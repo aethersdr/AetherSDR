@@ -1,6 +1,8 @@
 #include "FirmwareInstallDialog.h"
 
 #include "CanonIndicators.h"
+#include "ComboStyle.h"
+#include "Ctr2ProxyPanel.h"
 #include "ModemChrome.h"
 #include "ScopedChildWidget.h"
 #include "core/Ctr2FirmwareUpdater.h"
@@ -54,7 +56,7 @@ QLabel* wrapped(const QString& text = {})
 } // namespace
 
 FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* parent)
-    : CanonWindow(tr("CTR2-Max Firmware"), parent)
+    : CanonWindow(tr("CTR2"), parent, Kind::Workspace)
     , m_model(model)
     , m_downloader(new EspFirmwareDownloader(this))
     , m_job(new EspFirmwareJob(this))
@@ -62,7 +64,8 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
 {
     setObjectName(QStringLiteral("firmwareInstallDialog"));
     setAttribute(Qt::WA_DeleteOnClose);
-    resize(520, 560);
+    setGeometryKey(QStringLiteral("Ctr2WindowGeometry"));
+    resize(540, 800);
     applyCanonSheet(bodyWidget(), [] {
         return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
                + QStringLiteral(
@@ -82,12 +85,36 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
                    "QLabel#firmwareInstallStatus[tone=\"sparkGold\"] {"
                    " color: {{color.canon.sparkGold}}; border-color: {{color.canon.sparkGold}}; }"
                    "QLabel#firmwareInstallStatus[tone=\"aqua\"] { color: {{color.canon.aqua}};"
-                   " border-color: {{color.canon.aqua}}; }");
+                   " border-color: {{color.canon.aqua}}; }"
+                   // The relay panel (Ctr2ProxyPanel): its combos and value tones.
+                   "QComboBox { color: {{color.canon.ink}}; background: {{color.canon.control}};"
+                   " border: 1px solid {{color.canon.lineHi}}; border-radius: 4px; padding: 4px 8px; }"
+                   "QComboBox:hover, QComboBox:focus { border-color: {{color.canon.aqua}}; }"
+                   "QComboBox:disabled { color: {{color.canon.muted}};"
+                   " border-color: {{color.canon.line}}; }"
+                   "QComboBox::drop-down { border: 0; width: 18px; }"
+                   "QComboBox QAbstractItemView { color: {{color.canon.inkSoft}};"
+                   " background: {{color.canon.nested}}; border: 1px solid {{color.canon.lineHi}};"
+                   " selection-background-color: {{color.canon.cyan}};"
+                   " selection-color: {{color.canon.onAccent}}; }"
+                   "QLabel[tone=\"secondary\"] { color: {{color.canon.inkSoft}}; }"
+                   "QLabel[tone=\"readout\"] { color: {{color.canon.ink}};"
+                   " font-family: \"SF Mono\", \"Menlo\", \"Consolas\", monospace; }"
+                   "QLabel[tone=\"warning\"] { color: {{color.canon.sparkGold}}; }"
+                   "QLabel[tone=\"danger\"] { color: {{color.accent.danger}}; }")
+               + comboArrowRule();
     });
 
     auto* root = new QVBoxLayout(bodyWidget());
     root->setContentsMargins(14, 12, 14, 14);
     root->setSpacing(8);
+    // The relay first: it is what the window is opened for day to day.
+    root->addWidget(makeCanonHeader(tr("CTR2 Relay")));
+    m_relay = new Ctr2ProxyPanel;
+    m_relay->setModel(model);
+    root->addWidget(m_relay);
+    root->addSpacing(6);
+
     root->addWidget(makeCanonHeader(tr("CTR2-Max Firmware")));
 
     root->addWidget(section(tr("1. Firmware")));

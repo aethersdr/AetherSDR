@@ -2,11 +2,16 @@
 // owner pushes in, and every unusable case keeps Start disabled with the
 // pushed reason. Socket-free: nothing is started or bound.
 
+#include "TestSettingsProfile.h"
 #include "core/Ctr2HidFraming.h"
+#include "core/AppSettings.h"
+#include "core/Ctr2RelaySettings.h"
 #include "core/Ctr2HidPort.h"
 #include "models/Ctr2ProxyModel.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QThread>
 #include <QFile>
 #include <QHostAddress>
 #include <QPointer>
@@ -15,6 +20,7 @@
 #include <QTemporaryDir>
 
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -245,6 +251,87 @@ void testSelfNamedDevices()
           "the prefix is case-sensitive and needs the Espressif IDs");
 }
 
+bool waitUntil(const std::function<bool()>& predicate, int timeoutMs)
+{
+    QElapsedTimer t;
+    t.start();
+    while (!predicate() && t.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(5);
+    }
+    return predicate();
+}
+
+// The relay starts by itself when AetherSDR connects to a radio, retries
+// until the device is plugged in, stays stopped after the operator's Stop
+// until the next connection, remembers its device, and never starts a stock
+// CTR2 (no USB mode).
+void testAutoStart()
+{
+    using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
+    AetherSDR::Ctr2RelaySettings{}.save();
+    const Info stock{QStringLiteral("stock"), 0x303A, 0x1001, {}, QStringLiteral("ESP32S3_DEV"),
+                     QStringLiteral("000000000001")};
+    const Info aether{QStringLiteral("aether"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
+                      QStringLiteral("B81F3FC45888")};
+    auto devices = std::make_shared<QList<Info>>();
+    auto log = std::make_shared<PortLog>();
+    const auto backend = [&](Ctr2ProxyModel& m) {
+        m.setUsbBackend([devices] { return *devices; },
+                        [log](const Info&, QString*) {
+                            return static_cast<AetherSDR::Ctr2HidPort*>(new FakePort(log));
+                        });
+        m.setTransport(Ctr2ProxyModel::Transport::Usb);
+    };
+    const QHostAddress radio(QStringLiteral("192.0.2.10"));
+    const int retry = Ctr2ProxyModel::kAutoStartRetryMs + 2000;
+    {
+        Ctr2ProxyModel model;
+        backend(model);
+        model.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
+        waitUntil([] { return false; }, 50);
+        check(!model.isRunning(), "with auto-start off, connecting starts nothing");
+
+        model.setAutoStart(true);
+        waitUntil([] { return false; }, 50);
+        check(!model.isRunning(), "no device: nothing starts");
+        devices->append(aether);
+        check(waitUntil([&] { return model.isRunning(); }, retry),
+              "the relay starts once the device is plugged in");
+
+        model.stopByOperator();
+        check(!waitUntil([&] { return model.isRunning(); }, retry),
+              "after the operator's Stop it stays stopped");
+        model.setAetherRadio({}, 0, {}, {});
+        model.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
+        check(waitUntil([&] { return model.isRunning(); }, 500),
+              "the next connection starts it again");
+        model.stop();
+    }
+    check(AetherSDR::Ctr2RelaySettings::load().autoStart
+              && AetherSDR::Ctr2RelaySettings::load().usbSerial == aether.serial,
+          "auto-start and the device are saved");
+    {
+        *devices = {stock, aether};
+        Ctr2ProxyModel model;
+        backend(model);
+        check(model.usbDevicePath() == aether.path, "the saved device is selected again");
+        model.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
+        check(waitUntil([&] { return model.isRunning(); }, 500),
+              "and the relay starts on connecting");
+        model.stop();
+    }
+    {
+        *devices = {stock};
+        Ctr2ProxyModel model;
+        backend(model);
+        model.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
+        check(!waitUntil([&] { return model.isRunning(); }, retry),
+              "a stock CTR2, which has no USB mode, is never started automatically");
+    }
+    AetherSDR::Ctr2RelaySettings{}.save();
+}
+
 // Selecting another CTR2 while the first one's version probe is still
 // pending probes the new one once the first finishes; a model destroyed
 // mid-probe closes the probe's port.
@@ -378,7 +465,10 @@ void testUsbAccessRuleDetection()
 
 int main(int argc, char** argv)
 {
+    // Before the app: starting the relay saves its setup.
+    TestSettingsProfile profile(QStringLiteral("ctr2_proxy_model_test"));
     QCoreApplication app(argc, argv);
+    AetherSDR::AppSettings::instance().load();
     Ctr2ProxyModel model;
 
     check(model.configurationProblem() == QStringLiteral("Connect AetherSDR to a radio first"),
@@ -421,12 +511,15 @@ int main(int argc, char** argv)
     check(model.configurationProblem() == QStringLiteral("Connect AetherSDR to a radio first"),
           "losing the radio falls back to the default reason");
 
+    AetherSDR::Ctr2RelaySettings{}.save();
     testRelayFollowsAetherSdrsRadio();
+    AetherSDR::Ctr2RelaySettings{}.save();
     testUsbAccessRuleDetection();
     testUsbDefaults();
     testProbeFollowsSelection();
     testUdevRuleMatchesKnownCtr2s();
     testSelfNamedDevices();
+    testAutoStart();
 
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

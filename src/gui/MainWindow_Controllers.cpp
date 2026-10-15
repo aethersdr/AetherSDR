@@ -32,7 +32,7 @@
 #include "PanadapterMessageOverlay.h"
 #include "TitleBar.h"
 #include "models/SliceModel.h"
-#include "Ctr2ProxyApplet.h"
+#include "FirmwareInstallDialog.h"
 #include "Ctr2AudioSpectrumFeeder.h"
 #include "models/Ctr2ProxyModel.h"
 
@@ -2668,11 +2668,17 @@ void MainWindow::setupCtr2Proxy()
             m_ctr2ProxyModel->sendCwText(text, cost);
         }
     });
-    if (m_appletPanel) {
-        if (auto* applet = m_appletPanel->ctr2ProxyApplet()) {
-            applet->setModel(m_ctr2ProxyModel);
-        }
-    }
+}
+
+void MainWindow::showCtr2Window()
+{
+    // The relay keeps running when the window closes; reopening shows it as
+    // it is.
+    if (!m_ctr2Window)
+        m_ctr2Window = new FirmwareInstallDialog(m_ctr2ProxyModel, this);
+    m_ctr2Window->show();
+    m_ctr2Window->raise();
+    m_ctr2Window->activateWindow();
 }
 
 void MainWindow::wireExternalControllers()

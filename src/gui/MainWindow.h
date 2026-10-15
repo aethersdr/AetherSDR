@@ -136,6 +136,7 @@ class AutomationServer;
 class CanonWindow;
 class ConnectionPanel;
 class Ctr2ProxyModel;
+class FirmwareInstallDialog;
 class TitleBar;
 class KiwiSdrManager;
 struct KiwiSdrAntennaProfile;
@@ -692,6 +693,7 @@ private:
     void applyGraphicEqToClientEq(bool transmit);
     void wireExternalControllers(); // MainWindow_Controllers.cpp
     void setupCtr2Proxy();          // MainWindow_Controllers.cpp
+    void showCtr2Window();          // MainWindow_Controllers.cpp
     void wireKiwiSdr();             // MainWindow_KiwiSdr.cpp
     void refreshKiwiSdrAppletReceivers();
     void refreshKiwiSdrSlices();
@@ -2123,6 +2125,7 @@ private:
 
 // CTR2 TCP proxy prototype (MainWindow_Controllers.cpp); never persisted, off at launch
     Ctr2ProxyModel* m_ctr2ProxyModel{nullptr};
+    QPointer<FirmwareInstallDialog> m_ctr2Window;
 
 // AetherClock (MainWindow_AetherClock.cpp)
     AetherClockEngine* m_clockEngine{nullptr};

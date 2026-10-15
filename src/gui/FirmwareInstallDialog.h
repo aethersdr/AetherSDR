@@ -18,9 +18,12 @@ class QTimer;
 namespace AetherSDR {
 
 class Ctr2ProxyModel;
+class Ctr2ProxyPanel;
 class EspFirmwareDownloader;
 class EspFirmwareJob;
 
+// The CTR2 window (Settings → Controllers → CTR2...): the CTR2 relay
+// (Ctr2ProxyPanel) at the top, and below it the CTR2-Max firmware installer.
 // Installs AetherCTR2 on a Lynovation CTR2-Max, beside its stock firmware:
 // pick a release from the catalog (EspFirmwareCatalog), then install it. A
 // CTR2-Max already running AetherCTR2 is updated in place, through the CTR2
@@ -77,6 +80,7 @@ private:
     QLabel* m_badge{nullptr};
     QLabel* m_step{nullptr};
     QProgressBar* m_bar{nullptr};
+    Ctr2ProxyPanel* m_relay{nullptr};
     QPushButton* m_install{nullptr};
     QPushButton* m_start{nullptr};
     QPushButton* m_backup{nullptr};

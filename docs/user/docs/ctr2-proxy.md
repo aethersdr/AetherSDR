@@ -1,7 +1,7 @@
 ---
 title: "CTR2 Proxy"
 slug: "/ctr2-proxy"
-description: "The CTR2 Proxy applet connects a CTR2-Max controller to your FlexRadio through AetherSDR."
+description: "The CTR2 window relays a CTR2-Max controller to your FlexRadio through AetherSDR, and installs AetherCTR2 on it."
 status: "Early"
 applies_to: ["FlexRadio"]
 ---
@@ -12,8 +12,8 @@ applies_to: ["FlexRadio"]
 
 :::
 
-The **CTR2 Proxy** applet connects a CTR2-Max controller to your FlexRadio
-through AetherSDR. The CTR2 talks to the radio exactly as it would directly;
+The **CTR2** window connects a CTR2-Max controller to your FlexRadio through
+AetherSDR, and installs AetherCTR2 on a CTR2-Max. The CTR2 talks to the radio exactly as it would directly;
 AetherSDR forwards every byte unchanged in both directions over its own
 network route to the radio, including a VPN or tailnet route the CTR2 could
 not reach by itself.
@@ -33,29 +33,45 @@ AetherSDR's own command or transmit paths.
 
 ## Setup
 
-The applet's button is **CTR2**, in the **Integration** category. It is not in
-the default applet bar; right-click any applet button to open the picker and
-add it.
+Open **Settings → Controllers → CTR2...**. The window has two parts: **CTR2
+Relay** at the top, and **CTR2-Max Firmware** below it (see
+[Installing AetherCTR2 on a CTR2-Max](#installing-aetherctr2-on-a-ctr2-max)).
+Closing the window does not stop the relay.
 
-The proxy is **off at every launch** and nothing about it is saved: mode,
-address and device are chosen again each session, and it only starts when you
-press **Start**.
+The relay starts when you press **Start**, or by itself with **Start
+automatically** (see [Starting automatically](#starting-automatically)). Each
+time it starts, its setup (mode, device, listen address and port) is saved and
+offered again at the next launch.
 
 The **Mode** selector offers **Wi-Fi (TCP)** and **USB**.
 
 <img src="/img/screens/ctr2-applet.png" width="248" alt="CTR2 Proxy applet. Mode is set to USB with a Rescan button, the USB selector reads Select CTR2 USB device, and the Radio row (blacked out here) sits beside a dimmed Start button. An amber hint reads Select the CTR2 USB device, followed by State: Stopped and traffic counters of 0 B to the radio and to the CTR2." />
 
-*The CTR2 Proxy applet before a CTR2 is selected. The radio's address is blacked out.*
+*The CTR2 relay controls before a CTR2 is selected, from before they moved into the CTR2 window. The radio's address is blacked out.*
 
-> **Check the mode every time.** On builds with USB support, USB is the
-> default and the choice is not saved. A CTR2 on its stock firmware works only
-> in **Wi-Fi (TCP)** mode, so pick it at every launch unless the CTR2-Max runs
+> **Check the mode the first time.** On builds with USB support, USB is the
+> default until the relay has been started once. A CTR2 on its stock firmware
+> works only in **Wi-Fi (TCP)** mode, so pick it unless the CTR2-Max runs
 > AetherCTR2.
+
+## Starting automatically
+
+Tick **Start automatically when AetherSDR connects to a radio** to have the
+relay start by itself, with the setup it last started with, whenever AetherSDR
+connects to a radio. The choice is saved.
+
+- If the CTR2 is not plugged in yet, AetherSDR keeps looking every few seconds
+  and starts the relay when it appears.
+- Pressing **Stop** holds it off until AetherSDR next connects to a radio.
+- In USB mode it starts only a CTR2-Max running AetherCTR2, or an AetherKnob.
+  A CTR2 on its stock firmware has no USB mode.
+- **Linux:** if the CTR2 udev rule is not installed yet, press **Start** once
+  to install it.
 
 ## Using Wi-Fi (TCP) mode
 
 1. On the CTR2, set the radio IP address to **this PC's LAN address**.
-2. In the applet, pick the **Listen** address: one of this PC's local IPv4
+2. In the CTR2 window, pick the **Listen** address: one of this PC's local IPv4
    addresses. The listen port is 4992; it can be changed while stopped.
 3. Press **Start**.
 
@@ -121,8 +137,8 @@ registration: the CTR2-Max can restart into either one. AetherCTR2 builds on
 the work of Dariusz Socha, SQ5X ([smartmtr.net](https://smartmtr.net)), and
 Lynn Hansen, Lynovation ([lynovation.com](https://lynovation.com)).
 
-Press **Install…** in the applet's **Firmware** row to open the **CTR2-Max
-Firmware** window. It has three steps:
+The **CTR2-Max Firmware** part of the CTR2 window (**Settings → Controllers →
+CTR2...**) has three steps:
 
 1. **Firmware.** The AetherCTR2 releases AetherSDR can install, newest first,
    from the list on aethersdr.com. Pick one; an older release can be picked to
@@ -174,8 +190,7 @@ is written.
 ### Updating AetherCTR2 (over the USB cable)
 
 With **Status** reading **AetherCTR2**, pick the release and press
-**Install…**. The applet's relay stops for the update and starts again
-afterwards. The update takes about three minutes. The CTR2-Max checks the
+**Install…**. The relay stops for the update and starts again afterwards. The update takes about three minutes. The CTR2-Max checks the
 firmware's signature, restarts into it and keeps it only once it has
 connected again; if anything goes wrong it goes back to the version it had.
 
@@ -210,12 +225,15 @@ over the cable that is cancelled leaves the firmware the unit had.
 
 ### Status
 
-While running, the applet shows:
+While running, the **CTR2 Relay** part of the window shows:
 
 - **State:** Stopped, Listening, Connecting, Relaying, Closing or Error.
 - The endpoints: the listener, the connected CTR2, and the radio.
-- Byte counters in each direction (`↑ Radio`, `↓ CTR2`) with queued bytes, and
-  in USB mode a UDP counter.
+- A table of counters, toward the radio (`↑ Radio`) and toward the CTR2
+  (`↓ CTR2`): **Bytes** relayed, bytes **Queued** and not yet sent, and in USB
+  mode **UDP** datagrams relayed and datagrams **Dropped** because the link to
+  the CTR2 was backed up. In Wi-Fi mode, **Rejected** counts extra CTR2
+  connections that were turned away.
 - The last error, kept apart from the relayed data.
 
 Stop the proxy to change its settings.

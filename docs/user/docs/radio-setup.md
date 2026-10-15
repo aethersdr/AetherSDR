@@ -21,7 +21,7 @@ Open Radio Setup from the menu:
 
 Several menu items open Radio Setup straight at the right page:
 
-- **Settings → FlexControl Knob & Buttons...** → Serial & Controllers
+- **Settings → Controllers → FlexControl Knob & Buttons...** → Serial & Controllers
 - **Settings → USB Cables...** → USB Cables
 - **Tools → Configure KiwiSDR...** → Antennas
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Ctr2FirmwareUpdater.h"
+#include "core/Ctr2RelaySettings.h"
 #include "core/Ctr2HidPort.h"
 #include "core/TcpByteProxy.h"
 
@@ -91,6 +92,18 @@ public:
 
     bool start();
     void stop();
+    // Stop pressed by the operator: also holds off the automatic start until
+    // AetherSDR next connects to a radio.
+    void stopByOperator();
+
+    // Starts the relay by itself whenever AetherSDR is connected to a radio,
+    // with the setup it last started with (Ctr2RelaySettings, saved), and
+    // keeps trying while the device is missing. In USB mode only a device
+    // whose firmware names itself (AetherCTR2, AetherKnob) is started: stock
+    // CTR2 firmware has no USB mode.
+    bool autoStart() const { return m_settings.autoStart; }
+    void setAutoStart(bool on);
+    static constexpr int kAutoStartRetryMs = 5000;
 
     TcpByteProxy::State state() const;
     QString stateText() const;
@@ -149,6 +162,7 @@ public:
 
 signals:
     void configurationChanged();
+    void autoStartChanged();
     void listenAddressesChanged();   // also covers the USB device list
     void stateChanged();
     void endpointsChanged();
@@ -161,6 +175,8 @@ signals:
     void firmwareVersionChanged();
 
 private:
+    void tryAutoStart();
+    void saveSetup();
     static bool parsePort(const QString& text, quint16* port);
     static bool parseIpv4(const QString& text, QHostAddress* address);
     bool radioProblem(QString* problem) const;
@@ -196,6 +212,9 @@ private:
     QString m_probedVersion;
     Ctr2FirmwareUpdater* m_firmware{nullptr};
     bool m_restartAfterFirmware{false};
+    Ctr2RelaySettings m_settings;
+    QTimer* m_autoStartTimer{nullptr};
+    bool m_autoStartHeld{false};   // the operator stopped it this connection
 };
 
 } // namespace AetherSDR

@@ -92,6 +92,24 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     m_transport = Transport::Usb;
     m_activeTransport = Transport::Usb;
 #endif
+    // The setup the relay last started with, if any; refreshDevices()
+    // prefers its USB device.
+    m_settings = Ctr2RelaySettings::load();
+    if (m_settings.hasSetup) {
+        if (!m_settings.usb || m_usbOpener) {
+            m_transport = m_settings.usb ? Transport::Usb : Transport::Wifi;
+            m_activeTransport = m_transport;
+        }
+        if (!m_settings.listenAddress.isEmpty())
+            m_listenAddress = m_settings.listenAddress;
+        if (!m_settings.listenPort.isEmpty())
+            m_listenPort = m_settings.listenPort;
+    }
+    m_autoStartTimer = new QTimer(this);
+    m_autoStartTimer->setInterval(kAutoStartRetryMs);
+    connect(m_autoStartTimer, &QTimer::timeout, this, &Ctr2ProxyModel::tryAutoStart);
+    if (m_settings.autoStart)
+        m_autoStartTimer->start();
     refreshDevices();
 }
 
@@ -149,11 +167,19 @@ void Ctr2ProxyModel::refreshDevices()
     // selected device has gone; an existing choice stands.
     if (!isRunning() && !selectedUsbDevice()) {
         m_usbDevicePath.clear();
+        // The device the relay last started with, when it is here.
         for (const Ctr2HidPort::DeviceInfo& d : std::as_const(m_usbChoices)) {
-            if (!d.ctr2Model().isEmpty()) {
+            if (!m_settings.usbSerial.isEmpty() && d.serial == m_settings.usbSerial
+                && d.vendorId == m_settings.usbVendorId && d.productId == m_settings.usbProductId) {
                 m_usbDevicePath = d.path;
                 break;
             }
+        }
+        for (const Ctr2HidPort::DeviceInfo& d : std::as_const(m_usbChoices)) {
+            if (!m_usbDevicePath.isEmpty())
+                break;
+            if (!d.ctr2Model().isEmpty())
+                m_usbDevicePath = d.path;
         }
     }
     emit listenAddressesChanged();
@@ -288,11 +314,69 @@ void Ctr2ProxyModel::setAetherRadio(const QHostAddress& address, quint16 port,
         && label == m_aetherRadioLabel && reason == m_aetherRadioReason) {
         return;
     }
+    const bool newRadio = !ipv4.isNull()
+        && (ipv4 != m_aetherRadioAddress || port != m_aetherRadioPort);
     m_aetherRadioAddress = ipv4;
     m_aetherRadioPort = port;
     m_aetherRadioLabel = label;
     m_aetherRadioReason = ipv4.isNull() ? reason : QString();
     emit configurationChanged();
+    if (newRadio) {
+        m_autoStartHeld = false;   // a new connection: start again
+        QTimer::singleShot(0, this, &Ctr2ProxyModel::tryAutoStart);
+    }
+}
+
+void Ctr2ProxyModel::setAutoStart(bool on)
+{
+    if (m_settings.autoStart == on)
+        return;
+    m_settings.autoStart = on;
+    m_settings.save();
+    if (on) {
+        m_autoStartTimer->start();
+        QTimer::singleShot(0, this, &Ctr2ProxyModel::tryAutoStart);
+    } else {
+        m_autoStartTimer->stop();
+    }
+    emit autoStartChanged();
+}
+
+void Ctr2ProxyModel::tryAutoStart()
+{
+    if (!m_settings.autoStart || m_autoStartHeld || isRunning()
+        || m_firmware->isRunning() || m_aetherRadioAddress.isNull()) {
+        return;
+    }
+    refreshDevices();   // the device may have been plugged in since
+    if (!configurationProblem().isEmpty())
+        return;
+    if (m_transport == Transport::Usb) {
+        const Ctr2HidPort::DeviceInfo* device = selectedUsbDevice();
+        if (!device || device->ctr2Model() != device->product)
+            return;   // a stock CTR2 has no USB mode
+        if (usbDeviceNeedsAccessRule())
+            return;   // Start offers to install the rule; nothing to retry
+    }
+    qCInfo(lcDevices) << "CTR2 relay: starting automatically";
+    start();
+}
+
+void Ctr2ProxyModel::saveSetup()
+{
+    m_settings.hasSetup = true;
+    m_settings.usb = m_activeTransport == Transport::Usb;
+    if (m_settings.usb) {
+        if (const Ctr2HidPort::DeviceInfo* device = selectedUsbDevice()) {
+            m_settings.usbSerial = device->serial;
+            m_settings.usbVendorId = device->vendorId;
+            m_settings.usbProductId = device->productId;
+        }
+    } else {
+        m_settings.listenAddress = m_listenAddress;
+        m_settings.listenPort = m_listenPort;
+    }
+    m_settings.save();
 }
 
 bool Ctr2ProxyModel::parsePort(const QString& text, quint16* port)
@@ -447,8 +531,16 @@ bool Ctr2ProxyModel::start()
         buildConfig(&config, &problem);
         ok = m_proxy->start(config);
     }
+    if (ok)
+        saveSetup();   // what an automatic start uses next time
     emit configurationChanged();
     return ok;
+}
+
+void Ctr2ProxyModel::stopByOperator()
+{
+    m_autoStartHeld = true;
+    stop();
 }
 
 void Ctr2ProxyModel::stop()

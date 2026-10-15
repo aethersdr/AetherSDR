@@ -1016,6 +1016,7 @@ set(CORE_SOURCES
     src/core/DecoderPcmAdapter.cpp
     src/core/AetherClockSettings.cpp
     src/core/MiniPanSettings.cpp
+    src/core/Ctr2RelaySettings.cpp
     src/core/GreenHeronProtocol.cpp
     src/core/PacketLossConcealment.cpp
     src/core/PerfTelemetry.cpp
@@ -1363,7 +1364,7 @@ set(GUI_SOURCES
     src/gui/VkampApplet.cpp
     src/gui/Kpa1500Applet.cpp
     src/gui/LpMeterApplet.cpp
-    src/gui/Ctr2ProxyApplet.cpp
+    src/gui/Ctr2ProxyPanel.cpp
     src/gui/FirmwareInstallDialog.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp

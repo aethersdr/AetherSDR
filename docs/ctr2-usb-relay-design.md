@@ -395,8 +395,9 @@ simulated device that runs the reference for its side of the link.
 
 ### Installing AetherCTR2 on a CTR2-Max
 
-The CTR2 Proxy applet's **Install** button opens the CTR2-Max Firmware window
-(`FirmwareInstallDialog`). It installs AetherCTR2 beside the CTR2-Max's stock
+The CTR2 window (**Settings → Controllers → CTR2...**, `FirmwareInstallDialog`)
+holds the relay's controls (`Ctr2ProxyPanel`) and, below them, the CTR2-Max
+firmware installer. It installs AetherCTR2 beside the CTR2-Max's stock
 firmware, from releases listed in AetherSDR's firmware catalog
 (`EspFirmwareCatalog`, `https://www.aethersdr.com/firmware/catalog.json`).
 
@@ -524,7 +525,7 @@ USB a complete replacement for Wi-Fi.
 | Link codec (v0) | `src/core/Ctr2HidFraming.{h,cpp}` |
 | HID device access on its own I/O thread (hidapi) | `src/core/Ctr2HidPort.{h,cpp}` |
 | Link state machine, radio TCP connection and per-link UDP socket | `src/core/Ctr2UsbRelay.{h,cpp}` |
-| Applet: Wi-Fi or USB, device list; radio follows AetherSDR's connection | `src/models/Ctr2ProxyModel`, `src/gui/Ctr2ProxyApplet` |
+| CTR2 window: Wi-Fi or USB, device list; radio follows AetherSDR's connection | `src/models/Ctr2ProxyModel`, `src/gui/Ctr2ProxyPanel` |
 | Extension negotiation (Feature report `0x02`), on the HID I/O thread | `src/core/Ctr2HidThreadPort.cpp`, `src/core/Ctr2HidapiPort.cpp` |
 | AUDIO_SPECTRUM producer: the Client EQ RX tap (post-EQ), or the TX EQ tap while transmitting, its own 2048-point analyzer (reset on each RX/TX switch), 32 bars at 20 Hz, floor-level bars while the tap in use is not being written, only while a negotiating device is relaying | `src/gui/Ctr2AudioSpectrumFeeder` |
 
