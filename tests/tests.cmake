@@ -8248,6 +8248,8 @@ set_tests_properties(rx_applet_squelch_reconciliation_test PROPERTIES
 add_executable(auto_agc_threshold_gui_test
     tests/auto_agc_threshold_gui_test.cpp
     ${THEME_TEST_RESOURCES}
+    src/gui/AgcCalibrationDialog.cpp
+    src/gui/CanonWindow.cpp
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp

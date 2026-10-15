@@ -354,6 +354,10 @@ void AgcCalibrationDialog::done(int result)
 void AgcCalibrationDialog::setSlice(SliceModel* slice)
 {
     if (m_slice == slice) {
+        // Reconnect can reclaim the same object with a new session generation.
+        m_engine.setSlice(slice);
+        updateModeUi();
+        refreshFromSlice();
         return;
     }
     if (m_slice) {

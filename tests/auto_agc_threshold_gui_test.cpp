@@ -14,6 +14,7 @@
 #include "core/backends/SliceDelta.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "gui/RxApplet.h"
+#include "gui/AgcCalibrationDialog.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -26,6 +27,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QLabel>
 #include <QPointer>
 #include <QPalette>
 #include <QPushButton>
@@ -277,6 +279,41 @@ class AutoAgcThresholdGuiTest : public QObject
     Q_OBJECT
 
 private slots:
+    void calibrationDialogDiscardsAndRebinds()
+    {
+        Fixture fixture;
+        AudioEngine audio;
+        AgcCalibrationDialog dialog(&fixture.radio, &audio, {});
+        SliceModel* slice = fixture.radio.slice(0);
+        dialog.setSlice(slice);
+        QLabel* result = nullptr;
+        for (QLabel* label : dialog.findChildren<QLabel*>()) {
+            if (label->property("agcRole").toString() == QStringLiteral("result")) {
+                result = label;
+            }
+        }
+        QVERIFY(result);
+        for (const int value : {20, 50, 80}) {
+            emit audio.levelChanged(static_cast<float>(value) / 100.0f);
+            fixture.backend->status(0, AgcThresholdMode::Manual, value);
+            QTest::qWait(300);
+        }
+        QVERIFY(result->text().startsWith(QStringLiteral("Recommended AGC-T")));
+        slice->requestAgcThresholdMode(AgcThresholdMode::Automatic);
+        QCOMPARE(result->text(), QStringLiteral("Calibration stopped."));
+
+        fixture.radio.stageSessionModelsForReconnectForTest();
+        fixture.backend->status(0, AgcThresholdMode::Manual);
+        QCOMPARE(fixture.radio.slice(0), slice);
+        dialog.setSlice(slice);
+        for (const int value : {25, 55, 85}) {
+            emit audio.levelChanged(static_cast<float>(value) / 100.0f);
+            fixture.backend->status(0, AgcThresholdMode::Manual, value);
+            QTest::qWait(300);
+        }
+        QVERIFY(result->text().startsWith(QStringLiteral("Recommended AGC-T")));
+    }
+
     void initTestCase()
     {
         QVERIFY2(QFile::exists(QStringLiteral(":/themes/default-dark.json")),

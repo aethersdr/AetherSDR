@@ -219,9 +219,12 @@ void staleManualCurve()
     }
     check(calibrator.hasRecommendation() && calibrator.curve().size() == 3,
           "manual calibration establishes a real curve and recommendation");
+    QSignalSpy finished(&calibrator, &AgcTCalibrator::finished);
     s->requestAgcThresholdMode(AgcThresholdMode::Automatic);
     check(!calibrator.hasRecommendation() && calibrator.curve().isEmpty(),
           "Auto takeover discards the complete old calibration curve");
+    check(finished.size() == 1 && !finished.constFirst().constFirst().toBool(),
+          "discarding an idle manual curve notifies its presentation");
     SliceDelta automatic = report(AgcThresholdMode::Automatic);
     automatic.agcThreshold = 35;
     emit f.backend->sliceChanged(0, automatic);
@@ -231,6 +234,36 @@ void staleManualCurve()
     calibrator.applyRecommendation();
     check(!calibrator.hasRecommendation() && f.backend->agcs.size() == writes,
           "automatic threshold reports cannot resurrect an old recommendation for later Manual apply");
+}
+
+void calibrationAuthorityTransitions()
+{
+    Fixture f;
+    license(f.radio, QStringLiteral("1"));
+    SliceModel* s = f.slice();
+    AgcTCalibrator calibrator;
+    calibrator.setSlice(s);
+    calibrator.setSettleMs(10);
+    calibrator.startAutoSweep();
+    check(calibrator.isRunning(), "external RX regression starts a sweep");
+    const qsizetype writes = f.backend->agcs.size();
+    s->setExternalReceiveAudioReplacementMute(true, false);
+    check(!calibrator.isRunning(), "external RX takeover cancels immediately before the next timer tick");
+    s->setExternalReceiveAudioReplacementMute(false, false);
+    QTest::qWait(30);
+    calibrator.stop();
+    check(f.backend->agcs.size() == writes,
+          "brief external RX takeover cannot resume or restore an old sweep");
+
+    f.radio.stageSessionModelsForReconnectForTest();
+    emit f.backend->sliceChanged(0, report());
+    check(f.slice() == s, "reconnect reclaims the existing slice object");
+    calibrator.setSlice(s);
+    calibrator.onAudioLevel(0.2f);
+    calibrator.onValueChanged(40);
+    QTest::qWait(140);
+    check(calibrator.curve().size() == 1,
+          "explicit rebind of a reclaimed slice permits fresh manual recording");
 }
 
 void calibrationAndSession()
@@ -287,6 +320,7 @@ int main(int argc, char** argv)
     gatesAndAuthority();
     reentrantPendingNotifications();
     staleManualCurve();
+    calibrationAuthorityTransitions();
     calibrationAndSession();
     return failures == 0 ? 0 : 1;
 }
