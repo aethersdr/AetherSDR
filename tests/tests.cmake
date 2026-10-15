@@ -6838,6 +6838,11 @@ target_include_directories(radio_capacity_declaration_test PRIVATE src)
 target_link_libraries(radio_capacity_declaration_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME radio_capacity_declaration_test COMMAND radio_capacity_declaration_test)
 
+add_executable(tx_session_notice_test tests/tx_session_notice_test.cpp)
+target_include_directories(tx_session_notice_test PRIVATE src tests)
+target_link_libraries(tx_session_notice_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME tx_session_notice_test COMMAND tx_session_notice_test)
+
 # RadioModel passes the power amplifier's handle to MeterModel, so only that
 # amplifier's AMP meters reach the PGXL panel.
 add_executable(radiomodel_amp_meter_routing_test tests/radiomodel_amp_meter_routing_test.cpp)
@@ -9035,6 +9040,7 @@ set(AETHER_SETTINGS_CONSUMERS
     backend_receive_contract_test
     receive_intent_routing_test
     radio_capacity_declaration_test
+    tx_session_notice_test
     extension_namespace_gate_test
     control_availability_registry_test
     offline_health_registry_test
