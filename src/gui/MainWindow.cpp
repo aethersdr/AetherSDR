@@ -6349,6 +6349,10 @@ void MainWindow::buildUI()
     auto* netStack = new QWidget;
     m_networkStatusBlock = netStack;
     netStack->setObjectName(QStringLiteral("networkStatusBlock"));
+    netStack->setAccessibleName(tr("Network diagnostics"));
+    netStack->setAccessibleDescription(
+        tr("Double-click or press Return/Enter to open Network Diagnostics"));
+    keyboardOperable(netStack);
     netStack->installEventFilter(this);
     reserveTelemetryStack(netStack, {
         QStringLiteral("Network:"),
@@ -6367,19 +6371,21 @@ void MainWindow::buildUI()
     netVbox->addWidget(netTitle);
     m_networkLabel = new QLabel("");
     m_networkLabel->setAccessibleName(tr("Network status"));
-    m_networkLabel->setAccessibleDescription(
-        tr("Network quality; double-click to open full diagnostics"));
+    m_networkLabel->setAccessibleDescription(tr("Network quality"));
     applyStatusBarCompactLabelStyle(m_networkLabel, QStringLiteral("{{color.text.label}}"));
     m_networkLabel->setTextFormat(Qt::RichText);
     m_networkLabel->setAlignment(Qt::AlignCenter);
     m_networkLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+    // Direct bridge events can still address the readout by accessible name.
+    m_networkLabel->installEventFilter(this);
     m_networkLabel->setToolTip(buildNetworkTooltip(m_radioModel,
                                                    m_adaptiveFpsCap,
                                                    m_radioModel.pendingThrottleLift()));
     netStack->setToolTip(m_networkLabel->toolTip());
     m_networkTooltipRefreshTimer.setInterval(1000);
     connect(&m_networkTooltipRefreshTimer, &QTimer::timeout, this, [this] {
-        if (!m_networkStatusBlock || !m_networkStatusBlock->underMouse()) {
+        if (!m_networkStatusBlock
+            || (!m_networkStatusBlock->underMouse() && !m_networkLabel->underMouse())) {
             m_networkTooltipRefreshTimer.stop();
             return;
         }
