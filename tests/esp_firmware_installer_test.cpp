@@ -485,6 +485,25 @@ void testPlanRefusals()
               "and an unchecked manifest with one installs nothing");
         check(!i.start(unchecked, &problem) && d.writes == 0, "nor starts");
     }
+
+    // A boot selection not on a sector boundary erases whole sectors around
+    // it: a required region in the last of them must count as under it.
+    {
+        EspFirmwareManifest unchecked = parsed(manifestJson(f));
+        // Its bytes are [kOtadata - kSector + 0x100, kOtadata + kSector + 0x100);
+        // writing them erases through kOtadata + 2 * kSector.
+        unchecked.otadata = kOtadata - kSector + 0x100;
+        EspFirmwareManifest::Region r;
+        r.name = QStringLiteral("neighbor");
+        r.offset = kOtadata + kSector + 0x200;            // past its bytes, inside its last sector
+        r.size = 0x20;
+        FakeFlash d = vendorDevice();
+        r.sha256 = sha256(d.flash.mid(r.offset, r.size));
+        unchecked.require.append(r);
+        EspFirmwareInstaller i(&d, {});
+        check(!i.install(unchecked, f, &problem) && d.writes == 0,
+              "a required region in a sector the boot selection erases is refused");
+    }
 }
 
 // A boot selection interrupted after its erase leaves the entry the device

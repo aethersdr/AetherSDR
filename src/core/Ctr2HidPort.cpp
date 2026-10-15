@@ -42,36 +42,39 @@ QString selfNamedModel(const QString& product, QLatin1String prefix)
 
 } // namespace
 
-bool Ctr2HidPort::DeviceInfo::usbLink() const
+// The known-device entry a device matches, the first in the table's order,
+// with its model name; nullptr if none.
+static const Ctr2HidPort::KnownCtr2* matchKnown(const Ctr2HidPort::DeviceInfo& d, QString* model)
 {
-    for (const KnownCtr2& known : knownCtr2Devices()) {
-        if (vendorId != known.vendorId || productId != known.productId)
+    for (const Ctr2HidPort::KnownCtr2& known : Ctr2HidPort::knownCtr2Devices()) {
+        if (d.vendorId != known.vendorId || d.productId != known.productId)
             continue;
         const QLatin1String pattern(known.product);
-        if (pattern.endsWith(QLatin1Char('*')) ? !selfNamedModel(product, pattern.chopped(1)).isEmpty()
-                                               : product == pattern)
-            return known.usbLink;
+        if (pattern.endsWith(QLatin1Char('*'))) {
+            const QString name = selfNamedModel(d.product, pattern.chopped(1));
+            if (!name.isEmpty()) {
+                *model = name;
+                return &known;
+            }
+        } else if (d.product == pattern) {
+            *model = QString::fromLatin1(known.model);
+            return &known;
+        }
     }
-    return false;
+    return nullptr;
+}
+
+bool Ctr2HidPort::DeviceInfo::usbLink() const
+{
+    QString model;
+    const KnownCtr2* known = matchKnown(*this, &model);
+    return known && known->usbLink;
 }
 
 QString Ctr2HidPort::DeviceInfo::ctr2Model() const
 {
-    for (const KnownCtr2& known : knownCtr2Devices()) {
-        if (vendorId != known.vendorId || productId != known.productId) {
-            continue;
-        }
-        const QLatin1String pattern(known.product);
-        if (pattern.endsWith(QLatin1Char('*'))) {
-            const QString model = selfNamedModel(product, pattern.chopped(1));
-            if (!model.isEmpty()) {
-                return model;
-            }
-        } else if (product == pattern) {
-            return QString::fromLatin1(known.model);
-        }
-    }
-    return {};
+    QString model;
+    return matchKnown(*this, &model) ? model : QString();
 }
 
 QString Ctr2HidPort::DeviceInfo::label() const

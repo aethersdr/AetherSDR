@@ -5,7 +5,9 @@
 // refused by MAC before anything is written. Injected device lists and an
 // in-memory flash; no serial port, no network.
 
+#include "TestSettingsProfile.h"
 #include "core/EspFlashTarget.h"
+#include "models/Ctr2ProxyModel.h"
 #include "models/FirmwareInstallModel.h"
 
 #include <QCoreApplication>
@@ -140,12 +142,87 @@ void testConfirmedDevice()
     check(waitFinished(model, &ok, &message) && ok, "succeeds");
 }
 
+// With two controllers connected, the window shows the one the relay has
+// selected: an update over the link goes to that one.
+void testFollowsRelaySelection()
+{
+    using Info = Ctr2HidPort::DeviceInfo;
+    const Info first{QStringLiteral("hid-1"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
+                     QStringLiteral("111111111111")};
+    const Info second{QStringLiteral("hid-2"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
+                      QStringLiteral("222222222222")};
+    Ctr2ProxyModel relay;
+    relay.setUsbBackend([=] { return QList<Info>{first, second}; },
+                        [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
+    relay.setTransport(Ctr2ProxyModel::Transport::Usb);
+    relay.setUsbDevicePath(second.path);
+    FirmwareInstallModel model(&relay);
+    model.setDeviceSources([] { return QList<FirmwareInstallModel::Loader>(); },
+                           [=] { return QList<Info>{first, second}; });
+    check(model.device() == FirmwareInstallModel::Device::LinkFirmware
+              && model.deviceMac() == QStringLiteral("22:22:22:22:22:22"),
+          "the relay's selected controller is the one shown");
+}
+
+// Only CTR2-Max units are shown: an AetherKnob is not one, and does not
+// hide a CTR2-Max behind it. A link action goes to the relay's device, so it
+// is refused when the relay holds another one.
+void testCtr2MaxOnly()
+{
+    using Info = Ctr2HidPort::DeviceInfo;
+    const Info knob{QStringLiteral("knob"), 0x303A, 0x1001, {}, QStringLiteral("AETHER_KNOB"),
+                    QStringLiteral("333333333333")};
+    const Info max{QStringLiteral("max"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
+                   QStringLiteral("444444444444")};
+    Ctr2ProxyModel relay;
+    relay.setUsbBackend([=] { return QList<Info>{knob, max}; },
+                        [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
+    relay.setTransport(Ctr2ProxyModel::Transport::Usb);
+    relay.setUsbDevicePath(knob.path);
+    FirmwareInstallModel model(&relay);
+    model.setDeviceSources([] { return QList<FirmwareInstallModel::Loader>(); },
+                           [=] { return QList<Info>{knob, max}; });
+    check(model.device() == FirmwareInstallModel::Device::LinkFirmware
+              && model.deviceMac() == QStringLiteral("44:44:44:44:44:44"),
+          "the CTR2-Max is shown, not the AetherKnob before it");
+    QString problem;
+    check(!model.restart(model.target(), true, &problem)
+              && problem.contains(QStringLiteral("another device")),
+          "a restart is refused while the relay holds the AetherKnob");
+
+    FirmwareInstallModel knobOnly(nullptr);
+    knobOnly.setDeviceSources([] { return QList<FirmwareInstallModel::Loader>(); },
+                              [=] { return QList<Info>{knob}; });
+    check(knobOnly.device() == FirmwareInstallModel::Device::None,
+          "an AetherKnob alone is not a CTR2-Max, stock or otherwise");
+}
+
+// A device in download mode whose MAC is not known is not acted on: the job
+// could not tell it from another on the same port.
+void testUnknownMac()
+{
+    FirmwareInstallModel model(nullptr);
+    model.setDeviceSources([] {
+        return QList<FirmwareInstallModel::Loader>{{QStringLiteral("ttyACM0"), QString()}};
+    }, [] { return QList<Ctr2HidPort::DeviceInfo>(); });
+    QTemporaryDir dir;
+    QString problem;
+    check(!model.backup(model.target(), dir.filePath(QStringLiteral("x.bin")), &problem)
+              && problem.contains(QStringLiteral("MAC")),
+          "no MAC, no action");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
+    // The relay model reads its saved setup: never the operator's.
+    TestSettingsProfile profile(QStringLiteral("firmware_install_model_test"));
     QCoreApplication app(argc, argv);
     testConfirmedDevice();
+    testFollowsRelaySelection();
+    testCtr2MaxOnly();
+    testUnknownMac();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

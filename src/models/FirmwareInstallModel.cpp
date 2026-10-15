@@ -11,11 +11,15 @@
 
 #include <QTimer>
 
+#include <algorithm>
+
 namespace AetherSDR {
 
 namespace {
 
 constexpr int kPollMs = 1000;
+// The USB product string of the CTR2-Max's stock firmware.
+constexpr char kStockProduct[] = "ESP32S3_DEV";
 
 } // namespace
 
@@ -34,7 +38,9 @@ FirmwareInstallModel::FirmwareInstallModel(Ctr2ProxyModel* relay, QObject* paren
 #endif
         return out;
     };
-    m_hid = [] {
+    m_hid = [this] {
+        if (m_relay)
+            return m_relay->availableUsbDevices();
 #ifdef HAVE_HIDAPI
         return Ctr2HidapiPort::enumerate();
 #else
@@ -166,16 +172,25 @@ void FirmwareInstallModel::poll()
         mac = found.first().mac;
         loaders = found.size();
     } else if (m_hid) {
-        // A controller running firmware. Firmware installed beside the
-        // device's own names itself; a device reporting one of the fixed CTR2
-        // product strings runs its maker's firmware.
-        for (const Ctr2HidPort::DeviceInfo& d : m_hid()) {
+        // A CTR2-Max running firmware: AetherCTR2, installed beside the
+        // stock firmware, names itself and relays over USB; the stock
+        // firmware reports ESP32S3_DEV. Other controllers (AetherKnob, M5Dial,
+        // CTR2-MIDI) are not CTR2-Max units and are passed over. The relay's
+        // selected device first: an update over the link goes to that one.
+        QList<Ctr2HidPort::DeviceInfo> devices = m_hid();
+        const QString selected = m_relay ? m_relay->usbDevicePath() : QString();
+        std::stable_partition(devices.begin(), devices.end(),
+                              [&selected](const Ctr2HidPort::DeviceInfo& d) {
+                                  return !selected.isEmpty() && d.path == selected;
+                              });
+        for (const Ctr2HidPort::DeviceInfo& d : std::as_const(devices)) {
             const QString model = d.ctr2Model();
-            if (model.isEmpty())
+            const bool aetherCtr2 = d.usbLink() && !model.isEmpty() && model == d.product;
+            const bool stock = d.product == QLatin1String(kStockProduct) && !model.isEmpty();
+            if (!aetherCtr2 && !stock)
                 continue;
-            const bool selfNamed = model == d.product;
-            device = selfNamed ? Device::LinkFirmware : Device::Stock;
-            name = selfNamed ? model : QString();
+            device = aetherCtr2 ? Device::LinkFirmware : Device::Stock;
+            name = aetherCtr2 ? model : QString();
             if (d.serial.size() == 12)
                 mac = QString::fromLatin1(QByteArray::fromHex(d.serial.toLatin1()).toHex(':')).toUpper();
             break;
@@ -219,9 +234,17 @@ bool FirmwareInstallModel::runJob(const Target& target, EspFirmwareJob::Action a
     }
     if (!stillTarget(target, problem))
         return false;
+    const QByteArray mac =
+        QByteArray::fromHex(QString(target.mac).remove(QLatin1Char(':')).toLatin1());
+    if (mac.size() != 6) {
+        // Without it the job could not tell this device from another on
+        // the same port.
+        *problem = tr("The device's MAC address is not known. Nothing was written.");
+        return false;
+    }
     EspFirmwareJob::Request r;
     r.portName = target.port;
-    r.expectedMac = QByteArray::fromHex(QString(target.mac).remove(QLatin1Char(':')).toLatin1());
+    r.expectedMac = mac;
     r.action = action;
     r.manifest = m_manifest;
     r.files = m_files;
@@ -283,27 +306,55 @@ QByteArray FirmwareInstallModel::appImage() const
     return apps == 1 ? app : QByteArray();
 }
 
-bool FirmwareInstallModel::canInstallOverLink(QString* problem) const
+bool FirmwareInstallModel::linkImage(Ctr2FirmwareUpdater::Image* image, QString* problem) const
 {
-    Ctr2FirmwareUpdater::Image image;
     const QByteArray app = appImage();
     if (!m_haveRelease || app.isEmpty()) {
         *problem = tr("This release cannot be installed over the USB cable. Put the device in "
                       "download mode to install it.");
         return false;
     }
-    return Ctr2FirmwareUpdater::readImage(app, &image, problem);
+    return Ctr2FirmwareUpdater::readImage(app, image, problem);
+}
+
+bool FirmwareInstallModel::canInstallOverLink(QString* problem) const
+{
+    Ctr2FirmwareUpdater::Image image;
+    return linkImage(&image, problem);
+}
+
+bool FirmwareInstallModel::relayHolds(const Target& target, QString* problem) const
+{
+    if (m_relay) {
+        const QString path = m_relay->usbDevicePath();
+        for (const Ctr2HidPort::DeviceInfo& d : m_relay->availableUsbDevices()) {
+            if (d.path != path || d.serial.size() != 12)
+                continue;
+            const QString mac =
+                QString::fromLatin1(QByteArray::fromHex(d.serial.toLatin1()).toHex(':')).toUpper();
+            if (mac == target.mac)
+                return true;
+        }
+    }
+    *problem = tr("The CTR2 relay has another device selected. Select %1 in the relay's USB list, "
+                  "then try again.")
+                   .arg(target.mac);
+    return false;
 }
 
 bool FirmwareInstallModel::installOverLink(const Target& target, QString* problem)
 {
+    if (busy()) {
+        *problem = tr("Wait for the current step to finish.");
+        return false;
+    }
     if (!m_relay || target.device != Device::LinkFirmware || !stillTarget(target, problem)) {
         if (problem->isEmpty())
             *problem = tr("The CTR2-Max is not running AetherCTR2.");
         return false;
     }
     Ctr2FirmwareUpdater::Image image;
-    if (!canInstallOverLink(problem) || !Ctr2FirmwareUpdater::readImage(appImage(), &image, problem))
+    if (!relayHolds(target, problem) || !linkImage(&image, problem))
         return false;
     m_linkRunning = true;
     if (!m_relay->startFirmwareUpdate(image, problem)) {
@@ -320,11 +371,17 @@ bool FirmwareInstallModel::installOverLink(const Target& target, QString* proble
 
 bool FirmwareInstallModel::restart(const Target& target, bool bootloader, QString* problem)
 {
+    if (busy()) {
+        *problem = tr("Wait for the current step to finish.");
+        return false;
+    }
     if (!m_relay || target.device != Device::LinkFirmware || !stillTarget(target, problem)) {
         if (problem->isEmpty())
             *problem = tr("The CTR2-Max is not running AetherCTR2.");
         return false;
     }
+    if (!relayHolds(target, problem))
+        return false;
     m_linkRunning = true;
     if (!m_relay->restartUsbDevice(bootloader ? Ctr2FirmwareUpdater::Restart::Bootloader
                                               : Ctr2FirmwareUpdater::Restart::OtherFirmware,

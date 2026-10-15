@@ -497,7 +497,7 @@ add_test(NAME esp_firmware_job_test COMMAND esp_firmware_job_test)
 # FirmwareInstallModel acts only on the device the operator confirmed:
 # injected device lists and an in-memory flash; no serial port, no network.
 add_executable(firmware_install_model_test tests/firmware_install_model_test.cpp)
-target_include_directories(firmware_install_model_test PRIVATE src)
+target_include_directories(firmware_install_model_test PRIVATE src tests)
 target_link_libraries(firmware_install_model_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME firmware_install_model_test COMMAND firmware_install_model_test)
 

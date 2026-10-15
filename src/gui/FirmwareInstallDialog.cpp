@@ -174,8 +174,9 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
     m_toStock = new QPushButton(tr("Stock Firmware"));
     m_toStock->setObjectName(QStringLiteral("firmwareInstallToStock"));
     m_toStock->setToolTip(tr("Restart the CTR2-Max into its stock firmware. AetherCTR2 stays "
-                             "installed; to come back, put the CTR2-Max in download mode and "
-                             "press Start."));
+                             "installed; to come back, choose Run AetherCTR2 in the CTR2-Max's "
+                             "Settings menu (v1.02.00 and later), or put it in download mode "
+                             "and press Start."));
     restartRow->addWidget(m_toStock);
     m_toBootloader = new QPushButton(tr("Bootloader"));
     m_toBootloader->setObjectName(QStringLiteral("firmwareInstallToBootloader"));

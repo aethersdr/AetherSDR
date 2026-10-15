@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/Ctr2FirmwareUpdater.h"
 #include "core/Ctr2HidPort.h"
 #include "core/EspFirmwareCatalog.h"
 #include "core/EspFirmwareJob.h"
@@ -61,6 +62,9 @@ public:
 
     // Tests: the devices found, and the device a job opens.
     using LoaderSource = std::function<QList<Loader>()>;
+    // Controllers running firmware: by default the relay's own device list
+    // (it rescans while stopped), so there is one enumeration and one
+    // selected device.
     using HidSource = std::function<QList<Ctr2HidPort::DeviceInfo>()>;
     void setDeviceSources(LoaderSource loaders, HidSource hid);
     void setJobTargetOpener(EspFirmwareJob::TargetOpener opener);
@@ -121,6 +125,9 @@ private:
     bool runJob(const Target& target, EspFirmwareJob::Action action, const QString& backupPath,
                 const QString& restoreFrom, QString* problem);
     QByteArray appImage() const;
+    bool linkImage(Ctr2FirmwareUpdater::Image* image, QString* problem) const;
+    // The relay's selected USB device is target (a link action goes to it).
+    bool relayHolds(const Target& target, QString* problem) const;
     void onJobFinished(bool ok, const QString& message);
 
     QPointer<Ctr2ProxyModel> m_relay;
