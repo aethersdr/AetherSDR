@@ -7,6 +7,15 @@
 
 namespace AetherSDR {
 
+// Position-fix state is independent of receiver presence and oscillator lock.
+enum class GpsFixState {
+    Unknown,
+    NoFix,
+    TimeOnly,
+    TwoD,
+    ThreeD
+};
+
 // Normalized GPS status delta (aetherd RFC 2.3 — RadioModel residual). The
 // backend tokenizes the vendor GPS status line and populates only the fields it
 // reported; RadioModel::applyGpsChanges applies them and emits gpsStatusChanged.
@@ -14,6 +23,7 @@ namespace AetherSDR {
 // "644 m", "0 kts", "0 ppb"); only the satellite counts are numeric.
 struct GpsDelta {
     std::optional<QString> status;
+    std::optional<GpsFixState> fixState;
     // A usable position is not synonymous with a reported hardware lock.
     // Some radios expose both; the IC-705 exposes position bytes but no lock
     // flag. Consumers use this field instead of parsing vendor status prose.

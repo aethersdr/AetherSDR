@@ -10,6 +10,7 @@
 #include "models/RadioModel.h"
 
 #include <QApplication>
+#include <QAccessible>
 #include <QClipboard>
 #include <QCheckBox>
 #include <QDateTime>
@@ -198,6 +199,18 @@ bool validNtpInput(const QString& value)
 QString displayValue(const QString& value)
 {
     return value.trimmed().isEmpty() ? QStringLiteral("—") : value.trimmed();
+}
+
+QString fixStateText(GpsFixState state)
+{
+    switch (state) {
+    case GpsFixState::ThreeD: return GpsLocationDialog::tr("3D");
+    case GpsFixState::TwoD: return GpsLocationDialog::tr("2D");
+    case GpsFixState::TimeOnly: return GpsLocationDialog::tr("Time only");
+    case GpsFixState::NoFix: return GpsLocationDialog::tr("No fix");
+    case GpsFixState::Unknown: return GpsLocationDialog::tr("Unknown");
+    }
+    return GpsLocationDialog::tr("Unknown");
 }
 
 bool statusIsLocked(QString status)
@@ -751,8 +764,27 @@ void GpsLocationDialog::refreshGps(bool reportArrived)
     const bool hasSatelliteTelemetry = caps.hasGpsSatelliteTelemetry;
     const bool hasFrequencyReference = caps.hasGpsFrequencyReference;
     const bool gpsAvailable = m_radioModel->hasGpsHardware()
-        || !m_radioModel->gpsStatus().isEmpty();
-    m_fixStatusLabel->setText(gpsAvailable ? status : tr("Not present"));
+        || !m_radioModel->gpsStatus().isEmpty()
+        || m_radioModel->gpsFixState() != GpsFixState::Unknown;
+    const QString fixText = gpsAvailable
+        ? fixStateText(m_radioModel->gpsFixState()) : tr("Not present");
+    QString fixDescription = tr("Receiver status: %1. Fix state: %2.")
+        .arg(status, fixText);
+    if (m_radioModel->gpsFixState() == GpsFixState::Unknown) {
+        fixDescription += tr(" The radio has not reported a recognized fix state.");
+    }
+    if (m_radioModel->gpsFixState() == GpsFixState::TimeOnly) {
+        fixDescription += tr(" Time and frequency are available without a position fix.");
+    }
+    const bool fixChanged = m_fixStatusLabel->text() != fixText
+        || m_fixStatusLabel->accessibleDescription() != fixDescription;
+    m_fixStatusLabel->setText(fixText);
+    m_fixStatusLabel->setToolTip(fixDescription);
+    m_fixStatusLabel->setAccessibleDescription(fixDescription);
+    if (fixChanged) {
+        QAccessibleEvent event(m_fixStatusLabel, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
     m_sourceLabel->setText(displayValue(m_radioModel->gpsSource()));
     m_satelliteMetricCard->setVisible(hasSatelliteTelemetry);
     m_referenceMetricCard->setVisible(hasFrequencyReference);
@@ -941,7 +973,7 @@ void GpsLocationDialog::updateClockAndAges()
         if (!radioTime.isValid()) {
             radioTime = QTime::fromString(m_radioModel->gpsTime(), QStringLiteral("HH:mm:ssZ"));
         }
-        if (radioTime.isValid() && m_radioModel->gpsPositionValid()) {
+        if (radioTime.isValid() && m_radioModel->gpsTimeValid()) {
             // The radio reports only whole-second GPS time. Advance that last
             // sample by its telemetry age before comparing it with the computer,
             // otherwise a healthy but infrequent GPS status update looks many

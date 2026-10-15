@@ -767,7 +767,7 @@ connects).
 | `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, Opus TX pacing counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
 | `dsp` | — | client-side AetherDSP noise-reduction state, **plus a `backend` object** carrying the backend-owned DSP read-back (`family` and a `chains` list, each entry naming its `chain` and its `level`) when the active backend reports one — see [`get dsp`](#get-dsp) |
 | `radio` | — | radio snapshot (name, model, version, connected, **connectState**, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) — see [`connectState`](#connectstate). `txPower` (measured forward power, Watts, **display-smoothed** — the same number as `get meters`.`fwdPower`; `get meters`.`fwdPowerInstant` is the unsmoothed sample, which is what a gate reading back a drive change wants) and `paTemp` are **null** unless a live sample says otherwise; neither reports a fabricated zero. The operator's requested drive is `get transmit`.`rfPower`, which is a different quantity. |
-| `gps` | — | GPS status, backend-normalized `positionValid` and `source`, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time and date, frequency error, the Flex-hosted `ntpServerAddress`, the radio-owned NTP client state (`ntpClientEnabled`, `ntpClientServer`, `gpsTimeCorrection`, `ntpSyncStatus` — IC-705), and oscillator-reference state. This authenticated diagnostic response contains precise location data; the compact status bar and tooltip do not. |
+| `gps` | — | GPS status, normalized `fixState` (`3D`, `2D`, `TIME_ONLY`, `NO_FIX`, `Unknown`), backend-normalized `positionValid`, `timeValid` and `source`, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time and date, frequency error, the Flex-hosted `ntpServerAddress`, the radio-owned NTP client state (`ntpClientEnabled`, `ntpClientServer`, `gpsTimeCorrection`, `ntpSyncStatus` — IC-705), and oscillator-reference state. This authenticated diagnostic response contains precise location data; the compact status bar and tooltip do not. |
 | `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/break-in/delay/sidetone/iambic mode/paddle swap/CWL/monitor gain+pan), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
 | `cwx` | — | CWX keyer + queue-drain watch — see [`get cwx`](#get-cwx) |
 | `equalizer` (or `eq`) | — | 8-band RX+TX graphic EQ: `rxEnabled`/`txEnabled` and `rx`/`tx` band maps keyed by label (`63`…`8k`). Validate EQ-applet slider changes. |
@@ -2000,6 +2000,9 @@ never sends a radio command.
 → {"cmd":"gps","action":"fixture","value":"8000"}
 ← {"ok":true,"gps":"fixture","profile":"8000","snapshot":{"status":"Locked","latitude":"34.224400000","ntpServerAddress":"192.0.2.80",…}}
 
+→ {"cmd":"gps","action":"fixfixture","value":"TIME_ONLY"}
+← {"ok":true,"gps":"fixfixture","snapshot":{"fixState":"TIME_ONLY","positionValid":false,…}}
+
 → {"cmd":"gps","action":"clearfixture"}
 ← {"ok":true,"gps":"clearfixture"}
 ```
@@ -2010,7 +2013,16 @@ minutes form seen from a FLEX-6700 GPSDO. The `8000` profile exercises decimal
 degrees and the `track` (course-over-ground) field captured from FLEX-8600
 firmware 4.2.18, plus the reserved TEST-NET-1 address `192.0.2.80` for testing
 the 8000-series NTP tip. Use `get gps` or `dumpTree` after injecting to assert
-model or widget state.
+model or widget state. Both location profiles initialize fix state to Unknown,
+matching firmware without the field. `gps fixfixture <3D|2D|TIME_ONLY|NO_FIX|UNKNOWN>`
+injects only the normalized fix-state field, preserving receiver status,
+coordinates and oscillator lock. It never establishes position validity or lock.
+`clearfixture` clears fix state, position validity and the location report.
+These fixtures prove presentation and propagation, not physical GPS acquisition.
+Run `python3 tools/automation_gps_fix_probe.py --socket <socket> --output <directory>`
+against an isolated disconnected app to check all five states in the real
+AetherGPS readout, independent lock/time/position validity, and save screenshots
+and JSON evidence. The probe clears its fixture when it finishes.
 
 #### `slice rxsource`
 Selects the receive source for a slice through the same virtual-Kiwi path as
@@ -4881,7 +4893,7 @@ audio devices require separate hardware validation.
 | `slice` | — | slice <action> [args] — slice lifecycle/config (see doSlice) |
 | `notch` | — | notch <list\|add\|set\|remove\|enable> [args] — manual notch filters (add <freqMhz> [widthHz]; set <id> [freq=<mhz>] [width=<hz>]; remove <id>; enable <0\|1>) |
 | `interlock` | — | interlock probe source=<tokens> [vox=0\|1] [owner=local\|other] — isolated production TX-state reconciliation; no radio or device access |
-| `gps` | — | gps <fixture\|clearfixture> [6000\|8000] — disconnected GPS test data |
+| `gps` | — | gps <fixture\|fixfixture\|clearfixture> [profile\|fix] — disconnected GPS test data |
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
 | `freqcal` | — | freqcal [get\|set <ppb>\|from_vfo <reference_mhz>\|reset] — manual frequency calibration (radios that cannot calibrate themselves) |

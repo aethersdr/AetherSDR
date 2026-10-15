@@ -1801,16 +1801,30 @@ QJsonObject radioSnapshot(const RadioModel* r)
     };
 }
 
+QString gpsFixStateName(GpsFixState state)
+{
+    switch (state) {
+    case GpsFixState::ThreeD: return QStringLiteral("3D");
+    case GpsFixState::TwoD: return QStringLiteral("2D");
+    case GpsFixState::TimeOnly: return QStringLiteral("TIME_ONLY");
+    case GpsFixState::NoFix: return QStringLiteral("NO_FIX");
+    case GpsFixState::Unknown: return QStringLiteral("Unknown");
+    }
+    return QStringLiteral("Unknown");
+}
+
 QJsonObject gpsSnapshot(const RadioModel* r)
 {
     return QJsonObject{
         {QStringLiteral("available"), r->hasGpsHardware()
-             || !r->gpsStatus().isEmpty()},
+             || !r->gpsStatus().isEmpty() || r->gpsFixState() != GpsFixState::Unknown},
         {QStringLiteral("status"), r->gpsStatus()},
+        {QStringLiteral("fixState"), gpsFixStateName(r->gpsFixState())},
         // Backend-normalized validity and source (GpsDelta::positionValid /
         // source), so a scenario can assert "usable fix" without parsing
         // family-specific status prose.
         {QStringLiteral("positionValid"), r->gpsPositionValid()},
+        {QStringLiteral("timeValid"), r->gpsTimeValid()},
         {QStringLiteral("source"), r->gpsSource()},
         {QStringLiteral("tracked"), r->gpsTracked()},
         {QStringLiteral("visible"), r->gpsVisible()},
@@ -3326,12 +3340,12 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("gps", {},
-            "gps <fixture|clearfixture> [6000|8000] — disconnected GPS test data",
+            "gps <fixture|fixfixture|clearfixture> [profile|fix] — disconnected GPS test data",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.action.isEmpty()) {
                     return err(QStringLiteral(
-                        "gps requires an action (fixture|clearfixture)"));
+                        "gps requires an action (fixture|fixfixture|clearfixture)"));
                 }
                 return s.doGps(a.action, a.value);
             });
@@ -8238,6 +8252,10 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
     GpsDelta delta;
     if (action == QLatin1String("clearfixture")) {
         delta.status = QString();
+        delta.fixState = GpsFixState::Unknown;
+        delta.positionValid = false;
+        delta.source = QString();
+        delta.date = QString();
         delta.tracked = 0;
         delta.visible = 0;
         delta.grid = QString();
@@ -8257,10 +8275,35 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("gps"), QStringLiteral("clearfixture")}};
     }
+    if (action == QLatin1String("fixfixture")) {
+        const QString state = format.toUpper();
+        if (state == QLatin1String("3D")) {
+            delta.fixState = GpsFixState::ThreeD;
+        } else if (state == QLatin1String("2D")) {
+            delta.fixState = GpsFixState::TwoD;
+        } else if (state == QLatin1String("TIME_ONLY")) {
+            delta.fixState = GpsFixState::TimeOnly;
+        } else if (state == QLatin1String("NO_FIX")) {
+            delta.fixState = GpsFixState::NoFix;
+        } else if (state == QLatin1String("UNKNOWN")) {
+            delta.fixState = GpsFixState::Unknown;
+        } else {
+            return err(QStringLiteral("gps fixfixture requires 3D, 2D, TIME_ONLY, NO_FIX or UNKNOWN"));
+        }
+        QString error;
+        if (!m_radioModel->automationApplyGpsFixture(
+                delta, m_radioModel->oscState(), m_radioModel->oscSetting(),
+                m_radioModel->oscLocked(), m_radioModel->gpsNtpServerAddress(), &error)) {
+            return err(error);
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("gps"), QStringLiteral("fixfixture")},
+                           {QStringLiteral("snapshot"), gpsSnapshot(m_radioModel)}};
+    }
     if (action != QLatin1String("fixture")) {
         return err(QStringLiteral(
             "unknown gps action: ") + action
-            + QStringLiteral(" (fixture|clearfixture)"));
+            + QStringLiteral(" (fixture|fixfixture|clearfixture)"));
     }
 
     const QString profile = format.trimmed().toLower();
@@ -8270,6 +8313,7 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
     }
 
     delta.status = QStringLiteral("Locked");
+    delta.fixState = GpsFixState::Unknown;
     // The dashboard, APRS beacon and clock agreement gate on the normalized
     // validity flag, not on the "Locked" prose, so the fixture must carry it.
     delta.positionValid = true;

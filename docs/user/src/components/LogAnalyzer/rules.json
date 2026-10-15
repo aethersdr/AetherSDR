@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8573,
+          "line": 8551,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -452,7 +452,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 1353,
+          "line": 1351,
           "text": "RadioModel: dax_rx stream create for channel"
         },
         {
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 12884,
+          "line": 12942,
           "text": "RadioModel: DAX TX create failed"
         }
       ]

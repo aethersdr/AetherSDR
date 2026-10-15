@@ -1755,6 +1755,21 @@ void FlexBackend::decodeGpsStatus(const QString& rawBody)
 
     GpsDelta d;
     carry(kvs, "status", d.status);
+    if (kvs.contains(QStringLiteral("fix"))) {
+        // Published FlexLib 4.3.16: exact tokens, ignoring case only. A
+        // reported unknown value clears the fix; an absent key preserves it.
+        const QString fix = kvs.value(QStringLiteral("fix")).toUpper();
+        d.fixState = GpsFixState::Unknown;
+        if (fix == QLatin1String("3D")) {
+            d.fixState = GpsFixState::ThreeD;
+        } else if (fix == QLatin1String("2D")) {
+            d.fixState = GpsFixState::TwoD;
+        } else if (fix == QLatin1String("TIME_ONLY")) {
+            d.fixState = GpsFixState::TimeOnly;
+        } else if (fix == QLatin1String("NO_FIX")) {
+            d.fixState = GpsFixState::NoFix;
+        }
+    }
     if (kvs.contains(QStringLiteral("status"))) {
         const QString status = kvs.value(QStringLiteral("status")).trimmed().toLower();
         const bool saysLock = status.contains(QLatin1String("lock"));
@@ -1763,9 +1778,8 @@ void FlexBackend::decodeGpsStatus(const QString& rawBody)
             || status.contains(QLatin1String("not lock"))
             || status.contains(QLatin1String("lost"))
             || status.contains(QLatin1String("loss"));
-        // Lock alone decides validity; the coordinates are carried by their
-        // own keys and consumers parse the persisted lat/lon, so a status
-        // line without them must not invalidate a fix the radio still has.
+        // Preserve legacy validity for firmware without fix=. RadioModel
+        // additionally vetoes it when a reported fix cannot supply position.
         d.positionValid = saysLock && !saysNoLock;
         d.source = QStringLiteral("GPSDO");
     }
