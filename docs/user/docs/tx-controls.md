@@ -258,6 +258,15 @@ The ATU pre-tune sweep needs ATU memory, so the entry is disabled with
 2. Open **Tools → Pre-tune ATU Bands...** again. If the entry is still
    disabled, hover it: the radio may have no ATU memory.
 
+### Transmit is unavailable until the radio has connected
+
+During a reconnect attempt, transmit stays blocked until the radio connects.
+A transmit request can show "Transmit is unavailable until the radio has
+connected."
+
+1. Wait for the radio to reconnect.
+2. Confirm the connection before trying to transmit again.
+
 ### A notification says transmit is blocked
 
 An interlock is holding transmit off: for example an amplifier warming up, the

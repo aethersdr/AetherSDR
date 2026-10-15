@@ -255,8 +255,15 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         }
     }
     if (m_txSessionClosing) {
-        emitInterlockNotification(tr("Transmit is unavailable while the radio disconnects."),
-                                  QStringLiteral("tx-session-closing"));
+        // Admission stays closed from the teardown until onConnected(), so a
+        // connect attempt reaches this refusal too; name the phase it is in.
+        if (m_connectAttemptActive) {
+            emitInterlockNotification(tr("Transmit is unavailable until the radio has connected."),
+                                      QStringLiteral("tx-session-connecting"));
+        } else {
+            emitInterlockNotification(tr("Transmit is unavailable while the radio disconnects."),
+                                      QStringLiteral("tx-session-closing"));
+        }
         return false;
     }
     if (!m_backend || !refuseKeyOnTransmitIncapableBackend()
