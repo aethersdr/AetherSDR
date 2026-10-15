@@ -2121,6 +2121,18 @@ void VfoWidget::buildTabContent()
                 }
             });
 
+            // A readback above the request ceiling leaves the thumb at the
+            // endpoint. Explicit activation must still request that endpoint.
+            const auto requestNrsEndpoint = [this] {
+                if (!m_updatingFromModel && m_slice && m_dspLevelTarget == LvlNrs
+                    && m_slice->nrsLevel() > m_slice->nrsLevelMaximum()
+                    && m_dspLevelSlider->sliderPosition() == m_slice->nrsLevelMaximum()) {
+                    m_slice->setNrsLevel(m_slice->nrsLevelMaximum());
+                }
+            };
+            connect(m_dspLevelSlider, &QSlider::actionTriggered, this, requestNrsEndpoint);
+            connect(m_dspLevelSlider, &QSlider::sliderReleased, this, requestNrsEndpoint);
+
             // Keep the panel compact when no leveled DSP is active. The row
             // appears only when it has a real target; setDspLevelTarget()
             // refits the flag after each visibility transition.
@@ -5775,7 +5787,7 @@ void VfoWidget::setDspLevelTarget(DspLevelTarget t)
         case LvlNone: return;
     }
     m_dspLevelLabel->setText(name);
-    m_dspLevelSlider->setAccessibleName(name + tr(" level"));
+    m_dspLevelSlider->setAccessibleName(tr("%1 level").arg(name));
     {
         QSignalBlocker b(m_dspLevelSlider);
         m_dspLevelSlider->setRange(0, t == LvlNrs ? m_slice->nrsLevelMaximum() : 100);

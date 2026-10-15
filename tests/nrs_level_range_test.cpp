@@ -7,6 +7,7 @@
 #include "core/QsoRecorder.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/RadioConnection.h"
+#include "core/backends/flex/WanConnection.h"
 #include "gui/VfoWidget.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -17,16 +18,19 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
+#include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QScopeGuard>
 #include <QLabel>
 #include <QLayout>
 #include <QMap>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
+#include <QStyle>
 #include <QStringList>
 #include <QTemporaryDir>
 #include <QTest>
@@ -44,13 +48,38 @@ public:
     }
 };
 
+// Shared firmware/session access; reuses an existing friend without a new seam.
 class RadioNicknameTestAccess {
 public:
     static void firmware(RadioModel& radio, const QString& version)
     {
-        radio.m_version = version;
+        radio.adoptSoftwareVersion(version);
         radio.m_model = QStringLiteral("FLEX-8600");
         emit radio.infoChanged();
+    }
+    static void protocol(RadioModel& radio)
+    {
+        radio.onVersionReceived(QStringLiteral("1.4.0.0"));
+    }
+    static void disconnect(RadioModel& radio)
+    {
+        radio.m_lastInfo.address = QHostAddress(QHostAddress::LocalHost);
+        radio.m_intentionalDisconnect = false;
+        radio.onDisconnected();
+        radio.m_reconnectTimer.stop();
+    }
+    static void retryWithoutTransport(RadioModel& radio)
+    {
+        // Retain the backend but detach its admission pointers while the real
+        // retry handler runs, so no dial can be enqueued on either transport.
+        auto backend = std::move(radio.m_backend);
+        RadioConnection* connection = std::exchange(radio.m_connection, nullptr);
+        const auto restore = qScopeGuard([&] {
+            radio.m_backend = std::move(backend);
+            radio.m_connection = connection;
+        });
+        radio.triggerAutoReconnectForTest();
+        radio.m_reconnectTimer.stop();
     }
 };
 
@@ -378,6 +407,118 @@ private slots:
         QVERIFY(!bridge.txAllowed());
     }
 
+    void protocolIdentityIsNotFirmware()
+    {
+        Fixture f;
+        QVERIFY(f.init(QString()));
+        RadioNicknameTestAccess::protocol(f.radio);
+        QCOMPARE(f.radio.protocolVersion(), QStringLiteral("1.4.0.0"));
+        QVERIFY(f.radio.softwareVersion().isEmpty());
+        QCOMPARE(f.radio.slice(0)->nrsLevelMaximum(), 100);
+        QVERIFY(f.commands.isEmpty());
+        RadioNicknameTestAccess::firmware(f.radio, QStringLiteral("4.3.16.42034"));
+        QCOMPARE(f.radio.slice(0)->nrsLevelMaximum(), 50);
+        QVERIFY(f.commands.isEmpty());
+    }
+
+    void wanIdentityDoesNotReuseLanFirmware()
+    {
+        // The WAN socket stays inert: connectViaWan only attaches an already
+        // constructed transport; WanConnection::connectToRadio is never called.
+        WanConnection wan;
+        Fixture f;
+        const QString lanVersion = QStringLiteral("4.3.16.42034");
+        QVERIFY(f.init(lanVersion));
+        f.radio.connectViaWan(&wan, QStringLiteral("192.0.2.1"), 0);
+        QVERIFY(f.radio.softwareVersion().isEmpty());
+        RadioNicknameTestAccess::protocol(f.radio);
+        QVERIFY(f.radio.softwareVersion().isEmpty());
+        QCOMPARE(f.backend->capabilities().nrsLevelControl->levelMaximum, 100);
+        RadioNicknameTestAccess::firmware(f.radio, QStringLiteral("4.2.20.41343"));
+        QCOMPARE(f.radio.softwareVersion(), QStringLiteral("4.2.20.41343"));
+        QCOMPARE(f.radio.lastRadioInfo().version, lanVersion);
+        QCOMPARE(f.backend->capabilities().nrsLevelControl->levelMaximum, 100);
+        QVERIFY(f.commands.isEmpty());
+        QVERIFY(wan.isSocketIdle());
+    }
+
+    void autoReconnectBeforeFirmwareInfo()
+    {
+        Fixture f;
+        const QString version = QStringLiteral("4.3.16.42034");
+        QVERIFY(f.init(version));
+        SliceModel* original = f.radio.slice(0);
+        RadioConnectionSessionTestAccess::connected(*f.backend->connection(), false);
+        QCOMPARE(f.radio.lastRadioInfo().version, version);
+        RadioNicknameTestAccess::disconnect(f.radio);
+        QVERIFY(f.radio.softwareVersion().isEmpty());
+        f.radio.stageSessionModelsForReconnectForTest();
+        RadioNicknameTestAccess::retryWithoutTransport(f.radio);
+        RadioNicknameTestAccess::protocol(f.radio);
+        RadioConnectionSessionTestAccess::connected(*f.backend->connection(), true);
+        emit f.radio.connectionStateChanged(true);
+        f.commands.clear();
+        f.radio.handleSliceStatusForTest(0, sliceStatus(80));
+        QCOMPARE(f.radio.slice(0), original);
+        QCOMPARE(original->nrsLevelMaximum(), 50);
+        QCOMPARE(original->nrsLevel(), 80);
+        QVERIFY(f.commands.isEmpty());
+        original->setNrsLevel(100);
+        QCOMPARE(f.commands, QStringList{QStringLiteral("slice set 0 speex_nr_level=50")});
+        f.commands.clear();
+        RadioNicknameTestAccess::firmware(f.radio, version);
+        QCOMPARE(original->nrsLevelMaximum(), 50);
+        QVERIFY(f.commands.isEmpty());
+    }
+
+    void cappedEndpointAcceptsOperatorIntent()
+    {
+        Fixture f;
+        QVERIFY(f.init(QStringLiteral("4.3.16.42034")));
+        SliceModel* slice = f.radio.slice(0);
+        VfoWidget vfo;
+        vfo.setHasExtendedDsp(true);
+        vfo.setRadioModel(&f.radio);
+        vfo.setSlice(slice);
+        vfo.show();
+        QSlider* slider = vfo.findChild<QSlider*>(QStringLiteral("dspLevelSlider"));
+        QVERIFY(slider);
+        for (QPushButton* button : vfo.findChildren<QPushButton*>()) {
+            if (button->accessibleName() == QStringLiteral("DSP settings (DSP active)")) {
+                button->click();
+                break;
+            }
+        }
+        QCoreApplication::processEvents();
+        QVERIFY(slider->isVisible());
+        for (int gesture = 0; gesture < 3; ++gesture) {
+            f.backend->decodeSliceStatus(0, sliceStatus(80));
+            QCOMPARE(slider->value(), 50);
+            QCOMPARE(slice->nrsLevel(), 80);
+            f.commands.clear();
+            if (gesture == 0) {
+                QTest::keyClick(slider, Qt::Key_End);
+            } else {
+                const int handleLength = slider->style()->pixelMetric(
+                    QStyle::PM_SliderLength, nullptr, slider);
+                const QPoint handle(slider->width() - handleLength / 2 - 1,
+                                    slider->height() / 2);
+                QSignalSpy released(slider, &QSlider::sliderReleased);
+                QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, handle);
+                QVERIFY(slider->isSliderDown());
+                QCOMPARE(slice->nrsLevel(), 80);
+                const QPoint end = gesture == 1 ? handle : handle + QPoint(10, 0);
+                if (gesture == 2) {
+                    QTest::mouseMove(slider, end);
+                }
+                QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, end);
+                QCOMPARE(released.size(), 1);
+            }
+            QCOMPARE(slice->nrsLevel(), 50);
+            QCOMPARE(f.commands, QStringList{QStringLiteral("slice set 0 speex_nr_level=50")});
+        }
+    }
+
     void reconnectReclaimsWithCurrentRange()
     {
         Fixture f;
@@ -404,7 +545,6 @@ private slots:
         requests.clear();
         f.commands.clear();
         RadioConnectionSessionTestAccess::connected(*f.backend->connection(), false);
-        RadioNicknameTestAccess::firmware(f.radio, QString());
         emit f.radio.connectionStateChanged(false);
         QCOMPARE(original->nrsLevelMaximum(), 100);
         QCOMPARE(original->nrsLevel(), 80);

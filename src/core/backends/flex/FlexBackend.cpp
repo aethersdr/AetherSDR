@@ -137,13 +137,18 @@ void FlexBackend::setFirmwareVersionProvider(std::function<QString()> provider)
     m_firmwareVersionProvider = std::move(provider);
 }
 
-int FlexBackend::nrsLevelMaximum() const
+bool FlexBackend::firmwareAtLeast(const QVersionNumber& minimum) const
 {
     const QString text = m_firmwareVersionProvider ? m_firmwareVersionProvider() : QString();
     qsizetype suffixIndex = 0;
     const QVersionNumber version = QVersionNumber::fromString(text, &suffixIndex);
+    return suffixIndex == text.size() && version >= minimum;
+}
+
+int FlexBackend::nrsLevelMaximum() const
+{
     // Published FlexLib 4.3.16 Slice.NRSLevel reduces the maximum from 100 to 50.
-    return suffixIndex == text.size() && version >= QVersionNumber(4, 3, 16) ? 50 : 100;
+    return firmwareAtLeast(QVersionNumber(4, 3, 16)) ? 50 : 100;
 }
 
 void FlexBackend::refreshFirmwareCapabilities()
@@ -175,12 +180,8 @@ ReceiveDispatch FlexBackend::requestRadioNickname(const QString& nickname)
         }
     }
     if (sanitized.isEmpty()) {
-        const QString versionText = m_firmwareVersionProvider
-            ? m_firmwareVersionProvider() : QString();
-        qsizetype suffixIndex = 0;
-        const QVersionNumber version = QVersionNumber::fromString(versionText, &suffixIndex);
         // Older firmware interprets an empty name argument as a query, not a clear.
-        if (suffixIndex != versionText.size() || version < QVersionNumber(4, 3)) {
+        if (!firmwareAtLeast(QVersionNumber(4, 3))) {
             qCWarning(lcProtocol) << "FlexBackend: nickname clear refused:"
                                  << "firmware 4.3 or later is required";
             return ReceiveDispatch::Unsupported;
@@ -747,6 +748,10 @@ ReceiveDispatch FlexBackend::requestSliceDsp(int sliceId, const SliceDspRequest&
     }
     const int level = request.feature == SliceDspRequest::Feature::Nrs
         ? std::min(request.level, nrsLevelMaximum()) : request.level;
+    if (request.field == SliceDspRequest::Field::Level && level != request.level) {
+        qCDebug(lcProtocol) << "FlexBackend: NRS level request clamped"
+                           << "slice" << sliceId << "requested" << request.level << "sent" << level;
+    }
     sendSlice(QStringLiteral("slice set %1 %2=%3").arg(sliceId).arg(key)
                   .arg(request.field == SliceDspRequest::Field::Enabled
                            ? int(request.enabled) : level));
