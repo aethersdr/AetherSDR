@@ -8,6 +8,7 @@
 #include "models/SliceModel.h"
 
 #include <QApplication>
+#include <QAbstractItemModel>
 #include <QComboBox>
 #include <QLabel>
 #include <QList>
@@ -310,6 +311,45 @@ void userAndStatus()
     QTest::keyClick(f.reset(), Qt::Key_Space);
     check(f.commands == QStringList{"slice reset 0 dsp_param=all"}, "keyboard activation reaches the same operator path");
 }
+
+void targetAvailability()
+{
+    Fixture f;
+    using Target = DspParameterResetTarget;
+    const auto enabled = [&f](Target target) {
+        const int row = f.target()->findData(static_cast<int>(target));
+        return f.target()->model()->flags(f.target()->model()->index(row, 0)).testFlag(Qt::ItemIsEnabled);
+    };
+    const auto reason = [&f](Target target, int role) {
+        return f.target()->itemData(f.target()->findData(static_cast<int>(target)), role).toString();
+    };
+    check(f.target()->count() == 8 && enabled(Target::All) && enabled(Target::Nrs) && !enabled(Target::Nr),
+          "unknown entitlement dims advanced choices while retaining all eight targets");
+    check(!reason(Target::Nr, Qt::ToolTipRole).isEmpty()
+              && !reason(Target::Nr, Qt::AccessibleDescriptionRole).isEmpty(),
+          "unavailable target exposes a tooltip and screen-reader reason");
+    f.target()->setFocus();
+    QTest::keyClick(f.target(), Qt::Key_Down);
+    check(f.target()->currentData().toInt() == static_cast<int>(Target::Nrs) && f.commands.isEmpty(),
+          "keyboard selection skips unavailable targets without resetting");
+    RadioModelSliceLifecycleTestAccess::license(f.radio, QStringLiteral("1"));
+    check(enabled(Target::Nr), "license grant restores advanced menu choices");
+    f.choose(Target::Nr);
+    RadioModelSliceLifecycleTestAccess::license(f.radio, QStringLiteral("0"));
+    check(!enabled(Target::Nr) && !f.reset()->isEnabled()
+              && f.target()->accessibleDescription().contains(reason(Target::Nr, Qt::AccessibleDescriptionRole)),
+          "revocation dims the selected target and explains the current restriction");
+    RadioModelSliceLifecycleTestAccess::license(f.radio, QStringLiteral("1"));
+    RadioModelSliceLifecycleTestAccess::identity(f.radio, "FLEX-6700", "4.3.16");
+    check(!enabled(Target::Nrs) && !enabled(Target::Nrf) && enabled(Target::Nr),
+          "hardware restrictions disable only unsupported targets");
+    f.backend->decodeSliceStatus(0, {{"mode", "CW"}});
+    check(!enabled(Target::Anf) && !enabled(Target::Anfl) && !enabled(Target::Anft) && enabled(Target::All),
+          "mode changes refresh individual menu availability");
+    f.backend->decodeSliceStatus(0, {{"mode", "FM"}});
+    check(!enabled(Target::All) && !f.reset()->isEnabled() && f.commands.isEmpty(),
+          "unsupported mode disables every target without a reset");
+}
 int bridgeFixture(QApplication& app)
 {
     Fixture f;
@@ -373,5 +413,6 @@ int main(int argc, char** argv)
     productionProviders();
     identityAndSession();
     userAndStatus();
+    targetAvailability();
     return failures ? 1 : 0;
 }

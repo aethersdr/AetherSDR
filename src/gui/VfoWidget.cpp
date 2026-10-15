@@ -68,6 +68,7 @@
 #include <QFormLayout>
 #include <QFontMetrics>
 #include <QSignalBlocker>
+#include <QStandardItemModel>
 #include <QDir>
 #include <QFile>
 #include <QPixmap>
@@ -6793,20 +6794,36 @@ void VfoWidget::updateDspParameterResetControls()
     if (!m_dspResetButton || !m_dspResetTarget) {
         return;
     }
+    const auto unavailableReason = [this](DspParameterResetTarget target) {
+        return m_radioModel
+            ? m_radioModel->dspParameterResetUnavailableReason(m_dspResetSlice.data(), m_radioModel->receiveControlSession(), target)
+            : tr("Connect to a radio to reset DSP parameters");
+    };
+    auto* targets = qobject_cast<QStandardItemModel*>(m_dspResetTarget->model());
+    if (targets) {
+        for (int row = 0; row < m_dspResetTarget->count(); ++row) {
+            const DspParameterResetTarget choice =
+                static_cast<DspParameterResetTarget>(m_dspResetTarget->itemData(row).toInt());
+            const QString reason = unavailableReason(choice);
+            QStandardItem* item = targets->item(row);
+            item->setEnabled(reason.isEmpty());
+            item->setSelectable(reason.isEmpty());
+            item->setData(reason, Qt::ToolTipRole);
+            item->setData(reason, Qt::AccessibleDescriptionRole);
+        }
+    }
     const DspParameterResetTarget target =
         static_cast<DspParameterResetTarget>(m_dspResetTarget->currentData().toInt());
     const QString scope = target == DspParameterResetTarget::All
         ? tr("Reset every DSP block's parameters, including NB and APF levels. Keeps all on/off states.")
         : tr("Reset the selected algorithm's parameters to radio defaults. Keeps its on/off state.");
-    const QString reason = m_radioModel
-        ? m_radioModel->dspParameterResetUnavailableReason(m_dspResetSlice.data(), m_radioModel->receiveControlSession(), target)
-        : tr("Connect to a radio to reset DSP parameters");
+    const QString reason = unavailableReason(target);
     const QString description = reason.isEmpty() ? scope : reason + QStringLiteral(". ") + scope;
     m_dspResetButton->setEnabled(reason.isEmpty());
     m_dspResetButton->setToolTip(description);
     m_dspResetButton->setAccessibleDescription(description);
-    m_dspResetTarget->setToolTip(scope);
-    m_dspResetTarget->setAccessibleDescription(scope + tr(" Selecting a target does not reset it; press Reset to apply."));
+    m_dspResetTarget->setToolTip(description);
+    m_dspResetTarget->setAccessibleDescription(description + tr(" Selecting a target does not reset it; press Reset to apply."));
 }
 
 void VfoWidget::setRadioModel(RadioModel* radioModel)
