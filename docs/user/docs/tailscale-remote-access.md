@@ -8,28 +8,42 @@ Operate a FLEX-8000 series or Aurora radio from anywhere: a small container
 installed **inside the radio** joins your private Tailscale network. It works
 behind carrier-grade NAT (CGNAT), Starlink, cellular home internet or any
 router whose ports you can't forward, and it needs no SmartLink account.
+The radio needs an active **SmartSDR+** subscription, which is what
+enables containers inside the radio.
 
 AetherSDR installs and sets up the container for you from the **Waveforms**
 window. After that you connect from anywhere with **Connect by IP**, as if the
 radio were on your desk.
 
-> ### 💲 It costs nothing
+> ### 💲 What it costs
 > Tailscale's **Personal plan is free forever**, for non-commercial use (which
 > amateur radio is). It covers up to **6 users** and **unlimited devices**,
 > and includes the **subnet routing** used here to share station
 > accessories. A typical ham station (the radio plus your laptop, phone and
-> tablet) fits easily, and you never need a paid plan for this. The
-> container and AetherSDR are free and open source too.
+> tablet) fits easily, and you never need a paid Tailscale plan for this.
+> The container and AetherSDR are free and open source too.
+>
+> The one thing you pay for is on the FlexRadio side: the radio only runs
+> containers with an active **SmartSDR+** subscription. See
+> [Requirements](#requirements).
 >
 > **Sign up with a personal login** (Gmail/Google, Apple, a personal
 > Microsoft or GitHub account) to land on the free plan. A login on your own
 > or your employer's domain is treated as a business and starts a business
 > trial instead.
 
-> **Radios:** FLEX-8000 series and Aurora, which can run Docker waveform
-> containers. It was developed and measured on a FLEX-8600 (firmware 4.2.20);
-> the FLEX-8400 and Aurora have not been tested yet. FLEX-6000 series radios
-> can't run containers.
+## Requirements
+
+- **Radio:** a FLEX-8000 series or Aurora radio, which can run Docker
+  waveform containers. It was developed and measured on a FLEX-8600
+  (firmware 4.2.20); the FLEX-8400 and Aurora have not been tested yet.
+  FLEX-6000 series radios can't run containers.
+- **SmartSDR+:** the radio must have an active **SmartSDR+** subscription,
+  purchased from FlexRadio. SmartSDR+ is what enables containers inside the
+  radio; without it the container can't be installed or run. AetherSDR
+  shows the radio's license under **Settings → Radio Setup... → Radio →
+  License Info**.
+- **Tailscale:** a free Tailscale Personal account (Part 1).
 
 ## What Tailscale is
 
@@ -62,7 +76,7 @@ Some things to know:
 |---|---|---|
 | Port forwarding at the station | Not needed; works behind CGNAT | Required (TCP 4994, UDP 4993) or UPnP |
 | Account | A **free** Tailscale Personal account | A FlexRadio SmartLink account |
-| Radios | FLEX-8000 series, Aurora | All FlexRadio models with SmartLink |
+| Radios | FLEX-8000 series, Aurora, with an active **SmartSDR+** subscription | All FlexRadio models with SmartLink |
 | Station accessories (Antenna Genius, PGXL, TGXL) | Reachable remotely | Not reachable |
 | What the remote computer needs | The Tailscale app | Nothing extra |
 
@@ -359,6 +373,9 @@ about a fifth of one core and around 34 MB of memory.
 
 ## Troubleshooting
 
+- **The container won't install or start**: check that the radio's
+  SmartSDR+ subscription is active (**Settings → Radio Setup... → Radio →
+  License Info**). Containers need SmartSDR+.
 - **Remote Access says "Unavailable"**: connect to the radio over its
   local network, not over the tailnet, to change settings.
 - **"Doesn't look like a Tailscale auth key"**: paste the whole key,

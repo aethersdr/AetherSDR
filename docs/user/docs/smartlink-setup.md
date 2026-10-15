@@ -14,7 +14,7 @@ applies_to: ["FlexRadio"]
 
 SmartLink lets you operate your FlexRadio over the internet. AetherSDR supports the full SmartLink sign-in and connection flow, including audio, panadapter and waterfall streaming.
 
-Can't forward ports at the station (CGNAT, Starlink, cellular)? On a FLEX-8000 series or Aurora radio, see [Tailscale Remote Access](./tailscale-remote-access.md). It needs no port forwarding and runs on Tailscale's free plan.
+Can't forward ports at the station (CGNAT, Starlink, cellular)? On a FLEX-8000 series or Aurora radio with a SmartSDR+ subscription, see [Tailscale Remote Access](./tailscale-remote-access.md). It needs no port forwarding and runs on Tailscale's free plan.
 
 ## Requirements
 

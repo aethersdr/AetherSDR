@@ -118,7 +118,7 @@ Prefer paper? Download the [printable manual](pathname:///AetherSDR-Manual.pdf) 
 
 - [SmartLink Setup](./smartlink-setup.md) — Operate your radio over the internet
 - [Manual Connection](./manual-connection.md) — Connect by IP across routed networks, VPN source path, diagnostics
-- [Tailscale Remote Access](./tailscale-remote-access.md) — Remote operation behind CGNAT through a container in the radio (FLEX-8000/Aurora), on Tailscale's free plan
+- [Tailscale Remote Access](./tailscale-remote-access.md) — Remote operation behind CGNAT through a container in the radio (FLEX-8000/Aurora with SmartSDR+), on Tailscale's free plan
 - [Low Bandwidth Connections](./low-bandwidth-connections.md) — Reduce traffic for VPN, LTE and metered links
 - [Multi-Flex](./multi-flex.md) — Operating alongside SmartSDR or Maestro
 

@@ -9,7 +9,7 @@ Connect to a radio by its IP address when automatic discovery cannot reach it, s
 Use **Connect by IP** for:
 
 - A radio on a different VLAN or subnet
-- A radio behind a VPN, including a FLEX-8000/Aurora on your tailnet (see [Tailscale Remote Access](./tailscale-remote-access.md))
+- A radio behind a VPN, including a FLEX-8000/Aurora on your tailnet (requires SmartSDR+; see [Tailscale Remote Access](./tailscale-remote-access.md))
 - Remote access via a public IP with port forwarding (without SmartLink)
 - A networked Icom, which is always reached this way (see [Networked Icom](./networked-icom.md))
 
