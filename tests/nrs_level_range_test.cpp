@@ -12,7 +12,6 @@
 #include <QLabel>
 #include <QLayout>
 #include <QMap>
-#include <QMap>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
