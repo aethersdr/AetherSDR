@@ -6783,6 +6783,13 @@ target_link_libraries(aetherd_radio_decode_test PRIVATE aethercore Qt6::Core Qt6
 set_target_properties(aetherd_radio_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_radio_decode_test COMMAND aetherd_radio_decode_test)
 
+# Socket-free: FlexLib GPS fix tokens, partial deltas, session reset and
+# generation-fenced old-backend delivery through the production model binding.
+add_executable(gps_fix_state_test tests/gps_fix_state_test.cpp)
+target_include_directories(gps_fix_state_test PRIVATE src tests)
+target_link_libraries(gps_fix_state_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME gps_fix_state_test COMMAND gps_fix_state_test)
+
 add_executable(aetherd_residual_decode_test tests/aetherd_residual_decode_test.cpp)
 target_include_directories(aetherd_residual_decode_test PRIVATE src)
 target_link_libraries(aetherd_residual_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -8624,6 +8631,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    gps_fix_state_test
     dax_receive_applet_test
     hl2_discovery_logging_test
     reroute_dead_controls_test
