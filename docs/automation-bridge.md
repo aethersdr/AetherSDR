@@ -4548,7 +4548,7 @@ Drive the CWX CW keyer — the easy repro for post-TX FFT-floor recovery (#3804)
 Stage the slice into a CW mode first (`invoke sliceModeCombo setCurrentText CW`)
 for the radio to actually emit.
 
-The send, speed and stop actions emit a `cwx` verb at the radio, so on a connected backend that
+Every action here emits a `cwx` verb at the radio, so on a connected backend that
 declares `hasRadioSideCwKeyer=false` (an HL2, the demo) all three return an error
 rather than `ok:true` for work the radio would silently drop:
 
@@ -4559,19 +4559,6 @@ rather than `ok:true` for work the radio would silently drop:
 
 Disconnected it still answers, like every other capability gate here — with
 nothing attached there is nothing to be honest about.
-
-#### Disconnected CWX protocol previews
-
-`cwx preview <text>` runs the production CWX model's send, live and macro-save construction with the supplied text. The reply's `commands` array labels each operation and includes its `command`, `utf8Hex`, and reply character count (`nChars`, or `-1` for commands without a tracked reply). The live preview passes the supplied string to `sendChar`; use a single character to inspect a live keystroke.
-
-`cwx preview-status <field>` feeds one macro status value to the production model and returns its decoded `macro`. Supply the field's surrounding quotes if present on the wire. For example:
-
-```json
-{"cmd":"cwx","action":"preview","value":"CQ \"DX\""}
-{"cmd":"cwx","action":"preview-status","value":"\"CQ\u007f\u001eDX\u001e\""}
-```
-
-Both actions require a disconnected radio and accept at most 1024 characters. Each uses a temporary model whose only signal bindings collect the reply; no transport, audio, TX coordinator or persistent state is attached. They return `isolated:true` and work with TX automation disabled. Other CWX actions retain their normal capability and TX gates.
 
 ### `txtest`
 Two-tone TX test signal (for IMD / PA / meter measurements).
@@ -4867,7 +4854,7 @@ still a separate radiocert task.
 | `droopcal` | — | droopcal [status\|start\|stop\|apply\|discard] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop) |
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
-| `cwx` | — | cwx <send\|speed\|stop\|preview\|preview-status> [args] — keyer or disconnected codec preview |
+| `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
 | `sim` | — | sim <swr\|dropslice\|stallscope\|disconnect\|malformed\|clear> [arg] — demo fault injection (RFC #4288; only valid when the demo is connected) |
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |

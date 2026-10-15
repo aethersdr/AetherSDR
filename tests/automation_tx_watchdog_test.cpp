@@ -167,52 +167,6 @@ struct Fixture {
     }
 };
 
-void cwxPreviewsCannotReachTransport()
-{
-    Fixture f;
-    f.backend->connected = false;
-    f.bridge.setTxAllowed(false);
-    int realCommands = 0;
-    QObject::connect(&f.radio.cwxModel(), &CwxModel::commandReady, &f.radio,
-                     [&realCommands](const QString&) { ++realCommands; });
-    QObject::connect(&f.radio.cwxModel(), &CwxModel::replyCommandReady, &f.radio,
-                     [&realCommands](const QString&, int, int) { ++realCommands; });
-    const QString originalMacro = f.radio.cwxModel().macro(0);
-    const QJsonObject preview = f.request("cwx preview CQ \"DX\"");
-    const QJsonArray commands = preview.value("commands").toArray();
-    check(preview.value("ok").toBool() && preview.value("isolated").toBool()
-              && commands.size() == 3, "disconnected CWX preview works with TX disabled");
-    if (commands.size() == 3) {
-        const QByteArray payload = QByteArray::fromHex("43517f1e44581e");
-        const QByteArray expected[] = {
-            QByteArray("cwx send \"") + payload + "\" 1",
-            QByteArray("cwx send \"") + payload + "\" 2",
-            QByteArray("cwx macro save 1 \"") + payload + '\"'
-        };
-        const QString operations[] = {QStringLiteral("send"), QStringLiteral("live"), QStringLiteral("save")};
-        for (int i = 0; i < 3; ++i) {
-            const QJsonObject command = commands[i].toObject();
-            check(command.value("operation").toString() == operations[i]
-                      && command.value("utf8Hex").toString().toLatin1() == expected[i].toHex(),
-                  "bridge preview exposes production quote-encoded command bytes");
-        }
-    }
-    const QJsonObject status = f.request(QByteArray("cwx preview-status ")
-        + QByteArray::fromHex("2243517f1e44581e22"));
-    check(status.value("ok").toBool() && status.value("macro").toString() == "CQ \"DX\"",
-          "bridge preview decodes an independent macro status fixture");
-    check(realCommands == 0 && f.commands.isEmpty()
-              && f.radio.cwxModel().macro(0) == originalMacro && !f.radio.cwxActive(),
-          "previews never touch the real keyer, macro store or transport");
-    check(!f.request(QByteArray("cwx preview ") + QByteArray(1025, 'A')).value("ok").toBool(),
-          "CWX preview input is bounded");
-    f.backend->connected = true;
-    check(!f.request("cwx preview CQ").value("ok").toBool()
-              && !f.request("cwx preview-status CQ").value("ok").toBool(),
-          "both CWX preview actions refuse a connected radio");
-    check(realCommands == 0 && f.commands.isEmpty(), "preview refusals issue no transport commands");
-}
-
 void manualTransmitIsNotPoliced()
 {
     Fixture f;
@@ -631,7 +585,6 @@ int main(int argc, char** argv)
         return 1;
     }
     QCoreApplication app(argc, argv);
-    cwxPreviewsCannotReachTransport();
     manualTransmitIsNotPoliced();
     actionsCannotAdoptExistingOperation();
     deadlineDoesNotRenew();
