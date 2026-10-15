@@ -1824,6 +1824,7 @@ private:
     QWidget* m_paStack{nullptr};
     QLabel*  m_paSeparator{nullptr};
     QLabel* m_networkLabel{nullptr};
+    QWidget* m_networkStatusBlock{nullptr};
     QTimer m_networkTooltipRefreshTimer;
     QTimer m_perfHeartbeatTimer;
     // GPS/station-location status-bar button and the separator that follows it.

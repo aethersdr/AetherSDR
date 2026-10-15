@@ -13,6 +13,7 @@
 #include "core/IambicKeyer.h"
 
 #include <QApplication>
+#include <QHelpEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
 
@@ -820,24 +821,27 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         setPaTempDisplayUnit(!m_paTempUseFahrenheit);
         return true;
     }
-    if (obj == m_networkLabel && event->type() == QEvent::MouseButtonDblClick) {
+    if (obj == m_networkStatusBlock && event->type() == QEvent::MouseButtonDblClick) {
+        m_networkTooltipRefreshTimer.stop();
+        QToolTip::hideText();
         showNetworkDiagnosticsDialog();
         return true;
     }
-    if (obj == m_networkLabel && event->type() == QEvent::Enter) {
+    if (obj == m_networkStatusBlock && event->type() == QEvent::Enter) {
         m_networkTooltipRefreshTimer.start();
     }
-    if (obj == m_networkLabel && event->type() == QEvent::Leave) {
+    if (obj == m_networkStatusBlock && event->type() == QEvent::Leave) {
         m_networkTooltipRefreshTimer.stop();
         QToolTip::hideText();
     }
-    if (obj == m_networkLabel && event->type() == QEvent::ToolTip) {
+    if (obj == m_networkStatusBlock && event->type() == QEvent::ToolTip) {
         const QString tooltip = buildNetworkTooltip(m_radioModel,
                                                      m_adaptiveFpsCap,
                                                      m_radioModel.pendingThrottleLift());
         m_networkLabel->setToolTip(tooltip);
+        m_networkStatusBlock->setToolTip(tooltip);
         auto* helpEvent = static_cast<QHelpEvent*>(event);
-        QToolTip::showText(helpEvent->globalPos(), tooltip, m_networkLabel);
+        QToolTip::showText(helpEvent->globalPos(), tooltip, m_networkStatusBlock);
         m_networkTooltipRefreshTimer.start();
         return true;
     }
