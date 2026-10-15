@@ -174,6 +174,10 @@ void interlockProbe()
     check(!ok(unsupported) && errorOf(unsupported).contains(QStringLiteral("read-only mode")),
           "only the interlock probe action is classified as read-only", unsupported);
 
+    const QJsonObject uppercase = Access::request(server, QByteArray("interlock PROBE source=MIC"));
+    check(!ok(uppercase) && errorOf(uppercase).contains(QStringLiteral("read-only mode")),
+          "observe-only action classification matches case-sensitive interlock dispatch", uppercase);
+
     const QString token = QStringLiteral("interlock-probe-test-token");
     server.setAuthToken(token);
     const QJsonObject unauthenticated = Access::request(server, QByteArray("interlock probe source=MIC"));

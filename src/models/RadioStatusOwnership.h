@@ -6,6 +6,7 @@
 #include <QMap>
 #include <QString>
 #include <QStringList>
+#include <QStringView>
 
 #include <algorithm>
 #include <utility>
@@ -104,12 +105,26 @@ inline bool interlockKeepsLocalTxOn(bool txOwnedByUs, bool txRequested,
     if (!txOwnedByUs) {
         return false;
     }
-    const QStringList sources = lastInterlockSource.split(QLatin1Char(','));
-    const bool hardwarePtt = sources.contains(QLatin1String("MIC"))
-        || sources.contains(QLatin1String("ACC"))
-        || sources.contains(QLatin1String("RCA"));
-    return txRequested || cwKeyActive || cwxActive || tuning
-           || hardwarePtt || voxEnabled;
+    if (txRequested || cwKeyActive || cwxActive || tuning || voxEnabled) {
+        return true;
+    }
+    // Status retains this remote field across deltas. Scan views so repeated
+    // comma-dense input cannot amplify allocations into one string per token.
+    const QStringView sources(lastInterlockSource);
+    qsizetype from = 0;
+    for (;;) {
+        const qsizetype comma = sources.indexOf(QLatin1Char(','), from);
+        const qsizetype end = comma < 0 ? sources.size() : comma;
+        const QStringView token = sources.mid(from, end - from);
+        if (token == QLatin1String("MIC") || token == QLatin1String("ACC")
+            || token == QLatin1String("RCA")) {
+            return true;
+        }
+        if (comma < 0) {
+            return false;
+        }
+        from = comma + 1;
+    }
 }
 
 // Whether the *local operator* is the one keying the transmitter — mic/PTT,
