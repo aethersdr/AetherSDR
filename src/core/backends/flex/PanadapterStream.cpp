@@ -406,6 +406,7 @@ void PanadapterStream::startWanUdpRegister(quint32 clientHandle)
                     << "handle=0x" + hex
                     << "sending to" << m_radioAddress.toString() << ":" << m_radioPort;
     sendWanUdpRegister();
+    m_wanRegisterTimer->setTimerType(Qt::PreciseTimer);
     m_wanRegisterTimer->start(kWanRegisterIntervalMs);
 }
 
@@ -437,27 +438,20 @@ void PanadapterStream::confirmWanRegistration(const QByteArray& data)
     const quint32 header = qFromBigEndian<quint32>(raw);
     const quint32 type = header >> 28;
     const bool hasClass = (header & 0x08000000u) != 0;
-    const bool hasTrailer = (header & 0x04000000u) != 0;
+    const bool hasStream = type == 1 || type == 3;
     const bool hasIntegerTimestamp = (header & 0x00C00000u) != 0;
     const bool hasFractionalTimestamp = (header & 0x00300000u) != 0;
-    const int headerBytes = 16 + (hasIntegerTimestamp ? 4 : 0)
-                              + (hasFractionalTimestamp ? 8 : 0);
-    const quint32 packetBytes = (header & 0xFFFFu) * 4;
-    const quint32 datagramBytes = static_cast<quint32>(data.size());
-    const quint16 pcc = static_cast<quint16>(qFromBigEndian<quint32>(raw + 12));
-    // FlexLib's byte-oriented Opus payload omits up to three padding bytes;
-    // its VITA word count still rounds up (TXRemoteAudioStream, 4.3.16).
-    const bool unpaddedOpus = pcc == PCC_OPUS && packetBytes >= datagramBytes
-                             && packetBytes - datagramBytes < 4;
-    // FlexLib qualifies by preamble/OUI, without matching the incoming source
-    // to the outgoing registration endpoint (VitaSocket.ReceiveLoop, 4.3.16).
-    if ((type != 1 && type != 3) || !hasClass
-        || (packetBytes != datagramBytes && !unpaddedOpus)
-        || data.size() < headerBytes + (hasTrailer ? 4 : 0)
-        || (qFromBigEndian<quint32>(raw + 8) & 0x00FFFFFFu) != 0x001C2Du) {
+    const int classOffset = 4 + (hasStream ? 4 : 0);
+    const int preambleBytes = classOffset + 8 + (hasIntegerTimestamp ? 4 : 0)
+                                            + (hasFractionalTimestamp ? 8 : 0);
+    // FlexLib 4.3.16 qualifies the parsed preamble's OUI before dispatch.
+    // Its preamble parser does not validate payload size or read the trailer.
+    if (!hasClass || data.size() < preambleBytes
+        || (qFromBigEndian<quint32>(raw + classOffset) & 0x00FFFFFFu) != 0x001C2Du) {
         return;
     }
     m_wanRegistered = true;
+    m_wanRegisterTimer->setTimerType(Qt::CoarseTimer);
     m_wanRegisterTimer->setInterval(kWanKeepaliveIntervalMs);
     qCDebug(lcVita49) << "PanadapterStream: WAN — first VITA-49 packet received!"
                     << data.size() << "bytes — UDP registration confirmed";
