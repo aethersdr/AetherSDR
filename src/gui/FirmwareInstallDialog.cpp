@@ -314,7 +314,7 @@ void FirmwareInstallDialog::onProductChosen(int index)
         return;
     m_haveRelease = false;
     m_release->setText(m_catalog.products[index].description);
-    m_downloader->fetchRelease(m_catalog.products[index].manifest,
+    m_downloader->fetchRelease(m_catalog.products[index].package,
                                m_catalog.products[index].version);
     sync();
 }

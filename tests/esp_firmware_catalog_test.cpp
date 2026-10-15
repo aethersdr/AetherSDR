@@ -1,7 +1,8 @@
 // EspFirmwareCatalog and EspFirmwareDownloader over file:// URLs: a release
-// installs only with a manifest signed by a trusted Ed25519 key, and only
-// with every image intact; the catalog resolves manifest links against its
-// own location. Keys are made here; no network.
+// package (.asdr, a ustar archive) installs only with a manifest signed by a
+// trusted Ed25519 key, and only with every image intact; a damaged or odd
+// archive is refused; the catalog resolves package links against its own
+// location. Archives and keys are made here; no network.
 
 #include "core/EspFirmwareCatalog.h"
 
@@ -77,6 +78,37 @@ void write(const QString& path, const QByteArray& data)
     f.write(data);
 }
 
+// One ustar entry, as GNU tar --format=ustar writes it.
+QByteArray tarEntry(const QByteArray& name, const QByteArray& data, char type = '0')
+{
+    QByteArray h(512, '\0');
+    const auto put = [&h](int at, const QByteArray& field) { h.replace(at, field.size(), field); };
+    put(0, name.left(100));
+    put(100, "0000644");
+    put(108, "0000000");
+    put(116, "0000000");
+    put(124, QByteArray::number(data.size(), 8).rightJustified(11, '0'));
+    put(136, "00000000000");
+    put(148, "        ");
+    h[156] = type;
+    put(257, QByteArray("ustar\0" "00", 8));
+    quint32 sum = 0;
+    for (char c : h)
+        sum += quint8(c);
+    put(148, QByteArray::number(sum, 8).rightJustified(6, '0') + QByteArray("\0 ", 2));
+    QByteArray body = data;
+    body.append(QByteArray((512 - data.size() % 512) % 512, '\0'));
+    return h + body;
+}
+
+QByteArray tarOf(const QList<QPair<QByteArray, QByteArray>>& files)
+{
+    QByteArray t;
+    for (const auto& f : files)
+        t += tarEntry(f.first, f.second);
+    return t + QByteArray(1024, '\0');
+}
+
 QString hex(quint32 v)
 {
     return QStringLiteral("0x%1").arg(v, 0, 16);
@@ -125,8 +157,8 @@ void testCatalog()
         {"products", QJsonArray{
              QJsonObject{{"name", "Example"}, {"device", "Example Box"}, {"chip", "ESP32-S3"},
                          {"releases", QJsonArray{
-                              QJsonObject{{"version", "1.1.0"}, {"manifest", "example/1.1.0/manifest.json"}},
-                              QJsonObject{{"version", "1.0.0"}, {"manifest", "example/1.0.0/manifest.json"}},
+                              QJsonObject{{"version", "1.1.0"}, {"package", "example/example-1.1.0.asdr"}},
+                              QJsonObject{{"version", "1.0.0"}, {"package", "example/example-1.0.0.asdr"}},
                               QJsonObject{{"version", "0.9.0"}},
                           }}},
              QJsonObject{{"name", "No releases"}},
@@ -137,7 +169,7 @@ void testCatalog()
     check(EspFirmwareCatalog::parse(json, QUrl("https://example.org/firmware/catalog.json"), &c,
                                     &problem),
           "the catalog parses");
-    check(c.products.size() == 2, "each release is listed; ones without a manifest are skipped");
+    check(c.products.size() == 2, "each release is listed; ones without a package are skipped");
     check(c.products.value(0).version == QStringLiteral("1.1.0")
               && c.products.value(1).version == QStringLiteral("1.0.0"),
           "releases keep the catalog's order, with their versions");
@@ -145,9 +177,9 @@ void testCatalog()
               && c.products.value(1).device == QStringLiteral("Example Box")
               && c.products.value(1).chip == QStringLiteral("ESP32-S3"),
           "every release carries its product's name, device and chip");
-    check(c.products.value(0).manifest
-              == QUrl("https://example.org/firmware/example/1.1.0/manifest.json"),
-          "manifest links resolve against the catalog");
+    check(c.products.value(0).package
+              == QUrl("https://example.org/firmware/example/example-1.1.0.asdr"),
+          "package links resolve against the catalog");
     check(!EspFirmwareCatalog::parse(R"({"format":2})", QUrl(), &c, &problem),
           "a newer catalog format is refused");
 }
@@ -177,24 +209,33 @@ Result fetch(const QUrl& url, const QString& expectedVersion = {})
     return r;
 }
 
+QByteArray testApp()
+{
+    QByteArray app(5000, 'x');
+    app[0] = static_cast<char>(0xE9);
+    return app;
+}
+
 void testDownload()
 {
     const Key trusted('a'), other('b');
     EspFirmwareCatalog::setTrustedKeysForTesting({trusted.pub});
     QTemporaryDir dir;
     const QDir d(dir.path());
-    QByteArray app(5000, 'x');
-    app[0] = static_cast<char>(0xE9);
+    const QByteArray app = testApp();
     const QByteArray manifest = manifestFor(app);
-    write(d.filePath("app.bin"), app);
-    write(d.filePath("manifest.json"), manifest);
-    write(d.filePath("manifest.json.sig"), trusted.sign(manifest).toBase64());
-    const QUrl url = QUrl::fromLocalFile(d.filePath("manifest.json"));
+    const QString path = d.filePath("example-2.0.0.asdr");
+    const QUrl url = QUrl::fromLocalFile(path);
+    const auto package = [&](const QByteArray& m, const QByteArray& sig, const QByteArray& a) {
+        write(path, tarOf({{"app.bin", a}, {"manifest.json", m}, {"manifest.json.sig", sig}}));
+    };
 
+    package(manifest, trusted.sign(manifest).toBase64(), app);
     Result r = fetch(url);
-    check(r.ok, "a signed release with intact images downloads");
-    check(r.manifest.version == QStringLiteral("2.0.0") && r.files.value("app.bin") == app,
-          "with its manifest and image");
+    check(r.ok, "a signed package with intact images opens");
+    check(r.manifest.version == QStringLiteral("2.0.0") && r.files.value("app.bin") == app
+              && r.files.size() == 1,
+          "with its manifest and only the images it names");
 
     r = fetch(url, QStringLiteral("2.0.0"));
     check(r.ok, "the version the catalog lists matches");
@@ -202,56 +243,92 @@ void testDownload()
     check(!r.ok && r.message.contains(QStringLiteral("2.1.0")),
           "a release that is not the version the catalog lists is refused");
 
-    write(d.filePath("app.bin"), app.left(4999) + "y");
+    package(manifest, trusted.sign(manifest).toBase64(), app.left(4999) + "y");
     r = fetch(url);
     check(!r.ok && r.message.contains(QStringLiteral("intact")), "a changed image is refused");
-    write(d.filePath("app.bin"), app);
 
-    write(d.filePath("manifest.json.sig"), other.sign(manifest));
+    package(manifest, other.sign(manifest), app);
     r = fetch(url);
     check(!r.ok && r.message.contains(QStringLiteral("not signed")),
           "a manifest signed by an untrusted key is refused");
 
-    QFile::remove(d.filePath("manifest.json.sig"));
+    write(path, tarOf({{"app.bin", app}, {"manifest.json", manifest}}));
     r = fetch(url);
-    check(!r.ok, "a manifest without a signature is refused");
+    check(!r.ok, "a package without a signature is refused");
+
+    write(path, tarOf({{"manifest.json", manifest}, {"manifest.json.sig", trusted.sign(manifest)}}));
+    r = fetch(url);
+    check(!r.ok && r.message.contains(QStringLiteral("app.bin")), "a package missing an image is refused");
 
     // Signed, but invalid as a manifest: still refused, after the signature.
     const QByteArray bad = manifest.left(manifest.size() / 2);
-    write(d.filePath("manifest.json"), bad);
-    write(d.filePath("manifest.json.sig"), trusted.sign(bad));
+    package(bad, trusted.sign(bad), app);
     r = fetch(url);
     check(!r.ok && r.message.contains(QStringLiteral("manifest")), "a broken manifest is refused");
 }
 
-// Every download is capped as it arrives: more than the limit is refused,
-// whatever its content.
+// Anything but plain files in one folder, or a damaged archive, is refused
+// before any of it is trusted.
+void testUnpack()
+{
+    QHash<QString, QByteArray> files;
+    QString problem;
+    const QByteArray good = tarOf({{"a.bin", "abc"}, {"b.bin", QByteArray(700, 'b')}});
+    check(EspFirmwareCatalog::unpack(good, &files, &problem) && files.size() == 2
+              && files.value("a.bin") == "abc" && files.value("b.bin") == QByteArray(700, 'b'),
+          "a package's files unpack by name");
+
+    check(!EspFirmwareCatalog::unpack(good.left(good.size() - 1024 - 100), &files, &problem),
+          "a cut-short package is refused");
+    check(!EspFirmwareCatalog::unpack(good.left(512 + 512), &files, &problem),
+          "a package without its end marker is refused");
+
+    QByteArray corrupt = good;
+    corrupt[10] = 'Z';   // in the first header's name: the checksum no longer matches
+    check(!EspFirmwareCatalog::unpack(corrupt, &files, &problem), "a damaged header is refused");
+
+    for (const QByteArray& name : {QByteArray("../a.bin"), QByteArray("dir/a.bin"),
+                                   QByteArray(".hidden"), QByteArray("a\\b.bin")}) {
+        check(!EspFirmwareCatalog::unpack(tarOf({{name, "x"}}), &files, &problem),
+              "a name with a path, or a hidden one, is refused");
+    }
+    check(!EspFirmwareCatalog::unpack(tarOf({{"a.bin", "x"}, {"a.bin", "y"}}), &files, &problem),
+          "a name twice is refused");
+    check(!EspFirmwareCatalog::unpack(tarEntry("link", {}, '2') + QByteArray(1024, '\0'), &files,
+                                      &problem),
+          "a link is refused");
+    check(!EspFirmwareCatalog::unpack(tarEntry("dir", {}, '5') + QByteArray(1024, '\0'), &files,
+                                      &problem),
+          "a folder is refused");
+
+    // A size larger than the archive.
+    QByteArray huge = tarEntry("a.bin", "abc");
+    QByteArray h = huge.left(512);
+    h.replace(124, 11, "77777777777");
+    h.replace(148, 8, "        ");
+    quint32 sum = 0;
+    for (char c : h)
+        sum += quint8(c);
+    h.replace(148, 8, QByteArray::number(sum, 8).rightJustified(6, '0') + QByteArray("\0 ", 2));
+    check(!EspFirmwareCatalog::unpack(h + huge.mid(512) + QByteArray(1024, '\0'), &files, &problem),
+          "an entry larger than the package is refused");
+
+    QList<QPair<QByteArray, QByteArray>> many;
+    for (int i = 0; i < 40; ++i)
+        many.append({"f" + QByteArray::number(i), "x"});
+    check(!EspFirmwareCatalog::unpack(tarOf(many), &files, &problem), "too many files are refused");
+}
+
+// Every download is capped as it arrives: more than the limit is refused.
 void testLimits()
 {
-    const Key trusted('a');
-    EspFirmwareCatalog::setTrustedKeysForTesting({trusted.pub});
     QTemporaryDir dir;
     const QDir d(dir.path());
-    QByteArray app(5000, 'x');
-    app[0] = static_cast<char>(0xE9);
-    const QByteArray manifest = manifestFor(app);
-    const QUrl url = QUrl::fromLocalFile(d.filePath("manifest.json"));
 
-    // A manifest of 32 MiB: the manifest cap is 64 KiB.
-    write(d.filePath("manifest.json"), manifest + QByteArray(32 * 1024 * 1024, ' '));
-    Result r = fetch(url);
-    check(!r.ok && r.message.contains(QStringLiteral("too large")), "an oversized manifest is refused");
-
-    write(d.filePath("manifest.json"), manifest);
-    write(d.filePath("manifest.json.sig"), trusted.sign(manifest).toBase64() + QByteArray(4096, '\n'));
-    r = fetch(url);
-    check(!r.ok && r.message.contains(QStringLiteral("too large")), "an oversized signature is refused");
-
-    write(d.filePath("manifest.json.sig"), trusted.sign(manifest).toBase64());
-    write(d.filePath("app.bin"), app + QByteArray(1024 * 1024, 'z'));
-    r = fetch(url);
-    check(!r.ok && r.message.contains(QStringLiteral("intact")),
-          "an image longer than its manifest says is refused");
+    // 32 MiB: the package cap is 17 MiB.
+    write(d.filePath("big.asdr"), QByteArray(32 * 1024 * 1024, '\0'));
+    const Result r = fetch(QUrl::fromLocalFile(d.filePath("big.asdr")));
+    check(!r.ok && r.message.contains(QStringLiteral("too large")), "an oversized package is refused");
 
     write(d.filePath("catalog.json"), QByteArray(R"({"format":1,"products":[]})")
                                           + QByteArray(1024 * 1024, ' '));
@@ -277,6 +354,7 @@ int main(int argc, char** argv)
     testVerify();
     testCatalog();
     testDownload();
+    testUnpack();
     testLimits();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

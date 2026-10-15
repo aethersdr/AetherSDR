@@ -400,9 +400,16 @@ The CTR2 Proxy applet's **Install** button opens the CTR2-Max Firmware window
 firmware, from releases listed in AetherSDR's firmware catalog
 (`EspFirmwareCatalog`, `https://www.aethersdr.com/firmware/catalog.json`).
 
-- **Trust.** Each release is a manifest (`EspFirmwareManifest`) with an
-  Ed25519 signature (`manifest.json.sig`) by a firmware-release key built
-  into AetherSDR, and the manifest's SHA-256s cover every image. There is no
+- **Package.** Each release is one file, `PRODUCT-VERSION.asdr`: an
+  uncompressed ustar archive of plain files in one folder, holding
+  `manifest.json` (`EspFirmwareManifest`), `manifest.json.sig` and the images
+  the manifest names. The catalog's `package` links to it. AetherSDR refuses
+  anything else in the archive (links, folders, paths, hidden or repeated
+  names) and a damaged or cut-short one.
+- **Trust.** The manifest carries an Ed25519 signature (`manifest.json.sig`)
+  by a firmware-release key built into AetherSDR, checked before anything
+  else in the package is used, and the manifest's SHA-256s cover every
+  image. There is no
   way to install an image of one's own. The signature is the whole trust
   chain: the catalog is unsigned and only says where releases are, so a
   wrong catalog can at most offer a different validly signed release. Older
@@ -415,9 +422,9 @@ firmware, from releases listed in AetherSDR's firmware catalog
   honors `AETHER_FIRMWARE_CATALOG` (another catalog URL) and
   `AETHER_FIRMWARE_TRUST_KEYS` (extra keys, hex), and logs each override it
   uses. A release build has neither.
-- **Downloads** are capped as they arrive: the catalog at 256 KiB, a
-  manifest at 64 KiB, a signature at 1 KiB and an image at the size its
-  signed manifest gives (16 MiB at most).
+- **Downloads** are capped as they arrive: the catalog at 256 KiB and a
+  package at 17 MiB; inside a package, the manifest at 64 KiB, the signature
+  at 1 KiB and each image at the size its signed manifest gives.
 - **Layout.** The manifest lists the images and where they go, the regions
   never written (the stock firmware, its settings and its registration), the
   partition-table rows that must be on the unit and stay, and the app slots

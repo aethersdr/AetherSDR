@@ -24,11 +24,18 @@ namespace {
 
 constexpr int kFormat = 1;
 // What each download may be, at most; more is refused as it arrives, before
-// it is buffered. An image must be exactly its manifest's size.
+// it is buffered. A package holds at most a whole flash's images, plus its
+// manifest and signature.
 constexpr qint64 kMaxCatalogBytes = 256 * 1024;
+constexpr qint64 kMaxPackageBytes = 17 * 1024 * 1024;
 constexpr qint64 kMaxManifestBytes = 64 * 1024;
 constexpr qint64 kMaxSignatureBytes = 1024;
 constexpr qint64 kMaxImageBytes = 16 * 1024 * 1024;
+constexpr int kMaxPackageFiles = 16;
+constexpr int kTarBlock = 512;
+
+const QString kManifestFile = QStringLiteral("manifest.json");
+const QString kSignatureFile = QStringLiteral("manifest.json.sig");
 
 QString tr(const char* text)
 {
@@ -91,11 +98,11 @@ bool EspFirmwareCatalog::parse(const QByteArray& json, const QUrl& base, EspFirm
             continue;   // skip what this version does not understand
         for (const QJsonValue& r : o.value("releases").toArray()) {
             const QString version = r.toObject().value("version").toString();
-            const QString manifest = r.toObject().value("manifest").toString();
-            if (version.isEmpty() || manifest.isEmpty())
+            const QString package = r.toObject().value("package").toString();
+            if (version.isEmpty() || package.isEmpty())
                 continue;
             p.version = version;
-            p.manifest = base.resolved(QUrl(manifest));
+            p.package = base.resolved(QUrl(package));
             catalog.products.append(p);
         }
     }
@@ -126,6 +133,50 @@ QList<QByteArray> EspFirmwareCatalog::trustedKeys()
 void EspFirmwareCatalog::setTrustedKeysForTesting(const QList<QByteArray>& keys)
 {
     keysOverride() = keys;
+}
+
+bool EspFirmwareCatalog::unpack(const QByteArray& package, QHash<QString, QByteArray>* files,
+                                QString* problem)
+{
+    const auto broken = [problem] {
+        *problem = tr("The firmware package is damaged.");
+        return false;
+    };
+    files->clear();
+    qsizetype at = 0;
+    while (at + kTarBlock <= package.size()) {
+        const QByteArray header = package.mid(at, kTarBlock);
+        if (header.count('\0') == kTarBlock)
+            return true;   // the end-of-archive marker
+        // The header's checksum: its bytes summed, the checksum field as spaces.
+        quint32 sum = 0;
+        for (int i = 0; i < kTarBlock; ++i)
+            sum += (i >= 148 && i < 156) ? quint32(' ') : quint32(quint8(header[i]));
+        bool ok = false;
+        const quint32 stored = header.mid(148, 8).trimmed().replace('\0', "").toUInt(&ok, 8);
+        if (!ok || stored != sum || !header.mid(257, 5).startsWith("ustar"))
+            return broken();
+        const char type = header[156];
+        if (type != '0' && type != '\0') {
+            *problem = tr("The firmware package holds something other than files.");
+            return false;
+        }
+        const QString name = QString::fromLatin1(header.left(100).split('\0').first());
+        // One flat folder: no path, nothing hidden, nothing twice.
+        if (name.isEmpty() || name.contains(QLatin1Char('/')) || name.contains(QLatin1Char('\\'))
+            || name.startsWith(QLatin1Char('.')) || header[345] != '\0' || files->contains(name)
+            || files->size() >= kMaxPackageFiles) {
+            *problem = tr("The firmware package holds an unexpected file.");
+            return false;
+        }
+        const qint64 size = header.mid(124, 12).trimmed().replace('\0', "").toLongLong(&ok, 8);
+        at += kTarBlock;
+        if (!ok || size < 0 || size > package.size() - at)
+            return broken();
+        files->insert(name, package.mid(at, size));
+        at += (size + kTarBlock - 1) / kTarBlock * kTarBlock;
+    }
+    return broken();   // no end-of-archive marker: cut short
 }
 
 bool EspFirmwareCatalog::verify(const QByteArray& manifest, const QByteArray& signature)
@@ -162,14 +213,12 @@ void EspFirmwareDownloader::fetchCatalog(const QUrl& url)
     get(url, Stage::Catalog);
 }
 
-void EspFirmwareDownloader::fetchRelease(const QUrl& manifestUrl, const QString& expectedVersion)
+void EspFirmwareDownloader::fetchRelease(const QUrl& packageUrl, const QString& expectedVersion)
 {
     cancel();
-    m_url = manifestUrl;
+    m_url = packageUrl;
     m_expectedVersion = expectedVersion;
-    m_files.clear();
-    m_image = 0;
-    get(manifestUrl, Stage::Manifest);
+    get(packageUrl, Stage::Package);
 }
 
 void EspFirmwareDownloader::cancel()
@@ -190,13 +239,7 @@ void EspFirmwareDownloader::get(const QUrl& url, Stage stage)
     QNetworkRequest request(url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
-    switch (stage) {
-    case Stage::Catalog: m_limit = kMaxCatalogBytes; break;
-    case Stage::Manifest: m_limit = kMaxManifestBytes; break;
-    case Stage::Signature: m_limit = kMaxSignatureBytes; break;
-    case Stage::Image: m_limit = m_manifest.images[m_image].size; break;
-    case Stage::Idle: m_limit = 0; break;
-    }
+    m_limit = stage == Stage::Catalog ? kMaxCatalogBytes : kMaxPackageBytes;
     m_body.clear();
     m_reply = m_nam->get(request);
     m_reply->setReadBufferSize(64 * 1024);
@@ -209,8 +252,8 @@ void EspFirmwareDownloader::get(const QUrl& url, Stage stage)
     });
     connect(m_reply, &QNetworkReply::readyRead, this, &EspFirmwareDownloader::readBody);
     connect(m_reply, &QNetworkReply::finished, this, &EspFirmwareDownloader::onFinished);
-    if (stage == Stage::Image) {
-        const QString file = m_manifest.images[m_image].file;
+    if (stage == Stage::Package) {
+        const QString file = url.fileName();
         connect(m_reply, &QNetworkReply::downloadProgress, this,
                 [this, file](qint64 done, qint64 total) {
                     emit progress(tr("Downloading %1").arg(file), done, total);
@@ -231,17 +274,11 @@ bool EspFirmwareDownloader::readBody()
 
 void EspFirmwareDownloader::refuse()
 {
-    const QUrl url = m_reply ? m_reply->url() : m_url;
     const Stage stage = m_stage;
-    const QString file = stage == Stage::Image ? m_manifest.images[m_image].file : url.fileName();
     cancel();
     m_body.clear();
-    switch (stage) {
-    case Stage::Catalog: fail(tr("The firmware catalog is too large.")); break;
-    case Stage::Manifest: fail(tr("The firmware manifest is too large.")); break;
-    case Stage::Image: fail(tr("%1 did not download intact.").arg(file)); break;
-    default: fail(tr("%1 is too large.").arg(file)); break;
-    }
+    fail(stage == Stage::Catalog ? tr("The firmware catalog is too large.")
+                                 : tr("The firmware package is too large."));
 }
 
 void EspFirmwareDownloader::fail(const QString& message)
@@ -278,57 +315,58 @@ void EspFirmwareDownloader::onFinished()
         emit catalogReady(catalog);
         return;
     }
-    case Stage::Manifest:
-        m_manifestBytes = body;
-        get(QUrl(m_url.toString() + QStringLiteral(".sig")), Stage::Signature);
+    case Stage::Package:
+        m_stage = Stage::Idle;
+        openPackage(body);
         return;
-    case Stage::Signature:
-        if (!EspFirmwareCatalog::verify(m_manifestBytes, body)) {
-            fail(tr("This firmware is not signed by a key AetherSDR trusts, so it was not "
-                    "installed."));
-            return;
-        }
-        if (!EspFirmwareManifest::parse(m_manifestBytes, &m_manifest, &problem)) {
-            fail(problem);
-            return;
-        }
-        if (!m_expectedVersion.isEmpty() && m_manifest.version != m_expectedVersion) {
-            fail(tr("The firmware list names version %1, but its release is %2.")
-                     .arg(m_expectedVersion, m_manifest.version));
-            return;
-        }
-        nextImage();
-        return;
-    case Stage::Image: {
-        const EspFirmwareManifest::Image& image = m_manifest.images[m_image];
-        if (static_cast<quint32>(body.size()) != image.size
-            || QCryptographicHash::hash(body, QCryptographicHash::Sha256) != image.sha256) {
-            fail(tr("%1 did not download intact.").arg(image.file));
-            return;
-        }
-        m_files.insert(image.file, body);
-        ++m_image;
-        nextImage();
-        return;
-    }
     case Stage::Idle:
         return;
     }
 }
 
-void EspFirmwareDownloader::nextImage()
+void EspFirmwareDownloader::openPackage(const QByteArray& package)
 {
-    if (m_image >= m_manifest.images.size()) {
-        m_stage = Stage::Idle;
-        emit releaseReady(m_manifest, m_files);
+    QHash<QString, QByteArray> files;
+    QString problem;
+    if (!EspFirmwareCatalog::unpack(package, &files, &problem)) {
+        fail(problem);
         return;
     }
-    const EspFirmwareManifest::Image& image = m_manifest.images[m_image];
-    if (image.size > kMaxImageBytes) {
-        fail(tr("%1 is too large.").arg(image.file));
+    const QByteArray manifestBytes = files.value(kManifestFile);
+    const QByteArray signature = files.value(kSignatureFile);
+    if (manifestBytes.isEmpty() || manifestBytes.size() > kMaxManifestBytes
+        || signature.size() > kMaxSignatureBytes) {
+        fail(tr("The firmware package has no usable manifest."));
         return;
     }
-    get(m_url.resolved(QUrl(image.file)), Stage::Image);
+    // The signature first: nothing else in the package is looked at until
+    // the manifest is known to be a trusted release's.
+    if (!EspFirmwareCatalog::verify(manifestBytes, signature)) {
+        fail(tr("This firmware is not signed by a key AetherSDR trusts, so it was not "
+                "installed."));
+        return;
+    }
+    EspFirmwareManifest manifest;
+    if (!EspFirmwareManifest::parse(manifestBytes, &manifest, &problem)) {
+        fail(problem);
+        return;
+    }
+    if (!m_expectedVersion.isEmpty() && manifest.version != m_expectedVersion) {
+        fail(tr("The firmware list names version %1, but its release is %2.")
+                 .arg(m_expectedVersion, manifest.version));
+        return;
+    }
+    QHash<QString, QByteArray> images;
+    for (const EspFirmwareManifest::Image& image : manifest.images) {
+        const QByteArray bytes = files.value(image.file);
+        if (image.size > kMaxImageBytes || static_cast<quint32>(bytes.size()) != image.size
+            || QCryptographicHash::hash(bytes, QCryptographicHash::Sha256) != image.sha256) {
+            fail(tr("%1 in the firmware package is not intact.").arg(image.file));
+            return;
+        }
+        images.insert(image.file, bytes);
+    }
+    emit releaseReady(manifest, images);
 }
 
 } // namespace AetherSDR

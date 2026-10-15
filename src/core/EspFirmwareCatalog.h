@@ -17,17 +17,18 @@ namespace AetherSDR {
 // Firmware AetherSDR can download and install on ESP32-based controllers.
 // The catalog (one JSON file, at kCatalogUrl) lists products and the
 // releases of each, newest first, so an operator can move to any of them;
-// each release points at its manifest (EspFirmwareManifest). The manifest
-// must carry an Ed25519 signature by a trusted firmware-release key
-// (manifest URL + ".sig", 64 bytes raw or base64), and its SHA-256s cover
-// every image, which are fetched from beside it. Catalog format 1:
+// each release points at its package: an uncompressed ustar archive (.asdr)
+// of plain files in one folder, manifest.json (EspFirmwareManifest),
+// manifest.json.sig and the images the manifest names. The manifest must
+// carry an Ed25519 signature by a trusted firmware-release key (64 bytes raw
+// or base64), and its SHA-256s cover every image. Catalog format 1:
 //
 //   { "format": 1,
 //     "products": [ { "name": "Example", "device": "Example Box", "chip": "ESP32-S3",
 //                     "description": "...",
 //                     "releases": [ { "version": "1.1.0",
-//                                     "manifest": "https://.../1.1.0/manifest.json" },
-//                                   { "version": "1.0.0", "manifest": "..." } ] } ] }
+//                                     "package": "https://.../example-1.1.0.asdr" },
+//                                   { "version": "1.0.0", "package": "..." } ] } ] }
 //
 // The installer checks that the manifest's version is the one listed.
 struct EspFirmwareCatalog {
@@ -38,7 +39,7 @@ struct EspFirmwareCatalog {
         QString chip;
         QString description;
         QString version;
-        QUrl manifest;
+        QUrl package;
     };
     QList<Product> products;
 
@@ -50,6 +51,10 @@ struct EspFirmwareCatalog {
 
     static bool parse(const QByteArray& json, const QUrl& base, EspFirmwareCatalog* out,
                       QString* problem);
+    // The files in a package, by name. Refuses anything but plain files in
+    // one folder, a name twice, and a damaged or cut-short archive.
+    static bool unpack(const QByteArray& package, QHash<QString, QByteArray>* files,
+                       QString* problem);
 
     // Whether signature (64 bytes, or their base64) is a trusted key's
     // Ed25519 signature of manifest.
@@ -63,10 +68,10 @@ struct EspFirmwareCatalog {
     static void setTrustedKeysForTesting(const QList<QByteArray>& keys);
 };
 
-// Fetches the catalog, or a release: a manifest, its signature and its
-// images, every one checked. Works for http(s) and file URLs alike, so a
-// release unpacked on disk installs the same way. Each download is capped as
-// it arrives (an image at its manifest's size), whatever the server claims.
+// Fetches the catalog, or a release's package, and checks the package: the
+// manifest's signature first, then its version and every image. Works for
+// http(s) and file URLs alike. Each download is capped as it arrives,
+// whatever the server claims.
 class EspFirmwareDownloader : public QObject {
     Q_OBJECT
 
@@ -75,7 +80,7 @@ public:
 
     void fetchCatalog(const QUrl& url = EspFirmwareCatalog::catalogUrl());
     // expectedVersion, when given, must be the manifest's version.
-    void fetchRelease(const QUrl& manifestUrl, const QString& expectedVersion = {});
+    void fetchRelease(const QUrl& packageUrl, const QString& expectedVersion = {});
     void cancel();
     bool isBusy() const { return m_reply != nullptr; }
 
@@ -87,13 +92,13 @@ signals:
     void failed(const QString& message);
 
 private:
-    enum class Stage { Idle, Catalog, Manifest, Signature, Image };
+    enum class Stage { Idle, Catalog, Package };
 
     void get(const QUrl& url, Stage stage);
     bool readBody();
     void refuse();
     void onFinished();
-    void nextImage();
+    void openPackage(const QByteArray& package);
     void fail(const QString& message);
 
     QNetworkAccessManager* m_nam;
@@ -103,10 +108,6 @@ private:
     qint64 m_limit{0};
     QByteArray m_body;
     QString m_expectedVersion;
-    QByteArray m_manifestBytes;
-    EspFirmwareManifest m_manifest;
-    QHash<QString, QByteArray> m_files;
-    int m_image{0};
 };
 
 } // namespace AetherSDR
