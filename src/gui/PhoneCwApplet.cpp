@@ -617,13 +617,17 @@ void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
     m_pitchStepHz = pitchStepHz;
     const QSignalBlocker pitchBlocker(m_pitchSlider);
     m_pitchSlider->setRange(minPitchHz, maxPitchHz);
+    if (m_model) {
+        m_pitchSlider->setValue(m_model->cwPitch());
+    }
     m_pitchSlider->setSingleStep(pitchStepHz);
     m_pitchSlider->setPageStep(pitchStepHz * 10);
     auto* pitchValidator = qobject_cast<QIntValidator*>(
         const_cast<QValidator*>(m_pitchEdit->validator()));
     pitchValidator->setRange(minPitchHz, maxPitchHz);
     if (!m_pitchEdit->hasFocus() || !m_pitchEdit->hasAcceptableInput()) {
-        m_pitchEdit->setText(QString::number(m_pitchSlider->value()));
+        m_pitchEdit->setText(QString::number(
+            m_model ? m_model->cwPitch() : m_pitchSlider->value()));
     }
     m_pitchEdit->setAccessibleDescription(
         tr("CW sidetone pitch in Hz, %1 to %2").arg(minPitchHz).arg(maxPitchHz));

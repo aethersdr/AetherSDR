@@ -218,8 +218,18 @@ int main(int argc, char** argv)
           pitchSlider->value() == 733 && pitch->text() == QStringLiteral("733")
               && cwCommands.isEmpty());
     applet.setCwControlLimits(6, 48, 300, 700, 5);
-    check("capability clamp updates controls without rewriting radio pitch",
-          pitchSlider->value() == 700 && pitch->text() == QStringLiteral("700")
+    check("capability clamp preserves the authoritative pitch readout",
+          pitchSlider->value() == 700 && pitch->text() == QStringLiteral("733")
+              && tx.cwPitch() == 733 && cwCommands.isEmpty());
+    AetherSDR::TransmitDelta unrelatedStatus;
+    unrelatedStatus.cwSpeed = 31;
+    tx.applyChanges(unrelatedStatus);
+    check("unrelated status leaves the authoritative pitch readout unchanged",
+          pitchSlider->value() == 700 && pitch->text() == QStringLiteral("733")
+              && tx.cwPitch() == 733 && cwCommands.isEmpty());
+    applet.setCwControlLimits(5, 100, 100, 6000, 10);
+    check("expanded pitch range restores the slider from radio state without a request",
+          pitchSlider->value() == 733 && pitch->text() == QStringLiteral("733")
               && tx.cwPitch() == 733 && cwCommands.isEmpty());
 
     // ── §1  Unbound, then bound ─────────────────────────────────────────────
