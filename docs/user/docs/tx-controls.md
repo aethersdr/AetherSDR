@@ -102,6 +102,14 @@ confirmation.
 
 Hover the Level, Compression or ALC gauge for its exact value. In CW modes the
 applet switches to keyer controls, including the APF toggle and level.
+**Pitch** sits directly below **Speed**: use its slider or enter a frequency
+in Hz in the value field. Pitch follows the radio's supported range and step.
+**Breakin**, **Iambic**, and **Hold Delay** share a separate row.
+**Hold Delay** re-sends your break-in delay after CW speed changes made here;
+it does not cover speed changes made at the radio or by another client.
+In CW modes, the RX Controls header shows the receive filter width beside the
+read-only **QSK** indicator. QSK follows the radio's break-in state, including
+changes made at the radio or by another client; **Breakin** requests a change.
 
 ## Using the Phone applet
 

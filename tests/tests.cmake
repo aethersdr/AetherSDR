@@ -463,6 +463,59 @@ target_include_directories(ctr2_hid_reference_test PRIVATE
 target_link_libraries(ctr2_hid_reference_test PRIVATE aethercore Qt6::Core)
 add_test(NAME ctr2_hid_reference_test COMMAND ctr2_hid_reference_test)
 
+# CTR2 firmware updates against a simulated device whose side of the link
+# runs the MIT firmware reference: success (stop-and-wait and windowed), a
+# slow re-enumeration, a rejected image, no Firmware extension, no answer, a
+# rollback to the old image, and cancel mid-transfer. No hidapi, no sockets.
+add_executable(ctr2_firmware_updater_test
+    tests/ctr2_firmware_updater_test.cpp
+    tools/ctr2-firmware-reference/ctr2_link.c)
+set_source_files_properties(tools/ctr2-firmware-reference/ctr2_link.c
+    TARGET_DIRECTORY ctr2_firmware_updater_test PROPERTIES LANGUAGE C)
+set_property(TARGET ctr2_firmware_updater_test PROPERTY C_STANDARD 99)
+target_include_directories(ctr2_firmware_updater_test PRIVATE
+    src tools/ctr2-firmware-reference)
+target_link_libraries(ctr2_firmware_updater_test PRIVATE aethercore Qt6::Core)
+add_test(NAME ctr2_firmware_updater_test COMMAND ctr2_firmware_updater_test)
+set_tests_properties(ctr2_firmware_updater_test PROPERTIES TIMEOUT 120)
+
+# EspFirmwareManifest and EspFirmwareInstaller against an in-memory flash:
+# protected regions are never written, a device that is not the manifest's is
+# left untouched, start rewrites only the boot selection, backups restore.
+add_executable(esp_firmware_installer_test tests/esp_firmware_installer_test.cpp)
+target_include_directories(esp_firmware_installer_test PRIVATE src)
+target_link_libraries(esp_firmware_installer_test PRIVATE aethercore Qt6::Core)
+add_test(NAME esp_firmware_installer_test COMMAND esp_firmware_installer_test)
+
+# EspFirmwareJob against a flash in memory: it acts only on the device the
+# operator confirmed (by MAC, before any write), and refuses an unreadable MAC.
+add_executable(esp_firmware_job_test tests/esp_firmware_job_test.cpp)
+target_include_directories(esp_firmware_job_test PRIVATE src)
+target_link_libraries(esp_firmware_job_test PRIVATE aethercore Qt6::Core)
+add_test(NAME esp_firmware_job_test COMMAND esp_firmware_job_test)
+
+# FirmwareInstallModel acts only on the device the operator confirmed:
+# injected device lists and an in-memory flash; no serial port, no network.
+add_executable(firmware_install_model_test tests/firmware_install_model_test.cpp)
+target_include_directories(firmware_install_model_test PRIVATE src tests)
+target_link_libraries(firmware_install_model_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME firmware_install_model_test COMMAND firmware_install_model_test)
+
+# Ctr2MaxRegistration (read-only littlefs) against synthetic stock-firmware
+# volumes: registered, not registered, and no volume.
+add_executable(ctr2max_registration_test tests/ctr2max_registration_test.cpp)
+target_include_directories(ctr2max_registration_test PRIVATE src tests)
+target_link_libraries(ctr2max_registration_test PRIVATE aethercore Qt6::Core)
+add_test(NAME ctr2max_registration_test COMMAND ctr2max_registration_test)
+
+# EspFirmwareCatalog and EspFirmwareDownloader over file:// URLs: only a
+# manifest signed by a trusted Ed25519 key, with intact images, is accepted.
+add_executable(esp_firmware_catalog_test tests/esp_firmware_catalog_test.cpp)
+target_include_directories(esp_firmware_catalog_test PRIVATE src)
+target_link_libraries(esp_firmware_catalog_test PRIVATE aethercore aether_monocypher Qt6::Core
+    Qt6::Network)
+add_test(NAME esp_firmware_catalog_test COMMAND esp_firmware_catalog_test)
+
 # CTR2 HID I/O thread with injected device operations (no hidapi, no device,
 # no sockets): shutdown never blocks the owner on slow writes, discardQueued()
 # fences queued output and late acknowledgements, reads and failures surface.

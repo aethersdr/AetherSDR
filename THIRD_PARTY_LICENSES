@@ -726,3 +726,43 @@ tools/docs/pdf/fonts/OFL.txt.
   Copyright: Copyright 2022 The Noto Project Authors
   License:   SIL Open Font License, Version 1.1
   Source:    https://github.com/notofonts/symbols
+
+
+29. esp-serial-flasher and esp-flasher-stub — ESP32 ROM bootloader protocol
+-------------------------------------------------------------------------------
+Bundled at third_party/esp-serial-flasher/ (library v2.0.0; the flasher
+stubs in src/stubs/ regenerated from esp-flasher-stub v1.4.1 with the
+library's cmake/gen_stub_sources.py, see COMMIT). Used to install firmware
+on ESP32-family controllers held in their ROM download mode; the stubs are
+uploaded to the device's RAM, not run on the host. The full license text is
+in third_party/esp-serial-flasher/LICENSE.
+
+  Copyright: Copyright 2020-2026 Espressif Systems (Shanghai) CO LTD
+  License:   Apache License 2.0 (library); Apache-2.0 OR MIT (stubs)
+  Source:    https://github.com/espressif/esp-serial-flasher
+             https://github.com/espressif/esp-flasher-stub
+
+
+30. Monocypher — Ed25519 signature verification
+-------------------------------------------------------------------------------
+Bundled at third_party/monocypher/ (4.0.3: monocypher.c and the optional
+monocypher-ed25519.c). Verifies the signatures on downloaded firmware
+manifests. The full license text is in third_party/monocypher/LICENCE.md.
+
+  Copyright: Copyright (c) 2017-2023 Loup Vaillant, Michael Savage,
+             Fabio Scotoni
+  License:   CC0-1.0 OR BSD-2-Clause (at the user's choice)
+  Source:    https://monocypher.org
+
+
+31. littlefs — CTR2-Max registration check (read-only)
+-------------------------------------------------------------------------------
+Bundled at third_party/littlefs/ (v2.11.3), built with LFS_READONLY so no
+write path is compiled. Reads the CTR2-Max stock firmware's file system to
+check the unit is registered before AetherCTR2 is installed. The full
+license text is in third_party/littlefs/LICENSE.md.
+
+  Copyright: Copyright (c) 2022, The littlefs authors.
+             Copyright (c) 2017, Arm Limited.
+  License:   BSD-3-Clause
+  Source:    https://github.com/littlefs-project/littlefs

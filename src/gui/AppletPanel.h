@@ -39,7 +39,6 @@ class VkampApplet;
 class Kpa500Applet;
 class Kpa1500Applet;
 class LpMeterApplet;
-class Ctr2ProxyApplet;
 class TxApplet;
 class PhoneCwApplet;
 enum class MicMeterSessionState;
@@ -114,7 +113,6 @@ public:
     Kpa500Applet* kpa500Applet()  { return m_kpa500Applet; }
     Kpa1500Applet* kpa1500Applet() { return m_kpa1500Applet; }
     LpMeterApplet* lpMeterApplet() { return m_lpMeterApplet; }
-    Ctr2ProxyApplet* ctr2ProxyApplet() { return m_ctr2ProxyApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
     PhoneCwApplet*  phoneCwApplet()  { return m_phoneCwApplet; }
     PhoneApplet*    phoneApplet()    { return m_phoneApplet; }
@@ -426,7 +424,6 @@ private:
     Kpa1500Applet* m_kpa1500Applet{nullptr};
     QPushButton* m_kpa1500Btn{nullptr};
     LpMeterApplet* m_lpMeterApplet{nullptr};
-    Ctr2ProxyApplet* m_ctr2ProxyApplet{nullptr};
     QPushButton* m_vkampBtn{nullptr};
     Kpa500Applet* m_kpa500Applet{nullptr};
     QPushButton*  m_kpa500Btn{nullptr};

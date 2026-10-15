@@ -350,7 +350,18 @@ void MainWindow::buildMenuBar()
         openRadioSetupPage();
     });
 
-    auto* flexControlAction = settingsMenu->addAction("AetherControl...");
+    // Every controller's settings in one submenu, so the Settings menu does
+    // not grow by one entry per supported device.
+    auto* controllersMenu = settingsMenu->addMenu("Controllers");
+    controllersMenu->setToolTipsVisible(true);
+
+    auto* ctr2Action = controllersMenu->addAction("CTR2...");
+    ctr2Action->setMenuRole(QAction::NoRole);
+    ctr2Action->setToolTip(tr("Relay a CTR2-Max or AetherKnob to the radio, and install "
+                              "AetherCTR2 on a CTR2-Max"));
+    connect(ctr2Action, &QAction::triggered, this, &MainWindow::showCtr2Window);
+
+    auto* flexControlAction = controllersMenu->addAction("AetherControl...");
     m_aetherControlAction = flexControlAction;
     flexControlAction->setVisible(true); // host controller, independent of radio capabilities
     flexControlAction->setMenuRole(QAction::NoRole);
@@ -365,7 +376,7 @@ void MainWindow::buildMenuBar()
     // (RadioSetupDialog.cpp) and the AetherControl "Settings…" button
     // (MainWindow_Controllers.cpp) that offers the same deep-link from
     // inside the controller window.
-    auto* flexControlKnobAction = settingsMenu->addAction("FlexControl Knob & Buttons...");
+    auto* flexControlKnobAction = controllersMenu->addAction("FlexControl Knob & Buttons...");
     m_flexControlKnobAction = flexControlKnobAction;
     flexControlKnobAction->setVisible(true); // host serial device, never gated (#5778)
     flexControlKnobAction->setMenuRole(QAction::NoRole);
@@ -552,13 +563,13 @@ void MainWindow::buildMenuBar()
         showNetSchedulerDialog();
     });
 #ifdef HAVE_MIDI
-    auto* midiAction = settingsMenu->addAction("MIDI Mapping...");
+    auto* midiAction = controllersMenu->addAction("MIDI Mapping...");
     connect(midiAction, &QAction::triggered, this, [this] {
         showOrRaisePersistent(m_midiDialog, m_midiControl);
     });
 #endif
 #ifdef HAVE_HIDAPI
-    auto* rc28Action = settingsMenu->addAction("Icom RC-28 Remote Encoder...");
+    auto* rc28Action = controllersMenu->addAction("Icom RC-28 Remote Encoder...");
     connect(rc28Action, &QAction::triggered, this, [this] {
         const bool fresh = !m_rc28MappingDialog;
         showOrRaisePersistent(m_rc28MappingDialog, m_hidEncoder);
@@ -581,7 +592,7 @@ void MainWindow::buildMenuBar()
             });
     });
 #endif
-    auto* ulanziAction = settingsMenu->addAction("Ulanzi Dial Mapping...");
+    auto* ulanziAction = controllersMenu->addAction("Ulanzi Dial Mapping...");
     connect(ulanziAction, &QAction::triggered, this, [this] {
 #ifdef HAVE_MIDI
         MidiControlManager* midi = m_midiControl;

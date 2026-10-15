@@ -71,6 +71,8 @@ public:
 
     // Link extensions the open device negotiated (ctr2hid::capabilityBit mask).
     quint32 extensions() const;
+    // The open device's firmware version, when it reports one.
+    std::optional<ctr2hid::deviceinfo::Info> firmwareInfo() const;
     // Sends one AudioSpectrum (or AudioSpectrumLinear) message while relaying,
     // if the device took that extension. Returns false, sending nothing,
     // otherwise or when ~130 ms of output is already queued: a late frame is

@@ -75,7 +75,8 @@ endpoints and routing explicitly; do not silently add payload rewriting.
 
 ## Operator controls
 
-Add a small CTR2 Proxy applet using existing applet patterns:
+The controls live in the CTR2 window (**Settings → Controllers → CTR2...**,
+`FirmwareInstallDialog`), in its CTR2 Relay part (`Ctr2ProxyPanel`):
 
 | Control or status | Prototype behavior |
 | --- | --- |
@@ -90,7 +91,10 @@ Add a small CTR2 Proxy applet using existing applet patterns:
 
 Start is disabled until configuration is valid. Freeze endpoints while
 running; stop before editing them. The listener starts only on explicit
-operator action and is off on every application launch. Do not silently
+operator action, or automatically when the operator has ticked **Start
+automatically** (`Ctr2RelaySettings`, AppSettings `Ctr2Relay`: the flag and
+the setup the relay last started with; an operator's Stop holds it off until
+AetherSDR next connects to a radio). Do not silently
 fall back to another port or bind all interfaces when a selected address is
 unavailable. If multiple windows attempt port 4992, report the bind conflict.
 
@@ -118,7 +122,8 @@ Suggested responsibilities, with names adjustable to repository conventions:
 - `src/models/Ctr2ProxyModel.{h,cpp}`: owns the relay, validates configuration,
   and exposes controls/status to the GUI. Keep the model independent of radio
   command dispatch and backend types.
-- `src/gui/Ctr2ProxyApplet.{h,cpp}`: widgets bound to the model. Use
+- `src/gui/Ctr2ProxyPanel.{h,cpp}`: widgets bound to the model, in the CTR2
+  window (`FirmwareInstallDialog`). Use
   ThemeManager and existing accessibility/app registration conventions.
 - Wire lifetime in the appropriate existing MainWindow sibling, keeping
   new feature behavior out of MainWindow.cpp. The model stops before its
@@ -260,7 +265,7 @@ Code map:
 | Transport-agnostic two-pump relay, budgets, timeouts, drain | `src/core/ByteRelay.{h,cpp}` |
 | Listener, single client, per-connection upstream, generations | `src/core/TcpByteProxy.{h,cpp}` |
 | Config validation, frozen-while-running, throttled stats | `src/models/Ctr2ProxyModel.{h,cpp}` |
-| Applet (`CTR2`, Integration, off by default, not in default order) | `src/gui/Ctr2ProxyApplet.{h,cpp}` |
+| CTR2 window (Settings → Controllers → CTR2...), relay part | `src/gui/Ctr2ProxyPanel.{h,cpp}`, `src/gui/FirmwareInstallDialog.{h,cpp}` |
 | Lifetime wiring; stop on close | `MainWindow_Controllers.cpp` `setupCtr2Proxy()`, `MainWindow::closeEvent` |
 
 Behavior as built: 256 KiB socket read buffers; 256 KiB per-direction budget

@@ -58,7 +58,7 @@ QList<Ctr2HidPort::DeviceInfo> Ctr2HidapiPort::enumerate()
 }
 
 Ctr2HidPort* Ctr2HidapiPort::open(const Ctr2HidPort::DeviceInfo& device, QString* error,
-                                  QObject* parent)
+                                  QObject* parent, quint32 hostCapabilities)
 {
     if (!ensureHidInit()) {
         *error = QStringLiteral("USB HID support failed to initialize");
@@ -98,7 +98,8 @@ Ctr2HidPort* Ctr2HidapiPort::open(const Ctr2HidPort::DeviceInfo& device, QString
     };
     io.close = [handle] { hid_close(handle); };
     io.lastError = [handle] { return fromWide(hid_error(handle)); };
-    return new Ctr2HidThreadPort(std::move(io), device.label(), device.path, parent);
+    return new Ctr2HidThreadPort(std::move(io), device.label(), device.path, parent,
+                                 hostCapabilities);
 }
 
 } // namespace AetherSDR

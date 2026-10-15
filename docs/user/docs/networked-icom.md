@@ -104,7 +104,7 @@ The FM controls set tone, duplex and offset where the model supports them. On an
 
 ### Controllers
 
-The Icom RC-28 remote encoder is supported (**Settings → Icom RC-28 Remote Encoder...**); see [USB Control Surfaces](./usb-control-surfaces.md).
+The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom RC-28 Remote Encoder...**); see [USB Control Surfaces](./usb-control-surfaces.md).
 
 ## Reference
 

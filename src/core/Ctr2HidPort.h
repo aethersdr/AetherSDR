@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QString>
 
+#include <optional>
 #include <vector>
 
 namespace AetherSDR {
@@ -30,7 +31,15 @@ public:
         // ESP32-S3 boards' own IDs, so a match is a strong hint, not proof;
         // the first match is preselected and the operator may pick another.
         QString ctr2Model() const;
+        // For the device list: the model, the maker and product, and the
+        // USB IDs and serial. A device that names itself (its product is its
+        // model) is named once.
         QString label() const;
+        // Just the name: the model, else the product.
+        QString shortName() const;
+        // A recognized device whose firmware relays over USB: AetherKnob,
+        // or firmware that names itself (AetherCTR2). Never a stock CTR2.
+        bool usbLink() const;
     };
 
     // Every USB identity recognised as a CTR2. 303A:1001 is Espressif's
@@ -46,6 +55,9 @@ public:
         quint16 productId;
         const char* product;
         const char* model;
+        // Its firmware relays over USB (the link this relay speaks). A stock
+        // CTR2's does not: it has no USB mode.
+        bool usbLink{false};
     };
     static const std::vector<KnownCtr2>& knownCtr2Devices();
 
@@ -68,6 +80,9 @@ public:
     // Link extensions negotiated with the device (ctr2hid::capabilityBit
     // mask); 0 for plain link version 0, and until negotiation finishes.
     quint32 extensions() const { return m_extensions; }
+    // The device's firmware version (Feature report 0x03), read during
+    // negotiation; empty for a device without it, and until then.
+    const std::optional<ctr2hid::deviceinfo::Info>& firmwareInfo() const { return m_firmwareInfo; }
 
 signals:
     // A whole number of 8-byte reports, in arrival order.
@@ -79,14 +94,18 @@ signals:
     void extensionsNegotiated(quint32 extensions);
 
 protected:
-    void setExtensions(quint32 extensions)
+    // The firmware version first: extensionsNegotiated() announces both.
+    void setExtensions(quint32 extensions,
+                       std::optional<ctr2hid::deviceinfo::Info> info = std::nullopt)
     {
+        m_firmwareInfo = std::move(info);
         m_extensions = extensions;
         emit extensionsNegotiated(extensions);
     }
 
 private:
     quint32 m_extensions{0};
+    std::optional<ctr2hid::deviceinfo::Info> m_firmwareInfo;
 };
 
 } // namespace AetherSDR

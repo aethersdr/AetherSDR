@@ -19,7 +19,7 @@ The FlexControl is a USB serial device (VID `0x2192`, PID `0x0010`) running at 9
 
 ## Setup
 
-Open **Settings → Radio Setup... → Serial & Controllers** and find the **FlexControl Tuning Knob** group. Shortcuts straight to it: **Settings → FlexControl Knob & Buttons...**, or the **Settings…** button in the AetherControl window.
+Open **Settings → Radio Setup... → Serial & Controllers** and find the **FlexControl Tuning Knob** group. Shortcuts straight to it: **Settings → Controllers → FlexControl Knob & Buttons...**, or the **Settings…** button in the AetherControl window.
 
 | Control | What it does |
 |---------|--------------|
@@ -45,7 +45,7 @@ Actions whose name starts with **Wheel** do not fire once: they change what the 
 
 ## Using AetherControl (virtual FlexControl)
 
-**Settings → AetherControl...** opens **AetherControl**, an on-screen tuning controller laid out like the FlexControl. It shares its button assignments with the physical knob and mirrors it when one is connected.
+**Settings → Controllers → AetherControl...** opens **AetherControl**, an on-screen tuning controller laid out like the FlexControl. It shares its button assignments with the physical knob and mirrors it when one is connected.
 
 The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it; it reopens at the size and place you left it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS); while the knob has the mouse captured, **Esc** releases it instead. It's a window of its own, with its own taskbar entry, so you can minimize it from the taskbar or park it on another monitor. **View → Frameless Window** does not apply to it.
 

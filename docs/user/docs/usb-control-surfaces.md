@@ -4,7 +4,7 @@ slug: "/usb-control-surfaces"
 description: "AetherSDR works with hardware knobs, jog wheels, button decks and keying interfaces connected to the computer."
 ---
 
-AetherSDR works with hardware knobs, jog wheels, button decks and keying interfaces connected to the computer. Most of them are set up on one Radio Setup page, **Settings → Radio Setup... → Serial & Controllers**, which you can also reach from **Settings → FlexControl Knob & Buttons...**.
+AetherSDR works with hardware knobs, jog wheels, button decks and keying interfaces connected to the computer. Most of them are set up on one Radio Setup page, **Settings → Radio Setup... → Serial & Controllers**, which you can also reach from **Settings → Controllers → FlexControl Knob & Buttons...**.
 
 These are host devices: they plug into your computer, not the radio, so the page and its controllers stay available on every radio family. Actions the connected radio cannot perform (for example band zoom on some radios) are refused with a notice rather than sent.
 
@@ -18,7 +18,7 @@ These are host devices: they plug into your computer, not the radio, so the page
 | Device | Connection | Where it is set up |
 |--------|-----------|--------------------|
 | FlexRadio FlexControl | USB serial | [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md) |
-| Icom RC-28 remote encoder | USB HID | **Settings → Icom RC-28 Remote Encoder...** |
+| Icom RC-28 remote encoder | USB HID | **Settings → Controllers → Icom RC-28 Remote Encoder...** |
 | Griffin PowerMate | USB HID | Serial & Controllers → HID encoder groups |
 | Contour ShuttleXpress / ShuttlePro v2 | USB HID | Serial & Controllers → HID encoder groups |
 | ELAD / WoodBoxRadio TMate 2 | USB HID | Serial & Controllers → TMate 2 groups |
@@ -72,7 +72,7 @@ The full action lists are under [Reference](#reference).
 The RC-28 is a weighted tuning knob with **F1**, **F2** and a **TX** bar. A community Arduino emulator (`aether-pad`) that speaks the same protocol is also recognized.
 
 1. Tick **Enable HID encoders / StreamDeck+** (see [Setup](#setup)).
-2. Open **Settings → Icom RC-28 Remote Encoder...** ("Icom RC-28 Button Mapping").
+2. Open **Settings → Controllers → Icom RC-28 Remote Encoder...** ("Icom RC-28 Button Mapping").
 
 The dialog has:
 

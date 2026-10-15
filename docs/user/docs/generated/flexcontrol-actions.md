@@ -13,7 +13,7 @@ This page is generated from `src/gui/FlexControlDialog.cpp` by `tools/docs/gen_r
 
 :::
 
-The FlexControl knob's three Aux buttons can each run one action on a single tap and another on a double tap. Set them in **Settings → FlexControl Knob & Buttons...**.
+The FlexControl knob's three Aux buttons can each run one action on a single tap and another on a double tap. Set them in **Settings → Controllers → FlexControl Knob & Buttons...**.
 
 ## Default button actions
 
