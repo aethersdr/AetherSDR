@@ -160,6 +160,15 @@ int DaxIqModel::sampleRateForPreference(int rate) const
     return rates.contains(48000) ? 48000 : 0;
 }
 
+int DaxIqModel::requestedSampleRate(int channel) const
+{
+    const int idx = channelIndex(channel);
+    if (idx < 0 || idx >= NUM_CHANNELS) {
+        return 0;
+    }
+    return sampleRateForPreference(m_desiredRate[idx]);
+}
+
 void DaxIqModel::createStream(int channel)
 {
     if (channel < 1 || channel > NUM_CHANNELS) return;
@@ -187,6 +196,7 @@ void DaxIqModel::setSampleRate(int channel, int rate)
     }
     m_desiredRate[idx] = rate;   // remember even if the stream isn't up yet
     if (!m_streams[idx].exists || m_streams[idx].streamId == 0) return;
+    m_streams[idx].rateSettling = m_streams[idx].sampleRate != rate;
     emit commandReady(QString("stream set 0x%1 daxiq_rate=%2")
         .arg(m_streams[idx].streamId, 0, 16).arg(rate));
 }

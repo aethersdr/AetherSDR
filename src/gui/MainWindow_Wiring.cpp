@@ -3221,7 +3221,13 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
             if (settings.value(QStringLiteral("DaxIqEnabled%1").arg(channel), "False").toString() != "True") {
                 continue;
             }
-            const DaxIqModel::IqStream stream = m_radioModel.daxIqModel().stream(channel);
+            DaxIqModel& iq = m_radioModel.daxIqModel();
+            const int savedRate = settings.value(QStringLiteral("DaxIqRate%1").arg(channel), "48000").toInt();
+            const int rate = iq.sampleRateForPreference(savedRate);
+            if (rate == 0) {
+                continue;
+            }
+            const DaxIqModel::IqStream stream = iq.stream(channel);
             if (stream.exists && stream.streamId != 0) {
                 if (m_radioModel.panStream()) {
                     m_radioModel.panStream()->unregisterIqStream(stream.streamId);
@@ -3229,13 +3235,8 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
                 m_radioModel.daxIqModel().removeStream(channel);
                 m_radioModel.daxIqModel().handleStreamRemoved(stream.streamId);
             }
-            m_radioModel.daxIqModel().createStream(channel);
-            const int rate = settings.value(QStringLiteral("DaxIqRate%1").arg(channel), "48000").toInt();
-            QTimer::singleShot(600, this, [this, channel, rate]() {
-                if (m_radioModel.isConnected()) {
-                    m_radioModel.daxIqModel().setSampleRate(channel, rate);
-                }
-            });
+            iq.setSampleRate(channel, rate);
+            iq.createStream(channel);
         }
     }
 }

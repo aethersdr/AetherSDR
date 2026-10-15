@@ -169,6 +169,11 @@ void DaxIqApplet::setRadioModel(RadioModel* model)
         disconnect(&m_model->daxIqModel(), nullptr, this, nullptr);
     }
     m_model = model;
+    for (int i = 0; i < kChannels; ++i) {
+        m_iqMeterDb[i] = -70.0f;
+        m_iqMeter[i]->setValue(0);
+        syncStreamState(i + 1);
+    }
     refreshRateChoices();
     if (!model) {
         for (int i = 0; i < kChannels; ++i) {
@@ -187,8 +192,11 @@ void DaxIqApplet::setRadioModel(RadioModel* model)
             return connected && !caps.daxIqSampleRates.isEmpty();
         };
         const QString reason = tr("DAX IQ sample rates are unavailable until a supported radio model is connected.");
-        m_availability->registerWidget(m_iqRateCombo[i], reason, available, {}, false);
-        m_availability->registerWidget(m_iqEnable[i], reason, available, {}, false);
+        const auto engaged = [this, i] {
+            return m_model && m_model->daxIqModel().stream(i + 1).exists;
+        };
+        m_availability->registerWidget(m_iqRateCombo[i], reason, available, engaged, false);
+        m_availability->registerWidget(m_iqEnable[i], reason, available, engaged, false);
     }
     connect(model, &RadioModel::capabilitiesChanged, this, [this, model] {
         if (m_model != model) { return; }
@@ -243,47 +251,50 @@ void DaxIqApplet::setRadioModel(RadioModel* model)
         restoreEnabledChannels();
     }
 
-    // Wire DAX IQ stream state changes → sync On/Off buttons
     connect(&model->daxIqModel(), &DaxIqModel::streamChanged, this, [this, model](int ch) {
         if (m_model != model) { return; }
-        if (ch < 1 || ch > kChannels) {
-            return;
-        }
-        int idx = ch - 1;
-        bool exists = m_model->daxIqModel().stream(ch).exists;
-        m_iqEnable[idx]->setText(exists ? "On" : "Off");
-        m_iqEnable[idx]->setStyleSheet(exists ? kIqBtnOn : kIqBtnOff);
-        // Zero the meter whenever the channel is not actively bound to a pan: it
-        // may be Off (exists==false) OR enabled-but-unbound (pan==0x0, e.g. the
-        // pan's daxiq_channel was moved to another IQ channel). No IQ data flows
-        // in either case, so the bar must drop to 0 instead of freezing.
-        const QString pan = exists ? m_model->daxIqModel().stream(ch).panId : QString();
-        const bool bound = exists && !pan.isEmpty()
-                           && pan != QStringLiteral("0x0") && pan != QStringLiteral("0");
-        if (!bound) {
-            m_iqMeterDb[idx] = -70.0f;
-            m_iqMeter[idx]->setValue(0);
-        }
+        syncStreamState(ch);
+    });
+}
 
-        // Sync rate combo from radio state ONLY while the stream exists and is
-        // not mid-rate-settling. On disable the model resets the stream's
-        // sampleRate to its 48k default; copying that into the combo would
-        // clobber the rate the user selected. During a non-default-rate enable
-        // the stream reports 48k transiently (rateSettling) before the real rate
-        // arrives; syncing then would flip the combo to 48k and back. In both
-        // cases the combo holds user intent and is re-applied on the next enable.
-        // (The On/Off button above still syncs every emit, settling or not.)
-        if (exists && !m_model->daxIqModel().stream(ch).rateSettling) {
-            int rate = m_model->daxIqModel().stream(ch).sampleRate;
-            QSignalBlocker sb(m_iqRateCombo[idx]);
-            for (int i = 0; i < m_iqRateCombo[idx]->count(); ++i) {
-                if (m_iqRateCombo[idx]->itemData(i).toInt() == rate) {
-                    m_iqRateCombo[idx]->setCurrentIndex(i);
-                    break;
-                }
+void DaxIqApplet::syncStreamState(int ch)
+{
+    if (ch < 1 || ch > kChannels) {
+        return;
+    }
+    int idx = ch - 1;
+    const bool exists = m_model && m_model->daxIqModel().stream(ch).exists;
+    m_iqEnable[idx]->setText(exists ? "On" : "Off");
+    m_iqEnable[idx]->setStyleSheet(exists ? kIqBtnOn : kIqBtnOff);
+    // Zero the meter whenever the channel is not actively bound to a pan: it
+    // may be Off (exists==false) OR enabled-but-unbound (pan==0x0, e.g. the
+    // pan's daxiq_channel was moved to another IQ channel). No IQ data flows
+    // in either case, so the bar must drop to 0 instead of freezing.
+    const QString pan = exists ? m_model->daxIqModel().stream(ch).panId : QString();
+    const bool bound = exists && !pan.isEmpty()
+                       && pan != QStringLiteral("0x0") && pan != QStringLiteral("0");
+    if (!bound) {
+        m_iqMeterDb[idx] = -70.0f;
+        m_iqMeter[idx]->setValue(0);
+    }
+
+    // Keep accepted intent visible until its rate echo arrives. Disabled streams
+    // retain the remembered preference instead of copying the radio's 48k default.
+    if (exists) {
+        const DaxIqModel::IqStream& stream = m_model->daxIqModel().stream(ch);
+        const int rate = stream.rateSettling ? m_model->daxIqModel().requestedSampleRate(ch)
+                                             : stream.sampleRate;
+        QSignalBlocker sb(m_iqRateCombo[idx]);
+        for (int i = 0; i < m_iqRateCombo[idx]->count(); ++i) {
+            if (m_iqRateCombo[idx]->itemData(i).toInt() == rate) {
+                m_iqRateCombo[idx]->setCurrentIndex(i);
+                break;
             }
         }
-    });
+    }
+    if (m_model && m_availability) {
+        m_availability->refreshEngaged();
+    }
 }
 
 void DaxIqApplet::restoreEnabledChannels()
@@ -352,7 +363,9 @@ void DaxIqApplet::refreshRateChoices()
             ? m_model->daxIqModel().sampleRateForPreference(m_preferredRate[ch]) : 0;
         if (m_model) {
             const DaxIqModel::IqStream& stream = m_model->daxIqModel().stream(ch + 1);
-            if (stream.exists && !stream.rateSettling && rates.contains(stream.sampleRate)) {
+            if (stream.exists && stream.rateSettling) {
+                effective = m_model->daxIqModel().requestedSampleRate(ch + 1);
+            } else if (stream.exists && rates.contains(stream.sampleRate)) {
                 effective = stream.sampleRate;
             }
         }

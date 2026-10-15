@@ -73,6 +73,8 @@ The applet has one row per channel, **IQ 1** to **IQ 4**:
 
 The rate and on/off state of each channel are saved and restored at startup. A saved 192k selection uses 96k when connecting to a model limited to 96 kHz. This fallback does not overwrite the saved preference: it returns to 192k on a model that supports it, unless you choose another rate.
 
+The same rate limits apply when IQ streams are recreated after a profile load.
+
 Higher rates use more of the radio's resources and more network bandwidth.
 
 ### Limits
