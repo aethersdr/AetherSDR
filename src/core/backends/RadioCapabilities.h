@@ -10,6 +10,7 @@
 #include <optional>
 
 #include "core/backends/SquelchLevelScale.h"
+#include "core/backends/DspParameterReset.h"
 
 namespace AetherSDR {
 
@@ -636,6 +637,7 @@ struct RadioCapabilities {
     bool hasTuner = false;         // antenna tuner / ATU matching control
     bool hasTunerMemories = false; // radio-side ATU memory recall/database
     bool hasAmplifier = false;     // integrated or controllable PA
+    std::optional<DspParameterResetControl> dspParameterReset;
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)
 
     // WDSP LMS/FFT filter family: NRL, ANFL, ANFT. Narrower than hasRadioSideDsp and

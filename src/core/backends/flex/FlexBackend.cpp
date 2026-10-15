@@ -137,6 +137,11 @@ void FlexBackend::setFirmwareVersionProvider(std::function<QString()> provider)
     m_firmwareVersionProvider = std::move(provider);
 }
 
+void FlexBackend::setDspResetLicenseProvider(std::function<std::optional<bool>()> provider)
+{
+    m_dspResetLicenseProvider = std::move(provider);
+}
+
 ReceiveDispatch FlexBackend::requestRadioNickname(const QString& nickname)
 {
     if (!m_sink) {
@@ -451,6 +456,35 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.maxPanadapters =
         m_reportedMaxPanadapters > 0 ? m_reportedMaxPanadapters : mc.maxSlices;
     caps.hasExtendedDsp = mc.hasExtendedDsp();
+    const QString resetVersionText = m_firmwareVersionProvider
+        ? m_firmwareVersionProvider() : QString();
+    qsizetype resetVersionEnd = 0;
+    const QVersionNumber resetVersion = QVersionNumber::fromString(resetVersionText, &resetVersionEnd);
+    const bool numericResetVersion = std::ranges::all_of(resetVersionText, [](QChar ch) {
+        return (ch >= QLatin1Char('0') && ch <= QLatin1Char('9')) || ch == QLatin1Char('.');
+    });
+    if (numericResetVersion && resetVersionEnd == resetVersionText.size() && resetVersion.segmentCount() >= 3
+        && resetVersion >= QVersionNumber(4, 3, 16) && mc.platform != RadioPlatform::Unknown) {
+        using Target = DspParameterResetTarget;
+        DspParameterResetControl reset;
+        reset.hardwareTargets = {Target::All, Target::Nr, Target::Anf, Target::Nrl,
+                                 Target::Anfl, Target::Anft};
+        if (mc.hasExtendedDsp()) {
+            reset.hardwareTargets.append({Target::Nrf, Target::Nrs});
+        }
+        const std::optional<bool> licensed = m_dspResetLicenseProvider
+            ? m_dspResetLicenseProvider() : std::nullopt;
+        reset.advancedAccess = !licensed ? DspParameterResetControl::AdvancedAccess::Unknown
+            : *licensed ? DspParameterResetControl::AdvancedAccess::Granted
+                        : DspParameterResetControl::AdvancedAccess::Denied;
+        reset.modes = {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("AM"),
+            QStringLiteral("SAM"), QStringLiteral("DSB"), QStringLiteral("CW"),
+            QStringLiteral("RTTY"), QStringLiteral("DIGU"), QStringLiteral("DIGL"),
+            QStringLiteral("FDVU"), QStringLiteral("FDVL")};
+        reset.notchModes = {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("AM"),
+                           QStringLiteral("SAM"), QStringLiteral("DSB")};
+        caps.dspParameterReset = reset;
+    }
     // The LMS/FFT family is base Flex firmware, not an 8000-series extra —
     // every radio with hasRadioSideDsp below also has NRL/ANFL/ANFT.
     caps.hasLmsNoiseFilters = true;
@@ -689,6 +723,30 @@ void FlexBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
         sendSlice(QStringLiteral("slice set %1 agc_off_level=%2").arg(sliceId).arg(request.offLevel));
         break;
     }
+}
+
+ReceiveDispatch FlexBackend::requestDspParameterReset(int sliceId, DspParameterResetTarget target)
+{
+    const RadioCapabilities caps = capabilities();
+    const std::optional<DspParameterResetControl> control = caps.dspParameterReset;
+    if (sliceId < 0 || sliceId >= caps.maxSlices || !control || !control->permits(target) || (!m_sliceSink && !m_sink)) {
+        return ReceiveDispatch::Unsupported;
+    }
+    QString algorithm;
+    // FlexLib 4.3.16 Slice.SendDspControlsResetCommand: fixed protocol whitelist.
+    switch (target) {
+    case DspParameterResetTarget::All: algorithm = QStringLiteral("all"); break;
+    case DspParameterResetTarget::Nr: algorithm = QStringLiteral("nr"); break;
+    case DspParameterResetTarget::Anf: algorithm = QStringLiteral("anf"); break;
+    case DspParameterResetTarget::Nrl: algorithm = QStringLiteral("lms_nr"); break;
+    case DspParameterResetTarget::Anfl: algorithm = QStringLiteral("lms_anf"); break;
+    case DspParameterResetTarget::Nrf: algorithm = QStringLiteral("nrf"); break;
+    case DspParameterResetTarget::Nrs: algorithm = QStringLiteral("speex_nr"); break;
+    case DspParameterResetTarget::Anft: algorithm = QStringLiteral("anft"); break;
+    default: return ReceiveDispatch::Unsupported;
+    }
+    sendSlice(QStringLiteral("slice reset %1 dsp_param=%2").arg(sliceId).arg(algorithm));
+    return ReceiveDispatch::Dispatched;
 }
 
 ReceiveDispatch FlexBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
