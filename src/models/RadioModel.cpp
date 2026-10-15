@@ -7682,7 +7682,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
             QMetaObject::invokeMethod(m_panStream, [this]() {
                 m_panStream->startWanUdpRegister(clientHandle());
             });
-            qCDebug(lcProtocol) << "RadioModel: WAN — started UDP registration via udp_register";
+            qCDebug(lcProtocol) << "RadioModel: WAN — requested UDP registration via udp_register";
         }
 
         const quint16 udpPort = m_panStream->localPort();

@@ -78,7 +78,7 @@ Forget a pin only when you have deliberately changed a radio's certificate.
 
 ### UDP session maintenance
 
-AetherSDR registers the SmartLink UDP endpoint every 50 ms until it receives a valid Flex VITA-49 packet from the radio, including compressed audio. It then sends a registration keepalive every five seconds for the rest of the connection to maintain the NAT mapping. Disconnecting stops these keepalives; reconnecting registers the new session. This happens automatically and needs no client-side setting.
+AetherSDR registers the SmartLink UDP endpoint every 50 ms until it receives a packet with a complete Flex VITA-49 preamble, including compressed audio. It then sends a registration keepalive every five seconds for the rest of the connection to maintain the NAT mapping. Disconnecting stops these keepalives; reconnecting registers the new session. This happens automatically and needs no client-side setting.
 
 ### Limitations
 

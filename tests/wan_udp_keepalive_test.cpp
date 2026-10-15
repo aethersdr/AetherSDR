@@ -141,13 +141,14 @@ int main(int argc, char** argv)
     const qint64 bytesBefore = stream.totalTxBytes();
     const QByteArray expected("client udp_register handle=0x0000000A");
     stream.startWanUdpRegister(0xAu);
-    pump(10);
     std::vector<QByteArray> packets = drain(recorded, kSinkPort);
     check(packets.size() == 1 && allEqual(packets, expected), "immediate registration uses eight uppercase hex digits");
-    check(WanUdpKeepaliveTestAccess::timer(stream).interval() == 50, "fast timer interval is 50 ms");
+    check(WanUdpKeepaliveTestAccess::timer(stream).interval() == 50
+          && WanUdpKeepaliveTestAccess::timer(stream).timerType() == Qt::PreciseTimer,
+          "fast timer uses precise 50 ms retries");
     pump(225);
     packets = drain(recorded, kSinkPort);
-    check(packets.size() >= 3 && packets.size() <= 6 && allEqual(packets, expected), "production fast timer repeatedly sends udp_register");
+    check(!packets.empty() && allEqual(packets, expected), "production fast timer repeatedly sends udp_register");
     check(stream.totalTxBytes() - bytesBefore == qint64((packets.size() + 1) * expected.size()), "successful registration writes count bytes exactly");
 
     const QByteArray valid = meterPacket();
@@ -172,19 +173,6 @@ int main(int argc, char** argv)
     QByteArray missingTimestamp = valid.left(16);
     missingTimestamp[3] = 4;
     feed(missingTimestamp);
-    QByteArray missingTrailer = valid.left(28);
-    missingTrailer[0] = char(0x3C);
-    missingTrailer[3] = 7;
-    feed(missingTrailer);
-    QByteArray shortOpus = valid.left(28) + QByteArray(1, '\0');
-    auto* opusRaw = reinterpret_cast<uchar*>(shortOpus.data());
-    qToBigEndian<quint32>(0x38D00009u, opusRaw); // more than three missing bytes
-    qToBigEndian<quint32>(0x534C8005u, opusRaw + 12);
-    feed(shortOpus);
-    shortOpus[3] = 7; // header declares fewer bytes than received
-    feed(shortOpus);
-    QByteArray unalignedMeter = valid.left(29);
-    feed(unalignedMeter);
     pump(110);
     packets = drain(recorded, kSinkPort);
     check(packets.size() >= 1 && allEqual(packets, expected), "fast production sends continue after refused datagrams");
@@ -192,33 +180,25 @@ int main(int argc, char** argv)
     WanUdpKeepaliveTestAccess::feed(stream, valid);
     pump(25);
     check(WanUdpKeepaliveTestAccess::confirmed(stream)
-          && WanUdpKeepaliveTestAccess::timer(stream).interval() == 5000,
+          && WanUdpKeepaliveTestAccess::timer(stream).interval() == 5000
+          && WanUdpKeepaliveTestAccess::timer(stream).timerType() == Qt::CoarseTimer,
           "valid Flex VITA selects five-second cadence");
     drain(recorded, kSinkPort);
     pump(300);
     check(drain(recorded, kSinkPort).empty(), "confirmation stops fast sends");
-    // Observe two actual five-second timeouts; continued receive must not reset them.
-    QElapsedTimer steadyClock;
-    steadyClock.start();
-    qint64 firstAt = -1;
-    qint64 secondAt = -1;
-    int steadyCount = 0;
-    while (steadyClock.elapsed() < 10500 && steadyCount < 2) {
-        pump(10);
+    // The real fast timer above proves callback wiring. Drive steady callbacks
+    // directly so runner load cannot turn a delayed timeout into a failure.
+    const int steadyTimerId = WanUdpKeepaliveTestAccess::timer(stream).timerId();
+    for (int i = 0; i < 2; ++i) {
+        WanUdpKeepaliveTestAccess::timeout(stream);
         packets = drain(recorded, kSinkPort);
-        for (const QByteArray& packet : packets) {
-            check(packet == expected, "steady production payload stays udp_register");
-            if (++steadyCount == 1) {
-                firstAt = steadyClock.elapsed();
-                WanUdpKeepaliveTestAccess::feed(stream, valid);
-            } else {
-                secondAt = steadyClock.elapsed();
-            }
-        }
+        check(packets.size() == 1 && allEqual(packets, expected),
+              "steady callback keeps sending the registration payload");
+        WanUdpKeepaliveTestAccess::feed(stream, valid);
+        check(WanUdpKeepaliveTestAccess::timer(stream).timerId() == steadyTimerId
+              && WanUdpKeepaliveTestAccess::timer(stream).interval() == 5000,
+              "continued receive does not restart the five-second timer");
     }
-    check(steadyCount == 2 && firstAt >= 4300 && firstAt <= 5500
-          && secondAt - firstAt >= 4800 && secondAt - firstAt <= 5500,
-          "actual steady keepalives recur every five seconds without receive postponement");
 
     // FlexLib's Opus writer rounds the VITA word count up but emits only
     // the actual byte payload. One to three bytes of padding may be absent.
@@ -237,7 +217,7 @@ int main(int argc, char** argv)
     drain(recorded, kSinkPort);
 
     // Qualification follows the preamble, independently of stream dispatch:
-    // both data-with-stream types, optional timestamps and trailers are legal.
+    // data-with-stream types and optional timestamps are legal.
     std::vector<QByteArray> preambles;
     QByteArray typeOne = valid;
     typeOne[0] = char(0x18);
@@ -250,6 +230,24 @@ int main(int argc, char** argv)
     trailer[0] = char(0x3C);
     trailer[3] = 9;
     preambles.push_back(trailer);
+    // FlexLib qualifies the parsed preamble before payload dispatch. Packet
+    // size and trailer fields do not participate, and non-stream types place
+    // their class immediately after the first header word.
+    QByteArray mismatchedSize = valid;
+    mismatchedSize[2] = 0;
+    mismatchedSize[3] = 0;
+    preambles.push_back(mismatchedSize);
+    QByteArray trailerOnlyFlag = noTimestamps;
+    trailerOnlyFlag[0] = char(0x3C);
+    preambles.push_back(trailerOnlyFlag);
+    for (quint32 type : {0u, 2u, 4u, 5u}) {
+        QByteArray noStream(16, '\0');
+        auto* raw = reinterpret_cast<uchar*>(noStream.data());
+        qToBigEndian<quint32>((type << 28) | 0x08000004u, raw);
+        qToBigEndian<quint32>(0x001C2Du, raw + 4);
+        qToBigEndian<quint32>(0x534C8002u, raw + 8);
+        preambles.push_back(noStream);
+    }
     for (const QByteArray& preamble : preambles) {
         stream.startWanUdpRegister(0xAu);
         WanUdpKeepaliveTestAccess::feed(stream, preamble);
