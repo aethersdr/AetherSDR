@@ -25,6 +25,7 @@
 #include <QProgressBar>
 #include <QSignalSpy>
 #include <QStandardItemModel>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QPixmap>
 #include <QStringList>
@@ -39,6 +40,64 @@ namespace AetherSDR {
 // Uses the existing friend test accessor; the injected TciClient has no socket.
 class TciServerReviewTest {
 public:
+    static bool deferredRate(RadioModel& model, const std::function<void(const QString&)>& changeModel)
+    {
+        changeModel(QString());
+        TciServer server(&model);
+        TciClient client;
+        QStringList sent;
+        client.textSink = [&sent](const QString& text) { sent.append(text); return text.size(); };
+        TciProtocol protocol(&model, &server.m_routingState, &server.m_trxMap);
+        TciServer::ClientState cs;
+        cs.socket = &client;
+        cs.protocol = &protocol;
+        cs.iqReceivers.insert(0);
+        server.m_clients.append(cs);
+        QObject::connect(&client, &TciClient::textMessageReceived,
+                         &server, &TciServer::onTextMessage);
+        SliceDelta slice;
+        slice.mode = QStringLiteral("USB");
+        slice.panId = QStringLiteral("0x40000000");
+        model.emitBackendSliceChangedForTest(0, slice);
+        server.wireSlice(0, model.slice(0));
+        QSignalSpy commands(&model.daxIqModel(), &DaxIqModel::commandReady);
+        bool ok = true;
+        for (const int rate : {96000, 192000}) {
+            emit client.textMessageReceived(QStringLiteral("iq_samplerate:%1;").arg(rate));
+            ok = ok && server.m_iqSampleRate == rate
+                && !sent.isEmpty() && sent.last() == QStringLiteral("iq_samplerate:%1;").arg(rate);
+        }
+        emit client.textMessageReceived(QStringLiteral("iq_samplerate:44100;"));
+        ok = ok && server.m_iqSampleRate == 192000 && commands.isEmpty()
+            && !server.ensureIqStream(0);
+        changeModel(QStringLiteral("FLEX-6400M"));
+        emit model.capabilitiesChanged(true, model.backendCapabilities());
+        ok = ok && server.m_iqSampleRate == 192000
+            && server.achievedIqSampleRate() == 96000 && server.ensureIqStream(0)
+            && sent.contains(QStringLiteral("iq_samplerate:96000;"));
+        commands.clear();
+        model.daxIqModel().applyStreamStatus(0x110, {{"daxiq_channel", "1"}, {"daxiq_rate", "48000"}});
+        ok = ok && commands.size() == 1
+            && commands.first().first().toString().endsWith(QStringLiteral("daxiq_rate=96000"));
+        model.daxIqModel().handleDisconnect();
+        server.resetIqStreamBookkeeping();
+        changeModel(QStringLiteral("FLEX-6700"));
+        emit model.capabilitiesChanged(true, model.backendCapabilities());
+        ok = ok && server.m_iqSampleRate == 192000
+            && server.achievedIqSampleRate() == 192000 && server.ensureIqStream(0)
+            && sent.last() == QStringLiteral("iq_samplerate:192000;");
+        changeModel(QStringLiteral("FLEX-6400M"));
+        emit model.capabilitiesChanged(true, model.backendCapabilities());
+        emit client.textMessageReceived(QStringLiteral("iq_samplerate:96000;"));
+        sent.clear();
+        emit client.textMessageReceived(QStringLiteral("iq_samplerate:192000;"));
+        ok = ok && server.m_iqSampleRate == 96000 && sent.size() == 1
+            && sent.last() == QStringLiteral("iq_samplerate:96000;")
+            && protocol.generateInitBurst().contains(QStringLiteral("iq_samplerate:96000;"));
+        server.m_clients.clear();
+        return ok;
+    }
+
     static bool rateReplacement(RadioModel& model, const std::function<void(const QString&)>& changeModel)
     {
         TciServer server(&model);
@@ -71,8 +130,7 @@ public:
             && sent.contains(QStringLiteral("iq_samplerate:96000;"))
             && protocol.generateInitBurst().contains(QStringLiteral("iq_samplerate:96000;"));
         emit client.textMessageReceived(QStringLiteral("iq_samplerate:192000;"));
-        ok = ok && server.m_iqSampleRate == 192000
-            && sent.last() == QStringLiteral("iq_samplerate:96000;");
+        ok = ok && sent.last() == QStringLiteral("iq_samplerate:96000;");
         QSignalSpy requests(&model.daxIqModel(), &DaxIqModel::commandReady);
         model.daxIqModel().applyStreamStatus(0x100, {{"daxiq_channel","1"}, {"daxiq_rate","48000"}});
         ok = ok && model.daxIqModel().stream(1).rateSettling
@@ -162,6 +220,11 @@ int main(int argc, char** argv)
     model.setBackendForTest(std::move(backend), QStringLiteral("test"));
     DaxIqModel& iq = model.daxIqModel();
     if (app.arguments().contains(QStringLiteral("--bridge-proof"))) {
+        const QString token = qEnvironmentVariable("AETHER_MCP_TOKEN");
+        if (token.isEmpty()) {
+            std::fprintf(stderr, "--bridge-proof requires a non-empty AETHER_MCP_TOKEN\n");
+            return 1;
+        }
         AppSettings& settings = AppSettings::instance();
         settings.setValue("DaxIqRate1", "192000");
         settings.setValue("DaxIqEnabled1", "False");
@@ -194,7 +257,7 @@ int main(int argc, char** argv)
         window.show();
         AutomationServer bridge;
         bridge.setRadioModel(&model);
-        bridge.setAuthToken(qEnvironmentVariable("AETHER_MCP_TOKEN"));
+        bridge.setAuthToken(token);
         qputenv("AETHER_AUTOMATION_NO_TX", "1");
         if (!bridge.start(qEnvironmentVariable("AETHER_AUTOMATION_SOCKET"))) {
             return 1;
@@ -247,6 +310,10 @@ int main(int argc, char** argv)
     iq.handleDisconnect();
 
 #ifdef HAVE_WEBSOCKETS
+    check(TciServerReviewTest::deferredRate(model, [source](const QString& name) {
+        source->model = name;
+    }), "TCI defers pre-identification rates without commands, then clamps and restores intent");
+    iq.handleDisconnect();
     source->model = QStringLiteral("FLEX-6700");
     check(TciServerReviewTest::rateReplacement(model, [source](const QString& name) {
         source->model = name;
@@ -275,16 +342,22 @@ int main(int argc, char** argv)
           "disabled choice has an accessible reason");
     check(combo->currentData().toInt() == 96000, "saved 192k displays safe 96k fallback");
     if (app.arguments().contains(QStringLiteral("--capture"))) {
+        QTemporaryDir captureDir;
+        if (!captureDir.isValid()) {
+            return 1;
+        }
+        captureDir.setAutoRemove(false);
+        std::printf("Capture directory: %s\n", qPrintable(captureDir.path()));
         applet.resize(280,120);
         applet.show();
         app.processEvents();
-        applet.grab().save(QStringLiteral("/private/tmp/dax-iq-96k-applet.png"));
+        applet.grab().save(captureDir.filePath(QStringLiteral("dax-iq-96k-applet.png")));
         combo->showPopup();
         app.processEvents();
-        combo->view()->grab().save(QStringLiteral("/private/tmp/dax-iq-96k-choices.png"));
+        combo->view()->grab().save(captureDir.filePath(QStringLiteral("dax-iq-96k-choices.png")));
         combo->hidePopup();
     }
-    spin(1600);
+    check(enables.wait(2500), "restore completes within the deadline");
     check(rates.size() == 1 && rates.at(0).at(1).toInt() == 96000 && enables.size() == 1,
           "restore requests safe fallback exactly once");
     check(settings.value("DaxIqRate1").toInt() == 192000, "fallback leaves valid saved preference intact");
@@ -298,11 +371,11 @@ int main(int argc, char** argv)
           "model revision re-enables 192k and restores preference");
     source->connected = false;
     emit model.connectionStateChanged(false);
-    spin(1600);
+    spin(2500);
     check(enables.size() == 1, "disconnect cancels pending restore");
     source->connected = true;
     emit model.connectionStateChanged(true);
-    spin(1600);
+    check(enables.wait(2500), "reconnect restore completes within the deadline");
     check(rates.last().at(1).toInt() == 192000 && enables.size() == 2,
           "reconnect restores valid 192k selection");
 
@@ -342,16 +415,16 @@ int main(int argc, char** argv)
     emit iq.streamChanged(1);
     spin(600);
     check(enables.isEmpty(), "old restore timer cannot fire early in replacement session");
-    spin(1000);
+    check(enables.wait(2500), "replacement restore completes within the deadline");
     check(rates.size() == 1 && rates.at(0).at(1).toInt() == 96000 && enables.size() == 1,
           "replacement ignores old model signals and cancels its pending timer");
     check(settings.value("DaxIqRate1").toInt() == 192000, "replacement still preserves saved preference");
     otherSource->model.clear();
     announce(replacement,*otherSource);
-    check(!combo->isEnabled() && !combo->accessibleDescription().isEmpty(),
-          "unknown model dims rate control with reason");
+    check(!combo->isEnabled() && combo->accessibleDescription().contains(QStringLiteral("until")),
+          "unknown model dims rate control with its availability reason");
     applet.setRadioModel(nullptr);
-    spin(1600);
+    spin(2500);
     check(enables.size() == 1, "unbinding model cancels restore");
 
     otherSource->model = QStringLiteral("FLEX-6400M");
@@ -361,6 +434,20 @@ int main(int argc, char** argv)
     applet.setRadioModel(&replacement);
     check(applet.findChild<QPushButton*>("daxIqEnable2")->text() == "On",
           "late applet binding seeds already-confirmed stream state");
+    applet.setRadioModel(nullptr);
+
+    auto* enable = applet.findChild<QPushButton*>("daxIqEnable2");
+    applet.setRadioModel(&replacement);
+    check(enable->styleSheet().contains(QStringLiteral("background: #00b4d8;")),
+          "late-bound On stream retains the On background");
+    replacementIq.handleStreamRemoved(0x202);
+    check(enable->text() == "Off"
+              && enable->styleSheet().contains(QStringLiteral("background: #1a2a3a;")),
+          "On to Off updates the rendered background after availability refresh");
+    replacementIq.applyStreamStatus(0x202, {{"daxiq_channel", "2"}, {"daxiq_rate", "24000"}});
+    check(enable->text() == "On"
+              && enable->styleSheet().contains(QStringLiteral("background: #00b4d8;")),
+          "Off to On updates the rendered background after availability refresh");
     applet.setRadioModel(nullptr);
 
     // A live rate request has not yet been echoed when a theme refresh occurs.
@@ -375,6 +462,9 @@ int main(int argc, char** argv)
     emit ThemeManager::instance().themeChanged();
     check(pendingCombo->currentData().toInt() == 96000,
           "refresh preserves a valid rate request awaiting radio confirmation");
+    check(pendingCombo->accessibleDescription().contains(QStringLiteral("192"))
+              && !pendingCombo->accessibleDescription().contains(QStringLiteral("not currently active")),
+          "theme refresh composes per-rate reasons with confirmed active state");
     replacementIq.setSampleRate(2, 48000);
     emit ThemeManager::instance().themeChanged();
     check(pendingCombo->currentData().toInt() == 48000,

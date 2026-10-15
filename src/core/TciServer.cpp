@@ -1482,33 +1482,39 @@ void TciServer::onTextMessage(const QString& msg)
             }
             bool ok = false;
             const int rate = value.toInt(&ok);
+            const QList<int> modelRates = m_model
+                ? m_model->daxIqModel().supportedSampleRates() : QList<int>{};
+            // Clients can negotiate once before the radio identifies its model.
+            // Retain that preference; stream creation still requires known rates.
             const bool supported = ok
                 && (rate == 24000 || rate == 48000
                     || rate == 96000 || rate == 192000)
-                && (!m_model || m_model->daxIqModel().supportsSampleRate(rate));
+                && (modelRates.isEmpty() || modelRates.contains(rate));
             if (!supported) {
                 replyText(ws, QStringLiteral("iq_samplerate:%1;")
                                   .arg(achievedIqSampleRate()));
                 continue;
             }
             m_iqSampleRate = rate;
-            m_announcedIqSampleRate = rate;
-            if (m_model) {
+            const int effectiveRate = effectiveIqSampleRate();
+            const int announcedRate = effectiveRate != 0 ? effectiveRate : rate;
+            m_announcedIqSampleRate = announcedRate;
+            if (m_model && effectiveRate != 0) {
                 for (int channel : std::as_const(m_tciIqChannels)) {
-                    m_model->daxIqModel().setSampleRate(channel, rate);
+                    m_model->daxIqModel().setSampleRate(channel, effectiveRate);
                 }
             }
-            // Keep every client's init burst honest: a client connecting after
-            // this SET must be told the rate in force, not the 48000 default.
+            // Seed later clients with the effective rate, or the deferred
+            // preference while no model has been identified.
             for (ClientState& cs : m_clients) {
                 if (cs.protocol) {
-                    cs.protocol->setIqSampleRate(rate);
+                    cs.protocol->setIqSampleRate(announcedRate);
                 }
             }
             // #3913: the requester and every peer each get exactly one copy.
             // Routed through sendClientText() so the peer sends stay in the
             // outbound accounting and the `TCI tx→client:` diagnostic log.
-            const QString response = QStringLiteral("iq_samplerate:%1;").arg(rate);
+            const QString response = QStringLiteral("iq_samplerate:%1;").arg(announcedRate);
             replyText(ws, response);
             for (ClientState& cs : m_clients) {
                 if (cs.socket != ws) {
