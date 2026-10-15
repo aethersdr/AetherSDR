@@ -471,6 +471,7 @@ RadioCapabilities FlexBackend::capabilities() const
         {QStringLiteral("DSB"), -12000, -10, 10, 12000, 20, 24000}}};
     caps.receiveAudioControl = std::nullopt; // legacy wire mixer path has not migrated
     caps.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    caps.dspParameterReset = std::nullopt;
     caps.receivePanCenterControl = std::nullopt; // unknown coverage including transverters
     caps.receivePanBandwidthControl = std::nullopt; // legacy coupled geometry path
     caps.txPowerBands = {};

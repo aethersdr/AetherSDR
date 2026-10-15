@@ -328,6 +328,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     }
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receiveAudioExport = ReceiveAudioExport{{24000, 48000}, m_receiverCapacity};
+    c.dspParameterReset = std::nullopt;
     c.panSpanModel = PanSpanModel{false, false};
     if (m_lastPublished && hasReceivingDcSensitive(*m_lastPublished)) {
         c.receiveCapturePlacement = ReceiveCapturePlacement{

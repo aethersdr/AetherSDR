@@ -78,6 +78,17 @@ radio copy.
 |---|---|---|---|---|---|---|---|
 | `broadcastFmReceive` | absent | absent | absent | absent | absent | de-emphasis 50/75 µs, force Mono, measured reception diagnostics | `WfmApplet` availability; `RadioModel::dispatchSliceWfm` validates the capability and routes `requestSliceWfm`, with explicit refusal reporting |
 
+### DSP parameter reset
+
+| Record | Flex | HL2 | Sim | Icom | ANAN | RTL-SDR | Consumers |
+|---|---|---|---|---|---|---|---|
+| `dspParameterReset` | Known hardware on numeric firmware 4.3.16+: target whitelist, applicable modes and unknown/denied/granted advanced entitlement | absent | absent | absent | absent | absent | `RadioModel` validates exact slice/session ownership and observed mode before `requestDspParameterReset`; `VfoWidget` dims unavailable targets and Reset with reasons |
+
+Absence refuses reset. All and supported NRS are Basic operations; individual
+advanced targets require explicitly granted entitlement. This record grants no
+host DSP, daemon or TX operation. See [DSP parameter reset](../dsp-parameter-reset-protocol.md)
+for protocol evidence and the conservative entitlement mapping.
+
 ### Local receive-control records
 
 The optional `receiveModeControl`, `receiveFilterControl`, `receiveAudioControl`,
