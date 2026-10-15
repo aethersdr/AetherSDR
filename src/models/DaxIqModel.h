@@ -54,6 +54,8 @@ public:
     QList<int> supportedSampleRates() const;
     bool supportsSampleRate(int rate) const;
     int sampleRateForPreference(int rate) const;
+    // Pending intent at a supported rate; stream().sampleRate is radio-confirmed.
+    int requestedSampleRate(int channel) const;
 
     // State
     const IqStream& stream(int channel) const;    // channel 1-4

@@ -40,6 +40,7 @@ private:
     void buildUI();
 
     void refreshRateChoices();
+    void syncStreamState(int channel);
     void restoreChannelsNow();
 
     QPointer<RadioModel> m_model;

@@ -22,6 +22,7 @@
 #include <QComboBox>
 #include <QEventLoop>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QSignalSpy>
 #include <QStandardItemModel>
 #include <QTimer>
@@ -310,9 +311,30 @@ int main(int argc, char** argv)
     RateBackend* otherSource = other.get();
     otherSource->model = QStringLiteral("AU-510M");
     replacement.setBackendForTest(std::move(other),QStringLiteral("test"));
+    iq.setSampleRate(1, 192000);
+    iq.applyStreamStatus(0x201, {{"daxiq_channel", "1"}, {"daxiq_rate", "192000"},
+                               {"pan", "0x40000000"}});
+    applet.setDaxIqLevel(1, 32768.0f);
+    check(applet.findChild<QPushButton*>("daxIqEnable1")->text() == "On",
+          "old model starts with a confirmed live IQ channel");
+    bool oldMeterActive = false;
+    for (QProgressBar* meter : applet.findChildren<QProgressBar*>()) {
+        oldMeterActive = oldMeterActive || meter->value() > 0;
+    }
+    check(oldMeterActive, "old model has an IQ level to clear on replacement");
+    check(!applet.findChild<QPushButton*>("daxIqEnable1")->accessibleDescription()
+              .contains(QStringLiteral("not currently active")),
+          "confirmed On stream is announced as active");
     applet.restoreEnabledChannels();
     spin(1000);
     applet.setRadioModel(&replacement);
+    check(applet.findChild<QPushButton*>("daxIqEnable1")->text() == "Off",
+          "replacement without streams immediately clears old On state");
+    bool allMetersZero = true;
+    for (QProgressBar* meter : applet.findChildren<QProgressBar*>()) {
+        allMetersZero = allMetersZero && meter->value() == 0;
+    }
+    check(allMetersZero, "replacement immediately clears old IQ meter levels");
     rates.clear();
     enables.clear();
     announce(model,*source);
@@ -331,5 +353,46 @@ int main(int argc, char** argv)
     applet.setRadioModel(nullptr);
     spin(1600);
     check(enables.size() == 1, "unbinding model cancels restore");
+
+    otherSource->model = QStringLiteral("FLEX-6400M");
+    DaxIqModel& replacementIq = replacement.daxIqModel();
+    replacementIq.setSampleRate(2, 24000);
+    replacementIq.applyStreamStatus(0x202, {{"daxiq_channel", "2"}, {"daxiq_rate", "24000"}});
+    applet.setRadioModel(&replacement);
+    check(applet.findChild<QPushButton*>("daxIqEnable2")->text() == "On",
+          "late applet binding seeds already-confirmed stream state");
+    applet.setRadioModel(nullptr);
+
+    // A live rate request has not yet been echoed when a theme refresh occurs.
+    replacementIq.setSampleRate(2, 24000);
+    replacementIq.applyStreamStatus(0x202, {{"daxiq_rate", "24000"}});
+    DaxIqApplet pendingApplet;
+    pendingApplet.setRadioModel(&replacement);
+    auto* pendingCombo = pendingApplet.findChild<QComboBox*>("daxIqRate2");
+    QObject::connect(&pendingApplet, &DaxIqApplet::iqRateChanged,
+                     &replacementIq, &DaxIqModel::setSampleRate);
+    pendingCombo->setCurrentIndex(pendingCombo->findData(96000));
+    emit ThemeManager::instance().themeChanged();
+    check(pendingCombo->currentData().toInt() == 96000,
+          "refresh preserves a valid rate request awaiting radio confirmation");
+    replacementIq.setSampleRate(2, 48000);
+    emit ThemeManager::instance().themeChanged();
+    check(pendingCombo->currentData().toInt() == 48000,
+          "refresh reflects pending rate intent from a non-GUI consumer");
+    replacementIq.applyStreamStatus(0x202, {{"daxiq_rate", "48000"}});
+    check(!replacementIq.stream(2).rateSettling && pendingCombo->currentData().toInt() == 48000,
+          "radio-confirmed rate clears pending state");
+    pendingApplet.setRadioModel(nullptr);
+
+    // Profile recovery seeds the supported remembered rate before creating.
+    QSignalSpy recoveryCommands(&replacementIq, &DaxIqModel::commandReady);
+    replacementIq.setSampleRate(4, replacementIq.sampleRateForPreference(192000));
+    replacementIq.createStream(4);
+    replacementIq.applyStreamStatus(0x204, {{"daxiq_channel", "4"}, {"daxiq_rate", "48000"}});
+    bool recoveredAt96k = false;
+    for (const QList<QVariant>& command : recoveryCommands) {
+        recoveredAt96k = recoveredAt96k || command.first().toString().endsWith("daxiq_rate=96000");
+    }
+    check(recoveredAt96k, "profile recovery restores a saved 192k preference at 96k");
     return failures == 0 ? 0 : 1;
 }
