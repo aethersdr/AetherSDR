@@ -62,6 +62,8 @@ On FlexRadio firmware that reports fix state, **GPS FIX** shows **3D**, **2D**, 
 
 Position source, **Grid square**, **Latitude**, **Longitude**, the coordinates in the radio's own format, **Altitude**, **Speed** and **Course**, plus the nearest mapped address (an online OpenStreetMap lookup). Buttons: **Copy gridsquare**, **Copy address** and **Refresh address**.
 
+When a valid position returns after **Time only** or **No fix**, the address lookup resumes even if the coordinates have not changed.
+
 ### Station Map
 
 A map of the radio's position. Use the arrow keys to pan, plus and minus to zoom, and Home to re-center.
