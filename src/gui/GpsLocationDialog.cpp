@@ -774,7 +774,8 @@ void GpsLocationDialog::refreshGps(bool reportArrived)
         fixDescription += tr(" The radio has not reported a recognized fix state.");
     }
     if (m_radioModel->gpsFixState() == GpsFixState::TimeOnly) {
-        fixDescription += tr(" Time and frequency are available without a position fix.");
+        fixDescription += tr(" The radio reports time-only mode without a position fix. "
+                             "Time validity and frequency-reference lock are shown separately.");
     }
     const bool fixChanged = m_fixStatusLabel->text() != fixText
         || m_fixStatusLabel->accessibleDescription() != fixDescription;

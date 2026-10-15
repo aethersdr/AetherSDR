@@ -23,6 +23,10 @@ def nodes(value):
             yield from nodes(child)
 
 
+def status_bar_clock(tree):
+    return next(n for n in nodes(tree) if n.get("accessibleName") == "UTC time")
+
+
 def run(bridge, output):
     output.mkdir(parents=True, exist_ok=True)
     evidence = []
@@ -62,6 +66,19 @@ def run(bridge, output):
             assert (labels["gpsLongitude"]["value"] != "—") is valid, labels["gpsLongitude"]
             if token == "TIME_ONLY":
                 assert not labels["gpsClockAgreement"]["value"].startswith("Unavailable"), labels["gpsClockAgreement"]
+                assert status_bar_clock(tree)["value"] == gps["utcTime"], status_bar_clock(tree)
+            if token == "NO_FIX":
+                # A fix-only update preserves the cached GPS time and reference
+                # lock. The status-bar clock must nevertheless resume ticking.
+                time.sleep(1.2)
+                first_tree = request(cmd="dumpTree")
+                first = status_bar_clock(first_tree)["value"]
+                time.sleep(1.2)
+                second_tree = request(cmd="dumpTree")
+                second = status_bar_clock(second_tree)["value"]
+                assert first != second, ("NO_FIX status-bar clock is frozen", first, second)
+                assert request(cmd="get", model="gps")["gps"]["utcTime"] == gps["utcTime"]
+                evidence.append({"fixture": "NO_FIX status-bar fallback", "clockSamples": [first, second]})
             evidence.append({"fixture": token, "gps": gps, "readout": readout})
             request(cmd="grab", target="GpsLocationDialog", path=str(output / f"{token.lower()}.png"))
         # Returning to the same position after either validity veto must resume
@@ -86,6 +103,15 @@ def run(bridge, output):
         readout = next(n for n in nodes(tree) if n.get("objectName") == "gpsFixStatus")
         assert readout["value"] == "3D", readout
         evidence.append({"fixture": "3D without position report", "gps": gps})
+        request(cmd="gps", action="fixfixture", value="TIME_ONLY")
+        gps = request(cmd="get", model="gps")["gps"]
+        assert not gps["positionValid"] and not gps["timeValid"] and not gps["referenceLocked"], gps
+        tree = request(cmd="dumpTree")
+        readout = next(n for n in nodes(tree) if n.get("objectName") == "gpsFixStatus")
+        assert readout["value"] == "Time only", readout
+        assert "Time validity and frequency-reference lock are shown separately." in readout["accessibleDescription"], readout
+        assert "are available" not in readout["accessibleDescription"], readout
+        evidence.append({"fixture": "TIME_ONLY without validity or reference lock", "gps": gps, "readout": readout})
         radio = request(cmd="get", model="radio")["radio"]
         assert not radio["connected"] and not radio["transmitting"], radio
     finally:

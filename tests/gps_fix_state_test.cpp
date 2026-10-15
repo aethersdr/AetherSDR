@@ -192,6 +192,11 @@ int main(int argc, char** argv)
           "production disconnect slot is reachable without transport");
     checkCleared(model);
     check(reports.count() == 1, "disconnect notifies GPS consumers of reset");
+    const int clearedTimeSettings = timeSettings.count();
+    check(QMetaObject::invokeMethod(&model, "onDisconnected", Qt::DirectConnection),
+          "repeated empty reset remains reachable");
+    check(reports.count() == 1 && timeSettings.count() == clearedTimeSettings,
+          "reset of already empty GPS state emits no duplicate notifications");
     QCoreApplication::sendPostedEvents(&model, QEvent::MetaCall);
     checkCleared(model);
     check(reports.count() == 1, "queued raw LAN GPS cannot undo disconnect reset");

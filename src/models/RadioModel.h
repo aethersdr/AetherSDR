@@ -272,6 +272,7 @@ public:
     // GPS data
     QString gpsStatus()    const { return m_gpsStatus; }
     GpsFixState gpsFixState() const { return m_gpsFixState; }
+    // Uses legacy backend validity with a no-fix veto; no separate time-valid bit is reported.
     bool gpsTimeValid() const
     {
         return m_gpsPositionValid && m_gpsFixState != GpsFixState::NoFix;
@@ -1445,7 +1446,6 @@ public:
 
 private slots:
     void onStatusReceived(const QString& object, const QMap<QString, QString>& kvs);
-    void onMessageReceived(const ParsedMessage& msg);
     void onConnected();
     void onDisconnected();
     void onConnectionError(const QString& msg);
