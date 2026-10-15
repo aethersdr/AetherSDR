@@ -2017,7 +2017,7 @@ model or widget state. Both location profiles initialize fix state to Unknown,
 matching firmware without the field. `gps fixfixture <3D|2D|TIME_ONLY|NO_FIX|UNKNOWN>`
 injects only the normalized fix-state field, preserving receiver status,
 coordinates and oscillator lock. It never establishes position validity or lock.
-`clearfixture` clears fix state, position validity and the location report.
+`clearfixture` clears fix state, position validity, source, UTC date and the location report.
 These fixtures prove presentation and propagation, not physical GPS acquisition.
 Run `python3 tools/automation_gps_fix_probe.py --socket <socket> --output <directory>`
 against an isolated disconnected app to check all five states in the real

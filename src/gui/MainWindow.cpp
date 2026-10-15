@@ -2393,13 +2393,14 @@ MainWindow::MainWindow(QWidget* parent)
         applyCapabilitiesToUi(m_radioModel.isConnected(),
                               m_radioModel.backendCapabilities());
 
-        // Use GPS UTC time only when GPSDO is installed and locked.
-        // GPS with no antenna/lock sends stale "00:00:00Z" — fall back to system clock.
+        // A locked frequency reference can persist without a valid GPS fix.
+        // Use independently usable GPS time or fall back to the computer clock.
         const RadioCapabilities caps = m_radioModel.backendCapabilities();
         const bool usablePositionTime = caps.hasGpsLocation
             && !caps.hasGpsFrequencyReference
             && m_radioModel.gpsPositionValid();
         if (!utcTime.isEmpty()
+            && m_radioModel.gpsTimeValid()
             && (usablePositionTime
                 || (normalizeOscillatorValue(m_radioModel.oscState()) == "gpsdo"
                     && m_radioModel.oscLocked()))) {
@@ -6534,6 +6535,7 @@ void MainWindow::buildUI()
     m_gpsDateLabel->setAlignment(Qt::AlignCenter);
     m_gpsDateLabel->setMinimumWidth(kTelemetryStackMinWidth);
     m_gpsTimeLabel = new QLabel("");
+    m_gpsTimeLabel->setAccessibleName(tr("UTC time"));
     applyStatusBarCompactLabelStyle(m_gpsTimeLabel, QStringLiteral("{{color.text.secondary}}"));
     m_gpsTimeLabel->setAlignment(Qt::AlignCenter);
     m_gpsTimeLabel->setMinimumWidth(kTelemetryStackMinWidth);

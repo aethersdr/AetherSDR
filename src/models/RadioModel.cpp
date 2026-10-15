@@ -9447,11 +9447,6 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
 
 // ─── Raw message handler (for meter status with '#' separators) ──────────────
 
-void RadioModel::onMessageReceived(const ParsedMessage& msg)
-{
-    handleMessageReceived(msg, m_gpsSessionGeneration);
-}
-
 void RadioModel::handleMessageReceived(const ParsedMessage& msg, quint64 gpsSessionGeneration)
 {
     if (msg.type == MessageType::Handle) {
@@ -9545,7 +9540,7 @@ void RadioModel::handleMessageReceived(const ParsedMessage& msg, quint64 gpsSess
 //   "radio"           → global radio properties
 //   "slice 0"         → slice receiver
 //   "panadapter 0"    → panadapter (spectrum)
-//   "meter 1"         → meter reading (handled by onMessageReceived)
+//   "meter 1"         → meter reading (handled by handleMessageReceived)
 //   "removed=True"    → object was removed
 
 bool RadioModel::backendCanTransmit() const
@@ -11302,7 +11297,7 @@ void RadioModel::onStatusReceived(const QString& object,
         }
     }
 
-    // Meter status uses '#'-separated tokens and is handled by onMessageReceived().
+    // Meter status uses '#'-separated tokens and is handled by handleMessageReceived().
 
     // "display pan 0x40000000 center=14.1 bandwidth=0.2 ..."
     // Only process status for OUR panadapter (matching client_handle or first unclaimed).
@@ -12460,6 +12455,15 @@ void RadioModel::resetGpsState(bool receiveMessages)
 {
     ++m_gpsSessionGeneration;
     wireGpsSessionReceivers(receiveMessages);
+    const bool telemetryChanged = !m_gpsStatus.isEmpty() || m_gpsPositionValid
+        || m_gpsFixState != GpsFixState::Unknown || !m_gpsSource.isEmpty()
+        || m_gpsTracked != 0 || m_gpsVisible != 0 || !m_gpsGrid.isEmpty()
+        || !m_gpsAltitude.isEmpty() || !m_gpsLat.isEmpty() || !m_gpsLon.isEmpty()
+        || !m_gpsTime.isEmpty() || !m_gpsDate.isEmpty() || !m_gpsSpeed.isEmpty()
+        || !m_gpsTrack.isEmpty() || !m_gpsFreqError.isEmpty()
+        || !m_automationGpsNtpServerAddress.isEmpty();
+    const bool timeSettingsChanged = m_gpsNtpEnabled || !m_gpsNtpServer.isEmpty()
+        || m_gpsTimeCorrectionEnabled || !m_gpsNtpSyncStatus.isEmpty();
     m_gpsStatus.clear();
     m_gpsPositionValid = false;
     m_gpsFixState = GpsFixState::Unknown;
@@ -12480,10 +12484,14 @@ void RadioModel::resetGpsState(bool receiveMessages)
     m_gpsTimeCorrectionEnabled = false;
     m_gpsNtpSyncStatus.clear();
     m_automationGpsNtpServerAddress.clear();
-    emit gpsStatusChanged(m_gpsStatus, m_gpsTracked, m_gpsVisible,
-                          m_gpsGrid, m_gpsAltitude, m_gpsLat, m_gpsLon,
-                          m_gpsTime);
-    emit gpsTimeSettingsChanged();
+    if (telemetryChanged) {
+        emit gpsStatusChanged(m_gpsStatus, m_gpsTracked, m_gpsVisible,
+                              m_gpsGrid, m_gpsAltitude, m_gpsLat, m_gpsLon,
+                              m_gpsTime);
+    }
+    if (timeSettingsChanged) {
+        emit gpsTimeSettingsChanged();
+    }
 }
 
 void RadioModel::applyGpsChanges(const GpsDelta& d)
@@ -12780,7 +12788,7 @@ void RadioModel::handleProfileStatus(const QString& object,
                                       const QMap<QString, QString>& kvs)
 {
     // Profile list/current with space-containing names are handled by
-    // handleProfileStatusRaw() via onMessageReceived().  This fallback
+    // handleProfileStatusRaw() via handleMessageReceived().  This fallback
     // handles any remaining profile status keys that don't have spaces
     // (e.g. "profile importing=1", "profile exporting=0").
     // aetherd RFC 2.3 (RadioModel residual): the space-free profile-flag decode
