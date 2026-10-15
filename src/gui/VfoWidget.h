@@ -676,6 +676,16 @@ private:
     QComboBox* m_agcCmb{nullptr};
     QSlider* m_agcTSlider{nullptr};
     QLabel* m_agcValueLbl{nullptr};
+    void updateDspParameterResetControls();
+    QPointer<SliceModel> m_dspResetSlice;
+    QPointer<SliceModel> m_dspResetIntentSlice;
+    QPointer<RadioModel> m_dspResetIntentRadio;
+    DspParameterResetTarget m_dspResetIntentTarget{DspParameterResetTarget::All};
+    quint64 m_dspResetSession{0};
+    bool m_dspResetIntentArmed{false};
+    QComboBox* m_dspResetTarget{nullptr};
+    QPushButton* m_dspResetButton{nullptr};
+
     // DSP tab
     QPushButton* m_nbBtn{nullptr};
     QPushButton* m_nrBtn{nullptr};

@@ -925,6 +925,10 @@ void RadioModel::setupBackend(const QString& family)
                     flex->refreshFirmwareCapabilities();
                 }
             });
+            flex->setDspResetLicenseProvider([this]() -> std::optional<bool> {
+                const LicenseFeatureState feature = licenseFeature(QStringLiteral("NOISE_REDUCTION"));
+                return feature.seen ? std::optional<bool>(feature.enabled) : std::nullopt;
+            });
             flex->setIndependentTxSequenceProvider([this] { return m_seqCounter.fetch_add(1); });
             m_connection = flex->connection();   // non-owning; the backend owns it
             m_panStream  = flex->panStream();    // non-owning; the backend owns it
@@ -1752,6 +1756,7 @@ void RadioModel::teardownBackend()
     for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
     ++m_backendReceiverGeneration;
+    ++m_receiveControlGeneration;
     m_backendObservedTransmit = false;   // an observation dies with its backend
     m_tgxlTune.reset();
     m_tgxlConfirmTimer.stop();
@@ -2096,6 +2101,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<SliceFilterRequest>();
     qRegisterMetaType<SliceAgcRequest>();
     qRegisterMetaType<SliceDspRequest>();
+    qRegisterMetaType<DspParameterResetTarget>();
     qRegisterMetaType<SliceAudioRequest>();
     qRegisterMetaType<SliceSquelchRequest>();
     qRegisterMetaType<SliceWfmRequest>();
@@ -8137,6 +8143,7 @@ void RadioModel::onDisconnected()
     // peek rather than resuming a half-finished one. (#5653 review)
     ++m_sessionGeneration;
     const RadioControlSession retiringSetupSession = controlSession();
+    ++m_receiveControlGeneration;
     m_multiFlexContinuation = nullptr;
 
     // #4142 — void any pan centers deferred during a profile load. The session
@@ -10178,6 +10185,52 @@ void RadioModel::reportReceiveDispatch(ReceiveDispatch result, const QString& op
             emit commandDropped(operation);
         }
     }
+}
+
+QString RadioModel::dspParameterResetUnavailableReason(const SliceModel* source, quint64 session,
+                                                        DspParameterResetTarget target) const
+{
+    if (QThread::currentThread() != thread() || !validDspParameterResetTarget(target)) {
+        return tr("Invalid DSP parameter reset request");
+    }
+    if (!isConnected() || !m_backend) {
+        return tr("Connect to a radio to reset DSP parameters");
+    }
+    if (!source || m_stagingReceiveModels || session != m_receiveControlGeneration
+        || slice(source->sliceId()) != source || !m_ownedSliceIds.contains(source->sliceId())
+        || isSlotForeign(source->sliceId())) {
+        return tr("DSP parameter reset requires a current, owned slice in this session");
+    }
+    const std::optional<DspParameterResetControl> control = backendCapabilities().dspParameterReset;
+    if (!control) {
+        return tr("Requires radio DSP parameter reset support (Flex SmartSDR 4.3.16 or later)");
+    }
+    if (!control->hardwareTargets.contains(target)) {
+        return tr("This radio model does not support this DSP reset target");
+    }
+    const bool notch = target == DspParameterResetTarget::Anf
+        || target == DspParameterResetTarget::Anfl || target == DspParameterResetTarget::Anft;
+    const std::optional<QString> reportedMode = source->receiveObservation().mode;
+    if (source->externalReceiveReplacementActive() || !reportedMode
+        || *reportedMode != source->mode() || !control->modes.contains(*reportedMode)
+        || (notch && !control->notchModes.contains(*reportedMode))) {
+        return tr("DSP parameter reset is unavailable for this receive mode");
+    }
+    if (!control->permits(target)) {
+        return control->advancedAccess == DspParameterResetControl::AdvancedAccess::Unknown
+            ? tr("Waiting for Advanced Noise Mitigation entitlement from the radio")
+            : tr("This target requires Advanced Noise Mitigation entitlement");
+    }
+    return {};
+}
+
+bool RadioModel::requestDspParameterReset(SliceModel* source, quint64 session,
+                                         DspParameterResetTarget target)
+{
+    if (!dspParameterResetUnavailableReason(source, session, target).isEmpty()) {
+        return false;
+    }
+    return m_backend->requestDspParameterReset(source->sliceId(), target) == ReceiveDispatch::Dispatched;
 }
 
 void RadioModel::dispatchSliceDsp(const SliceDspRequest& request)

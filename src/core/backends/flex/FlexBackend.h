@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 
 #include <QMap>
 #include <QString>
@@ -71,6 +72,7 @@ public:
     void setModelProvider(std::function<QString()> provider);
     void setFirmwareVersionProvider(std::function<QString()> provider);
     void refreshFirmwareCapabilities();
+    void setDspResetLicenseProvider(std::function<std::optional<bool>()> provider);
     void setIndependentTxSequenceProvider(std::function<quint32()> sequence);
     IndependentTxControl independentTxControl() const override;
     bool independentTxReady() const override;
@@ -112,6 +114,7 @@ public:
     void requestSliceFilter(int sliceId, const SliceFilterRequest& request) override;
     void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    ReceiveDispatch requestDspParameterReset(int sliceId, DspParameterResetTarget target) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
     ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
     ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
@@ -252,6 +255,7 @@ private:
     int nrsLevelMaximum() const;
     int m_announcedNrsLevelMaximum = 100;
     std::function<QString()> m_firmwareVersionProvider;
+    std::function<std::optional<bool>()> m_dspResetLicenseProvider;
     std::function<quint32()> m_sequenceProvider;
 
     // Decode-side handle state (#4198). Captured from the amplifier/tgxl status

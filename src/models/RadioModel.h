@@ -1470,6 +1470,11 @@ public:
 
     // Radio software version string (from discovery broadcast, e.g. "4.1.5")
     QString softwareVersion() const { return m_version; }
+    // Capture when binding an operator control; never refresh a stale intent at dispatch.
+    quint64 receiveControlSession() const { return m_receiveControlGeneration; }
+    QString dspParameterResetUnavailableReason(const SliceModel* source, quint64 session,
+                                               DspParameterResetTarget target) const;
+    bool requestDspParameterReset(SliceModel* source, quint64 session, DspParameterResetTarget target);
     // SmartSDR protocol version from the V line (e.g. "1.4.0.0"), empty until connected
     QString protocolVersion() const { return m_protocolVersion; }
 
@@ -1840,6 +1845,7 @@ private:
     // Bumped at every session end. Captured by deferred work (the multiFLEX
     // peek window) so a timer armed in one session cannot fire into the next.
     quint64 m_sessionGeneration{0};
+    quint64 m_receiveControlGeneration{0};
     void wireBackendReceiverState();
     bool dispatchSliceLifecycleCommand(const QString& command, ResponseCallback callback = {});
     quint64 m_backendReceiverGeneration = 0;

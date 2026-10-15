@@ -300,6 +300,8 @@ public:
     // receiveAudioControl record: its authorization/readback contract is
     // narrower than the existing desktop controls. Unsupported is explicit,
     // never acceptance through an inherited empty implementation hook.
+    virtual ReceiveDispatch requestDspParameterReset(int, DspParameterResetTarget)
+    { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSliceDsp(int, const SliceDspRequest&)
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSliceAudio(int, const SliceAudioRequest&)
