@@ -631,7 +631,9 @@ void testStockFirmwareCommands()
     stockInfo.productId = 0x1001;
     stockInfo.product = QStringLiteral("ESP32S3_DEV");   // no serial: no MAC
 
-    const auto run = [&](Device& dev, Firmware firmware, bool* waited) {
+    // restore: a backup's restore instead of the restart, which gets the
+    // unit into download mode the same way first.
+    const auto run = [&](Device& dev, Firmware firmware, bool* waited, bool restore = false) {
         Ctr2ProxyModel relay;
         relay.setUsbBackend(
             [stockInfo] { return QList<Ctr2HidPort::DeviceInfo>{stockInfo}; },
@@ -652,10 +654,15 @@ void testStockFirmwareCommands()
                          [&](bool o, const QString&) { done = true; ok = o; });
         QString problem;
         const bool takes = model.takesCommands(model.target());
-        const bool started = model.restartInto(model.target(), firmware, &problem);
+        const bool started =
+            restore ? model.restoreBackup(model.target(), QStringLiteral("/sim/backup.bin"),
+                                          &problem)
+                    : model.restartInto(model.target(), firmware, &problem);
         *waited = model.waitingForDownloadMode();
         if (started && !*waited)
             waitUntil([&done] { return done; });
+        if (restore)   // a restart it asked for reaches the device first
+            waitUntil([&dev] { return !dev.restartedInto.isEmpty(); }, 1000);
         model.cancel();
         return takes && started && ok;
     };
@@ -688,6 +695,36 @@ void testStockFirmwareCommands()
     run(old, Firmware::Stock, &waited);
     check(waited && old.restartedInto.isEmpty(),
           "AetherCTR2 without the commands waits for the buttons, sending nothing");
+    // AetherCTR2 before 0.9.2 offers the commands but has SWITCH only: it
+    // is judged by its version, and never sent a BOOTLOADER it cannot answer.
+    Device early;
+    early.version = QStringLiteral("0.9.1");
+    early.hasBootloaderOp = false;
+    check(!run(early, Firmware::Bootloader, &waited) && !waited
+              && early.restartedInto.isEmpty() && early.hellos == 0,
+          "AetherCTR2 0.9.1 is not asked for download mode: that takes its buttons");
+    Device earlyRestore;
+    earlyRestore.version = QStringLiteral("0.9.1");
+    earlyRestore.hasBootloaderOp = false;
+    run(earlyRestore, Firmware::Bootloader, &waited, true);
+    check(waited && earlyRestore.restartedInto.isEmpty() && earlyRestore.hellos == 0,
+          "and a restore on it waits for the buttons, sending nothing");
+    Device earlySwitch;
+    earlySwitch.version = QStringLiteral("0.9.1");
+    earlySwitch.hasBootloaderOp = false;
+    check(run(earlySwitch, Firmware::Stock, &waited) && !waited
+              && earlySwitch.restartedInto == QStringLiteral("other"),
+          "and still restarts into the stock firmware on request (SWITCH)");
+    Device current;
+    current.version = QStringLiteral("0.9.2");
+    check(run(current, Firmware::Bootloader, &waited) && !waited
+              && current.restartedInto == QStringLiteral("bootloader"),
+          "AetherCTR2 0.9.2 restarts into download mode on request, with no buttons");
+    Device currentRestore;
+    currentRestore.version = QStringLiteral("0.9.2");
+    run(currentRestore, Firmware::Bootloader, &waited, true);
+    check(waited && currentRestore.restartedInto == QStringLiteral("bootloader"),
+          "and for a restore, then waits for it in download mode");
     stockInfo.product = QStringLiteral("ESP32S3_DEV");
     stockInfo.serial.clear();
 

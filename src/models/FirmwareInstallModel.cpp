@@ -18,6 +18,7 @@
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QVersionNumber>
 
 #include <algorithm>
 #include <utility>
@@ -411,6 +412,18 @@ bool FirmwareInstallModel::takesCommands(const Target& target) const
            && m_relay->usbDevicePath() == target.hidPath && m_relay->usbFirmwareCommands();
 }
 
+bool FirmwareInstallModel::restartsIntoDownloadMode(const Target& target) const
+{
+    if (!takesCommands(target))
+        return false;
+    if (target.device != Device::LinkFirmware)
+        return true;
+    // AetherCTR2 answers BOOTLOADER from 0.9.2; one whose version is not
+    // known yet is not asked.
+    const QVersionNumber version = QVersionNumber::fromString(linkVersion());
+    return !version.isNull() && version >= QVersionNumber(0, 9, 2);
+}
+
 bool FirmwareInstallModel::relayHolds(const Target& target, QString* problem) const
 {
     if (m_relay) {
@@ -668,7 +681,7 @@ bool FirmwareInstallModel::whenInDownloadMode(const Target& target, Start start,
     // window asks for. Waiting for those, the device found may already be
     // passing through a restart: the action goes to the one device found in
     // download mode, and the job names it before writing.
-    const bool buttons = target.device != Device::Bootloader && !takesCommands(target);
+    const bool buttons = target.device != Device::Bootloader && !restartsIntoDownloadMode(target);
     if (!buttons && !stillTarget(target, problem))
         return false;
     if (target.device == Device::Bootloader)
@@ -731,7 +744,8 @@ bool FirmwareInstallModel::restartInto(const Target& target, Firmware firmware, 
     // Firmware that takes the link's commands (AetherCTR2, and stock
     // firmware offering them) restarts on request: into the other firmware
     // (SWITCH) or download mode.
-    if (takesCommands(target))
+    if (firmware == Firmware::Bootloader ? restartsIntoDownloadMode(target)
+                                         : takesCommands(target))
         return restart(target, firmware == Firmware::Bootloader, problem);
     if (firmware == Firmware::Bootloader) {
         *problem = tr("Put the CTR2-Max in download mode with its BOOT and RESET buttons.");

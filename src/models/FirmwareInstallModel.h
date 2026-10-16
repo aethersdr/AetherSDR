@@ -98,6 +98,10 @@ public:
     // that offers them. It restarts into its other firmware or download mode
     // on request, with no buttons. It must be the relay's selected device.
     bool takesCommands(const Target& target) const;
+    // A unit that restarts into download mode on request (BOOTLOADER):
+    // one that takes the commands, except AetherCTR2 before 0.9.2, which
+    // has SWITCH only. Any other needs its BOOT and RESET buttons.
+    bool restartsIntoDownloadMode(const Target& target) const;
     // Looks for the device again now, rather than at the next poll.
     void lookAgain() { poll(); }
     bool busy() const;
