@@ -1,7 +1,6 @@
 #include "AutomationServer.h"
 #include "core/DroopCalibration.h"
 #include "core/backends/AutoRfGainControl.h"
-#include "core/backends/TuneOutputPolicy.h"
 #include "AetherBuildIdentity.h"   // generated at build time; see cmake/AetherBuildIdentity.cmake
 #include "core/CtcssTones.h"
 #include "core/RadioCertification.h"
@@ -2756,9 +2755,6 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
     }
 
     const QString normalizedAction = action.trimmed().toLower();
-    if (name == QLatin1String("tuneoutput")) {
-        return normalizedAction == QLatin1String("probe");
-    }
     if (name == QLatin1String("radiocert") && normalizedAction == QLatin1String("persist")) {
         return true;  // snapshot only; the external supervisor owns transitions
     }
@@ -3257,25 +3253,6 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                                + getModelNames().join(QLatin1Char('|'))
                                + QLatin1Char(')'));
                 return s.doGet(a.model, a.selector, a.property);
-            });
-
-        add("tuneoutput", {}, "tuneoutput probe <firmware> — isolated production RCA TUNE ownership policy; no radio, settings, or keying access",
-            parseActionRest,
-            [](AutomationServer&, A& a, QLocalSocket*) -> QJsonObject {
-                if (a.action != QLatin1String("probe") || a.value.size() > 64
-                    || a.value.contains(QLatin1Char(' '))) {
-                    return err(QStringLiteral("tuneoutput requires probe <firmware>"));
-                }
-                const bool firmwareOwns = TuneOutputPolicy::firmwareSupportsSuppression(a.value);
-                const bool clientOwns = TuneOutputPolicy::clientManagesRca(a.value);
-                return {{QStringLiteral("ok"), true},
-                        {QStringLiteral("scope"), QStringLiteral("isolated-production-policy")},
-                        {QStringLiteral("firmware"), a.value},
-                        {QStringLiteral("firmwareOwnsRca"), firmwareOwns},
-                        {QStringLiteral("clientManagesRca"), clientOwns},
-                        {QStringLiteral("settingScope"), QStringLiteral("per-band")},
-                        {QStringLiteral("commands"), QJsonArray{}},
-                        {QStringLiteral("keyingIntents"), QJsonArray{}}};
             });
 
         add("meterwindow", {}, "meterwindow <start [duration_ms]|status|stop> — bounded meter ages and unrounded peaks; never keys TX",

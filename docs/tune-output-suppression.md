@@ -56,6 +56,11 @@ The separate ACC TX preference keeps its existing behavior. Firmware 4.2 and
 older, and unknown or malformed versions, retain the legacy path. The new
 checkbox is unavailable on unqualified firmware.
 
+RCA ownership is captured when a TUNE cycle applies inhibition. If firmware
+identification changes during that cycle, cleanup retains the captured ownership;
+the next cycle uses the new capability. This prevents late identification from
+skipping restoration of RCA outputs the legacy path temporarily disabled.
+
 The TX subscription can report band values before the `info` reply identifies
 the firmware, especially after reconnect or a manual-IP connection. Validated
 per-band observations are retained for that session, but controls and writes
@@ -73,8 +78,5 @@ inputs, keying authorization and other amplifier-keying mechanisms are separate
 from this setting.
 
 Injected production-path regressions cover encoding, parsing, ownership,
-readback, rejection, missing confirmation and session replacement. The agent
-automation bridge's `tuneoutput probe <firmware>` diagnostic evaluates the shared
-production ownership policy without constructing a radio or issuing commands.
-That diagnostic and injected lifecycle checks do not establish physical RF or
-RCA-output behavior.
+readback, rejection, missing confirmation and session replacement. These checks
+do not establish physical RF or RCA-output behavior.

@@ -219,28 +219,6 @@ void jsonIdAndMhzContract()
           "targettune validates before looking for its handler");
 }
 
-void tuneOutputPolicy()
-{
-    AutomationServer server;
-    server.setReadOnly(true);
-    for (const QString& version : {QStringLiteral("4.3.16.42034"), QStringLiteral("5.0.0.0"),
-                                  QStringLiteral("4.2.20.41343"), QStringLiteral("3.9.9.9"),
-                                  QStringLiteral("unknown"), QStringLiteral("4.3"),
-                                  QStringLiteral("4.3.16.42034junk")}) {
-        const QJsonObject reply = Access::request(server,
-            QStringLiteral("tuneoutput probe %1").arg(version).toUtf8());
-        const bool supported = version == QLatin1String("4.3.16.42034")
-            || version == QLatin1String("5.0.0.0");
-        check(ok(reply) && reply.value(QStringLiteral("firmwareOwnsRca")).toBool() == supported
-                  && reply.value(QStringLiteral("clientManagesRca")).toBool() != supported
-                  && reply.value(QStringLiteral("commands")).toArray().isEmpty()
-                  && reply.value(QStringLiteral("keyingIntents")).toArray().isEmpty(),
-              QStringLiteral("observe-only bridge uses production ownership policy for %1").arg(version), reply);
-    }
-    check(!ok(Access::request(server, QByteArrayLiteral("tuneoutput set 1"))),
-          QStringLiteral("diagnostic has no setting or keying action"));
-}
-
 void memoryActivate()
 {
     AutomationServer server;
@@ -534,7 +512,6 @@ int main(int argc, char** argv)
     qunsetenv("AETHER_AUTOMATION_ALLOW_TX");
     QCoreApplication app(argc, argv);
     jsonIdAndMhzContract();
-    tuneOutputPolicy();
     memoryActivate();
     deferredConnectFailures();
     fmRepeaterAndTransmit();

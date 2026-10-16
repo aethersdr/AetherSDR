@@ -59,6 +59,9 @@ the Tuner Genius XL.
   and that band's reported value are available, and while its request awaits
   confirmation. Hover over it for the reason. A rejected or unconfirmed request
   retains the last confirmed value and does not become a saved client preference.
+- If the firmware version arrives while TUNE is running, the cycle still
+  restores RCA outputs it temporarily disabled before identifying the firmware.
+  The next TUNE cycle uses the identified firmware's suppression behavior.
 - On **SmartSDR 4.2 and older**, **Settings → Inhibit during TUNE ▸** retains
   its **ACC TX**, **TX1**, **TX2** and **TX3** selections. On 4.3 and later,
   **ACC TX** remains a separate client setting, shown as a checkable menu item,

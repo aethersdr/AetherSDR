@@ -353,6 +353,50 @@ void legacyOwnership()
         }
     }
 }
+
+void ownershipChangeDuringTune()
+{
+    AppSettings& settings = AppSettings::instance();
+    for (const char* key : {"TuneInhibitAccTx", "TuneInhibitTx1", "TuneInhibitTx2", "TuneInhibitTx3"}) {
+        settings.setValue(QLatin1String(key), QStringLiteral("True"));
+    }
+    struct Versions { const char* start; const char* stop; };
+    for (const Versions& versions : {Versions{"", "4.3.16.42034"},
+                                    Versions{"1.4.0.0", "4.3.16.42034"},
+                                    Versions{"4.2.20.41343", "4.3.16.42034"},
+                                    Versions{"4.3.16.42034", "4.2.20.41343"}}) {
+        Fixture f;
+        f.version = QLatin1String(versions.start);
+        TuneOutputControlTestAccess::identity(f.radio, f.version);
+        f.band(9, QStringLiteral("20"), QStringLiteral("0"));
+        f.wire.clear();
+        TuneOutputControlTestAccess::apply(f.radio);
+        const QStringList applied = f.wire;
+        check(!applied.isEmpty(), "TUNE start actually dispatches inhibit requests");
+        f.version = QLatin1String(versions.stop);
+        TuneOutputControlTestAccess::identity(f.radio, f.version);
+        emit f.radio.infoChanged();
+        f.wire.clear();
+        TuneOutputControlTestAccess::restore(f.radio);
+        QStringList expected = applied;
+        for (QString& command : expected) {
+            command.chop(1);
+            command += QLatin1Char('1');
+        }
+        check(f.wire == expected,
+              "restore retains start-time RCA ownership when firmware identity changes during TUNE");
+        f.wire.clear();
+        TuneOutputControlTestAccess::apply(f.radio);
+        QStringList nextCycle{QStringLiteral("interlock bandset 9 acc_tx_enabled=0")};
+        if (TuneOutputPolicy::clientManagesRca(f.version)) {
+            for (int output : {1, 2, 3}) {
+                nextCycle << QStringLiteral("interlock bandset 9 tx%1_enabled=0").arg(output);
+            }
+        }
+        check(f.wire == nextCycle, "the next TUNE cycle evaluates the current firmware ownership anew");
+        TuneOutputControlTestAccess::restore(f.radio);
+    }
+}
 }
 int main(int argc, char** argv)
 {
@@ -365,6 +409,7 @@ int main(int argc, char** argv)
     genericSinkCompatibility();
     readbackBeforeFirmwareIdentity();
     legacyOwnership();
+    ownershipChangeDuringTune();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }

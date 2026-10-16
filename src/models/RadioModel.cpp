@@ -7968,24 +7968,29 @@ void RadioModel::applyTuneInhibit()
     auto it = m_txBandSettings.find(bandId);
     if (it == m_txBandSettings.end()) return;
 
+    // Firmware identity can arrive after TUNE starts. Keep the ownership
+    // chosen by this cycle until its temporary writes have been restored.
+    const bool clientManagesRca = m_tuneInhibitActive
+        ? m_tuneInhibitClientManagesRca : !backendCapabilities().tuneOutputSuppression;
     QStringList inhibited;
     if (s.value("TuneInhibitAccTx", "False").toString() == "True" && it->accTx) {
         sendCmd(QString("interlock bandset %1 acc_tx_enabled=0").arg(bandId));
         inhibited << "ACC TX";
     }
-    if (!backendCapabilities().tuneOutputSuppression && s.value("TuneInhibitTx1", "False").toString() == "True" && it->tx1) {
+    if (clientManagesRca && s.value("TuneInhibitTx1", "False").toString() == "True" && it->tx1) {
         sendCmd(QString("interlock bandset %1 tx1_enabled=0").arg(bandId));
         inhibited << "TX1";
     }
-    if (!backendCapabilities().tuneOutputSuppression && s.value("TuneInhibitTx2", "False").toString() == "True" && it->tx2) {
+    if (clientManagesRca && s.value("TuneInhibitTx2", "False").toString() == "True" && it->tx2) {
         sendCmd(QString("interlock bandset %1 tx2_enabled=0").arg(bandId));
         inhibited << "TX2";
     }
-    if (!backendCapabilities().tuneOutputSuppression && s.value("TuneInhibitTx3", "False").toString() == "True" && it->tx3) {
+    if (clientManagesRca && s.value("TuneInhibitTx3", "False").toString() == "True" && it->tx3) {
         sendCmd(QString("interlock bandset %1 tx3_enabled=0").arg(bandId));
         inhibited << "TX3";
     }
     if (!inhibited.isEmpty()) {
+        m_tuneInhibitClientManagesRca = clientManagesRca;
         m_tuneInhibitBandId = bandId;
         m_tuneInhibitActive = true;
         qDebug() << "Tune PA inhibit: disabled" << inhibited.join(", ")
@@ -8002,20 +8007,21 @@ void RadioModel::restoreTuneInhibit()
         sendCmd(QString("interlock bandset %1 acc_tx_enabled=1").arg(id));
         restored << "ACC TX";
     }
-    if (!backendCapabilities().tuneOutputSuppression && s.value("TuneInhibitTx1", "False").toString() == "True") {
+    if (m_tuneInhibitClientManagesRca && s.value("TuneInhibitTx1", "False").toString() == "True") {
         sendCmd(QString("interlock bandset %1 tx1_enabled=1").arg(id));
         restored << "TX1";
     }
-    if (!backendCapabilities().tuneOutputSuppression && s.value("TuneInhibitTx2", "False").toString() == "True") {
+    if (m_tuneInhibitClientManagesRca && s.value("TuneInhibitTx2", "False").toString() == "True") {
         sendCmd(QString("interlock bandset %1 tx2_enabled=1").arg(id));
         restored << "TX2";
     }
-    if (!backendCapabilities().tuneOutputSuppression && s.value("TuneInhibitTx3", "False").toString() == "True") {
+    if (m_tuneInhibitClientManagesRca && s.value("TuneInhibitTx3", "False").toString() == "True") {
         sendCmd(QString("interlock bandset %1 tx3_enabled=1").arg(id));
         restored << "TX3";
     }
     qDebug() << "Tune PA inhibit: restored" << restored.join(", ") << "on band" << id;
     m_tuneInhibitActive = false;
+    m_tuneInhibitClientManagesRca = false;
     m_tuneInhibitBandId = -1;
 }
 
