@@ -1027,6 +1027,7 @@ set(CORE_SOURCES
     src/core/Ctr2FirmwareUpdater.cpp
     src/core/Ctr2MaxRegistration.cpp
     src/core/CappedDownload.cpp
+    src/core/Ctr2DeviceLock.cpp
     src/core/Ctr2MaxStockCatalog.cpp
     src/core/Ctr2MaxStockFirmware.cpp
     src/core/EspFirmwareCatalog.cpp

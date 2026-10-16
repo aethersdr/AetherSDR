@@ -343,6 +343,15 @@ The build was made without hidapi.
 
 1. Pick **Wi-Fi (TCP)** mode instead.
 
+### "... is in use by another AetherSDR"
+
+Another AetherSDR on this computer has the CTR2 open over USB. Two relays on
+one CTR2 break each other's link, so only one AetherSDR may use it at a time.
+
+1. In the other AetherSDR, press **Stop** in the CTR2 window, or close that
+   AetherSDR.
+2. Press **Start** here.
+
 ### The proxy stopped on its own
 
 It stops when AetherSDR disconnects or switches radios.
