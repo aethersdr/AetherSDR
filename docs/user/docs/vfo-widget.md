@@ -82,6 +82,8 @@ from the samples on either side instead of silencing it, and while it runs an
 **NB2** fill row appears: **Zero**, **Sample hold**, **Mean hold**,
 **Hold sample** or **Interpolate**.
 
+The **Parameters:** selector and **Reset** button restore radio DSP parameters to firmware defaults. Choose a target, then press **Reset**; selecting alone does nothing. **All** includes NB and APF levels and preserves every algorithm's on/off state. Reset requires supported firmware, mode, slice ownership and, for advanced targets, entitlement. Unavailable targets stay visible and dimmed with reasons; if the selected target becomes unavailable, Reset is also dimmed and explains the restriction. See [Resetting radio DSP parameters](./dsp-noise-mitigation.md#resetting-radio-dsp-parameters) for requirements and scope.
+
 The same tab has the **AetherRX** and **AetherTX** launchers, always the same width, which open AetherSDR's own receive and transmit audio chains. The client-side noise reduction methods (NR2, RN2, NR4, NNR, DFNR, BNR, MNR) live in **AetherRX**, not on this tab; see [Aetherial Audio](./aetherial-audio.md) and [DSP Noise Mitigation](./dsp-noise-mitigation.md).
 
 The **DSP** tab label is color-coded: green when any radio DSP or client noise reduction is active, gray when everything is off, cyan while the tab is open.
