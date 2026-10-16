@@ -2094,6 +2094,7 @@ void VfoWidget::buildTabContent()
             lvlHb->addWidget(m_dspLevelLabel);
 
             m_dspLevelSlider = new GuardedSlider(Qt::Horizontal);
+            m_dspLevelSlider->setObjectName(QStringLiteral("dspLevelSlider"));
             m_dspLevelSlider->setRange(0, 100);
             applyPrimarySliderStyle(m_dspLevelSlider);
             lvlHb->addWidget(m_dspLevelSlider, 1);
@@ -2119,6 +2120,18 @@ void VfoWidget::buildTabContent()
                     case LvlNone: break;
                 }
             });
+
+            // A readback above the request ceiling leaves the thumb at the
+            // endpoint. Explicit activation must still request that endpoint.
+            const auto requestNrsEndpoint = [this] {
+                if (!m_updatingFromModel && m_slice && m_dspLevelTarget == LvlNrs
+                    && m_slice->nrsLevel() > m_slice->nrsLevelMaximum()
+                    && m_dspLevelSlider->sliderPosition() == m_slice->nrsLevelMaximum()) {
+                    m_slice->setNrsLevel(m_slice->nrsLevelMaximum());
+                }
+            };
+            connect(m_dspLevelSlider, &QSlider::actionTriggered, this, requestNrsEndpoint);
+            connect(m_dspLevelSlider, &QSlider::sliderReleased, this, requestNrsEndpoint);
 
             // Keep the panel compact when no leveled DSP is active. The row
             // appears only when it has a real target; setDspLevelTarget()
@@ -4813,6 +4826,11 @@ void VfoWidget::setSlice(SliceModel* slice)
     wireLevelEcho(&SliceModel::anfLevelChanged,  LvlAnf);
     wireLevelEcho(&SliceModel::nrlLevelChanged,  LvlNrl);
     wireLevelEcho(&SliceModel::nrsLevelChanged,  LvlNrs);
+    connect(m_slice, &SliceModel::nrsLevelMaximumChanged, this, [this](int) {
+        if (m_dspLevelTarget == LvlNrs) {
+            setDspLevelTarget(LvlNrs);
+        }
+    });
     wireLevelEcho(&SliceModel::nrfLevelChanged,  LvlNrf);
     wireLevelEcho(&SliceModel::anflLevelChanged, LvlAnfl);
     wireLevelEcho(&SliceModel::mnLevelChanged,   LvlMn);
@@ -5769,8 +5787,10 @@ void VfoWidget::setDspLevelTarget(DspLevelTarget t)
         case LvlNone: return;
     }
     m_dspLevelLabel->setText(name);
+    m_dspLevelSlider->setAccessibleName(tr("%1 level").arg(name));
     {
         QSignalBlocker b(m_dspLevelSlider);
+        m_dspLevelSlider->setRange(0, t == LvlNrs ? m_slice->nrsLevelMaximum() : 100);
         m_dspLevelSlider->setValue(level);
     }
     m_dspLevelValue->setText(QString::number(level));
