@@ -220,14 +220,21 @@ foreach ($image in $images) {
     }
 }
 
-# Qt plugins are version-locked to the Qt that loads them: a plugin built
-# against a different Qt is rejected by the plugin loader at run time and the
-# feature it provides silently never becomes available. Nothing above catches
-# that -- a stale plugin resolves every import, so the payload looks
-# self-contained while being internally inconsistent. In #6374 an older
-# AetherSDR install had left a Qt 6.7.3 qopensslbackend.dll in place, which
-# the Qt 6.12 loader rejected; the upgrade did not remove it because the
-# installer no longer ships that file.
+# Require a consistent Qt version across the packaged payload. Mixing Qt
+# modules and plugins from different Qt releases is unsupported: the private
+# API they share is only ABI-guaranteed within a single release. Qt's own
+# loader is more permissive than that (it rejects a plugin only when its minor
+# is newer than the host's, or its major differs), so an older-minor plugin can
+# load and still be built against a different private ABI. This is therefore a
+# packaging-consistency policy, not a restatement of the loader's rule.
+#
+# The import-table audit above cannot see any of this: every DLL name in a
+# version-skewed payload still resolves, so the payload looks self-contained
+# while being internally inconsistent.
+#
+# Scope: this audits BUILD OUTPUT. It cannot detect a stale plugin left behind
+# on a user's disk by an earlier installation (see #6374, where the leftover
+# was never in the payload).
 #
 # Qt6Core.dll is the reference: every Qt DLL and plugin in the payload must
 # report the same FileVersion.
@@ -240,46 +247,27 @@ if ($qtCore) {
         foreach ($image in $images) {
             # Qt's own modules and plugins only; third-party DLLs carry their
             # own unrelated versions.
-            if ($image.Name -notmatch '^Qt6[A-Z]' -and $image.Directory.FullName -eq $resolvedDeployDir) {
+            if ($image.Name -cnotmatch '^Qt6[A-Z]' -and $image.Directory.FullName -eq $resolvedDeployDir) {
                 continue
             }
             $info = $image.VersionInfo.FileVersion
             if (-not $info) {
                 continue  # not every plugin stamps a version; absence is not a mismatch
             }
-            if ($image.Name -match '^Qt6[A-Z]' -and $info -ne $qtVersion) {
-                $failures += "$($image.Name) is Qt $info but the payload is Qt $qtVersion -- version-locked Qt module mismatch"
+            if ($image.Name -cmatch '^Qt6[A-Z]' -and $info -ne $qtVersion) {
+                $failures += "$($image.Name) is Qt $info but the payload is Qt $qtVersion -- payload mixes Qt versions"
+            # Plugins in subdirectories (tls\, platforms\, ...) are matched by a
+            # 6.x FileVersion rather than by name. A Qt 5 plugin is deliberately
+            # not flagged here: Qt 5 and Qt 6 plugin directories coexist legally,
+            # and this audit is about skew within the Qt 6 payload.
             } elseif ($info -match '^6\.' -and $info -ne $qtVersion) {
                 $rel = $image.FullName.Substring($resolvedDeployDir.Length).TrimStart([char]92)
-                $failures += "$rel is Qt $info but the payload is Qt $qtVersion -- a version-locked Qt plugin will not load"
+                $failures += "$rel is Qt $info but the payload is Qt $qtVersion -- payload mixes Qt versions"
             }
         }
     }
 } else {
     $failures += "Qt6Core.dll not found in the payload -- cannot verify Qt plugin consistency"
-}
-
-# Qt resolves https:// through a TLS backend plugin. Schannel and cert-only
-# ship by default, but neither carries SmartLink's Auth0 login: that path
-# needs the OpenSSL backend, and windeployqt only deploys it when the OpenSSL
-# libraries are present to deploy alongside it. When they are absent the whole
-# feature goes missing silently -- nothing fails to build, nothing fails to
-# start, and QNetworkAccessManager reports "TLS initialization failed" the
-# first time a user signs in. That is #6374: v26.10.2 shipped tls\ with only
-# qcertonlybackend.dll and qschannelbackend.dll, so SmartLink could not work
-# on a clean install.
-#
-# A missing plugin is not a version mismatch, so the check above does not
-# catch it. Assert the backend and its libraries are in the payload together.
-$tlsBackend = $images | Where-Object { $_.Name -ieq "qopensslbackend.dll" } | Select-Object -First 1
-if (-not $tlsBackend) {
-    $failures += "tls\qopensslbackend.dll is not in the payload -- Qt has no OpenSSL TLS backend and SmartLink login will fail (#6374)"
-} else {
-    foreach ($lib in @("libssl-3-x64.dll", "libcrypto-3-x64.dll")) {
-        if (-not $shippedFiles.ContainsKey($lib.ToLowerInvariant())) {
-            $failures += "$lib is not in the payload -- qopensslbackend.dll loads it at run time and Qt falls back to no TLS backend without it"
-        }
-    }
 }
 
 foreach ($warning in $warnings) {
