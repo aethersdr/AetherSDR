@@ -10,6 +10,7 @@
 #include <QtEndian>
 #include <cmath>
 #include <cstring>
+#include <utility>
 #ifndef Q_OS_WIN
 #include <unistd.h>
 #include <fcntl.h>
@@ -132,9 +133,48 @@ void DaxIqModel::relayIqSamples(int channel, const QByteArray& iqBytes, int samp
     emit iqSamplesReady(channel, std::move(samples), sampleRate);
 }
 
+void DaxIqModel::setSampleRateProvider(std::function<QList<int>()> provider)
+{
+    m_sampleRateProvider = std::move(provider);
+}
+
+QList<int> DaxIqModel::supportedSampleRates() const
+{
+    return m_sampleRateProvider ? m_sampleRateProvider() : QList<int>{};
+}
+
+bool DaxIqModel::supportsSampleRate(int rate) const
+{
+    return supportedSampleRates().contains(rate);
+}
+
+int DaxIqModel::sampleRateForPreference(int rate) const
+{
+    const QList<int> rates = supportedSampleRates();
+    if (rates.contains(rate)) {
+        return rate;
+    }
+    if (rate == 192000 && rates.contains(96000)) {
+        return 96000;
+    }
+    return rates.contains(48000) ? 48000 : 0;
+}
+
+int DaxIqModel::requestedSampleRate(int channel) const
+{
+    const int idx = channelIndex(channel);
+    if (idx < 0 || idx >= NUM_CHANNELS) {
+        return 0;
+    }
+    return sampleRateForPreference(m_desiredRate[idx]);
+}
+
 void DaxIqModel::createStream(int channel)
 {
     if (channel < 1 || channel > NUM_CHANNELS) return;
+    if (supportedSampleRates().isEmpty()) {
+        return;
+    }
     emit commandReady(QString("stream create type=dax_iq daxiq_channel=%1").arg(channel));
 }
 
@@ -150,8 +190,13 @@ void DaxIqModel::setSampleRate(int channel, int rate)
 {
     int idx = channelIndex(channel);
     if (idx < 0 || idx >= NUM_CHANNELS) return;
+    if (!supportsSampleRate(rate)) {
+        qCWarning(lcProtocol) << "DaxIqModel: unsupported IQ sample rate" << rate;
+        return;
+    }
     m_desiredRate[idx] = rate;   // remember even if the stream isn't up yet
     if (!m_streams[idx].exists || m_streams[idx].streamId == 0) return;
+    m_streams[idx].rateSettling = m_streams[idx].sampleRate != rate;
     emit commandReady(QString("stream set 0x%1 daxiq_rate=%2")
         .arg(m_streams[idx].streamId, 0, 16).arg(rate));
 }
@@ -212,16 +257,17 @@ void DaxIqModel::applyStreamStatus(quint32 streamId, const QMap<QString, QString
     // the stream at its 48k default; re-apply the desired rate now that it exists
     // (proven path: "stream set ... daxiq_rate="). The rate-change status it
     // produces flows back through the guard above and rebuilds the pipe at rate.
-    const bool reapplyPending = (isNew && m_desiredRate[idx] != s.sampleRate);
+    const int desiredRate = sampleRateForPreference(m_desiredRate[idx]);
+    const bool reapplyPending = isNew && desiredRate != 0 && desiredRate != s.sampleRate;
     if (reapplyPending) {
         emit commandReady(QStringLiteral("stream set 0x%1 daxiq_rate=%2")
-            .arg(s.streamId, 0, 16).arg(m_desiredRate[idx]));
+            .arg(s.streamId, 0, 16).arg(desiredRate));
     }
     // "Rate-settling" until the actual sampleRate reaches the desired rate (the
     // applet holds its combo meanwhile). Tracks the rate gap itself, not
     // reapplyPending/isNew, so an interleaved non-rate status can't clear it early.
     // If the radio never echoes the rate it stays set; cosmetic only.
-    s.rateSettling = (m_desiredRate[idx] != s.sampleRate);
+    s.rateSettling = desiredRate != 0 && desiredRate != s.sampleRate;
 
     if (kvs.contains("pan"))
         s.panId = kvs["pan"];
