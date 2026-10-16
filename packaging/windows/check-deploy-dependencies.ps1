@@ -220,6 +220,45 @@ foreach ($image in $images) {
     }
 }
 
+# Qt plugins are version-locked to the Qt that loads them: a plugin built
+# against a different Qt is rejected by the plugin loader at run time and the
+# feature it provides silently never becomes available. Nothing above catches
+# that -- a stale plugin resolves every import, so the payload looks
+# self-contained while being internally inconsistent. That is how the Qt 6.7.3
+# qopensslbackend.dll shipped inside a Qt 6.12 payload in #6374: Qt had no
+# usable TLS backend and SmartLink login failed with "TLS initialization
+# failed" on every Windows install.
+#
+# Qt6Core.dll is the reference: every Qt DLL and plugin in the payload must
+# report the same FileVersion.
+$qtCore = $images | Where-Object { $_.Name -ieq "Qt6Core.dll" } | Select-Object -First 1
+if ($qtCore) {
+    $qtVersion = $qtCore.VersionInfo.FileVersion
+    if (-not $qtVersion) {
+        $failures += "Qt6Core.dll has no FileVersion -- cannot verify Qt payload consistency"
+    } else {
+        foreach ($image in $images) {
+            # Qt's own modules and plugins only; third-party DLLs carry their
+            # own unrelated versions.
+            if ($image.Name -notmatch '^Qt6[A-Z]' -and $image.Directory.FullName -eq $resolvedDeployDir) {
+                continue
+            }
+            $info = $image.VersionInfo.FileVersion
+            if (-not $info) {
+                continue  # not every plugin stamps a version; absence is not a mismatch
+            }
+            if ($image.Name -match '^Qt6[A-Z]' -and $info -ne $qtVersion) {
+                $failures += "$($image.Name) is Qt $info but the payload is Qt $qtVersion -- version-locked Qt module mismatch"
+            } elseif ($info -match '^6\.' -and $info -ne $qtVersion) {
+                $rel = $image.FullName.Substring($resolvedDeployDir.Length).TrimStart([char]92)
+                $failures += "$rel is Qt $info but the payload is Qt $qtVersion -- a version-locked Qt plugin will not load"
+            }
+        }
+    }
+} else {
+    $failures += "Qt6Core.dll not found in the payload -- cannot verify Qt plugin consistency"
+}
+
 foreach ($warning in $warnings) {
     Write-Warning $warning
 }
