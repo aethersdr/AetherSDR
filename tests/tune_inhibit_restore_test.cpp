@@ -373,6 +373,38 @@ void replacementDuringCleanup()
           "replacement during cleanup fences every remaining restore away from the new backend");
 }
 
+void reentrantStartDuringApply()
+{
+    for (bool atu : {false, true}) {
+        preferences(true, true, false, false);
+        Fixture f;
+        bool once = false;
+        f.backend->setTxCommandSink([&](const QString& command, const TxCoordinator::Command&) { f.wire << command; });
+        TxOperationIntegrationTestAccess::onWrite(f.inert, [&](const QString& command) {
+            f.wire << command;
+            if (!std::exchange(once, true)) {
+                if (atu) { f.radio.transmitModel().atuStart(); }
+                else { f.radio.transmitModel().startTune(); }
+            }
+        });
+        f.radio.transmitModel().startTune();
+        flush();
+        const qsizetype key = f.wire.indexOf("transmit tune 1");
+        const bool atuRefused = !f.wire.contains("atu start");
+        const qsizetype secondDisable = f.wire.indexOf("interlock bandset 9 tx1_enabled=0");
+        check(atuRefused && (key < 0 || (secondDisable >= 0 && secondDisable < key)),
+              "a reentrant carrier cannot dispatch before all selected outputs have been inhibited");
+        TxOperationIntegrationTestAccess::inject(f.radio, f.inert, f.wire);
+        f.radio.transmitModel().stopTune();
+        f.radio.transmitModel().atuBypass();
+        f.wire.clear();
+        f.radio.transmitModel().startTune();
+        check(f.wire.contains("transmit tune 1") && f.radio.transmitModel().isTuning(),
+              "a refused start during apply cannot block a later admitted TUNE request");
+        f.radio.transmitModel().stopTune();
+    }
+}
+
 void admittedProductionPaths()
 {
     preferences(false, true, true, true);
@@ -408,6 +440,7 @@ int main(int argc, char** argv)
     reentrantStartDuringRestore();
     refusalAndClosing();
     replacementDuringCleanup();
+    reentrantStartDuringApply();
     admittedProductionPaths();
     std::printf("%d failure(s)\n", failures);
     return failures ? 1 : 0;

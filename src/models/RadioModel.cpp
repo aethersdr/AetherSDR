@@ -8111,7 +8111,7 @@ bool RadioModel::applyTuneInhibit()
         return false;
     }
     if (m_tuneInhibit) {
-        return !m_tuneInhibit->restoring;
+        return m_tuneInhibit->phase == TuneInhibitState::Phase::Active;
     }
     AppSettings& settings = AppSettings::instance();
     double txFreq = 0.0;
@@ -8161,21 +8161,25 @@ bool RadioModel::applyTuneInhibit()
             rejected(-1, {});
         }
     }
-    return epoch == m_tuneInhibitEpoch && isConnected() && !m_txSessionClosing
-        && state.session == m_sessionGeneration && state.backend == m_backendReceiverGeneration;
+    if (epoch != m_tuneInhibitEpoch || !isConnected() || m_txSessionClosing
+        || state.session != m_sessionGeneration || state.backend != m_backendReceiverGeneration) {
+        return false;
+    }
+    m_tuneInhibit->phase = TuneInhibitState::Phase::Active;
+    return true;
 }
 
 void RadioModel::restoreTuneInhibit()
 {
-    if (!m_tuneInhibit || m_tuneInhibit->restoring) {
+    if (!m_tuneInhibit || m_tuneInhibit->phase == TuneInhibitState::Phase::Restoring) {
         return;
     }
     const TuneInhibitState state = *m_tuneInhibit;
-    m_tuneInhibit->restoring = true;
+    m_tuneInhibit->phase = TuneInhibitState::Phase::Restoring;
     m_tuneInhibit->pending.clear();
     const quint64 epoch = ++m_tuneInhibitEpoch;
-    // Consume each obligation before dispatch. Synchronous edits can revoke
-    // the remaining fields; a fresh cycle or session invalidates this loop.
+    // Consume each obligation before dispatch. Synchronous output edits can
+    // revoke remaining fields; session changes invalidate this loop.
     for (const QString& field : state.outputs) {
         if (epoch != m_tuneInhibitEpoch || !isConnected()
             || state.session != m_sessionGeneration || state.backend != m_backendReceiverGeneration) {

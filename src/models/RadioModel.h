@@ -2172,12 +2172,13 @@ private:
     QHash<QString, QString> m_panTransmitInhibitReasons;
     QHash<QString, int> m_panTransmitInhibitedTxSlices;
     struct TuneInhibitState {
+        enum class Phase { Applying, Active, Restoring };
         int bandId{-1};
         quint64 session{0};
         quint64 backend{0};
         QStringList pending;
         QStringList outputs;
-        bool restoring{false};
+        Phase phase{Phase::Applying};
     };
     std::optional<TuneInhibitState> m_tuneInhibit;
     quint64 m_tuneInhibitEpoch{0};
