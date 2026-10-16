@@ -1701,6 +1701,30 @@ void VfoWidget::buildTabContent()
         m_agcValueLbl->setFixedWidth(20);
         m_agcValueLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         agcRow->addWidget(m_agcValueLbl);
+        m_autoAgcTButton = new QPushButton(tr("Auto"));
+        m_autoAgcTButton->setObjectName(QStringLiteral("sliceAutoAgcT"));
+        m_autoAgcTButton->setAccessibleName(tr("Auto AGC-T"));
+        m_autoAgcTButton->setCheckable(true);
+        m_autoAgcTButton->setFixedSize(40, 20);
+        m_autoAgcTButton->setEnabled(false);
+        ThemeManager::instance().applyStyleSheet(m_autoAgcTButton,
+            "QPushButton { background: {{color.canon.control}}; "
+            "border: 1px solid {{color.canon.lineHi}}; border-radius: 3px; "
+            "color: {{color.canon.cyan}}; font-size: 10px; padding: 1px 2px; }"
+            "QPushButton:hover { background: {{color.canon.nested}}; }"
+            "QPushButton:checked { background: {{color.canon.cyan}}; "
+            "color: {{color.canon.onAccent}}; }"
+            "QPushButton:disabled { color: {{color.canon.muted}}; }");
+        connect(m_autoAgcTButton, &QPushButton::clicked, this, [this] {
+            if (m_slice && m_radioModel
+                && m_radioModel->autoAgcThresholdUnavailableReason(m_slice).isEmpty()) {
+                const bool automatic = m_slice->automaticAgcThresholdActiveOrPending();
+                m_slice->requestAgcThresholdMode(automatic
+                    ? AgcThresholdMode::Manual : AgcThresholdMode::Automatic);
+            }
+            syncAutoAgcThreshold();
+        });
+        agcRow->addWidget(m_autoAgcTButton);
         vb->addLayout(agcRow);
 
         // Pan row: DIV button + L + slider (with center marker) + R
@@ -4791,6 +4815,7 @@ void VfoWidget::setSlice(SliceModel* slice)
     if (m_slice)
         m_slice->disconnect(this);
     m_slice = slice;
+    syncAutoAgcThreshold();
     setProperty("sliceId", m_slice ? m_slice->sliceId() : -1);
     if (!m_slice) {
         updateFreqLabel();
@@ -4811,6 +4836,10 @@ void VfoWidget::setSlice(SliceModel* slice)
     // them out so the SpectrumWidget's overlay picks up the saved style. This
     // runs after wireVfoWidget() has connected markerStyleChanged (#1526).
     loadDisplayPrefs();
+    connect(m_slice, &SliceModel::agcThresholdModeChanged,
+            this, &VfoWidget::syncAutoAgcThreshold);
+    connect(m_slice, &SliceModel::externalReceiveReplacementChanged,
+            this, &VfoWidget::syncAutoAgcThreshold);
     emit markerStyleChanged(m_markerWidth, m_filterEdgesHidden);
     // Restore the per-slice adaptive RX filter config (RFC #3878) — bounds and
     // presets only; the enabled state is session-scoped and always starts off
@@ -6568,6 +6597,32 @@ int VfoWidget::agcThresholdMaximum() const
         : 100;
 }
 
+void VfoWidget::syncAutoAgcThreshold()
+{
+    const QSignalBlocker blocker(m_autoAgcTButton);
+    m_autoAgcTButton->setChecked(m_slice && m_slice->agcThresholdMode()
+        == AgcThresholdMode::Automatic);
+    if (m_filterAvailability) {
+        m_filterAvailability->refreshEngaged();
+    }
+    const QString reason = m_radioModel
+        ? m_radioModel->autoAgcThresholdUnavailableReason(m_slice)
+        : tr("Connect a radio to use Auto AGC-T");
+    if (!reason.isEmpty()) {
+        m_autoAgcTButton->setEnabled(false);
+        m_autoAgcTButton->setToolTip(reason);
+        m_autoAgcTButton->setAccessibleDescription(reason);
+    } else {
+        const QString description = m_slice->automaticAgcThresholdActiveOrPending()
+            && m_slice->agcThresholdMode() != AgcThresholdMode::Automatic
+            ? tr("Waiting for radio Auto AGC-T confirmation. Click again to request manual mode.")
+            : tr("Auto AGC-T: automatically adjusts the threshold as band noise changes. "
+                 "AGC speed stays independent. Move the slider to return to manual control.");
+        m_autoAgcTButton->setToolTip(description);
+        m_autoAgcTButton->setAccessibleDescription(description);
+    }
+}
+
 void VfoWidget::syncSqlVisuals()
 {
     if (!m_sqlBtn || !m_sqlSlider) return;
@@ -6800,6 +6855,8 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
                    this, nullptr);
         disconnect(m_radioModel, &RadioModel::transmitFrequencyCheckChanged,
                    this, nullptr);
+        disconnect(m_radioModel, &RadioModel::autoAgcThresholdAvailabilityChanged,
+                   this, nullptr);
     }
     delete m_filterAvailability;
     m_filterAvailability = nullptr;
@@ -6856,6 +6913,15 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
             });
         for (QWidget* widget : m_ritControls) { registerSignalControl(widget, Feature::Rit); }
 
+        m_filterAvailability->registerWidget(m_autoAgcTButton,
+            tr("Auto AGC-T requires a connected supported radio, an enabled license, and confirmed slice status"),
+            [this](bool, const RadioCapabilities&) {
+                return m_radioModel->autoAgcThresholdUnavailableReason(m_slice).isEmpty();
+            },
+            [this] { return m_slice && m_slice->agcThresholdMode()
+                == AgcThresholdMode::Automatic; }, false);
+        connect(m_radioModel, &RadioModel::autoAgcThresholdAvailabilityChanged,
+                this, &VfoWidget::syncAutoAgcThreshold);
         const auto supportsSquelch = [this](bool connected, const RadioCapabilities& caps) {
             if (!m_slice) {
                 return !exclusiveSquelchScale(caps.squelchLevelScale);
@@ -6907,6 +6973,7 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
     configureRepeaterReverseControl();
     configureFmToneControls();
     updateAgcSliderFromSlice();
+    syncAutoAgcThreshold();
     if (m_slice) {
         updateModeTab();
     }

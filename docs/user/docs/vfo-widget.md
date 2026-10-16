@@ -63,14 +63,17 @@ Click a label along the bottom of the flag to open its tab. Controls the slice's
 
 #### 🔊 Audio
 
-<img src="/img/screens/vfo-audio-tab.png" width="316" alt="VFO flag with the speaker tab open below the frequency. It holds an AF slider at 50, a SQL slider at 20, an AGC mode selector set to Med with its threshold slider at 65, and a DIV button next to a left-right pan slider." />
+<img src="/img/screens/vfo-audio-tab.png" width="252" alt="VFO flag tuned to 14.250.000 USB with the speaker tab open. AF, SQL and pan sliders are shown. The AGC row contains a Med selector, enabled threshold slider at 41 and a lit Auto button on the right." />
 
-*The VFO flag with the audio tab open.*
+*The VFO flag audio tab with radio Auto AGC-T enabled.*
 
 - **AF** slider with mute
 - **Pan** (left/right) with a center marker
 - **SQL** — squelch on/off and level
 - **AGC-T** — AGC mode (Off / Slow / Med / Fast) and threshold
+- **Auto** — radio-controlled AGC threshold, independent of AGC speed. The
+  slider remains enabled; moving it returns threshold control to manual.
+  Availability and license requirements match the [RX applet](./rx-controls.md#agc).
 
 #### DSP
 

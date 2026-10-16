@@ -15,6 +15,7 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "gui/RxApplet.h"
 #include "gui/AgcCalibrationDialog.h"
+#include "gui/VfoWidget.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -37,6 +38,7 @@
 #include <QtTest>
 
 #include <memory>
+#include <cstdlib>
 #include <optional>
 #include <utility>
 
@@ -121,7 +123,10 @@ public:
     {
         SliceDelta delta;
         delta.active = true;
+        delta.frequency = 14.25;
         delta.mode = QStringLiteral("USB");
+        delta.filterLow = 100;
+        delta.filterHigh = 2800;
         delta.agcMode = QStringLiteral("med");
         delta.agcThreshold = threshold;
         delta.agcThresholdMode = mode;
@@ -226,7 +231,7 @@ struct Fixture
     QJsonObject slice() { return send("get slice 0").value(QStringLiteral("slice")).toObject(); }
     QJsonObject click() { return send("invoke autoAgcT click"); }
 
-    bool capture(const QString& name)
+    bool capture(const QString& name, const QString& target = QStringLiteral("autoAgcProofRx"))
     {
         const QString output = qEnvironmentVariable("AETHER_AUTO_AGCT_PROOF_DIR");
         if (output.isEmpty()) {
@@ -237,7 +242,7 @@ struct Fixture
         }
         const QString path = QDir(output).filePath(name + QStringLiteral(".png"));
         const QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("grab")},
-            {QStringLiteral("target"), QStringLiteral("autoAgcProofRx")},
+            {QStringLiteral("target"), target},
             {QStringLiteral("path"), path}};
         const QJsonObject grabbed = send(QJsonDocument(command).toJson(QJsonDocument::Compact));
         if (!grabbed.value(QStringLiteral("ok")).toBool() || QImage(path).isNull()) {
@@ -296,7 +301,7 @@ private slots:
         for (const int value : {20, 50, 80}) {
             emit audio.levelChanged(static_cast<float>(value) / 100.0f);
             fixture.backend->status(0, AgcThresholdMode::Manual, value);
-            QTest::qWait(300);
+            QTest::qWait(400);
         }
         QVERIFY(result->text().startsWith(QStringLiteral("Recommended AGC-T")));
         slice->requestAgcThresholdMode(AgcThresholdMode::Automatic);
@@ -309,7 +314,7 @@ private slots:
         for (const int value : {25, 55, 85}) {
             emit audio.levelChanged(static_cast<float>(value) / 100.0f);
             fixture.backend->status(0, AgcThresholdMode::Manual, value);
-            QTest::qWait(300);
+            QTest::qWait(400);
         }
         QVERIFY(result->text().startsWith(QStringLiteral("Recommended AGC-T")));
     }
@@ -330,7 +335,13 @@ private slots:
         QVERIFY(!fixture.button()->isChecked());
         QCOMPARE(fixture.rx.width(), 248);
         QVERIFY(fixture.threshold());
-        QVERIFY(fixture.threshold()->width() >= 12);
+        QCOMPARE(fixture.button()->text(), QStringLiteral("A"));
+        QVERIFY(fixture.threshold()->width() >= 60);
+        QCOMPARE(fixture.button()->parentWidget(), fixture.threshold()->parentWidget());
+        QVERIFY(fixture.button()->x() > fixture.threshold()->geometry().right());
+        QVERIFY(std::abs(fixture.button()->geometry().center().y()
+            - fixture.threshold()->geometry().center().y()) <= 2);
+        QVERIFY(fixture.button()->toolTip().contains(QStringLiteral("Move the slider")));
         QVERIFY(fixture.capture(QStringLiteral("01-manual-before")));
 
         QVERIFY(fixture.click().value(QStringLiteral("ok")).toBool());
@@ -370,6 +381,66 @@ private slots:
         QCOMPARE(fixture.backend->wireCommands, expectedCommands);
         QVERIFY(fixture.backend->agcRequests.isEmpty());
         QVERIFY(fixture.capture(QStringLiteral("04-manual-confirmed")));
+    }
+
+    void sliceFlagAndRxShareAutomaticThresholdState()
+    {
+        Fixture fixture;
+        VfoWidget flag;
+        flag.setObjectName(QStringLiteral("autoAgcProofFlag"));
+        flag.setRadioModel(&fixture.radio);
+        flag.setSlice(fixture.radio.slice(0));
+        flag.show();
+        QPushButton* audioTab = nullptr;
+        QSlider* threshold = nullptr;
+        for (QPushButton* button : flag.findChildren<QPushButton*>()) {
+            if (button->accessibleName() == QStringLiteral("Audio settings")) {
+                audioTab = button;
+            }
+        }
+        for (QSlider* slider : flag.findChildren<QSlider*>()) {
+            if (slider->accessibleName() == QStringLiteral("AGC threshold")) {
+                threshold = slider;
+            }
+        }
+        auto* automatic = flag.findChild<QPushButton*>(QStringLiteral("sliceAutoAgcT"));
+        QVERIFY(audioTab && threshold && automatic);
+        audioTab->click();
+        settle();
+        QCOMPARE(automatic->text(), QStringLiteral("Auto"));
+        QVERIFY(automatic->isVisible() && automatic->isEnabled());
+        QVERIFY(automatic->toolTip().contains(QStringLiteral("AGC speed stays independent")));
+        QVERIFY(threshold->isEnabled());
+        QVERIFY(automatic->mapTo(&flag, QPoint()).x()
+            > threshold->mapTo(&flag, threshold->rect().topRight()).x());
+
+        QVERIFY(fixture.send("invoke sliceAutoAgcT click").value(QStringLiteral("ok")).toBool());
+        QCOMPARE(fixture.backend->modeRequests.size(), 1);
+        QVERIFY(!automatic->isChecked() && !fixture.button()->isChecked());
+        fixture.backend->status(0, AgcThresholdMode::Automatic, 41);
+        QVERIFY(automatic->isChecked() && fixture.button()->isChecked());
+        QVERIFY(threshold->isEnabled() && fixture.threshold()->isEnabled());
+        QCOMPARE(threshold->value(), 41);
+        QCOMPARE(fixture.radio.slice(0)->agcMode(), QStringLiteral("med"));
+        QVERIFY(fixture.backend->agcRequests.isEmpty());
+        QVERIFY(fixture.capture(QStringLiteral("05-slice-automatic"), flag.objectName()));
+
+        QTest::keyClick(threshold, Qt::Key_Left);
+        QCOMPARE(fixture.backend->agcRequests.size(), 1);
+        QCOMPARE(fixture.backend->agcRequests.last().field, SliceAgcRequest::Field::Threshold);
+        QCOMPARE(fixture.backend->agcRequests.last().threshold, 40);
+        QVERIFY(automatic->isChecked() && fixture.button()->isChecked());
+        fixture.backend->status(0, AgcThresholdMode::Manual, 40);
+        QVERIFY(!automatic->isChecked() && !fixture.button()->isChecked());
+        QVERIFY(fixture.capture(QStringLiteral("06-slice-manual"), flag.objectName()));
+
+        RadioModelWakeTestAccess::license(fixture.radio, true, false);
+        QVERIFY(!automatic->isEnabled());
+        QVERIFY(!automatic->accessibleDescription().isEmpty());
+        RadioModelWakeTestAccess::license(fixture.radio, true, true);
+        QVERIFY(automatic->isEnabled());
+        flag.setSlice(nullptr);
+        QVERIFY(!automatic->isEnabled() && !automatic->isChecked());
     }
 
     void refusedDispatchDoesNotEngageAutomaticMode()

@@ -425,6 +425,7 @@ private:
     void applyFilterPreset(int widthHz);
     void saveFilterPresets();
     void updateAgcSliderFromSlice();
+    void syncAutoAgcThreshold();
     void updateAntennaButton(QPushButton* button, const QString& token, bool tx);
     void updateAntennaButtons();
     QStringList rxAntennaOptions() const;
@@ -676,6 +677,7 @@ private:
     QComboBox* m_agcCmb{nullptr};
     QSlider* m_agcTSlider{nullptr};
     QLabel* m_agcValueLbl{nullptr};
+    QPushButton* m_autoAgcTButton{nullptr};
     // DSP tab
     QPushButton* m_nbBtn{nullptr};
     QPushButton* m_nrBtn{nullptr};
