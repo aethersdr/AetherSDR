@@ -275,8 +275,9 @@
           "_sleep": 0.8
         }
       ],
-      "caption": "The VFO flag with the audio tab open.",
-      "alt": "VFO flag with the speaker tab open below the frequency. It holds an AF slider at 50, a SQL slider at 20, an AGC mode selector set to Med with its threshold slider at 65, and a DIV button next to a left-right pan slider."
+      "caption": "The VFO flag audio tab with radio Auto AGC-T enabled.",
+      "alt": "VFO flag tuned to 14.250.000 USB with the speaker tab open. AF, SQL and pan sliders are shown. The AGC row contains a Med selector, enabled threshold slider at 41 and a lit Auto button on the right.",
+      "capture_note": "Current image captured from the real production widgets by auto_agc_threshold_gui_test with injected status and QT_SCALE_FACTOR=1.6667; no radio connection or RF activity."
     },
     {
       "id": "vfo-dsp-tab",
@@ -522,8 +523,9 @@
       "grab": {
         "target": "RX"
       },
-      "caption": "The RX Controls applet for the active slice.",
-      "alt": "RX Controls applet. The top row shows the slice buttons A (lit), B, C and D, a lock button, RX antenna ANT1, TX antenna ANT1 and filter width 2.7K. Below are a red TX badge, the mode selector set to USB and the frequency 14.250.000, then the tuning step selector at 500 and the AF gain and pan sliders, filter preset buttons 1.8K, 2.1K, 2.4K, 2.7K (lit), 2.9K and 3.3K beside the SQL and AGC (Med) controls, a passband graphic reading 100, 2.7K and 2800, and RIT and XIT offsets of +0 Hz."
+      "caption": "The RX Controls applet with the compact A button beside the AGC-T slider.",
+      "alt": "RX Controls applet tuned to 14.250.000 USB. The filter presets and passband graph sit beside the audio, squelch and AGC controls. The Med selector, enabled threshold slider at 41 and lit A button share one row; RIT and XIT are below.",
+      "capture_note": "Current image captured from the real production widgets by auto_agc_threshold_gui_test with injected status and QT_SCALE_FACTOR=1.6667; no radio connection or RF activity."
     },
     {
       "id": "tx-applet",

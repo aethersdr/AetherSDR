@@ -728,8 +728,10 @@ void RxApplet::buildUI()
     // Visual filter passband widget (draggable lo/hi edges)
     {
         m_filterPassband = new AetherSDR::FilterPassbandWidget;
+        // Leave room for the AGC slider at the dock's normal 248 px width.
+        m_filterPassband->setMinimumWidth(96);
         m_filterPassband->setMinimumHeight(40);
-        m_filterPassband->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        m_filterPassband->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
         connect(m_filterPassband, &AetherSDR::FilterPassbandWidget::filterChanged,
                 this, [this](int lo, int hi) {
             if (acceptsFilterEdges(lo, hi)) {
@@ -1086,12 +1088,9 @@ void RxApplet::buildUI()
     // AGC mode + threshold (wrapped in container for FM hide)
     {
         m_agcContainer = new QWidget;
-        auto* agcLayout = new QVBoxLayout(m_agcContainer);
-        agcLayout->setContentsMargins(0, 0, 0, 0);
-        agcLayout->setSpacing(4);
-        auto* agcRow = new QHBoxLayout;
-        agcRow->setSpacing(4);
-        agcLayout->addLayout(agcRow);
+        auto* agcRow = new QHBoxLayout(m_agcContainer);
+        agcRow->setContentsMargins(0, 0, 0, 0);
+        agcRow->setSpacing(2);
 
         m_agcCombo = new GuardedComboBox;
         m_agcCombo->addItem("Off",  QString("off"));
@@ -1108,7 +1107,8 @@ void RxApplet::buildUI()
         });
         agcRow->addWidget(m_agcCombo);
 
-        m_autoAgcTButton = mkToggle(tr("Auto AGC-T"), nullptr, kBlueActive());
+        m_autoAgcTButton = mkToggle(tr("A"), nullptr, kBlueActive());
+        m_autoAgcTButton->setFixedWidth(20);
         m_autoAgcTButton->setObjectName(QStringLiteral("autoAgcT"));
         m_autoAgcTButton->setAccessibleName(tr("Auto AGC-T"));
         m_autoAgcTButton->setAccessibleDescription(
@@ -1124,13 +1124,13 @@ void RxApplet::buildUI()
             }
             syncAutoAgcThreshold();
         });
-        agcLayout->addWidget(m_autoAgcTButton);
-
         m_agcTSlider = new GuardedSlider(Qt::Horizontal);
+        m_agcTSlider->setMinimumWidth(60);
         m_agcTSlider->setRange(0, 100);
         m_agcTSlider->setValue(65);
         applyPrimarySliderStyle(m_agcTSlider);
         agcRow->addWidget(m_agcTSlider, 1);
+        agcRow->addWidget(m_autoAgcTButton);
 
         // Right-click entry point for the AGC-T noise calibration panel.
         // (Discoverability mitigation for the right-click-only decision: the
@@ -2223,7 +2223,6 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
             configureRepeaterReverseControl();
             configureFmToneControls();
             syncAgcSliderFromSlice();
-            syncAutoAgcThreshold();
             if (m_slice) {
                 updateModeSettings(m_slice->mode());
             }
@@ -3761,7 +3760,8 @@ void RxApplet::syncAutoAgcThreshold()
         const QString description = m_slice->automaticAgcThresholdActiveOrPending()
             && m_slice->agcThresholdMode() != AgcThresholdMode::Automatic
             ? tr("Waiting for radio Auto AGC-T confirmation. Click again to request manual mode.")
-            : tr("Let the radio adjust AGC threshold automatically");
+            : tr("Auto AGC-T: automatically adjusts the threshold as band noise changes. "
+                 "AGC speed stays independent. Move the slider to return to manual control.");
         m_autoAgcTButton->setToolTip(description);
         m_autoAgcTButton->setAccessibleDescription(description);
     }
