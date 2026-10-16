@@ -4,6 +4,7 @@
 #include "core/WfmReceptionDiagnostics.h"
 
 #include "core/backends/NoiseBlankerKind.h"
+#include "core/backends/ReceiveCommand.h"
 
 #include <QMetaType>
 #include <QString>
@@ -104,6 +105,7 @@ struct SliceDelta {
     // AGC / squelch / RIT / XIT
     std::optional<QString>     agcMode;
     std::optional<int>         agcThreshold;
+    std::optional<AgcThresholdMode> agcThresholdMode;
     std::optional<int>         agcOffLevel;
     std::optional<bool>        squelchOn;
     std::optional<int>         squelchLevel;

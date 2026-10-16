@@ -225,6 +225,7 @@ private:
     TransmitModel* m_txModel{nullptr};
     RadioModel* m_radioModel{nullptr};
     ControlAvailabilityRegistry* m_filterAvailability{nullptr};
+    QPushButton* m_autoAgcTButton{nullptr};
     std::optional<ReceiveFilterControl> m_receiveFilterControl;
     // exclusiveSquelchScaleValue(caps.squelchLevelScale): the receiver's own gate.
     std::optional<SquelchLevelScale> m_exclusiveSquelch;
@@ -360,6 +361,7 @@ private:
     int agcThresholdMinimum() const;
     int agcThresholdMaximum() const;
     void syncAgcSliderFromSlice();
+    void syncAutoAgcThreshold();
     bool usesTransmitFrequencyCheck() const;
     void configureRepeaterReverseControl();
     void configureFmToneControls();

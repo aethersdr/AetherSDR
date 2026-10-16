@@ -645,6 +645,12 @@ target_include_directories(receive_intent_routing_test PRIVATE src tests)
 target_link_libraries(receive_intent_routing_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME receive_intent_routing_test COMMAND receive_intent_routing_test)
 
+# #6506: injected status, command sinks, entitlement and calibration lifetimes.
+add_executable(auto_agc_threshold_test tests/auto_agc_threshold_test.cpp)
+target_include_directories(auto_agc_threshold_test PRIVATE src tests)
+target_link_libraries(auto_agc_threshold_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME auto_agc_threshold_test COMMAND auto_agc_threshold_test)
+
 # ATU start on the IRadioBackend seam passes the TX gate (#5558): injected
 # backend records setAtu(); no sockets, no radio.
 add_executable(atu_seam_gate_test tests/atu_seam_gate_test.cpp)
@@ -8291,6 +8297,38 @@ add_test(NAME rx_applet_squelch_reconciliation_test
 set_tests_properties(rx_applet_squelch_reconciliation_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# #6506: real RX applet and automation reflection, injected session only.
+add_executable(auto_agc_threshold_gui_test
+    tests/auto_agc_threshold_gui_test.cpp
+    ${THEME_TEST_RESOURCES}
+    src/gui/AgcCalibrationDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(auto_agc_threshold_gui_test PRIVATE src tests)
+target_link_libraries(auto_agc_threshold_gui_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test
+)
+add_test(NAME auto_agc_threshold_gui_test
+         COMMAND auto_agc_threshold_gui_test)
+set_tests_properties(auto_agc_threshold_gui_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Socket-free real VFO/SmartMTR paint and label invalidation regression.
 add_executable(vfo_meter_overlay_invalidation_test
     tests/vfo_meter_overlay_invalidation_test.cpp
@@ -8725,6 +8763,8 @@ set(AETHER_SETTINGS_CONSUMERS
     icom_panadapter_capacity_test
     backend_receive_contract_test
     receive_intent_routing_test
+    auto_agc_threshold_test
+    auto_agc_threshold_gui_test
     radio_capacity_declaration_test
     extension_namespace_gate_test
     control_availability_registry_test

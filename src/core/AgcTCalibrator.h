@@ -33,7 +33,7 @@ public:
     explicit AgcTCalibrator(QObject* parent = nullptr);
 
     void setSlice(SliceModel* slice);
-    SliceModel* slice() const { return m_slice.data(); }
+    SliceModel* slice() const;
 
     // Comfortable audio-noise target for the AGC-off solve, in dB (negative).
     void  setTargetLevelDb(float db) { m_targetDb = db; }
@@ -86,6 +86,9 @@ private:
     // QPointer so slice removal / disconnect mid-calibration doesn't dangle.
     // All call sites null-check before use.
     QPointer<SliceModel> m_slice;
+    quint64 m_sliceGeneration{0};
+    bool canWrite() const;
+    void cancelWithoutRestore();
 
     bool   m_running{false};
     bool   m_auto{false};

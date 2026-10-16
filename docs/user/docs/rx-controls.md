@@ -14,9 +14,9 @@ Most of this page describes a FlexRadio. On other radio families, controls the
 radio cannot honor are dimmed with the reason in their tooltip, or refuse
 with a notice; see [Using the controls on other radios](#using-the-controls-on-other-radios) below.
 
-<img src="/img/screens/rx-applet.png" width="248" alt="RX Controls applet. The top row shows the slice buttons A (lit), B, C and D, a lock button, RX antenna ANT1, TX antenna ANT1 and filter width 2.7K. Below are a red TX badge, the mode selector set to USB and the frequency 14.250.000, then the tuning step selector at 500 and the AF gain and pan sliders, filter preset buttons 1.8K, 2.1K, 2.4K, 2.7K (lit), 2.9K and 3.3K beside the SQL and AGC (Med) controls, a passband graphic reading 100, 2.7K and 2800, and RIT and XIT offsets of +0 Hz." />
+<img src="/img/screens/rx-applet.png" width="248" alt="RX Controls applet tuned to 14.250.000 USB. The filter presets and passband graph sit beside the audio, squelch and AGC controls. The Med selector, enabled threshold slider at 41 and lit A button share one row; RIT and XIT are below." />
 
-*The RX Controls applet for the active slice.*
+*The RX Controls applet with the compact A button beside the AGC-T slider.*
 
 ## Using the RX applet
 
@@ -112,18 +112,38 @@ On RTL-SDR FM/FM-N, **AUTO** uses each receiver's own detector noise estimate, i
 
 ### AGC
 
-<img src="/img/screens/rx-agc-calibration.png" width="460" alt="AGC-T Calibration window. The heading reads AGC: MED, finding the knee (agc_threshold) just above the noise floor, with a warning that a signal is in the passband and you should tune to a clear spot. An empty plot with an AGC-T axis from 0 to 100 and a dashed marker fills the center, above Auto Sweep and Apply buttons and a hint: tune to a clear spot, then Auto Sweep, or move the AGC-T slider and watch where the noise bends." />
+<img src="/img/screens/rx-agc-calibration.png" width="460" alt="AGC-T Calibration window. The heading reads AGC: MED, finding the knee (agc_threshold) just above the noise floor, with a warning that a signal is in the passband and you should tune to a clear spot. An empty plot with an AGC-T axis from 0 to 100 and a dashed marker fills the centre, above Auto Sweep and Apply buttons and a hint: tune to a clear spot, then Auto Sweep, or move the AGC-T slider and watch where the noise bends." />
 
 *The AGC-T Calibration window.*
 
 - **Mode** — Off, Slow, Med, Fast
 - **AGC-T slider** — the AGC threshold
+- **A** to the right of the RX applet's AGC slider, or **Auto** to the right of
+  the slice flag's Audio-tab slider — requests radio Auto AGC-T. A lit button means
+  the radio reports automatic threshold control; an unlit button means manual.
+  This requires SmartSDR 4.3.16 or later and the radio's enabled **Auto AGC-T**
+  entitlement (SmartSDR+ Early Access). Until support, entitlement and slice
+  status are confirmed, the button is dimmed with the reason in its tooltip
+  and screen-reader description. Other radio families keep it dimmed.
+
+Auto AGC-T adjusts the threshold as band noise changes; the Off / Slow / Med /
+Fast speed selector remains independent. The threshold slider stays enabled and
+follows the radio. Moving it by hand requests a manual threshold; the **A** and
+**Auto** indicators follow the mode the radio reports afterward. Click either
+button again to request manual mode without changing
+the current threshold. AetherSDR does not save or reapply the radio's automatic
+or manual selection on reconnect.
 
 **AGC-T calibration:** right-click the AGC-T slider, or use
 **Tools → Calibrate AGC-T...**, to calibrate the threshold against the
 measured noise floor on the active slice. It does not transmit.
 Close the window with the corner ✕, Esc or Ctrl+W; closing it during
 an Auto Sweep stops the sweep and puts back the AGC-T it started from.
+Select manual AGC-T before calibrating. If radio Auto AGC-T or an external
+receiver takes over, or the radio disconnects, calibration discards its curve
+and recommendation without restoring its old threshold. Returning to manual
+AGC-T does not resume the old sweep. After reconnecting, reopen
+**Tools → Calibrate AGC-T...** to record a fresh manual curve.
 
 On the Hermes-Lite 2, AGC runs on the computer: with AGC **Off**, the AGC-T
 slider sets a fixed gain (4–64 dB, default 10 dB) remembered per receiver, and

@@ -746,6 +746,10 @@ struct RadioCapabilities {
     // Independent controls require an implemented command or host DSP path.
     // AGC mode selection alone does not imply a writable threshold/off level.
     bool hasAgcThreshold = false;
+    struct AutoAgcThresholdControl {
+        QString requiredLicenseFeature;
+    };
+    std::optional<AutoAgcThresholdControl> autoAgcThresholdControl;
     // Modes the implemented selector can honor. A native OFF time-constant
     // editor is a different contract from selecting a fast/medium/slow bank.
     QStringList agcModes{QStringLiteral("off"), QStringLiteral("slow"),
