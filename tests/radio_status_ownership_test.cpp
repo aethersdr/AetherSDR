@@ -84,6 +84,37 @@ void testInterlockTxGate()
     check(interlockKeepsLocalTxOn(true, false, false, false, true,
                                   QString(), false),
           "tune keeps local TX on");
+    for (const QString& source : {QStringLiteral("RCA"), QStringLiteral("MIC,VOX"),
+                                  QStringLiteral("VOX,MIC"), QStringLiteral("ACC,SW"),
+                                  QStringLiteral("SW,RCA"), QStringLiteral("TC2,ACC,DVK"),
+                                  QStringLiteral(",MIC,,")}) {
+        check(interlockKeepsLocalTxOn(true, false, false, false, false, source, false),
+              "exact hardware token anywhere in source list reconciles local TX");
+        check(!interlockKeepsLocalTxOn(false, true, true, true, true, source, true),
+              "foreign owner overrides all sources and local intents");
+    }
+    for (const QString& source : {QString(), QStringLiteral("SW"), QStringLiteral("VOX"),
+                                  QStringLiteral("SW,VOX"), QStringLiteral("TUNE"),
+                                  QStringLiteral("UNKNOWN"), QStringLiteral("MICROPHONE"),
+                                  QStringLiteral("XACC,RCAX,VOXX"), QStringLiteral("MIC;VOX"),
+                                  QStringLiteral(" MIC ")}) {
+        check(!interlockKeepsLocalTxOn(true, false, false, false, false, source, false),
+              "no exact hardware token or local intent keeps VOX-disabled TX off");
+        check(interlockKeepsLocalTxOn(true, false, false, false, false, source, true),
+              "VOX enable preserves legacy source-independent reconciliation");
+    }
+    const QString commaDense(1024 * 1024, QLatin1Char(','));
+    check(!interlockKeepsLocalTxOn(true, false, false, false, false, commaDense, false),
+          "large comma-dense source does not manufacture a hardware token");
+    for (const QString& token : {QStringLiteral("MIC"), QStringLiteral("ACC"), QStringLiteral("RCA")}) {
+        check(interlockKeepsLocalTxOn(true, false, false, false, false, commaDense + token, false),
+              "large source preserves exact hardware token at the end without truncation");
+        check(!interlockKeepsLocalTxOn(true, false, false, false, false,
+                                      commaDense + token + QLatin1Char('X'), false),
+              "large source preserves token boundaries at the end");
+    }
+    check(interlockKeepsLocalTxOn(true, false, false, true, false, QString(), false),
+          "CWX intent keeps local TX on without a source");
 }
 
 void testOperatorTransmitGate()

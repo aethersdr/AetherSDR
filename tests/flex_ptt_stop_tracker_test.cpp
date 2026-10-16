@@ -195,6 +195,17 @@ void strictFramesAndOwnership()
         check(h.tracker.phase() == Phase::Failed && !h.tracker.evidence(h.now).valid(),
               "malformed/partial/foreign/physical-key status cannot authorize handoff");
     }
+    // A latched VOX/hardware source is not proof of software-only ownership,
+    // even when SW is one member of the SmartSDR 4.3 source list.
+    for (const QString& source : {QStringLiteral("SW,VOX"), QStringLiteral("VOX,SW"),
+                                  QStringLiteral("MIC,SW"), QStringLiteral("SW,RCA")}) {
+        Harness h;
+        h.start();
+        h.feed(QStringLiteral("S0|interlock tx_client_handle=0x12345678 state=TRANSMITTING reason= source=%1 tx_allowed=1")
+                   .arg(source));
+        check(h.tracker.failure() == Failure::Ownership && !h.tracker.evidence(h.now).valid(),
+              "additional latched sources cannot qualify independent software TX ownership");
+    }
     Harness outOfBand;
     outOfBand.start();
     outOfBand.stopReply();

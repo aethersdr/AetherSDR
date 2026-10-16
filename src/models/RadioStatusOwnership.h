@@ -5,6 +5,8 @@
 
 #include <QMap>
 #include <QString>
+#include <QStringList>
+#include <QStringView>
 
 #include <algorithm>
 #include <utility>
@@ -91,24 +93,38 @@ inline bool statusRemoved(const StreamObjectParts& stream,
         || kvs.value(QStringLiteral("in_use")) == QStringLiteral("0");
 }
 
-// Decide whether an interlock status update should keep local TX (SmartMtr TX
-// meter + TX audio gate) ON. Returns false => force off. Mirrors the gate in
-// RadioModel's interlock handler. VOX keys the radio autonomously (no
-// setTransmit(), so txRequested stays false); when VOX is enabled and we own
-// the transmitter, treat it as a legitimate owned-TX path like hardware PTT.
-// voxEnabled has zero effect when false, so all non-VOX behavior is unchanged.
+// Reconcile local TX audio/meters only after the radio reports TX. FlexLib
+// 4.3.16 Radio.cs ParsePTTSource describes comma-separated latched sources.
+// VOX still requires its enable flag: older firmware reports it as SW.
+// Neither a source token nor this predicate grants an intent or keys TX.
 inline bool interlockKeepsLocalTxOn(bool txOwnedByUs, bool txRequested,
                                     bool cwKeyActive, bool cwxActive, bool tuning,
                                     const QString& lastInterlockSource,
                                     bool voxEnabled)
 {
-    if (!txOwnedByUs)
-        return false;  // another client owns TX — always force off
-    const bool hardwarePtt = (lastInterlockSource == QLatin1String("MIC")
-                              || lastInterlockSource == QLatin1String("ACC")
-                              || lastInterlockSource == QLatin1String("RCA"));
-    return txRequested || cwKeyActive || cwxActive || tuning
-           || hardwarePtt || voxEnabled;
+    if (!txOwnedByUs) {
+        return false;
+    }
+    if (txRequested || cwKeyActive || cwxActive || tuning || voxEnabled) {
+        return true;
+    }
+    // Status retains this remote field across deltas. Scan views so repeated
+    // comma-dense input cannot amplify allocations into one string per token.
+    const QStringView sources(lastInterlockSource);
+    qsizetype from = 0;
+    for (;;) {
+        const qsizetype comma = sources.indexOf(QLatin1Char(','), from);
+        const qsizetype end = comma < 0 ? sources.size() : comma;
+        const QStringView token = sources.mid(from, end - from);
+        if (token == QLatin1String("MIC") || token == QLatin1String("ACC")
+            || token == QLatin1String("RCA")) {
+            return true;
+        }
+        if (comma < 0) {
+            return false;
+        }
+        from = comma + 1;
+    }
 }
 
 // Whether the *local operator* is the one keying the transmitter — mic/PTT,

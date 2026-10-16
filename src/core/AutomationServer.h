@@ -620,6 +620,7 @@ private:
     // Disconnected-only GPS status fixtures for the 6000-series
     // hemisphere/minutes format and 8000-series decimal-degree format.
     QJsonObject doGps(const QString& action, const QString& format);
+    QJsonObject doInterlock(const QString& action, const QString& arguments);
     QJsonObject doTune(const QString& value, const QString& id);
     // Manual frequency calibration. Gated on
     // RadioCapabilities::hostFrequencyCalibration, so it refuses on a radio that
