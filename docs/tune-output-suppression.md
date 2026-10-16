@@ -56,6 +56,13 @@ The separate ACC TX preference keeps its existing behavior. Firmware 4.2 and
 older, and unknown or malformed versions, retain the legacy path. The new
 checkbox is unavailable on unqualified firmware.
 
+The TX subscription can report band values before the `info` reply identifies
+the firmware, especially after reconnect or a manual-IP connection. Validated
+per-band observations are retained for that session, but controls and writes
+remain unavailable until the firmware qualifies. The identity notification then
+updates an open table without another radio event. Disconnect clears these
+observations, including those received before firmware qualification.
+
 The radio's per-band value is not stored in AppSettings and is not initialized
 from the legacy global RCA preferences. Those preferences are retained for older
 firmware. While firmware owns RCA suppression, the submenu contains ACC TX

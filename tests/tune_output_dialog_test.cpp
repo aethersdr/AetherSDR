@@ -170,6 +170,25 @@ void unavailableDialog()
         check(f.commands.isEmpty(), "unsupported table construction sends nothing");
     }
 }
+
+void firmwareIdentityAfterReadback()
+{
+    Fixture f(QStringLiteral("1.4.0.0"));
+    TxBandDialog dialog(&f.radio);
+    QCheckBox* forty = bandBox(dialog, 5);
+    QCheckBox* twenty = bandBox(dialog, 9);
+    check(forty && twenty && !forty->isEnabled() && !twenty->isEnabled(),
+          "status-first session leaves the open table dimmed until firmware is known");
+    if (!forty || !twenty) {
+        return;
+    }
+    f.version = QStringLiteral("4.3.16.42034");
+    TuneOutputDialogTestAccess::identity(f.radio, f.backend, f.version);
+    emit f.radio.infoChanged();
+    check(forty->isEnabled() && !forty->isChecked() && twenty->isEnabled() && twenty->isChecked()
+              && f.commands.isEmpty(),
+          "late firmware identity enables the existing table with each earlier confirmed value");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -181,5 +200,6 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
     supportedDialog();
     unavailableDialog();
+    firmwareIdentityAfterReadback();
     return failures == 0 ? 0 : 1;
 }

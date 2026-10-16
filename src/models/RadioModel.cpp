@@ -7811,8 +7811,8 @@ TuneOutputControlState RadioModel::tuneOutputControl(int bandId) const
         && band != m_txBandSettings.cend() && !band->bandName.isEmpty();
     const auto confirmed = m_tuneOutputBands.constFind(bandId);
     if (knownBand && confirmed != m_tuneOutputBands.cend()) {
-        state.haveValue = isConnected() && confirmed->confirmed.has_value();
-        state.suppressed = confirmed->confirmed.value_or(false);
+        state.haveValue = state.supported && isConnected() && confirmed->confirmed.has_value();
+        state.suppressed = state.haveValue && confirmed->confirmed.value_or(false);
         state.pending = confirmed->requestId != 0;
         state.reason = confirmed->reason;
     }
@@ -7846,7 +7846,6 @@ void RadioModel::wireTuneOutputControl()
     connect(m_backend.get(), &IRadioBackend::tuneOutputSuppressionObserved, this,
         [this, generation](int bandId, bool suppressed) {
             if (generation != m_backendReceiverGeneration || !isConnected()
-                || !backendCapabilities().tuneOutputSuppression
                 || !TuneOutputPolicy::validBandId(bandId)) {
                 return;
             }

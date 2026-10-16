@@ -280,6 +280,39 @@ void genericSinkCompatibility()
           "reply-capable generic sink preserves existing disconnected command forwarding");
 }
 
+void readbackBeforeFirmwareIdentity()
+{
+    Fixture f;
+    f.backend->connected = false;
+    TuneOutputControlTestAccess::disconnect(f.radio);
+    f.version = QStringLiteral("1.4.0.0");
+    TuneOutputControlTestAccess::identity(f.radio, f.version);
+    f.backend->connected = true;
+    f.wire.clear();
+    // Reconnect and manual-IP sessions subscribe before info supplies software_ver.
+    f.band(5, QStringLiteral("40"), QStringLiteral("1"));
+    f.band(9, QStringLiteral("20"), QStringLiteral("0"));
+    f.radio.requestTuneOutputSuppression(9, true);
+    check(!f.radio.tuneOutputControl(5).supported && !f.radio.tuneOutputControl(5).haveValue
+              && f.wire.isEmpty(), "early readback cannot enable controls or writes before firmware qualification");
+    f.version = QStringLiteral("4.3.16.42034");
+    TuneOutputControlTestAccess::identity(f.radio, f.version);
+    emit f.radio.infoChanged();
+    check(f.radio.tuneOutputControl(5).haveValue && f.radio.tuneOutputControl(5).suppressed
+              && f.radio.tuneOutputControl(9).haveValue && !f.radio.tuneOutputControl(9).suppressed
+              && f.wire.isEmpty(), "firmware identity unlocks earlier per-band readback without another radio event or write");
+    f.radio.requestTuneOutputSuppression(9, true);
+    check(f.wire == QStringList{QStringLiteral("interlock bandset 9 tune_tx_suppress=1")},
+          "the qualified row accepts an explicit request after status-first reconnect");
+    f.backend->connected = false;
+    TuneOutputControlTestAccess::disconnect(f.radio);
+    f.version = QStringLiteral("4.3.16.42034");
+    TuneOutputControlTestAccess::identity(f.radio, f.version);
+    f.backend->connected = true;
+    check(!f.radio.tuneOutputControl(5).haveValue && !f.radio.tuneOutputControl(9).haveValue,
+          "a later session never inherits early readback from the previous connection");
+}
+
 void legacyOwnership()
 {
     AppSettings& settings = AppSettings::instance();
@@ -330,6 +363,7 @@ int main(int argc, char** argv)
     authorityAndReplies();
     explicitRowsIgnoreTxSelection();
     genericSinkCompatibility();
+    readbackBeforeFirmwareIdentity();
     legacyOwnership();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;

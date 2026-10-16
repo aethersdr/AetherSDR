@@ -75,6 +75,8 @@ named band. The existing columns remain usable on newer firmware: **RCA TX1**,
 Each new checkbox follows that band's value on the radio; it does not
 follow the selected panadapter. Editing it never starts TUNE. A dimmed checkbox
 has a tooltip explaining missing support, missing readback or a pending request.
+After connecting or reconnecting, the column becomes available once the radio
+has reported both supported firmware and the band's value, in either order.
 See [TX Controls](./tx-controls.md#tune) for the output scope and older firmware's
 **Inhibit during TUNE** settings.
 

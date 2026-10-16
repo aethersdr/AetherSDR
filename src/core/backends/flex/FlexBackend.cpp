@@ -184,10 +184,8 @@ void FlexBackend::requestTuneOutputSuppression(int bandId, bool suppressed, quin
 
 void FlexBackend::decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs)
 {
-    const QString version = m_firmwareVersionProvider ? m_firmwareVersionProvider() : QString();
-    if (!TuneOutputPolicy::firmwareSupportsSuppression(version)) {
-        return;
-    }
+    // Subscription readback can precede info's software_ver on reconnect or
+    // manual-IP connections. Validate observations now; gate edits on capability.
     static const QRegularExpression bandPattern(QStringLiteral("^interlock band ([0-9]{1,3})$"));
     const QRegularExpressionMatch match = bandPattern.match(object);
     if (!match.hasMatch()) {

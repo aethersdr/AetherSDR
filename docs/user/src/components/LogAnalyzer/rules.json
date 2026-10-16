@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8486,
+          "line": 8485,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 12808,
+          "line": 12807,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
