@@ -512,6 +512,14 @@ target_link_libraries(ctr2max_stock_firmware_test PRIVATE aethercore aether_mono
     Qt6::Network)
 add_test(NAME ctr2max_stock_firmware_test COMMAND ctr2max_stock_firmware_test)
 
+# One AetherSDR at a time on a CTR2's USB HID interface (Ctr2DeviceLock):
+# another process is refused, this one may overlap its own holders, and a
+# dead process's lock is taken over. The other process is the test itself.
+add_executable(ctr2_device_lock_test tests/ctr2_device_lock_test.cpp)
+target_include_directories(ctr2_device_lock_test PRIVATE src)
+target_link_libraries(ctr2_device_lock_test PRIVATE aethercore Qt6::Core)
+add_test(NAME ctr2_device_lock_test COMMAND ctr2_device_lock_test)
+
 # Ctr2MaxRegistration (read-only littlefs) against synthetic stock-firmware
 # volumes: registered (v1.02.00m's hashed Reg.txt), an earlier plain-text
 # call (not taken), not registered, and no volume.
