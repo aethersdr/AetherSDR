@@ -224,10 +224,10 @@ foreach ($image in $images) {
 # against a different Qt is rejected by the plugin loader at run time and the
 # feature it provides silently never becomes available. Nothing above catches
 # that -- a stale plugin resolves every import, so the payload looks
-# self-contained while being internally inconsistent. That is how the Qt 6.7.3
-# qopensslbackend.dll shipped inside a Qt 6.12 payload in #6374: Qt had no
-# usable TLS backend and SmartLink login failed with "TLS initialization
-# failed" on every Windows install.
+# self-contained while being internally inconsistent. In #6374 an older
+# AetherSDR install had left a Qt 6.7.3 qopensslbackend.dll in place, which
+# the Qt 6.12 loader rejected; the upgrade did not remove it because the
+# installer no longer ships that file.
 #
 # Qt6Core.dll is the reference: every Qt DLL and plugin in the payload must
 # report the same FileVersion.
@@ -257,6 +257,29 @@ if ($qtCore) {
     }
 } else {
     $failures += "Qt6Core.dll not found in the payload -- cannot verify Qt plugin consistency"
+}
+
+# Qt resolves https:// through a TLS backend plugin. Schannel and cert-only
+# ship by default, but neither carries SmartLink's Auth0 login: that path
+# needs the OpenSSL backend, and windeployqt only deploys it when the OpenSSL
+# libraries are present to deploy alongside it. When they are absent the whole
+# feature goes missing silently -- nothing fails to build, nothing fails to
+# start, and QNetworkAccessManager reports "TLS initialization failed" the
+# first time a user signs in. That is #6374: v26.10.2 shipped tls\ with only
+# qcertonlybackend.dll and qschannelbackend.dll, so SmartLink could not work
+# on a clean install.
+#
+# A missing plugin is not a version mismatch, so the check above does not
+# catch it. Assert the backend and its libraries are in the payload together.
+$tlsBackend = $images | Where-Object { $_.Name -ieq "qopensslbackend.dll" } | Select-Object -First 1
+if (-not $tlsBackend) {
+    $failures += "tls\qopensslbackend.dll is not in the payload -- Qt has no OpenSSL TLS backend and SmartLink login will fail (#6374)"
+} else {
+    foreach ($lib in @("libssl-3-x64.dll", "libcrypto-3-x64.dll")) {
+        if (-not $shippedFiles.ContainsKey($lib.ToLowerInvariant())) {
+            $failures += "$lib is not in the payload -- qopensslbackend.dll loads it at run time and Qt falls back to no TLS backend without it"
+        }
+    }
 }
 
 foreach ($warning in $warnings) {
