@@ -1685,6 +1685,7 @@ void RadioModel::wireBackendReceiverState()
 
 void RadioModel::teardownBackend()
 {
+    discardTuneInhibit();
     m_transmitModel.invalidateControlIntents();
     for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
@@ -2125,7 +2126,10 @@ RadioModel::RadioModel(QObject* parent)
     // BYPASS remains unconditional, including after a refused start (#5558).
     connect(&m_transmitModel, &TransmitModel::atuCommandIssued, this,
             [this](bool start) {
-        dispatchAtuIntent(start);
+        const quint64 epoch = m_atuCommandEpoch + 1;
+        if (!dispatchAtuIntent(start) && start && epoch == m_atuCommandEpoch) {
+            m_transmitModel.atuBypass();
+        }
     });
 
     connect(&m_transmitModel, &TransmitModel::moxCommandIssued, this,
@@ -2134,7 +2138,10 @@ RadioModel::RadioModel(QObject* parent)
     });
     connect(&m_transmitModel, &TransmitModel::tuneCommandIssued, this,
             [this](bool on) {
-        dispatchTuneIntent(on);
+        const quint64 epoch = m_tuneCommandEpoch + 1;
+        if (!dispatchTuneIntent(on) && on && epoch == m_tuneCommandEpoch) {
+            m_transmitModel.stopTune();
+        }
     });
 
     // aetherd RFC step 2.2b: FlexBackend owns the RadioConnection and PanadapterStream
@@ -2171,7 +2178,9 @@ RadioModel::RadioModel(QObject* parent)
         // TX interlock gate (was a commandReady string-sniff on "tgxl autotune").
         if (transmitStartBlockedByInhibit(QStringLiteral("tgxl-autotune")))
             return;
-        applyTuneInhibit();
+        if (!applyTuneInhibit()) {
+            return;
+        }
         if (m_backend)
             m_backend->invokeExtension(QStringLiteral("flex"), QStringLiteral("tuner.autotune"), 0);
     });
@@ -2366,8 +2375,9 @@ RadioModel::RadioModel(QObject* parent)
 
     // Tune PA inhibit: restore TX outputs when tune completes
     connect(&m_transmitModel, &TransmitModel::tuneChanged, this, [this](bool tuning) {
-        if (!tuning && m_tuneInhibitActive && m_tuneInhibitBandId >= 0)
+        if (!tuning) {
             restoreTuneInhibit();
+        }
     });
 
     // Drive the status-bar operator TX timer from actual transmit-state edges
@@ -2471,6 +2481,7 @@ RadioModel::~RadioModel()
             m_backend->abortCwText(m_txCoordinator.cleanupFence());
         }
     }
+    restoreTuneInhibit();
     // Disconnect RadioModel's own connections to the wire objects BEFORE they
     // are torn down, to prevent use-after-free (ASAN). (#502) The objects are
     // still alive here — the backend owns them and destroys them next. The WAN
@@ -3439,6 +3450,7 @@ void RadioModel::emitInterlockNotification(const QString& message,
 
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
+    discardTuneInhibit();
     cancelRadioWake();
     // aetherd Gap B: the backend follows the radio the operator selected. A Flex
     // and a Hermes-Lite 2 need different backends, and the picker is where that
@@ -3569,6 +3581,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
 
 void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort)
 {
+    discardTuneInhibit();
     cancelRadioWake();
     qCDebug(lcProtocol) << "RadioModel: connectViaWan publicIp=" << publicIp
              << "udpPort=" << udpPort
@@ -3877,6 +3890,7 @@ bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
 void RadioModel::disconnectFromRadio()
 {
     resetTxOperations();
+    restoreTuneInhibit();
     cancelRadioWake();
     m_intentionalDisconnect = true;
     m_rebootInProgress = false;
@@ -7812,71 +7826,122 @@ int RadioModel::bandIdForFrequency(double freqMhz) const
     return -1;
 }
 
-void RadioModel::applyTuneInhibit()
+void RadioModel::discardTuneInhibit()
 {
-    auto& s = AppSettings::instance();
-    double txFreq = 0.0;
-    for (auto* sl : m_slices) {
-        if (sl->isTxSlice()) { txFreq = sl->frequency(); break; }
-    }
-    int bandId = bandIdForFrequency(txFreq);
-    if (bandId < 0) return;
-    auto it = m_txBandSettings.find(bandId);
-    if (it == m_txBandSettings.end()) return;
+    ++m_tuneInhibitEpoch;
+    m_tuneInhibit.reset();
+    m_tuneInhibitKnownOutputs.clear();
+}
 
-    QStringList inhibited;
-    if (s.value("TuneInhibitAccTx", "False").toString() == "True" && it->accTx) {
-        sendCmd(QString("interlock bandset %1 acc_tx_enabled=0").arg(bandId));
-        inhibited << "ACC TX";
+void RadioModel::relinquishTuneInhibit(const QString& command)
+{
+    if (!m_tuneInhibit) {
+        return;
     }
-    if (s.value("TuneInhibitTx1", "False").toString() == "True" && it->tx1) {
-        sendCmd(QString("interlock bandset %1 tx1_enabled=0").arg(bandId));
-        inhibited << "TX1";
+    const QStringList words = command.simplified().split(QLatin1Char(' '));
+    bool ok = false;
+    if (words.size() < 4 || words[0] != QLatin1String("interlock")
+        || words[1] != QLatin1String("bandset")
+        || words[2].toInt(&ok) != m_tuneInhibit->bandId || !ok) {
+        return;
     }
-    if (s.value("TuneInhibitTx2", "False").toString() == "True" && it->tx2) {
-        sendCmd(QString("interlock bandset %1 tx2_enabled=0").arg(bandId));
-        inhibited << "TX2";
+    // A deliberate output edit supersedes our temporary write, even when the
+    // requested value equals the inhibited value already shown by the radio.
+    for (qsizetype i = 3; i < words.size(); ++i) {
+        const QString field = words[i].section(QLatin1Char('='), 0, 0);
+        m_tuneInhibit->pending.removeAll(field);
+        m_tuneInhibit->outputs.removeAll(field);
     }
-    if (s.value("TuneInhibitTx3", "False").toString() == "True" && it->tx3) {
-        sendCmd(QString("interlock bandset %1 tx3_enabled=0").arg(bandId));
-        inhibited << "TX3";
+}
+
+bool RadioModel::applyTuneInhibit()
+{
+    if (!isConnected() || m_txSessionClosing) {
+        return false;
     }
-    if (!inhibited.isEmpty()) {
-        m_tuneInhibitBandId = bandId;
-        m_tuneInhibitActive = true;
-        qDebug() << "Tune PA inhibit: disabled" << inhibited.join(", ")
-                 << "on band" << bandId << "before tune";
+    if (m_tuneInhibit) {
+        return !m_tuneInhibit->restoring;
     }
+    AppSettings& settings = AppSettings::instance();
+    double txFreq = 0.0;
+    for (SliceModel* slice : m_slices) {
+        if (slice->isTxSlice()) {
+            txFreq = slice->frequency();
+            break;
+        }
+    }
+    const int bandId = bandIdForFrequency(txFreq);
+    const auto band = m_txBandSettings.constFind(bandId);
+    if (bandId < 0 || band == m_txBandSettings.cend()) {
+        return true;
+    }
+    TuneInhibitState state{bandId, m_sessionGeneration, m_backendReceiverGeneration, {}, {}};
+    struct Output { const char* preference; const char* field; bool enabled; };
+    const Output outputs[] = {
+        {"TuneInhibitAccTx", "acc_tx_enabled", band->accTx},
+        {"TuneInhibitTx1", "tx1_enabled", band->tx1},
+        {"TuneInhibitTx2", "tx2_enabled", band->tx2},
+        {"TuneInhibitTx3", "tx3_enabled", band->tx3},
+    };
+    for (const Output& output : outputs) {
+        const QString field = QLatin1String(output.field);
+        if (output.enabled && m_tuneInhibitKnownOutputs.value(bandId).contains(field)
+            && settings.value(QLatin1String(output.preference), "False").toString() == QLatin1String("True")) {
+            state.pending << field;
+        }
+    }
+    const quint64 epoch = ++m_tuneInhibitEpoch;
+    m_tuneInhibit = state;
+    for (const QString& field : state.pending) {
+        if (epoch != m_tuneInhibitEpoch || !m_tuneInhibit || !isConnected() || m_txSessionClosing
+            || state.session != m_sessionGeneration || state.backend != m_backendReceiverGeneration) {
+            return false;
+        }
+        if (!m_tuneInhibit->pending.removeOne(field)) {
+            continue;
+        }
+        m_tuneInhibit->outputs << field;
+        const auto rejected = [this, epoch, field](int code, const QString&) {
+            if (code != 0 && epoch == m_tuneInhibitEpoch && m_tuneInhibit) {
+                m_tuneInhibit->outputs.removeAll(field);
+            }
+        };
+        if (sendCmd(QString("interlock bandset %1 %2=0").arg(bandId).arg(field), rejected) == 0) {
+            rejected(-1, {});
+        }
+    }
+    return epoch == m_tuneInhibitEpoch && isConnected() && !m_txSessionClosing
+        && state.session == m_sessionGeneration && state.backend == m_backendReceiverGeneration;
 }
 
 void RadioModel::restoreTuneInhibit()
 {
-    auto& s = AppSettings::instance();
-    int id = m_tuneInhibitBandId;
-    QStringList restored;
-    if (s.value("TuneInhibitAccTx", "False").toString() == "True") {
-        sendCmd(QString("interlock bandset %1 acc_tx_enabled=1").arg(id));
-        restored << "ACC TX";
+    if (!m_tuneInhibit || m_tuneInhibit->restoring) {
+        return;
     }
-    if (s.value("TuneInhibitTx1", "False").toString() == "True") {
-        sendCmd(QString("interlock bandset %1 tx1_enabled=1").arg(id));
-        restored << "TX1";
+    const TuneInhibitState state = *m_tuneInhibit;
+    m_tuneInhibit->restoring = true;
+    m_tuneInhibit->pending.clear();
+    const quint64 epoch = ++m_tuneInhibitEpoch;
+    // Consume each obligation before dispatch. Synchronous edits can revoke
+    // the remaining fields; a fresh cycle or session invalidates this loop.
+    for (const QString& field : state.outputs) {
+        if (epoch != m_tuneInhibitEpoch || !isConnected()
+            || state.session != m_sessionGeneration || state.backend != m_backendReceiverGeneration) {
+            return;
+        }
+        if (m_tuneInhibit->outputs.removeOne(field)) {
+            sendCmd(QString("interlock bandset %1 %2=1").arg(state.bandId).arg(field));
+        }
     }
-    if (s.value("TuneInhibitTx2", "False").toString() == "True") {
-        sendCmd(QString("interlock bandset %1 tx2_enabled=1").arg(id));
-        restored << "TX2";
+    if (epoch == m_tuneInhibitEpoch) {
+        m_tuneInhibit.reset();
     }
-    if (s.value("TuneInhibitTx3", "False").toString() == "True") {
-        sendCmd(QString("interlock bandset %1 tx3_enabled=1").arg(id));
-        restored << "TX3";
-    }
-    qDebug() << "Tune PA inhibit: restored" << restored.join(", ") << "on band" << id;
-    m_tuneInhibitActive = false;
-    m_tuneInhibitBandId = -1;
 }
 
 void RadioModel::onDisconnected()
 {
+    discardTuneInhibit();
     m_transmitModel.invalidateControlIntents();
     for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
@@ -7911,9 +7976,6 @@ void RadioModel::onDisconnected()
     // Release sleep inhibition on disconnect (#1420)
     m_sleepInhibitor.release();
 
-    // Safety: restore TX outputs if we were inhibiting during tune
-    if (m_tuneInhibitActive && m_tuneInhibitBandId >= 0)
-        restoreTuneInhibit();
 
     m_txRequested = false;
     m_cwKeyActive = false;
@@ -9374,6 +9436,7 @@ bool rejectsForeignPanWrite(const RadioModel& radio, const QString& cmd)
 
 bool RadioModel::sendCommand(const QString& cmd)
 {
+    relinquishTuneInhibit(cmd);
     if (rejectsForeignPanWrite(*this, cmd)) {
         return false;
     }
@@ -9388,6 +9451,7 @@ bool RadioModel::sendCommand(const QString& cmd)
 
 bool RadioModel::sendCmdPublic(const QString& cmd, ResponseCallback cb)
 {
+    relinquishTuneInhibit(cmd);
     if (rejectsForeignPanWrite(*this, cmd)) {
         return false;
     }
@@ -11473,6 +11537,11 @@ void RadioModel::onStatusReceived(const QString& object,
             if (kvs.contains("band_name"))       b.bandName = kvs["band_name"];
             if (kvs.contains("acc_txreq_enable"))b.accTxReq = kvs["acc_txreq_enable"] == "1";
             if (kvs.contains("rca_txreq_enable"))b.rcaTxReq = kvs["rca_txreq_enable"] == "1";
+            for (const char* field : {"acc_tx_enabled", "tx1_enabled", "tx2_enabled", "tx3_enabled"}) {
+                if (kvs.contains(QLatin1String(field))) {
+                    m_tuneInhibitKnownOutputs[id].insert(QLatin1String(field));
+                }
+            }
             if (kvs.contains("acc_tx_enabled"))  b.accTx    = kvs["acc_tx_enabled"] == "1";
             if (kvs.contains("tx1_enabled"))     b.tx1      = kvs["tx1_enabled"] == "1";
             if (kvs.contains("tx2_enabled"))     b.tx2      = kvs["tx2_enabled"] == "1";
