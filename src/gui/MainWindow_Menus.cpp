@@ -86,6 +86,9 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QAction>
+#include <QList>
+#include <QVariant>
 #include <QWidgetAction>
 
 #include <algorithm>
@@ -838,6 +841,7 @@ void MainWindow::buildMenuBar()
     // Inhibit during TUNE submenu — user selects which TX outputs to suppress.
     // Uses QWidgetAction with QCheckBox so the menu stays open for multi-select.
     auto* tuneInhibitMenu = settingsMenu->addMenu("Inhibit during TUNE");
+    tuneInhibitMenu->setObjectName(QStringLiteral("tuneInhibitMenu"));
     // Kept as a member so applyCapabilitiesToUi can dim it (with TX Band
     // Settings) on backends with no Flex command plane — doctrine (#5263):
     // dim, never hide.
@@ -855,9 +859,12 @@ void MainWindow::buildMenuBar()
 
     QCheckBox* noneCb = nullptr;
     QVector<QCheckBox*> outputCbs;
+    QList<QAction*> legacyInhibitActions;
 
     for (const auto& def : inhibitDefs) {
         auto* cb = new QCheckBox(def.label);
+        cb->setObjectName(QLatin1String(def.key));
+        cb->setAccessibleName(tr("Inhibit %1 during TUNE").arg(QLatin1String(def.label)));
         AetherSDR::ThemeManager::instance().applyStyleSheet(cb, "QCheckBox { color: {{color.text.primary}}; padding: 4px 12px; }"
             "QCheckBox::indicator { width: 14px; height: 14px; }"
             "QCheckBox::indicator:unchecked { border: 1px solid {{color.background.3}}; background: {{color.background.1}}; border-radius: 2px; }"
@@ -868,6 +875,7 @@ void MainWindow::buildMenuBar()
         auto* wa = new QWidgetAction(tuneInhibitMenu);
         wa->setDefaultWidget(cb);
         tuneInhibitMenu->addAction(wa);
+        legacyInhibitActions.append(wa);
 
         if (QString(def.label) == "None")
             noneCb = cb;
@@ -934,21 +942,34 @@ void MainWindow::buildMenuBar()
         });
     }
 
-    const auto syncTuneOutputOwnership = [this, noneCb, outputCbs]() {
+    auto* configureRcaAction = new QAction(tr("Configure RCA suppression…"), tuneInhibitMenu);
+    configureRcaAction->setObjectName(QStringLiteral("configureTuneRcaSuppression"));
+    configureRcaAction->setMenuRole(QAction::NoRole);
+    configureRcaAction->setToolTip(tr("Open TX Band Settings to configure RCA suppression during TUNE for each band."));
+    configureRcaAction->setStatusTip(configureRcaAction->toolTip());
+    connect(configureRcaAction, &QAction::triggered, m_txBandAction, &QAction::trigger);
+
+    // Firmware replaces the legacy RCA choices with an editor shortcut.
+    // Keep the detached actions alive so saved older-firmware choices survive.
+    const auto syncTuneOutputOwnership = [this, tuneInhibitMenu, legacyInhibitActions, configureRcaAction]() {
         const bool firmwareOwnsRca = m_radioModel.backendCapabilities().tuneOutputSuppression.has_value();
-        const QString reason = firmwareOwnsRca
-            ? tr("The radio controls RCA TUNE suppression. Use Radio Setup → Transmit → "
-                 "TX Band Settings to configure each band. "
-                 "These preferences are retained for older firmware.")
-            : QString();
-        for (int i = 1; i < outputCbs.size(); ++i) {
-            outputCbs[i]->setEnabled(!firmwareOwnsRca);
-            outputCbs[i]->setToolTip(reason);
-            outputCbs[i]->setAccessibleDescription(reason);
+        const QVariant previous = tuneInhibitMenu->property("firmwareOwnsRca");
+        if (previous.isValid() && previous.toBool() == firmwareOwnsRca) {
+            return;
         }
-        noneCb->setEnabled(!firmwareOwnsRca);
-        noneCb->setToolTip(reason);
-        noneCb->setAccessibleDescription(reason);
+        tuneInhibitMenu->setProperty("firmwareOwnsRca", firmwareOwnsRca);
+        for (QAction* action : legacyInhibitActions) {
+            tuneInhibitMenu->removeAction(action);
+        }
+        tuneInhibitMenu->removeAction(configureRcaAction);
+        if (firmwareOwnsRca) {
+            tuneInhibitMenu->addAction(legacyInhibitActions.at(1)); // ACC TX
+            tuneInhibitMenu->addAction(configureRcaAction);
+        } else {
+            for (QAction* action : legacyInhibitActions) {
+                tuneInhibitMenu->addAction(action);
+            }
+        }
     };
     syncTuneOutputOwnership();
     connect(tuneInhibitMenu, &QMenu::aboutToShow, this, syncTuneOutputOwnership);

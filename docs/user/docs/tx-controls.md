@@ -61,10 +61,11 @@ the Tuner Genius XL.
   retains the last confirmed value and does not become a saved client preference.
 - On **SmartSDR 4.2 and older**, **Settings → Inhibit during TUNE ▸** retains
   its **ACC TX**, **TX1**, **TX2** and **TX3** selections. On 4.3 and later,
-  **ACC TX** remains a separate client setting; the RCA selections are dimmed
-  with a tooltip pointing to **TX Band Settings**. Their saved preferences remain
+  **ACC TX** remains a separate client setting, and **Configure RCA suppression…**
+  opens **TX Band Settings** directly. Their saved preferences remain
   available when using older firmware. AetherSDR does not copy them over the
-  radio's per-band suppression values.
+  radio's per-band suppression values. No automatic migration or upgrade notice
+  is shown; review each band's radio value in the table.
 
 ### ATU, MEM and pre-tuning
 

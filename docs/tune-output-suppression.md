@@ -58,7 +58,10 @@ checkbox is unavailable on unqualified firmware.
 
 The radio's per-band value is not stored in AppSettings and is not initialized
 from the legacy global RCA preferences. Those preferences are retained for older
-firmware and are dimmed while firmware owns RCA suppression. TX REQ safety
+firmware. While firmware owns RCA suppression, the submenu contains ACC TX
+and a Configure RCA suppression shortcut to TX Band Settings. The legacy RCA
+actions are detached without clearing their saved values; they return for older
+firmware. No automatic migration or upgrade notice is shown. TX REQ safety
 inputs, keying authorization and other amplifier-keying mechanisms are separate
 from this setting.
 

@@ -142,7 +142,7 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
         auto* suppression = new QCheckBox;
         suppression->setObjectName(QStringLiteral("tuneOutputSuppressionBand%1").arg(bandId));
         suppression->setAccessibleName(tr("Suppress RCA during TUNE, band %1").arg(b.bandName));
-        suppression->setStyleSheet(kCbStyle);
+        ThemeManager::instance().applyStyleSheet(suppression, kCbStyle);
         auto* suppressionCell = new QWidget;
         ThemeManager::instance().applyStyleSheet(suppressionCell,
             QStringLiteral("background: {{color.background.0}};"));
