@@ -2482,7 +2482,10 @@ RadioModel::RadioModel(QObject* parent)
     // drop the window so a quick operator MOX isn't taken for the tune.
     connect(&m_tunerModel, &TunerModel::tuningChanged, this, [this](bool tuning) {
         m_tgxlTune.onTuningChanged(tuning, m_transmitModel.isTransmitting());
-        updateOperatorTransmit();
+        // Unkeyed, this only runs the "forget the remembered PTT source" reset,
+        // which would wipe an Atu/Tune tag set before the radio keys.
+        if (m_transmitModel.isTransmitting())
+            updateOperatorTransmit();
     });
 
     m_tgxlConfirmTimer.setSingleShot(true);
