@@ -41,7 +41,7 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
     const QStringList headers = {"Band", "RF PWR(%)", "Tune PWR(%)", "PTT Inhibit",
                                   "ACC TX", "RCA TX Req", "ACC TX Req",
                                   "RCA TX1", "RCA TX2", "RCA TX3", "HWALC",
-                                  "Suppress RCA\nduring TUNE"};
+                                  "RCA off/TUNE"};
     for (int c = 0; c < headers.size(); ++c) {
         auto* lbl = new QLabel(headers[c]);
         lbl->setStyleSheet(QStringLiteral(
@@ -49,6 +49,7 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
             "font-weight: bold; background: #1a2a3a; "
             "padding: 2px 4px; }"));
         lbl->setAlignment(Qt::AlignCenter);
+        lbl->setMinimumSize(lbl->sizeHint());
         headerGrid->addWidget(lbl, 0, c);
     }
 
@@ -183,11 +184,12 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
     }
 
     vb->addWidget(gridContainer);
-    auto* explanation = new QLabel(tr("Suppress RCA during TUNE: radio-owned per-band setting for TX1/TX2/TX3 "
+    auto* explanation = new QLabel(tr("RCA off/TUNE: suppress TX1/TX2/TX3 keying outputs during TUNE "
                                      "on SmartSDR 4.3 or later. ACC TX remains under Inhibit during TUNE."));
     explanation->setWordWrap(true);
     vb->addWidget(explanation);
     vb->addStretch();
+    setMinimumSize(minimumSize().expandedTo(minimumSizeHint()));
 }
 
 } // namespace AetherSDR

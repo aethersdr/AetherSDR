@@ -92,6 +92,9 @@ void supportedDialog()
 {
     Fixture f(QStringLiteral("4.3.16.42034"));
     TxBandDialog dialog(&f.radio);
+    dialog.resize(700, 450);
+    dialog.show();
+    QApplication::processEvents();
     QCheckBox* forty = bandBox(dialog, 5);
     QCheckBox* twenty = bandBox(dialog, 9);
     check(forty && twenty && forty->isEnabled() && twenty->isEnabled()
@@ -100,8 +103,13 @@ void supportedDialog()
     check(f.commands.isEmpty(), "constructing the table sends no commands");
     int newHeaders = 0;
     for (QLabel* label : dialog.findChildren<QLabel*>()) {
-        if (label->text() == QStringLiteral("Suppress RCA\nduring TUNE")) {
+        if (label->text() == QStringLiteral("RCA off/TUNE")) {
             ++newHeaders;
+            const QRect headerBounds(label->mapTo(&dialog, QPoint()), label->size());
+            check(dialog.rect().contains(headerBounds)
+                      && label->width() >= label->sizeHint().width()
+                      && label->height() >= label->sizeHint().height(),
+                  "restoring a small window cannot clip the header text");
         }
     }
     check(newHeaders == 1, "one added column has the approved concise label");

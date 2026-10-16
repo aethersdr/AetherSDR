@@ -68,8 +68,8 @@ their nicknames on this computer.
 ### RECEIVE & TRANSMIT
 
 Open **TX Band Settings** on the **Transmit** page to configure each band's
-TX outputs. On a FlexRadio with SmartSDR 4.3 or later, the **Suppress RCA during
-TUNE** column controls all three RCA keying outputs (TX1/TX2/TX3) for the
+TX outputs. On a FlexRadio with SmartSDR 4.3 or later, the **RCA off/TUNE**
+column controls all three RCA keying outputs (TX1/TX2/TX3) for the
 named band. The existing columns remain usable on newer firmware: **RCA TX1**,
 **RCA TX2** and **RCA TX3** still set which outputs are enabled for that band.
 Each new checkbox follows that band's value on the radio; it does not

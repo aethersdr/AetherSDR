@@ -49,7 +49,7 @@ the Tuner Genius XL.
   key, keyboard CW or CWX text does not transmit, and TUNE will not start while
   a key is down or CWX is sending.
 - On a **FlexRadio running SmartSDR 4.3 or later**, open **Radio Setup →
-  Transmit → TX Band Settings** and use the **Suppress RCA during TUNE**
+  Transmit → TX Band Settings** and use the **RCA off/TUNE**
   column. Each checkbox edits its named band's value on the radio, independently
   of the active slice or panadapter. Editing it never starts TUNE.
   When checked, firmware suppresses all three RCA keying outputs (TX1/TX2/TX3)
@@ -62,8 +62,10 @@ the Tuner Genius XL.
 - On **SmartSDR 4.2 and older**, **Settings → Inhibit during TUNE ▸** retains
   its **ACC TX**, **TX1**, **TX2** and **TX3** selections. On 4.3 and later,
   **ACC TX** remains a separate client setting, and **Configure RCA suppression…**
-  opens **TX Band Settings** directly. Their saved preferences remain
-  available when using older firmware. AetherSDR does not copy them over the
+  opens **TX Band Settings** directly. **ACC TX** inhibits the separate accessory
+  connector's keying output during TUNE; the firmware RCA suppression setting
+  does not cover it. Saved legacy RCA preferences remain available when using
+  older firmware. AetherSDR does not copy them over the
   radio's per-band suppression values. No automatic migration or upgrade notice
   is shown; review each band's radio value in the table.
 
