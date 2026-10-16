@@ -942,6 +942,21 @@ void MainWindow::buildMenuBar()
         });
     }
 
+    // A native checkable action avoids embedding/reparenting a QWidget when
+    // macOS first materializes this submenu. The legacy multi-select stays intact.
+    auto* accInhibitAction = new QAction(tr("ACC TX"), tuneInhibitMenu);
+    accInhibitAction->setObjectName(QStringLiteral("tuneInhibitAccTxAction"));
+    accInhibitAction->setMenuRole(QAction::NoRole);
+    accInhibitAction->setCheckable(true);
+    accInhibitAction->setChecked(outputCbs.at(0)->isChecked());
+    accInhibitAction->setToolTip(tr("Suppress the accessory connector's PTT output during TUNE."));
+    accInhibitAction->setStatusTip(accInhibitAction->toolTip());
+    connect(accInhibitAction, &QAction::toggled, outputCbs.at(0), &QCheckBox::setChecked);
+    connect(outputCbs.at(0), &QCheckBox::toggled, accInhibitAction, [accInhibitAction](bool checked) {
+        const QSignalBlocker blocker(accInhibitAction);
+        accInhibitAction->setChecked(checked);
+    });
+
     auto* configureRcaAction = new QAction(tr("Configure RCA suppression…"), tuneInhibitMenu);
     configureRcaAction->setObjectName(QStringLiteral("configureTuneRcaSuppression"));
     configureRcaAction->setMenuRole(QAction::NoRole);
@@ -951,7 +966,7 @@ void MainWindow::buildMenuBar()
 
     // Firmware replaces the legacy RCA choices with an editor shortcut.
     // Keep the detached actions alive so saved older-firmware choices survive.
-    const auto syncTuneOutputOwnership = [this, tuneInhibitMenu, legacyInhibitActions, configureRcaAction]() {
+    const auto syncTuneOutputOwnership = [this, tuneInhibitMenu, legacyInhibitActions, accInhibitAction, configureRcaAction, outputCbs]() {
         const bool firmwareOwnsRca = m_radioModel.backendCapabilities().tuneOutputSuppression.has_value();
         const QVariant previous = tuneInhibitMenu->property("firmwareOwnsRca");
         if (previous.isValid() && previous.toBool() == firmwareOwnsRca) {
@@ -961,9 +976,14 @@ void MainWindow::buildMenuBar()
         for (QAction* action : legacyInhibitActions) {
             tuneInhibitMenu->removeAction(action);
         }
+        tuneInhibitMenu->removeAction(accInhibitAction);
         tuneInhibitMenu->removeAction(configureRcaAction);
         if (firmwareOwnsRca) {
-            tuneInhibitMenu->addAction(legacyInhibitActions.at(1)); // ACC TX
+            {
+                const QSignalBlocker blocker(accInhibitAction);
+                accInhibitAction->setChecked(outputCbs.at(0)->isChecked());
+            }
+            tuneInhibitMenu->addAction(accInhibitAction);
             tuneInhibitMenu->addAction(configureRcaAction);
         } else {
             for (QAction* action : legacyInhibitActions) {

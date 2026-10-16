@@ -61,7 +61,8 @@ the Tuner Genius XL.
   retains the last confirmed value and does not become a saved client preference.
 - On **SmartSDR 4.2 and older**, **Settings → Inhibit during TUNE ▸** retains
   its **ACC TX**, **TX1**, **TX2** and **TX3** selections. On 4.3 and later,
-  **ACC TX** remains a separate client setting, and **Configure RCA suppression…**
+  **ACC TX** remains a separate client setting, shown as a checkable menu item,
+  and **Configure RCA suppression…**
   opens **TX Band Settings** directly. **ACC TX** inhibits the separate accessory
   connector's keying output during TUNE; the firmware RCA suppression setting
   does not cover it. Saved legacy RCA preferences remain available when using
