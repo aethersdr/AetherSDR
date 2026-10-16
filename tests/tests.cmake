@@ -7696,6 +7696,12 @@ target_link_libraries(tx_grant_manager_test PRIVATE Qt6::Core)
 add_test(NAME tx_grant_manager_test COMMAND tx_grant_manager_test)
 
 # Socket-free: production models with injected backend command recorders.
+# Socket-free production TUNE output ownership regression.
+add_executable(tune_inhibit_restore_test tests/tune_inhibit_restore_test.cpp)
+target_include_directories(tune_inhibit_restore_test PRIVATE src tests)
+target_link_libraries(tune_inhibit_restore_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tune_inhibit_restore_test COMMAND tune_inhibit_restore_test)
+
 add_executable(tx_operation_integration_test tests/tx_operation_integration_test.cpp)
 target_include_directories(tx_operation_integration_test PRIVATE src tests)
 target_link_libraries(tx_operation_integration_test PRIVATE aethercore Qt6::Core)
@@ -9399,6 +9405,7 @@ set(AETHER_SETTINGS_CONSUMERS
     dax_iq_rate_limits_test
     offline_health_registry_test
     tx_operation_integration_test
+    tune_inhibit_restore_test
     tx_audio_context_test
     backend_slice_lifecycle_test
     waterfall_time_marker_settings_test

@@ -2171,16 +2171,27 @@ private:
     QMap<int, TxBandInfo> m_txBandSettings;
     QHash<QString, QString> m_panTransmitInhibitReasons;
     QHash<QString, int> m_panTransmitInhibitedTxSlices;
-    int  m_tuneInhibitBandId{-1};  // band ID whose TX outputs were inhibited during tune
-    bool m_tuneInhibitActive{false};
+    struct TuneInhibitState {
+        int bandId{-1};
+        quint64 session{0};
+        quint64 backend{0};
+        QStringList pending;
+        QStringList outputs;
+        bool restoring{false};
+    };
+    std::optional<TuneInhibitState> m_tuneInhibit;
+    quint64 m_tuneInhibitEpoch{0};
+    QMap<int, QSet<QString>> m_tuneInhibitKnownOutputs;
     // #5572 firmware-upload retry barrier. Set when an upload is dispatched to
     // the radio; cleared only when a NEW connection is established, so it
     // survives the Radio Setup dialog (and its uploader) being closed.
     bool m_firmwareRetryBlocked{false};
 
     int bandIdForFrequency(double freqMhz) const;  // map TX freq → band ID
-    void applyTuneInhibit();    // suppress selected TX outputs before tune
-    void restoreTuneInhibit();  // re-enable TX outputs after tune
+    bool applyTuneInhibit();    // suppress selected TX outputs before tune
+    void restoreTuneInhibit();  // restore only this cycle's temporary writes
+    void discardTuneInhibit();
+    void relinquishTuneInhibit(const QString& command);
     QString transmitInhibitMessageForSlice(const SliceModel* slice) const;
     QString transmitInhibitMessageForTxSlice() const;
     void enforceTransmitInhibitForPan(const QString& panId);
