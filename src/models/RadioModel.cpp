@@ -1279,10 +1279,8 @@ void RadioModel::setupBackend(const QString& family)
     connect(m_backend.get(), &IRadioBackend::radioChanged, this,
             [this](const RadioDelta& delta) { applyRadioChanges(delta); });
 
-    // aetherd RFC 2.3 (RadioModel residual): GPS / memory-slot / profile status
+    // aetherd RFC 2.3 (RadioModel residual): memory-slot / profile status
     // decoded in the backend drive RadioModel's own state via the apply* methods.
-    connect(m_backend.get(), &IRadioBackend::gpsChanged, this,
-            [this](const GpsDelta& delta) { applyGpsChanges(delta); });
     connect(m_backend.get(), &IRadioBackend::memoryChanged, this,
             [this](const MemoryDelta& delta) { applyMemoryChanges(delta); });
     connect(m_backend.get(), &IRadioBackend::memoryRefreshStarted, this,
@@ -1374,11 +1372,6 @@ void RadioModel::setupBackend(const QString& family)
             [this, generation](const QString& object, const QMap<QString, QString>& kvs) {
         if (generation != m_backendReceiverGeneration) return;
         onStatusReceived(object, kvs);
-    });
-    connect(m_connection, &RadioConnection::messageReceived, this,
-            [this, generation](const ParsedMessage& msg) {
-        if (generation != m_backendReceiverGeneration) return;
-        onMessageReceived(msg);
     });
     connect(m_connection, &RadioConnection::connected, this,
             [this, generation] {
@@ -1506,6 +1499,7 @@ void RadioModel::wireBackendReceiverState()
         return;
     }
     const quint64 generation = m_backendReceiverGeneration;
+    wireGpsSessionReceivers();
     // aetherd RFC 2.3: the first converted touchpoint. The backend decodes the
     // universal pan center/bandwidth from Flex status and emits this normalized
     // signal; RadioModel drives the addressed PanadapterModel. (Template for the
@@ -2403,6 +2397,7 @@ RadioModel::RadioModel(QObject* parent)
             // so the flag has to be set here as well or an armed reconnect
             // reads as "nothing is happening".
             m_connectAttemptActive = true;
+            resetGpsState();
             // Restore the limits this radio declared: onDisconnected() cleared them, and this
             // path reconnects to m_lastInfo.address, the same radio. Not in onConnected():
             // connectViaWan() never sets m_lastInfo, so re-seeding there would hand a WAN
@@ -3440,6 +3435,7 @@ void RadioModel::emitInterlockNotification(const QString& message,
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
     cancelRadioWake();
+    m_wanConn = nullptr;  // LAN mode
     // aetherd Gap B: the backend follows the radio the operator selected. A Flex
     // and a Hermes-Lite 2 need different backends, and the picker is where that
     // choice is actually made — so swap the backend here rather than pinning the
@@ -3460,6 +3456,8 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         if (!m_backend) {
             return;
         }
+    } else {
+        resetGpsState();
     }
 
     // The session taking the wire reclaims the offline health instrument: a
@@ -3500,7 +3498,6 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // only backendChanged, never backendRebuilt, leaving the rebuilt
     // PanadapterStream with no sinks bound after a demo↔real swap. One selector.
 
-    m_wanConn = nullptr;  // LAN mode
     m_lastInfo = info;
     m_intentionalDisconnect = false;
     m_forcedDisconnectInProgress = false;
@@ -3584,6 +3581,7 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
         m_wanConn->disconnect(this);
 
     m_wanConn = wan;
+    resetGpsState();
     m_wanPublicIp = publicIp;
     m_wanUdpPort = udpPort;
     m_intentionalDisconnect = false;
@@ -3601,7 +3599,6 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
     connect(wan, &WanConnection::certFingerprintMismatch,
             this, &RadioModel::certFingerprintMismatch);
     connect(wan, &WanConnection::versionReceived, this, &RadioModel::onVersionReceived);
-    connect(wan, &WanConnection::messageReceived, this, &RadioModel::onMessageReceived);
     connect(wan, &WanConnection::statusReceived, this, &RadioModel::onStatusReceived);
     connect(wan, &WanConnection::pingRttMeasured, this, [this](int ms) {
         m_pingMissCount = 0;
@@ -6804,6 +6801,9 @@ void RadioModel::setSleepInhibitWhileConnected(bool on)
 
 void RadioModel::onConnected()
 {
+    // A late disconnect can retire the subscriptions armed by the connect
+    // attempt. Rebind without clearing GPS received during the handshake.
+    wireGpsSessionReceivers();
     m_cwInputSession.fetch_add(1, std::memory_order_release);
     m_cwInputNotBefore = std::chrono::steady_clock::now();
     m_txSessionClosing = false;
@@ -7999,30 +7999,8 @@ void RadioModel::onDisconnected()
     m_extPresent = false;
     m_gpsdoPresent = false;
     m_tcxoPresent = false;
-    m_gpsStatus.clear();
-    m_gpsPositionValid = false;
-    m_gpsSource.clear();
-    m_gpsTracked = 0;
-    m_gpsVisible = 0;
-    m_gpsGrid.clear();
-    m_gpsAltitude.clear();
-    m_gpsLat.clear();
-    m_gpsLon.clear();
-    m_gpsTime.clear();
-    m_gpsDate.clear();
-    m_gpsSpeed.clear();
-    m_gpsTrack.clear();
-    m_gpsFreqError.clear();
-    m_gpsNtpEnabled = false;
-    m_gpsNtpServer.clear();
-    m_gpsTimeCorrectionEnabled = false;
-    m_gpsNtpSyncStatus.clear();
-    m_automationGpsNtpServerAddress.clear();
     emit oscillatorChanged();
-    emit gpsStatusChanged(m_gpsStatus, m_gpsTracked, m_gpsVisible,
-                          m_gpsGrid, m_gpsAltitude, m_gpsLat, m_gpsLon,
-                          m_gpsTime);
-    emit gpsTimeSettingsChanged();
+    resetGpsState(false);
     // Cleared beside m_version rather than relying on the next connect to
     // reassign it: this block's contract is that everything here is re-derived
     // from the new radio's status, and a path that reaches a Flex without
@@ -9228,7 +9206,7 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
 
 // ─── Raw message handler (for meter status with '#' separators) ──────────────
 
-void RadioModel::onMessageReceived(const ParsedMessage& msg)
+void RadioModel::handleMessageReceived(const ParsedMessage& msg, quint64 gpsSessionGeneration)
 {
     if (msg.type == MessageType::Handle) {
         // The radio can send routine "Client connected from IP ..." M-messages
@@ -9303,6 +9281,9 @@ void RadioModel::onMessageReceived(const ParsedMessage& msg)
 
     // GPS status: "gps lat=...#lon=...#grid=...#tracked=...#visible=...#status=..."
     if (body.startsWith("gps ")) {
+        if (gpsSessionGeneration != m_gpsSessionGeneration) {
+            return;
+        }
         handleGpsStatus(body.mid(4));  // skip "gps "
         return;
     }
@@ -9318,7 +9299,7 @@ void RadioModel::onMessageReceived(const ParsedMessage& msg)
 //   "radio"           → global radio properties
 //   "slice 0"         → slice receiver
 //   "panadapter 0"    → panadapter (spectrum)
-//   "meter 1"         → meter reading (handled by onMessageReceived)
+//   "meter 1"         → meter reading (handled by handleMessageReceived)
 //   "removed=True"    → object was removed
 
 bool RadioModel::backendCanTransmit() const
@@ -10089,6 +10070,7 @@ void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
     // QObject::disconnect at teardown, all checks having passed).
     dropAllSessionModelsForFamilySwitch();
     teardownBackend();
+    resetGpsState();
     m_backend = std::move(backend);
     m_panStream = panStream;
     m_family = family;
@@ -10111,6 +10093,7 @@ void RadioModel::rebuildBackendForFamily(const QString& family)
     // new family with mismatched (or missing) command/TX/DV wiring.
     dropAllSessionModelsForFamilySwitch();
     teardownBackend();
+    resetGpsState();
     setupBackend(family);
     emit backendRebuilt();
 }
@@ -11060,7 +11043,7 @@ void RadioModel::onStatusReceived(const QString& object,
         }
     }
 
-    // Meter status uses '#'-separated tokens and is handled by onMessageReceived().
+    // Meter status uses '#'-separated tokens and is handled by handleMessageReceived().
 
     // "display pan 0x40000000 center=14.1 bandwidth=0.2 ..."
     // Only process status for OUR panadapter (matching client_handle or first unclaimed).
@@ -12203,11 +12186,94 @@ void RadioModel::handleGpsStatus(const QString& rawBody)
     if (m_flexBackend) m_flexBackend->decodeGpsStatus(rawBody);
 }
 
+void RadioModel::wireGpsSessionReceivers(bool receiveMessages)
+{
+    QObject::disconnect(m_gpsBackendConnection);
+    QObject::disconnect(m_gpsLanMessageConnection);
+    QObject::disconnect(m_gpsWanMessageConnection);
+    const quint64 backendGeneration = m_backendReceiverGeneration;
+    const quint64 gpsGeneration = m_gpsSessionGeneration;
+    if (m_backend) {
+        m_gpsBackendConnection = connect(m_backend.get(), &IRadioBackend::gpsChanged,
+                this, [this, backendGeneration, gpsGeneration](const GpsDelta& delta) {
+            if (backendGeneration == m_backendReceiverGeneration
+                && gpsGeneration == m_gpsSessionGeneration) {
+                applyGpsChanges(delta);
+            }
+        });
+    }
+    if (!receiveMessages) {
+        return;
+    }
+    // Disconnecting a Qt connection leaves its posted calls queued. Capture the
+    // GPS session at subscription time so only GPS dispatch rejects those calls;
+    // the existing meter/profile raw-message behavior is preserved.
+    if (m_wanConn) {
+        m_gpsWanMessageConnection = connect(m_wanConn, &WanConnection::messageReceived,
+                this, [this, backendGeneration, gpsGeneration](const ParsedMessage& msg) {
+            if (backendGeneration == m_backendReceiverGeneration) {
+                handleMessageReceived(msg, gpsGeneration);
+            }
+        });
+    } else if (m_connection) {
+        m_gpsLanMessageConnection = connect(m_connection, &RadioConnection::messageReceived,
+                this, [this, backendGeneration, gpsGeneration](const ParsedMessage& msg) {
+            if (backendGeneration == m_backendReceiverGeneration) {
+                handleMessageReceived(msg, gpsGeneration);
+            }
+        });
+    }
+}
+
+void RadioModel::resetGpsState(bool receiveMessages)
+{
+    ++m_gpsSessionGeneration;
+    wireGpsSessionReceivers(receiveMessages);
+    const bool telemetryChanged = !m_gpsStatus.isEmpty() || m_gpsPositionValid
+        || m_gpsFixState != GpsFixState::Unknown || !m_gpsSource.isEmpty()
+        || m_gpsTracked != 0 || m_gpsVisible != 0 || !m_gpsGrid.isEmpty()
+        || !m_gpsAltitude.isEmpty() || !m_gpsLat.isEmpty() || !m_gpsLon.isEmpty()
+        || !m_gpsTime.isEmpty() || !m_gpsDate.isEmpty() || !m_gpsSpeed.isEmpty()
+        || !m_gpsTrack.isEmpty() || !m_gpsFreqError.isEmpty()
+        || !m_automationGpsNtpServerAddress.isEmpty();
+    const bool timeSettingsChanged = m_gpsNtpEnabled || !m_gpsNtpServer.isEmpty()
+        || m_gpsTimeCorrectionEnabled || !m_gpsNtpSyncStatus.isEmpty();
+    m_gpsStatus.clear();
+    m_gpsPositionValid = false;
+    m_gpsFixState = GpsFixState::Unknown;
+    m_gpsSource.clear();
+    m_gpsTracked = 0;
+    m_gpsVisible = 0;
+    m_gpsGrid.clear();
+    m_gpsAltitude.clear();
+    m_gpsLat.clear();
+    m_gpsLon.clear();
+    m_gpsTime.clear();
+    m_gpsDate.clear();
+    m_gpsSpeed.clear();
+    m_gpsTrack.clear();
+    m_gpsFreqError.clear();
+    m_gpsNtpEnabled = false;
+    m_gpsNtpServer.clear();
+    m_gpsTimeCorrectionEnabled = false;
+    m_gpsNtpSyncStatus.clear();
+    m_automationGpsNtpServerAddress.clear();
+    if (telemetryChanged) {
+        emit gpsStatusChanged(m_gpsStatus, m_gpsTracked, m_gpsVisible,
+                              m_gpsGrid, m_gpsAltitude, m_gpsLat, m_gpsLon,
+                              m_gpsTime);
+    }
+    if (timeSettingsChanged) {
+        emit gpsTimeSettingsChanged();
+    }
+}
+
 void RadioModel::applyGpsChanges(const GpsDelta& d)
 {
     // Apply the present fields (absent keys keep their prior value) and always
     // re-emit — the old handler emitted unconditionally on every GPS status.
     if (d.status)    m_gpsStatus    = *d.status;
+    if (d.fixState)  m_gpsFixState  = *d.fixState;
     if (d.positionValid) m_gpsPositionValid = *d.positionValid;
     if (d.source)    m_gpsSource    = *d.source;
     if (d.tracked)   m_gpsTracked   = *d.tracked;
@@ -12233,7 +12299,7 @@ void RadioModel::applyGpsChanges(const GpsDelta& d)
     // A clock-settings read-back carries no telemetry; emitting the report
     // signal for it would restart the dashboard's report-age clock and
     // re-run every GPS consumer for a hostname that did not move.
-    const bool telemetryChanged = d.status || d.positionValid || d.source
+    const bool telemetryChanged = d.status || d.fixState || d.positionValid || d.source
         || d.tracked || d.visible || d.grid || d.altitude || d.lat || d.lon
         || d.time || d.date || d.speed || d.track || d.freqError;
     if (telemetryChanged || !timeSettingsChanged) {
@@ -12496,7 +12562,7 @@ void RadioModel::handleProfileStatus(const QString& object,
                                       const QMap<QString, QString>& kvs)
 {
     // Profile list/current with space-containing names are handled by
-    // handleProfileStatusRaw() via onMessageReceived().  This fallback
+    // handleProfileStatusRaw() via handleMessageReceived().  This fallback
     // handles any remaining profile status keys that don't have spaces
     // (e.g. "profile importing=1", "profile exporting=0").
     // aetherd RFC 2.3 (RadioModel residual): the space-free profile-flag decode
