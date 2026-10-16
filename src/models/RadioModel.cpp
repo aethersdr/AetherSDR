@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "core/backends/TuneOutputPolicy.h"
 #include <QScopedValueRollback>
 #include "TxController.h"
 #include "models/AprsDigipeaterModel.h"
@@ -872,7 +873,26 @@ void RadioModel::setupBackend(const QString& family)
             m_backend->setOfflineHealthSource(offline);
 
         if (auto* flex = dynamic_cast<FlexBackend*>(m_backend.get())) {
-            flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
+            flex->setReplyCommandSink([this, generation](const QString& command, FlexBackend::CommandReply reply) {
+                if (generation != m_backendReceiverGeneration || (reply && !isConnected())) {
+                    if (reply) {
+                        reply(-1, QStringLiteral("Radio disconnected before the setting was sent."));
+                    }
+                    return;
+                }
+                const quint64 session = m_sessionGeneration;
+                const quint64 tuneGeneration = m_tuneOutputGeneration;
+                ResponseCallback callback;
+                if (reply) {
+                    callback = [this, generation, session, tuneGeneration, reply = std::move(reply)](int code, const QString& body) {
+                        if (generation == m_backendReceiverGeneration && session == m_sessionGeneration
+                            && tuneGeneration == m_tuneOutputGeneration) {
+                            reply(code, body);
+                        }
+                    };
+                }
+                sendCmdPublic(command, std::move(callback));
+            });
             flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
                 sendTxKeyingCommand(cmd, fence);
             });
@@ -1502,6 +1522,7 @@ void RadioModel::applyBackendLinkStats(const IRadioBackend::LinkStats& stats)
 
 void RadioModel::wireBackendReceiverState()
 {
+    wireTuneOutputControl();
     if (!m_backend) {
         return;
     }
@@ -1685,6 +1706,7 @@ void RadioModel::wireBackendReceiverState()
 
 void RadioModel::teardownBackend()
 {
+    resetTuneOutputControl();
     m_transmitModel.invalidateControlIntents();
     for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
@@ -1913,6 +1935,9 @@ RadioModel::RadioModel(QObject* parent)
     // if a backend is ever moved to a worker thread the connection becomes queued;
     // without registration Qt would log "Cannot queue arguments of type …" and
     // silently drop the emit. Idempotent + cheap. (#4071 review.)
+    connect(this, &RadioModel::infoChanged, this, &RadioModel::tuneOutputControlChanged);
+    connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::tuneOutputControlChanged);
+    connect(this, &RadioModel::connectionStateChanged, this, &RadioModel::tuneOutputControlChanged);
     connect(this, &RadioModel::sliceAdded, this, [this](SliceModel* slice) {
         connect(slice, &SliceModel::modeChanged, this, &RadioModel::updateTuneAvailability);
         connect(slice, &SliceModel::txSliceChanged, this, &RadioModel::updateTuneAvailability);
@@ -3439,6 +3464,7 @@ void RadioModel::emitInterlockNotification(const QString& message,
 
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
+    resetTuneOutputControl();
     cancelRadioWake();
     // aetherd Gap B: the backend follows the radio the operator selected. A Flex
     // and a Hermes-Lite 2 need different backends, and the picker is where that
@@ -7776,6 +7802,125 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
     }); // client gui
 }
 
+TuneOutputControlState RadioModel::tuneOutputControl(int bandId) const
+{
+    TuneOutputControlState state;
+    state.supported = backendCapabilities().tuneOutputSuppression.has_value();
+    const auto band = m_txBandSettings.constFind(bandId);
+    const bool knownBand = TuneOutputPolicy::validBandId(bandId)
+        && band != m_txBandSettings.cend() && !band->bandName.isEmpty();
+    const auto confirmed = m_tuneOutputBands.constFind(bandId);
+    if (knownBand && confirmed != m_tuneOutputBands.cend()) {
+        state.haveValue = isConnected() && confirmed->confirmed.has_value();
+        state.suppressed = confirmed->confirmed.value_or(false);
+        state.pending = confirmed->requestId != 0;
+        state.reason = confirmed->reason;
+    }
+    if (!state.supported) {
+        state.reason = tr("This radio requires SmartSDR 4.3 or later for TUNE RCA output suppression.");
+    } else if (!isConnected()) {
+        state.reason = tr("Connect to a radio to change TUNE RCA output suppression.");
+    } else if (!knownBand) {
+        state.reason = tr("The radio has not reported this band row.");
+    } else if (state.pending) {
+        state.reason = tr("Waiting for the radio to confirm TUNE RCA output suppression.");
+    } else if (!state.haveValue && state.reason.isEmpty()) {
+        state.reason = tr("The radio has not reported TUNE RCA output suppression for this band.");
+    }
+    return state;
+}
+
+void RadioModel::resetTuneOutputControl()
+{
+    ++m_tuneOutputGeneration;
+    m_tuneOutputBands.clear();
+    emit tuneOutputControlChanged();
+}
+
+void RadioModel::wireTuneOutputControl()
+{
+    if (!m_backend) {
+        return;
+    }
+    const quint64 generation = m_backendReceiverGeneration;
+    connect(m_backend.get(), &IRadioBackend::tuneOutputSuppressionObserved, this,
+        [this, generation](int bandId, bool suppressed) {
+            if (generation != m_backendReceiverGeneration || !isConnected()
+                || !backendCapabilities().tuneOutputSuppression
+                || !TuneOutputPolicy::validBandId(bandId)) {
+                return;
+            }
+            TuneOutputState& state = m_tuneOutputBands[bandId];
+            state.confirmed = suppressed;
+            if (state.requestId == 0 || state.requested == suppressed) {
+                state.requestId = 0;
+                state.reason.clear();
+            }
+            emit tuneOutputControlChanged();
+        });
+    connect(m_backend.get(), &IRadioBackend::tuneOutputSuppressionCommandFinished, this,
+        [this, generation](quint64 requestId, bool accepted, const QString& reason) {
+            if (generation != m_backendReceiverGeneration || accepted) {
+                return;
+            }
+            for (TuneOutputState& state : m_tuneOutputBands) {
+                if (state.requestId == requestId && requestId != 0) {
+                    state.requestId = 0;
+                    state.reason = reason;
+                    emit tuneOutputControlChanged();
+                    return;
+                }
+            }
+        });
+}
+
+void RadioModel::expireTuneOutputRequest(int bandId, quint64 requestId, quint64 generation)
+{
+    auto state = m_tuneOutputBands.find(bandId);
+    if (generation == m_tuneOutputGeneration && state != m_tuneOutputBands.end()
+        && state->requestId == requestId && requestId != 0) {
+        state->requestId = 0;
+        state->reason = tr("The radio did not confirm TUNE RCA output suppression. Try again.");
+        emit tuneOutputControlChanged();
+    }
+}
+
+void RadioModel::requestTuneOutputSuppression(int bandId, bool suppressed)
+{
+    if (QThread::currentThread() != thread()) {
+        return;
+    }
+    const TuneOutputControlState current = tuneOutputControl(bandId);
+    if (!current.supported || !current.haveValue || current.pending || !isConnected() || !m_backend) {
+        return;
+    }
+    if (current.suppressed == suppressed && current.reason.isEmpty()) {
+        return;
+    }
+    const quint64 requestId = ++m_tuneOutputRequestId;
+    const quint64 generation = m_tuneOutputGeneration;
+    TuneOutputState& state = m_tuneOutputBands[bandId];
+    state.requestId = requestId;
+    state.requested = suppressed;
+    state.reason.clear();
+    const QPointer<IRadioBackend> backend(m_backend.get());
+    emit tuneOutputControlChanged();
+    if (generation != m_tuneOutputGeneration || !backend || backend != m_backend.get()
+        || m_tuneOutputBands.value(bandId).requestId != requestId) {
+        return;
+    }
+    if (!isConnected()) {
+        m_tuneOutputBands[bandId].requestId = 0;
+        m_tuneOutputBands[bandId].reason = tr("The radio disconnected before the setting was sent. Try again.");
+        emit tuneOutputControlChanged();
+        return;
+    }
+    QTimer::singleShot(3000, this, [this, bandId, requestId, generation] {
+        expireTuneOutputRequest(bandId, requestId, generation);
+    });
+    backend->requestTuneOutputSuppression(bandId, suppressed, requestId);
+}
+
 int RadioModel::bandIdForFrequency(double freqMhz) const
 {
     // Standard amateur HF band ranges → band names matching radio's band_name field
@@ -7829,15 +7974,15 @@ void RadioModel::applyTuneInhibit()
         sendCmd(QString("interlock bandset %1 acc_tx_enabled=0").arg(bandId));
         inhibited << "ACC TX";
     }
-    if (s.value("TuneInhibitTx1", "False").toString() == "True" && it->tx1) {
+    if (!backendCapabilities().tuneOutputSuppression && s.value("TuneInhibitTx1", "False").toString() == "True" && it->tx1) {
         sendCmd(QString("interlock bandset %1 tx1_enabled=0").arg(bandId));
         inhibited << "TX1";
     }
-    if (s.value("TuneInhibitTx2", "False").toString() == "True" && it->tx2) {
+    if (!backendCapabilities().tuneOutputSuppression && s.value("TuneInhibitTx2", "False").toString() == "True" && it->tx2) {
         sendCmd(QString("interlock bandset %1 tx2_enabled=0").arg(bandId));
         inhibited << "TX2";
     }
-    if (s.value("TuneInhibitTx3", "False").toString() == "True" && it->tx3) {
+    if (!backendCapabilities().tuneOutputSuppression && s.value("TuneInhibitTx3", "False").toString() == "True" && it->tx3) {
         sendCmd(QString("interlock bandset %1 tx3_enabled=0").arg(bandId));
         inhibited << "TX3";
     }
@@ -7858,15 +8003,15 @@ void RadioModel::restoreTuneInhibit()
         sendCmd(QString("interlock bandset %1 acc_tx_enabled=1").arg(id));
         restored << "ACC TX";
     }
-    if (s.value("TuneInhibitTx1", "False").toString() == "True") {
+    if (!backendCapabilities().tuneOutputSuppression && s.value("TuneInhibitTx1", "False").toString() == "True") {
         sendCmd(QString("interlock bandset %1 tx1_enabled=1").arg(id));
         restored << "TX1";
     }
-    if (s.value("TuneInhibitTx2", "False").toString() == "True") {
+    if (!backendCapabilities().tuneOutputSuppression && s.value("TuneInhibitTx2", "False").toString() == "True") {
         sendCmd(QString("interlock bandset %1 tx2_enabled=1").arg(id));
         restored << "TX2";
     }
-    if (s.value("TuneInhibitTx3", "False").toString() == "True") {
+    if (!backendCapabilities().tuneOutputSuppression && s.value("TuneInhibitTx3", "False").toString() == "True") {
         sendCmd(QString("interlock bandset %1 tx3_enabled=1").arg(id));
         restored << "TX3";
     }
@@ -7877,6 +8022,7 @@ void RadioModel::restoreTuneInhibit()
 
 void RadioModel::onDisconnected()
 {
+    resetTuneOutputControl();
     m_transmitModel.invalidateControlIntents();
     for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
@@ -11478,6 +11624,10 @@ void RadioModel::onStatusReceived(const QString& object,
             if (kvs.contains("tx2_enabled"))     b.tx2      = kvs["tx2_enabled"] == "1";
             if (kvs.contains("tx3_enabled"))     b.tx3      = kvs["tx3_enabled"] == "1";
         }
+        if (m_flexBackend) {
+            m_flexBackend->decodeTuneOutputStatus(object, kvs);
+        }
+        emit tuneOutputControlChanged();
         return;
     }
 

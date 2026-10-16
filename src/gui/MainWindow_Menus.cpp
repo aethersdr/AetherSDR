@@ -934,6 +934,27 @@ void MainWindow::buildMenuBar()
         });
     }
 
+    const auto syncTuneOutputOwnership = [this, noneCb, outputCbs]() {
+        const bool firmwareOwnsRca = m_radioModel.backendCapabilities().tuneOutputSuppression.has_value();
+        const QString reason = firmwareOwnsRca
+            ? tr("The radio controls RCA TUNE suppression. Use Radio Setup → Transmit → "
+                 "TX Band Settings to configure each band. "
+                 "These preferences are retained for older firmware.")
+            : QString();
+        for (int i = 1; i < outputCbs.size(); ++i) {
+            outputCbs[i]->setEnabled(!firmwareOwnsRca);
+            outputCbs[i]->setToolTip(reason);
+            outputCbs[i]->setAccessibleDescription(reason);
+        }
+        noneCb->setEnabled(!firmwareOwnsRca);
+        noneCb->setToolTip(reason);
+        noneCb->setAccessibleDescription(reason);
+    };
+    syncTuneOutputOwnership();
+    connect(tuneInhibitMenu, &QMenu::aboutToShow, this, syncTuneOutputOwnership);
+    connect(&m_radioModel, &RadioModel::tuneOutputControlChanged, this,
+            syncTuneOutputOwnership);
+
     auto* dspAction = settingsMenu->addAction("AetherRX...");
     dspAction->setMenuRole(QAction::NoRole);        // prevent macOS auto-reparenting (#883)
     connect(dspAction, &QAction::triggered, this, [this] {

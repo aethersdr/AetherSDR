@@ -4810,7 +4810,7 @@ code changes RX audio or keys TX. Physical-radio persistence validation is
 still a separate radiocert task.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 79 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 80 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4839,6 +4839,7 @@ still a separate radiocert task.
 | `clickAt` | `clickat` | clickAt <x> <y> \| clickAt <target> <x> <y> — TX-guarded coordinate click |
 | `invoke` | — | invoke <target> <action> [value…] — drive a control (TX-guarded) |
 | `get` | — | get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters |
+| `tuneoutput` | — | tuneoutput probe <firmware> — isolated production RCA TUNE ownership policy; no radio, settings, or keying access |
 | `meterwindow` | — | meterwindow <start [duration_ms]\|status\|stop> — bounded meter ages and unrounded peaks; never keys TX |
 | `connect` | — | connect <list\|show\|hide\|local\|ip\|wait> [args] |
 | `disconnect` | — | disconnect from the radio |
