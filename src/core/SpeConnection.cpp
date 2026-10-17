@@ -211,8 +211,9 @@ void SpeConnection::connectSerial(const QString& portName)
             // TimeoutError is a bounded wait (drainWrites) running out, not a
             // transport failure. Errors raised while teardownDevice() is
             // already releasing and closing the port must not re-enter it.
+            // A deliberate disconnect owns its drain errors and emits once.
             if (err == QSerialPort::NoError || err == QSerialPort::TimeoutError
-                || m_inTeardown) {
+                || m_inTeardown || m_deliberateDisconnect) {
                 return;
             }
             const QString msg = m_serialPort->errorString();
@@ -342,7 +343,7 @@ void SpeConnection::teardownDevice()
     m_inTeardown = true;
     if (isLegacy() && m_legacyDtrRaised && m_responding && m_lastStatus.transmitting) {
         // No TX guard yet (a TX inhibit is tracked separately, #6231): say so
-        // when the release lands while the amplifier reports transmitting.
+        // when the last received amplifier status reports transmitting.
         qCWarning(lcTuner) << "SpeConnection: releasing DTR while the 1K-FA"
                               " reports TRANSMIT — the amplifier powers off"
                               " mid-transmission.";

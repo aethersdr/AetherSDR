@@ -116,8 +116,10 @@ AetherSDR holds it only while it is connected:
   and an amplifier that **ON** switched on powers off. Reconnecting, by hand
   or with **Reconnect automatically**, does not switch it back on; press
   **ON** again.
-- An amplifier switched on at its own front panel is not affected by
-  connecting or disconnecting.
+- In the Windows bench, an amplifier switched on at its own front panel
+  stayed on when connecting. The final line policy still needs bench
+  verification, including the brief DTR pulse during serial open on macOS
+  and Linux.
 - While AetherSDR holds DTR, the amplifier refuses its own front-panel power
   switch. Use **OFF** in the applet.
 

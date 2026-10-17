@@ -235,7 +235,7 @@ std::optional<quint8> unmappedWarningContext(const QByteArray& payload)
         return std::nullopt;
     }
     const quint8 ctx = static_cast<quint8>(payload.at(kDisplayCtx));
-    if (ctx < 0x11 || !displayContextWarning(ctx).isEmpty()) {
+    if (ctx < 0x11 || ctx == 0x1D || !displayContextWarning(ctx).isEmpty()) {
         return std::nullopt;
     }
     return ctx;

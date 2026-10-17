@@ -474,7 +474,8 @@ wiring are reused. Mapping choices:
 - Warnings come from the Status's display-context byte, the alarm from its
   ALARM flag, as plain text (`Status::warningDetail` / `alarmDetail`).
 - No LCD mirror (the amp's own display works as usual; there is just no
-  remote copy): `0x80` is never sent, the floating window's glass says
+  remote copy): no LCD request is sent (legacy `0x80` starts Status),
+  the floating window's glass says
   so instead of "waiting for display…", and the menu keys stay gated
   off, exactly as when the mirror is stale on the newer family.
 - Power: DTR held high is the 1K-FA's power switch. ON raises DTR —
@@ -487,7 +488,9 @@ wiring are reused. Mapping choices:
   later, once the key is on the wire. Disconnect, a reconnect, quitting
   AetherSDR (the destructor) and a serial error all release it explicitly
   before close(), so the amp powers off if ON had powered it; an amp
-  switched on from its front panel is not affected (DTR was never raised).
+  switched on from its front panel stayed on during the pre-policy Windows
+  connect bench. Its response to the final policy and the open-time DTR
+  pulse remains unverified.
   The ON tooltip says so. The release is explicit because close() is not
   portable: Windows restores the DCB captured before open() (its DTR setting
   predates AetherSDR) and then leaves the line to the driver, while Linux
@@ -502,8 +505,9 @@ wiring are reused. Mapping choices:
   glitch cancel every later release. teardownDevice() clears the error after
   each close, a fatal serial error tears the port down at once (releasing
   the line where it still can), and the bounded drain's `TimeoutError` is
-  not treated as a link failure.
-- No TX guard yet: a release while the amplifier reports TRANSMIT is logged
+  not treated as a link failure. Errors during a deliberate disconnect
+  are handled by that disconnect, without a second disconnected signal.
+- No TX guard yet: a release whose last received status reports TRANSMIT is logged
   as a warning, and the user guide says not to disconnect or quit while
   transmitting. A TX inhibit around the 1K-FA's power transitions is the
   follow-up #6231.
@@ -564,8 +568,8 @@ capture's band, input and antenna fields are all zero) and the four 16-bit
 power and supply fields. STANDBY, HALF, ANT≠1 and IN2 captures are still to
 come (#6162), so the direct-SWR field, the HALF polarity, the antenna/input
 nibbles beyond 0/1, the display-context warning texts and the ALARM bit rest
-on the spec table until then. An input nibble other than 0/1 decodes as 0
-(unknown), and a warning-range display context without text is logged, so
+on the spec table until then. Alarm-history context `0x1D` is not a warning.
+An input nibble other than 0/1 decodes as 0 (unknown), and a warning-range display context without text is logged, so
 an unpinned value shows up instead of reading as a confident IN2 or
 nothing. The key table is asserted code by code against the Rev 2.0
 document; four keys (Operate, Tune, HALF/FULL, ANT) are live-tested.

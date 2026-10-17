@@ -202,6 +202,10 @@ int main()
         report("an unmapped warning context (0x19) shows no text but is reported",
                s && s->warningDetail.isEmpty()
                    && Legacy::unmappedWarningContext(odd) == quint8(0x19));
+        QByteArray history = odd;
+        history[2] = static_cast<char>(0x1D);
+        report("alarm-history context 0x1D is not an unmapped warning",
+               !Legacy::unmappedWarningContext(history).has_value());
         report("a normal display context (0x01) is not a warning",
                !Legacy::unmappedWarningContext(standby).has_value());
     }
@@ -259,6 +263,22 @@ int main()
         }
         report("live capture survives framing and byte-wise parsing",
                frames.size() == 1 && frames.at(0).data == live);
+    }
+    {
+        const auto alarm = Legacy::parseStatus(
+            statusPayload(0x08, 0x01, 0x00, 0x00, 0, 30, 0, 0, 480, 0));
+        const auto txOnly = Legacy::parseStatus(
+            statusPayload(0x04, 0x01, 0x00, 0x00, 0, 30, 0, 0, 480, 0));
+        report("ALARM is independent of the TX flag",
+               alarm && !alarm->transmitting && !alarm->alarmDetail.isEmpty()
+                   && txOnly && txOnly->transmitting && txOnly->alarmDetail.isEmpty());
+        const auto shutdown = Legacy::parseStatus(
+            statusPayload(0x00, 0x1E, 0x00, 0x00, 0, 30, 0, 0, 480, 0));
+        report("display context 0x1E reports shutdown",
+               shutdown && shutdown->warningDetail == QLatin1String("Shutdown in progress"));
+        const auto invalidBand = Legacy::parseStatus(
+            statusPayload(0x00, 0x01, 0xA0, 0x00, 0, 30, 0, 0, 480, 0));
+        report("band nibble above 9 is unknown", invalidBand && invalidBand->bandIndex == -1);
     }
     report("a short payload is rejected", !Legacy::parseStatus(QByteArray(29, '\0')));
 

@@ -85,7 +85,8 @@ std::optional<Status> parseStatus(const QByteArray& payload);
 // The display-context byte of a Status payload when it lies in the warning
 // range (0x11 and up) but has no text in the decoder's table — such a
 // warning would otherwise be invisible. nullopt for a mapped or non-warning
-// context, or a payload of the wrong size. For logging only.
+// context (including 0x1D, alarm history), or a payload of the wrong size.
+// For logging only.
 std::optional<quint8> unmappedWarningContext(const QByteArray& payload);
 
 // VSWR from forward/reverse power; 0 when there is no forward power, and
