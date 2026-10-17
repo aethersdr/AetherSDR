@@ -16,11 +16,11 @@ AetherSDR includes a built-in CW (Morse code) decoder powered by [ggmorse](https
 
 On Apple Silicon Macs, Linux and Windows you can also choose one of two neural decoders, **DeepFist** or **DeepCW**, which can copy weak or irregular signals that ggmorse misses. See [Choosing a decoder](#choosing-a-decoder).
 
-The decoder works on every radio family that has a CW mode: FlexRadio, the [Hermes-Lite 2](./hermes-lite-2.md), and [Networked Icom](./networked-icom.md) radios (it opens when an Icom slice is in CW).
+The decoder works on every radio family that has a CW mode: FlexRadio, the [Hermes-Lite 2](./hermes-lite-2.md), [Networked Icom](./networked-icom.md), and experimental [RTL-SDR](./rtl-sdr.md) reception.
 
 ## Requirements
 
-- The selected slice is in **CW** or **CWL**.
+- The selected slice is in a supported CW mode: **CW**, **CWU**, **CWL** or **CWR** (reverse CW on RTL-SDR).
 - On a FlexRadio, a **DAX RX channel** (1–8) assigned to the selected slice is recommended, so the decoder hears that slice alone. See [Which audio is decoded](#which-audio-is-decoded).
 
 ## Setup
@@ -40,7 +40,7 @@ Both appear in the same panel. Your own sending is shown in **cyan**, so it stan
 
 ## Using the CW decoder
 
-When the selected slice is in **CW** or **CWL**, the decode panel appears below the waterfall, and it hides again when you switch to another mode.
+When the selected slice is in **CW**, **CWU**, **CWL** or **CWR**, the decode panel appears below the waterfall, and it hides again when you switch to another mode.
 
 Drag the grip on the panel's edge to resize it; the height is remembered. Right-click the text for font size and Clear.
 
@@ -87,6 +87,7 @@ Retuning resets the decoder state; pitch and speed locks survive a retune.
 
 The decoder follows the **selected slice**, independently of speaker volume or mute:
 
+- **On RTL-SDR**, CW and CWR use the selected slice's independent audio. Speaker gain and mute do not affect decoding. Moving that receiver outside capture suspends decoding until it can receive again.
 - **On a FlexRadio, assign a DAX RX channel to the selected slice** (1–8). The decoder then reads that slice's audio alone, regardless of speaker gain, mute, or other audible slices.
 - Without a DAX channel, it uses the shared receive audio, which mixes every audible slice and follows speaker gain and mute. The panel shows **RX: shared audio**; hover it for the explanation.
 

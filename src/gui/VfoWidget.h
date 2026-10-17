@@ -832,6 +832,7 @@ private:
     bool         m_anftModeOk{true};
     bool         m_mnModeOk{true};
     // RIT/XIT tab
+    QList<QWidget*> m_ritControls;
     QPushButton* m_ritBtn{nullptr};
     QPushButton* m_xitBtn{nullptr};
     ScrollableLabel* m_ritLabel{nullptr};

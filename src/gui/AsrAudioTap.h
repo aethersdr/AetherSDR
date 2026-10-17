@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QMetaObject>
 #include <QObject>
+#include <QPointer>
 
 class QByteArray;
 
@@ -12,6 +13,7 @@ namespace AetherSDR {
 
 class AudioEngine;
 class AsrEngine;
+class DecoderAudioModel;
 
 // App-layer bridge from RX audio to the ASR engine (RFC #4333), composing
 // AudioEngine and AsrEngine without either knowing the other. When enabled it
@@ -35,6 +37,10 @@ public:
     AsrAudioTap(AudioEngine* audio, AsrEngine* asr, QObject* parent = nullptr);
 
     void setEnabled(bool on);
+    // A native route supplies selected-slice audio before monitor/client DSP.
+    // nullptr restores the saved presentation tap without changing its preference.
+    void setNativeInput(DecoderAudioModel* route);
+    bool usesNativeInput() const { return !m_nativeInput.isNull(); }
     bool isEnabled() const { return m_enabled; }
 
     // Applied live. Switching while enabled starts transcription over —
@@ -68,7 +74,10 @@ private:
 
     AudioEngine* m_audio = nullptr;
     AsrEngine* m_asr = nullptr;
+    quint64 m_bindingGeneration = 0;
     QMetaObject::Connection m_conn;
+    QMetaObject::Connection m_nativeResetConn;
+    QPointer<DecoderAudioModel> m_nativeInput;
     bool m_enabled = false;
     AsrTapPoint m_tapPoint = AsrTapPoint::PostDsp;
     AsrTapPolicy m_policy;

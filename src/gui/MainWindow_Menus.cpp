@@ -2014,6 +2014,7 @@ void MainWindow::showCopyAssist()
         }
         m_copyAssistApplet = applet;
         m_copyAssistController = new CopyAssistController(m_audio, applet->copyAssistPanel(), this);
+        m_copyAssistController->setReceiver(m_radioModel, activeSlice());
         trackPersistentDialog(m_copyAssistController->settingsDialog());
         // Seed the current frequency so the first "on start" log marker is correct
         // even before any retune fires.

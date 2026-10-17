@@ -445,6 +445,9 @@ public:
     // ── CW commands ─────────────────────────────────────────────────────────
     void setCwSpeed(int wpm);
     void setCwPitch(int hz);
+    // Receive-only engines acknowledge pitch after their DSP bank is adopted.
+    void setReceiveCwPitchConfirmation(bool confirmed) { m_confirmReceiveCwPitch = confirmed; }
+    bool confirmsReceiveCwPitch() const { return m_confirmReceiveCwPitch; }
     void setCwBreakIn(bool on);
     void setCwDelay(int ms);
     void setCwSidetone(bool on);
@@ -672,6 +675,7 @@ private:
 
     // CW state
     int  m_cwSpeed{20};       // 5–100 WPM
+    bool    m_confirmReceiveCwPitch{false};
     int  m_cwPitch{600};      // 100–6000 Hz
     bool m_cwBreakIn{false};
     int  m_cwDelay{500};      // 0–2000 ms

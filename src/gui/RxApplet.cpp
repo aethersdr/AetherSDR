@@ -1,4 +1,5 @@
 #include "RxApplet.h"
+#include "AudioButtonIcon.h"
 #include <QScopeGuard>
 #include "AntennaChoiceGate.h"
 #include "SplitAudioProfile.h"
@@ -458,7 +459,7 @@ void RxApplet::buildUI()
                     emit kiwiRxAntennaSelected(slice->sliceId(), profileId);
                 } else {
                     emit flexRxAntennaSelected(slice->sliceId());
-                    slice->setRxAntenna(token);
+                    if (slice->rxAntenna() != token) { slice->setRxAntenna(token); }
                 }
             });
             menu->popup(
@@ -733,7 +734,8 @@ void RxApplet::buildUI()
                 this, [this](int lo, int hi) {
             if (acceptsFilterEdges(lo, hi)) {
                 m_slice->setFilterWidth(lo, hi);
-            } else if (m_slice) {
+            }
+            if (m_slice && (m_slice->receiveControlsConfirmed() || !acceptsFilterEdges(lo, hi))) {
                 m_filterPassband->setFilter(m_slice->filterLow(), m_slice->filterHigh());
             }
         });
@@ -957,7 +959,11 @@ void RxApplet::buildUI()
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
-        m_muteBtn = new QPushButton(QString::fromUtf8("\xF0\x9F\x94\x8A")); // 🔊
+        m_muteBtn = new QPushButton;
+        applyAudioIcon(m_muteBtn, AudioIcon::Speaker, false, 16);
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, [this] {
+            applyAudioIcon(m_muteBtn, AudioIcon::Speaker, m_slice && m_slice->audioMute(), 16);
+        });
         m_muteBtn->setFixedSize(18, 18);
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_muteBtn, "QPushButton { background: transparent; border: none; font-size: 12px; padding: 0px; }"
             "QPushButton:hover { background: {{color.background.1}}; border-radius: 3px; }");
@@ -2138,6 +2144,26 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
     }
     if (m_radioModel) {
         m_filterAvailability = new ControlAvailabilityRegistry(*m_radioModel, this);
+        m_filterAvailability->registerRestriction(m_txAntBtn,
+            tr("This radio is receive-only; no transmit antenna is available"),
+            [](bool connected, const RadioCapabilities& caps) {
+                return !connected || caps.canTransmit;
+            });
+        m_filterAvailability->registerRestriction(m_rxAntBtn,
+            tr("This receiver has one fixed receive input"),
+            [this](bool connected, const RadioCapabilities& caps) {
+                const bool virtualAntennas = m_kiwiSdrManager
+                    && !m_kiwiSdrManager->virtualAntennaTokens().isEmpty();
+                return !connected || caps.canTransmit || !m_slice
+                    || m_slice->rxAntennaList().size() != 1 || virtualAntennas;
+            });
+        m_filterAvailability->registerRestriction(m_ritContainer,
+            tr("Receive incremental tuning is unavailable in this mode"),
+            [this](bool connected, const RadioCapabilities& caps) {
+                return !connected || !caps.receiveDspControl
+                    || (m_slice && caps.receiveDspControl->supports(
+                        ReceiveDspControl::Feature::Rit, m_slice->mode()));
+            });
         const auto supportsSquelch = [this](bool connected, const RadioCapabilities& caps) {
             if (!m_slice) {
                 return !exclusiveSquelchScale(caps.squelchLevelScale);
@@ -2182,6 +2208,7 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
             if (m_exclusiveSquelch && m_slice && !m_clientSquelchScope.hasRadioIdentity()) {
                 setSlice(m_slice);
             }
+            updateAntennaButtons();
             configureRepeaterReverseControl();
             configureFmToneControls();
             syncAgcSliderFromSlice();
@@ -2456,6 +2483,11 @@ QString RxApplet::antennaMenuLabel(const QString& token,
 
 QStringList RxApplet::rxAntennaOptions() const
 {
+    if (m_radioModel && m_radioModel->isConnected()
+        && !m_radioModel->backendCapabilities().canTransmit && m_slice
+        && !m_slice->rxAntennaList().isEmpty()) {
+        return m_slice->rxAntennaList();
+    }
     QStringList options;
     auto append = [&options](const QString& token) {
         if (!token.isEmpty() && !options.contains(token)) {
@@ -2487,6 +2519,8 @@ QStringList RxApplet::rxAntennaOptions() const
 
 QStringList RxApplet::txAntennaOptions() const
 {
+    if (m_radioModel && m_radioModel->isConnected()
+        && !m_radioModel->backendCapabilities().canTransmit) { return {}; }
     QStringList options;
     auto append = [&options](const QString& token) {
         if (!token.isEmpty() && !options.contains(token))
@@ -2515,6 +2549,10 @@ void RxApplet::updateAntennaButton(QPushButton* button, const QString& token, bo
         return;
 
     QString effectiveToken = token;
+    if (tx && m_radioModel && m_radioModel->isConnected()
+        && !m_radioModel->backendCapabilities().canTransmit) {
+        effectiveToken = tr("None");
+    }
     if (!tx && m_kiwiSdrManager && m_slice) {
         const QString profileId =
             m_kiwiSdrManager->assignedProfileForSlice(m_slice->sliceId());
@@ -2550,6 +2588,7 @@ void RxApplet::updateAntennaButton(QPushButton* button, const QString& token, bo
         : QStringLiteral("%1 antenna port: %2")
               .arg(tx ? QStringLiteral("Transmit") : QStringLiteral("Receive"),
                    full));
+    if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
 }
 
 void RxApplet::updateAntennaButtons()
@@ -2577,6 +2616,12 @@ void RxApplet::refreshFilterWidth()
 
 void RxApplet::connectSlice(SliceModel* s)
 {
+    connect(s, &SliceModel::receiveAgcRequested, this, [this] {
+        if (m_slice && m_slice->receiveControlsConfirmed()) {
+            updateAgcCombo();
+            syncAgcSliderFromSlice();
+        }
+    });
     // ── Header ─────────────────────────────────────────────────────────────
 
     // Slice badge — display follows SliceLetterDisplay AppSettings (#2606).
@@ -2697,6 +2742,7 @@ void RxApplet::connectSlice(SliceModel* s)
         int idx = m_modeCombo->findText(mode);
         if (idx >= 0) m_modeCombo->setCurrentIndex(idx);
         updateModeSettings(mode);
+        syncAgcSliderFromSlice();
     });
 
     // Initialize filter/step arrays for the current mode
@@ -2784,13 +2830,9 @@ void RxApplet::connectSlice(SliceModel* s)
     // routes to muteAllToggled via eventFilter).  The icon flips when the
     // radio acks the mute change via audioMuteChanged so the source of
     // truth is the slice state, not the click.
-    m_muteBtn->setText(s->audioMute()
-        ? QString::fromUtf8("\xF0\x9F\x94\x87")
-        : QString::fromUtf8("\xF0\x9F\x94\x8A"));
+    applyAudioIcon(m_muteBtn, AudioIcon::Speaker, s->audioMute(), 16);
     connect(s, &SliceModel::audioMuteChanged, this, [this](bool muted) {
-        m_muteBtn->setText(muted
-            ? QString::fromUtf8("\xF0\x9F\x94\x87")
-            : QString::fromUtf8("\xF0\x9F\x94\x8A"));
+        applyAudioIcon(m_muteBtn, AudioIcon::Speaker, muted, 16);
     });
 
     // Audio pan
@@ -2958,6 +3000,12 @@ void RxApplet::connectSlice(SliceModel* s)
 
     // DSP toggles removed — use VFO DSP tab or spectrum overlay
 
+    connect(s, &SliceModel::ritCommandIssued, this, [this] {
+        if (!m_slice || !m_slice->receiveControlsConfirmed()) { return; }
+        QSignalBlocker blocker(m_ritOnBtn);
+        m_ritOnBtn->setChecked(m_slice->ritOn());
+        m_ritLabel->setText(formatHz(m_slice->ritFreq()));
+    });
     // RIT
     {
         QSignalBlocker b(m_ritOnBtn);
@@ -3674,12 +3722,22 @@ void RxApplet::syncAgcSliderFromSlice()
     }
 
     const bool connected = m_radioModel && m_radioModel->isConnected();
-    const bool available = !connected || m_slice->externalReceiveReplacementActive()
-        || m_radioModel->backendCapabilities().hasAgcThreshold;
+    const RadioCapabilities backendCaps = connected
+        ? m_radioModel->backendCapabilities() : RadioCapabilities{};
+    const bool modeAvailable = !connected || m_slice->externalReceiveReplacementActive()
+        || !backendCaps.receiveDspControl
+        || backendCaps.receiveDspControl->supports(ReceiveDspControl::Feature::Agc, m_slice->mode());
+    const bool available = modeAvailable && (!connected || m_slice->externalReceiveReplacementActive()
+        || backendCaps.hasAgcThreshold);
     m_agcTSlider->setEnabled(available);
     const RadioCapabilities caps = connected && !m_slice->externalReceiveReplacementActive()
         ? m_radioModel->backendCapabilities() : RadioCapabilities{};
     setAgcModeAvailability(m_agcCombo, caps.agcModes);
+    m_agcCombo->setEnabled(modeAvailable);
+    m_agcCombo->setAccessibleDescription(modeAvailable ? tr("Automatic gain control speed")
+        : tr("AGC is unavailable in this receive mode"));
+    m_agcTSlider->setAccessibleDescription(available ? tr("Receive AGC gain control")
+        : tr("AGC threshold and off level are unavailable in this receive mode"));
     const bool agcOff = m_slice->receiveAgcMode() == QStringLiteral("off");
     const int minimum = agcOff ? 0 : agcThresholdMinimum();
     const int maximum = agcOff ? 100 : agcThresholdMaximum();

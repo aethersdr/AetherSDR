@@ -28,8 +28,8 @@ class RtlSdrDdc;
 // IRadioBackend implementation for RTL-SDR USB dongles.
 //
 // Receive-only (Principle VI): capabilities().canTransmit = false,
-// hostModulates = false. One capture/panadapter, prepared FM receiver bank;
-// the other existing modes retain the exclusive legacy DDC.
+// hostModulates = false. One capture/panadapter, prepared analog receiver bank;
+// AM/SAM use independent WDSP envelope/synchronous receive channels.
 //
 // The worker owns the librtlsdr device handle and runs
 // rtlsdr_read_async → IQ conversion → DDC. Backend relays are delivered to
@@ -70,6 +70,15 @@ public:
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
+    void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override;
+    ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    void setCwPitch(int hz) override;
+    void createNotch(double centerHz, double widthHz) override;
+    void setNotch(int notchId, const NotchDelta& delta) override;
+    void removeNotch(int notchId) override;
+    void setNotchesEnabled(bool on) override;
+    void setSliceRitEnabled(int sliceId, bool on) override;
+    void setSliceRitOffset(int sliceId, int hz) override;
     void setPanCenter(const QString& panId, double hz,
                       PanCenterIntent intent) override;
     void setPanBandwidth(const QString& panId, double hz) override;
@@ -207,9 +216,11 @@ private:
     int m_receiverCapacity = kQualifiedReceiverCapacity;
     RtlCaptureTransaction m_capture{{8, kQualifiedReceiverCapacity}};
     std::optional<RtlCaptureTransaction::State> m_lastPublished;
+    QMap<int, QMap<QString, RtlSliceSettings::Filter>> m_acceptedModeFilters;
     // Focus belongs to a configured stable identity, including parked receivers.
     // It does not change the capture or demodulator bank.
     int m_activeSliceId = -1;
+    int m_nextNotchId = 0;
     struct Monitor { int gain = 100; int pan = 50; bool mute = false; };
     std::array<Monitor, 8> m_monitors;
     struct NativeAudio {

@@ -1237,18 +1237,23 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
             append(token);
         }
     }
-    for (const QString& token : m_antList) {
-        append(token);
-    }
-    if (m_radioModel) {
-        for (const QString& token : m_radioModel->knownAntennaTokens()) {
+    const bool publishedReceiveOnly = targetSlice && !targetSlice->rxAntennaList().isEmpty()
+        && m_radioModel && m_radioModel->isConnected()
+        && !m_radioModel->backendCapabilities().canTransmit;
+    if (!publishedReceiveOnly) {
+        for (const QString& token : m_antList) {
             append(token);
         }
-    }
-    append(cur);
-    if (options.isEmpty()) {
-        append(QStringLiteral("ANT1"));
-        append(QStringLiteral("ANT2"));
+        if (m_radioModel) {
+            for (const QString& token : m_radioModel->knownAntennaTokens()) {
+                append(token);
+            }
+        }
+        append(cur);
+        if (options.isEmpty()) {
+            append(QStringLiteral("ANT1"));
+            append(QStringLiteral("ANT2"));
+        }
     }
     if (m_kiwiSdrManager) {
         for (const QString& token : m_kiwiSdrManager->virtualAntennaTokens()) {

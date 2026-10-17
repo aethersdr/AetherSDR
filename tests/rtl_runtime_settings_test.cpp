@@ -8,6 +8,7 @@
 #include "core/backends/rtl/RtlSdrBackend.h"
 #include <QCoreApplication>
 #include <QJsonObject>
+#include <QJsonDocument>
 #include <QStringList>
 #include <array>
 #include <cmath>
@@ -125,6 +126,13 @@ static void reconnectAtCaptureLimits()
         check(RtlSliceSettings(scope).patch(capture.centerHz, capture.rateHz, {saved}),
               "capture-limit reconnect fixture preserves a valid saved receiver");
         const QJsonObject original = scope.featureExact("RtlSlices");
+        QJsonObject expected = original;
+        QJsonObject entries = expected.value("slices").toObject();
+        QJsonObject entry = entries.value("1").toObject();
+        entry.insert("modeFilters", QJsonObject{{saved.mode,
+            QJsonObject{{"low", saved.filterLowHz}, {"high", saved.filterHighHz}}}});
+        entries.insert("1", entry);
+        expected.insert("slices", entries);
         rtl::RtlSdrBackend receiver;
         for (int attempt = 0; attempt < 2; ++attempt) {
             std::fprintf(stderr, "RTL_RECONNECT center=%u rate=%u mode=%s attempt=%d\n",
@@ -177,8 +185,13 @@ static void reconnectAtCaptureLimits()
                 check(receiver.storeOperatingState(scope, receiver.currentOperatingState()).value_or(false),
                     "accepted restored receiver remains owned by the RTL settings writer");
             }
-            check(scope.featureExact("RtlSlices") == original,
-                  "reconnect and accepted persistence preserve the complete saved slice document");
+            if (scope.featureExact("RtlSlices") != expected) {
+                std::fprintf(stderr, "RESTORE_EXPECTED %s\nRESTORE_ACTUAL %s\n",
+                    QJsonDocument(expected).toJson(QJsonDocument::Compact).constData(),
+                    QJsonDocument(scope.featureExact("RtlSlices")).toJson(QJsonDocument::Compact).constData());
+            }
+            check(scope.featureExact("RtlSlices") == expected,
+                  "reconnect adds only the accepted current-mode filter history to the saved document");
             receiver.disconnectRadio();
         }
     }
@@ -219,13 +232,13 @@ static void unsupportedStoredWfmRemainsIntact()
     QObject::connect(&receiver, &IRadioBackend::configurationWarning, &model,
         [&](const QString& warning) { warnings.append(warning); });
     RadioModelSliceLifecycleTestAccess::restore(model, serial);
-    check(receiver.currentOperatingState().mode == QLatin1String("AM"),
-          "real restored-state application chooses the provisional AM bootstrap");
+    check(receiver.currentOperatingState().mode == QLatin1String("USB"),
+          "real restored-state application chooses the provisional USB bootstrap");
     auto device = std::make_shared<test::DeviceState>();
     rtl::RtlCaptureBackendTestAccess::startRestored(receiver,
         std::make_unique<test::InjectedDevice>(device));
     check(rtl::RtlCaptureBackendTestAccess::bootstrapMuted(receiver),
-          "unsupported saved WFM never starts audible provisional AM");
+          "unsupported saved WFM never starts audible provisional USB");
     device->releaseReadback();
     QElapsedTimer deadline; deadline.start();
     int queued = 0;
@@ -244,9 +257,9 @@ static void unsupportedStoredWfmRemainsIntact()
               && accepted->hardware.sampleRateHz == 2'400'000
               && accepted->receivers.size() == 1
               && accepted->receivers.front().passband.stableId == 0
-              && accepted->receivers.front().mode == rtl::RtlCaptureTransaction::Mode::Am
+              && accepted->receivers.front().mode == rtl::RtlCaptureTransaction::Mode::Usb
               && accepted->receivers.front().audioMute,
-          "unsupported WFM remains unadopted while the confirmed provisional AM receiver stays muted");
+          "unsupported WFM remains unadopted while the confirmed provisional USB receiver stays muted");
     bool explained = false;
     for (const QString& warning : warnings) {
         const QString text = warning.toLower();

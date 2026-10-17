@@ -21,15 +21,23 @@ inline bool isVoiceMode(const QString& mode)
         || mode == QLatin1String("DFM");
 }
 
-// AetherSDR's older neutral vocabulary used CW for upper-side CW. Icom
-// reports that same mode explicitly as CWU; CWL is the reverse-side mode.
-// (The HL2 did too, until Hl2Backend::setSliceMode began collapsing CWU onto
-// CW. All three spellings stay here: Icom still produces CWU, and a guard
-// that is only correct while every backend canonicalises is the wrong kind.)
+// CW/CWU use the upper sideband; CWL/CWR explicitly use the reverse sideband.
+inline bool isReverseCwMode(const QString& mode)
+{
+    return mode == QLatin1String("CWL") || mode == QLatin1String("CWR");
+}
+
+// Only a command-plane receiver interprets the session CWL offset flag.
+// Explicit reverse modes remain authoritative on independent host receivers.
+inline int cwReceiveSidebandSign(const QString& mode, bool hasCommandPlane, bool cwlEnabled)
+{
+    return isReverseCwMode(mode) || (hasCommandPlane && cwlEnabled) ? -1 : 1;
+}
+
 inline bool isCwMode(const QString& mode)
 {
     return mode == QLatin1String("CW") || mode == QLatin1String("CWU")
-        || mode == QLatin1String("CWL");
+        || isReverseCwMode(mode);
 }
 
 }  // namespace AetherSDR

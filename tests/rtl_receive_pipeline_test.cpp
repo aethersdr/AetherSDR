@@ -674,9 +674,65 @@ static void measureParkAndResume()
     pipeline->stop();
 }
 
+static void trackingNotchCallbackAllocations()
+{
+    auto pipeline = std::make_unique<Pipeline>();
+    T::State state;
+    state.token = {83, 1}; state.hardware.centerHz = 100000000;
+    state.hardware.sampleRateHz = 240000;
+    state.capture = {83, 1, 100000000, 240000, 108000, 108000};
+    state.receivers = {{{0, 100020000, 100, 2900, 0, 3000, 3000}, T::Mode::Usb}};
+    state.receivingIds = {0};
+    // Populate the vector-bearing DSP recipe at its admitted capacity. Both
+    // adoption and sample processing must retain prepared storage by reference.
+    for (int id = 0; id < 32; ++id) {
+        state.trackingNotches.entries.push_back({id, 100020200.0 + id * 80, 200, true});
+    }
+    std::array<std::complex<float>, 1200> iq{};
+    Pipeline::Packet packet;
+    std::uint64_t first = 0;
+    (void)WdspChannel::threadAllocationSequenceForTest();
+    for (int epoch = 0; epoch < 2; ++epoch) {
+        state.token.revision = epoch + 1;
+        state.trackingNotches.enabled = epoch == 0;
+        if (!pipeline->prepare(state, epoch == 0) || !ready(*pipeline)) {
+            check(false, "full tracking-notch bank prepares outside acquisition");
+            break;
+        }
+        const std::size_t allocationsBefore = callbackAllocations;
+        const auto wdspBefore = WdspChannel::threadAllocationSequenceForTest();
+        inCallback = true;
+        const bool adopted = pipeline->adopt();
+        inCallback = false;
+        check(adopted, "tracking-notch enable and bypass banks adopt");
+        bool sawSlice = false;
+        for (int block = 0; block < 60; ++block) {
+            inCallback = true;
+            const bool accepted = pipeline->process(first, iq);
+            while (pipeline->takePacket(packet)) {
+                sawSlice |= packet.slot == 0 && packet.token == state.token;
+            }
+            inCallback = false;
+            check(accepted, "notched sideband callback accepts acquisition");
+            first += iq.size();
+            std::this_thread::sleep_for(6ms);
+        }
+        check(sawSlice && !pipeline->needsRepair(), "tracking-notch bank produces current independent PCM");
+        check(callbackAllocations == allocationsBefore,
+            "vector-bearing notch adoption and processing allocate no ordinary callback memory");
+        check(WdspChannel::threadAllocationSequenceForTest() == wdspBefore,
+            "tracking-notch acquisition performs no WDSP allocator operation");
+    }
+    pipeline->stop();
+    pipeline.reset();
+    check(QThreadPool::globalInstance()->waitForDone(15000),
+        "tracking-notch fixture releases its prepared banks before independent registry workloads");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    trackingNotchCallbackAllocations();
     {
         auto rf = std::make_unique<Pipeline>();
         check(AetherSDR::rtl::RtlReceivePipelineTestAccess::rfObservation(*rf),

@@ -77,6 +77,8 @@ public:
     // Tap point for the ASR feed: unchecked = after client NR and the RX
     // effects chain (what every build before this did), checked = before them.
     void setRawAudio(bool on);
+    void setNativeAudioRoute(bool native);
+    QWidget* rawAudioControl() const;
     bool isRawAudio() const;
     bool useSileroVad() const;
     void setVadModelPath(const QString& path);
@@ -130,6 +132,7 @@ private:
     QPushButton* m_logBrowse = nullptr;
     QCheckBox* m_useSilero = nullptr;
     QCheckBox* m_rawAudio = nullptr;
+    QString m_presentationAudioToolTip;
     QLineEdit* m_vadPath = nullptr;
     QPushButton* m_vadBrowse = nullptr;
     QCheckBox* m_labelSpeakers = nullptr;

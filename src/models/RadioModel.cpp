@@ -1083,19 +1083,6 @@ void RadioModel::setupBackend(const QString& family)
     // The backend confirms a pan is GONE. Only now is the pane dropped: the
     // backend can refuse a close (the last receiver on an HL2), and tearing the
     // model down optimistically would leave a receiver streaming into nothing.
-    // Notch state reported BY the backend. Only a backend whose notches live in
-    // this process emits these — a Flex reports TNFs as `tnf <id> …` status on
-    // its command plane, which handleStatus() already decodes into the same
-    // model. Both routes end at TnfModel, so the panadapter overlay is drawn
-    // from one place regardless of where the notch physically is.
-    connect(m_backend.get(), &IRadioBackend::notchChanged, this,
-            [this](int notchId, const NotchDelta& delta) {
-        m_tnfModel.applyNotchDelta(notchId, delta);
-    });
-    connect(m_backend.get(), &IRadioBackend::notchRemoved, this, [this](int notchId) {
-        m_tnfModel.removeTnf(notchId);
-    });
-
     connect(m_backend.get(), &IRadioBackend::panRemoved, this,
             [this](const QString& backendPanId) {
         auto* pan = resolveBackendPan(backendPanId);
@@ -1305,11 +1292,6 @@ void RadioModel::setupBackend(const QString& family)
     // aetherd 2.4 (#4092): TGXL tuner status decoded in the backend drives TunerModel.
     connect(m_backend.get(), &IRadioBackend::tunerChanged, this,
             [this](const TunerDelta& delta) { m_tunerModel.applyChanges(delta); });
-
-    // aetherd RFC 2.3 (RadioModel residual): radio-global status decoded in the
-    // backend drives RadioModel's own state via applyRadioChanges.
-    connect(m_backend.get(), &IRadioBackend::radioChanged, this,
-            [this](const RadioDelta& delta) { applyRadioChanges(delta); });
 
     // aetherd RFC 2.3 (RadioModel residual): GPS / memory-slot / profile status
     // decoded in the backend drive RadioModel's own state via the apply* methods.
@@ -1547,6 +1529,29 @@ void RadioModel::wireBackendReceiverState()
             m_transmitModel.handleControlAnswer(ticket, applied);
         }
     }, Qt::QueuedConnection);
+
+    // aetherd RFC 2.3 (RadioModel residual): radio-global status decoded in the
+    // backend drives RadioModel's own state via applyRadioChanges.
+    connect(m_backend.get(), &IRadioBackend::radioChanged, this,
+            [this, generation](const RadioDelta& delta) {
+                if (generation == m_backendReceiverGeneration) { applyRadioChanges(delta); }
+            });
+
+    // Notch state reported BY the backend. Only a backend whose notches live in
+    // this process emits these — a Flex reports TNFs as `tnf <id> …` status on
+    // its command plane, which handleStatus() already decodes into the same
+    // model. Both routes end at TnfModel, so the panadapter overlay is drawn
+    // from one place regardless of where the notch physically is.
+    connect(m_backend.get(), &IRadioBackend::notchChanged, this,
+            [this, generation](int notchId, const NotchDelta& delta) {
+        if (generation != m_backendReceiverGeneration) { return; }
+        m_tnfModel.applyNotchDelta(notchId, delta);
+    });
+    connect(m_backend.get(), &IRadioBackend::notchRemoved, this, [this, generation](int notchId) {
+        if (generation != m_backendReceiverGeneration) { return; }
+        m_tnfModel.removeTnf(notchId);
+    });
+
     // aetherd RFC 2.3: the first converted touchpoint. The backend decodes the
     // universal pan center/bandwidth from Flex status and emits this normalized
     // signal; RadioModel drives the addressed PanadapterModel. (Template for the
@@ -1677,6 +1682,17 @@ void RadioModel::wireBackendReceiverState()
             }
             s = new SliceModel(sliceId, this);
             wireSliceReceiveIntentsToBackend(s);
+            connect(s, &SliceModel::ritCommandIssued, this, [this, s, generation](bool on, int hz) {
+                if (generation != m_backendReceiverGeneration || receiveCommandSource() != s
+                    || m_backend->receiveControlPolicy() != ReceiveControlPolicy::Confirmed) { return; }
+                const int id = s->sliceId();
+                m_backend->setSliceRitEnabled(id, on);
+                // A synchronous adoption can retire the receiver or disconnect
+                // this session before the companion offset reaches the seam.
+                if (generation != m_backendReceiverGeneration || receiveCommandSource() != s
+                    || m_backend->receiveControlPolicy() != ReceiveControlPolicy::Confirmed) { return; }
+                m_backend->setSliceRitOffset(id, hz);
+            });
 
             // Tuning capture of the client-owned step, whatever moved it.
             connect(s, &SliceModel::stepChanged, this, [this](int hz) {
@@ -2123,13 +2139,27 @@ RadioModel::RadioModel(QObject* parent)
     // passband. Not for Flex, which applies `cw pitch` on-radio.
     connect(&m_transmitModel, &TransmitModel::cwPitchChanged, this,
             [this](int hz) {
-        if (m_backend && backendCapabilities().hostModulates) {
+        if (m_backend && backendCapabilities().hostModulates
+            && !backendCapabilities().receiveCwPitchControl) {
             const QPointer<RadioModel> alive(this);
             const QPointer<IRadioBackend> backend(m_backend.get());
             const quint64 generation = m_backendReceiverGeneration;
             m_backend->setCwPitch(hz);
             if (!alive || !backend || m_backendReceiverGeneration != generation
                 || m_transmitModel.cwPitch() != hz) { return; }
+            m_cwPitchHandedToBackend = hz;
+        }
+    });
+    connect(&m_transmitModel, &TransmitModel::cwPitchCommandIssued, this,
+            [this](int hz) {
+        if (m_backend && isConnected() && backendCapabilities().receiveCwPitchControl) {
+            const auto pitch = backendCapabilities().receiveCwPitchControl;
+            if (pitch && (hz < pitch->minimumHz || hz > pitch->maximumHz)) { return; }
+            const QPointer<RadioModel> alive(this);
+            const QPointer<IRadioBackend> backend(m_backend.get());
+            const quint64 generation = m_backendReceiverGeneration;
+            m_backend->setCwPitch(hz);
+            if (!alive || !backend || m_backendReceiverGeneration != generation) { return; }
             m_cwPitchHandedToBackend = hz;
         }
     });
@@ -2307,15 +2337,15 @@ RadioModel::RadioModel(QObject* parent)
     });
     connect(&m_tnfModel, &TnfModel::notchChangeRequested, this,
             [this](int id, const NotchDelta& delta){
-        if (m_backend)
+        if (m_backend && isConnected())
             m_backend->setNotch(id, delta);
     });
     connect(&m_tnfModel, &TnfModel::notchRemoveRequested, this, [this](int id){
-        if (m_backend)
+        if (m_backend && isConnected())
             m_backend->removeNotch(id);
     });
     connect(&m_tnfModel, &TnfModel::notchesEnabledRequested, this, [this](bool on){
-        if (m_backend)
+        if (m_backend && isConnected())
             m_backend->setNotchesEnabled(on);
     });
     // No CWX text while TUNE is active (#5422): the radio keys it at TUNE power.
@@ -4368,6 +4398,8 @@ void RadioModel::updateTuneAvailability()
 void RadioModel::publishCapabilities(bool connected)
 {
     const RadioCapabilities caps = backendCapabilities();
+    m_tnfModel.setControlPolicy(connected && m_backend
+        ? m_backend->receiveControlPolicy() : ReceiveControlPolicy::Optimistic);
     m_meterModel.setCompressionMaximumDb(connected ? caps.compressionMaximumDb : 25.0f);
     m_cwxModel.setSpeedModifiersEnabled(!connected
                                         || caps.cwTextSupportsSpeedModifiers);
@@ -4377,6 +4409,9 @@ void RadioModel::publishCapabilities(bool connected)
 
     // Capability-driven, not family()!="flex": only a backend that both
     // host-modulates and may transmit collapses the mic source to PC. (#4449)
+    m_transmitModel.setReceiveCwPitchConfirmation(connected
+        && caps.receiveCwPitchControl.has_value()
+        && m_backend->receiveControlPolicy() == ReceiveControlPolicy::Confirmed);
     m_transmitModel.setHostModulation(connected
                                       && caps.hostModulates && caps.canTransmit);
     // Whether an antenna tuner exists at all. Same shape and the same

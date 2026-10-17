@@ -1,6 +1,8 @@
 #pragma once
 
 #include "core/SharedCapturePolicy.h"
+#include "core/backends/NoiseBlankerKind.h"
+#include "RtlTrackingNotches.h"
 
 #include <cstdint>
 #include <optional>
@@ -35,6 +37,26 @@ public:
         bool wfmForceMono = false; // selected decoder matrix policy, not observed pilot
         bool automaticSquelch = false;
         int automaticSquelchMarginDb = 10;
+        // Host receive controls travel with the immutable prepared receiver.
+        int agcMode = 3; // WDSP: off=0, slow=2, medium=3, fast=4
+        int agcThreshold = 65;
+        int agcOffLevel = 10;
+        int cwPitchHz = 600;
+        bool ritEnabled = false;
+        int ritOffsetHz = 0;
+        NoiseBlankerKind nbKind = NoiseBlankerKind::Off;
+        int nbLevel = 50;
+        NoiseBlankerFill nbFill = NoiseBlankerFill::Zero;
+        bool apfEnabled = false;
+        int apfLevel = 50;
+        bool nrEnabled = false;
+        int nrLevel = 50;
+        bool anfEnabled = false;
+        int anfLevel = 50;
+        bool mnEnabled = false;
+        int mnLevel = 50;
+
+
         bool operator==(const Receiver&) const = default;
     };
     struct Desired {
@@ -44,6 +66,7 @@ public:
         };
         Hardware hardware;
         std::vector<Receiver> receivers;
+        RtlTrackingNotches trackingNotches;
         bool automaticDirectSampling = true;
         bool dcSuppression = false;
         // One-shot operator/mode-entry intent. Display pan/zoom never sets it.
@@ -68,6 +91,7 @@ public:
         // capture; only these sorted IDs have a live DSP receiver bank.
         std::vector<int> receivingIds;
         std::vector<Receiver> receivers;
+        RtlTrackingNotches trackingNotches;
         bool automaticDirectSampling = true;
         bool dcSuppression = false;
     };

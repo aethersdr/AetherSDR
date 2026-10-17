@@ -147,6 +147,7 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
         "almost everything \u2014 and closing it down costs speech, not noise. Leave "
         "Sensitivity high here. Silero VAD is not a substitute: on a noisy HF signal "
         "it rejects most real speech. Switching starts the transcription over."));
+    m_presentationAudioToolTip = m_rawAudio->toolTip();
     connect(m_rawAudio, &QCheckBox::toggled, this, &CopyAssistSettingsDialog::rawAudioToggled);
     form->addRow(m_rawAudio);
 
@@ -405,6 +406,20 @@ void CopyAssistSettingsDialog::setRawAudio(bool on)
     // Seeding from the store must not echo back as an operator edit.
     const QSignalBlocker block(m_rawAudio);
     m_rawAudio->setChecked(on);
+}
+
+void CopyAssistSettingsDialog::setNativeAudioRoute(bool native)
+{
+    if (native) {
+        setRawAudio(true);
+    } else {
+        m_rawAudio->setToolTip(m_presentationAudioToolTip);
+    }
+}
+
+QWidget* CopyAssistSettingsDialog::rawAudioControl() const
+{
+    return m_rawAudio;
 }
 
 bool CopyAssistSettingsDialog::isRawAudio() const

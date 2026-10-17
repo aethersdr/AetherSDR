@@ -1,4 +1,5 @@
 #include "core/backends/rtl/RtlReceivePipeline.h"
+#include "core/backends/rtl/RtlReceiveRecipe.h"
 #include "core/backends/rtl/RtlRfExtractor.h"
 #ifdef AETHER_BACKEND_RTL
 #include "core/backends/rtl/RtlSdrDdc.h"
@@ -949,18 +950,31 @@ void admission()
     native->stop();
 
     auto multiple = std::make_unique<Pipeline>(4, true);
-    for (const Transaction::Mode mode : {Transaction::Mode::Am, Transaction::Mode::Sam,
-             Transaction::Mode::Usb, Transaction::Mode::Lsb, Transaction::Mode::Cw,
-             Transaction::Mode::Cwr}) {
+    for (const Transaction::Mode mode : {Transaction::Mode::Am, Transaction::Mode::Sam}) {
         invalid = current;
         invalid.receivers.push_back({{6, 103'000'000, -3000, 3000, 0, 3000, 3000}, mode});
-        check(!multiple->prepare(invalid),
-              "parked legacy recipe cannot bypass configured-set singleton admission");
+        check(multiple->prepare(invalid) && ready(*multiple) && multiple->adopt(),
+              "parked AM/SAM recipe shares configured native bank with WFM");
         std::reverse(invalid.receivers.begin(), invalid.receivers.end());
-        check(!multiple->prepare(invalid),
-              "configured legacy singleton refusal is independent of receiver order");
+        ++invalid.token.revision;
+        check(multiple->prepare(invalid) && ready(*multiple) && multiple->adopt(),
+              "native AM/SAM admission is independent of receiver order");
     }
     multiple->stop();
+    multiple.reset(); native.reset(); legacy.reset();
+    check(QThreadPool::globalInstance()->waitForDone(15000), "legacy admission fixtures release registry reservations");
+    for (const Transaction::Mode mode : {Transaction::Mode::Usb, Transaction::Mode::Lsb,
+             Transaction::Mode::Cw, Transaction::Mode::Cwr}) {
+        auto mixed = current;
+        const auto [low, high] = AetherSDR::rtl::RtlReceiveRecipe::defaultFilter(mode);
+        mixed.receivers.push_back({{6, 100'300'000, double(low), double(high), 0, 3000, 3000}, mode});
+        mixed.receivingIds.push_back(6);
+        auto bank = std::make_unique<Pipeline>(4, true);
+        check(bank->prepare(mixed, true) && ready(*bank) && bank->adopt() && !bank->legacy(),
+              "native SSB/CW and WFM share the qualified analog bank");
+        bank->stop(); bank.reset();
+        check(QThreadPool::globalInstance()->waitForDone(15000), "mixed admission case releases its registry before the next case");
+    }
 }
 }
 int main(int argc, char** argv)
@@ -968,7 +982,9 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     outputClockAlignment();
     admission();
+    check(QThreadPool::globalInstance()->waitForDone(15000), "admission fixtures release all prepared receiver banks");
     nativeRouting();
+    check(QThreadPool::globalInstance()->waitForDone(15000), "routing fixture drains before independent analog timing workload");
     analogMultiReceiver();
     workerUnderrunTrace();
     if (qEnvironmentVariableIntValue("AETHER_WFM_BENCHMARK") == 1) {

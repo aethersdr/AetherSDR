@@ -43,6 +43,7 @@ public:
     explicit PhoneCwApplet(QWidget* parent = nullptr);
 
     void setTransmitModel(TransmitModel* model);
+    void setTransmitControlsAvailable(bool available);
 
     // Bind the active slice.  TransmitModel is radio-global TX state; APF is a
     // per-slice receive filter, so the CW panel needs the slice itself to drive
@@ -219,6 +220,7 @@ private:
 
     // ── Shared state ─────────────────────────────────────────────────────
 
+    bool m_transmitControlsAvailable{true};
     bool m_updatingFromModel{false};
     bool m_radeActive{false};
 

@@ -4,6 +4,7 @@
 #include <QMap>
 
 #include "core/backends/NotchDelta.h"
+#include "core/backends/SliceDelta.h"
 
 namespace AetherSDR {
 
@@ -25,6 +26,8 @@ public:
     const QMap<int, TnfEntry>& tnfs() const { return m_tnfs; }
     const TnfEntry* tnf(int id) const;
     bool globalEnabled() const { return m_globalEnabled; }
+    void setControlPolicy(ReceiveControlPolicy policy) { m_controlPolicy = policy; }
+    bool confirmsControls() const { return m_controlPolicy == ReceiveControlPolicy::Confirmed; }
 
     // ── Status parsing (called from RadioModel) ─────────────────────────
     // The Flex path: raw `tnf <id> …` status keys off the command plane.
@@ -37,7 +40,7 @@ public:
     void removeTnf(int id);
     void applyGlobalEnabled(bool on);
 
-    // ── Commands (emit commandReady) ────────────────────────────────────
+    // ── Commands (typed backend intents) ───────────────────────────────
     void createTnf(double freqMhz);
     void setTnfFreq(int id, double freqMhz);
     void setTnfWidth(int id, int widthHz);
@@ -65,6 +68,7 @@ signals:
 private:
     QMap<int, TnfEntry> m_tnfs;
     bool m_globalEnabled{true};
+    ReceiveControlPolicy m_controlPolicy{ReceiveControlPolicy::Optimistic};
 };
 
 } // namespace AetherSDR

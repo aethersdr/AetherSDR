@@ -7886,16 +7886,26 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
         if (!s)
             return err(QStringLiteral("no slice available"));
 
-        // LEVEL BEFORE ENABLE, for the reason the AGC branch above gives: the
-        // enable setter emits an intent carrying both values, so setting the
-        // level first makes one request reach the backend as a coherent pair.
-        // A radio with no radio-side NR / ANF (HL2, ANAN) cannot turn them
-        // on; the setter would only mark the model on.
-        if (on && which == QLatin1String("nr")
-            && !radio->radioSideNoiseReductionAvailable())
-            return err(QStringLiteral("refused: this radio has no radio-side noise reduction"));
-        if (on && which == QLatin1String("anf") && !radio->radioSideAutoNotchAvailable())
-            return err(QStringLiteral("refused: this radio has no auto notch"));
+        const auto receiveDsp = radio->backendCapabilities().receiveDspControl;
+        if (receiveDsp && which != QLatin1String("squelch")) {
+            using Feature = ReceiveDspControl::Feature;
+            const Feature feature = which == QLatin1String("nr") ? Feature::Nr
+                : which == QLatin1String("anf") ? Feature::Anf : Feature::Nb;
+            if (on && !receiveDsp->supports(feature, s->mode())) {
+                return err(QStringLiteral("refused: %1 is unavailable in receive mode %2")
+                           .arg(which, s->mode()));
+            }
+        } else {
+            if (on && which == QLatin1String("nr")
+                && !radio->radioSideNoiseReductionAvailable()) {
+                return err(QStringLiteral("refused: this radio has no radio-side noise reduction"));
+            }
+            if (on && which == QLatin1String("anf") && !radio->radioSideAutoNotchAvailable()) {
+                return err(QStringLiteral("refused: this radio has no auto notch"));
+            }
+        }
+        // Set the level before enabling. Confirmed receivers merge these
+        // field-specific requests into their pending recipe independently.
         if (which == QLatin1String("nr")) {
             if (level >= 0) s->setNrLevel(level);
             s->setNr(on);
@@ -7908,6 +7918,7 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
                              : advanced ? AetherSDR::NoiseBlankerKind::Advanced
                                         : AetherSDR::NoiseBlankerKind::Impulse);
         } else if (which == QLatin1String("anf")) {
+            if (level >= 0) { s->setAnfLevel(level); }
             s->setAnf(on);
         } else {
             s->setSquelch(on, level >= 0 ? level : s->squelchLevel());

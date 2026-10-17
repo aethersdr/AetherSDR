@@ -61,6 +61,30 @@ struct ReceiveFilterControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     QList<ReceiveFilterMode> modes;
 };
+// Supported host receive signal controls and their qualified mode family.
+// An absent record preserves existing radio-side capability semantics.
+struct ReceiveDspControl {
+    enum class Feature { Agc, Nb, Nr, Anf, ManualNotch, Apf, Rit };
+    QStringList modes;
+    QList<Feature> features;
+    // An entry narrows a declared feature to a subset of the qualified modes.
+    // An absent entry uses all modes; an empty entry disables that feature.
+    QMap<Feature, QStringList> featureModes;
+    bool supports(Feature feature, const QString& mode) const
+    {
+        const auto restriction = featureModes.constFind(feature);
+        return features.contains(feature) && modes.contains(mode)
+            && (restriction == featureModes.cend() || restriction.value().contains(mode));
+    }
+};
+
+// Session-wide receive BFO pitch, dispatched through setCwPitch and confirmed
+// through TransmitDelta::cwPitch. Presence grants no transmit or microphone path.
+struct ReceiveCwPitchControl {
+    int minimumHz = 100;
+    int maximumHz = 6000;
+    int stepHz = 10;
+};
 struct ReceiveAudioControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     // Both gain (0..100) and mute must act on the shared slice's RX audio.
@@ -410,6 +434,8 @@ struct RadioCapabilities {
     std::optional<ReceiveModeControl> receiveModeControl;
     std::optional<ReceiveFilterControl> receiveFilterControl;
     std::optional<ReceiveAudioControl> receiveAudioControl;
+    std::optional<ReceiveCwPitchControl> receiveCwPitchControl;
+    std::optional<ReceiveDspControl> receiveDspControl;
     std::optional<ReceiveAudioExport> receiveAudioExport;
     std::optional<BroadcastFmReceive> broadcastFmReceive;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;

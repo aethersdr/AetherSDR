@@ -3,6 +3,7 @@
 #include "asr/AsrSegmenter.h"
 #include "asr/IAsrBackend.h"
 #include "asr/SpeakerClusterer.h"
+#include "core/PcmFrame.h"
 
 #include <QObject>
 #include <QString>
@@ -48,6 +49,7 @@ public:
     // whole backlog. Used so shutdown and ASR-disable don't have to wait for a
     // backlog of queued segments to finish (each includes a blocking transcribe).
     void setCancelPending(bool cancel) { m_cancelPending.store(cancel, std::memory_order_relaxed); }
+    void setInputGeneration(quint64 generation) { m_requestedGeneration.store(generation); }
 
     // Thread-safe; set once by ~AsrEngine() before it joins this thread. Distinct
     // from setCancelPending() above, which is ALSO raised on every ASR-disable
@@ -63,7 +65,8 @@ public slots:
     void setSpeakerLabelingEnabled(bool on);
     // Mono float samples at sampleRate; resampled to whisper's 16 kHz on this
     // (worker) thread before segmentation — never on the audio/caller thread.
-    void processAudio(const QVector<float>& monoSamples, int sampleRate);
+    void processAudio(const QVector<float>& monoSamples, int sampleRate, quint64 generation,
+                      const AetherSDR::PcmEpochLease& source);
     void setMaxSegmentMs(int ms);
     void setSpeechRms(float rms);
     void setHangoverMs(int ms);
@@ -77,18 +80,19 @@ public slots:
     // text/context so a segment never splices audio from either side of the
     // gap. Narrower than reset() — speaker labels and the resampler survive.
     void markDiscontinuity();
-    void reset();
+    void reset(quint64 generation);
     // Clear the cancel flag that restartSession() raised. A separate slot, not
     // part of reset(), so this only ever runs for a tap-point switch: the
     // ASR-disable and shutdown paths keep the flag latched as they always did.
-    void resumeAfterCancel();
+    void resumeAfterCancel(quint64 generation);
 
 signals:
     void loaded();
     void loadFailed(const QString& error);
     void speakerModelLoaded(const QString& modelPath, bool loaded);
     // speaker: 0-based cluster index (A/B/C…), or -1 when labeling is off.
-    void segmentText(const QString& text, float confidence, int speaker);
+    void segmentText(const QString& text, float confidence, int speaker, quint64 generation,
+                     const AetherSDR::PcmEpochLease& source);
     void processedMs(double ms); // this chunk fully handled (for the backlog meter)
     void errorOccurred(const QString& error);
 
@@ -115,6 +119,10 @@ private:
     std::unique_ptr<Resampler> m_resampler;
     int m_resamplerSrcRate = 0;
     bool m_warnedNoModel = false;
+    quint64 m_generation = 0;
+    std::atomic<quint64> m_requestedGeneration{0};
+    PcmEpochLease m_source;
+    bool inputCurrent() const;
     std::atomic<bool> m_cancelPending{false}; // see setCancelPending()
     std::atomic<bool> m_shuttingDown{false};  // see requestShutdown()
 };
@@ -159,6 +167,7 @@ public:
     // (#5730): past asrBacklogHighWaterMs() chunks are dropped (droppedAudioChanged)
     // until the backlog drains to half, then the worker starts a fresh segment.
     void pushAudio(const QVector<float>& monoSamples, int sampleRate);
+    void pushNativePcm(const AetherSDR::PcmFrame& frame);
 
     // Segmentation tuning (applied on the worker thread):
     //  - decode buffer: max audio (ms) before a decode is forced without silence
@@ -213,7 +222,8 @@ signals:
     void requestLoad(const QString& modelPath);
     void requestLoadSpeakerModel(const QString& modelPath);
     void requestSetSpeakerLabelingEnabled(bool on);
-    void requestProcess(const QVector<float>& monoSamples, int sampleRate);
+    void requestProcess(const QVector<float>& monoSamples, int sampleRate, quint64 generation,
+                        const AetherSDR::PcmEpochLease& source);
     void requestSetMaxSegmentMs(int ms);
     void requestSetSpeechRms(float rms);
     void requestSetHangoverMs(int ms);
@@ -222,12 +232,16 @@ signals:
     void requestSetContextCarryEnabled(bool on);
     void requestClearContext();
     void requestMarkDiscontinuity();
-    void requestReset();
-    void requestResumeAfterCancel();
+    void requestReset(quint64 generation);
+    void requestResumeAfterCancel(quint64 generation);
 
 private:
+    friend struct AsrEngineTestAccess;
     void startThread(AsrBackendFactory factory, const AsrSegmenter::Config& segConfig,
                      AsrSpeakerEmbedderFactory speakerEmbedderFactory);
+
+    void pushAudioInput(const QVector<float>& monoSamples, int sampleRate, const PcmEpochLease& source);
+    quint64 m_generation = 0;
 
     void updateBacklog(); // recompute lag = pushed − processed, emit if it moved
     void updateDropped(); // emit droppedAudioChanged if the total moved

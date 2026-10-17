@@ -88,6 +88,7 @@ public:
     bool    adaptiveActive()        const { return m_adaptiveActive; }
     bool    isActive()   const { return m_active; }
     bool    inCapture()  const { return m_inCapture; }
+    bool receiveControlsConfirmed() const { return confirmsControls(); }
     bool    isTxSlice()  const { return m_txSlice; }
     float   rfGain()     const { return m_rfGain; }
     float   audioGain()  const { return m_externalReceiveAudioReplacement

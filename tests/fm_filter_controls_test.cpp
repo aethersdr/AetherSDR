@@ -2,6 +2,7 @@
 // capability data only; this is not a simulator peer or a hardware test.
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/KiwiSdrManager.h"
 #include "core/backends/SliceDelta.h"
 #include "gui/RxApplet.h"
 #include "gui/FilterPassbandWidget.h"
@@ -13,6 +14,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QImage>
+#include <QMenu>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QtTest>
@@ -72,6 +74,65 @@ QPushButton* button(QWidget& widget, const QString& text)
 class FmFilterControlsTest : public QObject {
     Q_OBJECT
 private slots:
+    void receiveOnlyAntennaControlsUsePublishedPorts()
+    {
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        FilterBackend* source = backend.get();
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceDelta initial;
+        initial.rxAntenna = "RX"; initial.rxAntennaList = QStringList{"RX"};
+        initial.txAntenna = QString(); initial.txAntennaList = QStringList{};
+        emit source->sliceChanged(3, initial);
+        QVERIFY(model.slice(3));
+        KiwiSdrManager virtualReceivers;
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setSlice(model.slice(3)); vfo.setSlice(model.slice(3));
+        rx.setRadioModel(&model); vfo.setRadioModel(&model);
+        const auto namedButton = [](QWidget& widget, const QString& name) {
+            for (auto* candidate : widget.findChildren<QPushButton*>()) {
+                if (candidate->accessibleName() == name) { return candidate; }
+            }
+            return static_cast<QPushButton*>(nullptr);
+        };
+        for (QWidget* widget : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            auto* receive = namedButton(*widget, "RX antenna");
+            auto* transmit = namedButton(*widget, "TX antenna");
+            QVERIFY(receive && transmit);
+            QCOMPARE(receive->text(), QStringLiteral("RX"));
+            QVERIFY(!receive->isEnabled());
+            QVERIFY(receive->accessibleDescription().contains("fixed"));
+            QCOMPARE(transmit->text(), QStringLiteral("None"));
+            QVERIFY(!transmit->isEnabled());
+            QVERIFY(transmit->accessibleDescription().contains("receive-only"));
+        }
+        const QString profileId = virtualReceivers.addProfile("Virtual receiver", "kiwi.example.test:8073");
+        rx.setKiwiSdrManager(&virtualReceivers); vfo.setKiwiSdrManager(&virtualReceivers);
+        for (QWidget* widget : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            auto* receive = namedButton(*widget, "RX antenna");
+            QVERIFY(receive->isEnabled());
+            receive->click();
+            auto* menu = receive->findChild<QMenu*>();
+            QVERIFY(menu);
+            QStringList ports;
+            for (auto* action : menu->actions()) { ports.append(action->data().toString()); }
+            QCOMPARE(ports, (QStringList{"RX", virtualReceivers.virtualAntennaToken(profileId)}));
+            menu->close();
+        }
+        source->caps.canTransmit = true;
+        initial.rxAntenna = "ANT1"; initial.rxAntennaList = QStringList{"ANT1", "ANT2"};
+        initial.txAntenna = "ANT1"; initial.txAntennaList = QStringList{"ANT1", "ANT2"};
+        emit source->sliceChanged(3, initial);
+        emit model.capabilitiesChanged(true, source->caps);
+        for (QWidget* widget : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            auto* receive = namedButton(*widget, "RX antenna");
+            auto* transmit = namedButton(*widget, "TX antenna");
+            QVERIFY(receive->isEnabled() && transmit->isEnabled());
+            QCOMPARE(transmit->text(), QStringLiteral("ANT1"));
+        }
+    }
+
     void captureActionUsesLiveCapabilityAndModelIntent()
     {
         RadioModel model;

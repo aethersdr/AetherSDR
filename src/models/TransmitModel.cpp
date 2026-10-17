@@ -26,6 +26,7 @@ bool TransmitModel::refuseControlOffThread() const
 
 void TransmitModel::resetState()
 {
+    m_confirmReceiveCwPitch = false;
     for (quint64& revision : m_controlIntentRevisions) { ++revision; }
     // A request of the ending session is answered, if at all, by a dead link.
     m_pendingVoxAnswers.clear();
@@ -1103,6 +1104,10 @@ void TransmitModel::setCwPitch(int hz)
     const auto field = TransmitControlRequest::Field::CwPitch;
     const auto current = captureControlIntent(field);
     hz = qBound(100, hz, 6000);
+    if (m_confirmReceiveCwPitch) {
+        emit cwPitchCommandIssued(hz);
+        return;
+    }
     if (m_cwPitch != hz) {
         m_cwPitch = hz;  // update local cache so rapid steppers accumulate
         emit phoneStateChanged();

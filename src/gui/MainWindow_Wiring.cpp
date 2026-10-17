@@ -1991,6 +1991,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     pushSliceOverlay(s);
     connect(s, &SliceModel::inCaptureChanged, this, [this, s](bool) {
         pushSliceOverlay(s);
+        updateAetherDspModePolicy();
     });
 
     // Set the panadapter applet's slice label (e.g. "Slice B") based on
@@ -4512,6 +4513,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     };
     QObject::disconnect(tnf, &TnfModel::tnfChanged, sw, nullptr);
     QObject::disconnect(tnf, &TnfModel::tnfRemoved, sw, nullptr);
+    QObject::disconnect(tnf, &TnfModel::notchChangeRequested, sw, nullptr);
+    connect(tnf, &TnfModel::notchChangeRequested, sw, [tnf, rebuildTnfMarkers] {
+        if (tnf->confirmsControls()) { rebuildTnfMarkers(); }
+    });
     connect(tnf, &TnfModel::tnfChanged,  sw, rebuildTnfMarkers);
     connect(tnf, &TnfModel::tnfRemoved,  sw, rebuildTnfMarkers);
     connect(tnf, &TnfModel::globalEnabledChanged,
@@ -6242,9 +6247,8 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         // convention as the Kiwi CW BFO (KiwiSdrProtocol.cpp).  Flex radios
         // express CWL as mode "CW" plus the transmit flag; Icom/HL2/sim
         // express it as slice mode "CWL" and never set the flag — honor both.
-        const bool cwl = slice->mode() == QLatin1String("CWL")
-                      || m_radioModel.transmitModel().cwlEnabled();
-        const int sign = cwl ? -1 : 1;
+        const int sign = cwReceiveSidebandSign(slice->mode(), m_radioModel.hasCommandPlane(),
+            m_radioModel.transmitModel().cwlEnabled());
         double offsetMhz = sign * (detected - configured) / 1.0e6;
         applyTuneRequest(slice, slice->frequency() + offsetMhz,
                          TuneIntent::IncrementalTune, "zero-beat");

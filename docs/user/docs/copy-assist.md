@@ -86,6 +86,12 @@ Either one shows or hides the panel, which docks under the waterfall of the acti
 - A band-stack recall or a disconnect does **not** close an open panel, so transcription survives a band change.
 - Whenever the panel is open, the ASR toggle is lit and clickable, so you can always close it by hand.
 
+### Which receiver is transcribed
+
+On RTL-SDR, Copy Assist uses the selected slice's independent audio before speaker volume, mute and client DSP. Other audible slices do not enter that feed. **Transcribe from unprocessed audio (bypasses NR and RX effects)** is unavailable for this route and explains why; its saved preference is retained for radios that use the presentation stream. Retuning, switching slices or parking the receiver starts a fresh transcription context. A parked receiver supplies no audio until it returns to capture.
+
+Other radios retain their existing presentation-audio route and pre/post-DSP choice. Selecting a slice controls mode availability; it does not isolate that slice from a shared presentation mix.
+
 ### Transcribing
 
 1. Open the panel and click **Disabled** so it reads **Enabled**.
@@ -101,7 +107,8 @@ Text is **colored by recognition confidence**, the same way as the [CW Decoder](
 | Orange | Questionable |
 | Red | Low |
 
-By default Copy Assist hears the audio after AetherSDR's noise reduction and RX effects, as you hear it, so a suitable [DSP Noise Mitigation](./dsp-noise-mitigation.md) setting can improve the transcript as well as your own listening. Noise-reduction artifacts can also confuse the speech model more than the noise does; to transcribe the audio before them, turn on **Transcribe from unprocessed audio (bypasses NR and RX effects)** in Copy Assist Settings. What you hear is unchanged.
+On radios using the presentation stream, the default processed-audio setting hears client-side [DSP Noise Mitigation](./dsp-noise-mitigation.md), which can affect transcription as well as listening. The unprocessed setting and RTL's independent receiver feed bypass those client effects.
+Noise-reduction artifacts can confuse the speech model more than noise does. On presentation-stream radios, turn on **Transcribe from unprocessed audio (bypasses NR and RX effects)** in Copy Assist Settings to bypass those effects for transcription. What you hear is unchanged.
 
 ### Context
 

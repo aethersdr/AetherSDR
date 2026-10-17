@@ -279,6 +279,7 @@ add_executable(rtl_capture_transaction_test
     src/core/SharedCapturePolicy.cpp
 )
 target_include_directories(rtl_capture_transaction_test PRIVATE src)
+target_link_libraries(rtl_capture_transaction_test PRIVATE Qt6::Core)
 set_target_properties(rtl_capture_transaction_test PROPERTIES AUTOMOC OFF)
 add_test(NAME rtl_capture_transaction_test COMMAND rtl_capture_transaction_test)
 
@@ -1076,6 +1077,10 @@ set_tests_properties(wdsp_wbfm_test PROPERTIES TIMEOUT 120)
 add_executable(wdsp_channel_test tests/wdsp_channel_test.cpp)
 target_link_libraries(wdsp_channel_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_test COMMAND wdsp_channel_test)
+if(WIN32)
+    # The Windows timer tick lengthens WDSP's bounded channel-stop waits.
+    set_tests_properties(wdsp_channel_test PROPERTIES TIMEOUT 600)
+endif()
 
 # Releasing the noise-blanker hold must not flush the stage: the blanker still
 # blanks impulses in the first 200 ms after the edge, unlike a re-enabled one.
@@ -1823,6 +1828,30 @@ target_include_directories(rtl_receive_pipeline_test PRIVATE src)
 target_link_libraries(rtl_receive_pipeline_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtl_receive_pipeline_test COMMAND rtl_receive_pipeline_test)
 set_tests_properties(rtl_receive_pipeline_test PROPERTIES TIMEOUT 45)
+
+# Analytic modulated IQ through production extraction/WDSP; no USB or peer.
+add_executable(rtl_am_sam_pipeline_test tests/rtl_am_sam_pipeline_test.cpp)
+target_include_directories(rtl_am_sam_pipeline_test PRIVATE src)
+target_link_libraries(rtl_am_sam_pipeline_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtl_am_sam_pipeline_test COMMAND rtl_am_sam_pipeline_test)
+set_tests_properties(rtl_am_sam_pipeline_test PROPERTIES TIMEOUT 180)
+
+add_executable(rtl_ssb_cw_pipeline_test tests/rtl_ssb_cw_pipeline_test.cpp)
+target_include_directories(rtl_ssb_cw_pipeline_test PRIVATE src)
+target_link_libraries(rtl_ssb_cw_pipeline_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtl_ssb_cw_pipeline_test COMMAND rtl_ssb_cw_pipeline_test)
+set_tests_properties(rtl_ssb_cw_pipeline_test PROPERTIES TIMEOUT 180)
+if(WIN32)
+    # Paced IQ and bounded channel-stop waits use the coarser Windows timer tick.
+    set_tests_properties(rtl_am_sam_pipeline_test rtl_ssb_cw_pipeline_test
+        PROPERTIES TIMEOUT 600)
+endif()
+
+add_executable(cw_mode_gate_test tests/cw_mode_gate_test.cpp)
+target_include_directories(cw_mode_gate_test PRIVATE src)
+target_link_libraries(cw_mode_gate_test PRIVATE Qt6::Core)
+add_test(NAME cw_mode_gate_test COMMAND cw_mode_gate_test)
+
 add_executable(flex_slice_mode_intent_test tests/flex_slice_mode_intent_test.cpp)
 target_include_directories(flex_slice_mode_intent_test PRIVATE src tests)
 target_link_libraries(flex_slice_mode_intent_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -4997,6 +5026,16 @@ if (ENABLE_ASR)
     set_target_properties(asr_audio_tap_test PROPERTIES AUTOMOC ON)
     add_test(NAME asr_audio_tap_test COMMAND asr_audio_tap_test)
     set_tests_properties(asr_audio_tap_test PROPERTIES TIMEOUT 120)
+
+    add_executable(asr_native_receiver_test
+        tests/asr_native_receiver_test.cpp
+        src/gui/AsrAudioTap.cpp
+    )
+    target_include_directories(asr_native_receiver_test PRIVATE src tests)
+    target_link_libraries(asr_native_receiver_test PRIVATE aethercore aetherasr Qt6::Core)
+    set_target_properties(asr_native_receiver_test PROPERTIES AUTOMOC ON)
+    add_test(NAME asr_native_receiver_test COMMAND asr_native_receiver_test)
+    set_tests_properties(asr_native_receiver_test PROPERTIES TIMEOUT 120)
 
     # Silero VAD (ONNX) smoke test — only when ONNX Runtime is available; env-gated
     # on a model + WAV at run time (see the test's header), so it SKIPs otherwise.
@@ -9005,6 +9044,7 @@ endif()
 
 set(AETHER_SETTINGS_CONSUMERS
     cw_rx_model_test
+    asr_native_receiver_test
     dax_receive_applet_test
     graphic_eq_persistence_test
     hl2_discovery_logging_test

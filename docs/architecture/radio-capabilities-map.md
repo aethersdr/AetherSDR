@@ -996,3 +996,41 @@ that already holds it untouched; Flex keeps its wire route.
 The wider per-backend declaration sweep lived in
 `tests/radio_capability_gating_test.cpp` until #5452 removed it for an
 ASan-flaky IC-9700 block; #5443 tracks recovering the rest of that coverage.
+
+
+## Confirmed host receive controls
+
+`receiveCwPitchControl` declares a session-wide receive BFO pitch range and step.
+It uses the existing `setCwPitch` verb, with accepted pitch reported through
+`TransmitDelta::cwPitch`. The record grants no transmit or microphone path;
+`hostModulates` remains independent. A backend using confirmed receive controls
+publishes pitch only after DSP adoption, and the shared model forwards operator
+intent without optimistically changing the observed pitch or sending a raw Flex
+command. An accepted pitch report is never routed back as another pitch request.
+The backend owns restoration; connecting does not push the preceding session's
+pitch into an engine declaring this record.
+
+`receiveDspControl` declares the qualified modes and individually supported
+signal controls (AGC, NB, NR, ANF, manual notch, APF and RIT). This can expose host
+DSP without claiming `hasRadioSideDsp`. An absent record retains existing family
+capability behavior; a present record makes unlisted features/modes unavailable.
+The optional entries in `featureModes` restrict an individual feature to a
+subset of those modes: RTL declares APF only for CW/CWR while its other receive
+controls cover AM/SAM/USB/LSB/CW/CWR. A missing entry preserves the common mode
+list; an empty entry makes the feature unavailable. A restriction cannot add a
+mode or feature absent from the common lists.
+The VFO and RX applet retain accepted state while a confirmed engine prepares a
+request. AGC/DSP requests identify the changed field: a confirmed backend merges
+that field into its pending recipe rather than overwriting independent pending
+edits with companion fields from the last observation.
+
+These desktop records do not themselves grant an aetherd control verb. Flex's
+radio-authoritative command/status and persistence contracts remain unchanged.
+
+Tracking-notch engines with `ReceiveControlPolicy::Confirmed` use the existing
+`createNotch`, `setNotch`, `removeNotch` and `setNotchesEnabled` verbs. `TnfModel`
+keeps moves, widths, removals and global bypass at accepted state until
+`notchChanged`, `notchRemoved` or `RadioDelta::tnfEnabled` arrives. Legacy
+optimistic sessions retain their existing behavior. Notch capability limits
+remain the existing `maxNotchFilters`, width bounds and `notchHasDepth` fields;
+a single relative MN control does not imply a tracking-notch bank.

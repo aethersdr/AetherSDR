@@ -11084,18 +11084,24 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const int newWidthHz = std::clamp(
             static_cast<int>(std::lround(static_cast<double>(m_dragTnfOrigWidthHz) * widthScale)),
             m_notchMinWidthHz, m_notchMaxWidthHz);
-        for (auto& t : m_tnfMarkers) {
-            if (t.id == m_draggingTnfId) {
-                t.freqMhz = newFreq;
-                t.widthHz = newWidthHz;
-                break;
+        const bool frequencyChanged = !qFuzzyCompare(newFreq + 1.0, m_dragTnfLastFreq + 1.0);
+        const bool widthChanged = newWidthHz != m_dragTnfLastWidthHz;
+        // Every preview mutation must dispatch an intent so a confirmed-state
+        // binding can restore the accepted marker, including repeated motion.
+        if (frequencyChanged || widthChanged) {
+            for (auto& t : m_tnfMarkers) {
+                if (t.id == m_draggingTnfId) {
+                    t.freqMhz = newFreq;
+                    t.widthHz = newWidthHz;
+                    break;
+                }
             }
         }
-        if (!qFuzzyCompare(newFreq + 1.0, m_dragTnfLastFreq + 1.0)) {
+        if (frequencyChanged) {
             m_dragTnfLastFreq = newFreq;
             emit tnfMoveRequested(m_draggingTnfId, newFreq);
         }
-        if (newWidthHz != m_dragTnfLastWidthHz) {
+        if (widthChanged) {
             m_dragTnfLastWidthHz = newWidthHz;
             emit tnfWidthRequested(m_draggingTnfId, newWidthHz);
         }

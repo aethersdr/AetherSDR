@@ -224,6 +224,7 @@ void MainWindow::updateAetherDspModePolicy()
             slice->mode(),
             slice->audioMute(),
             slice->audioGain(),
+            slice->inCapture(),
         });
     }
 
@@ -420,6 +421,12 @@ void MainWindow::wireDspApplets()
         });
     }
     m_appletPanel->phoneCwApplet()->setTransmitModel(&m_radioModel.transmitModel());
+    const auto updatePhoneCwReceiveOnly = [this](bool connected, const RadioCapabilities& caps) {
+        m_appletPanel->phoneCwApplet()->setTransmitControlsAvailable(!connected || caps.canTransmit);
+    };
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged, this, updatePhoneCwReceiveOnly);
+    updatePhoneCwReceiveOnly(m_radioModel.isConnected(), m_radioModel.backendCapabilities());
+
 
 
 
