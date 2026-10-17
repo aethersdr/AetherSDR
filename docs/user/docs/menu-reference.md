@@ -37,7 +37,7 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 | **SpotHub...** | See [SpotHub](./spothub.md). |
 | **multiFLEX...** | The multi-client dashboard. See [Multi-Flex](./multi-flex.md). |
 | **TX Band Settings...** | Per-band RF power, tune power and inhibit choices. |
-| **Inhibit during TUNE ▸** | Picks which integrations are held while the radio tunes. |
+| **Inhibit during TUNE ▸** | Selects ACC TX inhibition during TUNE. On Flex firmware 4.2 and older, also selects TX1/TX2/TX3. On 4.3 and later, the submenu contains **ACC TX** and **Configure RCA suppression…**, which opens **TX Band Settings** directly for per-band RCA suppression. |
 | **AetherRX...** | The receive audio chain. See [Aetherial Audio](./aetherial-audio.md). |
 | **Settings Browser...** | Browse and edit stored settings. See [Settings and Backups](./settings-and-backups.md). |
 | **Autostart CAT with AetherSDR** / **Autostart TCI…** / **Autostart DAX…** | Start those services automatically. |

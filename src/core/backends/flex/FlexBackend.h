@@ -3,6 +3,7 @@
 #include <functional>
 
 #include <QMap>
+#include <QSet>
 #include <QString>
 
 #include "core/backends/IRadioBackend.h"
@@ -44,6 +45,11 @@ public:
     // Where the core verbs emit their SmartSDR command strings — RadioModel's
     // existing sendCommand() funnel, so verbs reuse the one wire-write path.
     void setCommandSink(std::function<void(const QString&)> sink);
+    using CommandReply = std::function<void(int, const QString&)>;
+    using ReplyCommandSink = std::function<void(const QString&, CommandReply)>;
+    void setReplyCommandSink(ReplyCommandSink sink);
+    void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId) override;
+    void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
     // Primary keying verbs use an operation-fenced writer, never the generic
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
@@ -213,6 +219,10 @@ private:
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
     std::function<void(const QString&)> m_sink;
+    ReplyCommandSink m_replySink;
+    quint64 m_tuneOutputSession = 0;
+    QMap<int, quint64> m_tuneOutputRequests;
+    QSet<int> m_tuneOutputKnownBands;
     std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
     std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;

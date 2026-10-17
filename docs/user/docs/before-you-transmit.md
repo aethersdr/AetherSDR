@@ -47,7 +47,7 @@ The checks are written so you can do them without putting a signal on the air. W
 - [ ] **The transmit antenna is the one you mean.** The RX applet header shows the RX and TX antenna buttons, with the names you gave them in **Settings → Radio Setup... → Antennas**. See [RX Controls](./rx-controls.md).
 - [ ] **The antenna is matched.** Run the radio's **ATU** from the TX applet (FlexRadio), or your external tuner, at low tune power, and check the **SWR** gauge. A Tuner Genius XL has its own applet; see [TGXL Tuner Control](./tgxl-tuner-control.md). **Tools → Pre-tune ATU Bands...** keys the transmitter repeatedly, so make sure the bands are clear first.
 - [ ] **External amplifiers are in STANDBY** until everything above checks out, and while you tune or sweep. The amplifier applets have **STANDBY** / **OPERATE** buttons; the PGXL has a **STBY** key. See [Amplifiers](./amplifiers.md) and [Peripherals](./peripherals.md).
-- [ ] **(FlexRadio)** **TUNE will not key anything you don't want it to:** **Settings → Inhibit during TUNE ▸** chooses which outputs (ACC TX, TX1, TX2, TX3) are held while the radio tunes. See [TX Controls](./tx-controls.md).
+- [ ] **(FlexRadio)** **TUNE will not key anything you don't want it to:** on firmware 4.3 and later, check **RCA off/TUNE** for each band you use under **Radio Setup → Transmit → TX Band Settings**. **Settings → Inhibit during TUNE ▸** selects ACC TX inhibition, and also selects individual RCA outputs on firmware 4.2 and older. See [TX Controls](./tx-controls.md#tune).
 
 ### Digital modes
 
