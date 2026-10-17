@@ -8,6 +8,8 @@
 
 #include <QtTest>
 
+#include <limits>
+
 using namespace AetherSDR::ModeFilters;
 
 class ModeFilterPresetsTest : public QObject {
@@ -19,6 +21,8 @@ private slots:
     void amAndFmStraddleIt_data();
     void amAndFmStraddleIt();
     void diguCentresOnItsOffsetAndClampsAt95();
+    void freeDvUsesDigitalLadderAndPreservesSideband();
+    void freeDvRejectsUnrepresentableWidths();
     void rttyStraddlesMarkAndSpace();
     void laddersAreNarrowToWide();
     void unknownModesGetTheSsbLadder();
@@ -101,6 +105,51 @@ void ModeFilterPresetsTest::rttyStraddlesMarkAndSpace()
     QCOMPARE((e.lo + e.hi) / 2, -85);        // midway between the two tones
     QCOMPARE(e.hi - e.lo, 500);
     QVERIFY(e.lo < -170 && e.hi > 0);        // both tones inside the passband
+}
+
+void ModeFilterPresetsTest::freeDvUsesDigitalLadderAndPreservesSideband()
+{
+    // FlexLib 4.3 Filter.cs groups FDVU/FDVL with DIGU/DIGL.
+    const QVector<int> digital{100, 300, 600, 1000, 1500, 2000, 3000, 6000};
+    for (const QString& mode : {QStringLiteral("FDVU"), QStringLiteral("FDVL")}) {
+        QCOMPARE(widthsForMode(mode), digital);
+        QCOMPARE(widthsForMode(mode, nullptr), digital);
+        for (int width : digital) {
+            const Edges edges = edgesForWidth(mode, width, {});
+            QCOMPARE(edges.hi - edges.lo, width);
+            QCOMPARE(widthForEdges(mode, edges.lo, edges.hi), width);
+            if (mode == QStringLiteral("FDVL")) {
+                QCOMPARE(edges.lo, -95 - width);
+                QCOMPARE(edges.hi, -95);
+            } else {
+                QCOMPARE(edges.lo, 95);
+                QCOMPARE(edges.hi, 95 + width);
+            }
+        }
+    }
+    // Legacy memories retain the existing FDV ladder and edge convention.
+    QCOMPARE(widthsForMode(QStringLiteral("FDV")), widthsForMode(QStringLiteral("USB")));
+    const Edges legacy = edgesForWidth(QStringLiteral("FDV"), 2400, {});
+    QCOMPARE(legacy.lo, 95);
+    QCOMPARE(legacy.hi, 2400);
+}
+
+void ModeFilterPresetsTest::freeDvRejectsUnrepresentableWidths()
+{
+    constexpr int kMaximumWidth = std::numeric_limits<int>::max() - 95;
+    for (const QString& mode : {QStringLiteral("FDVU"), QStringLiteral("FDVL")}) {
+        for (int width : {std::numeric_limits<int>::max(), kMaximumWidth + 1,
+                          0, -1, std::numeric_limits<int>::min()}) {
+            const Edges edges = edgesForWidth(mode, width, {});
+            QCOMPARE(edges.lo, 0);
+            QCOMPARE(edges.hi, 0);
+            QVERIFY(!acceptsFilterEdges(mode, nullptr, false, edges));
+            QVERIFY(!acceptsFilterEdges(mode, nullptr, true, edges));
+        }
+        const Edges edges = edgesForWidth(mode, kMaximumWidth, {});
+        QVERIFY(edges.lo < edges.hi);
+        QCOMPARE(qint64(edges.hi) - edges.lo, qint64(kMaximumWidth));
+    }
 }
 
 void ModeFilterPresetsTest::laddersAreNarrowToWide()
