@@ -35,6 +35,8 @@
 #include "RadioSetupDialog.h"
 #include "GpsLocationDialog.h"
 #include "RxApplet.h"
+#include "ModeFilterPresets.h"
+#include "DisplaySquelchRouting.h"
 #include "WfmApplet.h"
 #include "AmpApplet.h"
 #include "AcomApplet.h"
@@ -1302,45 +1304,23 @@ void MainWindow::syncActiveSliceSquelchLineToSpectrums()
         return;
     }
 
-    const bool kiwiActive = m_kiwiSdrManager
-        && !m_kiwiSdrManager->assignedProfileForSlice(s->sliceId()).isEmpty();
-    const bool on = kiwiActive ? s->receiveSquelchOn() : s->squelchOn();
-    const int level = kiwiActive ? s->receiveSquelchLevel()
-                                 : s->squelchLevel();
-    const QString kiwiPanId = kiwiActive ? s->panId() : QString();
     auto applyToSpectrum = [&](const QString& panId, SpectrumWidget* sw) {
-        if (!sw) {
-            return;
-        }
+        if (!sw) { return; }
         if (SliceModel* kiwiSlice =
                 kiwiAssignedSliceForPan(m_radioModel, m_kiwiSdrManager, panId)) {
-            sw->setKiwiSdrSquelchLine(
-                kiwiSlice->receiveSquelchOn(),
-                kiwiSdrSquelchMarginDbForSliceLevel(
-                    kiwiSlice, kiwiSlice->receiveSquelchLevel()),
+            sw->setKiwiSdrSquelchLine(kiwiSlice->receiveSquelchOn(),
+                kiwiSdrSquelchMarginDbForSliceLevel(kiwiSlice, kiwiSlice->receiveSquelchLevel()),
                 kiwiSlice->externalReceiveAutoSquelchOn());
             sw->setSquelchLine(false, 0);
             return;
         }
-        if (kiwiActive) {
-            if (panId == kiwiPanId) {
-                sw->setKiwiSdrSquelchLine(
-                    on, kiwiSdrSquelchMarginDbForSliceLevel(s, level),
-                    s->externalReceiveAutoSquelchOn());
-            } else {
-                sw->clearKiwiSdrSquelchLine();
-                sw->setSquelchLine(false, 0);
-            }
-            return;
-        }
-        if (!kiwiSdrProfileForPan(panId).isEmpty()
-            || sw->kiwiSdrWaterfallActive()) {
-            sw->clearKiwiSdrSquelchLine();
-            sw->setSquelchLine(false, 0);
-            return;
-        }
         sw->clearKiwiSdrSquelchLine();
-        sw->setSquelchLine(on, level);
+        SliceModel* owner = squelchSliceForPan(panId);
+        const bool eligible = DisplaySquelchRouting::scaleForSlice(owner,
+            m_radioModel).has_value();
+        sw->setSquelchLine(owner && eligible && owner->squelchOn()
+            && kiwiSdrProfileForPan(panId).isEmpty() && !sw->kiwiSdrWaterfallActive(),
+            owner ? owner->squelchLevel() : 0);
     };
 
     if (!m_panStack) {
@@ -1356,21 +1336,42 @@ void MainWindow::syncActiveSliceSquelchLineToSpectrums()
     }
 }
 
+SliceModel* MainWindow::squelchSliceForPan(const QString& panId) const
+{
+    const PanadapterApplet* applet = m_panStack ? m_panStack->panadapter(panId) : nullptr;
+    return DisplaySquelchRouting::displaySlice(m_radioModel.slices(), panId,
+        activeSlice(), applet ? applet->titleSliceId() : -1);
+}
+
 std::optional<SquelchLevelScale> MainWindow::activeSliceSquelchScale() const
 {
-    const SliceModel* s = activeSlice();
-    if (!s || !m_radioModel.isConnected()) {
-        return std::nullopt;
-    }
-    return squelchScaleForMode(m_radioModel.backendCapabilities().squelchLevelScale,
-                               s->mode());
+    return DisplaySquelchRouting::scaleForSlice(activeSlice(),
+        m_radioModel);
 }
 
 void MainWindow::syncSquelchScaleToUi()
 {
     const std::optional<SquelchLevelScale> scale = activeSliceSquelchScale();
-    const QList<SpectrumWidget*> spectra = findChildren<SpectrumWidget*>();
-    for (SpectrumWidget* sw : spectra) {
+    if (m_panStack) {
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            if (!applet) { continue; }
+            SpectrumWidget* sw = m_panStack->spectrum(applet->panId());
+            if (!sw) { continue; }
+            SliceModel* owner = squelchSliceForPan(applet->panId());
+            auto panScale = DisplaySquelchRouting::scaleForSlice(owner,
+                m_radioModel);
+            // A background Auto receiver on this pan still needs its estimator.
+            for (SliceModel* slice : m_radioModel.slices()) {
+                if (DisplaySquelchRouting::tracks(slice, applet->panId(),
+                        m_radioModel)) {
+                    panScale = DisplaySquelchRouting::scaleForSlice(slice,
+                        m_radioModel);
+                    break;
+                }
+            }
+            sw->setSquelchScale(panScale);
+        }
+    } else if (SpectrumWidget* sw = spectrum()) {
         sw->setSquelchScale(scale);
     }
     RxApplet* rx = m_appletPanel ? m_appletPanel->rxApplet() : nullptr;
@@ -1386,7 +1387,12 @@ void MainWindow::syncSquelchScaleToUi()
         && published->appliesTo(s->mode());
     if (m_radioModel.isConnected() && s && !engineAuto && !autoSquelchAvailable(scale)) {
         const auto& published = m_radioModel.backendCapabilities().squelchLevelScale;
-        if (!published) {
+        if (!ModeFilters::squelchAvailableInMode(s->mode(),
+                published ? &*published : nullptr,
+                m_radioModel.backendCapabilities().hasModeIndependentSquelch,
+                s->externalReceiveReplacementActive())) {
+            reason = tr("squelch is unavailable in %1.").arg(s->mode());
+        } else if (!published) {
             reason = tr("this radio does not publish where its squelch level "
                         "sits on the panadapter scale.");
         } else if (!published->appliesTo(s->mode())) {
@@ -1398,7 +1404,7 @@ void MainWindow::syncSquelchScaleToUi()
                         "be held.");
         }
     }
-    rx->setAutoSqlAvailability(reason.isEmpty(), reason);
+    rx->setAutoSqlAvailability(reason.isEmpty(), reason, rx->isAttachedToSlice(s));
 }
 
 bool MainWindow::autoSquelchShouldRunOnSpectrum(
@@ -1409,35 +1415,15 @@ bool MainWindow::autoSquelchShouldRunOnSpectrum(
         return kiwiSlice->externalReceiveAutoSquelchOn();
     }
 
-    if (!m_appletPanel || !m_appletPanel->rxApplet()
-        || m_appletPanel->rxApplet()->sqlMode() != RxApplet::SqlMode::Auto) {
-        return false;
+    if (!kiwiSdrProfileForPan(panId).isEmpty()
+        || (spectrum && spectrum->kiwiSdrWaterfallActive())) { return false; }
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (DisplaySquelchRouting::tracks(slice, panId,
+                m_radioModel)) {
+            return true;
+        }
     }
-
-    const SliceModel* s = activeSlice();
-    if (!s) {
-        return false;
-    }
-
-    const bool activeKiwi = m_kiwiSdrManager
-        && !m_kiwiSdrManager->assignedProfileForSlice(s->sliceId()).isEmpty();
-
-    if (activeKiwi) {
-        return panId == s->panId();
-    }
-
-    const auto sql = m_radioModel.backendCapabilities().squelchLevelScale;
-    if (sql && sql->automaticInEngine) { return false; }
-
-    // The receiver's own gate runs Auto only on its slice's pan.
-    if (exclusiveSquelchScale(m_radioModel.backendCapabilities().squelchLevelScale)
-        && panId != s->panId()) {
-        return false;
-    }
-
-    return kiwiSdrProfileForPan(panId).isEmpty()
-        && (!spectrum || !spectrum->kiwiSdrWaterfallActive())
-        && autoSquelchAvailable(activeSliceSquelchScale());
+    return false;
 }
 
 void MainWindow::syncActiveSliceAutoSquelchToSpectrums()
@@ -1446,7 +1432,9 @@ void MainWindow::syncActiveSliceAutoSquelchToSpectrums()
         if (!sw) {
             return;
         }
-        sw->setAutoSquelchEnable(autoSquelchShouldRunOnSpectrum(panId, sw));
+        const SliceModel* owner = squelchSliceForPan(panId);
+        sw->setAutoSquelchEnable(autoSquelchShouldRunOnSpectrum(panId, sw),
+            owner && (owner->displayAutoSquelch() || owner->externalReceiveAutoSquelchOn()));
     };
 
     if (!m_panStack) {
@@ -2179,20 +2167,30 @@ void MainWindow::onSliceAdded(SliceModel* s)
         if (s->isTxSlice())
             syncTxWaterfallSliceToSpectrums();
     });
-    // Squelch threshold line on the spectrum overlay. Flex follows the active
-    // slice only; Kiwi replacement audio owns an independent line on its own
-    // pan even when a Flex slice is active elsewhere.
+    // Each pan renders its own slice's accepted threshold, including updates
+    // to background Auto receivers.
     connect(s, &SliceModel::squelchChanged, this, [this, s](bool on, int level) {
-        Q_UNUSED(on);
-        Q_UNUSED(level);
-        if (s != activeSlice()) return;
-        syncActiveSliceSquelchLineToSpectrums();
+        if (s != squelchSliceForPan(s->panId())) { return; }
+        if (SpectrumWidget* sw = spectrumForSlice(s)) {
+            const bool eligible = DisplaySquelchRouting::scaleForSlice(s, m_radioModel).has_value();
+            sw->setSquelchLine(on && eligible && !sw->kiwiSdrWaterfallActive(), level);
+        }
     });
     // The squelch scale is per mode (an HL2 FM gate has no dB place).
     connect(s, &SliceModel::modeChanged, this, [this, s](const QString&) {
-        if (s != activeSlice()) return;
+        if (!DisplaySquelchRouting::scaleForSlice(s,
+                m_radioModel)) {
+            s->setDisplayAutoSquelch(false);
+            const auto published = m_radioModel.backendCapabilities().squelchLevelScale;
+            if (s != activeSlice() && s->squelchOn() && published
+                && published->controlUnavailableModes.contains(s->mode())
+                && !isCwMode(s->mode())) {
+                s->setSquelch(false, s->squelchLevel());
+            }
+        }
         syncSquelchScaleToUi();
         syncActiveSliceAutoSquelchToSpectrums();
+        syncActiveSliceSquelchLineToSpectrums();
     });
     connect(s, &SliceModel::externalReceiveSquelchChanged,
             this, [this, s](bool on, int level) {
@@ -2211,11 +2209,14 @@ void MainWindow::onSliceAdded(SliceModel* s)
             syncActiveSliceSquelchLineToSpectrums();
         }
     });
-    if (s == activeSlice()) {
+    connect(s, &SliceModel::displayAutoSquelchChanged, this, [this] {
+        syncSquelchScaleToUi();
+        syncActiveSliceAutoSquelchToSpectrums();
         syncActiveSliceSquelchLineToSpectrums();
-    } else if (auto* sw = spectrumForSlice(s)) {
-        sw->setSquelchLine(s->squelchOn(), s->squelchLevel());
-    }
+    });
+    syncSquelchScaleToUi();
+    syncActiveSliceAutoSquelchToSpectrums();
+    syncActiveSliceSquelchLineToSpectrums();
 
     connect(s, &SliceModel::txSliceChanged, this, [this, s](bool tx) {
         // Update hasTxSlice on all spectrums for waterfall freeze logic
@@ -2339,6 +2340,14 @@ void MainWindow::onSliceAdded(SliceModel* s)
                     refreshPanSliceTitle(applet);
             }
         }
+        // A migrated receiver starts from the new pan's floor, never an EWMA
+        // inherited from the pan it left.
+        for (SpectrumWidget* sw : findChildren<SpectrumWidget*>()) {
+            sw->setAutoSquelchEnable(false);
+        }
+        syncSquelchScaleToUi();
+        syncActiveSliceAutoSquelchToSpectrums();
+        syncActiveSliceSquelchLineToSpectrums();
         // The TX slice moving pane moves a radio-wide span control (#5750).
         syncPanSpanControlPlacement();
         updateKiwiSdrVirtualTrackingForSlice(s);
@@ -2720,6 +2729,9 @@ void MainWindow::onSliceRemoved(int id)
     // slice) must re-derive the panadapter split-pair from the model. (#3726)
     updateSplitState();
     updateAetherDspModePolicy();
+    syncSquelchScaleToUi();
+    syncActiveSliceAutoSquelchToSpectrums();
+    syncActiveSliceSquelchLineToSpectrums();
 }
 
 void MainWindow::beginProfileLoadRadioStateWriteHold(const QString& profileType,
@@ -4681,43 +4693,17 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // ── Auto-squelch wiring ───────────────────────────────────────────────
     // RxApplet signals → per-pan spectrum widget
     connect(m_appletPanel->rxApplet(), &RxApplet::sqlAutoChanged,
-            sw, [this, applet, sw](bool) {
-        const QString panId = applet ? applet->panId() : QString();
-        sw->setAutoSquelchEnable(
-            autoSquelchShouldRunOnSpectrum(panId, sw));
-    });
+            sw, [this](bool) { syncActiveSliceAutoSquelchToSpectrums(); });
     connect(m_appletPanel->rxApplet(), &RxApplet::squelchStateChanged,
-            sw, [this, applet, sw](bool on, int level) {
-        SliceModel* s = activeSlice();
-        const bool kiwiActive = s && m_kiwiSdrManager
-            && !m_kiwiSdrManager->assignedProfileForSlice(s->sliceId()).isEmpty();
-        if (kiwiActive) {
-            if (applet && applet->panId() == s->panId()) {
-                sw->setKiwiSdrSquelchLine(
-                    on, kiwiSdrSquelchMarginDbForSliceLevel(s, level),
-                    s->externalReceiveAutoSquelchOn());
-            } else {
-                sw->clearKiwiSdrSquelchLine();
-                sw->setSquelchLine(false, 0);
-            }
-            return;
+            sw, [this](bool, int) {
+        if (const SliceModel* slice = activeSlice(); slice && slice->externalReceiveReplacementActive()) {
+            syncActiveSliceSquelchLineToSpectrums();
         }
-        const QString panId = applet ? applet->panId() : QString();
-        if (!kiwiSdrProfileForPan(panId).isEmpty()
-            || sw->kiwiSdrWaterfallActive()) {
-            sw->clearKiwiSdrSquelchLine();
-            sw->setSquelchLine(false, 0);
-            return;
-        }
-        sw->clearKiwiSdrSquelchLine();
-        sw->setSquelchLine(on, level);
     });
-    // Spectrum widget → radio + back to overlay: apply level and immediately
-    // update the squelch line on sw so the yellow line never depends on the
-    // RxApplet → squelchStateChanged → setSquelchLine round-trip, which can
-    // miss the first emission if wirePanadapter runs before setSlice.
+    // External receive uses a relative margin; absolute detectors route the
+    // measured floor below through each slice's own scale and margin.
     connect(sw, &SpectrumWidget::autoSquelchLevelSuggested,
-            this, [this, applet, sw](int level) {
+            this, [this, applet, sw](int) {
         const QString panId = applet ? applet->panId() : QString();
         if (!autoSquelchShouldRunOnSpectrum(panId, sw)) {
             return;
@@ -4729,21 +4715,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw->setKiwiSdrSquelchLine(true, margin, true);
             return;
         }
-        SliceModel* s = activeSlice();
-        if (!s) {
-            return;
-        }
-        const bool kiwiActive = m_kiwiSdrManager
-            && !m_kiwiSdrManager->assignedProfileForSlice(s->sliceId()).isEmpty();
-        if (kiwiActive) {
-            const int margin = currentAutoSqlMarginDb();
-            s->setSquelch(true, margin);
-            sw->setKiwiSdrSquelchLine(
-                true, margin, true);
-        } else {
-            s->setSquelch(true, level);
-            sw->setSquelchLine(s->squelchOn(), s->squelchLevel());
-        }
+
+    });
+    connect(sw, &SpectrumWidget::autoSquelchNoiseFloorChanged,
+            this, [this, applet](float floor) {
+        if (!applet || !kiwiSdrProfileForPan(applet->panId()).isEmpty()) { return; }
+        DisplaySquelchRouting::applyFloor(m_radioModel.slices(), applet->panId(),
+            m_radioModel, floor);
     });
     // Auto-squelch margin: now driven by the RX Applet's SQL slider when
     // SQL mode is Auto (instead of a separate slider in the Display
