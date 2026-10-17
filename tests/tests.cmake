@@ -3643,6 +3643,12 @@ target_include_directories(firmware_uploader_test PRIVATE src)
 target_link_libraries(firmware_uploader_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME firmware_uploader_test COMMAND firmware_uploader_test)
 
+# #5572 — socket-free MSI table decoding and exact CAB-member selection.
+add_executable(msi_firmware_metadata_test tests/msi_firmware_metadata_test.cpp)
+target_include_directories(msi_firmware_metadata_test PRIVATE src)
+target_link_libraries(msi_firmware_metadata_test PRIVATE aethercore Qt6::Core)
+add_test(NAME msi_firmware_metadata_test COMMAND msi_firmware_metadata_test)
+
 # #5958: socket-free capability policy; no discovery, transport, or radio peer.
 add_executable(tx_audio_path_policy_test tests/tx_audio_path_policy_test.cpp)
 target_include_directories(tx_audio_path_policy_test PRIVATE src)
@@ -4837,6 +4843,7 @@ target_link_libraries(vkamp_connection_test PRIVATE Qt6::Core Qt6::Network Qt6::
 add_test(NAME vkamp_connection_test COMMAND vkamp_connection_test)
 set_tests_properties(vkamp_connection_test PROPERTIES TIMEOUT 120)
 
+# not registered: requires the externally supplied SmartSDR 4.2.18 MSI fixture (AETHERSDR_TEST_MSI).
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp
     src/core/OleCompoundFile.cpp
