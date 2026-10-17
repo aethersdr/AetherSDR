@@ -1,19 +1,30 @@
 name: Docs
 
-# Builds the user documentation site (docs/user, Docusaurus) and, on main,
-# deploys it to Cloudflare Pages at https://docs.aethersdr.com. A manual run
-# (workflow_dispatch) on main redeploys without a content change.
+# Builds the user documentation site (docs/user, Docusaurus) and the
+# printable PDF manual (tools/docs/build_pdf.py: Pandoc + Typst).
 #
-# It also typesets the printable PDF manual (tools/docs/build_pdf.py: Pandoc
-# + Typst). On a pull request the PDF is a render check and a downloadable
-# artifact; on main it is deployed with the site as
-# https://docs.aethersdr.com/AetherSDR-Manual.pdf; and when a release is
-# published it is attached to that release as AetherSDR-Manual-<tag>.pdf,
-# with a detached signature (.pdf.asc) made with the release key.
+# On a pull request both are checks: the build is the link check
+# (docusaurus.config.js sets onBrokenLinks, onBrokenAnchors and
+# onBrokenMarkdownLinks to 'throw', so a page that links to a missing page or
+# heading fails this workflow), and the PDF is a render check and a
+# downloadable artifact. Nothing is deployed.
 #
-# The build is the link check: docusaurus.config.js sets onBrokenLinks,
-# onBrokenAnchors and onBrokenMarkdownLinks to 'throw', so a page that links
-# to a missing page or heading fails this workflow.
+# Publishing the site is a release-time job (#6556). When an app release (a
+# v* tag, not a pre-release) is published, the PDF is attached to it as
+# AetherSDR-Manual-<tag>.pdf with a detached signature (.pdf.asc) made with
+# the release key, and then the site is built from the tag and deployed to
+# Cloudflare Pages at https://docs.aethersdr.com. A merge to main deploys
+# nothing, so Next (/next/) shows main as of the last deploy.
+#
+# The PDF is not uploaded to Pages, which refuses any file over 25 MiB (the
+# manual passed that on 2026-10-17). The app and the site link to
+# https://docs.aethersdr.com/AetherSDR-Manual.pdf; the deploy writes a
+# _redirects entry sending that URL to the signed PDF on the release.
+#
+# A manual run (workflow_dispatch) redeploys the site: from the latest app
+# release by default, or from the tag or branch given as `ref` (main, for a
+# docs-only fix between releases). Its PDF link always points at the latest
+# app release.
 #
 # This is NOT a required status check, which is what makes the `paths:`
 # filter safe here. A required check that a PR never triggers blocks that PR
@@ -26,21 +37,20 @@ on:
       - 'docs/user/**'
       - 'tools/docs/**'
       - '.github/workflows/docs.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'docs/user/**'
-      - 'tools/docs/**'
-      - '.github/workflows/docs.yml'
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag or branch to deploy (empty: the latest app release)'
+        required: false
+        default: ''
   release:
     types: [published]
 
-# Superseded PR runs are cancelled; every main run completes so a deploy is
-# never cut off half-way (same expression as ci.yml / static-checks.yml).
+# Superseded PR runs are cancelled; a deploy run always completes so it is
+# never cut off half-way.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -57,13 +67,9 @@ env:
 jobs:
   build:
     name: Build docs site
-    if: ${{ github.event_name != 'release' }}
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      # Mapped from the secret so steps can be gated on its presence: the
-      # `secrets` context is not available in step `if:` conditions.
-      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     defaults:
       run:
         working-directory: docs/user
@@ -109,60 +115,28 @@ jobs:
           bin/pandoc --version | head -1
           bin/typst --version
 
-      # After the site build, which empties build/: the PDF lands in the
-      # site's root and is deployed with it on main.
       - name: Build PDF manual
         working-directory: .
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [ -n "$PR_NUMBER" ]; then
-            version="PR #${PR_NUMBER} @ ${HEAD_SHA::9}"
-          else
-            version="${GITHUB_REF_NAME} @ ${HEAD_SHA::9}"
-          fi
-          python3 tools/docs/build_pdf.py --version "$version" \
-            --output docs/user/build/AetherSDR-Manual.pdf
+          python3 tools/docs/build_pdf.py --version "PR #${PR_NUMBER} @ ${HEAD_SHA::9}" \
+            --output "${RUNNER_TEMP}/AetherSDR-Manual.pdf"
 
       - name: Upload PDF manual
-        if: ${{ github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: AetherSDR-Manual
-          path: docs/user/build/AetherSDR-Manual.pdf
+          path: ${{ runner.temp }}/AetherSDR-Manual.pdf
           if-no-files-found: error
           retention-days: 14
 
-      - name: Check deploy configuration
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && env.CF_TOKEN == '' }}
-        run: |
-          echo "::notice::CLOUDFLARE_API_TOKEN not set — skipping deploy."
-          echo "Add CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID repo secrets to enable it."
-
-      # First run creates the project; later runs no-op (hence continue-on-error).
-      - name: Ensure Pages project exists
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && env.CF_TOKEN != '' }}
-        continue-on-error: true
-        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages project create aethersdr-docs --production-branch main
-
-      - name: Deploy to Cloudflare Pages
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && env.CF_TOKEN != '' }}
-        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy docs/user/build --project-name=aethersdr-docs --branch=main --commit-dirty=true
-
-  # A published release gets the manual for its tag. Only this job can write
-  # to the repository (release assets); the site build above cannot.
+  # A published app release gets the manual for its tag. Only this job can
+  # write to the repository (release assets); the other jobs cannot.
   release-pdf:
     name: Attach PDF manual to release
-    if: ${{ github.event_name == 'release' }}
+    if: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -247,3 +221,119 @@ jobs:
             "${RUNNER_TEMP}/AetherSDR-Manual-${TAG}.pdf" \
             "${RUNNER_TEMP}/AetherSDR-Manual-${TAG}.pdf.asc" \
             --clobber --repo "$GITHUB_REPOSITORY"
+
+  # The site, from a published app release (after its PDF is attached, so the
+  # redirect never points at a missing file) or from a manual run.
+  deploy:
+    name: Deploy docs site
+    needs: release-pdf
+    if: >-
+      ${{ !cancelled()
+          && (needs.release-pdf.result == 'success' || needs.release-pdf.result == 'skipped')
+          && (github.event_name == 'workflow_dispatch'
+              || (github.event_name == 'release'
+                  && startsWith(github.event.release.tag_name, 'v')
+                  && !github.event.release.prerelease)) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Mapped from the secret so steps can be gated on its presence: the
+      # `secrets` context is not available in step `if:` conditions.
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # A release deploys its own tag. A manual run deploys `ref`, or else the
+      # latest app release. The PDF link always names a release, because a
+      # run from main has no signed PDF of its own.
+      - name: Resolve what to deploy
+        id: target
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if [ -n "$RELEASE_TAG" ]; then
+            ref="$RELEASE_TAG"
+            pdf_tag="$RELEASE_TAG"
+          else
+            pdf_tag=$(gh release list --repo "$GITHUB_REPOSITORY" \
+              --exclude-drafts --exclude-pre-releases --limit 50 \
+              --json tagName --jq '[.[] | select(.tagName | test("^v[0-9]"))][0].tagName')
+            if [ -z "$pdf_tag" ]; then
+              echo "::error::No published app release (v*) found."
+              exit 1
+            fi
+            ref="${INPUT_REF:-$pdf_tag}"
+          fi
+          pdf="AetherSDR-Manual-${pdf_tag}.pdf"
+          if ! gh release view "$pdf_tag" --repo "$GITHUB_REPOSITORY" \
+               --json assets --jq '.assets[].name' | grep -qxF "$pdf"; then
+            echo "::error::Release ${pdf_tag} has no ${pdf}; the PDF redirect would be broken."
+            exit 1
+          fi
+          echo "Deploying ${ref}; PDF manual from ${pdf_tag}"
+          {
+            echo "ref=${ref}"
+            echo "pdf_url=https://github.com/${GITHUB_REPOSITORY}/releases/download/${pdf_tag}/${pdf}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.target.outputs.ref }}
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/user/package-lock.json
+
+      - name: Install dependencies
+        working-directory: docs/user
+        run: npm ci
+
+      - name: Build (fails on any broken link or anchor)
+        working-directory: docs/user
+        run: npm run build
+
+      # The PDF lives on the release, not on Pages (25 MiB per-file limit).
+      - name: Redirect the PDF manual to the release
+        working-directory: docs/user
+        env:
+          PDF_URL: ${{ steps.target.outputs.pdf_url }}
+        run: |
+          echo "/AetherSDR-Manual.pdf ${PDF_URL} 302" >> build/_redirects
+          cat build/_redirects
+
+      - name: Check no file exceeds the Pages limit
+        working-directory: docs/user
+        run: |
+          big=$(find build -type f -size +25M)
+          if [ -n "$big" ]; then
+            echo "::error::Cloudflare Pages refuses files over 25 MiB:"
+            echo "$big" | xargs ls -l
+            exit 1
+          fi
+
+      - name: Check deploy configuration
+        if: ${{ env.CF_TOKEN == '' }}
+        run: |
+          echo "::notice::CLOUDFLARE_API_TOKEN not set — skipping deploy."
+          echo "Add CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID repo secrets to enable it."
+
+      # First run creates the project; later runs no-op (hence continue-on-error).
+      - name: Ensure Pages project exists
+        if: ${{ env.CF_TOKEN != '' }}
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages project create aethersdr-docs --production-branch main
+
+      - name: Deploy to Cloudflare Pages
+        if: ${{ env.CF_TOKEN != '' }}
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy docs/user/build --project-name=aethersdr-docs --branch=main --commit-dirty=true
