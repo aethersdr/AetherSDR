@@ -723,8 +723,19 @@ void MainWindow::onShuttleTick()
     }
 
     const int steps = m_shuttleRate.tick(dt, unitHz, m_shuttleSpeed, maxRateHz);
-    if (steps != 0)
-        applyFlexControlWheelAction(m_shuttleAction, steps);
+    if (steps == 0) {
+        return;
+    }
+    // A held ring must not resend an unchanged offset on every timer tick.
+    if (m_shuttleAction == QLatin1String("WheelRit") && s->ritOn()
+        && std::clamp(s->ritFreq() + steps * 10, -9999, 9999) == s->ritFreq()) {
+        return;
+    }
+    if (m_shuttleAction == QLatin1String("WheelXit") && s->xitOn()
+        && std::clamp(s->xitFreq() + steps * 10, -9999, 9999) == s->xitFreq()) {
+        return;
+    }
+    applyFlexControlWheelAction(m_shuttleAction, steps);
 }
 
 // static

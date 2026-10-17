@@ -97,6 +97,21 @@ The PowerMate (one knob with a push) and the Contour ShuttleXpress (5 buttons) a
 
 Contour reports can contain several button changes together. Every press and release is handled, and turning the jog wheel while pressing a button still tunes normally.
 
+On ShuttlePro v2, buttons 1–8 use **Key 1–8**, buttons 9–12 use **StreamDeck+ Encoder Push Actions**, and buttons 13–15 have no action mapping.
+
+### Contour shuttle ring
+
+The spring-loaded outer ring tunes continuously while held. A small deflection tunes slowly; full deflection sweeps at about 100 kHz/s at **Normal** speed. Releasing the ring stops tuning. A new deflection applies its first step after about 60 ms; larger tuning steps have a minimum step rate so the inner positions remain usable.
+
+Set it up under **Settings → Radio Setup... → Serial & Controllers → Shuttle Ring (ShuttleXpress / ShuttlePro)**:
+
+| Setting | Choices | Default |
+|---------|---------|---------|
+| **Action** | Tune Slice, RIT (Receive Incremental Tuning), XIT (Transmit Incremental Tuning), None | Tune Slice |
+| **Speed** | Slow (×0.5), Normal, Fast (×2) | Normal |
+
+The ring uses the same direction setting as the jog wheel. Tune Slice respects the active slice's Tune Lock. RIT and XIT move in 10 Hz increments, capped at 1 kHz/s and ±9999 Hz. Unplugging the controller stops ring tuning. The ring does not trigger auto-snap on release.
+
 ## Using the TMate 2
 
 The TMate 2 (three encoders, six function keys and an LCD) has its own groups on the same page: **TMate 2 Key Actions** (F1–F6), **TMate 2 Encoder Actions**, **TMate 2 Encoder Push Actions** and **TMate 2 Display**. Its LCD shows the frequency, mode, S-meter and transmit state.

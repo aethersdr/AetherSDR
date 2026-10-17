@@ -372,7 +372,7 @@ AetherSDR recognizes:
 
 The **jog wheel** tunes step by step. The **shuttle ring** tunes continuously while you hold it. Turning it moves one step almost at once (after about 60 ms, so the spring's bounce on release cannot step backwards), like a jog detent. After that, a small turn creeps (about 20 Hz per second) and full deflection sweeps the band (about 100 kHz per second). Letting go stops tuning. The top speed is the same whatever step size is selected. With a large step, the first positions still move at least a couple of steps per second.
 
-Set the ring up in `Settings > Radio Setup... > Serial`, in the **Shuttle Ring** group:
+Set the ring up in `Settings > Radio Setup... > Serial & Controllers`, in the **Shuttle Ring** group:
 
 - **Action:** Tune Slice (default), RIT, XIT, or None.
 - **Speed:** Slow, Normal, or Fast.
@@ -390,6 +390,8 @@ AetherSDR recognizes:
 - Fifteen buttons
 
 The jog wheel and shuttle ring work exactly as on the ShuttleXpress.
+
+Buttons 1–8 use **StreamDeck+ LCD Button Actions**; buttons 9–12 use **StreamDeck+ Encoder Push Actions**. Buttons 13–15 have no action mapping.
 
 ### Current limitation for HID knobs
 

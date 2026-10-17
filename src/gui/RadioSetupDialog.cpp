@@ -9189,16 +9189,15 @@ QWidget* RadioSetupDialog::buildSerialTab()
     // Contour shuttle ring (#5928)
     {
         auto* group = new QGroupBox("Shuttle Ring (ShuttleXpress / ShuttlePro)");
-        ThemeManager::instance().applyStyleSheet(group, kGroupStyle);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
         auto* note = new QLabel(
             "The spring-loaded outer ring tunes continuously while held: a small "
             "turn creeps, full deflection sweeps the band, letting go stops. "
-            "Speed does not depend on the step size.");
+            "Full deflection reaches the same sweep speed at each step size.");
         note->setWordWrap(true);
-        ThemeManager::instance().applyStyleSheet(note, kLabelStyle);
+        setTone(note, Tone::Hint);
         grid->addWidget(note, 0, 0, 1, 3);
 
         // Tuning-like actions only: a held ring on RF power or volume is unsafe.
@@ -9216,10 +9215,12 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
         auto addCombo = [&](int row, const QString& label, const auto& items,
                             const QString& field, const QString& dflt) {
-            grid->addWidget(new QLabel(label), row, 0);
-            auto* combo = new QComboBox;
-            ThemeManager::instance().applyStyleSheet(
-                combo, QString(kEditStyleTemplate).replace("QLineEdit", "QComboBox"));
+            auto* fieldLabel = new QLabel(label);
+            grid->addWidget(fieldLabel, row, 0);
+            auto* combo = new GuardedComboBox;
+            combo->setAccessibleName(QStringLiteral("Shuttle Ring ") + label.chopped(1));
+            combo->setObjectName(QStringLiteral("shuttleRing") + field);
+            fieldLabel->setBuddy(combo);
             for (const auto& it : items)
                 combo->addItem(QString::fromLatin1(it.label), QString::fromLatin1(it.id));
             const int idx = combo->findData(HidEncoderManager::shuttleMappingField(field, dflt));
