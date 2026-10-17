@@ -1039,8 +1039,8 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // marketing name for the whole TX-DSP composite.  Settings ID
     // stays TXDSP for persistence.
     {
-        auto entry = makeEntry("TXDSP", "Channel Strip", txDsp, false,
-                               m_drawer, m_drawerLayout, "VUDU");
+        auto entry = makeEntry("TXDSP", QString::fromUtf8("Aetherial Audio\xe2\x84\xa2"),
+                               txDsp, false, m_drawer, m_drawerLayout, "VUDU");
         // Make the composite's drag MIME match its owning AppletEntry.id
         // so the drop handler's fast lookup hits directly.  Container
         // persistence keys still use the internal id ("tx_dsp") — drag
