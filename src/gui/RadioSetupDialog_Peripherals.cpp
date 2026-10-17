@@ -14,6 +14,8 @@
 #include "RadioSetupDialog.h"
 #include "RadioSetupDialogCommon.h"
 #include "Kpa500AdvancedWidget.h"
+#include "Kat500AdvancedWidget.h"
+#include "models/Kat500Model.h"
 #include "PeripheralAuthConnectFlow.h"
 #include "PeripheralAuthStore.h"
 #include "PeripheralConnectionSource.h"
@@ -85,6 +87,7 @@ struct PeripheralDeviceUi {
         SerialOrNetwork,  // ACOM, SPE Expert, LP-100A: serial port or ser2net host
         Vkamp,            // host + port, plus the amplifier model
         Kpa1500,          // host + port
+        Kat500,           // KAT500 serial or TCP tuner
         Kpa500,           // Serial with selectable baud, or raw TCP
     };
 
@@ -502,7 +505,7 @@ void finishDetailPage(DetailPage& detail, PeripheralDeviceUi& ui,
     detail.layout->addWidget(detail.group, 0, Qt::AlignTop);
 
     if (ui.kind == PeripheralDeviceUi::Kind::AuthNetwork
-        || ui.kind == PeripheralDeviceUi::Kind::Kpa500) {
+        || (ui.kind == PeripheralDeviceUi::Kind::Kpa500 || ui.kind == PeripheralDeviceUi::Kind::Kat500)) {
         // TGXL and PGXL can also be reached through the radio, so for them the
         // toggle chooses the direct link over the radio's relay.
         const bool relayed = ui.id == QLatin1String("tgxl") || ui.id == QLatin1String("pgxl");
@@ -521,7 +524,7 @@ void finishDetailPage(DetailPage& detail, PeripheralDeviceUi& ui,
             : RadioSetupDialog::tr(
                   "Connect to %1 on startup, when discovery reports it, and after a drop. "
                   "Turn off to connect only when you click Connect.").arg(ui.label));
-        if (ui.kind == PeripheralDeviceUi::Kind::Kpa500) {
+        if ((ui.kind == PeripheralDeviceUi::Kind::Kpa500 || ui.kind == PeripheralDeviceUi::Kind::Kat500)) {
             autoConnect->setAccessibleDescription(RadioSetupDialog::tr(
                 "Connect to %1 on startup. Turn off to connect only when you click Connect.")
                 .arg(ui.label));
@@ -1214,7 +1217,7 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
         setTone(ui.deviceInfoLabel, Tone::Value);
         addFormRow(detail, tr("Device Information"), ui.deviceInfoLabel);
     }
-    if (ui.kind == PeripheralDeviceUi::Kind::Kpa500) {
+    if ((ui.kind == PeripheralDeviceUi::Kind::Kpa500 || ui.kind == PeripheralDeviceUi::Kind::Kat500)) {
         auto* help = new QLabel(ui.networkTooltip);
         help->setWordWrap(true);
         setTone(help, Tone::Hint);
@@ -1391,6 +1394,79 @@ void RadioSetupDialog::revealKpa500AdvancedSettings()
         }
     }
     QPointer<QPushButton> toggle = findChild<QPushButton*>(QStringLiteral("peripheralAdvanced_kpa500"));
+    if (!toggle) {
+        return;
+    }
+    toggle->setChecked(true);
+    toggle->setFocus(Qt::OtherFocusReason);
+    QTimer::singleShot(0, this, [toggle] {
+        if (!toggle) {
+            return;
+        }
+        for (QWidget* parent = toggle->parentWidget(); parent; parent = parent->parentWidget()) {
+            if (auto* area = qobject_cast<QScrollArea*>(parent); area && area->widget()) {
+                const int y = toggle->mapTo(area->widget(), QPoint(0, 0)).y();
+                area->verticalScrollBar()->setValue(qMax(0, y - 8));
+                return;
+            }
+        }
+    });
+}
+
+void RadioSetupDialog::buildKat500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
+                                        const std::function<void()>& refresh,
+                                        const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds)
+{
+#ifdef HAVE_SERIALPORT
+    ui.baudCombo = new QComboBox;
+    ui.baudCombo->setObjectName(QStringLiteral("peripheralBaud_%1").arg(ui.id));
+    ui.baudCombo->setAccessibleName(tr("KAT500 baud rate"));
+    ui.baudCombo->setAccessibleDescription(tr("Local serial speed; must match the tuner. 8 data bits, no parity, 1 stop bit."));
+    for (int baud : {4800, 9600, 19200, 38400}) {
+        ui.baudCombo->addItem(QString::number(baud), baud);
+    }
+    const int savedBaud = PeripheralSettings::deviceInt(ui.settingsGroup, "BaudRate", 38400);
+    const int baudIndex = ui.baudCombo->findData(savedBaud);
+    ui.baudCombo->setCurrentIndex(baudIndex >= 0 ? baudIndex : 0);
+    ui.connectSerial = [this, u = &ui](const QString& port) {
+        const int baud = u->baudCombo->currentData().toInt();
+        PeripheralSettings::setDeviceInt(u->settingsGroup, "BaudRate", baud);
+        m_kat500->connectSerial(port, baud);
+    };
+#endif
+    ui.networkPlaceholder = tr("ser2net host, raw TCP mode");
+    ui.networkDescription = tr("IP address or host name of the raw TCP serial proxy");
+    ui.networkTooltip = tr("Use a raw TCP ser2net endpoint, with 8N1 and the tuner's baud rate configured on the server. "
+                           "Telnet/RFC 2217 and Elecraft Remote Server are not supported by this connection.");
+    buildSerialNetworkDevice(ui, stackParent, refresh, pageReseeds);
+    auto* advancedToggle = new QPushButton(tr("Advanced"), ui.page);
+    advancedToggle->setObjectName(QStringLiteral("peripheralAdvanced_kat500"));
+    advancedToggle->setAccessibleName(tr("KAT500 advanced maintenance"));
+    advancedToggle->setAccessibleDescription(tr("Configuration backup and restore, stored fault history and all seven configuration categories and stored matches."));
+    advancedToggle->setCheckable(true);
+    auto* advanced = new Kat500AdvancedWidget(m_kat500, ui.page);
+    advanced->hide();
+    auto* layout = qobject_cast<QVBoxLayout*>(ui.page->layout());
+    layout->insertWidget(layout->count() - 1, advancedToggle, 0, Qt::AlignLeft);
+    layout->insertWidget(layout->count() - 1, advanced);
+    connect(advancedToggle, &QPushButton::toggled, advanced, &QWidget::setVisible);
+    connect(ui.autoConnectCheck, &QCheckBox::toggled, this, [this](bool on) {
+        m_kat500->setAutoReconnect(on && PeripheralSettings::autoReconnect());
+    });
+}
+
+void RadioSetupDialog::revealKat500AdvancedSettings()
+{
+    selectTab(QStringLiteral("Peripherals"));
+    if (QListWidget* devices = findChild<QListWidget*>(QStringLiteral("peripheralDeviceList"))) {
+        for (int row = 0; row < devices->count(); ++row) {
+            if (devices->item(row)->data(Qt::UserRole).toString() == QStringLiteral("kat500")) {
+                devices->setCurrentRow(row);
+                break;
+            }
+        }
+    }
+    QPointer<QPushButton> toggle = findChild<QPushButton*>(QStringLiteral("peripheralAdvanced_kat500"));
     if (!toggle) {
         return;
     }
@@ -1881,6 +1957,34 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             ? tr("amplifier not answering") : QString();
         buildKpa500Device(*ui, detailStack, refresh, serialReseeds);
     }
+    if (m_kat500) {
+        auto ui = addDevice(QStringLiteral("kat500"), tr("Elecraft KAT500"),
+                            QStringLiteral("KAT500 tuner"),
+                            PeripheralDeviceUi::Kind::Kat500, 2000);
+        ui->settingsGroup = QStringLiteral("Kat500");
+        ui->isConnected = [this]() { return m_kat500->isConnected(); };
+        ui->isConnecting = [this]() { return m_kat500->isConnecting(); };
+        ui->isNetworkConnection = [this]() { return m_kat500->isNetworkConnection(); };
+        ui->connectNetwork = [this](const QString& host, quint16 port) { m_kat500->connectToHost(host, port); };
+        ui->deviceInfo = [this]() {
+            const Kat500::Status& status = m_kat500->status();
+            return tr("%1\nFirmware: %2 · Serial: %3\n%4")
+                .arg(m_kat500->isConnected() ? m_kat500->description() : tr("Disconnected"),
+                     status.firmware.isEmpty() ? tr("Not reported") : status.firmware,
+                     status.serial.isEmpty() ? tr("Not reported") : status.serial,
+                     m_kat500->unavailableReason(false));
+        };
+        ui->disconnectNow = [this]() { m_kat500->disconnectDevice(); };
+        ui->description = [this]() { return m_kat500->description(); };
+        ui->afterRemoval = [this]() {
+            m_kat500->disconnectDevice();
+            m_kat500->setAutoReconnect(PeripheralSettings::autoReconnect()
+                                      && PeripheralSettings::autoConnect("kat500"));
+        };
+        ui->state.note = m_kat500->isConnected() && !m_kat500->isResponding()
+            ? tr("tuner not answering") : QString();
+        buildKat500Device(*ui, detailStack, refresh, serialReseeds);
+    }
     if (m_lpMeter) {
         auto ui = serialDevice(QStringLiteral("lp100a"), tr("LP-100A Meter"), QStringLiteral("LP-100A meter"),
             QStringLiteral("Lp100a"), 2000, QStringLiteral("115200 8N1"),
@@ -1926,6 +2030,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         }
         if (m_kpa500) {
             m_kpa500->setAutoReconnect(on && PeripheralSettings::autoConnect("kpa500"));
+        }
+        if (m_kat500) {
+            m_kat500->setAutoReconnect(on && PeripheralSettings::autoConnect("kat500"));
         }
         // VK3AMP takes this setting only at startup (#4919).
     });
@@ -2164,7 +2271,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             }
         } else {
             PeripheralSettings::clearDeviceConnection(ui.settingsGroup);
-            if (ui.kind == PeripheralDeviceUi::Kind::Kpa500) {
+            if ((ui.kind == PeripheralDeviceUi::Kind::Kpa500 || ui.kind == PeripheralDeviceUi::Kind::Kat500)) {
                 PeripheralSettings::clearDeviceField(ui.settingsGroup, "BaudRate");
                 PeripheralSettings::resetAutoConnect(ui.id);
                 const QSignalBlocker blocked(ui.autoConnectCheck);
@@ -2472,7 +2579,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             const bool connected = ui.isConnected();
             ui.state.source = sourceOf(ui);
             const bool connecting = effectivelyConnecting(ui);
-            const bool kpaConnecting = ui.kind == PeripheralDeviceUi::Kind::Kpa500 && connecting;
+            const bool kpaConnecting = (ui.kind == PeripheralDeviceUi::Kind::Kpa500 || ui.kind == PeripheralDeviceUi::Kind::Kat500) && connecting;
             ui.connectButton->setText(connected ? tr("Disconnect")
                 : kpaConnecting ? tr("Cancel") : tr("Connect"));
             applyStatusLabel(ui);
@@ -2694,6 +2801,11 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     }
     if (m_kpa1500) {
         wireLinkDevice(QStringLiteral("kpa1500"), m_kpa1500);
+    }
+    if (m_kat500) {
+        wireLinkDevice(QStringLiteral("kat500"), m_kat500);
+        connect(m_kat500, &Kat500Model::statusUpdated, this, refresh);
+        connect(m_kat500, &Kat500Model::availabilityChanged, this, refresh);
     }
     if (m_kpa500) {
         wireLinkDevice(QStringLiteral("kpa500"), m_kpa500);

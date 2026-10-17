@@ -3582,7 +3582,7 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
                                          &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
                                          m_kiwiSdrManager, &m_acomConn, &m_speConn,
                                          &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn, &m_kpa500Conn,
-                                         this);
+                                         this, &m_kat500Model);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         m_radioSetupDialog = dlg;
     }

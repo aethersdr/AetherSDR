@@ -43,6 +43,9 @@
 #include "Kpa1500Applet.h"
 #include "LpMeterApplet.h"
 #include "Kpa500Applet.h"
+#include "Kat500Applet.h"
+#include "AtuPreTuneDialog.h"
+#include "models/Kat500TxController.h"
 #include "HealthApplet.h"
 #include "ImageFileDialog.h"
 #include "MeterApplet.h"
@@ -1784,6 +1787,12 @@ void MainWindow::refreshTunerPortFrequency()
             if (kpaBand >= 0) { break; }
         }
         kpaSource = QStringLiteral("%1 · %2 MHz").arg(kpaTx->letter()).arg(mhz, 0, 'f', 6);
+    }
+    if (kpaTx) {
+        const double mhz = kpaTx->frequency()
+            + ((kpaTx->mode() == "FM" || kpaTx->mode() == "NFM") ? kpaTx->txOffsetFreq() : 0.0)
+            + (kpaTx->xitOn() ? kpaTx->xitFreq() / 1.0e6 : 0.0);
+        m_kat500Model.setEffectiveTxFrequencyHz(qRound64(mhz * 1.0e6));
     }
     const bool transmitting = m_radioModel.transmitModel().isTransmitting();
     m_kpa500Conn.setTxContext(kpaBand, kpaSource, transmitting);
@@ -6432,6 +6441,19 @@ void MainWindow::wireModemAudioCompletion()
     });
 }
 
+SharedTxMeterSelection MainWindow::sharedTxMeterSelection()
+{
+    int maxWatts = m_radioModel.transmitModel().maxPowerLevel();
+    if (m_radioModel.model().startsWith("AU-") && maxWatts <= 100) {
+        maxWatts = 500;
+    }
+    const bool amplifierActive = m_radioModel.amplifier().present()
+        && m_radioModel.amplifier().operate();
+    const bool kpa500Active = m_kpa500Conn.hasLiveTxMeters();
+    return selectSharedTxMeters(maxWatts, amplifierActive, kpa500Active,
+                                m_kat500Model.ampKeyBlockConfirmed());
+}
+
 // One owner for amplifier TX meters on the shared readouts (S-Meter,
 // cross-needle, TMate2). The radio relay and port-9008 status agree within
 // 0.05 dB but run at different rates (meter packets vs 5 Hz poll), so the relay
@@ -6439,6 +6461,9 @@ void MainWindow::wireModemAudioCompletion()
 // S-Meter would jitter between them.
 void MainWindow::applyAmpTxMeters(float watts, float swr, bool fromRelay)
 {
+    if (sharedTxMeterSelection().source != SharedTxMeterSource::Amplifier) {
+        return;
+    }
     if (fromRelay) {
         m_ampRelayTxStamp.restart();
     } else if (m_ampRelayTxStamp.isValid()
@@ -6518,9 +6543,9 @@ void MainWindow::wireMeters()
     // (~100 W) and amp (~1500 W) values race into the same widget. (#2927)
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
             this, [this](float fwd, float swr, bool swrValid) {
-        if ((m_radioModel.amplifier().present() && m_radioModel.amplifier().operate())
-            || m_kpa500Conn.hasLiveTxMeters())
+        if (sharedTxMeterSelection().source == SharedTxMeterSource::Amplifier) {
             return;
+        }
         // Absent SWR is forwarded as 1.0: RadioSwrValidityFilter downstream
         // reads <1.0 WITH forward power as the radio's over-range sentinel
         // and would peg the S-meter full-scale on a matched antenna (#4536
@@ -6540,9 +6565,7 @@ void MainWindow::wireMeters()
             &MeterModel::directionalPowerMetersChanged,
             this, [this](float fwd, float reflected, float swr,
                          bool swrValid, bool reflectedPowerMeasured) {
-        if ((m_radioModel.amplifier().present()
-             && m_radioModel.amplifier().operate())
-            || m_kpa500Conn.hasLiveTxMeters()) {
+        if (sharedTxMeterSelection().source == SharedTxMeterSource::Amplifier) {
             return;
         }
         // The cross-needle already clamps sub-1.0 values to 1.0 (its rest
@@ -6636,6 +6659,7 @@ void MainWindow::wireMeters()
         m_lpMeterConn.setAutoReconnect(ar);
         m_kpa500Conn.setAutoReconnect(
             ar && PeripheralSettings::autoConnect(QStringLiteral("kpa500")));
+        m_kat500Model.setAutoReconnect(ar && PeripheralSettings::autoConnect(QStringLiteral("kat500")));
     }
 
     // Wire TgxlConnection to TunerModel
@@ -7577,28 +7601,79 @@ void MainWindow::wireMeters()
 #endif
     }
 
-    // Elecraft telemetry changes only the VU/PWR meter scale; the radio-side
-    // controls retain their existing scale policy.
+    auto* kat = m_appletPanel->kat500Applet();
+    kat->setModel(&m_kat500Model);
+    connect(kat, &Kat500Applet::preTuneRequested, this, [this] {
+        if (!m_kat500PreTuneDialog) {
+            auto* controller = new Kat500TxController(&m_radioModel, &m_kat500Model, this);
+            auto* dialog = new AtuPreTuneDialog(&m_radioModel, m_bandPlanMgr, this, controller);
+            controller->setParent(dialog);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            m_kat500PreTuneDialog = dialog;
+        }
+        m_kat500PreTuneDialog->show();
+        m_kat500PreTuneDialog->raise();
+        m_kat500PreTuneDialog->activateWindow();
+    });
+    connect(&m_kat500Model, &Kat500Model::detectedChanged, m_appletPanel, &AppletPanel::setKat500Visible);
+    connect(kat, &Kat500Applet::advancedSettingsRequested, this, [this] {
+        if (RadioSetupDialog* dialog = openRadioSetupPage(QStringLiteral("Peripherals"))) {
+            dialog->revealKat500AdvancedSettings();
+        }
+    });
+    connect(kat, &Kat500Applet::followTxChanged, this, [this] { refreshTunerPortFrequency(); });
+    connect(&m_kat500Model, &Kat500Model::availabilityChanged, this, [this] {
+        if (m_kat500Model.followTxFrequency() && m_kat500Model.unavailableReason(true).isEmpty()) {
+            refreshTunerPortFrequency();
+        }
+    });
+    if (PeripheralSettings::autoConnect(QStringLiteral("kat500"))) {
+        const QString mode = PeripheralSettings::deviceString("Kat500", "ConnectionMode", "Serial");
+        if (mode == "Network") {
+            const QString host = PeripheralSettings::deviceString("Kat500", "ManualIp").trimmed();
+            const int port = PeripheralSettings::deviceInt("Kat500", "ManualPort", 2000);
+            if (!host.isEmpty() && port > 0 && port <= 65535) {
+                m_kat500Model.connectToHost(host, static_cast<quint16>(port));
+            }
+        }
+#ifdef HAVE_SERIALPORT
+        else if (mode == "Serial") {
+            const QString port = PeripheralSettings::deviceString("Kat500", "SerialPort");
+            if (!port.isEmpty()) {
+                m_kat500Model.connectSerial(port, PeripheralSettings::deviceInt("Kat500", "BaudRate", 38400));
+            }
+        }
+#endif
+    }
+
+    // Data and scale use the same confirmed selection.
     auto updatePowerScale = [this]() {
-        int maxW = m_radioModel.transmitModel().maxPowerLevel();
-        // Aurora (AU-) radios have an integrated 600W PA (Overlord) but
-        // max_power_level only reports the exciter limit (100W). Use model
-        // name to detect the true PA capability. (#484)
-        const QString& model = m_radioModel.model();
-        if (model.startsWith("AU-") && maxW <= 100) {
-            maxW = 500;
+        const SharedTxMeterSelection selection = sharedTxMeterSelection();
+        if (selection.source != m_sharedTxMeterSource) {
+            m_sharedTxMeterSource = selection.source;
+            m_appletPanel->setMeterTxValues(0.0f, 1.0f);
+            m_ampRelayTxStamp.invalidate();
+#ifdef HAVE_HIDAPI
+            m_tmate2TxWatts = 0.0f;
+            if (m_radioModel.transmitModel().isTransmitting()) {
+                updateTMate2Display();
+            }
+#endif
         }
-        const bool ampActive = m_radioModel.amplifier().present()
-                            && m_radioModel.amplifier().operate();
-        m_appletPanel->txApplet()->setPowerScale(maxW, ampActive);
-        m_appletPanel->tunerApplet()->setPowerScale(maxW, ampActive);
-        m_appletPanel->healthApplet()->setPowerScale(maxW, ampActive);
-        // The KPA500 uses the 600 W meter tier, below the PGXL's 2 kW tier.
-        if (!ampActive && m_kpa500Conn.hasLiveTxMeters()) {
-            maxW = 500;
+        int radioMaxWatts = m_radioModel.transmitModel().maxPowerLevel();
+        if (m_radioModel.model().startsWith("AU-") && radioMaxWatts <= 100) {
+            radioMaxWatts = 500;
         }
-        m_appletPanel->setMeterPowerScale(maxW, ampActive);
+        const bool integratedAmp = m_radioModel.amplifier().present()
+            && m_radioModel.amplifier().operate();
+        m_appletPanel->txApplet()->setPowerScale(radioMaxWatts, integratedAmp);
+        m_appletPanel->tunerApplet()->setPowerScale(radioMaxWatts, integratedAmp);
+        m_appletPanel->healthApplet()->setPowerScale(radioMaxWatts, integratedAmp);
+        m_appletPanel->setMeterPowerScale(selection.maxWatts, selection.highPowerAmplifier);
     };
+    connect(&m_kat500Model, &Kat500Model::statusUpdated, this, updatePowerScale);
+    connect(&m_kat500Model, &Kat500Model::availabilityChanged, this, updatePowerScale);
+    updatePowerScale();
     connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, updatePowerScale);
     connect(&m_radioModel.amplifier(), &AmpModel::stateChanged, this, updatePowerScale);
     // Re-evaluate scale when KPA500 operate state changes or disconnects.

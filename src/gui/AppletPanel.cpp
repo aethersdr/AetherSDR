@@ -16,6 +16,7 @@
 #include "SpeApplet.h"
 #include "VkampApplet.h"
 #include "Kpa500Applet.h"
+#include "Kat500Applet.h"
 #include "Kpa1500Applet.h"
 #include "LpMeterApplet.h"
 #include "TxApplet.h"
@@ -909,6 +910,23 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_appletOrder.append(entry);
     }
 
+    m_kat500Applet = new Kat500Applet;
+    {
+        auto entry = makeEntry("KAT500", "Elecraft KAT500 Tuner", m_kat500Applet,
+                               false, m_drawer, m_drawerLayout, "KT500");
+        entry.btn->setObjectName(QStringLiteral("kat500BarButton"));
+        entry.btn->setAccessibleName(tr("Elecraft KAT500 tuner"));
+        markHardwareConditional("KAT500");
+        if (auto* container = qobject_cast<ContainerWidget*>(entry.widget)) {
+            container->setDefaultFloatingSize(QSize(560, 720));
+            connect(container, &ContainerWidget::dockModeChanged, m_kat500Applet,
+                    [this](ContainerWidget::DockMode mode) {
+                m_kat500Applet->setFloating(mode != ContainerWidget::DockMode::PanelDocked);
+            });
+        }
+        m_appletOrder.append(entry);
+    }
+
     // Elecraft KPA1500 — independent of AMP (PGXL), ACOM, SPE and VKAMP
     // for the same reason they are independent of each other: a station can
     // have any combination of them connected at once. Deliberately NOT in
@@ -1439,6 +1457,7 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("ACOM"),  QStringLiteral("Amplifiers")},
         {QStringLiteral("SPE"),   QStringLiteral("Amplifiers")},
         {QStringLiteral("KPA500"), QStringLiteral("Amplifiers")},
+        {QStringLiteral("KAT500"), QStringLiteral("Transmit")},
         {QStringLiteral("VKAMP"), QStringLiteral("Amplifiers")},
         {QStringLiteral("KPA1500"), QStringLiteral("Amplifiers")},
         {QStringLiteral("EQ"),    QStringLiteral("Audio & DSP")},
@@ -1874,6 +1893,12 @@ void AppletPanel::setSpeVisible(bool visible)
 void AppletPanel::setVkampVisible(bool visible)
 {
     updateHardwareAvailability("VKAMP", "Applet_VKAMP", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setKat500Visible(bool visible)
+{
+    updateHardwareAvailability("KAT500", "Applet_KAT500", visible);
     applyBarLayout();
 }
 

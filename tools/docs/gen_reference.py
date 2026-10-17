@@ -1152,7 +1152,7 @@ def parse_log_categories():
         if len(fields) != 3:
             raise ParseError(f"{where}: category entry with {len(fields)} fields")
         cats.append([need_literal(f, where) for f in fields])
-    loose = len(re.findall(r'\{\s*"aether\.', src.code[open_pos:close]))
+    loose = len(re.findall(r'\{\s*"(?:aether|aethersdr)\.', src.code[open_pos:close]))
     if loose != len(cats):
         raise ParseError(f"{src.rel}: {loose} category rows, parsed {len(cats)}")
     ids = [c[0] for c in cats]

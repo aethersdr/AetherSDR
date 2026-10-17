@@ -13,6 +13,8 @@ transmit. Before you key up for the first time, read [Before You Transmit](./bef
 
 *The TX Controls applet.*
 
+These controls operate the radio. External Elecraft tuners have their own applets and maintenance controls. **RF Power** and **Tune Pwr** display percentages; the meters show measured radio watts and SWR.
+
 ## Using the TX applet
 
 - **Fwd Power gauge** (0–200 W barefoot, 0–2000 W with a PGXL amplifier), with
@@ -30,6 +32,7 @@ transmit. Before you key up for the first time, read [Before You Transmit](./bef
   **External APD**: pick a sampler-port input via the sub-menu so the radio
   can train its predistortion against the output of an external linear
   amplifier rather than its own PA.
+
 
 Hover **RF Pwr** or **SWR** for a floating badge with the exact value
 (for example `12 W` or `1.12:1`). Forward power drops to zero as soon as you
@@ -53,6 +56,9 @@ the Tuner Genius XL.
 
 ### ATU, MEM and pre-tuning
 
+
+
+
 - **MEM** shows the tuner's real memory state as the radio reports it, not
   just your last click.
 - ATU tune failures are reported in the status bar.
@@ -63,7 +69,7 @@ the bands you choose, tunes the ATU at each point and stores the result in the
 ATU memory, so later band changes recall a match instead of re-tuning. On
 channelised bands such as US 60 m it uses one point per channel.
 
-- **MEM must be on**; otherwise the entry is disabled with
+- **For the internal radio ATU, MEM must be on**; otherwise the entry is disabled with
   "Enable MEM before running the pre-tune sweep". It is hidden or disabled on
   radios without ATU memory, and a disabled entry says why.
 - **Mode:** *Step (confirm each point)*, with Tune / Skip / Abort per point, or
@@ -71,11 +77,13 @@ channelised bands such as US 60 m it uses one point per channel.
 - **License class** limits the points to sub-bands your class may use, where
   the active band plan has class data (the ARRL US plan has T/G/E).
 - Safety nets: a warning with an estimated duration above 100 points; a
-  warning when Auto-mode tune power is above 20 W; an audible cue on a
+  warning when the Auto-mode **Tune Pwr** setting is above 20; an audible cue on a
   per-point timeout; and after 3 consecutive failed or bypassed results on one
   band, the sweep skips the rest of that band and moves on.
 - **The sweep keys the transmitter repeatedly. Make sure the bands are clear
   before you start.**
+
+KAT500 sweeps require the external tuner to remain connected in Auto/Manual. They use KAT500 memory-bin spacing, do not require the radio's MEM setting, and stop on an unsuccessful or unconfirmed result.
 
 **Clear ATU memories.** **Tools → Clear ATU Memories...** or right-click
 **ATU** → **Clear ATU memories…** erases the stored tuner solutions after a

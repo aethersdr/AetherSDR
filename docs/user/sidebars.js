@@ -115,6 +115,7 @@ const sidebars = {
         "peripherals",
         "amplifiers",
         "tgxl-tuner-control",
+        "kat500-tuner-control",
         "shackswitch",
         "green-heron-everyware",
         "usb-cable-management"

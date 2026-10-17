@@ -3,6 +3,7 @@
 #include "RadioTabBar.h"
 #include "DeferredSettingsWrites.h"
 #include "TxAudioPathPolicy.h"
+#include "SharedTxMeterSelection.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ⚠️  MainWindow is DECOMPOSED (#3351). Add member fields/declarations here ONLY
@@ -95,6 +96,7 @@
 #include "core/SpeConnection.h"
 #include "core/VkampConnection.h"
 #include "core/Kpa500Connection.h"
+#include "models/Kat500Model.h"
 #include "core/Kpa1500Connection.h"
 #include "core/DxccColorProvider.h"
 
@@ -1336,6 +1338,8 @@ private:
     LpMeterConnection m_lpMeterConn;    // TelePost LP-100A wattmeter, serial or ser2net
     SpeConnection     m_speConn;         // SPE Expert amplifier, serial or ser2net
     VkampConnection   m_vkampConn;       // VK3AMP amplifier, TCP control/status + UDP telemetry
+    Kat500Model      m_kat500Model;
+    QPointer<class AtuPreTuneDialog> m_kat500PreTuneDialog;
     Kpa500Connection  m_kpa500Conn;      // Elecraft KPA500 amplifier, serial or raw TCP
     Kpa1500Connection m_kpa1500Conn;     // Elecraft KPA1500 amplifier, TCP control/status on port 1500 (#4097)
     BandPlanManager*  m_bandPlanMgr{nullptr};
@@ -1556,6 +1560,8 @@ private:
     // See applyAmpTxMeters() and kRelayMeterFreshnessMs.
     QElapsedTimer m_ampRelayTxStamp;
     void applyAmpTxMeters(float watts, float swr, bool fromRelay);
+    SharedTxMeterSelection sharedTxMeterSelection();
+    SharedTxMeterSource m_sharedTxMeterSource{SharedTxMeterSource::Radio};
 #ifdef Q_OS_LINUX
     EvdevEncoderManager*       m_dialBackend{nullptr};
 #elif defined(Q_OS_WIN) && defined(HAVE_HIDAPI)

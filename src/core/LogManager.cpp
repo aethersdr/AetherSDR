@@ -87,6 +87,7 @@ LogManager::LogManager()
         {"aether.transmit",   "Transmit",     "TX state, ATU, profiles, power control"},
         {"aether.firmware",   "Firmware",     "Firmware download, staging, upload"},
         {"aether.tuner",      "Tuner/AGM",    "TGXL tuner, Antenna Genius state"},
+        {"aether.kat500", "KAT500 Tuner", "Independent tuner connection, confirmed readbacks, configuration and maintenance diagnostics"},
         {"aether.peripheral.auth", "Peripheral Authorization", "Credential store availability and save failures; code values are never logged"},
         {"aether.gui",        "GUI",          "Window, applets, dialogs"},
         {"aether.dxcluster",  "DX Cluster",   "DX cluster telnet connection and spot parsing"},

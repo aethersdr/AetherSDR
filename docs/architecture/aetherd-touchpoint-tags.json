@@ -319,7 +319,7 @@
  },
  "core/FirmwareCurrency.h": {
   "tag": "universal",
-  "note": "Pure release comparison and its operator-facing wording; names no family and holds no wire types — the published version and release-notes template both arrive from the backend's declared capability.",
+  "note": "Pure release comparison and its operator-facing wording; names no family and holds no wire types \u2014 the published version and release-notes template both arrive from the backend's declared capability.",
   "split": "",
   "confidence": "high"
  },
@@ -1399,7 +1399,7 @@
  },
  "core/SpeLegacyProtocol.h": {
   "tag": "peripheral(spe)",
-  "note": "Wire codec for the original SPE Expert 1K-FA (Rev 2.0 legacy protocol) over serial/ser2net. Same standalone-accessory precedent as core/SpeProtocol.h; not radio-family wire and not behind IRadioBackend. See docs/architecture/spe-expert-amplifier-design.md §12.",
+  "note": "Wire codec for the original SPE Expert 1K-FA (Rev 2.0 legacy protocol) over serial/ser2net. Same standalone-accessory precedent as core/SpeProtocol.h; not radio-family wire and not behind IRadioBackend. See docs/architecture/spe-expert-amplifier-design.md \u00a712.",
   "split": "",
   "confidence": "high"
  },
@@ -1676,6 +1676,24 @@
  "core/VoiceKeyerSettings.h": {
   "tag": "ui-support",
   "note": "Client-side voice-keyer persistence (RFC #4214) - slot labels and the keyer-source choice in one nested JSON object under a single AppSettings key (Principle V). Deliberately NOT keyed to a radio, so an operator's slots follow them between radios; scoped to the OS user account instead. Config plumbing, not radio state, same precedent as core/AetherClockSettings.h.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/Kat500Model.h": {
+  "tag": "peripheral(elecraft)",
+  "note": "Typed model facade for the independent Elecraft KAT500 serial/raw-TCP tuner, with confirmed operating/configuration state and bounded maintenance operations. No radio-family wire or carrier commands are exposed to GUI.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/Kat500Types.h": {
+  "tag": "peripheral(elecraft)",
+  "note": "Model-owned KAT500 status, configuration and maintenance value types for the typed peripheral facade. No transport or raw command path in GUI.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/Kat500TxController.h": {
+  "tag": "peripheral(elecraft)",
+  "note": "Engine-owned external tuner sequence through typed RadioModel and captured TX input; KAT500 remains an independent peripheral. No vendor radio wire or GUI dependency.",
   "split": "",
   "confidence": "high"
  }

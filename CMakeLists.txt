@@ -1086,6 +1086,11 @@ set(CORE_SOURCES
     src/core/SpeProtocol.cpp
     src/core/SpeLegacyProtocol.cpp
     src/core/SpeConnection.cpp
+    src/models/Kat500TxController.cpp
+    src/models/Kat500TxController.h
+    src/models/Kat500Model.cpp
+    src/core/Kat500Protocol.cpp
+    src/core/Kat500Maintenance.cpp
     src/core/Kpa500Protocol.cpp
     src/core/Kpa500Maintenance.cpp
     src/core/Kpa500FaultHistory.cpp
@@ -1383,6 +1388,8 @@ set(GUI_SOURCES
     src/gui/AmpApplet.cpp
     src/gui/AcomApplet.cpp
     src/gui/SpeApplet.cpp
+    src/gui/Kat500Applet.cpp
+    src/gui/Kat500AdvancedWidget.cpp
     src/gui/Kpa500Applet.cpp
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/SpeLcdWidget.cpp

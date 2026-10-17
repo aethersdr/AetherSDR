@@ -42,6 +42,7 @@ class SpeConnection;
 class VkampConnection;
 class Kpa1500Connection;
 class Kpa500Connection;
+class Kat500Model;
 class LpMeterConnection;
 struct PeripheralDeviceUi;
 
@@ -62,7 +63,8 @@ public:
                               LpMeterConnection* lpMeter = nullptr,
                               Kpa1500Connection* kpa1500 = nullptr,
                               Kpa500Connection* kpa500 = nullptr,
-                              QWidget* parent = nullptr);
+                              QWidget* parent = nullptr,
+                              Kat500Model* kat500 = nullptr);
     void selectTab(const QString& tabName);
     void done(int result) override;
     // Like selectTab("Serial & Controllers"), but also scrolls the page so
@@ -71,6 +73,7 @@ public:
     // PR #5157 review).
     void revealFlexControlSettings();
     void revealKpa500AdvancedSettings();
+    void revealKat500AdvancedSettings();
     void refreshFlexControlButtonActions();
     void setFlexControlConnectionStatus(bool connected, const QString& port = {});
     // Result of the automation-bridge start the Network-tab toggle kicked off
@@ -211,6 +214,9 @@ private:
     void buildKpa500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
                            const std::function<void()>& refresh,
                            const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds);
+    void buildKat500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
+                           const std::function<void()>& refresh,
+                           const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds);
     void buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
                             const std::function<void()>& refresh);
     PeripheralDeviceUi* peripheralDevice(const QString& id) const;
@@ -254,6 +260,7 @@ private:
     LpMeterConnection* m_lpMeter{nullptr};
     Kpa1500Connection* m_kpa1500{nullptr};
     Kpa500Connection* m_kpa500{nullptr};
+    Kat500Model* m_kat500{nullptr};
     QTreeWidget* m_navigation{nullptr};
     QStackedWidget* m_pages{nullptr};
     QLabel* m_pageTitle{nullptr};
