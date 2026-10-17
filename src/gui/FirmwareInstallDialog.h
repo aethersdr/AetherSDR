@@ -59,7 +59,7 @@ private:
     void started(bool ok, const QString& problem, const QString& doneText);
     // For a unit on its stock firmware (stock): tells the operator to put it
     // in download mode. False if they cancel.
-    bool askDownloadMode(bool stock);
+    bool askDownloadMode(bool buttons);
     // Restores the backup at path on the unit connected now, once confirmed.
     void confirmRestore(const QString& path);
     void sync();
