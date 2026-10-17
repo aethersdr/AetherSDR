@@ -1,6 +1,8 @@
 #include "TestSettingsProfile.h"
 #include "core/ClientDisplaySettings.h"
 #include <QCoreApplication>
+#include <QJsonObject>
+#include <QString>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -67,6 +69,67 @@ int main(int argc, char** argv)
         check(!ClientDisplaySettings::fftAverage(other,0,true)
             && !ClientDisplaySettings::saveFftAverage(other,0,true,{42,false})
             && other.featureExact("ClientDisplay")==malformed, "malformed average is neither coerced nor overwritten");
+    }
+    // The waterfall rate on an anonymous radio (a dongle with no serial): its
+    // scope addresses the family-wide row, so nothing is stored or restored.
+    {
+        const QString feature = QStringLiteral("ClientDisplay");
+        const RadioSettingsScope anonymous = RadioSettingsScope::anonymousRadio("rtl");
+        const RadioSettingsScope rtlFamily("rtl", {});
+        const auto familyRow = [&feature](AppSettings::FeatureReadStatus* status) {
+            return AppSettings::instance().radioFeatureExact(
+                QStringLiteral("rtl"), QString(), feature, nullptr, status);
+        };
+        AppSettings::FeatureReadStatus status = AppSettings::FeatureReadStatus::Present;
+        check(anonymous.hasRadioIdentity() && anonymous.radioId().isEmpty()
+                  && !ClientDisplaySettings::keepsFor(anonymous)
+                  && familyRow(&status).isEmpty()
+                  && status == AppSettings::FeatureReadStatus::Missing,
+              "control: an anonymous scope is a connected radio whose row is the family's, and none exists yet");
+        ClientDisplaySettings::saveWaterfallRate(anonymous, 0, true, 63);
+        check(!ClientDisplaySettings::waterfallRate(anonymous, 0, true),
+              "an anonymous radio's waterfall rate is not restored");
+        status = AppSettings::FeatureReadStatus::Present;
+        check(familyRow(&status).isEmpty()
+                  && status == AppSettings::FeatureReadStatus::Missing,
+              "an anonymous radio's waterfall rate writes no family-wide row");
+
+        // A radio with an identity keeps its rate, and only under that identity.
+        const RadioSettingsScope hl2("hl2", "00:1C:C0:A2:13:DD");
+        const RadioSettingsScope dongle("rtl", "00000001");
+        ClientDisplaySettings::saveWaterfallRate(hl2, 0, true, 37);
+        ClientDisplaySettings::saveWaterfallRate(dongle, 0, true, 58);
+        check(ClientDisplaySettings::keepsFor(hl2)
+                  && ClientDisplaySettings::waterfallRate(hl2, 0, true) == 37,
+              "an HL2's waterfall rate is stored and restored");
+        check(ClientDisplaySettings::keepsFor(dongle)
+                  && ClientDisplaySettings::waterfallRate(dongle, 0, true) == 58,
+              "a dongle with a serial has its waterfall rate stored and restored");
+        check(hl2.featureExact(feature).value(QStringLiteral("waterfallRates")).toObject()
+                      == QJsonObject{{QStringLiteral("0"), 37}}
+                  && dongle.featureExact(feature).value(QStringLiteral("waterfallRates")).toObject()
+                      == QJsonObject{{QStringLiteral("0"), 58}},
+              "each identified radio's rate is in its own exact row");
+        status = AppSettings::FeatureReadStatus::Present;
+        check(familyRow(&status).isEmpty()
+                  && status == AppSettings::FeatureReadStatus::Missing
+                  && RadioSettingsScope("hl2", {}).featureExact(feature).isEmpty(),
+              "and identified radios write no family-wide row either");
+
+        // A family-wide row that is already there: left alone, and not applied.
+        const QJsonObject older{
+            {QStringLiteral("waterfallRates"), QJsonObject{{QStringLiteral("0"), 41}}}};
+        check(rtlFamily.setFeature(feature, 1, older), "family-wide fixture stored");
+        check(!ClientDisplaySettings::waterfallRate(anonymous, 0, true),
+              "an existing family-wide waterfall rate is not applied to an anonymous radio");
+        check(ClientDisplaySettings::waterfallRate(dongle, 0, true) == 58
+                  && !ClientDisplaySettings::waterfallRate(RadioSettingsScope("rtl", "00000002"), 0, true),
+              "nor to a dongle with a serial, with or without a rate of its own");
+        ClientDisplaySettings::saveWaterfallRate(anonymous, 0, true, 63);
+        status = AppSettings::FeatureReadStatus::Missing;
+        check(familyRow(&status) == older
+                  && status == AppSettings::FeatureReadStatus::Present,
+              "an existing family-wide row is neither rewritten nor removed");
     }
     return failed ? 1 : 0;
 }

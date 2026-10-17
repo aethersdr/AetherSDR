@@ -573,7 +573,8 @@ The existing `ClientDisplay` schema-1 owner stores both controls under
 `fftAverages[panIndex] = {average, weighted}` only when the backend explicitly
 declares `clientPersistsAveraging` (RTL in this change). No family string is
 tested in the GUI. Exact known device identity and pan slot scope the values;
-anonymous devices are session-only. Corrupt, malformed or newer settings are
+anonymous devices are session-only, for the waterfall rate as well
+(`ClientDisplaySettings::keepsFor()`). Corrupt, malformed or newer settings are
 not overwritten; unrelated fields, including waterfall rates, survive writes.
 Edits coalesce separately from waterfall cadence and capture their scope before
 a radio switch. A live pan model wins over disk during layout rebuilding.
