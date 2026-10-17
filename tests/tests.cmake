@@ -3803,6 +3803,7 @@ add_executable(radio_setup_operations_test
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/PersistentDialog.cpp
