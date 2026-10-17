@@ -90,7 +90,7 @@ For a crash, also attach the crash report your operating system kept: `coredumpc
 | **Protocol / Status** | `aether.protocol` | Parsed SmartSDR protocol handling and status updates |
 | **Audio** | `aether.audio` | RX/TX audio, device negotiation, volume |
 | **Audio Summary** | `aether.audio.summary` | Audio routing and device summaries for support logs |
-| **VITA-49** | `aether.vita49` | UDP packet routing: FFT, waterfall, meters, DAX. Lost or out-of-order packets are logged as `VITA-49 sequence errors`, at most once every 10 seconds per stream. |
+| **VITA-49** | `aether.vita49` | UDP packet routing: FFT, waterfall, meters, DAX. Lost packets, and on audio and DAX streams also out-of-order ones, are logged as `VITA-49 sequence errors`, at most once every 10 seconds per stream. |
 | **DSP** | `aether.dsp` | Client noise reduction and CW decoder processing |
 | **RADE** | `aether.rade` | FreeDV RADE digital voice |
 | **SmartLink** | `aether.smartlink` | SmartLink sign-in, TLS tunnel, WAN streaming |

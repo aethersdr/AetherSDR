@@ -7,6 +7,7 @@
 #include "core/PacketLossConcealment.h"
 #include "core/VitaBinCoverage.h"
 #include "core/backends/flex/VitaSequenceLossReport.h"
+#include "core/backends/flex/VitaSequenceTracker.h"
 #include "VitaDscpMarker.h"
 
 #include <QObject>
@@ -324,6 +325,8 @@ private:
     void restartAllStreamSequences();
     struct StreamStats {
         int  lastSeq{-1};
+        // FFT, waterfall and meter streams: losses net of reordering.
+        VitaSequenceTracker reorderTracker;
         int  errorCount{0};
         int  totalCount{0};
         bool started{false};       // this instance has seen its first packet

@@ -93,18 +93,25 @@ int main(int argc, char** argv)
     // status line is a real one.
     radio.handleStatusForTest(object, {{QStringLiteral("type"), QStringLiteral("remote_audio_rx")},
                                        {QStringLiteral("compression"), QStringLiteral("none")}});
+    // Meter packets: a missing one counts once it falls behind the reorder
+    // window, so the stream runs on past the gap.
     VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 5);  // 3..4 missing
-    report("adopted: a gap in a stream still flowing counts", stream->packetErrorCount() == 1);
-    VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 6);
+    for (int seq = 6; seq <= 12; ++seq) {
+        VitaSequenceLossLogTestAccess::feedMeter(*stream, id, seq);
+    }
+    report("adopted: a gap in a stream still flowing counts", stream->packetErrorCount() == 2);
 
     // The radio removes it; the next stream with this id starts over.
     radio.handleStatusForTest(object + QStringLiteral(" removed"), {});
-    VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 0);  // old instance ended at 6
+    VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 0);  // old instance ended at 12
     report("removed: a re-created stream's first packet counts no error",
-           stream->packetErrorCount() == 1);
+           stream->packetErrorCount() == 2);
 
     VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 4);  // 1..3 missing
-    report("a real gap still counts", stream->packetErrorCount() == 2);
+    for (int seq = 5; seq <= 11; ++seq) {
+        VitaSequenceLossLogTestAccess::feedMeter(*stream, id, seq);
+    }
+    report("a real gap still counts", stream->packetErrorCount() == 5);
 
     std::printf("%s\n", g_failed ? "FAILED" : "PASSED");
     return g_failed ? 1 : 0;

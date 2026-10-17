@@ -186,11 +186,24 @@ int main(int argc, char** argv)
         }
         report("in-order packets log nothing", g_warnings.isEmpty());
         VitaSequenceLossLogTestAccess::feedMeter(stream, id, 7);  // 4..6 missing
+        report("a gap inside the reorder window logs nothing yet", g_warnings.isEmpty());
+        // 4 falls behind the window at 12 and logs; 5 and 6 follow inside 10 s.
+        for (int seq = 8; seq <= 14; ++seq) {
+            VitaSequenceLossLogTestAccess::feedMeter(stream, id, seq);
+        }
         report("a gap logs one warning", g_warnings.size() == 1);
         report("on aether.vita49 with the stream, category and counts",
                g_warnings.value(0) == QStringLiteral(
                    "aether.vita49: PanadapterStream: VITA-49 sequence errors on meter stream "
-                   "0x7000000a: 1 in the last 0 s, 1 since the stream started (5 packets received)"));
+                   "0x7000000a: 1 in the last 0 s, 1 since the stream started (10 packets received)"));
+        report("every lost packet is counted",
+               stream.categoryStats(PanadapterStream::CatMeter).errors == 3);
+        // Packets that arrive late are not lost.
+        for (int seq : {15, 1, 0, 2, 3, 5, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14}) {
+            VitaSequenceLossLogTestAccess::feedMeter(stream, id, seq);
+        }
+        report("reordered packets count no error",
+               stream.categoryStats(PanadapterStream::CatMeter).errors == 3);
         for (int i = 0; i < 50; ++i) {
             VitaSequenceLossLogTestAccess::feedMeter(stream, id, i * 3);
         }
@@ -224,18 +237,21 @@ int main(int argc, char** argv)
                stream.packetTotalCount() == totalBefore + 1);
         VitaSequenceLossLogTestAccess::feedMeter(stream, id, 1);
         VitaSequenceLossLogTestAccess::feedMeter(stream, id, 5);  // 2..4 missing
-        report("reconnect: a real gap still logs at once",
+        for (int seq = 6; seq <= 12; ++seq) {
+            VitaSequenceLossLogTestAccess::feedMeter(stream, id, seq);
+        }
+        report("reconnect: a real gap still logs",
                g_warnings.size() == 1
                    && g_warnings.value(0) == QStringLiteral(
                           "aether.vita49: PanadapterStream: VITA-49 sequence errors on meter stream "
-                          "0x7000000b: 1 in the last 0 s, 1 since the stream started (3 packets received)"));
+                          "0x7000000b: 1 in the last 0 s, 1 since the stream started (8 packets received)"));
 
         // A pan or waterfall closed and re-created with the same id restarts too.
         // The limiter reported just above, so it would hold a line back: the
         // error count is what shows the restart.
         const int errorsBefore = stream.packetErrorCount();
         stream.unregisterPanStream(id);
-        VitaSequenceLossLogTestAccess::feedMeter(stream, id, 9);  // previous instance ended at 5
+        VitaSequenceLossLogTestAccess::feedMeter(stream, id, 9);  // previous instance ended at 12
         report("unregister pan: a re-created stream counts no sequence error",
                stream.packetErrorCount() == errorsBefore);
         stream.unregisterWfStream(id);
@@ -262,11 +278,14 @@ int main(int argc, char** argv)
         PanadapterStream stream;  // no init(), no socket
         for (quint32 i = 0; i < 20; ++i) {
             VitaSequenceLossLogTestAccess::feedMeter(stream, 0x71000000u + i, 0);
-            VitaSequenceLossLogTestAccess::feedMeter(stream, 0x71000000u + i, 5);
+            // 1..4 missing; 1 falls behind the reorder window at 9.
+            for (int seq = 5; seq <= 12; ++seq) {
+                VitaSequenceLossLogTestAccess::feedMeter(stream, 0x71000000u + i, seq);
+            }
         }
         report("burst of new ids: lines stop at the shared budget",
                g_warnings.size() == VitaSequenceLossBudget::kLinesPerInterval);
-        report("burst of new ids: every error is still counted", stream.packetErrorCount() == 20);
+        report("burst of new ids: every error is still counted", stream.packetErrorCount() == 80);
         qInstallMessageHandler(nullptr);
     }
 
