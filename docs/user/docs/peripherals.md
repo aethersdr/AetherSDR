@@ -74,6 +74,8 @@ device's own web interface. Connection defaults for every device type are
 under [Reference](#reference).
 
 
+The **Elecraft KXPA100** page combines amplifier and optional tuner controls. Click **Use with current radio** to associate it explicitly; this enables its VU/PWR metering and applet frequency context for that radio. TX Controls remains radio-side. The **Advanced** section provides antenna configuration, native backup/restore, faults and memory tools. See [KXPA100 Amplifier and Tuner](./kxpa100-amplifier-control.md).
+
 ### Connecting automatically
 
 TGXL, PGXL, Antenna Genius and ShackSwitch each have a toggle, **on by
@@ -268,6 +270,7 @@ The fields are locked while the device is connected.
 - [Amplifiers](./amplifiers.md)
 - [TGXL Tuner Control](./tgxl-tuner-control.md)
 - [KAT500 Tuner Control](./kat500-tuner-control.md)
+- [KXPA100 Amplifier and Tuner](./kxpa100-amplifier-control.md)
 - [ShackSwitch](./shackswitch.md)
 - [Green Heron Everyware](./green-heron-everyware.md)
 - [AetherSweep](./aethersweep.md)

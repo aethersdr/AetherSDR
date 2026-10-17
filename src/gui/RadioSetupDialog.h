@@ -43,6 +43,7 @@ class VkampConnection;
 class Kpa1500Connection;
 class Kpa500Connection;
 class Kat500Model;
+class Kxpa100Model;
 class LpMeterConnection;
 struct PeripheralDeviceUi;
 
@@ -64,7 +65,8 @@ public:
                               Kpa1500Connection* kpa1500 = nullptr,
                               Kpa500Connection* kpa500 = nullptr,
                               QWidget* parent = nullptr,
-                              Kat500Model* kat500 = nullptr);
+                              Kat500Model* kat500 = nullptr,
+                              Kxpa100Model* kxpa100 = nullptr);
     void selectTab(const QString& tabName);
     void done(int result) override;
     // Like selectTab("Serial & Controllers"), but also scrolls the page so
@@ -74,6 +76,7 @@ public:
     void revealFlexControlSettings();
     void revealKpa500AdvancedSettings();
     void revealKat500AdvancedSettings();
+    void revealKxpa100AdvancedSettings();
     void refreshFlexControlButtonActions();
     void setFlexControlConnectionStatus(bool connected, const QString& port = {});
     // Result of the automation-bridge start the Network-tab toggle kicked off
@@ -217,6 +220,9 @@ private:
     void buildKat500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
                            const std::function<void()>& refresh,
                            const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds);
+    void buildKxpa100Device(PeripheralDeviceUi& ui, QWidget* stackParent,
+                           const std::function<void()>& refresh,
+                           const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds);
     void buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
                             const std::function<void()>& refresh);
     PeripheralDeviceUi* peripheralDevice(const QString& id) const;
@@ -261,6 +267,7 @@ private:
     Kpa1500Connection* m_kpa1500{nullptr};
     Kpa500Connection* m_kpa500{nullptr};
     Kat500Model* m_kat500{nullptr};
+    Kxpa100Model* m_kxpa100{nullptr};
     QTreeWidget* m_navigation{nullptr};
     QStackedWidget* m_pages{nullptr};
     QLabel* m_pageTitle{nullptr};

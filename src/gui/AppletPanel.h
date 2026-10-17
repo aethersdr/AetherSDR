@@ -38,6 +38,7 @@ class SpeApplet;
 class VkampApplet;
 class Kpa500Applet;
 class Kat500Applet;
+class Kxpa100Applet;
 class Kpa1500Applet;
 class LpMeterApplet;
 class TxApplet;
@@ -112,6 +113,7 @@ public:
     SpeApplet*    speApplet()     { return m_speApplet; }
     VkampApplet*  vkampApplet()   { return m_vkampApplet; }
     Kat500Applet* kat500Applet() { return m_kat500Applet; }
+    Kxpa100Applet* kxpa100Applet() { return m_kxpa100Applet; }
     Kpa500Applet* kpa500Applet()  { return m_kpa500Applet; }
     Kpa1500Applet* kpa1500Applet() { return m_kpa1500Applet; }
     LpMeterApplet* lpMeterApplet() { return m_lpMeterApplet; }
@@ -201,6 +203,7 @@ public:
     // serial amplifier connection. Fully independent of all other amp applets.
     void setKpa500Visible(bool visible);
     void setKat500Visible(bool visible);
+    void setKxpa100Visible(bool visible);
     // Show/hide the KPA1500 button and applet based on a direct Elecraft
     // KPA1500 connection (#4097). Independent of every other amplifier
     // applet for the same reason setVkampVisible is: these are separate,
@@ -429,6 +432,7 @@ private:
     LpMeterApplet* m_lpMeterApplet{nullptr};
     QPushButton* m_vkampBtn{nullptr};
     Kat500Applet* m_kat500Applet{nullptr};
+    Kxpa100Applet* m_kxpa100Applet{nullptr};
     Kpa500Applet* m_kpa500Applet{nullptr};
     QPushButton*  m_kpa500Btn{nullptr};
     TxApplet*      m_txApplet{nullptr};

@@ -1272,12 +1272,12 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    Kpa1500Connection* kpa1500,
                                    Kpa500Connection* kpa500,
                                    QWidget* parent,
-                                   Kat500Model* kat500)
+                                   Kat500Model* kat500, Kxpa100Model* kxpa100)
     : CanonWindow(QStringLiteral("Radio Setup"), parent, Kind::Workspace),
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
       m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter),
-      m_kpa1500(kpa1500), m_kpa500(kpa500), m_kat500(kat500)
+      m_kpa1500(kpa1500), m_kpa500(kpa500), m_kat500(kat500), m_kxpa100(kxpa100)
 {
     theme::setContainer(this, QStringLiteral("canon/radioSetup"));
     // Size and position persist under the key it used as a PersistentDialog,

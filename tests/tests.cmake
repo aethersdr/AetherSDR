@@ -3708,6 +3708,7 @@ add_executable(firmware_close_dialog_test
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/PersistentDialog.cpp
@@ -3735,6 +3736,7 @@ add_executable(flex_control_visibility_test
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/PersistentDialog.cpp
@@ -3773,6 +3775,7 @@ add_executable(radio_setup_region_field_test
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/PersistentDialog.cpp
@@ -3832,6 +3835,7 @@ add_executable(radio_setup_label_theme_token_test
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/PersistentDialog.cpp
@@ -3858,6 +3862,7 @@ add_executable(radio_setup_window_size_test
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/PersistentDialog.cpp
@@ -3884,6 +3889,7 @@ add_executable(radio_setup_pair_grid_test
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/PersistentDialog.cpp
@@ -3916,6 +3922,7 @@ add_executable(radio_setup_max_power_field_test
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/PersistentDialog.cpp
@@ -3945,6 +3952,7 @@ add_executable(radio_setup_tx_timing_fields_test
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/PersistentDialog.cpp
@@ -3975,6 +3983,7 @@ add_executable(radio_setup_recording_mode_dim_test
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/PersistentDialog.cpp
@@ -4006,6 +4015,7 @@ add_executable(radio_setup_headphone_output_gate_test
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/PersistentDialog.cpp
@@ -4035,6 +4045,7 @@ add_executable(radio_nickname_test
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -4065,6 +4076,7 @@ add_executable(radio_setup_show_tx_waterfall_test
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/PersistentDialog.cpp
@@ -4799,6 +4811,31 @@ target_include_directories(spe_protocol_test PRIVATE src)
 target_link_libraries(spe_protocol_test PRIVATE Qt6::Core)
 add_test(NAME spe_protocol_test COMMAND spe_protocol_test)
 
+add_executable(kxpa100_protocol_test tests/kxpa100_protocol_test.cpp src/core/Kxpa100Protocol.cpp)
+target_include_directories(kxpa100_protocol_test PRIVATE src)
+target_link_libraries(kxpa100_protocol_test PRIVATE Qt6::Core)
+add_test(NAME kxpa100_protocol_test COMMAND kxpa100_protocol_test)
+
+add_executable(kxpa100_maintenance_test tests/kxpa100_maintenance_test.cpp
+    src/core/Kxpa100Maintenance.cpp src/core/Kxpa100Protocol.cpp)
+target_include_directories(kxpa100_maintenance_test PRIVATE src)
+target_link_libraries(kxpa100_maintenance_test PRIVATE Qt6::Core)
+target_compile_definitions(kxpa100_maintenance_test PRIVATE
+    KXPA100_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/tests/fixtures/kxpa100/synthetic.KXPAConfig"
+    KXPA100_INVALID_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures/kxpa100")
+add_test(NAME kxpa100_maintenance_test COMMAND kxpa100_maintenance_test)
+
+add_executable(kxpa100_model_test tests/kxpa100_model_test.cpp
+    src/models/Kxpa100Model.cpp src/models/Kxpa100Model_Maintenance.cpp src/models/Kxpa100Model.h
+    src/core/Kxpa100Protocol.cpp src/core/Kxpa100Maintenance.cpp)
+target_include_directories(kxpa100_model_test PRIVATE src)
+target_link_libraries(kxpa100_model_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+if(TARGET Qt6::SerialPort)
+    target_compile_definitions(kxpa100_model_test PRIVATE HAVE_SERIALPORT)
+    target_link_libraries(kxpa100_model_test PRIVATE Qt6::SerialPort)
+endif()
+add_test(NAME kxpa100_model_test COMMAND kxpa100_model_test)
+
 add_executable(kat500_protocol_test tests/kat500_protocol_test.cpp src/core/Kat500Protocol.cpp)
 target_include_directories(kat500_protocol_test PRIVATE src)
 target_link_libraries(kat500_protocol_test PRIVATE Qt6::Core)
@@ -4825,6 +4862,17 @@ if(TARGET Qt6::SerialPort)
 endif()
 add_test(NAME kat500_model_test COMMAND kat500_model_test)
 
+add_executable(kxpa100_applet_test tests/kxpa100_applet_test.cpp
+    src/gui/Kxpa100Applet.cpp src/models/Kxpa100Model.cpp src/models/Kxpa100Model_Maintenance.cpp src/models/Kxpa100Model.h
+    src/core/Kxpa100Protocol.cpp src/core/Kxpa100Maintenance.cpp
+    src/gui/CanonSurface.cpp src/gui/CanonWindow.cpp src/gui/DragValuePopup.cpp
+    src/core/ThemeManager.cpp src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings> $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer> ${THEME_TEST_RESOURCES})
+target_include_directories(kxpa100_applet_test PRIVATE src tests)
+target_link_libraries(kxpa100_applet_test PRIVATE Qt6::Core Qt6::Network Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME kxpa100_applet_test COMMAND kxpa100_applet_test)
+set_tests_properties(kxpa100_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 add_executable(kat500_applet_test tests/kat500_applet_test.cpp
     src/gui/Kat500Applet.cpp src/models/Kat500Model.cpp src/models/Kat500Model.h
     src/core/Kat500Protocol.cpp src/core/Kat500Maintenance.cpp
@@ -4836,6 +4884,18 @@ target_include_directories(kat500_applet_test PRIVATE src tests)
 target_link_libraries(kat500_applet_test PRIVATE Qt6::Core Qt6::Network Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME kat500_applet_test COMMAND kat500_applet_test)
 set_tests_properties(kat500_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+add_executable(kxpa100_advanced_widget_test tests/kxpa100_advanced_widget_test.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp src/models/Kxpa100Model.cpp src/models/Kxpa100Model_Maintenance.cpp src/models/Kxpa100Model.h
+    src/core/Kxpa100Protocol.cpp src/core/Kxpa100Maintenance.cpp
+    src/core/ThemeManager.cpp src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings> $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer> ${THEME_TEST_RESOURCES})
+target_include_directories(kxpa100_advanced_widget_test PRIVATE src tests)
+target_link_libraries(kxpa100_advanced_widget_test PRIVATE Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test)
+add_test(NAME kxpa100_advanced_widget_test COMMAND kxpa100_advanced_widget_test)
+set_tests_properties(kxpa100_advanced_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+target_compile_definitions(kxpa100_advanced_widget_test PRIVATE KXPA100_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/tests/fixtures/kxpa100/synthetic.KXPAConfig")
 add_executable(kat500_advanced_widget_test tests/kat500_advanced_widget_test.cpp
     src/gui/Kat500AdvancedWidget.cpp src/models/Kat500Model.cpp src/models/Kat500Model.h
     src/core/Kat500Protocol.cpp src/core/Kat500Maintenance.cpp
@@ -5393,6 +5453,7 @@ add_executable(peripheral_auth_dialog_test
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
     src/gui/Kpa500AdvancedWidget.cpp
     src/gui/AntennaGeniusApplet.cpp
@@ -8876,6 +8937,14 @@ set_tests_properties(gui_nested_lifetime_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Injected serial transport and backend only: no sockets, serial ports or RF.
+add_executable(kxpa100_tx_controls_test tests/kxpa100_tx_controls_test.cpp
+    src/gui/TxApplet.cpp src/gui/AtuPreTuneDialog.cpp src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp src/gui/FramelessWindowTitleBar.cpp)
+target_include_directories(kxpa100_tx_controls_test PRIVATE src tests)
+target_link_libraries(kxpa100_tx_controls_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
+add_test(NAME kxpa100_tx_controls_test COMMAND kxpa100_tx_controls_test)
+set_tests_properties(kxpa100_tx_controls_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(kat500_tx_controls_test tests/kat500_tx_controls_test.cpp
     src/gui/TxApplet.cpp src/gui/AtuPreTuneDialog.cpp src/gui/DragValuePopup.cpp
     src/gui/FramelessResizer.cpp src/gui/FramelessWindowTitleBar.cpp)
@@ -9236,7 +9305,9 @@ set(AETHER_SETTINGS_CONSUMERS
     canon_window_test
     canon_surface_test
     kpa500_applet_test
+    kxpa100_applet_test
     kat500_applet_test
+    kxpa100_advanced_widget_test
     kat500_advanced_widget_test
     panadapter_header_test
     theme_seed_test

@@ -1086,9 +1086,15 @@ set(CORE_SOURCES
     src/core/SpeProtocol.cpp
     src/core/SpeLegacyProtocol.cpp
     src/core/SpeConnection.cpp
+    src/models/Kxpa100RadioAssociation.cpp
+    src/models/Kxpa100RadioAssociation.h
     src/models/Kat500TxController.cpp
     src/models/Kat500TxController.h
+    src/models/Kxpa100Model.cpp
+    src/models/Kxpa100Model_Maintenance.cpp
     src/models/Kat500Model.cpp
+    src/core/Kxpa100Protocol.cpp
+    src/core/Kxpa100Maintenance.cpp
     src/core/Kat500Protocol.cpp
     src/core/Kat500Maintenance.cpp
     src/core/Kpa500Protocol.cpp
@@ -1388,7 +1394,9 @@ set(GUI_SOURCES
     src/gui/AmpApplet.cpp
     src/gui/AcomApplet.cpp
     src/gui/SpeApplet.cpp
+    src/gui/Kxpa100Applet.cpp
     src/gui/Kat500Applet.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
     src/gui/Kat500AdvancedWidget.cpp
     src/gui/Kpa500Applet.cpp
     src/gui/Kpa500AdvancedWidget.cpp

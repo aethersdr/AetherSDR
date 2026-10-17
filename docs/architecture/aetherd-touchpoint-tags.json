@@ -1696,5 +1696,23 @@
   "note": "Engine-owned external tuner sequence through typed RadioModel and captured TX input; KAT500 remains an independent peripheral. No vendor radio wire or GUI dependency.",
   "split": "",
   "confidence": "high"
+ },
+ "models/Kxpa100Model.h": {
+  "tag": "peripheral(elecraft)",
+  "note": "Confirmed state and bounded operations for the independent Elecraft KXPA100 serial/TCP accessory; no radio wire or GUI dependency.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/Kxpa100Types.h": {
+  "tag": "peripheral(elecraft)",
+  "note": "Typed KXPA100 accessory state, configuration, backup and fault records; no radio-family protocol.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/Kxpa100RadioAssociation.h": {
+  "tag": "peripheral(elecraft)",
+  "note": "Explicit per-radio amplifier telemetry association; no radio or tuner commands.",
+  "split": "",
+  "confidence": "high"
  }
 }
