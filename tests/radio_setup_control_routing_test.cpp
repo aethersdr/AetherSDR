@@ -32,7 +32,6 @@ void radioEncoding()
     using Field = RadioSetupRequest::Field;
     struct Case { RadioSetupRequest request; QStringList expected; };
     const std::vector<Case> cases{
-        {{Field::Nickname, QStringLiteral("Desk")}, {"radio name Desk"}},
         {{Field::Callsign, QStringLiteral("KI4TTZ")}, {"radio callsign KI4TTZ"}},
         {{Field::ClientStation, QStringLiteral("Test Client")}, {QStringLiteral("client station Test") + QChar(0x7f) + QStringLiteral("Client")}},
         {{Field::PrivateIpPolicy, true}, {"radio set enforce_private_ip_connections=1"}},
@@ -87,15 +86,13 @@ void radioEncoding()
             QStringLiteral("radio filter_sharpness %1 auto_level=1").arg(text)}, "every sharpness mode preserves separate level and auto fields");
     }
     backend.commands.clear();
-    backend.requestRadioSetup({Field::Nickname, QStringLiteral("Desk _#.,/-")});
     backend.requestRadioSetup({Field::Callsign, QStringLiteral("ki4ttz /p_#")});
     backend.requestRadioSetup({Field::ClientStation, QStringLiteral("Desk @#._-/ ]")});
-    check(backend.commands == QStringList{"radio name Desk.,/-", "radio callsign KI4TTZ/P",
+    check(backend.commands == QStringList{"radio callsign KI4TTZ/P",
         QStringLiteral("client station Desk") + QChar(0x7f) + QStringLiteral("_-/") + QChar(0x7f) + QStringLiteral("]")},
-        "nickname/callsign allowlists and station denylist match distinct SDK rules");
+        "callsign allowlist and station denylist match distinct SDK rules");
     backend.commands.clear();
     const std::vector<RadioSetupRequest> invalid{
-        {Field::Nickname, QStringLiteral("Name\ntransmit mox 1")},
         {Field::FrequencyCorrectionPpb, true}, {Field::NetworkMtu, 0},
         {Field::TimeoutMs, -1}, {Field::MaximumPowerPercent, 101},
         {Field::ReferenceSource, static_cast<ReferenceSource>(90)},

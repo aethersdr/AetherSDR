@@ -60,7 +60,7 @@ struct RadioSetupRequest {
             }
             return false;
         }
-        case Field::Nickname: case Field::ClientStation: {
+        case Field::ClientStation: {
             const QString* text = std::get_if<QString>(&value);
             return text && setupTextValid(*text);
         }

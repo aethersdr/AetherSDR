@@ -63,7 +63,6 @@ ReceiveDispatch FlexBackend::requestRadioSetup(const RadioSetupRequest& request,
     QString command;
     // FlexLib 4.2.18 Radio.cs setters and corresponding radio/interlock status.
     switch (request.field) {
-    case Field::Nickname: command = QStringLiteral("radio name ") + frontPanelText(std::get<QString>(request.value)); break;
     case Field::Callsign: command = QStringLiteral("radio callsign ") + frontPanelText(std::get<QString>(request.value).toUpper()); break;
     case Field::ClientStation:
         command = QStringLiteral("client station ")

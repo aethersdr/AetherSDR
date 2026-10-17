@@ -3768,6 +3768,7 @@ add_executable(radio_setup_operations_test
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kpa500AdvancedWidget.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -3897,7 +3898,7 @@ set_tests_properties(radio_setup_max_power_field_test PROPERTIES
 
 # Radio Setup's Transmit timing fields on the production dialog: dimmed with
 # an announced reason, and silent, on a connected radio with no command plane;
-# the same `interlock set` text with one. Injected backend; no socket.
+# the SDK's `interlock` timing text with one. Injected backend; no socket.
 add_executable(radio_setup_tx_timing_fields_test
     tests/radio_setup_tx_timing_fields_test.cpp
     src/gui/DragValuePopup.cpp

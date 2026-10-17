@@ -6,7 +6,7 @@ namespace AetherSDR {
 
 // Capability metadata stays usable by Qt Core-only model and UI consumers.
 enum class RadioSetupField {
-    Nickname, Callsign, ClientStation, PrivateIpPolicy, NetworkMtu,
+    Callsign, ClientStation, PrivateIpPolicy, NetworkMtu,
     Dhcp, StaticNetwork, AccTxDelayMs, TxDelayMs, Tx1DelayMs,
     Tx2DelayMs, Tx3DelayMs, TimeoutMs, MaximumPowerPercent,
     ShowTxInWaterfall, MeterDuringReceive, SyncCwx, RttyMarkDefaultHz,
