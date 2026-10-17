@@ -176,7 +176,7 @@ The main window has one 52 px title bar. From left to right:
 
 ### Transmit timer
 
-A green outlined `M:SS` readout (`H:MM:SS` past an hour) just left of **PC Audio**. It appears when you key up, starts from 0:00 for each transmission, holds the final time for 15 seconds after you unkey, then fades out. It counts operator transmissions only (MOX, PTT, footswitch, VOX, CW, tune) and never TCI or DAX transmissions from other programs.
+A green outlined `M:SS` readout (`H:MM:SS` past an hour) just left of **PC Audio**. It appears when you key up, starts from 0:00 for each transmission, holds the final time for 15 seconds after you unkey, then fades out. It counts operator transmissions only (MOX, PTT, footswitch, VOX, CW, tune) and never TCI or DAX transmissions from other programs. The audio controls stay in place as the timer appears and fades. In minimal mode, the hidden timer reserves no space.
 
 ### Speaker and master slider
 
