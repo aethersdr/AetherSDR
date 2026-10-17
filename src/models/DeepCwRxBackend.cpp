@@ -3,7 +3,7 @@
 #include "core/DeepCwEngine.h"
 #include "core/LogManager.h"
 #include "core/Resampler.h"
-#include "core/deepfist/DeepFistModelAssets.h"
+#include "core/CwModelAssets.h"
 #include <QDir>
 #include <QMutexLocker>
 #include <QStandardPaths>
@@ -16,7 +16,7 @@ namespace {
 constexpr auto kModelCommit = "9185d5da7d2344393d4e28352cd66c21ed83cad6";
 const QString kModelFile = QStringLiteral("model.onnx");
 
-QVector<DeepFistModelAssets::Asset> deepCwManifest()
+QVector<CwModelAssets::Asset> deepCwManifest()
 {
     return {{kModelFile, 15139839,
              "ef120799457bca042d4690944f0faf93268eb4654e7f50f28784ad63bdc1fe02"}};
@@ -43,23 +43,23 @@ DeepCwRxBackend::DeepCwRxBackend(QObject* parent)
 DeepCwRxBackend::DeepCwRxBackend(QString directory, QString baseUrl,
                                  QNetworkAccessManager* network, QObject* parent)
     : CwRxBackend(parent),
-      m_assets(std::make_unique<DeepFistModelAssets>(directory, std::move(baseUrl),
+      m_assets(std::make_unique<CwModelAssets>(directory, std::move(baseUrl),
                                                       deepCwManifest(), network)),
       m_directory(std::move(directory))
 {
-    connect(m_assets.get(), &DeepFistModelAssets::checking, this, [this] {
+    connect(m_assets.get(), &CwModelAssets::checking, this, [this] {
         setStatus(tr("Checking model…"));
     });
-    connect(m_assets.get(), &DeepFistModelAssets::progress, this, [this](qint64 got, qint64 total) {
+    connect(m_assets.get(), &CwModelAssets::progress, this, [this](qint64 got, qint64 total) {
         setStatus(tr("Download %1%").arg(total > 0 ? got * 100 / total : 0));
     });
-    connect(m_assets.get(), &DeepFistModelAssets::failed, this, [this](const QString& reason) {
+    connect(m_assets.get(), &CwModelAssets::failed, this, [this](const QString& reason) {
         m_preparing = false;
         m_canRetry = true;
         m_detail = reason;
         setStatus(tr("Model unavailable"));
     });
-    connect(m_assets.get(), &DeepFistModelAssets::ready, this, [this] {
+    connect(m_assets.get(), &CwModelAssets::ready, this, [this] {
         if (!m_started || !m_preparing) { return; }
         m_preparing = false;
         m_detail.clear();

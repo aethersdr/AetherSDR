@@ -32,11 +32,15 @@ application. It downloads from N9BC's versioned `exp27_bt-champion` release
 (`https://github.com/n9bc/DeepFist/releases/download/exp27_bt-champion/`), whose
 `deepfist.onnx` and `deepfist.onnx.json` match the pinned lengths and hashes
 below; a non-empty `DEEPFIST_MODEL_BASE_URL` replaces that directory.
-That release publishes no LICENSE; the manifest's LICENSE asset carries
-its own source, the same pinned bytes from the DeepFist repository's first
-commit (`061fc1d7`). The RFC's upstream-only hosting decision remains in effect;
-there is no AetherSDR mirror. A developer can point `AETHER_DEEPFIST_MODEL_DIR`
-at a local verified bundle instead.
+The release has no separate LICENSE asset. The manifest downloads its license
+from the release tag's resolved commit,
+[`930bd3cea7d9bf19fd45413acc9064b54c722871`](https://github.com/n9bc/DeepFist/tree/930bd3cea7d9bf19fd45413acc9064b54c722871),
+using a commit-pinned HTTPS URL and the exact size/hash below. The shared
+`CwModelAssets` downloader serves each decoder's own catalog. The RFC's
+upstream-only hosting decision remains in effect; there is no AetherSDR mirror.
+A developer can point `AETHER_DEEPFIST_MODEL_DIR` at a local verified bundle.
+An older cache keeps its model and metadata; its historical LICENSE is
+re-verified and replaced from the pinned source before the bundle is ready.
 
 The downloader verifies exact lengths and SHA-256 hashes, takes a cache lock,
 uses atomic file replacement, and checks the complete bundle before loading.
@@ -48,13 +52,26 @@ removed asset available to new installations.
 |---|---:|---|
 | deepfist.onnx | 13051998 | 6d2d4e3d66f9001d15e21a1b38b79150eae19ead86a310202900ee69d672b94d |
 | deepfist.onnx.json | 1257 | 840ceb8dba9d46d04495547a8a3789968b1acd2f8ac3a3a5c631f84008ac2217 |
-| LICENSE | 1068 | 9ad70a9ed30d58502e29f9e691a008ee7bccb6eba49d4384f2b7e675d68dc4f3 |
+| LICENSE | 35927 | d8dcabd2c59c9e96be89f094a94474685e3fcd5ee8c4304ae7fbbf6c722df6ab |
 
-The original PR's qualification used a bundle extracted from the Lyra 0.24.0
-installer as an archive. It is not committed or bundled into AetherSDR. Native helpers retain
-their pinned historical MIT license and attribution under
-`third_party/deepfist`; later upstream licensing does not identify the license
-of a different checkpoint or future update.
+### License understanding
+
+For the `exp27_bt-champion` download, AetherSDR follows the upstream release
+revision's [GPL-3.0-or-later license](https://github.com/n9bc/DeepFist/blob/930bd3cea7d9bf19fd45413acc9064b54c722871/LICENSE)
+and [README license notice](https://github.com/n9bc/DeepFist/blob/930bd3cea7d9bf19fd45413acc9064b54c722871/README.md#license).
+The model predates upstream's MIT-to-GPL change; that history does not create
+an incompatibility with AetherSDR's GPLv3 licensing. MIT is also
+[GPL-compatible](https://www.gnu.org/licenses/license-list.html#Expat), with
+its notices preserved. The operator accepted using the published release's
+GPL terms for this pinned download on 2026-10-17. This records the project's
+current understanding, rather than claiming a separate upstream clarification
+of the historical checkpoint's license. Future model revisions need their own
+provenance and pins.
+
+The native helpers under `third_party/deepfist` retain their pinned historical
+MIT license and attribution. The model is downloaded directly from upstream;
+it is neither committed nor bundled into AetherSDR. Its attribution and pinned
+license source are also recorded in `THIRD_PARTY_LICENSES`.
 
 ## Validation contract
 

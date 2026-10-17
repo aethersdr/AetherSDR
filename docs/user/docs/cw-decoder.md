@@ -144,7 +144,7 @@ Colors are based on ggmorse's cost function:
 ### Technical details
 
 - Library: [ggmorse](https://github.com/ggerganov/ggmorse) by Georgi Gerganov (MIT license)
-- Neural decoders: DeepFist ([n9bc/DeepFist](https://github.com/n9bc/DeepFist)) and DeepCW ([e04/deepcw-engine](https://github.com/e04/deepcw-engine), AGPL-3.0); both run with ONNX Runtime, and their models are downloaded, not bundled
+- Neural decoders: DeepFist ([n9bc/DeepFist](https://github.com/n9bc/DeepFist), downloaded with the pinned upstream release’s GPL-3.0-or-later notice) and DeepCW ([e04/deepcw-engine](https://github.com/e04/deepcw-engine), AGPL-3.0); both run with ONNX Runtime, and their models are downloaded, not bundled
 - ggmorse is built in — no external dependency
 - Runs on a dedicated worker thread — does not block audio playback
 - CPU usage: negligible

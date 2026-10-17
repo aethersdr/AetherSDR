@@ -1,4 +1,4 @@
-#include "DeepFistModelAssets.h"
+#include "CwModelAssets.h"
 #include "core/NetworkDiagnostics.h"
 
 #include <QCryptographicHash>
@@ -17,7 +17,7 @@
 
 namespace AetherSDR {
 namespace {
-bool matches(const QString& path, const DeepFistModelAssets::Asset& asset)
+bool matches(const QString& path, const CwModelAssets::Asset& asset)
 {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly) || file.size() != asset.bytes) { return false; }
@@ -25,31 +25,31 @@ bool matches(const QString& path, const DeepFistModelAssets::Asset& asset)
     return hash.addData(&file) && hash.result().toHex() == asset.sha256;
 }
 }
-QVector<DeepFistModelAssets::Asset> DeepFistModelAssets::manifest()
+QVector<CwModelAssets::Asset> CwModelAssets::manifest()
 {
     return {
         {"deepfist.onnx", 13051998, "6d2d4e3d66f9001d15e21a1b38b79150eae19ead86a310202900ee69d672b94d"},
         {"deepfist.onnx.json", 1257, "840ceb8dba9d46d04495547a8a3789968b1acd2f8ac3a3a5c631f84008ac2217"},
-        // The release publishes no LICENSE; these are the pinned bytes from the
-        // repository's first commit, fetched from that commit.
-        {"LICENSE", 1068, "9ad70a9ed30d58502e29f9e691a008ee7bccb6eba49d4384f2b7e675d68dc4f3",
-         "https://raw.githubusercontent.com/n9bc/DeepFist/061fc1d71f2b137b7b145b76cbc89c7e3d7a0d68/LICENSE"}
+        // The release tag's GPL-3.0-or-later notice, pinned to its commit.
+        // The downloaded weights and metadata keep their independent hashes.
+        {"LICENSE", 35927, "d8dcabd2c59c9e96be89f094a94474685e3fcd5ee8c4304ae7fbbf6c722df6ab",
+         "https://raw.githubusercontent.com/n9bc/DeepFist/930bd3cea7d9bf19fd45413acc9064b54c722871/LICENSE"}
     };
 }
-QString DeepFistModelAssets::releaseBaseUrl()
+QString CwModelAssets::releaseBaseUrl()
 {
     // The build selects the published upstream release or an explicit override.
     return QString::fromUtf8(DEEPFIST_MODEL_BASE_URL);
 }
-DeepFistModelAssets::DeepFistModelAssets(QString directory, QString baseUrl,
+CwModelAssets::CwModelAssets(QString directory, QString baseUrl,
     QVector<Asset> assets, QNetworkAccessManager* network, QObject* parent)
     : QObject(parent), m_directory(std::move(directory)), m_baseUrl(std::move(baseUrl)),
       m_assets(std::move(assets)), m_network(network)
 {
     if (!m_network) { m_network = new QNetworkAccessManager(this); }
 }
-DeepFistModelAssets::~DeepFistModelAssets() { cancel(); }
-void DeepFistModelAssets::cleanup()
+CwModelAssets::~CwModelAssets() { cancel(); }
+void CwModelAssets::cleanup()
 {
     if (m_reply) {
         m_reply->disconnect(this);
@@ -61,18 +61,18 @@ void DeepFistModelAssets::cleanup()
     m_hash.reset();
     m_lock.reset();
 }
-void DeepFistModelAssets::cancel()
+void CwModelAssets::cancel()
 {
     ++m_generation;
     m_busy = false;
     cleanup();
 }
-void DeepFistModelAssets::fail(const QString& reason)
+void CwModelAssets::fail(const QString& reason)
 {
     cancel();
     emit failed(reason);
 }
-void DeepFistModelAssets::ensure()
+void CwModelAssets::ensure()
 {
     if (m_busy) { return; }
     m_busy = true;
@@ -100,7 +100,7 @@ void DeepFistModelAssets::ensure()
     }
     next();
 }
-void DeepFistModelAssets::next()
+void CwModelAssets::next()
 {
     if (!m_busy) { return; }
     if (m_index == m_assets.size()) {
@@ -129,7 +129,7 @@ void DeepFistModelAssets::next()
     watcher->setFuture(QtConcurrent::run([path, asset] { return matches(path, asset); }));
     emit checking();
 }
-void DeepFistModelAssets::download()
+void CwModelAssets::download()
 {
     const Asset& asset = m_assets[m_index];
     const QString prefix = m_baseUrl.endsWith('/') ? m_baseUrl : m_baseUrl + '/';
@@ -147,18 +147,18 @@ void DeepFistModelAssets::download()
     QNetworkRequest request(source);
     request.setTransferTimeout(30000);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("AetherSDR-DeepFist"));
+    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("AetherSDR-CW"));
     m_reply = m_network->get(request);
-    NetworkDiagnostics::watch(m_reply, "DeepFist model download");
+    NetworkDiagnostics::watch(m_reply, "CW model download");
     m_reply->setReadBufferSize(64 * 1024);
-    connect(m_reply, &QNetworkReply::readyRead, this, &DeepFistModelAssets::readAvailable);
-    connect(m_reply, &QNetworkReply::finished, this, &DeepFistModelAssets::finishDownload);
+    connect(m_reply, &QNetworkReply::readyRead, this, &CwModelAssets::readAvailable);
+    connect(m_reply, &QNetworkReply::finished, this, &CwModelAssets::finishDownload);
     emit progress(m_completed, m_total);
 }
-void DeepFistModelAssets::readAvailable()
+void CwModelAssets::readAvailable()
 {
     if (!m_reply || !m_file) { return; }
-    const QPointer<DeepFistModelAssets> guard(this);
+    const QPointer<CwModelAssets> guard(this);
     const quint64 generation = m_generation;
     while (m_reply && m_reply->bytesAvailable() > 0) {
         const QByteArray bytes = m_reply->read(64 * 1024);
@@ -174,10 +174,10 @@ void DeepFistModelAssets::readAvailable()
         if (!guard || !m_busy || generation != m_generation) { return; }
     }
 }
-void DeepFistModelAssets::finishDownload()
+void CwModelAssets::finishDownload()
 {
     if (!m_reply) { return; }
-    const QPointer<DeepFistModelAssets> guard(this);
+    const QPointer<CwModelAssets> guard(this);
     const quint64 generation = m_generation;
     if (m_reply->error() != QNetworkReply::NoError
         || m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() != 200) {

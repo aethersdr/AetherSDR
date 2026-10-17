@@ -790,3 +790,23 @@ download-only ASR entries above, this has TWO distinct AGPL-3.0 obligations:
   Attribution: "deepcw-engine" by e04.
   License: AGPL-3.0-or-later (both the ported code and the model)
   Source:  https://github.com/e04/deepcw-engine
+
+
+33. DeepFist — CW model weights (download-on-demand)
+-------------------------------------------------------------------------------
+The exp27_bt-champion model (deepfist.onnx and deepfist.onnx.json) is downloaded
+on first selection, never bundled or mirrored by AetherSDR. Size and SHA-256
+are pinned in src/core/CwModelAssets.cpp. The accompanying LICENSE is fetched
+from the release tag's resolved source revision, not a historical MIT revision.
+The native helpers' separate historical MIT notice above remains in effect.
+
+  Copyright: Copyright (C) 2026 Brent Crier (N9BC)
+  License understanding: GPL-3.0-or-later, following the published release's
+             LICENSE and README; accepted for this pinned download by the
+             operator on 2026-10-17. This is not a separate upstream ruling on
+             the older checkpoint. See docs/deepfist-cw-backend.md.
+  Release:   https://github.com/n9bc/DeepFist/releases/tag/exp27_bt-champion
+  Source:    https://github.com/n9bc/DeepFist/tree/930bd3cea7d9bf19fd45413acc9064b54c722871
+  License:   https://raw.githubusercontent.com/n9bc/DeepFist/930bd3cea7d9bf19fd45413acc9064b54c722871/LICENSE
+  LICENSE:   35927 bytes; SHA-256
+             d8dcabd2c59c9e96be89f094a94474685e3fcd5ee8c4304ae7fbbf6c722df6ab

@@ -3201,7 +3201,7 @@ if(ORT_FOUND)
         src/core/DeepCwEngine.cpp src/core/DeepCwEngine.h
         src/core/DeepCwCommitter.cpp src/core/DeepCwCommitter.h
         src/models/DeepCwRxBackend.cpp src/models/DeepCwRxBackend.h
-        src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h)
+        src/core/CwModelAssets.cpp src/core/CwModelAssets.h)
     target_include_directories(aethercore PRIVATE "${CMAKE_SOURCE_DIR}/third_party/deepfist")
     # PUBLIC include dir: core/SignalClassifier.h includes onnxruntime under
     # HAVE_ONNX (PUBLIC) and is pulled in by gui/MainWindow.h. Same transitive

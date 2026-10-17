@@ -9568,7 +9568,7 @@ add_test(NAME deepcw_ctc_test COMMAND deepcw_ctc_test)
 set_tests_properties(deepcw_ctc_test PROPERTIES TIMEOUT 20)
 add_executable(deepfist_model_assets_test
     tests/deepfist_model_assets_test.cpp
-    src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h src/core/NetworkDiagnostics.cpp)
+    src/core/CwModelAssets.cpp src/core/CwModelAssets.h src/core/NetworkDiagnostics.cpp)
 target_include_directories(deepfist_model_assets_test PRIVATE src tests)
 target_compile_definitions(deepfist_model_assets_test PRIVATE DEEPFIST_MODEL_BASE_URL="")
 target_link_libraries(deepfist_model_assets_test PRIVATE Qt6::Core Qt6::Network Qt6::Concurrent)

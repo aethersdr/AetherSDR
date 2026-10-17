@@ -11,7 +11,7 @@
 #include <memory>
 class QNetworkAccessManager;
 namespace AetherSDR {
-class DeepFistModelAssets;
+class CwModelAssets;
 // GUI-facing experimental RX decoder. All DSP and model state is worker-owned.
 // Public methods run on the owning thread; no inference runs on that thread.
 class DeepFistCwModel final : public QObject {
@@ -53,7 +53,7 @@ private:
     void setStatus(const QString& status);
     DeepFistStream::Parameters m_parameters;
     std::thread m_worker;
-    std::unique_ptr<DeepFistModelAssets> m_assets;
+    std::unique_ptr<CwModelAssets> m_assets;
     QString m_directory;
     QString m_detail;
     bool m_preparing = false;

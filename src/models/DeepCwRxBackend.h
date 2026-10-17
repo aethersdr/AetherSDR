@@ -12,7 +12,7 @@ class QThread;
 namespace AetherSDR {
 
 class DeepCwEngine;
-class DeepFistModelAssets;
+class CwModelAssets;
 
 // DeepCW (RFC #4817, K5PTB's port of e04/deepcw-engine) behind CwRxBackend.
 // Consumes the converted mono 24 kHz feed (feedFixed24), resamples it to the
@@ -51,7 +51,7 @@ private:
     void postStatus(quint64 runId, const QString& status, bool failure);
     void setStatus(const QString& status);
 
-    std::unique_ptr<DeepFistModelAssets> m_assets;
+    std::unique_ptr<CwModelAssets> m_assets;
     QString m_directory;
 
     // Owner thread.
