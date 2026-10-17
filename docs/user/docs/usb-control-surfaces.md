@@ -95,6 +95,8 @@ Tuning speed follows how fast you turn the knob. Auto-snap rounds to the nearest
 
 The PowerMate (one knob with a push) and the Contour ShuttleXpress (5 buttons) and ShuttlePro v2 (15 buttons) work as single-encoder devices. Enable HID encoders, then choose the knob or jog wheel's action as **Encoder 1**. Their buttons are numbered from 1 and use the **Key 1–8** slots in **StreamDeck+ LCD Button Actions**; the PowerMate's push is Key 1.
 
+Contour reports can contain several button changes together. Every press and release is handled, and turning the jog wheel while pressing a button still tunes normally.
+
 ## Using the TMate 2
 
 The TMate 2 (three encoders, six function keys and an LCD) has its own groups on the same page: **TMate 2 Key Actions** (F1–F6), **TMate 2 Encoder Actions**, **TMate 2 Encoder Push Actions** and **TMate 2 Display**. Its LCD shows the frequency, mode, S-meter and transmit state.
