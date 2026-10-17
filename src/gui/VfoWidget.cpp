@@ -6256,7 +6256,7 @@ void VfoWidget::refreshCwDecoderControls()
     const bool selected = CwDecodeSettings::neuralSelected();
     m_zeroBeatBtn->setEnabled(!selected);
     const QString reason = selected
-        ? tr("Zero Beat needs ggmorse's pitch estimate; the neural CW decoders provide none") : QString{};
+        ? tr("Zero Beat uses ggmorse's pitch estimate; neural decoder pitch is not used") : QString{};
     m_zeroBeatBtn->setToolTip(reason);
     m_zeroBeatBtn->setAccessibleDescription(reason);
 }

@@ -8782,6 +8782,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    cw_rx_model_test
     dax_receive_applet_test
     hl2_discovery_logging_test
     reroute_dead_controls_test
@@ -9561,7 +9562,7 @@ target_include_directories(deepfist_committer_test PRIVATE src)
 target_link_libraries(deepfist_committer_test PRIVATE Qt6::Core)
 add_test(NAME deepfist_committer_test COMMAND deepfist_committer_test)
 set_tests_properties(deepfist_committer_test PROPERTIES TIMEOUT 20)
-add_executable(deepcw_ctc_test tests/deepcw_ctc_test.cpp src/core/DeepCwEngine.cpp)
+add_executable(deepcw_ctc_test tests/deepcw_ctc_test.cpp src/core/DeepCwEngine.cpp src/core/DeepCwCommitter.cpp)
 target_include_directories(deepcw_ctc_test PRIVATE src)
 add_test(NAME deepcw_ctc_test COMMAND deepcw_ctc_test)
 set_tests_properties(deepcw_ctc_test PROPERTIES TIMEOUT 20)

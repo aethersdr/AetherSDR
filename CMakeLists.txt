@@ -3550,7 +3550,6 @@ endforeach()
 # why that matters and why it should not be "tidied up" into a subdirectory.
 enable_testing()
 # DeepCW offline replay harness (RFC #4817 regression take): not built by default.
-# Declared above the tests include: executables declared after it fail configure.
 if(ORT_FOUND)
     add_executable(deepcw_replay EXCLUDE_FROM_ALL
         tools/deepcw_replay.cpp src/core/DeepCwEngine.cpp src/core/DeepCwCommitter.cpp

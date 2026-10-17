@@ -11,7 +11,7 @@
 //                               panel showed it via QTextEdit::insertHtml
 //   deepcw_replay <model.onnx> <in.wav> <outPrefix> commit [holdSec]
 //       <outPrefix>-commit-H<hold>.txt  the shipped path: DeepCwCommitter fed
-//                               in 200 ms drains, exactly as decodeLoopDeep()
+//                               in 200 ms drains, as in DeepCwRxBackend::decodeLoop()
 //
 // Input: PCM16 WAV at 24 kHz, mono or stereo (the QSO recorder's format).
 
@@ -25,6 +25,7 @@
 #include <QTextEdit>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -129,6 +130,10 @@ int main(int argc, char** argv)
 
     if (argc > 4 && std::string(argv[4]) == "commit") {
         const double hold = argc > 5 ? std::atof(argv[5]) : 5.0;
+        if (!std::isfinite(hold) || hold < 1.0 || hold > 14.0) {
+            std::fprintf(stderr, "holdSec must be finite and between 1 and 14 seconds\n");
+            return 2;
+        }
         DeepCwCommitter c(hold);
         std::string text;
         for (const auto& d : drains) text += c.push(d.data(), d.size(), eng).text;

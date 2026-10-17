@@ -58,7 +58,7 @@ The decoder selector in the panel's toolbar picks which decoder reads the receiv
 | **DeepFist** | About 2 seconds behind the signal | Weak and hand-sent CW | Downloaded on first use, about 13 MB |
 | **DeepCW** | About 6–8 seconds behind the signal, a few characters at a time; it holds text back so later audio can correct it | Weak signals | Downloaded on first use, about 15 MB |
 
-No decoder is best on every signal. Try each on the signals you work.
+No decoder is best on every signal. Try each on the signals you work. DeepCW analyzes tones from **400 to 1200 Hz**; keep the received CW tone in that range.
 
 The neural decoders' models are not part of the AetherSDR download. The first time you select one, AetherSDR downloads its model from the model's own published source and checks it before use; the status beside the selector shows the progress. **Cancel** stops a download, and **Retry** appears if it fails. Once downloaded, the model is kept and works offline. If a model cannot be downloaded, the decoder shows **Model unavailable** and you can switch back to ggmorse.
 
@@ -68,6 +68,8 @@ With a neural decoder selected:
 - Characters are coloured by the model's own confidence, on the same green-to-red scale, and are never hidden.
 - Callsign contact cards and the MQTT text stream come from ggmorse only.
 - AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on radios with SmartSDR+) works with any decoder.
+
+DeepCW discards its provisional text (about 5–7 seconds) when the source changes, audio is interrupted, or decoding stops. Its worker finishes the current inference or model load before stopping, so switching decoders can pause the interface until that work finishes.
 
 The neural decoders are not available on Intel Macs; there the selector does not appear and ggmorse decodes as before.
 

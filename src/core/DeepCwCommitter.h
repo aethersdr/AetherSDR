@@ -1,17 +1,9 @@
 #pragma once
 
-// DeepCW streaming front: sliding analysis window + time-anchored commit.
-//
-// The model is a whole-window CTC decoder, and its reading of a character
-// keeps improving while more audio arrives after it. So each hop the whole
-// window is re-decoded, but a character is committed (shown) only once it was
-// emitted more than holdSec behind the live edge; everything newer stays
-// provisional and is re-read on the next hop. The commit point is snapped back
-// into a run of blank frames so no character straddles it. When the window
-// reaches its maximum, the oldest audio is dropped but holdSec + leftContextSec
-// is kept, so there is no hard reset and no character or word is cut at a seam.
-//
-// Qt-free (std + DeepCwEngine) so the offline replay tool runs exactly this code.
+// Sliding-window CTC decode with a time-anchored commit point. Text stays
+// provisional until holdSec behind the live edge, then commits at a blank run.
+// Trimming keeps holdSec + leftContextSec so letters can span window edges.
+// Qt-free so the offline replay tool uses the same streaming path.
 
 #include "DeepCwEngine.h"
 

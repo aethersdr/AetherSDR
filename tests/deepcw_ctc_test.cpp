@@ -1,6 +1,7 @@
 // DeepCW's greedy CTC decode, model-free: no ONNX Runtime, weights or sockets.
 // Every log-prob row below is CONSTRUCTED; it exercises the decode rule only.
 #include "core/DeepCwEngine.h"
+#include "core/DeepCwCommitter.h"
 
 #include <cmath>
 #include <cstdio>
@@ -60,5 +61,10 @@ int main()
     float avgEmpty = 0.0f;
     if (!eng.ctcDecode(nullptr, 0, &avgEmpty).empty() || avgEmpty != 1.0f) { return 7; }
     if (!eng.greedyEmissions(nullptr, 0, &blank).empty() || !blank.empty()) { return 8; }
+    // A hop longer than the analysis window must not underflow its trim size.
+    AetherSDR::DeepCwCommitter longHop(5.0, 3.0, 100.0);
+    const std::vector<float> audio(DeepCwEngine::kModelSampleRate * 20, 0.0f);
+    longHop.push(audio.data(), audio.size(), eng);
+    longHop.push(audio.data(), audio.size(), eng);
     return 0;
 }

@@ -31,7 +31,8 @@ Windows); there is no separate option. The model is never bundled with the
 application. It downloads from N9BC's versioned `exp27_bt-champion` release
 (`https://github.com/n9bc/DeepFist/releases/download/exp27_bt-champion/`), whose
 `deepfist.onnx` and `deepfist.onnx.json` match the pinned lengths and hashes
-below; a non-empty `DEEPFIST_MODEL_BASE_URL` replaces that directory. That release publishes no LICENSE; the manifest's LICENSE asset carries
+below; a non-empty `DEEPFIST_MODEL_BASE_URL` replaces that directory.
+That release publishes no LICENSE; the manifest's LICENSE asset carries
 its own source, the same pinned bytes from the DeepFist repository's first
 commit (`061fc1d7`). The RFC's upstream-only hosting decision remains in effect;
 there is no AetherSDR mirror. A developer can point `AETHER_DEEPFIST_MODEL_DIR`

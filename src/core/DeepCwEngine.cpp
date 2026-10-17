@@ -306,7 +306,7 @@ std::string DeepCwEngine::decode(const std::vector<float>& audio, int sampleRate
     if (!m_loaded || !m_session) { return {}; }
 
     // The engine does not resample: the caller must deliver model-rate audio
-    // through an anti-aliased SRC (CwDecoder uses r8brain). A wrong rate here
+    // through an anti-aliased SRC (DeepCwRxBackend uses r8brain). A wrong rate here
     // would silently alias into the 400-1200 Hz band, so refuse it outright.
     if (sampleRateHz != kModelSampleRate) {
         static bool warned = false;

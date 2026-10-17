@@ -25,12 +25,12 @@ namespace AetherSDR {
 // log-magnitude spectrogram. Given a mono audio window already at the model's
 // 3200 Hz rate, the engine builds the exact spectrogram the model was trained
 // on, runs one ONNX Runtime inference, and greedy-CTC-decodes the log-probs to
-// text. Resampling to 3200 Hz is the caller's job (CwDecoder does it with an
+// text. Resampling to 3200 Hz is the caller's job (DeepCwRxBackend does it with an
 // anti-aliased r8brain SRC) — a non-integer decimation without a filter folds
 // energy straight into the 400-1200 Hz analysis band.
 //
 // Deliberately Qt-free (pure std + ORT, self-contained radix-2 FFT) so it can be
-// unit-tested and prototyped standalone; the CwDecoder wrapper adapts
+// unit-tested and prototyped standalone; the DeepCwRxBackend wrapper adapts
 // std::string -> QString. ORT calls compile out without HAVE_ONNX (decode()
 // then returns empty).
 //

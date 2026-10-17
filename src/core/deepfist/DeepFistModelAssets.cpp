@@ -38,7 +38,7 @@ QVector<DeepFistModelAssets::Asset> DeepFistModelAssets::manifest()
 }
 QString DeepFistModelAssets::releaseBaseUrl()
 {
-    // Empty until a reviewed, versioned release asset set has been published.
+    // The build selects the published upstream release or an explicit override.
     return QString::fromUtf8(DEEPFIST_MODEL_BASE_URL);
 }
 DeepFistModelAssets::DeepFistModelAssets(QString directory, QString baseUrl,

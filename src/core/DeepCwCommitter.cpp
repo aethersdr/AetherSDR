@@ -17,7 +17,7 @@ DeepCwCommitter::DeepCwCommitter(double holdSec, double leftContextSec, double h
     // Stay inside the model's trained 5-20 s window range.
     , m_window(std::min(DeepCwEngine::kMaxWindowSec,
                         std::max(15.0, holdSec + leftContextSec + hopSec)))
-    , m_keep(std::min(m_window - hopSec, holdSec + leftContextSec))
+    , m_keep(std::max(0.0, std::min(m_window - hopSec, holdSec + leftContextSec)))
 {
 }
 

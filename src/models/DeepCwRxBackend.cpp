@@ -188,14 +188,14 @@ void DeepCwRxBackend::feedFixed24(const DecoderPcmBlock& block)
     if (m_ring.size() > kRingCapacity) {
         m_ring.erase(m_ring.begin(),
                      m_ring.begin() + static_cast<std::ptrdiff_t>(m_ring.size() - kRingCapacity));
+        m_resetRequested = true;
     }
 }
 
-// K5PTB's DeepCW worker loop (prototype CwDecoder::decodeLoopDeep), fed by the
-// 24 kHz mono ring: resample to the model's 3200 Hz with an anti-aliased
-// r8brain SRC (a 7.5x decimation; a naive resample folds energy into the
-// 400-1200 Hz analysis band), then DeepCwCommitter: a sliding window re-decoded
-// every 2 s whose characters are shown once they are 5 s behind the live edge.
+// Resample the 24 kHz ring with anti-aliased r8brain SRC before inference.
+// The worker owns the sliding-window committer; discontinuities discard its
+// provisional text so characters cannot cross source changes.
+// AETHER_DEEPCW_HOLD_S overrides the 5 s hold for local measurements.
 void DeepCwRxBackend::decodeLoop(quint64 runId, const QString& modelPath)
 {
     if (!m_loaded) {
