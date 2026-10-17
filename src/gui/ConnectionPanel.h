@@ -238,8 +238,10 @@ private:
     void refitToContent();
     // Height the body would like if the screen allows it. The panel's own
     // sizeHint() cannot answer this — QScrollArea caps its hint by design, so
-    // it under-reports the body it is scrolling.
-    int preferredClientHeight() const;
+    // it under-reports the body it is scrolling. Taken at the client width the
+    // caller is about to apply, because that width decides whether a
+    // horizontal scrollbar takes its height out of the viewport.
+    int preferredClientHeight(int clientWidth) const;
     QScreen* screenFitTarget(QScreen* preferredScreen) const;
     void saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,

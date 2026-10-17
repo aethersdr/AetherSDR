@@ -35,6 +35,7 @@
 #include <QJsonObject>
 #include <QPainter>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QSizePolicy>
@@ -1417,7 +1418,7 @@ QScreen* ConnectionPanel::screenFitTarget(QScreen* preferredScreen) const
     return targetScreen;
 }
 
-int ConnectionPanel::preferredClientHeight() const
+int ConnectionPanel::preferredClientHeight(int clientWidth) const
 {
     if (!m_bodyContent || !m_bodyScroll) {
         return kPreferredHeight;
@@ -1427,7 +1428,23 @@ int ConnectionPanel::preferredClientHeight() const
     // summing the two widgets keeps this correct without duplicating which of
     // them is visible in which frameless mode.
     const int chromeHeight = sizeHint().height() - m_bodyScroll->sizeHint().height();
-    return qMax(kPreferredHeight, chromeHeight + m_bodyContent->sizeHint().height());
+    int bodyHeight = chromeHeight + m_bodyContent->sizeHint().height();
+
+    // A body wider than the viewport shows a horizontal scrollbar, and that bar
+    // takes its height out of the viewport. Left out, the fit comes up exactly
+    // one bar short and the dialog opens with a vertical scrollbar anyway
+    // (#5811). maximumViewportSize() is the viewport with no scrollbars, which
+    // is the state this fit is aiming for; the horizontal chrome around it
+    // carries over unchanged to the width the caller is about to apply.
+    const int viewportWidth = clientWidth
+        - (width() - m_bodyScroll->maximumViewportSize().width());
+    const int contentMinWidth = m_bodyContent->minimumSizeHint()
+                                    .expandedTo(m_bodyContent->minimumSize())
+                                    .width();
+    if (contentMinWidth > viewportWidth) {
+        bodyHeight += m_bodyScroll->horizontalScrollBar()->sizeHint().height();
+    }
+    return qMax(kPreferredHeight, bodyHeight);
 }
 
 void ConnectionPanel::fitToScreen(QScreen* preferredScreen)
@@ -1459,13 +1476,14 @@ void ConnectionPanel::fitToScreen(QScreen* preferredScreen)
     // operator wants. Growing is a courtesy, so it only applies to a height
     // this function chose — otherwise a dialog dragged short on a big screen
     // would spring back every time it was reopened.
+    const int targetWidth = qMin(width(), maximumClientWidth);
     int targetHeight = qMin(height(), maximumClientHeight);
     if (height() == m_autoFitHeight) {
         targetHeight = qBound(qMin(kSafeMinimumHeight, maximumClientHeight),
-                              preferredClientHeight(),
+                              preferredClientHeight(targetWidth),
                               maximumClientHeight);
     }
-    resize(qMin(width(), maximumClientWidth), targetHeight);
+    resize(targetWidth, targetHeight);
     m_autoFitHeight = height();
 }
 
