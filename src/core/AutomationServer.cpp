@@ -1922,6 +1922,10 @@ QJsonObject transmitSnapshot(const TransmitModel* t,
         snapshot.insert(QStringLiteral("txFilterLow"), t->txFilterLow());
         snapshot.insert(QStringLiteral("txFilterHigh"), t->txFilterHigh());
     }
+    // Absent until the radio reports it: firmware before v4.3 has no such key.
+    if (t->havePttMicOverride()) {
+        snapshot.insert(QStringLiteral("pttMicOverride"), t->pttMicOverride());
+    }
     return snapshot;
 }
 

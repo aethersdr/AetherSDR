@@ -42,6 +42,7 @@
 #include "VkampApplet.h"
 #include "Kpa1500Applet.h"
 #include "LpMeterApplet.h"
+#include "Kpa500Applet.h"
 #include "HealthApplet.h"
 #include "ImageFileDialog.h"
 #include "MeterApplet.h"
@@ -1758,6 +1759,35 @@ bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
 
 void MainWindow::refreshTunerPortFrequency()
 {
+    // Match the active plan's segments to the KPA's fixed band selectors.
+    // These broad search windows classify bands; the plan owns their edges.
+    SliceModel* kpaTx = m_radioModel.isConnected() && m_radioModel.backendCanTransmit()
+        ? m_radioModel.txSlice() : nullptr;
+    int kpaBand = -1;
+    QString kpaSource;
+    if (kpaTx && m_bandPlanMgr) {
+        const double mhz = kpaTx->frequency()
+            + ((kpaTx->mode() == "FM" || kpaTx->mode() == "NFM") ? kpaTx->txOffsetFreq() : 0.0)
+            + (kpaTx->xitOn() ? kpaTx->xitFreq() / 1.0e6 : 0.0);
+        static constexpr double windows[][2] = {
+            {1.5, 2.5}, {3.0, 4.5}, {5.0, 5.6}, {6.5, 7.5}, {9.8, 10.4},
+            {13.5, 14.8}, {17.5, 18.5}, {20.5, 21.8}, {24.5, 25.3}, {27.5, 30.0}, {49.0, 55.0}
+        };
+        for (int band = 0; band <= 10; ++band) {
+            const auto regions = m_bandPlanMgr->contiguousRegionsForBand(windows[band][0], windows[band][1]);
+            for (const auto& region : regions) {
+                if (mhz >= region.lowMhz && mhz <= region.highMhz) { kpaBand = band; break; }
+            }
+            if (kpaBand >= 0) { break; }
+        }
+        kpaSource = QStringLiteral("%1 · %2 MHz").arg(kpaTx->letter()).arg(mhz, 0, 'f', 6);
+    }
+    const bool transmitting = m_radioModel.transmitModel().isTransmitting();
+    m_kpa500Conn.setTxContext(kpaBand, kpaSource, transmitting);
+    if (m_appletPanel && m_appletPanel->kpa500Applet()) {
+        m_appletPanel->kpa500Applet()->setRadioTransmitting(transmitting);
+    }
+
     if (!m_appletPanel || !m_appletPanel->tunerApplet()) return;
     // No radio, or no slice keyed for transmit, means there is no frequency
     // on the port — which the strip renders as N/A. Reporting the last one
@@ -2395,6 +2425,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // no change of slice or frequency to notice it by.
     connect(s, &SliceModel::txAntennaChanged, this,
             [this](const QString&) { refreshTunerPortFrequency(); });
+    connect(s, &SliceModel::xitChanged, this, [this](bool, int) { refreshTunerPortFrequency(); });
+    connect(s, &SliceModel::txOffsetFreqChanged, this, [this](double) { refreshTunerPortFrequency(); });
+    connect(s, &SliceModel::modeChanged, this, [this](const QString&) { refreshTunerPortFrequency(); });
     refreshTunerPortFrequency();
 
     // Reset band-stack auto-save dwell timer on every active-slice tune
@@ -6422,6 +6455,16 @@ void MainWindow::wireMeters()
 {
     auto* relativeTimer = new QTimer(this);
     relativeTimer->setInterval(100);
+    const auto updateKpa500Drive = [this] {
+        if (m_appletPanel && m_appletPanel->kpa500Applet()) {
+            m_appletPanel->kpa500Applet()->updateRadioDrive(
+                m_radioModel.meterModel(), m_radioModel.isConnected());
+        }
+    };
+    // Poll even without meter packets so an expired radio reading clears in AMP mode too.
+    connect(relativeTimer, &QTimer::timeout, this, updateKpa500Drive);
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, this, updateKpa500Drive);
+    updateKpa500Drive();
     connect(relativeTimer, &QTimer::timeout, this, [this] {
         if (!m_appletPanel) { return; }
         auto* meter = m_appletPanel->sMeterWidget();
@@ -6468,7 +6511,8 @@ void MainWindow::wireMeters()
     // (~100 W) and amp (~1500 W) values race into the same widget. (#2927)
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
             this, [this](float fwd, float swr, bool swrValid) {
-        if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate())
+        if ((m_radioModel.amplifier().present() && m_radioModel.amplifier().operate())
+            || m_kpa500Conn.hasLiveTxMeters())
             return;
         // Absent SWR is forwarded as 1.0: RadioSwrValidityFilter downstream
         // reads <1.0 WITH forward power as the radio's over-range sentinel
@@ -6489,8 +6533,9 @@ void MainWindow::wireMeters()
             &MeterModel::directionalPowerMetersChanged,
             this, [this](float fwd, float reflected, float swr,
                          bool swrValid, bool reflectedPowerMeasured) {
-        if (m_radioModel.amplifier().present()
-            && m_radioModel.amplifier().operate()) {
+        if ((m_radioModel.amplifier().present()
+             && m_radioModel.amplifier().operate())
+            || m_kpa500Conn.hasLiveTxMeters()) {
             return;
         }
         // The cross-needle already clamps sub-1.0 values to 1.0 (its rest
@@ -6582,6 +6627,8 @@ void MainWindow::wireMeters()
         m_vkampConn.setAutoReconnect(ar);
         m_kpa1500Conn.setAutoReconnect(ar);
         m_lpMeterConn.setAutoReconnect(ar);
+        m_kpa500Conn.setAutoReconnect(
+            ar && PeripheralSettings::autoConnect(QStringLiteral("kpa500")));
     }
 
     // Wire TgxlConnection to TunerModel
@@ -7395,12 +7442,89 @@ void MainWindow::wireMeters()
 #endif
     }
 
-    // Fwd power gauge scale from radio max power and amp presence, applied to
-    // TxApplet, TunerApplet and SMeterWidget together; with the PGXL in STANDBY
-    // use the barefoot scale. Redundant re-applies are skipped inside each
-    // gauge's setPowerScale(), not here: infoChanged bursts on ordinary status,
-    // and an automation test action writes the widget scale directly, so a
-    // cache here could skip a needed re-apply.
+    // ── Elecraft KPA500 amplifier — serial or raw TCP, no FlexRadio relay ──────────
+    // See docs/architecture/elecraft-kpa500-kat500-design.md. Wire ALL signals
+    // before the auto-connect trigger — connectSerial() can call
+    // onTransportUp() synchronously, so anything wired after the trigger
+    // misses the first connected().
+    connect(&m_kpa500Conn, &Kpa500Connection::connected, this, [this]() {
+        m_appletPanel->kpa500Applet()->setConnected(true);
+        m_appletPanel->kpa500Applet()->setConnectionDescription(m_kpa500Conn.description());
+    });
+    connect(&m_kpa500Conn, &Kpa500Connection::disconnected, this, [this]() {
+        m_appletPanel->kpa500Applet()->setConnected(false);
+    });
+    connect(&m_kpa500Conn, &Kpa500Connection::detectedChanged,
+            m_appletPanel, &AppletPanel::setKpa500Visible);
+    connect(&m_kpa500Conn, &Kpa500Connection::respondingChanged, this, [this](bool responding) {
+        m_appletPanel->kpa500Applet()->setResponding(responding);
+    });
+    connect(&m_kpa500Conn, &Kpa500Connection::statusUpdated, this,
+            [this](const AetherSDR::Kpa500::Status& s) {
+        m_appletPanel->kpa500Applet()->applyStatus(s);
+        if (!(m_radioModel.amplifier().present() && m_radioModel.amplifier().operate())
+            && m_kpa500Conn.hasLiveTxMeters()) {
+            applyAmpTxMeters(s.forwardPowerW.value(), s.swr.value_or(1.0f),
+                             /*fromRelay=*/false);
+        }
+    });
+    connect(m_appletPanel->kpa500Applet(), &Kpa500Applet::operateToggled,
+            this, [this](bool on) { m_kpa500Conn.setOperate(on); });
+    connect(m_appletPanel->kpa500Applet(), &Kpa500Applet::clearFaultClicked,
+            this, [this]() { m_kpa500Conn.clearFault(); });
+    connect(m_appletPanel->kpa500Applet(), &Kpa500Applet::fanSpeedChangeRequested,
+            this, [this](int n) { m_kpa500Conn.setFanSpeed(n); });
+
+    auto* kpa = m_appletPanel->kpa500Applet();
+    connect(kpa, &Kpa500Applet::advancedSettingsRequested, this, [this] {
+        if (RadioSetupDialog* dialog = openRadioSetupPage(QStringLiteral("Peripherals"))) {
+            dialog->revealKpa500AdvancedSettings();
+        }
+    });
+    connect(&m_kpa500Conn, &Kpa500Connection::maintenanceBusyChanged, kpa, &Kpa500Applet::setMaintenanceBusy);
+    connect(kpa, &Kpa500Applet::powerRequested, &m_kpa500Conn, &Kpa500Connection::setPower);
+    connect(kpa, &Kpa500Applet::speakerRequested, &m_kpa500Conn, &Kpa500Connection::setSpeaker);
+    connect(kpa, &Kpa500Applet::bandRequested, &m_kpa500Conn, &Kpa500Connection::requestBand);
+    connect(kpa, &Kpa500Applet::followTxChanged, &m_kpa500Conn, &Kpa500Connection::setFollowTx);
+    connect(&m_kpa500Conn, &Kpa500Connection::diagnostic, kpa, &Kpa500Applet::appendDiagnostic);
+    connect(&m_kpa500Conn, &Kpa500Connection::telemetryReceived, kpa, &Kpa500Applet::recordTelemetry);
+    connect(&m_kpa500Conn, &Kpa500Connection::bandTrackingChanged, kpa, &Kpa500Applet::setBandTrackingText);
+    connect(&m_radioModel.transmitModel(), &TransmitModel::transmittingChanged,
+            this, [this](bool) { refreshTunerPortFrequency(); });
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool) { refreshTunerPortFrequency(); });
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged,
+            this, [this] { refreshTunerPortFrequency(); });
+    if (m_bandPlanMgr) {
+        connect(m_bandPlanMgr, &BandPlanManager::planChanged, this, &MainWindow::refreshTunerPortFrequency);
+    }
+    m_kpa500Conn.setFollowTx(kpa->followTx());
+    refreshTunerPortFrequency();
+    kpa->setBandTrackingText(m_kpa500Conn.bandTrackingText());
+
+    // Startup auto-connect from saved Peripherals settings.
+    if (PeripheralSettings::autoConnect(QStringLiteral("kpa500"))) {
+        const QString mode = PeripheralSettings::deviceString("Kpa500", "ConnectionMode", "Serial");
+        if (mode == "Network") {
+            const QString host = PeripheralSettings::deviceString("Kpa500", "ManualIp").trimmed();
+            const int port = PeripheralSettings::deviceInt("Kpa500", "ManualPort", 2000);
+            if (!host.isEmpty() && port > 0 && port <= 65535) {
+                m_kpa500Conn.connectToHost(host, static_cast<quint16>(port));
+            }
+        }
+#ifdef HAVE_SERIALPORT
+        else if (mode == "Serial") {
+            const QString port = PeripheralSettings::deviceString("Kpa500", "SerialPort");
+            if (!port.isEmpty()) {
+                const int baud = PeripheralSettings::deviceInt("Kpa500", "BaudRate", 4800);
+                m_kpa500Conn.connectSerial(port, baud);
+            }
+        }
+#endif
+    }
+
+    // Elecraft telemetry changes only the VU/PWR meter scale; the radio-side
+    // controls retain their existing scale policy.
     auto updatePowerScale = [this]() {
         int maxW = m_radioModel.transmitModel().maxPowerLevel();
         // Aurora (AU-) radios have an integrated 600W PA (Overlord) but
@@ -7414,14 +7538,23 @@ void MainWindow::wireMeters()
                             && m_radioModel.amplifier().operate();
         m_appletPanel->txApplet()->setPowerScale(maxW, ampActive);
         m_appletPanel->tunerApplet()->setPowerScale(maxW, ampActive);
-        m_appletPanel->setMeterPowerScale(maxW, ampActive);
         m_appletPanel->healthApplet()->setPowerScale(maxW, ampActive);
+        // The KPA500 uses the 600 W meter tier, below the PGXL's 2 kW tier.
+        if (!ampActive && m_kpa500Conn.hasLiveTxMeters()) {
+            maxW = 500;
+        }
+        m_appletPanel->setMeterPowerScale(maxW, ampActive);
     };
     connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, updatePowerScale);
     connect(&m_radioModel.amplifier(), &AmpModel::stateChanged, this, updatePowerScale);
+    // Re-evaluate scale when KPA500 operate state changes or disconnects.
+    connect(&m_kpa500Conn, &Kpa500Connection::statusUpdated, this, updatePowerScale);
+    connect(&m_kpa500Conn, &Kpa500Connection::disconnected, this, updatePowerScale);
+    connect(&m_kpa500Conn, &Kpa500Connection::respondingChanged, this, updatePowerScale);
     // Also refresh on infoChanged (#4813): maxPowerLevelChanged does not fire
     // when the radio's limit equals the 100 W default (the AU- case), and
     // infoChanged is the signal tied to the model() data this reads.
+
     connect(&m_radioModel, &RadioModel::infoChanged, this, updatePowerScale);
 
     // TGXL indicator: two-line rich text — label on top, state smaller below.

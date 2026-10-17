@@ -386,6 +386,7 @@ void RxApplet::buildUI()
         // RX antenna dropdown (blue text, no border)
         m_rxAntBtn = new QPushButton("ANT1");
         m_rxAntBtn->setFlat(true);
+        m_rxAntBtn->setFixedHeight(20);
         m_rxAntBtn->setStyleSheet(
             "QPushButton { color: #4488ff; background: transparent; border: none; "
             "font-size: 10px; font-weight: bold; padding: 0 2px; }"
@@ -468,6 +469,7 @@ void RxApplet::buildUI()
         // TX antenna dropdown (red text, no border)
         m_txAntBtn = new QPushButton("ANT1");
         m_txAntBtn->setFlat(true);
+        m_txAntBtn->setFixedHeight(20);
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_txAntBtn, "QPushButton { color: {{color.accent.danger}}; background: transparent; border: none; "
             "font-size: 10px; font-weight: bold; padding: 0 2px; }"
             "QPushButton:hover { color: #ff6666; }");
@@ -510,18 +512,20 @@ void RxApplet::buildUI()
 
         row->addStretch(1);
 
-        // Filter width label (e.g. "2.7K") — centered between ANT and QSK
+        // Filter width and QSK share the antenna controls' font and row height.
         m_filterWidthLbl = new QLabel("2.7K");
+        m_filterWidthLbl->setFixedHeight(20);
+        m_filterWidthLbl->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
         m_filterWidthLbl->setAlignment(Qt::AlignCenter);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_filterWidthLbl, "QLabel { color: {{color.accent.bright}}; font-size: 11px; font-weight: bold; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_filterWidthLbl, "QLabel { color: {{color.accent.bright}}; font-size: 10px; font-weight: bold; }");
         row->addWidget(m_filterWidthLbl);
-
-        row->addStretch(1);
 
         // QSK indicator (read-only — controlled via CW applet Breakin button)
         m_qskBtn = new QPushButton("QSK");
         m_qskBtn->setCheckable(true);
         m_qskBtn->setFlat(true);
+        m_qskBtn->setFixedHeight(20);
+        m_qskBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
         m_qskBtn->setEnabled(false);
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_qskBtn, "QPushButton { color: {{color.text.secondary}}; background: transparent; border: none; "
             "font-size: 10px; font-weight: bold; padding: 0 2px; }"

@@ -41,6 +41,7 @@ class AcomConnection;
 class SpeConnection;
 class VkampConnection;
 class Kpa1500Connection;
+class Kpa500Connection;
 class LpMeterConnection;
 struct PeripheralDeviceUi;
 
@@ -60,6 +61,7 @@ public:
                               VkampConnection* vkamp = nullptr,
                               LpMeterConnection* lpMeter = nullptr,
                               Kpa1500Connection* kpa1500 = nullptr,
+                              Kpa500Connection* kpa500 = nullptr,
                               QWidget* parent = nullptr);
     void selectTab(const QString& tabName);
     void done(int result) override;
@@ -68,6 +70,7 @@ public:
     // landing at the top of a long, scroll-wrapped page (#4940 follow-up —
     // PR #5157 review).
     void revealFlexControlSettings();
+    void revealKpa500AdvancedSettings();
     void refreshFlexControlButtonActions();
     void setFlexControlConnectionStatus(bool connected, const QString& port = {});
     // Result of the automation-bridge start the Network-tab toggle kicked off
@@ -150,6 +153,9 @@ private:
     bool isFlexOnlyPage(const QTreeWidgetItem* item) const;
     bool isCapabilityPageAvailable(const QTreeWidgetItem* item) const;
     bool isGpsSetupAvailable() const;
+    // Whether the ANAN Front End page applies: always with nothing connected,
+    // and otherwise only to a radio declaring RadioCapabilities::adcFrontEnd.
+    bool ananFrontEndAvailable() const;
     bool isGpsPage(const QTreeWidgetItem* item) const;
     void updateRadioCapabilityVisibility();
     QWidget* buildRadioTab();
@@ -169,6 +175,11 @@ private:
     // Mirrors buildCalibrationTab()'s own shape (gated on the capability, not
     // the family; a m_droopReseed lambda re-synced the same two ways).
     QWidget* buildDroopCalibrationTab();
+    // Receive front-end options for the ANAN-G2: the seven connect-time
+    // options, all read from AnanSettings when a session starts. VISIBLE WITH
+    // NOTHING CONNECTED -- see ananFrontEndAvailable() for why that differs
+    // from the two pages above it.
+    QWidget* buildAnanFrontEndTab();
     // Which Hermes-Lite 2 variant is attached: codec, the dither bit's three
     // meanings, companion filter board, CL1 reference, gateware ATU. Protocol 1 exposes none of
     // it, so these are operator settings (Hl2HardwareOptions). Gated on the
@@ -197,6 +208,9 @@ private:
                                   const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds);
     void buildVkampDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
                           const std::function<void()>& refresh);
+    void buildKpa500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
+                           const std::function<void()>& refresh,
+                           const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds);
     void buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
                             const std::function<void()>& refresh);
     PeripheralDeviceUi* peripheralDevice(const QString& id) const;
@@ -239,6 +253,7 @@ private:
     VkampConnection* m_vkamp{nullptr};
     LpMeterConnection* m_lpMeter{nullptr};
     Kpa1500Connection* m_kpa1500{nullptr};
+    Kpa500Connection* m_kpa500{nullptr};
     QTreeWidget* m_navigation{nullptr};
     QStackedWidget* m_pages{nullptr};
     QLabel* m_pageTitle{nullptr};
@@ -337,6 +352,7 @@ private:
     // commit that stale number to whichever radio is connected now.
     std::function<void()>     m_calibrationReseed;
     int                       m_droopCalibrationPageIndex{-1};
+    int                       m_ananFrontEndPageIndex{-1};
     int                       m_hl2HardwarePageIndex{-1};
     // Same reason as m_calibrationReseed: the page is built once per process
     // and the dialog is a persistent singleton, so a different HL2 connected
@@ -354,6 +370,10 @@ private:
     bool                      m_hl2ExternalRefLocked = false;
     // Same reason as m_calibrationReseed above, for the Droop Correction page.
     std::function<void()>     m_droopReseed;
+    // Same reason again, for the ANAN Front End page: its controls mirror
+    // AnanSettings, which another surface can have moved while this dialog was
+    // hidden.
+    std::function<void()>     m_ananFrontEndReseed;
     // Re-fills the Audio page's PC Input/Output combos from a LIVE device
     // enumeration. Same cause as m_calibrationReseed — page built once, dialog
     // a persistent singleton — but the stale thing here is the LIST, not one

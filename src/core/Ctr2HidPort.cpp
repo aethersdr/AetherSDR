@@ -12,10 +12,10 @@ const std::vector<Ctr2HidPort::KnownCtr2>& Ctr2HidPort::knownCtr2Devices()
         {0x2886, 0x0056, "XIAO_ESP32S3", "CTR2-MIDI"},
         // Elecrow CrowPanel 2.1" rotary display running AetherKnob firmware;
         // it speaks the same link and radio protocol as a CTR2.
-        {0x303A, 0x1001, "AETHER_KNOB", "AetherKnob"},
+        {0x303A, 0x1001, "AETHER_KNOB", "AetherKnob", true},
         // Other controller firmware that speaks the same link: it names
         // itself with a product string starting "Aether".
-        {0x303A, 0x1001, "Aether*", nullptr},
+        {0x303A, 0x1001, "Aether*", nullptr, true},
     };
     return kDevices;
 }
@@ -42,23 +42,39 @@ QString selfNamedModel(const QString& product, QLatin1String prefix)
 
 } // namespace
 
-QString Ctr2HidPort::DeviceInfo::ctr2Model() const
+// The known-device entry a device matches, the first in the table's order,
+// with its model name; nullptr if none.
+static const Ctr2HidPort::KnownCtr2* matchKnown(const Ctr2HidPort::DeviceInfo& d, QString* model)
 {
-    for (const KnownCtr2& known : knownCtr2Devices()) {
-        if (vendorId != known.vendorId || productId != known.productId) {
+    for (const Ctr2HidPort::KnownCtr2& known : Ctr2HidPort::knownCtr2Devices()) {
+        if (d.vendorId != known.vendorId || d.productId != known.productId)
             continue;
-        }
         const QLatin1String pattern(known.product);
         if (pattern.endsWith(QLatin1Char('*'))) {
-            const QString model = selfNamedModel(product, pattern.chopped(1));
-            if (!model.isEmpty()) {
-                return model;
+            const QString name = selfNamedModel(d.product, pattern.chopped(1));
+            if (!name.isEmpty()) {
+                *model = name;
+                return &known;
             }
-        } else if (product == pattern) {
-            return QString::fromLatin1(known.model);
+        } else if (d.product == pattern) {
+            *model = QString::fromLatin1(known.model);
+            return &known;
         }
     }
-    return {};
+    return nullptr;
+}
+
+bool Ctr2HidPort::DeviceInfo::usbLink() const
+{
+    QString model;
+    const KnownCtr2* known = matchKnown(*this, &model);
+    return known && known->usbLink;
+}
+
+QString Ctr2HidPort::DeviceInfo::ctr2Model() const
+{
+    QString model;
+    return matchKnown(*this, &model) ? model : QString();
 }
 
 QString Ctr2HidPort::DeviceInfo::label() const
@@ -74,8 +90,18 @@ QString Ctr2HidPort::DeviceInfo::label() const
         id += QStringLiteral(" #") + serial;
     }
     const QString model = ctr2Model();
+    if (!model.isEmpty() && model == product)
+        return QStringLiteral("%1 (%2)").arg(model, id);
     const QString base = QStringLiteral("%1 (%2)").arg(name, id);
     return model.isEmpty() ? base : model + QStringLiteral(": ") + base;
+}
+
+QString Ctr2HidPort::DeviceInfo::shortName() const
+{
+    const QString model = ctr2Model();
+    if (!model.isEmpty())
+        return model;
+    return product.isEmpty() ? QStringLiteral("HID device") : product;
 }
 
 } // namespace AetherSDR

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 
 #include <QMetaObject>
 #include <QPointer>
@@ -23,7 +23,9 @@ namespace AetherSDR {
 class SliceModel;
 class VirtualFlexControlWheel;
 
-class FlexControlDialog : public PersistentDialog {
+// AetherControl: the virtual FlexControl tuning knob, its aux buttons and
+// their actions, in a canon workspace window.
+class FlexControlDialog : public CanonWindow {
     Q_OBJECT
 
 public:
@@ -75,9 +77,12 @@ private:
     void updateCompactMode();
     void applyCompactWindowSize();
     int availableScreenHeight() const;
-    // Height the window needs around the scroll area's content (frameless title
-    // bar + body-layout margins); measured from live geometry, 0 before show.
+    // Height the window needs around the scroll area's content (canon header,
+    // button row and body margins); measured from live geometry, 0 before show.
     int windowChromeHeight() const;
+    // Width beside the content: body margins, border and the vertical
+    // scrollbar.
+    int windowChromeWidth() const;
     void setCaptureHintActive(bool active);
 
     QPointer<SliceModel> m_slice;

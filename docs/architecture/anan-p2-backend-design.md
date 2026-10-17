@@ -8,7 +8,10 @@
 > - Open question 4 (advertised-DDC-count clamping) shipped as recommended:
 >   clamp to what Discovery reports, never probe past it.
 > - Open question 3 (connect-shape) shipped as a dedicated ANAN section in
->   `ConnectionPanel`, not a `RadioConnectRequest::params` negotiation.
+>   `ConnectionPanel`, not a `RadioConnectRequest::params` negotiation. Since
+>   #6146 (RFC #6209) those options are set on Radio Setup's "ANAN Front End"
+>   page, reachable with nothing connected; the connect form keeps a pointer
+>   to it, and the connect path still reads them from `AnanSettings`.
 > - The maintainer approved RFC #4970 for this receive-only experimental
 >   phase. The original questions below remain part of the historical record,
 >   but they are no longer unresolved landing gates for Phase 1b.

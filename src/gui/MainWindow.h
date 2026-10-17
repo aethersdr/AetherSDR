@@ -91,6 +91,7 @@
 #include "core/LpMeterConnection.h"
 #include "core/SpeConnection.h"
 #include "core/VkampConnection.h"
+#include "core/Kpa500Connection.h"
 #include "core/Kpa1500Connection.h"
 #include "core/DxccColorProvider.h"
 
@@ -136,6 +137,7 @@ class AutomationServer;
 class CanonWindow;
 class ConnectionPanel;
 class Ctr2ProxyModel;
+class FirmwareInstallDialog;
 class TitleBar;
 class KiwiSdrManager;
 struct KiwiSdrAntennaProfile;
@@ -692,6 +694,7 @@ private:
     void applyGraphicEqToClientEq(bool transmit);
     void wireExternalControllers(); // MainWindow_Controllers.cpp
     void setupCtr2Proxy();          // MainWindow_Controllers.cpp
+    void showCtr2Window();          // MainWindow_Controllers.cpp
     void wireKiwiSdr();             // MainWindow_KiwiSdr.cpp
     void refreshKiwiSdrAppletReceivers();
     void refreshKiwiSdrSlices();
@@ -1317,6 +1320,7 @@ private:
     LpMeterConnection m_lpMeterConn;    // TelePost LP-100A wattmeter, serial or ser2net
     SpeConnection     m_speConn;         // SPE Expert amplifier, serial or ser2net
     VkampConnection   m_vkampConn;       // VK3AMP amplifier, TCP control/status + UDP telemetry
+    Kpa500Connection  m_kpa500Conn;      // Elecraft KPA500 amplifier, serial or raw TCP
     Kpa1500Connection m_kpa1500Conn;     // Elecraft KPA1500 amplifier, TCP control/status on port 1500 (#4097)
     BandPlanManager*  m_bandPlanMgr{nullptr};
 #ifdef HAVE_DEEPFIST
@@ -2123,6 +2127,7 @@ private:
 
 // CTR2 TCP proxy prototype (MainWindow_Controllers.cpp); never persisted, off at launch
     Ctr2ProxyModel* m_ctr2ProxyModel{nullptr};
+    QPointer<FirmwareInstallDialog> m_ctr2Window;
 
 // AetherClock (MainWindow_AetherClock.cpp)
     AetherClockEngine* m_clockEngine{nullptr};

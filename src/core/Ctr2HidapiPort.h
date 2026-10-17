@@ -13,9 +13,11 @@ struct Ctr2HidapiPort {
     // HID interfaces on vendor usage page 0xFF00, usage 0x01, recognised
     // CTR2 boards first.
     static QList<Ctr2HidPort::DeviceInfo> enumerate();
-    // Opens the interface; nullptr and *error on failure.
+    // Opens the interface; nullptr and *error on failure. hostCapabilities:
+    // the link extensions to accept (Ctr2HidThreadPort).
     static Ctr2HidPort* open(const Ctr2HidPort::DeviceInfo& device, QString* error,
-                             QObject* parent = nullptr);
+                             QObject* parent = nullptr,
+                             quint32 hostCapabilities = ctr2hid::kHostCapabilities);
 };
 
 } // namespace AetherSDR

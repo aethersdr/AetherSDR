@@ -49,6 +49,7 @@ void TransmitModel::resetState()
     m_memoriesEnabled = false;
     m_usingMemory = false;
     m_showTxInWaterfall = false;
+    resetPttMicOverrideReport();
     // Radio-reported; a new session re-reports it. A radio with no Flex command
     // plane never echoes dax=, so a Flex session's DAX=on must not survive into
     // it and hold the client TX chain's MIC-ready indicator off (#5871).
@@ -206,6 +207,13 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (provenanceMoved) emit powerProvenanceChanged();
     changed |= assign(d.tuneMode, m_tuneMode);
     changed |= assign(d.showTxInWaterfall, m_showTxInWaterfall);
+    // Latch on presence: pre-4.3 firmware never sends the key, and a 4.3 radio
+    // reporting the 0 default leaves the value unchanged.
+    if (d.pttMicOverride && !m_havePttMicOverride) {
+        m_havePttMicOverride = true;
+        changed = true;
+    }
+    changed |= assign(d.pttMicOverride, m_pttMicOverride);
     if (assign(d.txSliceMode, m_txSliceMode)) { changed = true; emit txSliceModeChanged(m_txSliceMode); }
 
     // ── Interlock (no emit — plain state, matching applyInterlockStatus) ──
@@ -906,6 +914,16 @@ void TransmitModel::setMicBias(bool on)
     m_micBias = on;  // optimistic — radio sends no status echo (#1045)
     emit phoneStateChanged();
     if (!current()) { return; }
+    emit controlRequested({field, on});
+}
+
+void TransmitModel::setPttMicOverride(bool on)
+{
+    if (refuseControlOffThread()) { return; }
+    const auto field = TransmitControlRequest::Field::PttMicOverride;
+    captureControlIntent(field);
+    // Not optimistic: the setting is radio-wide and the radio echoes it in
+    // transmit status, so the model changes only on that echo.
     emit controlRequested({field, on});
 }
 

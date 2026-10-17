@@ -32,7 +32,7 @@
 #include "PanadapterMessageOverlay.h"
 #include "TitleBar.h"
 #include "models/SliceModel.h"
-#include "Ctr2ProxyApplet.h"
+#include "FirmwareInstallDialog.h"
 #include "Ctr2AudioSpectrumFeeder.h"
 #include "models/Ctr2ProxyModel.h"
 
@@ -266,8 +266,17 @@ QString flexControlButtonAction(int button, int action)
 void MainWindow::showFlexControlDialog()
 {
     // No capability check: the knob is a host serial device (#5778).
+    // A canon workspace window: created directly rather than through
+    // showOrRaisePersistent(), which would apply View → Frameless Window.
     const bool wasFresh = !m_flexControlDialog;
-    showOrRaisePersistent(m_flexControlDialog);
+    if (wasFresh) {
+        auto* dialog = new FlexControlDialog(this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        m_flexControlDialog = dialog;
+    }
+    m_flexControlDialog->show();
+    m_flexControlDialog->raise();
+    m_flexControlDialog->activateWindow();
     if (wasFresh && m_flexControlDialog) {
         connect(m_flexControlDialog, &FlexControlDialog::virtualWheelSteps,
                 this, &MainWindow::handleVirtualFlexControlWheel);
@@ -2659,11 +2668,17 @@ void MainWindow::setupCtr2Proxy()
             m_ctr2ProxyModel->sendCwText(text, cost);
         }
     });
-    if (m_appletPanel) {
-        if (auto* applet = m_appletPanel->ctr2ProxyApplet()) {
-            applet->setModel(m_ctr2ProxyModel);
-        }
-    }
+}
+
+void MainWindow::showCtr2Window()
+{
+    // The relay keeps running when the window closes; reopening shows it as
+    // it is.
+    if (!m_ctr2Window)
+        m_ctr2Window = new FirmwareInstallDialog(m_ctr2ProxyModel, this);
+    m_ctr2Window->show();
+    m_ctr2Window->raise();
+    m_ctr2Window->activateWindow();
 }
 
 void MainWindow::wireExternalControllers()

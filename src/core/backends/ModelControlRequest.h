@@ -48,7 +48,7 @@ struct TransmitControlRequest {
         ExpanderEnabled, ExpanderLevel, Filter, CwSpeed, CwPitch, CwBreakIn,
         CwDelay, CwSidetone, CwIambic, CwIambicMode, CwSwap, CwlEnabled,
         CwMonitorGain, CwMonitorPan, TxProfile, MicProfile, ApdEnabled,
-        ApdSampler, ApdReset, AtuMemories, AtuClear, Count
+        ApdSampler, ApdReset, AtuMemories, AtuClear, PttMicOverride, Count
     };
     using Value = std::variant<bool, int, QString, ProcessorSetting, VoxSetting,
                                MonitorSetting, TxPassband, ApdSamplerSetting>;
@@ -158,6 +158,7 @@ inline bool TransmitControlRequest::valid() const
     case Field::ExpanderEnabled: case Field::CwBreakIn: case Field::CwSidetone:
     case Field::CwIambic: case Field::CwSwap: case Field::CwlEnabled:
     case Field::ApdEnabled: case Field::ApdReset: case Field::AtuMemories: case Field::AtuClear:
+    case Field::PttMicOverride:
         return std::holds_alternative<bool>(value);
     case Field::Count: return false;
     }
@@ -238,6 +239,7 @@ inline QString TransmitControlRequest::label() const
     case Field::ApdSampler: return QStringLiteral("apd sampler");
     case Field::ApdReset: return QStringLiteral("apd reset");
     case Field::AtuMemories: return QStringLiteral("atu memories");
+    case Field::PttMicOverride: return QStringLiteral("ptt mic override");
     case Field::AtuClear: return QStringLiteral("atu clear");
     case Field::Count: break;
     }

@@ -191,8 +191,8 @@ private:
 
     QPushButton* m_breakinBtn{nullptr};
     QPushButton* m_iambicBtn{nullptr};
-    QPushButton* m_holdDelayBtn{nullptr};   // "Hold Dly" — opt-in, AppSettings-backed
-    // Renders the three states of the Hold Dly toggle (off / on-and-holding /
+    QPushButton* m_holdDelayBtn{nullptr};   // "Hold Delay" — opt-in, AppSettings-backed
+    // Renders the three states of the Hold Delay toggle (off / on-and-holding /
     // on-but-holding-nothing) in style, tooltip and accessible description.
     void updateHoldDelayAffordance();
 
@@ -201,9 +201,9 @@ private:
     int m_pitchMinHz{100};
     int m_pitchMaxHz{6000};
     int m_pitchStepHz{10};
+    void commitCwPitch(int value);
+    QSlider*     m_pitchSlider{nullptr};
     QLineEdit*   m_pitchEdit{nullptr};
-    QPushButton* m_pitchDown{nullptr};
-    QPushButton* m_pitchUp{nullptr};
 
     // APF — per-slice CW audio peaking filter, mirroring the VfoWidget DSP-tab
     // pair.  Both surfaces drive the same SliceModel, so they stay in sync

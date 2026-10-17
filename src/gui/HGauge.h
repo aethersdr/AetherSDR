@@ -6,6 +6,7 @@
 
 #include <QAccessible>
 #include <QAccessibleWidget>
+#include <QColor>
 #include <QCursor>
 #include <QEnterEvent>
 #include <QEvent>
@@ -266,6 +267,13 @@ public:
         update();
     }
 
+    // Optional scale strokes: labeled ticks are major, empty labels are minor.
+    // An invalid colour preserves the label-only scale used by other applets.
+    void setTickMarkColor(const QColor& color) {
+        m_tickMarkColor = color;
+        update();
+    }
+
     // Scale the gauge's internal metrics — the tick strip above the bar and
     // both font sizes — so a gauge given more height grows its lettering
     // instead of just a taller bar. Opt-in, defaulting to 1.0, which
@@ -471,6 +479,12 @@ protected:
             // Leave a small right margin so the last tick isn't flush to the edge
             int lx = qBound(2, tx - tw / 2, w - tw - 4);
             p.drawText(lx, qRound(10 * m_metricScale), tick.label);
+            if (m_tickMarkColor.isValid()) {
+                const int length = qMax(2, qRound((tick.label.isEmpty() ? 3 : 7) * m_metricScale));
+                const int x = qBound(barX + 1, tx, barX + barW - 2);
+                p.setPen(m_tickMarkColor);
+                p.drawLine(x, barY + 1, x, qMin(barY + length, barY + barH - 2));
+            }
         }
 
         // Label in center of bar
@@ -709,6 +723,7 @@ private:
     qreal m_metricScale{1.0};      // 1.0 = the original fixed metrics
     QString m_label, m_unit;
     QVector<Tick> m_ticks;
+    QColor m_tickMarkColor;
 
     // Hover value readout state (see setHoverValuePopupEnabled).
     //

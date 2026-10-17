@@ -138,6 +138,8 @@ ReceiveDispatch FlexBackend::requestTransmitControl(const TransmitControlRequest
         command = QStringLiteral("apd enable=") + QString::number(int(std::get<bool>(request.value))); break;
     case Field::AtuMemories:
         command = QStringLiteral("atu set memories_enabled=") + QString::number(int(std::get<bool>(request.value))); break;
+    case Field::PttMicOverride:
+        command = QStringLiteral("transmit set ptt_mic_override=") + QString::number(int(std::get<bool>(request.value))); break;
     case Field::ProcessorEnabled: case Field::ProcessorLevel: {
         const ProcessorSetting setting = std::get<ProcessorSetting>(request.value);
         if (request.field == Field::ProcessorLevel && setting.level > 2) {

@@ -53,6 +53,29 @@ int main(int argc, char** argv)
         CHECK(d.cwIambicMode.has_value() && *d.cwIambicMode == 1);
     }
 
+    // ---- ptt_mic_override (v4.3 firmware, #6442) ----
+    {
+        const TransmitDelta d = decode(b, [](FlexBackend& fb){
+            fb.decodeTransmitStatus({{QStringLiteral("ptt_mic_override"), QStringLiteral("1")}});
+        });
+        CHECK(d.pttMicOverride.has_value() && *d.pttMicOverride == true);
+        const TransmitDelta absent = decode(b, [](FlexBackend& fb){
+            fb.decodeTransmitStatus({{QStringLiteral("rfpower"), QStringLiteral("50")}});
+        });
+        CHECK(!absent.pttMicOverride.has_value());   // pre-4.3 firmware: never reported
+        const TransmitDelta off = decode(b, [](FlexBackend& fb){
+            fb.decodeTransmitStatus({{QStringLiteral("ptt_mic_override"), QStringLiteral("0")}});
+        });
+        CHECK(off.pttMicOverride.has_value() && *off.pttMicOverride == false);
+        // FlexLib rejects anything but 0/1: malformed input is dropped, never "off".
+        for (const char* bad : {"garbage", "-1", "2", ""}) {
+            const TransmitDelta invalid = decode(b, [bad](FlexBackend& fb){
+                fb.decodeTransmitStatus({{QStringLiteral("ptt_mic_override"), QLatin1String(bad)}});
+            });
+            CHECK(!invalid.pttMicOverride.has_value());
+        }
+    }
+
     // ---- ok-guard: malformed present numeric is dropped ----
     {
         const TransmitDelta d = decode(b, [](FlexBackend& fb){

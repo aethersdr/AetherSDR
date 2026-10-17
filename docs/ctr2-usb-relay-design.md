@@ -314,12 +314,235 @@ counts radio bytes only. Each AUDIO_SPECTRUM frame of 32 bars is 7 reports
 | `0x41` RELAY_UDP_PORT | 1 | host → device | (2 bytes) `[port hi][port lo]`: the host's UDP socket for this link, sent once right after the host's READY. The device registers for UDP with `client udpport <port>` (and a one-byte datagram to radio port 4992). |
 | `0x42` AUDIO_SPECTRUM_LINEAR | 2 | host → device | (69 bytes) The same payload as AUDIO_SPECTRUM, `[bars N][low Hz hi][low Hz lo][span Hz hi][span Hz lo][N levels]`, but the bars always split low..span evenly, bar *i* covering low + (span − low)·i/N to low + (span − low)·(i+1)/N, whatever low is. A device that negotiates it gets it in place of AUDIO_SPECTRUM for windows that do not start at 0. AetherSDR sends it while receiving CW: a window centered on the CW pitch covering the passband (pitch + filter low to pitch + filter high) with half its width to spare on each side, kept within 0 Hz and Nyquist, so a controller can show how far a signal is from zero beat. Requires AUDIO_SPECTRUM. |
 | `0x43` CW_TEXT | 3 | host → device | (2–33 bytes) `[confidence 0..3][1..32 bytes of text]`: CW decoded by AetherSDR's CW decoder from the active slice (while it runs: the slice in CW and RX decoding on), as it arrives, about a character at a time with word gaps as spaces. Filtered by the CW panel's sensitivity threshold; newlines become spaces and only printable ASCII is sent. Confidence 0 is the most certain (decoder cost < 0.15), then 1 (< 0.35), 2 (< 0.60) and 3, the bands the CW panel colors. |
+| `0x44` FIRMWARE | 4 | both | (1–517 bytes) `[op][...]`: replaces the device's application over the link. Never negotiated by the relay; only AetherSDR's firmware updater uses it, on a session of its own. See *Firmware updates* below. |
 
 The reference implementation in `tools/ctr2-firmware-reference` covers the
 Feature report layout (`ctr2_caps_encode` / `ctr2_caps_decode`), sending
 (`ctr2_tx_send_extension`) and the accepted set
 (`ctr2_rx_set_extensions`). AetherSDR's tests cross-check it against the
 application in both directions.
+
+### Firmware updates
+
+A device that can replace its own application offers FIRMWARE (`0x44`), and
+reports its version in HID Feature report `0x03`. Neither is part of
+relaying: the relay never accepts FIRMWARE, and a device without them is
+updated some other way.
+
+**Version report.** Feature report `0x03`, Get only, exactly 24 bytes after
+the report ID, readable at any time without a link:
+
+```text
+['F'] ['W'] [layout 0x01] [major] [minor] [patch] [flags] [0x00]
+[build ID: 16 bytes of printable ASCII, NUL-padded]
+```
+
+Flags: `0x01` PENDING, this image was just installed and has not completed a
+link yet, so the device drops it on its next reset; `0x02` SIGNED, FIRMWARE
+accepts only images signed for this device. AetherSDR reads the report
+whenever it opens the device, and shows the version in the CTR2 Proxy
+applet.
+
+**Session.** The relay must not hold the device. The host accepts only
+FIRMWARE in Feature report `0x02`, sends HELLO and waits for READY as usual,
+then, in place of its own READY, resets its counter and sends FIRMWARE
+BEGIN. No radio connection opens. The device takes that header's counter as
+the start of the sequence (`ctr2_rx_start` in the reference) and sends only
+FIRMWARE messages until the session ends with CLOSED, HELLO or its own
+restart. Integers are big-endian:
+
+| Op | Direction | Payload | Meaning |
+| --- | --- | --- | --- |
+| `0x01` BEGIN | host → device | `[size u32][SHA-256, 32 bytes]` (37 bytes) | an image of `size` bytes follows |
+| `0x02` DATA | host → device | `[offset u32][1..512 bytes]` | the next bytes of the image, in order |
+| `0x03` END | host → device | none | verify the image and its signature, select it, restart into it |
+| `0x04` ABORT | host → device | none | drop the partial image |
+| `0x05` SWITCH | host → device | none | restart into the device's other firmware (its maker's, kept beside this one) |
+| `0x06` BOOTLOADER | host → device | none | restart into the chip's ROM download mode, for an install there |
+| `0x81` STATUS | device → host | `[op][status][value u32]` (7 bytes) | the answer to each host message; for DATA, value is the bytes stored so far |
+
+Status: `0` OK, `1` BAD_STATE (no session, a second BEGIN, or no other
+firmware for SWITCH), `2` BAD_OFFSET, `3` TOO_LARGE, `4` FLASH_ERROR, `5`
+REJECTED (not a valid image signed for this device), `6` HASH_MISMATCH, `7`
+BAD_MESSAGE.
+
+AetherSDR keeps four DATA messages in flight. At the link's rate of about
+7 KB/s (one 8-byte report per millisecond) a 1 MB image takes about two and
+a half minutes; the device erases its flash as the bytes arrive, so the link
+never waits for a whole-slot erase.
+
+**Keeping the new image.** After END answers OK the device leaves the bus
+and restarts on the new image, which reports PENDING. The host opens it
+again, checks the version is the one it sent, and completes a link (HELLO,
+READY, then CLOSED). Only then does the device keep the image; it clears
+PENDING, and the host reads the report once more to confirm. A device that
+resets before that, because the new image crashed or never reached the host,
+returns to its previous image. A device that refuses the image at END keeps
+its firmware, and the host ends the session with ABORT and CLOSED.
+
+**Two firmwares on one device.** A device may keep its maker's firmware
+beside the one AetherSDR updates, in a slot an update never writes, so the
+maker's firmware and its settings survive every update. SWITCH asks the
+device to restart into that firmware; how a device selects its image is its
+own business.
+
+**Host implementation.** `Ctr2FirmwareUpdater` runs the session and checks
+the image before sending anything: an ESP32-S3 application image with an
+application description (`readImage`), not a merged flash image or a
+bootloader. `Ctr2ProxyModel` stops the relay for the update and starts it
+again afterwards. `tests/ctr2_firmware_updater_test.cpp` holds it to a
+simulated device that runs the reference for its side of the link.
+
+### Installing AetherCTR2 on a CTR2-Max
+
+The CTR2 window (**Settings → Controllers → CTR2...**, `FirmwareInstallDialog`)
+holds the relay's controls (`Ctr2ProxyPanel`, over `Ctr2ProxyModel`) and, below
+them, the CTR2-Max firmware installer (over `FirmwareInstallModel`, which owns
+the catalog download, the device watch and the install job; the window
+includes no core headers). It installs AetherCTR2 beside the CTR2-Max's stock
+firmware, from releases listed in AetherSDR's firmware catalog
+(`EspFirmwareCatalog`, `https://www.aethersdr.com/firmware/catalog.json`).
+
+- **Package.** Each release is one file, `PRODUCT-VERSION.asdr`: an
+  uncompressed ustar archive of plain files in one folder, holding
+  `manifest.json` (`EspFirmwareManifest`), `manifest.json.sig` and the images
+  the manifest names. The catalog's `package` links to it. AetherSDR refuses
+  anything else in the archive (links, folders, paths, hidden or repeated
+  names) and a damaged or cut-short one.
+- **Trust.** The manifest carries an Ed25519 signature (`manifest.json.sig`)
+  by a firmware-release key built into AetherSDR, checked before anything
+  else in the package is used, and the manifest's SHA-256s cover every
+  image. There is no
+  way to install an image of one's own. The signature is the whole trust
+  chain: the catalog is unsigned and only says where releases are, so a
+  wrong catalog can at most offer a different validly signed release. Older
+  releases are listed on purpose, so an operator can go back to one; the
+  version an operator picks is the one installed (the signed manifest must
+  name it), and an update over the cable names the version the unit runs
+  before it starts.
+- **Testing a publisher's builds.** A build configured with
+  `-DAETHER_FIRMWARE_DEV_OVERRIDES=ON` (off by default, never for release)
+  honors `AETHER_FIRMWARE_CATALOG` (another catalog URL) and
+  `AETHER_FIRMWARE_TRUST_KEYS` (extra keys, hex), and logs each override it
+  uses. A release build has neither.
+- **Downloads** are capped as they arrive: the catalog at 256 KiB and a
+  package at 17 MiB; inside a package, the manifest at 64 KiB, the signature
+  at 1 KiB and each image at the size its signed manifest gives.
+- **Layout.** The manifest lists the images and where they go, the regions
+  never written (the stock firmware, its settings and its registration), the
+  partition-table rows that must be on the unit and stay, and the app slots
+  the boot selection (otadata) chooses among. `EspFirmwareInstaller` refuses
+  any write over a protected region, at parse time and again when writing,
+  counting whole erased sectors.
+- **Registration.** AetherCTR2 is installed only on a unit its stock firmware
+  has registered: `Reg.txt` in the stock firmware's LittleFS volume
+  (`Ctr2MaxRegistration`, read-only littlefs). The installer checks it before
+  writing anything, and AetherCTR2 checks it again at every start. This
+  honors the agreement with Lynovation by checking that the stock firmware
+  registered the unit. It looks for `Reg.txt` (the firmware also reads the
+  call sign in it), never for a registration key, and is not itself a
+  copy-protection mechanism.
+- **Versions.** The unit reports its version as three bytes, read from the
+  front of its `esp_app_desc` version string (`%u.%u.%u`). A release's
+  version must therefore start with `major.minor.patch`, each 0–255; a suffix
+  (`0.9.3-rc1`) is allowed and ignored by the check. `Ctr2FirmwareUpdater`
+  refuses an image whose version does not, and compares the unit's report
+  against the same three numbers.
+- **The device confirmed.** An action is taken on the device the operator
+  confirmed: the window captures it when the action begins, the model refuses
+  the action if another device is there by the time it is confirmed, and the
+  job compares the MAC of the device it opened before writing anything (a
+  port name can be reused). A device whose MAC cannot be read is refused.
+- **A plan that holds together.** Besides the protected regions, no two
+  writes may share a sector (images, and the boot selection), and no required
+  region may lie under the boot selection, which every install and start
+  rewrites. Parsing checks this, and the installer checks it again before the
+  first write (`EspFirmwareManifest::checkPlan`).
+- **Boot selection.** The boot selection (otadata) has two entries, one per
+  sector. Selecting a slot rewrites only the entry not in use, as its own
+  sector, so an interrupted write always leaves the entry the unit started
+  from.
+- **Two paths.** A unit running AetherCTR2 is updated over the link
+  (Firmware, above). One running its stock firmware, or held in ROM download
+  mode, is installed through the chip's ROM bootloader (`EspFlasher`, over
+  Espressif's esp-serial-flasher): optionally a whole-flash backup first,
+  then the images and the boot selection. In download mode the window also
+  starts AetherCTR2 (rewriting only the boot selection), and backs up or
+  restores the whole flash; a backup restores only onto the unit it came
+  from.
+
+### The CTR2-Max's own firmware
+
+The CTR2 window also installs the CTR2-Max's stock firmware, Lynovation's
+(the **Lynovation** tab). AetherSDR never hosts it.
+
+**From a file.** The operator downloads Lynovation's release (a zip holding
+one merged flash image, or the .bin itself) and opens it.
+`Ctr2MaxStockFirmware` takes it only if:
+
+- the application image is an intact ESP32-S3 image (its appended SHA-256
+  holds);
+- it carries the CTR2-Max firmware's markers.
+
+The install writes that application into app0 and selects it. The unit's own
+partition table lays the install out (`Ctr2MaxStockFirmware::plan`); the
+unit's nvs, otadata, app0 and spiffs rows must match the file's, and
+everything else is protected. The bootloader, the table, the settings files
+and registration (spiffs) and AetherCTR2 are never written. Each version
+opened is kept in AetherSDR's data folder, so it can be installed again.
+
+**From Lynovation's list.** Lynovation may publish its releases for
+AetherSDR to fetch (`Ctr2MaxStockCatalog`):
+
+- `catalog.json` at `https://ctr2.lynovation.com/firmware/catalog.json`,
+  format 1, lists each release's .bin, the same file as the download, by
+  URL, size and SHA-256, newest first:
+
+  ```json
+  { "format": 1,
+    "products": [ { "name": "CTR2-Max firmware", "device": "CTR2-Max", "chip": "ESP32-S3",
+                    "releases": [ { "version": "v1.02.00n",
+                                    "file": "https://ctr2.lynovation.com/.../CTR2-Max_v10200n.bin",
+                                    "size": 1622720,
+                                    "sha256": "<64 hex digits>" } ] } ] }
+  ```
+
+- `catalog.json.sig` beside it is the Ed25519 signature of the catalog's
+  exact bytes, in base64, made with Lynovation's own key:
+
+  ```sh
+  openssl pkeyutl -sign -rawin -inkey lynovation-release.pem -in catalog.json \
+      | base64 -w0 > catalog.json.sig
+  ```
+
+AetherSDR reads only a catalog signed by a Lynovation key built into it
+(`kBuiltInKeys` in `Ctr2MaxStockCatalog.cpp`; none yet), and fetches nothing
+without one. A downloaded .bin must be the size and SHA-256 the catalog
+gives, and the image's own version must be the one the catalog names. It is
+downloaded when the operator presses Install on it, then installed, and kept,
+as a file opened by hand would be.
+
+A build configured with `AETHER_FIRMWARE_DEV_OVERRIDES` (never a release)
+also reads two settings from the environment, so Lynovation can test its own
+catalog before publishing it:
+
+- `AETHER_LYNOVATION_CATALOG`: another catalog URL (a `file://` URL works);
+- `AETHER_LYNOVATION_TRUST_KEYS`: public keys to trust, as hex, separated by
+  commas.
+
+**Restarting without the buttons.** The stock firmware may take two FIRMWARE
+operations on the link, as AetherCTR2 does: SWITCH (`0x05`) into AetherCTR2,
+and BOOTLOADER (`0x06`) into download mode. It offers them like any device:
+
+- **Offer:** bit 4 of Feature report `0x02` (`'C' 'X' 01 00 00 00 00 10`).
+- **Session:** HELLO/READY, then the FIRMWARE message, answered with STATUS.
+- **Not needed:** it needs neither the version report nor the image
+  transfer.
+
+AetherSDR reads the offer when it reads the device's version
+(`Ctr2ProxyModel::usbFirmwareCommands()`). Where it is made, **Restart into**
+and every install from the stock firmware restart the unit on request, with
+no BOOT/RESET. Without it, the window asks the operator for the buttons.
 
 ### Test vectors
 
@@ -387,7 +610,7 @@ USB a complete replacement for Wi-Fi.
 | Link codec (v0) | `src/core/Ctr2HidFraming.{h,cpp}` |
 | HID device access on its own I/O thread (hidapi) | `src/core/Ctr2HidPort.{h,cpp}` |
 | Link state machine, radio TCP connection and per-link UDP socket | `src/core/Ctr2UsbRelay.{h,cpp}` |
-| Applet: Wi-Fi or USB, device list; radio follows AetherSDR's connection | `src/models/Ctr2ProxyModel`, `src/gui/Ctr2ProxyApplet` |
+| CTR2 window: Wi-Fi or USB, device list; radio follows AetherSDR's connection | `src/models/Ctr2ProxyModel`, `src/gui/Ctr2ProxyPanel` |
 | Extension negotiation (Feature report `0x02`), on the HID I/O thread | `src/core/Ctr2HidThreadPort.cpp`, `src/core/Ctr2HidapiPort.cpp` |
 | AUDIO_SPECTRUM producer: the Client EQ RX tap (post-EQ), or the TX EQ tap while transmitting, its own 2048-point analyzer (reset on each RX/TX switch), 32 bars at 20 Hz, floor-level bars while the tap in use is not being written, only while a negotiating device is relaying | `src/gui/Ctr2AudioSpectrumFeeder` |
 

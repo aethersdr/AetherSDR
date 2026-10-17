@@ -60,7 +60,7 @@ alone. MSVC flags and `Release` builds are unaffected.
 |---|---|---|
 | `ENABLE_DEEPFIST_EXPERIMENT` | OFF | Build the experimental DeepFist CW receive decoder. Requires ONNX Runtime at configure time (configuration fails without it) and a separate verified model bundle at runtime; see below. |
 | `ENABLE_RTL` | ON | Build the experimental receive-only RTL-SDR USB backend when both `librtlsdr` and single-precision FFTW (`fftw3f`) are found. Missing either disables the backend unless `REQUIRE_RTL=ON`. |
-| `AETHER_HL2_TX_TXA` | ON | Select WDSP's TXA chain for the Hermes-Lite 2 SSB transmit modulator. OFF builds the in-tree phasing modulator. This choice has no runtime toggle. |
+| `AETHER_HL2_TX_TXA` | ON | Select WDSP's TXA chain as the Hermes-Lite 2 transmit modulator: SSB, AM, DSB and FM. OFF builds the in-tree phasing modulator, which is SSB only; AM, DSB and FM then stay receive-only. This choice has no runtime toggle. |
 
 **DeepFist:** enabling `-DENABLE_DEEPFIST_EXPERIMENT=ON` alone does not supply its
 model. The configured model-download URL defaults to empty. For developer
@@ -171,6 +171,7 @@ These options are for development and qualification.
 | `AETHER_ENABLE_RADAR_GL_TEST` | OFF | Build/register the native-GPU weather-radar texture test. Needs a real OpenGL 3.2 context. |
 | `AETHER_BUILD_SPECTRUM_GESTURE_TEST` | OFF | Build/register `spectrum_confirmed_geometry_test`, which compiles the desktop application sources into a test binary to exercise the real `SpectrumWidget` gestures offscreen. |
 | `AETHER_SHARED_CORE` | OFF | Build `libaethercore` as a shared library so the sanitizer lane's test binaries fit on a hosted runner. For the sanitizer lane and local review builds (`/pr-review` step 7), never for releases; configuration fails on Windows. |
+| `AETHER_FIRMWARE_DEV_OVERRIDES` | OFF | Honor the `AETHER_FIRMWARE_CATALOG` (another firmware catalog URL) and `AETHER_FIRMWARE_TRUST_KEYS` (extra Ed25519 firmware-signing keys, hex, comma-separated) environment variables, for testing a firmware publisher's own builds. Each override is logged when used. Never for releases: a release build installs only firmware listed at aethersdr.com and signed by a key built into it. |
 
 Additional cache values accept a value rather than ON/OFF:
 

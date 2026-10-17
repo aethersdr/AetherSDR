@@ -720,6 +720,22 @@ struct RadioCapabilities {
     };
     std::optional<PaTelemetryAudit> paTelemetryAudit;
 
+    // Engaged means this radio's session takes its receive front-end options
+    // (sample rate, ADC, dither, randomization, filter-bank bypass, the
+    // radio-speaker stream) from the settings the "ANAN Front End" setup page
+    // edits, so that page applies to it. std::nullopt (the default) means NO
+    // SUCH PAGE for this radio, which is what every family that has not made
+    // the claim keeps.
+    //
+    // NO FIELDS, ON PURPOSE: the page offers all of its controls or none, so a
+    // per-control field would be a claim nothing reads (#5554). A field arrives
+    // together with the consumer that leaves a control out for some radio.
+    //
+    // A record rather than a bool for the same reason as PaTelemetryAudit
+    // above: RadioCapabilities is at its frozen boolean count (#5262 M2).
+    struct AdcFrontEnd {};
+    std::optional<AdcFrontEnd> adcFrontEnd;
+
     // The radio reports main-fan speed as live telemetry. False means the
     // Radio Vitals applet omits the fan gauge instead of presenting an
     // instrument that can never receive a sample. This is independent of PA
@@ -787,6 +803,14 @@ struct RadioCapabilities {
     // RadioModel synthesises no command-edge fallback. False for HL2 (no readback)
     // and Flex (interlock decoded by RadioModel). Icom: CI-V `1C 00`.
     bool hasRadioPttReadback = false;
+
+    // The backend also publishes on transmitChanged the keying the radio did by
+    // itself (its PTT or key input), which setKeying() never commanded. Observed
+    // state: it reaches radioTransmittingChanged and nothing that keys. setKeying()
+    // stays the authority for host keying, so RadioModel keeps the command-edge
+    // fallback and ORs the two. HL2: EP6 ptt_resp, which host MOX never raises.
+    struct RadioPttObservation {};
+    std::optional<RadioPttObservation> radioPttObservation;
 
     // Reachable RX filter widths in Hz; empty = continuous or unknown (the UI keeps
     // its configurable list). Set by radios with a short fixed IF set (IC-705

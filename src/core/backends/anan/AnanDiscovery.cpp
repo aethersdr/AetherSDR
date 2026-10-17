@@ -43,10 +43,56 @@ void enableBroadcast(QUdpSocket& s) noexcept
 #endif
 }
 
+// Every address entry on an interface that is actually carrying traffic.
+// NOT testable, which is why it is the only part of the sweep that lives here:
+// QNetworkInterface has no public constructor to synthesise one with. The flag
+// test is the same one NetworkPathResolver::enumerateIpv4Candidates() applies,
+// minus its IsLoopBack check -- broadcastTargets() drops loopback by address,
+// which also catches a loopback address on an interface not flagged as one.
+QList<QNetworkAddressEntry> liveAddressEntries()
+{
+    QList<QNetworkAddressEntry> entries;
+    for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
+        const auto flags = iface.flags();
+        if (!(flags & QNetworkInterface::IsUp) || !(flags & QNetworkInterface::IsRunning))
+            continue;
+        entries.append(iface.addressEntries());
+    }
+    return entries;
+}
+
 constexpr char kIdentityFeature[] = "Identity";
 constexpr char kNicknameField[] = "nickname";
 
 }  // namespace
+
+QList<QHostAddress> AnanDiscovery::broadcastTargets(
+    const QList<QNetworkAddressEntry>& entries)
+{
+    // The global broadcast goes first and unconditionally -- see this function's
+    // declaration comment for why it is kept rather than replaced.
+    QList<QHostAddress> targets{QHostAddress(QHostAddress::Broadcast)};
+    for (const QNetworkAddressEntry& entry : entries) {
+        const QHostAddress broadcast = entry.broadcast();
+        // Protocol 2 discovery is IPv4-only; absent broadcast addresses are
+        // not valid datagram destinations.
+        if (broadcast.isNull() || broadcast.protocol() != QAbstractSocket::IPv4Protocol) {
+            continue;
+        }
+        // /31 and /32 links have no broadcast domain. Qt can still synthesize
+        // ip | ~netmask for them, including this host's own address for a /32.
+        if (entry.prefixLength() >= 31) {
+            continue;
+        }
+        // The loopback subnet broadcasts to this host only; the radio is not
+        // there, and p2app on the same machine would be a different setup.
+        if (entry.ip().isLoopback())
+            continue;
+        if (!targets.contains(broadcast))
+            targets.append(broadcast);
+    }
+    return targets;
+}
 
 QString AnanDiscovery::macToSerial(const std::array<std::uint8_t, 6>& mac)
 {
@@ -130,9 +176,15 @@ void AnanDiscovery::sweepNow()
     if (!m_socket)
         return;
     const auto pkt = buildDiscovery();
-    m_socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
-                            static_cast<qint64>(pkt.size()),
-                            QHostAddress::Broadcast, kRadioPort);
+    // The kernel routes each directed broadcast from this wildcard socket.
+    // This reaches a second NIC on a distinct subnet; two NICs on the same
+    // subnet still follow the preferred route rather than each being swept.
+    // Replies return to this socket and are de-duplicated by MAC in onReadyRead().
+    for (const QHostAddress& target : broadcastTargets(liveAddressEntries())) {
+        m_socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
+                                static_cast<qint64>(pkt.size()),
+                                target, kRadioPort);
+    }
 }
 
 void AnanDiscovery::onSweepTimer()

@@ -19,13 +19,16 @@
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/sim/SimBackend.h"
 #include "gui/RadioSetupDialog.h"
+#include "core/backends/TransmitDelta.h"
 #include "models/RadioModel.h"
+#include "models/TransmitModel.h"
 
 #include <QApplication>
 #include <QGridLayout>
 #include <QHostAddress>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPushButton>
 #include <QList>
 #include <QLoggingCategory>
 #include <QMutex>
@@ -300,6 +303,63 @@ private slots:
             QVERIFY2(log.count(QLatin1String(field.wireText)) == 1, field.wireText);
         }
         QCOMPARE(dropped.count(), 0);
+    }
+
+    // PTT Mic Override (#6442) shows the RADIO's value: unreported (firmware
+    // before 4.3) it is dimmed with a reason; a click sends the request but
+    // snaps back until the echo; and a session reset clears an open page.
+    void pttMicOverrideFollowsTheRadioAndResets()
+    {
+        RadioModel model;  // a bare model is on the Flex backend
+        RadioSetupDialog dialog(&model);
+        dialog.show();
+        dialog.selectTab(QStringLiteral("Transmit"));
+
+        QPushButton* button = nullptr;
+        for (QPushButton* b : dialog.findChildren<QPushButton*>()) {
+            if (b->accessibleName() == QStringLiteral("PTT Mic Override")) {
+                button = b;
+            }
+        }
+        QVERIFY2(button, "the PTT Mic Override control exists");
+        QVERIFY2(!button->isEnabled(), "unreported: dimmed");
+        QVERIFY(button->accessibleDescription().startsWith(QStringLiteral("Requires SmartSDR v4.3")));
+
+        TransmitModel& tx = model.transmitModel();
+        TransmitDelta reportedOff;
+        reportedOff.pttMicOverride = false;
+        tx.applyChanges(reportedOff);
+        QVERIFY2(button->isEnabled(), "a reported 0 enables the control");
+        QVERIFY(!button->isChecked());
+
+        // The typed request; model_control_routing_test pins its wire text.
+        QSignalSpy requests(&tx, &TransmitModel::controlRequested);
+        button->click();
+        QCOMPARE(requests.count(), 1);
+        const auto request = requests.at(0).at(0).value<TransmitControlRequest>();
+        QVERIFY(request.field == TransmitControlRequest::Field::PttMicOverride);
+        QVERIFY(std::get<bool>(request.value));
+        QVERIFY2(!button->isChecked(), "no echo yet: the button still shows the radio's 0");
+        QVERIFY(!tx.pttMicOverride());
+
+        TransmitDelta echoOn;
+        echoOn.pttMicOverride = true;
+        tx.applyChanges(echoOn);
+        QVERIFY(button->isChecked());
+        QCOMPARE(button->text(), QStringLiteral("Enabled"));
+
+        // A family switch starts a new radio's session without a disconnect:
+        // the old radio's report must not carry over to it.
+        QVERIFY(model.rebuildBackendForTest(QStringLiteral("sim")));
+        QVERIFY2(!tx.havePttMicOverride() && !tx.pttMicOverride(), "family switch: unreported");
+        QVERIFY2(!button->isChecked() && !button->isEnabled(), "family switch: the open control resets");
+
+        tx.applyChanges(echoOn);
+        QVERIFY(button->isChecked() && button->isEnabled());
+        tx.resetState();
+        QVERIFY2(!button->isChecked(), "reset: the last session's value is gone");
+        QVERIFY2(!button->isEnabled(), "reset: unreported again");
+        QCOMPARE(button->text(), QStringLiteral("Disabled"));
     }
 };
 

@@ -112,7 +112,7 @@ Prefer paper? Download the [printable manual](pathname:///AetherSDR-Manual.pdf) 
 - [Ulanzi Dial](./ulanzi-dial.md) — Ulanzi Dial knob and keys: wheel actions, key mapping, PTT and CW keying
 - [USB Control Surfaces](./usb-control-surfaces.md) — RC-28, PowerMate, Contour Shuttle, Stream Deck+ and serial PTT/CW interfaces
 - [MIDI Controller Mapping](./midi-controller-mapping.md) — Map any MIDI controller, with Learn mode and profile import/export
-- [CTR2 Proxy](./ctr2-proxy.md) — Relay a CTR2-Max controller to the radio over Wi-Fi (USB pending CTR2 firmware)
+- [CTR2 Proxy](./ctr2-proxy.md) — Relay a CTR2-Max controller to the radio over Wi-Fi or USB, and install AetherCTR2 on it
 
 ## Remote Operation
 

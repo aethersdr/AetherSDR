@@ -28,13 +28,9 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 | Item | What it does |
 |------|-------------|
 | **Radio Setup...** | The main multi-page configuration dialog. See [Radio Setup](./radio-setup.md). On macOS: AetherSDR → Preferences…. |
-| **AetherControl...** | Opens the AetherControl controller window. |
-| **FlexControl Knob & Buttons...** | Jumps to the FlexControl section of Radio Setup → Serial & Controllers. See [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md). |
+| **Controllers ▸** | Every controller's settings: **CTR2...** (the CTR2 relay and CTR2-Max firmware; see [CTR2 Proxy](./ctr2-proxy.md)), **AetherControl...** (the on-screen AetherControl window), **FlexControl Knob & Buttons...** (the FlexControl section of Radio Setup → Serial & Controllers; see [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md)), **MIDI Mapping...** (see [MIDI Controller Mapping](./midi-controller-mapping.md)), **Icom RC-28 Remote Encoder...** (see [USB Control Surfaces](./usb-control-surfaces.md)) and **Ulanzi Dial Mapping...** (see [Ulanzi Dial](./ulanzi-dial.md)). Some appear only in builds with MIDI, USB HID or serial-port support. |
 | **Receive Sync ▸** | Timing alignment between the radio and a KiwiSDR receiver: Sync Kiwi Audio & Display, **Manual Offset** / **Auto Assist**, Delay KiwiSDR 50 ms, Delay Flex 50 ms, Reset Offset, and **Latency ▸** Normal (360 ms) / More Stable (520 ms) / High Jitter (1000 ms). See [KiwiSDR and Web-888](./kiwisdr-and-web-888.md). |
 | **MQTT...** | Broker, subscriptions and publish buttons. See [MQTT Station Automation](./mqtt-station-automation.md). |
-| **MIDI Mapping...** | See [MIDI Controller Mapping](./midi-controller-mapping.md). |
-| **Icom RC-28 Remote Encoder...** | See [USB Control Surfaces](./usb-control-surfaces.md). |
-| **Ulanzi Dial Mapping...** | See [Ulanzi Dial](./ulanzi-dial.md). |
 | **USB Cables...** | See [USB Cable Management](./usb-cable-management.md). |
 | **Keyboard Shortcuts** | Checkable. Turns operating shortcuts on or off; **off by default**. See [Keyboard Shortcuts](./keyboard-shortcuts.md). |
 | **Configure Shortcuts...** | The shortcut editor. |

@@ -461,6 +461,10 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");
+    // The session takes its receive front-end options from AnanSettings
+    // (populateFamilyParams()), so the setup page that edits them applies.
+    c.adcFrontEnd = RadioCapabilities::AdcFrontEnd{};
+
     // ---- PA telemetry ----
     // The DC supply rail, published as RAD:+13.8A from every status packet's
     // count (onSupplyRailCounts()). Claimed on a bench measurement, not on the
@@ -508,6 +512,7 @@ RadioCapabilities AnanBackend::capabilities() const
     c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
         SliceFrequencyControl::Authority::Engine, /*tunePowerAppliesLive=*/false};
     c.hasRadioPttReadback = false; // no PTT at all, so no readback either
+    c.radioPttObservation = std::nullopt;
     c.hasTuner = false;            // G2 has no internal ATU (Apache Labs spec)
     c.hasTunerMemories = false;    // no internal ATU, so no tuner-memory surface
     c.hasAmplifier = false;

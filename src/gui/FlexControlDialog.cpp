@@ -1,5 +1,6 @@
 #include "FlexControlDialog.h"
 
+#include "FramelessResizer.h"
 #include "GuardedSlider.h"
 #include "SliceLabel.h"
 #include "core/AppSettings.h"
@@ -27,6 +28,7 @@
 #include <QRadialGradient>
 #include <QScreen>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QSizePolicy>
@@ -58,6 +60,8 @@ constexpr int kDefaultWheelSensitivity = 50;
 // screen-clamped runtime path so the two never drift.
 constexpr int kNonCompactMinHeight = 610;
 constexpr int kNonCompactMinWidth = 430;
+// The body's left, right and bottom margin around the header and scroll area.
+constexpr int kBodyMargin = 14;
 constexpr const char* kVirtualWheelSettingsKey = "FlexControlVirtualWheel";
 constexpr const char* kLegacyWheelLoosenessKey = "FlexControlVirtualWheelLooseness";
 constexpr double kWheelPointerAnchorRadiusRatio = 0.10;
@@ -66,80 +70,78 @@ constexpr double kWheelCoastStartVelocity = 4.0;
 constexpr double kWheelCoastStopVelocity = 0.35;
 constexpr qint64 kWheelCoastInputQuietMs = 32;
 
+// The canon sheet on the body: cards on color.canon.raised, nested panels on
+// color.canon.nested, buttons and combos on color.canon.control. An "on"
+// state (an aux LED, the selected Aux button, a connected FlexControl, a
+// checked option, an armed capture) keeps AetherControl's green, through the
+// toggle.success and accent.success tokens.
 constexpr const char* kFlexControlStyle = R"(
 QWidget {
-    color: #aeb9cc;
-    background: #07101c;
+    color: {{color.canon.inkSoft}};
+    background: transparent;
     font-size: 14px;
 }
 QLabel {
     background: transparent;
 }
-QFrame#StatusFrame,
 QFrame#DeviceFrame,
 QFrame#ControlStrip,
+QFrame#StatusFrame,
 QFrame#AuxCell {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #111d2c, stop:1 #0a1421);
-    border: 1px solid #233246;
-    border-radius: 7px;
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 8px;
 }
 QFrame#KnobPanel,
 QFrame#PushActions,
 QFrame#StatusCell {
-    background: #08111d;
-    border: 1px solid #1c2a3b;
-    border-radius: 7px;
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 8px;
 }
-QLabel#FlexMark {
-    color: #e7edf4;
-    font-size: 24px;
-    font-weight: 800;
-}
-QLabel#SubMark,
 QLabel#SectionLabel {
-    color: #8d99ad;
+    color: {{color.canon.muted}};
     font-size: 11px;
     font-weight: 700;
 }
 QLabel#SliderTitle {
-    color: #d8e2ef;
+    color: {{color.canon.ink}};
     font-size: 12px;
     font-weight: 700;
 }
 QLabel#StatusValue {
-    color: #d8e2ef;
+    color: {{color.canon.ink}};
     font-size: 15px;
     font-weight: 700;
 }
 QLabel#StatusValueDim {
-    color: #8d99ad;
+    color: {{color.canon.muted}};
     font-size: 13px;
     font-weight: 600;
 }
 QLabel#CaptureHint {
-    color: #8d99ad;
-    background: #08111d;
-    border: 1px solid #1c2a3b;
-    border-radius: 7px;
+    color: {{color.canon.muted}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 8px;
     padding: 8px 10px;
     font-weight: 600;
 }
 QLabel#CaptureHint[armed="true"] {
-    color: #dfffe5;
-    background: #11271f;
-    border-color: #65d379;
+    color: {{color.canon.ink}};
+    background: {{color.toggle.success.background.checked}};
+    border-color: {{color.toggle.success.border.checked}};
 }
 QLabel#PushHint {
-    color: #8d99ad;
+    color: {{color.canon.muted}};
     font-size: 12px;
     font-weight: 700;
     min-height: 18px;
     max-height: 18px;
 }
 QLabel#LedDot {
-    background: #152233;
-    border: 1px solid #26374e;
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
     border-radius: 6px;
     min-width: 12px;
     max-width: 12px;
@@ -147,71 +149,52 @@ QLabel#LedDot {
     max-height: 12px;
 }
 QLabel#LedDot[active="true"] {
-    background: #65d379;
-    border-color: #92f2a0;
+    background: {{color.accent.success}};
+    border-color: {{color.toggle.success.border.checked}};
 }
 QPushButton#FlexButton,
 QPushButton#PushButton {
-    color: #d8e2ef;
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #17283c, stop:1 #0b1625);
-    border: 1px solid #31455f;
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
     border-radius: 7px;
     padding: 8px 12px;
     font-weight: 800;
 }
+QPushButton#PhysicalButton,
+QPushButton#OptionButton {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 700;
+}
 QPushButton#FlexButton:hover,
 QPushButton#PushButton:hover,
-QPushButton#PhysicalButton:hover {
-    border-color: #65d379;
-    color: #ffffff;
+QPushButton#PhysicalButton:hover,
+QPushButton#OptionButton:hover {
+    color: {{color.canon.aqua}};
+    background: {{color.canon.nested}};
+}
+QPushButton#FlexButton:focus,
+QPushButton#PushButton:focus,
+QPushButton#PhysicalButton:focus,
+QPushButton#OptionButton:focus {
+    border-color: {{color.canon.aqua}};
 }
 QPushButton#FlexButton:pressed,
 QPushButton#FlexButton[selected="true"],
-QPushButton#PushButton:pressed {
-    background: #173528;
-    border-color: #65d379;
-    color: #eaffef;
-}
-QPushButton#PhysicalButton {
-    color: #d8e2ef;
-    background: #0b1625;
-    border: 1px solid #31455f;
-    border-radius: 7px;
-    padding: 7px 12px;
-    font-size: 12px;
-    font-weight: 800;
-}
-QPushButton#PhysicalButton[connected="true"] {
-    color: #dfffe5;
-    background: #173528;
-    border-color: #65d379;
-}
-QPushButton#OptionButton {
-    color: #d8e2ef;
-    background: #0b1625;
-    border: 1px solid #31455f;
-    border-radius: 7px;
-    padding: 6px 10px;
-    font-size: 12px;
-    font-weight: 800;
-}
-QPushButton#OptionButton:hover {
-    border-color: #65d379;
-    color: #ffffff;
-}
+QPushButton#PushButton:pressed,
+QPushButton#PhysicalButton[connected="true"],
 QPushButton#OptionButton:checked {
-    color: #dfffe5;
-    background: #173528;
-    border-color: #65d379;
+    color: {{color.canon.ink}};
+    background: {{color.toggle.success.background.checked}};
+    border-color: {{color.toggle.success.border.checked}};
 }
-/* Slider rules tokenized as part of Pat's (b) hardcoded-slider sweep.
-   The wider handle (16 px) + bordered ring are deliberate FlexControl
-   visual identity, kept site-local.  Colours route through
-   color.slider.background / .handle for the structural tokens and
-   color.accent.success for the green fill + handle border, which
-   preserves the FlexControl green look while still letting a future
-   dialog/flexControl scope override retint it without touching code. */
+/* The wider handle (16 px) and bordered ring are AetherControl's own look;
+   the fill and ring are the green on-state, color.accent.success. */
 QSlider::groove:horizontal {
     height: 5px;
     border-radius: 2px;
@@ -229,27 +212,47 @@ QSlider::handle:horizontal {
     border: 1px solid {{color.accent.success}};
 }
 QComboBox {
-    color: #d8e2ef;
-    background: #08111d;
-    border: 1px solid #26374e;
-    border-radius: 6px;
-    padding: 6px 8px;
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 5px 8px;
     font-size: 12px;
     font-weight: 600;
 }
-QComboBox:hover {
-    border-color: #65d379;
+QComboBox:hover,
+QComboBox:focus {
+    border-color: {{color.canon.aqua}};
 }
 QComboBox::drop-down {
     border: 0;
     width: 18px;
 }
 QComboBox QAbstractItemView {
-    color: #d8e2ef;
-    background: #08111d;
-    selection-background-color: #173528;
-    selection-color: #ffffff;
-    border: 1px solid #26374e;
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.lineHi}};
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+QScrollBar:vertical {
+    background: transparent;
+    width: 12px;
+    margin: 8px 2px 8px 2px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical {
+    background: {{color.canon.lineHi}};
+    border-radius: 5px;
+    min-height: 34px;
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0px;
 }
 )";
 
@@ -564,7 +567,11 @@ protected:
         const QRectF knob = wheelRect();
         const QPointF center = knob.center();
         const double radius = knob.width() / 2.0;
-        const QColor accent(m_captured ? "#65d379" : "#31455f");
+        // Captured: the ring is the green on-state token. At rest it keeps the
+        // knob's own slate, like the rest of its painted metal.
+        auto& tm = ThemeManager::instance();
+        const QColor accent = m_captured ? tm.color(this, QStringLiteral("color.accent.success"))
+                                         : QColor("#31455f");
 
         p.setPen(Qt::NoPen);
         QRadialGradient tableShadow(center + QPointF(0.0, radius * 0.22), radius * 1.15);
@@ -645,10 +652,10 @@ protected:
             p.setFont(hintFont);
             const QRectF badge(center.x() - radius * 0.35, center.y() - 20.0,
                                radius * 0.70, 40.0);
-            p.setPen(QPen(QColor("#65d379"), 1.0));
-            p.setBrush(QColor(8, 17, 29, 235));
+            p.setPen(QPen(accent, 1.0));
+            p.setBrush(theme::withAlpha(this, QStringLiteral("color.canon.nested"), 235));
             p.drawRoundedRect(badge, 5.0, 5.0);
-            p.setPen(QColor("#dfffe5"));
+            p.setPen(tm.color(this, QStringLiteral("color.canon.ink")));
             p.drawText(badge, Qt::AlignCenter, hint);
         }
     }
@@ -989,27 +996,32 @@ QLabel* makeLed(const QString& label, bool active, QWidget* parent)
 } // namespace
 
 FlexControlDialog::FlexControlDialog(QWidget* parent)
-    : PersistentDialog(QStringLiteral("AetherControl"),
-                       QStringLiteral("FlexControlDialogGeometry"),
-                       parent)
+    : CanonWindow(QStringLiteral("AetherControl"), parent, Kind::Workspace)
 {
-    theme::setContainer(this, QStringLiteral("dialog/flexControl"));
-    setModal(false);
-    setWindowModality(Qt::NonModal);
+    // The canon scope maps the base tokens (slider, accents) onto the canon
+    // palette.
+    theme::setContainer(this, QStringLiteral("canon/aetherControl"));
+    // Size and position persist under the key it used as a PersistentDialog,
+    // so saved geometry carries over; it resizes from every edge.
+    setGeometryKey(QStringLiteral("FlexControlDialogGeometry"));
+    FramelessResizer::install(this);
     setMinimumSize(kNonCompactMinWidth, kNonCompactMinHeight);
 
-    // applyStyleSheet (not raw setStyleSheet) so the {{color.slider.*}} +
-    // {{color.accent.success}} tokens in the slider rules resolve at apply
-    // time, AND the body widget is registered for free live re-theme when
-    // the user switches Default Dark ↔ Default Light without restarting.
-    // Other (non-slider) hardcoded colours in the template remain as-is —
-    // out of scope for the slider-sweep PR; a follow-up could tokenize
-    // the rest of the FlexControl dialog stylesheet.
+    // applyStyleSheet (not raw setStyleSheet) so the tokens resolve in this
+    // window's scope and the body re-themes live on a theme switch.
     AetherSDR::ThemeManager::instance().applyStyleSheet(
         bodyWidget(), QString::fromLatin1(kFlexControlStyle));
     auto* bodyLayout = new QVBoxLayout(bodyWidget());
-    bodyLayout->setContentsMargins(14, 14, 14, 14);
-    bodyLayout->setSpacing(0);
+    bodyLayout->setContentsMargins(kBodyMargin, 12, kBodyMargin, kBodyMargin);
+    bodyLayout->setSpacing(8);
+    bodyLayout->addWidget(makeCanonHeader(QStringLiteral("AetherControl")));
+
+    // The window's own controls sit under the header, outside the scroll
+    // area, so Compact is always in reach.
+    auto* header = new QWidget(bodyWidget());
+    auto* headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(0, 0, 0, 0);
+    headerLayout->setSpacing(8);
 
     m_scrollArea = new QScrollArea(bodyWidget());
     m_scrollArea->setObjectName(QStringLiteral("FlexControlScrollArea"));
@@ -1017,7 +1029,6 @@ FlexControlDialog::FlexControlDialog(QWidget* parent)
     m_scrollArea->setFrameShape(QFrame::NoFrame);
     m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    bodyLayout->addWidget(m_scrollArea);
 
     m_contentWidget = new QWidget(m_scrollArea);
     m_contentWidget->setObjectName(QStringLiteral("FlexControlContent"));
@@ -1028,25 +1039,6 @@ FlexControlDialog::FlexControlDialog(QWidget* parent)
     root->setSizeConstraint(QLayout::SetMinimumSize);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(10);
-
-    auto* header = new QFrame;
-    header->setObjectName(QStringLiteral("StatusFrame"));
-    header->setMinimumHeight(70);
-    header->setMaximumHeight(70);
-    header->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    auto* headerLayout = new QHBoxLayout(header);
-    headerLayout->setContentsMargins(16, 12, 16, 12);
-    headerLayout->setSpacing(12);
-
-    auto* titleColumn = new QVBoxLayout;
-    titleColumn->setSpacing(0);
-    auto* title = new QLabel(QStringLiteral("AetherControl"));
-    title->setObjectName(QStringLiteral("FlexMark"));
-    auto* subtitle = new QLabel(QStringLiteral("Virtual Tuning Controller"));
-    subtitle->setObjectName(QStringLiteral("SubMark"));
-    titleColumn->addWidget(title);
-    titleColumn->addWidget(subtitle);
-    headerLayout->addLayout(titleColumn, 1);
 
     m_physicalButton = new QPushButton(header);
     m_physicalButton->setObjectName(QStringLiteral("PhysicalButton"));
@@ -1091,8 +1083,10 @@ FlexControlDialog::FlexControlDialog(QWidget* parent)
         updateCompactMode();
     });
     headerLayout->addWidget(m_compactButton, 0, Qt::AlignVCenter);
+    headerLayout->addStretch(1);
     setPhysicalReady(false);
-    root->addWidget(header);
+    bodyLayout->addWidget(header);
+    bodyLayout->addWidget(m_scrollArea, 1);
 
     m_deviceFrame = new QFrame;
     auto* device = m_deviceFrame;
@@ -1218,6 +1212,9 @@ FlexControlDialog::FlexControlDialog(QWidget* parent)
     knobLayout->setSpacing(8);
 
     m_wheel = new VirtualFlexControlWheel(knobPanel);
+    // The knob paints its accents from tokens: repaint on a theme switch.
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, m_wheel,
+            [wheel = m_wheel] { wheel->update(); });
     m_wheel->setStepCallback([this](int steps) {
         recordVirtualTune(steps);
     });
@@ -1790,7 +1787,7 @@ void FlexControlDialog::updateCompactMode()
         // user's Compact preference.
         const int availH = availableScreenHeight();
         // required is the content widget's intrinsic size; the window also needs
-        // the title bar + body margins around the scroll area, so add that
+        // the header, button row + body margins around the scroll area, so add that
         // chrome before resizing, then clamp to the screen so we never open
         // taller than the workspace (the content scrolls when clamped).
         int targetHeight = required.height() + windowChromeHeight();
@@ -1802,9 +1799,10 @@ void FlexControlDialog::updateCompactMode()
         // Min width tracks the content's own minimum (>= kNonCompactMinWidth) so
         // the horizontal-scroll-disabled scroll area can never be dragged narrow
         // enough to clip the controller.
-        setMinimumSize(required.width(), minimumHeight);
+        const int requiredWidth = required.width() + windowChromeWidth();
+        setMinimumSize(requiredWidth, minimumHeight);
         if (isVisible()) {
-            resize(std::max(width(), required.width()), targetHeight);
+            resize(std::max(width(), requiredWidth), targetHeight);
         }
     }
 }
@@ -1818,8 +1816,8 @@ int FlexControlDialog::availableScreenHeight() const
     return scr ? scr->availableGeometry().height() : 0;
 }
 
-// Height the window needs on top of the scroll area's content: the frameless
-// title bar plus the body-layout margins around the scroll area. Measured from
+// Height the window needs on top of the scroll area's content: the canon
+// header, the button row and the body-layout margins around the scroll area. Measured from
 // live geometry, which is exact and content-independent once the dialog is
 // shown. Returns 0 before the first show so pre-show sizing is no worse than
 // the content-only fallback — the next visible re-fit adds the chrome.
@@ -1831,6 +1829,18 @@ int FlexControlDialog::windowChromeHeight() const
             return chrome;
     }
     return 0;
+}
+
+// Width the window needs beside the scroll area's content: the body margins
+// and the canon border, plus the vertical scrollbar, reserved whether or not
+// it shows, so a content that starts to scroll is never clipped under it.
+int FlexControlDialog::windowChromeWidth() const
+{
+    if (!m_scrollArea)
+        return 0;
+    const int margins = isVisible() ? width() - m_scrollArea->width()
+                                    : 2 * (kBodyMargin + CanonWindow::kInset);
+    return std::max(0, margins) + m_scrollArea->verticalScrollBar()->sizeHint().width();
 }
 
 void FlexControlDialog::applyCompactWindowSize()
@@ -1854,7 +1864,7 @@ void FlexControlDialog::applyCompactWindowSize()
     QSize required = m_contentWidget
         ? m_contentWidget->minimumSizeHint().expandedTo(QSize(410, 0))
         : minimumSizeHint().expandedTo(QSize(410, 0));
-    // The window needs the title bar + body margins around the scroll area on
+    // The window needs the header + body margins around the scroll area on
     // top of the content's intrinsic height, or the fixed compact window opens
     // a scrollbar's-worth too short.
     // Backstop (#3662): never pin a window taller than the screen, even in
@@ -1865,49 +1875,50 @@ void FlexControlDialog::applyCompactWindowSize()
     int targetHeight = required.height() + windowChromeHeight();
     if (availH > 0 && targetHeight > availH)
         targetHeight = availH;
-    setMinimumSize(required.width(), targetHeight);
+    const int requiredWidth = required.width() + windowChromeWidth();
+    setMinimumSize(requiredWidth, targetHeight);
     setFixedHeight(targetHeight);
     if (isVisible()) {
-        const int targetWidth = std::max(width(), required.width());
+        const int targetWidth = std::max(width(), requiredWidth);
         resize(targetWidth, targetHeight);
     }
 }
 
 void FlexControlDialog::reject()
 {
-    if (m_ignoreNextReject || (m_wheel && m_wheel->captured())) {
+    if (m_ignoreNextReject) {
         m_ignoreNextReject = false;
         releaseWheelCapture();
         return;
     }
-    PersistentDialog::reject();
+    CanonWindow::reject();
 }
 
 bool FlexControlDialog::event(QEvent* event)
 {
     if (handleEscapeRelease(event))
         return true;
-    return PersistentDialog::event(event);
+    return CanonWindow::event(event);
 }
 
 bool FlexControlDialog::eventFilter(QObject* watched, QEvent* event)
 {
     if (handleEscapeRelease(event))
         return true;
-    return PersistentDialog::eventFilter(watched, event);
+    return CanonWindow::eventFilter(watched, event);
 }
 
 void FlexControlDialog::keyPressEvent(QKeyEvent* event)
 {
     if (handleEscapeRelease(event))
         return;
-    PersistentDialog::keyPressEvent(event);
+    CanonWindow::keyPressEvent(event);
 }
 
 void FlexControlDialog::closeEvent(QCloseEvent* event)
 {
     releaseWheelCapture();
-    PersistentDialog::closeEvent(event);
+    CanonWindow::closeEvent(event);
 }
 
 void FlexControlDialog::recordVirtualTune(int steps)

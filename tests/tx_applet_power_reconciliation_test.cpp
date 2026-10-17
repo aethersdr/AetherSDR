@@ -779,6 +779,14 @@ void testAtuCapabilityUsesThreeVisibleStates()
                && inactiveSuccessStyle == inactiveBypassStyle
                && inactiveSuccessStyle == inactiveMemoryStyle);
 
+    TransmitDelta power;
+    power.rfPower = 50;
+    power.tunePower = 7;
+    model.applyChanges(power);
+    report("power controls display percentage units without an external tuner",
+           labelWithText(applet, QStringLiteral("50%"))
+               && labelWithText(applet, QStringLiteral("7%")));
+
     ModelControlWireSpy commandSpy(&model);
     QSignalSpy atuIntents(&model, &TransmitModel::atuCommandIssued);
     model.setHasTuner(false);

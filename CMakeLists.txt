@@ -179,7 +179,8 @@ option(REQUIRE_RTL "Fail configuration unless the RTL backend and float FFTW are
 #       signed-16-bit wire (MetisProtocol.cpp, ep2WriteTxIq), so TXA's
 #       advantage THERE is below the wire and unusable.
 # OFF — the in-tree phasing modulator, unchanged. The fallback for a machine or
-#       a report where TXA misbehaves.
+#       a report where TXA misbehaves. SSB and digital only: AM, DSB and FM
+#       stay receive-only in this build.
 #
 #       THIS LINE USED TO SAY "kept building and kept tested" AND THE FLIP
 #       BELOW MAKES THAT FALSE. `grep AETHER_HL2_TX_TXA .github/workflows/*.yml`
@@ -234,8 +235,15 @@ option(REQUIRE_RTL "Fail configuration unless the RTL backend and float FFTW are
 # radio was keyed. No antenna port was observed." -- now exists, and it is named
 # rather than asserted.
 option(AETHER_HL2_TX_TXA
-       "Hermes-Lite 2 SSB transmit modulator: ON (default) uses WDSP's TXA chain, OFF the in-tree phasing modulator"
+       "Hermes-Lite 2 transmit modulator: ON (default) uses WDSP's TXA chain, OFF the in-tree phasing modulator (SSB only)"
        ON)
+# Lets AETHER_FIRMWARE_CATALOG and AETHER_FIRMWARE_TRUST_KEYS replace the
+# firmware catalog and add firmware-signing keys, for testing a publisher's own
+# builds. Off by default and never for release: a release build installs only
+# firmware from aethersdr.com signed by a key built into it.
+option(AETHER_FIRMWARE_DEV_OVERRIDES
+       "Honor the AETHER_FIRMWARE_CATALOG and AETHER_FIRMWARE_TRUST_KEYS environment overrides (testing only)"
+       OFF)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 if(WIN32)
@@ -896,6 +904,7 @@ set(CORE_SOURCES
     src/core/backends/flex/RadioConnection.cpp  # SmartSDR TCP command/reply/status wire
     src/core/backends/flex/CommandParser.cpp    # SmartSDR wire line parse/build
     src/core/backends/flex/PanadapterStream.cpp # SmartSDR VITA-49 UDP receiver (DAX/IQ)
+    src/core/backends/flex/VitaDscpMarker.cpp
     src/core/backends/flex/SmartLinkClient.cpp  # SmartLink WAN auth + radio list
     src/core/backends/flex/WanConnection.cpp    # SmartLink TLS transport (#5554 §2.6)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
@@ -1008,6 +1017,7 @@ set(CORE_SOURCES
     src/core/DecoderPcmAdapter.cpp
     src/core/AetherClockSettings.cpp
     src/core/MiniPanSettings.cpp
+    src/core/Ctr2RelaySettings.cpp
     src/core/GreenHeronProtocol.cpp
     src/core/PacketLossConcealment.cpp
     src/core/PerfTelemetry.cpp
@@ -1015,6 +1025,15 @@ set(CORE_SOURCES
     src/core/RigctlProtocol.cpp
     src/core/ByteRelay.cpp
     src/core/TcpByteProxy.cpp
+    src/core/Ctr2FirmwareUpdater.cpp
+    src/core/Ctr2MaxRegistration.cpp
+    src/core/CappedDownload.cpp
+    src/core/Ctr2MaxStockCatalog.cpp
+    src/core/Ctr2MaxStockFirmware.cpp
+    src/core/EspFirmwareCatalog.cpp
+    src/core/EspFirmwareInstaller.cpp
+    src/core/EspFirmwareJob.cpp
+    src/core/EspFirmwareManifest.cpp
     src/core/Ctr2HidFraming.cpp
     src/core/Ctr2HidPort.cpp
     src/core/Ctr2HidThreadPort.cpp
@@ -1064,6 +1083,10 @@ set(CORE_SOURCES
     src/core/AcomConnection.cpp
     src/core/SpeProtocol.cpp
     src/core/SpeConnection.cpp
+    src/core/Kpa500Protocol.cpp
+    src/core/Kpa500Maintenance.cpp
+    src/core/Kpa500FaultHistory.cpp
+    src/core/Kpa500Connection.cpp
     src/core/VkampProtocol.cpp
     src/core/VkampConnection.cpp
     src/core/Kpa1500Protocol.cpp
@@ -1222,6 +1245,7 @@ set(MODEL_SOURCES
     src/models/GreenHeronModel.cpp
     src/models/AetherClockModel.cpp
     src/models/Ctr2ProxyModel.cpp
+    src/models/FirmwareInstallModel.cpp
 )
 
 # Vendored QGeoView (LGPL-3.0) — slippy-map widget for the common
@@ -1345,11 +1369,14 @@ set(GUI_SOURCES
     src/gui/AmpApplet.cpp
     src/gui/AcomApplet.cpp
     src/gui/SpeApplet.cpp
+    src/gui/Kpa500Applet.cpp
+    src/gui/Kpa500AdvancedWidget.cpp
     src/gui/SpeLcdWidget.cpp
     src/gui/VkampApplet.cpp
     src/gui/Kpa1500Applet.cpp
     src/gui/LpMeterApplet.cpp
-    src/gui/Ctr2ProxyApplet.cpp
+    src/gui/Ctr2ProxyPanel.cpp
+    src/gui/FirmwareInstallDialog.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp
@@ -1575,6 +1602,78 @@ else()
     set_source_files_properties(${GGMORSE_SOURCES} PROPERTIES COMPILE_FLAGS "-w")
 endif()
 
+# Bundled esp-serial-flasher (Apache-2.0; its flasher stubs Apache-2.0 OR MIT):
+# Espressif's protocol for an ESP32-family chip's ROM bootloader, used to
+# install firmware on ESP32-based controllers in download mode. AetherSDR
+# supplies the serial port (EspFlasher.cpp).
+set(ESP_FLASHER_DIR ${CMAKE_SOURCE_DIR}/third_party/esp-serial-flasher)
+file(GLOB ESP_FLASHER_STUBS ${ESP_FLASHER_DIR}/src/stubs/*.c)
+add_library(aether_esp_flasher STATIC
+    ${ESP_FLASHER_DIR}/src/esp_loader.c
+    ${ESP_FLASHER_DIR}/src/esp_targets.c
+    ${ESP_FLASHER_DIR}/src/md5_hash.c
+    ${ESP_FLASHER_DIR}/src/protocol_serial.c
+    ${ESP_FLASHER_DIR}/src/protocol_uart.c
+    ${ESP_FLASHER_DIR}/src/protocol_spi.c
+    ${ESP_FLASHER_DIR}/src/protocol_sdio.c
+    ${ESP_FLASHER_DIR}/src/slip.c
+    ${ESP_FLASHER_STUBS}
+)
+target_include_directories(aether_esp_flasher
+    PUBLIC ${ESP_FLASHER_DIR}/include
+    PRIVATE ${ESP_FLASHER_DIR}/private_include
+)
+target_compile_definitions(aether_esp_flasher PUBLIC
+    SERIAL_FLASHER_LOG_LEVEL=1
+    SERIAL_FLASHER_WRITE_BLOCK_RETRIES=3
+    SERIAL_FLASHER_RESET_HOLD_TIME_MS=100
+    SERIAL_FLASHER_BOOT_HOLD_TIME_MS=50
+    SERIAL_FLASHER_RESET_INVERT=false
+    SERIAL_FLASHER_BOOT_INVERT=false
+)
+set_target_properties(aether_esp_flasher PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
+if(MSVC)
+    target_compile_options(aether_esp_flasher PRIVATE /w)
+else()
+    target_compile_options(aether_esp_flasher PRIVATE -w)
+endif()
+
+# Bundled Monocypher (CC0-1.0 OR BSD-2-Clause): Ed25519 signature checks on
+# downloaded firmware manifests, without depending on OpenSSL being present.
+add_library(aether_monocypher STATIC
+    ${CMAKE_SOURCE_DIR}/third_party/monocypher/monocypher.c
+    ${CMAKE_SOURCE_DIR}/third_party/monocypher/monocypher-ed25519.c
+)
+target_include_directories(aether_monocypher PUBLIC ${CMAKE_SOURCE_DIR}/third_party/monocypher)
+set_target_properties(aether_monocypher PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+    target_compile_options(aether_monocypher PRIVATE /w)
+else()
+    target_compile_options(aether_monocypher PRIVATE -w)
+endif()
+
+# CTR2-Max registration check: the stock firmware's LittleFS volume, read
+# with littlefs (BSD-3-Clause) built read-only (LFS_READONLY: no write path is
+# compiled). src/core/ctr2max_reg.c is shared with the AetherCTR2 firmware.
+add_library(aether_ctr2max_reg STATIC
+    ${CMAKE_SOURCE_DIR}/src/core/ctr2max_reg.c
+    ${CMAKE_SOURCE_DIR}/third_party/littlefs/lfs.c
+    ${CMAKE_SOURCE_DIR}/third_party/littlefs/lfs_util.c
+)
+target_include_directories(aether_ctr2max_reg
+    PUBLIC ${CMAKE_SOURCE_DIR}/src/core
+    PRIVATE ${CMAKE_SOURCE_DIR}/third_party/littlefs)
+target_compile_definitions(aether_ctr2max_reg PRIVATE
+    LFS_READONLY LFS_NO_MALLOC LFS_NO_DEBUG LFS_NO_WARN LFS_NO_ERROR LFS_NO_ASSERT)
+set_target_properties(aether_ctr2max_reg PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+    target_compile_options(aether_ctr2max_reg PRIVATE /w)
+else()
+    target_compile_options(aether_ctr2max_reg PRIVATE -w)
+endif()
+
 add_library(aether_libmodem_core STATIC
     third_party/libmodem_core/bitstream.cpp
     third_party/libmodem_core/demodulator.cpp
@@ -1690,6 +1789,10 @@ add_library(aethercore ${_aether_core_library_type}
     ${SPECBLEACH_SOURCES}
 )
 target_link_libraries(aethercore PRIVATE aether::wdsp)
+target_link_libraries(aethercore PRIVATE aether_monocypher)   # core: EspFirmwareCatalog
+target_compile_definitions(aethercore PRIVATE
+    AETHER_FIRMWARE_DEV_OVERRIDES=$<BOOL:${AETHER_FIRMWARE_DEV_OVERRIDES}>)
+target_link_libraries(aethercore PRIVATE aether_ctr2max_reg)  # core: Ctr2MaxRegistration
 
 # Desktop-only implementations kept out of libaethercore. Their public headers
 # remain temporarily in src/core while call sites migrate. A library keeps the
@@ -2503,6 +2606,8 @@ if(Qt6SerialPort_FOUND)
     # #ifdef HAVE_SERIALPORT directly.
     target_compile_definitions(aethercore PUBLIC HAVE_SERIALPORT)
     target_link_libraries(aethercore PUBLIC Qt6::SerialPort)
+    target_sources(aethercore PRIVATE src/core/EspFlasher.cpp)
+    target_link_libraries(aethercore PRIVATE aether_esp_flasher)
 endif()
 
 if(Qt6WebSockets_FOUND)

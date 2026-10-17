@@ -8,6 +8,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QThread>
+#include <QVersionNumber>
 
 #include "core/AppSettings.h"
 #include "core/FirmwareCurrency.h"  // publishedVersionIsStale() — the one freshness rule
@@ -129,6 +130,47 @@ FlexBackend::~FlexBackend()
 void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
 {
     m_sink = std::move(sink);
+}
+
+void FlexBackend::setFirmwareVersionProvider(std::function<QString()> provider)
+{
+    m_firmwareVersionProvider = std::move(provider);
+}
+
+ReceiveDispatch FlexBackend::requestRadioNickname(const QString& nickname)
+{
+    if (!m_sink) {
+        return ReceiveDispatch::Unsupported;
+    }
+    // FlexLib Nickname uses StringHelper.Sanitize: drop unsupported characters,
+    // including spaces; sanitized-empty input selects the clear operation.
+    QString sanitized;
+    sanitized.reserve(nickname.size());
+    for (const QChar ch : nickname) {
+        if ((ch >= QLatin1Char('a') && ch <= QLatin1Char('z'))
+            || (ch >= QLatin1Char('A') && ch <= QLatin1Char('Z'))
+            || (ch >= QLatin1Char('0') && ch <= QLatin1Char('9'))
+            || ch == QLatin1Char('.') || ch == QLatin1Char(',')
+            || ch == QLatin1Char('/') || ch == QLatin1Char('-')) {
+            sanitized.append(ch);
+        }
+    }
+    if (sanitized.isEmpty()) {
+        const QString versionText = m_firmwareVersionProvider
+            ? m_firmwareVersionProvider() : QString();
+        qsizetype suffixIndex = 0;
+        const QVersionNumber version = QVersionNumber::fromString(versionText, &suffixIndex);
+        // Older firmware interprets an empty name argument as a query, not a clear.
+        if (suffixIndex != versionText.size() || version < QVersionNumber(4, 3)) {
+            qCWarning(lcProtocol) << "FlexBackend: nickname clear refused:"
+                                 << "firmware 4.3 or later is required";
+            return ReceiveDispatch::Unsupported;
+        }
+        send(QStringLiteral("radio clear_name"));
+    } else {
+        send(QStringLiteral("radio name ") + sanitized);
+    }
+    return ReceiveDispatch::Dispatched;
 }
 
 void FlexBackend::setTxCommandSink(std::function<void(const QString&, const TxCoordinator::Command&)> sink)
@@ -496,6 +538,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // The keyed edge is decoded from `interlock` status inside RadioModel, not
     // published through this seam — see RadioCapabilities::hasRadioPttReadback.
     caps.hasRadioPttReadback = false;
+    caps.radioPttObservation = std::nullopt;   // same reason: interlock, not this seam
 
     // EMPTY = continuous or unknown, so the RX applet keeps the operator's own
     // configurable width list. A Flex's filters are continuous.
@@ -1255,10 +1298,22 @@ void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& k
     carry(kvs, "nb_level", d.nbLevel);
     carry(kvs, "nr_level", d.nrLevel);
     carry(kvs, "anf_level", d.anfLevel);
-    carry(kvs, "lms_nr_level", d.nrlLevel);
-    carry(kvs, "speex_nr_level", d.nrsLevel);
+    // The radio reports NRL/NRS/ANFL levels under status names that differ
+    // from the command names (FlexLib v4.3.16 Slice.cs:3678,3791,2904); the
+    // command names are kept as a fallback (#6447).
+    carry(kvs, "nrl_level", d.nrlLevel);
+    if (!kvs.contains(QStringLiteral("nrl_level"))) {
+        carry(kvs, "lms_nr_level", d.nrlLevel);
+    }
+    carry(kvs, "nrs_level", d.nrsLevel);
+    if (!kvs.contains(QStringLiteral("nrs_level"))) {
+        carry(kvs, "speex_nr_level", d.nrsLevel);
+    }
     carry(kvs, "nrf_level", d.nrfLevel);
-    carry(kvs, "lms_anf_level", d.anflLevel);
+    carry(kvs, "anfl_level", d.anflLevel);
+    if (!kvs.contains(QStringLiteral("anfl_level"))) {
+        carry(kvs, "lms_anf_level", d.anflLevel);
+    }
 
     // AGC / squelch / RIT / XIT
     carry(kvs, "agc_mode", d.agcMode);
@@ -1334,6 +1389,11 @@ void FlexBackend::decodeTransmitStatus(const QMap<QString, QString>& kvs)
     carry(kvs, "mic_boost", d.micBoost);
     carry(kvs, "mic_bias", d.micBias);
     carry(kvs, "met_in_rx", d.metInRx);
+    // FlexLib 4.3.16.42034 rejects anything but 0/1 (Radio.cs:11151-11163):
+    // a malformed value must not confirm "off" or mark the key as reported.
+    if (const std::optional<int> v = parseInt(kvs, "ptt_mic_override"); v && (*v == 0 || *v == 1)) {
+        d.pttMicOverride = (*v == 1);
+    }
     carry(kvs, "synccwx", d.syncCwx);
     carryClamp(kvs, "am_carrier_level", d.amCarrierLevel, 0, 100);
     // dexp / noise_gate_level alias compander / compander_level, but only when

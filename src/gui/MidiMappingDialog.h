@@ -15,7 +15,7 @@ class MidiControlManager;
 struct MidiBinding;
 
 // MIDI Mapping dialog — dedicated settings window for configuring MIDI
-// controller bindings. Opened from Settings → MIDI Mapping.
+// controller bindings. Opened from Settings → Controllers → MIDI Mapping.
 // Shows device selector, binding table with Learn mode, and profile
 // save/load. All bindings stored in ~/.config/AetherSDR/midi.settings.
 class MidiMappingDialog : public PersistentDialog {
