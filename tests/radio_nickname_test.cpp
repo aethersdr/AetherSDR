@@ -25,11 +25,6 @@
 namespace AetherSDR {
 class RadioNicknameTestAccess {
 public:
-    static void wireStatus(RadioModel& radio, FlexBackend& backend)
-    {
-        QObject::connect(&backend, &IRadioBackend::radioChanged,
-                         &radio, &RadioModel::applyRadioChanges);
-    }
     static void identity(RadioModel& radio, const QString& family,
                          const QString& version)
     {
@@ -169,7 +164,6 @@ void modelAndDialog()
     radio.setBackendForTest(std::move(owned), QStringLiteral("flex"));
     RadioNicknameTestAccess::identity(radio, QStringLiteral("flex"),
                                       QStringLiteral("4.3.16.42034"));
-    RadioNicknameTestAccess::wireStatus(radio, *backend);
     test::SeamThreadAffinityProbe probe(backend);
     test::attachAllSeamSignals(probe);
     {
@@ -253,7 +247,10 @@ void modelAndDialog()
         check(commands.last() == QStringLiteral("radio name DeskName"),
               "real typed Return dispatches sanitized nickname");
         const qsizetype sent = commands.size();
-        backend->decodeRadioStatus({{QStringLiteral("model"), QStringLiteral("FLEX-8600")}});
+        backend->decodeRadioStatus({{QStringLiteral("model"), QStringLiteral("FLEX-8600")},
+                                    {QStringLiteral("nickname"), QStringLiteral("OldName")}});
+        check(edit->text() == QStringLiteral("Desk Name_"),
+              "full radio status with the old name preserves the pending operator edit");
         replies.takeFirst()(0, QString());
         check(radio.nickname() == QStringLiteral("DeskName")
                   && edit->text() == QStringLiteral("DeskName") && !edit->isModified(),
@@ -328,12 +325,26 @@ void replyOrdering()
               && qvariant_cast<RadioDelta>(changes.first().first()).nickname == QStringLiteral("Second"),
           "an older success cannot overwrite a newer successful nickname reply");
     changes.clear();
-    backend->requestRadioNickname(QStringLiteral("Pending"));
-    backend->decodeRadioStatus({{QStringLiteral("nickname"), QStringLiteral("OtherClient")}});
+    backend->requestRadioNickname(QStringLiteral("RaceName"));
+    backend->decodeRadioStatus({{QStringLiteral("slices"), QStringLiteral("0")},
+                                {QStringLiteral("panadapters"), QStringLiteral("1")},
+                                {QStringLiteral("nickname"), QStringLiteral("OldName")}});
     replies.last()(0, QString());
-    check(changes.size() == 1
-              && qvariant_cast<RadioDelta>(changes.first().first()).nickname == QStringLiteral("OtherClient"),
-          "nickname status after dispatch supersedes the command reply");
+    check(changes.size() == 2
+              && qvariant_cast<RadioDelta>(changes.last().first()).nickname == QStringLiteral("RaceName"),
+          "R|0 confirms rename after an intervening full radio status carrying the old name");
+    backend->decodeRadioStatus({{QStringLiteral("nickname"), QStringLiteral("OtherClient")}});
+    check(changes.size() == 3
+              && qvariant_cast<RadioDelta>(changes.last().first()).nickname == QStringLiteral("OtherClient"),
+          "nickname status arriving after confirmation remains authoritative");
+    changes.clear();
+    backend->setFirmwareVersionProvider([] { return QStringLiteral("4.3.16.42034"); });
+    backend->requestRadioNickname(QString());
+    backend->decodeRadioStatus({{QStringLiteral("nickname"), QStringLiteral("OldName")}});
+    replies.last()(0, QString());
+    check(changes.size() == 2
+              && qvariant_cast<RadioDelta>(changes.last().first()).nickname == QString(),
+          "R|0 confirms clear after an intervening status carrying the old name");
     changes.clear();
     bool accepted = true;
     backend->requestRadioNickname(QStringLiteral("OldSession"), [&](bool ok) { accepted = ok; });

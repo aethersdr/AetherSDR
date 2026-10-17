@@ -41,8 +41,11 @@ public:
     RadioConnection*  connection() const { return m_connection; }
     PanadapterStream* panStream()  const { return m_panStream; }
 
-    // Where the core verbs emit their SmartSDR command strings — RadioModel's
-    // existing guarded command funnel, so verbs reuse the one wire-write path.
+    // Core verbs share RadioModel's guarded command funnel and wire-write path.
+    using CommandReply = std::function<void(int, const QString&)>;
+    void setCommandSink(std::function<bool(const QString&, CommandReply)> sink);
+    // Encoding-only observers cannot dispatch requests that need a radio reply.
+    void setCommandSink(std::function<void(const QString&)> sink);
     // The same funnel for a write whose caller waits on the radio's answer
     // (TransmitControlRequest::answerTicket). The sink reports the reply code;
     // with none installed, such a request goes out unanswered.
@@ -52,10 +55,6 @@ public:
     bool answersTransmitControl() const override { return bool(m_answeredSink); }
     // Configuration writes share LAN/WAN sequencing and report actual dispatch.
     void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
-    using CommandReply = std::function<void(int, const QString&)>;
-    void setCommandSink(std::function<bool(const QString&, CommandReply)> sink);
-    // Encoding-only observers cannot dispatch requests that need a radio reply.
-    void setCommandSink(std::function<void(const QString&)> sink);
     // Primary keying verbs use an operation-fenced writer, never the generic
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
@@ -244,8 +243,6 @@ private:
     quint64 m_nicknameSession{0};
     quint64 m_nicknameRequest{0};
     quint64 m_nicknameAppliedRequest{0};
-    // Nickname status only; info replies populate RadioModel separately.
-    quint64 m_nicknameStatusRevision{0};
     std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
     std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;

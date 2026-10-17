@@ -191,16 +191,15 @@ ReceiveDispatch FlexBackend::requestRadioNickname(const QString& nickname,
     const QPointer<FlexBackend> self(this);
     const quint64 session = m_nicknameSession;
     const quint64 request = ++m_nicknameRequest;
-    const quint64 statusRevision = m_nicknameStatusRevision;
     const bool dispatched = m_sink(command,
-        [self, session, request, statusRevision, sanitized, completion = std::move(completion)]
+        [self, session, request, sanitized, completion = std::move(completion)]
         (int code, const QString&) {
             const bool current = self && session == self->m_nicknameSession;
             const bool accepted = current && code == 0;
             // SmartSDR 4.3.16 confirms identity writes with R|0 but no status echo.
-            // A newer reply or nickname status remains authoritative.
-            if (accepted && request > self->m_nicknameAppliedRequest
-                && statusRevision == self->m_nicknameStatusRevision) {
+            // A full radio status before this reply can still carry the old name.
+            // Status received after confirmation continues to update the model.
+            if (accepted && request > self->m_nicknameAppliedRequest) {
                 self->m_nicknameAppliedRequest = request;
                 RadioDelta delta;
                 delta.nickname = sanitized;
@@ -1694,9 +1693,6 @@ void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
     carry(kvs, "slices", d.slicesAvailable);
     carry(kvs, "callsign", d.callsign);
     carry(kvs, "nickname", d.nickname);
-    if (d.nickname) {
-        ++m_nicknameStatusRevision;
-    }
     carry(kvs, "region", d.region);
     carry(kvs, "radio_options", d.radioOptions);
     carry(kvs, "bands", d.bandsRaw);   // optional radio-declared bands (gateway/non-Flex); validated in RadioModel
