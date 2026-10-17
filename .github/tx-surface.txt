@@ -1,0 +1,40 @@
+# The transmit surface. Principle VI: AetherSDR never transmits without
+# operator intent. A PR whose diff reaches anything listed here must say so:
+# tools/check_tx_surface.py fails Static checks until the PR adds
+# .github/tx-acks/<PR number>.md stating what changes on the TX path and how it
+# was verified. That directory is owned by @aethersdr/reviewers, so any code
+# owner's approval covers it. See GOVERNANCE.md §Transmit-path changes.
+#
+# This list is Tier 1: shrinking it is how the gate would be bypassed, so the
+# diff to this file is the review signal, the same as .github/ci-test-gate.txt.
+#
+# Two kinds of entry, one per line, `kind<space>regex`, trailing `# reason`
+# not parsed:
+#   path   — Python regex matched against the repo-relative path of any file
+#            the PR changes in a line that is not comment-only. The whole
+#            file is TX machinery.
+#   token  — Python regex searched in every added or removed line under src/
+#            that is not comment-only. The token is TX machinery wherever it
+#            appears, including inside RadioModel.cpp and MainWindow*.cpp,
+#            which are too large to gate by path.
+#
+# Comment-only lines never trigger either kind: a reworded comment is not a
+# keying change. A user-visible string that merely names a token is not one
+# either, which is why the env-var entry matches the read, not the name.
+
+path   ^src/models/TxController\.(h|cpp)$                # the TX permission object
+path   ^src/core/TxCoordinator\.(h|cpp)$                 # arbitration between TX producers
+path   ^src/models/RadioModel_TxCoordinator\.cpp$        # RadioModel's half of the coordinator
+path   ^src/core/backends/flex/FlexPttWireSession\.(h|cpp)$  # writes `xmit 1` / `xmit 0`
+path   ^src/core/TxKeyingMarker\.h$                      # which controls key, and the bridge's refusal
+
+token  "xmit\b                                          # Flex MOX on the wire
+token  "transmit tune\b                                 # Flex TUNE carrier
+token  "atu start\b                                     # ATU tune keys a carrier
+token  \bcwx (macro )?send\b                            # CWX keys CW
+token  \bsetKeying\b                                    # IRadioBackend keying entry point
+token  \b(setMox|setPtt|requestMox)\b                   # backend and model keying
+token  \b(markTxKeying|registerTxKeyingAction|registerReceiveControlAction)\b  # keying-control registration
+token  \b(transmitControlMatch|requiresTxPermission)\b  # keyboard and bridge TX guards
+token  \b(qEnvironmentVariable\w*|qgetenv|getenv)\(\s*"AETHER_AUTOMATION_ALLOW_TX"  # reading the bridge's TX opt-in
+token  \bm_txAllowed\b                                # the bridge's cached TX opt-in

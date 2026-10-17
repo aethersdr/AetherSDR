@@ -151,6 +151,12 @@ docs/                        @aethersdr/reviewers
 resources/                   @aethersdr/reviewers
 tests/                       @aethersdr/reviewers
 
+# Transmit-path acknowledgements (Principle VI, tools/check_tx_surface.py). A PR
+# whose diff reaches .github/tx-surface.txt adds .github/tx-acks/<PR>.md; any
+# code owner's approval covers it, so the directory is Tier 3. Its files are
+# markdown, so like docs/ this line must sit below the *.md glob.
+.github/tx-acks/             @aethersdr/reviewers
+
 # AI-instruction files. AGENTS.md / CLAUDE.md / GEMINI.md /
 # .github/copilot-instructions.md all land here via the *.md glob above —
 # they are listed in the Tier 2 header comment rather than repeated as
@@ -252,6 +258,10 @@ SECURITY*                    @aethersdr/maintainers
 # diff rather than one more "rides along" step in ci.yml (which is Tier 2).
 # See tools/check_ci_test_gate.py.
 .github/ci-test-gate.txt     @aethersdr/maintainers
+# The transmit surface that tools/check_tx_surface.py gates on. Tier 1 for
+# the same reason: shrinking it is how a keying change would slip past the
+# TX acknowledgement, so the diff to it is the review signal.
+.github/tx-surface.txt       @aethersdr/maintainers
 .github/codeql/              @aethersdr/maintainers
 docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
 

@@ -343,6 +343,22 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/check_ci_test_gate.py --strict
 
+      # ── Transmit-path acknowledgement (Principle VI). Keying code is spread
+      # across Tier-3 files too large to gate by path (RadioModel.cpp,
+      # MainWindow*.cpp, every backend), so this gates on what the diff does:
+      # a PR whose non-comment lines reach .github/tx-surface.txt must add
+      # .github/tx-acks/<PR>.md saying what changes on the TX path and how it
+      # was verified. The checkout is the merge ref, so HEAD^1 is the base.
+      - name: Transmit-path acknowledgement
+        if: ${{ !cancelled() }}
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python tools/check_tx_surface.py --base HEAD^1 --pr "$PR_NUMBER"
+
+      - name: Transmit-path checker self-test
+        if: ${{ !cancelled() }}
+        run: python tools/test_check_tx_surface.py
+
       # ── Network transfer-timeout ratchet (#4688 §6). A QNetworkAccessManager
       # with no transfer timeout turns a half-open connection into a reply that
       # never finishes and never errors — the surface that issued it just stops,

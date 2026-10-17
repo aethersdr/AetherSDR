@@ -319,6 +319,10 @@ runs in Docker image `ghcr.io/aethersdr/aethersdr-ci:latest`; a new
 `find_package(...)` needs its `-dev` package in `.github/docker/Dockerfile`.
 Test registration, the frozen per-PR test gate, and gate integrity:
 [`docs/agents/tests-ci.md`](docs/agents/tests-ci.md).
+A PR whose code reaches `.github/tx-surface.txt` (keying commands, keying entry
+points, TX permission guards) must add `.github/tx-acks/<PR number>.md` stating
+what changes on the TX path and how it was verified — Static checks fails
+without it (GOVERNANCE.md §Transmit-path changes, Principle VI).
 
 ## Architecture Overview
 

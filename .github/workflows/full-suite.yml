@@ -30,9 +30,13 @@ on:
 # `github.run_id` in the group, which gave every run a group of its own and
 # made the whole thing inert — the same behaviour, reached confusingly.
 
+# actions: read and pull-requests: read are for the tracking issue's
+# attribution lines (the parent commit's verdict, the commit's source PR).
 permissions:
   contents: read
   issues: write
+  actions: read
+  pull-requests: read
 
 jobs:
   full-suite:
@@ -318,12 +322,52 @@ jobs:
             const createLabels = [...labels, 'bug', 'priority: high'];
             const sha    = context.sha.substring(0, 7);
             const date   = new Date().toISOString().split('T')[0];
+            const repo   = { owner: context.repo.owner, repo: context.repo.repo };
+
+            // Attribution, so a human can decide fix-forward vs revert from the
+            // issue alone (docs/PR-WORKFLOW.md §Recovering from a red main).
+            // Squash merges make the pushed commit the suspect, unless main was
+            // already red one commit earlier. Neither lookup may stop the issue
+            // from being filed, so each degrades to "unknown".
+            let sourcePr = 'unknown';
+            try {
+              const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                ...repo, commit_sha: context.sha,
+              });
+              const pr = prs.data.find(p => p.merged_at) || prs.data[0];
+              sourcePr = pr ? `#${pr.number} by @${pr.user.login}` : 'none (direct push)';
+            } catch (e) {
+              core.warning(`source PR lookup failed: ${e.message}`);
+            }
+            let parentVerdict = 'unknown';
+            try {
+              const commit = await github.rest.repos.getCommit({ ...repo, ref: context.sha });
+              const parent = commit.data.parents[0]?.sha;
+              if (parent) {
+                const runs = await github.rest.actions.listWorkflowRuns({
+                  ...repo, workflow_id: 'full-suite.yml', head_sha: parent, per_page: 10,
+                });
+                const done = runs.data.workflow_runs.find(r => r.status === 'completed');
+                const p7 = parent.substring(0, 7);
+                parentVerdict =
+                  !done                          ? `no completed run for parent \`${p7}\``
+                  : done.conclusion === 'success' ? `green at parent \`${p7}\` — this commit is the first red one`
+                  : `already ${done.conclusion} at parent \`${p7}\` (${done.html_url}) — look earlier`;
+              }
+            } catch (e) {
+              core.warning(`parent verdict lookup failed: ${e.message}`);
+            }
 
             const body = [
               `**Run:** ${process.env.RUN_URL}`,
               `**Commit:** \`${sha}\``,
+              `**Source PR:** ${sourcePr}`,
+              `**Main before this commit:** ${parentVerdict}`,
               `**Date:** ${date}`,
               `**Failed:** ${process.env.FAILED}`,
+              '',
+              'Before reverting, check the failing tests against the known-flake umbrella #4703 ' +
+                'and re-run once; a revert is a human call (docs/PR-WORKFLOW.md §Recovering from a red main).',
               '',
               '<details><summary>ctest report</summary>',
               '',

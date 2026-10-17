@@ -202,6 +202,27 @@ review from someone else. The Tier-1 paths are hard gates: no merge without
 maintainer sign-off (an admin override is the only bypass). Team rosters live
 in the GitHub org; `.github/CODEOWNERS` carries the exact patterns.
 
+### Transmit-path changes
+
+CODEOWNERS routes review by path, but the code that keys the transmitter is
+spread through Tier-3 files too large to gate that way (`RadioModel.cpp`,
+`MainWindow*.cpp`, every backend). A keying change there would otherwise
+arrive looking like any other source change. Principle VI makes this the one
+place where review is routed by **what a diff does**, not where it lands:
+
+- `.github/tx-surface.txt` lists the transmit surface: files that are wholly
+  TX machinery, and tokens (wire commands, keying entry points, TX permission
+  guards) that are TX machinery wherever they appear.
+- When a PR's added or removed lines under `src/` reach that surface, Static
+  checks fails until the PR adds `.github/tx-acks/<PR number>.md` stating what
+  changes on the transmit path and how it was verified. Comment-only lines
+  never trigger it.
+- Any code owner (`@aethersdr/reviewers`) can approve the acknowledgement. Its
+  value is that the approval covers an explicit TX disclosure, and stale-review
+  dismissal makes it cover the head that merges.
+- The surface list itself is Tier 1. Growing it is routine; shrinking it is
+  how a keying change would slip through, so that diff needs the maintainer.
+
 ---
 
 ## AI Contributors
