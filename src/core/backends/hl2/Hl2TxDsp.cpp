@@ -679,8 +679,8 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     // PRE-modulation level: this is what a mic-gain control acts on, so it is
     // the number that tells an operator whether they are overdriving.
     emit micPeak(peak > 0.0f ? 20.0f * std::log10(peak) : -140.0f);
-    // POST-ALC level, which is a different question and needs its own meter:
-    // how close to full modulation the signal reaching the wire actually is.
+    // POST-ALC audio peak, before the modulator: it sits at the ALC target while
+    // the ALC reduces. The envelope of the modulated IQ is not measured here.
     emit alcPeak(postAlcPeak > 0.0f ? 20.0f * std::log10(postAlcPeak) : -140.0f);
 }
 

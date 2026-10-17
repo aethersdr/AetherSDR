@@ -365,7 +365,7 @@ signals:
 
     // Emitted when the external Hardware ALC RCA voltage changes (dBFS).
     void hwAlcChanged(float dbfs);
-    // Emitted when the post-software-ALC SSB-peak meter changes (dBFS).
+    // Emitted when the post-software-ALC peak meter changes (dBFS).
     // Retained for normalized consumers such as TCI.
     void swAlcChanged(float dbfs);
     // Emitted when the ALC's applied GAIN changes (dB, 0 = unity), and when it
