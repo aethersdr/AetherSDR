@@ -6608,6 +6608,18 @@ target_link_libraries(radio_connection_session_test PRIVATE aethercore Qt6::Core
 set_target_properties(radio_connection_session_test PROPERTIES AUTOMOC ON)
 add_test(NAME radio_connection_session_test COMMAND radio_connection_session_test)
 
+# Opt-in Qt transport diagnostic: binds only localhost TCP on an ephemeral
+# port; no radio discovery or hardware. Disabled in the default test graph.
+option(AETHER_ENABLE_FLEX_RETRY_SOCKET_TEST "Build localhost Flex TCP retry diagnostic" OFF)
+if(AETHER_ENABLE_FLEX_RETRY_SOCKET_TEST)
+    add_executable(radio_connection_retry_test tests/radio_connection_retry_test.cpp)
+    target_include_directories(radio_connection_retry_test PRIVATE src)
+    target_link_libraries(radio_connection_retry_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+    set_target_properties(radio_connection_retry_test PROPERTIES AUTOMOC ON)
+    add_test(NAME radio_connection_retry_test COMMAND radio_connection_retry_test)
+    set_tests_properties(radio_connection_retry_test PROPERTIES TIMEOUT 120)
+endif()
+
 add_executable(flex_backend_lifecycle_test tests/flex_backend_lifecycle_test.cpp)
 target_include_directories(flex_backend_lifecycle_test PRIVATE src)
 target_link_libraries(flex_backend_lifecycle_test PRIVATE aethercore Qt6::Core)

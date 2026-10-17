@@ -166,6 +166,7 @@ These options are for development and qualification.
 | Option | Default | Purpose and prerequisites |
 |---|---|---|
 | `RADE_WAV_TAP` | OFF | Write diagnostic WAV files at RADE transmit tap points when RADE is built. Output directory: `RADE_TAP_DIR`. |
+| `AETHER_ENABLE_FLEX_RETRY_SOCKET_TEST` | OFF | Build/register the Flex TCP retry diagnostic. Uses an ephemeral localhost TCP listener to check recovery after source-bound connection refusal; no radio is required. |
 | `AETHER_ENABLE_HL2_RECEIVER_CHURN_TEST` | OFF | Build/register the fake-EP6 receiver-churn test used by sanitizer runs. |
 | `AETHER_ENABLE_HL2_TX_LOOPBACK_TEST` | OFF | Build/register HL2 transmit-loopback and DSP-readback tests against an external `hpsdrsim` peer. The loopback test keys the simulated transmitter; a missing simulator produces a skip. |
 | `AETHER_ENABLE_HL2_SIGNAL_STOP_TEST` | OFF | Build the HL2 signal-stop child process. The loopback-UDP process test is registered on non-Windows hosts with Python 3. |

@@ -150,7 +150,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/RadioConnection.cpp",
-          "line": 607,
+          "line": 624,
           "text": "RadioConnection: socket error:"
         }
       ]
@@ -188,7 +188,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/RadioConnection.cpp",
-          "line": 668,
+          "line": 685,
           "text": "qCDebug(lcConnection) << \"RX:\" << line;"
         },
         {
