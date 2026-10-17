@@ -1,3 +1,4 @@
+#include "TestSettingsProfile.h"
 #include "gui/Kpa500AdvancedWidget.h"
 #include "core/Kpa500Connection.h"
 #include <QBuffer>
@@ -286,5 +287,15 @@ private slots:
     }
 };
 } // namespace AetherSDR
-QTEST_MAIN(AetherSDR::Kpa500AdvancedWidgetTest)
+int main(int argc, char* argv[])
+{
+    // File pickers must not enumerate the user's Documents folder in headless tests.
+    TestSettingsProfile profile(QStringLiteral("kpa500-advanced-widget-test"));
+    if (!profile.isValid()) {
+        return 1;
+    }
+    QApplication app(argc, argv);
+    AetherSDR::Kpa500AdvancedWidgetTest test;
+    return QTest::qExec(&test, argc, argv);
+}
 #include "kpa500_advanced_widget_test.moc"
