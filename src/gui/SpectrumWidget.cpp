@@ -5183,8 +5183,9 @@ void SpectrumWidget::updateWaterfallMsPerRowFromHistory()
         // The lock keeps per-row jitter off the scale (#106). It is not final:
         // an estimate that has settled away from the visible value replaces it
         // (WaterfallTimeScaleLock.h). Fallback and TX rows are paced from
-        // m_wfMsPerRow itself, so they never drive a re-lock: a radio with no
-        // native tiles never re-locks, and any pan waits while keyed.
+        // m_wfMsPerRow itself, so re-locking waits while fallback or TX pacing
+        // is active. Backend-derived rows delivered by updateWaterfallRow()
+        // use the independent row cadence, just like Flex tiles.
         const bool rowsPacedByScale = m_transmitting || m_waterfallFallbackActive;
         WaterfallTimeScaleLock lock{m_wfTimeScaleLocked, m_wfTimeScaleDriftSamples};
         const bool adopt = waterfallTimeScaleShouldAdopt(
