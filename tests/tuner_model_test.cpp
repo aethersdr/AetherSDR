@@ -11,6 +11,15 @@
 #include <QStringList>
 #include <cstdio>
 
+namespace AetherSDR {
+struct PeripheralConnectionTestAccess {
+    static void makeReady(TgxlConnection& connection)
+    {
+        connection.m_connected = true; // inert transport: no connection or peer
+    }
+};
+}
+
 using namespace AetherSDR;
 
 static int g_failures = 0;
@@ -132,6 +141,23 @@ int main(int argc, char** argv)
         t.autoTune();                                      // no direct conn → relay intent
         CHECK(at.count() == 1);
         CHECK(direct.count() == 0);   // relayed start never reports a direct tune
+    }
+
+    // A ready direct transport emits the start edge once; abort never re-arms.
+    {
+        TgxlConnection direct;
+        PeripheralConnectionTestAccess::makeReady(direct);
+        TunerModel t;
+        t.setDirectConnection(&direct);
+        QSignalSpy started(&t, &TunerModel::directAutotuneStarted);
+        QSignalSpy relayed(&t, &TunerModel::autotuneRequested);
+        t.autoTune();
+        CHECK(started.count() == 1 && relayed.count() == 0);
+        TunerDelta tuning;
+        tuning.tuning = true;
+        t.applyChanges(tuning);
+        t.abortTune();
+        CHECK(started.count() == 1 && relayed.count() == 0);
     }
 
     // ---- OPERATE / BYPASS on a TGXL reached by manual IP only REFUSE ALOUD ----

@@ -196,7 +196,7 @@ the title bar, just left of the **PC Audio** button. It counts each key-down
 from 0:00, holds the final time for 15 seconds after you unkey and then fades
 out. It runs for any transmission you key yourself (MOX, PTT, footswitch, VOX,
 including digital modes keyed with MOX) and never for CW, TUNE/ATU, a TGXL
-autotune, or TCI and DAX transmissions from other programs.
+autotune, or transmissions keyed by other programs through TCI, DAX or CAT.
 
 The audio controls stay in place as the timer appears and fades. In minimal mode, the hidden timer reserves no space.
 

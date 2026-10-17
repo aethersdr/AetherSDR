@@ -68,6 +68,28 @@ int main(int argc, char** argv)
         m.transmitModel().setTransmitting(false);
     }
 
+    {   // An ATU tag survives a late, unkeyed tuning edge.
+        RadioModel m;
+        m.tunerModel().setHandle(QStringLiteral("0x1234"));
+        tunerState(m, true, true);
+        m.transmitModel().noteActivePttSource(TransmitModel::PttSource::Atu);
+        tunerState(m, true, false);
+        m.transmitModel().setTransmitting(true);
+        check(!m.isOperatorTransmitting(), "ATU tag survives an unkeyed tuning edge");
+        m.transmitModel().setTransmitting(false);
+    }
+
+    {   // A new backend cannot inherit the previous tuner's arm window.
+        RadioModel m;
+        m.tunerModel().setHandle(QStringLiteral("0x1234"));
+        tunerState(m, true, false);
+        m.tunerModel().autoTune();
+        m.setBackendForTest({}, QStringLiteral("flex"));
+        m.transmitModel().setTransmitting(true);
+        check(m.isOperatorTransmitting(), "backend replacement clears the tune arm window");
+        m.transmitModel().setTransmitting(false);
+    }
+
     if (g_failures) { std::fprintf(stderr, "%d failure(s)\n", g_failures); return 1; }
     std::printf("OK\n");
     return 0;
