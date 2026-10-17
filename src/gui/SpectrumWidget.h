@@ -345,7 +345,7 @@ public:
     // at or below pass-1 mean to exclude signal peaks).  An EMA (α=0.1)
     // smooths frame-to-frame variation.  Emits autoSquelchLevelSuggested()
     // with a squelch level just above the smoothed floor.
-    void setAutoSquelchEnable(bool on);
+    void setAutoSquelchEnable(bool on, bool showFloor = true);
 
     // Margin above the EMA-smoothed noise floor for auto-squelch suggestion
     // (5-20 dB, default 10).  User-tunable via Display > SQL Margin.
@@ -995,6 +995,7 @@ signals:
     // Emitted when auto-squelch computes a new suggested level (0-100 radio units).
     // Connect to SliceModel::setSquelch and setSquelchLine to apply.
     void autoSquelchLevelSuggested(int level);
+    void autoSquelchNoiseFloorChanged(float floor);
 
     // Emitted when user clicks on an inactive slice marker.
     void sliceClicked(int sliceId);
@@ -1738,6 +1739,7 @@ private:
     bool  m_kiwiSdrSquelchMeterFloorValid{false};
     QVector<float> m_kiwiSdrSquelchMeterSamples;
     QTimer* m_squelchLineHideTimer{nullptr}; // auto-hides yellow line 3 s after enable/adjust (manual SQL only)
+    bool  m_autoSquelchFloorVisible{true};
     bool  m_autoSquelchEnabled{false};
     float m_sqlNoiseFloorDbm{-999.0f};  // auto-squelch own two-pass trimmed-mean EWMA
     // dBm above noise floor for auto-squelch suggestion (5-20, default 10)

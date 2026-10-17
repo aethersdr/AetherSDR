@@ -113,8 +113,10 @@ void recordsPerBackend()
     const RadioCapabilities flex = FlexBackend().capabilities();
     check(flex.squelchLevelScale.has_value(), "Flex publishes a squelch scale");
     if (flex.squelchLevelScale) {
-        check(*flex.squelchLevelScale == SquelchLevelScale{-160.0, 1.0, {}, true},
-              "Flex: -160 + 1*level in every mode, with Auto SQL");
+        SquelchLevelScale expected = legacyDbmSquelchScale();
+        expected.controlUnavailableModes = {"DIGU", "DIGL", "RTTY", "NT", "CW", "CWU", "CWL", "DFM"};
+        check(*flex.squelchLevelScale == expected,
+              "Flex: legacy dBm mapping with explicit unavailable control modes");
     }
 
     const RadioCapabilities hl2caps = hl2::Hl2Backend().capabilities();

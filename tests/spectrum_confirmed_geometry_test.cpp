@@ -1,5 +1,6 @@
 // Opt-in real-widget test: no sockets, radio, USB, or synthetic firmware peer.
 #include "TestSettingsProfile.h"
+#include "FlexSquelchBridgeFixture.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/VfoWidget.h"
 #include "gui/SpectrumOverlayMenu.h"
@@ -17,6 +18,7 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QThread>
+#include <QTimer>
 #include <QSlider>
 #include <QPushButton>
 #include <cmath>
@@ -26,6 +28,20 @@ using namespace AetherSDR;
 
 namespace AetherSDR {
 struct SpectrumOffscreenTestAccess {
+    static QImage sqlImage(SpectrumWidget& widget) {
+        QImage image(800, 300, QImage::Format_ARGB32);
+        image.fill(Qt::black);
+        QPainter painter(&image);
+        widget.drawSquelchLine(painter, image.rect());
+        widget.drawAutoSqlFloor(painter, image.rect());
+        return image;
+    }
+    static bool sqlHideTimerActive(const SpectrumWidget& widget) {
+        return widget.m_squelchLineHideTimer->isActive();
+    }
+    static void sqlBins(SpectrumWidget& widget) {
+        widget.updateAutoSquelchFromBins(QVector<float>(256, -110.0f));
+    }
     static void release(SpectrumWidget& widget, DbmRangeTransition::Range old,
                         DbmRangeTransition::Range target, quint64 generation) {
         widget.m_refLevel = target.maxDbm;
@@ -121,11 +137,52 @@ int main(int argc, char** argv)
 {
     TestSettingsProfile profile("spectrum-confirmed-geometry");
     QApplication app(argc, argv);
+    if (app.arguments().contains(QStringLiteral("--flex-squelch-bridge-fixture"))) {
+        return runFlexSquelchBridgeFixture(app);
+    }
     int failures = 0;
     const auto check = [&](bool ok, const char* name) {
         std::printf("[%s] %s\n", ok ? "OK" : "FAIL", name);
         failures += !ok;
     };
+    {
+        SpectrumWidget sql;
+        sql.setSquelchScale(legacyDbmSquelchScale());
+        sql.setAutoSquelchEnable(true);
+        sql.setSquelchLine(true, 60);
+        int suggestions = 0;
+        QObject::connect(&sql, &SpectrumWidget::autoSquelchLevelSuggested,
+                         &sql, [&](int) { ++suggestions; });
+        SpectrumOffscreenTestAccess::sqlBins(sql);
+        QImage empty(800, 300, QImage::Format_ARGB32);
+        empty.fill(Qt::black);
+        check(SpectrumOffscreenTestAccess::sqlImage(sql) != empty,
+              "Auto produces visible SQL/floor lines before disable");
+        check(suggestions > 0, "eligible Auto produces threshold suggestions");
+        sql.setSquelchLine(false, 0);
+        sql.setAutoSquelchEnable(true, false);
+        check(SpectrumOffscreenTestAccess::sqlImage(sql) == empty,
+              "background same-pan estimator hides floor for selected non-Auto slice");
+        sql.setSquelchLine(true, 60);
+        check(SpectrumOffscreenTestAccess::sqlHideTimerActive(sql),
+              "manual line retains its hide timer while a background slice runs Auto");
+        sql.setAutoSquelchEnable(false);
+        check(SpectrumOffscreenTestAccess::sqlImage(sql) == empty,
+              "Auto disable clears both lines immediately without another FFT");
+        const int before = suggestions;
+        SpectrumOffscreenTestAccess::sqlBins(sql);
+        check(suggestions == before, "disabled Auto produces no suggestions");
+        sql.setAutoSquelchEnable(true);
+        sql.setSquelchLine(true, 60);
+        SpectrumOffscreenTestAccess::sqlBins(sql);
+        sql.setSquelchScale(std::nullopt);
+        sql.setSquelchLine(true, 69);
+        check(SpectrumOffscreenTestAccess::sqlImage(sql) == empty,
+              "unavailable scale blocks late threshold status and clears floor");
+        const int unavailable = suggestions;
+        SpectrumOffscreenTestAccess::sqlBins(sql);
+        check(suggestions == unavailable, "unavailable scale stops estimator");
+    }
     // Deterministic replay of the captured decode-before-release / ingest-after-
     // release ordering, including both shifts and a span change. The production
     // widget must correct inputs before smoothing and keep late apertures valid.

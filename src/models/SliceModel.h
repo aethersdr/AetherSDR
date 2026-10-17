@@ -170,12 +170,23 @@ public:
                                       ? m_externalReceiveAudioMute
                                       : m_audioMute; }
     bool    flexAudioMute() const { return m_audioMute; }
-    // Only inbound reports establish current-session truth; local setters do not.
+    // Display-owned Auto intent is local to this receiver's lifetime. It is
+    // separate from engine-owned Auto and never replays radio state on reconnect.
+    bool restoreManualSquelchAfterMode() const { return m_restoreManualSquelchAfterMode; }
+    void setRestoreManualSquelchAfterMode(bool restore);
+    void restoreManualSquelchAfterModeChange();
+    bool displayAutoSquelch() const { return m_displayAutoSquelch; }
+    std::optional<int> displayAutoSquelchMarginDb() const { return m_displayAutoSquelchMarginDb; }
+    void setDisplayAutoSquelch(bool enabled);
+    void setDisplayAutoSquelchMarginDb(int marginDb);
+    void applyDisplayAutoSquelchLevel(int level);
+
     bool automaticSquelch() const { return m_automaticSquelch; }
     int automaticSquelchMarginDb() const { return m_automaticSquelchMarginDb; }
     void setAutomaticSquelch(bool enabled, int marginDb);
+    // Only inbound reports establish current-session truth; local setters do not.
     bool squelchStateKnown() const { return m_squelchOnKnown && m_squelchLevelKnown; }
-    void invalidateSquelchState() { m_squelchOnKnown = false; m_squelchLevelKnown = false; }
+    void invalidateSquelchState() { m_squelchOnKnown = false; m_squelchLevelKnown = false; setRestoreManualSquelchAfterMode(false); m_squelchRecoveryAwaitingModeReport = false; setDisplayAutoSquelch(false); }
     bool    squelchOn()   const { return m_squelchOn; }
     bool    flexSquelchOn() const { return m_squelchOn; }
     bool    receiveSquelchOn() const { return m_externalReceiveAudioReplacement
@@ -523,6 +534,7 @@ signals:
     void externalReceiveAgcOffLevelChanged(int value);
     void externalReceiveAutoSquelchChanged(bool on);
     void externalReceiveReplacementChanged(bool active);
+    void displayAutoSquelchChanged();
     void squelchChanged(bool on, int level);
     void wfmDeemphasisChanged(int microseconds);
     void wfmForceMonoChanged(bool forceMono);
@@ -728,6 +740,13 @@ private:
     QString m_agcMode{"med"};
     int     m_agcThreshold{65};
     int     m_agcOffLevel{10};
+    bool m_restoreManualSquelchAfterMode{false};
+    bool m_manualSquelchRestoreSent{false};
+    QString m_manualSquelchRestoreMode;
+    bool m_squelchRecoveryAwaitingModeReport{false};
+    bool m_displayAutoSquelch{false};
+    std::optional<int> m_displayAutoSquelchMarginDb;
+    std::optional<int> m_displayAutoSquelchLevel;
     bool m_automaticSquelch{false};
     int m_automaticSquelchMarginDb{10};
     bool m_squelchOnKnown{false};

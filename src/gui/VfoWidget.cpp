@@ -4911,8 +4911,12 @@ void VfoWidget::setSlice(SliceModel* slice)
         // Digital/RTTY: audio feeds external decoders via DAX, SQL not meaningful
         //   and gates weak FSK signals (#2504)
         // CW: radio locks squelch on at fixed level, rejects changes
+        const RadioCapabilities sqlCaps = m_radioModel ? m_radioModel->backendCapabilities()
+                                                   : RadioCapabilities{};
         const bool sqlDisabled = !ModeFilters::squelchAvailableInMode(mode,
-            m_exclusiveSquelch ? &*m_exclusiveSquelch : nullptr,
+            m_radioModel && m_radioModel->isConnected()
+                ? (sqlCaps.squelchLevelScale ? &*sqlCaps.squelchLevelScale : nullptr)
+                : (m_exclusiveSquelch ? &*m_exclusiveSquelch : nullptr),
             m_radioModel && m_radioModel->isConnected()
                 && m_radioModel->backendCapabilities().hasModeIndependentSquelch,
             m_slice && m_slice->externalReceiveReplacementActive());
@@ -4920,19 +4924,22 @@ void VfoWidget::setSlice(SliceModel* slice)
         m_sqlSlider->setEnabled(!sqlDisabled);
         if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
         if (sqlDisabled && m_slice) {
-            // Only digital/RTTY modes get a client-side squelch-off override
-            // (#2504). CW/CWL squelch is radio-managed — no client push, so no
-            // "save" either, or the unpaired flag would fabricate a restore on
-            // the next mode change (#3263).
-            if (m_slice->receiveSquelchOn() && (isDig || isRtty)) {
-                m_savedSquelchOn = true;
+            m_slice->setSquelchEchoIsManual(false);
+            // CW keeps native SQL untouched while Auto's manual provenance
+            // survives the unavailable visit on the slice, independent of focus.
+            if (m_slice->displayAutoSquelch()) {
+                m_slice->setRestoreManualSquelchAfterMode(true);
+            }
+            if ((m_slice->receiveSquelchOn() || m_slice->displayAutoSquelch())
+                && (isDig || isRtty || mode == "DFM")) {
+                m_slice->setRestoreManualSquelchAfterMode(true);
                 m_slice->setSquelch(false, m_slice->receiveSquelchLevel());
                 QSignalBlocker sb(m_sqlBtn);
                 m_sqlBtn->setChecked(false);
             }
-        } else if (!sqlDisabled && m_slice && m_savedSquelchOn) {
-            m_savedSquelchOn = false;
-            m_slice->setSquelch(true, m_slice->receiveSquelchLevel());
+        } else if (!sqlDisabled && m_slice && !m_slice->externalReceiveReplacementActive()
+            && m_slice->restoreManualSquelchAfterMode()) {
+            m_slice->restoreManualSquelchAfterModeChange();
             QSignalBlocker sb(m_sqlBtn);
             m_sqlBtn->setChecked(true);
         }
@@ -5549,8 +5556,12 @@ void VfoWidget::syncFromSlice()
     m_fmContainer->setVisible(isFm);
     m_fmToneContainer->setVisible(hasToneControls);
     // CW: radio locks squelch on at fixed level; Digital: not meaningful
+    const RadioCapabilities sqlCaps = m_radioModel ? m_radioModel->backendCapabilities()
+                                               : RadioCapabilities{};
     const bool squelchAvailable = ModeFilters::squelchAvailableInMode(m_slice->mode(),
-        m_exclusiveSquelch ? &*m_exclusiveSquelch : nullptr,
+        m_radioModel && m_radioModel->isConnected()
+                ? (sqlCaps.squelchLevelScale ? &*sqlCaps.squelchLevelScale : nullptr)
+                : (m_exclusiveSquelch ? &*m_exclusiveSquelch : nullptr),
         m_radioModel && m_radioModel->isConnected()
             && m_radioModel->backendCapabilities().hasModeIndependentSquelch,
         m_slice->externalReceiveReplacementActive());
@@ -6830,7 +6841,7 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
                 return !exclusiveSquelchScale(caps.squelchLevelScale);
             }
             return ModeFilters::squelchAvailableInMode(m_slice->mode(),
-                connected ? exclusiveSquelchScale(caps.squelchLevelScale) : nullptr,
+                connected && caps.squelchLevelScale ? &*caps.squelchLevelScale : nullptr,
                 connected && caps.hasModeIndependentSquelch,
                 m_slice->externalReceiveReplacementActive());
         };

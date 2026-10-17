@@ -120,6 +120,14 @@ manual/Auto state in its accepted receiver configuration (`RtlSlices`);
 existing `requestSliceSquelch` path carries both manual and Automatic requests
 through the confirmed transaction. Other families leave `modesExclusive` and
 `automaticInEngine` false, preserving the #2504 mode rule and radio-owned state.
+`controlUnavailableModes` lists modes where the manual control, display Auto,
+threshold line and floor line are unavailable, independently of the level-to-axis
+mapping. Flex declares DIGU/DIGL, RTTY, NT, DFM and CW/CWU/CWL. RADE uses its
+underlying DIGU/DIGL mode. An empty list retains the existing mode policy,
+including native mode-independent manual SQL on supported Icom profiles.
+DFM is excluded because digital voice gates on synchronization, rather than
+an analog audio threshold.
+
 The record grants no headless squelch verb or calibrated-power claim.
 
 ### Receive capture placement
@@ -646,7 +654,7 @@ and conflating them would hide one of them.
 | `dbmAxisIsCalibrated()` (`panAmplitude->calibratedDbm`) | ✅ (absent) | ❌ | ✅ (absent) | ❌ | Do the numbers on that axis mean absolute dBm at the antenna? |
 | `panBinsAbsolute()` (`panAmplitude->binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ✅ | Do the spectrum bins hold still while the reference level moves? |
 | `clientPersistsDbmRange()` (`panAmplitude->clientPersistsDbmRange`, with `binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ❌ (declared false) | May the client store and restore the dBm range the operator sets? RTL: ❌ (declared false). Sim: ❌ (absent) |
-| `squelchLevelScale` | −160 + 1·L, all modes, Auto SQL | −119 + 0.7·L, AM/SAM/DSB/LSB/USB, no Auto SQL | IC-7300MK2: −194.8 + 1.49·L on the pan, USB/LSB/CW/CWU/CWL/AM/DIGU/DIGL, no Auto SQL (measured, #6180); Flex's for every other Icom | Flex's (no measured map) | Where does squelch level L open, on this axis? |
+| `squelchLevelScale` | −160 + 1·L, eligible voice modes, display Auto SQL | −119 + 0.7·L, AM/SAM/DSB/LSB/USB, no Auto SQL | IC-7300MK2: −194.8 + 1.49·L on the pan, USB/LSB/CW/CWU/CWL/AM/DIGU/DIGL, no Auto SQL (measured, #6180); Flex's for every other Icom | Flex's (no measured map) | Where does squelch level L open, on this axis? |
 
 **`squelchLevelScale` draws the SQL line and drives Auto SQL** (#6092).
 The demo keeps Flex's scale. RTL-SDR publishes its own gate, −120 + 1.2·L dBFS/2048-bin in FM/FM-N, with engine-owned Auto and no display line (see Native squelch above). For display-driven Auto, an absent record or an unlisted mode means no line, and the SQL button

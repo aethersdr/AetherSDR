@@ -2538,6 +2538,9 @@ if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
     # source set so the test uses the same configured desktop implementation.
     get_target_property(_spectrum_gesture_sources AetherSDR SOURCES)
     list(REMOVE_ITEM _spectrum_gesture_sources src/main.cpp)
+    # Manual --flex-squelch-bridge-fixture starts the app's own QLocalServer
+    # and discovery listener with injected normalized state, never a radio peer.
+    # The registered CTest path remains socket-free.
     add_executable(spectrum_confirmed_geometry_test
         tests/spectrum_confirmed_geometry_test.cpp ${_spectrum_gesture_sources})
     target_include_directories(spectrum_confirmed_geometry_test PRIVATE

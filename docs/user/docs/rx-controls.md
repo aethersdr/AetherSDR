@@ -93,15 +93,34 @@ The **SQL** button cycles through three states:
 | **AUTO** | amber, labeled AUTO | A margin of **5–20 dB** above the measured panadapter noise floor (default 10 dB) |
 
 - In **AUTO**, squelch tracks the band's noise floor as it changes, opening
-  only for signals that stand the margin above it.
+  only for signals that stand the margin above it. On FlexRadio, AUTO and its
+  margin belong to each slice. Selecting another slice does not enable AUTO
+  there or stop a background AUTO slice. Each slice uses only its own
+  panadapter's noise floor; its SQL lines appear only on that panadapter.
+  When multiple slices share a panadapter, the SQL overlay follows the selected
+  slice on that pan, or the slice shown in its title while another pan is selected.
+  AUTO starts at the remembered manual threshold until that pan supplies a floor.
 - In **SQL**, a threshold line shows on the panadapter while you adjust it and
   hides itself 3 seconds after you stop.
 - Your manual level is remembered **per slice**, whichever control changes it
   (applet, VFO flag, MIDI or other controllers, the radio or another client).
   Auto tracking never overwrites it, so switching back from AUTO returns to
   your manual level.
-- Switching a slice to **RTTY** turns squelch off, because squelch breaks the
-  decode.
+- On FlexRadio, SQL and AUTO are unavailable in **DIGU, DIGL, RTTY, NT,
+  DFM and CW**. **RADE** follows its underlying DIGU/DIGL slice. Both panadapter
+  squelch lines disappear and Auto tracking stops in these modes, including
+  after incoming radio status. Data modes request SQL Off; firmware may reject
+  that request and report its fixed native state. The client still stops AUTO
+  and clears both lines. CW retains the radio's own squelch state without
+  client Auto updates. Leaving AUTO through an unavailable mode cancels AUTO;
+  returning to a supported mode restores SQL at that slice's remembered manual
+  threshold after the radio reports the returning mode. Selecting
+  another slice does not transfer or discard the pending recovery. DFM and
+  RADE use digital-voice synchronization, so an analog squelch threshold does
+  not control their decoder.
+- On Hermes-Lite 2 and Icom profiles without mode-independent squelch, the
+  existing CW, RTTY and data-mode restrictions also apply. Supported mode-independent
+  Icom profiles retain native manual SQL in those modes.
 - The squelch scale, the panadapter SQL line and Auto SQL follow each radio's
   own scale. On radios where Auto SQL is not available, a slice set to AUTO
   drops to manual at its manual level.
@@ -197,7 +216,9 @@ the client NR2 method, because the radio has no NR of its own. See [Supported Ra
 
 ## Known issues
 
-- The squelch line, or Auto squelch, can appear in CW, RTTY and digital modes, where the SQL control is disabled ([#6276](https://github.com/aethersdr/AetherSDR/issues/6276)).
+- Programmatic/manual SQL admission across CAT, TCI, controllers, automation
+  and memory recall remains under review
+  ([#6276](https://github.com/aethersdr/AetherSDR/issues/6276)).
 - Switching a slice from DIGU to USB can turn squelch on, silencing the audio until you switch it off ([#3505](https://github.com/aethersdr/AetherSDR/issues/3505)).
 
 ## Troubleshooting

@@ -4581,7 +4581,8 @@ void SpectrumWidget::setSquelchLine(bool visible, int level)
     // Manual SQL: 3 s auto-hide; each slider adjustment restarts the timer.
     // Auto SQL: line stays pinned to the tracked floor level — no timer.
     if (m_squelchLineHideTimer) {
-        if (visible && !m_autoSquelchEnabled && !m_kiwiSdrWaterfallActive) {
+        if (visible && !(m_autoSquelchEnabled && m_autoSquelchFloorVisible)
+            && !m_kiwiSdrWaterfallActive) {
             m_squelchLineHideTimer->start();
         } else if (!m_kiwiSdrWaterfallActive) {
             m_squelchLineHideTimer->stop();
@@ -4712,7 +4713,7 @@ void SpectrumWidget::drawAutoSqlFloor(QPainter& p, const QRect& specRect)
     const float floorDbm = useKiwiFloor
         ? m_kiwiSdrSquelchLiveFloorDbm
         : m_sqlNoiseFloorDbm;
-    if (!m_autoSquelchEnabled || floorDbm <= -500.0f) { return; }
+    if (!m_autoSquelchEnabled || !m_autoSquelchFloorVisible || floorDbm <= -500.0f) { return; }
     const float norm = (m_refLevel - floorDbm) / m_dynamicRange;
     const int y = specRect.top()
         + static_cast<int>(std::clamp(norm, 0.0f, 1.0f) * specRect.height());
@@ -4733,6 +4734,10 @@ void SpectrumWidget::setSquelchScale(std::optional<SquelchLevelScale> scale)
         return;
     }
     m_squelchScale = std::move(scale);
+    if (!m_squelchScale) {
+        setAutoSquelchEnable(false);
+        setSquelchLine(false, 0);
+    }
     // A new scale can mean new bin units (dBm vs RTL's dBFS/bin): restart the
     // Auto floor rather than blend one unit into the other.
     m_sqlNoiseFloorDbm = -999.0f;
@@ -4796,8 +4801,12 @@ void SpectrumWidget::drawSquelchLine(QPainter& p, const QRect& specRect)
     p.drawText(4, y - 2, label);
 }
 
-void SpectrumWidget::setAutoSquelchEnable(bool on)
+void SpectrumWidget::setAutoSquelchEnable(bool on, bool showFloor)
 {
+    if (m_autoSquelchFloorVisible != showFloor) {
+        m_autoSquelchFloorVisible = showFloor;
+        markOverlayDirty();
+    }
     if (m_autoSquelchEnabled == on) {
         return;
     }
@@ -4807,8 +4816,12 @@ void SpectrumWidget::setAutoSquelchEnable(bool on)
         m_sqlNoiseFloorDbm = -999.0f;  // cold-start the floor EWMA on enable
         m_lastAutoSquelchLevel = -1;
     }
-    if (on && m_squelchLineHideTimer) {
-        // Auto pins the line — cancel any pending manual auto-hide.
+    if (!on) {
+        m_sqlNoiseFloorDbm = -999.0f;
+        setSquelchLine(false, 0);
+        markOverlayDirty();
+    }
+    if (on && showFloor && m_squelchLineHideTimer) {
         m_squelchLineHideTimer->stop();
     }
 }
@@ -4844,6 +4857,7 @@ void SpectrumWidget::updateAutoSquelchFromBins(const QVector<float>& binsDbm)
         std::span(binsDbm.constData(), binsDbm.size()), m_sqlNoiseFloorDbm,
         m_squelchScale->offsetDb, m_squelchScale->dbPerStep, m_autoSqlMarginDb);
     if (!suggestion) { return; }
+    emit autoSquelchNoiseFloorChanged(m_sqlNoiseFloorDbm);
     const int level = *suggestion;
     if (level != m_lastAutoSquelchLevel) {
         m_lastAutoSquelchLevel = level;

@@ -754,8 +754,8 @@ private:
     SliceModel* flexRxPanSourceSlice() const;
     void syncFlexRxPanToAudioEngine();
     void syncActiveSliceSquelchLineToSpectrums();
-    // RadioCapabilities::squelchLevelScale for the active slice's mode, pushed to
-    // every SpectrumWidget and to RxApplet's Auto availability.
+    SliceModel* squelchSliceForPan(const QString& panId) const;
+    // The RX control uses the active slice's mode; each pan uses its own slice.
     std::optional<SquelchLevelScale> activeSliceSquelchScale() const;
     void syncSquelchScaleToUi();
     bool autoSquelchShouldRunOnSpectrum(const QString& panId,

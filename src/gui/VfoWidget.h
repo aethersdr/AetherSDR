@@ -592,7 +592,6 @@ private:
     QPushButton* m_sqlBtn{nullptr};
     QPointer<RxApplet> m_rxApplet;       // mirrored only while this VFO's slice is active
     QLabel*      m_sqlValueLbl{nullptr}; // captured during buildUI() for syncSqlVisuals
-    bool         m_savedSquelchOn{false};
     // Apply the current SqlMode from m_rxApplet to the VfoWidget's SQL
     // button label/style and slider range/value.  Called on rxApplet's
     // sqlModeChanged signal and once after setRxApplet().

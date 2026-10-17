@@ -225,6 +225,7 @@ void SliceModel::setMode(const QString& mode)
     }
 
     m_mode = mode;
+    m_squelchRecoveryAwaitingModeReport = true;
     const QPointer<SliceModel> alive(this);
     const quint64 modeRevision = ++m_modeIntentRevision;
     // aetherd RFC 2.3: express intent; FlexBackend builds "slice set N mode=…"
@@ -988,6 +989,71 @@ void SliceModel::setWfmDeemphasis(int microseconds)
     emit wfmDeemphasisRequested(microseconds);
 }
 
+void SliceModel::setRestoreManualSquelchAfterMode(bool restore)
+{
+    if (refuseOffThread(__func__)) { return; }
+    if (restore == m_restoreManualSquelchAfterMode
+        && (!restore || m_manualSquelchRestoreMode.isEmpty()
+            || m_manualSquelchRestoreMode == m_mode)) { return; }
+    m_restoreManualSquelchAfterMode = restore;
+    m_manualSquelchRestoreSent = false;
+    m_manualSquelchRestoreMode.clear();
+    if (restore) { m_squelchEchoIsManual = false; }
+}
+
+void SliceModel::restoreManualSquelchAfterModeChange()
+{
+    if (refuseOffThread(__func__) || !m_restoreManualSquelchAfterMode
+        || externalReceiveReplacementActive()) { return; }
+    if (m_manualSquelchRestoreSent) { return; }
+    m_manualSquelchRestoreMode = m_mode;
+    // The mode setter can be optimistic. Restore only after radio mode
+    // readback; retained Auto levels remain non-manual until recovery echoes.
+    if (m_squelchRecoveryAwaitingModeReport || m_receiveObservation.mode != m_mode) { return; }
+    m_manualSquelchRestoreSent = true;
+    // A previous mode's snapshot must not suppress either recovery field.
+    m_squelchOnKnown = false;
+    m_squelchLevelKnown = false;
+    if (!confirmsControls()) {
+        m_squelchEnableIntentPending = true;
+        m_squelchLevelIntentPending = true;
+    }
+    setSquelch(true, m_manualSquelchLevel);
+}
+
+void SliceModel::setDisplayAutoSquelch(bool enabled)
+{
+    if (refuseOffThread(__func__)) { return; }
+    if (m_displayAutoSquelch == enabled) { return; }
+    m_displayAutoSquelch = enabled;
+    m_displayAutoSquelchLevel.reset();
+    if (enabled) {
+        setRestoreManualSquelchAfterMode(false);
+        m_squelchEchoIsManual = false;
+    }
+    emit displayAutoSquelchChanged();
+}
+
+void SliceModel::setDisplayAutoSquelchMarginDb(int marginDb)
+{
+    if (refuseOffThread(__func__)) { return; }
+    marginDb = qBound(5, marginDb, 20);
+    if (m_displayAutoSquelchMarginDb == marginDb) { return; }
+    m_displayAutoSquelchMarginDb = marginDb;
+    m_displayAutoSquelchLevel.reset();
+    emit displayAutoSquelchChanged();
+}
+
+void SliceModel::applyDisplayAutoSquelchLevel(int level)
+{
+    if (refuseOffThread(__func__)) { return; }
+    if (!m_displayAutoSquelch) { return; }
+    level = qBound(1, level, 100);
+    if (m_displayAutoSquelchLevel == level) { return; }
+    m_displayAutoSquelchLevel = level;
+    setSquelch(true, level);
+}
+
 void SliceModel::setSquelch(bool on, int level)
 {
     if (refuseOffThread(__func__)) { return; }
@@ -1049,6 +1115,7 @@ void SliceModel::setAutomaticSquelch(bool enabled, int marginDb)
 
 void SliceModel::setManualSquelch(bool on, int level)
 {
+    setRestoreManualSquelchAfterMode(false);
     const QPointer<SliceModel> alive(this);
     const quint64 expectedRevision = m_squelchIntentRevision + 1;
     setSquelch(on, level);
@@ -1717,6 +1784,7 @@ void SliceModel::applyChanges(const SliceDelta& d)
     const QPointer<SliceModel> alive(this);
     const ReceiveObservation previousObservation = m_receiveObservation;
     if (d.mode) {
+        m_squelchRecoveryAwaitingModeReport = false;
         // A mode change invalidates the old mode's passband. Partial filter
         // reports may restore each edge independently, never from UI state.
         if (m_receiveObservation.mode != d.mode) {
@@ -2203,8 +2271,10 @@ void SliceModel::applyChanges(const SliceDelta& d)
         || d.automaticSquelch || d.automaticSquelchMarginDb) {
         m_squelchOnKnown |= d.squelchOn.has_value();
         m_squelchLevelKnown |= d.squelchLevel.has_value();
-        if (d.squelchOn.has_value())
+        if (d.squelchOn.has_value()) {
             m_squelchOn = *d.squelchOn;
+            if (!m_squelchOn) { setDisplayAutoSquelch(false); }
+        }
         if (d.squelchLevel.has_value()) {
             m_squelchLevel = *d.squelchLevel;
             // Adopt the echoed level as the operator's manual choice only
@@ -2219,9 +2289,15 @@ void SliceModel::applyChanges(const SliceDelta& d)
             // not a computed Auto level. Restore that memory even if the
             // attached applet already marked its echo surface Off/Auto.
             if ((m_squelchEchoIsManual || d.automaticSquelch.has_value())
-                && !m_externalReceiveAudioReplacement) {
+                && !m_restoreManualSquelchAfterMode && !m_externalReceiveAudioReplacement) {
                 setManualSquelchLevel(*d.squelchLevel);
             }
+        }
+        if (m_manualSquelchRestoreSent && m_squelchOnKnown && m_squelchLevelKnown
+            && m_squelchOn && m_receiveObservation.mode == m_manualSquelchRestoreMode
+            && m_squelchLevel == m_manualSquelchLevel) {
+            setRestoreManualSquelchAfterMode(false);
+            m_squelchEchoIsManual = true;
         }
         emit squelchChanged(m_squelchOn, m_squelchLevel);
     }
@@ -2372,6 +2448,12 @@ void SliceModel::applyChanges(const SliceDelta& d)
         emit frequencyStatusReported(m_reportedFrequency);
     }
     if (modeChanged_)   emit modeChanged(m_mode);
+    if (!alive) { return; }
+    if (m_restoreManualSquelchAfterMode && !m_manualSquelchRestoreMode.isEmpty()
+        && m_manualSquelchRestoreMode == m_mode) {
+        restoreManualSquelchAfterModeChange();
+        if (!alive) { return; }
+    }
     if (filterChanged_) emit filterChanged(m_filterLow, m_filterHigh);
     if (previousObservation != m_receiveObservation) {
         emit receiveObservationChanged();
