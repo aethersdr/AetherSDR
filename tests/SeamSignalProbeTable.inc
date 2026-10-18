@@ -16,6 +16,8 @@ AETHER_SEAM_PROBE(disconnected);
 AETHER_SEAM_PROBE(connectionError);
 AETHER_SEAM_PROBE(configurationWarning);
 AETHER_SEAM_PROBE(capabilitiesChanged);
+AETHER_SEAM_PROBE(tuneOutputSuppressionObserved);
+AETHER_SEAM_PROBE(tuneOutputSuppressionCommandFinished);
 AETHER_SEAM_PROBE(transmitFrequencyCheckChanged);
 AETHER_SEAM_PROBE(radioDialLockChanged);
 AETHER_SEAM_PROBE(linkStatsUpdated);

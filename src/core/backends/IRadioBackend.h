@@ -182,6 +182,14 @@ public:
     virtual ReceiveDispatch requestTransverter(const TransverterRequest&,
                                                const RadioSetupCompletion& = {})
     { return ReceiveDispatch::Unsupported; }
+    // This changes a radio-owned setting and never starts TUNE or keys TX.
+    virtual void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId)
+    {
+        Q_UNUSED(bandId);
+        Q_UNUSED(suppressed);
+        emit tuneOutputSuppressionCommandFinished(requestId, false,
+            QStringLiteral("This radio does not support TUNE output suppression."));
+    }
     explicit IRadioBackend(QObject* parent = nullptr) : QObject(parent)
     {
         connect(this, &IRadioBackend::connected, this, [this] {
@@ -993,6 +1001,11 @@ signals:
     void configurationWarning(const QString& message);
 
     void capabilitiesChanged();
+
+    void tuneOutputSuppressionObserved(int bandId, bool suppressed);
+    // Acceptance is not confirmation; only the observation changes live state.
+    void tuneOutputSuppressionCommandFinished(quint64 requestId, bool accepted,
+                                              const QString& reason);
 
     // Radio-authoritative state for the momentary transmit-frequency monitor.
     void transmitFrequencyCheckChanged(bool on);

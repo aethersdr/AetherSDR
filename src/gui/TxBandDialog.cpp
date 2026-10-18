@@ -1,5 +1,7 @@
 #include "TxBandDialog.h"
 
+#include "ControlAvailabilityRegistry.h"
+
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -10,6 +12,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QList>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <algorithm>
 
@@ -38,7 +41,8 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
     headerGrid->setSpacing(1);
     const QStringList headers = {"Band", "RF PWR(%)", "Tune PWR(%)", "PTT Inhibit",
                                   "ACC TX", "RCA TX Req", "ACC TX Req",
-                                  "RCA TX1", "RCA TX2", "RCA TX3", "HWALC"};
+                                  "RCA TX1", "RCA TX2", "RCA TX3", "HWALC",
+                                  "RCA off/TUNE"};
     for (int c = 0; c < headers.size(); ++c) {
         auto* lbl = new QLabel(headers[c]);
         lbl->setStyleSheet(QStringLiteral(
@@ -46,6 +50,7 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
             "font-weight: bold; background: #1a2a3a; "
             "padding: 2px 4px; }"));
         lbl->setAlignment(Qt::AlignCenter);
+        lbl->setMinimumSize(lbl->sizeHint());
         headerGrid->addWidget(lbl, 0, c);
     }
 
@@ -55,6 +60,9 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
         return;
     }
 
+    auto* availability = new ControlAvailabilityRegistry(*m_model, this);
+    connect(m_model, &RadioModel::tuneOutputControlChanged, availability,
+            &ControlAvailabilityRegistry::refreshEngaged);
     const auto& bands = m_model->txBandSettings();
     const RadioControlSession session = m_model->controlSession();
     QList<int> sortedIds = bands.keys();
@@ -136,11 +144,56 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
             });
             headerGrid->addWidget(w, row, col++);
         }
+        auto* suppression = new QCheckBox;
+        suppression->setObjectName(QStringLiteral("tuneOutputSuppressionBand%1").arg(bandId));
+        suppression->setAccessibleName(tr("Suppress RCA during TUNE, band %1").arg(b.bandName));
+        ThemeManager::instance().applyStyleSheet(suppression, kCbStyle);
+        auto* suppressionCell = new QWidget;
+        ThemeManager::instance().applyStyleSheet(suppressionCell,
+            QStringLiteral("background: {{color.background.0}};"));
+        auto* suppressionLayout = new QHBoxLayout(suppressionCell);
+        suppressionLayout->setContentsMargins(0, 0, 0, 0);
+        suppressionLayout->setAlignment(Qt::AlignCenter);
+        suppressionLayout->addWidget(suppression);
+        headerGrid->addWidget(suppressionCell, row, col);
+        availability->registerWidget(suppression,
+            tr("Requires SmartSDR 4.3 or later and this band's radio readback."),
+            [this, bandId](bool connected, const RadioCapabilities& caps) {
+                const TuneOutputControlState state = m_model->tuneOutputControl(bandId);
+                return connected && caps.tuneOutputSuppression.has_value()
+                    && state.haveValue && !state.pending;
+            }, [this, bandId] {
+                const TuneOutputControlState state = m_model->tuneOutputControl(bandId);
+                return state.haveValue && state.suppressed;
+            }, false);
+        const auto syncSuppression = [this, suppression, bandId] {
+            const TuneOutputControlState state = m_model->tuneOutputControl(bandId);
+            const QSignalBlocker blocker(suppression);
+            suppression->setChecked(state.haveValue && state.suppressed);
+            const QString description = state.reason.isEmpty()
+                ? tr("Suppress TX1, TX2 and TX3 RCA outputs during TUNE for this band. "
+                     "Normal PTT and TX REQ inputs are unchanged.")
+                : state.reason;
+            suppression->setToolTip(description);
+            suppression->setAccessibleDescription(description);
+        };
+        connect(m_model, &RadioModel::tuneOutputControlChanged, suppression, syncSuppression);
+        connect(m_model, &RadioModel::capabilitiesChanged, suppression, syncSuppression);
+        connect(suppression, &QCheckBox::clicked, this, [this, bandId, syncSuppression](bool checked) {
+            m_model->requestTuneOutputSuppression(bandId, checked);
+            syncSuppression();
+        });
+        syncSuppression();
         ++row;
     }
 
     vb->addWidget(gridContainer);
+    auto* explanation = new QLabel(tr("RCA off/TUNE: suppress TX1/TX2/TX3 keying outputs during TUNE "
+                                     "on SmartSDR 4.3 or later. ACC TX remains under Inhibit during TUNE."));
+    explanation->setWordWrap(true);
+    vb->addWidget(explanation);
     vb->addStretch();
+    setMinimumSize(minimumSize().expandedTo(minimumSizeHint()));
 }
 
 } // namespace AetherSDR

@@ -15,6 +15,13 @@
 
 namespace AetherSDR {
 
+// Radio-owned TUNE RCA output suppression, independently persisted per band.
+struct TuneOutputSuppressionControl {
+    enum class Scope { PerBand };
+    Scope scope = Scope::PerBand;
+    int maximumBandId = 255;
+};
+
 struct TxPowerBand {
     double lowHz = 0.0;
     double highHz = 0.0;
@@ -494,6 +501,7 @@ struct RadioCapabilities {
         bool tunePowerAppliesLive = false;
     };
     std::optional<TransmitDriveControl> transmitDriveControl;
+    std::optional<TuneOutputSuppressionControl> tuneOutputSuppression;
 
     // "Show TX in Waterfall" on a radio that neither stores nor echoes it.
     // Absent: `transmit set show_tx_in_waterfall=` and its status echo own the

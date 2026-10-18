@@ -84,10 +84,23 @@ their nicknames on this computer.
 
 ### RECEIVE & TRANSMIT
 
+Open **TX Band Settings** on the **Transmit** page to configure each band's
+TX outputs. On a FlexRadio with SmartSDR 4.3 or later, the **RCA off/TUNE**
+column controls all three RCA keying outputs (TX1/TX2/TX3) for the
+named band. The existing columns remain usable on newer firmware: **RCA TX1**,
+**RCA TX2** and **RCA TX3** still set which outputs are enabled for that band.
+Each new checkbox follows that band's value on the radio; it does not
+follow the selected panadapter. Editing it never starts TUNE. A dimmed checkbox
+has a tooltip explaining missing support, missing readback or a pending request.
+After connecting or reconnecting, the column becomes available once the radio
+has reported both supported firmware and the band's value, in either order.
+See [TX Controls](./tx-controls.md#tune) for the output scope and older firmware's
+**Inhibit during TUNE** settings.
+
 | Page | What it covers |
 |------|----------------|
 | **Audio** | The radio's Line Out, Headphone and Front Speaker outputs; audio compression for SmartLink and tailnet connections; packet-loss smoothing; **Prevent system sleep while connected**; PC audio devices, Audio Boost and Audio Buffer; recording. See [Audio Settings](./audio-settings.md). |
-| **Transmit** | TX timings (ACC TX, TX delay, timeout), TX REQ interlock polarity (RCA, Accessory), **PTT Mic Override** (firmware v4.3 and later; see [TX Controls](./tx-controls.md#hardware-ptt-and-the-tx-source)), Max Power, Show TX in Waterfall, Slice/TX Follow, and **TX Band Settings** (per-band RF/tune power, PTT inhibit and interlocks). The Show TX in Waterfall choice is remembered per [Hermes-Lite 2](./hermes-lite-2.md); a FlexRadio owns and reports its setting. See [TX Controls](./tx-controls.md). |
+| **Transmit** | TX timings (ACC TX, TX delay, timeout), TX REQ interlock polarity (RCA, Accessory), **PTT Mic Override** (firmware v4.3 and later; see [TX Controls](./tx-controls.md#hardware-ptt-and-the-tx-source)), Max Power, Show TX in Waterfall, Slice/TX Follow, and **TX Band Settings** (per-band RF/tune power, PTT inhibit, interlocks and RCA suppression during TUNE on firmware 4.3 and later). The Show TX in Waterfall choice is remembered per [Hermes-Lite 2](./hermes-lite-2.md); a FlexRadio owns and reports its setting. See [TX Controls](./tx-controls.md). |
 | **Phone & CW** | Microphone bias and +20 dB boost; CW iambic mode, paddle swap, sideband and CWX sync, and CW decoder RX/TX decode; Digital (RTTY mark default). See [CW Decoder](./cw-decoder.md) and [CWX Panel](./cwx-panel.md). |
 | **Receive** | Frequency offset (GPSDO detection, manual calibration) and the 10 MHz reference source |
 | **Filters** | Voice, CW and Digital filter sharpness (Low Latency ↔ Sharp Filters) with Auto buttons, and **Use Low Latency Filters for Digital Modes** |

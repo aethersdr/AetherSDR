@@ -86,6 +86,15 @@ struct LicenseFeatureState {
     QString reason;
 };
 
+// One reported band row's radio-owned TUNE RCA output suppression.
+struct TuneOutputControlState {
+    bool supported = false;
+    bool haveValue = false;
+    bool suppressed = false;
+    bool pending = false;
+    QString reason;
+};
+
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection, processes incoming status messages,
 // and exposes the radio's current state to the GUI via Qt properties/signals.
@@ -169,6 +178,8 @@ public:
     // stays the unadorned token that rigctl and the bridge serve.
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
+    TuneOutputControlState tuneOutputControl(int bandId) const;
+    void requestTuneOutputSuppression(int bandId, bool suppressed);
 
     // "Prevent system sleep while connected" (#1420), on unless the operator
     // turned it off (#6192). Setting it takes or drops the sleep block on the
@@ -1117,6 +1128,7 @@ signals:
     void infoChanged();
     void licenseFeaturesChanged();
     void connectionStateChanged(bool connected);
+    void tuneOutputControlChanged();
     // Per-pan transmit permission changed. Consumers use the pan id to update
     // each slice sharing that pan without inferring anything from TX ownership.
     void panTransmitInhibitChanged(const QString& panId);
@@ -1828,6 +1840,8 @@ public:
 private:
     friend class RadioModelSliceLifecycleTestAccess;
     friend class RadioNicknameTestAccess;
+    friend class TuneOutputControlTestAccess;
+    friend class TuneOutputDialogTestAccess;
     friend class TxOperationIntegrationTestAccess;
     friend class RerouteDeadControlsTestAccess;
     friend class VoiceKeyerTxRouteTestAccess;
@@ -2187,6 +2201,19 @@ private:
     // the radio; cleared only when a NEW connection is established, so it
     // survives the Radio Setup dialog (and its uploader) being closed.
     bool m_firmwareRetryBlocked{false};
+
+    struct TuneOutputState {
+        std::optional<bool> confirmed;
+        quint64 requestId = 0;
+        bool requested = false;
+        QString reason;
+    };
+    QMap<int, TuneOutputState> m_tuneOutputBands;
+    quint64 m_tuneOutputRequestId = 0;
+    quint64 m_tuneOutputGeneration = 0;
+    void resetTuneOutputControl();
+    void wireTuneOutputControl();
+    void expireTuneOutputRequest(int bandId, quint64 requestId, quint64 generation);
 
     int bandIdForFrequency(double freqMhz) const;  // map TX freq → band ID
     bool applyTuneInhibit();    // suppress selected TX outputs before tune

@@ -4066,6 +4066,13 @@ add_test(NAME radio_setup_headphone_output_gate_test COMMAND radio_setup_headpho
 set_tests_properties(radio_setup_headphone_output_gate_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
+# Recorded status and injected command/reply sinks; no synthetic radio or sockets.
+add_executable(tune_output_control_test tests/tune_output_control_test.cpp)
+target_include_directories(tune_output_control_test PRIVATE src tests)
+target_link_libraries(tune_output_control_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tune_output_control_test COMMAND tune_output_control_test)
+set_tests_properties(tune_output_control_test PROPERTIES LABELS "headless")
+
 # Socket-free Flex nickname encoding and production Radio Setup editing.
 add_executable(radio_nickname_test
     tests/radio_nickname_test.cpp
@@ -4095,6 +4102,23 @@ target_link_libraries(radio_nickname_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 add_test(NAME radio_nickname_test COMMAND radio_nickname_test)
 set_tests_properties(radio_nickname_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# Production TX Band Settings column with injected replies/status; no sockets.
+add_executable(tune_output_dialog_test
+    tests/tune_output_dialog_test.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/TxBandDialog.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(tune_output_dialog_test PRIVATE src tests)
+target_link_libraries(tune_output_dialog_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME tune_output_dialog_test COMMAND tune_output_dialog_test)
+set_tests_properties(tune_output_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 # Radio Setup's Show TX in Waterfall button on the production dialog: a click
@@ -9394,6 +9418,8 @@ set(AETHER_SETTINGS_CONSUMERS
     stored_control_routing_test
     stored_control_dialogs_test
     nrs_level_range_test
+    tune_output_control_test
+    tune_output_dialog_test
     pan_display_drop_notice_test
     backend_capability_revision_test
     icom_panadapter_capacity_test

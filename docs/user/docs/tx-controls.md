@@ -51,13 +51,36 @@ the Tuner Genius XL.
 - TUNE and CW keying lock each other out: while TUNE is on, a paddle, straight
   key, keyboard CW or CWX text does not transmit, and TUNE will not start while
   a key is down or CWX is sending.
-- **Settings → Inhibit during TUNE ▸** chooses which integrations are held
-  while the radio is tuning. When AetherSDR temporarily disables an output,
-  it restores only that output on the original band. Outputs already disabled
-  stay disabled. Changing the inhibit selections during TUNE applies to the
-  next cycle; an explicit output edit in **TX Band Settings** takes precedence
-  over the current cycle's restoration. After a lost connection, check the
-  band's output settings: temporary changes are not replayed on reconnect.
+- On a **FlexRadio running SmartSDR 4.3 or later**, open **Radio Setup →
+  Transmit → TX Band Settings** and use the **RCA off/TUNE**
+  column. Each checkbox edits its named band's value on the radio, independently
+  of the active slice or panadapter. Editing it never starts TUNE.
+  When checked, firmware suppresses all three RCA keying outputs (TX1/TX2/TX3)
+  during TUNE. Normal PTT uses the band's configured TX outputs. This setting
+  does not disable TX REQ safety inputs or control other amplifier-keying connections.
+- Each checkbox follows radio readback. It is dimmed until a supported radio
+  and that band's reported value are available, and while its request awaits
+  confirmation. Hover over it for the reason. A rejected or unconfirmed request
+  retains the last confirmed value and does not become a saved client preference.
+- If the firmware version arrives while TUNE is running, the cycle still
+  restores RCA outputs it temporarily disabled before identifying the firmware.
+  The next TUNE cycle uses the identified firmware's suppression behavior.
+- On **SmartSDR 4.2 and older**, **Settings → Inhibit during TUNE ▸** retains
+  its **ACC TX**, **TX1**, **TX2** and **TX3** selections. On 4.3 and later,
+  **ACC TX** remains a separate client setting, shown as a checkable menu item,
+  and **Configure RCA suppression…**
+  opens **TX Band Settings** directly. **ACC TX** inhibits the separate accessory
+  connector's keying output during TUNE; the firmware RCA suppression setting
+  does not cover it. Saved legacy RCA preferences remain available when using
+  older firmware. AetherSDR does not copy them over the
+  radio's per-band suppression values. No automatic migration or upgrade notice
+  is shown; review each band's radio value in the table.
+- For client-managed outputs, AetherSDR restores only outputs it temporarily
+  disabled on the original band. Outputs already disabled stay disabled.
+  Changing inhibit selections during TUNE applies to the next cycle; an explicit
+  output edit in **TX Band Settings** takes precedence over current restoration.
+  After a lost connection, check the band's output settings: temporary changes
+  are not replayed on reconnect.
 
 ### ATU, MEM and pre-tuning
 
