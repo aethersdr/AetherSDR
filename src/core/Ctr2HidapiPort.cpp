@@ -36,21 +36,33 @@ QList<Ctr2HidPort::DeviceInfo> Ctr2HidapiPort::enumerate()
     if (!ensureHidInit()) {
         return out;
     }
-    hid_device_info* list = hid_enumerate(0, 0);
-    for (hid_device_info* d = list; d; d = d->next) {
-        if (d->usage_page != kUsagePage || d->usage != kUsage) {
-            continue;
+    // Ask only for the known VID:PID pairs: hid_enumerate(0, 0) makes the
+    // Windows backend request strings and descriptors from every HID device
+    // on the machine, a GUI-thread stall on each rescan (#6256 has the detail).
+    QList<std::pair<quint16, quint16>> ids;
+    for (const Ctr2HidPort::KnownCtr2& known : Ctr2HidPort::knownCtr2Devices()) {
+        const std::pair<quint16, quint16> id{known.vendorId, known.productId};
+        if (!ids.contains(id)) {
+            ids.append(id);
         }
-        Ctr2HidPort::DeviceInfo info;
-        info.path = QString::fromUtf8(d->path);
-        info.vendorId = d->vendor_id;
-        info.productId = d->product_id;
-        info.manufacturer = fromWide(d->manufacturer_string);
-        info.product = fromWide(d->product_string);
-        info.serial = fromWide(d->serial_number);
-        out.append(info);
     }
-    hid_free_enumeration(list);
+    for (const auto& [vendorId, productId] : std::as_const(ids)) {
+        hid_device_info* list = hid_enumerate(vendorId, productId);
+        for (hid_device_info* d = list; d; d = d->next) {
+            if (d->usage_page != kUsagePage || d->usage != kUsage) {
+                continue;
+            }
+            Ctr2HidPort::DeviceInfo info;
+            info.path = QString::fromUtf8(d->path);
+            info.vendorId = d->vendor_id;
+            info.productId = d->product_id;
+            info.manufacturer = fromWide(d->manufacturer_string);
+            info.product = fromWide(d->product_string);
+            info.serial = fromWide(d->serial_number);
+            out.append(info);
+        }
+        hid_free_enumeration(list);
+    }
     std::stable_sort(out.begin(), out.end(),
                      [](const Ctr2HidPort::DeviceInfo& a, const Ctr2HidPort::DeviceInfo& b) {
         return !a.ctr2Model().isEmpty() && b.ctr2Model().isEmpty();
