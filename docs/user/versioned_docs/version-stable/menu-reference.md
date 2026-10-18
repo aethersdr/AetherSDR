@@ -28,20 +28,16 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 | Item | What it does |
 |------|-------------|
 | **Radio Setup...** | The main multi-page configuration dialog. See [Radio Setup](./radio-setup.md). On macOS: AetherSDR → Preferences…. |
-| **AetherControl...** | Opens the AetherControl controller window. |
-| **FlexControl Knob & Buttons...** | Jumps to the FlexControl section of Radio Setup → Serial & Controllers. See [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md). |
+| **Controllers ▸** | Every controller's settings: **CTR2...** (the CTR2 relay and CTR2-Max firmware; see [CTR2 Proxy](./ctr2-proxy.md)), **AetherControl...** (the on-screen AetherControl window), **FlexControl Knob & Buttons...** (the FlexControl section of Radio Setup → Serial & Controllers; see [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md)), **MIDI Mapping...** (see [MIDI Controller Mapping](./midi-controller-mapping.md)), **Icom RC-28 Remote Encoder...** (see [USB Control Surfaces](./usb-control-surfaces.md)) and **Ulanzi Dial Mapping...** (see [Ulanzi Dial](./ulanzi-dial.md)). Some appear only in builds with MIDI, USB HID or serial-port support. |
 | **Receive Sync ▸** | Timing alignment between the radio and a KiwiSDR receiver: Sync Kiwi Audio & Display, **Manual Offset** / **Auto Assist**, Delay KiwiSDR 50 ms, Delay Flex 50 ms, Reset Offset, and **Latency ▸** Normal (360 ms) / More Stable (520 ms) / High Jitter (1000 ms). See [KiwiSDR and Web-888](./kiwisdr-and-web-888.md). |
 | **MQTT...** | Broker, subscriptions and publish buttons. See [MQTT Station Automation](./mqtt-station-automation.md). |
-| **MIDI Mapping...** | See [MIDI Controller Mapping](./midi-controller-mapping.md). |
-| **Icom RC-28 Remote Encoder...** | See [USB Control Surfaces](./usb-control-surfaces.md). |
-| **Ulanzi Dial Mapping...** | See [Ulanzi Dial](./ulanzi-dial.md). |
 | **USB Cables...** | See [USB Cable Management](./usb-cable-management.md). |
 | **Keyboard Shortcuts** | Checkable. Turns operating shortcuts on or off; **off by default**. See [Keyboard Shortcuts](./keyboard-shortcuts.md). |
 | **Configure Shortcuts...** | The shortcut editor. |
 | **SpotHub...** | See [SpotHub](./spothub.md). |
 | **multiFLEX...** | The multi-client dashboard. See [Multi-Flex](./multi-flex.md). |
 | **TX Band Settings...** | Per-band RF power, tune power and inhibit choices. |
-| **Inhibit during TUNE ▸** | Picks which integrations are held while the radio tunes. |
+| **Inhibit during TUNE ▸** | Selects ACC TX inhibition during TUNE. On Flex firmware 4.2 and older, also selects TX1/TX2/TX3. On 4.3 and later, the submenu contains **ACC TX** and **Configure RCA suppression…**, which opens **TX Band Settings** directly for per-band RCA suppression. |
 | **AetherRX...** | The receive audio chain. See [Aetherial Audio](./aetherial-audio.md). |
 | **Settings Browser...** | Browse and edit stored settings. See [Settings and Backups](./settings-and-backups.md). |
 | **Autostart CAT with AetherSDR** / **Autostart TCI…** / **Autostart DAX…** | Start those services automatically. |
@@ -137,7 +133,7 @@ The Minimize and Full Screen keys can be rebound in **Settings → Configure Sho
 | **AetherSDR Documentation** | Opens this documentation site in your browser. |
 | **Printable Manual (PDF)** | Opens the [printable manual](pathname:///AetherSDR-Manual.pdf), all of these pages in one PDF. |
 | **Log Analyzer** | Opens the [Log Analyzer](/log-analyzer), which checks a log or support bundle for known problems in your browser. |
-| **Getting Started...**, **AetherSDR Help...**, **What's New...** | Built-in guides, each in its own window. They work offline, and each guide links its page on this site. |
+| **Getting Started...**, **AetherSDR Help...**, **What's New...** | Built-in guides, each in its own window. They work offline, and each guide links its page on this site. In **What's New...**, only web links (http and https) open; any other kind of link in the release notes is ignored. |
 | **Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...** | Topic guides, also offline. |
 | **AetherSDR Website**, **Donate to AetherSDR** | Open the web pages. |
 | **Submit your Idea... 💡** | The AI-assisted feature-request helper. |
@@ -180,7 +176,9 @@ The main window has one 52 px title bar. From left to right:
 
 ### Transmit timer
 
-A green outlined `M:SS` readout (`H:MM:SS` past an hour) just left of **PC Audio**. It appears when you key up, starts from 0:00 for each transmission, holds the final time for 15 seconds after you unkey, then fades out. It counts operator transmissions only (MOX, PTT, footswitch, VOX, CW, tune) and never TCI or DAX transmissions from other programs.
+A green outlined `M:SS` readout (`H:MM:SS` past an hour) just left of **PC Audio**. It appears when you key up, starts from 0:00 for each transmission, holds the final time for 15 seconds after you unkey, then fades out. It counts transmissions you key yourself (MOX, PTT, footswitch, VOX, including digital modes keyed with MOX). CW, TUNE/ATU, a TGXL autotune, and transmissions keyed by other programs through TCI, DAX or CAT are excluded.
+
+The audio controls stay in place as the timer appears and fades. In minimal mode, the hidden timer reserves no space.
 
 ### Speaker and master slider
 

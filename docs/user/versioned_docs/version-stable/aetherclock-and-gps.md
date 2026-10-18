@@ -54,9 +54,15 @@ The window has no title bar. Drag any empty part of it to move it, and drag an e
 
 **GPS FIX**, **SATELLITES**, **10 MHz REFERENCE** and **TELEMETRY** (the age of the latest GPS report).
 
+On FlexRadio firmware that reports fix state, **GPS FIX** shows **3D**, **2D**, **Time only** or **No fix**. **Unknown** means the radio has not reported a recognized fix state, including older firmware and other radio feeds that do not supply it. It does not mean **No fix**. A partial GPS report keeps the last reported fix state; a new connection starts at **Unknown**.
+
+**Time only** means the receiver reports timing mode without a position fix. Time validity, receiver status (available in the **GPS FIX** tooltip) and **10 MHz REFERENCE** lock are separate readings. A fix label alone does not establish usable time, position or frequency-reference lock. **Time only** and **No fix** prevent use of the reported coordinates as a current position; older feeds continue to use their existing position-validity report. With **No fix**, the status-bar UTC clock uses the computer clock even if the frequency reference remains locked. Hover over **GPS FIX** for the receiver status and an explanation of the fix state.
+
 ### Current Location
 
 Position source, **Grid square**, **Latitude**, **Longitude**, the coordinates in the radio's own format, **Altitude**, **Speed** and **Course**, plus the nearest mapped address (an online OpenStreetMap lookup). Buttons: **Copy gridsquare**, **Copy address** and **Refresh address**.
+
+When a valid position returns after **Time only** or **No fix**, the address lookup resumes even if the coordinates have not changed.
 
 ### Station Map
 

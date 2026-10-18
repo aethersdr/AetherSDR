@@ -25,6 +25,7 @@ What you can expect:
 - **Custom-drawn meters report their values.** Meters and indicators that AetherSDR paints itself expose their current reading to the screen reader.
 - **Status is given in words, not color alone.** For example, each radio tab in the title bar states its connection state ("Link lost" and so on) as text as well as with the colored dot.
 - **Unavailable controls say why.** A control your radio or build can't use is dimmed rather than hidden, and the reason is announced along with it (for example, a headphone control on a radio with no headphone output).
+- **Available controls keep their descriptions.** When an unavailable control becomes available, its own tooltip and description return. An inactive control may also announce "Available, not currently active".
 - **Notices are announced.** For example, pressing a shortcut key while keyboard shortcuts are off gives a "Keyboard shortcuts are off" notice that is announced as well as shown.
 
 ## Using the keyboard

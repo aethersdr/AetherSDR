@@ -63,14 +63,17 @@ Click a label along the bottom of the flag to open its tab. Controls the slice's
 
 #### 🔊 Audio
 
-<img src="/img/screens/vfo-audio-tab.png" width="316" alt="VFO flag with the speaker tab open below the frequency. It holds an AF slider at 50, a SQL slider at 20, an AGC mode selector set to Med with its threshold slider at 65, and a DIV button next to a left-right pan slider." />
+<img src="/img/screens/vfo-audio-tab.png" width="252" alt="VFO flag tuned to 14.250.000 USB with the speaker tab open. AF, SQL and pan sliders are shown. The AGC row contains a Med selector, enabled threshold slider at 41 and a lit Auto button on the right." />
 
-*The VFO flag with the audio tab open.*
+*The VFO flag audio tab with radio Auto AGC-T enabled.*
 
 - **AF** slider with mute
 - **Pan** (left/right) with a center marker
 - **SQL** — squelch on/off and level
 - **AGC-T** — AGC mode (Off / Slow / Med / Fast) and threshold
+- **Auto** — radio-controlled AGC threshold, independent of AGC speed. The
+  slider remains enabled; moving it returns threshold control to manual.
+  Availability and license requirements match the [RX applet](./rx-controls.md#agc).
 
 #### DSP
 
@@ -81,6 +84,8 @@ On radios whose noise blanker runs in AetherSDR (Hermes-Lite 2 and ANAN-G2),
 from the samples on either side instead of silencing it, and while it runs an
 **NB2** fill row appears: **Zero**, **Sample hold**, **Mean hold**,
 **Hold sample** or **Interpolate**.
+
+The **Parameters:** selector and **Reset** button restore radio DSP parameters to firmware defaults. Choose a target, then press **Reset**; selecting alone does nothing. **All** includes NB and APF levels and preserves every algorithm's on/off state. Reset requires supported firmware, mode, slice ownership and, for advanced targets, entitlement. Unavailable targets stay visible and dimmed with reasons; if the selected target becomes unavailable, Reset is also dimmed and explains the restriction. See [Resetting radio DSP parameters](./dsp-noise-mitigation.md#resetting-radio-dsp-parameters) for requirements and scope.
 
 The same tab has the **AetherRX** and **AetherTX** launchers, always the same width, which open AetherSDR's own receive and transmit audio chains. The client-side noise reduction methods (NR2, RN2, NR4, NNR, DFNR, BNR, MNR) live in **AetherRX**, not on this tab; see [Aetherial Audio](./aetherial-audio.md) and [DSP Noise Mitigation](./dsp-noise-mitigation.md).
 
