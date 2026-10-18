@@ -145,7 +145,10 @@ CI attaches it to every release, as `AetherSDR-Manual-<tag>.pdf`, with a
 detached signature made with the release key. It is not deployed with the site,
 because Cloudflare Pages refuses any file over 25 MiB. Instead the deploy writes
 a `_redirects` entry that sends `/AetherSDR-Manual.pdf`, the address the app and
-the site link to, to the PDF on the release.
+the site link to, to the PDF on the release. The site build also generates this
+redirect from `stable-version.json` for standalone builds. The deploy replaces
+that default with its verified release asset, keeping exactly one manual rule
+and preserving unrelated redirects.
 
 ## Log Analyzer
 

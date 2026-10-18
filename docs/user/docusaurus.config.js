@@ -4,6 +4,8 @@
 
 import {themes as prismThemes} from 'prism-react-renderer';
 import {createRequire} from 'node:module';
+import {writeFile} from 'node:fs/promises';
+import path from 'node:path';
 
 // The release the Stable docs describe. Written by
 // tools/docs/snapshot_stable.py with the snapshot in versioned_docs/.
@@ -45,6 +47,21 @@ const config = {
     defaultLocale: 'en',
     locales: ['en'],
   },
+
+  plugins: [
+    // The printable manual is not deployed with the site: it is larger than
+    // the 25 MiB a Cloudflare Pages file may be. /AetherSDR-Manual.pdf, the
+    // link in the site and in the app's Help menu, is a redirect to the copy
+    // attached to the stable release (docs.yml makes and signs it).
+    () => ({
+      name: 'manual-pdf-redirect',
+      async postBuild({outDir}) {
+        const tag = `v${stable.label}`;
+        const pdf = `https://github.com/aethersdr/AetherSDR/releases/download/${tag}/AetherSDR-Manual-${tag}.pdf`;
+        await writeFile(path.join(outDir, '_redirects'), `/AetherSDR-Manual.pdf ${pdf} 302\n`);
+      },
+    }),
+  ],
 
   presets: [
     [
@@ -125,9 +142,9 @@ const config = {
           },
           {to: '/log-analyzer', label: 'Log Analyzer', position: 'left'},
           {
-            // Built by tools/docs/build_pdf.py and deployed with the site
-            // (docs.yml). pathname:// keeps the link checker off it: it is a
-            // file, not a page.
+            // Redirected to the stable release's PDF (the plugin above).
+            // pathname:// keeps the link checker off it: it is a file, not a
+            // page.
             href: 'pathname:///AetherSDR-Manual.pdf',
             label: 'PDF manual',
             position: 'left',
