@@ -918,7 +918,13 @@ void RadioModel::setupBackend(const QString& family)
             flex->setModelProvider([this]{ return m_model; });
             flex->setFirmwareVersionProvider([this]{ return softwareVersion(); });
             connect(this, &RadioModel::infoChanged,
-                    flex, &FlexBackend::refreshFirmwareCapabilities);
+                    flex, [this, flex] {
+                // Disconnect publishes fallback UI capabilities itself; backend
+                // signals must end at disconnected(), for both LAN and WAN.
+                if (isConnected()) {
+                    flex->refreshFirmwareCapabilities();
+                }
+            });
             flex->setIndependentTxSequenceProvider([this] { return m_seqCounter.fetch_add(1); });
             m_connection = flex->connection();   // non-owning; the backend owns it
             m_panStream  = flex->panStream();    // non-owning; the backend owns it

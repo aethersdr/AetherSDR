@@ -94,6 +94,14 @@ public:
                                            : ConnectionState::Disconnected);
     }
 };
+
+class WanConnectionTestAccess {
+public:
+    static void connected(WanConnection& connection, bool connected)
+    {
+        connection.m_connected = connected;
+    }
+};
 } // namespace AetherSDR
 
 using namespace AetherSDR;
@@ -412,6 +420,22 @@ private slots:
         QVERIFY(!bridge.txAllowed());
     }
 
+    void disconnectedIdentityDoesNotEmitBackendSignals()
+    {
+        Fixture f;
+        QVERIFY(f.init(QStringLiteral("4.3.16.42034")));
+        test::SeamThreadAffinityProbe probe(f.backend);
+        test::attachAllSeamSignals(probe);
+        RadioConnectionSessionTestAccess::connected(*f.backend->connection(), false);
+        emit f.backend->disconnected();
+        RadioNicknameTestAccess::disconnect(f.radio);
+        QVERIFY(probe.violations().isEmpty());
+        QVERIFY2(probe.afterDisconnect().isEmpty(),
+                 qPrintable(probe.afterDisconnect().join(QStringLiteral(", "))));
+        QCOMPARE(f.radio.slice(0)->nrsLevelMaximum(), 100);
+        QVERIFY(f.commands.isEmpty());
+    }
+
     void protocolIdentityIsNotFirmware()
     {
         Fixture f;
@@ -445,6 +469,14 @@ private slots:
         QCOMPARE(f.backend->capabilities().nrsLevelControl->levelMaximum, 100);
         QVERIFY(f.commands.isEmpty());
         QVERIFY(wan.isSocketIdle());
+        RadioConnectionSessionTestAccess::connected(*f.backend->connection(), false);
+        WanConnectionTestAccess::connected(wan, true);
+        RadioNicknameTestAccess::firmware(f.radio, QStringLiteral("4.3.16.42034"));
+        QCOMPARE(f.radio.slice(0)->nrsLevelMaximum(), 50);
+        QCOMPARE(f.radio.lastRadioInfo().version, lanVersion);
+        QVERIFY(f.commands.isEmpty());
+        QVERIFY(wan.isSocketIdle());
+        WanConnectionTestAccess::connected(wan, false);
     }
 
     void autoReconnectBeforeFirmwareInfo()
