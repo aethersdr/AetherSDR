@@ -1849,6 +1849,7 @@ private:
     friend class VoiceKeyerTxRouteTestAccess;
     friend class RadioSetupControlTestAccess;
     friend class StoredControlTestAccess;
+    friend class TciServerReviewTest;
     void expirePendingCallbacks(const QString& reason);
 
     // True only while expirePendingCallbacks() is invoking the drained
