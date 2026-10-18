@@ -344,6 +344,10 @@ void checkCabinet()
     check(extractor.extractAll(cab, all) && all.size() == 2
               && all.at(0).second == decoy && all.at(1).second == wanted,
           "bounded archive inspection still extracts ordinary members");
+    QByteArray shortMember = cabinet({{"complete", wanted}, {"short", wanted}});
+    write(shortMember, 44 + 16 + sizeof("complete"), wanted.size() + 1, 4);
+    check(!extractor.extractAll(shortMember, all) && all.isEmpty(),
+          "a short cabinet member discards previously extracted members");
     QByteArray oversized = cab;
     write(oversized, 44, 500U * 1024U * 1024U + 1U, 4);
     check(!extractor.extractAll(oversized, all) && all.isEmpty()
@@ -561,6 +565,49 @@ void checkStagedFilename()
     check(QDir(temp.path()).entryList({"*.ssdr"}, QDir::Files).size() == 2,
           "staging creates only the two metadata-named firmware files");
 }
+
+void checkManualFilename()
+{
+    QTemporaryDir source;
+    QTemporaryDir staging;
+    check(source.isValid() && staging.isValid(), "manual staging directories are isolated");
+    if (!source.isValid() || !staging.isValid()) { return; }
+    const QByteArray firmware("Salted__manual firmware payload");
+    for (const QString& name : {QStringLiteral("firmware.ssdr"),
+                                QStringLiteral("FLEX-6x00_v4.3.16.42034.ssdr")}) {
+        const QString sourcePath = source.filePath(name);
+        QFile input(sourcePath);
+        check(input.open(QIODevice::WriteOnly) && input.write(firmware) == firmware.size(),
+              "manual firmware fixture is written");
+        input.close();
+        AetherSDR::FirmwareStager stager(nullptr, staging.path());
+        QString error;
+        QObject::connect(&stager, &AetherSDR::FirmwareStager::stageFailed,
+                         [&error](const QString& reason) { error = reason; });
+        QString completedPath;
+        QString completedVersion;
+        QObject::connect(&stager, &AetherSDR::FirmwareStager::stageComplete,
+                         [&](const QString& path, const QString& version) {
+            completedPath = path;
+            completedVersion = version;
+        });
+        const QString expectedPath = staging.filePath(name);
+        for (const QString& selectedPath : {sourcePath, expectedPath}) {
+            stager.stageFromLocalFile(selectedPath, "6x00");
+            check(error.isEmpty() && stager.isStaged() && completedPath == expectedPath
+                      && stager.stagedFilePath() == expectedPath,
+                  "manual staging and restaging preserve the selected filename");
+            check(completedVersion == (name == "firmware.ssdr" ? "unknown" : "4.3.16.42034"),
+                  "manual completion retains the parsed version or unknown");
+            QFile output(expectedPath);
+            check(output.open(QIODevice::ReadOnly) && output.readAll() == firmware,
+                  "staging an existing staged file preserves its bytes");
+        }
+        QFile original(sourcePath);
+        check(original.open(QIODevice::ReadOnly) && original.readAll() == firmware,
+              "manual staging leaves the selected source intact");
+    }
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -571,6 +618,7 @@ int main(int argc, char** argv)
     checkCabinet();
     checkCompoundFileBounds();
     checkStagedFilename();
+    checkManualFilename();
     if (failures == 0) { std::puts("MSI metadata and named firmware extraction checks passed"); }
     return failures == 0 ? 0 : 1;
 }

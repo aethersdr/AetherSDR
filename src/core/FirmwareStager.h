@@ -65,8 +65,8 @@ public:
 
     // Stage firmware from an installer file the user has already downloaded.
     // Accepts .msi (v4.2+), .exe (v4.1.x and earlier), or .ssdr (no extraction
-    // needed; passed straight through to staging). Version is parsed from the
-    // filename when present, otherwise stays empty until the radio confirms.
+    // needed; its filename is preserved). Version is parsed from the filename
+    // when present, otherwise reported as "unknown".
     void stageFromLocalFile(const QString& installerPath, const QString& modelFamily);
 
     // Cancel in-progress download

@@ -58,6 +58,12 @@ For FLEX-8000 and Aurora radios, a note below the staged filename explains:
 "FLEX-8000 and Aurora radios use FLEX-9600 firmware."
 An already extracted **`.ssdr`** file whose name identifies the other firmware
 family is rejected instead of being renamed for your radio.
+Manually selected **`.ssdr`** files keep their original filename. If the name
+contains no version, the staged version is reported as `unknown`.
+
+Delete firmware files staged by earlier AetherSDR versions and select the
+original installer again. Those cached **`.ssdr`** files can contain firmware
+for a different family despite their filename; renaming them cannot fix it.
 
 ### Upload
 

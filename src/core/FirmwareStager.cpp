@@ -322,8 +322,8 @@ void FirmwareStager::stageFromLocalFile(const QString& installerPath,
     auto m = verRe.match(fi.fileName());
     m_targetVersion = m.hasMatch() ? m.captured(1) : QStringLiteral("unknown");
 
-    // If the user picked a pre-extracted .ssdr, no extraction needed —
-    // copy it into the staging dir under our canonical name and we're done.
+    // Pre-extracted firmware keeps the selected filename. Atomic replacement
+    // also permits selecting a file that is already in the staging directory.
     if (fi.suffix().compare("ssdr", Qt::CaseInsensitive) == 0) {
         const QRegularExpression familyPattern(QStringLiteral(R"(^FLEX-(6x00|9600)_v)"),
                                                QRegularExpression::CaseInsensitiveOption);
@@ -347,10 +347,23 @@ void FirmwareStager::stageFromLocalFile(const QString& installerPath,
         }
 
         emit stageProgress(60, "Staging firmware...");
-        const QString outName = "FLEX-" + m_modelFamily + "_v" + m_targetVersion + ".ssdr";
+        const QString outName = fi.fileName();
         const QString outPath = stagingDirectory() + "/" + outName;
-        QFile::remove(outPath);
-        if (!QFile::copy(installerPath, outPath)) {
+        QSaveFile staged(outPath);
+        if (!probe.open(QIODevice::ReadOnly) || !staged.open(QIODevice::WriteOnly)) {
+            emit stageFailed("Failed to copy .ssdr into staging directory.");
+            return;
+        }
+        while (!probe.atEnd()) {
+            const QByteArray chunk = probe.read(1024 * 1024);
+            if (chunk.isEmpty() || staged.write(chunk) != chunk.size()) {
+                emit stageFailed("Failed to copy .ssdr into staging directory.");
+                return;
+            }
+        }
+        const bool readOk = probe.error() == QFileDevice::NoError;
+        probe.close();
+        if (!readOk || !staged.commit()) {
             emit stageFailed("Failed to copy .ssdr into staging directory.");
             return;
         }
