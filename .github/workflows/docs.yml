@@ -145,7 +145,8 @@ jobs:
           retention-days: 1
 
   # Publishing is its own job: it checks out nothing and runs only the
-  # pinned wrangler-action on the site the build job produced.
+  # pinned wrangler-action, with an exact wrangler version (the action
+  # otherwise installs the newest 4.x), on the site the build job produced.
   deploy:
     name: Deploy docs site
     needs: build
@@ -181,6 +182,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.147.0'
           command: pages project create aethersdr-docs --production-branch main
 
       - name: Deploy to Cloudflare Pages
@@ -189,6 +191,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.147.0'
           command: pages deploy site --project-name=aethersdr-docs --branch=main --commit-hash=${{ github.sha }} --commit-dirty=true
 
   # A published release gets the manual for its tag. Only this job can write
