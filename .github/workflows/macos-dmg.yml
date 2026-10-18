@@ -582,7 +582,9 @@ jobs:
   sign-dmg:
     name: Sign and notarize (${{ matrix.label }})
     needs: build-dmg
-    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
+    # !cancelled(): a failed build leg must not skip the other leg's signing.
+    # A leg whose build failed has no unsigned bundle and stops at download.
+    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main') }}
     strategy:
       fail-fast: false
       matrix:
@@ -593,9 +595,15 @@ jobs:
     environment: release
     permissions:
       contents: write
+    # The bundle is unpacked into input/ and every step works there; what
+    # this job publishes is written to out/, which the bundle cannot reach.
+    defaults:
+      run:
+        working-directory: input
 
     steps:
       - name: Install create-dmg
+        working-directory: ${{ github.workspace }}
         run: brew install create-dmg
 
       - name: Download unsigned bundle
@@ -604,10 +612,45 @@ jobs:
           name: macOS-unsigned-${{ matrix.label }}
           path: .
 
+      # Only the four entries build-dmg stages, as real directories, and no
+      # symlink that resolves outside them. bsdtar already refuses absolute
+      # and ../ member names.
       - name: Unpack unsigned bundle
+        working-directory: ${{ github.workspace }}
         run: |
-          tar -xf macos-unsigned.tar
+          set -euo pipefail
+          mkdir input out
+          tar -xf macos-unsigned.tar -C input
           rm macos-unsigned.tar
+          cd input
+          extra=$(find . -mindepth 1 -maxdepth 1 ! -name build ! -name driver-root ! -name stage ! -name symbols)
+          if [ -n "$extra" ]; then
+            echo "::error::Unexpected entries in the unsigned bundle:"
+            printf '%s\n' "$extra"
+            exit 1
+          fi
+          for d in build driver-root stage symbols; do
+            if [ -L "$d" ] || { [ -e "$d" ] && [ ! -d "$d" ]; }; then
+              echo "::error::$d in the unsigned bundle is not a directory."
+              exit 1
+            fi
+          done
+          python3 - <<'PY'
+          import os, sys
+          root = os.path.realpath(".")
+          bad = []
+          for dirpath, dirnames, filenames in os.walk("."):
+              for name in dirnames + filenames:
+                  path = os.path.join(dirpath, name)
+                  if os.path.islink(path):
+                      target = os.path.realpath(path)
+                      if os.path.commonpath([root, target]) != root:
+                          bad.append(f"{path} -> {os.readlink(path)}")
+          if bad:
+              print("::error::Symlinks in the unsigned bundle point outside it:")
+              print("\n".join(bad))
+              sys.exit(1)
+          PY
 
       - name: Import signing identities
         env:
@@ -721,6 +764,10 @@ jobs:
         run: |
           # The app's version, read from CMakeLists.txt by build-dmg
           APP_VERSION=$(cat stage/APP_VERSION)
+          if [[ ! "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]]; then
+            echo "::error::stage/APP_VERSION is not a version number."
+            exit 1
+          fi
 
           # Component package (unsigned — only the outer product archive needs signing)
           pkgbuild \
@@ -762,7 +809,7 @@ jobs:
         run: |
           # Branch dispatches contain slashes; preserve release tag filenames.
           SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
-          echo "DMG_FILENAME=AetherSDR-${SAFE_REF}-macOS-${{ matrix.label }}.dmg" >> "$GITHUB_ENV"
+          echo "DMG_FILENAME=$GITHUB_WORKSPACE/out/AetherSDR-${SAFE_REF}-macOS-${{ matrix.label }}.dmg" >> "$GITHUB_ENV"
 
       - name: Create DMG
         run: |
@@ -852,24 +899,43 @@ jobs:
             echo "$name $arch: UUID $uuid matches the bundle"
           done < symbols/SYMBOLS.txt
           SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
-          tar -cJf "AetherSDR-${SAFE_REF}-macOS-${{ matrix.label }}-symbols.tar.xz" -C symbols .
-          ls -l AetherSDR-*-symbols.tar.xz
+          tar -cJf "$GITHUB_WORKSPACE/out/AetherSDR-${SAFE_REF}-macOS-${{ matrix.label }}-symbols.tar.xz" -C symbols .
+          ls -l "$GITHUB_WORKSPACE"/out/AetherSDR-*-symbols.tar.xz
+
+      # out/ holds only what this job wrote: the DMG and the symbol archive,
+      # as regular files.
+      - name: Check outputs
+        working-directory: ${{ github.workspace }}/out
+        run: |
+          set -euo pipefail
+          for f in * .[!.]*; do
+            [ -e "$f" ] || [ -L "$f" ] || continue
+            case "$f" in
+              AetherSDR-*-macOS-${{ matrix.label }}.dmg|AetherSDR-*-macOS-${{ matrix.label }}-symbols.tar.xz) ;;
+              *) echo "::error::Unexpected output: $f"; exit 1 ;;
+            esac
+            if [ -L "$f" ] || [ ! -f "$f" ]; then
+              echo "::error::$f is not a regular file."
+              exit 1
+            fi
+          done
+          ls -l
 
       - name: Upload artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: macOS-DMG-${{ matrix.label }}
           path: |
-            AetherSDR-*.dmg
-            AetherSDR-*-symbols.tar.xz
+            out/AetherSDR-*.dmg
+            out/AetherSDR-*-symbols.tar.xz
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           files: |
-            AetherSDR-*.dmg
-            AetherSDR-*-symbols.tar.xz
+            out/AetherSDR-*.dmg
+            out/AetherSDR-*-symbols.tar.xz
 
       # Deleting the keychain also drops it from the search list.
       - name: Delete signing keychain
