@@ -379,8 +379,7 @@ complete list are in [`CHANGELOG.md`](CHANGELOG.md):
   Auto intent/margins, own-pan noise floors and preserved manual thresholds.
   PR #6464 (v26.10.3).
 - **Local voice recordings** — twelve 30-second slots, PC-microphone recording,
-  preview/import/export and F1–F12 playback without a SmartSDR+ licence; the
-  radio keyer remains selectable (v26.10.3).
+  preview/import/export and F1–F12 playback; the radio keyer remains selectable (v26.10.3).
 - **DeepCW and DeepFist** — standard RX choices beside ggmorse where ONNX
   Runtime is available, with pinned upstream model downloads on first use
   (v26.10.3).
