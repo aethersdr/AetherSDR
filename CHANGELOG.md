@@ -61,7 +61,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **KXPA100 and optional KXAT100 panel (#6475).** The KX100 applet supplies amplifier telemetry and manual tuner controls, Full/Mini views, history and Advanced maintenance over serial or raw TCP. Missing tuner controls stay dimmed with reasons. A durable association to the current radio selects eligible VU/PWR telemetry without sending device commands. Firmware-dependent maintenance is qualified for 01.39; no firmware updater or remote power command is added. Physical-device/RF operation was not revalidated in the landing pass.
 - **Original SPE Expert 1K-FA support (#6163).** Select the legacy model in Peripherals for its 9600-baud protocol, streamed status and DTR power handling; this does not cover the later Taurus. Unavailable LCD and ATU-SWR functions state their reasons. Disconnect releases DTR; a brief OS-induced DTR assertion on serial open remains a bench question, and the transmit-time power-release guard remains follow-up work. A network bridge that ignores RFC 2217 now produces a visible power-control note for every SPE model.
 
-### Hermes-Lite 2, ANAN-G2 and RTL-SDR
+### Experimental Backends: Hermes-Lite 2, ANAN-G2 and RTL-SDR
 
 - **HL2 AM, DSB and simplex FM/NFM transmit through WDSP TXA (#5977).** The default TXA build uses symmetric passbands, an explicit AM carrier and FM deviation, and disables default CTCSS. The legacy phasing build retains its receive-only restrictions; SAM, WFM and DRM remain receive-only. No repeater-offset/tone controls are added.
 - HL2 hardware PTT is observed as transmit state and mutes RX, without making the host key or generate microphone samples from that observation; live dummy-load validation remains outstanding (#6446).
