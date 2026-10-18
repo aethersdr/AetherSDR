@@ -52,7 +52,12 @@ the Tuner Genius XL.
   key, keyboard CW or CWX text does not transmit, and TUNE will not start while
   a key is down or CWX is sending.
 - **Settings → Inhibit during TUNE ▸** chooses which integrations are held
-  while the radio is tuning.
+  while the radio is tuning. When AetherSDR temporarily disables an output,
+  it restores only that output on the original band. Outputs already disabled
+  stay disabled. Changing the inhibit selections during TUNE applies to the
+  next cycle; an explicit output edit in **TX Band Settings** takes precedence
+  over the current cycle's restoration. After a lost connection, check the
+  band's output settings: temporary changes are not replayed on reconnect.
 
 ### ATU, MEM and pre-tuning
 
