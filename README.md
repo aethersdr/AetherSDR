@@ -37,7 +37,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
 - **AetherMap (PSK Reporter) overlays** — optional global precipitation (LibreWXR, with NOAA, ECCC and EUMETNET OPERA regional radar backups and a per-provider legend), NOAA/NWS weather radar with observation playback ([`docs`](docs/psk-reporter-weather-radar.md)) and a NASA/GSFC VIIRS night-lights layer that fades through civil twilight ([`docs`](docs/psk-reporter-city-lights.md)), on both the 2D map and 3D globe
 - **SmartLink remote, remote over CGNAT, and a TCI v2.0 server** — Auth0/TLS WAN operation; an in-radio Tailscale node that carries AetherSDR to a FLEX-8000 or Aurora radio behind CGNAT; and CAT + audio + IQ + CW + spots + tune and receiver events over a single TCI WebSocket
-- **Broad hardware control** — rigctld and virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, Multi-Flex operation alongside SmartSDR/Maestro, and a CTR2-Max relay over Wi-Fi or compatible USB firmware, with signed AetherCTR2 installation, stock-firmware installation, per-unit backups and firmware switching
+- **Broad hardware control** — rigctld and virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, Multi-Flex operation alongside SmartSDR/Maestro, and a CTR2-Max relay over Wi-Fi, with negotiated spectrum and CW-text extensions for compatible USB controllers
 - **Workspace canvas** — place pans and applets freely as resizable, layered items with edge and grid snapping, across several windows if you want them. Named workspaces recall which applets are open as well as where they sit, and bind to radio profiles. Off by default; the Classic shell is unchanged until you enable it
 - **A user guide at [docs.aethersdr.com](https://docs.aethersdr.com)** — Stable and Next versions, a printable PDF manual signed with each release, and a Log Analyzer that reads a log or support bundle in your browser without uploading it
 - **Built-in demo mode** — a synthetic backend generating its own RX audio and matching panadapter, with a fault-injection harness, so you can explore the full UI with no radio attached (it cannot transmit)
@@ -270,9 +270,8 @@ Currently in flight:
   remaining work for each is under [Supported Hardware](#supported-hardware).
 - **Workspace canvas** — an experimental alternative shell; remaining work is
   live cross-window drag and field time against the Classic shell.
-- **CTR2 controller relay and firmware** — Wi-Fi and compatible USB firmware,
-  with negotiated spectrum/CW text, AetherCTR2 installation and updates, stock
-  firmware installation, per-unit backups and switching from the CTR2 window.
+- **CTR2 controller relay** — Wi-Fi operation, with negotiated spectrum/CW
+  text for compatible USB controllers and exclusive USB device ownership.
 - **The visual canon** — the AetherSDR style guide (RFC #6226) is applied one
   surface at a time; SpotHub, Radio Setup and AetherControl now join the earlier
   windows, and a single base-token flip comes last.

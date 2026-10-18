@@ -204,12 +204,10 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   v26.10.2 added per-device link extensions ([RFC #6332](https://github.com/aethersdr/AetherSDR/issues/6332), approved): a device
   on the USB relay can negotiate an audio-spectrum feed and the relay's UDP
   port, verified end to end with an AetherKnob on a FLEX-8600, while a stock
-  CTR2 stays on plain link v0. The CTR2-Max can now install AetherCTR2 from the CTR2 window in v26.10.3,
-  with signed packages, stock-firmware installation, full-flash per-unit backups
-  and restart into either firmware. Compatible controllers can negotiate a
-  CW-pitch-centered linear spectrum and RX CW text. The relay and updater
-  share exclusive USB device ownership; stock USB relay compatibility still
-  depends on the controller firmware.
+  CTR2 stays on plain link v0. v26.10.3 adds a CW-pitch-centered linear spectrum
+  and RX CW text for compatible controllers, and exclusive USB device ownership between AetherSDR
+  processes. Stock USB relay compatibility still depends on the controller
+  firmware.
 - **AetherSDR style guide — the visual canon** ([RFC #6226](https://github.com/aethersdr/AetherSDR/issues/6226), approved;
   tracking [#6239](https://github.com/aethersdr/AetherSDR/issues/6239)) — the canon is written down in
   `docs/style/aethersdr-style-guide.md` with its own `color.canon.*` tokens,
@@ -374,23 +372,23 @@ implementation**. An approved RFC moves up into the cycle above. Full list:
 Highlights from the current cycle (v26.10.x). Earlier releases and the
 complete list are in [`CHANGELOG.md`](CHANGELOG.md):
 
+- **SmartSDR 4.3 controls** — radio-owned Auto AGC-T, DSP parameter reset,
+  PTT Mic Override and per-band RCA off/TUNE, gated by firmware, hardware and
+  licence as applicable (v26.10.3).
+- **DeepCW and DeepFist** — standard RX choices beside ggmorse where ONNX
+  Runtime is available, with pinned upstream model downloads on first use
+  (v26.10.3).
 - **Auto squelch stays with its slice and pan** — twelve corrections for CW,
   FT8/digital and multi-receiver setups: mode gates and overlays, independent
   Auto intent/margins, own-pan noise floors and preserved manual thresholds.
   PR #6464 (v26.10.3).
 - **Local voice recordings** — twelve 30-second slots, PC-microphone recording,
   preview/import/export and F1–F12 playback; the radio keyer remains selectable (v26.10.3).
-- **DeepCW and DeepFist** — standard RX choices beside ggmorse where ONNX
-  Runtime is available, with pinned upstream model downloads on first use
+- **Controller improvements** — exclusive CTR2 USB ownership, negotiated
+  CW-centered spectrum/text and variable-speed Contour shuttle tuning
   (v26.10.3).
-- **CTR2 firmware management** — install/update AetherCTR2, install stock
-  Lynovation images, keep per-unit backups and switch firmware from the CTR2
-  window, with exclusive USB ownership (v26.10.3).
 - **Elecraft station panels** — KPA500, KAT500 and KXPA100/KXAT100 over serial
   or raw TCP, with Full/Mini views and Advanced maintenance (v26.10.3).
-- **SmartSDR 4.3 controls** — radio-owned Auto AGC-T, DSP parameter reset,
-  PTT Mic Override and per-band RCA off/TUNE, gated by firmware, hardware and
-  licence as applicable (v26.10.3).
 - **HL2 AM/DSB/FM and RTL SSB/CW/AM/SAM** — TXA adds the HL2 transmit modes;
   RTL adds receive DSP and selected-decoder audio, retaining its normal
   one-receiver limit (v26.10.3).
