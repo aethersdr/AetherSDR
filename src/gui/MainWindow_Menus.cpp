@@ -86,6 +86,9 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QAction>
+#include <QList>
+#include <QVariant>
 #include <QWidgetAction>
 
 #include <algorithm>
@@ -847,6 +850,7 @@ void MainWindow::buildMenuBar()
     // Inhibit during TUNE submenu — user selects which TX outputs to suppress.
     // Uses QWidgetAction with QCheckBox so the menu stays open for multi-select.
     auto* tuneInhibitMenu = settingsMenu->addMenu("Inhibit during TUNE");
+    tuneInhibitMenu->setObjectName(QStringLiteral("tuneInhibitMenu"));
     // Kept as a member so applyCapabilitiesToUi can dim it (with TX Band
     // Settings) on backends with no Flex command plane — doctrine (#5263):
     // dim, never hide.
@@ -864,9 +868,12 @@ void MainWindow::buildMenuBar()
 
     QCheckBox* noneCb = nullptr;
     QVector<QCheckBox*> outputCbs;
+    QList<QAction*> legacyInhibitActions;
 
     for (const auto& def : inhibitDefs) {
         auto* cb = new QCheckBox(def.label);
+        cb->setObjectName(QLatin1String(def.key));
+        cb->setAccessibleName(tr("Inhibit %1 during TUNE").arg(QLatin1String(def.label)));
         AetherSDR::ThemeManager::instance().applyStyleSheet(cb, "QCheckBox { color: {{color.text.primary}}; padding: 4px 12px; }"
             "QCheckBox::indicator { width: 14px; height: 14px; }"
             "QCheckBox::indicator:unchecked { border: 1px solid {{color.background.3}}; background: {{color.background.1}}; border-radius: 2px; }"
@@ -877,6 +884,7 @@ void MainWindow::buildMenuBar()
         auto* wa = new QWidgetAction(tuneInhibitMenu);
         wa->setDefaultWidget(cb);
         tuneInhibitMenu->addAction(wa);
+        legacyInhibitActions.append(wa);
 
         if (QString(def.label) == "None")
             noneCb = cb;
@@ -942,6 +950,60 @@ void MainWindow::buildMenuBar()
             settings.save();
         });
     }
+
+    // A native checkable action avoids embedding/reparenting a QWidget when
+    // macOS first materializes this submenu. The legacy multi-select stays intact.
+    auto* accInhibitAction = new QAction(tr("ACC TX"), tuneInhibitMenu);
+    accInhibitAction->setObjectName(QStringLiteral("tuneInhibitAccTxAction"));
+    accInhibitAction->setMenuRole(QAction::NoRole);
+    accInhibitAction->setCheckable(true);
+    accInhibitAction->setChecked(outputCbs.at(0)->isChecked());
+    accInhibitAction->setToolTip(tr("Suppress the accessory connector's PTT output during TUNE."));
+    accInhibitAction->setStatusTip(accInhibitAction->toolTip());
+    connect(accInhibitAction, &QAction::toggled, outputCbs.at(0), &QCheckBox::setChecked);
+    connect(outputCbs.at(0), &QCheckBox::toggled, accInhibitAction, [accInhibitAction](bool checked) {
+        const QSignalBlocker blocker(accInhibitAction);
+        accInhibitAction->setChecked(checked);
+    });
+
+    auto* configureRcaAction = new QAction(tr("Configure RCA suppression…"), tuneInhibitMenu);
+    configureRcaAction->setObjectName(QStringLiteral("configureTuneRcaSuppression"));
+    configureRcaAction->setMenuRole(QAction::NoRole);
+    configureRcaAction->setToolTip(tr("Open TX Band Settings to configure RCA suppression during TUNE for each band."));
+    configureRcaAction->setStatusTip(configureRcaAction->toolTip());
+    connect(configureRcaAction, &QAction::triggered, m_txBandAction, &QAction::trigger);
+
+    // Firmware replaces the legacy RCA choices with an editor shortcut.
+    // Keep the detached actions alive so saved older-firmware choices survive.
+    const auto syncTuneOutputOwnership = [this, tuneInhibitMenu, legacyInhibitActions, accInhibitAction, configureRcaAction, outputCbs]() {
+        const bool firmwareOwnsRca = m_radioModel.backendCapabilities().tuneOutputSuppression.has_value();
+        const QVariant previous = tuneInhibitMenu->property("firmwareOwnsRca");
+        if (previous.isValid() && previous.toBool() == firmwareOwnsRca) {
+            return;
+        }
+        tuneInhibitMenu->setProperty("firmwareOwnsRca", firmwareOwnsRca);
+        for (QAction* action : legacyInhibitActions) {
+            tuneInhibitMenu->removeAction(action);
+        }
+        tuneInhibitMenu->removeAction(accInhibitAction);
+        tuneInhibitMenu->removeAction(configureRcaAction);
+        if (firmwareOwnsRca) {
+            {
+                const QSignalBlocker blocker(accInhibitAction);
+                accInhibitAction->setChecked(outputCbs.at(0)->isChecked());
+            }
+            tuneInhibitMenu->addAction(accInhibitAction);
+            tuneInhibitMenu->addAction(configureRcaAction);
+        } else {
+            for (QAction* action : legacyInhibitActions) {
+                tuneInhibitMenu->addAction(action);
+            }
+        }
+    };
+    syncTuneOutputOwnership();
+    connect(tuneInhibitMenu, &QMenu::aboutToShow, this, syncTuneOutputOwnership);
+    connect(&m_radioModel, &RadioModel::tuneOutputControlChanged, this,
+            syncTuneOutputOwnership);
 
     auto* dspAction = settingsMenu->addAction("AetherRX...");
     dspAction->setMenuRole(QAction::NoRole);        // prevent macOS auto-reparenting (#883)

@@ -1,4 +1,5 @@
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/TuneOutputPolicy.h"
 #include "core/AppActivity.h"
 
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QThread>
 #include <QVersionNumber>
 
@@ -146,6 +148,65 @@ void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
 void FlexBackend::setCommandSink(std::function<bool(const QString&, CommandReply)> sink)
 {
     m_sink = std::move(sink);
+}
+
+void FlexBackend::requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId)
+{
+    const QString version = m_firmwareVersionProvider ? m_firmwareVersionProvider() : QString();
+    if (!TuneOutputPolicy::firmwareSupportsSuppression(version)
+        || !TuneOutputPolicy::validBandId(bandId) || !m_tuneOutputKnownBands.contains(bandId)
+        || requestId == 0 || !m_sink) {
+        emit tuneOutputSuppressionCommandFinished(requestId, false,
+            QStringLiteral("TUNE output suppression requires SmartSDR 4.3 or later and a reported band row."));
+        return;
+    }
+    m_tuneOutputRequests[bandId] = requestId;
+    const quint64 session = m_tuneOutputSession;
+    const QPointer<FlexBackend> receiver(this);
+    // Verified on FLEX-6700 4.3.16: this exact key changes the addressed
+    // band's separately persisted setting, independently of the active band.
+    const bool dispatched = m_sink(QStringLiteral("interlock bandset %1 tune_tx_suppress=%2")
+                    .arg(bandId).arg(suppressed ? 1 : 0),
+        [receiver, session, bandId, requestId](int code, const QString& body) {
+            if (!receiver || receiver->m_tuneOutputSession != session
+                || receiver->m_tuneOutputRequests.value(bandId) != requestId) {
+                return;
+            }
+            receiver->m_tuneOutputRequests.remove(bandId);
+            emit receiver->tuneOutputSuppressionCommandFinished(requestId, code == 0,
+                code == 0 ? QString() : QStringLiteral("Radio rejected TUNE output suppression (%1): %2")
+                    .arg(static_cast<quint32>(code), 0, 16).arg(body));
+            // An ACK can succeed for an unknown bandset key. Only the per-band
+            // interlock observation confirms this radio-persisted setting.
+            if (code == 0 && receiver && receiver->m_tuneOutputSession == session
+                && !receiver->m_tuneOutputRequests.contains(bandId)) {
+                receiver->send(QStringLiteral("sub tx all"));
+            }
+        });
+    if (!dispatched && receiver && receiver->m_tuneOutputSession == session
+        && receiver->m_tuneOutputRequests.value(bandId) == requestId) {
+        receiver->m_tuneOutputRequests.remove(bandId);
+        emit receiver->tuneOutputSuppressionCommandFinished(requestId, false,
+            QStringLiteral("TUNE output suppression was not dispatched to the radio."));
+    }
+}
+
+void FlexBackend::decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs)
+{
+    // Subscription readback can precede info's software_ver on reconnect or
+    // manual-IP connections. Validate observations now; gate edits on capability.
+    static const QRegularExpression bandPattern(QStringLiteral("^interlock band ([0-9]{1,3})$"));
+    const QRegularExpressionMatch match = bandPattern.match(object);
+    if (!match.hasMatch()) {
+        return;
+    }
+    const int bandId = match.captured(1).toInt();
+    const QString value = kvs.value(QStringLiteral("tune_tx_suppress"));
+    if (TuneOutputPolicy::validBandId(bandId)
+        && (value == QLatin1String("0") || value == QLatin1String("1"))) {
+        m_tuneOutputKnownBands.insert(bandId);
+        emit tuneOutputSuppressionObserved(bandId, value == QLatin1String("1"));
+    }
 }
 
 void FlexBackend::setFirmwareVersionProvider(std::function<QString()> provider)
@@ -456,6 +517,10 @@ void FlexBackend::refreshPublishedFirmwareVersion()
 RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
+    const QString tuneVersion = m_firmwareVersionProvider ? m_firmwareVersionProvider() : QString();
+    if (TuneOutputPolicy::firmwareSupportsSuppression(tuneVersion)) {
+        caps.tuneOutputSuppression = TuneOutputSuppressionControl{};
+    }
     caps.broadcastFmReceive = std::nullopt;
     // FlexLib 4.2.18 Slice.Freq delegates range refusal to firmware; its old
     // bounds are commented out. Do not guess coverage (including transverters).
@@ -1750,6 +1815,9 @@ void FlexBackend::clearExtensionHandles()
 {
     // Identity replies belong to the same session as the cached encode handles.
     ++m_nicknameSession;
+    ++m_tuneOutputSession;
+    m_tuneOutputRequests.clear();
+    m_tuneOutputKnownBands.clear();
     // #4198: forget the amp/tuner encode handles on disconnect/reset so a stale
     // handle can't survive into a reconnect (possibly a different radio).
     m_ampHandle.clear();
