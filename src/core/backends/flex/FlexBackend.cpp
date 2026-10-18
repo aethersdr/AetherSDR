@@ -1,7 +1,5 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/TuneOutputPolicy.h"
-#include <QPointer>
-#include <QRegularExpression>
 #include "core/AppActivity.h"
 
 #include <algorithm>
@@ -11,6 +9,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QThread>
 #include <QVersionNumber>
 

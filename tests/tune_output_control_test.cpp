@@ -1,5 +1,6 @@
 // Injected command/reply sinks and recorded status: no radio, peer or RF.
 #include "TestSettingsProfile.h"
+#include "SeamThreadAffinityProbe.h"
 #include "core/AppSettings.h"
 #include "core/backends/TuneOutputPolicy.h"
 #include "core/backends/flex/FlexBackend.h"
@@ -154,6 +155,8 @@ void policyAndParser()
 void authorityAndReplies()
 {
     Fixture f;
+    test::SeamThreadAffinityProbe probe(f.backend);
+    test::attachAllSeamSignals(probe);
     TuneOutputControlState twenty = f.radio.tuneOutputControl(9);
     TuneOutputControlState forty = f.radio.tuneOutputControl(5);
     check(twenty.supported && twenty.haveValue && !twenty.suppressed && !twenty.pending
@@ -219,6 +222,10 @@ void authorityAndReplies()
     check(f.wire.isEmpty(), "reconnect cannot write until a fresh per-row suppression observation arrives");
     f.band(9, QStringLiteral("20"), QStringLiteral("0"));
     f.radio.requestTuneOutputSuppression(9, true);
+    check(probe.violations().isEmpty() && probe.afterDisconnect().isEmpty()
+        && probe.count(QStringLiteral("tuneOutputSuppressionObserved")) > 0
+        && probe.count(QStringLiteral("tuneOutputSuppressionCommandFinished")) > 0,
+          "suppression observations and completions honor seam thread affinity");
     const FlexBackend::CommandReply old = f.replies.back();
     auto replacement = std::make_unique<ConnectedFlex>();
     replacement->setFirmwareVersionProvider([] { return QStringLiteral("4.3.16.42034"); });
@@ -278,6 +285,35 @@ void genericSinkCompatibility()
     QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
     check(wire == QStringList{QStringLiteral("radio name Test")},
           "reply-capable generic sink preserves existing disconnected command forwarding");
+}
+
+void droppedDispatch()
+{
+    Fixture f;
+    f.backend->setCommandSink([](const QString&, FlexBackend::CommandReply) { return false; });
+    f.radio.requestTuneOutputSuppression(9, true);
+    const TuneOutputControlState state = f.radio.tuneOutputControl(9);
+    check(!state.pending && state.haveValue && !state.suppressed && !state.reason.isEmpty()
+        && f.wire.isEmpty(), "a dropped command preserves readback and immediately retires pending state");
+}
+
+void firmwareOwnedPreferenceChanges()
+{
+    Fixture f;
+    AppSettings& settings = AppSettings::instance();
+    for (const char* key : {"TuneInhibitAccTx", "TuneInhibitTx1", "TuneInhibitTx2", "TuneInhibitTx3"}) {
+        settings.setValue(QLatin1String(key), QStringLiteral("True"));
+    }
+    TuneOutputControlTestAccess::apply(f.radio);
+    check(f.wire == QStringList{QStringLiteral("interlock bandset 9 acc_tx_enabled=0")},
+          "firmware-owned RCA leaves only selected ACC in the ownership snapshot");
+    settings.setValue(QStringLiteral("TuneInhibitAccTx"), QStringLiteral("False"));
+    f.version = QStringLiteral("4.2.20.41343");
+    TuneOutputControlTestAccess::identity(f.radio, f.version);
+    TuneOutputControlTestAccess::restore(f.radio);
+    check(f.wire == QStringList{QStringLiteral("interlock bandset 9 acc_tx_enabled=0"),
+                               QStringLiteral("interlock bandset 9 acc_tx_enabled=1")},
+          "preference and firmware changes restore captured ACC without acquiring RCA ownership");
 }
 
 void readbackBeforeFirmwareIdentity()
@@ -407,6 +443,8 @@ int main(int argc, char** argv)
     authorityAndReplies();
     explicitRowsIgnoreTxSelection();
     genericSinkCompatibility();
+    droppedDispatch();
+    firmwareOwnedPreferenceChanges();
     readbackBeforeFirmwareIdentity();
     legacyOwnership();
     ownershipChangeDuringTune();
