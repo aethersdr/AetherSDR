@@ -771,8 +771,10 @@ int main(int argc, char** argv)
         band.setBandPlanFontSize(6);
         band.setFrequencyRangeImmediate(14.110, 0.040);
         band.show();
-        // PanadapterMessageOverlay covers the band row just after show(), and
-        // mouseMoveEvent() yields to any child under the pointer. Wait it out.
+        // Offscreen there is no QRhi, so PanadapterMessageOverlay shows its
+        // "Spectrum renderer unavailable" notice over the band row just after
+        // show(), and mouseMoveEvent() yields to any child under the pointer.
+        // Wait for it to clear the row.
         for (int i = 0; i < 100 && band.childAt(SpectrumOffscreenTestAccess::bandRow(band, 14.105)); ++i)
             wait(50);
         const auto hoverAt = [&](double mhz) {
