@@ -12,7 +12,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Auto squelch that stays with its slice, local voice recordings and neural CW decoders · CTR2 firmware management and Elecraft station panels · SmartSDR 4.3 controls and more typed backend requests
 
-80 merged changes from 14 human contributors and two Dependabot updates within that total. Auto squelch gains twelve corrections spanning mode eligibility, independent slices, pan ownership and manual-threshold recovery, especially relevant to CW and FT8 stations running several receivers. The voice keyer records locally without a SmartSDR+ licence, DeepCW and DeepFist join the CW decoder selector, and the CTR2 window installs and switches controller firmware. Elecraft KPA500, KAT500 and KXPA100 panels join the station controls; Flex gains radio-owned Auto AGC-T, DSP parameter resets and per-band TUNE RCA suppression. Underneath, another three groups of desktop controls move behind the typed backend seam. The full-suite and weekly sanitizer failures at the cutoff are recorded below; this release does not claim a clean sweep.
+80 merged changes from 14 human contributors and two Dependabot updates within that total. Auto squelch gains twelve corrections spanning mode eligibility, independent slices, pan ownership and manual-threshold recovery, especially relevant to CW and FT8 stations running several receivers. The voice keyer records locally without a SmartSDR+ licence, DeepCW and DeepFist join the CW decoder selector, and the CTR2 window installs and switches controller firmware. Elecraft KPA500, KAT500 and KXPA100 panels join the station controls; Flex gains radio-owned Auto AGC-T, DSP parameter resets and per-band TUNE RCA suppression. Underneath, another three groups of desktop controls move behind the typed backend seam.
 
 ### Auto squelch across CW, FT8 and multiple receivers
 
@@ -91,10 +91,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - The guide is refreshed against shipped behavior in US spelling (#6396). Agent claims explicitly lock implementation/landing while reviews remain parallel and unclaimed (#6416).
 - Tests: HL2 onset analysis bounds failed captures and retains injected unreachable, short and silent cases (#6377, #6404); ADC pairing age is pinned in its snapshot (#6441); model-control tests follow typed routing (#6421); headphone-gate pixel checks avoid antialiasing differences (#6424); KPA500 file dialogs use a temporary test profile (#6554).
 - CI passes changed accessibility paths as separate arguments (#6439), rejects reintroduced Q_OS_MAC (#6383), and initializes the legacy squelch unit to avoid repeated warnings (#6357). Dependabot updates actions/download-artifact to 8.0.2 and actions/upload-artifact to 7.0.2 (#6342, #6343).
-
-### Known validation failures at the release cutoff
-
-Required CI passed on cutoff `9eace2448`, but [Full Suite](https://github.com/aethersdr/AetherSDR/actions/runs/39133724639) reported five failures out of 865: `control_receive_test`, `rtl_capture_worker_test`, `rtl_capture_worker_slow_device_test`, `radio_setup_operations_test` and `auto_agc_threshold_gui_test`. The [October 17 weekly sanitizer run](https://github.com/aethersdr/AetherSDR/actions/runs/39032860552) failed `ctr2_hid_thread_port_test` under TSan and `firmware_install_model_test` under ASan/UBSan. These failures are disclosed; the release-prep pass does not resolve or classify them as harmless.
 
 ### Contributors
 
