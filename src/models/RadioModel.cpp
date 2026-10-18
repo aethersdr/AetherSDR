@@ -8089,6 +8089,8 @@ void RadioModel::relinquishTuneInhibit(const QString& command)
     if (!m_tuneInhibit) {
         return;
     }
+    // Legacy callers and typed TX-band setters share sendCmdPublic's encoded
+    // command funnel; temporary inhibit writes use sendCmd to retain ownership.
     const QStringList words = command.simplified().split(QLatin1Char(' '));
     bool ok = false;
     if (words.size() < 4 || words[0] != QLatin1String("interlock")
@@ -8107,11 +8109,11 @@ void RadioModel::relinquishTuneInhibit(const QString& command)
 
 bool RadioModel::applyTuneInhibit()
 {
-    if (!isConnected() || m_txSessionClosing) {
+    if (m_txSessionClosing) {
         return false;
     }
     if (m_tuneInhibit) {
-        return m_tuneInhibit->phase == TuneInhibitState::Phase::Active;
+        return isConnected() && m_tuneInhibit->phase == TuneInhibitState::Phase::Active;
     }
     AppSettings& settings = AppSettings::instance();
     double txFreq = 0.0;
@@ -8140,6 +8142,12 @@ bool RadioModel::applyTuneInhibit()
             && settings.value(QLatin1String(output.preference), "False").toString() == QLatin1String("True")) {
             state.pending << field;
         }
+    }
+    if (state.pending.isEmpty()) {
+        return true;
+    }
+    if (!isConnected()) {
+        return false;
     }
     const quint64 epoch = ++m_tuneInhibitEpoch;
     m_tuneInhibit = state;

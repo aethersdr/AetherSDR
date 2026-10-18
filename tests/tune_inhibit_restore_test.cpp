@@ -353,6 +353,37 @@ void refusalAndClosing()
     TxOperationIntegrationTestAccess::inject(lastWrite.radio, lastWrite.inert, lastWrite.wire);
 }
 
+void noOwnershipConnectivity()
+{
+    preferences(true, true, true, true);
+    Fixture noBand;
+    SliceDelta frequency;
+    frequency.frequency = 100.0;
+    noBand.radio.slice(0)->applyChanges(frequency);
+    noBand.backend->connected = false;
+    check(TxOperationIntegrationTestAccess::apply(noBand.radio) && noBand.wire.isEmpty(),
+          "no TX band leaves disconnected dispatch behavior unchanged");
+
+    Fixture noSelection;
+    preferences(false, false, false, false);
+    noSelection.backend->connected = false;
+    check(TxOperationIntegrationTestAccess::apply(noSelection.radio) && noSelection.wire.isEmpty(),
+          "no selected outputs leaves disconnected dispatch behavior unchanged");
+
+    Fixture noFreshReadback;
+    preferences(true, true, true, true);
+    noFreshReadback.backend->connected = false;
+    TxOperationIntegrationTestAccess::disconnect(noFreshReadback.radio);
+    TxOperationIntegrationTestAccess::reopen(noFreshReadback.radio);
+    check(TxOperationIntegrationTestAccess::apply(noFreshReadback.radio) && noFreshReadback.wire.isEmpty(),
+          "no fresh output observations acquires no disconnected ownership");
+
+    Fixture needsWrites;
+    needsWrites.backend->connected = false;
+    check(!TxOperationIntegrationTestAccess::apply(needsWrites.radio) && needsWrites.wire.isEmpty(),
+          "selected fresh outputs still refuse disconnected inhibit writes");
+}
+
 void replacementDuringCleanup()
 {
     preferences(true, true, false, false);
@@ -439,6 +470,7 @@ int main(int argc, char** argv)
     allOutputCombinations();
     reentrantStartDuringRestore();
     refusalAndClosing();
+    noOwnershipConnectivity();
     replacementDuringCleanup();
     reentrantStartDuringApply();
     admittedProductionPaths();
