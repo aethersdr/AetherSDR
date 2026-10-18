@@ -471,6 +471,31 @@ private slots:
             QStringLiteral("slice set 0 agc_threshold_mode=manual")}));
     }
 
+    void manualSliderCancelsPendingAutoWithConfirmedControls()
+    {
+        Fixture fixture;
+        SliceModel* slice = fixture.radio.slice(0);
+        QVERIFY(slice->receiveControlsConfirmed());
+        QVERIFY(fixture.click().value(QStringLiteral("ok")).toBool());
+        QVERIFY(slice->automaticAgcThresholdActiveOrPending());
+        QVERIFY(!slice->agcCalibrationAllowed());
+
+        QTest::keyClick(fixture.threshold(), Qt::Key_Left);
+        QCOMPARE(fixture.backend->agcRequests.size(), 1);
+        QCOMPARE(fixture.backend->agcRequests.last().field, SliceAgcRequest::Field::Threshold);
+        QCOMPARE(fixture.backend->agcRequests.last().threshold, 64);
+        QVERIFY(!slice->automaticAgcThresholdActiveOrPending());
+        QVERIFY(slice->agcCalibrationAllowed());
+        QCOMPARE(slice->agcThreshold(), 65);
+        QCOMPARE(fixture.threshold()->value(), 65);
+        QCOMPARE(fixture.backend->wireCommands,
+            QStringList{QStringLiteral("slice set 0 agc_threshold_mode=auto")});
+
+        fixture.backend->status(0, AgcThresholdMode::Manual, 64);
+        QCOMPARE(slice->agcThreshold(), 64);
+        QCOMPARE(fixture.threshold()->value(), 64);
+    }
+
     void spaceKeyRequestsAutomaticMode()
     {
         Fixture fixture;
