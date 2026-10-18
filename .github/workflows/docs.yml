@@ -22,9 +22,9 @@ name: Docs
 # _redirects entry sending that URL to the signed PDF on the release.
 #
 # A manual run (workflow_dispatch) redeploys the site: from the latest app
-# release by default, or from the tag or branch given as `ref` (main, for a
-# docs-only fix between releases). Its PDF link always points at the latest
-# app release.
+# release by default, or from `ref`, which must be `main` (for a docs-only
+# fix between releases) or a published app release tag. Its PDF link always
+# points at the latest app release.
 #
 # This is NOT a required status check, which is what makes the `paths:`
 # filter safe here. A required check that a PR never triggers blocks that PR
@@ -40,7 +40,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Tag or branch to deploy (empty: the latest app release)'
+        description: 'main or a published app release tag (empty: the latest app release)'
         required: false
         default: ''
   release:
@@ -287,39 +287,58 @@ jobs:
           gpgconf --kill gpg-agent || true
           rm -rf "$GNUPGHOME"
 
-  # The site, from a published app release (after its PDF is attached, so the
-  # redirect never points at a missing file) or from a manual run.
-  deploy:
-    name: Deploy docs site
-    needs: release-pdf
+  # Deploying the site is three jobs, so that no job both runs repository
+  # code and holds the Cloudflare token: resolve-target picks a reviewed
+  # commit, build-site builds it with no secrets, and deploy publishes the
+  # result under the cloudflare-pages environment without checking anything
+  # out.
+  #
+  # A release deploys its own tag, after sign-release-pdf has attached the
+  # PDF, so the redirect never points at a missing file. A manual run deploys
+  # the latest app release, or `ref`, which may only be `main` or a published
+  # app release tag: any other branch or tag is refused, so a manual run
+  # cannot publish unreviewed code. The PDF link always names a release,
+  # because a run from main has no signed PDF of its own.
+  resolve-target:
+    name: Resolve what to deploy
+    needs: sign-release-pdf
     if: >-
       ${{ !cancelled()
-          && (needs.release-pdf.result == 'success' || needs.release-pdf.result == 'skipped')
+          && (needs.sign-release-pdf.result == 'success' || needs.sign-release-pdf.result == 'skipped')
           && (github.event_name == 'workflow_dispatch'
               || (github.event_name == 'release'
                   && startsWith(github.event.release.tag_name, 'v')
                   && !github.event.release.prerelease)) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      # Mapped from the secret so steps can be gated on its presence: the
-      # `secrets` context is not available in step `if:` conditions.
-      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      GH_TOKEN: ${{ github.token }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.target.outputs.sha }}
+      pdf_url: ${{ steps.target.outputs.pdf_url }}
     steps:
-      # A release deploys its own tag. A manual run deploys `ref`, or else the
-      # latest app release. The PDF link always names a release, because a
-      # run from main has no signed PDF of its own.
-      - name: Resolve what to deploy
+      - name: Resolve the commit and the PDF
         id: target
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           INPUT_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
+          tag_re='^v[0-9]+(\.[0-9]+){1,3}$'
+
+          # A published, non-pre-release app release. Drafts are not visible
+          # to this read-only token, so they fail here too.
+          is_app_release() {
+            [[ "$1" =~ $tag_re ]] || return 1
+            [ "$(gh release view "$1" --repo "$GITHUB_REPOSITORY" \
+                   --json isDraft,isPrerelease \
+                   --jq '(.isDraft or .isPrerelease) | not' 2>/dev/null)" = "true" ]
+          }
+
           if [ -n "$RELEASE_TAG" ]; then
-            ref="$RELEASE_TAG"
             pdf_tag="$RELEASE_TAG"
+            ref="$RELEASE_TAG"
           else
             pdf_tag=$(gh release list --repo "$GITHUB_REPOSITORY" \
               --exclude-drafts --exclude-pre-releases --limit 50 \
@@ -330,21 +349,59 @@ jobs:
             fi
             ref="${INPUT_REF:-$pdf_tag}"
           fi
+
+          if ! is_app_release "$pdf_tag"; then
+            echo "::error::${pdf_tag} is not a published app release."
+            exit 1
+          fi
+          if [ "$ref" != "main" ] && ! is_app_release "$ref"; then
+            echo "::error::Refusing to deploy '${ref}': ref must be empty, main, or a published app release tag (vX.Y.Z)."
+            exit 1
+          fi
+
+          # Pin the commit now, so the build cannot pick up a later push.
+          # The full ref keeps a tag named "main" from standing in for the
+          # branch.
+          if [ "$ref" = "main" ]; then
+            full_ref="refs/heads/main"
+          else
+            full_ref="refs/tags/${ref}"
+          fi
+          sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${full_ref}" --jq .sha)
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve ${ref} to a commit."
+            exit 1
+          fi
+
           pdf="AetherSDR-Manual-${pdf_tag}.pdf"
           if ! gh release view "$pdf_tag" --repo "$GITHUB_REPOSITORY" \
                --json assets --jq '.assets[].name' | grep -qxF "$pdf"; then
             echo "::error::Release ${pdf_tag} has no ${pdf}; the PDF redirect would be broken."
             exit 1
           fi
-          echo "Deploying ${ref}; PDF manual from ${pdf_tag}"
+
+          echo "Deploying ${ref} (${sha}); PDF manual from ${pdf_tag}"
           {
-            echo "ref=${ref}"
+            echo "sha=${sha}"
             echo "pdf_url=https://github.com/${GITHUB_REPOSITORY}/releases/download/${pdf_tag}/${pdf}"
           } >> "$GITHUB_OUTPUT"
 
+  # Builds the resolved commit with a read-only token and no secrets.
+  build-site:
+    name: Build docs site for deploy
+    needs: resolve-target
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: docs/user
+    steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ steps.target.outputs.ref }}
+          ref: ${{ needs.resolve-target.outputs.sha }}
+          persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -353,24 +410,20 @@ jobs:
           cache-dependency-path: docs/user/package-lock.json
 
       - name: Install dependencies
-        working-directory: docs/user
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build (fails on any broken link or anchor)
-        working-directory: docs/user
         run: npm run build
 
       # The PDF lives on the release, not on Pages (25 MiB per-file limit).
       - name: Redirect the PDF manual to the release
-        working-directory: docs/user
         env:
-          PDF_URL: ${{ steps.target.outputs.pdf_url }}
+          PDF_URL: ${{ needs.resolve-target.outputs.pdf_url }}
         run: |
           echo "/AetherSDR-Manual.pdf ${PDF_URL} 302" >> build/_redirects
           cat build/_redirects
 
       - name: Check no file exceeds the Pages limit
-        working-directory: docs/user
         run: |
           big=$(find build -type f -size +25M)
           if [ -n "$big" ]; then
@@ -379,26 +432,57 @@ jobs:
             exit 1
           fi
 
+      - name: Upload site
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docs-site
+          path: docs/user/build
+          if-no-files-found: error
+          retention-days: 1
+
+  # Publishing is its own job: it checks out nothing and runs only the
+  # pinned wrangler-action, with an exact wrangler version (the action
+  # otherwise installs the newest 4.x), on the site build-site produced.
+  deploy:
+    name: Deploy docs site
+    needs: [resolve-target, build-site]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: cloudflare-pages
+    permissions: {}
+    steps:
+      # The secrets are configured, so a missing one is a misconfiguration
+      # to fix, not a reason to skip the deploy.
       - name: Check deploy configuration
-        if: ${{ env.CF_TOKEN == '' }}
+        env:
+          HAS_CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
         run: |
-          echo "::notice::CLOUDFLARE_API_TOKEN not set — skipping deploy."
-          echo "Add CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID repo secrets to enable it."
+          if [ "$HAS_CF_TOKEN" != "true" ] || [ "$HAS_CF_ACCOUNT" != "true" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must be set in the cloudflare-pages environment."
+            exit 1
+          fi
+
+      - name: Download site
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: docs-site
+          path: site
 
       # First run creates the project; later runs no-op (hence continue-on-error).
       - name: Ensure Pages project exists
-        if: ${{ env.CF_TOKEN != '' }}
         continue-on-error: true
         uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.147.0'
           command: pages project create aethersdr-docs --production-branch main
 
       - name: Deploy to Cloudflare Pages
-        if: ${{ env.CF_TOKEN != '' }}
         uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy docs/user/build --project-name=aethersdr-docs --branch=main --commit-dirty=true
+          wranglerVersion: '4.147.0'
+          command: pages deploy site --project-name=aethersdr-docs --branch=main --commit-hash=${{ needs.resolve-target.outputs.sha }} --commit-dirty=true
