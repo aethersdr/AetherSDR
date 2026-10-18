@@ -1,6 +1,7 @@
 // Firmware identity, operator requests and passive NRS readback through the
 // production model/backend/widget bindings. No peer, socket dial or radio.
 #include "TestSettingsProfile.h"
+#include "SeamThreadAffinityProbe.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/AutomationServer.h"
@@ -183,6 +184,8 @@ private slots:
     {
         Fixture f;
         QVERIFY(f.init());
+        test::SeamThreadAffinityProbe probe(f.backend);
+        test::attachAllSeamSignals(probe);
         SliceModel* slice = f.radio.slice(0);
         QSignalSpy capabilities(&f.radio, &RadioModel::capabilitiesChanged);
         struct VersionCase { const char* version; int maximum; };
@@ -225,6 +228,8 @@ private slots:
         QCOMPARE(f.backend->requestSliceDsp(0, {SliceDspRequest::Feature::Nrl,
             SliceDspRequest::Field::Level, true, 100}), ReceiveDispatch::Dispatched);
         QCOMPARE(f.commands, QStringList{QStringLiteral("slice set 0 lms_nr_level=100")});
+        QVERIFY(probe.violations().isEmpty());
+        QVERIFY(probe.afterDisconnect().isEmpty());
     }
 
     void passiveStatusAndWidgetRange()
