@@ -163,10 +163,10 @@ Both lists end with the connected unit's backups (see
 mode) restarts the unit into what is installed on it, writing nothing but the
 choice of firmware to start. The one it runs now is dimmed.
 
-Installs, restores and restarts run in download mode. From AetherCTR2 the
-window restarts the unit into it by itself, and so it does from CTR2-Max
-firmware releases that support it. From other stock firmware it asks you to,
-in an alert: hold **BOOT** (through the hole in the back), press and release
+Installs, restores and restarts run in download mode. From AetherCTR2 0.9.2
+or later the window restarts the unit into it by itself, and so it does from
+CTR2-Max firmware releases that support it. With older AetherCTR2, an unknown
+version, or other stock firmware it asks you to, in an alert: hold **BOOT** (through the hole in the back), press and release
 **RESET**, then release **BOOT**. It then carries on by itself.
 
 ### Requirements
@@ -269,8 +269,9 @@ supply this firmware: download it from Lynovation's
 3. Connect the CTR2-Max with a USB cable and press the tab's **Install…**,
    then **Update**.
 4. If the CTR2-Max is running its stock firmware, put it in download mode
-   when the alert asks. The update then starts by itself. From AetherCTR2,
-   or already in download mode, no buttons are needed.
+   when the alert asks. The update then starts by itself. From AetherCTR2
+   0.9.2 or later, or already in download mode, no buttons are needed. Older or unknown
+   AetherCTR2 versions need the same BOOT/RESET steps when asked.
 
 AetherSDR backs up the whole flash first (about a minute), writes the new
 firmware, and restarts the CTR2-Max into it.

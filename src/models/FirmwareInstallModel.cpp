@@ -414,10 +414,12 @@ bool FirmwareInstallModel::takesCommands(const Target& target) const
 
 bool FirmwareInstallModel::restartsIntoDownloadMode(const Target& target) const
 {
-    if (!takesCommands(target))
+    if (!takesCommands(target)) {
         return false;
-    if (target.device != Device::LinkFirmware)
+    }
+    if (target.device != Device::LinkFirmware) {
         return true;
+    }
     // AetherCTR2 answers BOOTLOADER from 0.9.2; one whose version is not
     // known yet is not asked.
     const QVersionNumber version = QVersionNumber::fromString(linkVersion());
@@ -745,8 +747,9 @@ bool FirmwareInstallModel::restartInto(const Target& target, Firmware firmware, 
     // firmware offering them) restarts on request: into the other firmware
     // (SWITCH) or download mode.
     if (firmware == Firmware::Bootloader ? restartsIntoDownloadMode(target)
-                                         : takesCommands(target))
+                                         : takesCommands(target)) {
         return restart(target, firmware == Firmware::Bootloader, problem);
+    }
     if (firmware == Firmware::Bootloader) {
         *problem = tr("Put the CTR2-Max in download mode with its BOOT and RESET buttons.");
         return false;

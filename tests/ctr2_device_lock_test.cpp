@@ -13,9 +13,14 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QTemporaryDir>
 #include <QThread>
 
+#include <array>
+#include <atomic>
+#include <barrier>
+#include <thread>
 #include <cstdio>
 #include <iostream>
 #include <string>
@@ -37,11 +42,11 @@ void check(bool condition, const char* message)
 const QString kPath = QStringLiteral("/dev/hidraw7");
 
 // The other AetherSDR: takes the device, says so, holds it until stdin closes.
-int holder(const QString& directory)
+int holder(const QString& directory, const QString& path)
 {
     Ctr2DeviceLock::setDirectoryForTesting(directory);
     qint64 other = 0;
-    Ctr2DeviceLock::Holder held = Ctr2DeviceLock::acquire(kPath, &other);
+    Ctr2DeviceLock::Holder held = Ctr2DeviceLock::acquire(path, &other);
     std::printf("%s\n", held ? "held" : "refused");
     std::fflush(stdout);
     std::string line;
@@ -49,11 +54,12 @@ int holder(const QString& directory)
     return 0;
 }
 
-bool startHolder(QProcess& p, const QString& directory)
+bool startHolder(QProcess& p, const QString& directory, const QString& path = kPath)
 {
-    p.start(QCoreApplication::applicationFilePath(), {QStringLiteral("--hold"), directory});
-    if (!p.waitForStarted(5000) || !p.waitForReadyRead(5000))
+    p.start(QCoreApplication::applicationFilePath(), {QStringLiteral("--hold"), directory, path});
+    if (!p.waitForStarted(5000) || !p.waitForReadyRead(5000)) {
         return false;
+    }
     return p.readLine().trimmed() == "held";
 }
 
@@ -62,8 +68,10 @@ bool startHolder(QProcess& p, const QString& directory)
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
-    if (argc == 3 && QByteArray(argv[1]) == "--hold")
-        return holder(QString::fromLocal8Bit(argv[2]));
+    if (argc == 4 && QByteArray(argv[1]) == "--hold") {
+        QCoreApplication::setApplicationName(qEnvironmentVariable("TMPDIR"));
+        return holder(QString::fromLocal8Bit(argv[2]), QString::fromLocal8Bit(argv[3]));
+    }
 
     QTemporaryDir dir;
     Ctr2DeviceLock::setDirectoryForTesting(dir.path());
@@ -75,7 +83,9 @@ int main(int argc, char** argv)
         check(relay && probe, "this process may hold its own device more than once");
         check(Ctr2DeviceLock::acquire(QStringLiteral("/dev/hidraw8"), &other) != nullptr,
               "another device is another lock");
+        Ctr2DeviceLock::Holder copiedProbe = probe;
         relay.reset();
+        probe.reset();
         QProcess p;
         check(!startHolder(p, dir.path()),
               "while any holder in this process remains, another process is refused");
@@ -114,6 +124,67 @@ int main(int argc, char** argv)
     crashed.waitForFinished(5000);
     check(Ctr2DeviceLock::acquire(kPath, &other) != nullptr,
           "a lock left by a process that died is taken over");
+
+    // Exercise production selection: no directory override in either child.
+    // Different temporary roots, runtime roots and application names must
+    // still exclude the same fictitious (never opened) HID path.
+    QTemporaryDir tempA;
+    QTemporaryDir tempB;
+    const QString productionPath = QStringLiteral("ctr2-lock-test-%1").arg(app.applicationPid());
+    QProcess owner;
+    QProcess contender;
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.remove(QStringLiteral("XDG_RUNTIME_DIR"));
+    env.insert(QStringLiteral("TMPDIR"), tempA.path());
+    env.insert(QStringLiteral("TMP"), tempA.path());
+    env.insert(QStringLiteral("TEMP"), tempA.path());
+    env.insert(QStringLiteral("AETHER_SETTINGS_DIR"), tempA.path());
+    owner.setProcessEnvironment(env);
+    env.insert(QStringLiteral("TMPDIR"), tempB.path());
+    env.insert(QStringLiteral("TMP"), tempB.path());
+    env.insert(QStringLiteral("TEMP"), tempB.path());
+    env.insert(QStringLiteral("AETHER_SETTINGS_DIR"), tempB.path());
+    env.insert(QStringLiteral("XDG_RUNTIME_DIR"), tempB.path());
+    contender.setProcessEnvironment(env);
+    check(startHolder(owner, {}, productionPath), "production namespace owner takes lock");
+    check(!startHolder(contender, {}, productionPath),
+          "production namespace excludes different temp/runtime/settings identities");
+    check(contender.state() == QProcess::Running, "refused production helper remains alive");
+    contender.closeWriteChannel();
+    check(contender.waitForFinished(5000), "production contender exits");
+    owner.closeWriteChannel();
+    check(owner.waitForFinished(5000), "production owner exits");
+    check(startHolder(contender, {}, productionPath), "production namespace releases ownership");
+    contender.closeWriteChannel();
+    check(contender.waitForFinished(5000), "production replacement exits");
+
+    // Registered in the unfiltered sanitizer lane as well: overlapping
+    // last-holder destruction and new acquisitions may never refuse our PID.
+    std::atomic<int> refused{0};
+    std::barrier start(4);
+    std::array<std::thread, 4> workers;
+    for (std::thread& worker : workers) {
+        worker = std::thread([&] {
+            start.arrive_and_wait();
+            for (int i = 0; i < 5000; ++i) {
+                qint64 pid = 0;
+                Ctr2DeviceLock::Holder held = Ctr2DeviceLock::acquire(kPath, &pid);
+                if (!held) {
+                    ++refused;
+                }
+                std::this_thread::yield();
+            }
+        });
+    }
+    for (std::thread& worker : workers) {
+        worker.join();
+    }
+    std::printf("same-process acquisitions=20000 refused=%d\n", refused.load());
+    check(refused == 0, "last release and acquisition are serialized");
+    QProcess afterChurn;
+    check(startHolder(afterChurn, dir2.path()), "last churn holder releases cross-process lock");
+    afterChurn.closeWriteChannel();
+    check(afterChurn.waitForFinished(5000), "post-churn holder exits");
 
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

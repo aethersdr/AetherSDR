@@ -57,8 +57,8 @@ private:
     void onFinished(bool ok, const QString& message);
     // Starting an action: its result, or the reason it did not start.
     void started(bool ok, const QString& problem, const QString& doneText);
-    // For a unit on its stock firmware (stock): tells the operator to put it
-    // in download mode. False if they cancel.
+    // When buttons are needed, asks the operator to enter download mode.
+    // False if they cancel.
     bool askDownloadMode(bool buttons);
     // Restores the backup at path on the unit connected now, once confirmed.
     void confirmRestore(const QString& path);

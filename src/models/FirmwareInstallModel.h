@@ -95,8 +95,8 @@ public:
     Target target() const { return {m_device, m_port, m_mac, m_hidPath}; }
     // A unit whose firmware takes the link's FIRMWARE commands
     // (Ctr2ProxyModel::usbFirmwareCommands()): AetherCTR2, or stock firmware
-    // that offers them. It restarts into its other firmware or download mode
-    // on request, with no buttons. It must be the relay's selected device.
+    // that offers them. It can switch firmware on request; download mode
+    // also requires restartsIntoDownloadMode(). It must be the selected device.
     bool takesCommands(const Target& target) const;
     // A unit that restarts into download mode on request (BOOTLOADER):
     // one that takes the commands, except AetherCTR2 before 0.9.2, which
