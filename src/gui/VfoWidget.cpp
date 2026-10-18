@@ -1,5 +1,8 @@
 #include "VfoWidget.h"
 #include "AudioButtonIcon.h"
+
+#include <QList>
+#include <QPair>
 #include <QScopeGuard>
 #include "ControlAvailabilityRegistry.h"
 #include "AntennaChoiceGate.h"
@@ -65,6 +68,8 @@
 #include <QFormLayout>
 #include <QFontMetrics>
 #include <QSignalBlocker>
+#include <QStandardItemModel>
+#include <QVariant>
 #include <QDir>
 #include <QFile>
 #include <QPixmap>
@@ -2107,6 +2112,75 @@ void VfoWidget::buildTabContent()
         m_dspGrid->addWidget(m_anftBtn, 2, 1);
         m_dspGrid->addWidget(m_mnBtn,   2, 2);
         dspVb->addLayout(m_dspGrid);
+
+        auto* resetRow = new QHBoxLayout;
+        resetRow->setSpacing(3);
+        auto* resetLabel = new QLabel(tr("Parameters:"));
+        resetRow->addWidget(resetLabel);
+        m_dspResetTarget = new GuardedComboBox;
+        m_dspResetTarget->setObjectName(QStringLiteral("dspParameterResetTarget"));
+        m_dspResetTarget->setAccessibleName(tr("DSP parameter reset target"));
+        resetLabel->setBuddy(m_dspResetTarget);
+        using ResetTarget = DspParameterResetTarget;
+        const QList<QPair<QString, ResetTarget>> resetTargets = {
+            {tr("All"), ResetTarget::All}, {QStringLiteral("NR"), ResetTarget::Nr},
+            {QStringLiteral("ANF"), ResetTarget::Anf}, {QStringLiteral("NRL"), ResetTarget::Nrl},
+            {QStringLiteral("ANFL"), ResetTarget::Anfl}, {QStringLiteral("NRF"), ResetTarget::Nrf},
+            {QStringLiteral("NRS"), ResetTarget::Nrs}, {QStringLiteral("ANFT"), ResetTarget::Anft}};
+        for (const auto& [label, target] : resetTargets) {
+            m_dspResetTarget->addItem(label, static_cast<int>(target));
+        }
+        resetRow->addWidget(m_dspResetTarget, 1);
+        m_dspResetButton = new QPushButton(tr("Reset"));
+        m_dspResetButton->setObjectName(QStringLiteral("dspParameterResetButton"));
+        m_dspResetButton->setAccessibleName(tr("Reset DSP parameters"));
+        m_dspResetButton->setFixedHeight(22);
+        m_dspResetTarget->setFixedHeight(22);
+        const QString resetStyle = QStringLiteral(
+            "QPushButton, QComboBox { background: {{color.canon.control}};"
+            "color: {{color.canon.cyan}}; border: 1px solid {{color.canon.lineHi}};"
+            "border-radius: 3px; padding: 1px 4px; }"
+            "QPushButton:hover, QComboBox:hover { background: {{color.canon.nested}};"
+            "color: {{color.canon.aqua}}; }"
+            "QPushButton:disabled { color: {{color.canon.muted}}; }"
+            "QPushButton:focus, QComboBox:focus { border-color: {{color.canon.cyan}}; }");
+        ThemeManager::instance().applyStyleSheet(m_dspResetTarget, resetStyle);
+        ThemeManager::instance().applyStyleSheet(m_dspResetButton, resetStyle);
+        ThemeManager::instance().applyStyleSheet(resetLabel,
+            QStringLiteral("QLabel { color: {{color.canon.muted}}; }"));
+        resetRow->addWidget(m_dspResetButton);
+        dspVb->addLayout(resetRow);
+        connect(m_dspResetTarget, &QComboBox::currentIndexChanged,
+                this, [this] {
+            m_dspResetIntentArmed = false;
+            updateDspParameterResetControls();
+        });
+        connect(m_dspResetButton, &QPushButton::pressed, this, [this] {
+            m_dspResetIntentArmed = false;
+            const std::optional<DspParameterResetTarget> target =
+                dspParameterResetTarget(m_dspResetTarget->currentIndex());
+            if (!target) {
+                return;
+            }
+            m_dspResetIntentRadio = m_radioModel;
+            m_dspResetIntentSlice = m_dspResetSlice;
+            m_dspResetIntentTarget = *target;
+            m_dspResetSession = m_radioModel ? m_radioModel->receiveControlSession() : 0;
+            m_dspResetIntentArmed = true;
+        });
+        connect(m_dspResetButton, &QPushButton::clicked, this, [this] {
+            const bool armed = std::exchange(m_dspResetIntentArmed, false);
+            const std::optional<DspParameterResetTarget> target =
+                dspParameterResetTarget(m_dspResetTarget->currentIndex());
+            if (armed && target && m_dspResetIntentRadio && m_dspResetIntentRadio == m_radioModel
+                && m_dspResetIntentSlice == m_dspResetSlice
+                && m_dspResetIntentTarget == *target) {
+                m_dspResetIntentRadio->requestDspParameterReset(m_dspResetIntentSlice.data(),
+                    m_dspResetSession, m_dspResetIntentTarget);
+            }
+            updateDspParameterResetControls();
+        });
+        updateDspParameterResetControls();
 
         // Shared DSP-level row — one slider that re-targets based on which
         // leveled DSP is most recently turned on.  Hidden when the active
@@ -4816,6 +4890,9 @@ void VfoWidget::setSlice(SliceModel* slice)
         m_slice->disconnect(this);
     m_slice = slice;
     syncAutoAgcThreshold();
+    m_dspResetSlice = slice;
+    m_dspResetIntentArmed = false;
+    updateDspParameterResetControls();
     setProperty("sliceId", m_slice ? m_slice->sliceId() : -1);
     if (!m_slice) {
         updateFreqLabel();
@@ -4846,6 +4923,11 @@ void VfoWidget::setSlice(SliceModel* slice)
     // (the operator opts in each session). Single load site (the flag is always
     // present per slice); the RX-applet copy just reflects the loaded slice.
     AdaptiveFilterControls::loadPrefs(m_slice);
+
+    connect(m_slice, &SliceModel::externalReceiveReplacementChanged,
+            this, &VfoWidget::updateDspParameterResetControls);
+    connect(m_slice, &SliceModel::receiveObservationChanged,
+            this, &VfoWidget::updateDspParameterResetControls);
 
     // Frequency
     connect(m_slice, &SliceModel::frequencyChanged, this, [this](double) { updateFreqLabel(); });
@@ -4929,6 +5011,7 @@ void VfoWidget::setSlice(SliceModel* slice)
     // Mode
     connect(m_slice, &SliceModel::modeChanged, this, [this](const QString& mode) {
         updateAgcSliderFromSlice();
+        updateDspParameterResetControls();
         m_tabBtns[2]->setText(mode);  // update mode tab label
         updateModeTab();
         // Show/hide mode-specific DSP controls
@@ -6841,10 +6924,64 @@ void VfoWidget::populateDaxCombo()
     m_daxCmb->setCurrentIndex(want);
 }
 
+std::optional<DspParameterResetTarget> VfoWidget::dspParameterResetTarget(int index) const
+{
+    if (!m_dspResetTarget || index < 0 || index >= m_dspResetTarget->count()) {
+        return std::nullopt;
+    }
+    const QVariant data = m_dspResetTarget->itemData(index);
+    if (data.metaType().id() != QMetaType::Int) {
+        return std::nullopt;
+    }
+    const DspParameterResetTarget target = static_cast<DspParameterResetTarget>(data.toInt());
+    return validDspParameterResetTarget(target) ? std::optional(target) : std::nullopt;
+}
+
+void VfoWidget::updateDspParameterResetControls()
+{
+    if (!m_dspResetButton || !m_dspResetTarget) {
+        return;
+    }
+    const auto unavailableReason = [this](DspParameterResetTarget target) {
+        return m_radioModel
+            ? m_radioModel->dspParameterResetUnavailableReason(m_dspResetSlice.data(), m_radioModel->receiveControlSession(), target)
+            : tr("Connect to a radio to reset DSP parameters");
+    };
+    auto* targets = qobject_cast<QStandardItemModel*>(m_dspResetTarget->model());
+    if (targets) {
+        for (int row = 0; row < m_dspResetTarget->count(); ++row) {
+            const std::optional<DspParameterResetTarget> choice = dspParameterResetTarget(row);
+            const QString reason = choice ? unavailableReason(*choice) : tr("Select a valid DSP parameter reset target");
+            QStandardItem* item = targets->item(row);
+            item->setEnabled(reason.isEmpty());
+            item->setSelectable(reason.isEmpty());
+            item->setData(reason, Qt::ToolTipRole);
+            item->setData(reason, Qt::AccessibleDescriptionRole);
+        }
+    }
+    const std::optional<DspParameterResetTarget> target =
+        dspParameterResetTarget(m_dspResetTarget->currentIndex());
+    const QString scope = target == DspParameterResetTarget::All
+        ? tr("Reset every DSP block's parameters, including NB and APF levels. Keeps all on/off states.")
+        : tr("Reset the selected algorithm's parameters to radio defaults. Keeps its on/off state.");
+    const QString reason = target ? unavailableReason(*target) : tr("Select a valid DSP parameter reset target");
+    const QString description = reason.isEmpty() ? scope : reason + QStringLiteral(". ") + scope;
+    m_dspResetButton->setEnabled(reason.isEmpty());
+    m_dspResetButton->setToolTip(description);
+    m_dspResetButton->setAccessibleDescription(description);
+    m_dspResetTarget->setToolTip(description);
+    m_dspResetTarget->setAccessibleDescription(description + tr(" Selecting a target does not reset it; press Reset to apply."));
+}
+
 void VfoWidget::setRadioModel(RadioModel* radioModel)
 {
     if (m_radioModel) {
         releaseTransmitFrequencyCheck();
+        disconnect(m_radioModel, &RadioModel::connectionStateChanged, this, &VfoWidget::updateDspParameterResetControls);
+        disconnect(m_radioModel, &RadioModel::capabilitiesChanged, this, &VfoWidget::updateDspParameterResetControls);
+        disconnect(m_radioModel, &RadioModel::infoChanged, this, &VfoWidget::updateDspParameterResetControls);
+        disconnect(m_radioModel, &RadioModel::licenseFeaturesChanged, this, &VfoWidget::updateDspParameterResetControls);
+        disconnect(m_radioModel, &RadioModel::slotOccupancyChanged, this, &VfoWidget::updateDspParameterResetControls);
         disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
                    this, &VfoWidget::updateAntennaButtons);
         disconnect(m_radioModel, &RadioModel::infoChanged,
@@ -6861,6 +6998,20 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
     delete m_filterAvailability;
     m_filterAvailability = nullptr;
     m_radioModel = radioModel;
+    m_dspResetIntentArmed = false;
+    if (m_radioModel) {
+        connect(m_radioModel, &RadioModel::connectionStateChanged,
+                this, &VfoWidget::updateDspParameterResetControls);
+        connect(m_radioModel, &RadioModel::capabilitiesChanged,
+                this, &VfoWidget::updateDspParameterResetControls);
+        connect(m_radioModel, &RadioModel::infoChanged,
+                this, &VfoWidget::updateDspParameterResetControls);
+        connect(m_radioModel, &RadioModel::licenseFeaturesChanged,
+                this, &VfoWidget::updateDspParameterResetControls);
+        connect(m_radioModel, &RadioModel::slotOccupancyChanged,
+                this, &VfoWidget::updateDspParameterResetControls);
+    }
+    updateDspParameterResetControls();
     m_receiveFilterControl = m_radioModel && m_radioModel->isConnected()
         ? m_radioModel->backendCapabilities().receiveFilterControl : std::nullopt;
     m_exclusiveSquelch = m_radioModel && m_radioModel->isConnected()

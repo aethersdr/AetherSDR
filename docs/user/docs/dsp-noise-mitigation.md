@@ -33,6 +33,28 @@ Blanks short impulse noise (ignition interference, switching power supplies). Ha
 
 On the [Hermes-Lite 2](./hermes-lite-2.md) and the [ANAN-G2](./anan-g2.md), AetherSDR runs the noise blanker on the computer, and the NB button cycles **Off → NB → NB2 → Off**; its label shows which blanker is running. NB blanks each impulse to silence. NB2 instead reconstructs the blanked window from the samples either side, which sounds better when the impulse lands on a signal and worse when the noise is dense. While NB2 runs, an **NB2** fill row appears under the DSP buttons: **Zero** (silence, as NB does), **Sample hold**, **Mean hold**, **Hold sample** or **Interpolate**. On other radios the blanker is the radio's own and NB is a plain on/off toggle.
 
+### Resetting radio DSP parameters
+
+In the slice's **DSP** tab, choose a **Parameters:** target and press **Reset**.
+Selecting a target does not send a reset. Reset is unavailable when no valid
+target is selected. The radio chooses the defaults and reports the resulting
+levels; every algorithm's on/off state stays unchanged.
+**All** resets every DSP block's parameters, including NB and APF levels.
+It does not reset AetherRX processing or WNB.
+
+Parameter reset requires FlexRadio SmartSDR **4.3.16 or later**, a connected
+slice owned by this client, and a supported receive mode. It is unavailable
+in FM modes. ANF, ANFL and ANFT resets are unavailable in CW, RTTY, DIGU,
+DIGL and FreeDV modes. Unsupported reset actions remain visible and dimmed;
+the Reset button's tooltip explains the reason.
+
+**All** and **NRS** parameter resets are Basic controls. Individual **NR**,
+**ANF**, **NRL**, **ANFL**, **NRF** and **ANFT** resets require the radio to
+report Advanced Noise Mitigation entitlement. Retained entitlement works
+even when a SmartSDR+ subscription has expired. **NRS** and **NRF** additionally
+require a FLEX-8000 or Aurora platform. NRS resets its level only; it has no
+advanced parameters.
+
 ### NR — Noise Reduction
 General-purpose noise reduction. Adjustable level (0-100). Good starting point for noisy bands.
 

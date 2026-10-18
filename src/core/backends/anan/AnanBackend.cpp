@@ -498,6 +498,7 @@ RadioCapabilities AnanBackend::capabilities() const
     // ours, the radio echoes nothing back, and there is no register to read.
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = std::nullopt; // center also retunes the slice
     c.receivePanBandwidthControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
                                                          48'000, 1'536'000};

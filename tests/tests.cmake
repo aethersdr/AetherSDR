@@ -9058,6 +9058,37 @@ add_test(NAME nrs_level_range_test COMMAND nrs_level_range_test)
 set_tests_properties(nrs_level_range_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Default is socket-free. Manual --bridge-fixture opts into a QLocalServer
+# named aethersdr-dsp-reset-fixture, never a firmware peer.
+add_executable(dsp_parameter_reset_test
+    tests/dsp_parameter_reset_test.cpp
+    ${THEME_TEST_RESOURCES}
+    src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(dsp_parameter_reset_test PRIVATE src)
+target_link_libraries(dsp_parameter_reset_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME dsp_parameter_reset_test
+         COMMAND dsp_parameter_reset_test)
+set_tests_properties(dsp_parameter_reset_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Socket-free production-widget lifetime regression coverage (#5568).
 add_executable(gui_nested_lifetime_test
     tests/gui_nested_lifetime_test.cpp
@@ -9342,6 +9373,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    dsp_parameter_reset_test
     cw_rx_model_test
     asr_native_receiver_test
     gps_fix_state_test
@@ -9561,6 +9593,7 @@ endforeach()
 # library as AetherSDR so moving QtWidgets out of aethercore cannot silently
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
+    dsp_parameter_reset_test
     nrs_level_range_test
     anan_noise_blanker_readback_test
     automation_cell_test
