@@ -469,8 +469,10 @@ jobs:
       # silently pass an empty base to `git worktree add`.
       - name: Hardcoded-colour ratchet
         if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          BASE=$(git merge-base HEAD "origin/${{ github.base_ref }}")
+          BASE=$(git merge-base HEAD "origin/${BASE_REF}")
           git worktree add /tmp/colour-base "$BASE"
           python tools/audit_colours.py \
             --src src \
@@ -482,8 +484,10 @@ jobs:
       # Scoped to src/gui/ files changed by this PR rather than the whole tree.
       - name: Get changed src/gui/ files
         if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          git diff --name-only origin/${{ github.base_ref }}...HEAD \
+          git diff --name-only "origin/${BASE_REF}...HEAD" \
             | grep -E '^src/gui/.*\.(cpp|h)$' \
             > /tmp/changed_gui_files.txt || true
           echo "Changed src/gui files:"
