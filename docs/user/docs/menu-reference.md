@@ -45,8 +45,6 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 
 Items that depend on optional build features (MQTT, MIDI, serial controllers) only appear in builds that include them.
 
-In builds with serial-port support, **Settings → Controllers → FlexControl Knob & Buttons...** opens the **FlexControl Tuning Knob** group directly. The menu label includes the **&** character on Linux, macOS and Windows.
-
 ## Profiles
 
 | Item | What it does |
