@@ -194,18 +194,20 @@ jobs:
           wranglerVersion: '4.147.0'
           command: pages deploy site --project-name=aethersdr-docs --branch=main --commit-hash=${{ github.sha }} --commit-dirty=true
 
-  # A published release gets the manual for its tag. Only this job can write
-  # to the repository (release assets); the site build above cannot.
+  # A published release gets the manual for its tag. The tag's own code
+  # renders it here, with a read-only token and no secrets; sign-release-pdf
+  # below signs and attaches the finished file in a job that runs none of it.
   release-pdf:
-    name: Attach PDF manual to release
-    if: ${{ github.event_name == 'release' }}
+    name: Render PDF manual for release
+    if: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: release
     permissions:
-      contents: write
+      contents: read
     env:
       TAG: ${{ github.event.release.tag_name }}
+    outputs:
+      present: ${{ steps.docs.outputs.present }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -248,10 +250,56 @@ jobs:
           python3 tools/docs/build_pdf.py --version "$TAG" \
             --output "${RUNNER_TEMP}/AetherSDR-Manual-${TAG}.pdf"
 
-      # Signed with the release key, as sign-release.yml signs the binaries.
-      # The PDF is not in SHA256SUMS.txt; its .asc is its own check.
-      - name: Import GPG key
+      - name: Upload PDF manual
         if: ${{ steps.docs.outputs.present == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-manual
+          path: ${{ runner.temp }}/AetherSDR-Manual-${{ github.event.release.tag_name }}.pdf
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signed with the release key, as sign-release.yml signs the binaries.
+  # The PDF is not in SHA256SUMS.txt; its .asc is its own check. This job
+  # checks out nothing and runs no repository code.
+  sign-release-pdf:
+    name: Attach PDF manual to release
+    needs: release-pdf
+    if: ${{ needs.release-pdf.outputs.present == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Check the tag
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+(\.[0-9]+){1,3}(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
+            echo "::error::Not a release tag; refusing to sign."
+            exit 1
+          fi
+
+      - name: Download PDF manual
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: release-manual
+          path: ${{ runner.temp }}/manual
+
+      # Exactly the one expected file, and a regular file.
+      - name: Check the download
+        working-directory: ${{ runner.temp }}/manual
+        run: |
+          pdf="AetherSDR-Manual-${TAG}.pdf"
+          listing=$(find . -mindepth 1 -printf '%y %P\n')
+          if [ "$listing" != "f $pdf" ]; then
+            echo "::error::Expected only $pdf as a regular file; found:"
+            printf '%s\n' "$listing"
+            exit 1
+          fi
+
+      - name: Import GPG key
         env:
           # A keyring of its own, removed at the end of the job.
           GNUPGHOME: ${{ runner.temp }}/gnupg
@@ -263,11 +311,10 @@ jobs:
           echo "${KEY_FP}:6:" | gpg --import-ownertrust
 
       - name: Sign PDF manual (detached .asc)
-        if: ${{ steps.docs.outputs.present == 'true' }}
         env:
           GNUPGHOME: ${{ runner.temp }}/gnupg
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        working-directory: ${{ runner.temp }}
+        working-directory: ${{ runner.temp }}/manual
         run: |
           printf '%s' "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
             --passphrase-fd 0 \
@@ -275,21 +322,19 @@ jobs:
           echo "Signed: AetherSDR-Manual-${TAG}.pdf -> AetherSDR-Manual-${TAG}.pdf.asc"
 
       - name: Verify the signature
-        if: ${{ steps.docs.outputs.present == 'true' }}
-        working-directory: ${{ runner.temp }}
+        working-directory: ${{ runner.temp }}/manual
         env:
           GNUPGHOME: ${{ runner.temp }}/gnupg
         run: gpg --batch --verify "AetherSDR-Manual-${TAG}.pdf.asc" "AetherSDR-Manual-${TAG}.pdf"
 
       # One upload, so the PDF and its signature carry the same timestamp.
       - name: Upload to the release
-        if: ${{ steps.docs.outputs.present == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "$TAG" \
-            "${RUNNER_TEMP}/AetherSDR-Manual-${TAG}.pdf" \
-            "${RUNNER_TEMP}/AetherSDR-Manual-${TAG}.pdf.asc" \
+            "${RUNNER_TEMP}/manual/AetherSDR-Manual-${TAG}.pdf" \
+            "${RUNNER_TEMP}/manual/AetherSDR-Manual-${TAG}.pdf.asc" \
             --clobber --repo "$GITHUB_REPOSITORY"
 
       - name: Remove the signing keyring
