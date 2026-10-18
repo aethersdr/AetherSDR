@@ -3151,6 +3151,23 @@ target_include_directories(bandplan_voice_labels_test PRIVATE src)
 target_link_libraries(bandplan_voice_labels_test PRIVATE Qt6::Core Qt6::Gui)
 add_test(NAME bandplan_voice_labels_test COMMAND bandplan_voice_labels_test)
 
+# IARU R1 / SSA rows match their charts, including the optional `usage`
+# annotation; loads through BandPlanManager so parser and resource are
+# checked together (#4667).
+qt_add_resources(BANDPLAN_USAGE_RESOURCE_TEST_RESOURCES resources/resources.qrc)
+add_executable(bandplan_usage_resource_test
+    tests/bandplan_usage_resource_test.cpp
+    src/models/BandPlanManager.cpp
+    src/core/VoiceSignalDetector.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
+    ${BANDPLAN_USAGE_RESOURCE_TEST_RESOURCES}
+)
+target_include_directories(bandplan_usage_resource_test PRIVATE src)
+target_link_libraries(bandplan_usage_resource_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME bandplan_usage_resource_test COMMAND bandplan_usage_resource_test)
+
 add_executable(radio_discovery_test
     tests/radio_discovery_test.cpp
     src/core/RadioDiscovery.cpp
@@ -9681,6 +9698,7 @@ set(AETHER_SETTINGS_CONSUMERS
     mini_pan_widget_test
     log_manager_filter_rules_test
     bandplan_voice_labels_test
+    bandplan_usage_resource_test
     vkamp_connection_test
     system_info_dialog_test
     spectrum_overlay_band_highlight_test

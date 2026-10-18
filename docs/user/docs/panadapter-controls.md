@@ -101,7 +101,7 @@ Drag the divider between the spectrum and the waterfall to resize them. The spli
 
 ### Band plan overlay
 
-The strip along the bottom of the spectrum shows band segments, colored by use. In the ARRL (US) plan, for example: blue for CW, red for data, orange for phone/SSB, cyan for beacons, purple for satellite, green for weak-signal SSB, and yellow for mixed or experimental segments. Dots mark spot frequencies (FT8, WSPR, QRP calling and so on); hover for a tooltip.
+The strip along the bottom of the spectrum shows band segments, colored by use. In the ARRL (US) plan, for example: blue for CW, red for data, orange for phone/SSB, cyan for beacons, purple for satellite, green for weak-signal SSB, and yellow for mixed or experimental segments. Dots mark spot frequencies (FT8, WSPR, QRP calling and so on); hover for a tooltip. Some segments also carry a usage note from the published band plan, such as "Digimodes, automatically controlled data stations (unattended)" or "All modes except SSB". Hover over the segment to read it. The IARU Region 1 and SSA (Sweden) plans have these notes.
 
 **View → Band Plan** sets:
 
