@@ -1,5 +1,6 @@
 // Production VFO/model/Flex encoder; no default socket, firmware peer or RF.
 #include "TestSettingsProfile.h"
+#include "SeamThreadAffinityProbe.h"
 #include "core/AutomationServer.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/sim/SimBackend.h"
@@ -12,6 +13,8 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QList>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QPair>
 #include <QStringList>
@@ -26,6 +29,13 @@
 #include <thread>
 
 namespace AetherSDR {
+class AutomationServerTestAccess {
+public:
+    static QJsonObject request(AutomationServer& server, const QJsonObject& request)
+    {
+        return server.handleLine(QJsonDocument(request).toJson(QJsonDocument::Compact), nullptr);
+    }
+};
 class RadioModelSliceLifecycleTestAccess {
 public:
     static void identity(RadioModel& radio, const QString& model, const QString& version)
@@ -284,6 +294,8 @@ void identityAndSession()
 void userAndStatus()
 {
     Fixture f;
+    test::SeamThreadAffinityProbe probe(f.backend);
+    test::attachAllSeamSignals(probe);
     using Target = DspParameterResetTarget;
     RadioModelSliceLifecycleTestAccess::license(f.radio, QStringLiteral("1"));
     f.choose(Target::Nr);
@@ -310,6 +322,8 @@ void userAndStatus()
     f.reset()->setFocus();
     QTest::keyClick(f.reset(), Qt::Key_Space);
     check(f.commands == QStringList{"slice reset 0 dsp_param=all"}, "keyboard activation reaches the same operator path");
+    check(probe.violations().isEmpty() && probe.afterDisconnect().isEmpty(),
+          "exercised Flex seam signals honor owner-thread and disconnect boundaries");
 }
 
 void targetAvailability()
@@ -349,6 +363,71 @@ void targetAvailability()
     f.backend->decodeSliceStatus(0, {{"mode", "FM"}});
     check(!enabled(Target::All) && !f.reset()->isEnabled() && f.commands.isEmpty(),
           "unsupported mode disables every target without a reset");
+}
+void invalidTargetSelection()
+{
+    Fixture f;
+    f.vfo.show();
+    for (QPushButton* button : f.vfo.findChildren<QPushButton*>()) {
+        if (button->text() == QStringLiteral("DSP")) {
+            button->click();
+            break;
+        }
+    }
+    AutomationServer bridge;
+    bridge.setRadioModel(&f.radio);
+    const auto invoke = [&bridge](const QString& target, const QString& action, const QString& value) {
+        return AutomationServerTestAccess::request(bridge,
+            {{QStringLiteral("cmd"), QStringLiteral("invoke")},
+             {QStringLiteral("target"), target}, {QStringLiteral("action"), action},
+             {QStringLiteral("value"), value}});
+    };
+    check(!bridge.isRunning() && !bridge.txAllowed(), "bridge dispatcher proof uses no socket or TX permission");
+    const QJsonObject cleared = invoke(QStringLiteral("dspParameterResetTarget"),
+                                      QStringLiteral("setCurrentIndex"), QStringLiteral("-1"));
+    check(cleared.value(QStringLiteral("ok")).toBool() && f.target()->currentIndex() == -1,
+          "production bridge can clear the reset target");
+    check(!f.reset()->isEnabled() && !f.reset()->accessibleDescription().isEmpty(),
+          "empty reset selection disables Reset with an accessible reason");
+    const QJsonObject refused = invoke(QStringLiteral("dspParameterResetButton"),
+                                      QStringLiteral("click"), QString());
+    check(!refused.value(QStringLiteral("ok")).toBool() && f.commands.isEmpty(),
+          "bridge refuses Reset with no selected target and sends no All command");
+    QMetaObject::invokeMethod(f.reset(), "pressed", Qt::DirectConnection);
+    QMetaObject::invokeMethod(f.reset(), "clicked", Qt::DirectConnection, Q_ARG(bool, false));
+    check(f.commands.isEmpty(), "direct signal delivery cannot arm an empty target");
+    f.commands.clear();
+    for (const QVariant& invalid : {QVariant(), QVariant(QStringLiteral("invalid")), QVariant(99)}) {
+        f.choose(DspParameterResetTarget::Nrs);
+        const int row = f.target()->currentIndex();
+        const QVariant saved = f.target()->itemData(row);
+        f.target()->setItemData(row, invalid);
+        emit f.radio.infoChanged();
+        check(!f.reset()->isEnabled(), "invalid selected item data disables Reset");
+        QMetaObject::invokeMethod(f.reset(), "pressed", Qt::DirectConnection);
+        QMetaObject::invokeMethod(f.reset(), "clicked", Qt::DirectConnection, Q_ARG(bool, false));
+        check(f.commands.isEmpty(), "invalid selected item data cannot dispatch a reset");
+        f.commands.clear();
+        f.target()->setItemData(row, saved);
+        emit f.radio.infoChanged();
+    }
+    f.choose(DspParameterResetTarget::All);
+    QMetaObject::invokeMethod(f.reset(), "pressed", Qt::DirectConnection);
+    f.target()->setCurrentIndex(-1);
+    QMetaObject::invokeMethod(f.reset(), "clicked", Qt::DirectConnection, Q_ARG(bool, false));
+    check(f.commands.isEmpty(), "clearing a valid target after press cancels the pending reset");
+    f.commands.clear();
+    f.choose(DspParameterResetTarget::All);
+    QMetaObject::invokeMethod(f.reset(), "pressed", Qt::DirectConnection);
+    f.target()->setCurrentIndex(-1);
+    f.choose(DspParameterResetTarget::All);
+    QMetaObject::invokeMethod(f.reset(), "clicked", Qt::DirectConnection, Q_ARG(bool, false));
+    check(f.commands.isEmpty(), "reselecting All cannot resurrect a cancelled press");
+    f.commands.clear();
+    f.choose(DspParameterResetTarget::All);
+    f.reset()->click();
+    check(f.commands == QStringList{"slice reset 0 dsp_param=all"},
+          "a fresh explicit All selection and click still dispatch exactly once");
 }
 int bridgeFixture(QApplication& app)
 {
@@ -414,5 +493,6 @@ int main(int argc, char** argv)
     identityAndSession();
     userAndStatus();
     targetAvailability();
+    invalidTargetSelection();
     return failures ? 1 : 0;
 }

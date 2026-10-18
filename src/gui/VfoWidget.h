@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 #include "core/KiwiSdrProtocol.h"
 #include "core/backends/RadioCapabilities.h"
@@ -677,6 +678,7 @@ private:
     QSlider* m_agcTSlider{nullptr};
     QLabel* m_agcValueLbl{nullptr};
     void updateDspParameterResetControls();
+    std::optional<DspParameterResetTarget> dspParameterResetTarget(int index) const;
     QPointer<SliceModel> m_dspResetSlice;
     QPointer<SliceModel> m_dspResetIntentSlice;
     QPointer<RadioModel> m_dspResetIntentRadio;

@@ -1,7 +1,6 @@
 #include "VfoWidget.h"
 #include "AudioButtonIcon.h"
 
-#include <utility>
 #include <QList>
 #include <QPair>
 #include <QScopeGuard>
@@ -70,6 +69,7 @@
 #include <QFontMetrics>
 #include <QSignalBlocker>
 #include <QStandardItemModel>
+#include <QVariant>
 #include <QDir>
 #include <QFile>
 #include <QPixmap>
@@ -2127,21 +2127,30 @@ void VfoWidget::buildTabContent()
         resetRow->addWidget(m_dspResetButton);
         dspVb->addLayout(resetRow);
         connect(m_dspResetTarget, &QComboBox::currentIndexChanged,
-                this, &VfoWidget::updateDspParameterResetControls);
+                this, [this] {
+            m_dspResetIntentArmed = false;
+            updateDspParameterResetControls();
+        });
         connect(m_dspResetButton, &QPushButton::pressed, this, [this] {
+            m_dspResetIntentArmed = false;
+            const std::optional<DspParameterResetTarget> target =
+                dspParameterResetTarget(m_dspResetTarget->currentIndex());
+            if (!target) {
+                return;
+            }
             m_dspResetIntentRadio = m_radioModel;
             m_dspResetIntentSlice = m_dspResetSlice;
-            m_dspResetIntentTarget =
-                static_cast<DspParameterResetTarget>(m_dspResetTarget->currentData().toInt());
+            m_dspResetIntentTarget = *target;
             m_dspResetSession = m_radioModel ? m_radioModel->receiveControlSession() : 0;
             m_dspResetIntentArmed = true;
         });
         connect(m_dspResetButton, &QPushButton::clicked, this, [this] {
             const bool armed = std::exchange(m_dspResetIntentArmed, false);
-            if (armed && m_dspResetIntentRadio && m_dspResetIntentRadio == m_radioModel
+            const std::optional<DspParameterResetTarget> target =
+                dspParameterResetTarget(m_dspResetTarget->currentIndex());
+            if (armed && target && m_dspResetIntentRadio && m_dspResetIntentRadio == m_radioModel
                 && m_dspResetIntentSlice == m_dspResetSlice
-                && m_dspResetIntentTarget ==
-                    static_cast<DspParameterResetTarget>(m_dspResetTarget->currentData().toInt())) {
+                && m_dspResetIntentTarget == *target) {
                 m_dspResetIntentRadio->requestDspParameterReset(m_dspResetIntentSlice.data(),
                     m_dspResetSession, m_dspResetIntentTarget);
             }
@@ -6860,6 +6869,19 @@ void VfoWidget::populateDaxCombo()
     m_daxCmb->setCurrentIndex(want);
 }
 
+std::optional<DspParameterResetTarget> VfoWidget::dspParameterResetTarget(int index) const
+{
+    if (!m_dspResetTarget || index < 0 || index >= m_dspResetTarget->count()) {
+        return std::nullopt;
+    }
+    const QVariant data = m_dspResetTarget->itemData(index);
+    if (data.metaType().id() != QMetaType::Int) {
+        return std::nullopt;
+    }
+    const DspParameterResetTarget target = static_cast<DspParameterResetTarget>(data.toInt());
+    return validDspParameterResetTarget(target) ? std::optional(target) : std::nullopt;
+}
+
 void VfoWidget::updateDspParameterResetControls()
 {
     if (!m_dspResetButton || !m_dspResetTarget) {
@@ -6873,9 +6895,8 @@ void VfoWidget::updateDspParameterResetControls()
     auto* targets = qobject_cast<QStandardItemModel*>(m_dspResetTarget->model());
     if (targets) {
         for (int row = 0; row < m_dspResetTarget->count(); ++row) {
-            const DspParameterResetTarget choice =
-                static_cast<DspParameterResetTarget>(m_dspResetTarget->itemData(row).toInt());
-            const QString reason = unavailableReason(choice);
+            const std::optional<DspParameterResetTarget> choice = dspParameterResetTarget(row);
+            const QString reason = choice ? unavailableReason(*choice) : tr("Select a valid DSP parameter reset target");
             QStandardItem* item = targets->item(row);
             item->setEnabled(reason.isEmpty());
             item->setSelectable(reason.isEmpty());
@@ -6883,12 +6904,12 @@ void VfoWidget::updateDspParameterResetControls()
             item->setData(reason, Qt::AccessibleDescriptionRole);
         }
     }
-    const DspParameterResetTarget target =
-        static_cast<DspParameterResetTarget>(m_dspResetTarget->currentData().toInt());
+    const std::optional<DspParameterResetTarget> target =
+        dspParameterResetTarget(m_dspResetTarget->currentIndex());
     const QString scope = target == DspParameterResetTarget::All
         ? tr("Reset every DSP block's parameters, including NB and APF levels. Keeps all on/off states.")
         : tr("Reset the selected algorithm's parameters to radio defaults. Keeps its on/off state.");
-    const QString reason = unavailableReason(target);
+    const QString reason = target ? unavailableReason(*target) : tr("Select a valid DSP parameter reset target");
     const QString description = reason.isEmpty() ? scope : reason + QStringLiteral(". ") + scope;
     m_dspResetButton->setEnabled(reason.isEmpty());
     m_dspResetButton->setToolTip(description);

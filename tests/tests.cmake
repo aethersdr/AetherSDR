@@ -9335,6 +9335,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    dsp_parameter_reset_test
     cw_rx_model_test
     asr_native_receiver_test
     gps_fix_state_test
@@ -9552,6 +9553,7 @@ endforeach()
 # library as AetherSDR so moving QtWidgets out of aethercore cannot silently
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
+    dsp_parameter_reset_test
     nrs_level_range_test
     anan_noise_blanker_readback_test
     automation_cell_test

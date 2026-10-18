@@ -36,8 +36,9 @@ On the [Hermes-Lite 2](./hermes-lite-2.md) and the [ANAN-G2](./anan-g2.md), Aeth
 ### Resetting radio DSP parameters
 
 In the slice's **DSP** tab, choose a **Parameters:** target and press **Reset**.
-Selecting a target does not send a reset. The radio chooses the defaults and
-reports the resulting levels; every algorithm's on/off state stays unchanged.
+Selecting a target does not send a reset. Reset is unavailable when no valid
+target is selected. The radio chooses the defaults and reports the resulting
+levels; every algorithm's on/off state stays unchanged.
 **All** resets every DSP block's parameters, including NB and APF levels.
 It does not reset AetherRX processing or WNB.
 
