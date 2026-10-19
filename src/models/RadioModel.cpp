@@ -7201,15 +7201,15 @@ void RadioModel::onConnected()
 
 void RadioModel::stageSessionModelsForReconnect()
 {
-    if (m_iaruRegion) {
-        m_iaruRegion.reset();
-        emit infoChanged();
-    }
     // onConnected has already opened the new backend session, but old slices
     // remain in m_slices while invalidation emits model notifications. A
     // reentrant UI callback must not dispatch through that temporary identity.
     const QScopedValueRollback<bool> staging(m_stagingReceiveModels, true);
     ++m_sessionModelGeneration;
+    if (m_iaruRegion) {
+        m_iaruRegion.reset();
+        emit infoChanged();
+    }
     // The PREVIOUS session's handle, captured when that session registered
     // (m_ownSessionHandle). clientHandle() is useless here: by stage time the
     // connection has already assigned (or zeroed) the NEW session's handle,
@@ -7675,13 +7675,16 @@ void RadioModel::requestRadioInfo()
     // Query radio info (region, callsign, options, etc.)
     // Response is comma-separated key=value pairs.
     sendCmd("info",
-        [this, infoBackend = m_backendReceiverGeneration,
+        [this, infoSelf = QPointer<RadioModel>(this),
+         infoBackend = m_backendReceiverGeneration,
          infoSession = m_sessionGeneration,
          infoModels = m_sessionModelGeneration](int code, const QString& body) {
-            if (code != 0 || infoSession != m_sessionGeneration
-                || infoBackend != m_backendReceiverGeneration
-                || infoModels != m_sessionModelGeneration) { return; }
-            if (m_flexBackend) { m_flexBackend->decodeRadioInfoMetadata(body); }
+            const auto current = [infoSelf, infoBackend, infoSession, infoModels] {
+                return infoSelf && infoSession == infoSelf->m_sessionGeneration
+                    && infoBackend == infoSelf->m_backendReceiverGeneration
+                    && infoModels == infoSelf->m_sessionModelGeneration;
+            };
+            if (code != 0 || !current()) { return; }
             for (const QString& kv : body.split(',')) {
                 const int eq = kv.indexOf('=');
                 if (eq < 0) continue;
@@ -7711,6 +7714,7 @@ void RadioModel::requestRadioInfo()
                 else if (key == "netmask")        m_netmask = val;
                 else if (key == "gateway")        m_gateway = val;
                 else if (key == "mac")            m_mac = val;
+                if (!current()) { return; }
             }
             qCDebug(lcProtocol) << "RadioModel: info — callsign:" << m_callsign
                      << "region:" << m_region << "options:" << m_radioOptions;
@@ -7728,7 +7732,15 @@ void RadioModel::requestRadioInfo()
                 pruneStaleSessionModels(m_sessionModelGeneration);
             }
 
-            emit infoChanged();
+            if (!current()) { return; }
+            // Metadata publication emits infoChanged: identity from this same
+            // reply must already be visible to synchronous observers.
+            if (m_flexBackend) {
+                m_flexBackend->decodeRadioInfoMetadata(body);
+            } else {
+                emit infoChanged();
+            }
+            if (!current()) { return; }
             if (reloadAntennaAliases())
                 emit antennaAliasesChanged();
         });

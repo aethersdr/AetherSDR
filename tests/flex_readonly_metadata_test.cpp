@@ -30,7 +30,6 @@
 #include <cstdio>
 #include <functional>
 #include <initializer_list>
-#include <cstdio>
 
 namespace AetherSDR {
 class AutomationServerTestAccess {
@@ -327,6 +326,98 @@ private slots:
         f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=not-a-region"));
         QVERIFY(!f.radio.iaruRegion().has_value());
         QVERIFY(f.noCommands());
+    }
+
+    void chainNotificationSeesTheCompleteStatusAndNewerReportWins()
+    {
+        Fixture f;
+        QVERIFY(f.init());
+        SliceModel* slice = f.radio.slice(0);
+        QString modeAtNotification;
+        bool nested = false;
+        connect(slice, &SliceModel::chainModeChanged, slice, [&](const QString& chain) {
+            if (chain == QLatin1String("DIGU") && !nested) {
+                modeAtNotification = slice->mode();
+                nested = true;
+                f.backend->decodeSliceStatus(0, {{"mode", "LSB"}, {"chain_mode", "LSB"}});
+            }
+        });
+        f.backend->decodeSliceStatus(0, {{"mode", "FDVU"}, {"chain_mode", "DIGU"}});
+        QCOMPARE(modeAtNotification, QStringLiteral("FDVU"));
+        QCOMPARE(slice->mode(), QStringLiteral("LSB"));
+        QCOMPARE(slice->chainMode(), QStringLiteral("LSB"));
+    }
+
+    void infoNotificationSeesCompleteIdentityAndDisconnectStopsTheReply()
+    {
+        Fixture f;
+        QVERIFY(f.init());
+        const quint32 seq = f.requestInfo();
+        QString regionAtNotification;
+        bool retired = false;
+        connect(&f.radio, &RadioModel::infoChanged, &f.radio, [&] {
+            if (!retired && f.radio.iaruRegion() == 3) {
+                retired = true;
+                regionAtNotification = f.radio.region();
+                RadioNicknameTestAccess::disconnect(f.radio);
+            }
+        });
+        f.reply(seq, 0, QStringLiteral("region=Current,iaru_region=3,name=Current"));
+        QCOMPARE(regionAtNotification, QStringLiteral("Current"));
+        QVERIFY(!f.radio.iaruRegion());
+        QVERIFY(f.radio.region().isEmpty());
+        QVERIFY(f.radio.nickname().isEmpty());
+    }
+
+    void callsignNotificationCannotPublishRetiredMetadata()
+    {
+        Fixture f;
+        QVERIFY(f.init());
+        const quint32 seq = f.requestInfo();
+        bool retired = false;
+        connect(&f.radio, &RadioModel::callsignChanged, &f.radio, [&] {
+            if (!retired) {
+                retired = true;
+                RadioNicknameTestAccess::disconnect(f.radio);
+            }
+        });
+        f.reply(seq, 0, QStringLiteral("callsign=NEW,region=Retired,iaru_region=3"));
+        QVERIFY(retired);
+        QVERIFY(!f.radio.iaruRegion());
+        QVERIFY(f.radio.region().isEmpty());
+    }
+
+    void stagingNotificationCannotDispatchThroughRetiringSlices()
+    {
+        Fixture f;
+        QVERIFY(f.init());
+        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=2"));
+        SliceModel* slice = f.radio.slice(0);
+        connect(&f.radio, &RadioModel::infoChanged, &f.radio, [slice] {
+            slice->setFrequency(14.3);
+        });
+        f.radio.stageSessionModelsForReconnectForTest();
+        QVERIFY(f.noCommands());
+    }
+
+    void stagingNotificationCannotReviveARetiredInfoReply()
+    {
+        Fixture f;
+        QVERIFY(f.init());
+        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=2"));
+        const quint32 seq = f.requestInfo();
+        const RadioConnection::ResponseCallback old = RadioNicknameTestAccess::callback(f.radio, seq);
+        QVERIFY(old);
+        bool attempted = false;
+        connect(&f.radio, &RadioModel::infoChanged, &f.radio, [&] {
+            if (!attempted) {
+                attempted = true;
+                old(0, QStringLiteral("iaru_region=1"));
+            }
+        });
+        f.radio.stageSessionModelsForReconnectForTest();
+        QVERIFY(attempted);
+        QVERIFY(!f.radio.iaruRegion());
     }
 
     void productionInfoReplyUpdatesBridgeAndErrorPreservesObservation()
