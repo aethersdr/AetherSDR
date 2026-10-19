@@ -9,6 +9,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QEventLoop>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPoint>
@@ -141,6 +142,7 @@ int main(int argc, char** argv)
     // layout squeeze, rather than a standalone widget that can ignore it.
     QWidget host;
     auto* splitter = new QSplitter(Qt::Horizontal, &host);
+    panel.setFixedWidth(250);
     splitter->addWidget(&panel);
     splitter->addWidget(new QWidget);
     host.resize(1024, 300);
@@ -174,6 +176,23 @@ int main(int argc, char** argv)
                && panel.rect().contains(play->geometry()) && panel.rect().contains(preview->geometry()));
     report(QStringLiteral("slots have a scroll area"), slotsScroll != nullptr);
     if (slotsScroll) {
+        const QString longName(DvkModel::kMaxNameBytes, QLatin1Char('W'));
+        feed(model, QStringLiteral("S1|dvk id=3 name=\"%1\" duration=4210").arg(longName));
+        // Include LayoutRequests posted by other LayoutRequests, rather than
+        // inspecting the stale geometry immediately after the name changes.
+        QApplication::processEvents(QEventLoop::AllEvents, 100);
+        auto* length3 = child<QLabel>(panel, QStringLiteral("dvkSlotLength3"));
+        const QRect keyRect(fkey3->mapTo(slotsScroll->viewport(), QPoint()), fkey3->size());
+        const QRect lengthRect = length3
+            ? QRect(length3->mapTo(slotsScroll->viewport(), QPoint()), length3->size()) : QRect();
+        report(QStringLiteral("long slot names keep the F-key and duration in the viewport"),
+               length3 && name3->text() == longName
+                   && slotsScroll->viewport()->rect().contains(keyRect)
+                   && slotsScroll->viewport()->rect().contains(lengthRect));
+        report(QStringLiteral("long slot names create no hidden horizontal scroll range"),
+               slotsScroll->horizontalScrollBar()->maximum() == 0);
+        feed(model, QStringLiteral("S1|dvk id=3 name=\"CQ Contest\" duration=4210"));
+        QApplication::processEvents(QEventLoop::AllEvents, 100);
         report(QStringLiteral("short panel scrolls slots vertically"),
                slotsScroll->verticalScrollBar()->maximum() > 0);
         report(QStringLiteral("slot grid never scrolls horizontally"),

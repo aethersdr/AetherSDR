@@ -179,6 +179,9 @@ DvkPanel::DvkPanel(VoiceKeyer* keyer, QWidget* parent)
         nameLabel->setObjectName(QString("dvkSlotName%1").arg(id));
         nameLabel->setProperty("dvkRole", QStringLiteral("name"));
         nameLabel->setProperty("empty", true);
+        // Names shrink within their column so a long recording name cannot
+        // push the F-key or duration outside the scroll area's viewport.
+        nameLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         rowLayout->addWidget(nameLabel, 1);
 
         auto* durLabel = new QLabel("Empty");
