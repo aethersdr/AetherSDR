@@ -263,9 +263,6 @@ private:
     void beginIcomUnkeySettle();
     void finishIcomUnkeySettle(quint64 generation);
     void stopTxChrono();
-    // Hands the radio's `transmit dax` flag back to what prepareTxAudio()
-    // found, once the radio is back in RX (#5524, #6538).
-    void restoreTransmitDax();
     void requestTciPttOff();
     void abortTciPtt();
     quint64 beginRouteTransition();
@@ -493,9 +490,6 @@ private:
     QJsonObject m_lastDisconnect;
     qint64 m_lastDisconnectAtMs { -1 };
     bool m_txAudioPrepared { false };
-    bool m_txHoldsTransmitDax { false };
-    bool m_txPrevTransmitDax { false };
-    bool m_txDaxRestorePending { false };
     bool              m_txUseRadioRoute{true};
     float             m_txGain{1.0f};
     OverflowMode      m_overflowMode{OverflowMode::Clip};

@@ -2218,6 +2218,13 @@ RadioModel::RadioModel(QObject* parent)
             &m_dstarModel, &DStarModel::handleWaveformStatus);
     connect(&m_dstarModel, &DStarModel::configurationChanged,
             this, &RadioModel::scheduleDStarRuntimeConfiguration);
+    // A `transmit dax` release that landed while the carrier was up is
+    // finished by the radio's own RX report (acquireTransmitDax()).
+    connect(this, &RadioModel::radioTransmittingChanged, this, [this](bool transmitting) {
+        if (!transmitting) {
+            finishTransmitDaxRelease();
+        }
+    });
     connect(&m_transmitModel, &TransmitModel::transmittingChanged,
             this, [this](bool transmitting) {
         if (!transmitting) {
@@ -8432,9 +8439,11 @@ void RadioModel::onDisconnected()
     m_wsprTxYieldAfterUse = false;
     m_wsprTxReleaseWhenReady = false;
     // The radio is gone — there is nothing left to hand `transmit dax` back to,
-    // and the next connect re-reads it from status.
-    m_wsprTxRestoreDax = false;
-    m_wsprTxPreviousDax = false;
+    // and the next connect re-reads it from status. A producer releasing
+    // after this finds no hold and sends nothing.
+    m_transmitDaxHolders = 0;
+    m_transmitDaxBaseline = false;
+    m_transmitDaxRestorePending = false;
     m_wsprTxSeamAudioArmed = false;
     m_wsprTxInput = {};
     m_deadDaxRxSeen.clear();
@@ -13382,6 +13391,67 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
     return true;
 }
 
+namespace {
+quint8 transmitDaxHolderBit(RadioModel::DaxTxFlagHolder who)
+{
+    return static_cast<quint8>(1u << static_cast<quint8>(who));
+}
+} // namespace
+
+void RadioModel::acquireTransmitDax(DaxTxFlagHolder who)
+{
+    // A restore still waiting for RX belongs to the same borrowing: its
+    // baseline is what the operator had, and daxOn() now reads our own 1.
+    if (m_transmitDaxHolders == 0 && !m_transmitDaxRestorePending) {
+        m_transmitDaxBaseline = m_transmitModel.daxOn();
+    }
+    m_transmitDaxRestorePending = false;
+    m_transmitDaxHolders |= transmitDaxHolderBit(who);
+    if (!m_transmitModel.daxOn()) {
+        m_transmitModel.setDax(true);
+    }
+}
+
+void RadioModel::releaseTransmitDax(DaxTxFlagHolder who)
+{
+    const quint8 bit = transmitDaxHolderBit(who);
+    if (!(m_transmitDaxHolders & bit)) {
+        return;
+    }
+    m_transmitDaxHolders &= static_cast<quint8>(~bit);
+    if (m_transmitDaxHolders != 0) {
+        return;
+    }
+    m_transmitDaxRestorePending = true;
+    finishTransmitDaxRelease();
+}
+
+bool RadioModel::transmitDaxHeldBy(DaxTxFlagHolder who) const
+{
+    return (m_transmitDaxHolders & transmitDaxHolderBit(who)) != 0;
+}
+
+void RadioModel::finishTransmitDaxRelease()
+{
+    // Pending only ever follows the last release; any acquire clears it.
+    if (!m_transmitDaxRestorePending) {
+        return;
+    }
+    // The abort paths release while the carrier may still be up; switching
+    // the modulator to the mic mid-over would put the room on the air.
+    if (m_radioTransmitting) {
+        return;
+    }
+    m_transmitDaxRestorePending = false;
+    // Holds only ever set the flag to 1, so there is something to hand back
+    // only when it was off before and is still on now. Off now means the
+    // operator or another client already chose; on before means nothing
+    // changed. Either way no command goes out (#2315).
+    if (!m_transmitDaxBaseline && m_transmitModel.daxOn()) {
+        m_transmitModel.setDax(false);
+    }
+}
+
 bool RadioModel::prepareWsprTransmit(const TxCoordinator::Request& input)
 {
     const TxCoordinator::Request request = input;
@@ -13424,20 +13494,18 @@ bool RadioModel::prepareWsprTransmit(const TxCoordinator::Request& input)
     }
     // WSPR is generated in-process and sent through our own dax_tx stream.
     // `transmit dax` is a station-wide setting the operator (or SmartSDR DAX2
-    // on Windows, #2315) owns, so remember it and hand it back in
+    // on Windows, #2315) owns, so hold it and release it in
     // releaseWsprTransmit(). Leaving dax=1 latched would silently kill the
     // next mic voice TX on every platform where updateDaxTxMode() is compiled
-    // out (Windows / Linux without PipeWire). Mirrors the AX.25 TX path.
+    // out (Windows / Linux without PipeWire).
     m_wsprTxInput = request;
-    m_wsprTxPreviousDax = m_transmitModel.daxOn();
-    m_wsprTxRestoreDax = true;
     m_wsprTxYieldAfterUse = !m_daxTxActive;
     m_wsprTxOwnershipRequested = true;
     m_wsprTxReleaseWhenReady = false;
     const auto current = [self, request] {
         return self && request.valid() && request.sameRequest(self->m_wsprTxInput);
     };
-    m_transmitModel.setDax(true);
+    acquireTransmitDax(DaxTxFlagHolder::Wspr);
     if (!current()) { releaseWsprTransmit(request); return false; }
     const bool ready = ensureDaxTxStream(DaxTxRequestReason::WsprBeacon);
     if (!current()) { releaseWsprTransmit(request); return false; }
@@ -13465,8 +13533,6 @@ void RadioModel::releaseWsprTransmit(const TxCoordinator::Request& input)
     const bool seamAudio = std::exchange(m_wsprTxSeamAudioArmed, false);
     const bool ownership = std::exchange(m_wsprTxOwnershipRequested, false);
     const bool yield = std::exchange(m_wsprTxYieldAfterUse, false);
-    const bool restoreDax = std::exchange(m_wsprTxRestoreDax, false);
-    const bool previousDax = m_wsprTxPreviousDax;
     if (!request.originalSessionCurrent()) { return; }
     // Seam audio: nothing was borrowed, so nothing is handed back. Dropping
     // the latch is the whole release — and it must happen before the DAX arm so
@@ -13482,9 +13548,8 @@ void RadioModel::releaseWsprTransmit(const TxCoordinator::Request& input)
             m_wsprTxReleaseWhenReady = true;
         }
     }
-    if (self && request.originalSessionCurrent() && restoreDax
-        && m_transmitModel.daxOn() != previousDax) {
-        m_transmitModel.setDax(previousDax);
+    if (self && request.originalSessionCurrent()) {
+        releaseTransmitDax(DaxTxFlagHolder::Wspr);
     }
 }
 

@@ -924,27 +924,22 @@ void MainWindow::syncRadeTransmitDax(bool radeOwnsTx)
     // slice RADE runs on and clears it on the way back to voice. Elsewhere
     // nothing sets it, so RADE keyed a silent carrier until the operator
     // pressed DAX, and then voice was silent until they turned it off again
-    // (#6538). Take the flag only while RADE's slice is the TX slice, and
-    // hand back what was found, so a SmartSDR DAX2 user's setting survives
-    // (#2315).
+    // (#6579). Hold the flag only while RADE's slice is the TX slice. The
+    // RadioModel table hands back what the operator had, so a SmartSDR DAX2
+    // user's setting survives (#2315), and a TCI over that overlaps RADE
+    // cannot clear it out from under RADE (#6538).
 #if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
     Q_UNUSED(radeOwnsTx);
 #else
-    if (radeOwnsTx == m_radeHoldsTransmitDax) {
-        return;
-    }
-    if (!m_radioModel.hasCommandPlane()) {
-        m_radeHoldsTransmitDax = false;
-        return;
-    }
-    auto& tx = m_radioModel.transmitModel();
-    if (radeOwnsTx) {
-        m_radePrevTransmitDax = tx.daxOn();
-        m_radeHoldsTransmitDax = true;
-        tx.setDax(true);
+    constexpr auto kRade = RadioModel::DaxTxFlagHolder::Rade;
+    // This runs on every slice mode and TX-slice change; acquiring again
+    // would re-assert dax=1 over an operator who turned DAX off mid-RADE.
+    if (radeOwnsTx && m_radioModel.hasCommandPlane()) {
+        if (!m_radioModel.transmitDaxHeldBy(kRade)) {
+            m_radioModel.acquireTransmitDax(kRade);
+        }
     } else {
-        m_radeHoldsTransmitDax = false;
-        tx.setDax(m_radePrevTransmitDax);
+        m_radioModel.releaseTransmitDax(kRade);
     }
 #endif
 }

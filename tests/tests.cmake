@@ -7777,6 +7777,14 @@ target_include_directories(voice_keyer_tx_route_test PRIVATE src tests)
 target_link_libraries(voice_keyer_tx_route_test PRIVATE aethercore Qt6::Core)
 add_test(NAME voice_keyer_tx_route_test COMMAND voice_keyer_tx_route_test)
 
+# RadioModel's `transmit dax` holder table (#6538, #6579): overlapping holders
+# release in any order, the restore waits for RX, an outside change wins.
+# Socket-free: a bare RadioModel. Links aethercore.
+add_executable(transmit_dax_hold_test tests/transmit_dax_hold_test.cpp)
+target_include_directories(transmit_dax_hold_test PRIVATE src tests)
+target_link_libraries(transmit_dax_hold_test PRIVATE aethercore Qt6::Core)
+add_test(NAME transmit_dax_hold_test COMMAND transmit_dax_hold_test)
+
 # Which keyer the panel is bound to, and RFC #4214's condition that a source
 # change never retargets a running operation. Socket-free: a bare RadioModel,
 # no AudioEngine. QSignalSpy needs Qt6::Test.

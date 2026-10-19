@@ -3363,45 +3363,12 @@ void TciServer::prepareTxAudio()
         // The flag is the radio's TX audio source for every later
         // transmission, not just this one: left on, the next mic
         // transmission keys with no modulation, and on Windows nothing else
-        // ever clears it. Remember what it was so stopTxChrono() can hand it
-        // back, as the voice keyer, AX.25 and WSPR producers do
-        // (#5524, #6538). A key-up that arrives while an earlier restore is
-        // still waiting for RX keeps the original value: daxOn() now reads
-        // our own dax=1.
+        // ever clears it. Hold it through RadioModel so stopTxChrono() hands
+        // back what the operator had, without clearing it under RADE or any
+        // other producer still holding it (#5524, #6538).
         if (m_model->hasCommandPlane()) {
-            auto& tx = m_model->transmitModel();
-            if (!m_txHoldsTransmitDax) {
-                m_txPrevTransmitDax = tx.daxOn();
-                m_txHoldsTransmitDax = true;
-            }
-            m_txDaxRestorePending = false;
-            tx.setDax(true);
+            m_model->acquireTransmitDax(RadioModel::DaxTxFlagHolder::Tci);
         }
-    }
-}
-
-void TciServer::restoreTransmitDax()
-{
-    if (!m_txHoldsTransmitDax) {
-        return;
-    }
-    // The abort and teardown paths stop the chrono while the carrier may
-    // still be up; switching the modulator back to the mic mid-over would
-    // put the room on the air. Wait for the radio to report RX.
-    if (m_model && m_model->isRadioTransmitting()) {
-        m_txDaxRestorePending = true;
-        return;
-    }
-    m_txHoldsTransmitDax = false;
-    m_txDaxRestorePending = false;
-    if (!m_model || !m_model->hasCommandPlane()) {
-        return;
-    }
-    // Write only what changes: a SmartSDR DAX2 user who had DAX on before
-    // TCI keyed sees no command at all (#2315).
-    auto& tx = m_model->transmitModel();
-    if (tx.daxOn() != m_txPrevTransmitDax) {
-        tx.setDax(m_txPrevTransmitDax);
     }
 }
 
@@ -3485,7 +3452,9 @@ void TciServer::stopTxChrono()
     m_txChronoClient = nullptr;
     if (m_audio && m_txAudioPrepared) { m_audio->setDaxTxMode(false); }
     m_txAudioPrepared = false;
-    restoreTransmitDax();
+    if (m_model) {
+        m_model->releaseTransmitDax(RadioModel::DaxTxFlagHolder::Tci);
+    }
 }
 
 
@@ -3609,9 +3578,6 @@ void TciServer::onRadioTransmittingChanged(bool transmitting)
 {
     const bool changed = transmitting != m_lastRadioTx;
     m_lastRadioTx = transmitting;
-    if (!transmitting && m_txDaxRestorePending) {
-        restoreTransmitDax();
-    }
 
     if (transmitting) {
         if (m_icomUnkeySettle.isSettling()) {

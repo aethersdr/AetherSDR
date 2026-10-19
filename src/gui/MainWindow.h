@@ -2203,8 +2203,6 @@ private:
     bool m_radeTxActive{false};
     // RADE's hold on the radio's `transmit dax` flag where nothing else
     // drives it from the slice mode (Windows, Linux without PipeWire).
-    bool m_radeHoldsTransmitDax{false};
-    bool m_radePrevTransmitDax{false};
     void syncRadeTransmitDax(bool radeOwnsTx);
     void activateRADE(int sliceId);
     void deactivateRADE();
