@@ -10639,6 +10639,19 @@ void RadioModel::dispatchSliceControl(const SliceControlRequest& request)
 
 void RadioModel::dispatchTransmitControl(const TransmitControlRequest& request)
 {
+    // TransmitModel counts a `transmit dax` request as outstanding until it is
+    // answered, and the holder table trusts the requested value meanwhile. A
+    // request that never reaches the backend must still be answered, or the
+    // flag would read as "in flight" for the rest of the session.
+    const QPointer<TransmitModel> daxModel(&m_transmitModel);
+    auto answerUnsentDax = qScopeGuard([daxModel, self = QPointer<RadioModel>(this),
+                                        ticket = request.answerTicket,
+                                        dax = request.field == TransmitControlRequest::Field::Dax] {
+        if (!dax || ticket == 0 || !self) { return; }
+        QMetaObject::invokeMethod(self, [daxModel, ticket] {
+            if (daxModel) { daxModel->handleControlAnswer(ticket, false); }
+        }, Qt::QueuedConnection);
+    });
     if (QThread::currentThread() != thread() || sender() != &m_transmitModel
         || !m_backend || !isConnected() || m_txSessionClosing) {
         return;
@@ -10671,6 +10684,7 @@ void RadioModel::dispatchTransmitControl(const TransmitControlRequest& request)
     }
     const TunePowerContext tuneContext = tuneCarrierLive() ? TunePowerContext::LiveLocalCarrier
         : m_transmitModel.isTuning() ? TunePowerContext::UnqualifiedCarrier : TunePowerContext::Deferred;
+    answerUnsentDax.dismiss();  // the backend, or the fallback below, answers now
     const ReceiveDispatch result = backend->requestTransmitControl(request, tuneContext);
     if (!alive || !backend || m_backendReceiverGeneration != generation) { return; }
     reportReceiveDispatch(result, request.label());
@@ -13398,16 +13412,28 @@ quint8 transmitDaxHolderBit(RadioModel::DaxTxFlagHolder who)
 }
 } // namespace
 
+bool RadioModel::transmitDaxEffective() const
+{
+    // While a dax command is unanswered, a status for an EARLIER command can
+    // still land and put daxOn() back to a superseded value: our own dax=1
+    // echo arriving after the restore's dax=0 was sent, or the operator's.
+    // Until the reply, the newest request is the radio's coming state; after
+    // it, every status that command produced has arrived (the radio sends
+    // them before or with the reply), so daxOn() is the truth again.
+    return m_transmitModel.daxSettled() ? m_transmitModel.daxOn()
+                                        : m_transmitModel.daxRequested();
+}
+
 void RadioModel::acquireTransmitDax(DaxTxFlagHolder who)
 {
     // A restore still waiting for RX belongs to the same borrowing: its
-    // baseline is what the operator had, and daxOn() now reads our own 1.
+    // baseline is what the operator had, and the flag now reads our own 1.
     if (m_transmitDaxHolders == 0 && !m_transmitDaxRestorePending) {
-        m_transmitDaxBaseline = m_transmitModel.daxOn();
+        m_transmitDaxBaseline = transmitDaxEffective();
     }
     m_transmitDaxRestorePending = false;
     m_transmitDaxHolders |= transmitDaxHolderBit(who);
-    if (!m_transmitModel.daxOn()) {
+    if (!transmitDaxEffective()) {
         m_transmitModel.setDax(true);
     }
 }
@@ -13447,7 +13473,7 @@ void RadioModel::finishTransmitDaxRelease()
     // only when it was off before and is still on now. Off now means the
     // operator or another client already chose; on before means nothing
     // changed. Either way no command goes out (#2315).
-    if (!m_transmitDaxBaseline && m_transmitModel.daxOn()) {
+    if (!m_transmitDaxBaseline && transmitDaxEffective()) {
         m_transmitModel.setDax(false);
     }
 }

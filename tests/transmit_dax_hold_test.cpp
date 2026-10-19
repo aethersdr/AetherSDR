@@ -7,6 +7,7 @@
 // Run: ./build/transmit_dax_hold_test
 
 #include "core/backends/ModelControlRequest.h"
+#include "core/backends/TransmitDelta.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
@@ -193,6 +194,68 @@ int main(int argc, char** argv)
         radio.releaseTransmitDax(Holder::VoiceKeyer);
         report("disconnect_drops_every_hold",
                droppedAtDisconnect && writes.count == 0, state(tx, writes));
+    }
+
+    // #6593 review (rfoust): the radio's echo of an EARLIER dax=1 lands after
+    // the restore's dax=0 was sent but before it was answered. The next
+    // holder must still send dax=1, and must not take that stale 1 as the
+    // operator's baseline, or its release would leave the flag latched.
+    {
+        RadioModel radio;
+        TransmitModel& tx = radio.transmitModel();
+        tx.setDax(false);
+        radio.acquireTransmitDax(Holder::Rade);   // requests ON
+        radio.releaseTransmitDax(Holder::Rade);   // requests OFF while RX
+
+        TransmitDelta onEcho;
+        onEcho.dax = true;                        // earlier ON status arrives late
+        tx.applyChanges(onEcho);
+        DaxWrites writes(tx);
+        radio.acquireTransmitDax(Holder::Tci);    // must still ask for ON
+
+        TransmitDelta offEcho;
+        offEcho.dax = false;                      // outstanding OFF reaches the radio
+        tx.applyChanges(offEcho);
+        report("delayed_on_echo_must_not_suppress_next_acquire",
+               writes.count > 0,
+               state(tx, writes) + " holder="
+                   + std::to_string(radio.transmitDaxHeldBy(Holder::Tci)));
+
+        TransmitDelta tciOnEcho;
+        tciOnEcho.dax = true;                     // TCI's own ON lands
+        tx.applyChanges(tciOnEcho);
+        radio.releaseTransmitDax(Holder::Tci);
+        report("delayed_on_echo_is_not_taken_as_baseline", !tx.daxOn(),
+               state(tx, writes));
+    }
+
+    // The same race started by the operator rather than a holder: DAX clicked
+    // on, then off, and the echo of the ON overtakes the OFF.
+    {
+        RadioModel radio;
+        TransmitModel& tx = radio.transmitModel();
+        tx.setDax(true);
+        tx.setDax(false);
+        TransmitDelta staleOn;
+        staleOn.dax = true;
+        tx.applyChanges(staleOn);
+        DaxWrites writes(tx);
+        radio.acquireTransmitDax(Holder::Tci);
+        radio.releaseTransmitDax(Holder::Tci);
+        report("operator_stale_echo_neither_suppresses_nor_latches",
+               writes.count == 2 && !tx.daxOn(), state(tx, writes));
+    }
+
+    // A dax request that never reaches a radio (here: no backend at all, as
+    // when disconnected) is still answered, so the flag cannot read as in
+    // flight for the rest of the session.
+    {
+        RadioModel radio;
+        TransmitModel& tx = radio.transmitModel();
+        tx.setDax(true);
+        const bool pendingAtFirst = !tx.daxSettled();
+        QCoreApplication::processEvents();
+        report("unsent_dax_request_is_answered", pendingAtFirst && tx.daxSettled());
     }
 
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");

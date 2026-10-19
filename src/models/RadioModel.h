@@ -2426,6 +2426,7 @@ private:
     bool        m_transmitDaxBaseline{false};
     bool        m_transmitDaxRestorePending{false};
     void        finishTransmitDaxRelease();
+    bool        transmitDaxEffective() const;
     QSet<quint32> m_deadDaxRxSeen;
     QSet<quint32> m_externalDaxTxSeen;
     QSet<quint32> m_externalDaxRxSeen;
