@@ -100,7 +100,7 @@ public:
         routes["GET /operate-mode"] = {200, R"({"operate_mode":"STANDBY"})"};
         routes["GET /operational-interface"] = {200, R"({"operational_interface":"CAT"})"};
         routes["GET /antennas"] = {200,
-            R"([{"type":"INTERNAL","number":1,"state":"ACTIVE"},{"type":"INTERNAL","number":2,"state":"AVAILABLE"}])"};
+            R"({"antennas":[{"type":"INTERNAL","number":1,"state":"ACTIVE"},{"type":"INTERNAL","number":2,"state":"AVAILABLE"}]})"};
         routes["PUT /operate-mode"] = {200, R"({"operate_mode":"OPERATE"})"};
         routes["PUT /antennas/active"] = {200, R"({"type":"INTERNAL","number":2})"};
         routes["POST /error/reset"] = {200, "{}"};

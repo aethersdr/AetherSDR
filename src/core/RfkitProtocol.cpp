@@ -326,11 +326,21 @@ std::optional<QVector<AntennaWithState>> parseAntennas(const QByteArray& body)
     }
     QJsonParseError error;
     const QJsonDocument doc = QJsonDocument::fromJson(body, &error);
-    if (error.error != QJsonParseError::NoError || !doc.isArray()) {
+    if (error.error != QJsonParseError::NoError) {
+        return std::nullopt;
+    }
+    // The document describes a bare array, but a real RF2K-S (firmware G200C267)
+    // answers {"antennas":[...]}. Accept both: the list is the same either way.
+    QJsonArray entries;
+    if (doc.isArray()) {
+        entries = doc.array();
+    } else if (doc.isObject() && doc.object().value(QLatin1String("antennas")).isArray()) {
+        entries = doc.object().value(QLatin1String("antennas")).toArray();
+    } else {
         return std::nullopt;
     }
     QVector<AntennaWithState> out;
-    for (const QJsonValue& entry : doc.array()) {
+    for (const QJsonValue& entry : entries) {
         if (!entry.isObject()) {
             continue;
         }

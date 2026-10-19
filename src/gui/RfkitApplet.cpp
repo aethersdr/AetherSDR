@@ -44,6 +44,24 @@ QVector<HGauge::Tick> evenTicks(float max)
     return ticks;
 }
 
+// The amplifier's own SWR meter is not linear: 1, 1.5, 2, 3, 5, infinity sit at
+// equal spacing, so detail is kept at the low end and a very bad match still
+// moves the needle. The gauge here runs over those six positions (0..5) and
+// every SWR is mapped onto it, so the applet reads like the amplifier's screen.
+constexpr float kSwrGaugeMax = 5.0f;
+constexpr float kSwrGaugeYellow = 1.0f;  // SWR 1.5
+constexpr float kSwrGaugeRed = 2.0f;     // SWR 2
+
+float swrGaugePosition(float swr)
+{
+    if (!(swr > 1.0f)) { return 0.0f; }              // also catches NaN
+    if (swr <= 1.5f) { return (swr - 1.0f) / 0.5f; }
+    if (swr <= 2.0f) { return 1.0f + (swr - 1.5f) / 0.5f; }
+    if (swr <= 3.0f) { return 2.0f + (swr - 2.0f); }
+    if (swr <= 5.0f) { return 3.0f + (swr - 3.0f) / 2.0f; }
+    return 4.0f + (1.0f - 5.0f / swr);               // approaches 5 at infinity
+}
+
 QLabel* makeValueLabel(QWidget* parent)
 {
     auto* lbl = new QLabel(parent);
@@ -173,11 +191,11 @@ RfkitApplet::RfkitApplet(QWidget* parent)
 
     m_swrLabel = makeValueLabel(this);
     m_swrLabel->setText(QStringLiteral("SWR"));
-    m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, QString(), QString(),
-                            {{1.0f, QStringLiteral("1")},   {1.5f, QStringLiteral("1.5")},
-                             {2.0f, QStringLiteral("2")},   {2.5f, QStringLiteral("2.5")},
-                             {3.0f, QStringLiteral("3")}},
-                            this, 2.0f);
+    m_swrGauge = new HGauge(0.0f, kSwrGaugeMax, kSwrGaugeRed, QString(), QString(),
+                            {{0.0f, QStringLiteral("1")},   {1.0f, QStringLiteral("1.5")},
+                             {2.0f, QStringLiteral("2")},   {3.0f, QStringLiteral("3")},
+                             {4.0f, QStringLiteral("5")},   {5.0f, QString::fromUtf8("\xe2\x88\x9e")}},
+                            this, kSwrGaugeYellow);
     m_swrGauge->setAccessibleName(tr("SWR"));
     auto* swrRow = new QHBoxLayout;
     swrRow->setSpacing(4);
@@ -364,7 +382,8 @@ void RfkitApplet::setStatus(const Rfkit::Status& status)
         // hold both at baseline below 1W, the same gate the other amplifier
         // applets use, so an idle amp does not paint a meaningless SWR.
         m_refGauge->setValue(fwd >= 1.0f ? static_cast<float>(status.power->reflected.value) : 0.0f);
-        m_swrGauge->setValue(fwd >= 1.0f ? status.power->swr.value : 1.0f);
+        m_swrGauge->setValue(fwd >= 1.0f
+                             ? swrGaugePosition(static_cast<float>(status.power->swr.value)) : 0.0f);
     }
 
     const QString error = status.interfaceState ? status.interfaceState->error : QString();
@@ -484,7 +503,7 @@ void RfkitApplet::setConnected(bool connected)
         m_pwrGauge->setValueImmediate(0.0f);
         m_pwrGauge->clearPeak();
         m_refGauge->setValueImmediate(0.0f);
-        m_swrGauge->setValueImmediate(1.0f);
+        m_swrGauge->setValueImmediate(0.0f);
         // Force the repaint so the placeholders replace the last readings now
         // rather than on the next tick.
         m_valuesDirty = true;
@@ -507,7 +526,7 @@ void RfkitApplet::updateValueLabels()
         ? QStringLiteral("REF  %1").arg(m_status.power->reflected.value)
         : QStringLiteral("REF"));
     m_swrLabel->setText(fwd >= 1.0f
-        ? QStringLiteral("SWR  %1:1").arg(m_status.power->swr.value, 0, 'f', 1)
+        ? QStringLiteral("SWR %1:1").arg(m_status.power->swr.value, 0, 'f', 2)
         : QStringLiteral("SWR"));
 
     if (!m_valuesDirty) {

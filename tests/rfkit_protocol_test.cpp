@@ -205,6 +205,20 @@ int main()
         report("malformed antenna entries are skipped, valid ones survive",
                list.has_value() && list->size() == 1 && list->at(0).antenna.number == 4);
     }
+    {
+        // The shape a real RF2K-S sends: the list wrapped in {"antennas":[...]}.
+        const auto list = parseAntennas(
+            R"({"antennas":[{"type":"INTERNAL","number":1,"state":"ACTIVE"},)"
+            R"({"type":"INTERNAL","number":2,"state":"AVAILABLE"},)"
+            R"({"type":"INTERNAL","number":3,"state":"DISABLED"},)"
+            R"({"type":"INTERNAL","number":4,"state":"DISABLED"},)"
+            R"({"type":"EXTERNAL","state":"AVAILABLE"}]})");
+        report("parseAntennas accepts the list wrapped in an object",
+               list.has_value() && list->size() == 4
+                   && list->at(0).state == AntennaState::Active
+                   && list->at(1).state == AntennaState::Available
+                   && list->at(2).state == AntennaState::Disabled);
+    }
     report("an antenna list that is not an array is rejected",
            !parseAntennas(R"({"type":"INTERNAL","number":1,"state":"ACTIVE"})").has_value());
     report("an empty antenna array is a valid, empty list",
