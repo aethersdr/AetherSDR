@@ -665,6 +665,18 @@
   "split": "Core-profile: presentation delay queue, per-surface delay/due-time model, sync settings/status, GCC-PHAT audio delay estimator \u2014 all generalize to N sources. Vendor: hardcoded Flex/KiwiSdr source and reference enums, Flex-vs-Kiwi offset polarity, and flex/kiwi audio-pair selection (kiwiProfileId, flexSliceId) \u2014 should become generic source IDs with flex/kiwi bindings.",
   "confidence": "high"
  },
+ "core/RfkitConnection.h": {
+  "tag": "peripheral(rfkit)",
+  "note": "Direct HTTP/JSON REST client (default port 8080) for the RF-KIT amplifier — a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h, core/SpeConnection.h, core/VkampConnection.h and core/Kpa1500Connection.h. The Flex radio neither discovers it nor proxies its telemetry, so its REST API is the only control channel. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/rfkit-amplifier-design.md.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/RfkitProtocol.h": {
+  "tag": "peripheral(rfkit)",
+  "note": "Wire codec for the RF-KIT peripheral: JSON parsers for each REST endpoint (power, data, tuner, antennas, operate mode, operational interface, info), the request-body builders, and the per-field optional Status snapshot. Derived from the vendor's public RFKIT API documentation (OpenAPI 0.9.0), a clean-room input (Constitution Principle IV). Peripheral accessory wire, NOT behind the IRadioBackend radio seam.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/RttyDecoder.h": {
   "tag": "universal",
   "note": "Radio-agnostic RTTY (Baudot) DSP decoder over generic 24 kHz PCM; engine-side digital-mode decode feature.",

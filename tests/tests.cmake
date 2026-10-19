@@ -5072,6 +5072,37 @@ target_include_directories(vkamp_protocol_test PRIVATE src)
 target_link_libraries(vkamp_protocol_test PRIVATE Qt6::Core)
 add_test(NAME vkamp_protocol_test COMMAND vkamp_protocol_test)
 
+add_executable(rfkit_protocol_test
+    tests/rfkit_protocol_test.cpp
+    src/core/RfkitProtocol.cpp
+)
+target_include_directories(rfkit_protocol_test PRIVATE src)
+target_link_libraries(rfkit_protocol_test PRIVATE Qt6::Core)
+add_test(NAME rfkit_protocol_test COMMAND rfkit_protocol_test)
+
+# RfkitConnection against a stub RF-KIT speaking HTTP on loopback -- the
+# transport behaviour the pure-codec test above can't reach: the GET /info
+# handshake, strictly serialized requests, command verbs and bodies, refusal of
+# out-of-range antennas before the wire, a non-RF-KIT peer, an oversized
+# response, an invalid address, and link loss after repeated failures. A
+# loopback mock of the vendor's documented, versioned HTTP API (RFKIT API
+# 0.9.0), the case docs/agents/tests-ci.md allows. Socket-owning: binds one
+# ephemeral 127.0.0.1 TCP listener per scenario and skips (exit 77) if it
+# cannot. Isolated settings dir per the CMake contract: LogManager pulls in
+# AppSettings.
+add_executable(rfkit_connection_test
+    tests/rfkit_connection_test.cpp
+    src/core/RfkitConnection.cpp
+    src/core/RfkitProtocol.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+)
+target_include_directories(rfkit_connection_test PRIVATE src tests)
+target_link_libraries(rfkit_connection_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME rfkit_connection_test COMMAND rfkit_connection_test)
+set_tests_properties(rfkit_connection_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
 # VkampConnection against a stub amp on loopback -- the transport behaviour
 # the pure-codec test above can't reach: the bypass/voltage safety interlock,
 # the reset hold's exclusive claim on the wire, the command rate limiter,
@@ -9606,6 +9637,7 @@ set(AETHER_SETTINGS_CONSUMERS
     log_manager_filter_rules_test
     bandplan_voice_labels_test
     vkamp_connection_test
+    rfkit_connection_test
     system_info_dialog_test
     spectrum_overlay_band_highlight_test
     spectrum_overlay_dax_availability_test

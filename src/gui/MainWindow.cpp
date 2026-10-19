@@ -3584,7 +3584,7 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
                                          &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
                                          m_kiwiSdrManager, &m_acomConn, &m_speConn,
                                          &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn, &m_kpa500Conn,
-                                         this, &m_kat500Model, &m_kxpa100Model);
+                                         this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         m_radioSetupDialog = dlg;
     }
@@ -4180,6 +4180,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // destructor-path unkey somewhere to run while the event loop is still
     // live, rather than during member destruction (#4097).
     m_kpa1500Conn.disconnect();
+    // The RF-KIT likewise has zero radio awareness. Closing it here also aborts
+    // any request still in flight while the event loop is live, rather than
+    // leaving that to member destruction.
+    m_rfkitConn.disconnect();
     // The LP-100A is likewise independent of the radio lifecycle and may be
     // connected through a shared ser2net proxy. Close it explicitly while
     // the event loop is still live instead of relying on member destruction.

@@ -1106,6 +1106,8 @@ set(CORE_SOURCES
     src/core/VkampConnection.cpp
     src/core/Kpa1500Protocol.cpp
     src/core/Kpa1500Connection.cpp
+    src/core/RfkitProtocol.cpp
+    src/core/RfkitConnection.cpp
     src/core/LpMeterProtocol.cpp
     src/core/LpMeterConnection.cpp
     src/core/FirmwareUploader.cpp
@@ -1405,6 +1407,7 @@ set(GUI_SOURCES
     src/gui/SpeLcdWidget.cpp
     src/gui/VkampApplet.cpp
     src/gui/Kpa1500Applet.cpp
+    src/gui/RfkitApplet.cpp
     src/gui/LpMeterApplet.cpp
     src/gui/Ctr2ProxyPanel.cpp
     src/gui/FirmwareInstallDialog.cpp

@@ -99,6 +99,7 @@
 #include "models/Kat500Model.h"
 #include "models/Kxpa100Model.h"
 #include "core/Kpa1500Connection.h"
+#include "core/RfkitConnection.h"
 #include "core/DxccColorProvider.h"
 
 #include <QMainWindow>
@@ -1344,6 +1345,7 @@ private:
     class Kxpa100RadioAssociation* m_kxpa100Association = nullptr;
     QPointer<class AtuPreTuneDialog> m_kat500PreTuneDialog;
     Kpa500Connection  m_kpa500Conn;      // Elecraft KPA500 amplifier, serial or raw TCP
+    RfkitConnection   m_rfkitConn;       // RF-KIT amplifier, REST/JSON over HTTP (default port 8080)
     Kpa1500Connection m_kpa1500Conn;     // Elecraft KPA1500 amplifier, TCP control/status on port 1500 (#4097)
     BandPlanManager*  m_bandPlanMgr{nullptr};
 #ifdef HAVE_CW_RX_BACKENDS

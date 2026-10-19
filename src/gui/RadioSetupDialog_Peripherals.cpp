@@ -31,6 +31,7 @@
 #include "core/PeripheralRemovalGuard.h"
 #include "core/PeripheralSettings.h"
 #include "core/PgxlConnection.h"
+#include "core/RfkitConnection.h"
 #include "core/SpeConnection.h"
 #include "core/TgxlConnection.h"
 #include "core/ThemeManager.h"
@@ -90,6 +91,7 @@ struct PeripheralDeviceUi {
         SerialOrNetwork,  // ACOM, SPE Expert, LP-100A: serial port or ser2net host
         Vkamp,            // host + port, plus the amplifier model
         Kpa1500,          // host + port
+        Rfkit,            // host + port (HTTP)
         Kxpa100,          // KXPA100 amplifier with optional tuner
         Kat500,           // KAT500 serial or TCP tuner
         Kpa500,           // Serial with selectable baud, or raw TCP
@@ -1572,6 +1574,69 @@ void RadioSetupDialog::revealKxpa100AdvancedSettings()
     });
 }
 
+void RadioSetupDialog::buildRfkitDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
+                                        const std::function<void()>& refresh)
+{
+    PeripheralDeviceUi* const u = &ui;
+    DetailPage detail = beginDetailPage(ui, stackParent);
+
+    ui.addressEdit = new QLineEdit;
+    ui.addressEdit->setObjectName(QStringLiteral("peripheralAddress_%1").arg(ui.id));
+    ui.addressEdit->setPlaceholderText(QStringLiteral("e.g. 192.168.1.70"));
+    ui.addressEdit->setText(PeripheralSettings::deviceString("Rfkit", "ManualIp"));
+    ui.addressEdit->setAccessibleName(tr("RF-KIT address"));
+    ui.addressEdit->setAccessibleDescription(
+        tr("IP address or host name of the RF-KIT amplifier"));
+
+    // The REST API's port is a device setting, so it is editable rather than fixed.
+    ui.portSpin = makePortSpin(ui);
+    ui.portSpin->setValue(PeripheralSettings::deviceInt("Rfkit", "ManualPort", ui.defaultPort));
+    ui.portSpin->setAccessibleName(tr("RF-KIT control port"));
+    ui.portSpin->setAccessibleDescription(tr("HTTP port, 1 to 65535, default 8080"));
+
+    ui.connectButton = makeConnectButton(ui);
+    ui.connectButton->setAccessibleName(tr("Connect or disconnect the RF-KIT amplifier"));
+    connect(ui.connectButton, &QPushButton::clicked, this, [u, refresh]() {
+        if (u->isConnected()) {
+            u->disconnectNow();
+            return;
+        }
+        u->state.attention = Attention::None;
+        u->state.message.clear();
+        const QString ip = u->addressEdit->text().trimmed();
+        if (ip.isEmpty()) {
+            refresh();
+            return;
+        }
+        const int port = u->portSpin->value();
+        PeripheralSettings::setDeviceString("Rfkit", "ManualIp", ip);
+        PeripheralSettings::setDeviceInt("Rfkit", "ManualPort", port);
+        u->state.connecting = true;
+        refresh();
+        u->connectNetwork(ip, static_cast<quint16>(port));
+        refresh();
+    });
+
+    addFormRow(detail, tr("IP Address"), ui.addressEdit);
+    addFormRow(detail, tr("Port"), ui.portSpin);
+
+    m_peripheralRowSavers.append([u]() {
+        if (!u->addressEdit || !u->addressEdit->text().trimmed().isEmpty()) {
+            return;
+        }
+        const QString savedIp = PeripheralSettings::deviceString("Rfkit", "ManualIp");
+        if (savedIp.isEmpty()) {
+            return;
+        }
+        PeripheralSettings::clearDeviceField("Rfkit", "ManualIp");
+        PeripheralSettings::clearDeviceField("Rfkit", "ManualPort");
+        if (u->isConnected() && u->description().startsWith(savedIp + ":")) {
+            u->disconnectNow();
+        }
+    });
+    finishDetailPage(detail, ui, {});
+}
+
 void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
                                           const std::function<void()>& refresh)
 {
@@ -2016,6 +2081,20 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         ui->afterRemoval = [this]() { m_kpa1500->disconnect(); };
         buildKpa1500Device(*ui, detailStack, refresh);
     }
+    if (m_rfkit) {
+        // REST over HTTP (docs/architecture/rfkit-amplifier-design.md): a plain
+        // host/port pair, no Serial/Network toggle.
+        auto ui = addDevice(QStringLiteral("rfkit"), tr("RF-KIT Amplifier"),
+                            QStringLiteral("RF-KIT amplifier"),
+                            PeripheralDeviceUi::Kind::Rfkit, Rfkit::kDefaultPort);
+        ui->settingsGroup = QStringLiteral("Rfkit");
+        ui->isConnected = [this]() { return m_rfkit->isConnected(); };
+        ui->disconnectNow = [this]() { m_rfkit->disconnect(); };
+        ui->connectNetwork = [this](const QString& h, quint16 p) { m_rfkit->connectNetwork(h, p); };
+        ui->description = [this]() { return m_rfkit->description(); };
+        ui->afterRemoval = [this]() { m_rfkit->disconnect(); };
+        buildRfkitDevice(*ui, detailStack, refresh);
+    }
     if (m_kpa500) {
         auto ui = addDevice(QStringLiteral("kpa500"), tr("Elecraft KPA500"),
                             QStringLiteral("KPA500 amplifier"),
@@ -2141,6 +2220,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         }
         if (m_kpa1500) {
             m_kpa1500->setAutoReconnect(on);
+        }
+        if (m_rfkit) {
+            m_rfkit->setAutoReconnect(on);
         }
         if (m_kpa500) {
             m_kpa500->setAutoReconnect(on && PeripheralSettings::autoConnect("kpa500"));
@@ -2898,7 +2980,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     connect(&m_model->amplifier(), &AmpModel::presenceChanged, this, refresh);
     connect(m_model, &RadioModel::connectionStateChanged, this, refresh);
 
-    // The serial, VK3AMP and KPA1500 devices: link changes, failures, and link-up with a
+    // The serial, VK3AMP, KPA1500 and RF-KIT devices: link changes, failures, and link-up with a
     // silent device.
     auto wireLinkDevice = [this, onLink, onFailure](const QString& id, auto* connection) {
         using Connection = std::remove_pointer_t<decltype(connection)>;
@@ -2918,6 +3000,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     }
     if (m_kpa1500) {
         wireLinkDevice(QStringLiteral("kpa1500"), m_kpa1500);
+    }
+    if (m_rfkit) {
+        wireLinkDevice(QStringLiteral("rfkit"), m_rfkit);
     }
     if (m_kat500) {
         wireLinkDevice(QStringLiteral("kat500"), m_kat500);

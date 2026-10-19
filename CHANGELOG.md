@@ -8,6 +8,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **RF-KIT amplifier support.** A standalone peripheral alongside ACOM, SPE
+  Expert, VK3AMP and the Elecraft KPA500 and KPA1500, configured in Peripherals
+  (default HTTP port 8080) and independent of the radio. The applet shows
+  forward power, reflected power and SWR (gauges scaled to the amplifier's own
+  reported full scale), temperature, supply voltage, current, band, frequency,
+  the tuner status and the operational interface, and offers OPERATE/STANDBY,
+  antenna selection (internal 1–4 and external 1–16) and a confirmed error
+  reset. The tuner and the operational interface are read-only by design.
+  Follows the vendor's published RFKIT API 0.9.0; not yet validated on real
+  hardware.
+
 ## [v26.10.3] — 2026-10-18
 
 ### SmartSDR 4.3 firmware support and the DeepCW AI CW decoder · Multi-slice Auto SQL fixes, local voice recordings and Elecraft station panels · Controller improvements and typed backend controls

@@ -19,6 +19,7 @@
 #include "Kat500Applet.h"
 #include "Kxpa100Applet.h"
 #include "Kpa1500Applet.h"
+#include "RfkitApplet.h"
 #include "LpMeterApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
@@ -960,6 +961,21 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_appletOrder.append(entry);
     }
 
+    // RF-KIT amplifier — independent of every other amplifier applet for the
+    // same reason the KPA1500 is: a station can have any combination of them
+    // connected at once. Deliberately NOT in kDefaultOrder either: the RF-KIT
+    // has no discovery path, so the stored Peripherals configuration is the
+    // only thing that can ever reveal it. See
+    // docs/architecture/rfkit-amplifier-design.md.
+    m_rfkitApplet = new RfkitApplet;
+    {
+        auto entry = makeEntry("RFKIT", "RF-KIT Amplifier", m_rfkitApplet, false,
+                               m_drawer, m_drawerLayout);
+        m_rfkitBtn = entry.btn;
+        markHardwareConditional("RFKIT");
+        m_appletOrder.append(entry);
+    }
+
     // LP-100A wattmeter — an instrument rather than an amplifier, so it is
     // independent of every amplifier applet above and lives in the Metering
     // category. Deliberately NOT in kDefaultOrder: it has no discovery path,
@@ -1479,6 +1495,7 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("KXPA100"), QStringLiteral("Transmit")},
         {QStringLiteral("VKAMP"), QStringLiteral("Amplifiers")},
         {QStringLiteral("KPA1500"), QStringLiteral("Amplifiers")},
+        {QStringLiteral("RFKIT"), QStringLiteral("Amplifiers")},
         {QStringLiteral("EQ"),    QStringLiteral("Audio & DSP")},
         {QStringLiteral("TXDSP"), QStringLiteral("Audio & DSP")},
         {QStringLiteral("WAVE"),  QStringLiteral("Audio & DSP")},
@@ -1936,6 +1953,12 @@ void AppletPanel::setKpa500Visible(bool visible)
 void AppletPanel::setKpa1500Visible(bool visible)
 {
     updateHardwareAvailability("KPA1500", "Applet_KPA1500", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setRfkitVisible(bool visible)
+{
+    updateHardwareAvailability("RFKIT", "Applet_RFKIT", visible);
     applyBarLayout();
 }
 

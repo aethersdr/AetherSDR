@@ -41,6 +41,7 @@ class AcomConnection;
 class SpeConnection;
 class VkampConnection;
 class Kpa1500Connection;
+class RfkitConnection;
 class Kpa500Connection;
 class Kat500Model;
 class Kxpa100Model;
@@ -66,7 +67,8 @@ public:
                               Kpa500Connection* kpa500 = nullptr,
                               QWidget* parent = nullptr,
                               Kat500Model* kat500 = nullptr,
-                              Kxpa100Model* kxpa100 = nullptr);
+                              Kxpa100Model* kxpa100 = nullptr,
+                              RfkitConnection* rfkit = nullptr);
     void selectTab(const QString& tabName);
     void done(int result) override;
     // Like selectTab("Serial & Controllers"), but also scrolls the page so
@@ -225,6 +227,8 @@ private:
                            const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds);
     void buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
                             const std::function<void()>& refresh);
+    void buildRfkitDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
+                          const std::function<void()>& refresh);
     PeripheralDeviceUi* peripheralDevice(const QString& id) const;
     QWidget* buildUiEnhancementsTab();
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951) — Pinned Certificates list
@@ -265,6 +269,7 @@ private:
     VkampConnection* m_vkamp{nullptr};
     LpMeterConnection* m_lpMeter{nullptr};
     Kpa1500Connection* m_kpa1500{nullptr};
+    RfkitConnection* m_rfkit{nullptr};
     Kpa500Connection* m_kpa500{nullptr};
     Kat500Model* m_kat500{nullptr};
     Kxpa100Model* m_kxpa100{nullptr};
