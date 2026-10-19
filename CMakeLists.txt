@@ -3023,6 +3023,8 @@ if(HIDAPI_FOUND)
     # HAVE_HIDAPI directly.
     target_compile_definitions(aethercore PUBLIC HAVE_HIDAPI)
     target_sources(aethercore PRIVATE
+        src/core/HidDiscovery.cpp
+        src/core/HidDiscovery.h
         src/core/HidEncoderManager.cpp
         src/core/HidEncoderManager.h
         src/core/HidDeviceParser.cpp
