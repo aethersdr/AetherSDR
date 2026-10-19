@@ -27,8 +27,10 @@
 #include <QCoreApplication>
 #include <QEvent>
 #include <QEventLoop>
+#include <QElapsedTimer>
 #include <QScopeGuard>
 #include <QTimer>
+#include <QThread>
 #include <QtEndian>
 #include <cstdio>
 #include <memory>
@@ -1898,9 +1900,15 @@ void netCwClientHandleEncoding()
             } else {
                 f.radio.sendCwKeyEdge(false);
             }
-            QEventLoop loop;
-            QTimer::singleShot(60, &loop, &QEventLoop::quit);
-            loop.exec();
+            // Timer callbacks queue transport writes; wait for those writes,
+            // rather than assuming an event-loop delay implies delivery.
+            QElapsedTimer wait;
+            wait.start();
+            while ((tcp.size() < 2 || udp.size() < 8) && wait.elapsed() < 1000) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+                QThread::msleep(1);
+            }
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
             const QByteArray verb = ptt ? "cw ptt " : "cw key ";
             const QByteArray suffix = QByteArray(" client_handle=") + handle.encoded;
             const QByteArray down = verb + "1 time=0x0000 index=37" + suffix;
