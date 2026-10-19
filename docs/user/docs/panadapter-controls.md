@@ -10,6 +10,8 @@ The panadapter is the main display: the FFT spectrum on top and the scrolling wa
 
 *A panadapter on 20 m with its waterfall, the slice A VFO flag and the overlay menu down the left edge.*
 
+The **B** and **S** buttons at the bottom left zoom to the active band or band-plan segment. On a scope-capable Icom, they choose the closest supported scope span around the radio's reported center; the tuned frequency stays put. Wide allocations may exceed the scope's maximum span. FlexRadio uses its own band and segment zoom modes. The buttons remain disabled when the connected radio does not declare either control.
+
 ## Using the panadapter
 
 ### Mouse controls

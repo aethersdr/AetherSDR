@@ -4283,6 +4283,15 @@ target_include_directories(band_plan_license_filter_test PRIVATE src)
 target_link_libraries(band_plan_license_filter_test PRIVATE Qt6::Core Qt6::Gui)
 add_test(NAME band_plan_license_filter_test COMMAND band_plan_license_filter_test)
 
+add_executable(band_plan_zoom_test
+    tests/band_plan_zoom_test.cpp
+    src/models/BandPlanManager.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(band_plan_zoom_test PRIVATE src)
+target_link_libraries(band_plan_zoom_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME band_plan_zoom_test COMMAND band_plan_zoom_test)
+
 qt_add_resources(KIWISDR_DX_SPOTS_TEST_RESOURCES resources/resources.qrc)
 add_executable(kiwisdr_dx_spots_test
     tests/kiwisdr_dx_spots_test.cpp
@@ -9687,6 +9696,7 @@ set(AETHER_SETTINGS_CONSUMERS
     qso_recorder_pc_audio_guard_test
     qso_recorder_filename_collision_test
     band_plan_license_filter_test
+    band_plan_zoom_test
     kiwisdr_dx_spots_test
     passive_spots_policy_test
     digital_voice_waveform_process_test

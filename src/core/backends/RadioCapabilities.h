@@ -426,17 +426,14 @@ struct RadioCapabilities {
     }
 
 
-    // Per-pan band/segment zoom: `display pan set <panId> band_zoom=<0|1>` and
-    // `segment_zoom=` (#4057). Absent refuses: every surface that can issue the
-    // write asks gui/PanZoomModeGate.h, so a radio with no such verb never shows a
-    // zoom control that moves without effect (HERMES.md §17). A record so a radio
-    // answering only one of the two keys can gain a field here.
+    // Per-pan band/segment zoom. Flex has radio-owned mode flags; Icom scope
+    // radios use native span detents. Absent refuses every surface through
+    // gui/PanZoomModeGate.h.
     struct PanZoomModes {
-        // The verb that carries both modes, recorded so the declaration names
-        // what it grants rather than being a bare presence bit. DIAGNOSTIC, in
-        // exactly TwoToneGenerator::selectionCommand's sense below: the gate
-        // branches on this record being ENGAGED and never on the string.
+        enum class Control { RadioFlags, NativeScopeSpan };
         QString setCommand;
+        Control control = Control::RadioFlags;
+        QVector<int> nativeWidthsHz;
     };
     std::optional<PanZoomModes> panZoomModes;
 

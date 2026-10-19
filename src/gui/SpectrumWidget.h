@@ -471,24 +471,25 @@ public:
         m_resetFftSmoothingOnNextFrame = true;
     }
 
-    // Enable/disable the "S"/"B" (segment/band zoom) buttons and explain why
-    // when disabled. Both send FlexLib wire text (band_zoom=/segment_zoom=,
-    // see togglePanZoomModeForPan()) that only a Flex radio's command plane
-    // ever answers -- on every other backend the click was a silent no-op,
-    // with nothing on screen saying so. Called per-radio model, same as
-    // setBandwidthLimits() above.
-    void setBandSegmentZoomAvailable(bool available)
+    // Flex uses radio-owned zoom flags; scope-capable Icom radios use native
+    // span detents around their radio-owned center.
+    void setBandSegmentZoomAvailable(bool available, bool icomScope = false)
     {
-        const QString tip = available
-            ? QString()
-            : tr("Band/segment zoom is available on FlexRadio only.");
+        const QString tip = !available
+            ? (icomScope ? tr("Waiting for Icom scope geometry.")
+                         : tr("Band/segment zoom requires FlexRadio or an Icom scope."))
+            : icomScope
+                ? tr("Zoom using the Icom scope span; the radio frequency stays unchanged.")
+                : QString();
         if (m_zoomBandBtn) {
             m_zoomBandBtn->setEnabled(available);
             m_zoomBandBtn->setToolTip(tip);
+            m_zoomBandBtn->setAccessibleDescription(tip);
         }
         if (m_zoomSegBtn) {
             m_zoomSegBtn->setEnabled(available);
             m_zoomSegBtn->setToolTip(tip);
+            m_zoomSegBtn->setAccessibleDescription(tip);
         }
     }
 
@@ -1038,7 +1039,7 @@ signals:
     void frequencyRangeChanged(double centerMhz, double bandwidthMhz);
     // Emitted when the user drags the frequency scale bar to change bandwidth.
     void bandwidthChangeRequested(double newBandwidthMhz);
-    // Band/segment zoom: radio handles center/bandwidth (SmartSDR pcap: "band_zoom=1" / "segment_zoom=1")
+    // Band/segment zoom: the connected backend handles radio flags or native span.
     void bandZoomRequested();
     void segmentZoomRequested();
     // Emitted when the user drags the waterfall to pan the center frequency.

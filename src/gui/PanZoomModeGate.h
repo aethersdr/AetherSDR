@@ -1,9 +1,10 @@
 #pragma once
 
 // One predicate for band/segment zoom: whether the "B"/"S" buttons are enabled
-// and whether a command path may send `display pan set <panId> band_zoom=` /
-// `segment_zoom=` (Flex wire text). Every non-button surface goes through
-// MainWindow::togglePanZoomMode / setPanZoomMode. Capability:
+// and whether a command path may invoke the declared radio zoom control.
+// Flex uses radio-owned mode flags; native-scope radios request a span.
+// Every non-button surface goes through MainWindow::togglePanZoomMode /
+// setPanZoomMode. Capability:
 // RadioCapabilities::panZoomModes.has_value(), not a family (#5554). On
 // NotDeclared callers warn and call showUnsupportedControlNotice();
 // NotConnected/NoPan stay silent. Receive-only: no TX path (keysTx false).
@@ -42,7 +43,7 @@ enum class PanZoomModeRefusal {
     return PanZoomModeRefusal::None;
 }
 
-// May this client write band_zoom=/segment_zoom= for this pan right now?
+// May this client request band/segment zoom for this pan right now?
 // Every command path asks this; none of them may ask anything narrower.
 [[nodiscard]] constexpr bool panZoomModeWritable(
     bool connected, bool panZoomModesDeclared, bool panKnown) noexcept
