@@ -1,5 +1,8 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/AcomConnection.h"
+#include "core/PeripheralSettings.h"
+#include "core/SpeConnection.h"
 #include "core/backends/IRadioBackend.h"
 #include "gui/RadioSetupDialog.h"
 #include "models/RadioModel.h"
@@ -65,7 +68,13 @@ public:
 class RadioSetupNoTransientWindowTest : public QObject {
     Q_OBJECT
 private slots:
-    void init() { AppSettings::instance().remove(QStringLiteral("SerialPortName")); }
+    void init()
+    {
+        AppSettings::instance().remove(QStringLiteral("SerialPortName"));
+        for (const QString& device : {QStringLiteral("Acom"), QStringLiteral("Spe")}) {
+            PeripheralSettings::setDeviceString(device, QStringLiteral("SerialPort"), QString());
+        }
+    }
 
     void visitingEveryPageCreatesNoWindow_data()
     {
@@ -81,12 +90,21 @@ private slots:
         QFETCH(QString, savedPort);
         if (!savedPort.isEmpty()) {
             AppSettings::instance().setValue(QStringLiteral("SerialPortName"), savedPort);
+            // The Peripherals serial pages show their custom-path edit for a saved port
+            // that is not in the enumerated list.
+            for (const QString& device : {QStringLiteral("Acom"), QStringLiteral("Spe")}) {
+                PeripheralSettings::setDeviceString(device, QStringLiteral("SerialPort"), savedPort);
+            }
         }
         RadioModel model;
         auto owned = std::make_unique<CapabilityBackend>();
         owned->connected = connected;
         model.setBackendForTest(std::move(owned), QStringLiteral("no-transient-window-test"));
-        RadioSetupDialog dialog(&model);
+        // Inert connection objects (never connected): their presence makes the Peripherals
+        // tab build its serial-or-network device pages.
+        AcomConnection acom;
+        SpeConnection spe;
+        RadioSetupDialog dialog(&model, nullptr, nullptr, nullptr, nullptr, nullptr, &acom, &spe);
         dialog.show();
         QCoreApplication::processEvents();
 
