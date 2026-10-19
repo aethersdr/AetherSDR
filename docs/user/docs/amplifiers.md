@@ -356,9 +356,9 @@ There is no network PTT and no lost-link TX inhibit.
 
 ## Using the RF-KIT
 
-> **Not yet validated on real hardware.** The RF-KIT support follows the
-> vendor's published REST API documentation (RFKIT API 0.9.0) but has not been
-> run against a physical amplifier. Reports from owners are welcome.
+> **Tested on an RF2K-S, firmware G200C267.** The RF-KIT support follows the
+> vendor's published REST API documentation (RFKIT API 0.9.0). Other RF-KIT
+> models have not been tried. Reports from owners are welcome.
 
 Add it with **Peripherals → Add → RF-KIT Amplifier**, enter the amplifier's IP
 address (or host name) and HTTP port (default 8080), and press **Connect**.
@@ -367,16 +367,21 @@ AetherSDR talks to the amplifier's REST API over plain HTTP; there is no login.
 The **RF-KIT Amplifier** applet:
 
 - A status pill, the amplifier's name, and **PWR**, **REF** and **SWR** gauges.
-  The power gauges scale to the full scale the amplifier reports.
+  The scales are fixed, like the amplifier's own display: forward power
+  0–1600 W, reflected power 0–200 W, and SWR on the amplifier's 1 / 1.5 / 2 / 3 /
+  5 / ∞ scale. The reflected-power and SWR bars turn orange from 1.5:1 and red
+  from 2:1 (on the reflected-power bar these points follow the forward power).
 - An info grid with temperature, supply voltage, current, band, frequency and
   the operational interface (`UNIV`, `CAT`, `UDP` or `TCI`).
-- A **TUNER** line showing the tuner's mode, setup and L/C values. The tuner is
-  read-only: the amplifier's API has no tuner control.
+- A **TUNER** line showing the tuner's mode, setup and L/C values, and a
+  **TUNER ON** (green) / **TUNER OFF** (red) indicator beside OPERATE. The tuner
+  is read-only: the amplifier's API has no tuner control, so the indicator
+  cannot be pressed.
 - The amplifier's own status text and, when it reports one, an error banner.
 - **OPERATE / STANDBY**. The label changes only when the amplifier confirms.
-- **ANT** buttons for the internal antennas (1–4) and a drop-down for the
-  external antennas (up to 16). Antennas the amplifier reports as disabled are
-  dimmed.
+- **ANT** buttons for the internal antennas (1–4) and **EXT**, the amplifier's
+  single external antenna selection. Antennas the amplifier reports as disabled
+  are dimmed, and the amplifier may refuse a change at times (it answers 409).
 - **RESET ERR**, which asks for confirmation and then clears the amplifier's
   error state. Make sure the cause has been dealt with first.
 

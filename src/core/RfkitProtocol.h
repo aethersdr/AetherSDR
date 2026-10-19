@@ -53,8 +53,11 @@ inline constexpr int kMaxBodyBytes = 64 * 1024;
 
 inline constexpr int kMinInternalAntenna = 1;
 inline constexpr int kMaxInternalAntenna = 4;
-inline constexpr int kMinExternalAntenna = 1;
-inline constexpr int kMaxExternalAntenna = 16;
+// The RF2K-S has a single external antenna selection. It is reported as
+// {"type":"EXTERNAL"} with no number (a number appears only while it is the
+// active one, and then is not an external port index), and is selected with
+// {"type":"EXTERNAL"} alone. So an external Antenna always has number 0.
+inline constexpr int kExternalAntennaNumber = 0;
 
 // Endpoint paths, relative to the device root.
 inline constexpr char kPathInfo[]        = "/info";
@@ -146,7 +149,7 @@ enum class AntennaType { Internal, External };
 
 struct Antenna {
     AntennaType type{AntennaType::Internal};
-    int number{1};
+    int number{1};  // 1-4 for an internal antenna; always 0 for the external one
 
     bool operator==(const Antenna& other) const
     {
@@ -192,15 +195,17 @@ std::optional<Tuner> parseTuner(const QByteArray& body);
 std::optional<OperateMode> parseOperateMode(const QByteArray& body);
 std::optional<InterfaceState> parseInterface(const QByteArray& body);
 std::optional<Antenna> parseAntenna(const QByteArray& body);
-// The /antennas array. Entries that are malformed are skipped; the call fails
-// only if the document is not an array at all.
+// The /antennas list: a bare array, or the {"antennas":[...]} object a real
+// RF2K-S sends. Entries that are malformed are skipped; the call fails only if
+// the document is neither.
 std::optional<QVector<AntennaWithState>> parseAntennas(const QByteArray& body);
 std::optional<ApiError> parseApiError(const QByteArray& body);
 
 // ── Request bodies ───────────────────────────────────────────────────────
-// Compact JSON. buildAntennaBody returns an empty array for an antenna number
-// outside the range the API document allows for its type, so an out-of-range
-// request never reaches the wire.
+// Compact JSON. buildAntennaBody returns an empty array for an antenna the
+// device cannot have (an internal number outside 1-4, an external number other
+// than 0), so such a request never reaches the wire. The external body carries
+// no number.
 
 QByteArray buildOperateModeBody(OperateMode mode);
 QByteArray buildAntennaBody(const Antenna& antenna);
@@ -214,7 +219,7 @@ float temperatureCelsius(const FloatValue& temperature);
 QString formatFrequency(const IntValue& frequency);
 // "20 m": the value and the unit the device gave it.
 QString formatBand(const IntValue& band);
-// "1".."4" for the internal antennas, "E1".."E16" for the external ones.
+// "1".."4" for the internal antennas, "EXT" for the external one.
 QString antennaLabel(const Antenna& antenna);
 QString tunerModeLabel(TunerMode mode);
 QString tunerSetupLabel(TunerSetup setup);

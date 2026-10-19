@@ -7,7 +7,6 @@
 #include <QVector>
 #include <QWidget>
 
-class QComboBox;
 class QLabel;
 
 namespace AetherSDR {
@@ -47,7 +46,6 @@ private:
     void updateValueLabels();
     void refreshControls();
     void refreshAntennas();
-    void updateGaugeScale();
     // Colour the reflected-power bar by SWR: orange past 1.5:1, red past 2:1.
     void updateReflectedZones(float forwardWatts);
 
@@ -77,21 +75,15 @@ private:
     QPushButton* m_operateBtn{nullptr};
     QPushButton* m_tunerBtn{nullptr};  // read-only tuner on/off indicator
     QPushButton* m_resetErrorBtn{nullptr};
-    // One button per internal antenna (the API allows 1-4); the external
-    // antennas (up to 16) are a combo box, since 16 buttons do not fit a
-    // docked applet.
+    // One button per internal antenna (the API allows 1-4), plus one for the
+    // amplifier's single external selection.
     QVector<QPushButton*> m_antBtns;
-    QComboBox* m_extAntCombo{nullptr};
+    QPushButton* m_extAntBtn{nullptr};
 
     QTimer m_labelTimer;
 
     Rfkit::Status m_status;
     bool m_connected{false};
-
-    // The gauge scales currently applied, so setStatus() only rebuilds a
-    // gauge's range when the device-reported full scale actually changes.
-    int m_gaugeFwdMax{0};
-    int m_gaugeRefMax{0};
 
     // setStatus() arrives at the connection's poll rate — funneled through
     // the m_labelTimer tick, the same throttle convention the other amplifier

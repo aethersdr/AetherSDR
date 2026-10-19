@@ -4,7 +4,6 @@
 #include "core/ThemeManager.h"
 
 #include <QAccessible>
-#include <QComboBox>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -145,9 +144,6 @@ RfkitApplet::RfkitApplet(QWidget* parent)
 
     auto& theme = AetherSDR::ThemeManager::instance();
 
-    m_gaugeFwdMax = kForwardMaxWatts;
-    m_gaugeRefMax = kReflectedMaxWatts;
-
     // ── Header: device name + status pill ────────────────────────────────
     m_nameLabel = new QLabel(this);
     m_nameLabel->setAccessibleName(tr("Amplifier name"));
@@ -170,9 +166,9 @@ RfkitApplet::RfkitApplet(QWidget* parent)
     // ── PWR / REF / SWR gauges ───────────────────────────────────────────
     m_pwrLabel = makeValueLabel(this);
     m_pwrLabel->setText(QStringLiteral("PWR"));
-    m_pwrGauge = new HGauge(0.0f, static_cast<float>(m_gaugeFwdMax),
-                            m_gaugeFwdMax * kRedZoneFraction, QString(), QString(),
-                            evenTicks(static_cast<float>(m_gaugeFwdMax)), this);
+    m_pwrGauge = new HGauge(0.0f, static_cast<float>(kForwardMaxWatts),
+                            kForwardMaxWatts * kRedZoneFraction, QString(), QString(),
+                            evenTicks(static_cast<float>(kForwardMaxWatts)), this);
     m_pwrGauge->setWindowPeakEnabled(true);
     m_pwrGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
@@ -183,10 +179,10 @@ RfkitApplet::RfkitApplet(QWidget* parent)
 
     m_refLabel = makeValueLabel(this);
     m_refLabel->setText(QStringLiteral("REF"));
-    m_refGauge = new HGauge(0.0f, static_cast<float>(m_gaugeRefMax), m_gaugeRefMax / 2.0f,
-                            QString(), QString(), evenTicks(static_cast<float>(m_gaugeRefMax)), this);
+    m_refGauge = new HGauge(0.0f, static_cast<float>(kReflectedMaxWatts), kReflectedMaxWatts / 2.0f,
+                            QString(), QString(), evenTicks(static_cast<float>(kReflectedMaxWatts)), this);
     m_refGauge->setAccessibleName(tr("Reflected power"));
-    m_refGauge->setCautionColor(QColor(0xe0, 0x80, 0x20));
+    m_refGauge->setCautionColor(theme.color(this, QStringLiteral("color.accent.warning")));
     auto* refRow = new QHBoxLayout;
     refRow->setSpacing(4);
     refRow->addWidget(m_refLabel);
@@ -201,7 +197,7 @@ RfkitApplet::RfkitApplet(QWidget* parent)
                              {4.0f, QStringLiteral("5")},   {5.0f, QString::fromUtf8("\xe2\x88\x9e")}},
                             this, kSwrGaugeYellow);
     m_swrGauge->setAccessibleName(tr("SWR"));
-    m_swrGauge->setCautionColor(QColor(0xe0, 0x80, 0x20));
+    m_swrGauge->setCautionColor(theme.color(this, QStringLiteral("color.accent.warning")));
     auto* swrRow = new QHBoxLayout;
     swrRow->setSpacing(4);
     swrRow->addWidget(m_swrLabel);
@@ -341,24 +337,17 @@ RfkitApplet::RfkitApplet(QWidget* parent)
         m_antBtns.append(btn);
         antRow->addWidget(btn);
     }
-    m_extAntCombo = new QComboBox(this);
-    m_extAntCombo->setAccessibleName(tr("External antenna"));
-    m_extAntCombo->setAccessibleDescription(
-        tr("Selects one of the amplifier's external antenna ports."));
-    theme.applyStyleSheet(m_extAntCombo,
-        "QComboBox { background: {{color.background.2}}; color: {{color.text.primary}}; "
-        "border: 1px solid {{color.border.subtle}}; border-radius: 3px; font-size: 10px; padding: 1px 4px; }"
-        "QComboBox:disabled { color: {{color.text.disabled}}; }");
-    m_extAntCombo->hide();
-    connect(m_extAntCombo, &QComboBox::activated, this, [this](int index) {
-        const int number = m_extAntCombo->itemData(index).toInt();
-        if (number >= Rfkit::kMinExternalAntenna && number <= Rfkit::kMaxExternalAntenna) {
-            emit antennaSelected(Rfkit::Antenna{Rfkit::AntennaType::External, number});
-        }
-        // Snap back to what the device last reported until it confirms.
-        refreshAntennas();
+    m_extAntBtn = makeSmallButton(QStringLiteral("EXT"), this);
+    m_extAntBtn->setAccessibleName(tr("External antenna"));
+    m_extAntBtn->setAccessibleDescription(
+        tr("Selects the amplifier's external antenna. The amplifier may refuse the change."));
+    theme.applyStyleSheet(m_extAntBtn, antBtnStyle);
+    m_extAntBtn->hide();
+    connect(m_extAntBtn, &QPushButton::clicked, this, [this]() {
+        // Asks only; the highlight moves when the device's list confirms it.
+        emit antennaSelected(Rfkit::Antenna{Rfkit::AntennaType::External, Rfkit::kExternalAntennaNumber});
     });
-    antRow->addWidget(m_extAntCombo);
+    antRow->addWidget(m_extAntBtn);
     antRow->addStretch();
     vbox->addLayout(antRow);
 
@@ -371,7 +360,7 @@ RfkitApplet::RfkitApplet(QWidget* parent)
 
 void RfkitApplet::updateReflectedZones(float forwardWatts)
 {
-    const float refMax = static_cast<float>(m_gaugeRefMax);
+    const float refMax = static_cast<float>(kReflectedMaxWatts);
     // Rounded to 0.1 W so a wobbling forward power does not rebuild the gauge
     // on every reply.
     const float red = std::min(refMax, std::round(reflectedWattsAtSwr(forwardWatts, 2.0f) * 10.0f) / 10.0f);
@@ -384,33 +373,12 @@ void RfkitApplet::updateReflectedZones(float forwardWatts)
     m_refGauge->setRange(0.0f, refMax, red, evenTicks(refMax), yellow);
 }
 
-void RfkitApplet::updateGaugeScale()
-{
-    if (!m_status.power) {
-        return;
-    }
-    const int fwdMax = kForwardMaxWatts;
-    const int refMax = kReflectedMaxWatts;
-    if (fwdMax != m_gaugeFwdMax) {
-        m_gaugeFwdMax = fwdMax;
-        m_pwrGauge->setRange(0.0f, static_cast<float>(fwdMax), fwdMax * kRedZoneFraction,
-                             evenTicks(static_cast<float>(fwdMax)));
-    }
-    if (refMax != m_gaugeRefMax) {
-        m_gaugeRefMax = refMax;
-        m_refYellowW = m_refRedW = -1.0f;  // the range reset below drops the zones
-        m_refGauge->setRange(0.0f, static_cast<float>(refMax), refMax / 2.0f,
-                             evenTicks(static_cast<float>(refMax)));
-    }
-}
-
 void RfkitApplet::setStatus(const Rfkit::Status& status)
 {
     m_status = status;
     m_valuesDirty = true;
 
     if (status.power) {
-        updateGaugeScale();
         const float fwd = static_cast<float>(status.power->forward.value);
         if (fwd >= 1.0f) {
             updateReflectedZones(fwd);
@@ -482,38 +450,13 @@ void RfkitApplet::refreshAntennas()
         setBtnState(btn, active ? QStringLiteral("active") : QString());
     }
 
-    // External antennas: rebuild the combo only when the usable set changes, so
-    // an open drop-down is not torn down by every poll.
-    QVector<int> numbers;
-    int activeNumber = 0;
-    for (const auto& item : list) {
-        if (item.antenna.type != Rfkit::AntennaType::External
-            || item.state == Rfkit::AntennaState::Disabled) {
-            continue;
-        }
-        numbers.append(item.antenna.number);
-        if (item.state == Rfkit::AntennaState::Active) {
-            activeNumber = item.antenna.number;
-        }
-    }
-    QVector<int> shown;
-    for (int i = 1; i < m_extAntCombo->count(); ++i) {
-        shown.append(m_extAntCombo->itemData(i).toInt());
-    }
-    if (shown != numbers) {
-        const QSignalBlocker blocker(m_extAntCombo);
-        m_extAntCombo->clear();
-        m_extAntCombo->addItem(QStringLiteral("EXT"), 0);  // placeholder row: no external active
-        for (int number : numbers) {
-            m_extAntCombo->addItem(Rfkit::antennaLabel({Rfkit::AntennaType::External, number}), number);
-        }
-    }
-    {
-        const QSignalBlocker blocker(m_extAntCombo);
-        m_extAntCombo->setCurrentIndex(std::max(0, m_extAntCombo->findData(activeNumber)));
-    }
-    m_extAntCombo->setVisible(!numbers.isEmpty());
-    m_extAntCombo->setEnabled(m_connected);
+    // The single external selection: shown once the device lists it, dimmed
+    // while the device reports it disabled.
+    const auto* ext = find(Rfkit::AntennaType::External, Rfkit::kExternalAntennaNumber);
+    m_extAntBtn->setVisible(ext != nullptr);
+    m_extAntBtn->setEnabled(m_connected && ext && ext->state != Rfkit::AntennaState::Disabled);
+    setBtnState(m_extAntBtn, m_connected && ext && ext->state == Rfkit::AntennaState::Active
+                                 ? QStringLiteral("active") : QString());
 }
 
 void RfkitApplet::setConnected(bool connected)

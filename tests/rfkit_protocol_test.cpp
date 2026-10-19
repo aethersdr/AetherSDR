@@ -170,16 +170,20 @@ int main()
                a.has_value() && a->type == AntennaType::Internal && a->number == 3);
     }
     {
-        const auto a = parseAntenna(R"({"type":"EXTERNAL","number":16})");
-        report("external antenna 16 (the maximum) decodes",
-               a.has_value() && a->type == AntennaType::External && a->number == 16);
+        // A real RF2K-S names the external selection with no number...
+        const auto a = parseAntenna(R"({"type":"EXTERNAL"})");
+        report("the un-numbered external antenna decodes",
+               a.has_value() && a->type == AntennaType::External && a->number == 0);
+        // ...and attaches the active antenna's number while it is selected,
+        // which is not an external port index and is not read.
+        const auto b = parseAntenna(R"({"type":"EXTERNAL","number":3})");
+        report("a number on the external antenna is ignored",
+               b.has_value() && b->type == AntennaType::External && b->number == 0);
     }
     report("internal antenna 5 is out of range (the API allows 1-4)",
            !parseAntenna(R"({"type":"INTERNAL","number":5})").has_value());
     report("internal antenna 0 is out of range",
            !parseAntenna(R"({"type":"INTERNAL","number":0})").has_value());
-    report("external antenna 17 is out of range (the API allows 1-16)",
-           !parseAntenna(R"({"type":"EXTERNAL","number":17})").has_value());
     report("an unknown antenna type is rejected",
            !parseAntenna(R"({"type":"MAGIC","number":1})").has_value());
     report("a non-integer antenna number is rejected",
@@ -188,7 +192,7 @@ int main()
         const auto list = parseAntennas(
             R"([{"type":"INTERNAL","number":1,"state":"ACTIVE"},)"
             R"({"type":"INTERNAL","number":2,"state":"AVAILABLE"},)"
-            R"({"type":"EXTERNAL","number":3,"state":"DISABLED"}])");
+            R"({"type":"EXTERNAL","state":"DISABLED"}])");
         report("parseAntennas decodes the list with states",
                list.has_value() && list->size() == 3
                    && list->at(0).state == AntennaState::Active
@@ -214,10 +218,13 @@ int main()
             R"({"type":"INTERNAL","number":4,"state":"DISABLED"},)"
             R"({"type":"EXTERNAL","state":"AVAILABLE"}]})");
         report("parseAntennas accepts the list wrapped in an object",
-               list.has_value() && list->size() == 4
+               list.has_value() && list->size() == 5
                    && list->at(0).state == AntennaState::Active
                    && list->at(1).state == AntennaState::Available
-                   && list->at(2).state == AntennaState::Disabled);
+                   && list->at(2).state == AntennaState::Disabled
+                   && list->at(4).antenna.type == AntennaType::External
+                   && list->at(4).antenna.number == 0
+                   && list->at(4).state == AntennaState::Available);
     }
     report("an antenna list that is not an array is rejected",
            !parseAntennas(R"({"type":"INTERNAL","number":1,"state":"ACTIVE"})").has_value());
@@ -240,10 +247,9 @@ int main()
         report("STANDBY body", s.value("operate_mode").toString() == "STANDBY");
     }
     {
-        const QJsonObject o = QJsonDocument::fromJson(
-            buildAntennaBody({AntennaType::External, 12})).object();
-        report("external antenna body",
-               o.value("type").toString() == "EXTERNAL" && o.value("number").toInt() == 12);
+        // The device accepts exactly {"type":"EXTERNAL"} here; a number is a 400.
+        report("external antenna body carries no number",
+               buildAntennaBody({AntennaType::External, 0}) == QByteArray(R"({"type":"EXTERNAL"})"));
     }
     {
         const QJsonObject o = QJsonDocument::fromJson(
@@ -254,14 +260,14 @@ int main()
     report("an out-of-range internal antenna is never built",
            buildAntennaBody({AntennaType::Internal, 5}).isEmpty()
                && buildAntennaBody({AntennaType::Internal, 0}).isEmpty());
-    report("an out-of-range external antenna is never built",
-           buildAntennaBody({AntennaType::External, 17}).isEmpty()
+    report("a numbered external antenna is never built",
+           buildAntennaBody({AntennaType::External, 1}).isEmpty()
                && buildAntennaBody({AntennaType::External, -1}).isEmpty());
     {
         // A built body must round-trip through the parser the device's reply uses.
-        const auto round = parseAntenna(buildAntennaBody({AntennaType::External, 7}));
+        const auto round = parseAntenna(buildAntennaBody({AntennaType::External, 0}));
         report("a built antenna body parses back to the same antenna",
-               round.has_value() && *round == Antenna{AntennaType::External, 7});
+               round.has_value() && *round == Antenna{AntennaType::External, 0});
     }
 
     // ── Presentation helpers ──────────────────────────────────────────────
@@ -275,7 +281,7 @@ int main()
     report("band is value plus unit", formatBand({20, "m"}) == "20 m");
     report("band with no unit is just the value", formatBand({20, ""}) == "20");
     report("internal antenna label", antennaLabel({AntennaType::Internal, 2}) == "2");
-    report("external antenna label", antennaLabel({AntennaType::External, 11}) == "E11");
+    report("external antenna label", antennaLabel({AntennaType::External, 0}) == "EXT");
 
     std::printf("\n%d RF-KIT protocol test(s) failed.\n", g_failed);
     return g_failed == 0 ? 0 : 1;

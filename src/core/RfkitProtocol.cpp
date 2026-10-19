@@ -131,24 +131,21 @@ std::optional<FloatWithMax> parseFloatWithMax(const QJsonValue& v)
 std::optional<Antenna> antennaFromObject(const QJsonObject& o)
 {
     const QString type = o.value(QLatin1String("type")).toString();
-    int number = 0;
-    if (!asInt(o.value(QLatin1String("number")), number)) {
-        return std::nullopt;
-    }
     Antenna antenna;
-    if (type == QLatin1String("INTERNAL")) {
-        antenna.type = AntennaType::Internal;
-        if (number < kMinInternalAntenna || number > kMaxInternalAntenna) {
-            return std::nullopt;
-        }
-    } else if (type == QLatin1String("EXTERNAL")) {
+    if (type == QLatin1String("EXTERNAL")) {
+        // One un-numbered external selection. Whatever number the device
+        // attaches while it is active is not an external port index, so it is
+        // not read.
         antenna.type = AntennaType::External;
-        if (number < kMinExternalAntenna || number > kMaxExternalAntenna) {
-            return std::nullopt;
-        }
-    } else {
+        antenna.number = kExternalAntennaNumber;
+        return antenna;
+    }
+    int number = 0;
+    if (type != QLatin1String("INTERNAL") || !asInt(o.value(QLatin1String("number")), number)
+        || number < kMinInternalAntenna || number > kMaxInternalAntenna) {
         return std::nullopt;
     }
+    antenna.type = AntennaType::Internal;
     antenna.number = number;
     return antenna;
 }
@@ -158,7 +155,7 @@ bool antennaInRange(const Antenna& a)
     if (a.type == AntennaType::Internal) {
         return a.number >= kMinInternalAntenna && a.number <= kMaxInternalAntenna;
     }
-    return a.number >= kMinExternalAntenna && a.number <= kMaxExternalAntenna;
+    return a.number == kExternalAntennaNumber;
 }
 
 TunerMode tunerModeFromValue(const QJsonValue& v)
@@ -397,7 +394,9 @@ QByteArray buildAntennaBody(const Antenna& antenna)
     o.insert(QLatin1String("type"),
              antenna.type == AntennaType::Internal ? QStringLiteral("INTERNAL")
                                                    : QStringLiteral("EXTERNAL"));
-    o.insert(QLatin1String("number"), antenna.number);
+    if (antenna.type == AntennaType::Internal) {
+        o.insert(QLatin1String("number"), antenna.number);
+    }
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 
@@ -444,7 +443,7 @@ QString antennaLabel(const Antenna& antenna)
 {
     return antenna.type == AntennaType::Internal
         ? QString::number(antenna.number)
-        : QStringLiteral("E%1").arg(antenna.number);
+        : QStringLiteral("EXT");
 }
 
 QString tunerModeLabel(TunerMode mode)

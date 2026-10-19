@@ -1,6 +1,6 @@
 # RF-KIT amplifier — design note
 
-Status: implemented; **not validated on real hardware**.
+Status: implemented; tested on an RF2K-S (firmware G200C267). Other RF-KIT models are untested.
 
 ## 1. Scope
 
@@ -78,13 +78,22 @@ HTTP has no connection to be "up", so:
 
 ## 5. What the operator can and cannot do
 
-Controls: OPERATE/STANDBY, antenna selection (internal 1–4, external 1–16,
-range-checked before the wire), and error reset behind a confirm dialog (an
+Controls: OPERATE/STANDBY, antenna selection (internal 1–4 and the single
+external selection EXT, range-checked before the wire), and error reset behind a confirm dialog (an
 error latch exists to protect the hardware).
 
 Never latched optimistically (Principle II): every control asks, and the
-applet repaints only from the device's own reply. The external-antenna combo
-snaps back to the last confirmed state immediately after a pick.
+applet repaints only from the device's own reply; the antenna buttons only
+move their highlight when the device's list confirms it.
+
+The RF2K-S reports one external selection, `{"type":"EXTERNAL"}`, with no
+number (a number appears only while it is active, and is the active antenna's
+index, not an external port), and accepts `{"type":"EXTERNAL"}` with no number
+to select it. The API document allows up to 16 numbered external antennas, but
+no device seen so far uses them, so an external antenna is always number 0
+here. The device refuses an antenna change with 409 when changes are not
+allowed; the condition is internal to the amplifier and is not interlocked
+here.
 
 Deliberately absent:
 
@@ -97,9 +106,15 @@ Deliberately absent:
 
 ## 6. Applet behaviour
 
-- Gauges scale to the device's own `max_value`; until it is known a 1500 W
-  starting scale is used. Reflected power and SWR are held at baseline below
-  1 W forward, as in the other amplifier applets.
+- Gauges use fixed scales that match the amplifier's own display (forward
+  0–1600 W, reflected 0–200 W, SWR on its 1 / 1.5 / 2 / 3 / 5 / ∞ scale). The
+  device's `max_value` is not used: it reports the present power limit, not the
+  meter range. The SWR bar turns orange from 1.5:1 and red from 2:1; the
+  reflected-power bar uses the same two ratios, converted to watts from the
+  present forward power. Reflected power and SWR are held at baseline below 1 W
+  forward, as in the other amplifier applets.
+- A read-only TUNER ON / OFF indicator follows the reported tuner mode (on for
+  manual, auto and tuning; off for off and bypass).
 - An unset field renders as "—", never 0; disconnecting drops every remembered
   reading.
 - Frequency is formatted from the unit the device reports (Hz / kHz / MHz); an
@@ -114,12 +129,11 @@ the conservative reading and each is a one-line change:
 1. The unit strings actually sent for `band` and `frequency`.
 2. The vocabulary of `/data`'s `status` text. It is displayed verbatim; it is
    not parsed into a fault state.
-3. Whether the device sends `max_value` on `reflected` and `swr` in practice.
-4. The `false` value in the tuner `mode` enum (a generator artifact in the
+3. The `false` value in the tuner `mode` enum (a generator artifact in the
    document). Accepted as a boolean or the string `"false"` and shown as `OFF`.
-5. Whether `POST /error/reset` should be offered only while an error is
+4. Whether `POST /error/reset` should be offered only while an error is
    present. Today the button is always enabled when connected, and the device
    answers 409 when the function is disabled.
-6. Real poll latency: if the device cannot sustain 250 ms rounds, the
+5. Real poll latency: if the device cannot sustain 250 ms rounds, the
    serialization above degrades the rate gracefully, but the interval may want
    raising.

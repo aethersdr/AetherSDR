@@ -30,15 +30,6 @@ const QStringList& slowPollPaths()
     return kSlow;
 }
 
-const char* methodName(int method)
-{
-    switch (method) {
-    case 1:  return "PUT";
-    case 2:  return "POST";
-    default: return "GET";
-    }
-}
-
 }  // namespace
 
 RfkitConnection::RfkitConnection(QObject* parent)
@@ -237,7 +228,13 @@ void RfkitConnection::onReplyFinished(QNetworkReply* reply, const Request& reque
         const auto apiError = Rfkit::parseApiError(body);
         const QString reason = apiError && !apiError->reason.isEmpty()
             ? apiError->reason : QStringLiteral("HTTP %1").arg(http);
-        qCWarning(lcTuner).noquote() << "RfkitConnection:" << methodName(static_cast<int>(request.method))
+        const char* method = "GET";
+        switch (request.method) {
+        case Request::Method::Get:  method = "GET"; break;
+        case Request::Method::Put:  method = "PUT"; break;
+        case Request::Method::Post: method = "POST"; break;
+        }
+        qCWarning(lcTuner).noquote() << "RfkitConnection:" << method
                                      << request.path << "refused:" << http << reason;
         if (request.probe) {
             // Answering the handshake with an error status means this is not

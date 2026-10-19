@@ -267,14 +267,14 @@ public:
         update();
     }
 
-    // Optional scale strokes: labeled ticks are major, empty labels are minor.
-    // An invalid colour preserves the label-only scale used by other applets.
     // Colour of the middle (caution) zone and its tick labels; default olive.
     void setCautionColor(const QColor& color) {
         m_cautionColor = color;
         update();
     }
 
+    // Optional scale strokes: labeled ticks are major, empty labels are minor.
+    // An invalid colour preserves the label-only scale used by other applets.
     void setTickMarkColor(const QColor& color) {
         m_tickMarkColor = color;
         update();

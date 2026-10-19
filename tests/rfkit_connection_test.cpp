@@ -259,10 +259,16 @@ int main(int argc, char** argv)
 
         // Out of range: refused before the wire.
         conn.selectAntenna({Rfkit::AntennaType::Internal, 9});
-        conn.selectAntenna({Rfkit::AntennaType::External, 0});
+        conn.selectAntenna({Rfkit::AntennaType::External, 1});
         spinFor(300);
         report("out-of-range antennas never reach the wire",
                amp.count("PUT /antennas/active") == 1);
+
+        // The external selection is sent without a number.
+        conn.selectAntenna({Rfkit::AntennaType::External, 0});
+        report("the external antenna is selected with a number-less body",
+               spin([&] { return amp.count("PUT /antennas/active") == 2; })
+                   && amp.bodies.value("PUT /antennas/active") == QByteArray(R"({"type":"EXTERNAL"})"));
 
         conn.resetError();
         report("resetError sends POST /error/reset",
