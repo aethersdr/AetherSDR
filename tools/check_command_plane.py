@@ -93,7 +93,7 @@ BASELINE = {
     "src/gui/SpectrumOverlayMenu.cpp": 1,
     "src/gui/SpotSettingsDialog.cpp": 1,
     # ---- core (above the seam; backends/ is excluded) ----
-    "src/core/TciServer.cpp": 11,
+    "src/core/TciServer.cpp": 10,
     "src/core/AutomationServer.cpp": 6,
     "src/core/WaveformInstaller.cpp": 3,
     "src/core/DvkWavTransfer.cpp": 1,
