@@ -48,10 +48,15 @@ private:
     void refreshControls();
     void refreshAntennas();
     void updateGaugeScale();
+    // Colour the reflected-power bar by SWR: orange past 1.5:1, red past 2:1.
+    void updateReflectedZones(float forwardWatts);
 
     HGauge* m_pwrGauge{nullptr};
     HGauge* m_refGauge{nullptr};
     HGauge* m_swrGauge{nullptr};
+    // Reflected-power watts at which the REF bar turns orange / red (-1 = unset).
+    float m_refYellowW{-1.0f};
+    float m_refRedW{-1.0f};
 
     QLabel* m_pwrLabel{nullptr};
     QLabel* m_refLabel{nullptr};
@@ -70,6 +75,7 @@ private:
     QLabel* m_faultLabel{nullptr};
 
     QPushButton* m_operateBtn{nullptr};
+    QPushButton* m_tunerBtn{nullptr};  // read-only tuner on/off indicator
     QPushButton* m_resetErrorBtn{nullptr};
     // One button per internal antenna (the API allows 1-4); the external
     // antennas (up to 16) are a combo box, since 16 buttons do not fit a

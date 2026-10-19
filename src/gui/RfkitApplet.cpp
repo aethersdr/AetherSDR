@@ -13,26 +13,20 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
 
 namespace AetherSDR {
 
 namespace {
 
-// Gauge full scale used until the device reports its own max_value on the
-// first /power reply, and again if a firmware omits it. Only a starting point:
-// the applet re-scales to whatever the device says.
-constexpr int kDefaultForwardMaxWatts = 1500;
+// Fixed gauge full scales, the same as the amplifier's own display (Forward
+// 0-1600 W, Reflected 0-200 W), so the bars read identically on both screens
+// and never rescale. The device's max_value is deliberately not used: it
+// reports the present power limit, not the meter range.
+constexpr int kForwardMaxWatts = 1600;
+constexpr int kReflectedMaxWatts = 200;
 // Where the forward gauge turns red, as a fraction of its full scale.
 constexpr float kRedZoneFraction = 0.85f;
-// Reflected axis as a fraction of the forward axis when the device does not
-// report its own: a full-scale reflected bar the amp can never reach is
-// wasted. Same 15% convention the other amplifier applets use.
-constexpr float kReflectedFraction = 0.15f;
-
-int defaultReflectedMax(int forwardMax)
-{
-    return std::max(1, static_cast<int>(forwardMax * kReflectedFraction));
-}
 
 QVector<HGauge::Tick> evenTicks(float max)
 {
@@ -51,6 +45,15 @@ QVector<HGauge::Tick> evenTicks(float max)
 constexpr float kSwrGaugeMax = 5.0f;
 constexpr float kSwrGaugeYellow = 1.0f;  // SWR 1.5
 constexpr float kSwrGaugeRed = 2.0f;     // SWR 2
+
+// Reflected power that corresponds to a given SWR at a given forward power:
+// reflection coefficient (S-1)/(S+1), power ratio its square. So 1.5:1 is 4% of
+// forward power and 2:1 is about 11%, whatever the power level.
+float reflectedWattsAtSwr(float forwardWatts, float swr)
+{
+    const float gamma = (swr - 1.0f) / (swr + 1.0f);
+    return forwardWatts * gamma * gamma;
+}
 
 float swrGaugePosition(float swr)
 {
@@ -142,8 +145,8 @@ RfkitApplet::RfkitApplet(QWidget* parent)
 
     auto& theme = AetherSDR::ThemeManager::instance();
 
-    m_gaugeFwdMax = kDefaultForwardMaxWatts;
-    m_gaugeRefMax = defaultReflectedMax(kDefaultForwardMaxWatts);
+    m_gaugeFwdMax = kForwardMaxWatts;
+    m_gaugeRefMax = kReflectedMaxWatts;
 
     // ── Header: device name + status pill ────────────────────────────────
     m_nameLabel = new QLabel(this);
@@ -183,6 +186,7 @@ RfkitApplet::RfkitApplet(QWidget* parent)
     m_refGauge = new HGauge(0.0f, static_cast<float>(m_gaugeRefMax), m_gaugeRefMax / 2.0f,
                             QString(), QString(), evenTicks(static_cast<float>(m_gaugeRefMax)), this);
     m_refGauge->setAccessibleName(tr("Reflected power"));
+    m_refGauge->setCautionColor(QColor(0xe0, 0x80, 0x20));
     auto* refRow = new QHBoxLayout;
     refRow->setSpacing(4);
     refRow->addWidget(m_refLabel);
@@ -197,6 +201,7 @@ RfkitApplet::RfkitApplet(QWidget* parent)
                              {4.0f, QStringLiteral("5")},   {5.0f, QString::fromUtf8("\xe2\x88\x9e")}},
                             this, kSwrGaugeYellow);
     m_swrGauge->setAccessibleName(tr("SWR"));
+    m_swrGauge->setCautionColor(QColor(0xe0, 0x80, 0x20));
     auto* swrRow = new QHBoxLayout;
     swrRow->setSpacing(4);
     swrRow->addWidget(m_swrLabel);
@@ -270,6 +275,21 @@ RfkitApplet::RfkitApplet(QWidget* parent)
         emit operateToggled(!operate);
     });
 
+    // Read-only indicator: the API has no tuner control, so this shows the
+    // device's reported tuner mode and cannot be pressed.
+    m_tunerBtn = makeSmallButton(QStringLiteral("TUNER —"), this);
+    m_tunerBtn->setFocusPolicy(Qt::NoFocus);
+    m_tunerBtn->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_tunerBtn->setAccessibleName(tr("Tuner state"));
+    theme.applyStyleSheet(m_tunerBtn, makeStateBtnStyle({
+        activeStateStyle(QStringLiteral("tuner"), QStringLiteral("{{color.background.0}}"),
+                         QStringLiteral("{{color.accent.success}}"),
+                         QStringLiteral("{{color.accent.success}}")),
+        activeStateStyle(QStringLiteral("tunerOff"), QStringLiteral("{{color.background.0}}"),
+                         QStringLiteral("{{color.accent.danger}}"),
+                         QStringLiteral("{{color.accent.danger}}")),
+    }));
+
     m_resetErrorBtn = makeSmallButton(QStringLiteral("RESET ERR"), this);
     m_resetErrorBtn->setAccessibleName(tr("Reset amplifier error"));
     m_resetErrorBtn->setAccessibleDescription(
@@ -291,6 +311,7 @@ RfkitApplet::RfkitApplet(QWidget* parent)
     auto* ctrlRow = new QHBoxLayout;
     ctrlRow->setSpacing(6);
     ctrlRow->addWidget(m_operateBtn);
+    ctrlRow->addWidget(m_tunerBtn);
     ctrlRow->addStretch();
     ctrlRow->addWidget(m_resetErrorBtn);
     vbox->addLayout(ctrlRow);
@@ -348,15 +369,28 @@ RfkitApplet::RfkitApplet(QWidget* parent)
     setConnected(false);
 }
 
+void RfkitApplet::updateReflectedZones(float forwardWatts)
+{
+    const float refMax = static_cast<float>(m_gaugeRefMax);
+    // Rounded to 0.1 W so a wobbling forward power does not rebuild the gauge
+    // on every reply.
+    const float red = std::min(refMax, std::round(reflectedWattsAtSwr(forwardWatts, 2.0f) * 10.0f) / 10.0f);
+    const float yellow = std::min(red, std::round(reflectedWattsAtSwr(forwardWatts, 1.5f) * 10.0f) / 10.0f);
+    if (red == m_refRedW && yellow == m_refYellowW) {
+        return;
+    }
+    m_refRedW = red;
+    m_refYellowW = yellow;
+    m_refGauge->setRange(0.0f, refMax, red, evenTicks(refMax), yellow);
+}
+
 void RfkitApplet::updateGaugeScale()
 {
     if (!m_status.power) {
         return;
     }
-    const int fwdMax = m_status.power->forward.maxValue > 0
-        ? m_status.power->forward.maxValue : kDefaultForwardMaxWatts;
-    const int refMax = m_status.power->reflected.maxValue > 0
-        ? m_status.power->reflected.maxValue : defaultReflectedMax(fwdMax);
+    const int fwdMax = kForwardMaxWatts;
+    const int refMax = kReflectedMaxWatts;
     if (fwdMax != m_gaugeFwdMax) {
         m_gaugeFwdMax = fwdMax;
         m_pwrGauge->setRange(0.0f, static_cast<float>(fwdMax), fwdMax * kRedZoneFraction,
@@ -364,6 +398,7 @@ void RfkitApplet::updateGaugeScale()
     }
     if (refMax != m_gaugeRefMax) {
         m_gaugeRefMax = refMax;
+        m_refYellowW = m_refRedW = -1.0f;  // the range reset below drops the zones
         m_refGauge->setRange(0.0f, static_cast<float>(refMax), refMax / 2.0f,
                              evenTicks(static_cast<float>(refMax)));
     }
@@ -377,6 +412,9 @@ void RfkitApplet::setStatus(const Rfkit::Status& status)
     if (status.power) {
         updateGaugeScale();
         const float fwd = static_cast<float>(status.power->forward.value);
+        if (fwd >= 1.0f) {
+            updateReflectedZones(fwd);
+        }
         m_pwrGauge->setValue(fwd);
         // Reflected power and SWR only mean anything alongside forward drive —
         // hold both at baseline below 1W, the same gate the other amplifier
@@ -483,6 +521,10 @@ void RfkitApplet::setConnected(bool connected)
     m_connected = connected;
     m_operateBtn->setEnabled(connected);
     m_resetErrorBtn->setEnabled(connected);
+    if (!connected) {
+        m_tunerBtn->setText(QStringLiteral("TUNER —"));
+        setBtnState(m_tunerBtn, QString());
+    }
 
     m_statusPill->setText(connected ? QStringLiteral("CONNECTED") : QStringLiteral("—"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusPill, connected
@@ -577,8 +619,23 @@ void RfkitApplet::updateValueLabels()
             text += QStringLiteral("  C %1%2").arg(t.c->value).arg(t.c->unit.isEmpty() ? QString() : QStringLiteral(" ") + t.c->unit);
         }
         m_tunerLabel->setText(text);
+
+        // Enabled = the tuner is in the signal path (manual, auto or mid-tune);
+        // disabled = the amplifier reports it off or bypassed.
+        const bool known = t.mode != Rfkit::TunerMode::Unknown;
+        const bool enabled = t.mode == Rfkit::TunerMode::Manual
+            || t.mode == Rfkit::TunerMode::Auto
+            || t.mode == Rfkit::TunerMode::AutoTuning;
+        m_tunerBtn->setText(!known ? QStringLiteral("TUNER —")
+                            : enabled ? QStringLiteral("TUNER ON") : QStringLiteral("TUNER OFF"));
+        m_tunerBtn->setAccessibleName(!known ? tr("Tuner state unknown")
+                                      : enabled ? tr("Tuner enabled") : tr("Tuner disabled"));
+        setBtnState(m_tunerBtn, !known || !m_connected ? QString()
+                    : enabled ? QStringLiteral("tuner") : QStringLiteral("tunerOff"));
     } else {
         m_tunerLabel->setText(QStringLiteral("TUNER  —"));
+        m_tunerBtn->setText(QStringLiteral("TUNER —"));
+        setBtnState(m_tunerBtn, QString());
     }
 }
 

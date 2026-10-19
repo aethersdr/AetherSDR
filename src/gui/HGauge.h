@@ -269,6 +269,12 @@ public:
 
     // Optional scale strokes: labeled ticks are major, empty labels are minor.
     // An invalid colour preserves the label-only scale used by other applets.
+    // Colour of the middle (caution) zone and its tick labels; default olive.
+    void setCautionColor(const QColor& color) {
+        m_cautionColor = color;
+        update();
+    }
+
     void setTickMarkColor(const QColor& color) {
         m_tickMarkColor = color;
         update();
@@ -436,7 +442,7 @@ protected:
                 if (fillW > yellowX && yellowX < redX) {
                     int yw = qMin(fillW, redX) - yellowX;
                     if (yw > 0)
-                        p.fillRect(barX + yellowX + 1, barY + 1, yw, barH - 2, QColor(0x99, 0x88, 0x00));
+                        p.fillRect(barX + yellowX + 1, barY + 1, yw, barH - 2, m_cautionColor);
                 }
 
                 // Red portion (above red zone)
@@ -470,7 +476,7 @@ protected:
             float tf = (tick.value - m_min) / (m_max - m_min);
             int tx = barX + static_cast<int>(tf * barW);
             QColor tickColor = (tick.value >= m_redStart) ? QColor(0xcc, 0x33, 0x33)
-                             : (tick.value >= m_yellowStart) ? QColor(0x99, 0x88, 0x00)
+                             : (tick.value >= m_yellowStart) ? m_cautionColor
                              : QColor(0xc8, 0xd8, 0xe8);
             p.setPen(tickColor);
             const QFontMetrics fm(tickFont);
@@ -724,6 +730,7 @@ private:
     QString m_label, m_unit;
     QVector<Tick> m_ticks;
     QColor m_tickMarkColor;
+    QColor m_cautionColor{0x99, 0x88, 0x00};
 
     // Hover value readout state (see setHoverValuePopupEnabled).
     //
