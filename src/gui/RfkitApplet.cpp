@@ -337,16 +337,18 @@ RfkitApplet::RfkitApplet(QWidget* parent)
         m_antBtns.append(btn);
         antRow->addWidget(btn);
     }
+    // The external antenna is shown, not selectable: nobody has yet seen what
+    // the amplifier does with a request to switch to it, and it moves the RF
+    // path. Same treatment as the tuner and the operational interface.
     m_extAntBtn = makeSmallButton(QStringLiteral("EXT"), this);
+    m_extAntBtn->setFocusPolicy(Qt::NoFocus);
+    m_extAntBtn->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_extAntBtn->setAccessibleName(tr("External antenna"));
     m_extAntBtn->setAccessibleDescription(
-        tr("Selects the amplifier's external antenna. The amplifier may refuse the change."));
+        tr("Shows whether the amplifier's external antenna is in use. It cannot be selected "
+           "from AetherSDR."));
     theme.applyStyleSheet(m_extAntBtn, antBtnStyle);
     m_extAntBtn->hide();
-    connect(m_extAntBtn, &QPushButton::clicked, this, [this]() {
-        // Asks only; the highlight moves when the device's list confirms it.
-        emit antennaSelected(Rfkit::Antenna{Rfkit::AntennaType::External, Rfkit::kExternalAntennaNumber});
-    });
     antRow->addWidget(m_extAntBtn);
     antRow->addStretch();
     vbox->addLayout(antRow);
@@ -450,13 +452,22 @@ void RfkitApplet::refreshAntennas()
         setBtnState(btn, active ? QStringLiteral("active") : QString());
     }
 
-    // The single external selection: shown once the device lists it, dimmed
-    // while the device reports it disabled.
-    const auto* ext = find(Rfkit::AntennaType::External, Rfkit::kExternalAntennaNumber);
+    // Read-only external indicator: listed by the amplifier, lit while it
+    // reports the external antenna active, with the switch port when it gives
+    // one ("EXT 16").
+    const Rfkit::AntennaWithState* ext = nullptr;
+    for (const auto& item : list) {
+        if (item.antenna.type == Rfkit::AntennaType::External) {
+            ext = &item;
+            break;
+        }
+    }
+    const bool extActive = m_connected && ext && ext->state == Rfkit::AntennaState::Active;
     m_extAntBtn->setVisible(ext != nullptr);
-    m_extAntBtn->setEnabled(m_connected && ext && ext->state != Rfkit::AntennaState::Disabled);
-    setBtnState(m_extAntBtn, m_connected && ext && ext->state == Rfkit::AntennaState::Active
-                                 ? QStringLiteral("active") : QString());
+    m_extAntBtn->setText(extActive && ext->externalPort > 0
+                             ? QStringLiteral("EXT %1").arg(ext->externalPort)
+                             : QStringLiteral("EXT"));
+    setBtnState(m_extAntBtn, extActive ? QStringLiteral("active") : QString());
 }
 
 void RfkitApplet::setConnected(bool connected)

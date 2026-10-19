@@ -170,14 +170,15 @@ int main()
                a.has_value() && a->type == AntennaType::Internal && a->number == 3);
     }
     {
-        // A real RF2K-S names the external selection with no number...
+        // A real RF2K-S lists the external entry with no number while it is
+        // not active...
         const auto a = parseAntenna(R"({"type":"EXTERNAL"})");
         report("the un-numbered external antenna decodes",
                a.has_value() && a->type == AntennaType::External && a->number == 0);
-        // ...and attaches the active antenna's number while it is selected,
-        // which is not an external port index and is not read.
-        const auto b = parseAntenna(R"({"type":"EXTERNAL","number":3})");
-        report("a number on the external antenna is ignored",
+        // ...and the API document gives it a number (the external switch port,
+        // readOnly) otherwise. The selection itself carries none.
+        const auto b = parseAntenna(R"({"type":"EXTERNAL","number":16})");
+        report("a number on the external antenna is not part of the selection",
                b.has_value() && b->type == AntennaType::External && b->number == 0);
     }
     report("internal antenna 5 is out of range (the API allows 1-4)",
@@ -226,6 +227,25 @@ int main()
                    && list->at(4).antenna.number == 0
                    && list->at(4).state == AntennaState::Available);
     }
+    {
+        // The vendor's example for an active external antenna: the entry
+        // carries the external switch port (1-16).
+        const auto list = parseAntennas(
+            R"([{"type":"INTERNAL","number":1,"state":"AVAILABLE"},)"
+            R"({"type":"EXTERNAL","number":16,"state":"ACTIVE"}])");
+        report("an external entry keeps the switch port it reports",
+               list.has_value() && list->size() == 2
+                   && list->at(1).antenna.type == AntennaType::External
+                   && list->at(1).state == AntennaState::Active
+                   && list->at(1).externalPort == 16);
+        const auto none = parseAntennas(R"([{"type":"EXTERNAL","state":"AVAILABLE"}])");
+        report("an external entry without a number has no port",
+               none.has_value() && none->size() == 1 && none->at(0).externalPort == 0);
+        const auto bad = parseAntennas(R"([{"type":"EXTERNAL","number":17,"state":"ACTIVE"}])");
+        report("an out-of-range external port is dropped, the entry kept",
+               bad.has_value() && bad->size() == 1 && bad->at(0).externalPort == 0
+                   && bad->at(0).state == AntennaState::Active);
+    }
     report("an antenna list that is not an array is rejected",
            !parseAntennas(R"({"type":"INTERNAL","number":1,"state":"ACTIVE"})").has_value());
     report("an empty antenna array is a valid, empty list",
@@ -247,7 +267,8 @@ int main()
         report("STANDBY body", s.value("operate_mode").toString() == "STANDBY");
     }
     {
-        // The device accepts exactly {"type":"EXTERNAL"} here; a number is a 400.
+        // The API document marks ExternalAntenna.number readOnly, so the request
+        // carries none. (Not observed on a unit: nobody has tried it.)
         report("external antenna body carries no number",
                buildAntennaBody({AntennaType::External, 0}) == QByteArray(R"({"type":"EXTERNAL"})"));
     }

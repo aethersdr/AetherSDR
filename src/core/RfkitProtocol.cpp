@@ -133,9 +133,9 @@ std::optional<Antenna> antennaFromObject(const QJsonObject& o)
     const QString type = o.value(QLatin1String("type")).toString();
     Antenna antenna;
     if (type == QLatin1String("EXTERNAL")) {
-        // One un-numbered external selection. Whatever number the device
-        // attaches while it is active is not an external port index, so it is
-        // not read.
+        // One external selection. Any number on the entry is the external
+        // switch's port (readOnly in the API document), not part of what is
+        // selected; parseAntennas() keeps it separately.
         antenna.type = AntennaType::External;
         antenna.number = kExternalAntennaNumber;
         return antenna;
@@ -349,6 +349,13 @@ std::optional<QVector<AntennaWithState>> parseAntennas(const QByteArray& body)
         const QString state = o.value(QLatin1String("state")).toString();
         AntennaWithState item;
         item.antenna = *antenna;
+        if (antenna->type == AntennaType::External) {
+            int port = 0;
+            if (asInt(o.value(QLatin1String("number")), port)
+                && port >= kMinExternalPort && port <= kMaxExternalPort) {
+                item.externalPort = port;
+            }
+        }
         if (state == QLatin1String("ACTIVE")) {
             item.state = AntennaState::Active;
         } else if (state == QLatin1String("AVAILABLE")) {

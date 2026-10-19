@@ -53,11 +53,17 @@ inline constexpr int kMaxBodyBytes = 64 * 1024;
 
 inline constexpr int kMinInternalAntenna = 1;
 inline constexpr int kMaxInternalAntenna = 4;
-// The RF2K-S has a single external antenna selection. It is reported as
-// {"type":"EXTERNAL"} with no number (a number appears only while it is the
-// active one, and then is not an external port index), and is selected with
-// {"type":"EXTERNAL"} alone. So an external Antenna always has number 0.
+// The external antenna is a single selection. The API document gives
+// ExternalAntenna.number (1-16) as readOnly: it names the port of the
+// operator's external antenna switch, which the amplifier reports but cannot
+// be told to change, so the selection request carries no number. An external
+// Antenna therefore always has number 0; the port the amplifier reports is kept
+// separately, as AntennaWithState::externalPort. A real RF2K-S (firmware
+// G200C267) lists {"type":"EXTERNAL","state":"AVAILABLE"} with no number while
+// it is not active; what it reports while it is active has not been observed.
 inline constexpr int kExternalAntennaNumber = 0;
+inline constexpr int kMinExternalPort = 1;
+inline constexpr int kMaxExternalPort = 16;
 
 // Endpoint paths, relative to the device root.
 inline constexpr char kPathInfo[]        = "/info";
@@ -162,6 +168,9 @@ enum class AntennaState { Active, Available, Disabled };
 struct AntennaWithState {
     Antenna antenna;
     AntennaState state{AntennaState::Available};
+    // External entry only: the external switch port the amplifier reported
+    // (1-16), or 0 when it sent none or one outside that range.
+    int externalPort{0};
 };
 
 // The device's error body, sent with a 400 or 409: {"status":..,"reason":..}.
@@ -205,7 +214,7 @@ std::optional<ApiError> parseApiError(const QByteArray& body);
 // Compact JSON. buildAntennaBody returns an empty array for an antenna the
 // device cannot have (an internal number outside 1-4, an external number other
 // than 0), so such a request never reaches the wire. The external body carries
-// no number.
+// no number, because the API document marks ExternalAntenna.number readOnly.
 
 QByteArray buildOperateModeBody(OperateMode mode);
 QByteArray buildAntennaBody(const Antenna& antenna);

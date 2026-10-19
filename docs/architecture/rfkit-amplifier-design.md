@@ -78,22 +78,32 @@ HTTP has no connection to be "up", so:
 
 ## 5. What the operator can and cannot do
 
-Controls: OPERATE/STANDBY, antenna selection (internal 1–4 and the single
-external selection EXT, range-checked before the wire), and error reset behind a confirm dialog (an
+Controls: OPERATE/STANDBY, antenna selection (internal 1–4,
+range-checked before the wire), and error reset behind a confirm dialog (an
 error latch exists to protect the hardware).
 
 Never latched optimistically (Principle II): every control asks, and the
 applet repaints only from the device's own reply; the antenna buttons only
 move their highlight when the device's list confirms it.
 
-The RF2K-S reports one external selection, `{"type":"EXTERNAL"}`, with no
-number (a number appears only while it is active, and is the active antenna's
-index, not an external port), and accepts `{"type":"EXTERNAL"}` with no number
-to select it. The API document allows up to 16 numbered external antennas, but
-no device seen so far uses them, so an external antenna is always number 0
-here. The device refuses an antenna change with 409 when changes are not
-allowed; the condition is internal to the amplifier and is not interlocked
-here.
+The external antenna is shown, not switchable. A real RF2K-S (firmware
+G200C267) always lists `{"type":"EXTERNAL","state":"AVAILABLE"}`, with no number
+and even with its Ext. Antenna switch setting off, so a button would be offered
+to every owner, including those with no external switch, and one press would
+move the amplifier's RF path. Nobody has seen what the amplifier does with
+that request, so the applet only lights an **EXT** indicator while the
+amplifier reports the external antenna active, and adds the port when it
+sends one ("EXT 16"). The API document marks `ExternalAntenna.number` (1–16)
+readOnly: it is the port of the operator's external antenna switch, reported
+but not settable, which is why a selection request would carry no number. What
+a unit reports while the external antenna is active has not been observed; the
+document's example is `{"type":"EXTERNAL","number":16,"state":"ACTIVE"}`. The
+parser keeps that port separately (`AntennaWithState::externalPort`) and the
+protocol layer can build the number-less request, so a selectable button is a
+small change once someone with an external switch has tried it.
+
+The device refuses an antenna change with 409 when changes are not allowed;
+the condition is internal to the amplifier and is not interlocked here.
 
 Deliberately absent:
 
