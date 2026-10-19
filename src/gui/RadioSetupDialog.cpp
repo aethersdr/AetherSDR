@@ -5757,8 +5757,6 @@ QWidget* RadioSetupDialog::buildAudioTab()
             "uncompressed audio on the local network. Until you choose, a radio reached "
             "over a tailnet gets Opus."));
         m_audioCompressionGroup = compGroup;
-        compGroup->setVisible(!m_model->isConnected()
-                              || m_model->backendCapabilities().hasAudioCompression);
         auto* compLayout = new QHBoxLayout(compGroup);
         compLayout->setSpacing(4);
 
@@ -5805,6 +5803,9 @@ QWidget* RadioSetupDialog::buildAudioTab()
         compLayout->addWidget(hint);
 
         vbox->addWidget(compGroup);
+        // Show only after parenting: a visible parentless widget is a transient window.
+        compGroup->setVisible(!m_model->isConnected()
+                              || m_model->backendCapabilities().hasAudioCompression);
     }
 
     // The two connection-wide switches share a group rather than sitting
@@ -8672,10 +8673,11 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
         // Custom port row — hidden unless "Custom..." selected or saved port is custom
         auto* customLabel = new QLabel("Path:");
-        customLabel->setVisible(isCustom);
-        customEdit->setVisible(isCustom);
         grid->addWidget(customLabel, 1, 0);
         grid->addWidget(customEdit, 1, 1, 1, 3);
+        // Show only after parenting: a visible parentless widget is a transient window.
+        customLabel->setVisible(isCustom);
+        customEdit->setVisible(isCustom);
 
         connect(portCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [portCombo, customLabel, customEdit](int idx) {
@@ -8950,8 +8952,6 @@ QWidget* RadioSetupDialog::buildSerialTab()
     {
         auto* group = new QGroupBox("FlexControl Tuning Knob");
         m_flexControlGroup = group;
-        // Host peripheral, not a radio capability -- see updateRadioCapabilityVisibility (#5778).
-        group->setVisible(true);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
@@ -9082,6 +9082,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
         });
         grid->addWidget(invertDir, 6, 0, 1, 3);
 
+        // Host peripheral, not a radio capability -- see updateRadioCapabilityVisibility (#5778).
+        // Visible by default as a child; never setVisible(true) before parenting.
         vbox->addWidget(group);
     }
 

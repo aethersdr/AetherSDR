@@ -3796,6 +3796,33 @@ add_test(NAME flex_control_visibility_test COMMAND flex_control_visibility_test)
 set_tests_properties(flex_control_visibility_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
+# Radio Setup pages must not show a parentless widget while building (macOS focus steal).
+add_executable(radio_setup_no_transient_window_test
+    tests/radio_setup_no_transient_window_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FirmwareReleasesDialog.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
+    src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
+    src/gui/Kpa500AdvancedWidget.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(radio_setup_no_transient_window_test PRIVATE src tests)
+target_link_libraries(radio_setup_no_transient_window_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME radio_setup_no_transient_window_test COMMAND radio_setup_no_transient_window_test)
+set_tests_properties(radio_setup_no_transient_window_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
 
 # #5507: the production Radio Setup dialog against a backend that reports no
 # region, driven by RadioDelta over the real IRadioBackend::radioChanged route.
@@ -9443,6 +9470,7 @@ set(AETHER_SETTINGS_CONSUMERS
     pcm_compatibility_test
     firmware_close_dialog_test
     flex_control_visibility_test
+    radio_setup_no_transient_window_test
     radio_setup_region_field_test
     radio_setup_tx_timing_fields_test
     radio_setup_label_theme_token_test
