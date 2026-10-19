@@ -11,6 +11,7 @@
 #include <QPointer>
 #include <QRegularExpression>
 #include <QThread>
+#include <QStringView>
 #include <QVersionNumber>
 
 #include "core/AppSettings.h"
@@ -1472,6 +1473,16 @@ void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& k
     carry(kvs, "index_letter", d.letter);
     carry(kvs, "RF_frequency", d.frequency);
     carry(kvs, "mode", d.mode);
+    if (kvs.contains(QStringLiteral("chain_mode"))) {
+        const QString value = kvs.value(QStringLiteral("chain_mode"));
+        // FlexLib 4.3.16 Slice.ChainMode is independent of the selected mode.
+        // Keep future chain names, but bound this diagnostic token at ingress.
+        const bool valid = value.size() <= 32
+            && std::all_of(value.cbegin(), value.cend(), [](QChar ch) {
+                return ch.unicode() >= 0x21 && ch.unicode() <= 0x7e;
+            });
+        d.chainMode = valid ? value : QString();
+    }
     carry(kvs, "filter_lo", d.filterLow);
     carry(kvs, "filter_hi", d.filterHigh);
     if (kvs.contains(QStringLiteral("mode_list"))) {
@@ -1869,6 +1880,32 @@ void FlexBackend::decodeApdSamplerStatus(const QMap<QString, QString>& kvs)
     if (kvs.contains(QStringLiteral("selected_sampler")))
         d.apdSamplerSelected = kvs.value(QStringLiteral("selected_sampler")).toUpper();
     emit transmitChanged(d);
+}
+
+void FlexBackend::decodeRadioInfoMetadata(const QString& body)
+{
+    // FlexLib 4.3.16 Radio.UpdateInfo: this belongs to the comma-separated
+    // info reply, not radio status. A reply is a snapshot, unlike slice deltas.
+    RadioDelta delta;
+    delta.iaruRegion = 0;
+    for (QStringView field : QStringView(body).split(QLatin1Char(','))) {
+        const qsizetype eq = field.indexOf(QLatin1Char('='));
+        if (eq < 0 || field.left(eq).trimmed() != QLatin1String("iaru_region")) {
+            continue;
+        }
+        QStringView value = field.mid(eq + 1).trimmed();
+        delta.iaruRegion = 0;
+        if (value.size() > 16) { continue; }
+        const auto wrapper = [](QChar ch) {
+            return ch == QLatin1Char('\\') || ch == QLatin1Char('"');
+        };
+        while (!value.isEmpty() && wrapper(value.front())) { value = value.mid(1); }
+        while (!value.isEmpty() && wrapper(value.back())) { value = value.left(value.size() - 1); }
+        bool ok = false;
+        const int region = value.size() <= 8 ? value.toInt(&ok) : 0;
+        delta.iaruRegion = ok && region >= 1 && region <= 3 ? region : 0;
+    }
+    emit radioChanged(delta);
 }
 
 void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)

@@ -1575,6 +1575,8 @@ QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo,
         {QStringLiteral("panId"),      s->panId()},
         {QStringLiteral("frequency"),  s->frequency()},   // MHz
         {QStringLiteral("mode"),       s->mode()},
+        {QStringLiteral("chainMode"), s->chainMode().isEmpty()
+            ? QJsonValue() : QJsonValue(s->chainMode())},
         {QStringLiteral("filterLow"),  s->filterLow()},
         {QStringLiteral("filterHigh"), s->filterHigh()},
         {QStringLiteral("filterPresetId"), filterControl.selectedPresetId},
@@ -1780,6 +1782,7 @@ QJsonObject radioSnapshot(const RadioModel* r)
         {QStringLiteral("serial"),       r->serial()},
         {QStringLiteral("callsign"),     r->callsign()},
         {QStringLiteral("nickname"),     r->nickname()},
+        {QStringLiteral("iaruRegion"), jsonOrNull(r->iaruRegion())},
         {QStringLiteral("connected"),    r->isConnected()},
         // The third value beside the bool, NOT a replacement for it: "idle",
         // "connecting" or "connected". A caller that issued `connect ip` and

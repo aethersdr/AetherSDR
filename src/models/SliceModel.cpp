@@ -1841,6 +1841,11 @@ void SliceModel::emitLetterRefresh()
 void SliceModel::applyChanges(const SliceDelta& d)
 {
     const QPointer<SliceModel> alive(this);
+    if (d.chainMode && m_chainMode != *d.chainMode) {
+        m_chainMode = *d.chainMode;
+        emit chainModeChanged(m_chainMode);
+        if (!alive) { return; }
+    }
     const ReceiveObservation previousObservation = m_receiveObservation;
     if (d.mode) {
         m_squelchRecoveryAwaitingModeReport = false;

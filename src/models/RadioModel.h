@@ -256,6 +256,7 @@ public:
     ReceiveDispatch requestRadioNickname(const QString& nickname,
                                          IRadioBackend::NicknameCompletion completion = {});
     QString region()       const { return m_region; }
+    std::optional<int> iaruRegion() const { return m_iaruRegion; }
     int     rttyMarkDefault() const { return m_rttyMarkDefault; }
     QString radioOptions() const { return m_radioOptions; }
     RadioInfo lastRadioInfo() const { return m_lastInfo; }
@@ -1605,6 +1606,7 @@ private:
 
     // Route command to active connection (LAN or WAN)
     using ResponseCallback = RadioConnection::ResponseCallback;
+    void requestRadioInfo();
     quint32 sendCmd(const QString& command, ResponseCallback cb = nullptr);
     quint32 clientHandle() const;
     PanadapterModel* ensureOwnedPanadapter(const QString& panId);
@@ -2030,6 +2032,7 @@ private:
     QString     m_callsign;
     QString     m_nickname;
     QString     m_region;
+    std::optional<int> m_iaruRegion;
     QString     m_radioOptions;
     QString     m_licenseRadioId;
     QString     m_licenseExpirationDate;

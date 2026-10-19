@@ -1866,6 +1866,13 @@ target_include_directories(cw_mode_gate_test PRIVATE src)
 target_link_libraries(cw_mode_gate_test PRIVATE Qt6::Core)
 add_test(NAME cw_mode_gate_test COMMAND cw_mode_gate_test)
 
+# Socket-free production parser/seam/model and bridge dispatcher regression.
+add_executable(flex_readonly_metadata_test tests/flex_readonly_metadata_test.cpp)
+target_include_directories(flex_readonly_metadata_test PRIVATE src tests)
+target_link_libraries(flex_readonly_metadata_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME flex_readonly_metadata_test COMMAND flex_readonly_metadata_test)
+set_tests_properties(flex_readonly_metadata_test PROPERTIES TIMEOUT 30)
+
 add_executable(flex_slice_mode_intent_test tests/flex_slice_mode_intent_test.cpp)
 target_include_directories(flex_slice_mode_intent_test PRIVATE src tests)
 target_link_libraries(flex_slice_mode_intent_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -9435,6 +9442,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    flex_readonly_metadata_test
     dsp_parameter_reset_test
     cw_rx_model_test
     asr_native_receiver_test
@@ -9659,6 +9667,7 @@ endforeach()
 # library as AetherSDR so moving QtWidgets out of aethercore cannot silently
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
+    flex_readonly_metadata_test
     dsp_parameter_reset_test
     nrs_level_range_test
     anan_noise_blanker_readback_test

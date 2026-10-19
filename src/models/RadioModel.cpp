@@ -7201,6 +7201,10 @@ void RadioModel::onConnected()
 
 void RadioModel::stageSessionModelsForReconnect()
 {
+    if (m_iaruRegion) {
+        m_iaruRegion.reset();
+        emit infoChanged();
+    }
     // onConnected has already opened the new backend session, but old slices
     // remain in m_slices while invalidation emits model notifications. A
     // reentrant UI callback must not dispatch through that temporary identity.
@@ -7218,6 +7222,7 @@ void RadioModel::stageSessionModelsForReconnect()
             slice->invalidateSquelchState();
             slice->invalidateFrequencyObservation();
             SliceDelta unavailableWfm;
+            unavailableWfm.chainMode = QString();
             unavailableWfm.wfmStereoStatus = WfmStereoStatus::Unavailable;
             unavailableWfm.wfmReceptionDiagnostics = WfmReceptionDiagnostics{};
             slice->applyChanges(unavailableWfm);
@@ -7306,6 +7311,10 @@ void RadioModel::pruneStaleSessionModels(quint64 generation)
 
 void RadioModel::dropAllSessionModelsForFamilySwitch()
 {
+    if (m_iaruRegion) {
+        m_iaruRegion.reset();
+        emit infoChanged();
+    }
     resetTxOperations();
     // Live models (present if the switch happens without a clean disconnect).
     const QList<SliceModel*> liveSlices = m_slices;
@@ -7661,6 +7670,70 @@ void RadioModel::handleGuiClientRegistrationFailure(
     closeConnectionForTerminalDisconnect();
 }
 
+void RadioModel::requestRadioInfo()
+{
+    // Query radio info (region, callsign, options, etc.)
+    // Response is comma-separated key=value pairs.
+    sendCmd("info",
+        [this, infoBackend = m_backendReceiverGeneration,
+         infoSession = m_sessionGeneration,
+         infoModels = m_sessionModelGeneration](int code, const QString& body) {
+            if (code != 0 || infoSession != m_sessionGeneration
+                || infoBackend != m_backendReceiverGeneration
+                || infoModels != m_sessionModelGeneration) { return; }
+            if (m_flexBackend) { m_flexBackend->decodeRadioInfoMetadata(body); }
+            for (const QString& kv : body.split(',')) {
+                const int eq = kv.indexOf('=');
+                if (eq < 0) continue;
+                const QString key = kv.left(eq).trimmed();
+                const QString val = kv.mid(eq + 1).trimmed()
+                    .remove('\\').remove('"');
+                if (key == "callsign") {
+                    if (val != m_callsign) {
+                        m_callsign = val;
+                        emit callsignChanged(callsign());   // effective value, not the raw radio field
+                    }
+                }
+                else if (key == "name")        m_nickname = val;
+                else if (key == "region")      m_region = val;
+                else if (key == "options")     m_radioOptions = val;
+                else if (key == "model") {
+                    m_model = val;
+                    // #5594 item 3: only when the radio declared nothing. A model-string
+                    // change must not overwrite a capacity the radio stated for itself —
+                    // the table is the fallback, not an override.
+                    if (m_declaredMaxSlices <= 0)
+                        m_maxSlices = maxSlicesForModel(m_model);
+                }
+                else if (key == "chassis_serial") m_chassisSerial = val;
+                else if (key == "software_ver")   adoptSoftwareVersion(val);
+                else if (key == "ip")             m_ip = val;
+                else if (key == "netmask")        m_netmask = val;
+                else if (key == "gateway")        m_gateway = val;
+                else if (key == "mac")            m_mac = val;
+            }
+            qCDebug(lcProtocol) << "RadioModel: info — callsign:" << m_callsign
+                     << "region:" << m_region << "options:" << m_radioOptions;
+
+            // Cross-radio guard, WAN leg: discovery serial isn't
+            // available at stage time over SmartLink, so drop any
+            // still-staged previous-session models as soon as the
+            // radio identifies itself as a different chassis.
+            if (!m_staleSessionSerial.isEmpty() && !m_chassisSerial.isEmpty()
+                && m_chassisSerial != m_staleSessionSerial) {
+                qCDebug(lcProtocol) << "RadioModel: chassis serial" << m_chassisSerial
+                                    << "differs from staged session serial"
+                                    << m_staleSessionSerial
+                                    << "— dropping previous-session models";
+                pruneStaleSessionModels(m_sessionModelGeneration);
+            }
+
+            emit infoChanged();
+            if (reloadAntennaAliases())
+                emit antennaAliasesChanged();
+        });
+}
+
 void RadioModel::registerAsGuiClient(const QString& clientId)
 {
     // aetherd Gap B: SmartSDR GUI-client registration is Flex-only. Every step
@@ -7901,61 +7974,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                              << "(expected on WAN — using udp_register instead)";
                 }
 
-                // Query radio info (region, callsign, options, etc.)
-                // Response is comma-separated key=value pairs.
-                sendCmd("info",
-                    [this](int code, const QString& body) {
-                        if (code != 0) return;
-                        for (const QString& kv : body.split(',')) {
-                            const int eq = kv.indexOf('=');
-                            if (eq < 0) continue;
-                            const QString key = kv.left(eq).trimmed();
-                            const QString val = kv.mid(eq + 1).trimmed()
-                                .remove('\\').remove('"');
-                            if (key == "callsign") {
-                                if (val != m_callsign) {
-                                    m_callsign = val;
-                                    emit callsignChanged(callsign());   // effective value, not the raw radio field
-                                }
-                            }
-                            else if (key == "name")        m_nickname = val;
-                            else if (key == "region")      m_region = val;
-                            else if (key == "options")     m_radioOptions = val;
-                            else if (key == "model") {
-                                m_model = val;
-                                // #5594 item 3: only when the radio declared nothing. A model-string
-                                // change must not overwrite a capacity the radio stated for itself —
-                                // the table is the fallback, not an override.
-                                if (m_declaredMaxSlices <= 0)
-                                    m_maxSlices = maxSlicesForModel(m_model);
-                            }
-                            else if (key == "chassis_serial") m_chassisSerial = val;
-                            else if (key == "software_ver")   adoptSoftwareVersion(val);
-                            else if (key == "ip")             m_ip = val;
-                            else if (key == "netmask")        m_netmask = val;
-                            else if (key == "gateway")        m_gateway = val;
-                            else if (key == "mac")            m_mac = val;
-                        }
-                        qCDebug(lcProtocol) << "RadioModel: info — callsign:" << m_callsign
-                                 << "region:" << m_region << "options:" << m_radioOptions;
-
-                        // Cross-radio guard, WAN leg: discovery serial isn't
-                        // available at stage time over SmartLink, so drop any
-                        // still-staged previous-session models as soon as the
-                        // radio identifies itself as a different chassis.
-                        if (!m_staleSessionSerial.isEmpty() && !m_chassisSerial.isEmpty()
-                            && m_chassisSerial != m_staleSessionSerial) {
-                            qCDebug(lcProtocol) << "RadioModel: chassis serial" << m_chassisSerial
-                                                << "differs from staged session serial"
-                                                << m_staleSessionSerial
-                                                << "— dropping previous-session models";
-                            pruneStaleSessionModels(m_sessionModelGeneration);
-                        }
-
-                        emit infoChanged();
-                        if (reloadAntennaAliases())
-                            emit antennaAliasesChanged();
-                    });
+                requestRadioInfo();
 
                 sendCmd("slice list",
                     [this](int code3, const QString& body) {
@@ -8514,6 +8533,7 @@ void RadioModel::onDisconnected()
     m_declaredMaxSlices = 0;
     m_maxPanadapters = 0;
     m_region.clear();
+    m_iaruRegion.reset();
     m_ip.clear();
     m_netmask.clear();
     m_gateway.clear();
@@ -8595,6 +8615,16 @@ void RadioModel::onDisconnected()
     if (m_panStream)
         m_panStream->resetDaxChannelsForDisconnect();
     emit otherClientsChanged(0, {});
+    // Staged objects can be reclaimed on reconnect; their observations belong
+    // to the retired session even when the slice id is reused.
+    SliceDelta unknownMetadata;
+    unknownMetadata.chainMode = QString();
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        if (slice) { slice->applyChanges(unknownMetadata); }
+    }
+    for (SliceModel* slice : std::as_const(m_staleSlices)) {
+        if (slice) { slice->applyChanges(unknownMetadata); }
+    }
     emit infoChanged();
     emit connectionStateChanged(false);
     // After connectionStateChanged(false): protocol adapters detach and remove
@@ -12458,6 +12488,11 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
     }
     if (d.nickname) { m_nickname = *d.nickname; changed = true; }
     if (d.region)   { m_region = *d.region; changed = true; }
+    if (d.iaruRegion) {
+        m_iaruRegion = *d.iaruRegion >= 1 && *d.iaruRegion <= 3
+            ? d.iaruRegion : std::nullopt;
+        changed = true;
+    }
     if (d.radioOptions) { m_radioOptions = *d.radioOptions; changed = true; }
     if (d.ip) { m_ip = *d.ip; changed = true; }
     if (d.netmask) { m_netmask = *d.netmask; changed = true; }
@@ -13517,6 +13552,7 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     radio["software_version"] = m_version;
     radio["protocol_version"] = m_protocolVersion;
     radio["region"] = m_region;
+    radio["iaru_region"] = m_iaruRegion ? QJsonValue(*m_iaruRegion) : QJsonValue();
     radio["radio_options"] = m_radioOptions;
     radio["max_slices"] = m_maxSlices;
     radio["full_duplex_enabled"] = m_fullDuplex;
@@ -13837,6 +13873,8 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
         slice["pan_id"] = sliceModel->panId();
         slice["frequency_mhz"] = sliceModel->frequency();
         slice["mode"] = sliceModel->mode();
+        slice["chain_mode"] = sliceModel->chainMode().isEmpty()
+            ? QJsonValue() : QJsonValue(sliceModel->chainMode());
         slice["mode_list"] = toJsonArray(sliceModel->modeList());
         slice["active"] = sliceModel->isActive();
         slice["in_capture"] = sliceModel->inCapture();
