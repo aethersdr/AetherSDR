@@ -1,7 +1,7 @@
 ---
 title: "Networked Icom"
 slug: "/networked-icom"
-description: "AetherSDR can operate Icom transceivers that have a built-in network connection, using Icom's CI-V commands over the RS-BA1 network protocol."
+description: "Connect an IC-7300MK2, IC-705 or IC-9700 using CI-V over the RS-BA1 network protocol."
 status: "Early"
 applies_to: ["Networked Icom"]
 ---
@@ -12,9 +12,9 @@ applies_to: ["Networked Icom"]
 
 :::
 
-AetherSDR can operate Icom transceivers that have a built-in network connection, using Icom's CI-V commands over the RS-BA1 network protocol. No Icom software and no USB cable are needed.
+AetherSDR connects to the IC-7300MK2, IC-705 and IC-9700 using Icom's CI-V commands over the RS-BA1 network protocol. No Icom software and no USB cable are needed. Other Icom models are not supported and cannot connect.
 
-The **IC-7300MK2** is supported and shows no EXPERIMENTAL badge. Every other Icom shows the **EXPERIMENTAL** badge in the title bar and an "Experimental radio support" notice when you connect. FlexRadio remains AetherSDR's supported target; see [Supported Radios](./supported-radios.md).
+The **IC-7300MK2** is supported and shows no EXPERIMENTAL badge. The **IC-705** and **IC-9700** are experimental: each shows the **EXPERIMENTAL** badge in the title bar and an "Experimental radio support" notice when you connect. FlexRadio remains AetherSDR's supported target; see [Supported Radios](./supported-radios.md).
 
 ## Where to go next
 
@@ -33,9 +33,8 @@ The **IC-7300MK2** is supported and shows no EXPERIMENTAL badge. Every other Ico
 | **IC-7300MK2** | Built-in Ethernet | **Supported**: no EXPERIMENTAL badge |
 | **IC-705** | Wi-Fi | Early (experimental); verified against its CI-V guide |
 | **IC-9700** | Ethernet | Early (experimental); works, with read-only memories |
-| IC-7610, IC-785x, IC-905 | Ethernet | Listed in the model chooser, not verified |
 
-The original IC-7300 has no network port and is not in the model list.
+The IC-7610, IC-7850/IC-7851, IC-905, IC-7760 and other Icom models are not supported. The original IC-7300 has no built-in network port and is also not supported.
 
 ## Setup
 
@@ -59,7 +58,9 @@ Networked Icoms are not discovered automatically. Open **File → Connect to Rad
 | **Icom ports:** | **Standard (50001–50003)**, or **Custom NAT ports...** with a **First UDP port:**. AetherSDR uses that port and the next two. Different port triplets let you reach several radios behind one NAT router. |
 | **Icom CI-V:** | **Auto-detect (recommended)** asks the radio for its own CI-V address. You can also pick a model from the list, or **Custom...** and type a hex **CI-V address:** (for example `A2`, from the radio's MENU > SET > Connectors > CI-V). A wrong address is not silently corrected: the connection gets no frequency, panadapter or transmit. |
 
-Click **Connect by IP**. The model is identified over the wire, not from the radio's name. If the handshake fails, the message names the target and the likely cause.
+The model choices label the IC-7300MK2 as **supported**, and the IC-705 and IC-9700 individually as **experimental**.
+
+Click **Connect by IP**. The model is identified over the wire, not from the radio's name. If the handshake fails, the message names the target and the likely cause. If identification returns an unsupported model, the **Icom model not supported** dialog names the model and CI-V model ID, lists the three available models with their support status, and reports that the connection has closed without automatic retries. This check also applies to **Auto-detect (recommended)**, **Custom...**, and saved connections.
 
 ### Wake Icom on connect
 
@@ -70,7 +71,7 @@ Click **Connect by IP**. The model is identified over the wire, not from the rad
 AetherSDR treats an Icom differently from a FlexRadio:
 
 - **The radio is authoritative.** It remembers its own frequency, mode and filter. AetherSDR reads the radio's state and levels when it connects and never pushes saved state onto it.
-- **Unknown models fail closed.** Each verified model has its own command profile. A control that has not been proven on a model is hidden, and a radio AetherSDR does not recognize gets no panadapter and no transmit, rather than guessed defaults.
+- **Unsupported models cannot connect.** Only models with an implemented bring-up profile are admitted. An unknown or unsupported identity closes the connection before model-specific initialization.
 
 What you can do:
 

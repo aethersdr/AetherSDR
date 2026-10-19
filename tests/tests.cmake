@@ -7941,6 +7941,7 @@ set_tests_properties(aethercontrol_window_test PROPERTIES
 add_executable(connection_panel_size_test
     tests/connection_panel_size_test.cpp
     src/gui/ConnectionPanel.cpp
+    src/gui/FramelessMessageBox.cpp
     src/gui/CanonWindow.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp

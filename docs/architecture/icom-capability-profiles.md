@@ -21,8 +21,11 @@ discovered identity declares scope geometry. `controls map` reports that split
 as `supported: true` with `profileEvidence: none`; reachability is not an
 attestation. The backend must not borrow another radio's SET address, enum,
 meter curve, front-end ladder, mode vocabulary, or model-specific command
-shape. Identity-only rows remain discoverable but do not receive a supported
-bring-up profile.
+shape. Identity-only rows remain available for diagnostics, but are excluded
+from the connection chooser. CI-V identification admits only profiles with
+`supportedBringup` set: IC-705, IC-7300MK2 and IC-9700. Other identities close
+the session before the startup snapshot, scope or model-specific polling,
+and report a terminal rejection rather than starting automatic reconnect.
 
 ## Initial supported profiles
 

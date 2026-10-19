@@ -1456,6 +1456,18 @@ void RadioModel::setupBackend(const QString& family)
                 this, &RadioModel::onDisconnected);
         connect(m_backend.get(), &IRadioBackend::connectionError,
                 this, &RadioModel::onConnectionError);
+        connect(m_backend.get(), &IRadioBackend::connectionRejected,
+                this, [this, generation](const QString& reason) {
+            if (generation != m_backendReceiverGeneration) {
+                return;
+            }
+            cancelRadioWake();
+            m_intentionalDisconnect = true;
+            m_connectAttemptActive = false;
+            m_reconnectTimer.stop();
+            emit connectionRejected(reason);
+            emit connectionError(reason);
+        });
         // Advisory only — deliberately NOT routed through onConnectionError,
         // which starts the reconnect timer. Re-emitted for the UI to surface.
         connect(m_backend.get(), &IRadioBackend::configurationWarning,

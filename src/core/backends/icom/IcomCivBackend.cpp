@@ -936,7 +936,7 @@ void IcomCivBackend::disconnectRadio()
     // restore the operator's RF-power setpoint if TUNE had borrowed it.  These
     // are response-free emergency dispatches so every datagram reaches the
     // session before its sockets close; no state is optimistically adopted.
-    if (m_session && m_connected) {
+    if (m_session && m_connected && !m_civIdentityRejected) {
         terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
                            SchedulerWaiterOutcome::Cancelled);
         queueEmergencyWriteNoReply(cmdAbortCwMessage(m_session->civAddress()),
@@ -1023,6 +1023,7 @@ void IcomCivBackend::disconnectRadio()
     m_civReported = 0;
     m_civModelId = 0;
     m_civAmbiguous = false;
+    m_civIdentityRejected = false;
     m_civUnexpectedResponderWarned = false;
     m_civDetectAttempts = 0;
     m_scopeStarted = false;
@@ -1359,10 +1360,45 @@ bool IcomCivBackend::adoptCivIdentity(std::uint8_t address, std::uint8_t modelId
         return false;
     }
 
+    const IcomModel* identified = modelForId(modelId);
+    if (!identified || !profileFor(*identified).supportedBringup) {
+        m_civIdentityRejected = true;
+        if (m_civDetectTimer) {
+            m_civDetectTimer->stop();
+        }
+        if (m_meterTimer) {
+            m_meterTimer->stop();
+        }
+        terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                           SchedulerWaiterOutcome::Cancelled);
+        const QString id = QStringLiteral("0x%1").arg(
+            QString::number(modelId, 16).rightJustified(2, QLatin1Char('0')).toUpper());
+        const QString identity = identified
+            ? tr("%1 (CI-V model ID %2)")
+                  .arg(QString::fromUtf8(identified->name.data(),
+                                        static_cast<int>(identified->name.size())), id)
+            : tr("Icom model ID %1").arg(id);
+        const QString reason = tr(
+            "%1 is not supported by AetherSDR.\n\n"
+            "Available Icom models: IC-7300MK2 (supported), IC-705 (experimental), "
+            "and IC-9700 (experimental).\n\n"
+            "The connection has been closed. AetherSDR will not retry automatically.")
+                                   .arg(identity);
+        qCWarning(lcIcomAddr).noquote() << reason;
+        // Retire the session after its current frame callback unwinds. Queue
+        // this before notifying the UI, so its queued dialog sees a closed link.
+        const std::uint64_t generation = m_sessionGeneration;
+        QTimer::singleShot(0, this, [this, generation] {
+            if (generation == m_sessionGeneration && m_civIdentityRejected) {
+                disconnectRadio();
+            }
+        });
+        emit connectionRejected(reason);
+        return false;
+    }
     m_civReported = address;
     m_civModelId = modelId;
-    const IcomModel* identified = modelForId(modelId);
-    m_model = identified ? identified : &unknownModel();
+    m_model = identified;
     // Cancel the identity read and any fallback snapshot before selecting the
     // destination. The new snapshot must use the resolved model's vocabulary.
     terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
@@ -1372,18 +1408,13 @@ bool IcomCivBackend::adoptCivIdentity(std::uint8_t address, std::uint8_t modelId
     sendConnectReadBurst();
     qCInfo(lcIcomAddr) << "CI-V identity: model ID" << Qt::hex << modelId
                      << "at address" << address;
-    if (!identified) {
-        emit configurationWarning(QStringLiteral(
-            "Unrecognized Icom model ID %1. Model-specific controls and transmit "
-            "remain disabled.").arg(QString::number(modelId, 16).toUpper()));
-    }
     return true;
 }
 
 void IcomCivBackend::requestCivIdentity(std::uint64_t sessionGeneration)
 {
     if (!m_connected || !m_session || sessionGeneration != m_sessionGeneration
-        || m_civReported != 0 || m_civAmbiguous) {
+        || m_civReported != 0 || m_civAmbiguous || m_civIdentityRejected) {
         return;
     }
     const int maxAttempts = m_waitingForWake ? 20 : kCivDetectMaxAttempts;
@@ -1725,7 +1756,7 @@ void IcomCivBackend::applyScopeStartup()
 void IcomCivBackend::onCivFrame(const CivFrame& frame,
                                 std::uint64_t sessionGeneration)
 {
-    if (!m_connected || sessionGeneration != m_sessionGeneration) {
+    if (!m_connected || m_civIdentityRejected || sessionGeneration != m_sessionGeneration) {
         return;
     }
     // Reject invalid/foreign ID replies before they can retire a scheduler

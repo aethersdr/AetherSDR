@@ -111,6 +111,8 @@ public:
     }
     QObject* asQObject() override { return this; }
 
+    void showUnsupportedIcomModel(const QString& reason);
+
 protected:
     bool event(QEvent* e) override;
 

@@ -106,10 +106,10 @@ FlexRadio remains the supported target:
   IC-7300MK2 (controls, meters, ATU, WSPR, PC Audio routing and the CW decoder).
   The connect path asks the radio for its own CI-V address rather than assuming
   one. Only the IC-705 and IC-7300MK2 are verified against their own CI-V guides
-  — an unrecognised model gets no scope and no transmit rather than optimistic
-  defaults. The **IC-7300MK2 over built-in Ethernet/RS-BA1 is supported** as of
+  — other model identities are rejected before model-specific initialization.
+  The **IC-7300MK2 over built-in Ethernet/RS-BA1 is supported** as of
   v26.9.5 ([RFC #5517](https://github.com/aethersdr/AetherSDR/issues/5517));
-  every other Icom model keeps the early, experimental treatment.
+  IC-705 and IC-9700 support remains experimental. Other Icom models cannot connect.
 - **ANAN-G2** — **experimental, receive-only**. openHPSDR Protocol 2 discovery
   with a single receive path, spectrum and audio, live tuning and zoom, live DDC
   rate changes, and DDC0 edge-droop compensation derived from the Saturn

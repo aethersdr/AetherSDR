@@ -1161,6 +1161,7 @@ signals:
     void rawSliceModeListsChanged();
     void metersChanged();
     void connectionError(const QString& msg);
+    void connectionRejected(const QString& msg);
     void radioWakeProgress(const QString& message, bool active);
     void radioWakeFailed(const QString& message);
     // Radio CONFIGURATION advice that does not end the session. See
