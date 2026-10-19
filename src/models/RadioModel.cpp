@@ -5563,12 +5563,12 @@ bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
     }
     int index = m_netCwIndex++;
 
-    // FlexLib formats hex values UPPERCASE (C# ToString("X")), and the
-    // radio's status messages do too (e.g. `S23A59BDF|...`) — the netcw
-    // parser appears to be case-sensitive on `client_handle`.  Match that
-    // by formatting both hex values uppercase explicitly.
+    // Published FlexLib 4.3.16 Radio.CWKey/CWPTT use ClientHandleHelper:
+    // client_handle is a uint32 rendered as 0x plus eight uppercase hex digits.
+    // This width belongs to the handle; the relative timestamp keeps its
+    // independent four-digit format.
     const QString tsHex = QString("%1").arg(timeMs, 4, 16, QChar('0')).toUpper();
-    const QString chHex = QString("%1").arg(clientHandle(), 0, 16).toUpper();
+    const QString chHex = QString("%1").arg(clientHandle(), 8, 16, QLatin1Char('0')).toUpper();
     QString fullCmd = QString("%1 time=0x%2 index=%3 client_handle=0x%4")
         .arg(baseCmd, tsHex, QString::number(index), chHex);
 
