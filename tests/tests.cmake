@@ -7980,6 +7980,8 @@ set_tests_properties(minimal_mode_exit_order_test PROPERTIES
 add_executable(startup_autoconnect_lockout_test
     tests/startup_autoconnect_lockout_test.cpp
     src/gui/ConnectionPanel.cpp
+    src/gui/FramelessMessageBox.cpp
+    src/gui/FramelessWindowTitleBar.cpp
     src/gui/CanonWindow.cpp
     src/gui/FramelessResizer.cpp
 )

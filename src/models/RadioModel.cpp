@@ -1456,23 +1456,26 @@ void RadioModel::setupBackend(const QString& family)
                 this, &RadioModel::onDisconnected);
         connect(m_backend.get(), &IRadioBackend::connectionError,
                 this, &RadioModel::onConnectionError);
-        connect(m_backend.get(), &IRadioBackend::connectionRejected,
-                this, [this, generation](const QString& reason) {
-            if (generation != m_backendReceiverGeneration) {
-                return;
-            }
-            cancelRadioWake();
-            m_intentionalDisconnect = true;
-            m_connectAttemptActive = false;
-            m_reconnectTimer.stop();
-            emit connectionRejected(reason);
-            emit connectionError(reason);
-        });
         // Advisory only — deliberately NOT routed through onConnectionError,
         // which starts the reconnect timer. Re-emitted for the UI to surface.
         connect(m_backend.get(), &IRadioBackend::configurationWarning,
                 this, &RadioModel::configurationWarning);
     }
+
+    // Terminal rejection has no duplicate RadioConnection event. Every backend
+    // needs its consumer, including families with a separate wire lifecycle.
+    connect(m_backend.get(), &IRadioBackend::connectionRejected,
+            this, [this, generation](const QString& reason) {
+        if (generation != m_backendReceiverGeneration) {
+            return;
+        }
+        cancelRadioWake();
+        m_intentionalDisconnect = true;
+        m_connectAttemptActive = false;
+        m_reconnectTimer.stop();
+        emit connectionRejected(reason);
+        emit connectionError(reason);
+    });
 
     // Transport counters from a backend that owns its own socket. Wired
     // unconditionally: a backend that measures nothing never emits this, and one
