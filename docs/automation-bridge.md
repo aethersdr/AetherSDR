@@ -788,6 +788,16 @@ connects).
 | `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
 | `waveforms` | — | installed legacy/Docker waveforms, WFP state, local Digital Voice service/mode configuration and delivery metrics, raw radio `mode_list` values, duplicate counts, last maintenance response, and recent `waveform status` reports |
 
+Read-only Flex metadata is available as `get radio` → `iaruRegion` (1–3 or
+`null`) and `get slice` / `get slices` → `chainMode` (bounded radio-reported
+text or `null`). Missing, unsupported and invalid observations are unknown.
+`chainMode` is separate from `mode`: a waveform can report `mode=FDVU` with
+`chainMode=DIGU`. Neither observation sends commands or changes the client band
+plan, RF limits or transmit permission. Partial slice reports preserve the
+chain; full `info` replies replace the region observation. Both observations
+reset across sessions and radio/slice replacement. The troubleshooting JSON
+uses `radio.iaru_region` and `slices[].chain_mode` for the same observations.
+
 Add a trailing **property** name to any single-object form to get just that
 field: `get slice active mode` → `{"value":"LSB"}`.
 

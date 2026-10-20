@@ -451,6 +451,18 @@ target_include_directories(ctr2_hid_framing_test PRIVATE src tests)
 target_link_libraries(ctr2_hid_framing_test PRIVATE aethercore Qt6::Core)
 add_test(NAME ctr2_hid_framing_test COMMAND ctr2_hid_framing_test)
 
+# Global HIDAPI discovery/open state under concurrent churn; fake HID symbols,
+# no hardware or sockets. Included in the default sanitizer test graph.
+if(HIDAPI_FOUND)
+    add_executable(hid_discovery_test
+        tests/hid_discovery_test.cpp
+        src/core/HidDiscovery.cpp)
+    target_include_directories(hid_discovery_test PRIVATE src ${HIDAPI_NORMALIZED_INCLUDE_DIRS})
+    target_link_libraries(hid_discovery_test PRIVATE Qt6::Core)
+    add_test(NAME hid_discovery_test COMMAND hid_discovery_test)
+    set_tests_properties(hid_discovery_test PROPERTIES TIMEOUT 30)
+endif()
+
 # MIT firmware reference for the CTR2 USB link, compiled as C99, held to the
 # same vectors and cross-checked against the application codec both ways.
 add_executable(ctr2_hid_reference_test
@@ -1874,6 +1886,13 @@ add_executable(cw_mode_gate_test tests/cw_mode_gate_test.cpp)
 target_include_directories(cw_mode_gate_test PRIVATE src)
 target_link_libraries(cw_mode_gate_test PRIVATE Qt6::Core)
 add_test(NAME cw_mode_gate_test COMMAND cw_mode_gate_test)
+
+# Socket-free production parser/seam/model and bridge dispatcher regression.
+add_executable(flex_readonly_metadata_test tests/flex_readonly_metadata_test.cpp)
+target_include_directories(flex_readonly_metadata_test PRIVATE src tests)
+target_link_libraries(flex_readonly_metadata_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME flex_readonly_metadata_test COMMAND flex_readonly_metadata_test)
+set_tests_properties(flex_readonly_metadata_test PROPERTIES TIMEOUT 30)
 
 add_executable(flex_slice_mode_intent_test tests/flex_slice_mode_intent_test.cpp)
 target_include_directories(flex_slice_mode_intent_test PRIVATE src tests)
@@ -9444,6 +9463,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    flex_readonly_metadata_test
     dsp_parameter_reset_test
     cw_rx_model_test
     asr_native_receiver_test
@@ -9669,6 +9689,7 @@ endforeach()
 # library as AetherSDR so moving QtWidgets out of aethercore cannot silently
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
+    flex_readonly_metadata_test
     dsp_parameter_reset_test
     nrs_level_range_test
     anan_noise_blanker_readback_test
