@@ -5699,12 +5699,10 @@ void MainWindow::buildUI()
         // WNB (panadapter-level, not slice)
         if (auto* pan = m_radioModel.activePanadapter()) {
             if (e.wnbOn != pan->wnbActive()) {
-                m_radioModel.sendCommand(
-                    QString("display pan set %1 wnb=%2").arg(pan->panId()).arg(e.wnbOn ? 1 : 0));
+                m_radioModel.requestPanDisplay(pan, {PanDisplayField::Wnb, e.wnbOn});
             }
             if (e.wnbLevel != pan->wnbLevel()) {
-                m_radioModel.sendCommand(
-                    QString("display pan set %1 wnb_level=%2").arg(pan->panId()).arg(e.wnbLevel));
+                m_radioModel.requestPanDisplay(pan, {PanDisplayField::WnbLevel, e.wnbLevel});
             }
         }
     });
@@ -11202,6 +11200,7 @@ void MainWindow::showMnrSettings()
 void MainWindow::applyPanLayout(const QString& layoutId)
 {
     if (!m_radioModel.isConnected()) return;
+    ++m_panLayoutRequestGeneration;
 
     const int needed = panCountForLayoutId(layoutId);
     const bool canvasLayout = m_workspaceController
@@ -11347,124 +11346,6 @@ void MainWindow::settleCanvasPanLayout(const QString& layoutId,
     });
 }
 
-void MainWindow::createPansSequentially(const QString& layoutId, int total,
-                                        std::shared_ptr<QStringList> panIds, int created)
-{
-    if (created >= total) {
-        // All new pans created — wait for radio status to establish PanadapterModels
-        qDebug() << "applyPanLayout: all" << total << "new pans created:" << *panIds;
-        QTimer::singleShot(800, this, [this, panIds, layoutId]() {
-            // The new pans were added to the stack via panadapterAdded handler.
-            // Wire any that aren't already wired.
-            for (auto* applet : m_panStack->allApplets()) {
-                const QString pid = applet->panId();
-                auto* pan = m_radioModel.panadapter(pid);
-                if (pan) {
-                    // Push current state to the spectrum widget
-                    applet->spectrumWidget()->setDbmRange(pan->minDbm(), pan->maxDbm());
-                    applet->spectrumWidget()->observeFrequencyRange(
-                        pan->centerMhz(), pan->bandwidthMhz());
-                }
-            }
-
-            // Rearrange splitter structure for the selected layout
-            if (!m_workspaceController || !m_workspaceController->isEnabled()) {
-                m_panStack->rearrangeLayout(layoutId);
-            }
-            startCanvasPanLayoutSettle(layoutId, panCountForLayoutId(layoutId));
-
-            m_panApplet = m_panStack->activeApplet();
-
-            qDebug() << "applyPanLayout: layout" << layoutId
-                     << "complete, total pans:" << m_panStack->count();
-        });
-        return;
-    }
-
-    // Backends that own their receivers create pans at the SEAM: the Flex
-    // wire command below has no completion callback there, and the
-    // recursion runs from that callback. The seam create is synchronous; the
-    // new pan is found by diffing, since the backend numbers its own pans and
-    // skips retired numbers.
-    if (!m_radioModel.usesFlexCommandPlane()) {
-        auto before = std::make_shared<QSet<QString>>();
-        for (auto* p : m_panStack->allApplets())
-            before->insert(p->panId());
-        for (auto* p : m_radioModel.panadapters())
-            if (p) before->insert(p->panId());
-
-        m_radioModel.createPanadapter();
-
-        // The seam create is NOT synchronous for every backend (red-team
-        // M4): HL2's is, but the demo mints its pan over the synthetic wire
-        // — two queued thread hops — so an immediate diff found nothing,
-        // declared "capacity full", and aborted the recursion while the pan
-        // materialised a moment later.  Diff after the create has settled;
-        // 300 ms covers both wire hops with margin and is indistinguishable
-        // from the existing 200 ms inter-create pacing for a synchronous
-        // backend.
-        QTimer::singleShot(300, this,
-                           [this, layoutId, total, panIds, created, before]() {
-            if (m_shuttingDown || !m_panStack) {
-                return;
-            }
-            QString createdId;
-            for (auto* p : m_radioModel.panadapters()) {
-                if (p && !before->contains(p->panId())) {
-                    createdId = p->panId();
-                    break;
-                }
-            }
-            if (createdId.isEmpty()) {
-                // The backend refused — receiver count, or the link budget
-                // at this span. It has already logged which; surface it and
-                // stop rather than recursing against a limit that will
-                // refuse every remaining pan.
-                qWarning() << "applyPanLayout: backend declined pan"
-                           << (created + 1) << "of" << total;
-                showPanadapterSliceCapacityMessage();
-                return;
-            }
-            panIds->append(createdId);
-            qDebug() << "applyPanLayout: created pan" << (created + 1)
-                     << "of" << total << "id:" << createdId;
-            // Same inter-create pacing rationale as the Flex path: adding a
-            // receiver restarts the EP6 stream, so creates stay spaced.
-            QTimer::singleShot(200, this,
-                               [this, layoutId, total, panIds, created]() {
-                createPansSequentially(layoutId, total, panIds, created + 1);
-            });
-        });
-        return;
-    }
-
-    m_radioModel.sendCmdPublic(
-        "display panafall create x=100 y=100",
-        [this, panIds, layoutId, total, created](int code, const QString& body) {
-            if (code != 0) {
-                qWarning() << "applyPanLayout: panafall create failed, code"
-                           << Qt::hex << code << body;
-                showPanadapterSliceCapacityMessage();
-                return;
-            }
-            const QString panId = RadioStatusOwnership::parsePanafallCreatePanId(body);
-
-            qDebug() << "applyPanLayout: created pan" << (created + 1) << "of" << total
-                     << "id:" << panId;
-
-            if (!panId.isEmpty()) {
-                panIds->append(panId);
-                // Configure the pan
-                m_radioModel.sendCommand(
-                    QString("display pan set %1 xpixels=1024 ypixels=700").arg(panId));
-            }
-
-            // Create next pan after a brief delay
-            QTimer::singleShot(200, this, [this, layoutId, total, panIds, created]() {
-                createPansSequentially(layoutId, total, panIds, created + 1);
-            });
-        });
-}
 
 void MainWindow::showPanadapterSliceCapacityMessage()
 {
@@ -11533,10 +11414,8 @@ void MainWindow::restoreBandState(const BandSnapshot& snap)
         // the radio determines bandwidth. Pushing stale saved values causes
         // FFT/waterfall misalignment during the transition (#279, #291).
         // Only restore dBm scale (client-side display preference).
-        m_radioModel.sendCommand(
-            QString("display pan set %1 min_dbm=%2 max_dbm=%3").arg(pan->panId())
-                .arg(static_cast<double>(snap.minDbm), 0, 'f', 2)
-                .arg(static_cast<double>(snap.maxDbm), 0, 'f', 2));
+        m_radioModel.requestPanDisplay(pan,
+            {PanDisplayField::LevelRange, PanLevelRange{snap.minDbm, snap.maxDbm}});
     }
     m_radioModel.setPanRfGain(snap.rfGain);
     m_radioModel.setPanWnb(snap.wnbOn);

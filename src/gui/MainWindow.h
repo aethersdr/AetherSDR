@@ -1615,6 +1615,7 @@ private:
     WorkspaceController* m_workspaceController{nullptr};
     QAction*             m_workspaceCanvasAction{nullptr};
     quint64              m_canvasPanLayoutGeneration{0};
+    quint64              m_panLayoutRequestGeneration{0};
     QString              m_pendingCanvasPanLayoutId;
     int                  m_pendingCanvasPanLayoutTarget{-1};
     // Additional canvas windows (phase 7), keyed by surface id.  A hidden

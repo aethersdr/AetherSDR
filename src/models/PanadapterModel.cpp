@@ -29,6 +29,7 @@ quint32 PanadapterModel::wfStreamId() const
 void PanadapterModel::setWaterfallId(const QString& id)
 {
     if (m_waterfallId != id) {
+        ++m_controlRevision;
         m_waterfallId = id;
         emit waterfallIdChanged(id);
     }
@@ -54,6 +55,8 @@ void PanadapterModel::setClientHandle(const QString& h)
 {
     const bool ownerChanged = m_ownerHandle != parseHandleHex(h);
     if (ownerChanged) {
+        ++m_controlRevision;
+        ++m_ownershipRevision;
         m_reportedCenterHz.reset();
         m_reportedBandwidthHz.reset();
     }
@@ -166,6 +169,9 @@ void PanadapterModel::recordGeometryObservation(double centerMhz, double bandwid
 
 void PanadapterModel::resetCenterKnownForReconnect()
 {
+    ++m_controlRevision;
+    m_displayIntentRevisions.fill(0);
+    ++m_ownershipRevision;
     ++m_geometryRevision;
     m_centerKnown = false;
     if (m_reportedCenterHz || m_reportedBandwidthHz) {
@@ -428,6 +434,7 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
         const int fps = fields.value(QStringLiteral("fps")).toInt(&ok);
         if (ok) {
             m_radioReportedFps = fps;
+            ++m_fftObservationRevision;
             m_fpsIsRequest = false;
             if (fps != m_fps) {
                 m_fps = fps;
@@ -447,6 +454,7 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
         const int average = fields.value(QStringLiteral("average")).toInt(&ok);
         if (ok) {
             m_radioReportedAverage = average;
+            ++m_fftObservationRevision;
             m_averageIsRequest = false;
             if (average != m_average) {
                 m_average = average;
@@ -548,12 +556,12 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
     if (fields.contains(QStringLiteral("waterfall"))) {
         const QString wf = fields.value(QStringLiteral("waterfall")).toString();
         bool ok = false;
-        wf.toUInt(&ok, 0);
+        quint32 streamId = wf.toUInt(&ok, 0);
         if (!ok) {
-            wf.toUInt(&ok, 16);
+            streamId = wf.toUInt(&ok, 16);
         }
         if (ok) {
-            setWaterfallId(wf);
+            setWaterfallId(QStringLiteral("0x%1").arg(streamId, 8, 16, QLatin1Char('0')));
         } else {
             qCDebug(lcProtocol) << "PanadapterModel: invalid waterfall value" << wf;
         }

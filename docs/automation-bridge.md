@@ -2598,17 +2598,22 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 
 → {"cmd":"pan","action":"close","value":"1"}
 ← {"ok":true,"pan":"close","requested":true,
-   "closed":[{"panId":"0x40000001","waterfallId":"0x42000001","resolved":true}]}
+   "closed":[{"panId":"0x40000001","waterfallId":"0x42000001","resolved":true,"requested":true}]}
 ```
 
 | `action` | `value` | effect |
 |---|---|---|
-| `create` (alias `add`) | — | create a new panadapter (panafall). The only UI path is an unaddressable label. |
+| `create` (alias `add`) | — | request a new panadapter through the backend's declared lifecycle control. |
 | `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). **MHz, not Hz**: the [four refusals listed under `tune`](#tune) apply here too, with `pan center` in the message. It matters more on this verb — `setPanCenter()` clamps only the low edge, so an unguarded out-of-range centre is stored and advertised over TCI (`dds:`) even though the radio rejects it. |
-| `close` (alias `remove`) | `<panId>` (`0x…`) / `<index>` (panIndex) / `active` / `all` | close pan(s). Sends `display pan remove` **and** `display panafall remove`, so a panafall-created pan closes without the slice-removal workaround. A single target won't close the last pan; `all` will. |
+| `close` (alias `remove`) | `<panId>` (`0x…`) / `<index>` (panIndex) / `active` / `all` | request removal of owned pan(s). Flex requests cleanup of the original paired waterfall too. A single target preserves the last pan; `all` allows requesting its removal but never overrides a native refusal or foreign ownership. |
 
-All are async (the radio echoes the change) — re-poll `get pans`. Every `pan`
-action is RX/config only; none keys the transmitter.
+Replies describe request admission, not observed completion — re-poll `get pans`.
+Creation correlates the returned ID with the original session's new owned pan;
+its waterfall may appear later. Unknown outcomes are not automatically retried.
+Each close entry reports `requested`; the compatibility field `closed` names the
+request list, not confirmed removals. An aggregate `ok:true` means at least one
+close request was dispatched, so inspect every entry after a partial refusal.
+Every `pan` action is RX/config only; none keys the transmitter.
 
 Floating and docking use the production pan title-bar control rather than a
 radio lifecycle command. Target its stable object name through the pan scope;

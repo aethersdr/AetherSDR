@@ -136,6 +136,13 @@ It re-uses the main panadapter's data, so it uses no extra radio panadapter or s
 - Pan layouts, including floating pans, are restored when you reconnect.
 - With the [Workspace Canvas](./workspace-canvas.md) on, **Import pop-outs onto canvas** places floating pans on the canvas.
 
+Opening a pan waits for the connected backend to publish its actual display.
+The waterfall may arrive afterward. If creation remains unconfirmed, AetherSDR
+does not automatically retry: another request could allocate a second display.
+Closing a pan requests cleanup; the pan disappears when the backend reports its
+removal. The normal close action preserves the last pan, and a backend may
+refuse a close because it still needs that receiver.
+
 ### Panadapter messages
 
 Status cards appear over the spectrum for things like "Center Lock released", a renderer problem, or KiwiSDR connection state. KiwiSDR status cards can be collapsed to a small pill but not closed.

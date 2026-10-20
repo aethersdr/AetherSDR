@@ -995,8 +995,14 @@ public:
     ReceiveDispatch requestFullDuplex(bool enabled, QObject* replyContext = nullptr,
                                       const RadioControlCompletion& completion = {});
     ReceiveDispatch requestSliceInventoryRefresh(std::optional<RadioControlSession> expectedSession = {});
-    void createPanadapter();   // Create a new independent panadapter
-    void removePanadapter(const QString& panId);
+    using PanCreationCompletion = std::function<void(const RadioControlReply&, PanadapterModel*)>;
+    ReceiveDispatch requestPanCreation(QObject* context, const PanCreationCompletion& completion,
+                                       bool initializeDisplay = true);
+    bool createPanadapter();
+    bool removePanadapter(const QString& panId, PanCloseIntent intent = PanCloseIntent::Ordinary);
+    ReceiveDispatch requestPanDisplay(PanadapterModel* pan, const PanDisplayRequest& request,
+        const RadioControlCompletion& completion = {}, bool announce = true);
+    ReceiveDispatch requestPanDimensions(PanadapterModel* pan, int width, int height, int localPoints);
     void setPanBandwidth(double bandwidthMhz);
     void setPanCenter(double centerMhz);
     void setPanDbmRange(float minDbm, float maxDbm);
@@ -1065,10 +1071,6 @@ public:
                       std::optional<RadioControlSession> expectedSession = {});
     ReceiveDispatch recallMemory(int index, int sliceId);
     quint64 memorySlotRevision(int index) const { return m_memorySlotRevisions.value(index); }
-    // Panel width in spectrum points for a backend that shapes its own
-    // spectrum: straight down to that backend. Returns false on Flex, where
-    // the caller sends the xpixels= wire command itself.
-    bool requestLocalPanPixelWidth(const QString& panId, int points);
     // Operator FFT FPS / waterfall rate intent: wire text on Flex; applied to
     // the pan model on self-shaping backends. Returns true if applied or sent.
     // `wfRate` is the 1..100 rate control, not milliseconds despite the Flex
@@ -1529,6 +1531,14 @@ private slots:
                                 const SpectrumCoverage& coverage);
 
 private:
+    struct PendingPanCreation;
+    QMap<quint64, std::shared_ptr<PendingPanCreation>> m_pendingPanCreations;
+    quint64 m_nextPanCreation{0};
+    QHash<QString, quint64> m_displayRetirements;
+    quint64 m_displayHistoryEpoch{0};
+    void settlePanCreations();
+    void retireDisplayResource(const QString& id);
+    void requestPanRfGainInfo(PanadapterModel* pan);
     friend struct RadioModelWakeTestAccess;
     void handleRadioStatus(const QMap<QString, QString>& kvs);
     void adoptSoftwareVersion(const QString& version);

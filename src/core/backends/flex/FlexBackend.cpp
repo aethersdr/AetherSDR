@@ -548,6 +548,16 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = QStringLiteral("flex");
+    using PanField = PanDisplayField;
+    caps.panDisplayControl = PanDisplayControl{{PanField::Geometry, PanField::Band,
+        PanField::LevelRange, PanField::Pixels, PanField::Average, PanField::FrameRate,
+        PanField::WeightedAverage, PanField::RfGain, PanField::Wnb, PanField::WnbLevel, PanField::LoopA, PanField::LoopB,
+        PanField::NoiseFloorPosition, PanField::NoiseFloorEnabled, PanField::WaterfallRate,
+        PanField::WaterfallColorGain, PanField::WaterfallBlackLevel, PanField::WaterfallAutoBlack,
+        PanField::WaterfallDefaults}, {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    caps.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Answered,
+        {PanLifecycleAction::Create, PanLifecycleAction::Remove,
+         PanLifecycleAction::RefreshInventory, PanLifecycleAction::RfGainInfo}};
     // SmartSDR `transmit set tune_mode=two_tone` is a real on-radio two-tone
     // generator; FlexBackend is the only consumer of that key.
     caps.twoToneGenerator = RadioCapabilities::TwoToneGenerator{

@@ -6,6 +6,7 @@
 // at its original constructor position.
 
 #include "MainWindow.h"
+
 #include "MeterApplet.h"
 
 #include "AetherialAudioStrip.h"
@@ -3399,6 +3400,53 @@ void MainWindow::openFirmwareReleaseNotes()
             source->publishedReleases, m_radioVersionLabel->text()));
     if (!url.isEmpty())
         QDesktopServices::openUrl(QUrl(url));
+}
+
+void MainWindow::createPansSequentially(const QString& layoutId, int total,
+    std::shared_ptr<QStringList> panIds, int created)
+{
+    const quint64 generation = m_panLayoutRequestGeneration;
+    const AetherSDR::RadioControlSession session = m_radioModel.controlSession();
+    const auto current = [this, generation, session] {
+        return !m_shuttingDown && m_panStack && generation == m_panLayoutRequestGeneration
+            && m_radioModel.controlSessionCurrent(session);
+    };
+    if (!current()) { return; }
+    if (created >= total) {
+        QTimer::singleShot(800, this, [this, current, layoutId] {
+            if (!current()) { return; }
+            for (PanadapterApplet* applet : m_panStack->allApplets()) {
+                if (AetherSDR::PanadapterModel* pan = m_radioModel.panadapter(applet->panId())) {
+                    applet->spectrumWidget()->setDbmRange(pan->minDbm(), pan->maxDbm());
+                    applet->spectrumWidget()->observeFrequencyRange(pan->centerMhz(), pan->bandwidthMhz());
+                }
+            }
+            if (!m_workspaceController || !m_workspaceController->isEnabled()) {
+                m_panStack->rearrangeLayout(layoutId);
+            }
+            startCanvasPanLayoutSettle(layoutId, panCountForLayoutId(layoutId));
+            m_panApplet = m_panStack->activeApplet();
+        });
+        return;
+    }
+    const AetherSDR::ReceiveDispatch dispatched = m_radioModel.requestPanCreation(this,
+        [this, current, panIds, layoutId, total, created]
+        (const AetherSDR::RadioControlReply& reply, AetherSDR::PanadapterModel* pan) {
+            if (!current()) { return; }
+            if (reply.kind != AetherSDR::RadioControlReply::Kind::Accepted || !pan) {
+                if (reply.kind != AetherSDR::RadioControlReply::Kind::Cancelled) {
+                    showPanadapterSliceCapacityMessage();
+                }
+                return;
+            }
+            panIds->append(pan->panId());
+            QTimer::singleShot(200, this, [this, current, panIds, layoutId, total, created] {
+                if (current()) { createPansSequentially(layoutId, total, panIds, created + 1); }
+            });
+        }, false);
+    if (dispatched == AetherSDR::ReceiveDispatch::Unsupported && current()) {
+        showPanadapterSliceCapacityMessage();
+    }
 }
 
 } // namespace AetherSDR

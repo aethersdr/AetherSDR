@@ -16,6 +16,7 @@
 #include <QMap>
 #include <QHostAddress>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <QVariant>
@@ -190,6 +191,56 @@ public:
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestTxBand(const TxBandRequest&)
     { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestPanDisplay(const QString& panId, const QString&,
+        const PanDisplayRequest& request, const RadioControlCompletion& = {},
+        const RadioControlFence& current = {})
+    {
+        const auto control = capabilities().panDisplayControl;
+        if (panId.isEmpty() || !request.valid() || !control
+            || !control->supports(request.field) || (current && !current())) {
+            return ReceiveDispatch::Unsupported;
+        }
+        const QPointer<IRadioBackend> alive(this);
+        using Field = PanDisplayField;
+        switch (request.field) {
+        case Field::Geometry: {
+            const PanGeometryRequest geometry = std::get<PanGeometryRequest>(request.value);
+            if ((geometry.centerMhz && !control->geometry.contains(PanGeometryComponent::Center))
+                || (geometry.bandwidthMhz && !control->geometry.contains(PanGeometryComponent::Bandwidth))) {
+                return ReceiveDispatch::Unsupported;
+            }
+            if (geometry.centerMhz) {
+                setPanCenter(panId, *geometry.centerMhz * 1.0e6,
+                    geometry.intent == PanGeometryRequest::Intent::Drag ? PanCenterIntent::Drag : PanCenterIntent::Range);
+            }
+            if (!alive || (current && !current())) { return ReceiveDispatch::Unsupported; }
+            if (geometry.bandwidthMhz) { alive->setPanBandwidth(panId, *geometry.bandwidthMhz * 1.0e6); }
+            break;
+        }
+        case Field::Average: setPanAverage(panId, std::get<int>(request.value)); break;
+        case Field::FrameRate: setPanFrameRate(panId, std::get<int>(request.value)); break;
+        case Field::WeightedAverage: setPanWeightedAverage(panId, std::get<bool>(request.value)); break;
+        case Field::SpectrumPoints: setPanPixelWidth(panId, std::get<int>(request.value)); break;
+        case Field::RfGain: setPanRfGain(panId, std::get<int>(request.value)); break;
+        default: return ReceiveDispatch::Unsupported;
+        }
+        return ReceiveDispatch::Dispatched;
+    }
+    virtual ReceiveDispatch requestPanLifecycle(const PanLifecycleRequest& request,
+        const PanLifecycleCompletion& = {}, const RadioControlFence& current = {})
+    {
+        const auto control = capabilities().panLifecycleControl;
+        if (!control || !control->supports(request.action) || (current && !current())) {
+            return ReceiveDispatch::Unsupported;
+        }
+        if (request.action == PanLifecycleAction::Create) {
+            return createPanadapter() ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+        }
+        if (request.action == PanLifecycleAction::Remove && !request.panId.isEmpty()) {
+            return removePanadapter(request.panId) ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+        }
+        return ReceiveDispatch::Unsupported;
+    }
     virtual ReceiveDispatch requestProfile(const ProfileRequest&,
                                            const RadioControlCompletion& = {},
                                            const RadioControlFence& = {})

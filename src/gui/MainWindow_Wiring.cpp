@@ -2927,26 +2927,19 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId,
         return;
     }
 
-    auto* pan = m_radioModel.panadapter(panId);
-    if (!pan) {
-        return;
-    }
+    const QPointer<PanadapterModel> pan(m_radioModel.panadapter(panId));
+    if (!pan) { return; }
 
     const int xpix = panXpixelsFor(sw);
     const int ypix = panYpixelsFor(sw);
-    // A backend that computes its own spectrum takes the width through the
-    // seam. Everything else falls back to the xpixels/ypixels text, which is a
-    // Flex command-plane contract: an in-process or CI-V backend publishes its
-    // own fixed frame geometry, so the text can only be dropped, which used to
-    // surface an unsupported-command status-bar warning during an otherwise
-    // successful Icom connect. Only the write is skipped: the local rescale
-    // below still runs for them (#4448).
-    if (!m_radioModel.requestLocalPanPixelWidth(panId, panLocalSpectrumPointsFor(sw))
-        && m_radioModel.hasCommandPlane()) {
-        m_radioModel.sendCommand(
-            QString("display pan set %1 xpixels=%2 ypixels=%3")
-                .arg(panId).arg(xpix).arg(ypix));
-    }
+    const RadioControlSession dimensionSession = m_radioModel.controlSession();
+    const quint64 ownershipRevision = pan->ownershipRevision();
+    // The backend declares radio pixels, local analyzer points, or fixed
+    // geometry. Fixed geometry still needs the renderer rescale below.
+    m_radioModel.requestPanDimensions(pan, xpix, ypix, panLocalSpectrumPointsFor(sw));
+    if (!pan || m_radioModel.panadapter(panId) != pan
+        || !m_radioModel.controlSessionCurrent(dimensionSession)
+        || pan->ownershipRevision() != ownershipRevision) { return; }
 
     // Arm the DSS settle gate now, before the radio echo switches the local
     // decoder. The stream keeps decoding with the old y_pixels until the echo,
@@ -2971,12 +2964,14 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId,
     const quint32 streamId = pan->panStreamId();
     if (streamId) {
         QPointer<SpectrumWidget> swGuard(sw);
-        auto updateLocalDecoder = [this, panId, swGuard, streamId, ypix]() {
+        auto updateLocalDecoder = [this, panId, pan, swGuard, streamId, ypix, dimensionSession, ownershipRevision]() {
             if (m_shuttingDown || !swGuard) {
                 return;
             }
             auto* currentPan = m_radioModel.panadapter(panId);
-            if (!currentPan || currentPan->panStreamId() != streamId) {
+            if (!currentPan || currentPan != pan || currentPan->panStreamId() != streamId
+                || !m_radioModel.controlSessionCurrent(dimensionSession)
+                || currentPan->ownershipRevision() != ownershipRevision) {
                 return;
             }
             if (!panPixelDimensionsReady(swGuard.data())
@@ -3574,9 +3569,8 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
             }
             if (!m_radioModel.requestLocalPanWeightedAverage(targetPanId,
                                                              src->fftWeightedAvg())) {
-                m_radioModel.sendCommand(QString("display pan set %1 weighted_average=%2")
-                                             .arg(targetPanId)
-                                             .arg(src->fftWeightedAvg() ? 1 : 0));
+                m_radioModel.requestPanDisplay(m_radioModel.panadapter(targetPanId),
+                    {PanDisplayField::WeightedAverage, src->fftWeightedAvg()});
             }
         }
         dst->setFftAverage(src->fftAverage());
@@ -3941,14 +3935,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         const auto generation = std::make_shared<quint64>(0);
         const QPointer<SpectrumWidget> guard(sw);
         return DbmRangeTransition::dispatchValidatedRange({minDbm, maxDbm}, [&]() {
-            return m_radioModel.sendCmdPublic(
-                QString("display pan set %1 min_dbm=%2 max_dbm=%3")
-                .arg(applet->panId())
-                .arg(static_cast<double>(minDbm), 0, 'f', 2)
-                .arg(static_cast<double>(maxDbm), 0, 'f', 2),
+            return m_radioModel.requestPanDisplay(pan,
+                {PanDisplayField::LevelRange, PanLevelRange{minDbm, maxDbm}},
             [this, guard, pan, pendingDbm, generation, previousRange,
              applyAuthoritativeDbmRange, setStreamDbmRange, encoderRecoveryPending,
-             rangeWiringEpoch, sessionCommandsPan](int code, const QString&) {
+             rangeWiringEpoch, sessionCommandsPan](const RadioControlReply& reply) {
+                const bool accepted = reply.kind == RadioControlReply::Kind::Accepted;
                 if (!guard || !pan
                     || guard->dbmRangeWireEpoch() != rangeWiringEpoch
                     || pan != m_radioModel.panadapter(pan->panId())
@@ -3956,14 +3948,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                     return;
                 }
                 const DbmRangeTransition::HandshakeDecision decision =
-                    pendingDbm->completeReply(*generation, code == 0, previousRange);
+                    pendingDbm->completeReply(*generation, accepted, previousRange);
                 if (decision.action == DbmRangeTransition::HandshakeAction::Ignore) {
                     return;
                 }
                 // Accepted reply-only writes converge the same canonical model
                 // as status. Any later radio status remains authoritative.
                 if (!pan->setRange(decision.range.minDbm, decision.range.maxDbm)) {
-                    if (code == 0) {
+                    if (accepted) {
                         // A reply confirms command acceptance, not which aperture
                         // the next queued FFT used. Keep its frame guard alive.
                         setStreamDbmRange(decision.range.minDbm, decision.range.maxDbm);
@@ -3976,7 +3968,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                         applyAuthoritativeDbmRange(decision.range);
                     }
                 }
-            });
+            }) != ReceiveDispatch::Unsupported;
         }, [&]() {
             *generation = armDbmRangeHandshake(minDbm, maxDbm);
             *encoderRecoveryPending = encoderOnly;
@@ -4844,8 +4836,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this, applet, sw](bool on) {
         sw->setFftWeightedAvg(on);
         if (!m_radioModel.requestLocalPanWeightedAverage(applet->panId(), on)) {
-            m_radioModel.sendCommand(
-                QString("display pan set %1 weighted_average=%2").arg(applet->panId()).arg(on ? 1 : 0));
+            m_radioModel.requestPanDisplay(m_radioModel.panadapter(applet->panId()),
+                {PanDisplayField::WeightedAverage, on});
         } else {
             scheduleClientFftAverageSave(sw->panIndex(), sw->fftAverage(), on);
         }
@@ -5131,8 +5123,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             scheduleClientFftAverageSave(sw->panIndex(), 0, false);
         }
         if (!m_radioModel.requestLocalPanWeightedAverage(applet->panId(), false)) {
-            m_radioModel.sendCommand(
-                QString("display pan set %1 weighted_average=0").arg(applet->panId()));
+            m_radioModel.requestPanDisplay(m_radioModel.panadapter(applet->panId()),
+                {PanDisplayField::WeightedAverage, false});
         }
         // fps + line_duration go through the dispatcher rather than as Flex wire
         // text: on a backend that shapes its own display rate the reset updated
@@ -5679,16 +5671,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // ── WNB / RF Gain ────────────────────────────────────────────────────
     connect(menu, &SpectrumOverlayMenu::wnbToggled,
             this, [this, applet](bool on) {
-        m_radioModel.sendCommand(
-            QString("display pan set %1 wnb=%2").arg(applet->panId()).arg(on ? 1 : 0));
+        m_radioModel.requestPanDisplay(m_radioModel.panadapter(applet->panId()), {PanDisplayField::Wnb, on});
         // The radio echoes WNB state, level, and normalization progress.
         // Let PanadapterModel drive the spectrum indicator and related menus.
         // No client copy is saved: the radio persists WNB itself (#5111).
     });
     connect(menu, &SpectrumOverlayMenu::wnbLevelChanged,
             this, [this, applet](int level) {
-        m_radioModel.sendCommand(
-            QString("display pan set %1 wnb_level=%2").arg(applet->panId()).arg(level));
+        m_radioModel.requestPanDisplay(m_radioModel.panadapter(applet->panId()), {PanDisplayField::WnbLevel, level});
     });
     connect(menu, &SpectrumOverlayMenu::rfGainChanged,
             this, [this, sw, applet](int gain) {
@@ -5745,13 +5735,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
     connect(menu, &SpectrumOverlayMenu::loopAToggled,
             this, [this, applet](bool on) {
-        m_radioModel.sendCommand(
-            QString("display pan set %1 loopa=%2").arg(applet->panId()).arg(on ? 1 : 0));
+        m_radioModel.requestPanDisplay(m_radioModel.panadapter(applet->panId()), {PanDisplayField::LoopA, on});
     });
     connect(menu, &SpectrumOverlayMenu::loopBToggled,
             this, [this, applet](bool on) {
-        m_radioModel.sendCommand(
-            QString("display pan set %1 loopb=%2").arg(applet->panId()).arg(on ? 1 : 0));
+        m_radioModel.requestPanDisplay(m_radioModel.panadapter(applet->panId()), {PanDisplayField::LoopB, on});
     });
     connect(menu, &SpectrumOverlayMenu::swrSweepStartRequested,
             this, [this](int sliceId, int powerWatts,
