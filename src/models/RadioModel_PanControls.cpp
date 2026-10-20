@@ -205,9 +205,13 @@ ReceiveDispatch RadioModel::requestPanDisplay(PanadapterModel* pan, const PanDis
     const quint64 historyEpoch = m_displayHistoryEpoch;
     const quint64 revision = request.targetsWaterfall() ? pan->controlRevision() : pan->ownershipRevision();
     const quint64 intent = pan->noteDisplayIntent(request.field);
+    const quint64 colorIntent = pan->displayIntentRevision(PanDisplayField::WaterfallColorGain);
+    const quint64 blackIntent = pan->displayIntentRevision(PanDisplayField::WaterfallBlackLevel);
+    const quint64 autoBlackIntent = pan->displayIntentRevision(PanDisplayField::WaterfallAutoBlack);
     const auto control = backendCapabilities().panDisplayControl;
     const RadioControlFence current = [alive, original, session, revision, request, intent,
-                                      waterfallId, waterfallRetired, historyEpoch] {
+                                      waterfallId, waterfallRetired, historyEpoch,
+                                      colorIntent, blackIntent, autoBlackIntent] {
         if (!(alive && original && alive->controlSessionCurrent(session)
             && alive->panadapter(original->panId()) == original
             && (request.targetsWaterfall() ? original->controlRevision() : original->ownershipRevision()) == revision
@@ -215,6 +219,10 @@ ReceiveDispatch RadioModel::requestPanDisplay(PanadapterModel* pan, const PanDis
             && (!request.targetsWaterfall() || original->waterfallId() == waterfallId)
             && original->displayIntentRevision(request.field) == intent)) { return false; }
         if (!request.targetsWaterfall()) { return true; }
+        if (request.field == PanDisplayField::WaterfallDefaults
+            && (original->displayIntentRevision(PanDisplayField::WaterfallColorGain) != colorIntent
+                || original->displayIntentRevision(PanDisplayField::WaterfallBlackLevel) != blackIntent
+                || original->displayIntentRevision(PanDisplayField::WaterfallAutoBlack) != autoBlackIntent)) { return false; }
         if (alive->m_displayHistoryEpoch != historyEpoch
             || alive->m_displayRetirements.value(waterfallId) != waterfallRetired) { return false; }
         const auto observed = alive->m_radioDisplayWaterfalls.constFind(waterfallId);

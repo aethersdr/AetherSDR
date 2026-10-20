@@ -82,7 +82,15 @@ int main(int argc, char** argv)
     TestSettingsProfile profile(QStringLiteral("pan-dimension-routing"));
     if (!profile.isValid()) { return 1; }
     QCoreApplication app(argc, argv);
-    for (const char* family : {"hl2", "anan", "icom", "sim", "rtl"}) { native(QString::fromLatin1(family)); }
+    for (const char* family : {"hl2", "anan", "icom", "sim"}) { native(QString::fromLatin1(family)); }
+#ifdef AETHER_BACKEND_RTL
+    native(QStringLiteral("rtl"));
+#else
+    {
+        RadioModel radio;
+        check(!radio.rebuildBackendForTest(QStringLiteral("rtl")), "optional RTL backend remains unavailable when not compiled");
+    }
+#endif
     {
         PanControlFixture f;
         PanadapterModel* first = f.publish(QStringLiteral("0x40000000"));

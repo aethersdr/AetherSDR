@@ -312,6 +312,18 @@ void staleDisplayAndGainInfo()
     f.backend->answer(0, {RadioControlReply::Kind::Failed, 1, {}});
     check(f.backend->writes.size() == 1, "waterfall owner ABA cannot revive a retired fallback");
     f.clear();
+    const PanDisplayRequest components[]{
+        {PanDisplayField::WaterfallColorGain, 67},
+        {PanDisplayField::WaterfallBlackLevel, 19},
+        {PanDisplayField::WaterfallAutoBlack, true}};
+    for (const PanDisplayRequest& component : components) {
+        f.radio.requestPanDisplay(pan, {PanDisplayField::WaterfallDefaults, true});
+        f.radio.requestPanDisplay(pan, component);
+        f.backend->answer(0, {RadioControlReply::Kind::Failed, 1, {}});
+        check(f.backend->commands().filter(QStringLiteral("display waterfall set")).isEmpty(),
+              "aggregate defaults fallback cannot overwrite a newer component setting");
+        f.clear();
+    }
     f.status(QStringLiteral("display waterfall 0x42000000"),
         {{QStringLiteral("client_handle"), QStringLiteral("0x72")}});
     check(f.radio.requestPanDisplay(pan, {PanDisplayField::WaterfallBlackLevel, 20}) == ReceiveDispatch::Unsupported
