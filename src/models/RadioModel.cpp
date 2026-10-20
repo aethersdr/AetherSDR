@@ -10536,6 +10536,71 @@ bool RadioModel::requestDspParameterReset(SliceModel* source, quint64 session,
     return m_backend->requestDspParameterReset(source->sliceId(), target) == ReceiveDispatch::Dispatched;
 }
 
+QString RadioModel::dspParameterUnavailableReason(const SliceModel* source, quint64 session,
+                                                  DspParameter parameter) const
+{
+    const DspParameterSpec* spec = dspParameterSpec(parameter);
+    if (QThread::currentThread() != thread() || !spec) {
+        return tr("Invalid advanced DSP parameter request");
+    }
+    if (!isConnected() || !m_backend) {
+        return tr("Connect to a radio to edit advanced DSP parameters");
+    }
+    if (!source || m_stagingReceiveModels || session != m_receiveControlGeneration
+        || slice(source->sliceId()) != source || !m_ownedSliceIds.contains(source->sliceId())
+        || isSlotForeign(source->sliceId())) {
+        return tr("Advanced DSP parameters require a current, owned slice in this session");
+    }
+    const std::optional<DspParameterControl> control = backendCapabilities().dspParameters;
+    if (!control) {
+        return tr("Advanced DSP parameters require supported radio firmware (Flex SmartSDR 4.3.16 or later)");
+    }
+    if (!control->supports(parameter)) {
+        return tr("This radio model does not support this advanced DSP parameter");
+    }
+    const bool notch = spec->algorithm == DspParameterResetTarget::Anf
+        || spec->algorithm == DspParameterResetTarget::Anfl
+        || spec->algorithm == DspParameterResetTarget::Anft;
+    const std::optional<QString> reportedMode = source->receiveObservation().mode;
+    if (source->externalReceiveReplacementActive() || !reportedMode
+        || *reportedMode != source->mode() || !control->modes.contains(*reportedMode)
+        || (notch && !control->notchModes.contains(*reportedMode))) {
+        return tr("Advanced DSP parameters are unavailable for this receive mode");
+    }
+    if (!control->permits(parameter)) {
+        return control->advancedAccess == DspParameterResetControl::AdvancedAccess::Unknown
+            ? tr("Waiting for Advanced Noise Mitigation entitlement from the radio")
+            : tr("Advanced DSP parameters require Advanced Noise Mitigation entitlement");
+    }
+    if (!source->dspParameter(parameter)) {
+        return tr("Waiting for the radio to report this DSP parameter");
+    }
+    return {};
+}
+
+bool RadioModel::requestDspParameter(SliceModel* source, quint64 session,
+                                    const DspParameterRequest& request)
+{
+    if (!request.valid() || !dspParameterUnavailableReason(source, session, request.parameter).isEmpty()) {
+        return false;
+    }
+    const QPointer<RadioModel> owner(this);
+    const QPointer<SliceModel> original(source);
+    const QPointer<IRadioBackend> backend(m_backend.get());
+    const quint64 receiverGeneration = m_backendReceiverGeneration;
+    const quint64 sliceGeneration = source->receiveSessionGeneration();
+    const RadioControlFence current = [owner, original, backend, receiverGeneration,
+                                      sliceGeneration, session, parameter = request.parameter] {
+        return owner && original && backend && QThread::currentThread() == owner->thread()
+            && receiverGeneration == owner->m_backendReceiverGeneration
+            && session == owner->m_receiveControlGeneration
+            && owner->m_backend.get() == backend.data()
+            && sliceGeneration == original->receiveSessionGeneration()
+            && owner->dspParameterUnavailableReason(original.data(), session, parameter).isEmpty();
+    };
+    return backend->requestDspParameter(source->sliceId(), request, current) == ReceiveDispatch::Dispatched;
+}
+
 void RadioModel::dispatchSliceDsp(const SliceDspRequest& request)
 {
     if (SliceModel* source = receiveCommandSource()) {

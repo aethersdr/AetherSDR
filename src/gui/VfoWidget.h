@@ -41,6 +41,7 @@ class SliceModel;
 class TransmitModel;
 class RadioModel;
 class ControlAvailabilityRegistry;
+class DspAdvancedControls;
 class PhaseKnob;
 class RxApplet;
 class KiwiSdrManager;
@@ -721,6 +722,7 @@ private:
     QWidget* m_dspLevelRow{nullptr};
     QLabel*  m_dspLevelLabel{nullptr};
     QSlider* m_dspLevelSlider{nullptr};
+    DspAdvancedControls* m_advancedDsp{nullptr};
     QLabel*  m_dspLevelValue{nullptr};
     DspLevelTarget m_dspLevelTarget{LvlNone};
     // Activation stack — most recent at the back.  Lets the slider fall

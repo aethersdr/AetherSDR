@@ -3,11 +3,14 @@
 #include "core/AppActivity.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
+#include <memory>
 
 #include <QDateTime>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QMetaObject>
 #include <QPointer>
 #include <QRegularExpression>
 #include <QThread>
@@ -30,6 +33,33 @@ namespace AetherSDR {
 using namespace flexkv;
 
 namespace {
+
+struct DspParameterWire {
+    DspParameter parameter;
+    const char* command;
+    const char* status;
+};
+
+// Published FlexLib 4.3.16 setters and parsers use different LMS field names.
+constexpr std::array<DspParameterWire, 17> kDspParameterWire{{
+    {DspParameter::NrDelay, "nr_delay", "nr_delay"},
+    {DspParameter::NrWindow, "nr_wlen", "nr_wlen"},
+    {DspParameter::NrIsdft, "nr_isdft_mode", "nr_isdft_mode"},
+    {DspParameter::NrAdapt, "nr_adapt_mode", "nr_adapt_mode"},
+    {DspParameter::AnfDelay, "anf_delay", "anf_delay"},
+    {DspParameter::AnfWindow, "anf_wlen", "anf_wlen"},
+    {DspParameter::AnfIsdft, "anf_isdft_mode", "anf_isdft_mode"},
+    {DspParameter::AnfAdapt, "anf_adapt_mode", "anf_adapt_mode"},
+    {DspParameter::NrlDelay, "lms_nr_delay", "nrl_delay"},
+    {DspParameter::NrlTaps, "lms_nr_taps", "nrl_filter_size"},
+    {DspParameter::NrlLeakage, "lms_nr_leakage_level", "nrl_leakage_level"},
+    {DspParameter::AnflDelay, "lms_anf_delay", "anfl_delay"},
+    {DspParameter::AnflTaps, "lms_anf_taps", "anfl_filter_size"},
+    {DspParameter::AnflLeakage, "lms_anf_leakage_level", "anfl_leakage_level"},
+    {DspParameter::AnftMinDb, "anft_min_db", "anft_min_db"},
+    {DspParameter::AnftToneDiff, "anft_tone_db_diff", "anft_tone_db_diff"},
+    {DspParameter::NrfWindow, "nrf_wlen", "nrf_wlen"}
+}};
 
 QStringList uniqueCommaList(const QString& value)
 {
@@ -132,6 +162,7 @@ FlexBackend::~FlexBackend()
 
 void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
 {
+    ++m_commandSinkGeneration;
     if (!sink) {
         m_sink = {};
         return;
@@ -147,6 +178,7 @@ void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
 
 void FlexBackend::setCommandSink(std::function<bool(const QString&, CommandReply)> sink)
 {
+    ++m_commandSinkGeneration;
     m_sink = std::move(sink);
 }
 
@@ -624,6 +656,16 @@ RadioCapabilities FlexBackend::capabilities() const
         reset.notchModes = {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("AM"),
                            QStringLiteral("SAM"), QStringLiteral("DSB")};
         caps.dspParameterReset = reset;
+        DspParameterControl parameters;
+        parameters.modes = reset.modes;
+        parameters.notchModes = reset.notchModes;
+        parameters.advancedAccess = reset.advancedAccess;
+        for (const DspParameterSpec& spec : dspParameterSpecs()) {
+            if (reset.hardwareTargets.contains(spec.algorithm)) {
+                parameters.parameters.append(spec.parameter);
+            }
+        }
+        caps.dspParameters = parameters;
     }
     // The LMS/FFT family is base Flex firmware, not an 8000-series extra —
     // every radio with hasRadioSideDsp below also has NRL/ANFL/ANFT.
@@ -915,6 +957,82 @@ ReceiveDispatch FlexBackend::requestDspParameterReset(int sliceId, DspParameterR
     return ReceiveDispatch::Dispatched;
 }
 
+ReceiveDispatch FlexBackend::requestDspParameter(int sliceId, const DspParameterRequest& request,
+                                                  const RadioControlFence& current)
+{
+    if (QThread::currentThread() != thread() || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    const QPointer<FlexBackend> self(this);
+    const quint64 sinkGeneration = m_commandSinkGeneration;
+    const auto writer = m_sink;
+    const RadioControlFence fence = current;
+    const auto permitted = [self, sinkGeneration, fence] {
+        if (!self || QThread::currentThread() != self->thread()
+            || sinkGeneration != self->m_commandSinkGeneration) {
+            return false;
+        }
+        const bool allowed = !fence || fence();
+        // Trusted composition may synchronously retire or rebind the backend.
+        return allowed && self && sinkGeneration == self->m_commandSinkGeneration;
+    };
+    if (!writer || !permitted()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    const RadioCapabilities caps = capabilities();
+    if (sliceId < 0 || sliceId >= caps.maxSlices || !caps.dspParameters
+        || !caps.dspParameters->permits(request.parameter) || !permitted()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    const DspParameterSpec* spec = dspParameterSpec(request.parameter);
+    const QString value = spec->choices.isEmpty() ? QString::number(request.value)
+        : spec->choices.at(request.value);
+    for (const DspParameterWire& wire : kDspParameterWire) {
+        if (wire.parameter != request.parameter) {
+            continue;
+        }
+        struct ReadbackState {
+            bool dispatchKnown{false};
+            bool dispatched{false};
+            bool replied{false};
+            bool accepted{false};
+            bool queued{false};
+        };
+        const auto state = std::make_shared<ReadbackState>();
+        const auto queueReadback = [self, sinkGeneration, writer, permitted, state] {
+            if (!state->dispatchKnown || !state->dispatched || !state->accepted || state->queued) {
+                return;
+            }
+            state->queued = true;
+            if (!self || sinkGeneration != self->m_commandSinkGeneration) {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [writer, permitted] {
+                if (permitted()) {
+                    writer(QStringLiteral("sub slice all"), {});
+                }
+            }, Qt::QueuedConnection);
+        };
+        // Firmware can acknowledge this receive-only whitelist without a status
+        // echo. Ask once for authoritative readback after acceptance, never retry.
+        const bool dispatched = writer(QStringLiteral("slice set %1 %2=%3").arg(sliceId)
+            .arg(QString::fromLatin1(wire.command), value),
+            [state, queueReadback](int code, const QString&) {
+                if (state->replied) {
+                    return;
+                }
+                state->replied = true;
+                state->accepted = code == 0;
+                queueReadback();
+            });
+        state->dispatched = dispatched;
+        state->dispatchKnown = true;
+        queueReadback();
+        return dispatched ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+    }
+    return ReceiveDispatch::Unsupported;
+}
+
 ReceiveDispatch FlexBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
 {
     if (sliceId < 0 || !request.valid()) {
@@ -944,7 +1062,8 @@ ReceiveDispatch FlexBackend::requestSliceDsp(int sliceId, const SliceDspRequest&
     }
     if (request.field == SliceDspRequest::Field::Level) {
         if (request.feature == SliceDspRequest::Feature::Rnn
-            || request.feature == SliceDspRequest::Feature::Anft) {
+            || request.feature == SliceDspRequest::Feature::Anft
+            || (request.feature == SliceDspRequest::Feature::Nrf && capabilities().dspParameters)) {
             return ReceiveDispatch::Unsupported;
         }
         key += QStringLiteral("_level");
@@ -1543,6 +1662,28 @@ void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& k
     carry(kvs, "anfl_level", d.anflLevel);
     if (!kvs.contains(QStringLiteral("anfl_level"))) {
         carry(kvs, "lms_anf_level", d.anflLevel);
+    }
+
+    // Advanced readback is sparse and radio-owned. Legacy numeric enum codes
+    // have no published mapping; only the 4.3 string vocabulary is decoded.
+    for (const DspParameterWire& wire : kDspParameterWire) {
+        const auto found = kvs.constFind(QString::fromLatin1(wire.status));
+        if (found == kvs.cend()) {
+            continue;
+        }
+        const DspParameterSpec* spec = dspParameterSpec(wire.parameter);
+        bool parsed = false;
+        int value = 0;
+        if (spec->choices.isEmpty()) {
+            value = found.value().toInt(&parsed);
+        } else {
+            const qsizetype choice = spec->choices.indexOf(found.value());
+            parsed = choice >= 0;
+            value = static_cast<int>(choice);
+        }
+        if (parsed && validDspParameterValue(wire.parameter, value)) {
+            d.dspParameters.insert(wire.parameter, value);
+        }
     }
 
     // AGC / squelch / RIT / XIT

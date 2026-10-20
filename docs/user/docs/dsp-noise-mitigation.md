@@ -22,7 +22,7 @@ The in-app guide **Help → Understanding Noise Cancellation...** covers the sam
 
 ## Using the radio-side filters (FPGA)
 
-On a FlexRadio these run on the radio's FPGA — zero CPU cost to your PC (the noise blanker on the Hermes-Lite 2 and ANAN-G2 is the exception; see [NB](#nb--noise-blanker)). All use preset, optimized parameters with no user adjustments required — just toggle on/off. We did, however, add "amount" sliders in the DSP slide bar menu if you're feeling adventurous.
+On a FlexRadio these run on the radio's FPGA — zero CPU cost to your PC (the noise blanker on the Hermes-Lite 2 and ANAN-G2 is the exception; see [NB](#nb--noise-blanker)). The DSP tab provides on/off buttons and amount controls. Supported FlexRadio firmware also exposes advanced parameters; opening the tab does not change the radio's settings.
 
 The radio-side buttons are on the VFO flag's **DSP** tab: NR, NB, ANF and APF on the first row; NRL, NRS, RNN and NRF on the second.
 
@@ -54,6 +54,43 @@ report Advanced Noise Mitigation entitlement. Retained entitlement works
 even when a SmartSDR+ subscription has expired. **NRS** and **NRF** additionally
 require a FLEX-8000 or Aurora platform. NRS resets its level only; it has no
 advanced parameters.
+
+### Advanced parameters
+
+On the VFO flag's **DSP** tab, choose an algorithm from **Advanced:**. Its
+parameter rows show the radio's confirmed values. Edit a value, then press
+**Apply** beside that row to request only that parameter. Choosing an algorithm
+or editing a field sends no command. After Apply, the display follows radio
+status; a request alone does not establish the radio's value. Profile recalls
+and parameter-reset echoes update these same controls without sending edits
+back to the radio. A new report or session change discards an unfinished edit.
+
+| Algorithm | Controls and allowed values |
+| --- | --- |
+| NR, ANF | **Delay** 1–512; **Window** 32, 64, 128, 256, 512; **Inverse SDFT** one, half, zero; **Adaptation** auto, fast, slow |
+| NRL, ANFL | **Delay** 1–512; **Taps** 1–512; **Leakage** 0–100 |
+| ANFT | **Tone min (dB)** −150 to −50; **Tone diff (dB)** 1–60 |
+| NRF | **Window** 512, 1024, 2048, 4096, 8192 |
+
+FlexRadio does not recommend the **zero** inverse-SDFT choice. NRS has no
+advanced parameters. On SmartSDR 4.3.16+, NRF uses **Window** instead of a level;
+the legacy NRF amount slider is disabled with an explanation.
+
+Advanced editing requires SmartSDR **4.3.16 or later**, a current slice owned
+by this client, a supported receive mode and radio-confirmed **Advanced Noise
+Mitigation** entitlement. Entitlement retained after a SmartSDR+ subscription
+expires remains valid. Subscription dates or the presence of parameter status
+alone do not grant access. NR, ANF, NRL, ANFL and ANFT are supported on the
+FLEX-6000 series, including FLEX-6700, subject to those requirements. NRF
+requires FLEX-8000 or Aurora hardware. Advanced controls remain visible and
+disabled with the reason when unavailable or waiting for their first report.
+FM modes exclude advanced editing; ANF, ANFL and ANFT additionally exclude CW,
+RTTY, DIGU, DIGL and FreeDV modes.
+
+Older firmware can report numeric adaptation/inverse-SDFT modes. AetherSDR does
+not infer their mapping; advanced editing remains disabled on that firmware.
+Ordinary supported on/off and amount controls continue to operate. These
+radio-owned parameters are not saved or restored from computer settings.
 
 ### NR — Noise Reduction
 General-purpose noise reduction. Adjustable level (0-100). Good starting point for noisy bands.

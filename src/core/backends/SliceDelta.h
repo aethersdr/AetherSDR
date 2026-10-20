@@ -5,6 +5,7 @@
 
 #include "core/backends/NoiseBlankerKind.h"
 #include "core/backends/ReceiveCommand.h"
+#include "core/backends/DspParameter.h"
 
 #include <QMetaType>
 #include <QString>
@@ -101,6 +102,8 @@ struct SliceDelta {
     std::optional<int>         anflLevel;
     // Manual-notch POSITION, 0..100 across the passband — not a frequency.
     std::optional<int>         mnLevel;
+
+    DspParameterValues dspParameters;
 
     // AGC / squelch / RIT / XIT
     std::optional<QString>     agcMode;

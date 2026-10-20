@@ -19,6 +19,7 @@
 #include "CallsignUtils.h"
 #include "models/Nr2SettingsModel.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
+#include "core/backends/DspParameter.h"
 #include "core/backends/IRadioBackend.h"   // backend()->invokeExtension (sim faults)
 #include "core/backends/HealthSnapshotMerge.h"   // mergeHealthSnapshots — family-neutral
 #include <QHostAddress>                          // telemetry target <ip>
@@ -1569,7 +1570,14 @@ QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo,
             break;
         }
     }
+    QJsonObject advancedDsp;
+    for (const DspParameterSpec& spec : dspParameterSpecs()) {
+        const std::optional<int> value = s->dspParameter(spec.parameter);
+        advancedDsp.insert(QString::fromLatin1(spec.id), !value ? QJsonValue(QJsonValue::Null)
+            : spec.choices.isEmpty() ? QJsonValue(*value) : QJsonValue(spec.choices[*value]));
+    }
     return QJsonObject{
+        {QStringLiteral("advancedDsp"), advancedDsp},
         {QStringLiteral("sliceId"),    s->sliceId()},
         {QStringLiteral("letter"),     s->letter()},
         {QStringLiteral("panId"),      s->panId()},
