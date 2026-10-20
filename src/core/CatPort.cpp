@@ -1,14 +1,17 @@
 #include "CatPort.h"
 #include "LogManager.h"
+#include "OtrspProtocol.h"
 #include "RigctlProtocol.h"
 #include "SmartCatProtocol.h"
 #include "SmartCatSession.h"
 #include "models/RadioModel.h"
 
 #include <utility>
+#include <cerrno>
 
 #include <QDir>
 #include <QFileInfo>
+#include <QPointer>
 #include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -66,6 +69,12 @@ bool CatPort::start(quint16 port)
 {
     if (isRunning()) return true;
 
+    if (m_dialect == CatDialect::OTRSP
+        && (m_vfoA < 0 || m_vfoB < 0 || m_vfoA == m_vfoB)) {
+        qCWarning(lcCat) << "CatPort: OTRSP requires two distinct VFO slice assignments";
+        return false;
+    }
+
     m_tcpServer = new QTcpServer(this);
     if (!m_tcpServer->listen(QHostAddress::Any, port)) {
         qCWarning(lcCat) << "CatPort: failed to bind port" << port
@@ -101,6 +110,12 @@ void CatPort::stop()
         c.socket->abort();
         delete c.protocol;
     }
+    const auto otrspClients = std::exchange(m_otrspClients, {});
+    for (const OtrspClient& client : otrspClients) {
+        client.protocol->close();
+        QObject::disconnect(client.socket, nullptr, this, nullptr);
+        client.socket->abort();
+    }
 
     if (m_tcpServer) {
         m_tcpServer->close();
@@ -128,7 +143,7 @@ quint16 CatPort::port() const
 
 int CatPort::clientCount() const
 {
-    return m_rigctlClients.size() + m_catSessions.size();
+    return m_rigctlClients.size() + m_catSessions.size() + m_otrspClients.size();
 }
 
 QString CatPort::ptyPath() const
@@ -163,6 +178,12 @@ void CatPort::onNewConnection()
                 this, &CatPort::onRigctlDisconnected);
 
         qCInfo(lcCat) << "CatPort: rigctld client connected on port" << port();
+    } else if (m_dialect == CatDialect::OTRSP) {
+        socket->setReadBufferSize(4096);
+        m_otrspClients.append({socket, std::make_shared<OtrspProtocol>(m_model, m_vfoA, m_vfoB)});
+        connect(socket, &QTcpSocket::readyRead, this, &CatPort::onOtrspData);
+        connect(socket, &QTcpSocket::disconnected, this, &CatPort::onOtrspDisconnected);
+        qCInfo(lcCat) << "CatPort: OTRSP client connected on port" << port();
     } else {
         bool flex = (m_dialect == CatDialect::FlexCAT);
         auto* session = new SmartCatSession(socket, m_model,
@@ -234,6 +255,50 @@ void CatPort::onCatSessionEnded(SmartCatSession* session)
     emit clientCountChanged(clientCount());
 }
 
+void CatPort::onOtrspData()
+{
+    auto* socket = qobject_cast<QTcpSocket*>(sender());
+    if (!socket) {
+        return;
+    }
+    for (const OtrspClient& client : m_otrspClients) {
+        if (client.socket != socket) {
+            continue;
+        }
+        if (socket->bytesToWrite() > 65536) {
+            qCWarning(lcCat) << "CatPort: disconnecting OTRSP client with excessive queued output";
+            socket->abort();
+            return;
+        }
+        // A synchronous model notification can stop the port during dispatch.
+        const std::shared_ptr<OtrspProtocol> protocol = client.protocol;
+        const QPointer<QTcpSocket> alive(socket);
+        const QByteArray response = protocol->processData(socket->readAll());
+        if (alive && alive->state() == QAbstractSocket::ConnectedState && !response.isEmpty()) {
+            alive->write(response);
+        }
+        return;
+    }
+}
+
+void CatPort::onOtrspDisconnected()
+{
+    auto* socket = qobject_cast<QTcpSocket*>(sender());
+    if (!socket) {
+        return;
+    }
+    for (int i = 0; i < m_otrspClients.size(); ++i) {
+        if (m_otrspClients[i].socket == socket) {
+            m_otrspClients[i].protocol->close();
+            m_otrspClients.removeAt(i);
+            socket->deleteLater();
+            qCInfo(lcCat) << "CatPort: OTRSP client disconnected";
+            break;
+        }
+    }
+    emit clientCountChanged(clientCount());
+}
+
 // ── PTY ─────────────────────────────────────────────────────────────────────
 
 void CatPort::startPty()
@@ -285,6 +350,12 @@ void CatPort::startPty()
     if (m_dialect == CatDialect::Rigctld) {
         m_ptyRigctlProtocol = new RigctlProtocol(m_model);
         m_ptyRigctlProtocol->setSliceIndex(m_vfoA);
+    } else if (m_dialect == CatDialect::OTRSP) {
+        m_ptyOtrspProtocol = std::make_shared<OtrspProtocol>(m_model, m_vfoA, m_vfoB);
+        m_ptyWriteNotifier = new QSocketNotifier(m_ptyMasterFd, QSocketNotifier::Write, this);
+        m_ptyWriteNotifier->setEnabled(false);
+        connect(m_ptyWriteNotifier, &QSocketNotifier::activated,
+                this, &CatPort::flushOtrspPtyOutput);
     } else {
         bool flex = (m_dialect == CatDialect::FlexCAT);
         m_ptyCatProtocol = new SmartCatProtocol(m_model, m_vfoA, m_vfoB, flex);
@@ -307,11 +378,18 @@ void CatPort::stopPty()
 
     delete m_ptyNotifier;
     m_ptyNotifier = nullptr;
+    delete m_ptyWriteNotifier;
+    m_ptyWriteNotifier = nullptr;
+    m_ptyOtrspOutput.clear();
 
     delete m_ptyRigctlProtocol;
     m_ptyRigctlProtocol = nullptr;
     delete m_ptyCatProtocol;
     m_ptyCatProtocol = nullptr;
+    if (m_ptyOtrspProtocol) {
+        m_ptyOtrspProtocol->close();
+        m_ptyOtrspProtocol.reset();
+    }
 
     ::close(m_ptyMasterFd);
     ::close(m_ptySlaveFd);
@@ -334,6 +412,24 @@ void CatPort::onPtyData()
     char buf[4096];
     ssize_t n = ::read(m_ptyMasterFd, buf, sizeof(buf));
     if (n <= 0) return;
+
+    if (m_ptyOtrspProtocol) {
+        const std::shared_ptr<OtrspProtocol> protocol = m_ptyOtrspProtocol;
+        const QPointer<CatPort> alive(this);
+        const QByteArray response = protocol->processData(
+            QByteArray(buf, static_cast<int>(n)));
+        if (!alive || alive->m_ptyOtrspProtocol != protocol) {
+            return;
+        }
+        m_ptyOtrspOutput += response;
+        if (m_ptyOtrspOutput.size() > 65536) {
+            qCWarning(lcCat) << "CatPort: stopping OTRSP PTY with excessive queued output";
+            stopPty();
+            return;
+        }
+        flushOtrspPtyOutput();
+        return;
+    }
 
     m_ptyBuffer.append(buf, static_cast<int>(n));
 
@@ -375,6 +471,32 @@ void CatPort::onPtyData()
             }
         }
     }
+#endif
+}
+
+void CatPort::flushOtrspPtyOutput()
+{
+#ifndef Q_OS_WIN
+    if (!m_ptyWriteNotifier) {
+        return;
+    }
+    while (!m_ptyOtrspOutput.isEmpty()) {
+        const ssize_t written = ::write(m_ptyMasterFd, m_ptyOtrspOutput.constData(),
+                                        m_ptyOtrspOutput.size());
+        if (written > 0) {
+            m_ptyOtrspOutput.remove(0, written);
+        } else if (written < 0 && errno == EINTR) {
+            continue;
+        } else if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            m_ptyWriteNotifier->setEnabled(true);
+            return;
+        } else {
+            qCWarning(lcCat) << "CatPort: OTRSP PTY write failed";
+            stopPty();
+            return;
+        }
+    }
+    m_ptyWriteNotifier->setEnabled(false);
 #endif
 }
 

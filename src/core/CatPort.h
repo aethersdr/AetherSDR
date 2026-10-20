@@ -4,6 +4,8 @@
 #include <QList>
 #include <QString>
 
+#include <memory>
+
 class QTcpServer;
 class QTcpSocket;
 class QSocketNotifier;
@@ -14,16 +16,18 @@ class RadioModel;
 class RigctlProtocol;
 class SmartCatProtocol;
 class SmartCatSession;
+class OtrspProtocol;
 
 enum class CatDialect {
     Rigctld,   // Hamlib rigctld protocol (newline-framed)
     TS2000,    // Kenwood TS-2000 CAT, no Flex ZZ extensions
-    FlexCAT    // Kenwood TS-2000 + FlexRadio ZZ extensions
+    FlexCAT,   // Kenwood TS-2000 + FlexRadio ZZ extensions
+    OTRSP      // Two-slice RX/TX focus (carriage-return-framed)
 };
 
 // Whether a dialect has a configurable VFO B. rigctld (Hamlib) is single-VFO per
 // port — RigctlProtocol has no VFO B input; split is create-on-demand. The
-// SmartSDR dialects (TS-2000 / FlexCAT) support a configured VFO B (dual-VFO).
+// TS-2000, FlexCAT and OTRSP support a configured VFO B (dual-VFO).
 // Single definition so the config UI — and any future config surface — agrees.
 inline bool dialectSupportsVfoB(CatDialect d) { return d != CatDialect::Rigctld; }
 
@@ -37,6 +41,7 @@ class CatPort : public QObject {
 
 public:
     static constexpr int kVfoNone = -1;  // VFO B = simplex
+    static constexpr quint16 kOtrspDefaultPort = 60000;
 
     explicit CatPort(RadioModel* model, QObject* parent = nullptr);
     ~CatPort() override;
@@ -72,10 +77,13 @@ private slots:
     // Rigctld TCP I/O
     void onRigctlData();
     void onRigctlDisconnected();
+    void onOtrspData();
+    void onOtrspDisconnected();
     // SmartCAT TCP
     void onCatSessionEnded(SmartCatSession* session);
     // PTY data
     void onPtyData();
+    void flushOtrspPtyOutput();
 
 private:
     void startPty();
@@ -87,6 +95,10 @@ private:
         RigctlProtocol* protocol{nullptr};
         QByteArray      buffer;
     };
+    struct OtrspClient {
+        QTcpSocket* socket{nullptr};
+        std::shared_ptr<OtrspProtocol> protocol;
+    };
 
     RadioModel*             m_model;
     CatDialect              m_dialect{CatDialect::Rigctld};
@@ -96,6 +108,7 @@ private:
 
     QTcpServer*             m_tcpServer{nullptr};
     QList<RigctlClient>     m_rigctlClients;
+    QList<OtrspClient>      m_otrspClients;
     QList<SmartCatSession*> m_catSessions;
 
     // PTY (non-Windows only)
@@ -108,6 +121,9 @@ private:
     // Protocol handler for PTY (one of these is active, the other null)
     RigctlProtocol*  m_ptyRigctlProtocol{nullptr};
     SmartCatProtocol* m_ptyCatProtocol{nullptr};
+    std::shared_ptr<OtrspProtocol> m_ptyOtrspProtocol;
+    QByteArray m_ptyOtrspOutput;
+    QSocketNotifier* m_ptyWriteNotifier{nullptr};
 #endif
 };
 
