@@ -698,6 +698,15 @@ target_link_libraries(radio_setup_control_routing_test PRIVATE aethercore Qt6::C
 add_test(NAME radio_setup_control_routing_test COMMAND radio_setup_control_routing_test)
 set_tests_properties(radio_setup_control_routing_test PROPERTIES TIMEOUT 45)
 
+# #6614: injected production writers and an unbound automation server object.
+# No socket endpoint, synthetic firmware peer, physical device or TX operation.
+add_executable(desktop_utility_routing_test tests/desktop_utility_routing_test.cpp)
+target_include_directories(desktop_utility_routing_test PRIVATE src tests)
+target_link_libraries(desktop_utility_routing_test PRIVATE aetherdesktop_support aethercore Qt6::Core Qt6::Widgets Qt6::Test)
+add_test(NAME desktop_utility_routing_test COMMAND desktop_utility_routing_test)
+set_tests_properties(desktop_utility_routing_test PROPERTIES TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
+
 # Socket-free frequency control: a recording engine backend and normalized
 # observations exercise the production target/service. LocalControlServer
 # instances only test startup binding; neither listens or opens an endpoint.
@@ -7623,7 +7632,7 @@ add_test(NAME memory_telemetry_test COMMAND memory_telemetry_test)
 
 add_executable(memory_recall_policy_test
     tests/memory_recall_policy_test.cpp
-    src/core/MemoryRecallPolicy.cpp
+    src/core/MemoryFieldValues.cpp
 )
 target_include_directories(memory_recall_policy_test PRIVATE src)
 target_link_libraries(memory_recall_policy_test PRIVATE Qt6::Core)
@@ -9485,6 +9494,7 @@ set(AETHER_SETTINGS_CONSUMERS
     model_control_routing_test
     radio_nickname_test
     radio_setup_control_routing_test
+    desktop_utility_routing_test
     radio_setup_operations_test
     stored_control_routing_test
     stored_control_dialogs_test

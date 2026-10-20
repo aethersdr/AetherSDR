@@ -5463,8 +5463,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             if (tciServer() && s && !s->isLocked() && !m_swrSweep.running)
                 tciServer()->notifySpotClicked(spotIndex, s);
         } else if (!isPassiveLocalSpotId(spotIndex)) {
-            m_radioModel.sendCommand(
-                QString("spot trigger %1 pan=%2").arg(spotIndex).arg(applet->panId()));
+            SpotRequest request;
+            request.action = SpotAction::Trigger;
+            request.index = spotIndex;
+            m_radioModel.requestSpot(request, m_radioModel.panadapter(applet->panId()));
         }
 
         // Auto-switch mode from spot metadata (#424). Default flipped to True
@@ -5498,24 +5500,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // Seed dedup so a cluster echo of our own DX command (when
         // forwardToCluster is on) is suppressed by isDuplicateSpot. (#2658)
         m_spotDedup[callsign] = { freqMhz, QDateTime::currentMSecsSinceEpoch() };
-        QString call = QString(callsign).replace(' ', QChar(0x7f));
         QString freq = QString::number(freqMhz, 'f', 6);
         QString myCall = as.value("DxClusterCallsign").toString();
         if (myCall.isEmpty()) myCall = "AetherSDR";
-        QString cmd = "spot add callsign=" + call + " rx_freq=" + freq
-                     + " tx_freq=" + freq
-                     + " source=Manual"
-                     + " spotter_callsign=" + myCall
-                     + " trigger_action=none"  // (#1846)
-                     + " lifetime_seconds=" + QString::number(lifetimeSec);
-        if (!comment.isEmpty())
-            cmd += " comment=" + QString(comment).replace(' ', QChar(0x7f));
         QString spotColor = as.value("ManualSpotColor", "#00FF00").toString();
         if (spotColor.length() == 7) spotColor = "#FF" + spotColor.mid(1);
-        cmd += " color=" + spotColor;
         if (SpotCommandPolicy::shouldSendSpotAddCommands(
                 m_radioModel.backendCapabilities().alwaysUseClientSideSpots)) {
-            m_radioModel.sendCommand(cmd);
+            m_radioModel.requestSpot({SpotAction::Add, callsign, QStringLiteral("Manual"),
+                                      myCall, comment, spotColor, freqMhz, lifetimeSec});
         } else {
             QMap<QString, QString> kvs;
             kvs["callsign"] = QString(callsign).replace(' ', QChar(0x7f));
@@ -5581,9 +5574,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             m_passiveSpotExpiryMs.remove(spotIndex);
             m_radioModel.spotModel().removeSpot(spotIndex);
             return;
-        case SpotLabelPolicy::RemoveRoute::RadioCommand:
-            m_radioModel.sendCommand(QString("spot remove %1").arg(spotIndex));
+        case SpotLabelPolicy::RemoveRoute::RadioCommand: {
+            SpotRequest request;
+            request.action = SpotAction::Remove;
+            request.index = spotIndex;
+            m_radioModel.requestSpot(request);
             return;
+        }
         case SpotLabelPolicy::RemoveRoute::Ignore:
             // Unreachable today: menuFor() gives memory labels no Remove
             // Spot. Logged so a fourth ID class does not fail silently.

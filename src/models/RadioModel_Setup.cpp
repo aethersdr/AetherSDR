@@ -66,6 +66,8 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
     const QPointer<QObject> owner(replyContext ? replyContext : this);
     const RadioControlSession session = controlSession();
     const bool identity = request.field == Field::Callsign || request.field == Field::ClientStation;
+    const quint64 stationRevision = request.field == Field::ClientStation && request.valid()
+        ? ++m_stationIntentRevision : m_stationIntentRevision;
     const bool localDisplay = request.field == Field::ShowTxInWaterfall
         && backendCapabilities().clientPersistsShowTxInWaterfall();
     const bool calibration = request.field == Field::StartFrequencyCalibration;
@@ -80,6 +82,7 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
         if (request.field == Field::Callsign) {
             setStationCallsign(std::get<QString>(request.value));
         } else if (request.field == Field::ClientStation) {
+            if (m_stationIntentRevision != stationRevision) { return; }
             AppSettings::instance().setValue("StationName", std::get<QString>(request.value));
             AppSettings::instance().save();
         }
@@ -119,11 +122,14 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
     if (effective.field == Field::NetworkMtu) {
         effective.value = networkMtuParam(std::get<int>(effective.value));
     }
-    const RadioControlFence current = [alive, owner, session, pending, calibration] {
-        return alive && alive->controlSessionCurrent(session) && (!calibration || (owner && *pending));
+    const bool station = request.field == Field::ClientStation;
+    const RadioControlFence current = [alive, owner, session, pending, calibration, station, stationRevision] {
+        return alive && alive->controlSessionCurrent(session) && (!calibration || (owner && *pending))
+            && (!station || alive->m_stationIntentRevision == stationRevision);
     };
     const ReceiveDispatch result = m_backend->requestRadioSetup(effective, reply, current);
     if (!alive) { return result; }
+    if (station && result == ReceiveDispatch::Dispatched && current()) { m_stationOverrideOwner = 0; }
     if (identity) {
         persistIdentity();
         if (!alive) { return result; }

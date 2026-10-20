@@ -1459,7 +1459,6 @@ private:
     AetherSDR::SignalClassifier m_signalClassifier;
 
     // Batched spot add commands (flushed 1/sec)
-    QStringList m_spotCmdBatch;
     int m_nextPassiveSpotId{-2000000};
     QHash<int, qint64> m_passiveSpotExpiryMs;
     // N1MM spot identity: N1MMSpotParser::spotKey(dxcall, freq) -> passive

@@ -2103,6 +2103,9 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<SliceControlRequest>();
     qRegisterMetaType<TransmitControlRequest>();
     qRegisterMetaType<RadioSetupRequest>();
+    qRegisterMetaType<SpotRequest>();
+    qRegisterMetaType<PanControlRequest>();
+    qRegisterMetaType<SlicePresetRequest>();
     qRegisterMetaType<TxBandRequest>();
     qRegisterMetaType<TransverterRequest>();
     qRegisterMetaType<RadioSetupReply>();
@@ -4251,12 +4254,12 @@ RadioCapabilities RadioModel::backendCapabilities() const
     return m_backend ? m_backend->capabilities() : RadioCapabilities{};
 }
 
-// None of these writes wire text: the Flex caller keeps its own send.
+// Client-owned receive state; radio-owned requests stay on the backend route.
 
 bool RadioModel::applyClientOwnedSliceStep(int sliceId, int hz)
 {
     if (hasCommandPlane()) {
-        return false;   // the radio owns the step; the caller's wire text sets it
+        return false;   // the radio owns the step; the typed backend request sets it
     }
     // No command plane: the step is a client-side quantity (the tuning wheel
     // and the RX applet read SliceModel::stepHz). Returns true even when there
@@ -12516,12 +12519,6 @@ int RadioModel::activeOutputVolumePercent() const
         .value(QStringLiteral("MasterVolume"), QStringLiteral("100")).toInt();
 }
 
-bool RadioModel::lineoutThroughSeam() const
-{
-    return m_backend && !usesFlexCommandPlane()
-        && m_backend->capabilities().lineoutControl.has_value();
-}
-
 void RadioModel::setLineoutGain(int v)
 {
     v = std::clamp(v, 0, 100);
@@ -12530,14 +12527,11 @@ void RadioModel::setLineoutGain(int v)
     }
     m_lineoutGain = v;
     qCDebug(lcAudio) << "setLineoutGain:" << v;
-    // A backend that declares a line out takes the request typed; a Flex takes
-    // the wire text, and on a radio with neither the text's drop notice says
-    // that nothing applied it.
-    if (lineoutThroughSeam()) {
-        m_backend->setLineoutGain(v);
-    } else {
-        sendCmd(QString("mixer lineout gain %1").arg(v));
-    }
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    const quint64 revision = ++m_outputIntentRevisions[0];
+    requestRadioSetup({RadioSetupField::LineoutGain, v});
+    if (!alive || session != controlSession() || m_outputIntentRevisions[0] != revision) { return; }
     emit audioOutputChanged();
 }
 
@@ -12550,12 +12544,11 @@ void RadioModel::setLineoutGain(int v)
 void RadioModel::setLineoutMute(bool m)
 {
     qCDebug(lcAudio) << "setLineoutMute:" << m;
-    // Routed as in setLineoutGain(), but always sent, for the reason above.
-    if (lineoutThroughSeam()) {
-        m_backend->setLineoutMute(m);
-    } else {
-        sendCmd(QString("mixer lineout mute %1").arg(m ? 1 : 0));
-    }
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    const quint64 revision = ++m_outputIntentRevisions[1];
+    requestRadioSetup({RadioSetupField::LineoutMute, m});
+    if (!alive || session != controlSession() || m_outputIntentRevisions[1] != revision) { return; }
     if (m_lineoutMute != m) {
         m_lineoutMute = m;
         emit audioOutputChanged();
@@ -12570,7 +12563,11 @@ void RadioModel::setHeadphoneGain(int v)
     }
     m_headphoneGain = v;
     qCDebug(lcAudio) << "setHeadphoneGain:" << v;
-    sendCmd(QString("mixer headphone gain %1").arg(v));
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    const quint64 revision = ++m_outputIntentRevisions[2];
+    requestRadioSetup({RadioSetupField::HeadphoneGain, v});
+    if (!alive || session != controlSession() || m_outputIntentRevisions[2] != revision) { return; }
     emit audioOutputChanged();
 }
 
@@ -12578,7 +12575,11 @@ void RadioModel::setHeadphoneGain(int v)
 void RadioModel::setHeadphoneMute(bool m)
 {
     qCDebug(lcAudio) << "setHeadphoneMute:" << m;
-    sendCmd(QString("mixer headphone mute %1").arg(m ? 1 : 0));
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    const quint64 revision = ++m_outputIntentRevisions[3];
+    requestRadioSetup({RadioSetupField::HeadphoneMute, m});
+    if (!alive || session != controlSession() || m_outputIntentRevisions[3] != revision) { return; }
     if (m_headphoneMute != m) {
         m_headphoneMute = m;
         emit audioOutputChanged();
@@ -12589,7 +12590,11 @@ void RadioModel::setHeadphoneMute(bool m)
 void RadioModel::setFrontSpeakerMute(bool m)
 {
     qCDebug(lcAudio) << "setFrontSpeakerMute:" << m;
-    sendCmd(QString("mixer front_speaker mute %1").arg(m ? 1 : 0));
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    const quint64 revision = ++m_outputIntentRevisions[4];
+    requestRadioSetup({RadioSetupField::FrontSpeakerMute, m});
+    if (!alive || session != controlSession() || m_outputIntentRevisions[4] != revision) { return; }
     if (m_frontSpeakerMute != m) {
         m_frontSpeakerMute = m;
         emit audioOutputChanged();
