@@ -2138,6 +2138,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     // `display pan set ... band_zoom=` is dropped inside RadioModel::sendCmd.
     // Declaring absence is what makes the control refuse rather than lie.
     c.panZoomModes = std::nullopt;
+    // setSliceFrequency() re-centres the NCO (the pan centre) once the slice is
+    // more than kUsablePassbandFraction of the half-span away from it, so only
+    // that central part of the span holds still under a tuned slice.
+    c.panViewHold = RadioCapabilities::PanViewHold{kUsablePassbandFraction};
     // The one member of the noise family that is NOT moot here. WDSP's ANB runs
     // on this host, on the raw IQ, ahead of the demodulator — the same
     // arrangement as the manual notch and for the same reason (oracle addendum

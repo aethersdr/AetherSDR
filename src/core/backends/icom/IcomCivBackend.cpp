@@ -552,6 +552,12 @@ RadioCapabilities IcomCivBackend::capabilities() const
             RadioCapabilities::PanZoomModes::Control::NativeScopeSpan,
             QVector<int>(widths.begin(), widths.end())};
     }
+    // A scope with SCROLL-F and Fixed keeps its window still under a tuned VFO
+    // in those modes (SCROLL-F pages only once the VFO is off screen); which
+    // mode each pan is in travels on panViewHoldChanged. Center-only radios
+    // follow every tune.
+    c.panViewHold = scopeModesOffered()
+        ? std::optional(RadioCapabilities::PanViewHold{1.0}) : std::nullopt;
     c.panFrameRateShaping = std::nullopt;  // no client owner is declared for FFT FPS
     // CI-V carries no waterfall rate: the client is the only memory it has.
     c.panWaterfallRateShaping =
@@ -2281,6 +2287,10 @@ void IcomCivBackend::publishZoomPlacement(bool force)
     }
     m_zoomPlacementPublished = placement;
     emit panZoomPlacementChanged(panId(), placement);
+    // The window is the VFO's only in Center and SCROLL-C; until the mode is
+    // known nothing is promised.
+    emit panViewHoldChanged(panId(), placement == PanZoomPlacement::CenterAllocation
+                                         || placement == PanZoomPlacement::Unavailable);
 }
 
 void IcomCivBackend::setPanScopeMode(const QString& id, int index)
@@ -2408,6 +2418,7 @@ void IcomCivBackend::handleScopeRefusal(const std::string& key)
     m_scopeScrollRefused = true;
     resetScopeEdgeState();
     publishScopeModes();
+    publishCapabilities();  // scopeModesOffered() just changed what is declared
     if (m_session) {
         // A SCROLL-F write still queued behind the refused one must not follow it.
         m_civScheduler.cancelQueued("scope.mode");

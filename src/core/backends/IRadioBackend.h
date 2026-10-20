@@ -1493,6 +1493,10 @@ signals:
     // Required of a backend declaring PanZoomModes::Control::NativeScopeSpan:
     // until it is published the pan reads Unknown and B/S stay dimmed.
     void panZoomPlacementChanged(const QString& panId, AetherSDR::PanZoomPlacement placement);
+    // Whether this pan's window stays still under a tuned slice right now, for
+    // a backend whose RadioCapabilities::PanViewHold depends on a live mode
+    // (Icom: yes in Scroll-F and Fixed, no in Center). Unpublished reads true.
+    void panViewHoldChanged(const QString& panId, bool holds);
 
     // Panadapter antenna selection (universal). Two signals because the wire may
     // report the selected RX antenna and the available list independently.

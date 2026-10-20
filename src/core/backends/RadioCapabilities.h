@@ -495,6 +495,18 @@ struct RadioCapabilities {
     };
     std::optional<PanZoomModes> panZoomModes;
 
+    // How much of the published pan span stays still while a slice tunes
+    // inside it: what Lock view (gui/PanViewLockPolicy.h) can promise. Absent
+    // refuses, so the lock button is dimmed with the reason instead of
+    // pretending. Per-family rationale: docs/architecture/radio-capabilities-map.md.
+    struct PanViewHold {
+        // Fraction (0, 1] of the published pan bandwidth, centred on the pan
+        // centre, inside which a tuned slice never moves the view. 1.0 = the
+        // whole span. No default: an engaging backend must state its own.
+        double holdableSpanFraction;
+    };
+    std::optional<PanViewHold> panViewHold;
+
 
     // Tunable receive range in Hz; both zero = not reported (clients keep their prior
     // assumption). Lets band controls refuse bands the receiver cannot reach.

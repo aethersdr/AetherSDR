@@ -33,7 +33,7 @@ A second press at the same zoom does nothing; Icom zoom is not a toggle. FlexRad
 
 - **View → Single-Click to Tune** (off by default) makes a single click tune instead of a double-click.
 - Clicking an empty part of a panadapter that has no slice on it adds a new slice there.
-- Dragging a slice to the edge of the pan keeps panning the display.
+- Dragging a slice to the edge of the pan keeps panning the display, unless [Lock view](#lock-view) is on. While it is on, dragging the display or the frequency scale and Ctrl+scroll do nothing.
 - On a trackpad, vertical scrolling tunes, sideways swipes are ignored, and pinch-to-zoom changes the span where the system delivers a zoom gesture.
 - If the wheel tunes the wrong way for your mouse or trackball, turn on **Radio Setup → Appearance & Behavior → Reverse mouse-wheel tuning direction**.
 - Dragging any slider shows its value in a small popup.
@@ -49,6 +49,8 @@ On a touchscreen the panadapter and the rest of the app are fully operable by to
 | **Two-finger pinch** | Zoom the span, anchored under your fingers |
 | **Press and hold** (about ⅔ of a second) | Acts as a right-click — opens the context menu |
 | **Drag** in a list or menu | Flick-scroll it, with momentum; a tap still selects the item |
+
+While [Lock view](#lock-view) is on, dragging the spectrum or waterfall and pinching do not change the range.
 
 Touch-scroll works in every scrollable list and menu. The exception is the drag-to-rearrange lists — the applet panel down the left edge and the favorites picker — where a drag moves items instead of scrolling.
 
@@ -132,6 +134,24 @@ The strip along the bottom of the spectrum shows band segments, colored by use. 
 - **Region:** ARRL (US), IARU Region 1, IARU Region 2, IARU Region 3, RAC (Canada) or SSA (Sweden).
 
 The ARRL and RAC plans mark license classes by brightness. The ARRL plan's 60 m band follows the FCC order effective 13 February 2026. The selected plan is remembered.
+
+### Lock view
+
+Lock view freezes a panadapter's frequency range, so the slice moves across a still display instead of the display following the slice. Toggle it with the padlock button at the bottom left of each panadapter, beside the − and + zoom buttons. Each panadapter has its own setting, and it is remembered for that radio.
+
+- Dragging a slice stops at the edge of the display; the band does not scroll.
+- Tuning with the scroll wheel, keyboard, FlexControl, MIDI or RC-28 does not move the display. If the slice tunes off the edge, the off-screen indicator shows where it went; click it to bring the slice back into view.
+- Clicking the spectrum or a spot, typing a frequency or recalling a memory tunes in place when the frequency is already on screen, and so does a band button on radios without band stacks. Near the edge, a click lands on the nearest step that is still on screen.
+- On a FlexRadio a band button recalls that band's saved view. A typed frequency or memory that is on screen but across a band edge tunes in place, without recalling that band's saved antenna, mode and filter.
+- Going somewhere off screen still moves the display: a band button, a memory, a spot or DX click, a typed frequency, or a logging program over CAT/TCI. The lock stays on at the new range.
+- The range itself is frozen too: dragging the display or the frequency scale, Ctrl+scroll, pinch-to-zoom and the zoom shortcuts do nothing, the − + S B zoom buttons are dimmed, and **Center Slice** is unavailable. Unlock to change the range.
+- Lock view and Center Lock do opposite things, so turning one on turns the other off for that panadapter.
+- Closing a panadapter with its **✕**, or choosing a layout with fewer panadapters, forgets its Lock view setting.
+- While WFM is running on a slice, the display still follows it once it leaves the WFM capture window.
+- On a Hermes-Lite 2 the radio recenters itself once the slice is near the edge, so Lock view holds only the middle 80% of the display: a dragged slice stops there, and tuning past it moves the display. With RIT on, the radio judges the edge on the RIT frequency, so the held range is smaller by the RIT offset.
+- On a networked Icom, Lock view works while the scope is in **Scroll-F** or **Fixed** and the button is dimmed in **Center**, where the window follows every tune. Switching back to Scroll-F or Fixed brings a saved lock back. In Scroll-F, tuning off the edge still pages the window, because the radio does that itself. Turning the radio's own dial into the outer tenth of the window also moves it.
+- On ANAN and RTL-SDR radios the button is dimmed, because the panadapter can move with the slice.
+- Another MultiFlex station tuning your slice can still move the display.
 
 ### Off-screen VFO indicator
 
@@ -378,7 +398,8 @@ Display settings belong to the panadapter you opened them from.
 The slice is outside the visible span.
 
 1. Click the off-screen indicator at the edge of the spectrum. The slice becomes active and comes into view.
-2. To keep a pan on one slice as it tunes, right-click and choose **Center Lock**.
+2. If the padlock button at the bottom left is lit, [Lock view](#lock-view) is on and the display does not follow tuning. Turn it off to let the display follow the slice again.
+3. To keep a pan on one slice as it tunes, right-click and choose **Center Lock**.
 
 ### A floating panadapter won't restore properly
 

@@ -1521,7 +1521,7 @@ comparing screenshots.
    "fftHeatMap":true,"showGrid":true,
    "fftLineWidth":1.0,"fftSmoothing":0,"fftDecombHz":0,"fftLineColor":"#00e5ff",
    "fftFillAlpha":0.7,"fftFillColor":"#00e5ff",
-   "noiseFloorEnable":false,"noiseFloorPosition":75,
+   "noiseFloorEnable":false,"noiseFloorPosition":75,"viewLocked":false,
    "wfBlankerEnabled":false,"wfBlankerThreshold":1.15,"wfBlankerMode":0,
    "wfBlackLevel":15,"wfAutoBlack":true,"wfAutoBlackOffset":50,
    "wfAutoBlackRadioSide":false,"effectiveWfAutoBlackRadioSide":false,
@@ -1550,6 +1550,11 @@ Field notes:
 - `dssFloorDepth` and `noiseFloorPosition` are stored per display source;
   `kiwiWaterfallActive` says which one these resolved from, so a Flex-vs-Kiwi
   mismatch reads as a labelled difference rather than a mystery failure.
+- `viewLocked` is the pan's Lock view state (the `pan N/panViewLockBtn`
+  chrome button). Toggle it with
+  `invoke "pan 0/panViewLockBtn" toggle`; it reads `false` and the button is
+  disabled on a radio that declares no `panViewHold` (ANAN, RTL, an Icom
+  whose scope is in Center).
 - `fftAverage`, `fftFps`, `fftWeightedAvg` and `wfLineDuration` are
   radio-authoritative: the values here are what the widget last saw from radio
   status, and they settle a turn or two after a command.

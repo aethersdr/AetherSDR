@@ -3186,6 +3186,23 @@ if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
         COMMAND tx_waterfall_mask_filter_drag_test)
     set_tests_properties(tx_waterfall_mask_filter_drag_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
+
+    # Lock view on a real SpectrumWidget: locked gestures change nothing, a
+    # dragged slice stops at the hold window. Its own executable for the same
+    # reason as above (no librtlsdr needed). Socket-free: no MainWindow.
+    add_executable(pan_view_lock_widget_test
+        tests/pan_view_lock_widget_test.cpp ${_spectrum_gesture_sources})
+    target_include_directories(pan_view_lock_widget_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(pan_view_lock_widget_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,COMPILE_DEFINITIONS>)
+    target_compile_options(pan_view_lock_widget_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,COMPILE_OPTIONS>)
+    target_link_libraries(pan_view_lock_widget_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,LINK_LIBRARIES>)
+    add_test(NAME pan_view_lock_widget_test COMMAND pan_view_lock_widget_test)
+    set_tests_properties(pan_view_lock_widget_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
 endif()
 
 # SpectrumTraceBins (header-only): the `get tracedebug <pan> bins` reply (#5806).
@@ -5446,6 +5463,29 @@ add_executable(pan_recenter_policy_test
 )
 target_include_directories(pan_recenter_policy_test PRIVATE src)
 add_test(NAME pan_recenter_policy_test COMMAND pan_recenter_policy_test)
+
+# Lock view — pins that a locked pan holds its visible range for every tune
+# except an explicit jump off-screen, and that a slice drag stops at the edge.
+add_executable(pan_view_lock_policy_test
+    tests/pan_view_lock_policy_test.cpp
+)
+target_include_directories(pan_view_lock_policy_test PRIVATE src)
+add_test(NAME pan_view_lock_policy_test COMMAND pan_view_lock_policy_test)
+
+# Lock view's MainWindow call sites, as source contracts: no default-graph
+# test constructs MainWindow. The widget's gestures are run by the opt-in
+# pan_view_lock_widget_test, the decisions by pan_view_lock_policy_test.
+add_executable(pan_view_lock_wiring_test tests/pan_view_lock_wiring_test.cpp)
+target_link_libraries(pan_view_lock_wiring_test PRIVATE Qt6::Core)
+target_compile_definitions(pan_view_lock_wiring_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME pan_view_lock_wiring_test COMMAND pan_view_lock_wiring_test)
+
+# Lock view persistence blob — pure JSON parse/serialize, no AppSettings.
+add_executable(view_lock_settings_test tests/view_lock_settings_test.cpp)
+target_include_directories(view_lock_settings_test PRIVATE src)
+target_link_libraries(view_lock_settings_test PRIVATE Qt6::Core)
+add_test(NAME view_lock_settings_test COMMAND view_lock_settings_test)
 
 add_executable(waterfall_time_marker_settings_test tests/waterfall_time_marker_settings_test.cpp)
 target_include_directories(waterfall_time_marker_settings_test PRIVATE src)

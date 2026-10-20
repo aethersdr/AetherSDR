@@ -344,6 +344,8 @@ int main(int argc, char** argv)
         check(mainPan && subPan && mainPan->zoomPlacement() == PanZoomPlacement::FitAroundCenter
               && subPan->zoomPlacement() == PanZoomPlacement::CenterAllocation,
               "MAIN/SUB publish independent zoom placement for current upstream band/segment controls");
+        check(mainPan && subPan && !mainPan->viewHolds() && subPan->viewHolds(),
+              "MAIN in Center does not hold its view while SUB in SCROLL-F does: Lock view is per pan");
         check(spectra[0].size() == 689 * sizeof(float) && spectra[1].size() == 689 * sizeof(float),
               "both scopes preserve all 689 native bins");
         float centerBin = 0, farBin = 0;

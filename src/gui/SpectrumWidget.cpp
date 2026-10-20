@@ -17,6 +17,7 @@
 #include "NativeWidgetTopology.h"
 #include "PanadapterRenderScheduler.h"
 #include "PanadapterMessageOverlay.h"
+#include "PanViewLockPolicy.h"
 #include "SoftwareOpenGlRequest.h"
 #include "SpectrumOverlayMenu.h"
 #include "RfGainPresentation.h"
@@ -50,6 +51,7 @@
 #include <QGestureEvent>
 #include <QPinchGesture>
 #include <QMenu>
+#include <QAction>
 #include <QActionGroup>
 #include <QToolTip>
 #include <QDialog>
@@ -1796,6 +1798,7 @@ QVariantMap SpectrumWidget::automationDisplaySettingsSnapshot() const
     snap[QStringLiteral("fftFillColor")] = m_fftFillColor.name();
     snap[QStringLiteral("noiseFloorEnable")] = m_noiseFloorEnable;
     snap[QStringLiteral("noiseFloorPosition")] = m_noiseFloorPosition;
+    snap[QStringLiteral("viewLocked")] = m_viewLocked;
 
     // WATERFALL
     snap[QStringLiteral("wfBlankerEnabled")] = m_wfBlankerEnabled;
@@ -2361,6 +2364,22 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // saying why must still show on the dimmed buttons. (#5750)
     m_zoomOutBtn->installEventFilter(this);
     m_zoomInBtn->installEventFilter(this);
+
+    // Lock view: hold this pan's visible range while tuning (PanViewLockPolicy.h).
+    // Checkable so its state is always on screen; the glyph mirrors the VFO
+    // lock button's open/closed padlock.
+    m_viewLockBtn = makeBtn(QString::fromUtf8("\xF0\x9F\x94\x93"),  // 🔓
+                            QStringLiteral("panViewLockBtn"), tr("Lock view"));
+    m_viewLockBtn->setCheckable(true);
+    m_viewLockBtn->installEventFilter(this);
+    setViewLockAvailable(true);
+    // toggled, not clicked: keyboard, accessibility and the bridge's toggle
+    // reach the button through QAbstractButton::toggle(), which never emits
+    // clicked. setViewLocked() blocks this signal, so only operator input lands.
+    connect(m_viewLockBtn, &QPushButton::toggled, this, [this](bool checked) {
+        setViewLocked(checked);
+        emit viewLockToggled(checked);
+    });
 
     // SmartSDR pcap: B sends "band_zoom=1", S sends "segment_zoom=1"
     connect(m_zoomBandBtn, &QPushButton::clicked, this, [this]() {
@@ -8580,6 +8599,84 @@ void SpectrumWidget::setCenterLockSliceId(int sliceId)
     markOverlayDirty();
 }
 
+void SpectrumWidget::setViewLocked(bool locked)
+{
+    if (m_viewLocked == locked) {
+        return;
+    }
+    m_viewLocked = locked;
+    if (m_viewLockBtn) {
+        const QSignalBlocker blocker(m_viewLockBtn);
+        m_viewLockBtn->setChecked(locked);
+        m_viewLockBtn->setText(locked ? QString::fromUtf8("\xF0\x9F\x94\x92")    // 🔒
+                                      : QString::fromUtf8("\xF0\x9F\x94\x93"));  // 🔓
+        QAccessibleValueChangeEvent event(m_viewLockBtn, locked);
+        QAccessible::updateAccessibility(&event);
+    }
+    // Engaging mid-drag must stop an edge pan already in flight.
+    if (locked && m_vfoDragEdgePanTimer && m_vfoDragEdgePanTimer->isActive()) {
+        m_vfoDragEdgePanTimer->stop();
+    }
+    setBandSegmentZoomAvailable(m_bandSegZoomAvailable, m_bandSegZoomNativeSpan,
+                                m_bandSegZoomBlockedReason);
+    setSpanControlPlacement(m_spanControlLive, m_spanControlRadioWide, m_spanControlFixed);
+    updateAccessibleStateDescription();
+    QAccessibleEvent event(this, QAccessible::DescriptionChanged);
+    QAccessible::updateAccessibility(&event);
+}
+
+double SpectrumWidget::viewLockHoldBandwidthMhz() const
+{
+    return PanViewLockPolicy::holdBandwidthMhz(effectiveBandwidthMhz(), m_bandwidthMhz,
+                                               m_viewHoldFraction);
+}
+
+QString SpectrumWidget::viewLockZoomTip() const
+{
+    return tr("Lock view is on: unlock the view to zoom.");
+}
+
+bool SpectrumWidget::frequencyInView(double mhz) const
+{
+    return PanViewLockPolicy::targetInView(mhz, m_centerMhz, viewLockHoldBandwidthMhz());
+}
+
+void SpectrumWidget::setViewHoldFraction(double fraction)
+{
+    m_viewHoldFraction = std::clamp(fraction, 0.0, 1.0);
+    updateViewLockToolTip();
+}
+
+void SpectrumWidget::setViewLockAvailable(bool available, const QString& reason)
+{
+    m_viewLockAvailable = available;
+    m_viewLockUnavailableReason = reason;
+    if (m_viewLockBtn) {
+        m_viewLockBtn->setEnabled(available);
+    }
+    updateViewLockToolTip();
+}
+
+void SpectrumWidget::updateViewLockToolTip()
+{
+    if (!m_viewLockBtn) {
+        return;
+    }
+    QString text = m_viewLockUnavailableReason;
+    if (m_viewLockAvailable) {
+        text = tr("Lock view: freeze this panadapter's frequency range. Panning "
+                  "and zooming are off and a dragged slice stops at the edge; "
+                  "jumping to an off-screen frequency still moves the view.");
+        if (m_viewHoldFraction < 1.0) {
+            text += QLatin1Char(' ')
+                + tr("This radio holds only the middle %1% of the display.")
+                      .arg(qRound(m_viewHoldFraction * 100.0));
+        }
+    }
+    m_viewLockBtn->setToolTip(text);
+    m_viewLockBtn->setAccessibleDescription(text);
+}
+
 void SpectrumWidget::setSliceLinkPairs(const QVector<SliceLinkPair>& pairs)
 {
     if (m_sliceLinkPairs == pairs) {
@@ -8609,6 +8706,9 @@ void SpectrumWidget::updateAccessibleStateDescription()
         parts << tr("Center Lock enabled for Slice %1").arg(sliceName);
     } else {
         parts << tr("Center Lock is off");
+    }
+    if (m_viewLocked) {
+        parts << tr("View locked");
     }
     for (const SliceLinkPair& pair : std::as_const(m_sliceLinkPairs)) {
         QString aName = QString::number(pair.aSliceId);
@@ -10060,6 +10160,14 @@ static double snapToStep(double mhz, int stepHz)
     return std::round(mhz / stepMhz) * stepMhz;
 }
 
+double SpectrumWidget::snapClickTarget(double rawMhz) const
+{
+    return m_viewLocked
+        ? PanViewLockPolicy::snapClickOnStep(rawMhz, m_centerMhz,
+                                             viewLockHoldBandwidthMhz(), m_stepHz)
+        : snapToStep(rawMhz, m_stepHz);
+}
+
 void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 {
     PerfInputScope perfScope("mousePress");
@@ -10133,7 +10241,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                     // spot range.  Optionally snap to the slice's step size to
                     // counter detector edge-bin imprecision.
                     const double tuneMhz = m_sHistorySnapToStep
-                        ? snapToStep(hr.freqMhz, m_stepHz)
+                        ? snapClickTarget(hr.freqMhz)
                         : hr.freqMhz;
                     emit frequencyClicked(tuneMhz);
                 }
@@ -10170,6 +10278,10 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             return;
         }
 
+        if (m_viewLocked) {
+            ev->accept();  // frozen range: no span drag
+            return;
+        }
         m_draggingBandwidth = true;
         const QPointF localPosition = mapFromGlobal(ev->globalPosition());
         m_bwDragStartX = static_cast<int>(std::lround(localPosition.x()));
@@ -10535,7 +10647,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                     [this, id = so.sliceId]{ emit sliceCloseRequested(id); });
                 menu.addAction(QString("Move Slice %1 Here").arg(letter), this,
                     [this, id = so.sliceId]{ emit sliceTuneRequested(id, m_centerMhz); });
-                menu.addAction(QString("Center Slice %1").arg(letter), this,
+                QAction* centerAct = menu.addAction(QString("Center Slice %1").arg(letter), this,
                     [this, freq = so.freqMhz]{
                         if (!panGeometryConfirmationRequired()) {
                             m_centerMhz = freq;
@@ -10544,6 +10656,10 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                         }
                         emit centerChangeRequested(freq);
                     });
+                if (m_viewLocked) {
+                    centerAct->setEnabled(false);
+                    centerAct->setStatusTip(tr("Lock view is on: unlock the view to center the slice."));
+                }
                 menu.addSeparator();
                 addCenterLockAction(&menu, so, true);
                 addSliceLinkControls(menu);
@@ -10918,7 +11034,12 @@ static QString spotMarkerTooltip(const SpectrumWidget::SpotMarker& sm);
 // zone owns all panning. MainWindow skips the pan command when center is equal.
 void SpectrumWidget::driveVfoDragTune(int mx, const char* phase)
 {
-    const double mhz = snapToStep(xToMhz(mx) - m_vfoDragOffsetHz / 1.0e6, m_stepHz);
+    const double rawMhz = xToMhz(mx) - m_vfoDragOffsetHz / 1.0e6;
+    // A locked view never edge-pans, so the slice stops at the hold window's edge.
+    const double mhz = m_viewLocked
+        ? PanViewLockPolicy::clampToViewOnStep(rawMhz, m_centerMhz,
+                                               viewLockHoldBandwidthMhz(), m_stepHz)
+        : snapToStep(rawMhz, m_stepHz);
     qCDebug(lcPerf).nospace()
         << "SliceDrag phase=" << phase
         << " mx=" << mx << " w=" << width()
@@ -10938,7 +11059,7 @@ bool SpectrumWidget::updateVfoDragEdgePan(int mx)
     // — otherwise its first DBM_STRIP_W px sit under the opaque strip and the
     // drag-to-edge feel is asymmetric vs the left (#3482).
     const int zonePx = std::max(1, static_cast<int>(contentWidth() * kVfoDragEdgeZoneFrac));
-    const bool inEdgeZone = !m_vfoDragEdgePanDisabled
+    const bool inEdgeZone = !m_vfoDragEdgePanDisabled && !m_viewLocked
         && ((mx <= zonePx) || (mx >= contentWidth() - zonePx));
     if (!m_vfoDragEdgePanTimer) {
         return inEdgeZone;
@@ -11114,7 +11235,7 @@ void SpectrumWidget::beginPanDrag(int startX)
 
 void SpectrumWidget::applyPanDragCenter(double newCenterMhz, bool force)
 {
-    if (!std::isfinite(newCenterMhz)) {
+    if (!std::isfinite(newCenterMhz) || m_viewLocked) {
         return;
     }
 
@@ -11478,6 +11599,12 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
     }
 
     if (m_draggingPan) {
+        // A locked view's range is frozen: the press still counts for
+        // click-to-tune, but dragging pans nothing.
+        if (m_viewLocked) {
+            ev->accept();
+            return;
+        }
         const int dx = static_cast<int>(ev->position().x()) - m_panDragStartX;
         // Dragging right moves the view right → center shifts left
         const double deltaMhz = -(static_cast<double>(dx) / contentWidth()) * effectiveBandwidthMhz();
@@ -11867,7 +11994,7 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
                 const int mx = static_cast<int>(ev->position().x());
                 if (mx < width() - DBM_STRIP_W) {
                     double rawMhz = xToMhz(mx);
-                    emit frequencyClicked(snapToStep(rawMhz, m_stepHz));
+                    emit frequencyClicked(snapClickTarget(rawMhz));
                 }
             }
         }
@@ -11884,7 +12011,7 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
             const int mx = static_cast<int>(ev->position().x());
             if (mx < width() - DBM_STRIP_W) {
                 double rawMhz = xToMhz(mx);
-                emit frequencyClicked(snapToStep(rawMhz, m_stepHz));
+                emit frequencyClicked(snapClickTarget(rawMhz));
                 ev->accept();
                 m_spotClickConsumed = false;
                 return;
@@ -12031,7 +12158,7 @@ void SpectrumWidget::mouseDoubleClickEvent(QMouseEvent* ev)
                                          static_cast<double>(contentWidth()));
         double rawMhz = startMhz + (clickX / contentWidth()) * displayBw;
 
-        emit frequencyClicked(snapToStep(rawMhz, m_stepHz));
+        emit frequencyClicked(snapClickTarget(rawMhz));
         ev->accept();
         return;
     }
@@ -12186,6 +12313,10 @@ bool SpectrumWidget::event(QEvent* ev)
 bool SpectrumWidget::applyAnchoredZoom(double bandwidthFactor,
                                        const QPointF& globalPosition)
 {
+    // A locked view's range is frozen, whichever pinch path got here.
+    if (m_viewLocked) {
+        return true;
+    }
     // No-op (and NaN/non-positive) factors are consumed but change nothing.
     if (!(bandwidthFactor > 0.0) || qFuzzyCompare(bandwidthFactor, 1.0)) {
         return true;
@@ -12240,10 +12371,13 @@ bool SpectrumWidget::eventFilter(QObject* watched, QEvent* event)
     }
 
     // See the installEventFilter() call sites in the constructor: only the
-    // S/B pair and the -/+ span pair are ever disabled-with-an-explanatory-
-    // tooltip, so only these four need the disabled-widget tooltip workaround.
-    if ((widget == m_zoomSegBtn || widget == m_zoomBandBtn
-         || widget == m_zoomOutBtn || widget == m_zoomInBtn)
+    // S/B pair, the -/+ span pair and the Lock view button are ever
+    // disabled-with-an-explanatory-tooltip, so only these five need the
+    // disabled-widget tooltip workaround.
+    const bool explainsWhenDisabled = widget == m_viewLockBtn
+        || (widget == m_zoomSegBtn || widget == m_zoomBandBtn
+            || widget == m_zoomOutBtn || widget == m_zoomInBtn);
+    if (explainsWhenDisabled
         && event->type() == QEvent::ToolTip && !widget->isEnabled()
         && !widget->toolTip().isEmpty()) {
         auto* helpEvent = static_cast<QHelpEvent*>(event);
@@ -12388,6 +12522,10 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
     // Mirrors the pinch-to-zoom gesture and the Ctrl-drag convention used on
     // the dBm scale strip (PR #2717) and waterfall time scale (PR #2783).
     if (ev->modifiers() & Qt::ControlModifier) {
+        if (m_viewLocked) {
+            ev->accept();  // frozen range: no Ctrl+wheel zoom
+            return;
+        }
         const double factor  = (steps > 0) ? (1.0 / 1.5) : 1.5;
         const double newBw   = std::clamp(m_bandwidthMhz * factor, m_minBwMhz, m_maxBwMhz);
         if (qFuzzyCompare(newBw, m_bandwidthMhz)) { ev->accept(); return; }
@@ -12587,6 +12725,9 @@ void SpectrumWidget::positionZoomButtons()
     // Row 1 (bottom): − | + (bandwidth zoom)
     m_zoomOutBtn->move(pad, botY - sz);
     m_zoomInBtn->move(pad + sz + 2, botY - sz);
+    if (m_viewLockBtn) {
+        m_viewLockBtn->move(pad + 2 * (sz + 2), botY - sz);
+    }
     // Row 0 (above): S | B (segment/band zoom)
     m_zoomSegBtn->move(pad, botY - sz - sz - 2);
     m_zoomBandBtn->move(pad + sz + 2, botY - sz - sz - 2);

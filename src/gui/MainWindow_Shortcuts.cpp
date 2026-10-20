@@ -2037,7 +2037,7 @@ void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
         showUnsupportedControlNotice();
         return;
     }
-    if (refusal != PanZoomModeRefusal::None) {
+    if (refusal != PanZoomModeRefusal::None || refuseViewLockedRangeChange(panId)) {
         return;
     }
     if (zoom->control == RadioCapabilities::PanZoomModes::Control::NativeScopeSpan) {
@@ -2126,6 +2126,9 @@ void MainWindow::zoomActivePanadapter(double factor)
     if (panSpanFixedByBackend() && !kiwiSdrPanDisplaysKiwi(s->panId())) {
         return;
     }
+    if (refuseViewLockedRangeChange(s->panId())) {
+        return;
+    }
 
     const double currentBw = sw->bandwidthMhz();
     // Clamp to limits so the final keypress snaps to exact min/max (#1458).
@@ -2157,6 +2160,8 @@ bool MainWindow::setActivePanSpan(double bandwidthMhz)
     auto* sw = spectrumForSlice(s);
     if (!sw) return false;
     if (panSpanFixedByBackend() && !kiwiSdrPanDisplaysKiwi(s->panId())) return false;
+    // Handled, with its own notice: the radio supports the preset, the lock refuses it.
+    if (refuseViewLockedRangeChange(s->panId())) return true;
     const double bw = std::clamp(bandwidthMhz,
                                  m_radioModel.panMinBandwidthMhz(s->panId()),
                                  m_radioModel.panMaxBandwidthMhz(s->panId()));
@@ -2200,7 +2205,8 @@ void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)
     // of which were silent early returns before this PR and stay silent.
     auto* pan = panId.isEmpty() ? nullptr : m_radioModel.panadapter(panId);
     if (!panZoomModeWritable(m_radioModel.isConnected(), panZoomDeclared,
-                             /*panKnown=*/pan != nullptr)) {
+                             /*panKnown=*/pan != nullptr)
+        || refuseViewLockedRangeChange(panId)) {
         return;
     }
     const auto zoom = m_radioModel.backendCapabilities().panZoomModes;

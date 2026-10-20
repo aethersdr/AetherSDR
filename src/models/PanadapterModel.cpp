@@ -169,6 +169,15 @@ void PanadapterModel::setZoomPlacement(PanZoomPlacement placement)
     emit zoomPlacementChanged(m_zoomPlacement);
 }
 
+void PanadapterModel::setViewHolds(bool holds)
+{
+    if (holds == m_viewHolds) {
+        return;
+    }
+    m_viewHolds = holds;
+    emit viewHoldsChanged(m_viewHolds);
+}
+
 bool PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)
 {
     bool changed = false;

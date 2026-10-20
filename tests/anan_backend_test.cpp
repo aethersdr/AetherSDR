@@ -291,6 +291,9 @@ int main(int argc, char** argv)
               "ANAN explicitly declares tuner matching and tuner memories absent");
         check(c.hasDdcPanEdgeRolloff,
               "hasDdcPanEdgeRolloff true -- ANAN's DDC has a real edge roll-off");
+        check(!c.panViewHold.has_value(),
+              "panViewHold absent -- emitPanState() reports center = slice, "
+              "so Lock view cannot hold the pan");
         check(c.backendPanAveraging.has_value()
                   && !c.backendPanAveraging->clientPersistsAveraging
                   && c.backendPanAveraging->averageDescription.isEmpty()

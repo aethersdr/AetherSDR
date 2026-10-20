@@ -1531,6 +1531,8 @@ void MainWindow::wireRadioModel()
             this, &MainWindow::applyCapabilitiesToUi);
     connect(&m_radioModel, &RadioModel::capabilitiesChanged,
             this, [this] { refreshPanZoomControls(); });
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged,
+            this, &MainWindow::onViewLockCapabilitiesChanged);
     connect(&m_radioModel, &RadioModel::capabilitiesChanged, m_audio,
             [this](bool connected, const RadioCapabilities& capabilities) {
         const auto policy = connected ? capabilities.receiveAudioPlayout : std::nullopt;
@@ -2770,6 +2772,12 @@ void MainWindow::wirePanLifecycle()
         connect(pan, &PanadapterModel::scopeModeIndexChanged,
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setScopeModeIndex);
+        // Lock view follows whether this pan holds, and its dimmed reason
+        // depends on whether scope modes are offered.
+        connect(pan, &PanadapterModel::viewHoldsChanged,
+                this, [this, panId = pan->panId()] { syncViewLockAvailability(panId); });
+        connect(pan, &PanadapterModel::scopeModeLabelsChanged,
+                this, [this, panId = pan->panId()] { syncViewLockAvailability(panId); });
         connect(pan, &PanadapterModel::zoomPlacementChanged,
                 this, [this] { refreshPanZoomControls(); });
         connect(pan, &PanadapterModel::bandwidthLimitsChanged,
@@ -2906,6 +2914,10 @@ void MainWindow::wirePanLifecycle()
                 reattachSliceVisualsToPanadapter(slice);
             }
         }
+        // A reclaimed pan skips wirePanadapter, so apply a lock toggled while
+        // disconnected (or this radio's saved one) here.
+        syncViewLockAvailability(pan->panId());
+        restoreViewLockForPan(pan->panId());
     });
     // Re-push xpixels/ypixels when the radio requests it (profile change, reconnect, etc.)
     connect(&m_radioModel, &RadioModel::panDimensionsNeeded,

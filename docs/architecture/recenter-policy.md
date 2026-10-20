@@ -486,6 +486,60 @@ Current meaning:
 - does not block explicit center actions
 - does not block absolute jump reveal behavior where the goal is to make the target visible
 
+### Lock view (per pan)
+
+A per-pan operator choice (`SpectrumWidget::viewLocked()`, persisted as the
+`ViewLock` blob) that holds the visible range while tuning. The decisions are
+the pure `gui/PanViewLockPolicy.h`; "on screen" means inside the **hold
+window** — the drawn range narrowed to `RadioCapabilities::panViewHold`
+(the whole span on Flex/Sim, the central 80% on HL2).
+
+- `MainWindow::viewLockAllowsRecenter()` gates `revealFrequencyIfNeeded()`
+  (so `panFollowVfo()` and every `applyTuneRequest()` caller).
+  `IncrementalTune` never moves a locked view; `AbsoluteJump`, `CommandedTargetCenter` and `RevealOffscreen`
+  move it only when the target is off-screen. `ExplicitPan` never asks:
+  operator range changes are refused where they start instead —
+  `SpectrumWidget` drops pan drag (`applyPanDragCenter`), frequency-scale span
+  drag, Ctrl+wheel and pinch (`applyAnchoredZoom`), dims any −/+ or S/B button
+  that would otherwise be live (`setSpanControlPlacement`,
+  `setBandSegmentZoomAvailable`) and disables **Center Slice**;
+  `MainWindow::refuseViewLockedRangeChange()` refuses the zoom shortcuts and
+  controller actions (`zoomActivePanadapter`, `togglePanZoomModeForPan`,
+  `setPanZoomMode`). The bridge's `pan center` is an automation lever and is
+  not gated.
+- `MainWindow::lockedViewShows()` keeps the paths that would move the view
+  outside that gate from doing so for an on-screen target: the non-Flex band
+  button's `requestPanCenter()`, and the Flex band-stack preselect of a
+  cross-band memory recall or typed tune.
+- Slice drag: `SpectrumWidget::updateVfoDragEdgePan()` reports no edge zone and
+  `driveVfoDragTune()` clamps the target on-step to the hold window; the
+  `edgePanTuneRequested` handler also refuses to write a new centre. Clicks
+  snap through `snapClickTarget()`, which never rounds across the edge.
+- The hard-center paths below are explicit jumps and stay as they are when the
+  target is off-screen (band change, CAT/TCI out of span).
+- Mutually exclusive with Center Lock on the same pan; an operator lock also
+  drops a saved Center Lock and any pending band-recall rebind. Refused where
+  `panViewHold` is absent (ANAN, RTL, a Center-only Icom) or the pan is not
+  holding right now (`PanadapterModel::viewHolds()`, from
+  `IRadioBackend::panViewHoldChanged`: an Icom scope in Center).
+  `syncViewLockAvailability()` releases the live lock when the hold goes and
+  restores the saved one when it returns.
+- The on-screen cross-band skip of the Flex band-stack preselect also skips
+  what the recall restores (antenna, mode, filter): the target is tuned in
+  place.
+- Operator range changes also include the span-preset actions
+  (`setActivePanSpan`), refused like the zoom shortcuts.
+- Known limits, left as they are: the WFM DAX-IQ recentre
+  (`MainWindow_DigitalModes.cpp`, `centerPanAtSlice`) still moves a locked pan
+  once the slice leaves the IQ window; CAT/TCI decide "in span" on the radio's
+  geometry (`PanadapterModel::spanContainsMhz`), so on a KiwiSDR-display pan a
+  target visible in the Kiwi view but outside the frozen radio span is sent
+  with `tuneAndRecenter()`; another MultiFlex client's tune without
+  `autopan=0` lets the radio move the pan; a TCI client switching Center Lock
+  on (`rx_ctun_ex`) releases the live lock for the session, though not the
+  saved one. Only the title-bar close and a
+  layout shrink drop a pan's saved lock (bridge/TCI pan removal do not).
+
 ### `m_updatingFromModel`
 
 Used to suppress client-side echo loops while applying model-driven UI updates.

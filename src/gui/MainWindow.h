@@ -2431,6 +2431,38 @@ private:
     void snapCenterLocksForTuningSlice(SliceModel* slice, double mhz,
                                        bool sendCommand);
     void holdCenterLockTuneTarget(SliceModel* slice, double mhz);
+
+    // Lock view — per-pan mode that holds the visible range while tuning, so
+    // the slice moves inside a fixed view (PanViewLockPolicy.h). Mutually
+    // exclusive with Center Lock on the same pan. The SpectrumWidget owns the
+    // live flag; this is the persisted intent by radio/station + pan index
+    // (ViewLockSettings.h). The locked range itself is radio-owned, never saved.
+    QHash<QString, QSet<int>> m_viewLockedPanIndicesByRadio;
+    // Pan indices locked while disconnected. restoreViewLockForPan() applies
+    // and saves each once the next radio can hold; a connection that ends
+    // without holding (ANAN, an Icom left in Center) drops them.
+    QSet<int> m_pendingViewLockPanIndices;
+    bool m_viewLockPendingSawConnection{false};
+    bool panViewLocked(const QString& panId) const;
+    // True when panId's view is locked and already shows mhz: a jump there
+    // tunes in place, so nothing may recentre or recall a band stack for it.
+    bool lockedViewShows(const QString& panId, double mhz) const;
+    // A locked view's range is frozen: refuse an operator pan/zoom command for
+    // panId and say why on the status bar. Returns true when refused.
+    bool refuseViewLockedRangeChange(const QString& panId);
+    // False when Lock view forbids the tune-driven recenter `intent` would do.
+    bool viewLockAllowsRecenter(const SliceModel* slice, double mhz,
+                                TuneIntent intent) const;
+    void loadViewLockSettings();
+    void saveViewLockSettings() const;
+    void setViewLockForPan(const QString& panId, bool locked, bool persist = true);
+    void restoreViewLockForPan(const QString& panId);
+    // The span fraction panId can hold: 1.0 when disconnected (permissive),
+    // 0.0 when the radio declares no PanViewHold or this pan is not holding.
+    double viewLockHoldFraction(const QString& panId) const;
+    void syncViewLockAvailability(const QString& panId);
+    // Every capability publication, including each connect and disconnect.
+    void onViewLockCapabilitiesChanged(bool connected);
     double centerLockDisplayFrequency(const SliceModel* slice, double mhz) const;
     void recenterCenterLockForPan(const QString& panId);
     void recenterCenterLocks();

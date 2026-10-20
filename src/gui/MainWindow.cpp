@@ -1459,6 +1459,7 @@ MainWindow::MainWindow(QWidget* parent)
     buildMenuBar();
     buildUI();
     loadCenterLockSettings();
+    loadViewLockSettings();
     registerShortcutActions();
 
     m_swrSweepTimer.setTimerType(Qt::PreciseTimer);
@@ -5760,6 +5761,7 @@ void MainWindow::buildUI()
         const RadioCapabilities caps = m_radioModel.backendCapabilities();
         applet->spectrumWidget()->setPanEdgeTaperEnabled(
             connected && caps.hasDdcPanEdgeRolloff);
+        syncViewLockAvailability(panId);
         applet->spectrumWidget()->setClientFftSmoothingEnabled(
             AetherSDR::clientFftSmoothingEnabled(
                 connected, caps.backendPanAveraging.has_value()));
@@ -7863,7 +7865,12 @@ bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPan
     if (hasMemoryFrequency) {
         const QString memoryBand = BandSettings::bandForFrequency(memoryFreqMhz);
         const QString currentBand = BandSettings::bandForFrequency(slice->frequency());
-        if (memoryBand != currentBand) {
+        if (memoryBand != currentBand && lockedViewShows(slicePanId, memoryFreqMhz)) {
+            // A locked view already showing the memory tunes in place: a band
+            // stack recall would move the view to that band's saved centre.
+            clearSwrSweepForBandChange(-1, slicePanId, memoryBand);
+            m_bandSettings.setCurrentBand(memoryBand);
+        } else if (memoryBand != currentBand) {
             const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
             const auto stackKeyResult =
                 XvtrPolicy::resolveBandStackKey(memoryBand, xvtrs, m_radioModel.capabilities());
@@ -8739,8 +8746,10 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
     // Everything below is Flex band-stack machinery — it ends in
     // `display pan set <pan> band=<key>`, a command plane an Icom or an HL2
     // does not have. The band was admissible, so let the ordinary tune-and-
-    // recenter path carry it (#5041).
-    if (admissibility.bandStackKey.isEmpty()) {
+    // recenter path carry it (#5041). A locked view already showing the
+    // target takes the same path: a stack recall would move the view.
+    if (admissibility.bandStackKey.isEmpty()
+        || lockedViewShows(slice->panId(), mhz)) {
         // But the band DID change, and the two things that follow from that on
         // a radio with no stack are the same two the band buttons already do
         // (MainWindow_Wiring.cpp). Dropping them here would have let a finished
@@ -11277,6 +11286,8 @@ void MainWindow::applyPanLayout(const QString& layoutId)
             const QString panId = removalCandidates.at(i);
             if (panId == PanSliceTitle::kPlaceholderPanId) continue;
             qDebug() << "applyPanLayout: closing pan" << panId;
+            // Shrinking the layout closes this pan for good, like its ✕.
+            setViewLockForPan(panId, false, /*persist=*/true);
             // Route through removePanadapter so a layout-shrink tears down the
             // waterfall too ("display pan remove" + "display panafall remove"),
             // not just the panadapter stream. (#3843)
