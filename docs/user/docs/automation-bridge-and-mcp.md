@@ -80,6 +80,26 @@ Repeated commits of an unchanged field do not send another request. These
 actions currently support only **Radio nickname**; `setText` alone does not
 commit it.
 
+### Temporary station identity
+
+On FlexRadio, `station <name>` sets this client's session-only station label for
+other MultiFlex clients. Use one token without spaces. It does not change your
+saved station name or radio-wide callsign. A successful reply means the request
+was sent, not that the radio confirmed it. Unsupported or disconnected radios
+refuse the request.
+
+Your saved station-name edits are retained even if an automation request
+applies a temporary label at the same time.
+
+Stopping the bridge restores your saved name only while that bridge still owns
+the override in the same radio session. A newer operator edit takes precedence;
+an old restore or reconnect callback cannot overwrite it.
+
+The `txwaterfall on|off` command changes **Show TX in Waterfall** through the same
+route as Radio Setup. FlexRadio owns the flag on the radio; Hermes-Lite 2 keeps
+it client-side. Other unsupported radios refuse it. This display setting never
+keys the transmitter.
+
 ## Using transmit safety
 
 - The bridge refuses to operate any control that keys the transmitter (MOX/PTT, TUNE, ATU, CWX send, packet/APRS send) through its generic "click this control" path, whoever is asking.

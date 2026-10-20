@@ -32,6 +32,20 @@ public:
     static void closing(RadioModel& radio, bool value) { radio.m_txSessionClosing = value; }
     static void expiring(RadioModel& radio, bool value) { radio.m_expiringPendingCallbacks = value; }
     static void retireBackend(RadioModel& radio) { radio.teardownBackend(); }
+    static PanadapterModel* addPan(RadioModel& radio, const QString& id)
+    {
+        PanadapterModel* pan = new PanadapterModel(id, &radio);
+        radio.m_panadapters[id] = pan;
+        return pan;
+    }
+    static SliceModel* addSlice(RadioModel& radio, int id)
+    {
+        SliceModel* slice = new SliceModel(id, &radio);
+        // Keep retired fixtures parent-owned so stale-object guards can be tested.
+        if (SliceModel* old = radio.slice(id)) { radio.m_slices.removeOne(old); }
+        radio.m_slices.append(slice);
+        return slice;
+    }
     static void pendingDisconnectState(RadioModel& radio)
     {
         radio.m_multiFlexContinuation = [] {};

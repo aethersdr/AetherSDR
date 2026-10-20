@@ -47,6 +47,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <QPointer>
 
 #include "core/ThemeManager.h"
 
@@ -675,24 +676,30 @@ void SpectrumOverlayMenu::buildAntPanel()
                 return;
             }
         }
+        const QPointer<SpectrumOverlayMenu> alive(this);
+        const QPointer<RadioModel> radio(m_radioModel);
+        if (!radio) { return; }
+        const QPointer<PanadapterModel> pan(radio->panadapter(m_panId));
+        const QPointer<SliceModel> originalSlice(targetSlice);
+        const RadioControlSession session = radio->controlSession();
         if (targetSlice) {
             emit flexRxAntennaSelected(targetSlice->sliceId());
         }
-        if (m_radioModel && !m_panId.isEmpty()
-            && m_radioModel->usesFlexCommandPlane()) {
+        if (!alive || !radio || radio->controlSession() != session) { return; }
+        const std::optional<PanControl> control = radio->backendCapabilities().panControl;
+        if (!m_panId.isEmpty() && control && control->supports(PanControlField::ReceiveAntenna)) {
             // Flex assigns receive antenna on the panadapter.  SliceModel's
             // command targets a different object and was never equivalent.
             // The empty-id check is not decoration: a pan applet exists before
             // the radio hands back its id, and without it a click landing in
             // that window puts `display pan set  rxant=ANT1` — no id, double
             // space — on the wire. Same defect the clone path hit in #4881.
-            m_radioModel->sendCommand(
-                QStringLiteral("display pan set %1 rxant=%2")
-                    .arg(m_panId, ant));
-        } else if (targetSlice) {
-            targetSlice->setRxAntenna(ant);
+            radio->requestPanControl(pan,
+                {PanControlField::ReceiveAntenna, ant});
+        } else if (originalSlice && radio->slice(originalSlice->sliceId()) == originalSlice) {
+            originalSlice->setRxAntenna(ant);
         }
-        updateLoopButtonVisibility();
+        if (alive) { updateLoopButtonVisibility(); }
     });
 
     // Loop row — SmartSDR exposes this directly below RX ANT on models

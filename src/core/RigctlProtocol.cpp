@@ -1,4 +1,5 @@
 #include "RigctlProtocol.h"
+#include <utility>
 #include "LogManager.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
@@ -266,6 +267,7 @@ double panGainToRfLevel(int gain, int low, int high)
 RigctlProtocol::RigctlProtocol(RadioModel* model)
     : m_model(model)
     , m_txProducer(model ? model->registerTxProducer() : TxCoordinator::Producer{})
+    , m_splitCreateOwner(std::make_unique<QObject>())
 {}
 
 RigctlProtocol::~RigctlProtocol()
@@ -283,24 +285,22 @@ RigctlProtocol::~RigctlProtocol()
     removeCreatedTxSlice();
 }
 
-// Best-effort, crash-safe removal of a TX slice we created on demand for split.
-// Tracks by id (not pointer) and re-resolves at removal time, so a stale/removed
-// slice is simply skipped. Only slices WE created are tracked (m_createdTxSliceId);
-// promoted operator slices are never touched. Uses m_model as the invoke context so
-// a destroyed model cancels the queued call (no use-after-free during shutdown).
+// Cleanup requires our create receipt, not merely a matching numeric ID.
+// The model fences queued work against the original session and object identity.
 void RigctlProtocol::removeCreatedTxSlice()
 {
-    const int id = m_createdTxSliceId;
-    m_createdTxSliceId = -1;
-    if (id < 0 || !m_model) return;
-    auto* model = m_model;
-    QMetaObject::invokeMethod(model, [model, id]{
-        // hasCommandPlane: defense in depth — the created-slice id is only
-        // ever set from a successful Flex `slice create` callback, but the
-        // remove must not become a logged drop if that invariant ever bends
-        // (M0, #5263).
-        if (model->slice(id) && model->hasCommandPlane())
-            model->sendCommand(QStringLiteral("slice remove %1").arg(id));
+    const auto pending = std::exchange(m_splitCreation, {});
+    const CreatedSliceReceipt created = std::exchange(m_createdTxSlice, {});
+    if (pending) { pending->cancelled = true; }
+    if (!m_model) { return; }
+    QPointer<RadioModel> model(m_model);
+    QMetaObject::invokeMethod(model, [model, created, pending] {
+        if (!model) { return; }
+        if (pending) {
+            model->cancelSliceCreation(pending->ticket);
+            if (pending->created.valid()) { model->removeCreatedSlice(pending->created); }
+        }
+        if (created.valid()) { model->removeCreatedSlice(created); }
     }, Qt::QueuedConnection);
 }
 
@@ -1064,48 +1064,50 @@ SliceModel* RigctlProtocol::findTxSlice(bool promote)
     return currentTxSlice();
 }
 
-// If set_split_vfo 1 arrived when only one slice existed, addSlice() was called
-// and this flag was set.  On the next split-related call we scan for the newly
-// created slice and promote it to TX so subsequent set_split_freq succeeds.
+// Promote only the acknowledged, published slice created for this CAT client.
 void RigctlProtocol::tryPromoteTxSlice()
 {
     if (!m_pendingSplitEnable || !m_model) return;
     auto* rxSlice = currentSlice();
-    for (auto* s : m_model->slices()) {
+    if (m_splitCreation
+        && (!m_splitCreation->originalRx || rxSlice != m_splitCreation->originalRx
+            || !m_model->controlSessionCurrent(m_splitCreation->session)
+            || m_model->slice(rxSlice->sliceId()) != m_splitCreation->originalRx)) {
+        m_pendingSplitEnable = false;
+        removeCreatedTxSlice();
+        return;
+    }
+    SliceModel* created = m_splitCreation
+        ? m_model->resolveCreatedSlice(m_splitCreation->created) : nullptr;
+    if (m_splitCreation && m_splitCreation->completed && !created) {
+        m_pendingSplitEnable = false;
+        return;
+    }
+    if (SliceModel* s = created) {
         if (s != rxSlice) {
             m_pendingSplitEnable = false;
             m_pendingTxSlice = s;
-            // We only reach here after OUR create-on-demand armed m_pendingSplitEnable,
-            // so this newly-appeared slice is one we made — track it for best-effort
-            // removal on disable/disconnect (don't orphan it).
-            m_createdTxSliceId = s->sliceId();
-            if (!s->isTxSlice())
-                QMetaObject::invokeMethod(s, [s]{ s->setTxSlice(true); },
-                                          Qt::QueuedConnection);
-            // Apply freq/mode stashed while we waited for this slice to appear.
-            // Queued, not direct: this runs on the CAT socket thread while the
-            // SliceModel lives on the GUI thread, so a direct setFrequency/setMode
-            // would be an unsynchronised cross-thread write. Mirrors the queued
-            // setTxSlice above and every other model mutation in this class.
-            if (m_pendingSplitFreqMHz > 0.0) {
-                const double mhz = m_pendingSplitFreqMHz;
-                RadioModel* model = m_model;
-                // Route the split TX slice through tuneSliceForCat, mirroring how
-                // TCI handles split (TciServer::tuneSliceAndConfirm tunes the TX
-                // slice with the same in-span/out-of-span policy): an in-span TX
-                // keeps autopan=0 (no yank), a cross-band TX recenters. TCI is the
-                // reference behavior we match on every command plane.
-                QMetaObject::invokeMethod(s, [s, model, mhz]{
-                    if (model) model->tuneSliceForCat(s, mhz);
-                }, Qt::QueuedConnection);
-                m_pendingSplitFreqMHz = 0.0;
-            }
-            if (!m_pendingSplitMode.isEmpty()) {
-                const QString mode = m_pendingSplitMode;
-                QMetaObject::invokeMethod(s, [s, mode]{ s->setMode(mode); },
-                                          Qt::QueuedConnection);
-                m_pendingSplitMode.clear();
-            }
+            m_createdTxSlice = m_splitCreation->created;
+            const QPointer<RadioModel> model(m_model);
+            const auto pending = m_splitCreation;
+            const double mhz = std::exchange(m_pendingSplitFreqMHz, 0.0);
+            const QString mode = std::exchange(m_pendingSplitMode, {});
+            QMetaObject::invokeMethod(model, [model, pending, mhz, mode] {
+                if (!model || pending->cancelled) { return; }
+                if (!model->controlSessionCurrent(pending->session) || !pending->originalRx
+                    || model->slice(pending->originalRx->sliceId()) != pending->originalRx) {
+                    pending->cancelled = true;
+                    model->removeCreatedSlice(pending->created);
+                    return;
+                }
+                SliceModel* target = model->resolveCreatedSlice(pending->created);
+                if (!target) { return; }
+                model->requestTxSlice(target);
+                target = model->resolveCreatedSlice(pending->created);
+                if (target && mhz > 0.0) { model->tuneSliceForCat(target, mhz); }
+                target = model->resolveCreatedSlice(pending->created);
+                if (target && !mode.isEmpty()) { target->setMode(mode); }
+            }, Qt::QueuedConnection);
             return;
         }
     }
@@ -1198,26 +1200,19 @@ QString RigctlProtocol::cmdSetSplitVfo(const QString& args)
 // already exists. Promote an existing non-RX slice, else create a second slice
 // and flag deferred promotion (tryPromoteTxSlice applies it when the radio's
 // status response populates the new SliceModel).
-// Max time a create-on-demand may stay "in flight" before the in-flight guard
-// treats it as failed and lets a retry through. Only needs to outlast a normal
-// slice create (~300-400 ms observed) while still deduping the rapid WSJT-X burst.
-static constexpr qint64 kPendingCreateTimeoutMs = 2000;
-
 void RigctlProtocol::ensureSplitTxSlice(bool recordExistingAsEnabled)
 {
     if (!m_model) return;
     auto* rxSlice = currentSlice();
     if (!rxSlice) return;
-    // A create is still in flight (WSJT-X split sends set_freq/set_mode VFOB in
-    // quick succession): don't create a second TX slice; tryPromoteTxSlice() will
-    // promote it and apply the stashed freq/mode. Returning also protects that
-    // stash, which the promote-existing path below clears unapplied. Bounded by
-    // kPendingCreateTimeoutMs in case the create never lands (NAK, radio full).
+    // Only the model's answered create/deadline ends an in-flight request.
+    // A slow status must not let a second request adopt a competing receiver.
     if (m_pendingSplitEnable) {
-        if (m_pendingSplitTimer.isValid()
-                && m_pendingSplitTimer.elapsed() < kPendingCreateTimeoutMs)
-            return;
-        m_pendingSplitEnable = false;   // stale create — fall through and retry
+        tryPromoteTxSlice();
+        if (m_pendingSplitEnable) { return; }
+        if (m_splitCreation && !m_model->resolveCreatedSlice(m_splitCreation->created)) {
+            removeCreatedTxSlice();
+        }
     }
     if (auto* tx = findTxSlice(/*promote=*/false); tx && tx != rxSlice) {
         // Record the enable only for enable-intent callers; a passive
@@ -1246,7 +1241,6 @@ void RigctlProtocol::ensureSplitTxSlice(bool recordExistingAsEnabled)
     if (m_model->slices().size() >= m_model->maxSlices())
         return;   // could not engage split — leave m_lastSplitEnable untouched
     m_pendingSplitEnable = true;
-    m_pendingSplitTimer.start();   // arm the time-bounded in-flight guard above
     m_lastSplitEnable = 1;   // engaged via create-on-demand (slice in flight)
     // Create the TX slice on the RX slice's pan AND seeded at the RX frequency,
     // instead of letting addSlice() pick its default geometry (pan-center + 20% of
@@ -1258,11 +1252,31 @@ void RigctlProtocol::ensureSplitTxSlice(bool recordExistingAsEnabled)
     auto* model = m_model;
     const QString panId = rxSlice->panId();
     const double  rxFreqMhz = rxSlice->frequency();
-    QMetaObject::invokeMethod(m_model, [model, panId, rxFreqMhz]{
-        if (panId.isEmpty())
-            model->addSlice();                        // no pan → default geometry
-        else
-            model->addSliceOnPan(panId, rxFreqMhz);   // seed TX slice at RX freq
+    const auto pending = std::make_shared<SplitCreation>();
+    pending->originalRx = rxSlice;
+    pending->session = model->controlSession();
+    m_splitCreation = pending;
+    const QPointer<QObject> owner(m_splitCreateOwner.get());
+    QMetaObject::invokeMethod(m_model, [model, owner, pending, panId, rxFreqMhz] {
+        if (!owner || pending->cancelled) { return; }
+        if (!model->controlSessionCurrent(pending->session) || !pending->originalRx
+            || model->slice(pending->originalRx->sliceId()) != pending->originalRx) {
+            pending->cancelled = true;
+            pending->completed = true;
+            return;
+        }
+        pending->ticket = model->createSlice({panId, rxFreqMhz * 1.0e6, {}, {}}, owner,
+            [model, pending](const SliceCreationResult& result) {
+                pending->completed = true;
+                pending->created = result.created;
+                if (!model->controlSessionCurrent(pending->session) || !pending->originalRx
+                    || model->slice(pending->originalRx->sliceId()) != pending->originalRx) {
+                    pending->cancelled = true;
+                }
+                if (pending->cancelled && result.created.valid()) {
+                    model->removeCreatedSlice(result.created);
+                }
+            }, true);
     }, Qt::QueuedConnection);
 }
 

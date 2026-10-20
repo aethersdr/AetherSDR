@@ -68,7 +68,9 @@ struct RadioSetupRequest {
         case Field::PrivateIpPolicy: case Field::ShowTxInWaterfall:
         case Field::MeterDuringReceive: case Field::SyncCwx:
         case Field::MuteLocalWhenRemote: case Field::BinauralReceive:
-        case Field::LowLatencyDigital: return std::holds_alternative<bool>(value);
+        case Field::LowLatencyDigital: case Field::LineoutMute:
+        case Field::HeadphoneMute: case Field::FrontSpeakerMute:
+            return std::holds_alternative<bool>(value);
         case Field::NetworkMtu: {
             const int* mtu = std::get_if<int>(&value);
             return mtu && *mtu >= kMinNetworkMtu && *mtu <= kMaxNetworkMtu;
@@ -83,7 +85,7 @@ struct RadioSetupRequest {
             const int* milliseconds = std::get_if<int>(&value);
             return milliseconds && *milliseconds >= 0;
         }
-        case Field::MaximumPowerPercent: {
+        case Field::MaximumPowerPercent: case Field::LineoutGain: case Field::HeadphoneGain: {
             const int* percent = std::get_if<int>(&value);
             return percent && *percent >= 0 && *percent <= 100;
         }

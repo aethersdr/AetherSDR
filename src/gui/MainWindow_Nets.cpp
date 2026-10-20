@@ -4,8 +4,8 @@
 // (NOT radio memory slots — nets are operator-scoped per Constitution XIII and
 // must work with no radio connected), drives the single recompute-and-rearm
 // reminder timer, and surfaces reminders through an in-app actionable banner
-// plus a best-effort OS tray notification. "Tune Now" reuses the same
-// MemoryRecallPolicy command builders as a memory recall.
+// plus a best-effort OS tray notification. "Tune Now" uses typed slice
+// corrections without assigning the net a radio memory slot.
 
 #include "MainWindow.h"
 #include "MainWindowHelpers.h"
@@ -16,7 +16,6 @@
 
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
-#include "core/MemoryRecallPolicy.h"
 #include "core/NetScheduleStore.h"
 #include "core/NetScheduler.h"
 #include "models/BandSettings.h"
@@ -31,6 +30,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QIODevice>
+#include <QPointer>
 #include <QSaveFile>
 #include <QStatusBar>
 #include <QString>
@@ -161,27 +161,41 @@ void MainWindow::tuneToNet(const NetEntry& entry)
     // spots: `slice tune` (echoed, so the VFO tracks) plus pan recenter across
     // bands. Do not send `display pan set band=` first: it reloads the band
     // stack and the following retune gets no status echo (#3918).
-    if (freqMhz > 0.0)
+    const QPointer<MainWindow> alive(this);
+    const QPointer<SliceModel> original(slice);
+    const RadioControlSession session = m_radioModel.controlSession();
+    const auto current = [alive, original, session, sliceId] {
+        return alive && original && alive->m_radioModel.controlSessionCurrent(session)
+            && alive->m_radioModel.slice(sliceId) == original;
+    };
+    if (freqMhz > 0.0) {
         applyTuneRequest(slice, freqMhz, TuneIntent::AbsoluteJump, "net-tune");
+    }
+    if (!current()) { return; }
 
     // Net-specific slice settings the tune policy doesn't cover (a net has no
     // radio-side memory slot to "memory apply").
-    if (!entry.preset.mode.isEmpty())
+    if (!entry.preset.mode.isEmpty()) {
         slice->setMode(entry.preset.mode);
+    }
+    if (!current()) { return; }
     // Through SliceModel, so the filter reaches every backend, not only a
     // command plane.
     if (entry.preset.rxFilterLow != entry.preset.rxFilterHigh) {
         slice->setFilterWidth(entry.preset.rxFilterLow, entry.preset.rxFilterHigh);
     }
+    if (!current()) { return; }
     // The step is the radio's where there is a command plane, the client's
     // where there is not (RadioModel::applyClientOwnedSliceStep).
-    if (entry.preset.step > 0
-        && !m_radioModel.applyClientOwnedSliceStep(sliceId, entry.preset.step)) {
-        m_radioModel.sendCommand(QString("slice set %1 step=%2").arg(sliceId).arg(entry.preset.step));
+    if (entry.preset.step > 0) {
+        SlicePresetRequest request;
+        request.stepHz = entry.preset.step;
+        m_radioModel.requestSlicePreset(slice, request);
     }
-    const QString fixup = buildMemoryRecallSliceFixupCommand(sliceId, entry.preset);
-    if (!fixup.isEmpty())
-        m_radioModel.sendCommand(fixup);
+    if (!current()) { return; }
+    const SlicePresetRequest fixup = SlicePresetRequest::repeaterFixup(entry.preset);
+    if (!fixup.empty()) { m_radioModel.requestSlicePreset(slice, fixup); }
+    if (!current()) { return; }
 
     statusBar()->showMessage(QString("Tuned to %1").arg(entry.name), 3000);
 }

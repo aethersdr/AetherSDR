@@ -1458,8 +1458,7 @@ private:
     QHash<QString, std::shared_ptr<AetherSDR::SpectrogramBuffer>> m_spectrogramBuffers;
     AetherSDR::SignalClassifier m_signalClassifier;
 
-    // Batched spot add commands (flushed 1/sec)
-    QStringList m_spotCmdBatch;
+    // Passive spot identity and expiry.
     int m_nextPassiveSpotId{-2000000};
     QHash<int, qint64> m_passiveSpotExpiryMs;
     // N1MM spot identity: N1MMSpotParser::spotKey(dxcall, freq) -> passive
@@ -1895,6 +1894,10 @@ private:
     // Active slice tracking for multi-slice support
     int m_activeSliceId{-1};
     bool m_splitActive{false};
+    quint64 m_splitCreateTicket{0};
+    quint64 m_splitCreateRevision{0};
+    CreatedSliceReceipt m_splitCreatedSlice;
+    QPointer<SliceModel> m_splitRxIdentity;
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};
     double m_splitRxFrequencyMhz{0.0};
@@ -2201,6 +2204,9 @@ private:
     quint64 m_radeEooRequestId{0};
     std::shared_ptr<std::atomic<bool>> m_radeFallbackReleaseFence;
     bool m_radeTxActive{false};
+    // RADE's hold on the radio's `transmit dax` flag where nothing else
+    // drives it from the slice mode (Windows, Linux without PipeWire).
+    void syncRadeTransmitDax(bool radeOwnsTx);
     void activateRADE(int sliceId);
     void deactivateRADE();
     void onRadeSliceModeChanged(const QString& mode);

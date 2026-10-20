@@ -1,5 +1,8 @@
 #pragma once
 #include "RadioSetupControl.h"
+#include "SpotRequest.h"
+#include "PanControlRequest.h"
+#include "SlicePresetRequest.h"
 
 #include <QFlags>
 #include <QList>
@@ -351,11 +354,10 @@ struct RadioCapabilities {
     QString manufacturer;
 
     // Receive
-    // Independent slice creation on an existing pan through the neutral backend
-    // hook. RadioModel consults this only without a command plane; Flex and Sim
-    // retain their command adapters regardless of this value. Do not use this
-    // field alone to gate +RX in the UI. Separate from maxSlices: a paired
-    // receiver/pan topology can support several slices but not this operation.
+    // Independent creation on an existing pan through the typed backend route.
+    // Separate from maxSlices: a paired receiver/pan topology can support several
+    // receivers but not independent slice creation. Transient split creation also
+    // needs TX support and an answered identity, not merely this declaration.
     bool canCreateSlices = false;
     int maxSlices = 1;             // independent demod slices the radio supports
     int maxPanadapters = 1;        // simultaneous panadapters
@@ -662,6 +664,10 @@ struct RadioCapabilities {
     bool hasAudioCompression = false; // selectable compressed radio-audio transport
     bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
     std::optional<RadioSetupControl> radioSetupControl;
+    // Desktop utility verbs only; neither record adds daemon permissions.
+    std::optional<SpotControl> spotControl;
+    std::optional<PanControl> panControl;
+    std::optional<SlicePresetControl> slicePresetControl;
     // The radio's streaming data plane uses VITA-49. This currently gates the
     // receive-socket buffer and network MTU controls; it describes the transport,
     // not the vendor or only one stream direction.

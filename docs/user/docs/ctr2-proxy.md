@@ -91,6 +91,8 @@ AetherCTR2 (see below) or an AetherKnob.
   list refreshes itself every 2 seconds, so a CTR2-Max that switches between
   its stock firmware and AetherCTR2 shows up as it is now; **Rescan** refreshes
   it (and the local addresses) at once.
+  USB discovery is shared with other HID controllers, so you can rescan while
+  an encoder is reconnecting. Stopping one controller leaves the others available.
 - **Linux:** a udev rule for the CTR2 ships with the build. If the device
   cannot be opened, **Start** offers to install the rule
   (`/etc/udev/rules.d/70-aethersdr-ctr2.rules`) through `pkexec`, asking for
