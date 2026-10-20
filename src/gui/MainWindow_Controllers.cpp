@@ -2359,7 +2359,7 @@ void MainWindow::registerMidiParams()
     reg("global.masterVolume", "Master Volume", "Global", P::Slider, 0, 100,
         [this](float v) {
             if (m_radioModel.hasCommandPlane()) {
-                m_radioModel.sendCommand(QString("mixer lineout gain %1").arg(static_cast<int>(v)));
+                m_radioModel.requestRadioSetup({RadioSetupField::LineoutGain, static_cast<int>(v)});
                 return;
             }
             if (!m_radioModel.isConnected()) {
@@ -2402,7 +2402,7 @@ void MainWindow::registerMidiParams()
                                    << "radio mixer verbs need a Flex command plane";
                 return;
             }
-            m_radioModel.sendCommand(QString("mixer headphone gain %1").arg(static_cast<int>(v)));
+            m_radioModel.requestRadioSetup({RadioSetupField::HeadphoneGain, static_cast<int>(v)});
         },
         [this]() -> float { return m_radioModel.headphoneGain(); });
 

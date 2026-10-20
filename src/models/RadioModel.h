@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/TxGrantManager.h"
+#include "core/SpotRequestQueue.h"
 #include "core/SpectrumDecodeScale.h"
 #include "core/backends/IndependentTxControl.h"
 
@@ -27,6 +28,7 @@
 #include "core/DigitalVoiceWaveformTelemetry.h"
 #include <QThread>
 #include <chrono>
+#include <array>
 #include <optional>
 #include "SliceModel.h"
 #include "MeterModel.h"
@@ -631,13 +633,9 @@ public:
     // other family that takes typed intents through the IRadioBackend seam) —
     // there, Flex wire text has nowhere to go and is dropped at the sink.
     bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
-    // A non-Flex backend that declares RadioCapabilities::lineoutControl, which
-    // takes setLineoutGain()/setLineoutMute() typed instead of as wire text.
-    bool lineoutThroughSeam() const;
-
     // The slice's tuning step, applied on the client when the radio has no
     // command plane to carry `slice set <n> step=`. Returns false, doing
-    // nothing, when a command plane exists: the caller sends its wire text and
+    // nothing, when a command plane exists: the typed backend request sets it and
     // the radio's status echo sets the step.
     bool applyClientOwnedSliceStep(int sliceId, int hz);
 
@@ -1042,6 +1040,18 @@ public:
                                       std::optional<RadioControlSession> expectedSession = {});
     RadioControlSession controlSession() const;
     bool controlSessionCurrent(const RadioControlSession& session) const;
+    ReceiveDispatch requestSpot(const SpotRequest& request, PanadapterModel* pan = nullptr,
+                                std::optional<RadioControlSession> expectedSession = {},
+                                std::optional<quint64> expectedEpoch = {});
+    quint64 spotRequestEpoch() const { return m_spotRequestEpoch; }
+    void queueSpot(const SpotRequest& request);
+    void flushQueuedSpots(int limit);
+    void clearQueuedSpots();
+    ReceiveDispatch requestPanControl(PanadapterModel* pan, const PanControlRequest& request);
+    ReceiveDispatch requestSlicePreset(SliceModel* slice, const SlicePresetRequest& request);
+    std::optional<RadioStationOverride> requestTemporaryStation(const QString& name);
+    bool restoreTemporaryStation(const RadioStationOverride& owner);
+    quint64 stationIdentityRevision() const { return m_stationIntentRevision; }
     ReceiveDispatch requestProfile(const ProfileRequest& request,
                                    QObject* replyContext = nullptr,
                                    const RadioControlCompletion& completion = {},
@@ -1867,6 +1877,12 @@ private:
     // Bumped at every session end. Captured by deferred work (the multiFLEX
     // peek window) so a timer armed in one session cannot fire into the next.
     quint64 m_sessionGeneration{0};
+    quint64 m_spotRequestEpoch{0};
+    SpotRequestQueue m_spotRequests;
+    bool m_flushingSpotRequests{false};
+    quint64 m_stationIntentRevision{0};
+    quint64 m_stationOverrideOwner{0};
+    std::array<quint64, 5> m_outputIntentRevisions{};
     quint64 m_receiveControlGeneration{0};
     void wireBackendReceiverState();
     struct PendingSliceCreate;

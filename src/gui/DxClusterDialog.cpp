@@ -2836,7 +2836,9 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             "delete the stored source logs, and send a clear command to the\n"
             "radio. The spot list stays empty after you reopen SpotHub.");
         connect(clearAllBtn, &QPushButton::clicked, this, [this] {
-            m_radioModel->sendCommand("spot clear");
+            SpotRequest request;
+            request.action = SpotAction::Clear;
+            m_radioModel->requestSpot(request);
             m_spotModel->clear();  // modelReset → m_spotCountLabel updates itself
             if (m_totalSpotsLabel)
                 m_totalSpotsLabel->setText("0");

@@ -3124,9 +3124,8 @@ and the note says so:
 ```
 
 Flex owns the flag in the radio. ANAN, Icom, RTL-SDR and the **demo simulator**
-declare no owner: there the verb sends the wire text and answers with the first
-note above, nothing echoes, `get transmit showTxInWaterfall` stays `false`, and
-nothing is stored. A `true` flag only says keyed rows are allowed: the demo,
+declare no owner: the verb refuses without writing or storing a value. A
+`true` flag only says keyed rows are allowed: the demo,
 ANAN and RTL-SDR cannot key, and on a Hermes-Lite 2 what those rows show while
 keyed has not been measured.
 
@@ -4082,9 +4081,13 @@ is persisted on the front panel.
 ← {"ok":true,"station":"Claude"}
 ```
 
-Must be a single token (no spaces) and requires a connected radio. The agent name
-is applied automatically on connect and the user's real name is restored when the
-bridge stops.
+Must be a single token (no spaces) and requires a connected radio that supports
+per-client station identity. Success means the request was dispatched, not that
+firmware confirmed it. The override never changes the saved station name.
+On bridge stop, restoration is limited to the original session and this bridge's
+still-current override. A newer operator edit or override takes precedence. A
+reconnect callback is cancelled by bridge stop, session replacement or a newer
+station edit.
 
 ### `qrz`
 QRZ.com callsign-lookup subsystem (live CW contacts window + View → Callsign

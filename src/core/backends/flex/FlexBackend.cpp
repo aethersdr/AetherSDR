@@ -685,6 +685,12 @@ RadioCapabilities FlexBackend::capabilities() const
         setup.fields.insert(static_cast<RadioSetupRequest::Field>(field));
     }
     caps.radioSetupControl = setup;
+    caps.spotControl = SpotControl{{SpotAction::Add, SpotAction::Remove,
+                                    SpotAction::Clear, SpotAction::Trigger}};
+    caps.panControl = PanControl{{PanControlField::BandZoom, PanControlField::SegmentZoom,
+                                  PanControlField::ReceiveAntenna}};
+    caps.slicePresetControl = SlicePresetControl{{SlicePresetField::Step, SlicePresetField::RepeaterOffset,
+                                                  SlicePresetField::ToneMode, SlicePresetField::ToneValue}};
     caps.usesVita49Transport = true;
     caps.hasNetworkConfigurationReadback = true;
     caps.hasPrivateIpConnectionPolicy = true;
