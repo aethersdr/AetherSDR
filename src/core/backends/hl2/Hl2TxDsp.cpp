@@ -327,6 +327,7 @@ void Hl2TxDsp::onExchangeTimer()
     m_iq.clear();
     exchangeDueBlocks();
     if (!m_iq.empty()) {
+        noteFilterOutput(m_iq);
         emit iqReady(m_iq, m_txContext);
     }
 }
@@ -556,6 +557,8 @@ void Hl2TxDsp::reset()
     // first sample that needs reduction has it, with no attack constant.
     m_alc.reset();
     m_inBuffer.clear();
+    m_filterInPeak = m_filterOutPeak = 0.0f;
+    m_filterWindowSamples = 0;
     // Re-arm the mid-buffer source-change warning for the next transmission.
     m_sourceChangeWarned = false;
     // The modulator's own state, per build. In the phasing build this is the
@@ -674,14 +677,35 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     m_inBuffer.erase(m_inBuffer.begin(),
                      m_inBuffer.begin() + static_cast<std::ptrdiff_t>(consumed));
 
-    if (!m_iq.empty())
+    if (!m_iq.empty()) {
+        noteFilterOutput(m_iq);
         emit iqReady(m_iq, context);
+    }
     // PRE-modulation level: this is what a mic-gain control acts on, so it is
     // the number that tells an operator whether they are overdriving.
     emit micPeak(peak > 0.0f ? 20.0f * std::log10(peak) : -140.0f);
     // POST-ALC audio peak, before the modulator: it sits at the ALC target while
     // the ALC reduces. The envelope of the modulated IQ is not measured here.
     emit alcPeak(postAlcPeak > 0.0f ? 20.0f * std::log10(postAlcPeak) : -140.0f);
+
+    // TX filter taps, once per ~100 ms of input. TXA's output lags its input
+    // by a few blocks, so a per-block pair would read a loss at every key-down;
+    // a held window keeps that lag inside one report.
+    m_filterInPeak = std::max(m_filterInPeak, postAlcPeak);
+    m_filterWindowSamples += consumed;
+    if (m_filterWindowSamples
+        >= static_cast<std::size_t>(m_config.inputSampleRateHz / 10)) {
+        const auto db = [](float v) { return v > 0.0f ? 20.0f * std::log10(v) : -140.0f; };
+        emit filterLevels(db(m_filterInPeak), db(m_filterOutPeak));
+        m_filterInPeak = m_filterOutPeak = 0.0f;
+        m_filterWindowSamples = 0;
+    }
+}
+
+void Hl2TxDsp::noteFilterOutput(const std::vector<std::complex<float>>& iq)
+{
+    for (const auto& v : iq)
+        m_filterOutPeak = std::max(m_filterOutPeak, std::abs(v));
 }
 
 }  // namespace AetherSDR::hl2
