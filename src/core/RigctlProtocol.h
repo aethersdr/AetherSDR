@@ -168,6 +168,8 @@ private:
     QString m_pendingSplitMode;
     struct SplitCreation {
         quint64 ticket{0};
+        QPointer<SliceModel> originalRx;
+        RadioControlSession session{};
         CreatedSliceReceipt created;
         bool completed{false};
         bool cancelled{false};

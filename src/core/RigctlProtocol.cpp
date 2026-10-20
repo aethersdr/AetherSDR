@@ -1069,12 +1069,21 @@ void RigctlProtocol::tryPromoteTxSlice()
 {
     if (!m_pendingSplitEnable || !m_model) return;
     auto* rxSlice = currentSlice();
-    if (m_splitCreation && m_splitCreation->completed && !m_splitCreation->created.valid()) {
+    if (m_splitCreation
+        && (!m_splitCreation->originalRx || rxSlice != m_splitCreation->originalRx
+            || !m_model->controlSessionCurrent(m_splitCreation->session)
+            || m_model->slice(rxSlice->sliceId()) != m_splitCreation->originalRx)) {
+        m_pendingSplitEnable = false;
+        removeCreatedTxSlice();
+        return;
+    }
+    SliceModel* created = m_splitCreation
+        ? m_model->resolveCreatedSlice(m_splitCreation->created) : nullptr;
+    if (m_splitCreation && m_splitCreation->completed && !created) {
         m_pendingSplitEnable = false;
         return;
     }
-    if (SliceModel* s = m_splitCreation
-        ? m_model->resolveCreatedSlice(m_splitCreation->created) : nullptr) {
+    if (SliceModel* s = created) {
         if (s != rxSlice) {
             m_pendingSplitEnable = false;
             m_pendingTxSlice = s;
@@ -1085,6 +1094,12 @@ void RigctlProtocol::tryPromoteTxSlice()
             const QString mode = std::exchange(m_pendingSplitMode, {});
             QMetaObject::invokeMethod(model, [model, pending, mhz, mode] {
                 if (!model || pending->cancelled) { return; }
+                if (!model->controlSessionCurrent(pending->session) || !pending->originalRx
+                    || model->slice(pending->originalRx->sliceId()) != pending->originalRx) {
+                    pending->cancelled = true;
+                    model->removeCreatedSlice(pending->created);
+                    return;
+                }
                 SliceModel* target = model->resolveCreatedSlice(pending->created);
                 if (!target) { return; }
                 model->requestTxSlice(target);
@@ -1195,7 +1210,9 @@ void RigctlProtocol::ensureSplitTxSlice(bool recordExistingAsEnabled)
     if (m_pendingSplitEnable) {
         tryPromoteTxSlice();
         if (m_pendingSplitEnable) { return; }
-        if (m_splitCreation && !m_splitCreation->created.valid()) { removeCreatedTxSlice(); }
+        if (m_splitCreation && !m_model->resolveCreatedSlice(m_splitCreation->created)) {
+            removeCreatedTxSlice();
+        }
     }
     if (auto* tx = findTxSlice(/*promote=*/false); tx && tx != rxSlice) {
         // Record the enable only for enable-intent callers; a passive
@@ -1236,15 +1253,26 @@ void RigctlProtocol::ensureSplitTxSlice(bool recordExistingAsEnabled)
     const QString panId = rxSlice->panId();
     const double  rxFreqMhz = rxSlice->frequency();
     const auto pending = std::make_shared<SplitCreation>();
+    pending->originalRx = rxSlice;
+    pending->session = model->controlSession();
     m_splitCreation = pending;
     const QPointer<QObject> owner(m_splitCreateOwner.get());
-    const RadioControlSession session = model->controlSession();
-    QMetaObject::invokeMethod(m_model, [model, owner, session, pending, panId, rxFreqMhz] {
-        if (!owner || pending->cancelled || !model->controlSessionCurrent(session)) { return; }
+    QMetaObject::invokeMethod(m_model, [model, owner, pending, panId, rxFreqMhz] {
+        if (!owner || pending->cancelled) { return; }
+        if (!model->controlSessionCurrent(pending->session) || !pending->originalRx
+            || model->slice(pending->originalRx->sliceId()) != pending->originalRx) {
+            pending->cancelled = true;
+            pending->completed = true;
+            return;
+        }
         pending->ticket = model->createSlice({panId, rxFreqMhz * 1.0e6, {}, {}}, owner,
             [model, pending](const SliceCreationResult& result) {
                 pending->completed = true;
                 pending->created = result.created;
+                if (!model->controlSessionCurrent(pending->session) || !pending->originalRx
+                    || model->slice(pending->originalRx->sliceId()) != pending->originalRx) {
+                    pending->cancelled = true;
+                }
                 if (pending->cancelled && result.created.valid()) {
                     model->removeCreatedSlice(result.created);
                 }

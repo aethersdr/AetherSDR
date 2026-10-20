@@ -1871,7 +1871,9 @@ private:
     void wireSliceLifecycle();
     void reconcileSliceCreates();
     void expireSliceCreation(quint64 ticket);
+    void forgetSliceCreation(quint64 ticket);
     void noteSliceRetirement(int sliceId);
+    void compactSliceRetirements();
     std::optional<quint64> retainSliceRetirement(int sliceId);
     void notifySliceCreate(const std::shared_ptr<PendingSliceCreate>& pending,
                            const SliceCreationResult& result);

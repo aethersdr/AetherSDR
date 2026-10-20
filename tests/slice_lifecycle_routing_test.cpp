@@ -2,6 +2,7 @@
 // replies are injected independently; no peer, radio, TX or listening server.
 #include "TestSettingsProfile.h"
 #include "RadioSetupControlFixture.h"
+#include "core/backends/flex/RadioConnection.h"
 #include "core/RigctlProtocol.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -10,11 +11,15 @@
 #endif
 
 #include <QCoreApplication>
+#include <QEvent>
 #include <QEventLoop>
+#include <QMap>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QStringList>
 #include <cstddef>
 #include <cstdio>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -32,6 +37,8 @@ public:
     }
     static void foreign(RadioModel& radio, int id) { radio.m_foreignSliceOwners.insert(id, 99); }
     static qsizetype retirementCount(const RadioModel& radio) { return radio.m_sliceRetirements.size(); }
+    static auto pendingReference(const RadioModel& radio, quint64 ticket)
+    { return std::weak_ptr<RadioModel::PendingSliceCreate>(radio.m_pendingSliceCreates.value(ticket)); }
     static void quarantine(RadioModel& radio, int id)
     {
         SliceModel* source = radio.slice(id);
@@ -40,18 +47,29 @@ public:
         emit radio.sliceRemoved(id);
     }
 };
+class TxOperationIntegrationTestAccess {
+public:
+    static void bindIdentity(RadioModel& radio, RadioConnection* connection)
+    {
+        radio.m_connection = connection;
+        if (connection) { connection->m_handle.store(1); }
+    }
+};
 #ifdef HAVE_WEBSOCKETS
 class TciSliceLifecycleTestAccess {
 public:
     static void create(TciServer& server, TciClient& client, SliceModel* rx)
     {
-        TciServer::ClientState state;
-        state.socket = &client;
-        server.m_clients.append(state);
+        if (!server.clientStateFor(&client)) {
+            TciServer::ClientState state;
+            state.socket = &client;
+            server.m_clients.append(state);
+        }
         server.createTxSliceForVfoB(&client, {0, 1, 14234000}, rx, {}, false);
     }
     static bool pending(const TciServer& server) { return server.m_pendingVfoBCreate.has_value(); }
     static bool ownsRoute(const TciServer& server) { return server.m_routingState.ownsRoute(); }
+    static qsizetype createdCount(const TciServer& server) { return server.m_createdVfoBSlices.size(); }
     static void disableSplit(TciServer& server, TciClient& client, const CreatedSliceReceipt& receipt)
     {
         server.m_createdVfoBSlices.insert(receipt.sliceId(), receipt);
@@ -375,6 +393,59 @@ void boundedRetirementHistory()
           "compaction retains tombstones for quarantined objects reclaimed in the same session");
 }
 
+void foreignRetirementBeforePublication()
+{
+    for (const bool alreadyForeign : {false, true}) {
+        Fixture f;
+        RadioConnection identity; // No init(): no socket or transport is constructed.
+        TxOperationIntegrationTestAccess::bindIdentity(f.radio, &identity);
+        const auto detach = qScopeGuard([&] {
+            TxOperationIntegrationTestAccess::bindIdentity(f.radio, nullptr);
+        });
+        const QMap<QString, QString> foreign{{QStringLiteral("client_handle"), QStringLiteral("99")},
+                                            {QStringLiteral("in_use"), QStringLiteral("1")}};
+        if (alreadyForeign) { f.radio.handleSliceStatusForTest(2, foreign); }
+        QObject owner;
+        const quint64 ticket = f.create(&owner, {});
+        f.radio.cancelSliceCreation(ticket);
+        f.radio.handleSliceStatusForTest(2, foreign);
+        f.radio.handleSliceStatusForTest(2, {{QStringLiteral("client_handle"), QStringLiteral("99")},
+                                           {QStringLiteral("in_use"), QStringLiteral("0")}}, true);
+        f.radio.handleSliceStatusForTest(2, {{QStringLiteral("client_handle"), QStringLiteral("1")},
+                                           {QStringLiteral("in_use"), QStringLiteral("1")}});
+        f.publish(2);
+        SliceDelta pan;
+        pan.panId = f.pan;
+        emit f.backend->sliceChanged(2, pan);
+        check(f.radio.slice(2)->panId() == f.pan && f.radio.sliceOwnedByUs(2),
+              "foreign-churn fixture publishes an owned replacement on the original pan");
+        f.acknowledge(0, 2);
+        settle();
+        check(f.radio.slice(2) && f.backend->removes.empty(),
+              "foreign occupancy and removal before publication prevent cleanup of a later owned replacement");
+    }
+}
+
+void completedCreationReleasesState()
+{
+    for (const bool accepted : {false, true}) {
+        Fixture f;
+        QObject owner;
+        const quint64 ticket = f.create(&owner, {});
+        const auto pending = RadioModelSliceLifecycleTestAccess::pendingReference(f.radio, ticket);
+        if (accepted) {
+            f.acknowledge(0, 1);
+            f.publish(1);
+            settle();
+        } else {
+            f.backend->createReplies.front()({{RadioControlReply::Kind::Failed, 1, "refused"}, {}});
+        }
+        f.backend->createReplies.clear();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        check(pending.expired(), "terminal creation releases its request snapshots and timers immediately");
+    }
+}
+
 void answeredSelectionAndInhibit()
 {
     Fixture f;
@@ -421,6 +492,17 @@ void answeredSelectionAndInhibit()
     superseded.radio.requestTxSlice(nullptr);
     superseded.backend->selectionReplies.back()({RadioControlReply::Kind::Accepted, 0, {}});
     check(answer == RadioControlReply::Kind::Accepted, "invalid target does not supersede valid TX intent");
+
+    Fixture retired;
+    retired.publish(1);
+    retired.radio.requestTxSlice(retired.radio.slice(1), true, &retired.radio,
+        [&](const RadioControlReply& result) { answer = result.kind; });
+    const auto retiredReply = retired.backend->selectionReplies.back();
+    RadioModelSliceLifecycleTestAccess::quarantine(retired.radio, 1);
+    retired.publish(1);
+    retiredReply({RadioControlReply::Kind::Accepted, 0, {}});
+    check(answer == RadioControlReply::Kind::Cancelled,
+          "TX-selection reply cannot authorize a retired and reclaimed slice object");
 }
 
 void duplexAndRefresh()
@@ -483,6 +565,64 @@ void rigctlCorrelation()
     protocol.handleLine(QStringLiteral("\\set_split_vfo 0 VFOA"));
     settle();
     check(cancelled.backend->creates.empty(), "same-pass CAT disable cancels before queued creation");
+
+    Fixture reconnected;
+    RigctlProtocol surviving(&reconnected.radio);
+    surviving.handleLine(QStringLiteral("\\set_split_vfo 1 VFOB"));
+    settle();
+    reconnected.acknowledge(0, 1);
+    reconnected.publish(1);
+    settle();
+    SliceModel* original = reconnected.radio.slice(1);
+    RadioModelSliceLifecycleTestAccess::endSession(reconnected.radio);
+    RadioModelSliceLifecycleTestAccess::quarantine(reconnected.radio, 1);
+    reconnected.publish(1);
+    check(reconnected.radio.slice(1) == original,
+          "CAT reconnect fixture preserves the original QObject without preserving its receipt");
+    surviving.handleLine(QStringLiteral("\\set_split_vfo 1 VFOB"));
+    settle();
+    check(reconnected.backend->selections.size() == 1
+              && reconnected.backend->selections.back().first == 1,
+          "CAT retries split after an unpromoted create receipt loses its original session");
+
+    Fixture replaced;
+    RigctlProtocol queued(&replaced.radio);
+    queued.handleLine(QStringLiteral("\\set_split_vfo 1 VFOB"));
+    emit replaced.backend->sliceRemoved(0);
+    replaced.publish(0, true);
+    settle();
+    check(replaced.backend->creates.empty(), "CAT queued create cannot follow a replacement RX object");
+    queued.handleLine(QStringLiteral("\\set_split_vfo 1 VFOB"));
+    settle();
+    check(replaced.backend->creates.size() == 1,
+          "an explicit CAT retry may create split for the replacement receiver");
+
+    Fixture inFlight;
+    RigctlProtocol pending(&inFlight.radio);
+    pending.handleLine(QStringLiteral("\\set_split_vfo 1 VFOB"));
+    settle();
+    emit inFlight.backend->sliceRemoved(0);
+    inFlight.publish(0, true);
+    inFlight.acknowledge(0, 1);
+    inFlight.publish(1);
+    settle();
+    check(inFlight.backend->removes == std::vector<int>{1}
+              && inFlight.backend->selections.empty(),
+          "CAT reaps its late creation instead of binding split to a replacement RX");
+
+    Fixture promotion;
+    RigctlProtocol promoting(&promotion.radio);
+    promoting.handleLine(QStringLiteral("\\set_split_vfo 1 VFOB"));
+    settle();
+    promotion.acknowledge(0, 1);
+    promotion.publish(1);
+    settle();
+    promoting.handleLine(QStringLiteral("\\get_split_freq"));
+    emit promotion.backend->sliceRemoved(0);
+    promotion.publish(0, true);
+    settle();
+    check(promotion.backend->selections.empty() && promotion.backend->removes == std::vector<int>{1},
+          "CAT queued promotion cannot follow a replacement RX object");
 }
 
 void tciCancellation()
@@ -531,6 +671,22 @@ void tciCancellation()
     }
     check(TciSliceLifecycleTestAccess::ownsRoute(server) && f.backend->removes.empty(),
           "late split-disable selection cannot clear a replacement route or start stale cleanup");
+
+    Fixture churn;
+    TciServer churnServer(&churn.radio);
+    TciClient churnClient;
+    for (int id = 10; id != 90; ++id) {
+        TciSliceLifecycleTestAccess::create(churnServer, churnClient, churn.radio.slice(0));
+        churn.acknowledge(static_cast<std::size_t>(id - 10), id);
+        churn.publish(id);
+        settle();
+        check(churn.backend->selectionReplies.size() == static_cast<std::size_t>(id - 9),
+              "retired history does not consume capacity for a fresh TCI create and TX selection");
+        churn.backend->selectionReplies.back()({RadioControlReply::Kind::Accepted, 0, {}});
+        emit churn.backend->sliceRemoved(id);
+    }
+    check(TciSliceLifecycleTestAccess::createdCount(churnServer) == 0,
+          "TCI discards cleanup receipts when their receiver is authoritatively removed");
 #endif
 }
 }
@@ -545,6 +701,8 @@ int main(int argc, char** argv)
     cancelledCreation();
     retiredAndForeign();
     boundedRetirementHistory();
+    foreignRetirementBeforePublication();
+    completedCreationReleasesState();
     answeredSelectionAndInhibit();
     duplexAndRefresh();
     rigctlCorrelation();

@@ -5,6 +5,7 @@
 #include <QPointer>
 #include <QThread>
 #include <QTimer>
+#include <initializer_list>
 #include <memory>
 #include <utility>
 
@@ -25,6 +26,8 @@ struct RadioModel::PendingSliceCreate {
     QHash<int, quint64> retirements;
     SliceCreationCompletion completion;
     QMetaObject::Connection ownerConnection;
+    QPointer<QTimer> deadlineTimer;
+    QPointer<QTimer> retainTimer;
     std::optional<SliceCreateReply> reply;
     bool transient{false};
     bool cancelled{false};
@@ -37,15 +40,15 @@ std::optional<quint64> RadioModel::retainSliceRetirement(int id)
     if (id < 0) { return {}; }
     const auto existing = m_sliceRetirements.constFind(id);
     if (existing != m_sliceRetirements.cend()) { return *existing; }
+    compactSliceRetirements();
     if (m_sliceRetirements.size() >= kRetirementHistoryLimit) { return {}; }
     m_sliceRetirements.insert(id, 0);
     return 0;
 }
 
-void RadioModel::noteSliceRetirement(int id)
+void RadioModel::compactSliceRetirements()
 {
-    if (id < 0) { return; }
-    if (!m_sliceRetirements.contains(id) && m_sliceRetirements.size() >= kRetirementHistoryLimit) {
+    if (m_sliceRetirements.size() >= kRetirementHistoryLimit) {
         // Discarded tombstones make pending create identities unprovable. Keep
         // live and quarantined identities so issued receipts stay precise.
         for (const auto& pending : std::as_const(m_pendingSliceCreates)) { pending->identityUncertain = true; }
@@ -55,6 +58,10 @@ void RadioModel::noteSliceRetirement(int id)
         }
         QTimer::singleShot(0, this, &RadioModel::reconcileSliceCreates);
     }
+}
+
+void RadioModel::noteSliceRetirement(int id)
+{
     if (const auto revision = retainSliceRetirement(id)) { m_sliceRetirements[id] = *revision + 1; }
 }
 
@@ -105,6 +112,7 @@ quint64 RadioModel::createSlice(const SliceCreateRequest& request, QObject* repl
     }
     if (slices().size() + reserved >= maxSlices()) { return refuse(); }
 
+    compactSliceRetirements();
     const auto pending = std::make_shared<PendingSliceCreate>();
     pending->ticket = ++m_nextSliceCreateTicket;
     pending->session = controlSession();
@@ -119,13 +127,19 @@ quint64 RadioModel::createSlice(const SliceCreateRequest& request, QObject* repl
     pending->ownerConnection = connect(pending->owner, &QObject::destroyed, this, [alive, pending] {
         if (alive && pending->transient) { alive->cancelSliceCreation(pending->ticket); }
     });
-    QTimer::singleShot(kSliceCreateDeadlineMs, this, [alive, pending] {
+    pending->deadlineTimer = new QTimer(this);
+    pending->deadlineTimer->setSingleShot(true);
+    connect(pending->deadlineTimer, &QTimer::timeout, this, [alive, pending] {
         if (!alive || !alive->m_pendingSliceCreates.contains(pending->ticket)) { return; }
         alive->expireSliceCreation(pending->ticket);
     });
-    QTimer::singleShot(kSliceCreateRetainMs, this, [alive, pending] {
-        if (alive) { alive->m_pendingSliceCreates.remove(pending->ticket); }
+    pending->deadlineTimer->start(kSliceCreateDeadlineMs);
+    pending->retainTimer = new QTimer(this);
+    pending->retainTimer->setSingleShot(true);
+    connect(pending->retainTimer, &QTimer::timeout, this, [alive, pending] {
+        if (alive) { alive->forgetSliceCreation(pending->ticket); }
     });
+    pending->retainTimer->start(kSliceCreateRetainMs);
     SliceCreateRequest backendRequest = request;
     backendRequest.panId = backendPanIdFor(request.panId);
     backendRequest.requiresReceipt = transient || request.requiresReceipt;
@@ -154,9 +168,29 @@ void RadioModel::notifySliceCreate(const std::shared_ptr<PendingSliceCreate>& pe
 {
     if (pending->notified) { return; }
     pending->notified = true;
+    if (pending->deadlineTimer) {
+        pending->deadlineTimer->stop();
+        pending->deadlineTimer->deleteLater();
+        pending->deadlineTimer.clear();
+    }
     QObject::disconnect(pending->ownerConnection);
     const SliceCreationCompletion completion = std::exchange(pending->completion, {});
     if (pending->owner && completion) { completion(result); }
+}
+
+void RadioModel::forgetSliceCreation(quint64 ticket)
+{
+    const auto pending = m_pendingSliceCreates.take(ticket);
+    if (!pending) { return; }
+    QObject::disconnect(pending->ownerConnection);
+    for (QTimer* timer : {pending->deadlineTimer.data(), pending->retainTimer.data()}) {
+        if (timer) {
+            timer->stop();
+            timer->deleteLater();
+        }
+    }
+    pending->deadlineTimer.clear();
+    pending->retainTimer.clear();
 }
 
 void RadioModel::expireSliceCreation(quint64 ticket)
@@ -175,7 +209,7 @@ void RadioModel::reconcileSliceCreates()
     for (const auto& pending : requests) {
         if (!m_pendingSliceCreates.contains(pending->ticket)) { continue; }
         if (pending->identityUncertain) {
-            m_pendingSliceCreates.remove(pending->ticket);
+            forgetSliceCreation(pending->ticket);
             notifySliceCreate(pending, {{RadioControlReply::Kind::Failed, -1,
                 QStringLiteral("Slice-creation identity history is no longer available")}, {}});
             if (!alive) { return; }
@@ -183,27 +217,27 @@ void RadioModel::reconcileSliceCreates()
         }
         if (!controlSessionCurrent(pending->session) || !pending->pan
             || panadapter(pending->pan->panId()) != pending->pan) {
-            m_pendingSliceCreates.remove(pending->ticket);
+            forgetSliceCreation(pending->ticket);
             notifySliceCreate(pending, {{RadioControlReply::Kind::Cancelled, -1,
                 QStringLiteral("Original slice-creation session ended")}, {}});
         } else if (pending->reply) {
             const SliceCreateReply reply = *pending->reply;
             if (reply.result.kind != RadioControlReply::Kind::Accepted || !reply.sliceId) {
-                m_pendingSliceCreates.remove(pending->ticket);
+                forgetSliceCreation(pending->ticket);
                 notifySliceCreate(pending, {reply.result, {}});
             } else {
                 const int id = *reply.sliceId;
                 if (pending->existing.contains(id)
                     || m_sliceRetirements.value(id) != pending->retirements.value(id)
                     || isSlotForeign(id)) {
-                    m_pendingSliceCreates.remove(pending->ticket);
+                    forgetSliceCreation(pending->ticket);
                     notifySliceCreate(pending, {{RadioControlReply::Kind::Failed, -1,
                         QStringLiteral("Created slice identity was retired or belongs to another owner")}, {}});
                 } else if (SliceModel* source = slice(id);
                            source && source->panId() == pending->pan->panId() && sliceOwnedByUs(id)) {
                     const std::optional<quint64> retirement = retainSliceRetirement(id);
-                    if (!retirement) {
-                        m_pendingSliceCreates.remove(pending->ticket);
+                    if (!retirement || pending->identityUncertain) {
+                        forgetSliceCreation(pending->ticket);
                         notifySliceCreate(pending, {{RadioControlReply::Kind::Failed, -1,
                             QStringLiteral("Slice-creation identity capacity is unavailable")}, {}});
                         if (!alive) { return; }
@@ -214,7 +248,7 @@ void RadioModel::reconcileSliceCreates()
                     receipt.m_identity = source;
                     receipt.m_session = pending->session;
                     receipt.m_retirement = *retirement;
-                    m_pendingSliceCreates.remove(pending->ticket);
+                    forgetSliceCreation(pending->ticket);
                     if (pending->transient && (pending->cancelled || !pending->owner)) {
                         removeCreatedSlice(receipt);
                         if (!alive) { return; }
@@ -313,10 +347,19 @@ ReceiveDispatch RadioModel::requestTxSlice(SliceModel* source, bool enabled,
         }
         return ReceiveDispatch::Unsupported;
     }
+    const std::optional<quint64> retirement = retainSliceRetirement(target->sliceId());
+    if (!retirement) {
+        if (owner && completion) {
+            completion({RadioControlReply::Kind::Refused, -1,
+                        QStringLiteral("TX-selection identity capacity is unavailable")});
+        }
+        return ReceiveDispatch::Unsupported;
+    }
     const quint64 revision = ++m_txSliceSelectionRevision;
-    const RadioControlFence current = [alive, target, session, enabled, revision] {
+    const RadioControlFence current = [alive, target, session, enabled, revision, retirement] {
         return alive && target && alive->controlSessionCurrent(session)
             && revision == alive->m_txSliceSelectionRevision
+            && alive->m_sliceRetirements.value(target->sliceId()) == *retirement
             && alive->slice(target->sliceId()) == target && alive->sliceOwnedByUs(target->sliceId())
             && alive->backendCapabilities().canTransmit
             && (!enabled || (!modeIsReceiveOnly(alive->backendCapabilities(), target->mode())

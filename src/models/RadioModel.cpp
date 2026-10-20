@@ -12611,6 +12611,8 @@ void RadioModel::handleSliceStatus(int id,
                 if (wasTxSlice)
                     m_meterModel.setActiveTxSlice(activeTxSliceNum());
                 syncDigitalVoiceTxSelection();
+            } else if (removed || !wasForeign) {
+                noteSliceRetirement(id);
             }
             if (!wasForeign) emit slotOccupancyChanged(id);
             return;  // slice belongs to another client

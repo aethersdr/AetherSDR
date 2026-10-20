@@ -420,6 +420,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // re-arm above re-acquires when a replacement slice appears.
         connect(m_model, &RadioModel::sliceRemoved,
                 this, [this](int sliceId) {
+            m_createdVfoBSlices.remove(sliceId);
+            m_createdVfoBPans.remove(sliceId);
             retireSliceRx(sliceId);
             const bool removedTxRoute = sliceId == m_routingState.txSliceId();
             m_routingState.removeSlice(sliceId);
