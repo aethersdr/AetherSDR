@@ -33,8 +33,8 @@ ReceiveDispatch FlexBackend::requestSpot(const SpotRequest& request, const QStri
         // FlexLib 4.2.18 Radio.RequestSpot; the desktop handles tune/mode itself.
         command = QStringLiteral("spot add callsign=%1 rx_freq=%2 tx_freq=%2 source=%3 spotter_callsign=%4 trigger_action=none lifetime_seconds=%5")
                       .arg(spotText(request.callsign), QString::number(request.frequencyMhz, 'f', 6),
-                           spotText(request.source), spotText(request.spotter))
-                      .arg(request.lifetimeSeconds);
+                           spotText(request.source), spotText(request.spotter),
+                           QString::number(request.lifetimeSeconds));
         if (!request.comment.isEmpty()) { command += QStringLiteral(" comment=") + spotText(request.comment); }
         if (!request.color.isEmpty()) { command += QStringLiteral(" color=") + request.color; }
         break;

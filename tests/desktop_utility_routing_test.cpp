@@ -71,6 +71,15 @@ void utilityEncodingAndOwnership()
               + QChar(0x7f) + QStringLiteral("20") + QChar(0x7f) + QStringLiteral("dB color=#FF00FF00")},
           "spot values are escaped exactly once without callsign-style comment sanitizing");
     backend->commands.clear();
+    SpotRequest literal = addSpot(QStringLiteral("K1ABC%1"));
+    literal.spotter = QStringLiteral("W1%5");
+    check(radio.requestSpot(literal) == ReceiveDispatch::Dispatched
+              && backend->commands.size() == 1
+              && backend->commands.first().contains(QLatin1String("callsign=K1ABC%1 "))
+              && backend->commands.first().contains(QLatin1String("spotter_callsign=W1%5 "))
+              && backend->commands.first().contains(QLatin1String("lifetime_seconds=120")),
+          "literal argument markers in spot text are never interpolated again");
+    backend->commands.clear();
     SpotRequest bad = addSpot();
     bad.comment = QStringLiteral("comment\ntransmit tune 1");
     check(radio.requestSpot(bad) == ReceiveDispatch::Unsupported && backend->commands.isEmpty(),
