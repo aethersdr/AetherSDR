@@ -1973,8 +1973,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // RADE mode should only route mic→RADEEngine when the TX slice IS
         // the RADE slice.  Otherwise a RADE slice running on a non-TX slice
         // would hijack voice TX on the actual TX slice.
-        if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive())
+        if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive()) {
             m_audio->setRadeMode(txSliceId == m_radeSliceId);
+            syncRadeTransmitDax(txSliceId == m_radeSliceId);
+        }
 #else
         Q_UNUSED(txSliceId);
 #endif

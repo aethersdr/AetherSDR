@@ -3368,7 +3368,15 @@ void TciServer::prepareTxAudio()
         // to the modulator. Sending dax=0 keeps the radio on the physical
         // mic and silently discards every dax_tx packet. — fw v1.4.0.0
         m_model->ensureDaxTxStream(DaxTxRequestReason::TciTxAudio);
-        m_model->sendCmdPublic("transmit set dax=1", nullptr);
+        // The flag is the radio's TX audio source for every later
+        // transmission, not just this one: left on, the next mic
+        // transmission keys with no modulation, and on Windows nothing else
+        // ever clears it. Hold it through RadioModel so stopTxChrono() hands
+        // back what the operator had, without clearing it under RADE or any
+        // other producer still holding it (#5524, #6538).
+        if (m_model->hasCommandPlane()) {
+            m_model->acquireTransmitDax(RadioModel::DaxTxFlagHolder::Tci);
+        }
     }
 }
 
@@ -3452,6 +3460,9 @@ void TciServer::stopTxChrono()
     m_txChronoClient = nullptr;
     if (m_audio && m_txAudioPrepared) { m_audio->setDaxTxMode(false); }
     m_txAudioPrepared = false;
+    if (m_model) {
+        m_model->releaseTransmitDax(RadioModel::DaxTxFlagHolder::Tci);
+    }
 }
 
 

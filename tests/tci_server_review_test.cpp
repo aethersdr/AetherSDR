@@ -6,6 +6,7 @@
 #include "core/TciServer.h"
 #include "core/TciTrxMap.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/flex/RadioConnection.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/sim/SimBackend.h"
 #include "models/RadioModel.h"
@@ -2651,6 +2652,71 @@ public:
         return receiveOnlyProtocol.generateInitBurst()
             .contains(QStringLiteral("tx_enable:0,false;"));
     }
+    // #5524 / #6538: TCI's TX audio session turns on the radio's
+    // `transmit dax` flag and must hand back what it found. Left on, the next
+    // mic transmission keys with no modulation, and Windows has no slice-mode
+    // sync to clear it. Both starting states, so a restore that always writes
+    // 0 (or never writes) fails one of them.
+    static bool txAudioRestoresTransmitDaxAsFound()
+    {
+        for (const bool before : {false, true}) {
+            RadioConnection plane;
+            RadioModel model;
+            model.m_connection = &plane;
+            const auto detach = qScopeGuard([&] { model.m_connection = nullptr; });
+            TransmitModel& tx = model.transmitModel();
+            tx.setDax(before);
+            TciServer server(&model);
+
+            server.prepareTxAudio();
+            if (!tx.daxOn()) {
+                std::printf("      before=%d: TCI TX did not take dax\n", before);
+                return false;
+            }
+            server.stopTxChrono();
+            if (tx.daxOn() != before) {
+                std::printf("      before=%d: dax left at %d after TCI TX\n",
+                            before, tx.daxOn());
+                return false;
+            }
+            // A second stop must not write the flag again: the hold is spent.
+            tx.setDax(!before);
+            server.stopTxChrono();
+            if (tx.daxOn() != !before) {
+                std::printf("      before=%d: a repeated stop rewrote dax\n", before);
+                return false;
+            }
+        }
+
+        // An abort stops the chrono while the carrier is still up. The mic
+        // must not be switched in mid-over; the flag goes back at RX. A
+        // key-up before that RX keeps the value found by the FIRST session,
+        // not the dax=1 this server put there itself.
+        RadioConnection plane;
+        RadioModel model;
+        model.m_connection = &plane;
+        const auto detach = qScopeGuard([&] { model.m_connection = nullptr; });
+        TransmitModel& tx = model.transmitModel();
+        tx.setDax(false);
+        TciServer server(&model);
+
+        server.prepareTxAudio();
+        model.m_radioTransmitting = true;
+        server.stopTxChrono();
+        if (!tx.daxOn()) {
+            std::printf("      dax restored while the radio was still keyed\n");
+            return false;
+        }
+        server.prepareTxAudio();
+        server.stopTxChrono();
+        model.m_radioTransmitting = false;
+        emit model.radioTransmittingChanged(false);
+        if (tx.daxOn()) {
+            std::printf("      dax not restored when the radio reached RX\n");
+            return false;
+        }
+        return true;
+    }
 };
 
 } // namespace AetherSDR
@@ -2739,6 +2805,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::chronoStallSnapshotIsIdle();
     const bool chronoCatchUp
         = AetherSDR::TciServerReviewTest::chronoStallCountsCatchUpAndLatePolls();
+    const bool daxRestored
+        = AetherSDR::TciServerReviewTest::txAudioRestoresTransmitDaxAsFound();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -2823,6 +2891,8 @@ int main(int argc, char** argv)
                 chronoIdle ? "PASS" : "FAIL");
     std::printf("%s  TX_CHRONO stall counts late polls and catch-up bursts\n",
                 chronoCatchUp ? "PASS" : "FAIL");
+    std::printf("%s  TCI TX hands transmit dax back as found (#6538)\n",
+                daxRestored ? "PASS" : "FAIL");
 
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
@@ -2844,6 +2914,6 @@ int main(int argc, char** argv)
         && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
-        && chronoIdle && chronoCatchUp
+        && chronoIdle && chronoCatchUp && daxRestored
         ? 0 : 1;
 }

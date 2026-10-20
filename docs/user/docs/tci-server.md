@@ -137,6 +137,7 @@ TCI audio is sent and received as binary frames on the same WebSocket.
 - RTL-SDR receive audio follows the stable receiver map and remains independent of speaker gain and mute; receiver squelch still applies. Normal launches offer one RTL receiver. Extra receivers belong to the [process-only evaluation](./rtl-sdr.md#multi-receiver-evaluation), not a higher production limit. RTL has no transmit or IQ export.
 - If a client reconnects more than 10 seconds later, its receive audio is re-bound to the right DAX channels automatically.
 - TX audio from a client is resampled from the rate the client declares, so 8, 12 and 24 kHz programs are not mis-pitched.
+- **DAX goes back the way it was after each transmission.** On a FlexRadio, TCI turns on the radio's DAX transmit input while a client transmits, then restores it once the radio is back in receive, so your next microphone transmission is not silent. Disconnecting or switching radios discards the previous session's DAX hold.
 
 ### Sample rate and format
 
@@ -240,7 +241,6 @@ keyer:0,false;                    # key up
 
 - If a client that holds PTT dies without closing its connection (power loss, a pulled cable, a dropped Wi-Fi link), the radio stays keyed until the operating system gives up on the TCP connection ([#5985](https://github.com/aethersdr/AetherSDR/issues/5985)).
 - Transmit audio from a TCI client passes through the Phone/CW microphone chain, so the mic profile, **MIC** level and **PROC** change what a digital-mode client puts on the air ([#5844](https://github.com/aethersdr/AetherSDR/issues/5844)).
-- After a TCI voice keyer (for example OpsLog) transmits, DAX stays on, so the next microphone transmission has no audio until you turn DAX off ([#5524](https://github.com/aethersdr/AetherSDR/issues/5524)).
 - A cross-band tune from a TCI client does not recall the radio's band stack, so the per-band antenna, mode and filters are not restored ([#3543](https://github.com/aethersdr/AetherSDR/issues/3543)).
 - The TCI port listens on every network interface with no password, so any machine that can reach it can tune and key the radio ([#5296](https://github.com/aethersdr/AetherSDR/issues/5296)).
 

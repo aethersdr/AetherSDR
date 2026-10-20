@@ -85,7 +85,7 @@ BASELINE = {
     "src/gui/MainWindow_Wiring.cpp": 1,
     "src/gui/MainWindow_DigitalModes.cpp": 2,
     # ---- core (above the seam; backends/ is excluded) ----
-    "src/core/TciServer.cpp": 4,
+    "src/core/TciServer.cpp": 3,
     "src/core/AutomationServer.cpp": 1,
     "src/core/WaveformInstaller.cpp": 3,
     "src/core/DvkWavTransfer.cpp": 1,

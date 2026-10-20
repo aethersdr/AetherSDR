@@ -696,6 +696,32 @@ public:
     // so a connect must never replay this client-persisted flag onto it.
     void notePcAudioEnabled(bool on);
     bool ensureDaxTxStream(DaxTxRequestReason reason);
+    // The radio's `transmit dax` flag is ONE bit for the whole radio, shared
+    // with every client: it picks DAX TX or the microphone as the source of
+    // the next transmission. Every in-process producer that needs it on holds
+    // it here rather than saving and restoring it itself, so two producers
+    // whose holds overlap cannot hand it back out of order (#6538, #6579).
+    // Same shape as PanadapterStream's DAX RX holder table (#3305):
+    //   first hold    -> remember the flag, then set dax=1
+    //   later holds   -> set dax=1 again only if something turned it off
+    //   last release  -> once the radio is in RX, put back what the first
+    //                    hold found, but only while the flag is still the 1
+    //                    a hold set; if the operator or another client turned
+    //                    it off meanwhile, theirs is the newer choice.
+    // No grace window: a mic or footswitch key-up straight after an FT8 over
+    // has to modulate. Callers keep their own "does this radio have a
+    // `transmit dax` at all" guard; the table does not second-guess it.
+    enum class DaxTxFlagHolder : quint8 {
+        Tci,
+        Rade,
+        VoiceKeyer,
+        Ax25,
+        Wspr,
+        RxPlayback,
+    };
+    void acquireTransmitDax(DaxTxFlagHolder who);
+    void releaseTransmitDax(DaxTxFlagHolder who);
+    bool transmitDaxHeldBy(DaxTxFlagHolder who) const;
     bool prepareWsprTransmit(const TxCoordinator::Request& input);
     void releaseWsprTransmit(const TxCoordinator::Request& input);
     // "The WSPR beacon's transmit-audio route is ready." On a Flex that is
@@ -1875,6 +1901,8 @@ private:
     friend class VoiceKeyerTxRouteTestAccess;
     friend class RadioSetupControlTestAccess;
     friend class StoredControlTestAccess;
+    friend class TciServerReviewTest;
+    friend class TransmitDaxHoldTestAccess;
     void expirePendingCallbacks(const QString& reason);
 
     // True only while expirePendingCallbacks() is invoking the drained
@@ -2133,6 +2161,11 @@ private:
     bool        m_cwxDrainArmed{false}; // CWX drain-release latch, immune to interlock flicker (#3949)
     bool        m_txAudioGate{false}; // actual TX audio gate state
     bool        m_radioTransmitting{false}; // raw interlock TX state, any owner
+    // Last interlock state= the radio reported, any owner; empty until one
+    // arrives and on backends that report none. m_radioTransmitting is only
+    // `state == TRANSMITTING`, so it is already false in PTT_REQUESTED and
+    // UNKEY_REQUESTED; restoring the radio's audio source needs this.
+    QString     m_interlockState;
     // Last mox a RadioCapabilities::radioPttObservation backend published; ORed
     // into the command-edge fallback. Always false for every other backend.
     bool        m_backendObservedTransmit{false};
@@ -2442,14 +2475,21 @@ private:
     bool        m_wsprTxTransition{false};
     bool        m_wsprTxYieldAfterUse{false};
     bool        m_wsprTxReleaseWhenReady{false};
-    bool        m_wsprTxPreviousDax{false};   // `transmit dax` before the beacon armed
-    bool        m_wsprTxRestoreDax{false};    // beacon changed it and owes a restore
     // The beacon armed against a seam-audio backend, so it borrowed no Flex DAX
     // stream and no `transmit dax`. Latched by prepareWsprTransmit() and the
     // only thing releaseWsprTransmit() has to undo on that path.
     bool        m_wsprTxSeamAudioArmed{false};
     quint32     m_daxTxClientHandle{0};  // Tracked for diagnostics only — not consulted in routing.
     bool        m_daxTxCreatePending{false};
+    // acquireTransmitDax() table: a bit per DaxTxFlagHolder, the flag the
+    // first hold found, and a restore owed once the radio reaches RX.
+    quint8      m_transmitDaxHolders{0};
+    bool        m_transmitDaxBaseline{false};
+    bool        m_transmitDaxRestorePending{false};
+    void        resetTransmitDaxSessionState();
+    void        finishTransmitDaxRelease();
+    bool        transmitDaxEffective() const;
+    bool        radioReceivingForTransmitDax() const;
     QSet<quint32> m_deadDaxRxSeen;
     QSet<quint32> m_externalDaxTxSeen;
     QSet<quint32> m_externalDaxRxSeen;

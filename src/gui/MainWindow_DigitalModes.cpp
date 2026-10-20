@@ -565,6 +565,7 @@ void MainWindow::activateRADE(int sliceId)
     // Only route mic→RADE when the RADE slice IS the TX slice.
     // If another slice is TX (e.g. USB voice), leave its audio path alone.
     m_audio->setRadeMode(s->isTxSlice());
+    syncRadeTransmitDax(s->isTxSlice());
 
     // TX path: mic -> RADEEngine (worker) -> sendModemTxAudio (main)
     connect(m_audio, &AudioEngine::txRawPcmReady,
@@ -853,6 +854,7 @@ void MainWindow::deactivateRADE()
     syncKiwiSdrTransmitMute();
 
     m_audio->setRadeMode(false);
+    syncRadeTransmitDax(false);
     m_radioModel.setDigitalVoiceTxSlice(-1);
     m_audio->clearTxAccumulators();  // flush stale RADE modem data (self-marshals)
     m_appletPanel->phoneCwApplet()->setRadeActive(false);
@@ -912,6 +914,34 @@ void MainWindow::deactivateRADE()
     stopFreeDvReporting(radeSliceId);
 
     qInfo() << "MainWindow: RADE mode deactivated";
+}
+
+void MainWindow::syncRadeTransmitDax(bool radeOwnsTx)
+{
+    // RADE's modem audio goes out on the dax_tx stream, which the radio only
+    // modulates while `transmit dax=1`. On macOS / PipeWire builds the
+    // slice-mode sync in MainWindow_Wiring already sets it for the DIGU/DIGL
+    // slice RADE runs on and clears it on the way back to voice. Elsewhere
+    // nothing sets it, so RADE keyed a silent carrier until the operator
+    // pressed DAX, and then voice was silent until they turned it off again
+    // (#6579). Hold the flag only while RADE's slice is the TX slice. The
+    // RadioModel table hands back what the operator had, so a SmartSDR DAX2
+    // user's setting survives (#2315), and a TCI over that overlaps RADE
+    // cannot clear it out from under RADE (#6538).
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
+    Q_UNUSED(radeOwnsTx);
+#else
+    constexpr auto kRade = RadioModel::DaxTxFlagHolder::Rade;
+    // This runs on every slice mode and TX-slice change; acquiring again
+    // would re-assert dax=1 over an operator who turned DAX off mid-RADE.
+    if (radeOwnsTx && m_radioModel.hasCommandPlane()) {
+        if (!m_radioModel.transmitDaxHeldBy(kRade)) {
+            m_radioModel.acquireTransmitDax(kRade);
+        }
+    } else {
+        m_radioModel.releaseTransmitDax(kRade);
+    }
+#endif
 }
 
 void MainWindow::onRadeSliceModeChanged(const QString& mode)
