@@ -13,9 +13,11 @@
 #include <QEventLoop>
 #include <QSignalSpy>
 #include <QStringList>
+#include <cstddef>
 #include <cstdio>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
