@@ -678,14 +678,14 @@ void SpectrumOverlayMenu::buildAntPanel()
         }
         const QPointer<SpectrumOverlayMenu> alive(this);
         const QPointer<RadioModel> radio(m_radioModel);
-        const QPointer<PanadapterModel> pan(radio ? radio->panadapter(m_panId) : nullptr);
+        if (!radio) { return; }
+        const QPointer<PanadapterModel> pan(radio->panadapter(m_panId));
         const QPointer<SliceModel> originalSlice(targetSlice);
-        const std::optional<RadioControlSession> session = radio
-            ? std::optional<RadioControlSession>(radio->controlSession()) : std::nullopt;
+        const RadioControlSession session = radio->controlSession();
         if (targetSlice) {
             emit flexRxAntennaSelected(targetSlice->sliceId());
         }
-        if (!alive || !radio || !session || radio->controlSession() != *session) { return; }
+        if (!alive || !radio || radio->controlSession() != session) { return; }
         const std::optional<PanControl> control = radio->backendCapabilities().panControl;
         if (!m_panId.isEmpty() && control && control->supports(PanControlField::ReceiveAntenna)) {
             // Flex assigns receive antenna on the panadapter.  SliceModel's
