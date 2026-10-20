@@ -4522,7 +4522,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
     // TX-safety guard — never key a live radio from the test bridge unless the
     // operator has explicitly opted in. (#3646 Phase 1 safety requirement.)
     const bool transmitControl = isTransmitControl(w);
-    if (transmitControl && txActionRequiresPermission(w) && !m_txAllowed) {
+    if (transmitControl && txActionRequiresPermission(w, action, value) && !m_txAllowed) {
         qCWarning(lcAutomation).noquote()
             << "BLOCKED transmit-related invoke on" << target
             << "(" << shortClassName(w) << ")";
@@ -7473,7 +7473,7 @@ QJsonObject AutomationServer::invokeTxAction(QObject* object, const QString& tar
     if (!self || !guardedObject) {
         return err(QStringLiteral("scoped control disappeared during preparation"));
     }
-    const bool requiresTx = txActionRequiresPermission(object) || bool(controller);
+    const bool requiresTx = txActionRequiresPermission(object, action, value) || bool(controller);
     TxKeyingAction::Prepared prepared = prepareTxKeyingAction(object, controller, action, value);
     if (!self) { return err(QStringLiteral("bridge disappeared during preparation")); }
     if (!prepared) {

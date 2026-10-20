@@ -1,7 +1,7 @@
-// The automation bridge may switch VOX off, with TX permission, and never on.
+// The automation bridge may switch VOX off, with or without TX permission, and never on.
 // The Phone applet's VOX button carries a disarm-only scoped action (#6053).
-// Every other path is pinned as it is: arming and pointer verbs are refused,
-// nothing passes without TX permission, the operator's own input is untouched.
+// vox_toggle is registered with keysTx=true so it cannot arm VOX without permission.
+// Every other path is pinned: arming and pointer verbs are refused, the operator's own input is untouched.
 // No radio, no socket, no transmission: a bare RadioModel's TransmitModel.
 
 #include "TestEventLoop.h"
@@ -190,17 +190,28 @@ int main(int argc, char** argv)
         tx.setVoxEnable(false);
     }
 
-    // ── Bridge, no TX permission: nothing passes ────────────────────────────
+    // ── Bridge, no TX permission: disarm passes, arming is refused ──────────
     server.setTxAllowed(false);
     {
         tx.setVoxEnable(true);
         const bool off = ok(invoke(server, QStringLiteral("setChecked"), QStringLiteral("false")));
+        const bool landed = AetherTest::waitFor([&] { return !tx.voxEnable() && !button->isChecked(); }, 2000);
+        check(off && landed, "TX not allowed: invoke setChecked false is accepted and disarms VOX (Principle VI)");
+        check(!tx.voxEnable() && !button->isChecked(), "TX not allowed: VOX is disarmed");
+
+        for (const char* spelling : {"0", "off", "no", "unchecked"}) {
+            tx.setVoxEnable(true);
+            const bool accepted = ok(invoke(server, QStringLiteral("setChecked"),
+                                            QString::fromLatin1(spelling)));
+            const bool disarmed = AetherTest::waitFor([&] { return !tx.voxEnable(); }, 2000);
+            const QByteArray what = QByteArray("TX not allowed: setChecked '") + spelling + "' disarms";
+            check(accepted && disarmed, what.constData());
+        }
+
         const bool click = ok(invoke(server, QStringLiteral("click")));
         const bool pointer = ok(clickAt(server));
         drain();
-        check(!off, "TX not allowed: invoke setChecked false is refused (unchanged)");
         check(!click && !pointer, "TX not allowed: click and clickAt are refused (unchanged)");
-        check(tx.voxEnable(), "TX not allowed: an armed VOX stays armed");
 
         tx.setVoxEnable(false);
         const bool on = ok(invoke(server, QStringLiteral("setChecked"), QStringLiteral("true")));
@@ -209,6 +220,59 @@ int main(int argc, char** argv)
         drain();
         check(!on && !toggle && !pointerOn && !tx.voxEnable(),
               "TX not allowed: arming is refused by every verb (unchanged)");
+    }
+
+    // ── Shortcut vox_toggle: gated against arming without TX permission ─────
+    {
+        ShortcutManager shortcuts;
+        shortcuts.registerAction(QStringLiteral("vox_toggle"), QStringLiteral("VOX Toggle"),
+                                QStringLiteral("TX"), QKeySequence(), [&tx]() {
+                                    tx.setVoxEnable(!tx.voxEnable());
+                                }, false, true);
+
+        server.setShortcutAutomationHandler([&shortcuts](const QString& id, bool allowTx,
+                                                         const std::shared_ptr<TxController>& controller) {
+            auto* a = shortcuts.action(id);
+            if (!a) return 1;
+            if (a->keysTx && !allowTx) return 3;
+            if (!a->handler && !a->txHandler) return 2;
+            if (a->keysTx) {
+                if (a->txHandler) {
+                    if (!controller || !controller->valid()) return 3;
+                    a->txHandler(controller->capture(a->txActivity));
+                } else if (a->handler) {
+                    a->handler();
+                }
+                return 4;
+            }
+            a->handler();
+            return 0;
+        });
+
+        const auto* action = shortcuts.action(QStringLiteral("vox_toggle"));
+        check(action != nullptr && action->keysTx,
+              "shortcut: vox_toggle is registered with keysTx=true");
+
+        server.setTxAllowed(false);
+        tx.setVoxEnable(false);
+        QJsonObject rep = AutomationServerTestAccess::request(server,
+            QJsonObject{{QStringLiteral("cmd"), QStringLiteral("shortcut")},
+                        {QStringLiteral("target"), QStringLiteral("vox_toggle")}});
+        check(!ok(rep), "shortcut: vox_toggle is blocked when allowTx is false");
+        check(!tx.voxEnable(), "shortcut: VOX remains unarmed when shortcut is blocked");
+
+        server.setTxAllowed(true);
+        rep = AutomationServerTestAccess::request(server,
+            QJsonObject{{QStringLiteral("cmd"), QStringLiteral("shortcut")},
+                        {QStringLiteral("target"), QStringLiteral("vox_toggle")}});
+        check(ok(rep), "shortcut: vox_toggle is accepted when allowTx is true");
+        check(tx.voxEnable(), "shortcut: VOX is toggled to true when allowTx is true");
+
+        rep = AutomationServerTestAccess::request(server,
+            QJsonObject{{QStringLiteral("cmd"), QStringLiteral("shortcut")},
+                        {QStringLiteral("target"), QStringLiteral("vox_toggle")}});
+        check(ok(rep), "shortcut: vox_toggle can toggle back to false when allowTx is true");
+        check(!tx.voxEnable(), "shortcut: VOX is toggled back to false");
     }
 
     // ── The operator's own input ────────────────────────────────────────────
