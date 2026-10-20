@@ -1628,7 +1628,7 @@ void RadioModel::wireBackendReceiverState()
         }
         SliceModel* s = slice(sliceId);
         if (!s) {
-            ++m_sliceRetirements[sliceId];
+            noteSliceRetirement(sliceId);
             return;
         }
         m_slices.removeAll(s);
@@ -3329,9 +3329,10 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
         if (SliceModel* currentTxSlice = txSlice();
             currentTxSlice && currentTxSlice->panId() == trimmedPanId
             && sliceMayBelongToUs(currentTxSlice->sliceId())) {
-            m_panTransmitInhibitedTxSlices.insert(
-                trimmedPanId, {currentTxSlice->sliceId(), currentTxSlice, controlSession(),
-                               m_sliceRetirements.value(currentTxSlice->sliceId())});
+            if (const auto retirement = retainSliceRetirement(currentTxSlice->sliceId())) {
+                m_panTransmitInhibitedTxSlices.insert(
+                    trimmedPanId, {currentTxSlice->sliceId(), currentTxSlice, controlSession(), *retirement});
+            }
         }
     }
     if (m_panTransmitInhibitReasons.value(trimmedPanId) == trimmedReason) {
@@ -12623,7 +12624,7 @@ void RadioModel::handleSliceStatus(int id,
 
     if (removed) {
         // A removal before publication still retires an acknowledged create ID.
-        if (!s && !m_staleSlices.contains(id)) { ++m_sliceRetirements[id]; }
+        if (!s && !m_staleSlices.contains(id)) { noteSliceRetirement(id); }
         if (s) {
             const bool wasTxSlice = s->isTxSlice();
             m_slices.removeOne(s);

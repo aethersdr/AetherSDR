@@ -153,6 +153,16 @@ The connected radio can't do split, so AetherSDR refuses rather than doing nothi
    create a split transmitter. Other radio families do not offer independent
    same-pan split creation through this control.
 
+### Split setup failed
+
+The radio refused the new slice, did not confirm it in time, or the original
+receiver changed before setup finished. AetherSDR leaves the split disabled
+when it cannot safely identify the new transmit slice.
+
+1. Check that the original receiver is still connected and a slice is free.
+2. Check the radio's current slices before retrying; an unconfirmed request
+   may still have created a slice.
+
 ### The split closed on its own after my logger changed frequency
 
 **Close split on QSY** is on, and something outside AetherSDR moved Slice A by more than the threshold.

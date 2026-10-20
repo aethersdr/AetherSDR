@@ -29,6 +29,14 @@ public:
         radio.reconcileSliceCreates();
     }
     static void foreign(RadioModel& radio, int id) { radio.m_foreignSliceOwners.insert(id, 99); }
+    static qsizetype retirementCount(const RadioModel& radio) { return radio.m_sliceRetirements.size(); }
+    static void quarantine(RadioModel& radio, int id)
+    {
+        SliceModel* source = radio.slice(id);
+        radio.m_slices.removeOne(source);
+        radio.m_staleSlices.insert(id, source);
+        emit radio.sliceRemoved(id);
+    }
 };
 #ifdef HAVE_WEBSOCKETS
 class TciSliceLifecycleTestAccess {
@@ -42,6 +50,20 @@ public:
     }
     static bool pending(const TciServer& server) { return server.m_pendingVfoBCreate.has_value(); }
     static bool ownsRoute(const TciServer& server) { return server.m_routingState.ownsRoute(); }
+    static void disableSplit(TciServer& server, TciClient& client, const CreatedSliceReceipt& receipt)
+    {
+        server.m_createdVfoBSlices.insert(receipt.sliceId(), receipt);
+        server.m_trxMap.acquire(0);
+        server.m_routingState.bindCreatedRoute(0, receipt.sliceId());
+        server.m_routingState.setSplitRequested(true);
+        server.handleSplitRequest(&client, {0, false});
+    }
+    static void replaceRoute(TciServer& server)
+    {
+        ++server.m_routeTransitionGeneration;
+        server.m_routeTransitionInFlight = false;
+        server.m_routingState.bindCreatedRoute(0, 2);
+    }
 };
 #endif
 }
@@ -307,6 +329,50 @@ void retiredAndForeign()
           "acknowledged but unpublished creation still reserves capacity");
 }
 
+void boundedRetirementHistory()
+{
+    Fixture f;
+    QObject owner;
+    CreatedSliceReceipt retained;
+    f.create(&owner, [&](const SliceCreationResult& result) { retained = result.created; });
+    f.acknowledge(0, 1);
+    f.publish(1);
+    settle();
+    RadioControlReply::Kind pendingResult = RadioControlReply::Kind::Accepted;
+    CreatedSliceReceipt uncertain;
+    f.create(&owner, [&](const SliceCreationResult& result) {
+        pendingResult = result.result.kind;
+        uncertain = result.created;
+    });
+    for (int id = 1000; id != 2024; ++id) {
+        f.radio.handleSliceStatusForTest(id, {}, true);
+    }
+    settle();
+    check(RadioModelSliceLifecycleTestAccess::retirementCount(f.radio) <= 64,
+          "arbitrary unknown removal status cannot grow retirement history beyond its fixed bound");
+    check(f.radio.resolveCreatedSlice(retained) == f.radio.slice(1),
+          "history compaction preserves a live slice's cleanup identity");
+    f.acknowledge(1, 2);
+    f.publish(2);
+    settle();
+    check(pendingResult != RadioControlReply::Kind::Accepted && !uncertain.valid(),
+          "a pending creation with discarded retirement history cannot acquire cleanup authority");
+    check(f.radio.removeCreatedSlice(retained) && f.backend->removes == std::vector<int>{1},
+          "bounded history still permits cleanup of the original live receiver");
+    Fixture stale;
+    stale.create(&owner, [&](const SliceCreationResult& result) { retained = result.created; });
+    stale.acknowledge(0, 1);
+    stale.publish(1);
+    settle();
+    SliceModel* identity = stale.radio.slice(1);
+    RadioModelSliceLifecycleTestAccess::quarantine(stale.radio, 1);
+    for (int id = 3000; id != 4024; ++id) { emit stale.backend->sliceRemoved(id); }
+    stale.publish(1);
+    check(stale.radio.slice(1) == identity && !stale.radio.resolveCreatedSlice(retained)
+              && RadioModelSliceLifecycleTestAccess::retirementCount(stale.radio) <= 64,
+          "compaction retains tombstones for quarantined objects reclaimed in the same session");
+}
+
 void answeredSelectionAndInhibit()
 {
     Fixture f;
@@ -445,6 +511,24 @@ void tciCancellation()
                   && f.backend->removes == std::vector<int>{1},
               "TCI stop, replaced RX and late selection cannot resurrect a route or reap another slice");
     }
+    Fixture f;
+    QObject owner;
+    CreatedSliceReceipt receipt;
+    f.create(&owner, [&](const SliceCreationResult& result) { receipt = result.created; });
+    f.acknowledge(0, 1);
+    f.publish(1, true);
+    f.publish(0, false);
+    settle();
+    TciServer server(&f.radio);
+    TciClient client;
+    TciSliceLifecycleTestAccess::disableSplit(server, client, receipt);
+    check(f.backend->selectionReplies.size() == 1, "TCI split disable waits for original RX selection");
+    TciSliceLifecycleTestAccess::replaceRoute(server);
+    if (!f.backend->selectionReplies.empty()) {
+        f.backend->selectionReplies.front()({RadioControlReply::Kind::Accepted, 0, {}});
+    }
+    check(TciSliceLifecycleTestAccess::ownsRoute(server) && f.backend->removes.empty(),
+          "late split-disable selection cannot clear a replacement route or start stale cleanup");
 #endif
 }
 }
@@ -458,6 +542,7 @@ int main(int argc, char** argv)
     correlatedCreation();
     cancelledCreation();
     retiredAndForeign();
+    boundedRetirementHistory();
     answeredSelectionAndInhibit();
     duplexAndRefresh();
     rigctlCorrelation();

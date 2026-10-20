@@ -13,6 +13,7 @@ namespace {
 constexpr int kSliceCreateDeadlineMs = 10000;
 constexpr int kSliceCreateRetainMs = 60000;
 constexpr int kPendingCreateLimit = 64;
+constexpr int kRetirementHistoryLimit = 64;
 }
 
 struct RadioModel::PendingSliceCreate {
@@ -28,12 +29,39 @@ struct RadioModel::PendingSliceCreate {
     bool transient{false};
     bool cancelled{false};
     bool notified{false};
+    bool identityUncertain{false};
 };
+
+std::optional<quint64> RadioModel::retainSliceRetirement(int id)
+{
+    if (id < 0) { return {}; }
+    const auto existing = m_sliceRetirements.constFind(id);
+    if (existing != m_sliceRetirements.cend()) { return *existing; }
+    if (m_sliceRetirements.size() >= kRetirementHistoryLimit) { return {}; }
+    m_sliceRetirements.insert(id, 0);
+    return 0;
+}
+
+void RadioModel::noteSliceRetirement(int id)
+{
+    if (id < 0) { return; }
+    if (!m_sliceRetirements.contains(id) && m_sliceRetirements.size() >= kRetirementHistoryLimit) {
+        // Discarded tombstones make pending create identities unprovable. Keep
+        // live and quarantined identities so issued receipts stay precise.
+        for (const auto& pending : std::as_const(m_pendingSliceCreates)) { pending->identityUncertain = true; }
+        for (auto it = m_sliceRetirements.begin(); it != m_sliceRetirements.end();) {
+            if (!slice(it.key()) && !m_staleSlices.contains(it.key())) { it = m_sliceRetirements.erase(it); }
+            else { ++it; }
+        }
+        QTimer::singleShot(0, this, &RadioModel::reconcileSliceCreates);
+    }
+    if (const auto revision = retainSliceRetirement(id)) { m_sliceRetirements[id] = *revision + 1; }
+}
 
 void RadioModel::wireSliceLifecycle()
 {
     connect(this, &RadioModel::sliceRemoved, this, [this](int id) {
-        ++m_sliceRetirements[id];
+        noteSliceRetirement(id);
         m_pendingSliceRemoves.remove(id);
         QTimer::singleShot(0, this, &RadioModel::reconcileSliceCreates);
     });
@@ -146,6 +174,13 @@ void RadioModel::reconcileSliceCreates()
     const auto requests = m_pendingSliceCreates.values();
     for (const auto& pending : requests) {
         if (!m_pendingSliceCreates.contains(pending->ticket)) { continue; }
+        if (pending->identityUncertain) {
+            m_pendingSliceCreates.remove(pending->ticket);
+            notifySliceCreate(pending, {{RadioControlReply::Kind::Failed, -1,
+                QStringLiteral("Slice-creation identity history is no longer available")}, {}});
+            if (!alive) { return; }
+            continue;
+        }
         if (!controlSessionCurrent(pending->session) || !pending->pan
             || panadapter(pending->pan->panId()) != pending->pan) {
             m_pendingSliceCreates.remove(pending->ticket);
@@ -166,11 +201,19 @@ void RadioModel::reconcileSliceCreates()
                         QStringLiteral("Created slice identity was retired or belongs to another owner")}, {}});
                 } else if (SliceModel* source = slice(id);
                            source && source->panId() == pending->pan->panId() && sliceOwnedByUs(id)) {
+                    const std::optional<quint64> retirement = retainSliceRetirement(id);
+                    if (!retirement) {
+                        m_pendingSliceCreates.remove(pending->ticket);
+                        notifySliceCreate(pending, {{RadioControlReply::Kind::Failed, -1,
+                            QStringLiteral("Slice-creation identity capacity is unavailable")}, {}});
+                        if (!alive) { return; }
+                        continue;
+                    }
                     CreatedSliceReceipt receipt;
                     receipt.m_sliceId = id;
                     receipt.m_identity = source;
                     receipt.m_session = pending->session;
-                    receipt.m_retirement = m_sliceRetirements.value(id);
+                    receipt.m_retirement = *retirement;
                     m_pendingSliceCreates.remove(pending->ticket);
                     if (pending->transient && (pending->cancelled || !pending->owner)) {
                         removeCreatedSlice(receipt);

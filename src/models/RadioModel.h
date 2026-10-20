@@ -1871,6 +1871,8 @@ private:
     void wireSliceLifecycle();
     void reconcileSliceCreates();
     void expireSliceCreation(quint64 ticket);
+    void noteSliceRetirement(int sliceId);
+    std::optional<quint64> retainSliceRetirement(int sliceId);
     void notifySliceCreate(const std::shared_ptr<PendingSliceCreate>& pending,
                            const SliceCreationResult& result);
     bool dispatchSliceRemoval(SliceModel* source, const RadioControlSession& session,

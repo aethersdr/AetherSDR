@@ -7963,6 +7963,10 @@ void MainWindow::enterSplit(int rxSliceId, std::optional<double> offsetMhz)
                 m_splitTxSliceId = -1;
                 m_splitRxFrequencyMhz = 0.0;
                 updateSplitState();
+                if (result.result.kind != RadioControlReply::Kind::Cancelled) {
+                    showPanadapterInterlockNotification(
+                        tr("Split setup failed: %1").arg(result.result.message), QStringLiteral("split-create-failed"));
+                }
                 return;
             }
             SliceModel* target = m_radioModel.resolveCreatedSlice(result.created);

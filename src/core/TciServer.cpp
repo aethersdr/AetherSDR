@@ -2185,6 +2185,7 @@ void TciServer::handleVfoRequest(TciClient* client, const TciProtocol::VfoReques
                 if (!self) {
                     return;
                 }
+                if (transitionGeneration != self->m_routeTransitionGeneration) { return; }
                 if (socket && socket->live() && selected) {
                     self->tuneSliceAndConfirm(
                         socket, request.trx, 1, route.txSliceId, request.frequencyHz);
@@ -2248,6 +2249,7 @@ void TciServer::handleSplitRequest(TciClient* client, const TciProtocol::SplitRe
                     if (!self) {
                         return;
                     }
+                    if (transitionGeneration != self->m_routeTransitionGeneration) { return; }
                     if (!selected) {
                         self->m_routingState.setSplitRequested(false);
                         self->finishRouteTransition(transitionGeneration);
@@ -2295,6 +2297,7 @@ void TciServer::handleSplitRequest(TciClient* client, const TciProtocol::SplitRe
             if (!self) {
                 return;
             }
+            if (transitionGeneration != self->m_routeTransitionGeneration) { return; }
             if (selected) {
                 if (createdSliceId >= 0 && self->m_model) {
                     self->reapCreatedVfoBSlice(createdSliceId);
@@ -2588,6 +2591,7 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
         if (!self) {
             return;
         }
+        if (transitionGeneration != self->m_routeTransitionGeneration) { return; }
         if (!socket || !socket->live() || !selected || !self->m_model || !txRequest.valid()) {
             // A refused promote used to be near-unreachable: resolvePttSlice()
             // returned the slice that already held TX, so promoteTxSlice took
