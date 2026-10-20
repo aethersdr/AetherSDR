@@ -120,6 +120,43 @@ bool retainLockedEstimates()
     return require(decoder.estimatedPitch() == 0 && decoder.estimatedSpeed() == 0,
                    "Unlocked stopped decoder kept old estimates");
 }
+
+bool sameRange(CwDecodeSettings::Range got, int low, int high)
+{
+    return got.low == low && got.high == high;
+}
+
+// A saved decoder range reaches the slider and the decoder only as an ordered
+// band inside the slider span; anything else falls back to the default.
+bool savedRangesStayInsideTheSliders()
+{
+    auto& s = AppSettings::instance();
+    auto store = [&](const char* json) { s.setValue("CwDecoder", QString::fromLatin1(json)); };
+    // CONSTRUCTED blobs: they exercise the read-side validation only.
+    store(R"({"rx":"True","tx":"False"})");
+    if (!require(sameRange(CwDecodeSettings::pitchRange(), 500, 700)
+                 && sameRange(CwDecodeSettings::speedRange(), 15, 40),
+                 "Missing ranges did not read as the defaults")) { return false; }
+    store(R"({"pitchLow":100,"pitchHigh":5000,"speedLow":0,"speedHigh":99})");
+    if (!require(sameRange(CwDecodeSettings::pitchRange(), 300, 1200)
+                 && sameRange(CwDecodeSettings::speedRange(), 5, 60),
+                 "Out-of-span ranges were not clamped to the slider spans")) { return false; }
+    store(R"({"pitchLow":900,"pitchHigh":600,"speedLow":"fast","speedHigh":30})");
+    if (!require(sameRange(CwDecodeSettings::pitchRange(), 500, 700)
+                 && sameRange(CwDecodeSettings::speedRange(), 15, 40),
+                 "Inverted or non-numeric ranges did not fall back")) { return false; }
+
+    store(R"({"rx":"False","tx":"True","liveContacts":"True"})");
+    CwDecodeSettings::setPitchRange(651, 954);
+    CwDecodeSettings::setSpeedRange(20, 30);
+    const bool kept = require(sameRange(CwDecodeSettings::pitchRange(), 651, 954)
+                              && sameRange(CwDecodeSettings::speedRange(), 20, 30)
+                              && !CwDecodeSettings::rxEnabled() && CwDecodeSettings::txEnabled()
+                              && CwDecodeSettings::liveContactsEnabled(),
+                              "Saving a range lost it or another CW decoder setting");
+    store(R"({"rx":"True","tx":"False"})");
+    return kept;
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -127,6 +164,7 @@ int main(int argc, char** argv)
     TestSettingsProfile settings(QStringLiteral("cw-rx-model"));
     QCoreApplication app(argc, argv);
     AppSettings::instance().load();
+    if (!savedRangesStayInsideTheSliders()) { return 1; }
     CwDecodeSettings::setBackend(QStringLiteral("unknown"));
     if (!require(!CwDecodeSettings::neuralSelected(),
                  "Unknown saved backend disables ggmorse controls")) { return 1; }

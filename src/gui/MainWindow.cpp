@@ -9510,6 +9510,9 @@ void MainWindow::routeCwDecoderOutput()
 
     // Connect to new applet
     if (m_cwDecoderApplet) {
+        // Each pan builds its own range sliders; the decoder's ranges are one
+        // shared setting, so the target shows the saved ones before they are pushed.
+        m_cwDecoderApplet->restoreCwRanges();
         connect(&m_cwDecoder, &CwRxModel::textDecoded,
                 m_cwDecoderApplet, &PanadapterApplet::appendCwText);
         // TX-side decoded text routes to a separate slot so the panel
