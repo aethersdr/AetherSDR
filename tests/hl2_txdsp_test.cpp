@@ -2672,6 +2672,66 @@ int main(int argc, char** argv)
     }
 #endif  // AETHER_HL2_TX_TXA
 
+    // ── TX filter taps (#6605) ────────────────────────────────────────────
+    //
+    // filterLevels() is what RadioModel's TX-filter-loss card reads as
+    // SC_FILT_1/SC_FILT_2, and the card fires at 40 dB between them
+    // (kTxFilterKillDeltaDb). A tone inside the passband must come out at
+    // about the level it went in; one outside it must lose more than that.
+    {
+        auto tapDelta = [&](double toneHz) {
+            std::vector<float> deltas;
+            for (int attempt = 0; attempt < 3; ++attempt) {
+                deltas.clear();
+                Hl2TxDsp tx;
+                TxTestAuthority auth;
+                Hl2TxDsp::Config cfg;
+                cfg.mode = WdspChannel::Mode::Usb;
+                cfg.filterLowHz = 300.0;
+                cfg.filterHighHz = 2700.0;
+                cfg.alcEnabled = false;
+                std::string err;
+                if (!tx.configure(cfg, &err)) {
+                    check(false, "filter-tap case configures");
+                    return deltas;
+                }
+                tx.setMicGain(1.0);
+                QObject::connect(&tx, &Hl2TxDsp::filterLevels, &tx,
+                                 [&deltas](float in, float out) { deltas.push_back(in - out); });
+                const int fs = cfg.inputSampleRateHz;
+                constexpr int kChunk = 240;
+                std::vector<float> chunk(kChunk);
+                for (int off = 0; off + kChunk <= fs; off += kChunk) {
+                    for (int n = 0; n < kChunk; ++n)
+                        chunk[static_cast<std::size_t>(n)] = static_cast<float>(
+                            0.5 * std::sin(2.0 * M_PI * toneHz * (off + n) / fs));
+                    feed(tx, chunk, TxAudioSource::Microphone, auth.context);
+                }
+                if (tx.modulatorFaultBlocks() == 0)
+                    break;
+            }
+            // The first windows hold the modulator's start-up; the card itself
+            // needs five in a row, so the settled ones are what it acts on.
+            if (deltas.size() > 4)
+                deltas.erase(deltas.begin(), deltas.begin() + 4);
+            std::sort(deltas.begin(), deltas.end());
+            return deltas;
+        };
+        const auto inBand = tapDelta(1000.0);
+        const auto outBand = tapDelta(6000.0);
+        const float inMed = inBand.empty() ? 999.0f : inBand[inBand.size() / 2];
+        const float outMin = outBand.empty() ? -999.0f : outBand.front();
+        std::fprintf(stderr, "filter taps: 1 kHz in 300..2700 loses %.1f dB (median of %zu);"
+                             " 6 kHz loses at least %.1f dB (%zu windows)\n",
+                     inMed, inBand.size(), outMin, outBand.size());
+        check(inBand.size() >= 4 && outBand.size() >= 4,
+              "filter taps: published about every 100 ms of input");
+        check(std::fabs(inMed) < 10.0f,
+              "filter taps: a tone inside the passband comes out at about its input level");
+        check(outMin > 40.0f,
+              "filter taps: a tone outside the passband loses more than the card's 40 dB");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_txdsp_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;
