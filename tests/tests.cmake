@@ -4286,7 +4286,7 @@ add_test(NAME band_plan_license_filter_test COMMAND band_plan_license_filter_tes
 add_executable(band_plan_zoom_test
     tests/band_plan_zoom_test.cpp
     src/models/BandPlanManager.cpp
-    ${AETHER_SETTINGS_SOURCES}
+    $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(band_plan_zoom_test PRIVATE src)
 target_link_libraries(band_plan_zoom_test PRIVATE Qt6::Core Qt6::Gui)
