@@ -6304,9 +6304,8 @@ bool RadioModel::requestLocalPanWeightedAverage(const QString& panId, bool on)
 
 bool RadioModel::requestLocalShowTxInWaterfall(bool on)
 {
-    // Only where the backend declares the client owns the flag. Elsewhere
-    // the caller sends the show_tx_in_waterfall= wire text itself, which
-    // keeps a raw command out of this side of the seam (#5262 M4).
+    // Only where the backend declares the client owns the flag. Radio-owned
+    // requests continue through requestRadioSetup and the backend encoder.
     const bool clientOwns = backendCapabilities().clientPersistsShowTxInWaterfall();
     if (!clientOwns) {
         return false;
