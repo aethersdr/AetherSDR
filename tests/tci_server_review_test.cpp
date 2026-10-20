@@ -130,14 +130,17 @@ public:
         TciServer server(&model);
         TciClient client;
         TciClient otherClient;
+        // Routing-only PTT must not require admission to a DAX audio session.
+        const TciProtocol::TrxRequest key{0, true, QString()};
+        if (server.trxWantsAudio(&client, key)) {
+            return false;
+        }
 
         server.m_routeTransitionInFlight = true;
         server.handleVfoRequest(&client, TciProtocol::VfoRequest{
             0, 1, 14076000
         });
-        server.handleTrxRequest(&client, TciProtocol::TrxRequest{
-            0, true, QStringLiteral("tci")
-        });
+        server.handleTrxRequest(&client, key);
         if (!server.m_pendingTrxRequest
             || server.m_pendingTrxRequest->client != &client
             || server.m_pendingRouteCommands.size() != 1) {
@@ -153,9 +156,7 @@ public:
         }
 
         server.m_pendingTrxRequest = TciServer::PendingTrxRequest{
-            &otherClient, TciProtocol::TrxRequest{
-                0, true, QStringLiteral("tci")
-            }
+            &otherClient, key
         };
         TciServer::PendingRouteCommand otherRoute;
         otherRoute.client = &otherClient;
@@ -169,6 +170,27 @@ public:
             && server.m_pendingTrxRequest->client == &otherClient
             && server.m_pendingRouteCommands.size() == 1
             && server.m_pendingRouteCommands.first().client == &otherClient;
+    }
+
+    static bool unownedAudioPttIsRefusedBeforeRouting()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        TciClient client;
+        const TciProtocol::TrxRequest key{0, true, QStringLiteral("tci")};
+        if (!client.live() || !model.backendCapabilities().hasDaxStreams
+            || model.daxTxAudioPermit().permits() || !server.trxWantsAudio(&client, key)) {
+            return false;
+        }
+        QStringList replies;
+        client.textSink = [&replies](const QString& message) -> qint64 {
+            replies.append(message.trimmed());
+            return message.size();
+        };
+        server.m_routeTransitionInFlight = true;
+        server.handleTrxRequest(&client, key);
+        return !server.m_pendingTrxRequest
+            && replies == QStringList{QStringLiteral("trx:0,false;")};
     }
 
     // #4547: two WSJT-X instances both address trx 0, so the wire request
@@ -500,11 +522,13 @@ public:
         if (!pttRouteFixture(model, server)) {
             return false;
         }
+        const TciProtocol::TrxRequest key{1, true, QString()};
+        if (server.trxWantsAudio(&client, key)) {
+            return false;
+        }
 
         const QStringList log = captureCatLog([&] {
-            server.handleTrxRequest(&client, TciProtocol::TrxRequest{
-                1, true, QStringLiteral("tci")
-            });
+            server.handleTrxRequest(&client, key);
         });
 
         const QString route = findLine(log, "TCI PTT route:");
@@ -582,10 +606,12 @@ public:
 
         // trx 0 addresses slice 0, which is not the TX slice: with a route
         // applying, the requested receiver is resolved away onto slice 1.
+        const TciProtocol::TrxRequest key{0, true, QString()};
+        if (server.trxWantsAudio(&client, key)) {
+            return false;
+        }
         const QStringList log = captureCatLog([&] {
-            server.handleTrxRequest(&client, TciProtocol::TrxRequest{
-                0, true, QStringLiteral("tci")
-            });
+            server.handleTrxRequest(&client, key);
         });
 
         const QString route = findLine(log, "TCI PTT route:");
@@ -2665,6 +2691,8 @@ int main(int argc, char** argv)
     const bool validProfile = settingsProfile.isValid();
     const bool deferredAbort
         = AetherSDR::TciServerReviewTest::deferredAbortIsClientScoped();
+    const bool unownedAudioRefused
+        = AetherSDR::TciServerReviewTest::unownedAudioPttIsRefusedBeforeRouting();
     const bool observableFailure
         = AetherSDR::TciServerReviewTest::routeFailureIsObservable();
     const bool payloadFreeDisconnect
@@ -2746,6 +2774,8 @@ int main(int argc, char** argv)
                 validProfile ? "PASS" : "FAIL");
     std::printf("%s  deferred TRX abort is client-scoped\n",
                 deferredAbort ? "PASS" : "FAIL");
+    std::printf("%s  unowned DAX audio PTT is refused before deferred routing\n",
+                unownedAudioRefused ? "PASS" : "FAIL");
     std::printf("%s  VFO-B route failure is observable\n",
                 observableFailure ? "PASS" : "FAIL");
     std::printf("%s  disconnect snapshot omits peer text and uses unset error\n",
@@ -2835,7 +2865,7 @@ int main(int argc, char** argv)
     std::printf("%s  worker streams and revokes TX while owner is stalled\n", workerStall ? "PASS" : "FAIL");
     std::printf("%s  late key abort runs on model owner\n", lateKeyAbort ? "PASS" : "FAIL");
 
-    return workerStall && lateKeyAbort && inputFence && validProfile && deferredAbort && observableFailure
+    return workerStall && lateKeyAbort && inputFence && validProfile && deferredAbort && unownedAudioRefused && observableFailure
         && payloadFreeDisconnect && outboundTextAccounting && pttBindsReceiver
         && pttUsesStableMap && ownershipJoin
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
