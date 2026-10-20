@@ -304,9 +304,10 @@ jobs:
     needs: sign-release-pdf
     if: >-
       ${{ !cancelled()
-          && (needs.sign-release-pdf.result == 'success' || needs.sign-release-pdf.result == 'skipped')
-          && (github.event_name == 'workflow_dispatch'
+          && ((github.event_name == 'workflow_dispatch'
+               && needs.sign-release-pdf.result == 'skipped')
               || (github.event_name == 'release'
+                  && needs.sign-release-pdf.result == 'success'
                   && startsWith(github.event.release.tag_name, 'v')
                   && !github.event.release.prerelease)) }}
     runs-on: ubuntu-latest
@@ -374,8 +375,9 @@ jobs:
           fi
 
           pdf="AetherSDR-Manual-${pdf_tag}.pdf"
-          if ! gh release view "$pdf_tag" --repo "$GITHUB_REPOSITORY" \
-               --json assets --jq '.assets[].name' | grep -qxF "$pdf"; then
+          has_pdf=$(gh release view "$pdf_tag" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq ".assets | any(.name == \"${pdf}\")")
+          if [ "$has_pdf" != "true" ]; then
             echo "::error::Release ${pdf_tag} has no ${pdf}; the PDF redirect would be broken."
             exit 1
           fi
@@ -390,6 +392,7 @@ jobs:
   build-site:
     name: Build docs site for deploy
     needs: resolve-target
+    if: ${{ !cancelled() && needs.resolve-target.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -420,7 +423,17 @@ jobs:
         env:
           PDF_URL: ${{ needs.resolve-target.outputs.pdf_url }}
         run: |
-          echo "/AetherSDR-Manual.pdf ${PDF_URL} 302" >> build/_redirects
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          redirects = Path('build/_redirects')
+          lines = redirects.read_text().splitlines() if redirects.exists() else []
+          lines = [line for line in lines
+                   if not line.split() or line.split()[0] != '/AetherSDR-Manual.pdf']
+          lines.append(f"/AetherSDR-Manual.pdf {os.environ['PDF_URL']} 302")
+          redirects.write_text('\n'.join(lines) + '\n')
+          PY
           cat build/_redirects
 
       - name: Check no file exceeds the Pages limit
@@ -446,6 +459,7 @@ jobs:
   deploy:
     name: Deploy docs site
     needs: [resolve-target, build-site]
+    if: ${{ !cancelled() && needs.resolve-target.result == 'success' && needs.build-site.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: cloudflare-pages
