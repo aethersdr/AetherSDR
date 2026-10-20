@@ -259,6 +259,73 @@ int main(int argc, char** argv)
     check(!backend.capabilities().canTransmit && !audio.hostModulation(),
           "unknown ID cannot inherit the familiar nickname or source-address profile");
 
+    for (const std::uint8_t id : {0x94, 0x98, 0x8E, 0xAC, 0xB2, 0x7F}) {
+        IcomCivBackendTestAccess::connect(backend, "IC-7300MK2", 0x50, true);
+        QString rejection;
+        int rejections = 0;
+        int disconnects = 0;
+        const QMetaObject::Connection refused = QObject::connect(
+            &backend, &IRadioBackend::connectionRejected, [&](const QString& reason) {
+                rejection = reason;
+                ++rejections;
+            });
+        const QMetaObject::Connection closed = QObject::connect(
+            &backend, &IRadioBackend::disconnected, [&] { ++disconnects; });
+        const QStringList beforeFrames = IcomCivBackendTestAccess::outbound(backend);
+        const QByteArray reply = QByteArray::fromHex("fefee0501900")
+                                 + QByteArray(1, static_cast<char>(id))
+                                 + QByteArray::fromHex("fd");
+        IcomCivBackendTestAccess::inject(
+            backend, reply, IcomCivBackendTestAccess::generation(backend));
+        IcomCivBackendTestAccess::inject(backend, "fefee0501900a4fd");
+        check(rejections == 1 && rejection.contains("not supported by AetherSDR")
+                  && rejection.contains(QStringLiteral("0x%1").arg(
+                      QString::number(id, 16).rightJustified(2, QLatin1Char('0')).toUpper()))
+                  && rejection.contains("IC-705 (experimental)")
+                  && rejection.contains("IC-9700 (experimental)"),
+              "unsupported identity is refused once with model ID and explicit support labels");
+        if (id == 0x98) {
+            check(rejection.startsWith("IC-7610 (CI-V model ID 0x98)"),
+                  "known unsupported model is named independently of nickname and address");
+        }
+        check(!backend.capabilities().canTransmit && !audio.hostModulation()
+                  && !IcomCivBackendTestAccess::retrying(backend),
+              "rejection stops identity retries and cannot adopt a later supported reply");
+        waitMs(0);
+        check(!backend.isConnected() && disconnects == 1
+                  && IcomCivBackendTestAccess::outbound(backend) == beforeFrames,
+              "rejected session closes once without startup reads or teardown CI-V writes");
+        QObject::disconnect(refused);
+        QObject::disconnect(closed);
+    }
+
+    for (const std::uint8_t id : {0xA4, 0xB6, 0xA2}) {
+        IcomCivBackendTestAccess::connect(backend, "Custom radio", 0x50, true);
+        const QByteArray reply = QByteArray::fromHex("fefee0501900")
+                                 + QByteArray(1, static_cast<char>(id))
+                                 + QByteArray::fromHex("fd");
+        IcomCivBackendTestAccess::inject(
+            backend, reply, IcomCivBackendTestAccess::generation(backend));
+        waitMs(0);
+        check(backend.isConnected() && backend.capabilities().canTransmit
+                  && IcomCivBackendTestAccess::address(backend) == 0x50,
+              "all three admitted models retain customized CI-V address support");
+    }
+
+    {
+        RadioModel radio;
+        IcomCivBackend& refusedBackend = RadioModelWakeTestAccess::prepare(radio);
+        int refused = 0;
+        QObject::connect(&radio, &RadioModel::connectionRejected,
+                         [&](const QString&) { ++refused; });
+        IcomCivBackendTestAccess::connect(refusedBackend, "IC-705");
+        IcomCivBackendTestAccess::inject(refusedBackend, "fefee098190098fd");
+        waitMs(0);
+        check(refused == 1 && !radio.isConnected()
+                  && !radio.isConnectAttemptInFlight() && !RadioModelWakeTestAccess::retrying(radio),
+              "terminal identity rejection reaches RadioModel without automatic reconnect");
+    }
+
     IcomCivBackendTestAccess::connect(backend, "IC-705");
     IcomCivBackendTestAccess::inject(backend, "fefee0501900a4fd");
     IcomCivBackendTestAccess::markKeyed(backend);

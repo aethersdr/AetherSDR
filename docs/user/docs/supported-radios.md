@@ -30,13 +30,13 @@ The rest of this documentation describes FlexRadio operation unless a page says 
 | Family | Status | Connects by | Page |
 |--------|--------|-------------|------|
 | Hermes-Lite 2 | **Experimental** | LAN discovery, or Connect by IP | [Hermes-Lite 2](./hermes-lite-2.md) |
-| Networked Icom (IC-705, IC-7300MK2, IC-9700 …) | **Early**; the **IC-7300MK2 is supported** | Connect by IP | [Networked Icom](./networked-icom.md) |
+| Networked Icom (IC-705, IC-7300MK2, IC-9700) | **IC-7300MK2 supported**; **IC-705 and IC-9700 experimental** | Connect by IP | [Networked Icom](./networked-icom.md) |
 | ANAN-G2 | **Experimental, receive-only** | LAN discovery, or Connect by IP | [ANAN-G2](./anan-g2.md) |
 | RTL-SDR USB dongles | **Experimental, receive-only** | USB discovery (builds with the RTL-SDR backend) | [RTL-SDR](./rtl-sdr.md) |
 | KiwiSDR and Web-888 | Public receivers used as receive-only antennas for a slice | Radio Setup → Antennas | [KiwiSDR and Web-888](./kiwisdr-and-web-888.md) |
 | Demo | Built-in simulator, cannot transmit | The Connect to Radio list | [Demo Mode](./demo-mode.md) |
 
-None of the other families is a supported family yet. The IC-7300MK2 over its built-in Ethernet (RS-BA1) is the one non-Flex model supported on its own; every other Icom model keeps the early, experimental treatment.
+None of the other families is a supported family yet. The IC-7300MK2 over its built-in Ethernet (RS-BA1) is the one non-Flex model supported on its own. The IC-705 and IC-9700 are experimental; other Icom models cannot connect.
 
 While a Hermes-Lite 2, an ANAN-G2 or an Icom other than the IC-7300MK2 is connected, an **EXPERIMENTAL** badge shows in the title bar, and an "Experimental radio support" notice appears when you connect. Tick "Don't show again" in the notice to stop it for that family.
 
@@ -70,7 +70,7 @@ This table lists only what has been confirmed for each family. A **?** means not
 
 Notes:
 - **Receivers on the HL2:** up to four receivers at spans up to 192 kHz, three at 384 kHz. The span is one value for the whole board.
-- **Icom panadapters:** the IC-9700, IC-7610 and IC-785x offer one panadapter, the single scope stream AetherSDR implements.
+- **Icom panadapters:** the IC-705, IC-7300MK2 and IC-9700 offer one panadapter, the single scope stream AetherSDR implements.
 - **Memory channels:** a FlexRadio keeps its memories. Every other family uses one shared bank stored on this computer. On an Icom whose model supports it, the radio's own memories can be read into that bank; the IC-9700's radio memories are read-only. See [Memory Channels](./memory-channels.md).
 
 ### Controls on non-Flex radios

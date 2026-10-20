@@ -177,8 +177,8 @@ txBandwidthProfileFor(const IcomModel& model);
 // receiver. An unknown radio that gets advertised as scope-capable produces a
 // panadapter wired to a command the radio may not implement; an unknown radio
 // advertised as transmit-capable produces a TX button on something we cannot
-// characterise. Both are worse than a reduced feature set, and the operator can
-// still tune and listen.
+// characterise. This is the pre-identification profile; an unknown identity is
+// rejected rather than admitted with guessed capabilities.
 [[nodiscard]] const IcomModel& unknownModel();
 
 // One RF deck: a range this model can tune, and the PA rating inside it.

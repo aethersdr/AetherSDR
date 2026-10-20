@@ -1,4 +1,5 @@
 #include "ConnectionPanel.h"
+#include "FramelessMessageBox.h"
 #include "core/AppSettings.h"
 #include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with MainWindow_Session
 #include "core/backends/anan/AnanDiscovery.h" // shared nickname + MAC->serial helpers
@@ -2340,11 +2341,24 @@ void ConnectionPanel::setManualFamily(const QString& family)
     updateManualFamilyHints();
 }
 
-// Build the model list, and select what the settings say.
-//
-// FROM knownModels(), never hand-typed, so the list cannot drift from the table
-// the backend decodes against. A model added there appears here for free —
-// which is the point, given the table is where the IC-7760 row is missing.
+void ConnectionPanel::showUnsupportedIcomModel(const QString& reason)
+{
+    auto* box = new FramelessMessageBox(this);
+    box->setObjectName(QStringLiteral("unsupportedIcomModelDialog"));
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->setIcon(QMessageBox::Warning);
+    // QMessageBox ignores titles on macOS; the custom chrome still needs one.
+    box->QDialog::setWindowTitle(tr("Icom model not supported"));
+    box->setAccessibleName(tr("Icom model not supported"));
+    box->setTextFormat(Qt::PlainText);
+    box->setText(reason);
+    box->setStandardButtons(QMessageBox::Ok);
+    box->setDefaultButton(QMessageBox::Ok);
+    box->open();
+}
+
+// Identity metadata alone does not qualify a model for connection. Offer only
+// the model profiles whose command tables have been brought up.
 void ConnectionPanel::populateIcomCivCombo()
 {
     if (!m_manualIcomCivCombo)
@@ -2359,19 +2373,17 @@ void ConnectionPanel::populateIcomCivCombo()
     m_manualIcomCivCombo->addItem(tr("Auto-detect (recommended)"),
                                   QStringLiteral("__auto__"));
     for (const auto& model : AetherSDR::icom::knownModels()) {
-        // Only radios this page can dial. hasNetwork == false means CI-V only
-        // (serial or an RS-BA1 server front end); those stay reachable via
-        // `Custom...`, where name auto-detect cannot help because the handshake
-        // names the server, not the radio.
-        if (!model.hasNetwork)
+        if (!model.hasNetwork || !AetherSDR::icom::profileFor(model).supportedBringup) {
             continue;
+        }
         const QString name = QString::fromUtf8(model.name.data(),
                                                static_cast<int>(model.name.size()));
         const QString hex =
             QStringLiteral("%1").arg(model.civAddress, 2, 16, QLatin1Char('0')).toUpper();
-        // "%1 — %2" is populateSerialPortCombo's own label idiom, with the raw
-        // value in userData so the read-back never has to re-parse the label.
-        m_manualIcomCivCombo->addItem(QStringLiteral("%1 — %2").arg(name, hex), hex);
+        const QString status = model.name == "IC-7300MK2" ? tr("supported")
+                                                         : tr("experimental");
+        m_manualIcomCivCombo->addItem(
+            tr("%1 (%2) — %3").arg(name, status, hex), hex);
     }
     // TRAILING sentinel, and the read-back below relies on it being last.
     m_manualIcomCivCombo->addItem(tr("Custom..."), QStringLiteral("__custom__"));

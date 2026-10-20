@@ -995,6 +995,9 @@ signals:
     void connected();
     void disconnected();
     void connectionError(const QString& reason);
+    // Terminal refusal: suppress automatic reconnect. The backend closes the
+    // session after this signal and emits disconnected() when teardown finishes.
+    void connectionRejected(const QString& reason);
 
     // A RADIO-CONFIGURATION problem the operator should fix that does not end the
     // session. connectionError is fatal (RadioModel always starts its reconnect timer

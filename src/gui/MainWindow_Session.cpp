@@ -1142,6 +1142,12 @@ void MainWindow::wireRadioModel()
             this, showTerminalConnectionFailure);
     connect(&m_radioModel, &RadioModel::radioWakeFailed,
             this, showTerminalConnectionFailure);
+    connect(&m_radioModel, &RadioModel::connectionRejected,
+            this, showTerminalConnectionFailure);
+    connect(&m_radioModel, &RadioModel::connectionRejected,
+            this, [this](const QString& message) {
+        m_connPanel->showUnsupportedIcomModel(message);
+    }, Qt::QueuedConnection);
     connect(&m_radioModel, &RadioModel::certFingerprintMismatch,
             this, &MainWindow::onWanCertFingerprintMismatch);
     connect(&m_radioModel, &RadioModel::radioWakeProgress, this,

@@ -16,6 +16,7 @@
 #include <QLabel>
 #include <QLayout>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
@@ -165,6 +166,11 @@ void checkIcomCustomNatPorts()
     auto* password =
         panel.findChild<QLineEdit*>(QStringLiteral("connectionManualIcomPassword"));
 
+    // Stage a fixture before selecting Icom so the UI never reads the operator's keychain.
+    if (password) {
+        password->setText(QStringLiteral("test-password"));
+    }
+
     if (manualMode) {
         manualMode->click();
     }
@@ -179,6 +185,39 @@ void checkIcomCustomNatPorts()
     report("Icom connect-by-IP defaults to standard UDP ports",
            portMode
                && portMode->currentData().toString() == QStringLiteral("__standard__"));
+    auto* civModels = panel.findChild<QComboBox*>(
+        QStringLiteral("connectionManualIcomCivCombo"));
+    report("Icom chooser offers only the three implemented models plus Auto and Custom",
+           civModels && civModels->count() == 5
+               && civModels->findData(QStringLiteral("A4")) >= 0
+               && civModels->findData(QStringLiteral("B6")) >= 0
+               && civModels->findData(QStringLiteral("A2")) >= 0);
+    report("Icom chooser labels both experimental models explicitly",
+           civModels && civModels->findText(QStringLiteral("IC-705 (experimental) — A4")) >= 0
+               && civModels->findText(QStringLiteral("IC-9700 (experimental) — A2")) >= 0
+               && civModels->findText(QStringLiteral("IC-7300MK2 (supported) — B6")) >= 0);
+    const QString rejectedModel = QStringLiteral(
+        "IC-7610 (CI-V model ID 0x98) is not supported by AetherSDR.");
+    panel.showUnsupportedIcomModel(rejectedModel);
+    QApplication::processEvents();
+    auto* rejectionDialog = panel.findChild<QMessageBox*>(
+        QStringLiteral("unsupportedIcomModelDialog"));
+    report("unsupported Icom identity opens a dismissible dialog with its reason",
+           rejectionDialog && rejectionDialog->isVisible()
+               && rejectionDialog->windowTitle() == QStringLiteral("Icom model not supported")
+               && rejectionDialog->text() == rejectedModel
+               && rejectionDialog->textFormat() == Qt::PlainText
+               && rejectionDialog->standardButtons() == QMessageBox::Ok,
+           rejectionDialog
+               ? QStringLiteral("visible=%1 title=%2 text=%3 format=%4 buttons=%5")
+                     .arg(rejectionDialog->isVisible()).arg(rejectionDialog->windowTitle(),
+                                                          rejectionDialog->text())
+                     .arg(rejectionDialog->textFormat()).arg(rejectionDialog->standardButtons().toInt())
+                     .toStdString()
+               : "dialog not found");
+    if (rejectionDialog) {
+        rejectionDialog->accept();
+    }
     report("custom NAT base port stays hidden in standard mode",
            basePort && !basePort->isVisibleTo(&panel));
 

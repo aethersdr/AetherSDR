@@ -1462,6 +1462,21 @@ void RadioModel::setupBackend(const QString& family)
                 this, &RadioModel::configurationWarning);
     }
 
+    // Terminal rejection has no duplicate RadioConnection event. Every backend
+    // needs its consumer, including families with a separate wire lifecycle.
+    connect(m_backend.get(), &IRadioBackend::connectionRejected,
+            this, [this, generation](const QString& reason) {
+        if (generation != m_backendReceiverGeneration) {
+            return;
+        }
+        cancelRadioWake();
+        m_intentionalDisconnect = true;
+        m_connectAttemptActive = false;
+        m_reconnectTimer.stop();
+        emit connectionRejected(reason);
+        emit connectionError(reason);
+    });
+
     // Transport counters from a backend that owns its own socket. Wired
     // unconditionally: a backend that measures nothing never emits this, and one
     // that does is the only source the network readouts have.
