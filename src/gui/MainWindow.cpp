@@ -9,6 +9,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include "MainWindow.h"
+#include <utility>
 #include "core/AppActivity.h"
 #include "core/backends/AutoRfGainControl.h"
 
@@ -9267,6 +9268,9 @@ void MainWindow::disableSplit()
 
     m_pendingSliceFrequencyEchoes.clear();
     m_splitActive = false;
+    ++m_splitCreateRevision;
+    const quint64 pendingCreate = std::exchange(m_splitCreateTicket, 0);
+    m_radioModel.cancelSliceCreation(pendingCreate);
 
     // Learn this split's audio arrangement and put the RX pan back, BEFORE the
     // TX slice is destroyed below — once it is gone its values are unreadable
@@ -9274,12 +9278,15 @@ void MainWindow::disableSplit()
     recordSplitAudioMirror();
 
     // Move TX back to the RX slice
-    if (auto* rxSlice = m_radioModel.slice(m_splitRxSliceId))
-        rxSlice->setTxSlice(true);
+    if (SliceModel* rxSlice = m_radioModel.slice(m_splitRxSliceId);
+        rxSlice && rxSlice == m_splitRxIdentity) {
+        SliceModel* currentTx = m_radioModel.txSlice();
+        if (!currentTx || currentTx->sliceId() == m_splitTxSliceId) { rxSlice->setTxSlice(true); }
+    }
 
     // Destroy the split TX slice
-    if (m_splitTxSliceId >= 0)
-        m_radioModel.sendCommand(QString("slice remove %1").arg(m_splitTxSliceId));
+    m_radioModel.removeCreatedSlice(std::exchange(m_splitCreatedSlice, {}));
+    m_splitRxIdentity.clear();
 
     m_splitRxSliceId = -1;
     m_splitTxSliceId = -1;

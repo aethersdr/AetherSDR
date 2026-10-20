@@ -38,6 +38,7 @@
 #include "core/backends/SlicePresetRequest.h"
 #include "core/backends/ProfileRequest.h"
 #include "core/backends/MemoryRequest.h"
+#include "core/backends/SliceLifecycleRequest.h"
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
@@ -549,13 +550,46 @@ public:
     // a single answer.
     virtual void setActiveSlice(int sliceId) { Q_UNUSED(sliceId); }
 
+    // Typed desktop lifecycle requests. Native receiver topologies retain their
+    // existing verbs; an accepted dispatch does not manufacture observed state.
+    virtual ReceiveDispatch requestSliceCreate(const SliceCreateRequest& request,
+                                               const SliceCreateCompletion& completion = {},
+                                               const RadioControlFence& current = {})
+    {
+        if (!request.valid() || request.requiresReceipt || request.mode || request.rxAntenna || (current && !current())
+            || !createSlice(request.panId, request.frequencyHz)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        if (completion) { completion({{RadioControlReply::Kind::Accepted, 0, {}}, {}}); }
+        return ReceiveDispatch::Dispatched;
+    }
+    virtual ReceiveDispatch requestSliceRemove(int sliceId,
+                                               const RadioControlCompletion& = {},
+                                               const RadioControlFence& current = {})
+    {
+        return sliceId >= 0 && (!current || current()) && removeSlice(sliceId)
+            ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+    }
+    virtual ReceiveDispatch requestTxSlice(int sliceId, bool enabled,
+                                           const RadioControlCompletion& = {},
+                                           const RadioControlFence& current = {})
+    {
+        if (current && !current()) { return ReceiveDispatch::Unsupported; }
+        return requestSliceControl(sliceId, {SliceControlRequest::Field::TxSlice, enabled});
+    }
+    virtual ReceiveDispatch requestFullDuplex(bool, const RadioControlCompletion& = {},
+                                              const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestSliceInventoryRefresh(const RadioControlCompletion& = {},
+                                                         const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+
     // ---- ordinary receive-slice lifecycle ----
     // panId is backend-owned and opaque; frequencyHz is absolute RF in Hz.
     // true means the request was accepted, not completed: confirmed state arrives via
     // sliceChanged / sliceRemoved, a later failure via sliceLifecycleFailed. false is
     // final refusal; callers never fall back to another command plane. Fixed/paired
-    // receiver topologies keep the default refusal; Flex and Sim keep RadioModel's
-    // command-plane adapter. A backend cancels pending work on disconnect/reconnect
+    // receiver topologies keep the default refusal. A backend cancels pending work on disconnect/reconnect
     // and discards completions from retired sessions or receivers before emitting;
     // reused slice ids alone cannot identify pending work.
     virtual bool createSlice(const QString& panId, double frequencyHz)

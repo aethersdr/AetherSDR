@@ -105,14 +105,6 @@ public:
     {
         server.promoteTxSliceAndContinue(sliceId, std::move(continuation));
     }
-    static void completePromotionReply(RadioModel& radio, quint32 sequence)
-    {
-        RadioModel::ResponseCallback callback = radio.m_pendingCallbacks.take(sequence);
-        if (!callback) {
-            qFatal("TCI promotion test lost its outstanding reply");
-        }
-        callback(0, QString());
-    }
     static void discardTciInputs(TciServer& server, TciClient& socket)
     {
         server.clientStateFor(&socket)->txProducer.discardInputs();
@@ -284,6 +276,14 @@ public:
     std::function<void(const TxCoordinator::Operation&, const TxCoordinator::StopRequest&)> stopWriter;
     std::function<void(const TxCoordinator::Operation&)> cwTextWriter;
     Writer cwTextQueueWriter;
+    std::vector<RadioControlCompletion> selectionReplies;
+    ReceiveDispatch requestTxSlice(int, bool, const RadioControlCompletion& completion,
+                                   const RadioControlFence& current) override
+    {
+        if (current && !current()) { return ReceiveDispatch::Unsupported; }
+        selectionReplies.push_back(completion);
+        return ReceiveDispatch::Dispatched;
+    }
     QStringList* commands;
     explicit RecordingBackend(QStringList& record) : commands(&record)
     {
@@ -2825,31 +2825,31 @@ void tciPromotionRechecksPermissionAfterReply()
             replied = true;
             permitted = accepted;
         });
-        check(!replied && TxOperationIntegrationTestAccess::pendingReplyCount(f.radio) == 1,
+        check(!replied && !f.backend->selectionReplies.empty(),
               "owned receiver promotion waits for the injected command reply");
-        return TxOperationIntegrationTestAccess::firstPendingReplySequence(f.radio);
+        return f.backend->selectionReplies.back();
     };
     f.radio.handleSliceStatusForTest(0, ours);
-    quint32 sequence = begin();
+    RadioControlCompletion reply = begin();
     f.radio.handleSliceStatusForTest(0, {
         {QStringLiteral("client_handle"), QStringLiteral("0x87654321")}});
-    TxOperationIntegrationTestAccess::completePromotionReply(f.radio, sequence);
+    reply({RadioControlReply::Kind::Accepted, 0, {}});
     check(replied && !permitted,
           "a successful promotion reply cannot key a receiver whose ownership changed");
 
     f.radio.handleSliceStatusForTest(0, ours);
-    sequence = begin();
+    reply = begin();
     SliceDelta mode;
     mode.mode = QStringLiteral("WFM");
     f.radio.emitBackendSliceChangedForTest(0, mode);
-    TxOperationIntegrationTestAccess::completePromotionReply(f.radio, sequence);
+    reply({RadioControlReply::Kind::Accepted, 0, {}});
     check(replied && !permitted,
           "a successful promotion reply cannot key a newly receive-only mode");
 
     mode.mode = QStringLiteral("USB");
     f.radio.emitBackendSliceChangedForTest(0, mode);
-    sequence = begin();
-    TxOperationIntegrationTestAccess::completePromotionReply(f.radio, sequence);
+    reply = begin();
+    reply({RadioControlReply::Kind::Accepted, 0, {}});
     check(replied && permitted,
           "a successful promotion reply still accepts an owned transmit-capable receiver");
 }

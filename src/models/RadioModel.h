@@ -1009,6 +1009,18 @@ public:
     bool addSliceOnPan(const QString& panId, double freqMhz);
     // Ordinary RX close. Confirmation is sliceRemoved, never this return value.
     bool removeSlice(int sliceId);
+    quint64 createSlice(const SliceCreateRequest& request, QObject* replyContext = nullptr,
+                        const SliceCreationCompletion& completion = {}, bool transient = false);
+    void cancelSliceCreation(quint64 ticket);
+    bool removeCreatedSlice(const CreatedSliceReceipt& receipt);
+    SliceModel* resolveCreatedSlice(const CreatedSliceReceipt& receipt) const;
+    ReceiveDispatch requestTxSlice(SliceModel* source, bool enabled = true,
+                                   QObject* replyContext = nullptr,
+                                   const RadioControlCompletion& completion = {},
+                                   std::optional<RadioControlSession> expectedSession = {});
+    ReceiveDispatch requestFullDuplex(bool enabled, QObject* replyContext = nullptr,
+                                      const RadioControlCompletion& completion = {});
+    ReceiveDispatch requestSliceInventoryRefresh(std::optional<RadioControlSession> expectedSession = {});
     void createPanadapter();   // Create a new independent panadapter
     void removePanadapter(const QString& panId);
     void setPanBandwidth(double bandwidthMhz);
@@ -1869,14 +1881,6 @@ public:
     // wiring and teardown with no socket, no device and no radio. Returns false
     // when the family has no backend in this build (RTL without librtlsdr).
     bool rebuildBackendForTest(const QString& family);
-    // Replace only the ordinary lifecycle command transport, including replies.
-    // Tests can pin Flex/Sim encoding without constructing a wire object/peer.
-    void setSliceLifecycleCommandSinkForTest(
-        std::function<bool(const QString&, ResponseCallback)> sink)
-    {
-        m_sliceLifecycleCommandSinkForTest = std::move(sink);
-    }
-
 private:
     friend class RadioModelSliceLifecycleTestAccess;
     friend class RadioNicknameTestAccess;
@@ -1909,9 +1913,26 @@ private:
     std::array<quint64, 5> m_outputIntentRevisions{};
     quint64 m_receiveControlGeneration{0};
     void wireBackendReceiverState();
-    bool dispatchSliceLifecycleCommand(const QString& command, ResponseCallback callback = {});
+    struct PendingSliceCreate;
+    void wireSliceLifecycle();
+    void reconcileSliceCreates();
+    void expireSliceCreation(quint64 ticket);
+    void forgetSliceCreation(quint64 ticket);
+    void noteSliceRetirement(int sliceId);
+    void compactSliceRetirements();
+    std::optional<quint64> retainSliceRetirement(int sliceId);
+    void notifySliceCreate(const std::shared_ptr<PendingSliceCreate>& pending,
+                           const SliceCreationResult& result);
+    bool dispatchSliceRemoval(SliceModel* source, const RadioControlSession& session,
+                              bool preserveLastReceiver = true);
+    QHash<quint64, std::shared_ptr<PendingSliceCreate>> m_pendingSliceCreates;
+    QHash<int, quint64> m_sliceRetirements;
+    QHash<int, QPointer<QObject>> m_pendingSliceRemoves;
+    quint64 m_nextSliceCreateTicket{0};
+    quint64 m_fullDuplexRequestRevision{0};
+    quint64 m_fullDuplexObservationRevision{0};
+    quint64 m_txSliceSelectionRevision{0};
     quint64 m_backendReceiverGeneration = 0;
-    std::function<bool(const QString&, ResponseCallback)> m_sliceLifecycleCommandSinkForTest;
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
     // Remaining selection bindings and initial global lock observation.
     // Both helpers must be called at every SliceModel construction site.
@@ -2240,7 +2261,13 @@ private:
     };
     QMap<int, TxBandInfo> m_txBandSettings;
     QHash<QString, QString> m_panTransmitInhibitReasons;
-    QHash<QString, int> m_panTransmitInhibitedTxSlices;
+    struct InhibitedTxSelection {
+        int id{-1};
+        QPointer<SliceModel> identity;
+        RadioControlSession session{};
+        quint64 retirement{0};
+    };
+    QHash<QString, InhibitedTxSelection> m_panTransmitInhibitedTxSlices;
     struct TuneInhibitState {
         enum class Phase { Applying, Active, Restoring };
         int bandId{-1};

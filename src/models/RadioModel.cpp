@@ -1627,8 +1627,10 @@ void RadioModel::wireBackendReceiverState()
             return;
         }
         SliceModel* s = slice(sliceId);
-        if (!s)
+        if (!s) {
+            noteSliceRetirement(sliceId);
             return;
+        }
         m_slices.removeAll(s);
         qCDebug(lcProtocol) << "RadioModel: backend slice removed" << sliceId;
         // Removing the transmit slice moves transmit without any slice delta to
@@ -1751,6 +1753,7 @@ void RadioModel::wireBackendReceiverState()
         }
         qCWarning(lcProtocol) << "RadioModel: slice" << operation << "failed:"
                              << sliceId << reason;
+        if (operation == QLatin1String("remove")) { m_pendingSliceRemoves.remove(sliceId); }
         emit sliceLifecycleFailed(operation, sliceId, reason);
     });
 }
@@ -1778,7 +1781,6 @@ void RadioModel::teardownBackend()
         m_backend->retirePcmStreams();
     }
     expirePendingCallbacks(QStringLiteral("the radio connection was replaced"));
-    m_sliceLifecycleCommandSinkForTest = {};
     // Back to "no reading" rather than whatever the last radio said. A lamp
     // left showing Clean for a radio that is gone is worse than one showing
     // nothing, because it answers a question nobody can currently ask.
@@ -2103,6 +2105,11 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<TxCoordinator::StopRequest>();
     qRegisterMetaType<TxStopEvidence>();
     qRegisterMetaType<SliceDelta>();
+    qRegisterMetaType<SliceCreateReply>();
+    qRegisterMetaType<SliceCreateRequest>();
+    qRegisterMetaType<CreatedSliceReceipt>();
+    qRegisterMetaType<SliceCreationResult>();
+    wireSliceLifecycle();
     qRegisterMetaType<SliceControlRequest>();
     qRegisterMetaType<TransmitControlRequest>();
     qRegisterMetaType<RadioSetupRequest>();
@@ -3303,23 +3310,24 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
         const bool wasInhibited = m_panTransmitInhibitReasons.remove(trimmedPanId) > 0;
         const bool hadRestoreSlice =
             m_panTransmitInhibitedTxSlices.contains(trimmedPanId);
-        const int restoreSliceId = hadRestoreSlice
+        const InhibitedTxSelection restore = hadRestoreSlice
             ? m_panTransmitInhibitedTxSlices.take(trimmedPanId)
-            : -1;
+            : InhibitedTxSelection{};
+        const int restoreSliceId = restore.id;
         if (hadRestoreSlice) {
             SliceModel* restoreSlice = slice(restoreSliceId);
             SliceModel* currentTxSlice = txSlice();
             const int currentTxSliceId = currentTxSlice
                 ? currentTxSlice->sliceId()
                 : -1;
-            if (restoreSlice
+            if (restoreSlice && restoreSlice == restore.identity
+                && controlSessionCurrent(restore.session)
+                && m_sliceRetirements.value(restoreSliceId) == restore.retirement
                 && TransmitInhibitPolicy::shouldRestoreInhibitedTxSlice(
                     trimmedPanId, restoreSlice->panId(),
                     sliceMayBelongToUs(restoreSliceId), restoreSliceId,
                     currentTxSliceId)) {
-                sendSliceCommand(restoreSlice,
-                                 QStringLiteral("slice set %1 tx=1")
-                                     .arg(restoreSliceId));
+                requestTxSlice(restoreSlice);
             }
         }
         if (wasInhibited) {
@@ -3335,8 +3343,10 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
         if (SliceModel* currentTxSlice = txSlice();
             currentTxSlice && currentTxSlice->panId() == trimmedPanId
             && sliceMayBelongToUs(currentTxSlice->sliceId())) {
-            m_panTransmitInhibitedTxSlices.insert(
-                trimmedPanId, currentTxSlice->sliceId());
+            if (const auto retirement = retainSliceRetirement(currentTxSlice->sliceId())) {
+                m_panTransmitInhibitedTxSlices.insert(
+                    trimmedPanId, {currentTxSlice->sliceId(), currentTxSlice, controlSession(), *retirement});
+            }
         }
     }
     if (m_panTransmitInhibitReasons.value(trimmedPanId) == trimmedReason) {
@@ -3400,7 +3410,7 @@ void RadioModel::enforceTransmitInhibitForSlice(SliceModel* slice)
         message,
         QStringLiteral("pan-tx-inhibit:%1").arg(slice->panId()),
         slice->panId());
-    sendCmd(QStringLiteral("slice set %1 tx=0").arg(slice->sliceId()));
+    requestTxSlice(slice, false);
 }
 
 void RadioModel::selectSoleValidTxAntennaIfNeeded(SliceModel* slice, bool txAntennaStatusReceived)
@@ -3458,7 +3468,7 @@ void RadioModel::noteLocalTxSliceEnableIntent(int sliceId)
 
     for (auto it = m_panTransmitInhibitedTxSlices.begin();
          it != m_panTransmitInhibitedTxSlices.end();) {
-        if (it.value() == sliceId) {
+        if (it.value().id == sliceId) {
             ++it;
             continue;
         }
@@ -5809,68 +5819,22 @@ bool RadioModel::addSliceOnPan(const QString& panId, double freqMhz)
         qCWarning(lcProtocol) << "RadioModel::addSliceOnPan: invalid frequency" << freqMhz;
         return false;
     }
-    if (!hasCommandPlane()) {
-        // Refusal is terminal. Paired/fixed receivers do not acquire an
-        // independent lifecycle just because maxSlices happens to exceed one.
-        if (m_backend && backendCapabilities().canCreateSlices
-            && m_backend->createSlice(backendPanIdFor(panId), frequencyHz)) {
-            return true;
-        }
-        // This refusal replaces sendCmd's loud commandDropped path (#5263).
-        // GUI callers may discard the result; the existing lifecycle signal
-        // still tells the operator that the request did not create a receiver.
-        const QString reason = tr("this radio cannot create a slice here");
-        qCWarning(lcProtocol) << "RadioModel::addSliceOnPan: backend declined" << panId << reason;
-        emit sliceLifecycleFailed(QStringLiteral("create"), -1, reason);
-        return false;
-    }
-
-    const QString freq = QString::number(freqMhz, 'f', 6);
-    const QString cmd = QString("slice create pan=%1 freq=%2").arg(panId, freq);
-    const quint64 generation = m_backendReceiverGeneration;
-    qCDebug(lcProtocol) << "RadioModel::addSliceOnPan:" << cmd;
-    return dispatchSliceLifecycleCommand(cmd, [this, generation](int code, const QString& body) {
-        if (generation != m_backendReceiverGeneration) {
-            return;
-        }
-        if (code != 0) {
-            qCWarning(lcProtocol) << "RadioModel: slice create failed, code"
-                       << Qt::hex << code << "body:" << body;
-            emit sliceCreateFailed(maxSlices(), m_model);
-        } else {
-            qCDebug(lcProtocol) << "RadioModel: new slice created, index =" << body;
-        }
-    });
+    const RadioControlSession session = controlSession();
+    const QPointer<RadioModel> alive(this);
+    return createSlice({panId, frequencyHz, {}, {}}, this,
+        [alive, session](const SliceCreationResult& result) {
+            if (!alive || !alive->controlSessionCurrent(session)
+                || result.result.kind == RadioControlReply::Kind::Accepted
+                || result.result.kind == RadioControlReply::Kind::Cancelled) { return; }
+            qCWarning(lcProtocol) << "RadioModel: slice creation refused" << result.result.message;
+            emit alive->sliceLifecycleFailed(QStringLiteral("create"), -1, result.result.message);
+            if (alive) { emit alive->sliceCreateFailed(alive->maxSlices(), alive->m_model); }
+        }) != 0;
 }
 
 bool RadioModel::removeSlice(int sliceId)
 {
-    // Ordinary close cannot remove the last receiver or a foreign/unknown ID.
-    // Split/TX cleanup has its own ownership contract and does not use this.
-    if (m_slices.size() <= 1 || !slice(sliceId)) {
-        return false;
-    }
-    if (!hasCommandPlane()) {
-        if (m_backend && m_backend->removeSlice(sliceId)) {
-            return true;
-        }
-        // Same contract as creation: a terminal refusal is never silent, and
-        // it never falls back to a Flex command. One channel reports it so the
-        // GUI, the bridge and the log agree.
-        const QString reason = tr("this radio cannot remove this slice");
-        qCWarning(lcProtocol) << "RadioModel::removeSlice: backend declined" << sliceId << reason;
-        emit sliceLifecycleFailed(QStringLiteral("remove"), sliceId, reason);
-        return false;
-    }
-    return dispatchSliceLifecycleCommand(QStringLiteral("slice remove %1").arg(sliceId));
-}
-
-bool RadioModel::dispatchSliceLifecycleCommand(const QString& command, ResponseCallback callback)
-{
-    if (m_sliceLifecycleCommandSinkForTest) {
-        return m_sliceLifecycleCommandSinkForTest(command, std::move(callback));
-    }
-    return sendCmd(command, std::move(callback)) != 0;
+    return dispatchSliceRemoval(slice(sliceId), controlSession());
 }
 
 void RadioModel::createPanadapter()
@@ -10667,6 +10631,14 @@ void RadioModel::dispatchSliceControl(const SliceControlRequest& request)
 {
     SliceModel* source = receiveCommandSource();
     if (!source) { return; }
+    if (request.field == SliceControlRequest::Field::TxSlice && request.valid()) {
+        const QPointer<RadioModel> alive(this);
+        const RadioControlSession session = controlSession();
+        const bool announce = backendCapabilities().canTransmit;
+        const ReceiveDispatch result = requestTxSlice(source, std::get<bool>(request.value));
+        if (alive && controlSessionCurrent(session)) { reportReceiveDispatch(result, request.label(), announce); }
+        return;
+    }
     const QPointer<RadioModel> alive(this);
     const quint64 generation = m_backendReceiverGeneration;
     // A radio that cannot transmit has no TX slice to move, so choosing one is
@@ -12540,7 +12512,11 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
     if (d.multiFlexEnabled) { m_multiFlexEnabled = *d.multiFlexEnabled; changed = true; }
     if (d.enforcePrivateIp) { m_enforcePrivateIp = *d.enforcePrivateIp; changed = true; }
     if (d.binauralRx) { m_binauralRx = *d.binauralRx; changed = true; }
-    if (d.fullDuplex) { m_fullDuplex = *d.fullDuplex; changed = true; }
+    if (d.fullDuplex) {
+        ++m_fullDuplexObservationRevision;
+        m_fullDuplex = *d.fullDuplex;
+        changed = true;
+    }
     if (d.muteLocalWhenRemote) { m_muteLocalWhenRemote = *d.muteLocalWhenRemote; changed = true; }
     if (d.autoSave) {
         const bool newAutoSave = *d.autoSave;
@@ -12710,6 +12686,8 @@ void RadioModel::handleSliceStatus(int id,
                 if (wasTxSlice)
                     m_meterModel.setActiveTxSlice(activeTxSliceNum());
                 syncDigitalVoiceTxSelection();
+            } else if (removed || !wasForeign) {
+                noteSliceRetirement(id);
             }
             if (!wasForeign) emit slotOccupancyChanged(id);
             return;  // slice belongs to another client
@@ -12722,6 +12700,8 @@ void RadioModel::handleSliceStatus(int id,
     SliceModel* s = slice(id);
 
     if (removed) {
+        // A removal before publication still retires an acknowledged create ID.
+        if (!s && !m_staleSlices.contains(id)) { noteSliceRetirement(id); }
         if (s) {
             const bool wasTxSlice = s->isTxSlice();
             m_slices.removeOne(s);
@@ -12826,7 +12806,7 @@ void RadioModel::handleSliceStatus(int id,
             // recreates a stale slice model with tx=1 but tx_client_handle
             // pointing at our dead pre-reboot handle (or 0). Fresh startup
             // slices are left radio-owned so GUIClient restore can settle.
-            sendCmd(QString("slice set %1 tx=1").arg(id));
+            requestTxSlice(s);
         }
         emit slotOccupancyChanged(id);  // empty/foreign → ours
         return;   // status already decoded above via decodeSliceStatus; don't
@@ -13236,21 +13216,16 @@ void RadioModel::createDefaultSliceOnPan(const QString& panId,
         return;
     }
 
-    const QString sliceCmd =
-        QString("slice create pan=%1 freq=%2 antenna=%3 mode=%4")
-            .arg(pan->panId(), freqMhz, antenna, mode);
-
-    sendCmd(sliceCmd,
-        [this, panId = pan->panId()](int code, const QString& body) {
-            if (code != 0) {
-                qCWarning(lcProtocol) << "RadioModel: slice create failed for pan"
-                                      << panId << "code" << Qt::hex << code
-                                      << "body:" << body;
-                emit sliceCreateFailed(maxSlices(), m_model);
-            } else {
-                qCDebug(lcProtocol) << "RadioModel: slice created, index =" << body;
-                // Radio now emits S|slice N ... status messages;
-                // handleSliceStatus() picks them up automatically.
+    bool valid = false;
+    const double frequencyHz = freqMhz.toDouble(&valid) * 1.0e6;
+    if (!valid) { return; }
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    createSlice({pan->panId(), frequencyHz, mode, antenna}, this,
+        [alive, session](const SliceCreationResult& result) {
+            if (alive && alive->controlSessionCurrent(session)
+                && result.result.kind == RadioControlReply::Kind::Failed) {
+                emit alive->sliceCreateFailed(alive->maxSlices(), alive->m_model);
             }
         });
 }

@@ -1894,6 +1894,10 @@ private:
     // Active slice tracking for multi-slice support
     int m_activeSliceId{-1};
     bool m_splitActive{false};
+    quint64 m_splitCreateTicket{0};
+    quint64 m_splitCreateRevision{0};
+    CreatedSliceReceipt m_splitCreatedSlice;
+    QPointer<SliceModel> m_splitRxIdentity;
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};
     double m_splitRxFrequencyMhz{0.0};

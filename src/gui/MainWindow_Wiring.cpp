@@ -101,6 +101,7 @@
 #include <algorithm>
 #include <memory>
 #include <cmath>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -2480,22 +2481,6 @@ void MainWindow::onSliceAdded(SliceModel* s)
         m_bsAutoSaveTimer->start(dwellSec * 1000);
     });
 
-    // If split is pending, this new slice is the TX slice
-    if (m_splitActive && m_splitTxSliceId < 0 && s->sliceId() != m_splitRxSliceId) {
-        m_splitTxSliceId = s->sliceId();
-        s->setTxSlice(true);
-        // Apply the remembered arrangement, then start learning this split's.
-        // With nothing remembered the apply just mutes the TX slice, which is
-        // what this line used to do unconditionally. (#2242)
-        applyAndArmSplitAudio(m_radioModel.slice(m_splitRxSliceId), s);
-        // TX slice frequency is already set by the slice create command
-        // (with mode-dependent offset), so do NOT override it here (#789).
-        if (auto* sw = spectrum()) sw->setSplitPair(m_splitRxSliceId, m_splitTxSliceId);
-        updateSplitState();
-        // Auto-focus the TX VFO so the user can immediately tune the TX offset
-        setActiveSlice(s->sliceId());
-    }
-
     // Refresh slice tab buttons (#1278)
     if (s->isActive() && s->sliceId() != m_activeSliceId) {
         m_updatingFromModel = true;
@@ -2677,7 +2662,7 @@ void MainWindow::onSliceRemoved(int id)
     endSplitMonitorForSlice(id, /*deferWrites=*/true);
 
     // If the split TX slice was closed, disable split
-    if (m_splitActive && id == m_splitTxSliceId) {
+    if (m_splitActive && (id == m_splitTxSliceId || id == m_splitRxSliceId)) {
         // TX slice removed out-of-band (2nd client / front panel / rigctld),
         // not via the in-app SPLIT toggle. Reclaim TX onto the former RX slice
         // explicitly (mirror disableSplit). activeSlice() is wrong here:
@@ -2686,6 +2671,8 @@ void MainWindow::onSliceRemoved(int id)
         // never reclaimed) or, if a third slice was focused, the WRONG slice,
         // which would be keyed via the radio command "slice set N tx=1".
         const int rxId = m_splitRxSliceId;   // capture before reset
+        const QPointer<SliceModel> originalRx = m_splitRxIdentity;
+        const bool txRemoved = id == m_splitTxSliceId;
         // Same learn-and-restore as disableSplit(). The TX slice model is
         // already gone here, so everything recorded comes from the mirror —
         // the reason it is kept live for the whole split. The restore is
@@ -2693,12 +2680,17 @@ void MainWindow::onSliceRemoved(int id)
         recordSplitAudioMirror(/*deferRestore=*/true);
         m_pendingSliceFrequencyEchoes.clear();
         m_splitActive = false;
+        ++m_splitCreateRevision;
+        m_radioModel.cancelSliceCreation(std::exchange(m_splitCreateTicket, 0));
+        m_radioModel.removeCreatedSlice(std::exchange(m_splitCreatedSlice, {}));
+        m_splitRxIdentity.clear();
         m_splitRxSliceId = -1;
         m_splitTxSliceId = -1;
         m_splitRxFrequencyMhz = 0.0;
         if (auto* sw = spectrum()) sw->setSplitPair(-1, -1);
-        if (auto* rx = m_radioModel.slice(rxId))
-            rx->setTxSlice(true);
+        if (SliceModel* rx = m_radioModel.slice(rxId); txRemoved && rx && rx == originalRx) {
+            if (!m_radioModel.txSlice()) { rx->setTxSlice(true); }
+        }
         updateSplitState();
     }
 
@@ -7926,16 +7918,9 @@ void MainWindow::onSpectrumReadyForAdaptiveFilter(quint32 streamId,
 void MainWindow::enterSplit(int rxSliceId, std::optional<double> offsetMhz)
 {
     if (m_splitActive) return;
-    // Split creates its TX slice with Flex wire text, dropped without a command
-    // plane (#5277, as #5266 gated FlexControl/HID Split). Return before the
-    // writes below, since m_splitActive latches ahead of the command and would
-    // otherwise claim split is on. Warn + notice; not permissive when
-    // disconnected, because this latches state. hasCommandPlane() is
-    // m_wanConn || m_connection: Flex (LAN/WAN) and Sim pass, others refuse.
-    if (!m_radioModel.hasCommandPlane()) {
-        qCWarning(lcDevices)
-            << "Split entry ignored: this backend takes no Flex"
-            << "slice-create command";
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    if (!m_radioModel.isConnected() || !caps.canCreateSlices || !caps.canTransmit) {
+        qCWarning(lcDevices) << "Split entry ignored: independent TX-slice creation is unavailable";
         showUnsupportedControlNotice();
         return;
     }
@@ -7958,10 +7943,46 @@ void MainWindow::enterSplit(int rxSliceId, std::optional<double> offsetMhz)
 
     m_splitActive = true;
     m_splitRxSliceId = rxSliceId;
+    m_splitRxIdentity = rxSlice;
     m_splitRxFrequencyMhz = rxSlice->reportedFrequency();
-    m_radioModel.sendCommand(
-        QString("slice create pan=%1 freq=%2")
-            .arg(panId).arg(txFreq, 0, 'f', 6));
+    const quint64 revision = ++m_splitCreateRevision;
+    const QPointer<SliceModel> originalRx(rxSlice);
+    const quint64 ticket = m_radioModel.createSlice({panId, txFreq * 1.0e6, {}, {}}, this,
+        [this, revision, originalRx](const SliceCreationResult& result) {
+            if (revision != m_splitCreateRevision || !m_splitActive || !originalRx
+                || m_radioModel.slice(originalRx->sliceId()) != originalRx) {
+                if (result.created.valid()) { m_radioModel.removeCreatedSlice(result.created); }
+                return;
+            }
+            m_splitCreateTicket = 0;
+            if (result.result.kind != RadioControlReply::Kind::Accepted || !result.created.valid()) {
+                m_splitActive = false;
+                m_splitRxIdentity.clear();
+                m_splitRxSliceId = -1;
+                m_splitTxSliceId = -1;
+                m_splitRxFrequencyMhz = 0.0;
+                updateSplitState();
+                if (result.result.kind != RadioControlReply::Kind::Cancelled) {
+                    showPanadapterInterlockNotification(
+                        tr("Split setup failed: %1").arg(result.result.message), QStringLiteral("split-create-failed"));
+                }
+                return;
+            }
+            SliceModel* target = m_radioModel.resolveCreatedSlice(result.created);
+            if (!target) { return; }
+            m_splitCreatedSlice = result.created;
+            m_splitTxSliceId = target->sliceId();
+            target->setTxSlice(true);
+            target = m_radioModel.resolveCreatedSlice(result.created);
+            if (!target || revision != m_splitCreateRevision || !m_splitActive || !originalRx) { return; }
+            applyAndArmSplitAudio(originalRx, target);
+            if (SpectrumWidget* sw = spectrum()) { sw->setSplitPair(m_splitRxSliceId, m_splitTxSliceId); }
+            updateSplitState();
+            setActiveSlice(target->sliceId());
+        }, true);
+    if (m_splitActive && revision == m_splitCreateRevision && !m_splitCreatedSlice.valid()) {
+        m_splitCreateTicket = ticket;
+    }
 }
 
 QString MainWindow::splitEntryBlocker(int rxSliceId) const
@@ -7970,7 +7991,8 @@ QString MainWindow::splitEntryBlocker(int rxSliceId) const
     // act says why instead of just being grey.
     if (m_splitActive)
         return tr("A split is already running or being set up.");
-    if (!m_radioModel.hasCommandPlane())
+    if (!m_radioModel.isConnected() || !m_radioModel.backendCapabilities().canCreateSlices
+        || !m_radioModel.backendCapabilities().canTransmit)
         return tr("This radio cannot create a split slice.");
     if (m_radioModel.slices().size() >= m_radioModel.maxSlices())
         return tr("No free slice for the transmit side of a split.");

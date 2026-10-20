@@ -354,11 +354,10 @@ struct RadioCapabilities {
     QString manufacturer;
 
     // Receive
-    // Independent slice creation on an existing pan through the neutral backend
-    // hook. RadioModel consults this only without a command plane; Flex and Sim
-    // retain their command adapters regardless of this value. Do not use this
-    // field alone to gate +RX in the UI. Separate from maxSlices: a paired
-    // receiver/pan topology can support several slices but not this operation.
+    // Independent creation on an existing pan through the typed backend route.
+    // Separate from maxSlices: a paired receiver/pan topology can support several
+    // receivers but not independent slice creation. Transient split creation also
+    // needs TX support and an answered identity, not merely this declaration.
     bool canCreateSlices = false;
     int maxSlices = 1;             // independent demod slices the radio supports
     int maxPanadapters = 1;        // simultaneous panadapters

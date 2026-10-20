@@ -192,6 +192,19 @@ sessions are rechecked after cache signals, which can synchronously retire them.
 Neutral storage validation covers supported backend modes and wide FM filters;
 the legacy Flex editor dropdown is not the storage vocabulary.
 These desktop operations add no daemon catalogue methods or TX authority.
+Independent slice create/remove, TX-slice selection, full duplex and runtime
+slice refresh also use typed `RadioModel` routes. `FlexSliceLifecycleControls`
+owns their wire encoding; the initial connection subscription batch is separate.
+A transient split receiver needs both its create reply and original-session,
+owned model publication before any consumer receives a cleanup receipt. Numeric
+ID reuse, retired slots, competing creators and destroyed requesters never grant
+ownership. Native ordinary lifecycle hooks remain adapters; transient creation
+requires an answered identity and must not fall back to an uncorrelated hook.
+Retirement history is bounded. Compaction retains live/quarantined identities
+and refuses any pending creation whose discarded history makes ownership
+uncertain, rather than issuing a cleanup receipt from incomplete evidence.
+GUI, CAT and TCI retain their existing topology, frequency, focus and audio
+policies. TX assignment is not keying and grants no extra TX authority.
 Desktop spot, pan-utility and net/tuning-step requests also use typed backend
 verbs; their desktop-only field-set records are not daemon permissions. Spot
 batches retain their original control session and Clear All epoch and detach
