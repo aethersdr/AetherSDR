@@ -672,6 +672,28 @@ void tciCancellation()
     check(TciSliceLifecycleTestAccess::ownsRoute(server) && f.backend->removes.empty(),
           "late split-disable selection cannot clear a replacement route or start stale cleanup");
 
+    for (int scenario = 0; scenario != 3; ++scenario) {
+        Fixture retiredRx;
+        TciServer retiredServer(&retiredRx.radio);
+        TciClient retiredClient;
+        TciSliceLifecycleTestAccess::create(retiredServer, retiredClient, retiredRx.radio.slice(0));
+        retiredRx.acknowledge(0, 1);
+        retiredRx.publish(1);
+        settle();
+        check(retiredRx.backend->selectionReplies.size() == 1,
+              "TCI waits for TX selection after correlated creation");
+        if (scenario == 2) {
+            RadioModelSliceLifecycleTestAccess::quarantine(retiredRx.radio, 0);
+        } else {
+            emit retiredRx.backend->sliceRemoved(0);
+        }
+        if (scenario != 0) { retiredRx.publish(0, true); }
+        retiredRx.backend->selectionReplies.front()({RadioControlReply::Kind::Accepted, 0, {}});
+        settle();
+        check(retiredRx.backend->removes == std::vector<int>{1},
+              "TCI reaps created VFO B when original RX retires before selection ACK");
+    }
+
     Fixture churn;
     TciServer churnServer(&churn.radio);
     TciClient churnClient;

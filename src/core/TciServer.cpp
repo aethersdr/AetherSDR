@@ -2048,7 +2048,12 @@ void TciServer::createTxSliceForVfoB(TciClient* client,
                 return;
             }
             if (pending.transitionGeneration != self->m_routeTransitionGeneration) { return; }
-            if (!pending.client || !pending.client->live() || !selected) {
+            const bool originalRoute = self->m_model && pending.rxIdentity
+                && self->m_model->controlSessionCurrent(pending.session)
+                && self->m_model->slice(pending.rxSliceId) == pending.rxIdentity
+                && self->m_routingState.rxSliceId() == pending.rxSliceId
+                && self->m_routingState.txSliceId() == sliceId;
+            if (!pending.client || !pending.client->live() || !selected || !originalRoute) {
                 if (self->m_model) {
                     self->reapCreatedVfoBSlice(sliceId);
                 }
