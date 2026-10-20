@@ -22,6 +22,8 @@
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/SleepInhibitor.h"
 #include "core/DaxTxPolicy.h"
+#include "core/DaxTxAudioPermit.h"
+#include "core/backends/DaxTxStream.h"
 #include "core/NetworkMtuPolicy.h"  // networkMtuParam(); Radio Setup's MTU range
 #include "core/LocalMemoryBank.h"   // memory channels for a radio that has none
 #include "core/DigitalVoiceWaveformTelemetry.h"
@@ -697,6 +699,10 @@ public:
     // so a connect must never replay this client-persisted flag onto it.
     void notePcAudioEnabled(bool on);
     bool ensureDaxTxStream(DaxTxRequestReason reason);
+    QJsonObject daxTxOwnershipSnapshot() const;
+    QString daxTxOwnershipUnavailableReason(bool take) const;
+    bool requestDaxTxOwnership(bool take);
+    bool daxTxStreamReady() const;
     bool prepareWsprTransmit(const TxCoordinator::Request& input);
     void releaseWsprTransmit(const TxCoordinator::Request& input);
     // "The WSPR beacon's transmit-audio route is ready." On a Flex that is
@@ -718,7 +724,7 @@ public:
         if (wsprSeamAudioRouteReady(m_wsprTxSeamAudioArmed,
                                     backendCapabilities()))
             return true;
-        return m_daxTxStreamId != 0 && m_daxTxActive;
+        return (!m_wsprTxOwnershipRequested || m_wsprTxInput.valid()) && daxTxStreamReady();
     }
     QJsonObject troubleshootingSnapshot() const;
 
@@ -915,6 +921,10 @@ public:
                                         std::function<void()> observer);
     TxCoordinator::Context captureTxMedia(const TxCoordinator::Producer& producer) const;
     TxCoordinator::Context captureTxMedia(const TxCoordinator::Request& request) const;
+    TxCoordinator::Context captureDaxTxMedia(const TxCoordinator::Producer& producer) const;
+    TxCoordinator::Context captureDaxTxMedia(const TxCoordinator::Request& request) const;
+    void noteDaxTxInput(const TxCoordinator::Request& request);
+    DaxTxAudioPermit daxTxAudioPermit() const { return m_daxTxAudioPermit; }
     bool setProducerTransmit(const TxCoordinator::Request& request, bool tx,
                              TransmitModel::PttSource source = TransmitModel::PttSource::Dax);
     bool requestProducerPttOn(const TxCoordinator::Request& request, TransmitModel::PttSource source);
@@ -1297,6 +1307,8 @@ signals:
     void networkQualityChanged(const QString& quality, int pingMs);
     // Emitted when the radio assigns a TX audio stream ID (DAX TX).
     void txAudioStreamReady(quint32 streamId);
+    void daxTxOwnershipChanged();
+    void daxTxAudioRouteChanged(quint32 streamId, const AetherSDR::DaxTxAudioPermit& permit);
     // Emitted only after the active backend has drained finite TX-audio state.
     // drainMs is how much already-submitted audio (host queue plus radio
     // buffer) is still to be played — hold PTT for that long, then the tail.
@@ -1530,6 +1542,21 @@ private:
     void handlePanadapterStatus(const QString& panId, const QMap<QString, QString>& kvs);
     void handleProfileStatus(const QString& object, const QMap<QString, QString>& kvs);
     void handleProfileStatusRaw(const QString& profileType, const QString& rawBody);
+    friend class DaxTxOwnershipTestAccess;
+    void resetDaxTxOwnership();
+    void retireDaxTxInputs();
+    void observeDaxTxStream(const DaxTxStreamDelta& delta);
+    void publishDaxTxOwnership();
+    void refreshDaxTxOwnershipGuards();
+    void interruptDaxTxOwnership(const QString& reason);
+    bool beginDaxTxOwnership(bool take, bool wspr);
+    void continueDaxTxOwnership();
+    void completeDaxTxOwnership();
+    void expireDaxTxOwnership(quint64 ticket);
+    void finishDaxTxOwnership(bool success, const QString& reason);
+    void releaseWsprDaxTxOwnership();
+    void finishWsprDaxTxRelease();
+    bool acceptDaxTxCreate(quint32 id, quint64 startRevision);
     void traceDaxStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
     void handleDaxRxStreamRegistry(const QString& object, const QMap<QString, QString>& kvs);
     bool handleRemoteAudioRxStreamStatus(const QString& object,
@@ -1605,7 +1632,8 @@ private:
 
     // Route command to active connection (LAN or WAN)
     using ResponseCallback = RadioConnection::ResponseCallback;
-    quint32 sendCmd(const QString& command, ResponseCallback cb = nullptr);
+    quint32 sendCmd(const QString& command, ResponseCallback cb = nullptr,
+                    std::function<bool()> dispatchAllowed = {});
     quint32 clientHandle() const;
     PanadapterModel* ensureOwnedPanadapter(const QString& panId);
     void updateStreamFilters();
@@ -2381,6 +2409,32 @@ private:
     QMap<quint32, DaxStreamDebugState> m_daxStreamDebug;
     quint32     m_daxTxStreamId{0};
     bool        m_daxTxActive{false};
+    bool        m_daxTxKnown{false};
+    quint64     m_daxTxSession{1};
+    quint64     m_daxTxIncarnation{1};
+    quint64     m_daxTxObservationRevision{0};
+    quint64     m_daxTxTicket{0};
+    quint64     m_daxTxCreateTicket{0};
+    QMap<quint32, quint64> m_daxTxRetiredAt;
+    struct DaxTxOwnershipIntent {
+        quint64 ticket{0};
+        quint64 session{0};
+        quint64 incarnation{0};
+        quint64 startRevision{0};
+        quint32 streamId{0};
+        bool take{false};
+        bool dispatched{false};
+        bool accepted{false};
+        DaxTxRequestGuard guard;
+    };
+    DaxTxRequestGuard m_daxTxCreateGuard;
+    std::optional<DaxTxOwnershipIntent> m_daxTxOwnershipIntent;
+    std::vector<TxCoordinator::Request::Weak> m_daxTxInputs;
+    QTimer m_daxTxGuardTimer;
+    DaxTxAudioPermit m_daxTxAudioPermit{DaxTxAudioPermit::blocked()};
+    bool m_daxTxUncertain{false};
+    QString m_daxTxOutcome;
+    QString m_daxTxError;
     bool        m_wsprTxOwnershipRequested{false};
     TxCoordinator::Request m_wsprTxInput;
     bool        m_wsprTxTransition{false};
@@ -2392,7 +2446,7 @@ private:
     // stream and no `transmit dax`. Latched by prepareWsprTransmit() and the
     // only thing releaseWsprTransmit() has to undo on that path.
     bool        m_wsprTxSeamAudioArmed{false};
-    quint32     m_daxTxClientHandle{0};  // Tracked for diagnostics only — not consulted in routing.
+    quint32     m_daxTxClientHandle{0};
     bool        m_daxTxCreatePending{false};
     QSet<quint32> m_deadDaxRxSeen;
     QSet<quint32> m_externalDaxTxSeen;

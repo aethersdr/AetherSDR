@@ -877,6 +877,12 @@ void RadioModel::setupBackend(const QString& family)
                    "was unavailable when AetherSDR was compiled."));
             return;
         }
+        connect(m_backend.get(), &IRadioBackend::daxTxStreamChanged, this,
+                [this, generation](const DaxTxStreamDelta& delta) {
+            if (generation == m_backendReceiverGeneration && !m_txSessionClosing) {
+                observeDaxTxStream(delta);
+            }
+        });
         connect(m_backend.get(), &IRadioBackend::independentTxStopped, this,
                 [this, generation](const TxStopEvidence& evidence) {
             if (generation == m_backendReceiverGeneration && !m_txSessionClosing) {
@@ -908,6 +914,11 @@ void RadioModel::setupBackend(const QString& family)
                 }
             });
             flex->setSetupCommandSink(setupCommandSink());
+            flex->setDaxTxClientHandleProvider([this] { return ourClientHandle(); });
+            flex->setDaxTxCommandSink([this](const QString& command, ResponseCallback reply,
+                                            const DaxTxRequestGuard& guard) {
+                return sendCmd(command, std::move(reply), [guard] { return guard.permits(); }) != 0;
+            });
             flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
                 sendTxKeyingCommand(cmd, fence);
             });
@@ -1766,6 +1777,7 @@ void RadioModel::teardownBackend()
     m_transmitModel.invalidateControlIntents();
     for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
+    resetDaxTxOwnership();
     ++m_backendReceiverGeneration;
     ++m_receiveControlGeneration;
     m_backendObservedTransmit = false;   // an observation dies with its backend
@@ -2102,6 +2114,20 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<SliceControlRequest>();
     qRegisterMetaType<TransmitControlRequest>();
+    qRegisterMetaType<DaxTxStreamDelta>();
+    qRegisterMetaType<DaxTxAudioPermit>();
+    m_daxTxGuardTimer.setSingleShot(true);
+    connect(&m_daxTxGuardTimer, &QTimer::timeout, this, &RadioModel::refreshDaxTxOwnershipGuards);
+    connect(this, &RadioModel::profileLoadStarted, this, &RadioModel::refreshDaxTxOwnershipGuards);
+    connect(this, &RadioModel::profileLoadCompleted, this, &RadioModel::refreshDaxTxOwnershipGuards);
+    connect(this, &RadioModel::radioTransmittingChanged, this, [this](bool transmitting) {
+        if (transmitting) {
+            interruptDaxTxOwnership(tr("Transmission interrupted DAX TX ownership. Waiting for fresh radio status."));
+        } else {
+            finishWsprDaxTxRelease();
+        }
+        emit daxTxOwnershipChanged();
+    });
     qRegisterMetaType<RadioSetupRequest>();
     qRegisterMetaType<TxBandRequest>();
     qRegisterMetaType<TransverterRequest>();
@@ -4891,6 +4917,11 @@ bool RadioModel::setTransmitImpl(bool tx, TransmitModel::PttSource source,
     if (QThread::currentThread() != thread()) {
         return false;
     }
+    const bool daxInput = backendCapabilities().hasDaxStreams
+        && (source == TransmitModel::PttSource::Dax || source == TransmitModel::PttSource::Wspr);
+    if (tx && daxInput && !daxTxStreamReady()) {
+        return false;
+    }
     TxCoordinator::Intent intent;
     if (request && !tx) {
         const TxCoordinator::Intent bound = m_txCoordinator.requestIntent(*request);
@@ -4979,8 +5010,12 @@ bool RadioModel::setTransmitImpl(bool tx, TransmitModel::PttSource source,
     // Track local intent so we can keep TX gating aligned with user/PTT edges
     // while radio interlock transitions through intermediate states.
     m_txRequested = tx;
-    const TxCoordinator::Operation operation = request
+    TxCoordinator::Operation operation = request
         ? m_txCoordinator.requestOperation(*request) : m_txOperation;
+    if (tx && daxInput) {
+        const DaxTxAudioPermit permit = m_daxTxAudioPermit;
+        operation = operation.withKeyingPermit([permit] { return permit.permits(); });
+    }
     if (!request) {
         intent = m_localTxIntents.value(TxActivity::Mox);
     }
@@ -8353,6 +8388,7 @@ void RadioModel::onDisconnected()
     m_transmitModel.invalidateControlIntents();
     for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
+    resetDaxTxOwnership();
     acknowledgeTxTransportTeardown(m_txOperation);
     expirePendingCallbacks(QStringLiteral("the radio connection was disconnected"));
     qCDebug(lcProtocol) << "RadioModel: disconnected";
@@ -10138,8 +10174,15 @@ void RadioModel::logRemoteAudioRxSummary(const QString& reason) const
         << "RadioModel: remote_audio_rx summary" << fields.join(QLatin1Char(' '));
 }
 
-quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
+quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb,
+                            std::function<bool()> dispatchAllowed)
 {
+    if (dispatchAllowed && !dispatchAllowed()) {
+        if (cb) {
+            cb(kNoCommandPlaneCode, QStringLiteral("request expired before dispatch"));
+        }
+        return 0;
+    }
     auto& perf = PerfTelemetry::instance();
     if (perf.enabled()
         && command.startsWith(QStringLiteral("display pan set "))
@@ -10233,8 +10276,13 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
         return 0;
     }
 
-    if (m_wanConn)
+    if (m_wanConn) {
+        if (dispatchAllowed && !dispatchAllowed()) {
+            if (cb) { cb(kNoCommandPlaneCode, QStringLiteral("request expired before WAN write")); }
+            return 0;
+        }
         return m_wanConn->sendCommand(command, std::move(cb));
+    }
 
     // A callback being expired at the session boundary tried to chain another
     // command. There is no session left to write to, and registering it would
@@ -10272,8 +10320,21 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
         m_pendingCallbacks.insert(seq, std::move(cb));
 
     // Queue the socket write on the connection's worker thread.
-    QMetaObject::invokeMethod(m_connection, [conn = m_connection, seq, command] {
-        conn->writeCommand(seq, command);
+    const QPointer<RadioModel> receiver(this);
+    QMetaObject::invokeMethod(m_connection, [conn = m_connection, receiver, seq, command, dispatchAllowed] {
+        if (!dispatchAllowed || dispatchAllowed()) {
+            conn->writeCommand(seq, command);
+            return;
+        }
+        if (receiver) {
+            QMetaObject::invokeMethod(receiver, [receiver, seq] {
+                if (!receiver) { return; }
+                auto callback = receiver->m_pendingCallbacks.take(seq);
+                if (callback) {
+                    callback(kNoCommandPlaneCode, QStringLiteral("request expired before transport write"));
+                }
+            });
+        }
     });
     return seq;
 }
@@ -11106,12 +11167,6 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
                 << QStringLiteral("stream=%1").arg(hexId(stream.streamId))
                 << QStringLiteral("type=%1").arg(type.isEmpty() ? QStringLiteral("(unknown)") : type)
                 << QStringLiteral("keys=%1").arg(kvs.keys().join(QLatin1Char(',')));
-            if (stream.streamId == m_daxTxStreamId) {
-                m_daxTxStreamId = 0;
-                m_daxTxActive = false;
-                m_daxTxClientHandle = 0;
-                m_daxTxCreatePending = false;
-            }
             m_deadDaxRxSeen.remove(stream.streamId);
             m_externalDaxTxSeen.remove(stream.streamId);
             m_externalDaxRxSeen.remove(stream.streamId);
@@ -11186,16 +11241,6 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
             }
         }
 
-        if (state.type == QStringLiteral("dax_tx")
-            && daxTxStatusCanUpdateLocalState(stream.streamId, m_daxTxStreamId, kvs, clientHandle())) {
-            m_daxTxStreamId = stream.streamId;
-            m_daxTxActive = state.tx;
-            updateOperatorTransmit();  // DAX TX toggled — refresh the operator
-                                       // TX-timer gate promptly (#4131 review)
-            m_daxTxClientHandle = state.clientHandle;
-            if (ownedByUs)
-                m_daxTxCreatePending = false;
-        }
 
         QStringList fields;
         fields << QStringLiteral("stream=%1").arg(hexId(stream.streamId));
@@ -11236,12 +11281,6 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
             << "RadioModel: DAX tx_audio_stream removed"
             << QStringLiteral("stream=%1").arg(hexId(txAudioStream.streamId))
             << QStringLiteral("keys=%1").arg(kvs.keys().join(QLatin1Char(',')));
-        if (txAudioStream.streamId == m_daxTxStreamId) {
-            m_daxTxStreamId = 0;
-            m_daxTxActive = false;
-            m_daxTxClientHandle = 0;
-            m_daxTxCreatePending = false;
-        }
         m_daxStreamDebug.remove(txAudioStream.streamId);
         m_externalDaxTxSeen.remove(txAudioStream.streamId);
         return;
@@ -11263,14 +11302,6 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
             << "RadioModel: external DAX TX stream observed"
             << QStringLiteral("stream=%1").arg(hexId(txAudioStream.streamId))
             << QStringLiteral("owner=%1").arg(hexId(state.clientHandle));
-    }
-    if (daxTxStatusCanUpdateLocalState(txAudioStream.streamId, m_daxTxStreamId, kvs, clientHandle())) {
-        m_daxTxStreamId = txAudioStream.streamId;
-        m_daxTxActive = state.tx;
-        updateOperatorTransmit();  // DAX TX toggled (#4131 review)
-        m_daxTxClientHandle = state.clientHandle;
-        if (ownedByUs)
-            m_daxTxCreatePending = false;
     }
     qCDebug(lcDax).noquote()
         << "RadioModel: DAX tx_audio_stream status"
@@ -11360,6 +11391,9 @@ void RadioModel::onStatusReceived(const QString& object,
     emit statusReceived(object, kvs);
 
     handleRemoteAudioRxStreamStatus(object, kvs);
+    if (m_flexBackend) {
+        m_flexBackend->decodeDaxTxStatus(object, kvs);
+    }
     traceDaxStreamStatus(object, kvs);
     handleDaxRxStreamRegistry(object, kvs);
 
@@ -13305,7 +13339,6 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
 
     const DaxTxPolicyContext policyContext = currentDaxTxPolicyContext(reason);
     const DaxTxPolicyDecision decision = evaluateDaxTxPolicy(policyContext);
-    const quint32 ourHandle = clientHandle();
     qCInfo(lcDax).noquote()
         << "RadioModel: DAX TX policy"
         << QStringLiteral("reason=%1").arg(daxTxRequestReasonName(reason))
@@ -13328,18 +13361,29 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
         return false;
     }
 
-    const bool existingStreamIsOurs = m_daxTxStreamId != 0
-        && (m_daxTxClientHandle == 0 || m_daxTxClientHandle == ourHandle);
-    if (existingStreamIsOurs || m_daxTxCreatePending)
+    // An allocated ID still awaiting owner status is not permission to send,
+    // but it is enough to avoid allocating another stream for every producer.
+    if (m_daxTxStreamId != 0 || m_daxTxCreatePending)
         return true;
 
     m_daxTxCreatePending = true;
+    const quint64 session = m_daxTxSession;
+    const quint64 createTicket = ++m_daxTxCreateTicket;
+    const quint64 startRevision = m_daxTxObservationRevision;
+    m_daxTxCreateGuard = m_daxTxOwnershipIntent ? m_daxTxOwnershipIntent->guard
+                                               : DaxTxRequestGuard::create(3000);
+    const DaxTxRequestGuard createGuard = m_daxTxCreateGuard;
+    const QPointer<IRadioBackend> origin(m_backend.get());
     qCInfo(lcDax).noquote()
         << "RadioModel: DAX TX create requested"
         << QStringLiteral("reason=%1").arg(daxTxRequestReasonName(reason));
     sendCmd(
         "stream create type=dax_tx",
-        [this, reason](int code, const QString& body) {
+        [this, reason, session, createTicket, startRevision, origin](int code, const QString& body) {
+            if (session != m_daxTxSession || createTicket != m_daxTxCreateTicket
+                || !origin || origin != m_backend.get()) {
+                return;
+            }
             m_daxTxCreatePending = false;
             if (code != 0) {
                 qCWarning(lcDax).noquote()
@@ -13347,6 +13391,7 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
                     << QStringLiteral("code=%1").arg(hexCode(code))
                     << QStringLiteral("body=%1").arg(body)
                     << QStringLiteral("reason=%1").arg(daxTxRequestReasonName(reason));
+                finishDaxTxOwnership(false, tr("DAX TX stream creation failed: %1").arg(body));
                 return;
             }
 
@@ -13357,28 +13402,25 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
                     << QStringLiteral("code=0x00000000")
                     << QStringLiteral("body=%1").arg(body)
                     << QStringLiteral("reason=%1").arg(daxTxRequestReasonName(reason));
+                finishDaxTxOwnership(false, tr("DAX TX stream creation failed: %1").arg(body));
                 return;
             }
 
-            const bool statusAlreadyAdoptedStream = m_daxTxStreamId == id;
-            m_daxTxStreamId = id;
-            // Stream status normally precedes the create reply. Preserve the
-            // ownership bit if that status already adopted this exact stream.
-            if (!statusAlreadyAdoptedStream) {
-                m_daxTxActive = false;
+            const QPointer<RadioModel> self(this);
+            if (!acceptDaxTxCreate(id, startRevision) || !self
+                || session != m_daxTxSession || createTicket != m_daxTxCreateTicket
+                || !origin || origin != m_backend.get()) {
+                return;
             }
-            m_daxTxClientHandle = clientHandle();
             qCInfo(lcDax).noquote()
                 << "RadioModel: DAX TX create succeeded"
                 << QStringLiteral("stream=%1").arg(hexId(id));
             emit txAudioStreamReady(id);
-            if (m_wsprTxOwnershipRequested) {
-                sendCmd(QStringLiteral("stream set %1 tx=1").arg(hexId(id)));
-            } else if (m_wsprTxReleaseWhenReady) {
-                m_wsprTxReleaseWhenReady = false;
-                sendCmd(QStringLiteral("stream set %1 tx=0").arg(hexId(id)));
-            }
-        });
+            if (!self || session != m_daxTxSession || createTicket != m_daxTxCreateTicket
+                || !origin || origin != m_backend.get()) { return; }
+            continueDaxTxOwnership();
+            if (self && session == m_daxTxSession) { finishWsprDaxTxRelease(); }
+        }, [createGuard] { return createGuard.permits(); });
     return true;
 }
 
@@ -13439,15 +13481,11 @@ bool RadioModel::prepareWsprTransmit(const TxCoordinator::Request& input)
     };
     m_transmitModel.setDax(true);
     if (!current()) { releaseWsprTransmit(request); return false; }
-    const bool ready = ensureDaxTxStream(DaxTxRequestReason::WsprBeacon);
+    const bool ready = beginDaxTxOwnership(true, true);
     if (!current()) { releaseWsprTransmit(request); return false; }
     if (!ready) {
         releaseWsprTransmit(request);
         return false;
-    }
-    if (m_daxTxStreamId != 0) {
-        sendCmd(QStringLiteral("stream set %1 tx=1")
-                    .arg(hexId(m_daxTxStreamId)));
     }
     return current();
 }
@@ -13475,12 +13513,7 @@ void RadioModel::releaseWsprTransmit(const TxCoordinator::Request& input)
     // such stream.
     if (seamAudio) { return; }
     if (ownership && yield) {
-        if (m_daxTxStreamId != 0) {
-            sendCmd(QStringLiteral("stream set %1 tx=0")
-                        .arg(hexId(m_daxTxStreamId)));
-        } else if (m_daxTxCreatePending) {
-            m_wsprTxReleaseWhenReady = true;
-        }
+        releaseWsprDaxTxOwnership();
     }
     if (self && request.originalSessionCurrent() && restoreDax
         && m_transmitModel.daxOn() != previousDax) {

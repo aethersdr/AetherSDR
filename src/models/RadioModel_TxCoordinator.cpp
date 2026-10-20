@@ -234,6 +234,10 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     if (request && !m_txCoordinator.acceptsRequest(*request)) {
         return false;
     }
+    if (m_daxTxOwnershipIntent) {
+        interruptDaxTxOwnership(tr("Transmit preparation interrupted DAX TX ownership. Waiting for fresh radio status."));
+        return false;
+    }
     // TUNE/ATU use the backend's shared carrier/PTT latch, unlike compatible
     // MOX holds. Their release cannot preserve another producer's carrier.
     // Keep these combinations within one producer until a backend provides
@@ -388,7 +392,10 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
             return false;
         }
     }
-    return true;
+    const QPointer<RadioModel> self(this);
+    emit daxTxOwnershipChanged();
+    return self && !m_txSessionClosing && m_backend
+        && (request ? request->valid() : intent.permitsDispatch(txMonotonicMs()));
 }
 
 TransmitModel::KeyingRoute RadioModel::producerKeyingRoute(const TxCoordinator::Request& request,
@@ -598,6 +605,7 @@ void RadioModel::endLocalTxActivity(const TxCoordinator::Intent& intent)
 {
     if (m_txCoordinator.endIntent(intent)) {
         completeLocalTxIfDrained();
+        emit daxTxOwnershipChanged();
     }
 }
 

@@ -649,7 +649,7 @@ void MainWindow::activateRADE(int sliceId)
         m_radeEooPending = false;
         m_radeTxActive = true;
         syncKiwiSdrTransmitMute();
-        const TxCoordinator::Context context = m_radioModel.captureTxMedia(radeProducer);
+        const TxCoordinator::Context context = m_radioModel.captureDaxTxMedia(radeProducer);
         QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine, context]() {
             if (context.permitsDispatch(TxCoordinator::monotonicMs())) {
                 engine->resetTx(context);
@@ -1367,7 +1367,7 @@ bool MainWindow::startDax()
     const TxCoordinator::Producer daxProducer = m_radioModel.registerTxProducer(m_daxBridge);
     connect(&m_radioModel, &RadioModel::localTransmitEngaged, m_daxBridge,
             [this, bridge = m_daxBridge, daxProducer] {
-        bridge->setTxContext(m_radioModel.captureTxMedia(daxProducer));
+        bridge->setTxContext(m_radioModel.captureDaxTxMedia(daxProducer));
     });
     connect(m_daxBridge, &DaxBridge::txAudioReady,
             this, [this](const QByteArray& pcm, const TxCoordinator::Context& context) {
