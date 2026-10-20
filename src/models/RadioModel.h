@@ -2449,6 +2449,7 @@ private:
     quint8      m_transmitDaxHolders{0};
     bool        m_transmitDaxBaseline{false};
     bool        m_transmitDaxRestorePending{false};
+    void        resetTransmitDaxSessionState();
     void        finishTransmitDaxRelease();
     bool        transmitDaxEffective() const;
     bool        radioReceivingForTransmitDax() const;

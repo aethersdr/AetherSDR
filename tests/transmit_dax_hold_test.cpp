@@ -305,6 +305,140 @@ int main(int argc, char** argv)
                state(tx, writes));
     }
 
+    // Backend replacement can retire a session without onDisconnected().
+    {
+        RadioModel radio;
+        TransmitModel& tx = radio.transmitModel();
+        tx.setDax(false);
+        radio.acquireTransmitDax(Holder::Rade);
+        radio.rebuildBackendForTest("sim");
+        report("backend_replacement_drops_old_holders",
+               !radio.transmitDaxHeldBy(Holder::Rade));
+    }
+    // The replacement's ON report must become its own borrowing baseline.
+    {
+        RadioModel radio;
+        TransmitModel& tx = radio.transmitModel();
+        tx.setDax(false);
+        radio.acquireTransmitDax(Holder::Rade);
+        radio.handleStatusForTest("interlock", {{"state", "TRANSMITTING"}});
+        radio.releaseTransmitDax(Holder::Rade);
+        radio.rebuildBackendForTest("sim");
+        radio.rebuildBackendForTest("flex");
+        QCoreApplication::processEvents();
+        TransmitDelta newRadioOn;
+        newRadioOn.dax = true;
+        tx.applyChanges(newRadioOn);
+        DaxWrites writes(tx);
+        radio.acquireTransmitDax(Holder::Tci);
+        radio.releaseTransmitDax(Holder::Tci);
+        radio.handleStatusForTest("interlock", {{"state", "READY"}});
+        report("new_backend_on_baseline_survives_old_pending_restore",
+               tx.daxOn() && writes.count == 0, state(tx, writes));
+    }
+
+    // A new session's first request cannot be settled by a retired ticket.
+    {
+        RadioModel radio;
+        TransmitModel& tx = radio.transmitModel();
+        quint64 ticket = 0;
+        QObject::connect(&tx, &TransmitModel::controlRequested, &tx,
+                         [&ticket](const TransmitControlRequest& request) {
+            if (request.field == TransmitControlRequest::Field::Dax) {
+                ticket = request.answerTicket;
+            }
+        });
+        tx.setDax(false);
+        const quint64 oldTicket = ticket;
+        radio.rebuildBackendForTest("sim");
+        radio.rebuildBackendForTest("flex");
+        const bool retired = tx.daxSettled();
+        TransmitDelta newRadioOn;
+        newRadioOn.dax = true;
+        tx.applyChanges(newRadioOn);
+        DaxWrites writes(tx);
+        radio.acquireTransmitDax(Holder::Tci);
+        radio.releaseTransmitDax(Holder::Tci);
+        report("retired_off_request_cannot_override_new_on_report",
+               retired && tx.daxOn() && writes.count == 0, state(tx, writes));
+        tx.setDax(false);
+        const quint64 newTicket = ticket;
+        tx.handleControlAnswer(oldTicket, false);
+        const bool newRequestPending = !tx.daxSettled();
+        tx.handleControlAnswer(newTicket, true);
+        report("retired_answer_cannot_consume_new_session_request",
+               newTicket > oldTicket && newRequestPending && tx.daxSettled());
+    }
+
+    // Neither a transmit report nor an optimistic DAX value is evidence about
+    // the replacement. With no new interlock report, the new borrow can finish.
+    {
+        RadioModel radio;
+        TransmitModel& tx = radio.transmitModel();
+        tx.setDax(true);
+        radio.handleStatusForTest("interlock", {{"state", "TRANSMITTING"}});
+        radio.rebuildBackendForTest("sim");
+        radio.rebuildBackendForTest("flex");
+        report("backend_replacement_retires_observed_dax", !tx.daxOn());
+        TransmitDelta newRadioOff;
+        newRadioOff.dax = false;
+        tx.applyChanges(newRadioOff);
+        DaxWrites writes(tx);
+        radio.acquireTransmitDax(Holder::Tci);
+        radio.releaseTransmitDax(Holder::Tci);
+        report("backend_replacement_retires_receive_qualification",
+               !tx.daxOn() && writes.count == 2, state(tx, writes));
+    }
+
+    // Retirement itself never hands an old borrowing back to a replacement.
+    {
+        RadioModel radio;
+        TransmitModel& tx = radio.transmitModel();
+        radio.acquireTransmitDax(Holder::Rade);
+        radio.handleStatusForTest("interlock", {{"state", "TRANSMITTING"}});
+        radio.releaseTransmitDax(Holder::Rade);
+        DaxWrites writes(tx);
+        radio.rebuildBackendForTest("sim");
+        radio.handleStatusForTest("interlock", {{"state", "READY"}});
+        radio.releaseTransmitDax(Holder::Rade);
+        report("backend_retirement_never_restores_onto_replacement", writes.count == 0,
+               state(tx, writes));
+    }
+
+    // A disconnect's false TX notification must not flush a pending restore.
+    {
+        RadioModel radio;
+        TransmitModel& tx = radio.transmitModel();
+        radio.acquireTransmitDax(Holder::Tci);
+        radio.handleStatusForTest("interlock", {{"state", "TRANSMITTING"}});
+        radio.releaseTransmitDax(Holder::Tci);
+        DaxWrites writes(tx);
+        Access::disconnect(radio);
+        report("disconnect_discards_pending_restore_without_request", writes.count == 0,
+               state(tx, writes));
+    }
+
+    // Unsent edits from retirement callbacks must not supply the next baseline.
+    {
+        RadioModel radio;
+        TransmitModel& tx = radio.transmitModel();
+        const QMetaObject::Connection attempt = QObject::connect(
+            &radio, &RadioModel::transmitSessionInvalidated, &radio,
+            [&tx] { tx.setDax(false); });
+        radio.rebuildBackendForTest("sim");
+        radio.rebuildBackendForTest("flex");
+        QObject::disconnect(attempt);
+        const bool settled = tx.daxSettled();
+        TransmitDelta newRadioOn;
+        newRadioOn.dax = true;
+        tx.applyChanges(newRadioOn);
+        DaxWrites writes(tx);
+        radio.acquireTransmitDax(Holder::Tci);
+        radio.releaseTransmitDax(Holder::Tci);
+        report("retirement_callback_request_cannot_supply_new_baseline",
+               settled && tx.daxOn() && writes.count == 0, state(tx, writes));
+    }
+
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");
     return g_failed == 0 ? 0 : 1;
 }

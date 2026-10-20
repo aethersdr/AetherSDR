@@ -24,13 +24,23 @@ bool TransmitModel::refuseControlOffThread() const
     return true;
 }
 
+void TransmitModel::resetDaxSessionState()
+{
+    // Observations and unanswered requests belong to one session. Keep ticket
+    // numbers monotonic so queued old answers cannot consume new requests.
+    // Retirement emits no control intent or model notification.
+    m_pendingDaxAnswers.clear();
+    m_daxRequested = false;
+    m_daxOn = false;
+}
+
 void TransmitModel::resetState()
 {
     m_confirmReceiveCwPitch = false;
     for (quint64& revision : m_controlIntentRevisions) { ++revision; }
     // A request of the ending session is answered, if at all, by a dead link.
     m_pendingVoxAnswers.clear();
-    m_pendingDaxAnswers.clear();
+    resetDaxSessionState();
     m_voxUnconfirmed = true;   // the next radio has not said yet
     cancelPttRelease();
     m_apdEnabled = false;
@@ -55,10 +65,6 @@ void TransmitModel::resetState()
     m_usingMemory = false;
     m_showTxInWaterfall = false;
     resetPttMicOverrideReport();
-    // Radio-reported; a new session re-reports it. A radio with no Flex command
-    // plane never echoes dax=, so a Flex session's DAX=on must not survive into
-    // it and hold the client TX chain's MIC-ready indicator off (#5871).
-    m_daxOn = false;
     m_txSliceMode.clear();
     setTuneAvailable(true);
 

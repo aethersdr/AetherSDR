@@ -591,6 +591,7 @@ signals:
 
 private:
     friend class RadioModel;
+    void resetDaxSessionState();
     auto captureControlIntent(TransmitControlRequest::Field field)
     {
         const QPointer<TransmitModel> alive(this);

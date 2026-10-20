@@ -130,7 +130,7 @@ TCI audio is sent and received as binary frames on the same WebSocket.
 - RTL-SDR receive audio follows the stable receiver map and remains independent of speaker gain and mute; receiver squelch still applies. Normal launches offer one RTL receiver. Extra receivers belong to the [process-only evaluation](./rtl-sdr.md#multi-receiver-evaluation), not a higher production limit. RTL has no transmit or IQ export.
 - If a client reconnects more than 10 seconds later, its receive audio is re-bound to the right DAX channels automatically.
 - TX audio from a client is resampled from the rate the client declares, so 8, 12 and 24 kHz programs are not mis-pitched.
-- **DAX goes back the way it was after each transmission.** On a FlexRadio, TCI turns on the radio's DAX transmit input while a client transmits, then restores it once the radio is back in receive, so your next microphone transmission is not silent.
+- **DAX goes back the way it was after each transmission.** On a FlexRadio, TCI turns on the radio's DAX transmit input while a client transmits, then restores it once the radio is back in receive, so your next microphone transmission is not silent. Disconnecting or switching radios discards the previous session's DAX hold.
 
 ### Sample rate and format
 

@@ -1757,6 +1757,9 @@ void RadioModel::wireBackendReceiverState()
 
 void RadioModel::teardownBackend()
 {
+    resetTransmitDaxSessionState();
+    // Retirement callbacks can attempt edits before teardown returns.
+    const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
     discardTuneInhibit();
     resetTuneOutputControl();
     if (!m_licenseFeatures.isEmpty()) {
@@ -8389,6 +8392,8 @@ void RadioModel::restoreTuneInhibit()
 
 void RadioModel::onDisconnected()
 {
+    resetTransmitDaxSessionState();
+    const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
     discardTuneInhibit();
     resetTuneOutputControl();
     m_transmitModel.invalidateControlIntents();
@@ -8450,7 +8455,6 @@ void RadioModel::onDisconnected()
     }
     m_backendObservedTransmit = false;
     m_radioTransmitting = false;
-    m_interlockState.clear();
     emit radioTransmittingChanged(false);
     if (m_profileDatabaseImporting) {
         m_profileDatabaseImporting = false;
@@ -8473,12 +8477,6 @@ void RadioModel::onDisconnected()
     m_wsprTxOwnershipRequested = false;
     m_wsprTxYieldAfterUse = false;
     m_wsprTxReleaseWhenReady = false;
-    // The radio is gone — there is nothing left to hand `transmit dax` back to,
-    // and the next connect re-reads it from status. A producer releasing
-    // after this finds no hold and sends nothing.
-    m_transmitDaxHolders = 0;
-    m_transmitDaxBaseline = false;
-    m_transmitDaxRestorePending = false;
     m_wsprTxSeamAudioArmed = false;
     m_wsprTxInput = {};
     m_deadDaxRxSeen.clear();
@@ -13476,6 +13474,18 @@ bool RadioModel::transmitDaxEffective() const
     // them before or with the reply), so daxOn() is the truth again.
     return m_transmitModel.daxSettled() ? m_transmitModel.daxOn()
                                         : m_transmitModel.daxRequested();
+}
+
+void RadioModel::resetTransmitDaxSessionState()
+{
+    // Retire before callbacks or receive notifications can release an old hold.
+    // This also runs for backend replacement without a disconnect notification.
+    m_transmitDaxHolders = 0;
+    m_transmitDaxBaseline = false;
+    m_transmitDaxRestorePending = false;
+    m_interlockState.clear();
+    m_radioTransmitting = false;
+    m_transmitModel.resetDaxSessionState();
 }
 
 void RadioModel::acquireTransmitDax(DaxTxFlagHolder who)
