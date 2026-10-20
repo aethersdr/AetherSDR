@@ -76,6 +76,9 @@ bool VoiceKeyerTxRoute::admitOperation()
     if (!m_producer.valid())
         m_producer = m_radio.registerTxProducer(this);
     m_request = m_producer.request();
+    if (needsStream()) {
+        m_radio.noteDaxTxInput(m_request);
+    }
     return m_request.valid();
 }
 
@@ -90,7 +93,7 @@ bool VoiceKeyerTxRoute::keyOn()
     m_pttRequested = true;
     // Captured while the operation this request admitted is live; a context
     // taken before the key is not yet dispatchable.
-    m_context = m_radio.captureTxMedia(m_request);
+    m_context = m_radio.captureDaxTxMedia(m_request);
     if (!m_context.permitsDispatch(TxCoordinator::monotonicMs())) {
         // Keyed with nothing licensed to send: unkey here rather than hold the
         // transmitter up with a silent carrier.

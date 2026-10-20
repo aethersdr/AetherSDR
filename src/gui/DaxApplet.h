@@ -1,15 +1,20 @@
 #pragma once
 
+#include <QPointer>
 #include <QWidget>
+
+#include <memory>
 
 class QPushButton;
 class QLabel;
+class QVBoxLayout;
 
 namespace AetherSDR {
 
 class RadioModel;
 class SliceModel;
 class MeterSlider;
+class ControlAvailabilityRegistry;
 
 // DAX Applet — DAX Audio channel meters + gain sliders.
 // Displays RX meters for DAX channels 1-8 plus a single TX meter.
@@ -20,6 +25,7 @@ public:
     static constexpr int kChannels = 8;
 
     explicit DaxApplet(QWidget* parent = nullptr);
+    ~DaxApplet() override;
 
     void setRadioModel(RadioModel* model);
     void setNativeReceiveRouting(bool native);
@@ -43,12 +49,21 @@ signals:
 
 private:
     void buildUI();
+    void buildOwnershipUI(QVBoxLayout* outer);
+    void updateDaxTxOwnership();
+    void updateReceiveLabels();
+    void updateTxSliceLabel();
 
-    RadioModel* m_model{nullptr};
+    QPointer<RadioModel> m_model;
+    std::unique_ptr<QObject> m_modelBinding;
+    std::unique_ptr<ControlAvailabilityRegistry> m_ownershipAvailability;
     bool m_nativeReceiveRouting{false};
     int m_maxDaxChannels{kChannels};  // radio slice capacity (FlexLib table)
 
     QPushButton*  m_daxEnable{nullptr};
+    QPushButton*  m_daxTxTake{nullptr};
+    QPushButton*  m_daxTxRelease{nullptr};
+    QLabel*       m_daxTxOwnershipStatus{nullptr};
     QWidget*      m_daxRxRow[kChannels]{};  // per-channel row container — hidden to gate to maxSlices()
     MeterSlider*  m_daxRxMeter[kChannels]{};
     QLabel*       m_daxRxStatus[kChannels]{};

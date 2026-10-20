@@ -173,16 +173,21 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     });
     connect(m_io.get(), &TciIoWorker::clientOpened, this, &TciServer::onClientOpened);
     connect(m_io.get(), &TciIoWorker::textReceived, this,
-            [this](quint64 id, const QString& text, const TxCoordinator::Request& input) {
+            [this](quint64 id, const QString& text, const TxCoordinator::Request& input,
+                   const DaxTxAudioPermit& daxPermit) {
         QPointer<TciServer> self(this);
         QPointer<TciClient> client = clientById(id);
         if (client && client->live()) {
             client->ingressRequest = input;
+            if (ClientState* state = clientStateFor(client)) { state->ingressDaxPermit = daxPermit; }
             emit client->textMessageReceived(text);
             if (!self) { return; }
             if (client) {
                 client->ingressRequest.reset();
-                if (ClientState* state = clientStateFor(client)) { syncClient(*state); }
+                if (ClientState* state = clientStateFor(client)) {
+                    state->ingressDaxPermit.reset();
+                    syncClient(*state);
+                }
             }
         }
         m_io->post([io = m_io.get(), id] { io->acknowledgeText(id); });
@@ -219,6 +224,11 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     }
 
     if (m_model) {
+        m_io->setDaxTxAudioPermit(m_model->daxTxAudioPermit());
+        connect(m_model, &RadioModel::daxTxAudioRouteChanged, m_io.get(),
+            [io = m_io.get()](quint32, const DaxTxAudioPermit& permit) {
+                io->setDaxTxAudioPermit(permit);
+            });
         // This per-slice tap bypasses speaker gain/mute and remains bound across
         // backend replacement. Flex supplies its separate typed DAX route.
         connect(m_model, &RadioModel::backendSliceAudioFrameReady,
@@ -2366,32 +2376,83 @@ void TciServer::drainDeferredRoutingAndPtt()
     const PendingTrxRequest pending = *m_pendingTrxRequest;
     m_pendingTrxRequest.reset();
     if (pending.client && pending.client->live()) {
-        handleTrxRequest(pending.client, pending.request, pending.txRequest);
+        handleTrxRequest(pending.client, pending.request, pending.txRequest,
+                         pending.wantsAudio, pending.daxPermit);
     }
+}
+
+bool TciServer::trxWantsAudio(TciClient* client, const TciProtocol::TrxRequest& request) const
+{
+    if (request.source == QStringLiteral("dax") || request.source == QStringLiteral("tci")) {
+        return true;
+    }
+    if (!request.source.isEmpty() || !m_model) {
+        return false;
+    }
+    const SliceModel* rxSlice = sliceForTrxStrict(effectiveTrx(client, request.trx));
+    if (!rxSlice) {
+        return false;
+    }
+    // Classification belongs to the original input, before a route can wait.
+    // Resolve a copy so this snapshot does not change the live routing cache.
+    TciRoutingState route = m_routingState;
+    const SliceModel* txSlice = m_model->slice(
+        route.resolvePttSlice(rxSlice->sliceId(), routingEndpoints(client)));
+    if (!txSlice) {
+        return false;
+    }
+    const QString mode = txSlice->mode().trimmed().toUpper();
+    return mode == QStringLiteral("DIGU") || mode == QStringLiteral("DIGL")
+        || mode == QStringLiteral("RTTY") || mode == QStringLiteral("FDV")
+        || mode == QStringLiteral("FDVU") || mode == QStringLiteral("FDVL");
 }
 
 void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxRequest& request)
 {
     ClientState* state = clientStateFor(client);
     TxCoordinator::Request txRequest;
+    DaxTxAudioPermit daxPermit = DaxTxAudioPermit::blocked();
+    bool wantsAudio = false;
     if (state) {
         if (request.transmitting && !state->pttRequest.valid()) {
             state->pttRequest = client->ingressRequest ? *client->ingressRequest : state->txProducer.request();
+            state->pttDaxPermit = client->ingressRequest
+                ? state->ingressDaxPermit.value_or(DaxTxAudioPermit::blocked())
+                : (m_model ? m_model->daxTxAudioPermit() : DaxTxAudioPermit::blocked());
+            state->pttWantsAudio = trxWantsAudio(client, request);
         }
         txRequest = state->pttRequest;
+        daxPermit = state->pttDaxPermit;
+        wantsAudio = state->pttWantsAudio;
         if (!request.transmitting) {
             state->pttRequest = {};
+            state->pttDaxPermit = DaxTxAudioPermit::blocked();
+            state->pttWantsAudio = false;
         }
+    } else {
+        wantsAudio = trxWantsAudio(client, request);
+        if (m_model) { daxPermit = m_model->daxTxAudioPermit(); }
     }
     // Capture the accepted session before route selection can queue work.
-    handleTrxRequest(client, request, txRequest);
+    handleTrxRequest(client, request, txRequest, wantsAudio, daxPermit);
 }
 
 void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxRequest& request,
-                                const TxCoordinator::Request& txRequest)
+                                const TxCoordinator::Request& txRequest, bool wantsAudio,
+                                const DaxTxAudioPermit& daxPermit)
 {
     if (!client || !client->live() || !m_model) {
         return;
+    }
+    if (request.transmitting && wantsAudio) {
+        if (m_model->backendCapabilities().hasDaxStreams && !daxPermit.permits()) {
+            const QPointer<TciServer> self(this);
+            const QPointer<TciClient> socket(client);
+            m_model->requestProducerPttOff(txRequest, TransmitModel::PttSource::Dax);
+            if (self && socket) { replyText(socket, QStringLiteral("trx:%1,false;").arg(request.trx)); }
+            return;
+        }
+        m_model->noteDaxTxInput(txRequest);
     }
     if (request.transmitting && m_icomUnkeySettle.isAwaitingConfirmation()
         && !m_icomUnkeySettle.isSettling()) {
@@ -2403,7 +2464,7 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
     if (request.transmitting
         && (m_routeTransitionInFlight || m_tciPttCancelPending
             || m_icomUnkeySettle.isSettling())) {
-        m_pendingTrxRequest = PendingTrxRequest { client, request, txRequest };
+        m_pendingTrxRequest = PendingTrxRequest { client, request, txRequest, wantsAudio, daxPermit };
         return;
     }
     if (!request.transmitting) {
@@ -2583,23 +2644,17 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
                                 << "to slice" << sliceTag(txSliceId);
     }
 
-    const QString mode = txSlice->mode().trimmed().toUpper();
-    const bool digitalMode = mode == QStringLiteral("DIGU") || mode == QStringLiteral("DIGL")
-        || mode == QStringLiteral("RTTY") || mode == QStringLiteral("FDV")
-        || mode == QStringLiteral("FDVU") || mode == QStringLiteral("FDVL");
-    const bool wantsAudio = request.source == QStringLiteral("dax")
-        || request.source == QStringLiteral("tci") || (request.source.isEmpty() && digitalMode);
-
     const quint64 transitionGeneration = beginRouteTransition();
     QPointer<TciServer> self(this);
     QPointer<TciClient> socket(client);
     promoteTxSliceAndContinue(txSliceId,
-        [self, socket, request, txRequest, wantsAudio, transitionGeneration](bool selected) {
+        [self, socket, request, txRequest, wantsAudio, daxPermit, transitionGeneration](bool selected) {
         if (!self) {
             return;
         }
         if (transitionGeneration != self->m_routeTransitionGeneration) { return; }
-        if (!socket || !socket->live() || !selected || !self->m_model || !txRequest.valid()) {
+        if (!socket || !socket->live() || !selected || !self->m_model || !txRequest.valid()
+            || (wantsAudio && self->m_model->backendCapabilities().hasDaxStreams && !daxPermit.permits())) {
             // A refused promote used to be near-unreachable: resolvePttSlice()
             // returned the slice that already held TX, so promoteTxSlice took
             // its isTxSlice() early return. Honouring the requested slice
@@ -2616,7 +2671,7 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
                 self->replyText(socket,
                     QStringLiteral("trx:%1,false;").arg(request.trx));
             }
-            self->finishRouteTransition(transitionGeneration);
+            if (self) { self->finishRouteTransition(transitionGeneration); }
             return;
         }
         self->m_tciPttClient = socket;
@@ -2632,9 +2687,13 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
 
         bool admitted = false;
         TxCoordinator::Context media;
-        ([self, wantsAudio, txRequest, &admitted, &media]() {
+        ([self, wantsAudio, txRequest, daxPermit, &admitted, &media]() {
             if (wantsAudio) {
                 self->prepareTxAudio();
+                if (!self || !self->m_model || !txRequest.valid()
+                    || (self->m_model->backendCapabilities().hasDaxStreams && !daxPermit.permits())) {
+                    return;
+                }
                 admitted = self->m_model->setProducerTransmit(
                     txRequest, true, TransmitModel::PttSource::Dax);
             } else {
@@ -2644,16 +2703,22 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
                 admitted = self->m_model->requestProducerPttOn(
                     txRequest, TransmitModel::PttSource::TciHardware);
             }
-            if (admitted) {
-                media = self->m_model->captureTxMedia(txRequest);
+            if (admitted && self && self->m_model) {
+                media = wantsAudio ? self->m_model->captureDaxTxMedia(txRequest)
+                                   : self->m_model->captureTxMedia(txRequest);
+                if (wantsAudio && self->m_model->backendCapabilities().hasDaxStreams) {
+                    media = media.withMediaPermit([daxPermit] { return daxPermit.permits(); });
+                }
             }
         })();
+        if (!self) { return; }
         if (!admitted) {
             self->abortTciPtt();
+            if (!self) { return; }
             if (socket) {
                 self->replyText(socket, QStringLiteral("trx:%1,false;").arg(request.trx));
             }
-            self->finishRouteTransition(transitionGeneration);
+            if (self) { self->finishRouteTransition(transitionGeneration); }
             return;
         }
         self->m_tciTxContext = std::move(media);

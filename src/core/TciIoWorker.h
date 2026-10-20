@@ -1,6 +1,7 @@
 #pragma once
 #ifdef HAVE_WEBSOCKETS
 
+#include "DaxTxAudioPermit.h"
 #include "PcmFrame.h"
 #include "TciClient.h"
 #include "TciRxConverter.h"
@@ -70,6 +71,7 @@ public:
     void retireRxRoute(quint64 key);
     void setRxGain(int channel, float gain);
     void setTxGain(float gain, int overflowMode);
+    void setDaxTxAudioPermit(const DaxTxAudioPermit& permit);
     void prepareTx(quint64 id, const TxCoordinator::Context& context);
     void startChrono(quint64 id, int trx, const TxCoordinator::Context& context);
     void stopChrono();
@@ -86,7 +88,8 @@ signals:
     void audioStopped(quint64 id, quint64 generation);
     void clientOpened(std::shared_ptr<TciClientLifetime> lifetime, QHostAddress address, quint16 port);
     void clientClosed(quint64 id, int closeCode, int error, const QString& errorText);
-    void textReceived(quint64 id, const QString& text, const AetherSDR::TxCoordinator::Request& input);
+    void textReceived(quint64 id, const QString& text, const AetherSDR::TxCoordinator::Request& input,
+                      const AetherSDR::DaxTxAudioPermit& daxPermit);
     void rxLevel(int channel, float rms);
     void txLevel(float rms);
     void txPcmReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
@@ -98,7 +101,13 @@ private:
         TxCoordinator::Producer producer;
         bool activated{false};
         bool textInFlight{false};
-        struct Text { QString message; TxCoordinator::Request input; bool captured{false}; };
+        struct Text {
+            QString message;
+            TxCoordinator::Request input;
+            bool captured{false};
+            DaxTxAudioPermit daxPermit{DaxTxAudioPermit::blocked()};
+            bool daxPermitCaptured{false};
+        };
         std::deque<Text> texts;
         qsizetype textBytes{0};
         int error{-1};
@@ -123,6 +132,7 @@ private:
     mutable QMutex m_diagnosticsMutex;
     QJsonObject m_diagnostics;
     void dispatchText(quint64 id);
+    void receiveText(quint64 id, const QString& text);
     void captureTextInputs(Client& client);
     void drain();
     void resetRxRoute(quint64 key);
@@ -156,6 +166,7 @@ private:
     quint64 m_txClient{0};
     int m_txChronoTrx{0};
     TxCoordinator::Context m_tciTxContext;
+    DaxTxAudioPermit m_daxTxAudioPermit{DaxTxAudioPermit::blocked()};
     std::unique_ptr<Resampler> m_txResampler;
     QElapsedTimer m_txChronoClock;
     QElapsedTimer m_txChronoSessionClock;

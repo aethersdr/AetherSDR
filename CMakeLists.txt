@@ -1238,6 +1238,7 @@ set(MODEL_SOURCES
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
     src/models/RadioModel.cpp
+    src/models/RadioModel_DaxTx.cpp
     src/models/RadioModel_Setup.cpp
     src/models/RadioModel_Utilities.cpp
     src/models/RadioModel_StoredControls.cpp
