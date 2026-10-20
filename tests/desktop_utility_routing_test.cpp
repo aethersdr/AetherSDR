@@ -10,7 +10,12 @@
 
 #include <QApplication>
 #include <QLocalServer>
+#include <QJsonObject>
+#include <QList>
+#include <QMetaType>
 #include <QSignalSpy>
+#include <QString>
+#include <QStringList>
 #include <cstdio>
 #include <limits>
 #include <memory>

@@ -2,6 +2,8 @@
 #include "core/AppSettings.h"
 
 #include <QPointer>
+#include <QList>
+#include <QString>
 #include <QSysInfo>
 #include <QThread>
 

@@ -4,6 +4,7 @@
 #include "models/MemoryEntry.h"
 #include <QSet>
 #include <QMetaType>
+#include <QString>
 
 #include <cmath>
 #include <optional>
