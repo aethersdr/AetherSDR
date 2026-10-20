@@ -283,16 +283,15 @@ void CatControlApplet::setMaxSlices(int n)
     m_maxSlices = qMax(1, n);
     for (int row = 0; row < m_rows.size(); ++row) {
         PortRow& r = m_rows[row];
-        // Remember the selected slice by DATA (not raw index): with the "—" entry
-        // shifting indices, an index-based restore + qMin clamp could silently
-        // repoint a VFO to a different slice when the count changes. Restore by
-        // data; if the saved slice is no longer available, fall back to the first
-        // entry (slice A / "—") for DISPLAY only — the persisted value is kept
-        // (persistVfo won't overwrite an unrepresentable saved slice).
-        const int savedA = r.vfoACombo->currentData().toInt();
-        const int savedB = r.vfoBCombo->currentData().toInt();
-        r.vfoACombo->blockSignals(true);
-        r.vfoBCombo->blockSignals(true);
+        // A smaller receiver count can temporarily hide a saved assignment.
+        // Read settings, not the display fallback, when the choices expand again.
+        const QString prefix = QString("CatPort_%1_").arg(row);
+        const auto& settings = AppSettings::instance();
+        const int savedA = settings.value(prefix + "VfoA", "0").toInt();
+        const int savedB = settings.value(prefix + "VfoB",
+                                        QString::number(CatPort::kVfoNone)).toInt();
+        const QSignalBlocker blockA(r.vfoACombo);
+        const QSignalBlocker blockB(r.vfoBCombo);
         r.vfoACombo->clear();
         r.vfoBCombo->clear();
         populateVfoCombo(r.vfoACombo, false);
@@ -301,8 +300,7 @@ void CatControlApplet::setMaxSlices(int n)
         const int idxB = r.vfoBCombo->findData(savedB);
         r.vfoACombo->setCurrentIndex(idxA >= 0 ? idxA : 0);
         r.vfoBCombo->setCurrentIndex(idxB >= 0 ? idxB : 0);
-        r.vfoACombo->blockSignals(false);
-        r.vfoBCombo->blockSignals(false);
+        updateRowLocked(row);
     }
 }
 

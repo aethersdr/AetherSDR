@@ -15,6 +15,58 @@ class OtrspAppletTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void restoresMappingsAfterReceiverCountChanges()
+    {
+        AppSettings& settings = AppSettings::instance();
+        settings.setValue("CatEnabled", "True");
+        settings.setValue("CatPort_0_Port", "60000");
+        settings.setValue("CatPort_0_Dialect", "OTRSP");
+        settings.setValue("CatPort_0_VfoA", "2");
+        settings.setValue("CatPort_0_VfoB", "5");
+        settings.setValue("CatPort_0_Enabled", "False");
+        settings.save();
+        CatPort port(nullptr);
+        CatPort* ports[] = {&port};
+        CatControlApplet applet;
+        applet.setPorts(ports, 1);
+        applet.setMaxSlices(1);
+        applet.setFloating(true);
+        QComboBox* vfoA = applet.findChild<QComboBox*>("catPort0VfoA");
+        QComboBox* vfoB = applet.findChild<QComboBox*>("catPort0VfoB");
+        QComboBox* dialect = applet.findChild<QComboBox*>("catPort0Dialect");
+        QLineEdit* number = applet.findChild<QLineEdit*>("catPort0Port");
+        QCheckBox* enabled = applet.findChild<QCheckBox*>("catPort0Enabled");
+        QVERIFY(vfoA && vfoB && dialect && number && enabled);
+        QCOMPARE(vfoA->currentData().toInt(), 0);
+        QCOMPARE(vfoB->currentData().toInt(), CatPort::kVfoNone);
+        QVERIFY(!enabled->isEnabled());
+        applet.setMaxSlices(8);
+        QCOMPARE(vfoA->currentData().toInt(), 2);
+        QCOMPARE(vfoB->currentData().toInt(), 5);
+        QVERIFY(enabled->isEnabled());
+        applet.setMaxSlices(1);
+        number->setText("60002");
+        QVERIFY(QMetaObject::invokeMethod(number, "editingFinished", Qt::DirectConnection));
+        QCOMPARE(settings.value("CatPort_0_VfoA").toInt(), 2);
+        QCOMPARE(settings.value("CatPort_0_VfoB").toInt(), 5);
+        applet.setMaxSlices(8);
+        QCOMPARE(vfoA->currentData().toInt(), 2);
+        QCOMPARE(vfoB->currentData().toInt(), 5);
+        vfoB->setCurrentIndex(vfoB->findData(1));
+        applet.setMaxSlices(2);
+        QCOMPARE(vfoB->currentData().toInt(), 1);
+        applet.setMaxSlices(8);
+        QCOMPARE(vfoB->currentData().toInt(), 1);
+        dialect->setCurrentIndex(dialect->findData(static_cast<int>(CatDialect::Rigctld)));
+        applet.setMaxSlices(2);
+        QCOMPARE(vfoB->currentData().toInt(), CatPort::kVfoNone);
+        QVERIFY(!vfoB->isEnabled());
+        applet.setMaxSlices(8);
+        QCOMPARE(vfoB->currentData().toInt(), CatPort::kVfoNone);
+        dialect->setCurrentIndex(dialect->findData(static_cast<int>(CatDialect::OTRSP)));
+        QCOMPARE(vfoB->currentData().toInt(), 1);
+    }
+
     void settingsAndMappings()
     {
         AppSettings& settings = AppSettings::instance();
