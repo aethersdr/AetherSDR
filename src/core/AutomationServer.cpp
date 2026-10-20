@@ -6338,13 +6338,9 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
         if (!m_radioModel || !m_radioModel->isConnected()) {
             return err(QStringLiteral("no connected radio available"));
         }
-        // `sub slice all` is Flex wire text; on a backend with no command
-        // plane it is dropped, and an ok for work that never happens is the
-        // same defect as a permanently dim button (M0, #5263).
-        if (!m_radioModel->hasCommandPlane()) {
-            return err(QStringLiteral("not supported on this radio (no Flex command plane)"));
+        if (m_radioModel->requestSliceInventoryRefresh() == ReceiveDispatch::Unsupported) {
+            return err(QStringLiteral("slice inventory refresh is not supported on this radio"));
         }
-        m_radioModel->sendCommand(QStringLiteral("sub slice all"));
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("pending"), true}};
     }
@@ -6376,10 +6372,13 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
             {QStringLiteral("timestampMs"), QDateTime::currentMSecsSinceEpoch()}
         };
         QPointer<AutomationServer> self(this);
+        const QPointer<RadioModel> originalRadio(m_radioModel);
+        const RadioControlSession refreshSession = m_radioModel->controlSession();
         m_radioModel->sendCmdPublic(
             QStringLiteral("waveform remove %1").arg(name),
-            [self, name](int code, const QString& body) {
-                if (!self) {
+            [self, name, originalRadio, refreshSession](int code, const QString& body) {
+                if (!self || !originalRadio || self->m_radioModel != originalRadio
+                    || !originalRadio->controlSessionCurrent(refreshSession)) {
                     return;
                 }
                 self->m_lastWaveformCommand = QJsonObject{
@@ -6392,7 +6391,7 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
                 };
                 if (code == 0 && self->m_radioModel
                         && self->m_radioModel->isConnected()) {
-                    self->m_radioModel->sendCommand(QStringLiteral("sub slice all"));
+                    self->m_radioModel->requestSliceInventoryRefresh(refreshSession);
                 }
             });
         return QJsonObject{{QStringLiteral("ok"), true},

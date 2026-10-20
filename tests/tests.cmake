@@ -8435,6 +8435,12 @@ target_link_libraries(backend_slice_lifecycle_test PRIVATE
     aethercore Qt6::Core Qt6::Test
 )
 add_test(NAME backend_slice_lifecycle_test COMMAND backend_slice_lifecycle_test)
+# Socket-free lifecycle replies, independent state observations and protocol
+# handlers. No listener, radio peer, physical receiver or transmitter is used.
+add_executable(slice_lifecycle_routing_test tests/slice_lifecycle_routing_test.cpp)
+target_include_directories(slice_lifecycle_routing_test PRIVATE src tests)
+target_link_libraries(slice_lifecycle_routing_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME slice_lifecycle_routing_test COMMAND slice_lifecycle_routing_test)
 # Socket-free bridge diagnostics: injected backend and meter model, no server/peer.
 add_executable(automation_persist_diagnostics_test tests/automation_persist_diagnostics_test.cpp)
 target_include_directories(automation_persist_diagnostics_test PRIVATE src tests)
@@ -9507,6 +9513,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tune_inhibit_restore_test
     tx_audio_context_test
     backend_slice_lifecycle_test
+    slice_lifecycle_routing_test
     waterfall_time_marker_settings_test
     extended_tnf_settings_test
     client_display_settings_test

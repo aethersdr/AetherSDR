@@ -99,6 +99,18 @@ public:
     ReceiveDispatch requestRadioNickname(const QString& nickname,
                                          NicknameCompletion completion = {}) override;
     ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
+    ReceiveDispatch requestSliceCreate(const SliceCreateRequest& request,
+                                       const SliceCreateCompletion& completion = {},
+                                       const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestSliceRemove(int sliceId, const RadioControlCompletion& completion = {},
+                                       const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestTxSlice(int sliceId, bool enabled,
+                                   const RadioControlCompletion& completion = {},
+                                   const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestFullDuplex(bool enabled, const RadioControlCompletion& completion = {},
+                                      const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestSliceInventoryRefresh(const RadioControlCompletion& completion = {},
+                                                 const RadioControlFence& current = {}) override;
     ReceiveDispatch requestTransmitControl(const TransmitControlRequest& request,
         TunePowerContext context = TunePowerContext::Deferred) override;
     ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,

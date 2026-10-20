@@ -75,16 +75,16 @@ from pathlib import Path
 # drop the number here in the same commit. When a file reaches 0, delete its row.
 BASELINE = {
     # ---- models ----
-    "src/models/RadioModel.cpp": 124,
+    "src/models/RadioModel.cpp": 120,
     "src/models/CwxModel.cpp": 9,
     "src/models/DaxIqModel.cpp": 4,
     "src/models/EqualizerModel.cpp": 4,
     "src/models/FlexWaveformModel.cpp": 3,
     # ---- gui ----
-    "src/gui/MainWindow.cpp": 12,
-    "src/gui/MainWindow_Wiring.cpp": 14,
-    "src/gui/MainWindow_Controllers.cpp": 4,
-    "src/gui/MainWindow_Shortcuts.cpp": 4,
+    "src/gui/MainWindow.cpp": 11,
+    "src/gui/MainWindow_Wiring.cpp": 13,
+    "src/gui/MainWindow_Controllers.cpp": 2,
+    "src/gui/MainWindow_Shortcuts.cpp": 2,
     "src/gui/MainWindow_Nets.cpp": 2,
     "src/gui/MainWindow_DigitalModes.cpp": 2,
     "src/gui/DxClusterDialog.cpp": 1,
@@ -93,12 +93,12 @@ BASELINE = {
     "src/gui/SpectrumOverlayMenu.cpp": 1,
     "src/gui/SpotSettingsDialog.cpp": 1,
     # ---- core (above the seam; backends/ is excluded) ----
-    "src/core/TciServer.cpp": 11,
-    "src/core/AutomationServer.cpp": 6,
+    "src/core/TciServer.cpp": 4,
+    "src/core/AutomationServer.cpp": 4,
     "src/core/WaveformInstaller.cpp": 3,
     "src/core/DvkWavTransfer.cpp": 1,
     "src/core/FirmwareUploader.cpp": 2,
-    "src/core/RigctlProtocol.cpp": 2,
+    "src/core/RigctlProtocol.cpp": 1,
     "src/core/WfmDemodulator.cpp": 2,
     "src/core/TciProtocol.cpp": 1,
 }

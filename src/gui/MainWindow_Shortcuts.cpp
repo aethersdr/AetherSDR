@@ -943,17 +943,14 @@ void MainWindow::activateStatusIndicator(QObject* obj)
     }
     if (obj == m_fdxIndicator) {
         bool on = !m_radioModel.fullDuplexEnabled();
-        m_radioModel.sendCmdPublic(
-            QString("radio set full_duplex_enabled=%1").arg(on ? 1 : 0),
-            [this, on](int code, const QString& body) {
-                if (code != 0) {
+        m_radioModel.requestFullDuplex(on, this,
+            [this](const RadioControlReply& result) {
+                if (result.kind != RadioControlReply::Kind::Accepted
+                    && result.kind != RadioControlReply::Kind::Cancelled) {
                     showPanadapterInterlockNotification(
-                        QString("FDX not available: %1").arg(body.trimmed()),
+                        QString("FDX not available: %1").arg(result.message.trimmed()),
                         QStringLiteral("fdx-unavailable"));
-                    return;
                 }
-                // Radio accepted; no status echo follows, so apply manually.
-                m_radioModel.setFullDuplex(on);
             });
         return;
     }
@@ -1409,32 +1406,7 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("split_toggle", "Split Toggle", "Slice",
         QKeySequence(), [this]() {
             if (!m_splitActive) {
-                // Same gate, same reasons, as the VfoWidget::splitToggled
-                // lambda in MainWindow_Wiring.cpp — see the comment there for
-                // why this returns ahead of the m_splitActive write rather
-                // than only skipping the send (issue 5277) — and for why it
-                // is deliberately not permissive on disconnect, and which
-                // families the predicate refuses.
-                if (!m_radioModel.hasCommandPlane()) {
-                    qCWarning(lcDevices)
-                        << "split_toggle ignored: this backend takes no Flex"
-                        << "slice-create command";
-                    showUnsupportedControlNotice();
-                    return;
-                }
-                if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) return;
-                auto* s = activeSlice();
-                if (!s) return;
-                QString panId = s->panId();
-                if (panId.isEmpty())
-                    panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
-                bool isCw = isCwMode(s->mode());
-                double txFreq = s->frequency() + (isCw ? 0.001 : 0.005);
-                m_splitActive = true;
-                m_splitRxSliceId = s->sliceId();
-                m_splitRxFrequencyMhz = s->reportedFrequency();
-                m_radioModel.sendCommand(
-                    QString("slice create pan=%1 freq=%2").arg(panId).arg(txFreq, 0, 'f', 6));
+                if (SliceModel* source = activeSlice()) { enterSplit(source->sliceId()); }
             } else {
                 disableSplit();
             }

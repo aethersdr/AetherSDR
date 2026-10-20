@@ -73,6 +73,12 @@ audio_stop:0;            # stop it
 
 ## Using TCI with other programs
 
+When a VFO-B request needs a new receiver, AetherSDR waits for its acknowledged
+identity and radio status before selecting it for TX. A delayed reply cannot
+adopt another client's receiver. Disconnecting or stopping TCI during setup
+cancels the pending route; cleanup only removes the receiver created for it.
+Radios with paired receiver/panadapter topology keep that native topology.
+
 ### WSJT-X
 
 Use a WSJT-X build with TCI support (WSJT-X Improved, or WSJT-X 3.x).
