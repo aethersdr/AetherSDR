@@ -65,6 +65,12 @@ With MultiFlex, another client can select its own DAX TX stream. AetherSDR's lab
 
 Ownership is not taken on connect, mode change, incoming status or settings restore. Reconnecting does not replay a previous **Take DAX TX** request. If a request is refused or times out, the applet shows its reason; check the current status before making another request.
 
+On Linux and macOS, starting the hosted DAX bridge temporarily selects **PC**
+as the mic source. Stopping it restores the original source only in the same
+radio session and only if you have not selected a mic source since it started.
+This temporary selection is separate from DAX stream ownership and never keys
+the transmitter.
+
 ### Wiring WSJT-X (Linux and macOS)
 
 This transmit-capable setup applies to FlexRadio.

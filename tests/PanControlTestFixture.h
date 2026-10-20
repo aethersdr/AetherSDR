@@ -28,6 +28,16 @@ public:
     static void retire(RadioModel& radio, const QString& id) { radio.retireDisplayResource(id); }
     static void settle(RadioModel& radio) { radio.settlePanCreations(); }
     static void newSession(RadioModel& radio) { ++radio.m_sessionGeneration; radio.settlePanCreations(); }
+    static void resetAudio(RadioModel& radio) { radio.resetAudioControls(); }
+    static int pendingAudio(const RadioModel& radio) { return radio.m_audioPending.size(); }
+    static void audioTransport(RadioModel& radio, RadioConnection& connection, FlexBackend& backend,
+                               std::function<void(quint32, const QString&)> writer)
+    {
+        connection.m_commandSinkForTest = std::move(writer);
+        backend.setAudioCommandSink(radio.audioCommandSink());
+    }
+    static void startRx(RadioModel& radio) { radio.createRxAudioStream(); }
+    static void stopRx(RadioModel& radio) { radio.removeRxAudioStream(); }
     static void hold(RadioModel& radio) { radio.m_profileLoadRadioStateWriteHoldUntilMs = QDateTime::currentMSecsSinceEpoch() + 60000; }
     static void flush(RadioModel& radio)
     { radio.m_profileLoadRadioStateWriteHoldUntilMs = 0; radio.flushPendingProfileLoadPanWrites(); }
@@ -47,6 +57,15 @@ public:
         setSetupCommandSink([this](const QString& command, const RadioControlCompletion& completion) {
             if (!admit) { return false; }
             writes.push_back({command, completion});
+            const auto callback = onWrite;
+            if (callback) { callback(command); }
+            return true;
+        });
+        setAudioCommandSink([this](const QString& command, CommandReply reply, const AudioControlGuard& guard) {
+            if (!admit || !guard.permits()) { return false; }
+            writes.push_back({command, [reply](const RadioControlReply& result) {
+                if (reply) { reply(result.code, result.message); }
+            }});
             const auto callback = onWrite;
             if (callback) { callback(command); }
             return true;

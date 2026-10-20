@@ -759,7 +759,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.panDisplayControl = PanDisplayControl{{PanField::Geometry, PanField::Band,
         PanField::LevelRange, PanField::Pixels, PanField::Average, PanField::FrameRate,
         PanField::WeightedAverage, PanField::RfGain, PanField::Wnb, PanField::WnbLevel, PanField::LoopA, PanField::LoopB,
-        PanField::NoiseFloorPosition, PanField::NoiseFloorEnabled, PanField::WaterfallRate,
+        PanField::NoiseFloorPosition, PanField::NoiseFloorEnabled, PanField::DaxIqChannel, PanField::WaterfallRate,
         PanField::WaterfallColorGain, PanField::WaterfallBlackLevel, PanField::WaterfallAutoBlack,
         PanField::WaterfallDefaults}, {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
     caps.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Answered,
@@ -958,6 +958,10 @@ RadioCapabilities FlexBackend::capabilities() const
     // DAX audio + DAX IQ ride PanadapterStream's VITA-49 plane, which only this
     // backend owns.
     caps.hasDaxStreams = true;
+    caps.audioStreamControl = AudioStreamControl{{AudioStreamKind::RemoteReceive,
+        AudioStreamKind::RemoteTransmit, AudioStreamKind::DaxReceive,
+        AudioStreamKind::DaxTransmit, AudioStreamKind::Iq}};
+    caps.radioGraphicEqControl = GraphicEqControl{{GraphicEqRequest::Path::Receive, GraphicEqRequest::Path::Transmit}};
     // NR/NB/ANF/NRL/ANFL/ANFT, the APD predistorter and the wideband noise
     // blanker all run in the radio's firmware, driven by command-plane verbs.
     caps.hasRadioSideDsp = true;

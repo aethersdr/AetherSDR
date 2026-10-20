@@ -11,6 +11,8 @@
 #include <cmath>
 #include <cstring>
 #include <utility>
+#include <QPointer>
+#include <QTimer>
 #ifndef Q_OS_WIN
 #include <unistd.h>
 #include <fcntl.h>
@@ -106,6 +108,7 @@ DaxIqModel::DaxIqModel(QObject* parent)
 
 DaxIqModel::~DaxIqModel()
 {
+    for (const AudioControlGuard& guard : m_createGuards) { guard.revoke(); }
     ShutdownTrace trace("dax_iq.thread.join");
     m_workerThread.quit();
     m_workerThread.wait();
@@ -169,25 +172,105 @@ int DaxIqModel::requestedSampleRate(int channel) const
     return sampleRateForPreference(m_desiredRate[idx]);
 }
 
-void DaxIqModel::createStream(int channel)
+ReceiveDispatch DaxIqModel::dispatch(AudioStreamRequest request, const AudioStreamCompletion& completion)
 {
-    if (channel < 1 || channel > NUM_CHANNELS) return;
-    if (supportedSampleRates().isEmpty()) {
-        return;
+    if (QThread::currentThread() != thread() || !request.valid() || request.kind != AudioStreamKind::Iq
+        || request.channel < 1 || request.channel > NUM_CHANNELS) { return ReceiveDispatch::Unsupported; }
+    const QPointer<DaxIqModel> alive(this);
+    const quint64 session = m_controlSession;
+    const ControlDispatcher dispatcher = m_dispatcher;
+    emit controlRequested(request);
+    if (!alive) { return ReceiveDispatch::Unsupported; }
+    const int idx = channelIndex(request.channel);
+    if (session != m_controlSession || (request.guard.present() && !request.guard.permits())
+        || (request.action == AudioStreamAction::SetIqRate && request.sampleRate != requestedSampleRate(request.channel))
+        || (request.action == AudioStreamAction::Remove && m_wanted[idx])) {
+        if (completion) { completion({{RadioControlReply::Kind::Cancelled, -1, QStringLiteral("IQ intent retired")}, 0}); }
+        return ReceiveDispatch::Unsupported;
     }
-    emit commandReady(QString("stream create type=dax_iq daxiq_channel=%1").arg(channel));
+    if (dispatcher) { return dispatcher(std::move(request), completion); }
+    if (completion) { completion({{RadioControlReply::Kind::Refused, -1, QStringLiteral("no IQ control dispatcher")}, 0}); }
+    return ReceiveDispatch::Unsupported;
+}
+
+bool DaxIqModel::createPending(int channel) const
+{
+    return channel >= 1 && channel <= NUM_CHANNELS && m_createPending[channel - 1];
+}
+
+quint64 DaxIqModel::streamRevision(int channel) const
+{
+    return channel >= 1 && channel <= NUM_CHANNELS ? m_streamRevisions[channel - 1] : 0;
+}
+
+bool DaxIqModel::createStream(int channel)
+{
+    if (QThread::currentThread() != thread() || channel < 1 || channel > NUM_CHANNELS
+        || supportedSampleRates().isEmpty()) { return false; }
+    const int idx = channelIndex(channel);
+    m_intentKnown[idx] = true;
+    m_wanted[idx] = true;
+    if (m_streams[idx].exists) { return false; }
+    if (m_createPending[idx]) {
+        m_retryAfterCancel[idx] = !m_createGuards[idx].permits();
+        return false;
+    }
+    m_createPending[idx] = true;
+    m_createdIds[idx] = 0;
+    ++m_streamRevisions[idx];
+    m_createGuards[idx] = AudioControlGuard::create(30000);
+    const quint64 session = m_controlSession;
+    const QPointer<DaxIqModel> alive(this);
+    const quint64 revision = m_streamRevisions[idx];
+    QTimer::singleShot(30000, this, [alive, idx, session, revision] {
+        if (alive && alive->m_controlSession == session && alive->m_streamRevisions[idx] == revision
+            && alive->m_createPending[idx]) {
+            alive->removeStream(idx + 1);
+            alive->m_createPending[idx] = false;
+            emit alive->streamChanged(idx + 1);
+        }
+    });
+    AudioStreamRequest request{AudioStreamKind::Iq, AudioStreamAction::Create, 0, channel};
+    request.guard = m_createGuards[idx];
+    return dispatch(request, [alive, idx, session, revision, channel](const AudioStreamReply& reply) {
+        if (!alive || alive->m_controlSession != session || alive->m_streamRevisions[idx] != revision) { return; }
+        if (reply.result.kind == RadioControlReply::Kind::Accepted) {
+            alive->m_createdIds[idx] = reply.streamId;
+        }
+        if (reply.result.kind != RadioControlReply::Kind::Accepted) {
+            if (reply.streamId != 0) { alive->m_ignoredStreams.insert(reply.streamId); }
+            alive->m_createPending[idx] = false;
+            if (reply.result.kind == RadioControlReply::Kind::Failed) { alive->m_wanted[idx] = false; }
+            if (alive->m_wanted[idx] && std::exchange(alive->m_retryAfterCancel[idx], false)
+                && reply.result.kind == RadioControlReply::Kind::Cancelled) {
+                QTimer::singleShot(0, alive, [alive, channel, session, revision] {
+                    if (alive && alive->m_controlSession == session && alive->m_streamRevisions[channel - 1] == revision
+                        && alive->m_wanted[channel - 1]) {
+                        alive->createStream(channel);
+                    }
+                });
+            }
+        }
+    }) == ReceiveDispatch::Dispatched;
 }
 
 void DaxIqModel::removeStream(int channel)
 {
+    if (QThread::currentThread() != thread()) { return; }
     int idx = channelIndex(channel);
     if (idx < 0 || idx >= NUM_CHANNELS) return;
-    if (!m_streams[idx].exists || m_streams[idx].streamId == 0) return;
-    emit commandReady(QString("stream remove 0x%1").arg(m_streams[idx].streamId, 0, 16));
+    m_wanted[idx] = false;
+    m_intentKnown[idx] = true;
+    m_createGuards[idx].revoke();
+    const quint32 id = m_streams[idx].exists ? m_streams[idx].streamId : m_createdIds[idx];
+    if (id == 0) { return; }
+    if (!m_streams[idx].exists) { m_ignoredStreams.insert(id); }
+    dispatch({AudioStreamKind::Iq, AudioStreamAction::Remove, id, channel});
 }
 
 void DaxIqModel::setSampleRate(int channel, int rate)
 {
+    if (QThread::currentThread() != thread()) { return; }
     int idx = channelIndex(channel);
     if (idx < 0 || idx >= NUM_CHANNELS) return;
     if (!supportsSampleRate(rate)) {
@@ -197,12 +280,12 @@ void DaxIqModel::setSampleRate(int channel, int rate)
     m_desiredRate[idx] = rate;   // remember even if the stream isn't up yet
     if (!m_streams[idx].exists || m_streams[idx].streamId == 0) return;
     m_streams[idx].rateSettling = m_streams[idx].sampleRate != rate;
-    emit commandReady(QString("stream set 0x%1 daxiq_rate=%2")
-        .arg(m_streams[idx].streamId, 0, 16).arg(rate));
+    dispatch({AudioStreamKind::Iq, AudioStreamAction::SetIqRate, m_streams[idx].streamId, channel, rate});
 }
 
 void DaxIqModel::applyStreamStatus(quint32 streamId, const QMap<QString, QString>& kvs)
 {
+    if (m_ignoredStreams.contains(streamId)) { return; }
     // Find which channel this stream belongs to
     int ch = -1;
     if (kvs.contains("daxiq_channel"))
@@ -221,8 +304,13 @@ void DaxIqModel::applyStreamStatus(quint32 streamId, const QMap<QString, QString
     bool isNew = false;
     if (idx < 0 && ch >= 1 && ch <= NUM_CHANNELS) {
         idx = channelIndex(ch);
+        if ((m_intentKnown[idx] && !m_wanted[idx])
+            || (m_createPending[idx] && !m_createGuards[idx].permits())) { return; }
+        if (m_streams[idx].exists) { return; }
+        if (!m_createPending[idx]) { ++m_streamRevisions[idx]; }
         m_streams[idx].streamId = streamId;
         m_streams[idx].exists = true;
+        m_createPending[idx] = false;
         isNew = true;
         qCDebug(lcProtocol) << "DaxIqModel: new IQ stream ch" << ch
                             << "id" << Qt::hex << streamId;
@@ -260,8 +348,7 @@ void DaxIqModel::applyStreamStatus(quint32 streamId, const QMap<QString, QString
     const int desiredRate = sampleRateForPreference(m_desiredRate[idx]);
     const bool reapplyPending = isNew && desiredRate != 0 && desiredRate != s.sampleRate;
     if (reapplyPending) {
-        emit commandReady(QStringLiteral("stream set 0x%1 daxiq_rate=%2")
-            .arg(s.streamId, 0, 16).arg(desiredRate));
+        dispatch({AudioStreamKind::Iq, AudioStreamAction::SetIqRate, s.streamId, s.channel, desiredRate});
     }
     // "Rate-settling" until the actual sampleRate reaches the desired rate (the
     // applet holds its combo meanwhile). Tracks the rate gap itself, not
@@ -285,8 +372,10 @@ void DaxIqModel::applyStreamStatus(quint32 streamId, const QMap<QString, QString
 
 void DaxIqModel::handleStreamRemoved(quint32 streamId)
 {
+    m_ignoredStreams.remove(streamId);
     for (int i = 0; i < NUM_CHANNELS; ++i) {
         if (m_streams[i].streamId == streamId) {
+            ++m_streamRevisions[i];
             int ch = m_streams[i].channel;
             m_streams[i] = IqStream{};
             m_streams[i].channel = ch;
@@ -302,6 +391,17 @@ void DaxIqModel::handleStreamRemoved(quint32 streamId)
 
 void DaxIqModel::handleDisconnect()
 {
+    ++m_controlSession;
+    m_ignoredStreams.clear();
+    for (int i = 0; i < NUM_CHANNELS; ++i) {
+        m_createGuards[i].revoke();
+        m_createPending[i] = false;
+        m_wanted[i] = false;
+        m_intentKnown[i] = false;
+        m_createdIds[i] = 0;
+        m_retryAfterCancel[i] = false;
+        ++m_streamRevisions[i];
+    }
     // The radio won't send a per-stream "removed" status on a hard disconnect,
     // so tear every IQ stream down here (mirroring handleStreamRemoved): reset
     // the struct but keep the 1-based channel index, and destroy the pipe on the

@@ -5,6 +5,7 @@
 #include <QMap>
 #include <QString>
 #include <array>
+#include "core/backends/AudioControlRequest.h"
 
 namespace AetherSDR {
 
@@ -81,7 +82,7 @@ public:
 signals:
     void txStateChanged();
     void rxStateChanged();
-    void commandReady(const QString& cmd);
+    void controlRequested(const AetherSDR::GraphicEqRequest& request);
     // One of the four setters above ran: the operator, a controller or a
     // shortcut moved the EQ. Status parsing and restoreState() do not emit it.
     void operatorEdited();

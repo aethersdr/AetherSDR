@@ -3997,9 +3997,9 @@ bool TciServer::ensureIqStream(int trx)
     if (shared != 0) {
         m_pendingIqRemovals.remove(shared);
         iq.setSampleRate(shared, rate);
-        if (!iq.stream(shared).exists && !m_iqCreateInFlight.contains(shared)) {
+        if (!iq.stream(shared).exists) {
+            if (!iq.createStream(shared) && !iq.createPending(shared)) { return false; }
             m_iqCreateInFlight.insert(shared);
-            iq.createStream(shared);
         }
         return true;
     }
@@ -4022,34 +4022,31 @@ bool TciServer::ensureIqStream(int trx)
     // the channel, so a pan is never left routed at a channel nothing reads.
     const QString stalePan = m_iqPanChannel.key(channel, QString());
     if (!stalePan.isEmpty() && stalePan != panId) {
-        m_model->sendCommand(
-            QStringLiteral("display pan set %1 daxiq_channel=0").arg(stalePan));
+        if (m_model->requestPanIqBinding(m_model->panadapter(stalePan), 0) == ReceiveDispatch::Unsupported) { return false; }
         m_iqPanChannel.remove(stalePan);
     }
 
-    // #3977 makes RadioModel::sendCommand() DROP a `display pan set` for a pan
-    // the radio has said another client owns (the #3951 signature). Test that
-    // condition here rather than reading sendCommand()'s bool: that return also
-    // folds in transport state, so treating it as the answer would report a
-    // receiver unarmed merely because the command was queued. This is the case
-    // the contract is about — without it TCI creates the stream, the bind is
-    // silently dropped, and the skimmer is told it started.
+    // Do not allocate an IQ channel for a pan owned by another client.
     if (PanadapterModel* pan = m_model->panadapter(panId);
         pan && !pan->ownedByClient(m_model->ourClientHandle())) {
         qCWarning(lcCat) << "TCI: refusing IQ start for trx" << trx
                          << "— pan" << panId << "is owned by another client";
         return false;
     }
-    m_model->sendCommand(QStringLiteral("display pan set %1 daxiq_channel=%2")
-                             .arg(panId).arg(channel));
+    if (m_model->requestPanIqBinding(m_model->panadapter(panId), channel) == ReceiveDispatch::Unsupported) { return false; }
 
     m_iqPanChannel.insert(panId, channel);
     m_tciIqChannels.insert(channel);
     m_pendingIqRemovals.remove(channel);
     iq.setSampleRate(channel, rate);
-    if (!iq.stream(channel).exists && !m_iqCreateInFlight.contains(channel)) {
+    if (!iq.stream(channel).exists) {
+        if (!iq.createStream(channel) && !iq.createPending(channel)) {
+            m_model->requestPanIqBinding(m_model->panadapter(panId), 0);
+            m_iqPanChannel.remove(panId);
+            m_tciIqChannels.remove(channel);
+            return false;
+        }
         m_iqCreateInFlight.insert(channel);
-        iq.createStream(channel);
     }
     return true;
 }
@@ -4076,17 +4073,17 @@ void TciServer::releaseIqChannel(int channel)
     // blocks the DAX IQ applet from using that pan.
     const QString panId = m_iqPanChannel.key(channel, QString());
     if (!panId.isEmpty()) {
-        m_model->sendCommand(
-            QStringLiteral("display pan set %1 daxiq_channel=0").arg(panId));
+        m_model->requestPanIqBinding(m_model->panadapter(panId), 0);
         m_iqPanChannel.remove(panId);
     }
+    m_model->daxIqModel().removeStream(channel);
     if (!m_model->daxIqModel().stream(channel).exists) {
-        // iq_stop won the race against the create status; DaxIqModel cannot
-        // remove an id it has not learned. The streamChanged reaper finishes.
+        // The model revokes an unanswered create and cleans up its late ID.
         m_pendingIqRemovals.insert(channel);
+        m_tciIqChannels.remove(channel);
+        m_iqCreateInFlight.remove(channel);
         return;
     }
-    m_model->daxIqModel().removeStream(channel);
     m_tciIqChannels.remove(channel);
     m_iqCreateInFlight.remove(channel);
     m_pendingIqRemovals.remove(channel);

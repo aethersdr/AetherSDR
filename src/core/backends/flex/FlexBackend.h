@@ -37,6 +37,9 @@ class FlexBackend : public IRadioBackend {
 public:
     explicit FlexBackend(QObject* parent = nullptr);
     ~FlexBackend() override;
+    ReceiveDispatch requestAudioStream(const AudioStreamRequest& request,
+                                       const AudioStreamCompletion& completion = {}) override;
+    ReceiveDispatch requestGraphicEq(const GraphicEqRequest& request) override;
 
     // The owned wire objects, on their worker threads. Non-owning to callers;
     // valid for the backend's lifetime. RadioModel grabs these post-construction
@@ -46,6 +49,8 @@ public:
 
     // Core verbs share RadioModel's guarded command funnel and wire-write path.
     using CommandReply = std::function<void(int, const QString&)>;
+    using AudioCommandSink = std::function<bool(const QString&, CommandReply, const AudioControlGuard&)>;
+    void setAudioCommandSink(AudioCommandSink sink);
     void setCommandSink(std::function<bool(const QString&, CommandReply)> sink);
     // Encoding-only observers cannot dispatch requests that need a radio reply.
     void setCommandSink(std::function<void(const QString&)> sink);
@@ -220,6 +225,8 @@ public:
     // present fields. Called from the matching RadioModel status choke points.
     void decodeTransmitStatus(const QMap<QString, QString>& kvs);
     void decodeDaxTxStatus(const QString& object, const QMap<QString, QString>& kvs);
+    void decodeAudioStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
+    void decodeStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
     // Decode radio-global status ("radio …" / "radio slices …" etc.) into the
     // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel
     // residual). Present-only, ok-guarded numeric parses.
@@ -278,6 +285,7 @@ private:
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
     std::function<bool(const QString&, CommandReply)> m_sink;
+    AudioCommandSink m_audioSink;
     std::function<bool(const QString&, CommandReply, const DaxTxRequestGuard&)> m_daxTxSink;
     struct DaxTxStreamState {
         std::optional<quint32> clientHandle;

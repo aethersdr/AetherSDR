@@ -2801,6 +2801,8 @@ void MainWindow::wireDaxIq()
             }
             if (kvs.value("type") != "dax_iq") return;
             if (!streamStatusBelongsToUs(kvs, m_radioModel.ourClientHandle())) {
+                m_radioModel.panStream()->unregisterIqStream(streamId);
+                m_radioModel.daxIqModel().handleStreamRemoved(streamId);
                 qCDebug(lcDax) << "MainWindow: ignoring DAX IQ stream for another client"
                                 << "stream=0x" + QString::number(streamId, 16)
                                 << "owner=" << kvs.value("client_handle");
@@ -2814,7 +2816,9 @@ void MainWindow::wireDaxIq()
             int ch = kvs.value("daxiq_channel").toInt();
             // panStream() is null on a backend that carries its own IQ; there
             // is no VITA-49 stream to register against.
-            if (streamId && ch >= 1 && ch <= 4 && m_radioModel.panStream())
+            if (streamId && ch >= 1 && ch <= 4 && m_radioModel.panStream()
+                && m_radioModel.daxIqModel().stream(ch).exists
+                && m_radioModel.daxIqModel().stream(ch).streamId == streamId)
                 m_radioModel.panStream()->registerIqStream(streamId, ch);
         });
 

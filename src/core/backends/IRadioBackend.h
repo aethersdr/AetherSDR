@@ -23,6 +23,7 @@
 #include <QVariantMap>
 
 #include "core/backends/AmpDelta.h"
+#include "core/backends/AudioControlRequest.h"
 #include "core/backends/DaxTxStream.h"
 #include "core/backends/GpsDelta.h"
 #include "core/backends/MemoryDelta.h"
@@ -142,6 +143,10 @@ class IRadioBackend : public QObject {
     Q_OBJECT
 
 public:
+    virtual ReceiveDispatch requestAudioStream(const AudioStreamRequest&, const AudioStreamCompletion& = {})
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestGraphicEq(const GraphicEqRequest&)
+    { return ReceiveDispatch::Unsupported; }
     // Desktop control routing only: these do not extend the daemon registry.
     virtual ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request)
     {
@@ -1097,6 +1102,7 @@ public:
                                  quint64 requestId, const QVariant& arg = {}) = 0;
 
 signals:
+    void audioStreamChanged(const AetherSDR::AudioStreamDelta& delta);
     void independentTxStopped(const AetherSDR::TxStopEvidence& evidence);
     // The radio's own answer to a dispatched TransmitControlRequest whose
     // answerTicket was nonzero: applied when it accepted the setting. Emitted
