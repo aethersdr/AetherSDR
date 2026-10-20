@@ -2111,6 +2111,11 @@ private:
     bool        m_cwxDrainArmed{false}; // CWX drain-release latch, immune to interlock flicker (#3949)
     bool        m_txAudioGate{false}; // actual TX audio gate state
     bool        m_radioTransmitting{false}; // raw interlock TX state, any owner
+    // Last interlock state= the radio reported, any owner; empty until one
+    // arrives and on backends that report none. m_radioTransmitting is only
+    // `state == TRANSMITTING`, so it is already false in PTT_REQUESTED and
+    // UNKEY_REQUESTED; restoring the radio's audio source needs this.
+    QString     m_interlockState;
     // Last mox a RadioCapabilities::radioPttObservation backend published; ORed
     // into the command-edge fallback. Always false for every other backend.
     bool        m_backendObservedTransmit{false};
@@ -2427,6 +2432,7 @@ private:
     bool        m_transmitDaxRestorePending{false};
     void        finishTransmitDaxRelease();
     bool        transmitDaxEffective() const;
+    bool        radioReceivingForTransmitDax() const;
     QSet<quint32> m_deadDaxRxSeen;
     QSet<quint32> m_externalDaxTxSeen;
     QSet<quint32> m_externalDaxRxSeen;

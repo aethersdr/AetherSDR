@@ -258,6 +258,53 @@ int main(int argc, char** argv)
         report("unsent_dax_request_is_answered", pendingAtFirst && tx.daxSettled());
     }
 
+    // #6593 review (jensenpat): "not TRANSMITTING" is not "receiving". A Flex
+    // reports UNKEY_REQUESTED on its way out of TX and PTT_REQUESTED on its
+    // way in; the restore must wait for READY in both, through the production
+    // interlock status router rather than the TX boolean.
+    {
+        RadioModel radio;
+        TransmitModel& tx = radio.transmitModel();
+        tx.setDax(false);
+        radio.acquireTransmitDax(Holder::Tci);
+        radio.handleStatusForTest("interlock", {{"state", "TRANSMITTING"}});
+        radio.releaseTransmitDax(Holder::Tci);
+        DaxWrites writes(tx);
+        radio.handleStatusForTest("interlock", {{"state", "UNKEY_REQUESTED"}});
+        report("unkey_requested_must_not_restore_before_ready",
+               tx.daxOn() && writes.count == 0, state(tx, writes));
+        radio.handleStatusForTest("interlock", {{"state", "READY"}});
+        report("ready_finishes_pending_restore", !tx.daxOn(), state(tx, writes));
+    }
+    {
+        RadioModel radio;
+        TransmitModel& tx = radio.transmitModel();
+        tx.setDax(false);
+        radio.acquireTransmitDax(Holder::Tci);
+        radio.handleStatusForTest("interlock", {{"state", "PTT_REQUESTED"}});
+        DaxWrites writes(tx);
+        radio.releaseTransmitDax(Holder::Tci);
+        const bool heldThroughRequest = tx.daxOn() && writes.count == 0;
+        radio.handleStatusForTest("interlock", {{"state", "READY"}});
+        report("release_during_ptt_requested_waits_for_ready",
+               heldThroughRequest && !tx.daxOn(), state(tx, writes));
+    }
+    // A fault is not a settled receive either: wait for it to clear.
+    {
+        RadioModel radio;
+        TransmitModel& tx = radio.transmitModel();
+        tx.setDax(false);
+        radio.acquireTransmitDax(Holder::Tci);
+        radio.handleStatusForTest("interlock", {{"state", "TRANSMITTING"}});
+        radio.releaseTransmitDax(Holder::Tci);
+        DaxWrites writes(tx);
+        radio.handleStatusForTest("interlock", {{"state", "TX_FAULT"}});
+        const bool heldThroughFault = tx.daxOn() && writes.count == 0;
+        radio.handleStatusForTest("interlock", {{"state", "READY"}});
+        report("tx_fault_waits_for_ready", heldThroughFault && !tx.daxOn(),
+               state(tx, writes));
+    }
+
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");
     return g_failed == 0 ? 0 : 1;
 }

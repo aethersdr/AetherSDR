@@ -2219,7 +2219,8 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_dstarModel, &DStarModel::configurationChanged,
             this, &RadioModel::scheduleDStarRuntimeConfiguration);
     // A `transmit dax` release that landed while the carrier was up is
-    // finished by the radio's own RX report (acquireTransmitDax()).
+    // finished by the radio's own receive report: the interlock handler emits
+    // this on every state=, so READY after UNKEY_REQUESTED lands here too.
     connect(this, &RadioModel::radioTransmittingChanged, this, [this](bool transmitting) {
         if (!transmitting) {
             finishTransmitDaxRelease();
@@ -8416,6 +8417,7 @@ void RadioModel::onDisconnected()
     }
     m_backendObservedTransmit = false;
     m_radioTransmitting = false;
+    m_interlockState.clear();
     emit radioTransmittingChanged(false);
     if (m_profileDatabaseImporting) {
         m_profileDatabaseImporting = false;
@@ -12231,6 +12233,7 @@ void RadioModel::onStatusReceived(const QString& object,
             // passthrough when an external app triggers PTT (#752).
             const bool radioTx = (state == "TRANSMITTING");
             m_radioTransmitting = radioTx;
+            m_interlockState = state;
             emit radioTransmittingChanged(radioTx);
 
             // Hardware PTT (mic, ACC, RCA TXREQ) and VOX key the radio without
@@ -13457,6 +13460,22 @@ bool RadioModel::transmitDaxHeldBy(DaxTxFlagHolder who) const
     return (m_transmitDaxHolders & transmitDaxHolderBit(who)) != 0;
 }
 
+bool RadioModel::radioReceivingForTransmitDax() const
+{
+    // A Flex reports its transmitter through interlock state=, and only a
+    // settled non-transmitting state is receive. PTT_REQUESTED is on its way
+    // into TX and UNKEY_REQUESTED on its way out (FlexPttStopTracker waits for
+    // READY after it too); the fault states are left to settle into READY or
+    // NOT_READY. A backend that reports no interlock (and a Flex before its
+    // first report) falls back to its confirmed transmit state.
+    if (m_interlockState.isEmpty()) {
+        return !m_radioTransmitting;
+    }
+    return m_interlockState == QLatin1String("READY")
+        || m_interlockState == QLatin1String("RECEIVE")
+        || m_interlockState == QLatin1String("NOT_READY");
+}
+
 void RadioModel::finishTransmitDaxRelease()
 {
     // Pending only ever follows the last release; any acquire clears it.
@@ -13465,7 +13484,7 @@ void RadioModel::finishTransmitDaxRelease()
     }
     // The abort paths release while the carrier may still be up; switching
     // the modulator to the mic mid-over would put the room on the air.
-    if (m_radioTransmitting) {
+    if (!radioReceivingForTransmitDax()) {
         return;
     }
     m_transmitDaxRestorePending = false;
