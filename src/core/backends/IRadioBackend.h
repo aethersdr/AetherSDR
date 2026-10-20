@@ -9,6 +9,7 @@
 
 #include <map>
 #include <functional>
+#include <variant>
 
 #include <QByteArray>
 #include <QLoggingCategory>
@@ -32,6 +33,9 @@
 #include "core/backends/ReceiveCommand.h"
 #include "core/backends/ModelControlRequest.h"
 #include "core/backends/RadioSetupRequest.h"
+#include "core/backends/SpotRequest.h"
+#include "core/backends/PanControlRequest.h"
+#include "core/backends/SlicePresetRequest.h"
 #include "core/backends/ProfileRequest.h"
 #include "core/backends/MemoryRequest.h"
 #include "core/backends/RestoredRadioState.h"
@@ -161,12 +165,28 @@ public:
                                               const RadioSetupCompletion& = {},
                                               const RadioControlFence& current = {})
     {
+        if ((!current || current()) && request.valid() && isConnected() && capabilities().lineoutControl) {
+            if (request.field == RadioSetupField::LineoutGain) {
+                setLineoutGain(std::get<int>(request.value));
+                return ReceiveDispatch::Dispatched;
+            }
+            if (request.field == RadioSetupField::LineoutMute) {
+                setLineoutMute(std::get<bool>(request.value));
+                return ReceiveDispatch::Dispatched;
+            }
+        }
         // The station identity is consumed by the desktop even on families
         // with no radio-side copy. This is not a fabricated hardware write.
         return (!current || current()) && request.valid() && (request.field == RadioSetupRequest::Field::Callsign
             || request.field == RadioSetupRequest::Field::ClientStation)
             ? ReceiveDispatch::LocalOnly : ReceiveDispatch::Unsupported;
     }
+    virtual ReceiveDispatch requestSpot(const SpotRequest&, const QString& = {})
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestPanControl(const QString&, const PanControlRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestSlicePreset(int, const SlicePresetRequest&)
+    { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestTxBand(const TxBandRequest&)
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestProfile(const ProfileRequest&,

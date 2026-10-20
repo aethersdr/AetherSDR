@@ -432,6 +432,7 @@ RadioCapabilities AnanBackend::capabilities() const
     // The radio's speaker output: setLineoutMute() sends it silence and
     // setLineoutGain() scales the samples this host feeds it.
     c.lineoutControl = RadioCapabilities::LineoutControl{};
+    c.radioSetupControl = RadioSetupControl{{RadioSetupField::LineoutGain, RadioSetupField::LineoutMute}};
     // No client owner is declared for "Show TX in Waterfall" on an ANAN.
     c.txWaterfallClientFlag = std::nullopt;
     // The panadapter dBm axis is dBFS with a dBm label: kUncalibratedDbfsToDbmOffset

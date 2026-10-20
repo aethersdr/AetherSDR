@@ -192,6 +192,14 @@ sessions are rechecked after cache signals, which can synchronously retire them.
 Neutral storage validation covers supported backend modes and wide FM filters;
 the legacy Flex editor dropdown is not the storage vocabulary.
 These desktop operations add no daemon catalogue methods or TX authority.
+Desktop spot, pan-utility and net/tuning-step requests also use typed backend
+verbs; their desktop-only field-set records are not daemon permissions. Spot
+batches retain their original control session and Clear All epoch and detach
+before dispatch. TCI/memory/passive marker namespaces remain local, and radio
+spot triggers leave lock/SWR admission to firmware. Net repeater patches carry
+present fields only. Physical-output setup preserves native ANAN lineout and
+the separate MIDI/PC-audio routing policy. Temporary station overrides never
+persist client identity; restore is fenced by session, ownership and newer edits.
 MOX, TUNE and ATU start/stop still use the existing operation-fenced TX path;
 host TUNE-power edits additionally require a live locally admitted carrier.
 HL2 host-keyer, sidetone and compressor settings return local-only receipts;

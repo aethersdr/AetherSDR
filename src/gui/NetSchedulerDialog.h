@@ -19,8 +19,8 @@ namespace AetherSDR {
 //
 // The dialog owns a working copy of the entry list and emits entriesChanged()
 // whenever it is mutated so the owner (MainWindow) can persist it and refeed the
-// scheduler. "Tune Now" reuses the same MemoryRecallPolicy path as a memory
-// recall via the tuneRequested() signal.
+// scheduler. "Tune Now" emits tuneRequested() for typed slice corrections,
+// without recalling a radio memory slot.
 class NetSchedulerDialog : public PersistentDialog {
     Q_OBJECT
 

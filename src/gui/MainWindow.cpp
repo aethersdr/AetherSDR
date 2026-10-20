@@ -54,7 +54,6 @@
 #include "core/PerfTelemetry.h"
 #include "core/PeripheralSettings.h"
 #include "core/VoiceSignalDetector.h"
-#include "core/MemoryRecallPolicy.h"
 #include "core/StreamStatus.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioStatusOwnership.h"
@@ -2886,9 +2885,9 @@ void MainWindow::applyOperatorTuningStep(int step)
     // Send step to radio for the active slice, or apply it on the client
     // where there is no command plane to carry it.
     if (auto* s = m_radioModel.slice(m_activeSliceId)) {
-        if (!m_radioModel.applyClientOwnedSliceStep(s->sliceId(), step)) {
-            m_radioModel.sendCommand(QString("slice set %1 step=%2").arg(s->sliceId()).arg(step));
-        }
+        SlicePresetRequest request;
+        request.stepHz = step;
+        m_radioModel.requestSlicePreset(s, request);
     }
     // Also save to AppSettings for SpectrumWidget scroll-to-tune
     auto& settings = AppSettings::instance();

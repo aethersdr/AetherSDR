@@ -64,9 +64,12 @@ ReceiveDispatch FlexBackend::requestRadioSetup(const RadioSetupRequest& request,
     // FlexLib 4.2.18 Radio.cs setters and corresponding radio/interlock status.
     switch (request.field) {
     case Field::Callsign: command = QStringLiteral("radio callsign ") + frontPanelText(std::get<QString>(request.value).toUpper()); break;
-    case Field::ClientStation:
-        command = QStringLiteral("client station ")
-            + stationText(std::get<QString>(request.value)); break;
+    case Field::ClientStation: {
+        const QString name = stationText(std::get<QString>(request.value));
+        if (name.isEmpty()) { return ReceiveDispatch::Unsupported; }
+        command = QStringLiteral("client station ") + name;
+        break;
+    }
     case Field::PrivateIpPolicy: command = QStringLiteral("radio set enforce_private_ip_connections=") + boolean(); break;
     case Field::NetworkMtu: command = QStringLiteral("client set enforce_network_mtu=1 network_mtu=") + integer(); break;
     case Field::Dhcp: command = QStringLiteral("radio static_net_params reset"); break;
@@ -103,6 +106,11 @@ ReceiveDispatch FlexBackend::requestRadioSetup(const RadioSetupRequest& request,
         command = QStringLiteral("radio filter_sharpness %1 auto_level=%2").arg(sharpnessMode(setting.mode)).arg(int(setting.enabled)); break;
     }
     case Field::LowLatencyDigital: command = QStringLiteral("radio set low_latency_digital_modes=") + boolean(); break;
+    case Field::LineoutGain: command = QStringLiteral("mixer lineout gain ") + integer(); break;
+    case Field::LineoutMute: command = QStringLiteral("mixer lineout mute ") + boolean(); break;
+    case Field::HeadphoneGain: command = QStringLiteral("mixer headphone gain ") + integer(); break;
+    case Field::HeadphoneMute: command = QStringLiteral("mixer headphone mute ") + boolean(); break;
+    case Field::FrontSpeakerMute: command = QStringLiteral("mixer front_speaker mute ") + boolean(); break;
     case Field::StartFrequencyCalibration: {
         // Each prelude must be acknowledged before the next write. Start's
         // acknowledgement is not completion; pll_done owns the result.

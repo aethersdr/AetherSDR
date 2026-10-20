@@ -1907,11 +1907,8 @@ void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
         return;
     }
     const bool on = segmentZoom ? !pan->segmentZoomOn() : !pan->bandZoomOn();
-    m_radioModel.sendCommand(QString("display pan set %1 %2=%3")
-        .arg(panId,
-             segmentZoom ? QStringLiteral("segment_zoom")
-                         : QStringLiteral("band_zoom"))
-        .arg(on ? 1 : 0));
+    m_radioModel.requestPanControl(pan, {
+        segmentZoom ? PanControlField::SegmentZoom : PanControlField::BandZoom, on});
 }
 
 void MainWindow::zoomActivePanadapter(double factor)
@@ -1993,11 +1990,8 @@ void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)
     }
     const bool current = segmentZoom ? pan->segmentZoomOn() : pan->bandZoomOn();
     if (current != enable) {
-        m_radioModel.sendCommand(QString("display pan set %1 %2=%3")
-            .arg(panId,
-                 segmentZoom ? QStringLiteral("segment_zoom")
-                             : QStringLiteral("band_zoom"))
-            .arg(enable ? 1 : 0));
+        m_radioModel.requestPanControl(pan, {
+            segmentZoom ? PanControlField::SegmentZoom : PanControlField::BandZoom, enable});
     }
 }
 
