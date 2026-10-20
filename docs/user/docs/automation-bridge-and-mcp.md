@@ -88,6 +88,9 @@ saved station name or radio-wide callsign. A successful reply means the request
 was sent, not that the radio confirmed it. Unsupported or disconnected radios
 refuse the request.
 
+Your saved station-name edits are retained even if an automation request
+applies a temporary label at the same time.
+
 Stopping the bridge restores your saved name only while that bridge still owns
 the override in the same radio session. A newer operator edit takes precedence;
 an old restore or reconnect callback cannot overwrite it.

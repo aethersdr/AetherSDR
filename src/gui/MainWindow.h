@@ -1458,7 +1458,7 @@ private:
     QHash<QString, std::shared_ptr<AetherSDR::SpectrogramBuffer>> m_spectrogramBuffers;
     AetherSDR::SignalClassifier m_signalClassifier;
 
-    // Batched spot add commands (flushed 1/sec)
+    // Passive spot identity and expiry.
     int m_nextPassiveSpotId{-2000000};
     QHash<int, qint64> m_passiveSpotExpiryMs;
     // N1MM spot identity: N1MMSpotParser::spotKey(dxcall, freq) -> passive

@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <thread>
 
 using namespace AetherSDR;
@@ -289,6 +290,44 @@ void stationOwnership()
     check(!radio.requestTemporaryStation(QStringLiteral("!!!")), "an identity erased by the SDK sanitizer is refused");
 }
 
+void savedStationIntent()
+{
+    RadioModel radio;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+    AppSettings::instance().setValue("StationName", QStringLiteral("Before"));
+    std::optional<RadioStationOverride> agent;
+    bool nested = false;
+    backend->setSetupCommandSink([&](const QString& command, const RadioSetupCompletion&) {
+        backend->commands.append(command);
+        if (!nested) {
+            nested = true;
+            agent = radio.requestTemporaryStation(QStringLiteral("AgentDuringEdit"));
+        }
+        return true;
+    });
+    radio.requestRadioSetup({RadioSetupField::ClientStation, QStringLiteral("Operator Latest")});
+    check(agent && AppSettings::instance().value("StationName").toString() == QLatin1String("Operator Latest"),
+          "a temporary override cannot discard a pending saved station edit");
+    backend->commands.clear();
+    check(agent && radio.restoreTemporaryStation(*agent)
+              && backend->commands == QStringList{QStringLiteral("client station Operator")
+                  + QChar(0x7f) + QStringLiteral("Latest")},
+          "override cleanup restores the operator edit made around its admission");
+
+    nested = false;
+    backend->setSetupCommandSink([&](const QString& command, const RadioSetupCompletion&) {
+        backend->commands.append(command);
+        if (!nested) {
+            nested = true;
+            radio.requestRadioSetup({RadioSetupField::ClientStation, QStringLiteral("Newest Operator")});
+        }
+        return true;
+    });
+    radio.requestRadioSetup({RadioSetupField::ClientStation, QStringLiteral("Older Operator")});
+    check(AppSettings::instance().value("StationName").toString() == QLatin1String("Newest Operator"),
+          "a reentrant operator edit remains the newest saved station intent");
+}
+
 class NativeLineoutBackend final : public SimBackend {
 public:
     bool isConnected() const override { return true; }
@@ -403,6 +442,7 @@ int main(int argc, char** argv)
     utilityEncodingAndOwnership();
     queueFencing();
     stationOwnership();
+    savedStationIntent();
     physicalOutputs();
     bridgeStationLifetime();
     return failures ? 1 : 0;
