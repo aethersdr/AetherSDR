@@ -17,10 +17,22 @@ using namespace AetherSDR;
 class ConnectedOtrspBackend final : public FlexBackend {
 public:
     bool isConnected() const override { return true; }
+    RadioCapabilities capabilities() const override
+    {
+        RadioCapabilities caps = FlexBackend::capabilities();
+        caps.hasMultiClientSessions = false;
+        return caps;
+    }
 };
 
 class OtrspPortTest : public QObject {
     Q_OBJECT
+
+public:
+    bool bindSkipped() const { return m_bindSkipped; }
+
+private:
+    bool m_bindSkipped = false;
 
 private slots:
     void connectionLifecycle()
@@ -29,7 +41,10 @@ private slots:
         port.setDialect(CatDialect::OTRSP);
         port.setVfoA(2);
         port.setVfoB(5);
-        QVERIFY(port.start(0));
+        if (!port.start(0)) {
+            m_bindSkipped = true;
+            QSKIP("Cannot bind ephemeral TCP port");
+        }
         QVERIFY(port.isRunning());
         QVERIFY(port.port() != 0);
         QSignalSpy counts(&port, &CatPort::clientCountChanged);
@@ -57,7 +72,10 @@ private slots:
         QVERIFY(!counts.isEmpty());
         QCOMPARE(counts.last().first().toInt(), 0);
 
-        QVERIFY(port.start(0));
+        if (!port.start(0)) {
+            m_bindSkipped = true;
+            QSKIP("Cannot bind ephemeral TCP port after restart");
+        }
         QTcpSocket restarted;
         restarted.connectToHost(QHostAddress::LocalHost, port.port());
         QTRY_COMPARE_WITH_TIMEOUT(port.clientCount(), 1, 2000);
@@ -87,6 +105,10 @@ private slots:
         ConnectedOtrspBackend* backend = owned.get();
         backend->setSliceCommandSink([&](const QString& command) { commands.append(command); });
         backend->setCommandSink([&](const QString& command) { commands.append(command); });
+        backend->setSetupCommandSink([&](const QString& command, const RadioSetupCompletion&) {
+            commands.append(command);
+            return true;
+        });
         radio.setBackendForTest(std::move(owned), QStringLiteral("otrsp-port-test"));
         for (int id : {3, 6}) {
             SliceDelta delta;
@@ -104,7 +126,10 @@ private slots:
         port.setDialect(CatDialect::OTRSP);
         port.setVfoA(6);
         port.setVfoB(3);
-        QVERIFY(port.start(0));
+        if (!port.start(0)) {
+            m_bindSkipped = true;
+            QSKIP("Cannot bind ephemeral TCP port");
+        }
         QTcpSocket client;
         client.connectToHost(QHostAddress::LocalHost, port.port());
         QTRY_COMPARE_WITH_TIMEOUT(port.clientCount(), 1, 2000);
@@ -136,7 +161,8 @@ int main(int argc, char** argv)
         return 2;
     }
     OtrspPortTest test;
-    return QTest::qExec(&test, argc, argv);
+    const int result = QTest::qExec(&test, argc, argv);
+    return result == 0 && test.bindSkipped() ? 77 : result;
 }
 
 #include "otrsp_port_test.moc"

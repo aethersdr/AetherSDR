@@ -30,6 +30,12 @@ class ConnectedBackend final : public FlexBackend {
 public:
     bool connected{true};
     bool isConnected() const override { return connected; }
+    RadioCapabilities capabilities() const override
+    {
+        RadioCapabilities caps = FlexBackend::capabilities();
+        caps.hasMultiClientSessions = false;
+        return caps;
+    }
 };
 
 struct Fixture {
@@ -43,6 +49,10 @@ struct Fixture {
         backend = owned.get();
         backend->setCommandSink([this](const QString& command) { commands.append(command); });
         backend->setSliceCommandSink([this](const QString& command) { commands.append(command); });
+        backend->setSetupCommandSink([this](const QString& command, const RadioSetupCompletion&) {
+            commands.append(command);
+            return true;
+        });
         radio.setBackendForTest(std::move(owned), QStringLiteral("otrsp-test"));
         for (int id : {2, 5, 7}) {
             SliceDelta delta;

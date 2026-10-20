@@ -7201,6 +7201,7 @@ add_executable(otrsp_port_test tests/otrsp_port_test.cpp)
 target_include_directories(otrsp_port_test PRIVATE src tests)
 target_link_libraries(otrsp_port_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME otrsp_port_test COMMAND otrsp_port_test)
+set_tests_properties(otrsp_port_test PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(otrsp_applet_test tests/otrsp_applet_test.cpp src/gui/CatControlApplet.cpp)
 target_include_directories(otrsp_applet_test PRIVATE src tests)

@@ -30,7 +30,7 @@ CAT has its own **CAT Control** applet (applet-tray button **CAT**, Integration 
 
 While a port is running, its port number, dialect and VFO selectors are locked. Untick the port to change them.
 
-The VFO selectors list one letter per receiver the connected radio offers, up to **A–H**. If you connect to a smaller radio, a slice choice it cannot show is kept and comes back when that slice exists again.
+The VFO selectors list one letter per receiver the connected radio offers, up to **A–H**. Saved VFO A and VFO B assignments are restored after restarting AetherSDR and connecting to a radio. If you connect to a smaller radio, a slice choice it cannot show is kept and comes back when that slice exists again.
 
 ### Turning CAT on
 
