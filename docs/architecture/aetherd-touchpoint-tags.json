@@ -1714,5 +1714,11 @@
   "note": "Explicit per-radio amplifier telemetry association; no radio or tuner commands.",
   "split": "",
   "confidence": "high"
+ },
+ "core/backends/DspParameter.h": {
+  "tag": "universal",
+  "note": "Typed desktop advanced DSP parameter identities, validated value domains, sparse observations and capability shape. No radio command text; Flex wire names stay in FlexBackend. Consumed by the parameter editor through RadioModel and SliceModel.",
+  "split": "",
+  "confidence": "high"
  }
 }

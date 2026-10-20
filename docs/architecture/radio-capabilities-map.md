@@ -94,6 +94,7 @@ This desktop capability adds no daemon method or persistence ownership.
 | Record | Flex | HL2 | Sim | Icom | ANAN | RTL-SDR | Consumers |
 |---|---|---|---|---|---|---|---|
 | `dspParameterReset` | Known hardware on numeric firmware 4.3.16+: target whitelist, applicable modes and unknown/denied/granted advanced entitlement | absent | absent | absent | absent | absent | `RadioModel` validates exact slice/session ownership and observed mode before `requestDspParameterReset`; `VfoWidget` dims unavailable targets and Reset with reasons |
+| `dspParameters` | Known hardware on numeric firmware 4.3.16+: 17 typed advanced parameters, applicable modes and retained advanced entitlement; NRF on 8000/Aurora only | absent | absent | absent | absent | absent | `RadioModel` validates exact owned slice/session and confirmed mode/value before `requestDspParameter`; editor revisions fence profile/reset/session changes |
 
 Absence refuses reset. All and supported NRS are Basic operations; individual
 advanced targets require explicitly granted entitlement. This record grants no

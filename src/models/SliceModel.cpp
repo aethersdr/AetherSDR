@@ -1842,6 +1842,16 @@ void SliceModel::applyChanges(const SliceDelta& d)
 {
     const QPointer<SliceModel> alive(this);
     const ReceiveObservation previousObservation = m_receiveObservation;
+    bool dspParametersReported = false;
+    for (auto it = d.dspParameters.cbegin(); it != d.dspParameters.cend(); ++it) {
+        if (validDspParameterValue(it.key(), it.value())) {
+            m_dspParameters.insert(it.key(), it.value());
+            dspParametersReported = true;
+        }
+    }
+    if (dspParametersReported) {
+        ++m_dspParametersRevision;
+    }
     if (d.mode) {
         m_squelchRecoveryAwaitingModeReport = false;
         // A mode change invalidates the old mode's passband. Partial filter
@@ -2534,14 +2544,21 @@ void SliceModel::applyChanges(const SliceDelta& d)
     if (d.mode) {
         emit receiveModeReported();
     }
+    if (alive && dspParametersReported) {
+        emit dspParametersChanged();
+    }
 }
 
 void SliceModel::invalidateFrequencyObservation()
 {
+    const QPointer<SliceModel> alive(this);
     ++m_receiveSessionGeneration;
+    m_dspParameters.clear();
+    ++m_dspParametersRevision;
     m_agcThresholdMode.reset();
     m_automaticAgcThresholdPending = false;
     emit agcThresholdModeChanged();
+    if (!alive) { return; }
     for (auto& feature : m_dspIntentRevisions) {
         for (quint64& revision : feature) {
             ++revision;
@@ -2564,12 +2581,15 @@ void SliceModel::invalidateFrequencyObservation()
     if (m_receiveObservation != ReceiveObservation{}) {
         m_receiveObservation = {};
         emit receiveObservationChanged();
+        if (!alive) { return; }
     }
     if (m_frequencyReportedKnown) {
         m_frequencyReportedKnown = false;
         m_reportedFrequency = 0.0;
         emit frequencyReported();
+        if (!alive) { return; }
     }
+    emit dspParametersChanged();
 }
 
 void SliceModel::applyRecalledStepHz(int hz)

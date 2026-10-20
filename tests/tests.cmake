@@ -8916,6 +8916,7 @@ add_executable(rx_applet_squelch_reconciliation_test
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
+    src/gui/DspAdvancedControls.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
@@ -8948,6 +8949,7 @@ add_executable(auto_agc_threshold_gui_test
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
+    src/gui/DspAdvancedControls.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
@@ -8977,6 +8979,7 @@ add_executable(vfo_meter_overlay_invalidation_test
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
+    src/gui/DspAdvancedControls.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
@@ -9007,6 +9010,7 @@ add_executable(fm_filter_controls_test
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
+    src/gui/DspAdvancedControls.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
@@ -9037,6 +9041,7 @@ add_executable(wfm_controls_test
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
+    src/gui/DspAdvancedControls.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
@@ -9067,6 +9072,7 @@ add_executable(vfo_dsp_launcher_width_test
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
+    src/gui/DspAdvancedControls.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
@@ -9098,6 +9104,7 @@ add_executable(nrs_level_range_test
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
+    src/gui/DspAdvancedControls.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
@@ -9128,6 +9135,7 @@ add_executable(dsp_parameter_reset_test
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
+    src/gui/DspAdvancedControls.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
@@ -9151,12 +9159,51 @@ add_test(NAME dsp_parameter_reset_test
 set_tests_properties(dsp_parameter_reset_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Socket-free advanced DSP decoder/encoder/model boundary coverage (#6615).
+add_executable(dsp_advanced_parameters_test tests/dsp_advanced_parameters_test.cpp)
+target_include_directories(dsp_advanced_parameters_test PRIVATE src tests)
+target_link_libraries(dsp_advanced_parameters_test PRIVATE aethercore Qt6::Test)
+add_test(NAME dsp_advanced_parameters_test COMMAND dsp_advanced_parameters_test)
+
+# Default GUI CTest is socket-free. Opt-in --bridge-fixture binds only our own
+# local agent automation bridge, aethersdr-advanced-dsp-fixture; no firmware peer.
+add_executable(dsp_advanced_parameters_gui_test
+    tests/dsp_advanced_parameters_gui_test.cpp
+    ${THEME_TEST_RESOURCES}
+    src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/DspAdvancedControls.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(dsp_advanced_parameters_gui_test PRIVATE src)
+target_link_libraries(dsp_advanced_parameters_gui_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME dsp_advanced_parameters_gui_test
+         COMMAND dsp_advanced_parameters_gui_test)
+set_tests_properties(dsp_advanced_parameters_gui_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Socket-free production-widget lifetime regression coverage (#5568).
 add_executable(gui_nested_lifetime_test
     tests/gui_nested_lifetime_test.cpp
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
+    src/gui/DspAdvancedControls.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
@@ -9435,6 +9482,8 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    dsp_advanced_parameters_test
+    dsp_advanced_parameters_gui_test
     dsp_parameter_reset_test
     cw_rx_model_test
     asr_native_receiver_test
@@ -9659,6 +9708,7 @@ endforeach()
 # library as AetherSDR so moving QtWidgets out of aethercore cannot silently
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
+    dsp_advanced_parameters_gui_test
     dsp_parameter_reset_test
     nrs_level_range_test
     anan_noise_blanker_readback_test

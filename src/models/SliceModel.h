@@ -102,6 +102,14 @@ public:
                                       : m_audioPan; }
     int     flexAudioPan() const { return m_audioPan; }
 
+    const DspParameterValues& dspParameters() const { return m_dspParameters; }
+    std::optional<int> dspParameter(DspParameter parameter) const
+    {
+        const auto found = m_dspParameters.constFind(parameter);
+        return found == m_dspParameters.cend() ? std::nullopt : std::optional<int>(found.value());
+    }
+    quint64 dspParametersRevision() const { return m_dspParametersRevision; }
+
     // Getters — RX DSP state
     QString rxAntenna()   const { return m_rxAntenna; }
     QString txAntenna()   const { return m_txAntenna; }
@@ -439,6 +447,7 @@ signals:
     // fire (same-value reports, optimistic-value echoes, or invalidation).
     void frequencyReported();
     void receiveObservationChanged();
+    void dspParametersChanged();
     void receiveModeReported(); // including same-value reports after an intent
     // Legacy local-intent notifications, not backend dispatch. In particular,
     // linked slices consume frequencyChanged BEFORE frequencyCommandIssued
@@ -683,6 +692,8 @@ private:
     double  m_reportedFrequency{0.0};
     bool    m_frequencyReportedKnown{false};
     ReceiveObservation m_receiveObservation;
+    DspParameterValues m_dspParameters;
+    quint64 m_dspParametersRevision{0};
     QString m_mode{"USB"};
     QString m_modeBeforeDigitalVoice;
     QStringList m_modeList;

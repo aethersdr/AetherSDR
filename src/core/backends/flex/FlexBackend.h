@@ -120,6 +120,8 @@ public:
     ReceiveDispatch requestSliceAgcThresholdMode(int sliceId, AgcThresholdMode mode) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
     ReceiveDispatch requestDspParameterReset(int sliceId, DspParameterResetTarget target) override;
+    ReceiveDispatch requestDspParameter(int sliceId, const DspParameterRequest& request,
+                                        const RadioControlFence& current = {}) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
     ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
     ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
@@ -248,6 +250,7 @@ private:
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
     std::function<bool(const QString&, CommandReply)> m_sink;
+    quint64 m_commandSinkGeneration{0};
     AnsweredCommandSink m_answeredSink;
     std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;
     quint64 m_nicknameSession{0};

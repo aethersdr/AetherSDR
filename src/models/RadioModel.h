@@ -1489,6 +1489,9 @@ public:
     QString dspParameterResetUnavailableReason(const SliceModel* source, quint64 session,
                                                DspParameterResetTarget target) const;
     bool requestDspParameterReset(SliceModel* source, quint64 session, DspParameterResetTarget target);
+    QString dspParameterUnavailableReason(const SliceModel* source, quint64 session,
+                                          DspParameter parameter) const;
+    bool requestDspParameter(SliceModel* source, quint64 session, const DspParameterRequest& request);
     // SmartSDR protocol version from the V line (e.g. "1.4.0.0"), empty until connected
     QString protocolVersion() const { return m_protocolVersion; }
 

@@ -1,4 +1,5 @@
 #include "VfoWidget.h"
+#include "DspAdvancedControls.h"
 #include "AudioButtonIcon.h"
 
 #include <QList>
@@ -2181,6 +2182,11 @@ void VfoWidget::buildTabContent()
             updateDspParameterResetControls();
         });
         updateDspParameterResetControls();
+        m_advancedDsp = new DspAdvancedControls;
+        dspVb->addWidget(m_advancedDsp);
+        connect(m_advancedDsp, &DspAdvancedControls::contentChanged, this, [this] {
+            if (m_activeTab == 1) { relayoutToCurrentContent(); }
+        });
 
         // Shared DSP-level row — one slider that re-targets based on which
         // leveled DSP is most recently turned on.  Hidden when the active
@@ -4891,6 +4897,7 @@ void VfoWidget::setSlice(SliceModel* slice)
     m_slice = slice;
     syncAutoAgcThreshold();
     m_dspResetSlice = slice;
+    if (m_advancedDsp) { m_advancedDsp->setContext(m_radioModel, slice); }
     m_dspResetIntentArmed = false;
     updateDspParameterResetControls();
     setProperty("sliceId", m_slice ? m_slice->sliceId() : -1);
@@ -6998,6 +7005,7 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
     delete m_filterAvailability;
     m_filterAvailability = nullptr;
     m_radioModel = radioModel;
+    if (m_advancedDsp) { m_advancedDsp->setContext(m_radioModel, m_dspResetSlice); }
     m_dspResetIntentArmed = false;
     if (m_radioModel) {
         connect(m_radioModel, &RadioModel::connectionStateChanged,
@@ -7051,8 +7059,9 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
         registerSignalControl(m_apfSlider, Feature::Apf);
         registerSignalControl(m_nbFillCombo, Feature::Nb);
         m_filterAvailability->registerRestriction(m_dspLevelSlider,
-            tr("This DSP parameter is unavailable in the current receive mode"),
+            tr("This DSP parameter is unavailable in the current receive mode; SmartSDR 4.3 NRF uses Advanced > NRF > Window instead of a level"),
             [this, signalAvailable](bool connected, const RadioCapabilities& caps) {
+                if (connected && caps.dspParameters && m_dspLevelTarget == LvlNrf) { return false; }
                 if (!connected || !caps.receiveDspControl) { return true; }
                 switch (m_dspLevelTarget) {
                 case LvlNB: return signalAvailable(connected, caps, Feature::Nb);

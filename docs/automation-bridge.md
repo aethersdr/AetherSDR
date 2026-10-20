@@ -4986,3 +4986,13 @@ waterfall rate still follow their existing radio-publication paths; this change
 does not establish whether their setters echo on every firmware version.
 The aetherd panadapter resource exposes the same Average/FPS request provenance
 and last radio publications as the bridge, including same-value confirmations.
+
+### Advanced radio DSP observations
+
+`get slice <id>` includes `advancedDsp`, with 17 neutral parameter names
+(`nrDelay`, `nrWindow`, `nrIsdft`, `nrAdapt`, corresponding `anf*`,
+`nrlDelay`/`nrlTaps`/`nrlLeakage`, corresponding `anfl*`, `anftMinDb`,
+`anftToneDiff`, `nrfWindow`). Unobserved values are JSON null. Mode choices are
+canonical strings; numbers are validated radio reports. Requests do not update
+these observations. Use the DSP tab's named editors and Apply buttons for an
+explicit edit; the usual slice/session/ownership/entitlement gates apply.

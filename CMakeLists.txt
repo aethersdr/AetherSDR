@@ -1341,6 +1341,7 @@ set(GUI_SOURCES
     src/gui/SliceColorManager.cpp
     src/gui/SliceLabel.cpp
     src/gui/VfoWidget.cpp
+    src/gui/DspAdvancedControls.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/SplitAudioProfile.cpp
     src/gui/SmartMtrWidget.cpp
