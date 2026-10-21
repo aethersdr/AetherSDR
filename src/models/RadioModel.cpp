@@ -2134,6 +2134,14 @@ RadioModel::RadioModel(QObject* parent)
             this, &RadioModel::refreshAutoAgcThresholdAvailability);
     connect(this, &RadioModel::capabilitiesChanged,
             this, &RadioModel::refreshAutoAgcThresholdAvailability);
+    connect(this, &RadioModel::infoChanged,
+            this, &RadioModel::panNoiseFloorRangeAvailabilityChanged);
+    connect(this, &RadioModel::licenseFeaturesChanged,
+            this, &RadioModel::panNoiseFloorRangeAvailabilityChanged);
+    connect(this, &RadioModel::capabilitiesChanged,
+            this, &RadioModel::panNoiseFloorRangeAvailabilityChanged);
+    connect(this, &RadioModel::connectionStateChanged,
+            this, &RadioModel::panNoiseFloorRangeAvailabilityChanged);
     qRegisterMetaType<SliceDspRequest>();
     qRegisterMetaType<DspParameterResetTarget>();
     qRegisterMetaType<SliceAudioRequest>();
@@ -10447,6 +10455,28 @@ QString RadioModel::autoAgcThresholdUnavailableReason(const SliceModel* source) 
     }
     if (!source->agcThresholdMode()) {
         return tr("Waiting for the radio to report the AGC-T mode.");
+    }
+    return {};
+}
+
+QString RadioModel::panNoiseFloorRangeUnavailableReason() const
+{
+    if (!isConnected()) {
+        return tr("Connect to a radio to use Noise Floor Range.");
+    }
+    const auto control = backendCapabilities().noiseFloorRangeControl;
+    if (!control) {
+        return tr("Noise Floor Range requires a FLEX-8000 series or Aurora radio "
+                  "on firmware 4.3.16 or later.");
+    }
+    if (!control->requiredLicenseFeature.isEmpty()) {
+        const LicenseFeatureState feature = licenseFeature(control->requiredLicenseFeature);
+        if (!feature.seen) {
+            return tr("Waiting for the radio to confirm the Noise Floor Range license.");
+        }
+        if (!feature.enabled) {
+            return tr("Noise Floor Range requires SmartSDR+ (%1).").arg(feature.reason);
+        }
     }
     return {};
 }

@@ -220,6 +220,7 @@ Click **Display** in the overlay menu. The panel is divided into sections and sc
 | **FFT Line** | Off–5.0 px, default 1.0 px | Trace thickness, with its own color button. |
 | **FFT Fill** | 0–100, default 70 | Fill opacity under the trace, with its own color button. |
 | **FFT Floor** + **Auto** | 1–99, default 75 | With **Auto** on, the dBm scale follows the noise floor and keeps it at this height (% from top). Off by default. |
+| **NF Range** | 0–10 dB in 0.5 dB steps; the radio's default is 1.5 | How far the measured noise floor may move before **Auto** repositions the scale. A larger range steadies the display at high zoom. The radio stores it. Needs SmartSDR+ on a FLEX-8000 series or Aurora radio with firmware 4.3.16 or later; otherwise it is dimmed and its tooltip says why. |
 
 #### WATERFALL
 

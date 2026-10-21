@@ -667,6 +667,12 @@ struct RadioCapabilities {
     // Desktop utility verbs only; neither record adds daemon permissions.
     std::optional<SpotControl> spotControl;
     std::optional<PanControl> panControl;
+    // PanControlField::NoiseFloorRange, separate from panControl because it
+    // needs a license the radio reports. Absent refuses the field.
+    struct NoiseFloorRangeControl {
+        QString requiredLicenseFeature;
+    };
+    std::optional<NoiseFloorRangeControl> noiseFloorRangeControl;
     std::optional<SlicePresetControl> slicePresetControl;
     // The radio's streaming data plane uses VITA-49. This currently gates the
     // receive-socket buffer and network MTU controls; it describes the transport,

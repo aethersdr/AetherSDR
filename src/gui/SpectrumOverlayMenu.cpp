@@ -1153,9 +1153,12 @@ void SpectrumOverlayMenu::setPanSlotIndex(int idx)
 
 void SpectrumOverlayMenu::setRadioModel(RadioModel* model)
 {
-    if (m_radioModel)
+    if (m_radioModel) {
         disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
                    this, &SpectrumOverlayMenu::refreshAntennaCombo);
+        disconnect(m_radioModel, &RadioModel::panNoiseFloorRangeAvailabilityChanged,
+                   this, &SpectrumOverlayMenu::syncNoiseFloorRange);
+    }
     if (m_panRxAntennaConnection) {
         disconnect(m_panRxAntennaConnection);
         m_panRxAntennaConnection = {};
@@ -1169,6 +1172,8 @@ void SpectrumOverlayMenu::setRadioModel(RadioModel* model)
     if (m_radioModel) {
         connect(m_radioModel, &RadioModel::antennaAliasesChanged,
                 this, &SpectrumOverlayMenu::refreshAntennaCombo);
+        connect(m_radioModel, &RadioModel::panNoiseFloorRangeAvailabilityChanged,
+                this, &SpectrumOverlayMenu::syncNoiseFloorRange);
     }
     wirePanadapterRxAntenna();
     refreshAntennaCombo();
@@ -1184,7 +1189,12 @@ void SpectrumOverlayMenu::wirePanadapterRxAntenna()
         disconnect(m_panLoopConnection);
         m_panLoopConnection = {};
     }
+    if (m_panNoiseFloorRangeConnection) {
+        disconnect(m_panNoiseFloorRangeConnection);
+        m_panNoiseFloorRangeConnection = {};
+    }
     m_panadapter = nullptr;
+    syncNoiseFloorRange();
 
     if (!m_radioModel || m_panId.isEmpty())
         return;
@@ -1192,6 +1202,11 @@ void SpectrumOverlayMenu::wirePanadapterRxAntenna()
     m_panadapter = m_radioModel->panadapter(m_panId);
     if (!m_panadapter)
         return;
+
+    m_panNoiseFloorRangeConnection =
+        connect(m_panadapter, &PanadapterModel::noiseFloorRangeChanged,
+                this, &SpectrumOverlayMenu::syncNoiseFloorRange);
+    syncNoiseFloorRange();
 
     m_panRxAntennaConnection =
         connect(m_panadapter, &PanadapterModel::rxAntennaChanged,
@@ -1205,6 +1220,50 @@ void SpectrumOverlayMenu::wirePanadapterRxAntenna()
         connect(m_panadapter, &PanadapterModel::loopChanged,
                 this, &SpectrumOverlayMenu::setLoopState);
     setLoopState(m_panadapter->loopA(), m_panadapter->loopB());
+}
+
+void SpectrumOverlayMenu::syncNoiseFloorRange()
+{
+    if (!m_floorRangeSlider) {
+        return;
+    }
+    const std::optional<double> db = m_panadapter ? m_panadapter->noiseFloorRange()
+                                                   : std::nullopt;
+    QString reason = m_radioModel ? m_radioModel->panNoiseFloorRangeUnavailableReason()
+                                  : tr("Connect to a radio to use Noise Floor Range.");
+    if (reason.isEmpty() && !db) {
+        reason = tr("Waiting for the radio to report this panadapter's noise floor range.");
+    }
+    if (db) {
+        const QSignalBlocker blocker(m_floorRangeSlider);
+        m_floorRangeSlider->setValue(qRound(*db / kNoiseFloorRangeStepDb));
+        m_floorRangeLabel->setText(QString::number(*db, 'f', 1));
+    } else {
+        m_floorRangeLabel->setText(QStringLiteral("-"));
+    }
+    m_floorRangeSlider->setEnabled(reason.isEmpty());
+    const QString description = reason.isEmpty()
+        ? tr("How far the measured noise floor may move, in dB, before the radio "
+             "repositions this panadapter. A larger range steadies the display at "
+             "high zoom. Applies while FFT Floor is on Auto.")
+        : reason;
+    m_floorRangeSlider->setToolTip(description);
+    m_floorRangeSlider->setAccessibleDescription(description);
+}
+
+void SpectrumOverlayMenu::requestNoiseFloorRange()
+{
+    if (!m_radioModel || !m_panadapter || !m_floorRangeSlider) {
+        return;
+    }
+    const double db = m_floorRangeSlider->value() * kNoiseFloorRangeStepDb;
+    if (m_panadapter->noiseFloorRange() == db) {
+        return;
+    }
+    if (m_radioModel->requestPanControl(m_panadapter, {PanControlField::NoiseFloorRange, db})
+        != ReceiveDispatch::Dispatched) {
+        syncNoiseFloorRange();   // refused: show the radio's value again
+    }
 }
 
 QString SpectrumOverlayMenu::currentRxAntennaToken() const
@@ -2002,6 +2061,26 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         m_floorLabel->setText(QString::number(v));
         emit noiseFloorPositionChanged(v);
     });
+
+    // Radio-owned: the slider shows what the pan reported and sends a request.
+    const int rangeSteps = qRound(kNoiseFloorRangeMaximumDb / kNoiseFloorRangeStepDb);
+    makeRow("NF Range:", 0, rangeSteps, 3, m_floorRangeSlider, m_floorRangeLabel);
+    m_floorRangeSlider->setObjectName("displayNoiseFloorRangeSlider");
+    m_floorRangeSlider->setAccessibleName(tr("Noise floor range"));
+    m_floorRangeSlider->setPageStep(2);
+    static_cast<GuardedSlider*>(m_floorRangeSlider)->setDragValueFormatter([](int v) {
+        return QStringLiteral("%1 dB").arg(v * kNoiseFloorRangeStepDb, 0, 'f', 1);
+    });
+    m_floorRangeLabel->setText(QStringLiteral("-"));
+    connect(m_floorRangeSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_floorRangeLabel->setText(QString::number(v * kNoiseFloorRangeStepDb, 'f', 1));
+        if (!m_floorRangeSlider->isSliderDown()) {
+            requestNoiseFloorRange();
+        }
+    });
+    connect(m_floorRangeSlider, &QSlider::sliderReleased,
+            this, &SpectrumOverlayMenu::requestNoiseFloorRange);
+    syncNoiseFloorRange();
 
     makeHeader("WATERFALL");
 

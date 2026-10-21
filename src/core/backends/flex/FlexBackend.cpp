@@ -714,6 +714,12 @@ RadioCapabilities FlexBackend::capabilities() const
         && firmwareVersion >= QVersionNumber(4, 3, 16)) {
         caps.autoAgcThresholdControl = RadioCapabilities::AutoAgcThresholdControl{
             QStringLiteral("auto_agc_t")};
+        // FLEX-8000 and Aurora only, under the Relative Noise Floor Scaling
+        // license (FlexLib v4.3.16 FeatureLicense.cs:212, Panadapter.cs:549).
+        if (mc.platform == RadioPlatform::BigBend) {
+            caps.noiseFloorRangeControl = RadioCapabilities::NoiseFloorRangeControl{
+                QStringLiteral("noise_floor")};
+        }
     }
     caps.hasAmCarrierLevel = true;
     caps.voxControl = RadioCapabilities::VoxControl{/*hasDelay*/ true};
@@ -1331,6 +1337,7 @@ void FlexBackend::decodePanState(const QString& panId,
     // uint-parse + >1-invalid semantics (Panadapter.cs 933/1159).
     carry(kvs, "band_zoom", st);
     carry(kvs, "segment_zoom", st);
+    carry(kvs, "noise_floor_range", st);
     if (!st.isEmpty()) {
         st.insert(QStringLiteral("panId"), panId);
         emit extensionStatus(QStringLiteral("flex"),

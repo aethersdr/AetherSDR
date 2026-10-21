@@ -277,6 +277,8 @@ public:
     bool licenseFeatureEnabled(const QString& name) const;
     QString licenseFeatureReason(const QString& name) const;
     QString autoAgcThresholdUnavailableReason(const SliceModel* slice) const;
+    // Empty when the radio can take a noise floor range for its panadapters.
+    QString panNoiseFloorRangeUnavailableReason() const;
 
     QString ip()          const { return m_ip; }
     QString netmask()     const { return m_netmask; }
@@ -1178,6 +1180,7 @@ signals:
     void infoChanged();
     void licenseFeaturesChanged();
     void autoAgcThresholdAvailabilityChanged();
+    void panNoiseFloorRangeAvailabilityChanged();
     void connectionStateChanged(bool connected);
     void tuneOutputControlChanged();
     // Per-pan transmit permission changed. Consumers use the pan id to update

@@ -527,6 +527,16 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
             }
         }
     }
+    // FlexLib parses noise_floor_range with TryParseDouble and skips a
+    // malformed value (Panadapter.cs:1056); a non-finite one is malformed too.
+    if (fields.contains(QStringLiteral("noise_floor_range"))) {
+        bool ok = false;
+        const double db = fields.value(QStringLiteral("noise_floor_range")).toString().toDouble(&ok);
+        if (ok && std::isfinite(db) && m_noiseFloorRange != db) {
+            m_noiseFloorRange = db;
+            emit noiseFloorRangeChanged(db);
+        }
+    }
     // #3977: ownership is radio-authoritative. When another session reclaims
     // this pan (MultiFlex reconnect), the radio broadcasts the new
     // client_handle; tracking it lets a superseded session stop adjusting a pan

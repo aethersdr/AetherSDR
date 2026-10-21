@@ -87,6 +87,18 @@ an explicitly enabled entitlement. The RX applet consumes the same admission
 reason through its control availability registry; absent data leaves it dimmed.
 This desktop capability adds no daemon method or persistence ownership.
 
+### Panadapter noise floor range
+
+`noiseFloorRangeControl` declares `PanControlField::NoiseFloorRange` on the
+existing `requestPanControl` verb, and the license the radio must report.
+Flex declares it only for a fully parsed SmartSDR version of 4.3.16 or later on
+a BigBend (FLEX-8000/Aurora) platform, with `requiredLicenseFeature=noise_floor`.
+Other backends leave it absent, and `RadioModel::requestPanControl` refuses the
+field. `RadioModel::panNoiseFloorRangeUnavailableReason()` is the one admission
+rule: the Display panel's **NF Range** slider dims with that reason, and also
+while the pan has not reported `noise_floor_range`. The radio owns the value;
+nothing is persisted on the client.
+
 ### Broadcast FM receiver controls
 
 | Record | Flex | HL2 | Sim | Icom | ANAN | RTL-SDR | Consumers |
