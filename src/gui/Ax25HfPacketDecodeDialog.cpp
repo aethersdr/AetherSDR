@@ -2840,7 +2840,6 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
         return;
     }
 
-    auto& txModel = m_radio->transmitModel();
     if (m_attachedSlice && !m_attachedSlice->isTxSlice()) {
         appendSystemLine(QStringLiteral("Selecting attached slice %1 for AX.25 TX.")
             .arg(m_attachedSlice->sliceId()));
@@ -2860,9 +2859,7 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
     // never changed would hand back a stale value on unkey.
     m_audio->setDaxTxMode(true);
     if (!bypassesDax) {
-        m_txPreviousTransmitDax = txModel.daxOn();
-        m_txRestoreTransmitDax = true;
-        txModel.setDax(true);
+        m_radio->acquireTransmitDax(RadioModel::DaxTxFlagHolder::Ax25);
     }
 
     const QString route = bypassesDax
@@ -3165,14 +3162,12 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
     m_txPendingStream = false;
 
     if (m_radio) {
-        auto& txModel = m_radio->transmitModel();
         if (aborted) {
             m_radio->abortProducerPtt(m_txRequest, TransmitModel::PttSource::Dax);
         } else {
             m_radio->requestProducerPttOff(m_txRequest, TransmitModel::PttSource::Dax);
         }
-        if (m_txRestoreTransmitDax)
-            txModel.setDax(m_txPreviousTransmitDax);
+        m_radio->releaseTransmitDax(RadioModel::DaxTxFlagHolder::Ax25);
     }
     m_txRequest = {};
     if (m_audio) {
@@ -3201,7 +3196,6 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
     m_txChunkIndex = 0;
     m_txChunkCount = 0;
     m_txRestoreAudioDaxMode = false;
-    m_txRestoreTransmitDax = false;
     m_txFromKiss = false;
     m_txFromDigi = false;
     refreshTransmitControls();

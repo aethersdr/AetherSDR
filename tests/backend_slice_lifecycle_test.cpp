@@ -3,7 +3,6 @@
 // reply sink; no synthetic firmware peer, USB device, DSP channel or wire.
 #include "TestSettingsProfile.h"
 #include "core/AutomationServer.h"
-#include "core/backends/flex/RadioConnection.h"
 #include "core/backends/IRadioBackend.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -26,10 +25,6 @@ namespace AetherSDR {
 class RadioModelSliceLifecycleTestAccess
 {
 public:
-    static void useCommandPlane(RadioModel& radio, RadioConnection* connection)
-    {
-        radio.m_connection = connection;
-    }
     static void setSessionSerials(RadioModel& radio, const QString& connected,
                                  const QString& nextTarget)
     {
@@ -75,9 +70,6 @@ public:
     int modeCalls = 0;
     bool connected = true;
     int disconnectCalls = 0;
-    // Uninitialized RadioConnection has no socket, timer, thread or peer. Its
-    // presence models the exact ownership boundary used by Flex and hybrid Sim.
-    std::unique_ptr<RadioConnection> commandPlane;
     RadioCapabilities capabilities() const override { return caps; }
     void connectRadio(const RadioConnectRequest&) override {}
     void disconnectRadio() override { connected = false; ++disconnectCalls; }
@@ -166,11 +158,6 @@ void testNeutralLifecycle()
     QSignalSpy removed(&radio, &RadioModel::sliceRemoved);
     QSignalSpy dropped(&radio, &RadioModel::commandDropped);
     QSignalSpy failed(&radio, &RadioModel::sliceLifecycleFailed);
-    int lifecycleCommands = 0;
-    radio.setSliceLifecycleCommandSinkForTest([&](const QString&, std::function<void(int, const QString&)>) {
-        ++lifecycleCommands;
-        return true;
-    });
     bool completeAtNotification = false;
     QObject::connect(&radio, &RadioModel::sliceAdded, &radio, [&](SliceModel* slice) {
         completeAtNotification = slice->panId() == pan && slice->frequency() == 14.234567
@@ -224,7 +211,7 @@ void testNeutralLifecycle()
               && radio.panadapters().size() == 1 && original->panId() == pan
               && added.size() == 1 && removed.isEmpty(),
           "creation refusals preserve receiver state and ownership");
-    check(lifecycleCommands == 0 && dropped.isEmpty(),
+    check(dropped.isEmpty(),
           "creation refusal diagnostic does not fall back to a Flex command");
     failed.clear();
     backend->caps.canCreateSlices = true;
@@ -394,52 +381,26 @@ void testDisconnectAndReclaim()
 
 void testCommandAdapter()
 {
-    using Reply = std::function<void(int, const QString&)>;
     for (const QString family : {QStringLiteral("flex"), QStringLiteral("sim")}) {
         RadioModel radio;
         LifecycleBackend* backend = install(radio, family);
-        backend->caps.canCreateSlices = family == QLatin1String("flex");
+        backend->caps.canCreateSlices = true;
         const QString pan = publishPan(radio, *backend, QStringLiteral("adapter-pan"));
         emit backend->sliceChanged(0, fullDelta(QStringLiteral("adapter-pan"), 14.2));
-        backend->commandPlane = std::make_unique<RadioConnection>();
-        RadioModelSliceLifecycleTestAccess::useCommandPlane(radio, backend->commandPlane.get());
-        check(radio.hasCommandPlane(), "fixture supplies command-plane ownership independently of the sink");
-        QStringList commands;
-        std::vector<Reply> replies;
-        bool accept = true;
-        radio.setSliceLifecycleCommandSinkForTest([&](const QString& command, Reply reply) {
-            commands.append(command);
-            if (reply) {
-                replies.push_back(std::move(reply));
-            }
-            return accept;
-        });
-        QSignalSpy failuresSpy(&radio, &RadioModel::sliceCreateFailed);
-        check(radio.addSlice(), "command-plane adapter accepts default ordinary creation");
-        check(commands.value(commands.size() - 1) == QStringLiteral("slice create pan=%1 freq=14.220000").arg(pan),
-              "command adapter preserves center offset and six-decimal MHz formatting");
+        check(radio.addSlice(), "ordinary creation is routed through the backend independently of family name");
+        check(std::abs(backend->requestedHz - 14220000.0) < 0.001,
+              "typed lifecycle preserves default center offset");
         check(radio.addSliceOnPan(pan, 14.2345678)
-                  && commands.value(commands.size() - 1) == QStringLiteral("slice create pan=%1 freq=14.234568").arg(pan),
-              "explicit creation preserves existing command encoding");
-        check(!replies.empty(), "accepted command dispatch retains its response callback");
-        if (!replies.empty()) {
-            replies.back()(0, QStringLiteral("1"));
-            check(radio.slices().size() == 1 && failuresSpy.isEmpty(), "successful reply alone cannot invent slice ownership");
-            replies.back()(1, QStringLiteral("capacity"));
-            check(failuresSpy.size() == 1, "existing Flex create failure callback remains observable");
-        }
+                  && std::abs(backend->requestedHz - 14234567.8) < 0.001,
+              "model preserves Hz precision until backend encoding");
+        check(radio.slices().size() == 1, "accepted request does not invent slice ownership");
         emit backend->sliceChanged(1, fullDelta(QStringLiteral("adapter-pan"), 14.3));
-        check(radio.removeSlice(1) && commands.value(commands.size() - 1) == QLatin1String("slice remove 1") && radio.slice(1),
-              "command adapter preserves removal encoding and status authority");
-        accept = false;
-        check(!radio.addSliceOnPan(pan, 14.27) && !radio.removeSlice(1), "command transport refusal propagates");
-        check(backend->createCalls == 0 && backend->removeCalls == 0,
-              "Flex/Sim adapter never also dispatches neutral lifecycle verbs");
-        install(radio, QStringLiteral("rtl"));
-        if (!replies.empty()) {
-            replies.front()(1, QStringLiteral("late reply"));
-            check(failuresSpy.size() == 1, "retired command callback cannot report failure into a new session");
-        }
+        check(radio.removeSlice(1) && backend->requestedRemoval == 1 && radio.slice(1),
+              "typed removal preserves status authority");
+        backend->acceptCreate = false;
+        check(!radio.addSliceOnPan(pan, 14.27), "backend creation refusal propagates without raw fallback");
+        check(backend->createCalls == 3 && backend->removeCalls == 1,
+              "each typed request reaches exactly one backend verb");
     }
 }
 
@@ -483,6 +444,23 @@ void testBridgeAndDefaults()
     reply = AutomationServerTestAccess::slice(server, QStringLiteral("remove"), QStringLiteral("0"));
     check(!reply.value("ok").toBool() && radio.slice(0), "bridge retains last-slice refusal");
 }
+
+void testUnansweredTransientRefusal()
+{
+    RadioModel radio;
+    LifecycleBackend* backend = install(radio);
+    backend->caps.canTransmit = true;
+    const QString pan = publishPan(radio, *backend, QStringLiteral("native-pan"));
+    emit backend->sliceChanged(0, fullDelta(QStringLiteral("native-pan")));
+    check(radio.createSlice({pan, 14200000.0, {}, {}}, &radio, {}, true) == 0
+              && backend->createCalls == 0,
+          "transient creation never falls back to an uncorrelated native hook");
+    emit backend->sliceChanged(1, fullDelta(QStringLiteral("native-pan")));
+    check(radio.removeSlice(1) && !radio.removeSlice(0), "pending native removal reserves the last receiver");
+    emit backend->sliceLifecycleFailed(QStringLiteral("remove"), 1, QStringLiteral("refused"));
+    check(radio.removeSlice(1) && backend->removeCalls == 2,
+          "native asynchronous refusal releases its removal reservation");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -496,5 +474,6 @@ int main(int argc, char** argv)
     testDisconnectAndReclaim();
     testCommandAdapter();
     testBridgeAndDefaults();
+    testUnansweredTransientRefusal();
     return failures == 0 ? 0 : 1;
 }

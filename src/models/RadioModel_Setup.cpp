@@ -65,7 +65,10 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
     const QPointer<RadioModel> alive(this);
     const QPointer<QObject> owner(replyContext ? replyContext : this);
     const RadioControlSession session = controlSession();
-    const bool identity = request.field == Field::Callsign || request.field == Field::ClientStation;
+    const bool station = request.field == Field::ClientStation;
+    const bool identity = request.field == Field::Callsign || station;
+    const quint64 stationRevision = station && request.valid()
+        ? ++m_stationIntentRevision : m_stationIntentRevision;
     const bool localDisplay = request.field == Field::ShowTxInWaterfall
         && backendCapabilities().clientPersistsShowTxInWaterfall();
     const bool calibration = request.field == Field::StartFrequencyCalibration;
@@ -80,6 +83,7 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
         if (request.field == Field::Callsign) {
             setStationCallsign(std::get<QString>(request.value));
         } else if (request.field == Field::ClientStation) {
+            if (m_stationIntentRevision != stationRevision) { return; }
             AppSettings::instance().setValue("StationName", std::get<QString>(request.value));
             AppSettings::instance().save();
         }
@@ -90,6 +94,12 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
         return ReceiveDispatch::Unsupported;
     };
     if (!request.valid()) { return refuse(false); }
+    // Saved operator intent is independent of temporary radio labels. Commit
+    // it before dispatch can reenter with a radio-only override.
+    if (station) {
+        persistIdentity();
+        if (!alive) { return ReceiveDispatch::LocalOnly; }
+    }
     // Client-owned display preferences remain editable without a radio link.
     if (request.field == Field::ShowTxInWaterfall
         && requestLocalShowTxInWaterfall(std::get<bool>(request.value))) {
@@ -98,7 +108,7 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
     }
     if (!m_backend || !controlSessionCurrent(session)) {
         if (identity) {
-            persistIdentity();
+            if (!station) { persistIdentity(); }
             if (reply) { reply({RadioSetupReply::Kind::Accepted, 0, {}}); }
             return ReceiveDispatch::LocalOnly;
         }
@@ -119,13 +129,15 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
     if (effective.field == Field::NetworkMtu) {
         effective.value = networkMtuParam(std::get<int>(effective.value));
     }
-    const RadioControlFence current = [alive, owner, session, pending, calibration] {
-        return alive && alive->controlSessionCurrent(session) && (!calibration || (owner && *pending));
+    const RadioControlFence current = [alive, owner, session, pending, calibration, station, stationRevision] {
+        return alive && alive->controlSessionCurrent(session) && (!calibration || (owner && *pending))
+            && (!station || alive->m_stationIntentRevision == stationRevision);
     };
     const ReceiveDispatch result = m_backend->requestRadioSetup(effective, reply, current);
     if (!alive) { return result; }
+    if (station && result == ReceiveDispatch::Dispatched && current()) { m_stationOverrideOwner = 0; }
     if (identity) {
-        persistIdentity();
+        if (!station) { persistIdentity(); }
         if (!alive) { return result; }
         if (result == ReceiveDispatch::Unsupported) {
             if (reply) { reply({RadioSetupReply::Kind::Accepted, 0, QStringLiteral("Station identity saved locally; radio copy not dispatched.")}); }

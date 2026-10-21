@@ -32,6 +32,7 @@ struct SliceDelta {
     std::optional<QString>     letter;
     std::optional<double>      frequency;      // MHz
     std::optional<QString>     mode;
+    std::optional<QString>     chainMode;      // empty = unknown; absent = unchanged
     std::optional<int>         filterLow;      // Hz
     std::optional<int>         filterHigh;     // Hz
     std::optional<QStringList> modeList;

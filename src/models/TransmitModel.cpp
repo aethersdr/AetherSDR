@@ -24,12 +24,23 @@ bool TransmitModel::refuseControlOffThread() const
     return true;
 }
 
+void TransmitModel::resetDaxSessionState()
+{
+    // Observations and unanswered requests belong to one session. Keep ticket
+    // numbers monotonic so queued old answers cannot consume new requests.
+    // Retirement emits no control intent or model notification.
+    m_pendingDaxAnswers.clear();
+    m_daxRequested = false;
+    m_daxOn = false;
+}
+
 void TransmitModel::resetState()
 {
     m_confirmReceiveCwPitch = false;
     for (quint64& revision : m_controlIntentRevisions) { ++revision; }
     // A request of the ending session is answered, if at all, by a dead link.
     m_pendingVoxAnswers.clear();
+    resetDaxSessionState();
     m_voxUnconfirmed = true;   // the next radio has not said yet
     cancelPttRelease();
     m_apdEnabled = false;
@@ -54,10 +65,6 @@ void TransmitModel::resetState()
     m_usingMemory = false;
     m_showTxInWaterfall = false;
     resetPttMicOverrideReport();
-    // Radio-reported; a new session re-reports it. A radio with no Flex command
-    // plane never echoes dax=, so a Flex session's DAX=on must not survive into
-    // it and hold the client TX chain's MIC-ready indicator off (#5871).
-    m_daxOn = false;
     m_txSliceMode.clear();
     setTuneAvailable(true);
 
@@ -814,7 +821,14 @@ void TransmitModel::setDax(bool on)
         emit micStateChanged();  // PhoneCwApplet's DAX button binds to this
         if (!current()) { return; }
     }
-    emit controlRequested({field, on});
+    // Every dax command is tracked until answered, so a holder deciding
+    // whether the radio is already on can tell a settled flag from a stale
+    // status overtaking this request (#6593 review).
+    TransmitControlRequest request{field, on};
+    request.answerTicket = ++m_lastAnswerTicket;
+    m_pendingDaxAnswers.insert(request.answerTicket);
+    m_daxRequested = on;
+    emit controlRequested(request);
 }
 
 void TransmitModel::setSbMonitor(bool on)
@@ -891,6 +905,7 @@ quint64 TransmitModel::requestVoxEnable(bool on)
 
 void TransmitModel::handleControlAnswer(quint64 ticket, bool applied)
 {
+    if (m_pendingDaxAnswers.remove(ticket)) { return; }
     const auto it = m_pendingVoxAnswers.constFind(ticket);
     if (it == m_pendingVoxAnswers.constEnd()) { return; }
     const PendingVoxAnswer pending = it.value();
