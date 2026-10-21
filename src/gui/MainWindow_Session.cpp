@@ -1216,6 +1216,9 @@ void MainWindow::wireRadioModel()
     // txSliceChanged edge, so the span control's owner is re-derived (#5750).
     connect(&m_radioModel, &RadioModel::slotOccupancyChanged,
             this, [this](int) { syncPanSpanControlPlacement(); });
+    // A late capability republish can change whether the span is fixed.
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged,
+            this, [this](bool, const RadioCapabilities&) { syncPanSpanControlPlacement(); });
     // ...and CWX/DVK availability follows the TX slice for the same reason. The
     // licence statuses land before the slice statuses, so the pass they trigger
     // finds no TX slice yet and disables the indicator. A new slice's
@@ -3298,6 +3301,8 @@ void MainWindow::syncPanSpanControlPlacement()
     const bool radioWide = m_radioModel.isConnected()
         && caps.panSpanModel.has_value()
         && caps.panSpanModel->radioWide;
+    const bool displayDeclared = caps.panDisplayControl.has_value();
+    const bool spanDeclared = displayDeclared && caps.panDisplayControl->declaresSpan();
     const SliceModel* tx = m_radioModel.txSlice();
     const QString txPanId = tx ? tx->panId() : QString();
     // Docked panes in the order the layout shows them, then floating or
@@ -3311,8 +3316,17 @@ void MainWindow::syncPanSpanControlPlacement()
             continue;
         }
         sw->setSpanControlPlacement(
-            spanControlLiveOnPan(radioWide, panIds, txPanId, panId), radioWide);
+            spanControlLiveOnPan(radioWide, panIds, txPanId, panId), radioWide,
+            spanFixedOnPan(m_radioModel.isConnected(), displayDeclared, spanDeclared,
+                           kiwiSdrPanDisplaysKiwi(panId)));
     }
+}
+
+bool MainWindow::panSpanFixedByBackend() const
+{
+    const auto display = m_radioModel.backendCapabilities().panDisplayControl;
+    return spanFixedOnPan(m_radioModel.isConnected(), display.has_value(),
+                          display && display->declaresSpan(), false);
 }
 
 // Color the version row by how current the firmware is, and make it a link to

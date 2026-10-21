@@ -4331,7 +4331,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(sw, &SpectrumWidget::bandwidthChangeRequested,
             this, [this, applet](double bw) {
-        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId()) || panSpanFixedByBackend()) {
             return;
         }
         // #4142: a bandwidth drag is user intent — during the profile-load

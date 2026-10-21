@@ -500,14 +500,21 @@ public:
     // pair states its reason in the tooltip (shown on a disabled button by
     // eventFilter()) and in the accessible description, which is what a
     // screen reader announces; the live pair says the span is shared.
+    // `spanFixed` dims the pair on every pane: the backend cannot change span.
     // `live = true, radioWide = false` is the per-pan default and restores
     // exactly what the constructor built: enabled, no tooltip, no description.
-    void setSpanControlPlacement(bool live, bool radioWide)
+    void setSpanControlPlacement(bool live, bool radioWide, bool spanFixed = false)
     {
         QString outTip;
         QString inTip;
         QString desc;
-        if (radioWide && live) {
+        if (spanFixed) {
+            live = false;
+            desc = tr("Span buttons unavailable: this radio's span is fixed, so zoom "
+                      "cannot change it.");
+            outTip = desc;
+            inTip = desc;
+        } else if (radioWide && live) {
             outTip = tr("Zoom out. The span is shared: this changes every panadapter on this radio.");
             inTip = tr("Zoom in. The span is shared: this changes every panadapter on this radio.");
             desc = tr("This radio has one span for all panadapters, so this control changes every panadapter.");
@@ -519,15 +526,18 @@ public:
             outTip = desc;
             inTip = desc;
         }
+        // Re-derived often; an unchanged description is not re-announced.
         if (m_zoomOutBtn) {
             m_zoomOutBtn->setEnabled(live);
             m_zoomOutBtn->setToolTip(outTip);
-            m_zoomOutBtn->setAccessibleDescription(desc);
+            if (m_zoomOutBtn->accessibleDescription() != desc)
+                m_zoomOutBtn->setAccessibleDescription(desc);
         }
         if (m_zoomInBtn) {
             m_zoomInBtn->setEnabled(live);
             m_zoomInBtn->setToolTip(inTip);
-            m_zoomInBtn->setAccessibleDescription(desc);
+            if (m_zoomInBtn->accessibleDescription() != desc)
+                m_zoomInBtn->setAccessibleDescription(desc);
         }
     }
 

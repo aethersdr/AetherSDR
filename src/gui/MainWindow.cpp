@@ -8786,6 +8786,9 @@ void MainWindow::applyPanRangeRequest(const QString& panId, double centerMhz,
     }
 
     auto* pan = m_radioModel.panadapter(panId);
+    // A fixed span takes the center only, silently: no zoom route can change
+    // it, and the dimmed -/+ pair already says why.
+    const bool spanFixed = panSpanFixedByBackend();
 
     if (pan) {
         // Effective (pending-else-model) geometry: during the profile-load
@@ -8793,8 +8796,9 @@ void MainWindow::applyPanRangeRequest(const QString& panId, double centerMhz,
         // against it would treat the user's pending zoom as "already there"
         // — or re-issue it forever (#4142).
         if (qFuzzyCompare(m_radioModel.effectivePanCenterMhz(panId), centerMhz)
-            && qFuzzyCompare(m_radioModel.effectivePanBandwidthMhz(panId),
-                             bandwidthMhz)) {
+            && (spanFixed
+                || qFuzzyCompare(m_radioModel.effectivePanBandwidthMhz(panId),
+                                 bandwidthMhz))) {
             return;
         }
     }
@@ -8807,12 +8811,13 @@ void MainWindow::applyPanRangeRequest(const QString& panId, double centerMhz,
     // during a profile load — zoom and drag, not just typed frequency entry.
     // requestPanCenter() defers and replays it, and only advances the local
     // model when the command actually reaches the wire.
-    const bool sent = m_radioModel.requestPanCenter(panId, centerMhz, bandwidthMhz);
+    const bool sent = m_radioModel.requestPanCenter(
+        panId, centerMhz, spanFixed ? -1.0 : bandwidthMhz);
 
     qDebug() << "Pan range request:" << source
              << "center" << centerMhz
-             << "bandwidth" << bandwidthMhz
-             << (sent ? "" : "(deferred: profile load)");
+             << "bandwidth" << (spanFixed ? QStringLiteral("fixed") : QString::number(bandwidthMhz))
+             << (sent ? "" : "(not sent: deferred for profile load or refused)");
 }
 
 void MainWindow::setActiveSlice(int sliceId)

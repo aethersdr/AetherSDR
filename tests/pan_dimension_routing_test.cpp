@@ -2,6 +2,7 @@
 // select Flex pixels, native analyzer points, or a fixed-geometry local no-op.
 #include "TestSettingsProfile.h"
 #include "PanControlTestFixture.h"
+#include "gui/PanSpanControlGate.h"
 
 #include <QCoreApplication>
 #include <QFile>
@@ -46,6 +47,10 @@ void native(const QString& family)
     RadioModel specimen;
     check(specimen.rebuildBackendForTest(family), "production family backend constructed without dialing");
     const RadioCapabilities caps = specimen.backendCapabilities();
+    const bool spanDeclared = caps.panDisplayControl && caps.panDisplayControl->declaresSpan();
+    check(spanFixedOnPan(true, caps.panDisplayControl.has_value(), spanDeclared, false)
+              == (family == QLatin1String("sim")),
+          "only the Demo's fixed span dims the -/+ pair");
     RadioModel radio;
     auto owned = std::make_unique<NativeBackend>();
     NativeBackend* backend = owned.get();
@@ -99,6 +104,10 @@ int main(int argc, char** argv)
         check(f.radio.requestPanDimensions(first, 1111, 700, 2222) == ReceiveDispatch::Dispatched
             && f.backend->commands() == QStringList{QStringLiteral("display pan set 0x40000000 xpixels=1111 ypixels=700")},
               "Flex sends actual widget dimensions as one paired request");
+        const auto flexDisplay = f.radio.backendCapabilities().panDisplayControl;
+        check(!spanFixedOnPan(true, flexDisplay.has_value(),
+                  flexDisplay && flexDisplay->declaresSpan(), false),
+              "Flex declares its span, so its -/+ pair stays live");
     }
     QFile source(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Wiring.cpp"));
     check(source.open(QIODevice::ReadOnly), "GUI dimension source readable");

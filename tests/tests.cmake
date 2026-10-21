@@ -8898,15 +8898,18 @@ target_compile_definitions(client_display_pan_settings_test PRIVATE
 add_test(NAME client_display_pan_settings_test
          COMMAND client_display_pan_settings_test)
 
-# RadioModel's own client-owned state on an ANAN: the master-volume read-back,
-# the restored line-out level, and the Tuning-domain step. Socket-free, through
-# setBackendForTest() and a TestSettingsProfile store.
+# Typed pan lifecycle and display controls through the production Flex encoder
+# and RadioModel fences. Socket-free: the backend records requests and its
+# RadioConnection is never opened.
 add_executable(pan_control_routing_test tests/pan_control_routing_test.cpp)
 target_include_directories(pan_control_routing_test PRIVATE src tests)
 target_link_libraries(pan_control_routing_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME pan_control_routing_test COMMAND pan_control_routing_test)
 set_tests_properties(pan_control_routing_test PROPERTIES TIMEOUT 30)
 
+# RadioModel's own client-owned state on an ANAN: the master-volume read-back,
+# the restored line-out level, and the Tuning-domain step. Socket-free, through
+# setBackendForTest() and a TestSettingsProfile store.
 add_executable(radio_model_client_state_test tests/radio_model_client_state_test.cpp)
 target_include_directories(radio_model_client_state_test PRIVATE src tests)
 target_link_libraries(radio_model_client_state_test PRIVATE

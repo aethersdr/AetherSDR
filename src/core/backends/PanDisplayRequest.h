@@ -30,6 +30,7 @@ struct PanDisplayControl {
     QSet<PanDisplayField> fields;
     QSet<PanGeometryComponent> geometry;
     bool supports(PanDisplayField field) const { return fields.contains(field); }
+    bool declaresSpan() const { return geometry.contains(PanGeometryComponent::Bandwidth); }
 };
 
 struct PanDisplayRequest {

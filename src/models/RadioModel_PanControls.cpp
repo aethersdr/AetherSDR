@@ -48,7 +48,7 @@ void RadioModel::settlePanCreations()
             if (!request->notified) {
                 request->notified = true;
                 const PanCreationCompletion completion = std::exchange(request->completion, {});
-                if (request->deadline) { request->deadline->stop(); }
+                if (request->deadline) { request->deadline->stop(); request->deadline->deleteLater(); }
                 if (request->owner && completion) {
                     completion({RadioControlReply::Kind::Cancelled, -1,
                                 QStringLiteral("pan creation identity is uncertain")}, nullptr);
@@ -149,6 +149,7 @@ ReceiveDispatch RadioModel::requestPanCreation(QObject* context, const PanCreati
         const auto request = alive->m_pendingPanCreations.value(ticket);
         if (!request || request->notified) { return; }
         request->notified = true;
+        if (request->deadline) { request->deadline->deleteLater(); }
         const PanCreationCompletion completion = std::exchange(request->completion, {});
         if (request->owner && completion) {
             completion({RadioControlReply::Kind::Failed, -1,
@@ -179,7 +180,7 @@ ReceiveDispatch RadioModel::requestPanCreation(QObject* context, const PanCreati
                 const PanCreationCompletion completion = std::exchange(request->completion, {});
                 const bool notify = !request->notified && request->owner && completion;
                 request->notified = true;
-                if (request->deadline) { request->deadline->stop(); }
+                if (request->deadline) { request->deadline->stop(); request->deadline->deleteLater(); }
                 if (notify) { completion(reply.result, nullptr); }
                 if (!alive) { return; }
             }
