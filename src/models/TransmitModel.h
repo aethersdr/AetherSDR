@@ -237,6 +237,9 @@ public:
     QString     activeProfile()     const { return m_activeProfile; }
     QStringList micProfileList()    const { return m_micProfileList; }
     QString     activeMicProfile()  const { return m_activeMicProfile; }
+    QStringList cwProfileList()     const { return m_cwProfileList; }
+    QString     activeCwProfile()   const { return m_activeCwProfile; }
+    bool        cwProfileUnsaved()  const { return m_cwProfileUnsaved; }
     QStringList micInputList()      const { return m_micInputList; }
 
     // Apply a normalized, typed transmit delta from the backend
@@ -248,6 +251,9 @@ public:
     void setActiveProfile(const QString& profile);
     void setMicProfileList(const QStringList& profiles);
     void setActiveMicProfile(const QString& profile);
+    void setCwProfileList(const QStringList& profiles);
+    void setActiveCwProfile(const QString& profile);
+    void setCwProfileUnsaved(bool unsaved);
     void setMicInputList(const QStringList& inputs);
 
     // PTT request coordinator (#2262) — single entry point for "user
@@ -510,6 +516,8 @@ signals:
     void profileListChanged();
     void micStateChanged();
     void micProfileListChanged();
+    // CW profile list, active name or unsaved-changes flag changed.
+    void cwProfilesChanged();
     void micInputListChanged();
     void phoneStateChanged();       // VOX or CW property changed
     // Fires only when txFilterLow / txFilterHigh actually change.  Use this
@@ -739,6 +747,11 @@ private:
     QStringList m_micProfileList;
     QString     m_activeMicProfile;
     QStringList m_micInputList;
+
+    // CW profiles (SmartSDR 4.3.16+)
+    QStringList m_cwProfileList;
+    QString     m_activeCwProfile;
+    bool        m_cwProfileUnsaved{false};
 };
 
 } // namespace AetherSDR

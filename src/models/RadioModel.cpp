@@ -9625,6 +9625,10 @@ void RadioModel::handleMessageReceived(const ParsedMessage& msg, quint64 gpsSess
         handleProfileStatusRaw("global", body.mid(15));  // skip "profile global "
         return;
     }
+    if (body.startsWith("profile cw ")) {
+        handleProfileStatusRaw("cw", body.mid(11));  // skip "profile cw "
+        return;
+    }
 
     // GPS status: "gps lat=...#lon=...#grid=...#tracked=...#visible=...#status=..."
     if (body.startsWith("gps ")) {
@@ -9747,6 +9751,9 @@ void RadioModel::refreshProfiles()
     for (const ProfileRequest::Kind kind : {ProfileRequest::Kind::Global,
             ProfileRequest::Kind::Transmit, ProfileRequest::Kind::Mic}) {
         requestProfile({kind, ProfileRequest::Action::Refresh, {}});
+    }
+    if (backendCapabilities().cwProfileControl.has_value()) {
+        requestProfile({ProfileRequest::Kind::Cw, ProfileRequest::Action::Refresh, {}});
     }
 }
 
@@ -13061,6 +13068,17 @@ void RadioModel::applyProfileChanges(const ProfileDelta& d)
         } else if (d.current) {
             m_transmitModel.setActiveMicProfile(*d.current);
             qCDebug(lcProtocol) << "RadioModel: active mic profile:" << *d.current;
+        }
+    } else if (d.type == QLatin1String("cw")) {
+        if (d.list) {
+            m_transmitModel.setCwProfileList(*d.list);
+            qCDebug(lcProtocol) << "RadioModel: CW profiles:" << *d.list;
+        } else if (d.current) {
+            m_transmitModel.setActiveCwProfile(*d.current);
+            qCDebug(lcProtocol) << "RadioModel: active CW profile:" << *d.current;
+        } else if (d.unsavedChanges) {
+            m_transmitModel.setCwProfileUnsaved(*d.unsavedChanges);
+            qCDebug(lcProtocol) << "RadioModel: CW profile unsaved changes:" << *d.unsavedChanges;
         }
     } else if (d.type == QLatin1String("global")) {
         if (d.list) {

@@ -242,10 +242,12 @@ int FlexBackend::nrsLevelMaximum() const
 void FlexBackend::refreshFirmwareCapabilities()
 {
     const int maximum = nrsLevelMaximum();
-    if (maximum == m_announcedNrsLevelMaximum) {
+    const bool cwProfiles = firmwareAtLeast(QVersionNumber(4, 3, 16));
+    if (maximum == m_announcedNrsLevelMaximum && cwProfiles == m_announcedCwProfiles) {
         return;
     }
     m_announcedNrsLevelMaximum = maximum;
+    m_announcedCwProfiles = cwProfiles;
     emit capabilitiesChanged();
 }
 
@@ -712,6 +714,10 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hostDroopCalibration = false;   // no known DDC edge droop on this radio
     // Global / TX / mic profiles are a SmartSDR feature on every current model.
     caps.hasProfiles = true;
+    // Published FlexLib 4.3.16 adds the CW profile type (Radio.cs:8780-8919).
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16))) {
+        caps.cwProfileControl = RadioCapabilities::CwProfileControl{};
+    }
     caps.hasSelectableMicInputs = true;
     // SmartSDR's compander command is the authoritative DEXP path used by
     // TransmitModel::setDexp/setDexpLevel.
@@ -2073,6 +2079,16 @@ void FlexBackend::decodeProfileStatus(const QString& profileType, const QString&
         return;
     }
 
+    // FlexLib 4.3.16 reports the CW profile's dirty flag as
+    // unsaved_changes_cw (Radio.cs:12002); the suffix names the profile type.
+    static const QLatin1String unsavedPrefix("unsaved_changes_");
+    if (key.startsWith(unsavedPrefix)) {
+        d.type = key.mid(unsavedPrefix.size());
+        d.unsavedChanges = val == QLatin1String("1");
+        emit profileChanged(d);
+        return;
+    }
+
     d.type = profileType;
     if (key == QLatin1String("list"))
         d.list = val.split('^', Qt::SkipEmptyParts);
@@ -2094,6 +2110,12 @@ void FlexBackend::decodeProfileFlags(const QMap<QString, QString>& kvs)
     carry(kvs, "exporting", d.exporting);
     if (d.importing || d.exporting)
         emit profileChanged(d);
+    if (kvs.contains(QStringLiteral("unsaved_changes_cw"))) {
+        ProfileDelta unsaved;
+        unsaved.type = QStringLiteral("cw");
+        carry(kvs, "unsaved_changes_cw", unsaved.unsavedChanges);
+        emit profileChanged(unsaved);
+    }
 }
 
 void FlexBackend::send(const QString& cmd)

@@ -3,6 +3,7 @@
 #include "core/AppSettings.h"
 #include "core/LocalMemoryStore.h"
 #include "core/backends/sim/SimBackend.h"
+#include "models/TransmitModel.h"
 
 #include <QCoreApplication>
 #include <QJsonDocument>
@@ -86,6 +87,33 @@ void encoders()
           "TX overwrite cannot be manufactured");
     check(backend.commands.isEmpty(), "invalid profiles have no effects");
 
+    check(backend.requestProfile({Kind::Cw, Action::Refresh}) == ReceiveDispatch::Unsupported
+          && backend.commands.isEmpty(), "CW profiles refused before firmware 4.3.16");
+    backend.setFirmwareVersionProvider([] { return QStringLiteral("4.2.20.41174"); });
+    check(!backend.capabilities().cwProfileControl.has_value()
+          && backend.requestProfile({Kind::Cw, Action::Load, "Contest"}) == ReceiveDispatch::Unsupported,
+          "CW profiles refused on 4.2 firmware");
+    backend.setFirmwareVersionProvider([] { return QStringLiteral("4.3.16.42034"); });
+    check(backend.capabilities().cwProfileControl.has_value(), "4.3.16 firmware advertises CW profiles");
+    const std::vector<std::pair<ProfileRequest, QString>> cwCases{
+        {{Kind::Cw, Action::Refresh}, "profile cw info"},
+        {{Kind::Cw, Action::Load, "Contest 30 WPM"}, "profile cw load \"Contest 30 WPM\""},
+        {{Kind::Cw, Action::Create, "Contest*"}, "profile cw create \"Contest\""},
+        {{Kind::Cw, Action::Remove, "Contest"}, "profile cw delete \"Contest\""},
+        {{Kind::Cw, Action::Reset, "Contest"}, "profile cw reset \"Contest\""}
+    };
+    for (const auto& [request, expected] : cwCases) {
+        backend.commands.clear();
+        check(backend.requestProfile(request) == ReceiveDispatch::Dispatched
+            && backend.commands == QStringList{expected}, "CW profile encoder matches SDK command");
+    }
+    backend.commands.clear();
+    check(backend.requestProfile({Kind::Mic, Action::Reset, "My Mic"}) == ReceiveDispatch::Unsupported
+          && backend.requestProfile({Kind::Cw, Action::Save, "Contest"}) == ReceiveDispatch::Unsupported
+          && backend.requestProfile({Kind::Cw, Action::AutoSave, {}, true}) == ReceiveDispatch::Unsupported
+          && backend.requestProfile({Kind::Cw, Action::Reset, "**"}) == ReceiveDispatch::Unsupported
+          && backend.commands.isEmpty(), "reset is CW-only and CW has no save or autosave");
+
     MemoryRequest update{MemoryRequest::Action::Update, 7, MemoryPatch::fromEntry(channel())};
     backend.requestMemory(update);
     const QString encoded = backend.commands.value(0);
@@ -134,6 +162,26 @@ void encoders()
         update.patch = {}; update.patch.rxFilterHigh = edge;
         check(!update.valid(), "out-of-envelope high filter remains refused");
     }
+}
+void cwProfileState()
+{
+    RadioModel model;
+    ProfileDelta list; list.type = QStringLiteral("cw");
+    list.list = QStringList{QStringLiteral("Default"), QStringLiteral("Contest 30 WPM")};
+    StoredControlTestAccess::profile(model, list);
+    ProfileDelta current; current.type = QStringLiteral("cw");
+    current.current = QStringLiteral("Contest 30 WPM");
+    StoredControlTestAccess::profile(model, current);
+    ProfileDelta dirty; dirty.type = QStringLiteral("cw"); dirty.unsavedChanges = true;
+    StoredControlTestAccess::profile(model, dirty);
+    const TransmitModel& tx = model.transmitModel();
+    check(tx.cwProfileList() == *list.list && tx.activeCwProfile() == *current.current
+          && tx.cwProfileUnsaved(), "CW profile status reaches the transmit model");
+    check(tx.profileList().isEmpty() && tx.micProfileList().isEmpty(),
+          "CW profile status leaves TX and mic lists alone");
+    dirty.unsavedChanges = false;
+    StoredControlTestAccess::profile(model, dirty);
+    check(!tx.cwProfileUnsaved(), "CW unsaved flag clears");
 }
 void localBank()
 {
@@ -392,6 +440,6 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     if (!profile.isValid()) { return 2; }
     AppSettings::instance().load();
-    encoders(); localBank(); unreadableBank(); earlySlotReuse(); reentrantPublication(); asynchronous();
+    encoders(); cwProfileState(); localBank(); unreadableBank(); earlySlotReuse(); reentrantPublication(); asynchronous();
     return failures == 0 ? 0 : 1;
 }
