@@ -879,6 +879,57 @@
       ]
     },
     {
+      "id": "anan-discovery-bind-failed",
+      "severity": "warning",
+      "title": "ANAN-G2 discovery could not open its UDP socket",
+      "explanation": "AetherSDR could not open the UDP socket it searches for an ANAN-G2 with, so no G2 can appear under On This Network. Discovery tries again on every sweep; the text after the colon is the operating system's reason. If you don't use an ANAN-G2, you can ignore this.",
+      "match": {
+        "substring": "ANAN discovery: cannot bind a UDP socket"
+      },
+      "docs": "/anan-g2#setup",
+      "source": [
+        {
+          "file": "src/core/backends/anan/AnanDiscovery.cpp",
+          "line": 89,
+          "text": "ANAN discovery: cannot bind a UDP socket"
+        }
+      ]
+    },
+    {
+      "id": "anan-discovery-no-subnet",
+      "severity": "warning",
+      "title": "ANAN-G2 discovery found no network to search",
+      "explanation": "No network interface had an IPv4 broadcast address when AetherSDR searched for an ANAN-G2, so the search went to the global broadcast only: the computer was offline, or connected only through a VPN or a point-to-point link. Connect it to the G2's network; discovery keeps searching. If you don't use an ANAN-G2, you can ignore this.",
+      "match": {
+        "substring": "ANAN discovery: no IPv4 interface has a broadcast address"
+      },
+      "docs": "/anan-g2#setup",
+      "source": [
+        {
+          "file": "src/core/backends/anan/AnanDiscovery.cpp",
+          "line": 106,
+          "text": "ANAN discovery: no IPv4 interface has a broadcast address"
+        }
+      ]
+    },
+    {
+      "id": "anan-discovery-send-failed",
+      "severity": "warning",
+      "title": "ANAN-G2 discovery could not send a probe",
+      "explanation": "AetherSDR could not send its ANAN-G2 search to one address; the line names the address and the operating system's reason. A G2 on that address's subnet may not appear under On This Network. If your G2 is listed anyway, another address reached it. If you don't use an ANAN-G2, you can ignore this.",
+      "match": {
+        "substring": "ANAN discovery: cannot send a probe to"
+      },
+      "docs": "/anan-g2#setup",
+      "source": [
+        {
+          "file": "src/core/backends/anan/AnanDiscovery.cpp",
+          "line": 118,
+          "text": "ANAN discovery: cannot send a probe to"
+        }
+      ]
+    },
+    {
       "id": "hl2-socket-failed",
       "severity": "problem",
       "title": "Hermes-Lite 2: the UDP socket could not be opened",
