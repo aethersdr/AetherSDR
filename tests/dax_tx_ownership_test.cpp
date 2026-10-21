@@ -187,7 +187,8 @@ void failuresAndClients()
     f.action(QStringLiteral("take"));
     const DaxTxRequestGuard expired = f.writes.back().guard;
     DaxTxOwnershipTestAccess::timeout(f.model);
-    check(!expired.permits() && f.snapshot().value("state").toString() == QLatin1String("timed-out"),
+    check(!expired.permits() && f.snapshot().value("uncertain").toBool()
+          && f.snapshot().value("state").toString() == QLatin1String("timed-out"),
           "timeout revokes the exact queued command rather than replaying it");
     const size_t before = f.writes.size();
     check(!f.action(QStringLiteral("take")).value("ok").toBool() && f.writes.size() == before,
@@ -195,7 +196,8 @@ void failuresAndClients()
     f.reply(1);
     check(!f.model.daxTxStreamReady(), "a late success ACK cannot turn timeout into ownership");
     f.stream(false);
-    check(f.action(QStringLiteral("take")).value("ok").toBool() && f.writes.size() == before + 1,
+    check(!f.snapshot().value("uncertain").toBool()
+          && f.action(QStringLiteral("take")).value("ok").toBool() && f.writes.size() == before + 1,
           "fresh radio state permits a new explicit request");
     const DaxTxRequestGuard retired = f.writes.back().guard;
     f.stream(true, QStringLiteral("0x87654321"));

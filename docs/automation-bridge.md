@@ -3156,7 +3156,7 @@ report an unavailable state and explicit guard reasons.
 → {"cmd":"get","model":"daxtx"}
 ← {"ok":true,"model":"daxtx","daxtx":{
      "available":true,"streamId":"0x84000000","clientHandle":"0x12345678",
-     "txKnown":true,"owned":false,"ready":false,"pending":false,
+     "txKnown":true,"uncertain":false,"owned":false,"ready":false,"pending":false,
      "state":"released","error":"","canTake":true,"canRelease":true,
      "takeReason":"","releaseReason":""}}
 
@@ -3172,7 +3172,8 @@ no stream selector.
 |---|---|
 | `available` | The current session supports DAX TX stream ownership. |
 | `streamId`, `clientHandle` | Current stream and confirmed client identity, as hex strings; zero means no confirmed identity. They are output only. |
-| `txKnown`, `owned` | Whether selection is known, and whether the latest radio observation selects this client's stream. Read `owned` only with `txKnown`. |
+| `txKnown`, `owned` | Whether selection is known, and whether the latest radio observation selects this client's stream. Read `owned` only with `txKnown` and `uncertain=false`. |
+| `uncertain` | A request was interrupted or timed out without confirmation. The last observation is retained, but the applet shows **Unknown** until fresh radio status arrives. |
 | `ready` | The distinct, revocable DAX audio permission. An owned stream can still have audio blocked after a timeout or uncertain operation. This grants no keying permission. |
 | `pending` | Creation or a selection/yield request is awaiting completion. |
 | `state` | `unavailable`, `no-stream`, `creating`, `unknown`, `released`, `taking`, `owned`, `releasing`, `refused`, or `timed-out`. |

@@ -45,10 +45,10 @@ bool RadioModel::daxTxStreamReady() const
 QString RadioModel::daxTxOwnershipUnavailableReason(bool take) const
 {
     if (!isConnected() || m_txSessionClosing) {
-        return tr("Connect to a radio before changing DAX TX ownership.");
+        return tr("Connect to a radio before changing DAX TX stream selection.");
     }
     if (!m_backend || !backendCapabilities().canTransmit || !backendCapabilities().hasDaxStreams) {
-        return tr("This radio does not support DAX TX stream ownership.");
+        return tr("This radio does not support DAX TX stream selection.");
     }
     if (ourClientHandle() == 0) {
         return tr("Waiting for this client's radio identity.");
@@ -60,17 +60,17 @@ QString RadioModel::daxTxOwnershipUnavailableReason(bool take) const
         [](const TxCoordinator::Request::Weak& input) { return input.lock().valid(); });
     if (isRadioTransmitting() || transmitOwnershipPending() || preparingDax
         || m_wsprTxInput.originalSessionCurrent()) {
-        return tr("Finish the current transmission or transmit preparation before changing DAX TX ownership.");
+        return tr("Finish the current transmission or transmit preparation before changing DAX TX stream selection.");
     }
     if (m_daxTxOwnershipIntent) {
-        return tr("Waiting for the current DAX TX ownership request.");
+        return tr("Waiting for the current DAX TX stream selection request.");
     }
     if (m_daxTxUncertain) {
         return tr("Waiting for fresh radio status after an unconfirmed request; no retry was sent.");
     }
     if (m_daxTxStreamId != 0
         && (m_daxTxClientHandle == 0 || m_daxTxClientHandle != ourClientHandle() || !m_daxTxKnown)) {
-        return tr("Waiting for confirmed ownership and TX status of this client's stream.");
+        return tr("Waiting for confirmed identity and TX status of this app's stream.");
     }
     if (take) {
         for (const SliceModel* slice : slices()) {
@@ -78,10 +78,10 @@ QString RadioModel::daxTxOwnershipUnavailableReason(bool take) const
                 return {};
             }
         }
-        return tr("Select a TX slice owned by this client before taking DAX TX.");
+        return tr("Select a TX slice belonging to this app before selecting its DAX TX stream.");
     }
     if (m_daxTxStreamId == 0) {
-        return tr("This client has no DAX TX stream to release.");
+        return tr("This app has no DAX TX stream to deselect.");
     }
     return {};
 }
@@ -117,6 +117,7 @@ QJsonObject RadioModel::daxTxOwnershipSnapshot() const
         {QStringLiteral("streamId"), streamToken(m_daxTxStreamId)},
         {QStringLiteral("clientHandle"), streamToken(m_daxTxClientHandle)},
         {QStringLiteral("txKnown"), m_daxTxKnown},
+        {QStringLiteral("uncertain"), m_daxTxUncertain},
         {QStringLiteral("owned"), owned},
         {QStringLiteral("ready"), daxTxStreamReady()},
         {QStringLiteral("pending"), m_daxTxOwnershipIntent.has_value()},
@@ -197,7 +198,7 @@ void RadioModel::refreshDaxTxOwnershipGuards()
         const qint64 remaining = m_profileLoadRadioStateWriteHoldUntilMs
             - QDateTime::currentMSecsSinceEpoch();
         m_daxTxGuardTimer.start(static_cast<int>(std::clamp<qint64>(remaining + 1, 1, 60000)));
-        interruptDaxTxOwnership(tr("The profile load interrupted DAX TX ownership. Waiting for fresh radio status."));
+        interruptDaxTxOwnership(tr("The profile load interrupted DAX TX stream selection. Waiting for fresh radio status."));
     }
     if (self && session == m_daxTxSession) { emit daxTxOwnershipChanged(); }
 }
@@ -301,7 +302,7 @@ void RadioModel::observeDaxTxStream(const DaxTxStreamDelta& delta)
         m_daxTxKnown = false;
         m_daxTxActive = false;
         m_wsprTxReleaseWhenReady = false;
-        finishDaxTxOwnership(false, tr("The stream's client ownership changed or became unknown."));
+        finishDaxTxOwnership(false, tr("The stream's client identity changed or became unknown."));
         return;
     }
     if (delta.clientHandle) {
@@ -450,7 +451,7 @@ void RadioModel::continueDaxTxOwnership()
             }
             if (!accepted) {
                 self->finishDaxTxOwnership(false, reason.isEmpty()
-                    ? tr("The radio refused the DAX TX ownership request.") : reason);
+                    ? tr("The radio refused the DAX TX stream selection request.") : reason);
                 return;
             }
             self->m_daxTxOwnershipIntent->accepted = true;
@@ -458,7 +459,7 @@ void RadioModel::continueDaxTxOwnership()
         });
     if (self && m_daxTxOwnershipIntent && request.ticket == m_daxTxOwnershipIntent->ticket
         && dispatch != ReceiveDispatch::Dispatched) {
-        finishDaxTxOwnership(false, tr("This backend could not dispatch DAX TX ownership."));
+        finishDaxTxOwnership(false, tr("This backend could not dispatch DAX TX stream selection."));
     }
 }
 
@@ -510,7 +511,7 @@ void RadioModel::expireDaxTxOwnership(quint64 ticket)
     m_daxTxUncertain = true;
     m_wsprTxReleaseWhenReady = false;
     m_daxTxOutcome = QStringLiteral("timed-out");
-    m_daxTxError = tr("DAX TX ownership was not confirmed. No retry or rollback was sent.");
+    m_daxTxError = tr("DAX TX stream selection was not confirmed. No retry or rollback was sent.");
     m_daxTxAudioPermit.revoke();
     retireDaxTxInputs();
     if (!self || session != m_daxTxSession) { return; }
