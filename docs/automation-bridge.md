@@ -371,6 +371,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get hostnb`](#get-hostnb) | Host-side noise blanker, read from the backend (HL2 and ANAN). |
 | | `get waveforms` | Installed waveform list, WFP state, local D-STAR service/configuration, delivery health/metrics, and recent waveform status reports. |
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
+| | [`get daxtx`](#get-daxtx) | This client's radio-confirmed DAX TX ownership, audio readiness, pending request, and guard reasons. |
 | | [`get txtimer`](#get-txtimer) | Status-bar transmit-timer state (visible/running/holding/fading/elapsed). |
 | | [`get titlebar`](#get-titlebar) | Unified 52 px title bar — brand, radio tabs, audio cluster, window chrome. |
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
@@ -385,7 +386,8 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
 | | [`streams [radio\|resync\|reset]`](#streams) | Radio-side display-stream leak detector. |
 | | [`txwaterfall on\|off`](#txwaterfall) | Toggle "show TX in waterfall". |
-| **DAX / TCI** | [`tci start\|status\|stop\|send\|trace\|routes`](#tci) | TCI client simulator (multi-client via `@id` / `rx=N`) plus ordered protocol and route diagnostics. |
+| **DAX / TCI** | [`daxTx take\|release\|status`](#daxtx) | Request this client's DAX TX stream selection or yield; never keys TX. |
+| | [`tci start\|status\|stop\|send\|trace\|routes`](#tci) | TCI client simulator (multi-client via `@id` / `rx=N`) plus ordered protocol and route diagnostics. |
 | **Observability** | [`log <action>`](#log) | Runtime log-category control + ring-buffer tail/subscribe. |
 | | [`mark <text>`](#mark) | Drop a sequenced timeline marker. |
 | | [`audioCapture <action>`](#audiocapture) | Bounded PCM capture for sync diagnostics. |
@@ -786,6 +788,7 @@ connects).
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
 | `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
+| `daxtx` | — (optional property) | This client's DAX TX stream identity, observed ownership, media readiness, pending operation, and live refusal reasons — see [`get daxtx`](#get-daxtx) |
 | `waveforms` | — | installed legacy/Docker waveforms, WFP state, local Digital Voice service/mode configuration and delivery metrics, raw radio `mode_list` values, duplicate counts, last maintenance response, and recent `waveform status` reports |
 
 Read-only Flex metadata is available as `get radio` → `iaruRegion` (1–3 or
@@ -3151,6 +3154,76 @@ is inside the 1.5 s removal grace window (it disappears once the removal
 lands); a channel entry that persists with holders across a consumer teardown
 proves the co-hold path.
 
+### `get daxtx`
+
+Read this client's DAX TX stream selection separately from the radio-global
+DAX input flag in `get transmit` and from TX-slice/keying authority. The
+snapshot is read-only on every backend; unsupported or disconnected sessions
+report an unavailable state and explicit guard reasons.
+
+```json
+→ {"cmd":"get","model":"daxtx"}
+← {"ok":true,"model":"daxtx","daxtx":{
+     "available":true,"streamId":"0x84000000","clientHandle":"0x12345678",
+     "txKnown":true,"uncertain":false,"owned":false,"ready":false,"pending":false,
+     "state":"released","error":"","canTake":true,"canRelease":true,
+     "takeReason":"","releaseReason":""}}
+
+→ {"cmd":"get","model":"daxtx","property":"owned"}
+← {"ok":true,"model":"daxtx","property":"owned","value":false}
+```
+
+Every field supports the same `property` narrowing, including booleans,
+identity strings and reasons. Bare lines use `get daxtx [property]`; there is
+no stream selector.
+
+| Field | Meaning |
+|---|---|
+| `available` | The current session supports DAX TX stream ownership. |
+| `streamId`, `clientHandle` | Current stream and confirmed client identity, as hex strings; zero means no confirmed identity. They are output only. |
+| `txKnown`, `owned` | Whether selection is known, and whether the latest radio observation selects this client's stream. Read `owned` only with `txKnown` and `uncertain=false`. |
+| `uncertain` | A request was interrupted or timed out without confirmation. The last observation is retained, but the applet shows **Unknown** until fresh radio status arrives. |
+| `ready` | The distinct, revocable DAX audio permission. An owned stream can still have audio blocked after a timeout or uncertain operation. This grants no keying permission. |
+| `pending` | Creation or a selection/yield request is awaiting completion. |
+| `state` | `unavailable`, `no-stream`, `creating`, `unknown`, `released`, `taking`, `owned`, `releasing`, `refused`, or `timed-out`. |
+| `error` | The latest refusal/timeout reason; it does not replace the last radio observation. |
+| `canTake`, `canRelease` | Whether each explicit operation can currently be admitted. These are live guard verdicts, not a future reservation. |
+| `takeReason`, `releaseReason` | The current reason an operation cannot be admitted, or an empty string. |
+
+### `daxTx`
+
+`daxTx take`, `daxTx release`, and `daxTx status` address only this client's
+DAX TX stream. JSON uses `{"cmd":"daxTx","action":"take"}`; `daxtx` is a
+verb alias. The typed MCP tool is `dax_tx` with the same action enum.
+
+```json
+→ {"cmd":"daxTx","action":"take"}
+← {"ok":true,"action":"take","pending":true,
+   "daxtx":{"state":"taking","txKnown":true,"owned":false,
+            "ready":false,"pending":true, …}}
+```
+
+`ok:true` means the model admitted the request, including an idempotent
+request whose desired state is already confirmed. It does **not** confirm
+radio selection. Read `pending`, `state`, `error` and the radio-observed
+`txKnown`/`owned` fields, then re-poll `get daxtx`; an accepted command reply
+alone never changes the ownership indicator. A refused request returns
+`ok:false`, its actual `error`, and the current `daxtx` snapshot.
+
+Take may create this client's stream before requesting its selection.
+Release yields only its confirmed local stream. The model refuses unsupported,
+disconnected, foreign/unknown, busy, or profile-load-held operations. Take
+also requires this client's confirmed TX slice. Only one ownership operation
+can be pending; an identical request is idempotent and a conflicting request
+is refused. No stream ID, raw command or status-injection parameter is accepted.
+
+Neither action keys the radio, changes the global DAX input flag, moves the
+TX slice, starts an audio producer, persists a selection, or resumes a failed
+transmit request. Ownership is not taken on connect, status, mode change or
+settings restore. The operator must initiate any later transmission separately.
+`status` is allowed in observe-only mode; take/release require writable bridge
+access but do not require `AETHER_AUTOMATION_ALLOW_TX` because they never key.
+
 ### `get txtimer`
 Read the status-bar transmit timer's state. The timer sits just left of the
 **PC Audio** button and runs **only** for operator-driven phone/data transmits
@@ -4869,7 +4942,7 @@ socket-free production-router tests; live firmware, visible GUI meters and
 audio devices require separate hardware validation.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 80 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 81 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4898,6 +4971,7 @@ audio devices require separate hardware validation.
 | `clickAt` | `clickat` | clickAt <x> <y> \| clickAt <target> <x> <y> — TX-guarded coordinate click |
 | `invoke` | — | invoke <target> <action> [value…] — drive a control (TX-guarded) |
 | `get` | — | get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters |
+| `daxTx` | `daxtx` | daxTx <take\|release\|status> — this client's DAX TX stream ownership; never keys TX |
 | `meterwindow` | — | meterwindow <start [duration_ms]\|status\|stop> — bounded meter ages and unrounded peaks; never keys TX |
 | `connect` | — | connect <list\|show\|hide\|local\|ip\|wait> [args] |
 | `disconnect` | — | disconnect from the radio |

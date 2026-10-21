@@ -7,6 +7,7 @@
 #include "core/TxGrantManager.h"
 #include "core/SerialPortController.h"
 #include "models/SliceModel.h"
+#include "core/backends/DaxTxStream.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/FlexPttWireSession.h"
 #include "core/backends/flex/CommandParser.h"
@@ -15,13 +16,17 @@
 #include "core/RigctlProtocol.h"
 #include "core/SmartCatProtocol.h"
 #include "core/AudioEngine.h"
+#include "core/DaxTxAudioPermit.h"
 #include "core/TciServer.h"
 #include "core/LocalVoiceKeyerStore.h"
 #include "core/VoiceKeyerSettings.h"
 #include "models/VoiceKeyer.h"
 #include "models/VoiceKeyerController.h"
 #ifdef HAVE_WEBSOCKETS
+#include "core/TciAudioHeader.h"
 #include "core/TciClient.h"
+#include "core/TciIoWorker.h"
+#include "core/TciProtocol.h"
 #endif
 
 #include <QCoreApplication>
@@ -72,6 +77,12 @@ public:
             connection->m_handle.store(handle);
         }
     }
+    static void observeTciDaxStream(RadioModel& radio, const DaxTxStreamDelta& delta)
+    {
+        // setBackendForTest omits setupBackend's DAX signal binding. Exercise
+        // its production observer directly; Flex decoding has separate tests.
+        radio.observeDaxTxStream(delta);
+    }
     static bool tciPromotion(TciServer& server, int sliceId)
     {
         bool called = false;
@@ -92,6 +103,61 @@ public:
         client.txProducer = radio.registerTxProducer(&socket);
         server.m_clients.append(std::move(client));
     }
+    static void addNativeTciClient(TciServer& server, TciClient& socket, RadioModel& radio,
+                                   bool activated = true, bool holdText = false)
+    {
+        addTciClient(server, socket, radio);
+        TciServer::ClientState* state = server.clientStateFor(&socket);
+        std::unique_ptr<TciProtocol> protocol = std::make_unique<TciProtocol>(
+            &radio, &server.m_routingState, &server.m_trxMap);
+        state->protocol = protocol.release(); // existing controller owns protocol teardown
+        QObject::connect(&socket, &TciClient::textMessageReceived,
+                         &server, &TciServer::onTextMessage);
+        TciIoWorker::Client native;
+        native.lifetime = socket.lifetime;
+        native.activated = activated;
+        native.textInFlight = holdText;
+        if (activated) { native.producer = state->txProducer; }
+        server.m_io->m_clients.insert(socket.id(), std::move(native));
+    }
+    static void nativeTciText(TciServer& server, TciClient& socket, const QString& text)
+    {
+        server.m_io->receiveText(socket.id(), text);
+    }
+    static qsizetype queuedNativeTciTexts(const TciServer& server, const TciClient& socket)
+    {
+        const auto client = server.m_io->m_clients.constFind(socket.id());
+        return client == server.m_io->m_clients.cend() ? 0
+            : static_cast<qsizetype>(client->texts.size());
+    }
+    static DaxTxAudioPermit queuedNativeTciPermit(const TciServer& server, const TciClient& socket)
+    {
+        const auto client = server.m_io->m_clients.constFind(socket.id());
+        return client != server.m_io->m_clients.cend() && !client->texts.empty()
+            ? client->texts.front().daxPermit : DaxTxAudioPermit::blocked();
+    }
+    static TxCoordinator::Request queuedNativeTciRequest(const TciServer& server, const TciClient& socket)
+    {
+        const auto client = server.m_io->m_clients.constFind(socket.id());
+        return client != server.m_io->m_clients.cend() && !client->texts.empty()
+            ? client->texts.front().input : TxCoordinator::Request{};
+    }
+    static void releaseNativeTciText(TciServer& server, TciClient& socket, bool activate)
+    {
+        if (activate) {
+            server.m_io->activate(socket.id(), server.clientStateFor(&socket)->txProducer);
+        } else {
+            server.m_io->m_clients[socket.id()].textInFlight = false;
+            server.m_io->dispatchText(socket.id());
+        }
+    }
+    static TxCoordinator::Request tciClientRequest(TciServer& server, TciClient& socket)
+    { return server.clientStateFor(&socket)->pttRequest; }
+    static TxCoordinator::Context tciMedia(const TciServer& server) { return server.m_tciTxContext; }
+    static bool tciWantsAudio(const TciServer& server) { return server.m_tciPttWantsAudio; }
+    static bool hasDeferredTciRequest(const TciServer& server) { return server.m_pendingTrxRequest.has_value(); }
+    static bool deferredTciWantsAudio(const TciServer& server)
+    { return server.m_pendingTrxRequest && server.m_pendingTrxRequest->wantsAudio; }
     static void tciRequest(TciServer& server, TciClient& socket, bool on, int receiver = 0)
     {
         server.handleTrxRequest(&socket, {receiver, on, QStringLiteral("tci")});
@@ -2635,6 +2701,300 @@ void producerTuneAndAtu()
 }
 
 #ifdef HAVE_WEBSOCKETS
+struct DaxTciFixture {
+    static constexpr quint32 kStream = 0x4a000001;
+    QStringList wire;
+    RadioConnection identity;
+    Fixture f{false};
+    TciClient client;
+    TciServer server{&f.radio};
+
+    explicit DaxTciFixture(bool selected = true, const QString& mode = QStringLiteral("DIGU"),
+                           bool activated = true, bool holdText = false)
+    {
+        f.backend->caps.hasDaxStreams = true;
+        f.backend->caps.hasMultiClientSessions = true;
+        TxOperationIntegrationTestAccess::injectTcp(f.radio, identity, wire);
+        TxOperationIntegrationTestAccess::bindTciOwnershipIdentity(f.radio, &identity);
+        f.radio.handleSliceStatusForTest(0, {
+            {QStringLiteral("in_use"), QStringLiteral("1")},
+            {QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
+        SliceDelta sliceState;
+        sliceState.inUse = true;
+        sliceState.active = true;
+        sliceState.txSlice = true;
+        sliceState.mode = mode;
+        sliceState.frequency = 14.2;
+        sliceState.panId = QStringLiteral("0x40000000");
+        if (SliceModel* slice = f.radio.slice(0)) { slice->applyChanges(sliceState); }
+        stream(selected);
+        TxOperationIntegrationTestAccess::addNativeTciClient(
+            server, client, f.radio, activated, holdText);
+        check(f.radio.slice(0) && f.radio.sliceOwnedByUs(0) && f.radio.daxTxStreamReady() == selected,
+              "TCI DAX fixture supplies confirmed local slice and synthetic stream status");
+        f.commands.clear();
+        wire.clear();
+    }
+
+    void stream(bool selected)
+    {
+        DaxTxStreamDelta delta;
+        delta.streamId = kStream;
+        delta.clientHandle = 0x12345678;
+        delta.tx = selected;
+        TxOperationIntegrationTestAccess::observeTciDaxStream(f.radio, delta);
+    }
+    void mode(const QString& value)
+    {
+        SliceDelta delta;
+        delta.mode = value;
+        if (SliceModel* slice = f.radio.slice(0)) { slice->applyChanges(delta); }
+    }
+    void txSlice(bool selected)
+    {
+        SliceDelta delta;
+        delta.txSlice = selected;
+        if (SliceModel* slice = f.radio.slice(0)) { slice->applyChanges(delta); }
+    }
+    void text(const QString& message)
+    { TxOperationIntegrationTestAccess::nativeTciText(server, client, message); }
+};
+
+void tciNativeDaxInputKeepsCapturedGrant()
+{
+    for (const bool beforeActivation : {false, true}) {
+        DaxTciFixture f(true, QStringLiteral("DIGU"), !beforeActivation, !beforeActivation);
+        const DaxTxAudioPermit original = f.f.radio.daxTxAudioPermit();
+        f.text(QStringLiteral("trx:0,true,tci;"));
+        const TxCoordinator::Request queued =
+            TxOperationIntegrationTestAccess::queuedNativeTciRequest(f.server, f.client);
+        check(TxOperationIntegrationTestAccess::queuedNativeTciTexts(f.server, f.client) == 1
+            && TxOperationIntegrationTestAccess::queuedNativeTciPermit(f.server, f.client).sameGrant(original)
+            && queued.valid() == !beforeActivation && f.f.commands.isEmpty(),
+            "native TCI enqueue pins the original grant before activation or controller delivery");
+        f.stream(false);
+        f.stream(true);
+        check(!original.permits() && f.f.radio.daxTxStreamReady()
+            && !f.f.radio.daxTxAudioPermit().sameGrant(original),
+            "synthetic loss and retake establish a distinct live grant for the same stream ID");
+        TxOperationIntegrationTestAccess::releaseNativeTciText(f.server, f.client, beforeActivation);
+        check(!f.f.commands.contains(QStringLiteral("mox:on"))
+            && !TxOperationIntegrationTestAccess::tciClientRequest(f.server, f.client).valid()
+            && f.f.radio.daxTxOwnershipSnapshot().value(QStringLiteral("canTake")).toBool(),
+            "old native or preactivation TCI input cannot borrow the replacement DAX grant");
+        f.text(QStringLiteral("trx:0,true,tci;"));
+        check(f.f.commands.contains(QStringLiteral("mox:on"))
+            && TxOperationIntegrationTestAccess::tciMedia(f.server).permitsDispatch(TxCoordinator::monotonicMs()),
+            "fresh native input after retake still keys and carries permitted DAX media");
+    }
+}
+
+void tciDeferredDaxInputCannotSurviveRetake()
+{
+    DaxTciFixture f;
+    TxOperationIntegrationTestAccess::deferTciRoute(f.server);
+    f.text(QStringLiteral("trx:0,true,tci;"));
+    const TxCoordinator::Request original =
+        TxOperationIntegrationTestAccess::tciClientRequest(f.server, f.client);
+    check(original.valid() && TxOperationIntegrationTestAccess::hasDeferredTciRequest(f.server)
+        && TxOperationIntegrationTestAccess::deferredTciWantsAudio(f.server)
+        && f.f.commands.isEmpty(), "DAX PTT retains its original input while routing is deferred");
+    f.stream(false);
+    check(!original.valid(), "DAX loss retires the original deferred request before route drainage");
+    f.stream(true);
+    TxOperationIntegrationTestAccess::drainTciRoute(f.server);
+    check(!original.valid() && !TxOperationIntegrationTestAccess::hasDeferredTciRequest(f.server)
+        && !f.f.commands.contains(QStringLiteral("mox:on")),
+        "loss and retake retire deferred DAX input before route drainage can key it");
+    f.text(QStringLiteral("trx:0,true,tci;"));
+    check(f.f.commands.contains(QStringLiteral("mox:on")),
+        "deferred-input retirement does not block a fresh explicit DAX request");
+}
+
+void tciPromotingDaxInputCannotSurviveRetake()
+{
+    DaxTciFixture f;
+    f.txSlice(false);
+    f.text(QStringLiteral("trx:0,true,tci;"));
+    const RadioControlCompletion reply = f.f.backend->selectionReplies.empty()
+        ? RadioControlCompletion{} : f.f.backend->selectionReplies.front();
+    const TxCoordinator::Request original =
+        TxOperationIntegrationTestAccess::tciClientRequest(f.server, f.client);
+    check(reply && f.f.backend->selectionReplies.size() == 1
+        && original.valid() && !f.f.commands.contains(QStringLiteral("mox:on")),
+        "DAX PTT promotion waits on an injected typed reply without keying");
+    f.stream(false);
+    check(!original.valid(), "DAX loss retires the original promoting request before its reply");
+    f.stream(true);
+    f.txSlice(true);
+    if (reply) {
+        reply({RadioControlReply::Kind::Accepted, 0, {}});
+    }
+    check(!original.valid() && !f.f.commands.contains(QStringLiteral("mox:on"))
+        && !f.server.routingSnapshot().value(QStringLiteral("routeTransitionInFlight")).toBool(),
+        "successful promotion ACK after retake cannot renew the original DAX input");
+    f.text(QStringLiteral("trx:0,true,tci;"));
+    check(f.f.commands.contains(QStringLiteral("mox:on")),
+        "fresh DAX input keys the promoted owned slice after the old callback is retired");
+}
+
+void tciDeferredAudioClassificationStaysOriginal()
+{
+    for (const bool originallyDigital : {false, true}) {
+        DaxTciFixture f(originallyDigital,
+            originallyDigital ? QStringLiteral("DIGU") : QStringLiteral("USB"));
+        TxOperationIntegrationTestAccess::deferTciRoute(f.server);
+        f.text(QStringLiteral("trx:0,true;"));
+        check(TxOperationIntegrationTestAccess::hasDeferredTciRequest(f.server)
+            && TxOperationIntegrationTestAccess::deferredTciWantsAudio(f.server) == originallyDigital,
+            "an implicit TCI audio choice is classified before the first route deferral");
+        f.mode(originallyDigital ? QStringLiteral("USB") : QStringLiteral("DIGU"));
+        TxOperationIntegrationTestAccess::drainTciRoute(f.server);
+        const TxCoordinator::Context media = TxOperationIntegrationTestAccess::tciMedia(f.server);
+        check(f.f.commands.contains(QStringLiteral("mox:on"))
+            && TxOperationIntegrationTestAccess::tciWantsAudio(f.server) == originallyDigital
+            && media.permitsDispatch(TxCoordinator::monotonicMs()),
+            "a later mode change cannot reclassify the deferred original TCI input");
+        f.stream(false);
+        check(media.permitsDispatch(TxCoordinator::monotonicMs()) == !originallyDigital,
+            "only originally digital TCI media inherits DAX revocation after a deferred mode change");
+    }
+}
+
+void tciRefusedInputCannotClassifyFreshRequest()
+{
+    for (const bool selected : {false, true}) {
+        for (const bool refusedAudio : {false, true}) {
+            DaxTciFixture f(selected, QStringLiteral("USB"));
+            f.text(refusedAudio ? QStringLiteral("trx:999,true,tci;")
+                                : QStringLiteral("trx:999,true,mic;"));
+            check(!TxOperationIntegrationTestAccess::tciClientRequest(f.server, f.client).valid()
+                && !f.f.commands.contains(QStringLiteral("mox:on")),
+                "a definitive TCI refusal retires the captured request without keying");
+            const bool freshAudio = !refusedAudio;
+            f.text(freshAudio ? QStringLiteral("trx:0,true,tci;")
+                              : QStringLiteral("trx:0,true,mic;"));
+            const bool shouldKey = !freshAudio || selected;
+            const bool keyed = f.f.commands.contains(QStringLiteral("mox:on"));
+            check(keyed == shouldKey
+                && (!keyed || TxOperationIntegrationTestAccess::tciWantsAudio(f.server) == freshAudio),
+                "a fresh TCI input uses its own source classification and DAX selection grant");
+            if (keyed) {
+                check(TxOperationIntegrationTestAccess::tciMedia(f.server)
+                        .permitsDispatch(TxCoordinator::monotonicMs()),
+                    "a fresh admitted TCI request carries its own permitted media");
+            }
+        }
+    }
+}
+
+void tciRefusedPromotionCannotClassifyFreshRequest()
+{
+    for (const bool selected : {false, true}) {
+        for (const bool refusedAudio : {false, true}) {
+            if (refusedAudio && !selected) { continue; }
+            DaxTciFixture f(selected, QStringLiteral("USB"));
+            f.txSlice(false);
+            f.text(refusedAudio ? QStringLiteral("trx:0,true,tci;")
+                                : QStringLiteral("trx:0,true,mic;"));
+            const TxCoordinator::Request original =
+                TxOperationIntegrationTestAccess::tciClientRequest(f.server, f.client);
+            const RadioControlCompletion reply = f.f.backend->selectionReplies.empty()
+                ? RadioControlCompletion{} : f.f.backend->selectionReplies.front();
+            check(reply && original.valid(), "a TCI promotion retains its input while awaiting the reply");
+            if (!reply) { continue; }
+            reply({RadioControlReply::Kind::Refused, 1, QStringLiteral("refused")});
+            check(!original.valid()
+                && !TxOperationIntegrationTestAccess::tciClientRequest(f.server, f.client).valid()
+                && !TxOperationIntegrationTestAccess::hasDeferredTciRequest(f.server)
+                && !f.f.commands.contains(QStringLiteral("mox:on")),
+                "a refused promotion retires the original TCI input without keying");
+            f.txSlice(true);
+            const bool freshAudio = !refusedAudio;
+            f.text(freshAudio ? QStringLiteral("trx:0,true,tci;")
+                              : QStringLiteral("trx:0,true,mic;"));
+            const bool keyed = f.f.commands.contains(QStringLiteral("mox:on"));
+            check(keyed == (!freshAudio || selected)
+                && (!keyed || TxOperationIntegrationTestAccess::tciWantsAudio(f.server) == freshAudio),
+                "a fresh input after a refused promotion rechecks its source and DAX grant");
+        }
+    }
+}
+
+void tciHardwareAndCwIgnoreDaxSelection()
+{
+    {
+        DaxTciFixture f(false, QStringLiteral("USB"));
+        f.text(QStringLiteral("trx:0,true,mic;"));
+        const TxCoordinator::Context media = TxOperationIntegrationTestAccess::tciMedia(f.server);
+        check(!f.f.radio.daxTxAudioPermit().permits()
+            && f.f.commands.contains(QStringLiteral("mox:on"))
+            && !TxOperationIntegrationTestAccess::tciWantsAudio(f.server)
+            && media.permitsDispatch(TxCoordinator::monotonicMs()),
+            "explicit TCI microphone PTT works while DAX selection is blocked");
+        f.stream(true);
+        f.stream(false);
+        check(media.permitsDispatch(TxCoordinator::monotonicMs())
+            && !f.f.commands.contains(QStringLiteral("mox:off")),
+            "DAX grant revocation cannot cancel an independent microphone PTT request");
+    }
+    {
+        Fixture f;
+        f.backend->caps.hasDaxStreams = true;
+        TciClient client;
+        TciServer server(&f.radio);
+        TxOperationIntegrationTestAccess::addNativeTciClient(server, client, f.radio);
+        TxOperationIntegrationTestAccess::nativeTciText(server, client, QStringLiteral("cw_macros:0,CQ;"));
+        for (int i = 0; i < 4; ++i) {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        }
+        check(!f.radio.daxTxAudioPermit().permits() && f.commands.contains(QStringLiteral("cwx:CQ"))
+            && !f.commands.contains(QStringLiteral("mox:on")),
+            "native TCI CW text reaches its existing keyer route without a DAX grant");
+    }
+}
+
+void tciHostModulationIgnoresDaxSelection()
+{
+    // Exercise the HL2 capability path with the existing injected seam;
+    // no Metis transport or HL2 DSP instance is constructed.
+    Fixture f;
+    f.backend->caps.hostModulates = true;
+    f.backend->caps.takesTxAudioOverSeam = true;
+    AudioEngine audio;
+    audio.setHostModulation(true);
+    TciClient client;
+    TciServer server(&f.radio);
+    server.setAudioEngine(&audio);
+    TxOperationIntegrationTestAccess::addNativeTciClient(server, client, f.radio);
+    TxOperationIntegrationTestAccess::wireTciBinary(server, client);
+    QObject::connect(&audio, &AudioEngine::txTransportPcmReady,
+        [&](const QByteArray& pcm, TxAudioSource source, const TxCoordinator::Context& context) {
+            if (context.beginDispatch(TxCoordinator::monotonicMs())) {
+                f.backend->submitTxAudio(pcm, 24000, source, context);
+            }
+        });
+    TxOperationIntegrationTestAccess::nativeTciText(server, client, QStringLiteral("trx:0,true,tci;"));
+    check(!f.radio.daxTxAudioPermit().permits() && f.commands.contains(QStringLiteral("mox:on"))
+        && TxOperationIntegrationTestAccess::tciWantsAudio(server)
+        && TxOperationIntegrationTestAccess::tciMedia(server).permitsDispatch(TxCoordinator::monotonicMs()),
+        "the host-modulating TCI audio path keys without a Flex DAX grant");
+    TciAudioHeader header{};
+    header.type = 2;
+    header.format = 3;
+    header.sampleRate = 48000;
+    header.channels = 1;
+    header.length = 1920;
+    QByteArray frame(reinterpret_cast<const char*>(&header), sizeof(header));
+    frame.append(QByteArray(1920 * static_cast<int>(sizeof(float)), '\0'));
+    TxOperationIntegrationTestAccess::sendTciBinary(client, frame);
+    for (int i = 0; i < 4; ++i) {
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    }
+    check(TxOperationIntegrationTestAccess::tciAudioBlocks(server) > 0 && f.backend->txAudioFrames > 0,
+        "TCI worker PCM reaches host modulation and the injected audio seam despite blocked DAX selection");
+}
+
 void tciProducerLifetimes()
 {
     // Drive the production server handler with disconnected WebSocket
@@ -2911,6 +3271,14 @@ int main(int argc, char** argv)
     cwQueueDoesNotOwnManualPtt();
     protocolCwxLifetimes();
 #ifdef HAVE_WEBSOCKETS
+    tciNativeDaxInputKeepsCapturedGrant();
+    tciDeferredDaxInputCannotSurviveRetake();
+    tciPromotingDaxInputCannotSurviveRetake();
+    tciDeferredAudioClassificationStaysOriginal();
+    tciRefusedInputCannotClassifyFreshRequest();
+    tciRefusedPromotionCannotClassifyFreshRequest();
+    tciHardwareAndCwIgnoreDaxSelection();
+    tciHostModulationIgnoresDaxSelection();
     tciProducerLifetimes();
     tciPermissionRequiresConfirmedOwnership();
     tciPromotionRechecksPermissionAfterReply();

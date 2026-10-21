@@ -949,6 +949,7 @@
     },
     {
       "id": "dax-applet",
+      "device_pixel_ratio": 1.0,
       "page": "dax-virtual-audio",
       "anchor_heading": "The DAX Audio applet",
       "settle": 1.5,
@@ -988,8 +989,8 @@
           "optional": true
         }
       ],
-      "caption": "The DAX Audio applet on Linux: one level bar per DAX channel and the button that starts DAX.",
-      "alt": "DAX Audio applet. Level bars for DAX 1, assigned to Slice A, DAX 2 to DAX 4, unassigned, and TX, assigned to Slice A, above a DAX row with a Disabled button."
+      "caption": "The DAX Audio applet with the local audio bridge enabled and AetherSDR’s TX stream selected.",
+      "alt": "DAX Audio applet. Receive level and gain bars for DAX 1, assigned to Slice A, and DAX 2 through DAX 8, unassigned. The TX row is assigned to Slice A. DAX is Enabled and the single TX stream toggle is Selected."
     },
     {
       "id": "dax-iq-applet",

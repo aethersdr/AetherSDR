@@ -22,6 +22,7 @@
 #include <QVariantMap>
 
 #include "core/backends/AmpDelta.h"
+#include "core/backends/DaxTxStream.h"
 #include "core/backends/GpsDelta.h"
 #include "core/backends/MemoryDelta.h"
 #include "core/backends/MeterDef.h"
@@ -152,6 +153,11 @@ public:
     }
     virtual ReceiveDispatch requestTransmitControl(const TransmitControlRequest&,
                                                     TunePowerContext = TunePowerContext::Deferred)
+    { return ReceiveDispatch::Unsupported; }
+    // Requests selection of our audio stream, never a global source or PTT edit.
+    // A dispatched command's acceptance does not confirm the observed TX bit.
+    virtual ReceiveDispatch requestDaxTxOwnership(const DaxTxOwnershipRequest&,
+                                                 DaxTxOwnershipCompletion = {})
     { return ReceiveDispatch::Unsupported; }
     // Radio-owned identity; client-owned nicknames retain their local store.
     using NicknameCompletion = std::function<void(bool accepted)>;
@@ -1125,6 +1131,7 @@ signals:
     // fields the wire reported (across the transmit / interlock / ATU / APD /
     // APD-sampler status planes) and RadioModel drives the TransmitModel.
     void transmitChanged(const TransmitDelta& delta);
+    void daxTxStreamChanged(const AetherSDR::DaxTxStreamDelta& delta);
     // An explicit radio readback confirmed the keyed state. This is distinct
     // from transmitChanged because optimistic state may already equal the
     // answer and therefore produce no delta. Backends without a separate
