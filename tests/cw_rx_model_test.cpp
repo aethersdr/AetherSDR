@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 #include <iostream>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QElapsedTimer>
 #include <QThread>
@@ -60,19 +61,18 @@ QVector<float> letterV(PcmFormat format)
     return samples;
 }
 
-bool retainLockedEstimates()
+bool establishEstimates(CwRxModel& decoder, PcmProducer& producer)
 {
-    CwRxModel decoder;
     QString decoded;
-    QObject::connect(&decoder, &CwRxModel::textDecoded, &decoder,
-                     [&](const QString& text, float) { decoded += text; });
+    const auto collect = QObject::connect(&decoder, &CwRxModel::textDecoded, &decoder,
+                                          [&](const QString& text, float) { decoded += text; });
+    const auto release = qScopeGuard([collect] { QObject::disconnect(collect); });
     decoder.setPitchRange(550, 650);
     decoder.setSpeedRange(18, 22);
     decoder.start();
     // Exercise fixed24 receive ingress with the original source lease.
     // Backend switches below use the inert stub; no model is downloaded.
     const PcmFormat format{24000, PcmLayout::Stereo};
-    PcmProducer producer;
     DecoderPcmAdapter adapter;
     adapter.selectRoute(DecoderPcmAdapter::RouteLane::NativeSlice, 11);
     if (!require(producer.start(PcmPurpose::Slice, 11, format),
@@ -88,10 +88,17 @@ bool retainLockedEstimates()
         pump(10);
     }
     pump(300);
-    if (!require(decoded.count('V') >= 3, "Real fixed24 worker did not decode Morse V")
-        || !require(decoder.estimatedPitch() > 550 && decoder.estimatedPitch() < 650
-                        && decoder.estimatedSpeed() > 0,
-                    "Worker did not establish positive pitch and speed")) { return false; }
+    return require(decoded.count('V') >= 3, "Real fixed24 worker did not decode Morse V")
+        && require(decoder.estimatedPitch() > 550 && decoder.estimatedPitch() < 650
+                       && decoder.estimatedSpeed() > 0,
+                   "Worker did not establish positive pitch and speed");
+}
+
+bool retainLockedEstimates()
+{
+    CwRxModel decoder;
+    PcmProducer producer;  // the lease must stay current while locking
+    if (!establishEstimates(decoder, producer)) { return false; }
     decoder.lockPitch(true);
     decoder.lockSpeed(true);
     const float pitch = decoder.estimatedPitch();
@@ -156,6 +163,36 @@ bool savedRangesStayInsideTheSliders()
                               "Saving a range lost it or another CW decoder setting");
     store(R"({"rx":"True","tx":"False"})");
     return kept;
+}
+
+bool unlockAfterStopClearsReadout()
+{
+    // The CW panel shows the last statsUpdated. A stopped decoder keeps its
+    // locked values on screen; unlocking them must publish the cleared
+    // estimate, or a dead reading stays up (#5745).
+    float shownPitch = -1;  // declared before the decoder so they outlive it
+    float shownSpeed = -1;
+    CwRxModel decoder;
+    PcmProducer producer;  // the lease must stay current while locking
+    if (!establishEstimates(decoder, producer)) { return false; }
+    decoder.lockPitch(true);
+    decoder.lockSpeed(true);
+    decoder.stop();
+    QObject::connect(&decoder, &CwRxModel::statsUpdated, &decoder,
+                     [&](float pitch, float speed) { shownPitch = pitch; shownSpeed = speed; });
+    pump(20);
+    if (!require(shownPitch > 550 && shownSpeed > 0, "Stopped decoder did not show its locked values")) {
+        return false;
+    }
+    decoder.lockPitch(false);
+    pump(20);
+    if (!require(shownPitch == 0 && shownSpeed > 0, "Unlocking pitch on a stopped decoder left it on screen")) {
+        return false;
+    }
+    decoder.lockSpeed(false);
+    pump(20);
+    return require(shownPitch == 0 && shownSpeed == 0,
+                   "Unlocking speed on a stopped decoder left it on screen");
 }
 } // namespace
 
@@ -249,5 +286,6 @@ int main(int argc, char** argv)
     QCoreApplication::processEvents();
     if (!require(posts == settled + 1,
                  "Stale queued statusChanged survived the backend switch")) { return 1; }
-    return require(!decoder.isRunning(), "Stopped decoder restarted") && retainLockedEstimates() ? 0 : 1;
+    return require(!decoder.isRunning(), "Stopped decoder restarted") && retainLockedEstimates()
+        && unlockAfterStopClearsReadout() ? 0 : 1;
 }
