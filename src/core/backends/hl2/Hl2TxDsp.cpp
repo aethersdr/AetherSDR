@@ -559,6 +559,7 @@ void Hl2TxDsp::reset()
     m_inBuffer.clear();
     m_filterInPeak = m_filterOutPeak = 0.0f;
     m_filterWindowSamples = 0;
+    m_filterWindowFaultMark = modulatorFaultBlocks();
     // Re-arm the mid-buffer source-change warning for the next transmission.
     m_sourceChangeWarned = false;
     // The modulator's own state, per build. In the phasing build this is the
@@ -695,10 +696,17 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     m_filterWindowSamples += consumed;
     if (m_filterWindowSamples
         >= static_cast<std::size_t>(m_config.inputSampleRateHz / 10)) {
-        const auto db = [](float v) { return v > 0.0f ? 20.0f * std::log10(v) : -140.0f; };
-        emit filterLevels(db(m_filterInPeak), db(m_filterOutPeak));
+        // A window with a dropped block has audio in and no IQ out for it: a
+        // stalled or underrunning worker, not a filter. Publish nothing then,
+        // so the card cannot name the passband for a loss it did not measure.
+        const unsigned long long faults = modulatorFaultBlocks();
+        if (faults == m_filterWindowFaultMark) {
+            const auto db = [](float v) { return v > 0.0f ? 20.0f * std::log10(v) : -140.0f; };
+            emit filterLevels(db(m_filterInPeak), db(m_filterOutPeak));
+        }
         m_filterInPeak = m_filterOutPeak = 0.0f;
         m_filterWindowSamples = 0;
+        m_filterWindowFaultMark = faults;
     }
 }
 
