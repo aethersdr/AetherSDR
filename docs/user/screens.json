@@ -990,7 +990,7 @@
         }
       ],
       "caption": "The DAX Audio applet with the local audio bridge enabled and AetherSDR’s TX stream selected.",
-      "alt": "DAX Audio applet. Receive level and gain bars for DAX 1, assigned to Slice B, and DAX 2 through DAX 8, unassigned. The TX row is assigned to Slice B. Audio bridge is Enabled and the single TX stream toggle is Selected."
+      "alt": "DAX Audio applet. Receive level and gain bars for DAX 1, assigned to Slice A, and DAX 2 through DAX 8, unassigned. The TX row is assigned to Slice A. DAX is Enabled and the single TX stream toggle is Selected."
     },
     {
       "id": "dax-iq-applet",

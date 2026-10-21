@@ -173,7 +173,7 @@ void DaxApplet::buildBridgeUI(QVBoxLayout* outer)
 {
     auto* row = new QHBoxLayout;
     row->setContentsMargins(4, 2, 4, 2);
-    auto* label = new QLabel(tr("Audio bridge:"), this);
+    auto* label = new QLabel(tr("DAX:"), this);
     label->setObjectName(QStringLiteral("daxBridgeLabel"));
     ThemeManager::instance().applyStyleSheet(label,
         QStringLiteral("QLabel { color: {{color.canon.muted}}; font-size: 11px; }"));
@@ -181,7 +181,7 @@ void DaxApplet::buildBridgeUI(QVBoxLayout* outer)
     row->addStretch();
     m_daxEnable = new QPushButton(this);
     m_daxEnable->setObjectName(QStringLiteral("daxEnable"));
-    m_daxEnable->setAccessibleName(tr("Audio bridge"));
+    m_daxEnable->setAccessibleName(tr("DAX"));
     m_daxEnable->setCheckable(true);
     m_daxEnable->setFixedSize(96, 22);
     ThemeManager::instance().applyStyleSheet(m_daxEnable, QStringLiteral(
