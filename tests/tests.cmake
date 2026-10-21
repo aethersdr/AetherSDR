@@ -7724,6 +7724,7 @@ set_tests_properties(stored_control_routing_test PROPERTIES TIMEOUT 45)
 add_executable(stored_control_dialogs_test
     tests/stored_control_dialogs_test.cpp
     src/gui/ProfileManagerDialog.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/MemoryDialog.cpp
     src/gui/MemoryCommands.cpp
     src/gui/PersistentDialog.cpp

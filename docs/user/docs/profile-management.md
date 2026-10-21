@@ -62,10 +62,10 @@ On each profile tab:
 - **Save** (Global tab): save the current state to the selected profile, or to a new one using the name field
 - **Create** (Transmit and Microphone tabs): create a new profile. The radio cannot overwrite an existing TX or Mic profile directly; changes to the active one are captured by Auto-Save. If you try to create a name that already exists, AetherSDR tells you so and, if Auto-Save is off, offers **Enable Auto-Save**.
 - **Create** (CW tab): create a new CW profile. A name that already exists is refused with a status line.
-- **Reset** (CW tab): ask the radio to reset the selected CW profile, after confirmation
+- **Reset** (CW tab): after confirmation, return the selected CW profile to the radio's built-in CW values. It does not copy the settings of the `Default` profile.
 - **Delete**: remove the selected profile, after confirmation
 
-When the radio reports edits to the active CW profile that are not saved yet, the CW tab shows **The active CW profile has unsaved changes.**
+When the radio reports edits to the active CW profile that are not saved yet, the CW tab shows **The active CW profile has unsaved changes.** The line clears when the profile is saved, or when the changed settings are put back to their saved values.
 
 A status line reports what the radio did: `Saving "<name>"…`, `Saved profile "<name>".`, "Radio refused save of …", "Not connected — cannot save …", or "No response from the radio …". A blank name field never overwrites the highlighted profile.
 

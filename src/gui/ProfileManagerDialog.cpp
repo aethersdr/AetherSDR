@@ -203,7 +203,8 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
     if (!isGlobal) {
         auto* note = new QLabel(isCw
             ? QStringLiteral("Create makes a new CW profile; it does not overwrite an\n"
-                             "existing one. Reset asks the radio to reset the selected profile.")
+                             "existing one. Reset returns the selected profile to the radio's\n"
+                             "built-in CW values, not to the settings of the Default profile.")
             : QStringLiteral("Updates to existing profiles save automatically — enable\n"
                              "Auto-Save (Auto-Save tab) so changes follow the active profile.\n"
                              "Create makes a new profile; it does not overwrite an existing one."));
@@ -492,6 +493,8 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
             box.setIcon(QMessageBox::Question);
             box.setWindowTitle("Reset CW Profile");
             box.setText(QString("Reset CW profile \"%1\"?").arg(name));
+            box.setInformativeText("Its settings return to the radio's built-in CW values. "
+                                   "The Default profile is not copied.");
             box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
             const int reply = box.exec();
             if (!self || !modelGuard || self->m_model != modelGuard.data() || !boxOwner
