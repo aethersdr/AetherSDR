@@ -740,6 +740,13 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
                           anan::AnanSettings::bypassAdc1Filters());
         req.params.insert(QStringLiteral("anan.speakerAudioEnabled"),
                           anan::AnanSettings::speakerAudioEnabled());
+        // Live once connected (the "anan"/"frontend.set" verb), and seeded here
+        // so the session's first High Priority packet already carries them: a
+        // muted speaker amplifier would otherwise speak for one keepalive.
+        req.params.insert(QStringLiteral("anan.bandFiltersEnabled"),
+                          anan::AnanSettings::bandFiltersEnabled());
+        req.params.insert(QStringLiteral("anan.speakerAmpMuted"),
+                          anan::AnanSettings::speakerAmpMuted());
         return;
     }
 
