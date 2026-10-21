@@ -378,9 +378,12 @@ jobs:
                 } else {
                   const here = process.env.FAILED || '';
                   const there = await failedAt(p7);
-                  // A list capped at 25 names hides tests, so no set
-                  // difference against it is trustworthy.
-                  if (there === null || /more$/.test(here) || /more$/.test(there)) {
+                  // A set difference needs two complete test lists: not a
+                  // missing entry, not a build failure ("none (the … step
+                  // failed)") or "unknown", and not a list capped at 25 names.
+                  const listed = s => s !== null && !/^(none|unknown)\b/.test(s) &&
+                    !/more$/.test(s) && testNames(s).size > 0;
+                  if (!listed(here) || !listed(there)) {
                     parentVerdict = `red at ${at}. Tests that failed there too started earlier; ` +
                       'a test failing here but not there starts at this commit';
                   } else {
