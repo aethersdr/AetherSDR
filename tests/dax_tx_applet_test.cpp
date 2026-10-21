@@ -1,6 +1,7 @@
 // Socket-free UI/bridge checks: production models and dispatcher, no radio,
 // listener, audio device or peer. Model ownership/ACK lifecycle tests are separate.
 #include "TestSettingsProfile.h"
+#include "TestEventLoop.h"
 #include "core/AudioEngine.h"
 #include "core/AppSettings.h"
 #include "core/backends/flex/FlexBackend.h"
@@ -230,8 +231,9 @@ void selectionOrdering(bool statusFirst)
         {QStringLiteral("cmd"), QStringLiteral("invoke")},
         {QStringLiteral("target"), QStringLiteral("daxTxToggle")},
         {QStringLiteral("action"), statusFirst ? QStringLiteral("toggle") : QStringLiteral("click")}});
-    QApplication::processEvents();
     check(invoked.value("ok").toBool(), "production automation click/toggle can request selection with TX automation off");
+    check(AetherTest::waitFor([&f] { return !f.writes.empty() && !f.toggle->isEnabled(); }, 2000),
+        "deferred automation selection reaches its pending state before the deadline");
     check(f.writes.size() == 1 && f.writes.front().command == QLatin1String("stream set 0x4a000001 tx=1")
         && !f.toggle->isChecked() && !f.toggle->isEnabled() && f.toggle->text() == QStringLiteral("Selecting…"),
         "one select click requests only our stream and never optimistically checks the toggle");
@@ -259,6 +261,8 @@ void selectionOrdering(bool statusFirst)
     } else {
         f.toggle->click();
     }
+    check(AetherTest::waitFor([&f] { return f.writes.size() >= 2 && !f.toggle->isEnabled(); }, 2000),
+        "deferred automation deselection reaches its pending state before the deadline");
     check(f.writes.size() == 2 && f.writes.back().command == QLatin1String("stream set 0x4a000001 tx=0")
         && f.toggle->text() == QStringLiteral("Deselecting…") && !f.toggle->isEnabled(),
         "deselect dispatches only one release without stopping the bridge");
