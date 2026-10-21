@@ -2816,18 +2816,19 @@ void tciPromotingDaxInputCannotSurviveRetake()
     DaxTciFixture f;
     f.txSlice(false);
     f.text(QStringLiteral("trx:0,true,tci;"));
-    const quint32 sequence = TxOperationIntegrationTestAccess::firstPendingReplySequence(f.f.radio);
+    const RadioControlCompletion reply = f.f.backend->selectionReplies.empty()
+        ? RadioControlCompletion{} : f.f.backend->selectionReplies.front();
     const TxCoordinator::Request original =
         TxOperationIntegrationTestAccess::tciClientRequest(f.server, f.client);
-    check(sequence != 0 && TxOperationIntegrationTestAccess::pendingReplyCount(f.f.radio) == 1
+    check(reply && f.f.backend->selectionReplies.size() == 1
         && original.valid() && !f.f.commands.contains(QStringLiteral("mox:on")),
-        "DAX PTT promotion waits on an injected reply without keying");
+        "DAX PTT promotion waits on an injected typed reply without keying");
     f.stream(false);
     check(!original.valid(), "DAX loss retires the original promoting request before its reply");
     f.stream(true);
     f.txSlice(true);
-    if (sequence != 0) {
-        TxOperationIntegrationTestAccess::completePromotionReply(f.f.radio, sequence);
+    if (reply) {
+        reply({RadioControlReply::Kind::Accepted, 0, {}});
     }
     check(!original.valid() && !f.f.commands.contains(QStringLiteral("mox:on"))
         && !f.server.routingSnapshot().value(QStringLiteral("routeTransitionInFlight")).toBool(),
