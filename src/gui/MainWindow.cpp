@@ -1657,9 +1657,10 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel.transmitModel(), &TransmitModel::phoneStateChanged,
             this, [this]() { refreshCwDecodeState(); });
 
-    // The receive decoder's pitch range follows the CW pitch. A radio report is
-    // judged by CwDecodeSettings::pitchRangeForReport; any other pitch change
-    // re-centres. The pitch itself is only read here, never stored or sent.
+    // The receive decoder's pitch range follows the CW pitch. A reported pitch
+    // (radio status, or a host-DSP backend's restored state) is judged by
+    // CwDecodeSettings::pitchRangeForReport; any other pitch change re-centres.
+    // The pitch itself is only read here, never stored or sent.
     const auto applyCwPitchRange = [this](CwDecodeSettings::Range range) {
         CwDecodeSettings::setPitchRange(range.low, range.high);
         if (m_cwDecoderApplet) {
@@ -1675,7 +1676,7 @@ MainWindow::MainWindow(QWidget* parent)
             applyCwPitchRange(*range);
         }
     });
-    // A radio report reaches cwPitchReported first, so its own change arrives
+    // A reported pitch reaches cwPitchReported first, so its own change arrives
     // here already followed and is skipped.
     connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchChanged,
             this, [this, applyCwPitchRange](int hz) {
