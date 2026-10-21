@@ -331,8 +331,9 @@ int main(int argc, char** argv)
                   && !radio.transmitModel().showTxInWaterfall(),
               "txwaterfall off: the model reads false");
     }
-    // Flex, and the demo simulator, which declares no owner: the verb sends the
-    // wire text and answers as it does on a Flex. Nothing echoes on the demo.
+    // Flex with no live session, and the demo simulator, which declares no
+    // setup control: nothing is dispatched, so the verb refuses and the model
+    // carries the drop notice.
     for (const QString& family : {QStringLiteral("flex"), QStringLiteral("sim")}) {
         const QByteArray tag = family.toLatin1();
         const auto named = [&tag](const char* what) -> QByteArray {
@@ -340,16 +341,20 @@ int main(int argc, char** argv)
         };
         RadioModel radio;
         check(radio.rebuildBackendForTest(family), named("fixture: backend built").constData());
+        QStringList dropped;
+        QObject::connect(&radio, &RadioModel::commandDropped, &radio,
+                         [&dropped](const QString& operation) { dropped << operation; });
         AutomationServer bridge;
         bridge.setRadioModel(&radio);
         const QJsonObject on = AutomationServerTestAccess::request(bridge, "txwaterfall on");
-        check(on.value(QStringLiteral("ok")).toBool(), named("accepted").constData());
-        check(on.value(QStringLiteral("note")).toString()
-                  == QStringLiteral("radio echoes status; re-read with get transmit "
-                                    "showTxInWaterfall"),
-              named("the note is the radio-echo one").constData());
+        check(!on.value(QStringLiteral("ok")).toBool(), named("refused").constData());
+        check(on.value(QStringLiteral("error")).toString()
+                  == QStringLiteral("TX waterfall setting not dispatched"),
+              named("the error says nothing was dispatched").constData());
+        check(dropped == QStringList{QStringLiteral("transmit set show_tx_in_waterfall=1")},
+              named("the model announces the drop").constData());
         check(!radio.transmitModel().showTxInWaterfall(),
-              named("the model waits for the radio").constData());
+              named("the model is unchanged").constData());
     }
 
     // 5. The store's own boundary.

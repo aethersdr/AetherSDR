@@ -79,6 +79,8 @@ void lineoutRouting()
 {
     Fixture f;
     f.backend->caps.lineoutControl = RadioCapabilities::LineoutControl{};
+    f.backend->caps.radioSetupControl = RadioSetupControl{
+        {RadioSetupField::LineoutGain, RadioSetupField::LineoutMute}};
     f.radio.setLineoutMute(true);
     f.radio.setLineoutMute(false);
     f.radio.setLineoutGain(30);

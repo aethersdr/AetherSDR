@@ -56,6 +56,29 @@ RadioSetupCompletion RadioModel::fencedSetupCompletion(
     return reply;
 }
 
+namespace {
+QString setupOperationLabel(const RadioSetupRequest& request)
+{
+    using Field = RadioSetupRequest::Field;
+    switch (request.field) {
+    case Field::LineoutGain:
+        return QStringLiteral("mixer lineout gain %1").arg(std::get<int>(request.value));
+    case Field::LineoutMute:
+        return QStringLiteral("mixer lineout mute %1").arg(int(std::get<bool>(request.value)));
+    case Field::HeadphoneGain:
+        return QStringLiteral("mixer headphone gain %1").arg(std::get<int>(request.value));
+    case Field::HeadphoneMute:
+        return QStringLiteral("mixer headphone mute %1").arg(int(std::get<bool>(request.value)));
+    case Field::FrontSpeakerMute:
+        return QStringLiteral("mixer front_speaker mute %1").arg(int(std::get<bool>(request.value)));
+    case Field::ShowTxInWaterfall:
+        return QStringLiteral("transmit set show_tx_in_waterfall=%1").arg(int(std::get<bool>(request.value)));
+    default:
+        return QStringLiteral("radio setup");
+    }
+}
+}
+
 ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
                                              QObject* replyContext,
                                              const RadioSetupCompletion& completion)
@@ -90,7 +113,7 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
     };
     const auto refuse = [&](bool announce = true) {
         if (reply) { reply({RadioSetupReply::Kind::Refused, -1, QStringLiteral("configuration not dispatched")}); }
-        if (alive && announce) { reportReceiveDispatch(ReceiveDispatch::Unsupported, QStringLiteral("radio setup")); }
+        if (alive && announce) { reportReceiveDispatch(ReceiveDispatch::Unsupported, setupOperationLabel(request)); }
         return ReceiveDispatch::Unsupported;
     };
     if (!request.valid()) { return refuse(false); }
