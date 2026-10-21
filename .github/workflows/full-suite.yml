@@ -254,7 +254,7 @@ jobs:
           # report is close enough to the limit that the create call would 422
           # and the worst possible failure would be the one that opens no
           # issue. The full list is in the report body and the artifact.
-          allfailed=$(sed -n '/^The following tests FAILED:/,$p' full-suite.log | grep -oE '[A-Za-z0-9_.-]+ \((Failed|Timeout|Subprocess aborted|Not Run|SEGFAULT|Child aborted)[^)]*\)' | sort)
+          allfailed=$(sed -n '/^The following tests FAILED:/,$p' full-suite.log | grep -oE '[0-9]+ - [A-Za-z0-9_.-]+ \([^)]+\)' | sed 's/^[0-9]* - //' | sort)
           count=$(printf '%s' "$allfailed" | grep -c . )
           failed=$(printf '%s' "$allfailed" | head -n 25 | tr '\n' ' ')
           if [ "${count:-0}" -gt 25 ]; then
@@ -341,9 +341,14 @@ jobs:
             }
             // A red parent only clears this commit for the tests that were
             // already failing there, so compare the failed sets. The parent's
-            // set comes from the issue body or comment this step filed for it.
+            // set comes from the issue entry this step filed for the parent
+            // run the verdict links, matched by run id: a commit can have
+            // several runs with different failures. More than one distinct
+            // list for that run (a re-run attempt) is ambiguous, so none.
             const testNames = s => new Set([...(s || '').matchAll(/([A-Za-z0-9_.-]+) \(/g)].map(m => m[1]));
-            const failedAt = async (p7) => {
+            const failedAt = async (runId) => {
+              const run = new RegExp(`^\\*\\*Run:\\*\\* \\S*/actions/runs/${runId}$`, 'm');
+              const lists = new Set();
               const issues = await github.rest.issues.listForRepo({
                 ...repo, labels: 'full-suite', state: 'all', sort: 'updated', per_page: 20,
               });
@@ -352,12 +357,12 @@ jobs:
                   ...repo, issue_number: issue.number, per_page: 100,
                 });
                 for (const text of [issue.body || '', ...comments.map(c => c.body || '')]) {
-                  if (!text.includes(`**Commit:** \`${p7}\``)) continue;
+                  if (!run.test(text)) continue;
                   const m = text.match(/^\*\*Failed:\*\* (.*)$/m);
-                  if (m) return m[1];
+                  if (m) lists.add(m[1]);
                 }
               }
-              return null;
+              return lists.size === 1 ? [...lists][0] : null;
             };
             let parentVerdict = 'unknown';
             try {
@@ -377,7 +382,7 @@ jobs:
                   parentVerdict = `green at ${at} — this commit is the first red one`;
                 } else {
                   const here = process.env.FAILED || '';
-                  const there = await failedAt(p7);
+                  const there = await failedAt(done.id);
                   // A set difference needs two complete test lists: not a
                   // missing entry, not a build failure ("none (the … step
                   // failed)") or "unknown", and not a list capped at 25 names.
@@ -392,7 +397,7 @@ jobs:
                     parentVerdict = added.length
                       ? `red at ${at}, but ${added.map(t => `\`${t}\``).join(', ')} ` +
                         'failed here and not there: those start at this commit'
-                      : `red at ${at} with the same failures — look earlier`;
+                      : `red at ${at}, and nothing fails here that passed there — look earlier`;
                   }
                 }
               }
