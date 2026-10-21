@@ -336,6 +336,8 @@ private slots:
     void compactLayoutFitsDock_data()
     {
         QTest::addColumn<QString>("fontFamily");
+        // DejaVu Sans is the row that needs the compact preset padding (#6641);
+        // a host without it runs only rows that already fit.
         QTest::newRow("system") << QString();
         const QStringList families = QFontDatabase::families();
         for (const QString& family : {QStringLiteral("DejaVu Sans"),
@@ -369,7 +371,10 @@ private slots:
         for (QWidget* widget : fixture.rx.findChildren<QWidget*>()) {
             if (widget->isVisibleTo(&fixture.rx) && !widget->isWindow()) {
                 const QRect bounds(widget->mapTo(&fixture.rx, QPoint()), widget->size());
-                QVERIFY2(fixture.rx.rect().contains(bounds), qPrintable(widget->accessibleName()));
+                QVERIFY2(fixture.rx.rect().contains(bounds),
+                    qPrintable(widget->accessibleName().isEmpty()
+                        ? QString::fromLatin1(widget->metaObject()->className())
+                        : widget->accessibleName()));
             }
         }
 
