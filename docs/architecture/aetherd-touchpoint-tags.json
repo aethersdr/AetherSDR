@@ -1,4 +1,16 @@
 {
+ "core/backends/CwTextRequest.h": {
+  "tag": "universal",
+  "note": "Typed desktop buffered-keyer intents, capability fields and normalized queue replies. Plain text and original caller identity; no vendor command grammar or daemon TX permission.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/flex/FlexCwxControls.h": {
+  "tag": "vendor(flex)",
+  "note": "FlexLib-authoritative CWX command encoding and bounded queue-reply decoding. Only backend implementations and socket-free wire fixtures consume it.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/DxSpotLineParser.h": {
   "tag": "universal",
   "note": "Parses DX-cluster `DX de` lines (DXSpider/AR/CC/RBN/GoCluster) into DxSpot, including the GoCluster fixed-column tail and SNR report, and replays saved spot logs with per-session provenance. Pure line-to-value logic; no vendor radio ties.",
@@ -955,7 +967,7 @@
  },
  "models/CwxModel.h": {
   "tag": "universal",
-  "note": "CW keyer intent: WPM/delay/QSK, 12 macros, send/erase, sent-index progress. Generic despite Flex 'CWX' name.",
+  "note": "Plain-text CW keyer intent: typed WPM/delay/QSK, macro and send/erase requests, batch cancellation and bounded speed-echo bookkeeping. Command encoding and queue-reply decoding live below the seam; legacy CWX status parsing remains.",
   "split": "",
   "confidence": "high"
  },

@@ -2,6 +2,7 @@
 // used; no radio, peer, listener, discovery or transmitter is opened.
 #include "TestSettingsProfile.h"
 #include "TxTestAuthority.h"
+#include "CwxControlTestFixture.h"
 #include "models/RadioModel.h"
 #include "models/TxController.h"
 #include "core/TxGrantManager.h"
@@ -166,6 +167,14 @@ public:
             radio.sendTxKeyingCommand(command, fence);
         });
     }
+    static void bindCwxEncoder(RadioModel& radio, FlexBackend& encoder)
+    {
+        encoder.setCwxCommandSink([&radio](const QString& wire, const TxCoordinator::Command& command,
+                                          const RadioControlFence& current, FlexBackend::CommandReply reply) {
+            return radio.sendTxTcpCommand(wire, command.operation, command.keying,
+                [completion = command.completion] { completion.finish(); }, std::move(reply), current);
+        });
+    }
     static void injectTcp(RadioModel& radio, RadioConnection& connection, QStringList& commands)
     {
         connection.m_commandSinkForTest = [&commands](quint32, const QString& command) { commands << command; };
@@ -266,6 +275,8 @@ void check(bool condition, const char* message)
 
 class RecordingBackend final : public IRadioBackend {
 public:
+    RadioModel* radio{nullptr};
+    std::unique_ptr<FlexBackend> cwxEncoder;
     RadioCapabilities caps;
     bool connected{false};
     QString cwRejection;
@@ -295,7 +306,28 @@ public:
     TxCoordinator::Context capturedTransmitContext() const { return transmitContext(); }
     void submitTxAudio(const QByteArray&, int, TxAudioSource,
                        const TxCoordinator::Context&) override { ++txAudioFrames; }
-    RadioCapabilities capabilities() const override { return caps; }
+    RadioCapabilities capabilities() const override
+    {
+        RadioCapabilities result = caps;
+        if (radio && TxOperationIntegrationTestAccess::connection(*radio) && caps.hasRadioSideCwKeyer) {
+            using Field = CwTextRequest::Field;
+            result.cwTextControl = CwTextControl{{Field::Send, Field::SendMacro, Field::SaveMacro,
+                Field::Speed, Field::Delay, Field::Qsk, Field::Erase, Field::Clear},
+                CwTextControl::Completion::RadioCharacterIndex};
+        }
+        return result;
+    }
+    ReceiveDispatch requestCwTextControl(const CwTextRequest& request,
+        const TxCoordinator::Command& command, const RadioControlFence& current,
+        const CwTextCompletion& completion) override
+    {
+        if (!radio || !TxOperationIntegrationTestAccess::connection(*radio)) { return ReceiveDispatch::Unsupported; }
+        if (!cwxEncoder) {
+            cwxEncoder = std::make_unique<FlexBackend>();
+            TxOperationIntegrationTestAccess::bindCwxEncoder(*radio, *cwxEncoder);
+        }
+        return cwxEncoder->requestCwTextControl(request, command, current, completion);
+    }
     IndependentTxControl independentTxControl() const override { return {1}; }
     bool independentTxReady() const override { return connected; }
     void stopIndependentTx(const TxCoordinator::Operation& operation,
@@ -361,6 +393,7 @@ struct Fixture {
         auto owned = std::make_unique<RecordingBackend>(commands);
         backend = owned.get();
         radio.setBackendForTest(std::move(owned), QStringLiteral("test"));
+        backend->radio = &radio;
         if (installSlice) {
             installTxSlice();
         }
@@ -790,7 +823,7 @@ void cwxCallbackLifetimes()
                 return CwxModel::TransmissionPermit([] { return true; });
             });
         } else if (stage == 1 || stage == 3) {
-            QObject::connect(model.get(), &CwxModel::commandReady, [&] { model.reset(); });
+            QObject::connect(model.get(), &CwxModel::controlRequested, [&] { model.reset(); });
         } else {
             model->setTextSender([&](const QString&, int) { model.reset(); return true; });
         }
@@ -1537,8 +1570,8 @@ void cwxCancellationFence()
     CwxModel cwx;
     int sends = 0;
     bool cleared = false;
-    QObject::connect(&cwx, &CwxModel::commandReady, &cwx, [&](const QString& command) {
-        if (!cleared && command.startsWith("cwx send")) {
+    QObject::connect(&cwx, &CwxModel::controlRequested, &cwx, [&](const CwTextRequest& request) {
+        if (!cleared && request.field == CwTextRequest::Field::Send) {
             cleared = true;
             cwx.clearBuffer();
         }
@@ -1684,22 +1717,22 @@ void cwxFailureAndSpeedRestore()
         int cancelled = 0;
         QObject::connect(&cwx, &CwxModel::transmissionCancelled, &cwx, [&] { ++cancelled; });
         const int epoch = cwx.drainEpoch();
-        cwx.handleSendReply(0, "10,1", epoch, 3);
-        cwx.handleSendReply(failure == 0 ? 1 : 0,
-                           failure == 1 ? "bad" : failure == 3 ? "2147483647,1" : "10,1",
+        cwx.handleSendReply(FlexCwxControls::decodeReply(0, "10,1", 1), epoch, 3);
+        cwx.handleSendReply(FlexCwxControls::decodeReply(failure == 0 ? 1 : 0,
+                           failure == 1 ? "bad" : failure == 3 ? "2147483647,1" : "10,1", 1),
                            epoch, failure == 2 ? 0 : 3);
         check(cancelled == 1 && cwx.cwxEndIndex() == -1 && cwx.drainEpoch() != epoch,
               "rejected, malformed, empty or overflowing reply cancels the current CWX batch");
-        cwx.handleSendReply(1, {}, epoch, 1);
+        cwx.handleSendReply({CwTextReply::Kind::Failed, -1, 0, 1}, epoch, 1);
         check(cancelled == 1, "stale rejected reply cannot cancel a replacement CWX batch");
     }
     CwxModel cwx;
     bool allowed = true;
     QStringList commands;
     cwx.setTransmissionAdmission([&] { return [&] { return allowed; }; });
-    QObject::connect(&cwx, &CwxModel::commandReady, &cwx, [&](const QString& command) {
-        commands << command;
-        if (command == "cwx wpm 23") {
+    QObject::connect(&cwx, &CwxModel::controlRequested, &cwx, [&](const CwTextRequest& request) {
+        commands << FlexCwxControls::encode(request);
+        if (request.field == CwTextRequest::Field::Speed && request.value == 23) {
             allowed = false;
         }
     });
@@ -1734,7 +1767,7 @@ void flexCwxLifecycle()
     f.radio.transmitModel().startTune();
     check(f.commands.isEmpty() && !f.radio.transmitModel().isTuning(),
           "an in-flight Flex CWX batch refuses TUNE before coordinator re-entry");
-    f.radio.cwxModel().handleSendReply(1, {}, epoch, 2);
+    f.radio.cwxModel().handleSendReply({CwTextReply::Kind::Failed, -1, 0, 1}, epoch, 2);
     check(!TxOperationIntegrationTestAccess::cwxDrainArmed(f.radio)
               && !queuedBatch(),
           "Flex reply failure immediately disarms drain and fences the exact queued batch");
@@ -1745,11 +1778,11 @@ void flexCwxLifecycle()
           "failed Flex batch completes after queued cleanup without writing cancelled text");
     f.radio.cwxModel().send("NEW");
     const TxCoordinator::Operation replacement = f.radio.transmitOperation();
-    f.radio.cwxModel().handleSendReply(1, {}, epoch, 2);
+    f.radio.cwxModel().handleSendReply({CwTextReply::Kind::Failed, -1, 0, 1}, epoch, 2);
     check(replacement.permitsDispatch(std::numeric_limits<qint64>::max())
               && TxOperationIntegrationTestAccess::cwxDrainArmed(f.radio),
           "old failed reply cannot release a replacement Flex CWX operation");
-    f.radio.cwxModel().handleSendReply(0, "10,1", f.radio.cwxModel().drainEpoch(), 3);
+    f.radio.cwxModel().handleSendReply(FlexCwxControls::decodeReply(0, "10,1", 1), f.radio.cwxModel().drainEpoch(), 3);
     f.radio.cwxModel().sendMacro(2);
     check(!TxOperationIntegrationTestAccess::cwxDrainArmed(f.radio)
               && f.radio.cwxModel().cwxEndIndex() == -1,

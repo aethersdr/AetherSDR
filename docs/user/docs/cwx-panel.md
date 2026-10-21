@@ -40,7 +40,9 @@ The panel has three views, chosen with the buttons at its top: **Send**, **Live*
 
 Right-click a sent bubble for **Resend** (sent again exactly as typed, per-word speed changes included) or **Clear History**.
 
-When the CWX queue empties, AetherSDR releases the transmitter straight away, so the radio returns to receive right after the last character.
+When the CWX queue empties, AetherSDR releases its text-send intent. A separately held **MOX** remains on; otherwise the radio returns to receive after the last character. **Escape** cancels queued text and its local sidetone without releasing a separately held **MOX**.
+
+Text is not automatically resent after a lost connection. Reconnect before starting a new send.
 
 ### Macros and shortcuts
 
@@ -90,6 +92,8 @@ To watch your own sending, turn on the **TX** decode of the [CW Decoder](./cw-de
 | **QSK** | Full break-in on or off |
 | **Step** | How many WPM each `+` or `-` speed prefix changes the speed (1–20) |
 | **F1–F12** | Twelve macro texts |
+
+**Delay** follows the radio's break-in delay. AetherSDR does not push a default or enforce a minimum when you connect.
 
 ### Special characters
 

@@ -64,6 +64,14 @@ public:
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
     void setTxCommandSink(std::function<void(const QString&, const TxCoordinator::Command&)> sink);
+    // Queue admission and radio reply are separate. Replies run on the owner
+    // thread; current is an immutable worker-safe fence at the terminal writer.
+    using CwxCommandSink = std::function<bool(const QString&, const TxCoordinator::Command&,
+                                             const RadioControlFence&, CommandReply)>;
+    void setCwxCommandSink(CwxCommandSink sink) { m_cwxSink = std::move(sink); }
+    ReceiveDispatch requestCwTextControl(const CwTextRequest& request,
+        const TxCoordinator::Command& command, const RadioControlFence& current,
+        const CwTextCompletion& completion = {}) override;
     // Slice verbs (setSliceFrequency/Mode/Filter) route through THIS sink, which
     // RadioModel wires to its TX-inhibit-guarded sendSliceCommand — so keeping
     // the encode's TX safety above the seam (RFC §6). Falls back to the generic
@@ -274,6 +282,7 @@ private:
     QMap<int, quint64> m_tuneOutputRequests;
     QSet<int> m_tuneOutputKnownBands;
     std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
+    CwxCommandSink m_cwxSink;
     std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;
     bool firmwareAtLeast(const QVersionNumber& minimum) const;

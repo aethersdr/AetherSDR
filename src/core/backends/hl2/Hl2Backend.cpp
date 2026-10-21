@@ -2085,6 +2085,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // CW, and this client's own noise modules are the only DSP it has. TNF is
     // deliberately NOT gated — see the note in RadioCapabilities.h.
     c.hasRadioSideCwKeyer = false;
+    c.cwTextControl = std::nullopt;
     c.hasVoiceKeyer = false;
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface

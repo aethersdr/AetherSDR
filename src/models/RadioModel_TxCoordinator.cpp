@@ -788,8 +788,10 @@ bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const
         [self, request](const QString& value, int) {
             return self && self->dispatchCwxText(value, self->m_txCoordinator.requestOperation(request));
         },
-        [self, request](const QString& command, int epoch, int nChars) {
-            if (self) { self->dispatchCwxCommand(command, self->m_txCoordinator.requestOperation(request), epoch, nChars); }
+        [self, request](const CwTextRequest& command, int epoch, int nChars, CwxModel::TransmissionPermit current) {
+            return self ? self->dispatchCwxRequest(command, self->m_txCoordinator.requestOperation(request),
+                                                   epoch, nChars, std::move(current))
+                        : ReceiveDispatch::Unsupported;
         },
         [self, request](int epoch, bool untrackedMacro) {
             if (self) { self->finishCwxDispatch(epoch, untrackedMacro, self->m_txCoordinator.requestIntent(request)); }
@@ -829,42 +831,74 @@ void RadioModel::abortProducerCwx(const TxCoordinator::Request& request)
     }
 }
 
-void RadioModel::dispatchCwxCommand(const QString& command, TxCoordinator::Operation operation,
-                                    int epoch, int nChars)
+ReceiveDispatch RadioModel::dispatchCwxRequest(const CwTextRequest& request,
+    TxCoordinator::Operation operation, int epoch, int nChars, RadioControlFence current)
 {
-    if (!usesFlexCommandPlane()) {
-        return;
+    if (QThread::currentThread() != thread() || !request.valid() || !m_backend
+        || !isConnected() || m_txSessionClosing || m_expiringPendingCallbacks || (current && !current())) {
+        return ReceiveDispatch::Unsupported;
     }
-    if (command.startsWith("cwx send") || command.startsWith("cwx macro send")) {
-        if (!operation.permitsDispatch(txMonotonicMs())) {
-            return;
+    const RadioCapabilities caps = backendCapabilities();
+    if (!caps.cwTextControl) {
+        // Existing native text adapters dispatch once through TextSender. Their
+        // speed setting retains TransmitModel's typed hold-delay policy.
+        if (!caps.hasRadioSideCwKeyer) { return ReceiveDispatch::Unsupported; }
+        if (request.field == CwTextRequest::Field::Speed) {
+            if (request.origin == CwTextRequest::Origin::Operator) {
+                m_transmitModel.setCwSpeed(request.value);
+            }
+            return ReceiveDispatch::LocalOnly;
         }
+        if (request.keys() || request.field == CwTextRequest::Field::Clear
+            || request.field == CwTextRequest::Field::Erase) { return ReceiveDispatch::LocalOnly; }
+        return ReceiveDispatch::Unsupported;
+    }
+    if (!caps.cwTextControl->supports(request.field)) { return ReceiveDispatch::Unsupported; }
+    const bool batchSpeed = request.origin != CwTextRequest::Origin::Operator;
+    if (request.keys() && !operation.permitsDispatch(txMonotonicMs())) { return ReceiveDispatch::Unsupported; }
+    if (request.origin == CwTextRequest::Origin::Transient) {
+        if (!operation.permitsDispatch(txMonotonicMs())) { return ReceiveDispatch::Unsupported; }
+        current = [operation, captured = std::move(current)] {
+            return operation.permitsDispatch(txMonotonicMs()) && (!captured || captured());
+        };
+    }
+    if (!request.keys() && !batchSpeed) {
+        if (request.field != CwTextRequest::Field::Clear && request.field != CwTextRequest::Field::Erase) {
+            operation = m_txCoordinator.cleanupFence();
+        }
+    }
+    if (!request.keys() && !operation.permitsCleanup()) { return ReceiveDispatch::Unsupported; }
+    const QPointer<RadioModel> self(this);
+    const RadioControlSession session = controlSession();
+    CwTextCompletion reply;
+    if (request.keys()) {
         m_cwxActive = true;
-        if (nChars >= 0) {
-            // The epoch and original producer survive QSK gaps and nested
-            // notifications; an earlier reply cannot adopt a new text batch.
+        if (nChars >= 0
+            && caps.cwTextControl->completion == CwTextControl::Completion::RadioCharacterIndex) {
             m_cwxDrainArmed = true;
-            sendCwxCommand(command, true, operation,
-                [this, operation, epoch, nChars](int result, const QString& body) {
-                    if (operation.permitsDispatch(txMonotonicMs())) {
-                        m_cwxModel.handleSendReply(result, body, epoch, nChars);
-                    }
-                });
-        } else {
-            sendCwxCommand(command, true, operation);
+            reply = [self, session, operation, epoch, nChars](const CwTextReply& result) {
+                if (self && self->controlSessionCurrent(session)
+                    && operation.permitsDispatch(txMonotonicMs())) {
+                    self->m_cwxModel.handleSendReply(result, epoch, nChars);
+                }
+            };
         }
-    } else if (command.startsWith("cwx clear")) {
+    } else if (request.field == CwTextRequest::Field::Clear) {
         m_cwxActive = false;
         m_cwxDrainArmed = false;
-        sendCwxCommand(command, false, operation);
-    } else {
-        sendCmd(command);
     }
+    const bool counted = request.keys() || batchSpeed || request.field == CwTextRequest::Field::Clear;
+    const TxCoordinator::Completion consumed = counted ? trackCwxQueue(operation) : TxCoordinator::Completion{};
+    const TxCoordinator::Command command{operation, request.keys(), consumed};
+    const ReceiveDispatch result = m_backend->requestCwTextControl(request, command, current, reply);
+    if (result == ReceiveDispatch::Unsupported) { consumed.finish(); }
+    if (!self) { return ReceiveDispatch::Unsupported; }
+    return result;
 }
 
 bool RadioModel::dispatchCwxText(const QString& text, TxCoordinator::Operation original)
 {
-    if (usesFlexCommandPlane()) {
+    if (backendCapabilities().cwTextControl) {
         return true;
     }
     if (!m_backend || !backendCapabilities().hasRadioSideCwKeyer
@@ -884,7 +918,8 @@ void RadioModel::finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator
     if (epoch != m_cwxModel.drainEpoch() || !intent.sameIntent(m_cwxCommandIntent)) {
         return;
     }
-    if (!usesFlexCommandPlane() || untrackedMacro) {
+    const auto control = backendCapabilities().cwTextControl;
+    if (!control || control->completion == CwTextControl::Completion::LocalHandoff || untrackedMacro) {
         // CI-V and unknown-length Flex macros have no qualified drain index.
         // This is local queue handoff, never proof of radio-idle or recovery.
         if (untrackedMacro && m_cwxDrainArmed) {
@@ -913,21 +948,6 @@ TxCoordinator::Completion RadioModel::trackCwxQueue(const TxCoordinator::Operati
             receiver->endLocalTxActivity(intent);
         }
     });
-}
-
-void RadioModel::sendCwxCommand(const QString& command, bool keying,
-                                const TxCoordinator::Operation& operation, ResponseCallback reply)
-{
-    const TxCoordinator::Operation fence = keying || operation.permitsCleanup()
-        ? operation : m_txCoordinator.cleanupFence();
-    const TxCoordinator::Completion completion = trackCwxQueue(operation);
-    const auto consumed = [completion] { completion.finish(); };
-    // An ESC must cancel queued text even while a separate MOX intent keeps
-    // the shared desktop operation alive. Never read CwxModel on the worker.
-    const auto batch = m_cwxModel.queuedTransmissionPermit();
-    if (!sendTxTcpCommand(command, fence, keying, consumed, std::move(reply), batch)) {
-        consumed();
-    }
 }
 
 void RadioModel::stopTxOperation(const TxCoordinator::Operation& operation,
