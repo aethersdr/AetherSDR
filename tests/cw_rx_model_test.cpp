@@ -194,6 +194,38 @@ bool unlockAfterStopClearsReadout()
     return require(shownPitch == 0 && shownSpeed == 0,
                    "Unlocking speed on a stopped decoder left it on screen");
 }
+
+bool sameRange(std::optional<CwDecodeSettings::Range> got, int low, int high)
+{
+    return got && sameRange(*got, low, high);
+}
+
+// The pitch range follows the radio's CW pitch: re-centred on a change, kept on
+// the first report of a session only when it already contains the pitch.
+bool pitchRangeFollowsTheRadioPitch()
+{
+    using S = CwDecodeSettings;
+    // CONSTRUCTED pitches: they exercise the centring and the span edges only.
+    if (!require(sameRange(S::pitchRangeAround(800), 650, 950)
+                 && sameRange(S::pitchRangeAround(250), 300, 600)
+                 && sameRange(S::pitchRangeAround(1150), 900, 1200)
+                 && sameRange(S::pitchRangeAround(1500), 900, 1200),
+                 "The range around a pitch is not 300 Hz inside the slider span")) { return false; }
+
+    const S::Range fixedDefault = S::kPitchDefault;
+    // MEASURED (#6158, reporter's support bundle 2026-10-04: `transmit … pitch=710`,
+    // no saved range) — the radio's pitch sits outside the 500-700 default.
+    if (!require(sameRange(S::pitchRangeForReport(710, 0, fixedDefault), 560, 860),
+                 "A first report outside the saved range did not re-centre on it")) { return false; }
+    // CONSTRUCTED values from here: the first-report and repeat rules only.
+    if (!require(!S::pitchRangeForReport(600, 0, fixedDefault)
+                 && !S::pitchRangeForReport(700, 0, fixedDefault),
+                 "A first report inside the saved range replaced it")) { return false; }
+    if (!require(!S::pitchRangeForReport(600, 600, S::Range{900, 1200}),
+                 "A repeated pitch report changed the range")) { return false; }
+    return require(sameRange(S::pitchRangeForReport(650, 600, fixedDefault), 500, 800),
+                   "A pitch change inside the range did not re-centre on it");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -202,6 +234,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     AppSettings::instance().load();
     if (!savedRangesStayInsideTheSliders()) { return 1; }
+    if (!pitchRangeFollowsTheRadioPitch()) { return 1; }
     CwDecodeSettings::setBackend(QStringLiteral("unknown"));
     if (!require(!CwDecodeSettings::neuralSelected(),
                  "Unknown saved backend disables ggmorse controls")) { return 1; }

@@ -565,6 +565,11 @@ signals:
     // phoneStateChanged for slot work that should NOT run on every
     // VOX/CW/dexp/mic-boost/etc. status update (e.g. #4423 KiwiSDR BFO sync).
     void cwPitchChanged(int hz);
+    // Fires on every radio report that carries the CW pitch, changed or not,
+    // before that report's cwPitchChanged: the first report after a connect
+    // often repeats the value already held, so cwPitchChanged stays silent
+    // there. Local changes never emit it.
+    void cwPitchReported(int hz);
     void cwSpeedChanged(int wpm);
     // Compatibility CW-intent notifications for test observers; radio
     // observations never emit them. Backend dispatch uses controlRequested.

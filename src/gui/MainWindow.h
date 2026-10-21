@@ -1640,6 +1640,7 @@ private:
     bool m_miniPanFeedWanted{false};              // applet visible → consume frames
     QPointer<PanadapterApplet> m_panApplet;  // backward compat alias to active applet
     QPointer<PanadapterApplet> m_cwDecoderApplet;
+    int m_cwRangePitch{0};  // last CW pitch the decoder range saw this session, 0 = none yet
     QPointer<PanadapterApplet> m_rttyDecoderApplet;
 
     // GUI — right applet panel

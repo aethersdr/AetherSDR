@@ -10,6 +10,7 @@
 #include <QString>
 
 #include <algorithm>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -113,6 +114,27 @@ public:
     static Range speedRange() { return readRange("speedLow", "speedHigh", kSpeedSpan, kSpeedDefault); }
     static void setPitchRange(int low, int high) { writeRange("pitchLow", "pitchHigh", low, high); }
     static void setSpeedRange(int low, int high) { writeRange("speedLow", "speedHigh", low, high); }
+
+    // The pitch range centred on the CW pitch: 300 Hz wide, shifted to stay
+    // inside the slider span (a pitch beyond the span gets the edge window).
+    static constexpr int kPitchHalfWidth = 150;
+    static constexpr Range pitchRangeAround(int pitchHz)
+    {
+        const int width = 2 * kPitchHalfWidth;
+        const int low = std::clamp(pitchHz - kPitchHalfWidth, kPitchSpan.low, kPitchSpan.high - width);
+        return Range{low, low + width};
+    }
+
+    // The range to apply when the radio reports CW pitch `pitchHz`, or nothing
+    // to keep `current`.  The radio's pitch wins: the first report of a session
+    // (previousHz 0) keeps a range that already contains it, any later change
+    // re-centres on it, and a repeated value changes nothing.
+    static constexpr std::optional<Range> pitchRangeForReport(int pitchHz, int previousHz, Range current)
+    {
+        if (pitchHz == previousHz) return std::nullopt;
+        if (previousHz == 0 && current.low <= pitchHz && pitchHz <= current.high) return std::nullopt;
+        return pitchRangeAround(pitchHz);
+    }
 
     // One-shot migration from the legacy "CwDecodeOverlay" flat key.  Run
     // at startup before any caller reads the new blob.  Safe to call
