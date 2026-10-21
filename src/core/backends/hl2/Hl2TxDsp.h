@@ -168,7 +168,8 @@ signals:
     // input: the post-ALC audio handed to the modulator, and the modulated IQ
     // it produced. Published as TX:SC_FILT_1/SC_FILT_2, the taps RadioModel's
     // TX-filter-loss check reads (#4651, #6605). In FM the IQ envelope is
-    // constant, so the pair cannot show a loss there.
+    // constant, so the pair cannot show a loss there. Not emitted for a window
+    // in which the modulator dropped a block.
     void filterLevels(float inDbfs, float outDbfs);
     // Echoed from setMicGain so a readout reports the gain this object holds,
     // not the caller's copy of the request.
@@ -212,6 +213,7 @@ private:
     float m_filterInPeak = 0.0f;
     float m_filterOutPeak = 0.0f;
     std::size_t m_filterWindowSamples = 0;
+    unsigned long long m_filterWindowFaultMark = 0;   // modulatorFaultBlocks() at window start
 
 #if AETHER_HL2_TX_TXA
     std::unique_ptr<WdspChannel> m_channel;

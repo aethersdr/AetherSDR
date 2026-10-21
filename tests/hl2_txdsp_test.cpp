@@ -2710,15 +2710,29 @@ int main(int argc, char** argv)
                 if (tx.modulatorFaultBlocks() == 0)
                     break;
             }
-            // The first windows hold the modulator's start-up; the card itself
-            // needs five in a row, so the settled ones are what it acts on.
-            if (deltas.size() > 4)
-                deltas.erase(deltas.begin(), deltas.begin() + 4);
-            std::sort(deltas.begin(), deltas.end());
             return deltas;
         };
-        const auto inBand = tapDelta(1000.0);
-        const auto outBand = tapDelta(6000.0);
+        // The longest run of windows reading more than the card's 40 dB: the
+        // card fires on five in a row (kTxFilterKillConfirmSamples).
+        auto longestLossRun = [](const std::vector<float>& d) {
+            int run = 0, best = 0;
+            for (float v : d) {
+                run = v > 40.0f ? run + 1 : 0;
+                best = std::max(best, run);
+            }
+            return best;
+        };
+        // The first windows hold the modulator's start-up; the settled ones are
+        // what the level checks read.
+        auto settled = [](std::vector<float> d) {
+            if (d.size() > 4)
+                d.erase(d.begin(), d.begin() + 4);
+            std::sort(d.begin(), d.end());
+            return d;
+        };
+        const auto inBandAll = tapDelta(1000.0);
+        const auto inBand = settled(inBandAll);
+        const auto outBand = settled(tapDelta(6000.0));
         const float inMed = inBand.empty() ? 999.0f : inBand[inBand.size() / 2];
         const float outMin = outBand.empty() ? -999.0f : outBand.front();
         std::fprintf(stderr, "filter taps: 1 kHz in 300..2700 loses %.1f dB (median of %zu);"
@@ -2730,7 +2744,45 @@ int main(int argc, char** argv)
               "filter taps: a tone inside the passband comes out at about its input level");
         check(outMin > 40.0f,
               "filter taps: a tone outside the passband loses more than the card's 40 dB");
+        check(longestLossRun(inBandAll) < 5,
+              "filter taps: the key-down start-up never reads as five lossy windows in a row");
     }
+
+#if AETHER_HL2_TX_TXA
+    // A stalled worker drops blocks: audio in, no IQ out. Those windows must
+    // not reach the card as a filter loss.
+    {
+        Hl2TxDsp tx;
+        TxTestAuthority auth;
+        Hl2TxDsp::Config cfg;
+        cfg.mode = WdspChannel::Mode::Usb;
+        cfg.filterLowHz = 300.0;
+        cfg.filterHighHz = 2700.0;
+        cfg.alcEnabled = false;
+        std::string err;
+        check(tx.configure(cfg, &err), "stalled filter-tap case configures");
+        tx.setMicGain(1.0);
+        tx.setOutputReadyProbeForTest([](bool) { return false; });
+        std::vector<float> deltas;
+        QObject::connect(&tx, &Hl2TxDsp::filterLevels, &tx,
+                         [&deltas](float in, float out) { deltas.push_back(in - out); });
+        const int fs = cfg.inputSampleRateHz;
+        constexpr int kChunk = 240;
+        std::vector<float> chunk(kChunk);
+        for (int off = 0; off + kChunk <= fs; off += kChunk) {
+            for (int n = 0; n < kChunk; ++n)
+                chunk[static_cast<std::size_t>(n)] = static_cast<float>(
+                    0.5 * std::sin(2.0 * M_PI * 1000.0 * (off + n) / fs));
+            feed(tx, chunk, TxAudioSource::Microphone, auth.context);
+        }
+        const auto lossy = std::count_if(deltas.begin(), deltas.end(),
+                                         [](float v) { return v > 40.0f; });
+        std::fprintf(stderr, "filter taps, stalled: %llu blocks dropped, %zu windows published, %ld lossy\n",
+                     tx.modulatorStallDrops(), deltas.size(), static_cast<long>(lossy));
+        check(tx.modulatorStallDrops() > 0, "stalled filter-tap case: the probe stalls the worker");
+        check(lossy == 0, "filter taps: a window with dropped blocks is not published as a filter loss");
+    }
+#endif  // AETHER_HL2_TX_TXA
 
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_txdsp_test: all checks passed\n");

@@ -8152,9 +8152,9 @@ void Hl2Backend::defineMeters()
     // Peaks either side of the TX passband (Hl2TxDsp::filterLevels): the names
     // RadioModel's TX-filter-loss check reads (#4651). sourceIndex 0 as above.
     def(10, QStringLiteral("TX"), QStringLiteral("SC_FILT_1"), QStringLiteral("dBFS"),
-        -140.0, 0.0,   QStringLiteral("Transmit audio before the TX filter"));
+        -140.0, 0.0,   QStringLiteral("Transmit audio after the ALC, into the modulator"));
     def(11, QStringLiteral("TX"), QStringLiteral("SC_FILT_2"), QStringLiteral("dBFS"),
-        -140.0, 0.0,   QStringLiteral("Transmit signal after the TX filter"));
+        -140.0, 0.0,   QStringLiteral("Modulated transmit IQ, the modulator's output"));
 }
 
 void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
