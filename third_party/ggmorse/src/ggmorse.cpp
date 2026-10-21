@@ -752,7 +752,7 @@ void GGMorse::decode_float() {
     int bestLevelIdx = 0;
     int bestSpeedIdx = 0;
 
-    // Speed range from caller (s-index = wpm - 5). Default 5..115 WPM.
+    // Speed range from caller (s-index = wpm - 5). Default 5..55 WPM; a set range is capped at 115.
     const float sRangeMin = m_impl->parametersDecode.speedRangeMin_wpm;
     const float sRangeMax = m_impl->parametersDecode.speedRangeMax_wpm;
     int s0 = (sRangeMin > 0.0f) ? std::max(0, (int)std::round(sRangeMin - 5.0f)) : 0;
