@@ -11420,7 +11420,8 @@ void MainWindow::restoreBandState(const BandSnapshot& snap)
         // FFT/waterfall misalignment during the transition (#279, #291).
         // Only restore dBm scale (client-side display preference).
         m_radioModel.requestPanDisplay(pan,
-            {PanDisplayField::LevelRange, PanLevelRange{snap.minDbm, snap.maxDbm}});
+            {PanDisplayField::LevelRange, PanLevelRange{snap.minDbm, snap.maxDbm}},
+            {}, /*announce=*/false);
     }
     m_radioModel.setPanRfGain(snap.rfGain);
     m_radioModel.setPanWnb(snap.wnbOn);

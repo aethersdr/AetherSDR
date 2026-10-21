@@ -6636,12 +6636,14 @@ void RadioModel::setBinauralRx(bool on)
 
 void RadioModel::setPanWnb(bool on)
 {
-    requestPanDisplay(activePanadapter(), {PanDisplayField::Wnb, on});
+    // The band-state replay of the stored value: no operator moved a control.
+    requestPanDisplay(activePanadapter(), {PanDisplayField::Wnb, on}, {}, /*announce=*/false);
 }
 
 void RadioModel::setPanWnbLevel(int level)
 {
-    requestPanDisplay(activePanadapter(), {PanDisplayField::WnbLevel, level});
+    // The band-state replay of the stored value: no operator moved a control.
+    requestPanDisplay(activePanadapter(), {PanDisplayField::WnbLevel, level}, {}, /*announce=*/false);
 }
 
 void RadioModel::setPanRfGain(int gain)
