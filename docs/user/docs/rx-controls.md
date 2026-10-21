@@ -57,6 +57,9 @@ Mode-dependent filter width buttons (FlexRadio):
 Radios that publish their own filter widths (such as networked Icom) show
 those instead.
 
+The compact preset buttons keep the AGC-T slider and **A** button visible
+beside the filter controls in the standard-width applet panel.
+
 #### Adaptive RX filter (USB/LSB)
 
 An automatic filter that fits the passband to the station you are hearing. It
