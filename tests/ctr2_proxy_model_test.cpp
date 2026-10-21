@@ -15,6 +15,7 @@
 #include <QFile>
 #include <QHostAddress>
 #include <QMutex>
+#include <QSemaphore>
 #include <QTimer>
 #include <QPointer>
 #include <QRegularExpression>
@@ -443,6 +444,123 @@ void testRescanRunsOffGuiThread()
     check(model.usbDevicePath() == a.path, "a background scan overtaken by a Rescan is dropped");
 }
 
+// Without a USB source (a build without hidapi) the periodic rescan still
+// follows the network interfaces, off the GUI thread, so a listen address
+// that appears after startup is offered without pressing Rescan.
+void testInterfacesRescanWithoutUsbSource()
+{
+    struct Source {
+        QMutex mutex;
+        QStringList addresses{QStringLiteral("192.0.2.1")};
+        int guiCalls{0};
+        int workerCalls{0};
+        QThread* gui{nullptr};
+    };
+    auto source = std::make_shared<Source>();
+    source->gui = QThread::currentThread();
+    Ctr2ProxyModel model;
+    model.setUsbBackend({}, {});
+    model.setListenAddressSource([source] {
+        const QMutexLocker lock(&source->mutex);
+        ++(QThread::currentThread() == source->gui ? source->guiCalls : source->workerCalls);
+        return source->addresses;
+    });
+    check(model.availableListenAddresses() == QStringList{QStringLiteral("192.0.2.1")},
+          "the injected interfaces are listed");
+    {
+        const QMutexLocker lock(&source->mutex);
+        source->addresses.append(QStringLiteral("192.0.2.2"));
+        source->guiCalls = 0;
+    }
+    check(waitUntil([&] { return model.availableListenAddresses().size() == 2; },
+                    Ctr2ProxyModel::kDeviceRescanMs + 2000),
+          "with no USB source, a new interface is still found without a Rescan");
+    const QMutexLocker lock(&source->mutex);
+    check(source->workerCalls > 0 && source->guiCalls == 0,
+          "and the interfaces are enumerated off the GUI thread");
+}
+
+// A scan that was out while the relay started belongs to the time before
+// that session: when it lands after the relay has stopped again, it is
+// dropped rather than replacing the list.
+void testScanFromBeforeAStartIsDropped()
+{
+    using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
+    const Info a{QStringLiteral("ctr2-a"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
+                 QStringLiteral("A00000000001")};
+    const Info b{QStringLiteral("ctr2-b"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
+                 QStringLiteral("B00000000002")};
+    struct Source {
+        QMutex mutex;
+        QList<Info> devices;
+        bool hold{false};
+        int entered{0};
+        int returned{0};
+        QThread* gui{nullptr};
+        QSemaphore release;
+    };
+    auto source = std::make_shared<Source>();
+    source->devices = {a, b};
+    source->gui = QThread::currentThread();
+    auto log = std::make_shared<PortLog>();
+    Ctr2ProxyModel model;
+    model.setListenAddressSource([] { return QStringList{QStringLiteral("192.0.2.1")}; });
+    model.setUsbBackend(
+        [source] {
+            bool hold = false;
+            QList<Info> devices;
+            {
+                const QMutexLocker lock(&source->mutex);
+                if (QThread::currentThread() != source->gui) {
+                    ++source->entered;
+                    hold = source->hold;
+                }
+                devices = source->devices;
+            }
+            if (hold) {
+                source->release.acquire();
+            }
+            const QMutexLocker lock(&source->mutex);
+            if (QThread::currentThread() != source->gui) {
+                ++source->returned;
+            }
+            return devices;
+        },
+        [log](const Info&, QString*) {
+            return static_cast<AetherSDR::Ctr2HidPort*>(new FakePort(log));
+        },
+        {}, true);
+    model.setTransport(Ctr2ProxyModel::Transport::Usb);
+    model.setAetherRadio(QHostAddress(QStringLiteral("192.0.2.10")), 4992, QStringLiteral("FLEX"), {});
+    model.setUsbDevicePath(a.path);
+    {
+        const QMutexLocker lock(&source->mutex);
+        source->hold = true;
+        source->devices = {b};   // what the held scan reports: a has gone
+    }
+    const auto counts = [&] {
+        const QMutexLocker lock(&source->mutex);
+        return std::pair{source->entered, source->returned};
+    };
+    check(waitUntil([&] { return counts().first > 0; }, Ctr2ProxyModel::kDeviceRescanMs + 2000),
+          "a background scan is held");
+    {
+        const QMutexLocker lock(&source->mutex);
+        source->devices = {a, b};
+    }
+    check(model.start() && model.isRunning(), "the relay starts on a while that scan is out");
+    model.stop();
+    source->release.release();
+    check(waitUntil([&] { return counts().second > 0; }, 2000), "the held scan returns");
+    waitUntil([] { return false; }, 100);
+    check(model.usbDevicePath() == a.path,
+          "a scan from before the relay started is dropped after it stops");
+    {
+        const QMutexLocker lock(&source->mutex);
+        source->hold = false;
+    }
+}
+
 // Selecting another CTR2 while the first one's version probe is still
 // pending probes the new one once the first finishes; a model destroyed
 // mid-probe closes the probe's port.
@@ -683,6 +801,8 @@ int main(int argc, char** argv)
     testAutoStart(QStringLiteral("AETHER_KNOB"));  // the fixed AetherKnob identity
     testDevicesRescanByThemselves();
     testRescanRunsOffGuiThread();
+    testInterfacesRescanWithoutUsbSource();
+    testScanFromBeforeAStartIsDropped();
     testFirmwareCommandsOffered();
 
     if (g_failures) {

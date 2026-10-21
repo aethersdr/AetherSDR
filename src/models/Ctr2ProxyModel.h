@@ -58,6 +58,11 @@ public:
                        UsbCapsPortOpener firmwareOpener = {},
                        bool threadSafeSource = false);
     bool usbAvailable() const { return static_cast<bool>(m_usbOpener); }
+    // The local IPv4 addresses offered for Wi-Fi. Defaults to the machine's
+    // interfaces; tests inject a list. Called on the thread pool by the
+    // periodic rescan, so it must be thread-safe.
+    using ListenAddressSource = std::function<QStringList()>;
+    void setListenAddressSource(ListenAddressSource source);
 
     // Rescans local IPv4 addresses and CTR2-class USB HID devices, now, on
     // this thread. The periodic rescan does the same work off the GUI thread.
@@ -224,6 +229,7 @@ private:
     quint16 m_runningRadioPort{0};
     QString m_runningRadioLabel;
     QString m_stopReason;                // why the relay stopped on its own
+    ListenAddressSource m_listenAddresses;
     UsbDeviceSource m_usbDevices;
     bool m_usbDevicesThreadSafe{false};
     UsbPortOpener m_usbOpener;
@@ -239,8 +245,8 @@ private:
     QTimer* m_autoStartTimer{nullptr};
     QTimer* m_deviceRescan{nullptr};
     QFutureWatcher<DeviceScan>* m_rescanWatcher{nullptr};
-    // Bumped by every synchronous scan and backend change, so a background
-    // scan that started before one of them is dropped.
+    // Bumped by every synchronous scan, backend change and relay start, so a
+    // background scan that started before one of them is dropped.
     quint64 m_scanGeneration{0};
     bool m_autoStartHeld{false};   // the operator stopped it this connection
 };

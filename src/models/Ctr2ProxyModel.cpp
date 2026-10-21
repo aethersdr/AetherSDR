@@ -33,6 +33,7 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     , m_proxy(new TcpByteProxy(this))
     , m_usb(new Ctr2UsbRelay(this))
     , m_aetherRadioReason(tr("Connect AetherSDR to a radio first"))
+    , m_listenAddresses(&Ctr2ProxyModel::scanListenAddresses)
 {
     m_statsTimer = new QTimer(this);
     m_statsTimer->setSingleShot(true);
@@ -116,8 +117,10 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     m_rescanWatcher = new QFutureWatcher<DeviceScan>(this);
     m_deviceRescan = new QTimer(this);
     m_deviceRescan->setInterval(kDeviceRescanMs);
+    // Network interfaces too, so a build without hidapi still notices a
+    // listen address that appears after startup.
     connect(m_deviceRescan, &QTimer::timeout, this, [this] {
-        if (m_usbDevices && !isRunning() && !m_firmware->isRunning())
+        if (!isRunning() && !m_firmware->isRunning())
             rescanInBackground();
     });
     m_deviceRescan->start();
@@ -166,10 +169,16 @@ QStringList Ctr2ProxyModel::scanListenAddresses()
     return choices;
 }
 
+void Ctr2ProxyModel::setListenAddressSource(ListenAddressSource source)
+{
+    m_listenAddresses = std::move(source);
+    refreshDevices();
+}
+
 void Ctr2ProxyModel::refreshDevices()
 {
     ++m_scanGeneration;   // a background scan already under way is stale
-    applyDeviceScan({scanListenAddresses(),
+    applyDeviceScan({m_listenAddresses ? m_listenAddresses() : QStringList(),
                      m_usbDevices ? m_usbDevices() : QList<Ctr2HidPort::DeviceInfo>()});
 }
 
@@ -178,7 +187,7 @@ void Ctr2ProxyModel::refreshDevices()
 // rescan does it on the thread pool and only applies the result here.
 void Ctr2ProxyModel::rescanInBackground()
 {
-    if (!m_usbDevicesThreadSafe) {
+    if (m_usbDevices && !m_usbDevicesThreadSafe) {
         refreshDevices();
         return;
     }
@@ -188,17 +197,19 @@ void Ctr2ProxyModel::rescanInBackground()
     const quint64 generation = m_scanGeneration;
     disconnect(m_rescanWatcher, &QFutureWatcher<DeviceScan>::finished, this, nullptr);
     connect(m_rescanWatcher, &QFutureWatcher<DeviceScan>::finished, this, [this, generation] {
-        // Dropped if a synchronous scan or a backend change came first, or
-        // the relay or an update started while it was out.
+        // Dropped if a synchronous scan, a backend change or a relay start
+        // came first, or the relay or an update is running now.
         if (generation != m_scanGeneration || isRunning() || m_firmware->isRunning()) {
             return;
         }
         applyDeviceScan(m_rescanWatcher->result());
     });
-    // A copy of the source, never `this`: the scan may outlive the model.
-    m_rescanWatcher->setFuture(QtConcurrent::run([source = m_usbDevices] {
-        return DeviceScan{scanListenAddresses(), source()};
-    }));
+    // Copies of the sources, never `this`: the scan may outlive the model.
+    m_rescanWatcher->setFuture(QtConcurrent::run(
+        [listen = m_listenAddresses, usb = m_usbDevices] {
+            return DeviceScan{listen ? listen() : QStringList(),
+                              usb ? usb() : QList<Ctr2HidPort::DeviceInfo>()};
+        }));
 }
 
 void Ctr2ProxyModel::applyDeviceScan(DeviceScan scan)
@@ -584,8 +595,10 @@ bool Ctr2ProxyModel::start()
         buildConfig(&config, &problem);
         ok = m_proxy->start(config);
     }
-    if (ok)
+    if (ok) {
+        ++m_scanGeneration;   // a scan from before this session is stale
         saveSetup();   // what an automatic start uses next time
+    }
     emit configurationChanged();
     return ok;
 }
