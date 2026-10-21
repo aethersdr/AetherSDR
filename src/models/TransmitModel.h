@@ -215,6 +215,18 @@ public:
     bool    apdEnabled()        const { return m_apdEnabled; }
     bool    apdConfigurable()   const { return m_apdConfigurable; }
     bool    apdEqualizerActive()const { return m_apdEqActive; }
+    // Unset until the radio reports a lifecycle state (SmartSDR 4.3+).
+    std::optional<ApdLifecycleState> apdLifecycleState() const { return m_apdLifecycle; }
+    static QString apdLifecycleStateName(ApdLifecycleState state);
+
+    // The transmit slice an equalizer status is matched against. RadioModel
+    // supplies it; without one, scoped equalizer statuses never apply.
+    struct ApdTxSlice {
+        QString txAntenna;
+        double  frequencyMhz{0.0};
+    };
+    using ApdTxSliceResolver = std::function<std::optional<ApdTxSlice>()>;
+    void setApdTxSliceResolver(ApdTxSliceResolver resolver) { m_apdTxSliceResolver = std::move(resolver); }
 
     // External APD per-TX-antenna sampler-port assignment (SmartSDR 4.2.18+).
     struct ApdSampler {
@@ -638,6 +650,9 @@ private:
     bool m_apdEnabled{false};
     bool m_apdConfigurable{false};
     bool m_apdEqActive{false};
+    std::optional<ApdLifecycleState> m_apdLifecycle;
+    ApdTxSliceResolver m_apdTxSliceResolver;
+    bool apdStatusMatchesTxSlice(const TransmitDelta& d) const;
     QHash<QString, ApdSampler> m_apdSamplers;  // keyed by ANT1/ANT2/XVTA/XVTB
 
     // Transmit state

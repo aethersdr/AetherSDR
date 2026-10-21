@@ -6,6 +6,7 @@
 #include <limits>
 
 #include <QDateTime>
+#include <QHash>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QPointer>
@@ -1863,6 +1864,24 @@ void FlexBackend::decodeApdStatus(const QMap<QString, QString>& kvs)
     // Bare flag (no `=`): the model clears apdEqActive + emits the reset signal.
     if (kvs.contains(QStringLiteral("equalizer_reset")))
         d.apdEqualizerReset = true;
+    // Matched by name, as FlexLib APD.cs does: an unrecognized token stays
+    // disengaged rather than guessing a state.
+    static const QHash<QString, ApdLifecycleState> kLifecycle{
+        {QStringLiteral("OFF"), ApdLifecycleState::Off},
+        {QStringLiteral("IDLE"), ApdLifecycleState::Idle},
+        {QStringLiteral("TRAINING"), ApdLifecycleState::Training},
+        {QStringLiteral("ACTIVE"), ApdLifecycleState::Active},
+        {QStringLiteral("HOLD"), ApdLifecycleState::Hold},
+        {QStringLiteral("FAULT"), ApdLifecycleState::Fault},
+    };
+    const auto state = kLifecycle.constFind(kvs.value(QStringLiteral("state")).toUpper());
+    if (state != kLifecycle.constEnd())
+        d.apdLifecycle = state.value();
+    const QString ant = kvs.value(QStringLiteral("ant"));
+    if (!ant.isEmpty())
+        d.apdEqAntenna = ant;
+    carry(kvs, "freq", d.apdEqFrequencyMhz);
+    carry(kvs, "rfpower", d.apdEqRfPower);
     emit transmitChanged(d);
 }
 

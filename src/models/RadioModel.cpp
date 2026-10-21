@@ -2064,6 +2064,19 @@ RadioModel::RadioModel(QObject* parent)
                             TxCoordinator::StopReason reason) { stopTxOperation(operation, reason); })
 {
     m_desktopTxActor = m_txCoordinator.registerActor({true, 0});
+    // FlexLib APD.cs matches against the transmit slice, else the active one.
+    m_transmitModel.setApdTxSliceResolver([this]() -> std::optional<TransmitModel::ApdTxSlice> {
+        SliceModel* slice = txSlice();
+        for (int i = 0; !slice && i < m_slices.size(); ++i) {
+            if (m_slices[i] && m_slices[i]->isActive()) {
+                slice = m_slices[i];
+            }
+        }
+        if (!slice) {
+            return std::nullopt;
+        }
+        return TransmitModel::ApdTxSlice{slice->txAntenna(), slice->frequency()};
+    });
     m_transmitModel.setKeyingAdmission([this](TransmitModel::KeyingIntent intent, bool on) -> TransmitModel::KeyingPermit {
         if (!on) {
             const TxCoordinator::Operation fence = m_txCoordinator.cleanupFence();
@@ -13916,6 +13929,9 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     apd["enabled"] = m_transmitModel.apdEnabled();
     apd["configurable"] = m_transmitModel.apdConfigurable();
     apd["equalizer_active"] = m_transmitModel.apdEqualizerActive();
+    const auto apdLifecycle = m_transmitModel.apdLifecycleState();
+    apd["lifecycle_state"] = apdLifecycle
+        ? TransmitModel::apdLifecycleStateName(*apdLifecycle) : QStringLiteral("unreported");
     transmit["apd"] = apd;
 
     QJsonObject profiles;

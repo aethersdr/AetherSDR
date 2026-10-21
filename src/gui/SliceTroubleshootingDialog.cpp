@@ -1000,7 +1000,7 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
                  .arg(yesNo(txPower["show_tx_in_waterfall"].toBool()));
     lines << QString("- TX state: tuning `%1`, MOX `%2`, transmitting `%3`, ATU `%4` "
                       "(enabled `%5`, memories `%6`, using memory `%7`), APD `%8` "
-                      "(configurable `%9`, EQ active `%10`)")
+                      "(configurable `%9`, EQ active `%10`, lifecycle `%11`)")
                  .arg(yesNo(txPower["tuning"].toBool()))
                  .arg(yesNo(txPower["mox"].toBool()))
                  .arg(yesNo(txPower["transmitting"].toBool()))
@@ -1010,7 +1010,8 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
                  .arg(yesNo(atu["using_memory"].toBool()))
                  .arg(yesNo(apd["enabled"].toBool()))
                  .arg(yesNo(apd["configurable"].toBool()))
-                 .arg(yesNo(apd["equalizer_active"].toBool()));
+                 .arg(yesNo(apd["equalizer_active"].toBool()))
+                 .arg(orPlaceholder(apd["lifecycle_state"].toString()));
     lines << QString("- Mic/phone: input `%1`, mic level `%2`, mic boost `%3`, mic bias `%4`, DAX `%5`, "
                       "monitor `%6` (`%7`), speech processor `%8` (`%9`), compander `%10` (`%11`), "
                       "dexp `%12` (`%13`), met-in-RX `%14`, sync CWX `%15`, AM carrier `%16`, "

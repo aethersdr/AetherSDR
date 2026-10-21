@@ -9,6 +9,8 @@
 
 #include <QCoreApplication>
 #include <QSignalSpy>
+#include <QList>
+#include <QPair>
 #include <QString>
 #include <cstdio>
 
@@ -143,6 +145,75 @@ int main(int argc, char** argv)
         });
         CHECK(d.apdEnabled.has_value() && *d.apdEnabled == true);
         CHECK(d.apdEqualizerReset.has_value());   // engaged by presence, value irrelevant
+    }
+
+    // ---- APD lifecycle + scope, as a FLEX-8600 on 4.3.16.42034 sends them ----
+    {
+        // apd ant=ANT1 freq=14.268000 rfpower=100 state=IDLE deployed=0
+        const TransmitDelta d = decode(b, [](FlexBackend& fb){
+            fb.decodeApdStatus({{QStringLiteral("ant"), QStringLiteral("ANT1")},
+                                {QStringLiteral("freq"), QStringLiteral("14.268000")},
+                                {QStringLiteral("rfpower"), QStringLiteral("100")},
+                                {QStringLiteral("state"), QStringLiteral("IDLE")},
+                                {QStringLiteral("deployed"), QStringLiteral("0")}});
+        });
+        CHECK(d.apdLifecycle == ApdLifecycleState::Idle);
+        CHECK(d.apdEqAntenna == QStringLiteral("ANT1"));
+        CHECK(d.apdEqFrequencyMhz && qFuzzyCompare(*d.apdEqFrequencyMhz, 14.268));
+        CHECK(d.apdEqRfPower == 100);
+        CHECK(!d.apdEqActive);
+    }
+    {
+        // apd slice=0 mmx=0 client_handle=0x1D6D44F8 ant=ANT1 freq=14.268000
+        //     rfpower=100 rx_error_mHz=2.105713 equalizer_active=0 configurable=1
+        const TransmitDelta d = decode(b, [](FlexBackend& fb){
+            fb.decodeApdStatus({{QStringLiteral("slice"), QStringLiteral("0")},
+                                {QStringLiteral("mmx"), QStringLiteral("0")},
+                                {QStringLiteral("client_handle"), QStringLiteral("0x1D6D44F8")},
+                                {QStringLiteral("ant"), QStringLiteral("ANT1")},
+                                {QStringLiteral("freq"), QStringLiteral("14.268000")},
+                                {QStringLiteral("rfpower"), QStringLiteral("100")},
+                                {QStringLiteral("rx_error_mHz"), QStringLiteral("2.105713")},
+                                {QStringLiteral("equalizer_active"), QStringLiteral("0")},
+                                {QStringLiteral("configurable"), QStringLiteral("1")}});
+        });
+        CHECK(d.apdEqActive == false);
+        CHECK(d.apdConfigurable == true);
+        CHECK(d.apdEqAntenna == QStringLiteral("ANT1"));
+        CHECK(!d.apdLifecycle);
+    }
+    {
+        // Every lifecycle token, case-insensitively; anything else stays unset.
+        const QList<QPair<QString, ApdLifecycleState>> tokens{
+            {QStringLiteral("off"), ApdLifecycleState::Off},
+            {QStringLiteral("IDLE"), ApdLifecycleState::Idle},
+            {QStringLiteral("TRAINING"), ApdLifecycleState::Training},
+            {QStringLiteral("ACTIVE"), ApdLifecycleState::Active},
+            {QStringLiteral("HOLD"), ApdLifecycleState::Hold},
+            {QStringLiteral("FAULT"), ApdLifecycleState::Fault},
+        };
+        for (const auto& [token, state] : tokens) {
+            const TransmitDelta d = decode(b, [&token](FlexBackend& fb){
+                fb.decodeApdStatus({{QStringLiteral("state"), token}});
+            });
+            CHECK(d.apdLifecycle == state);
+        }
+        for (const QString& bad : {QStringLiteral("3"), QStringLiteral("IDLE,TRAINING"), QString()}) {
+            const TransmitDelta d = decode(b, [&bad](FlexBackend& fb){
+                fb.decodeApdStatus({{QStringLiteral("state"), bad}});
+            });
+            CHECK(!d.apdLifecycle);
+        }
+    }
+    {
+        // Pre-scope global form and a malformed frequency carry no scope.
+        const TransmitDelta d = decode(b, [](FlexBackend& fb){
+            fb.decodeApdStatus({{QStringLiteral("equalizer_active"), QStringLiteral("1")},
+                                {QStringLiteral("freq"), QStringLiteral("abc")},
+                                {QStringLiteral("ant"), QString()}});
+        });
+        CHECK(d.apdEqActive == true);
+        CHECK(!d.apdEqAntenna && !d.apdEqFrequencyMhz && !d.apdEqRfPower);
     }
 
     // ---- APD sampler: uppercase, INTERNAL-prepend, empty tx_ant → no emit ----

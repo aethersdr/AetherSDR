@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <QTimer>
 #include <QThread>
+#include <cmath>
 #include <utility>
 
 namespace AetherSDR {
@@ -46,6 +47,8 @@ void TransmitModel::resetState()
     m_apdEnabled = false;
     m_apdConfigurable = false;
     m_apdEqActive = false;
+    // The next radio may not report a lifecycle at all.
+    m_apdLifecycle.reset();
     m_apdSamplers.clear();
     m_rfPower = 100;
     // 100 is a default again, not a reported value (#5518): clearing provenance
@@ -280,7 +283,27 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
         bool apdChanged = false;
         apdChanged |= assign(d.apdEnabled, m_apdEnabled);
         apdChanged |= assign(d.apdConfigurable, m_apdConfigurable);
-        apdChanged |= assign(d.apdEqActive, m_apdEqActive);
+        if (d.apdLifecycle && m_apdLifecycle != d.apdLifecycle) {
+            m_apdLifecycle = d.apdLifecycle;
+            apdChanged = true;
+        }
+        // FlexLib APD.cs: an equalizer status describes one TX antenna,
+        // frequency and power, and applies only to a matching transmit slice.
+        // Once the radio reports a lifecycle, equalizer_active is no longer
+        // trusted (any deployed table sets it): a correction is on air only in
+        // ACTIVE or HOLD. A status with no scope is older firmware's global form.
+        const bool scoped = d.apdEqAntenna || d.apdEqFrequencyMhz;
+        std::optional<bool> eqActive = d.apdEqActive;
+        if (m_apdLifecycle) {
+            eqActive.reset();
+            if (scoped) {
+                eqActive = *m_apdLifecycle == ApdLifecycleState::Active
+                        || *m_apdLifecycle == ApdLifecycleState::Hold;
+            }
+        }
+        if (eqActive && (!scoped || apdStatusMatchesTxSlice(d))) {
+            apdChanged |= assign(eqActive, m_apdEqActive);
+        }
         // Bare equalizer_reset flag: clear active + emit the reset signal.
         if (d.apdEqualizerReset) {
             if (m_apdEqActive) { m_apdEqActive = false; apdChanged = true; }
@@ -309,6 +332,38 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
             emit apdSamplerChanged(txAnt);
         }
     }
+}
+
+bool TransmitModel::apdStatusMatchesTxSlice(const TransmitDelta& d) const
+{
+    if (!d.apdEqAntenna || !d.apdEqFrequencyMhz || !m_apdTxSliceResolver) {
+        return false;
+    }
+    const std::optional<ApdTxSlice> slice = m_apdTxSliceResolver();
+    if (!slice
+        || d.apdEqAntenna->compare(slice->txAntenna, Qt::CaseInsensitive) != 0) {
+        return false;
+    }
+    // The radio reports the frequency to the Hz; the slice may carry sub-Hz.
+    if (std::llround(*d.apdEqFrequencyMhz * 1e6) != std::llround(slice->frequencyMhz * 1e6)) {
+        return false;
+    }
+    // Tune power while tuning (SMART-12625). Firmware that omits rfpower is
+    // matched on antenna and frequency alone.
+    return !d.apdEqRfPower || *d.apdEqRfPower == (m_tune ? m_tunePower : m_rfPower);
+}
+
+QString TransmitModel::apdLifecycleStateName(ApdLifecycleState state)
+{
+    switch (state) {
+    case ApdLifecycleState::Off:      return QStringLiteral("off");
+    case ApdLifecycleState::Idle:     return QStringLiteral("idle");
+    case ApdLifecycleState::Training: return QStringLiteral("training");
+    case ApdLifecycleState::Active:   return QStringLiteral("active");
+    case ApdLifecycleState::Hold:     return QStringLiteral("hold");
+    case ApdLifecycleState::Fault:    return QStringLiteral("fault");
+    }
+    return {};
 }
 
 void TransmitModel::setApdEnabled(bool on)
