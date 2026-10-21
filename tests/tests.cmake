@@ -7277,20 +7277,13 @@ target_include_directories(icom_family_test PRIVATE src)
 target_link_libraries(icom_family_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME icom_family_test COMMAND icom_family_test)
 
-# #5920 follow-up (@jensenpat, non-blocking review): the channels out of
-# MainWindow::sendPanDimensionsToRadio() -- Flex wire delivery, ANAN typed
-# dispatch, Icom's no-command path. Two halves, for the reason the test's own
-# header gives: no test target constructs a MainWindow, and the block cannot
-# move down into RadioModel without failing check_command_plane.py, whose
-# src/models/RadioModel.cpp row is shrink-only. Part A builds every family
-# through the production family switch and reads the two predicates that call
-# site consults (no socket, no device, no radio); Part B reads the call site
-# itself as TEXT, which is what AETHER_SOURCE_DIR is for here.
+# Socket-free shared dimension routing: real family declarations, Flex encoder,
+# native analyzer dispatch, fixed-geometry local result, and the GUI call site.
 add_executable(pan_dimension_routing_test tests/pan_dimension_routing_test.cpp)
 target_include_directories(pan_dimension_routing_test PRIVATE src tests)
 target_compile_definitions(pan_dimension_routing_test PRIVATE
     AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(pan_dimension_routing_test PRIVATE aethercore Qt6::Core)
+target_link_libraries(pan_dimension_routing_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME pan_dimension_routing_test COMMAND pan_dimension_routing_test)
 
 # A panadapter display control the client applied itself raises no drop
@@ -8908,6 +8901,18 @@ add_test(NAME client_display_pan_settings_test
 # RadioModel's own client-owned state on an ANAN: the master-volume read-back,
 # the restored line-out level, and the Tuning-domain step. Socket-free, through
 # setBackendForTest() and a TestSettingsProfile store.
+add_executable(audio_control_routing_test tests/audio_control_routing_test.cpp)
+target_include_directories(audio_control_routing_test PRIVATE src tests)
+target_link_libraries(audio_control_routing_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME audio_control_routing_test COMMAND audio_control_routing_test)
+set_tests_properties(audio_control_routing_test PROPERTIES TIMEOUT 30)
+
+add_executable(pan_control_routing_test tests/pan_control_routing_test.cpp)
+target_include_directories(pan_control_routing_test PRIVATE src tests)
+target_link_libraries(pan_control_routing_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME pan_control_routing_test COMMAND pan_control_routing_test)
+set_tests_properties(pan_control_routing_test PROPERTIES TIMEOUT 30)
+
 add_executable(radio_model_client_state_test tests/radio_model_client_state_test.cpp)
 target_include_directories(radio_model_client_state_test PRIVATE src tests)
 target_link_libraries(radio_model_client_state_test PRIVATE
@@ -9476,8 +9481,39 @@ if(NOT WIN32)
     set_tests_properties(dax_receive_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+# Socket-free DAX ownership: production encoder, model/bridge handler and PCM
+# packetizers with injected observations/replies; no firmware peer or listener.
+add_executable(dax_tx_backend_test tests/dax_tx_backend_test.cpp)
+target_include_directories(dax_tx_backend_test PRIVATE src tests)
+target_link_libraries(dax_tx_backend_test PRIVATE aethercore Qt6::Core)
+add_test(NAME dax_tx_backend_test COMMAND dax_tx_backend_test)
+
+add_executable(dax_tx_ownership_test tests/dax_tx_ownership_test.cpp)
+target_include_directories(dax_tx_ownership_test PRIVATE src tests)
+target_link_libraries(dax_tx_ownership_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME dax_tx_ownership_test COMMAND dax_tx_ownership_test)
+
+add_executable(dax_tx_media_context_test tests/dax_tx_media_context_test.cpp)
+target_include_directories(dax_tx_media_context_test PRIVATE src tests)
+target_link_libraries(dax_tx_media_context_test PRIVATE aethercore Qt6::Core)
+add_test(NAME dax_tx_media_context_test COMMAND dax_tx_media_context_test)
+
+add_executable(dax_tx_applet_test tests/dax_tx_applet_test.cpp
+    src/gui/DaxApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
+    src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(dax_tx_applet_test PRIVATE src tests)
+target_link_libraries(dax_tx_applet_test PRIVATE aetherdesktop_support Qt6::Widgets)
+add_test(NAME dax_tx_applet_test COMMAND dax_tx_applet_test)
+set_tests_properties(dax_tx_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 set(AETHER_SETTINGS_CONSUMERS
+    audio_control_routing_test
     flex_readonly_metadata_test
+    dax_tx_backend_test
+    dax_tx_ownership_test
+    dax_tx_media_context_test
+    dax_tx_applet_test
     dsp_parameter_reset_test
     cw_rx_model_test
     asr_native_receiver_test
@@ -9488,6 +9524,7 @@ set(AETHER_SETTINGS_CONSUMERS
     reroute_dead_controls_test
     hl2_bandstack_digital_agc_test
     radio_model_client_state_test
+    pan_control_routing_test
     squelch_level_scale_test
     hl2_pan_create_async_test
     hl2_session_memory_test
@@ -9705,6 +9742,8 @@ endforeach()
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
     flex_readonly_metadata_test
+    dax_tx_ownership_test
+    dax_tx_applet_test
     dsp_parameter_reset_test
     nrs_level_range_test
     anan_noise_blanker_readback_test

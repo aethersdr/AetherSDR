@@ -117,6 +117,16 @@ Tick **Observe only** to hand a client visibility without control. The bridge th
 
 `ping` needs no token and returns the app version plus the **build identity**: the `git describe` string, commit SHA, the release tag it is based on, commits since that tag, and whether the build had local changes. It is the same identity **Help → About** shows, so a test build can be told apart from a release with the same version number.
 
+### Checking pan creation and removal
+
+`pan create` and `pan close` report whether the backend accepted a request for
+dispatch, not whether a display has appeared or disappeared. Re-poll `get pans`
+to observe the result. Each entry in a close response includes `requested`;
+`closed` is the compatibility name for that request list, not proof of removal.
+An explicit `pan close all` may request the last pan's removal, but still respects
+backend refusals and display ownership. A normal single-pan close preserves the
+last pan. No pan action enables transmit.
+
 ## Reference
 
 ### Environment variables

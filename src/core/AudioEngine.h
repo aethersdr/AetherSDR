@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/PcmFrame.h"
+#include "core/DaxTxAudioPermit.h"
 
 #include <QObject>
 #include "RxChainRunner.h"
@@ -148,7 +149,8 @@ public:
     Q_INVOKABLE void stopTxStream();
 
     // Set the DAX TX stream ID (from radio's response to "stream create type=dax_tx")
-    void setTxStreamId(quint32 id) { m_txStreamId = id; }
+    void setTxStreamId(quint32 id) { m_txStreamId.store(id); }
+    void setDaxTxAudioRoute(quint32 streamId, const AetherSDR::DaxTxAudioPermit& permit);
     quint32 txStreamId() const { return m_txStreamId; }
     // Set the remote audio TX stream ID (for voice TX and VOX monitoring)
     void setRemoteTxStreamId(quint32 id) { m_remoteTxStreamId = id; }
@@ -815,7 +817,8 @@ signals:
     // recorder opens its TX gate for CW the same way moxChanged does for voice.
     // Ownership-correct: driven by our local keyer, not any-owner interlock.
     void cwRecordingActiveChanged(bool active);
-    void txPacketReady(const QByteArray& vitaPacket, const AetherSDR::TxCoordinator::Context& context);
+    void txPacketReady(const QByteArray& vitaPacket, const AetherSDR::TxCoordinator::Context& context,
+                       const AetherSDR::DaxTxAudioPermit& ownership = {});
     // Sidetone-tapped audio for the TX-side CW decoder (#2417).  Emitted
     // from the audio thread; receivers should connect via Qt::AutoConnection
     // (which becomes queued across threads) so feedAudio() lands on the
@@ -959,6 +962,7 @@ private:
     float computeRMS(const QByteArray& pcm) const;
     QByteArray applyBoost(const QByteArray& pcm, float gain) const;
     QByteArray buildVitaTxPacket(const float* samples, int numStereoSamples);
+    void emitDaxTxPacket(const QByteArray& packet, const TxCoordinator::Context& context);
     void sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId, const TxCoordinator::Context& context);
     void emitScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate, bool tx);
     void emitScopeFromInt16Stereo(const QByteArray& pcm, int sampleRate, bool tx);
@@ -1131,7 +1135,8 @@ private:
 #endif
     QHostAddress  m_txAddress;
     quint16       m_txPort{0};
-    quint32       m_txStreamId{0};         // DAX TX stream
+    std::atomic<quint32> m_txStreamId{0};  // confirmed DAX TX route
+    DaxTxAudioPermit m_daxTxAudioPermit{DaxTxAudioPermit::blocked()};
     quint32       m_remoteTxStreamId{0};  // remote_audio_tx (voice/VOX)
     // Host-modulating backend (HL2): no Flex stream id will ever be assigned,
     // so the TX gate keys off this instead. setHostModulation() is the single

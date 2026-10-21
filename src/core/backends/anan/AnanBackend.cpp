@@ -420,6 +420,9 @@ RadioCapabilities AnanBackend::capabilities() const
     RadioCapabilities c;
     c.broadcastFmReceive = std::nullopt;
     c.family = QStringLiteral("anan");
+    c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
+        PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage,
+        PanDisplayField::SpectrumPoints}, {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
     // No setTune() implementation, so no tune generator to select a mode on.
     c.twoToneGenerator = std::nullopt;
     c.firmwareUpdateSource = std::nullopt;  // gateware number; no published list covers it.

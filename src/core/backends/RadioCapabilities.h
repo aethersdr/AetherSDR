@@ -3,6 +3,9 @@
 #include "SpotRequest.h"
 #include "PanControlRequest.h"
 #include "SlicePresetRequest.h"
+#include "PanDisplayRequest.h"
+#include "PanLifecycleRequest.h"
+#include "AudioControlRequest.h"
 
 #include <QFlags>
 #include <QList>
@@ -361,6 +364,9 @@ struct RadioCapabilities {
     bool canCreateSlices = false;
     int maxSlices = 1;             // independent demod slices the radio supports
     int maxPanadapters = 1;        // simultaneous panadapters
+    // Desktop requests only; these do not widen the daemon capability catalogue.
+    std::optional<PanDisplayControl> panDisplayControl;
+    std::optional<PanLifecycleControl> panLifecycleControl;
     QVector<int> sampleRatesHz;    // supported per-receiver sample rates (Hz)
 
     // What this radio's panadapter span and vertical axis are made of, as two
@@ -904,6 +910,8 @@ struct RadioCapabilities {
     // Discrete DAX IQ request rates in Hz. Empty means unsupported or unknown.
     // Applied by the existing DaxIqModel command path, including stream restore.
     QList<int> daxIqSampleRates;
+    std::optional<AudioStreamControl> audioStreamControl;
+    std::optional<GraphicEqControl> radioGraphicEqControl;
 
     // Audio DSP runs inside the radio via command-plane verbs (Flex: NR/NB/ANF/NRL/
     // ANFL/ANFT, APD, wideband NB, 8-band hardware EQ `eq RXsc`/`eq TXsc`). False for

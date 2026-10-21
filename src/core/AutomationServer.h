@@ -86,7 +86,7 @@ class TxPointerAction;
 //   shortcut <id>                   invoke a ShortcutManager action by id.
 //   get <model> [selector] [prop]   live JSON of audio | dsp | radio | transmit |
 //                                   slice <id|active|tx> | slices | pan <id|active>
-//                                   | pans | flags [sliceId|all] | waveforms | kiwi;
+//                                   | pans | flags [sliceId|all] | waveforms | kiwi | daxtx;
 //                                   a trailing property returns just that field.
 //                                   `dsp` is the client-side NR modules (NR2/NR4/
 //                                   MNR/DFNR/RN2/BNR), the counterpart to the
@@ -97,6 +97,8 @@ class TxPointerAction;
 //   connect list | show | hide | local first | local serial <s> | ip <host> |
 //           wait <timeout_ms>       discovery and connection through the normal
 //                                   ConnectionPanel/MainWindow/RadioModel path.
+//   daxTx take|release|status       request this client's DAX TX stream selection;
+//                                   admission is asynchronous and never keys TX.
 //   disconnect                      the normal user disconnect path.
 //   slice tx <id>                   make <id> the TX slice. Set-only, radio-auth.
 //   key ptt on|off | key mox        PTT/MOX via the model; keying is gated by
@@ -559,6 +561,8 @@ private:
                                const QString& path) const;
     QJsonObject doGet(const QString& model, const QString& selector,
                       const QString& property) const;
+    // Client-scoped stream ownership only; no source flag, keying or stream-id input.
+    QJsonObject doDaxTx(const QString& action);
     QJsonObject doMeterWindow(const QString& action, const QString& value);
     void sampleMeterWindow();
     MeterObservationWindow m_meterWindow;

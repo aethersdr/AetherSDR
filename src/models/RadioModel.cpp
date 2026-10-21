@@ -214,11 +214,6 @@ QString normalizePanadapterId(QString text)
     return normalized.isEmpty() ? trimmed : normalized;
 }
 
-QString parsePanadapterCreateId(const QString& body)
-{
-    return RadioStatusOwnership::parsePanafallCreatePanId(body);
-}
-
 struct StreamObjectParts {
     bool valid{false};
     quint32 streamId{0};
@@ -838,6 +833,17 @@ RadioModel::SetupCommandSink RadioModel::setupCommandSink(const SetupCommandWrit
     };
 }
 
+RadioModel::AudioCommandSink RadioModel::audioCommandSink()
+{
+    const QPointer<RadioModel> model(this);
+    const quint64 generation = m_backendReceiverGeneration;
+    return [model, generation](const QString& command, ResponseCallback reply, const AudioControlGuard& guard) {
+        if (!model || generation != model->m_backendReceiverGeneration
+            || !model->controlSessionCurrent(model->controlSession())) { return false; }
+        return model->sendCmd(command, std::move(reply), [guard] { return guard.permits(); }) != 0;
+    };
+}
+
 void RadioModel::setupBackend(const QString& family)
 {
     // Rerunnable on every family switch. Every connection made here must have the
@@ -877,6 +883,12 @@ void RadioModel::setupBackend(const QString& family)
                    "was unavailable when AetherSDR was compiled."));
             return;
         }
+        connect(m_backend.get(), &IRadioBackend::daxTxStreamChanged, this,
+                [this, generation](const DaxTxStreamDelta& delta) {
+            if (generation == m_backendReceiverGeneration && !m_txSessionClosing) {
+                observeDaxTxStream(delta);
+            }
+        });
         connect(m_backend.get(), &IRadioBackend::independentTxStopped, this,
                 [this, generation](const TxStopEvidence& evidence) {
             if (generation == m_backendReceiverGeneration && !m_txSessionClosing) {
@@ -908,6 +920,12 @@ void RadioModel::setupBackend(const QString& family)
                 }
             });
             flex->setSetupCommandSink(setupCommandSink());
+            flex->setAudioCommandSink(audioCommandSink());
+            flex->setDaxTxClientHandleProvider([this] { return ourClientHandle(); });
+            flex->setDaxTxCommandSink([this](const QString& command, ResponseCallback reply,
+                                            const DaxTxRequestGuard& guard) {
+                return sendCmd(command, std::move(reply), [guard] { return guard.permits(); }) != 0;
+            });
             flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
                 sendTxKeyingCommand(cmd, fence);
             });
@@ -1107,6 +1125,7 @@ void RadioModel::setupBackend(const QString& family)
         if (!pan)
             return;
         const QString modelPanId = pan->panId();
+        retireDisplayResource(modelPanId);
         // Retire the id translation for this pan. The index IS reused —
         // neutralPanIndexFor() hands out the lowest free one, deliberately, and
         // says why. What makes that safe is the cleanup below: freeing the index
@@ -1361,12 +1380,14 @@ void RadioModel::setupBackend(const QString& family)
             m_panStream->notifyDaxCreateFailed(ch);
             return;
         }
-        sendCmd(QString("stream create type=dax_rx dax_channel=%1").arg(ch),
-                [this, ch](int code, const QString& body) {
-            if (code != 0) {
+        const QPointer<PanadapterStream> originalStream(m_panStream);
+        requestAudioStream({AudioStreamKind::DaxReceive, AudioStreamAction::Create, 0, ch},
+                [originalStream, ch](const AudioStreamReply& reply) {
+            if (!originalStream) { return; }
+            if (reply.result.kind != RadioControlReply::Kind::Accepted) {
                 qCWarning(lcDax) << "RadioModel: dax_rx stream create for channel"
-                                 << ch << "failed, code" << Qt::hex << code << body;
-                m_panStream->notifyDaxCreateFailed(ch);
+                                 << ch << "failed, code" << Qt::hex << reply.result.code << reply.result.message;
+                originalStream->notifyDaxCreateFailed(ch);
                 return;
             }
             // Success needs no action here. The #1439 legacy client-
@@ -1382,10 +1403,9 @@ void RadioModel::setupBackend(const QString& family)
     if (m_panStream)
     connect(m_panStream, &PanadapterStream::daxStreamRemoveNeeded,
             this, [this, generation](quint32 streamId, int ch) {
-        Q_UNUSED(ch);
         if (generation != m_backendReceiverGeneration) return;
         if (!isConnected()) return;
-        sendCommand(QString("stream remove 0x%1").arg(streamId, 0, 16));
+        requestAudioStream({AudioStreamKind::DaxReceive, AudioStreamAction::Remove, streamId, ch});
     });
 
     // RadioConnection (created + owned by the backend above, on its own worker
@@ -1533,6 +1553,10 @@ void RadioModel::wireBackendReceiverState()
     }
     const quint64 generation = m_backendReceiverGeneration;
     wireGpsSessionReceivers();
+    connect(m_backend.get(), &IRadioBackend::audioStreamChanged, this,
+        [this, generation](const AudioStreamDelta& delta) {
+            if (generation == m_backendReceiverGeneration) { applyAudioStreamDelta(delta); }
+        });
     // The radio's answer to a transmit setting the caller waits on. Queued, so
     // an answer never lands inside the request that asked for it, and a
     // replaced backend's late answer is dropped by the generation guard.
@@ -1760,6 +1784,8 @@ void RadioModel::wireBackendReceiverState()
 
 void RadioModel::teardownBackend()
 {
+    m_txSessionClosing = true;
+    resetAudioControls();
     resetTransmitDaxSessionState();
     // Retirement callbacks can attempt edits before teardown returns.
     const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
@@ -1772,7 +1798,9 @@ void RadioModel::teardownBackend()
     m_transmitModel.invalidateControlIntents();
     for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
+    resetDaxTxOwnership();
     ++m_backendReceiverGeneration;
+    settlePanCreations();
     ++m_receiveControlGeneration;
     m_backendObservedTransmit = false;   // an observation dies with its backend
     m_tgxlTune.reset();
@@ -2112,10 +2140,32 @@ RadioModel::RadioModel(QObject* parent)
     wireSliceLifecycle();
     qRegisterMetaType<SliceControlRequest>();
     qRegisterMetaType<TransmitControlRequest>();
+    qRegisterMetaType<DaxTxStreamDelta>();
+    qRegisterMetaType<DaxTxAudioPermit>();
+    m_daxTxGuardTimer.setSingleShot(true);
+    connect(&m_daxTxGuardTimer, &QTimer::timeout, this, &RadioModel::refreshDaxTxOwnershipGuards);
+    connect(this, &RadioModel::profileLoadStarted, this, &RadioModel::refreshDaxTxOwnershipGuards);
+    connect(this, &RadioModel::profileLoadCompleted, this, &RadioModel::refreshDaxTxOwnershipGuards);
+    connect(this, &RadioModel::radioTransmittingChanged, this, [this](bool transmitting) {
+        if (transmitting) {
+            interruptDaxTxOwnership(tr("Transmission interrupted DAX TX ownership. Waiting for fresh radio status."));
+        } else {
+            finishWsprDaxTxRelease();
+        }
+        emit daxTxOwnershipChanged();
+    });
     qRegisterMetaType<RadioSetupRequest>();
     qRegisterMetaType<SpotRequest>();
     qRegisterMetaType<PanControlRequest>();
     qRegisterMetaType<SlicePresetRequest>();
+    qRegisterMetaType<PanDisplayRequest>();
+    qRegisterMetaType<AudioStreamRequest>();
+    qRegisterMetaType<GraphicEqRequest>();
+    qRegisterMetaType<AudioStreamDelta>();
+    qRegisterMetaType<PanLifecycleRequest>();
+    connect(this, &RadioModel::panadapterAdded, this, &RadioModel::settlePanCreations);
+    connect(this, &RadioModel::panadapterReclaimed, this, &RadioModel::settlePanCreations);
+    connect(this, &RadioModel::connectionStateChanged, this, &RadioModel::settlePanCreations);
     qRegisterMetaType<TxBandRequest>();
     qRegisterMetaType<TransverterRequest>();
     qRegisterMetaType<RadioSetupReply>();
@@ -2415,9 +2465,8 @@ RadioModel::RadioModel(QObject* parent)
         return backendCapabilities().daxIqSampleRates;
     });
 
-    // Forward DAX IQ commands to the radio
-    connect(&m_daxIqModel, &DaxIqModel::commandReady, this, [this](const QString& cmd){
-        sendCmd(cmd);
+    m_daxIqModel.setControlDispatcher([this](AudioStreamRequest request, const AudioStreamCompletion& completion) {
+        return requestAudioStream(std::move(request), completion);
     });
 
     // Route amplifier (PGXL) operate intent to the radio through the backend seam
@@ -2464,18 +2513,8 @@ RadioModel::RadioModel(QObject* parent)
     });
 
 
-    // Forward equalizer model commands to the radio
-    connect(&m_equalizerModel, &EqualizerModel::commandReady, this, [this](const QString& cmd){
-        // Without a command plane the graphic EQ is served by ClientEq
-        // (MainWindow::applyGraphicEqToClientEq, bound to the model's own
-        // state signals), so the slider and a mapped MIDI band DO act. Sending
-        // the `eq` text anyway only reached sendCmd's drop and told the
-        // operator a working control was unsupported.
-        if (!hasCommandPlane()) {
-            return;
-        }
-        sendCmd(cmd);
-    });
+    connect(&m_equalizerModel, &EqualizerModel::controlRequested, this,
+        [this](const GraphicEqRequest& request) { requestGraphicEq(request); });
 
     // Forward TNF intents to the backend, which decides whether a notch is a
     // radio feature (Flex: `tnf …` on the command plane) or host DSP (HL2:
@@ -4915,6 +4954,11 @@ bool RadioModel::setTransmitImpl(bool tx, TransmitModel::PttSource source,
     if (QThread::currentThread() != thread()) {
         return false;
     }
+    const bool daxInput = backendCapabilities().hasDaxStreams
+        && (source == TransmitModel::PttSource::Dax || source == TransmitModel::PttSource::Wspr);
+    if (tx && daxInput && !daxTxStreamReady()) {
+        return false;
+    }
     TxCoordinator::Intent intent;
     if (request && !tx) {
         const TxCoordinator::Intent bound = m_txCoordinator.requestIntent(*request);
@@ -5003,8 +5047,12 @@ bool RadioModel::setTransmitImpl(bool tx, TransmitModel::PttSource source,
     // Track local intent so we can keep TX gating aligned with user/PTT edges
     // while radio interlock transitions through intermediate states.
     m_txRequested = tx;
-    const TxCoordinator::Operation operation = request
+    TxCoordinator::Operation operation = request
         ? m_txCoordinator.requestOperation(*request) : m_txOperation;
+    if (tx && daxInput) {
+        const DaxTxAudioPermit permit = m_daxTxAudioPermit;
+        operation = operation.withKeyingPermit([permit] { return permit.permits(); });
+    }
     if (!request) {
         intent = m_localTxIntents.value(TxActivity::Mox);
     }
@@ -5837,91 +5885,56 @@ bool RadioModel::removeSlice(int sliceId)
     return dispatchSliceRemoval(slice(sliceId), controlSession());
 }
 
-void RadioModel::createPanadapter()
+bool RadioModel::createPanadapter()
 {
-    // A backend that owns its receivers creates the pan at the seam; the Flex
-    // `display panafall create` text does nothing there. Checked before the limit
-    // below, which is a Flex model-string table: the backend knows its real limits
-    // (receiver count, link budget at the current span) and reports which it hit. The
-    // new pan arrives via panCenterBandwidthChanged, the one pane-creation path.
-    if (!m_flexBackend && m_backend) {
-        if (!m_backend->createPanadapter()) {
-            qCWarning(lcProtocol) << "RadioModel::createPanadapter: backend declined";
-            emit panadapterLimitReached(m_backend->capabilities().maxPanadapters, m_model);
-        }
-        return;
-    }
-
-    int limit = maxPanadapters();
-    if (static_cast<int>(m_panadapters.size()) >= limit) {
-        qCWarning(lcProtocol) << "RadioModel::createPanadapter: limit of" << limit
-                              << "panadapters reached for model" << m_model;
-        emit panadapterLimitReached(limit, m_model);
-        return;
-    }
-    const auto handleCreatedPan = [this](const QString& source, int code, const QString& body) {
-        if (code != 0) {
-            qCWarning(lcProtocol) << "RadioModel:" << source << "failed, code"
-                                  << Qt::hex << code << "body:" << body;
-            emit panadapterLimitReached(maxPanadapters(), m_model);
-            return;
-        }
-        const QString panId = parsePanadapterCreateId(body);
-
-        qCDebug(lcProtocol) << "RadioModel: new panadapter created, pan_id =" << panId;
-
-        if (!panId.isEmpty()) {
-            ensureOwnedPanadapter(panId);
-            QTimer::singleShot(200, this, [this, panId]() {
-                sendCmd(QString("display pan set %1 xpixels=1024 ypixels=700").arg(panId));
-                sendCmd(QString("display pan set %1 min_dbm=-130 max_dbm=-40").arg(panId));
-            });
-        }
-    };
-
-    qCDebug(lcProtocol) << "RadioModel::createPanadapter: sending display panafall create";
-    sendCmd("display panafall create x=100 y=100", [this, handleCreatedPan](int code, const QString& body) {
-        if (code == 0) {
-            handleCreatedPan(QStringLiteral("display panafall create"), code, body);
-            return;
-        }
-
-        qCWarning(lcProtocol) << "RadioModel: display panafall create failed, code"
-                              << Qt::hex << code << "body:" << body
-                              << "- trying legacy panadapter create";
-        sendCmd("panadapter create",
-                [handleCreatedPan](int legacyCode, const QString& legacyBody) {
-            handleCreatedPan(QStringLiteral("panadapter create"), legacyCode, legacyBody);
-        });
-    });
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    return requestPanCreation(this, [alive, session](const RadioControlReply& reply, PanadapterModel*) {
+        if (!alive || !alive->controlSessionCurrent(session)
+            || reply.kind == RadioControlReply::Kind::Accepted
+            || reply.kind == RadioControlReply::Kind::Cancelled) { return; }
+        qCWarning(lcProtocol) << "RadioModel: pan creation failed" << reply.message;
+        emit alive->panadapterLimitReached(alive->maxPanadapters(), alive->model());
+    }) != ReceiveDispatch::Unsupported;
 }
 
-void RadioModel::removePanadapter(const QString& panId)
+bool RadioModel::removePanadapter(const QString& panId, PanCloseIntent intent)
 {
-    // A panafall allocates a panadapter AND a waterfall stream, and the radio does
-    // not free the waterfall with the pan, so teardown sends both "display pan
-    // remove" and "display panafall remove" (FlexLib v4.2.18 Panadapter.Close() +
-    // Waterfall.Close(); #3843). Capture the waterfall id first: the removal echo
-    // deletes the PanadapterModel.
-    const PanadapterModel* pan = m_panadapters.value(panId, nullptr);
-    const QString wfId = pan ? pan->waterfallId() : QString();
-    qCDebug(lcProtocol) << "RadioModel::removePanadapter:" << panId
-                        << "waterfall:" << (wfId.isEmpty() ? QStringLiteral("(none)") : wfId);
-
-    // Same reasoning as createPanadapter(): on a backend that owns its
-    // receivers this is a seam verb, and the Flex teardown pair below would go
-    // nowhere. The model pane is dropped when the backend confirms with
-    // panRemoved — never optimistically, or a refused close (the last receiver)
-    // would take the pane away while the receiver kept streaming into nothing.
-    if (!m_flexBackend && m_backend) {
-        if (!m_backend->removePanadapter(backendPanIdFor(panId)))
-            qCWarning(lcProtocol) << "RadioModel::removePanadapter: backend declined" << panId;
-        return;
-    }
-    sendCommand(QStringLiteral("display pan remove ") + panId);
-    if (!wfId.isEmpty())
-        sendCommand(QStringLiteral("display panafall remove ") + wfId);
-    // Radio will send "display pan <id> removed" → handled in onStatusReceived
+    const QPointer<PanadapterModel> original(panadapter(panId));
+    const RadioControlSession session = controlSession();
+    const auto control = backendCapabilities().panLifecycleControl;
+    if (!original || !m_backend || !controlSessionCurrent(session) || !control
+        || !control->supports(PanLifecycleAction::Remove)
+        || !original->ownedByClient(clientHandle())
+        || (intent == PanCloseIntent::Ordinary && m_panadapters.size() <= 1)) { return false; }
+    const QString waterfallId = original->waterfallId();
+    const quint64 revision = original->controlRevision();
+    const quint64 retired = m_displayRetirements.value(panId);
+    const quint64 waterfallRetired = m_displayRetirements.value(waterfallId);
+    const quint64 historyEpoch = m_displayHistoryEpoch;
+    const QPointer<RadioModel> alive(this);
+    const RadioControlFence current = [alive, original, session, panId, waterfallId,
+                                      revision, retired, waterfallRetired, historyEpoch] {
+        if (!alive || !alive->controlSessionCurrent(session) || alive->m_displayHistoryEpoch != historyEpoch
+            || alive->m_displayRetirements.value(waterfallId) != waterfallRetired) { return false; }
+        PanadapterModel* held = alive->panadapter(panId);
+        if (held) {
+            if (held != original || held->controlRevision() != revision
+                || !held->ownedByClient(alive->clientHandle())) { return false; }
+        } else if (alive->m_displayRetirements.value(panId) != retired + 1) { return false; }
+        const auto observed = alive->m_radioDisplayWaterfalls.constFind(waterfallId);
+        return observed == alive->m_radioDisplayWaterfalls.cend()
+            || ((observed->clientHandle == 0 || observed->clientHandle == alive->clientHandle())
+                && (observed->parentPanId.isEmpty() || observed->parentPanId == panId));
+    };
+    return m_backend->requestPanLifecycle(
+        {PanLifecycleAction::Remove, backendPanIdFor(panId), waterfallId},
+        [alive, session](const PanLifecycleReply& reply) {
+            if (alive && alive->controlSessionCurrent(session)
+                && reply.result.kind != RadioControlReply::Kind::Accepted) {
+                qCWarning(lcProtocol) << "RadioModel: display teardown not confirmed" << reply.result.message;
+            }
+        }, current) != ReceiveDispatch::Unsupported;
 }
 
 // ── Pan accessor implementations ──────────────────────────────────────────────
@@ -5974,18 +5987,14 @@ DisplayInventory::Report RadioModel::displayInventoryReport() const
 
 bool RadioModel::resyncDisplayInventory()
 {
-    if (!isConnected()) return false;
-    // Re-subscribing to the pan domain makes the radio re-send the status of
-    // every currently-allocated panadapter + waterfall. Those replies flow
-    // through the same `display pan`/`display panafall` status parser that
-    // maintains m_radioDisplayPans/Waterfalls, so the Layer-B inventory
-    // refreshes to the radio's authoritative current set — the only way to
-    // observe a resource-level lingering waterfall that no longer emits UDP
-    // (#3856). We intentionally do NOT clear the maps first: a re-dump can
-    // only re-add/confirm objects, so a no-op on firmware that doesn't re-dump
-    // leaves the inventory intact rather than wiping it.
-    sendCmd("sub pan all");
-    return true;
+    const RadioControlSession session = controlSession();
+    const auto control = backendCapabilities().panLifecycleControl;
+    if (!m_backend || !controlSessionCurrent(session) || !control
+        || !control->supports(PanLifecycleAction::RefreshInventory)) { return false; }
+    // A subscription replay confirms observations; it is not a complete snapshot.
+    // Keep the current inventory until authoritative removal status retires it.
+    return m_backend->requestPanLifecycle({PanLifecycleAction::RefreshInventory, {}, {}})
+        == ReceiveDispatch::Dispatched;
 }
 
 double RadioModel::panCenterMhz() const
@@ -6075,9 +6084,12 @@ bool RadioModel::requestPanCenter(const QString& panId,
                                   double bandwidthMhz,
                                   IRadioBackend::PanCenterIntent intent)
 {
-    if (panId.isEmpty()) {
+    PanGeometryRequest geometry{centerMhz, bandwidthMhz > 0.0 ? std::optional<double>(bandwidthMhz) : std::nullopt};
+    PanadapterModel* target = panadapter(panId);
+    if (!target || !PanDisplayRequest{PanDisplayField::Geometry, geometry}.valid()) {
         return false;
     }
+    target->noteDisplayIntent(PanDisplayField::Geometry);
 
     const bool wantsBandwidth = bandwidthMhz > 0.0;
 
@@ -6184,9 +6196,12 @@ RadioModel::DataLiveness RadioModel::dataLiveness() const
 
 bool RadioModel::requestPanBandwidth(const QString& panId, double bandwidthMhz)
 {
-    if (panId.isEmpty() || bandwidthMhz <= 0.0) {
+    PanadapterModel* target = panadapter(panId);
+    if (!target || !PanDisplayRequest{PanDisplayField::Geometry,
+            PanGeometryRequest{std::nullopt, bandwidthMhz}}.valid()) {
         return false;
     }
+    target->noteDisplayIntent(PanDisplayField::Geometry);
 
     if (profileLoadRadioStateWritesHeld()) {
         const auto pendingBandwidth =
@@ -6224,35 +6239,28 @@ bool RadioModel::requestPanBandwidth(const QString& panId, double bandwidthMhz)
 
 bool RadioModel::requestPanAverage(const QString& panId, int average)
 {
-    if (panId.isEmpty() || average < 0 || average > 100) {
-        return false;
-    }
-
-    PanadapterModel* pan = panadapter(panId);
-
-    // A backend that shapes its own spectra has no display engine: the FlexLib
-    // command below would fail and skip the model write. The model write
-    // (m_fftAverage) feeds the rebuild restore, automation readback and
-    // RadioResourceAdapter; actual averaging comes only from setPanAverage() (ANAN:
-    // WDSP analyzer averaging time; HL2: Hl2Spectrum time-constant average).
-    // RTL averages in its acquisition-owned accumulator.
+    const QPointer<PanadapterModel> pan(panadapter(panId));
+    if (!pan || average < 0 || average > 100) { return false; }
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    const quint64 ownership = pan->ownershipRevision();
+    const quint64 intent = pan->noteDisplayIntent(PanDisplayField::Average);
     if (shapesDisplayRatesLocally()) {
-        if (!pan) {
-            return false;
-        }
         pan->setLocalAverage(average);
-        // And down to the backend, which may average its own spectrum -- the
-        // same path setPanFrameRate() takes in requestPanDisplayRates().
-        m_backend->setPanAverage(backendPanIdFor(panId), average);
+        if (!alive || !pan || !controlSessionCurrent(session) || panadapter(panId) != pan
+            || pan->ownershipRevision() != ownership
+            || pan->displayIntentRevision(PanDisplayField::Average) != intent) { return false; }
+        const auto control = backendCapabilities().panDisplayControl;
+        if (control && control->supports(PanDisplayField::Average)) {
+            requestPanDisplay(pan, {PanDisplayField::Average, average}, {}, false);
+        }
         return true;
     }
-
-    // FlexLib Panadapter.Average updates locally on dispatch; later status
-    // reconciles it. Preserve the existing ownership and profile-load gates.
-    if (!sendCommand(QString("display pan set %1 average=%2").arg(panId).arg(average))) {
-        return false;
-    }
-    if (pan) {
+    const quint64 observed = pan->fftObservationRevision();
+    if (requestPanDisplay(pan, {PanDisplayField::Average, average}) == ReceiveDispatch::Unsupported
+        || !alive || !pan || !controlSessionCurrent(session) || panadapter(panId) != pan) { return false; }
+    if (pan->fftObservationRevision() == observed && pan->ownershipRevision() == ownership
+        && pan->displayIntentRevision(PanDisplayField::Average) == intent + 1) {
         pan->setRequestedFftSettings(average, -1);
     }
     return true;
@@ -6260,20 +6268,20 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
 
 bool RadioModel::requestLocalPanWeightedAverage(const QString& panId, bool on)
 {
-    // Local-shaping backends only. On Flex the caller still sends the
-    // weighted_average= wire text itself: moving it in here would add a raw
-    // command above the seam (tools/check_command_plane.py, #5262 M4).
-    if (panId.isEmpty() || !shapesDisplayRatesLocally()) {
-        return false;
+    if (panId.isEmpty() || !shapesDisplayRatesLocally()) { return false; }
+    const QPointer<PanadapterModel> pan(panadapter(panId));
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    const quint64 ownership = pan ? pan->ownershipRevision() : 0;
+    const quint64 intent = pan ? pan->noteDisplayIntent(PanDisplayField::WeightedAverage) : 0;
+    if (pan) { pan->setLocalWeightedAverage(on); }
+    if (!alive || !pan || !controlSessionCurrent(session) || panadapter(panId) != pan
+        || pan->ownershipRevision() != ownership
+        || pan->displayIntentRevision(PanDisplayField::WeightedAverage) != intent) { return false; }
+    const auto control = backendCapabilities().panDisplayControl;
+    if (control && control->supports(PanDisplayField::WeightedAverage)) {
+        requestPanDisplay(pan, {PanDisplayField::WeightedAverage, on}, {}, false);
     }
-    // The model write mirrors requestPanAverage()'s setLocalAverage(): no
-    // radio echo is coming, so the value is authoritative here and the
-    // automation readback / resource snapshot see it (a missing pan is not
-    // an error -- the backend still gets the setting).
-    if (PanadapterModel* pan = panadapter(panId)) {
-        pan->setLocalWeightedAverage(on);
-    }
-    m_backend->setPanWeightedAverage(backendPanIdFor(panId), on);
     return true;
 }
 
@@ -6310,67 +6318,51 @@ void RadioModel::restoreClientShowTxInWaterfall()
     m_transmitModel.applyChanges(delta);
 }
 
-bool RadioModel::requestLocalPanPixelWidth(const QString& panId, int points)
+bool RadioModel::requestPanDisplayRates(const QString& panId, int fps, int wfRate)
 {
-    // Local-shaping backends only, as requestLocalPanWeightedAverage(): on
-    // Flex the caller still sends the xpixels= wire text itself. Unlike that
-    // one, nothing is mirrored into PanadapterModel: the width is not an
-    // operator setting but a fact of the window, re-sent on every resize,
-    // and fftXPixels() was never echoed for a local backend either.
-    if (panId.isEmpty() || !shapesDisplayRatesLocally()) {
-        return false;
-    }
-    m_backend->setPanPixelWidth(backendPanIdFor(panId), points);
-    return true;
-}
-
-bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
-                                        int wfRate)
-{
-    if (panId.isEmpty())
-        return false;
-
-    PanadapterModel* pan = panadapter(panId);
-
-    // A backend that streams raw spectra shapes them in onBackendSpectrumFrame,
-    // and the pan model is where that shaper reads its target. Applying locally
-    // is correct rather than optimistic here: with no radio-side display engine,
-    // the client IS the authority for these two values, so there is no echo to
-    // wait for and nothing that could later contradict it.
+    const QPointer<PanadapterModel> pan(panadapter(panId));
+    if (!pan || fps < 0 || fps > 100 || wfRate < 0 || wfRate > 100 || (!fps && !wfRate)) { return false; }
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    const quint64 ownership = pan->ownershipRevision();
+    const quint64 fpsIntent = fps > 0 ? pan->noteDisplayIntent(PanDisplayField::FrameRate) : 0;
+    const quint64 waterfallIntent = wfRate > 0 ? pan->noteDisplayIntent(PanDisplayField::WaterfallRate) : 0;
     if (shapesDisplayRatesLocally()) {
-        if (!pan)
-            return false;
         pan->setDisplayRates(fps, wfRate);
-        // The FPS half goes DOWN to the backend, which caps its own frame
-        // production. Only the waterfall's line_duration is paced up here —
-        // see onBackendSpectrumFrame for why the two live in different places.
-        if (fps > 0)
-            m_backend->setPanFrameRate(backendPanIdFor(panId), fps);
+        if (!alive || !pan || !controlSessionCurrent(session) || panadapter(panId) != pan
+            || pan->ownershipRevision() != ownership
+            || (fps > 0 && pan->displayIntentRevision(PanDisplayField::FrameRate) != fpsIntent)) { return false; }
+        const auto control = backendCapabilities().panDisplayControl;
+        if (fps > 0 && control && control->supports(PanDisplayField::FrameRate)) {
+            requestPanDisplay(pan, {PanDisplayField::FrameRate, fps}, {}, false);
+        }
         return true;
     }
-
-    bool sent = false;
+    bool dispatched = false;
     if (fps > 0) {
-        sent = sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fps));
-        if (sent && pan) {
+        const quint64 observed = pan->fftObservationRevision();
+        dispatched = requestPanDisplay(pan, {PanDisplayField::FrameRate, fps}) != ReceiveDispatch::Unsupported;
+        if (!alive || !pan || !controlSessionCurrent(session) || panadapter(panId) != pan) { return dispatched; }
+        if (dispatched && pan->fftObservationRevision() == observed && pan->ownershipRevision() == ownership
+            && pan->displayIntentRevision(PanDisplayField::FrameRate) == fpsIntent + 1) {
             pan->setRequestedFftSettings(-1, fps);
         }
     }
-    if (wfRate > 0 && pan && !pan->waterfallId().isEmpty()) {
-        // The wire parameter keeps Flex's name; the value is the rate.
-        sent = sendCommand(QString("display panafall set %1 line_duration=%2")
-                               .arg(pan->waterfallId())
-                               .arg(wfRate))
-               || sent;
+    if (!alive || !pan || !controlSessionCurrent(session) || panadapter(panId) != pan) { return dispatched; }
+    if (wfRate > 0 && !pan->waterfallId().isEmpty() && pan->ownershipRevision() == ownership
+        && pan->displayIntentRevision(PanDisplayField::WaterfallRate) == waterfallIntent) {
+        dispatched = requestPanDisplay(pan, {PanDisplayField::WaterfallRate, wfRate}) != ReceiveDispatch::Unsupported || dispatched;
     }
-    return sent;
+    return dispatched;
 }
 
 bool RadioModel::requestPanBand(const QString& panId, const QString& bandKey)
 {
-    if (panId.isEmpty() || bandKey.isEmpty()) {
+    PanadapterModel* target = panadapter(panId);
+    if (!target || !PanDisplayRequest{PanDisplayField::Band, bandKey}.valid()) {
         return false;
     }
+    target->noteDisplayIntent(PanDisplayField::Band);
 
     if (profileLoadRadioStateWritesHeld()) {
         const auto pendingBand = m_pendingProfileLoadPanWrites.pendingBand(panId);
@@ -6484,145 +6476,52 @@ double RadioModel::effectivePanBandwidthMhz(const QString& panId) const
 }
 
 bool RadioModel::dispatchPanCenterBandwidth(const QString& panId,
-                                            double centerMhz,
-                                            double bandwidthMhz,
-                                            IRadioBackend::PanCenterIntent intent)
+    double centerMhz, double bandwidthMhz, IRadioBackend::PanCenterIntent intent)
 {
     const bool hasCenter = !std::isnan(centerMhz);
     const bool hasBandwidth = bandwidthMhz > 0.0;
-    if (!hasCenter && !hasBandwidth) {
-        return false;
-    }
-
-    PanadapterModel* pan = panadapter(panId);
-
+    const QPointer<PanadapterModel> pan(panadapter(panId));
+    if (!pan || (!hasCenter && !hasBandwidth)) { return false; }
     if (hasCenter) {
-        // Re-clamp against the pan's CURRENT geometry. The request may have
-        // been clamped by its caller against geometry a profile load has since
-        // replaced — a deferred write is dispatched seconds after it was made.
-        // Same rule as every gesture path: the pan's low edge stays >= 0 Hz.
-        const double clampBandwidthMhz =
-            hasBandwidth ? bandwidthMhz : (pan ? pan->bandwidthMhz() : 0.0);
-        const double clamped = std::max(centerMhz, clampBandwidthMhz / 2.0);
-        if (clamped > centerMhz) {
-            qCDebug(lcProtocol).noquote()
-                << "RadioModel: clamping pan center against current geometry"
-                << QStringLiteral("pan=%1").arg(panId)
-                << QStringLiteral("requested=%1").arg(centerMhz, 0, 'f', 6)
-                << QStringLiteral("clamped=%1").arg(clamped, 0, 'f', 6);
-            centerMhz = clamped;
-        }
+        centerMhz = std::max(centerMhz, (hasBandwidth ? bandwidthMhz : pan->bandwidthMhz()) / 2.0);
     }
-
-    // Center and bandwidth must travel together when both are requested;
-    // splitting them produced the P1/P2 waterfall-loss and zoom-drift bugs.
-    QString command;
-    if (hasCenter && hasBandwidth) {
-        command = QString("display pan set %1 center=%2 bandwidth=%3")
-                      .arg(panId)
-                      .arg(centerMhz, 0, 'f', 6)
-                      .arg(bandwidthMhz, 0, 'f', 6);
-    } else if (hasCenter) {
-        command = QString("display pan set %1 center=%2")
-                      .arg(panId)
-                      .arg(centerMhz, 0, 'f', 6);
-    } else {
-        command = QString("display pan set %1 bandwidth=%2")
-                      .arg(panId)
-                      .arg(bandwidthMhz, 0, 'f', 6);
-    }
-
-    // A backend that owns its own pan geometry cannot be driven with Flex wire
-    // text — the command would go nowhere and the view would advance against a
-    // window the receiver never moved. Route the intent through the seam
-    // instead; the backend reports the new centre back via
-    // panCenterBandwidthChanged, which drives the model.
-    if (!m_flexBackend && m_backend) {
-        if (hasCenter) {
-            // THE CALLER'S INTENT, FORWARDED — not "did a bandwidth come with
-            // it". That inference read every centre-only writer as a drag, and
-            // most of them are not: pan-follow, reveal, the band-change
-            // recentre and the WFM recentre all send a centre alone. Reveal is
-            // the one that bites, because the centre it sends is DELIBERATELY
-            // OFFSET from the frequency in question (settle distance in from
-            // the edge) — so on a backend where Drag means retune, clicking a
-            // signal near the pan edge tuned the radio most of a half-span past
-            // it. See IRadioBackend::PanCenterIntent and requestPanCenter().
-            m_backend->setPanCenter(backendPanIdFor(panId), centerMhz * 1.0e6,
-                                    intent);
-        }
-        // Bandwidth goes through the seam for the same reason center does. This
-        // used to fall straight into the model write below, which is why zooming
-        // an HL2 produced black bars: the span the operator asked for became the
-        // view's span while the receiver kept sending its old, narrower window,
-        // and the honest VITA-49 tiles left the difference unpainted.
-        if (hasBandwidth)
-            m_backend->setPanBandwidth(backendPanIdFor(panId), bandwidthMhz * 1.0e6);
-        if (m_backend->receiveControlPolicy() == ReceiveControlPolicy::Confirmed) {
-            // Capture adoption, not dispatch, moves the view. False also keeps
-            // gesture callers from advancing their own geometry optimistically.
-            return false;
-        }
-        if (pan) {
-            // Center only. The backend snaps a span REQUEST to a rate it can
-            // actually run, so the resulting bandwidth is not ours to predict —
-            // it arrives on panCenterBandwidthChanged, which is also what makes
-            // the view widen only once the data behind it did.
-            pan->setCenterBandwidth(hasCenter ? centerMhz : pan->centerMhz(),
-                                    -1.0);
-        }
-        return true;
-    }
-
-    // Wire BEFORE model, gated on the send actually happening. sendCommand()
-    // reports the foreign-owner drop, the hold backstop, and a dead WAN
-    // session; advancing the model on any of those would re-create the exact
-    // model-claims-state-the-radio-never-took lie this fix exists to kill.
-    if (!sendCommand(command)) {
-        qCWarning(lcProtocol).noquote()
-            << "RadioModel: pan write not dispatched — model state unchanged —"
-            << command;
-        return false;
-    }
-
-    if (pan) {
-        // Keep the canonical model aligned with the command now on the wire:
-        // the radio may ACK without echoing a display status back to the
-        // setting client, and TCI dds: follows this center.
+    PanGeometryRequest geometry;
+    if (hasCenter) { geometry.centerMhz = centerMhz; }
+    if (hasBandwidth) { geometry.bandwidthMhz = bandwidthMhz; }
+    geometry.intent = intent == IRadioBackend::PanCenterIntent::Drag
+        ? PanGeometryRequest::Intent::Drag : PanGeometryRequest::Intent::Range;
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    const quint64 before = pan->geometryRevision();
+    const quint64 ownership = pan->ownershipRevision();
+    const quint64 intentRevision = pan->displayIntentRevision(PanDisplayField::Geometry) + 1;
+    const bool localSpan = shapesDisplayRatesLocally();
+    const bool confirmed = confirmsReceiveControls();
+    const ReceiveDispatch result = requestPanDisplay(pan, {PanDisplayField::Geometry, geometry});
+    if (!alive || !pan || !controlSessionCurrent(session) || panadapter(panId) != pan
+        || result == ReceiveDispatch::Unsupported || confirmed) { return false; }
+    if (pan->geometryRevision() == before && pan->ownershipRevision() == ownership
+        && pan->displayIntentRevision(PanDisplayField::Geometry) == intentRevision) {
         pan->setCenterBandwidth(hasCenter ? centerMhz : pan->centerMhz(),
-                                hasBandwidth ? bandwidthMhz : -1.0);
+            hasBandwidth && !localSpan ? bandwidthMhz : -1.0);
     }
     return true;
 }
 
 bool RadioModel::dispatchPanBand(const QString& panId, const QString& bandKey)
 {
-    const QString command =
-        QString("display pan set %1 band=%2").arg(panId, bandKey);
-
+    const QPointer<RadioModel> alive(this);
+    const QPointer<PanadapterModel> original(panadapter(panId));
+    const RadioControlSession session = controlSession();
     emit panBandAboutToDispatch(panId);
-    if (!sendCommand(command)) {
-        // The band stack is a Flex concept. On a backend with no command plane
-        // this write was never going to land — that is expected, not the #4142
-        // signature the warning exists to catch, and warning on it would fire on
-        // every band change the operator makes on an HL2. The failure signal
-        // still goes out either way: it restores the KiwiSDR mute handoff that
-        // panBandAboutToDispatch just lifted, which is needed precisely BECAUSE
-        // the write did not reach the radio.
-        if (hasCommandPlane()) {
-            qCWarning(lcProtocol).noquote()
-                << "RadioModel: pan band write not dispatched —" << command;
-        } else {
-            qCDebug(lcProtocol).noquote()
-                << "RadioModel: no command plane for the band stack, skipping" << command;
-        }
+    if (!alive) { return false; }
+    const ReceiveDispatch result = controlSessionCurrent(session)
+        ? requestPanDisplay(original, {PanDisplayField::Band, bandKey}) : ReceiveDispatch::Unsupported;
+    if (!alive) { return false; }
+    if (result == ReceiveDispatch::Unsupported) {
         emit panBandDispatchFailed(panId);
         return false;
     }
-
-    // No model write: the band-stack swap retunes center/bandwidth/slices on
-    // the radio, and that state arrives via radio status like any other
-    // radio-initiated change.
     return true;
 }
 
@@ -6678,16 +6577,41 @@ void RadioModel::flushPendingProfileLoadPanWrites()
     const QHash<QString, PanWrites> pending =
         m_pendingProfileLoadPanWrites.takeAll();
 
+    struct Target {
+        QPointer<PanadapterModel> pan;
+        quint64 ownership;
+        quint64 geometryIntent;
+        quint64 bandIntent;
+    };
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    QHash<QString, Target> targets;
+    // Snapshot the whole detached batch before any command can reenter and
+    // replace a later target or supersede its queued operator intent.
+    for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
+        if (PanadapterModel* pan = panadapter(it.key())) {
+            targets.insert(it.key(), {pan, pan->ownershipRevision(),
+                pan->displayIntentRevision(PanDisplayField::Geometry),
+                pan->displayIntentRevision(PanDisplayField::Band)});
+        }
+    }
+
     int sent = 0;
     int voided = 0;
     for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
         const QString& panId = it.key();
         const PanWrites& writes = it.value();
+        const Target target = targets.value(panId);
+        const auto current = [alive, session, target, panId] {
+            return alive && target.pan && alive->controlSessionCurrent(session)
+                && alive->panadapter(panId) == target.pan
+                && target.pan->ownershipRevision() == target.ownership;
+        };
 
         // Backstop only: the removal hook voids a dying pan's writes at
         // removal time, so a vanished pan here means a removal path was
         // missed. Void loudly either way — never silently.
-        if (!panadapter(panId)) {
+        if (!current()) {
             ++voided;
             qCWarning(lcProtocol).noquote()
                 << "RadioModel: voiding deferred pan write(s) — pan vanished"
@@ -6700,14 +6624,16 @@ void RadioModel::flushPendingProfileLoadPanWrites()
         // Band first, then center+bandwidth merged — the same order as the
         // live cross-band path: the band-stack swap lands, then the explicit
         // target overrides the stack's recalled frequency.
-        if (writes.bandKey) {
+        if (writes.bandKey && target.pan->displayIntentRevision(PanDisplayField::Band) == target.bandIntent) {
             if (dispatchPanBand(panId, *writes.bandKey)) {
                 ++sent;
             } else {
                 ++voided;
             }
         }
-        if (writes.centerMhz || writes.bandwidthMhz) {
+        if (!alive) { return; }
+        if ((writes.centerMhz || writes.bandwidthMhz) && current()
+            && target.pan->displayIntentRevision(PanDisplayField::Geometry) == target.geometryIntent) {
             const double centerMhz = writes.centerMhz
                 ? *writes.centerMhz
                 : std::numeric_limits<double>::quiet_NaN();
@@ -6719,6 +6645,7 @@ void RadioModel::flushPendingProfileLoadPanWrites()
                 ++voided;
             }
         }
+        if (!alive) { return; }
     }
 
     // Always account — a flush that voided everything is exactly the one that
@@ -6743,33 +6670,24 @@ void RadioModel::voidPendingPanWrites(const QString& panId, const QString& reaso
 
 void RadioModel::setPanDbmRange(float minDbm, float maxDbm)
 {
-    if (m_activePanId.isEmpty()) return;
-    sendCmd(
-        QString("display pan set %1 min_dbm=%2 max_dbm=%3")
-            .arg(m_activePanId)
-            .arg(static_cast<double>(minDbm), 0, 'f', 2)
-            .arg(static_cast<double>(maxDbm), 0, 'f', 2));
+    requestPanDisplay(activePanadapter(), {PanDisplayField::LevelRange, PanLevelRange{minDbm, maxDbm}});
 }
 
 void RadioModel::setBinauralRx(bool on)
 {
     if (m_binauralRx == on) return;
     m_binauralRx = on;
-    sendCmd(QString("radio set binaural_rx=%1").arg(on ? 1 : 0));
+    requestRadioSetup({RadioSetupField::BinauralReceive, on});
 }
 
 void RadioModel::setPanWnb(bool on)
 {
-    if (m_activePanId.isEmpty() || !hasCommandPlane()) return;
-    sendCmd(
-        QString("display pan set %1 wnb=%2").arg(m_activePanId).arg(on ? 1 : 0));
+    requestPanDisplay(activePanadapter(), {PanDisplayField::Wnb, on});
 }
 
 void RadioModel::setPanWnbLevel(int level)
 {
-    if (m_activePanId.isEmpty() || !hasCommandPlane()) return;
-    sendCmd(
-        QString("display pan set %1 wnb_level=%2").arg(m_activePanId).arg(level));
+    requestPanDisplay(activePanadapter(), {PanDisplayField::WnbLevel, level});
 }
 
 void RadioModel::setPanRfGain(int gain)
@@ -6779,16 +6697,7 @@ void RadioModel::setPanRfGain(int gain)
 
 void RadioModel::setPanRfGainFor(const QString& panId, int gain)
 {
-    if (panId.isEmpty()) return;
-    // A backend that owns its gain in a hardware register cannot be driven with
-    // Flex wire text — the same reason center/bandwidth route through the seam.
-    // Without this the HL2's RF Gain slider moved, persisted, and changed
-    // nothing: lnaGainDb was applied once at connect and never again.
-    if (!m_flexBackend && m_backend) {
-        m_backend->setPanRfGain(backendPanIdFor(panId), gain);
-        return;
-    }
-    sendCmd(QString("display pan set %1 rfgain=%2").arg(panId).arg(gain));
+    requestPanDisplay(panadapter(panId), {PanDisplayField::RfGain, gain});
 }
 
 // The discrete front-end stages. No Flex fallback: a Flex publishes no preamp
@@ -6812,23 +6721,19 @@ void RadioModel::setPanAttenuatorFor(const QString& panId, int step)
 
 void RadioModel::setPanAverage(int frames)
 {
-    if (m_activePanId.isEmpty()) return;
-    sendCmd(
-        QString("display pan set %1 average=%2").arg(m_activePanId).arg(frames));
+    requestPanAverage(m_activePanId, frames);
 }
 
 void RadioModel::setPanFps(int fps)
 {
-    if (m_activePanId.isEmpty()) return;
-    sendCmd(
-        QString("display pan set %1 fps=%2").arg(m_activePanId).arg(fps));
+    requestPanDisplayRates(m_activePanId, fps, 0);
 }
 
 void RadioModel::setPanWeightedAverage(bool on)
 {
-    if (m_activePanId.isEmpty()) return;
-    sendCmd(
-        QString("display pan set %1 weighted_average=%2").arg(m_activePanId).arg(on ? 1 : 0));
+    if (!requestLocalPanWeightedAverage(m_activePanId, on)) {
+        requestPanDisplay(activePanadapter(), {PanDisplayField::WeightedAverage, on});
+    }
 }
 
 // ── Display controls — Waterfall ──────────────────────────────────────────
@@ -6866,20 +6771,12 @@ void RadioModel::setWaterfallBlackLevelFor(const QString& panId, int level)
 
 void RadioModel::sendWaterfallColorGain(const QString& panId, int gain, bool reportDrop)
 {
-    const PanadapterModel* pan = panadapter(panId);
-    if (!pan || pan->waterfallId().isEmpty()) return;
-    if (!hasCommandPlane() && !reportDrop) return;
-    sendCmd(
-        QString("display panafall set %1 color_gain=%2").arg(pan->waterfallId()).arg(gain));
+    requestPanDisplay(panadapter(panId), {PanDisplayField::WaterfallColorGain, gain}, {}, reportDrop);
 }
 
 void RadioModel::sendWaterfallBlackLevel(const QString& panId, int level, bool reportDrop)
 {
-    const PanadapterModel* pan = panadapter(panId);
-    if (!pan || pan->waterfallId().isEmpty()) return;
-    if (!hasCommandPlane() && !reportDrop) return;
-    sendCmd(
-        QString("display panafall set %1 black_level=%2").arg(pan->waterfallId()).arg(level));
+    requestPanDisplay(panadapter(panId), {PanDisplayField::WaterfallBlackLevel, level}, {}, reportDrop);
 }
 
 void RadioModel::setWaterfallAutoBlack(bool on)
@@ -6896,44 +6793,23 @@ void RadioModel::setWaterfallAutoBlackSource(bool radioSide)
 
 void RadioModel::applyWaterfallAutoBlack()
 {
-    // The radio only needs to compute and embed its per-tile auto-black level
-    // when the user has selected radio-side auto-black AND auto-black is on.
-    // Otherwise the client renders the floor from its own estimate, so keep
-    // auto_black=0 (radio-authoritative when, and only when, the user asks).
-    if (activeWfId().isEmpty() || !hasCommandPlane()) return;
-    // …and only when the RADIO can actually do it. m_wfAutoBlackRadioSide is the
-    // operator's stored intent, which deliberately survives a session on a radio
-    // that computes no black level (#4606), so the capability has to be ANDed in
-    // here too. Belt-and-braces with the GUI's own mask: this is the one place
-    // that emits the command, so a caller that reaches it with a stale intent —
-    // say a connect-time push that lands before the widget has been told the
-    // capability — still cannot ask a radio for a level it will never send.
-    const int v = (m_wfAutoBlackOn && m_wfAutoBlackRadioSide
-                   && hasRadioSideWaterfallAutoBlack()) ? 1 : 0;
-    sendCmd(
-        QString("display panafall set %1 auto_black=%2")
-            .arg(activeWfId()).arg(v));
+    const bool enabled = m_wfAutoBlackOn && m_wfAutoBlackRadioSide && hasRadioSideWaterfallAutoBlack();
+    requestPanDisplay(activePanadapter(), {PanDisplayField::WaterfallAutoBlack, enabled}, {}, false);
 }
 
-void RadioModel::setWaterfallLineDuration(int ms)
+void RadioModel::setWaterfallLineDuration(int rate)
 {
-    if (activeWfId().isEmpty()) return;
-    sendCmd(
-        QString("display panafall set %1 line_duration=%2").arg(activeWfId()).arg(ms));
+    requestPanDisplayRates(m_activePanId, 0, rate);
 }
 
 void RadioModel::setPanNoiseFloorPosition(int pos)
 {
-    if (m_activePanId.isEmpty()) return;
-    sendCmd(
-        QString("display pan set %1 noise_floor_position=%2").arg(m_activePanId).arg(pos));
+    requestPanDisplay(activePanadapter(), {PanDisplayField::NoiseFloorPosition, pos});
 }
 
 void RadioModel::setPanNoiseFloorEnable(bool on)
 {
-    if (m_activePanId.isEmpty()) return;
-    sendCmd(
-        QString("display pan set %1 noise_floor_position_enable=%2").arg(m_activePanId).arg(on ? 1 : 0));
+    requestPanDisplay(activePanadapter(), {PanDisplayField::NoiseFloorEnabled, on});
 }
 
 // ─── Connection slots ─────────────────────────────────────────────────────────
@@ -8040,17 +7916,16 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
 
                         // Radio always forces Opus for remote_audio_tx regardless of
                         // what we request (confirmed by protocol testing, v1.4.0.0).
-                        sendCmd(
-                            "stream create type=remote_audio_tx compression=opus",
-                            [this](int code, const QString& body) {
-                                if (code == 0) {
-                                    quint32 id = body.trimmed().toUInt(nullptr, 16);
+                        requestAudioStream({AudioStreamKind::RemoteTransmit, AudioStreamAction::Create},
+                            [this](const AudioStreamReply& reply) {
+                                if (reply.result.kind == RadioControlReply::Kind::Accepted) {
+                                    const quint32 id = reply.streamId;
                                     qCDebug(lcProtocol) << "RadioModel: remote_audio_tx stream created, id:"
                                              << Qt::hex << id;
                                     emit remoteTxStreamReady(id);
                                 } else {
                                     qCWarning(lcProtocol) << "RadioModel: stream create remote_audio_tx failed, code"
-                                               << Qt::hex << code << "body:" << body;
+                                               << Qt::hex << reply.result.code << "body:" << reply.result.message;
                                 }
                             });
                     });
@@ -8356,6 +8231,8 @@ void RadioModel::restoreTuneInhibit()
 
 void RadioModel::onDisconnected()
 {
+    m_txSessionClosing = true;
+    resetAudioControls();
     resetTransmitDaxSessionState();
     const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
     discardTuneInhibit();
@@ -8363,6 +8240,7 @@ void RadioModel::onDisconnected()
     m_transmitModel.invalidateControlIntents();
     for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
+    resetDaxTxOwnership();
     acknowledgeTxTransportTeardown(m_txOperation);
     expirePendingCallbacks(QStringLiteral("the radio connection was disconnected"));
     qCDebug(lcProtocol) << "RadioModel: disconnected";
@@ -8375,6 +8253,7 @@ void RadioModel::onDisconnected()
     // dropping the continuation makes sure a reconnect starts from a fresh
     // peek rather than resuming a half-finished one. (#5653 review)
     ++m_sessionGeneration;
+    settlePanCreations();
     const RadioControlSession retiringSetupSession = controlSession();
     ++m_receiveControlGeneration;
     m_multiFlexContinuation = nullptr;
@@ -9091,10 +8970,14 @@ void RadioModel::sendAdaptiveCapToPan(const QString& panId, int fpsCap)
         requestPanDisplayRates(panId, fpsCap, adaptiveWfRateForCap(fpsCap));
         return;
     }
-    sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fpsCap));
-    if (!pan->waterfallId().isEmpty())
-        sendCommand(QString("display panafall set %1 line_duration=%2")
-                        .arg(pan->waterfallId()).arg(adaptiveWfRateForCap(fpsCap)));
+    const QPointer<PanadapterModel> original(pan);
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    requestPanDisplay(original, {PanDisplayField::FrameRate, fpsCap}, {}, false);
+    if (alive && original && controlSessionCurrent(session) && panadapter(panId) == original
+        && !original->waterfallId().isEmpty()) {
+        requestPanDisplay(original, {PanDisplayField::WaterfallRate, adaptiveWfRateForCap(fpsCap)}, {}, false);
+    }
 }
 
 void RadioModel::applyAdaptiveFrameRate(NetState newState, NetState oldState)
@@ -9946,33 +9829,48 @@ void RadioModel::requestLocalPtt()
 
 void RadioModel::createRxAudioStream()
 {
+    if (!backendCapabilities().audioStreamControl) { return; }
+    if (m_remoteRxAllocationPending) {
+        if (m_rxAudio.removeRequested) {
+            m_rxAudio.removeRequested = false;
+            m_remoteRxRestartAfterCancel = true;
+        }
+        logRemoteAudioRxSummary(QStringLiteral("create skipped: request already pending"));
+        return;
+    }
     if (m_rxAudio.streamId != 0) {
         logRemoteAudioRxSummary(QStringLiteral("create skipped: stream already known"));
         return;
     }
-    if (m_rxAudio.createPending) {
-        logRemoteAudioRxSummary(QStringLiteral("create skipped: request already pending"));
-        return;
-    }
 
+    m_remoteRxAllocationPending = true;
     m_rxAudio.createPending = true;
     m_rxAudio.removeRequested = false;
+    m_remoteRxRestartAfterCancel = false;
+    const RadioControlSession session = controlSession();
+    const quint64 revision = ++m_remoteRxRequestRevision;
+    const QString compression = audioCompressionParam();
+    m_remoteRxCreateGuard = AudioControlGuard::create(30000);
     resetAudioStreamDiagnostics();
     logRemoteAudioRxSummary(QStringLiteral("create requested"));
     // Push our mute preference before opening the stream. Firmware defaults
     // mute_local_audio_when_remote=1, silencing hardware outputs whenever any
     // remote_audio_rx stream exists. Overriding here covers multi-client
     // scenarios where another client (e.g. SmartSDR) has set it to 1. (#1069)
-    sendCmd(QString("radio set mute_local_audio_when_remote=%1")
-                .arg(m_muteLocalWhenRemote ? 1 : 0));
-    sendCmd(QString("stream create type=remote_audio_rx compression=%1").arg(audioCompressionParam()),
-        [this](int code, const QString& body) {
+    requestRadioSetup({RadioSetupField::MuteLocalWhenRemote, m_muteLocalWhenRemote});
+    AudioStreamRequest request{AudioStreamKind::RemoteReceive, AudioStreamAction::Create};
+    request.compression = compression == QLatin1String("opus") ? AudioCompression::Opus : AudioCompression::None;
+    request.guard = m_remoteRxCreateGuard;
+    requestAudioStream(request,
+        [this, session, revision, compression](const AudioStreamReply& reply) {
+            if (controlSession() != session || m_remoteRxRequestRevision != revision) { return; }
+            m_remoteRxAllocationPending = false;
             m_rxAudio.createPending = false;
-            if (code == 0) {
-                const quint32 streamId = RadioStatusOwnership::parseCreateResponseStreamId(body);
+            if (reply.result.kind == RadioControlReply::Kind::Accepted) {
+                const quint32 streamId = reply.streamId;
                 if (streamId == 0) {
                     qCWarning(lcProtocol) << "RadioModel: stream create remote_audio_rx returned unparseable body:"
-                                          << body;
+                                          << reply.result.message;
                     logRemoteAudioRxSummary(QStringLiteral("create response unparseable"));
                     return;
                 }
@@ -9983,12 +9881,12 @@ void RadioModel::createRxAudioStream()
                                         << RadioStatusOwnership::hexId(oldStreamId)
                                         << "with create response"
                                         << RadioStatusOwnership::hexId(streamId);
-                    sendCmd(QString("stream remove %1").arg(RadioStatusOwnership::hexId(oldStreamId)));
+                    requestAudioStream({AudioStreamKind::RemoteReceive, AudioStreamAction::Remove, oldStreamId});
                 }
 
                 m_rxAudio.streamId = streamId;
                 m_rxAudio.clientHandle = clientHandle();
-                m_rxAudio.compression = audioCompressionParam();
+                m_rxAudio.compression = compression;
                 resetAudioStreamDiagnostics();
                 qCDebug(lcProtocol) << "RadioModel: remote_audio_rx stream created, id:"
                                     << RadioStatusOwnership::hexId(streamId);
@@ -9996,17 +9894,29 @@ void RadioModel::createRxAudioStream()
                 if (m_rxAudio.removeRequested)
                     removeRxAudioStream();
             } else {
+                if (reply.result.kind == RadioControlReply::Kind::Cancelled && reply.streamId != 0
+                    && m_rxAudio.streamId == reply.streamId) { m_rxAudio = {}; }
                 qCWarning(lcProtocol) << "RadioModel: stream create remote_audio_rx failed, code"
-                           << Qt::hex << code << "body:" << body;
+                           << Qt::hex << reply.result.code << "body:" << reply.result.message;
                 logRemoteAudioRxSummary(QStringLiteral("create failed"));
+                if (std::exchange(m_remoteRxRestartAfterCancel, false) && controlSessionCurrent(session)) {
+                    QTimer::singleShot(0, this, [this, session, revision] {
+                        if (controlSessionCurrent(session) && m_remoteRxRequestRevision == revision
+                            && AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True") {
+                            createRxAudioStream();
+                        }
+                    });
+                }
             }
         });
 }
 
 void RadioModel::removeRxAudioStream()
 {
+    m_remoteRxCreateGuard.revoke();
+    m_remoteRxRestartAfterCancel = false;
     if (m_rxAudio.streamId == 0) {
-        if (m_rxAudio.createPending) {
+        if (m_remoteRxAllocationPending) {
             m_rxAudio.removeRequested = true;
             logRemoteAudioRxSummary(QStringLiteral("remove deferred: create pending"));
         } else {
@@ -10019,15 +9929,15 @@ void RadioModel::removeRxAudioStream()
     // Reassert our mute preference when tearing down. If another client's
     // stream remains open after ours is removed, this prevents the global
     // mute_local_audio_when_remote from silencing hardware outputs. (#1110)
-    sendCmd(QString("radio set mute_local_audio_when_remote=%1")
-                .arg(m_muteLocalWhenRemote ? 1 : 0));
-    sendCmd(QString("stream remove %1").arg(RadioStatusOwnership::hexId(streamId)));
+    requestRadioSetup({RadioSetupField::MuteLocalWhenRemote, m_muteLocalWhenRemote});
+    if (requestAudioStream({AudioStreamKind::RemoteReceive, AudioStreamAction::Remove, streamId})
+        == ReceiveDispatch::Unsupported) { return; }
     qCDebug(lcProtocol) << "RadioModel: removed remote_audio_rx stream"
                         << RadioStatusOwnership::hexId(streamId);
     m_rxAudio.streamId = 0;
     m_rxAudio.clientHandle = 0;
     m_rxAudio.statusSeen = false;
-    m_rxAudio.removeRequested = false;
+    m_rxAudio.removeRequested = m_remoteRxAllocationPending;
     m_rxAudio.compression.clear();
     resetAudioStreamDiagnostics();
     logRemoteAudioRxSummary(QStringLiteral("remove requested"));
@@ -10155,8 +10065,15 @@ void RadioModel::logRemoteAudioRxSummary(const QString& reason) const
         << "RadioModel: remote_audio_rx summary" << fields.join(QLatin1Char(' '));
 }
 
-quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
+quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb,
+                            std::function<bool()> dispatchAllowed)
 {
+    if (dispatchAllowed && !dispatchAllowed()) {
+        if (cb) {
+            cb(kNoCommandPlaneCode, QStringLiteral("request expired before dispatch"));
+        }
+        return 0;
+    }
     auto& perf = PerfTelemetry::instance();
     if (perf.enabled()
         && command.startsWith(QStringLiteral("display pan set "))
@@ -10250,8 +10167,13 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
         return 0;
     }
 
-    if (m_wanConn)
+    if (m_wanConn) {
+        if (dispatchAllowed && !dispatchAllowed()) {
+            if (cb) { cb(kNoCommandPlaneCode, QStringLiteral("request expired before WAN write")); }
+            return 0;
+        }
         return m_wanConn->sendCommand(command, std::move(cb));
+    }
 
     // A callback being expired at the session boundary tried to chain another
     // command. There is no session left to write to, and registering it would
@@ -10289,8 +10211,21 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
         m_pendingCallbacks.insert(seq, std::move(cb));
 
     // Queue the socket write on the connection's worker thread.
-    QMetaObject::invokeMethod(m_connection, [conn = m_connection, seq, command] {
-        conn->writeCommand(seq, command);
+    const QPointer<RadioModel> receiver(this);
+    QMetaObject::invokeMethod(m_connection, [conn = m_connection, receiver, seq, command, dispatchAllowed] {
+        if (!dispatchAllowed || dispatchAllowed()) {
+            conn->writeCommand(seq, command);
+            return;
+        }
+        if (receiver) {
+            QMetaObject::invokeMethod(receiver, [receiver, seq] {
+                if (!receiver) { return; }
+                auto callback = receiver->m_pendingCallbacks.take(seq);
+                if (callback) {
+                    callback(kNoCommandPlaneCode, QStringLiteral("request expired before transport write"));
+                }
+            });
+        }
     });
     return seq;
 }
@@ -10935,23 +10870,7 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
     }
     updateStreamFilters();
 
-    // Flex discovers this range with a command. Seam backends publish their
-    // own range via panRfGainInfoChanged; asking them a Flex-only question is
-    // both meaningless and a loud commandDropped event in the UI.
-    if (hasCommandPlane()) {
-        sendCmd(QString("display pan rfgain_info %1").arg(normalizedPanId),
-                [pan](int code, const QString& body) {
-            if (code != 0 || body.isEmpty()) return;
-            QStringList vals = body.split(',');
-            if (vals.size() < 3) return;
-            int low = vals[0].trimmed().toInt();
-            int high = vals[1].trimmed().toInt();
-            int step = vals[2].trimmed().toInt();
-            if (step > 0)
-                pan->setRfGainInfo(low, high, step);
-        });
-    }
-
+    requestPanRfGainInfo(pan);
     qCDebug(lcProtocol) << "RadioModel:" << (reclaimed ? "reclaimed" : "claimed")
                         << "panadapter" << normalizedPanId;
     if (reclaimed) {
@@ -11145,12 +11064,6 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
                 << QStringLiteral("stream=%1").arg(hexId(stream.streamId))
                 << QStringLiteral("type=%1").arg(type.isEmpty() ? QStringLiteral("(unknown)") : type)
                 << QStringLiteral("keys=%1").arg(kvs.keys().join(QLatin1Char(',')));
-            if (stream.streamId == m_daxTxStreamId) {
-                m_daxTxStreamId = 0;
-                m_daxTxActive = false;
-                m_daxTxClientHandle = 0;
-                m_daxTxCreatePending = false;
-            }
             m_deadDaxRxSeen.remove(stream.streamId);
             m_externalDaxTxSeen.remove(stream.streamId);
             m_externalDaxRxSeen.remove(stream.streamId);
@@ -11225,16 +11138,6 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
             }
         }
 
-        if (state.type == QStringLiteral("dax_tx")
-            && daxTxStatusCanUpdateLocalState(stream.streamId, m_daxTxStreamId, kvs, clientHandle())) {
-            m_daxTxStreamId = stream.streamId;
-            m_daxTxActive = state.tx;
-            updateOperatorTransmit();  // DAX TX toggled — refresh the operator
-                                       // TX-timer gate promptly (#4131 review)
-            m_daxTxClientHandle = state.clientHandle;
-            if (ownedByUs)
-                m_daxTxCreatePending = false;
-        }
 
         QStringList fields;
         fields << QStringLiteral("stream=%1").arg(hexId(stream.streamId));
@@ -11275,12 +11178,6 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
             << "RadioModel: DAX tx_audio_stream removed"
             << QStringLiteral("stream=%1").arg(hexId(txAudioStream.streamId))
             << QStringLiteral("keys=%1").arg(kvs.keys().join(QLatin1Char(',')));
-        if (txAudioStream.streamId == m_daxTxStreamId) {
-            m_daxTxStreamId = 0;
-            m_daxTxActive = false;
-            m_daxTxClientHandle = 0;
-            m_daxTxCreatePending = false;
-        }
         m_daxStreamDebug.remove(txAudioStream.streamId);
         m_externalDaxTxSeen.remove(txAudioStream.streamId);
         return;
@@ -11302,14 +11199,6 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
             << "RadioModel: external DAX TX stream observed"
             << QStringLiteral("stream=%1").arg(hexId(txAudioStream.streamId))
             << QStringLiteral("owner=%1").arg(hexId(state.clientHandle));
-    }
-    if (daxTxStatusCanUpdateLocalState(txAudioStream.streamId, m_daxTxStreamId, kvs, clientHandle())) {
-        m_daxTxStreamId = txAudioStream.streamId;
-        m_daxTxActive = state.tx;
-        updateOperatorTransmit();  // DAX TX toggled (#4131 review)
-        m_daxTxClientHandle = state.clientHandle;
-        if (ownedByUs)
-            m_daxTxCreatePending = false;
     }
     qCDebug(lcDax).noquote()
         << "RadioModel: DAX tx_audio_stream status"
@@ -11383,8 +11272,10 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
                     qCInfo(lcDax) << "RadioModel: dax_rx ch" << ch
                                   << "not auto-bound — sending #1439 nudge";
                     m_nudgedDaxStreams.insert(stream.streamId);
-                    sendCommand(QString("slice set %1 dax=%2")
-                                    .arg(s->sliceId()).arg(ch));
+                    if (m_backend) {
+                        m_backend->requestSliceControl(s->sliceId(),
+                            {SliceControlRequest::Field::DaxChannel, ch});
+                    }
                     break;
                 }
             }
@@ -11395,8 +11286,13 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
 void RadioModel::onStatusReceived(const QString& object,
                                   const QMap<QString, QString>& kvs)
 {
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession original = controlSession();
+    if (m_flexBackend) { m_flexBackend->decodeStreamStatus(object, kvs); }
+    if (!alive || controlSession() != original) { return; }
     // Relay to listeners (e.g., MemoryDialog)
     emit statusReceived(object, kvs);
+    if (!alive || controlSession() != original) { return; }
 
     handleRemoteAudioRxStreamStatus(object, kvs);
     traceDaxStreamStatus(object, kvs);
@@ -11743,6 +11639,7 @@ void RadioModel::onStatusReceived(const QString& object,
                 // in the rebuild too.
                 voidPendingPanWrites(
                     panId, QStringLiteral("pan removed during profile load"));
+                retireDisplayResource(normalizePanadapterId(panId));
                 m_radioDisplayPans.remove(normalizePanadapterId(panId));   // #3856 Layer B inventory
                 m_pendingPanStatuses.remove(panId);
                 m_panTransmitInhibitReasons.remove(panId);
@@ -11771,8 +11668,13 @@ void RadioModel::onStatusReceived(const QString& object,
             {
                 const QString nPanId = normalizePanadapterId(panId);
                 auto& e = m_radioDisplayPans[nPanId];
-                if (kvs.contains(QStringLiteral("client_handle")))
-                    e.clientHandle = parseClientHandle(kvs.value(QStringLiteral("client_handle")));
+                if (kvs.contains(QStringLiteral("client_handle"))) {
+                    const quint32 owner = parseClientHandle(kvs.value(QStringLiteral("client_handle")));
+                    if (owner != 0 && owner != clientHandle() && owner != e.clientHandle) {
+                        retireDisplayResource(nPanId);
+                    }
+                    e.clientHandle = owner;
+                }
                 // Capture the pan-side waterfall link and stamp it onto the
                 // waterfall entry's parentPanId. Some firmware conveys the
                 // pan↔waterfall link only here (the pan's `waterfall=` key) and
@@ -11905,6 +11807,7 @@ void RadioModel::onStatusReceived(const QString& object,
             const auto rm = wfRemovedRe.match(object);
             if (rm.hasMatch()) {
                 const QString wfId = normalizePanadapterId(rm.captured(1));
+                retireDisplayResource(wfId);
                 m_radioDisplayWaterfalls.remove(wfId);
                 qCDebug(lcProtocol) << "RadioModel: waterfall removed (inventory)" << wfId;
             }
@@ -11921,11 +11824,19 @@ void RadioModel::onStatusReceived(const QString& object,
             {
                 const QString nWfId = normalizePanadapterId(wfId);
                 auto& e = m_radioDisplayWaterfalls[nWfId];
-                if (kvs.contains(QStringLiteral("client_handle")))
-                    e.clientHandle = parseClientHandle(kvs.value(QStringLiteral("client_handle")));
+                if (kvs.contains(QStringLiteral("client_handle"))) {
+                    const quint32 owner = parseClientHandle(kvs.value(QStringLiteral("client_handle")));
+                    if (owner != 0 && owner != clientHandle() && owner != e.clientHandle) {
+                        retireDisplayResource(nWfId);
+                    }
+                    e.clientHandle = owner;
+                }
                 const QString parent =
                     normalizePanadapterId(kvs.value(QStringLiteral("panadapter")));
                 if (!parent.isEmpty()) {
+                    if (!e.parentPanId.isEmpty() && e.parentPanId != parent) {
+                        retireDisplayResource(nWfId);
+                    }
                     e.parentPanId = parent;
                 } else if (e.parentPanId.isEmpty()) {
                     // Firmware omitted `panadapter=` on the waterfall status:
@@ -13081,37 +12992,12 @@ void RadioModel::configurePan(const QString& panId)
 
 void RadioModel::configureWaterfall(const QString& waterfallId)
 {
-    const QString targetWaterfallId = RadioStatusOwnership::normalizedFlexId(waterfallId);
-    if (targetWaterfallId.isEmpty()) return;
-
-    // Initialize with radio auto-black OFF (the client renders the floor from
-    // its own estimate by default). The persisted auto-black on/off and
-    // client-vs-radio source are pushed moments later from the session layer
-    // via setWaterfallAutoBlack()/setWaterfallAutoBlackSource(), which raise
-    // auto_black=1 only when the user has selected radio-side. black_level is
-    // the manual fallback; color_gain is applied client-side via wfHighThresholdRaw.
-    // FlexLib uses "display panafall set" addressed to the waterfall stream ID.
-    const QString cmd = QString("display panafall set %1 auto_black=0 black_level=15 color_gain=50")
-                            .arg(targetWaterfallId);
-    sendCmd(cmd, [this, targetWaterfallId](int code, const QString&) {
-        if (code != 0) {
-            qCDebug(lcProtocol) << "RadioModel: display panafall set waterfall failed, code"
-                     << Qt::hex << code << "— trying display waterfall set";
-            // Fallback for firmware that doesn't support panafall addressing
-            sendCmd(
-                QString("display waterfall set %1 auto_black=0 black_level=15 color_gain=50")
-                    .arg(targetWaterfallId),
-                [](int code2, const QString&) {
-                    if (code2 != 0)
-                        qCWarning(lcProtocol) << "RadioModel: display waterfall set also failed, code"
-                                   << Qt::hex << code2;
-                    else
-                        qCDebug(lcProtocol) << "RadioModel: waterfall configured via display waterfall set";
-                });
-        } else {
-            qCDebug(lcProtocol) << "RadioModel: waterfall configured (auto_black=0 black_level=15 color_gain=50)";
+    for (PanadapterModel* pan : m_panadapters) {
+        if (pan->waterfallId() == waterfallId) {
+            requestPanDisplay(pan, {PanDisplayField::WaterfallDefaults, true}, {}, false);
+            return;
         }
-    });
+    }
 }
 
 bool RadioModel::profileLoadRadioStateWritesHeld() const
@@ -13151,58 +13037,18 @@ void RadioModel::ensureDefaultSlicePreferringRestoredPan()
     }
 }
 
-// Standalone mode: create panadapter + slice.
-// FlexLib v4.2.18 uses "display panafall create x=100 y=100"; keep the
-// legacy "panadapter create" as a fallback for older firmware.
-
+// Standalone mode: wait for this session's created pan before adding its slice.
 void RadioModel::createDefaultSlice(const QString& freqMhz,
-                                     const QString& mode,
-                                     const QString& antenna)
+    const QString& mode, const QString& antenna)
 {
-    qCDebug(lcProtocol) << "RadioModel: standalone mode — creating panadapter + slice"
-             << freqMhz << mode << antenna;
-
-    const auto handleCreatedPan =
-        [this, freqMhz, mode, antenna](const QString& source,
-                                       int code,
-                                       const QString& body) -> bool {
-        if (code != 0) {
-            qCWarning(lcProtocol) << "RadioModel:" << source << "failed, code"
-                                  << Qt::hex << code << "body:" << body;
-            emit panadapterLimitReached(maxPanadapters(), m_model);
-            return false;
-        }
-
-        qCDebug(lcProtocol) << "RadioModel:" << source << "response body:" << body;
-        const QString panId = parsePanadapterCreateId(body);
-        if (panId.isEmpty()) {
-            qCWarning(lcProtocol) << "RadioModel:" << source
-                                  << "returned empty pan_id";
-            return false;
-        }
-
-        qCDebug(lcProtocol) << "RadioModel: panadapter created, pan_id =" << panId;
-        createDefaultSliceOnPan(panId, freqMhz, mode, antenna);
-        return true;
-    };
-
-    sendCmd("display panafall create x=100 y=100",
-        [this, handleCreatedPan](int code, const QString& body) {
-            if (code == 0) {
-                handleCreatedPan(QStringLiteral("display panafall create"), code, body);
-                return;
-            }
-
-            qCWarning(lcProtocol) << "RadioModel: display panafall create failed, code"
-                                  << Qt::hex << code << "body:" << body
-                                  << "- trying legacy panadapter create";
-            sendCmd("panadapter create",
-                [handleCreatedPan](int legacyCode, const QString& legacyBody) {
-                    handleCreatedPan(QStringLiteral("panadapter create"),
-                                     legacyCode,
-                                     legacyBody);
-                });
-        });
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    requestPanCreation(this, [alive, session, freqMhz, mode, antenna]
+        (const RadioControlReply& reply, PanadapterModel* pan) {
+        if (!alive || !alive->controlSessionCurrent(session) || !pan
+            || reply.kind != RadioControlReply::Kind::Accepted) { return; }
+        alive->createDefaultSliceOnPan(pan->panId(), freqMhz, mode, antenna);
+    }, false);
 }
 
 void RadioModel::createDefaultSliceOnPan(const QString& panId,
@@ -13319,15 +13165,26 @@ void RadioModel::resetPanState()
 
 void RadioModel::createAudioStream()
 {
+    if (m_remoteRxAllocationPending) {
+        m_remoteRxCreateGuard.revoke();
+        m_rxAudio.removeRequested = true;
+        m_remoteRxRestartAfterCancel = true;
+        return;
+    }
     // Remove old audio stream first, then create new one in the callback
     if (m_rxAudio.streamId != 0) {
         const quint32 oldId = m_rxAudio.streamId;
-        m_rxAudio = {};
-        sendCmd(
-            QString("stream remove %1").arg(RadioStatusOwnership::hexId(oldId)),
-            [this](int, const QString&) {
-                // Old stream removed — now create the new one
-                createRxAudioStream();
+        const RadioControlSession session = controlSession();
+        const quint64 revision = ++m_remoteRxRequestRevision;
+        requestAudioStream({AudioStreamKind::RemoteReceive, AudioStreamAction::Remove, oldId},
+            [this, oldId, session, revision](const AudioStreamReply& reply) {
+                if (controlSessionCurrent(session) && reply.result.code == 0
+                    && m_remoteRxRequestRevision == revision
+                    && AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True"
+                    && (m_rxAudio.streamId == oldId || m_rxAudio.streamId == 0)) {
+                    m_rxAudio = {};
+                    createRxAudioStream();
+                }
             });
     } else {
         createRxAudioStream();
@@ -13355,7 +13212,6 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
 
     const DaxTxPolicyContext policyContext = currentDaxTxPolicyContext(reason);
     const DaxTxPolicyDecision decision = evaluateDaxTxPolicy(policyContext);
-    const quint32 ourHandle = clientHandle();
     qCInfo(lcDax).noquote()
         << "RadioModel: DAX TX policy"
         << QStringLiteral("reason=%1").arg(daxTxRequestReasonName(reason))
@@ -13378,18 +13234,33 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
         return false;
     }
 
-    const bool existingStreamIsOurs = m_daxTxStreamId != 0
-        && (m_daxTxClientHandle == 0 || m_daxTxClientHandle == ourHandle);
-    if (existingStreamIsOurs || m_daxTxCreatePending)
+    // An allocated ID still awaiting owner status is not permission to send,
+    // but it is enough to avoid allocating another stream for every producer.
+    if (m_daxTxStreamId != 0 || m_daxTxCreatePending)
         return true;
 
     m_daxTxCreatePending = true;
+    const quint64 session = m_daxTxSession;
+    const quint64 createTicket = ++m_daxTxCreateTicket;
+    const quint64 startRevision = m_daxTxObservationRevision;
+    m_daxTxCreateGuard = m_daxTxOwnershipIntent ? m_daxTxOwnershipIntent->guard
+                                               : DaxTxRequestGuard::create(3000);
+    const DaxTxRequestGuard createGuard = m_daxTxCreateGuard;
+    const QPointer<IRadioBackend> origin(m_backend.get());
     qCInfo(lcDax).noquote()
         << "RadioModel: DAX TX create requested"
         << QStringLiteral("reason=%1").arg(daxTxRequestReasonName(reason));
-    sendCmd(
-        "stream create type=dax_tx",
-        [this, reason](int code, const QString& body) {
+    AudioStreamRequest createRequest{AudioStreamKind::DaxTransmit, AudioStreamAction::Create};
+    createRequest.guard = createGuard;
+    requestAudioStream(createRequest,
+        [this, reason, session, createTicket, startRevision, origin](const AudioStreamReply& reply) {
+            const int code = reply.result.kind == RadioControlReply::Kind::Accepted ? 0
+                : reply.result.code != 0 ? reply.result.code : -1;
+            const QString& body = reply.result.message;
+            if (session != m_daxTxSession || createTicket != m_daxTxCreateTicket
+                || !origin || origin != m_backend.get()) {
+                return;
+            }
             m_daxTxCreatePending = false;
             if (code != 0) {
                 qCWarning(lcDax).noquote()
@@ -13397,37 +13268,35 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
                     << QStringLiteral("code=%1").arg(hexCode(code))
                     << QStringLiteral("body=%1").arg(body)
                     << QStringLiteral("reason=%1").arg(daxTxRequestReasonName(reason));
+                finishDaxTxOwnership(false, tr("DAX TX stream creation failed: %1").arg(body));
                 return;
             }
 
-            const quint32 id = RadioStatusOwnership::parseCreateResponseStreamId(body);
+            const quint32 id = reply.streamId;
             if (id == 0) {
                 qCWarning(lcDax).noquote()
                     << "RadioModel: DAX TX create failed"
                     << QStringLiteral("code=0x00000000")
                     << QStringLiteral("body=%1").arg(body)
                     << QStringLiteral("reason=%1").arg(daxTxRequestReasonName(reason));
+                finishDaxTxOwnership(false, tr("DAX TX stream creation failed: %1").arg(body));
                 return;
             }
 
-            const bool statusAlreadyAdoptedStream = m_daxTxStreamId == id;
-            m_daxTxStreamId = id;
-            // Stream status normally precedes the create reply. Preserve the
-            // ownership bit if that status already adopted this exact stream.
-            if (!statusAlreadyAdoptedStream) {
-                m_daxTxActive = false;
+            const QPointer<RadioModel> self(this);
+            if (!acceptDaxTxCreate(id, startRevision) || !self
+                || session != m_daxTxSession || createTicket != m_daxTxCreateTicket
+                || !origin || origin != m_backend.get()) {
+                return;
             }
-            m_daxTxClientHandle = clientHandle();
             qCInfo(lcDax).noquote()
                 << "RadioModel: DAX TX create succeeded"
                 << QStringLiteral("stream=%1").arg(hexId(id));
             emit txAudioStreamReady(id);
-            if (m_wsprTxOwnershipRequested) {
-                sendCmd(QStringLiteral("stream set %1 tx=1").arg(hexId(id)));
-            } else if (m_wsprTxReleaseWhenReady) {
-                m_wsprTxReleaseWhenReady = false;
-                sendCmd(QStringLiteral("stream set %1 tx=0").arg(hexId(id)));
-            }
+            if (!self || session != m_daxTxSession || createTicket != m_daxTxCreateTicket
+                || !origin || origin != m_backend.get()) { return; }
+            continueDaxTxOwnership();
+            if (self && session == m_daxTxSession) { finishWsprDaxTxRelease(); }
         });
     return true;
 }
@@ -13588,15 +13457,11 @@ bool RadioModel::prepareWsprTransmit(const TxCoordinator::Request& input)
     };
     acquireTransmitDax(DaxTxFlagHolder::Wspr);
     if (!current()) { releaseWsprTransmit(request); return false; }
-    const bool ready = ensureDaxTxStream(DaxTxRequestReason::WsprBeacon);
+    const bool ready = beginDaxTxOwnership(true, true);
     if (!current()) { releaseWsprTransmit(request); return false; }
     if (!ready) {
         releaseWsprTransmit(request);
         return false;
-    }
-    if (m_daxTxStreamId != 0) {
-        sendCmd(QStringLiteral("stream set %1 tx=1")
-                    .arg(hexId(m_daxTxStreamId)));
     }
     return current();
 }
@@ -13622,12 +13487,7 @@ void RadioModel::releaseWsprTransmit(const TxCoordinator::Request& input)
     // such stream.
     if (seamAudio) { return; }
     if (ownership && yield) {
-        if (m_daxTxStreamId != 0) {
-            sendCmd(QStringLiteral("stream set %1 tx=0")
-                        .arg(hexId(m_daxTxStreamId)));
-        } else if (m_daxTxCreatePending) {
-            m_wsprTxReleaseWhenReady = true;
-        }
+        releaseWsprDaxTxOwnership();
     }
     if (self && request.originalSessionCurrent()) {
         releaseTransmitDax(DaxTxFlagHolder::Wspr);

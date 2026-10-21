@@ -1615,6 +1615,7 @@ private:
     WorkspaceController* m_workspaceController{nullptr};
     QAction*             m_workspaceCanvasAction{nullptr};
     quint64              m_canvasPanLayoutGeneration{0};
+    quint64              m_panLayoutRequestGeneration{0};
     QString              m_pendingCanvasPanLayoutId;
     int                  m_pendingCanvasPanLayoutTarget{-1};
     // Additional canvas windows (phase 7), keyed by surface id.  A hidden
@@ -2323,6 +2324,8 @@ private:
 #if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
     DaxBridge* m_daxBridge{nullptr};
     QString m_savedMicSelection;  // restore on stopDax
+    RadioControlSession m_daxMicOverrideSession{};
+    quint64 m_daxMicOverrideRevision{0};
     bool startDax();
     void stopDax();
     // #2895: react to per-slice DAX channel (re)assignment while the bridge is

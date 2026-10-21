@@ -3,6 +3,7 @@
 // #6437 regression: published FlexLib rates, production request
 // admission, applet restore and replacement. No firmware peer or RF operation.
 #include "TestSettingsProfile.h"
+#include "PanControlTestFixture.h"
 #include "core/AppSettings.h"
 #include "core/AutomationServer.h"
 #include "core/ThemeManager.h"
@@ -28,6 +29,7 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QPixmap>
+#include <QScopeGuard>
 #include <QStringList>
 #include <functional>
 #include <memory>
@@ -55,45 +57,48 @@ public:
         server.m_clients.append(cs);
         QObject::connect(&client, &TciClient::textMessageReceived,
                          &server, &TciServer::onTextMessage);
-        SliceDelta slice;
-        slice.mode = QStringLiteral("USB");
-        slice.panId = QStringLiteral("0x40000000");
-        model.emitBackendSliceChangedForTest(0, slice);
+        model.handleStatusForTest(QStringLiteral("slice 0"),
+            {{"in_use", "1"}, {"client_handle", "0x71"}, {"pan", "0x40000000"}, {"mode", "USB"}});
         server.wireSlice(0, model.slice(0));
-        QSignalSpy commands(&model.daxIqModel(), &DaxIqModel::commandReady);
+        model.handleStatusForTest(QStringLiteral("display pan 0x40000000"), {{"client_handle", "0x71"}});
+        QSignalSpy commands(&model.daxIqModel(), &DaxIqModel::controlRequested);
         bool ok = true;
+        const auto expect = [&ok](bool value, const char* phase) {
+            if (!value) { std::printf("      deferred rate: %s\n", phase); }
+            ok = value && ok;
+        };
         for (const int rate : {96000, 192000}) {
             emit client.textMessageReceived(QStringLiteral("iq_samplerate:%1;").arg(rate));
-            ok = ok && server.m_iqSampleRate == rate
-                && !sent.isEmpty() && sent.last() == QStringLiteral("iq_samplerate:%1;").arg(rate);
+            expect(server.m_iqSampleRate == rate
+                && !sent.isEmpty() && sent.last() == QStringLiteral("iq_samplerate:%1;").arg(rate), "pre-identification preference");
         }
         emit client.textMessageReceived(QStringLiteral("iq_samplerate:44100;"));
-        ok = ok && server.m_iqSampleRate == 192000 && commands.isEmpty()
-            && !server.ensureIqStream(0);
+        expect(server.m_iqSampleRate == 192000 && commands.isEmpty()
+            && !server.ensureIqStream(0), "unknown model refuses create");
         changeModel(QStringLiteral("FLEX-6400M"));
         emit model.capabilitiesChanged(true, model.backendCapabilities());
-        ok = ok && server.m_iqSampleRate == 192000
+        expect(server.m_iqSampleRate == 192000
             && server.achievedIqSampleRate() == 96000 && server.ensureIqStream(0)
-            && sent.contains(QStringLiteral("iq_samplerate:96000;"));
+            && sent.contains(QStringLiteral("iq_samplerate:96000;")), "identified limited model creates");
         commands.clear();
         model.daxIqModel().applyStreamStatus(0x110, {{"daxiq_channel", "1"}, {"daxiq_rate", "48000"}});
-        ok = ok && commands.size() == 1
-            && commands.first().first().toString().endsWith(QStringLiteral("daxiq_rate=96000"));
+        expect(commands.size() == 1
+            && qvariant_cast<AudioStreamRequest>(commands.first().first()).sampleRate == 96000, "limited rate reapply");
         model.daxIqModel().handleDisconnect();
         server.resetIqStreamBookkeeping();
         changeModel(QStringLiteral("FLEX-6700"));
         emit model.capabilitiesChanged(true, model.backendCapabilities());
-        ok = ok && server.m_iqSampleRate == 192000
+        expect(server.m_iqSampleRate == 192000
             && server.achievedIqSampleRate() == 192000 && server.ensureIqStream(0)
-            && sent.last() == QStringLiteral("iq_samplerate:192000;");
+            && sent.last() == QStringLiteral("iq_samplerate:192000;"), "full rate reconnect");
         changeModel(QStringLiteral("FLEX-6400M"));
         emit model.capabilitiesChanged(true, model.backendCapabilities());
         emit client.textMessageReceived(QStringLiteral("iq_samplerate:96000;"));
         sent.clear();
         emit client.textMessageReceived(QStringLiteral("iq_samplerate:192000;"));
-        ok = ok && server.m_iqSampleRate == 96000 && sent.size() == 1
+        expect(server.m_iqSampleRate == 96000 && sent.size() == 1
             && sent.last() == QStringLiteral("iq_samplerate:96000;")
-            && protocol.generateInitBurst().contains(QStringLiteral("iq_samplerate:96000;"));
+            && protocol.generateInitBurst().contains(QStringLiteral("iq_samplerate:96000;")), "unsupported rate response");
         server.m_clients.clear();
         return ok;
     }
@@ -112,11 +117,10 @@ public:
         server.m_clients.append(cs);
         QObject::connect(&client, &TciClient::textMessageReceived,
                          &server, &TciServer::onTextMessage);
-        SliceDelta slice;
-        slice.mode = QStringLiteral("USB");
-        slice.panId = QStringLiteral("0x40000000");
-        model.emitBackendSliceChangedForTest(0, slice);
+        model.handleStatusForTest(QStringLiteral("slice 0"),
+            {{"in_use", "1"}, {"client_handle", "0x71"}, {"pan", "0x40000000"}, {"mode", "USB"}});
         server.wireSlice(0, model.slice(0));
+        model.handleStatusForTest(QStringLiteral("display pan 0x40000000"), {{"client_handle", "0x71"}});
         emit client.textMessageReceived(QStringLiteral("iq_samplerate:192000;"));
         bool ok = server.m_iqSampleRate == 192000 && server.ensureIqStream(0);
         model.daxIqModel().handleDisconnect();
@@ -131,10 +135,10 @@ public:
             && protocol.generateInitBurst().contains(QStringLiteral("iq_samplerate:96000;"));
         emit client.textMessageReceived(QStringLiteral("iq_samplerate:192000;"));
         ok = ok && sent.last() == QStringLiteral("iq_samplerate:96000;");
-        QSignalSpy requests(&model.daxIqModel(), &DaxIqModel::commandReady);
+        QSignalSpy requests(&model.daxIqModel(), &DaxIqModel::controlRequested);
         model.daxIqModel().applyStreamStatus(0x100, {{"daxiq_channel","1"}, {"daxiq_rate","48000"}});
         ok = ok && model.daxIqModel().stream(1).rateSettling
-            && requests.size() == 1 && requests.first().first().toString().endsWith("96000");
+            && requests.size() == 1 && qvariant_cast<AudioStreamRequest>(requests.first().first()).sampleRate == 96000;
         model.daxIqModel().handleDisconnect();
         server.resetIqStreamBookkeeping();
         changeModel(QStringLiteral("FLEX-6700"));
@@ -168,13 +172,23 @@ void spin(int ms)
     QTimer::singleShot(ms, &loop, &QEventLoop::quit);
     loop.exec();
 }
-class RateBackend final : public IRadioBackend {
+class RateBackend final : public FlexBackend {
 public:
+    RateBackend()
+    {
+        setModelProvider([this] { return model; });
+        setAudioCommandSink([this](const QString& command, CommandReply reply, const AudioControlGuard& guard) {
+            if (!guard.permits()) { return false; }
+            if (reply) { reply(0, command.startsWith(QStringLiteral("stream create"))
+                ? QStringLiteral("0x%1").arg(++nextId, 0, 16) : QString()); }
+            return true;
+        });
+    }
     QString model{QStringLiteral("FLEX-6700")};
     bool connected{true};
+    quint32 nextId{0x2000};
     RadioCapabilities capabilities() const override {
-        RadioCapabilities caps;
-        caps.hasDaxStreams = true;
+        RadioCapabilities caps = FlexBackend::capabilities();
         caps.daxIqSampleRates = capabilitiesFor(model).daxIqSampleRates();
         return caps;
     }
@@ -214,10 +228,13 @@ int main(int argc, char** argv)
     name.clear();
     check(flex.capabilities().daxIqSampleRates.isEmpty(), "unknown Flex model offers no IQ rates");
 
+    RadioConnection identity;
     RadioModel model;
     auto backend = std::make_unique<RateBackend>();
     RateBackend* source = backend.get();
-    model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+    model.setBackendForTest(std::move(backend), QStringLiteral("flex"), source->panStream());
+    TxOperationIntegrationTestAccess::identity(model, identity, source);
+    const auto releaseIdentity = qScopeGuard([&] { TxOperationIntegrationTestAccess::release(model); });
     DaxIqModel& iq = model.daxIqModel();
     if (app.arguments().contains(QStringLiteral("--bridge-proof"))) {
         const QString token = qEnvironmentVariable("AETHER_MCP_TOKEN");
@@ -266,7 +283,7 @@ int main(int argc, char** argv)
         QTimer::singleShot(60000, &app, &QCoreApplication::quit);
         return app.exec();
     }
-    QSignalSpy commands(&iq, &DaxIqModel::commandReady);
+    QSignalSpy commands(&iq, &DaxIqModel::controlRequested);
     auto status = [&iq](quint32 id, int ch, int rate) {
         iq.applyStreamStatus(id, {{"daxiq_channel",QString::number(ch)},
                                  {"daxiq_rate",QString::number(rate)}});
@@ -277,7 +294,7 @@ int main(int argc, char** argv)
         status(0x100, 1, 48000);
         commands.clear();
         iq.setSampleRate(1, rate);
-        check(commands.size() == 1 && commands.at(0).at(0).toString().endsWith(QString::number(rate)),
+        check(commands.size() == 1 && qvariant_cast<AudioStreamRequest>(commands.at(0).at(0)).sampleRate == rate,
               "supported request emits exact rate");
     }
     commands.clear();
@@ -291,7 +308,7 @@ int main(int argc, char** argv)
     iq.setSampleRate(1,192000);
     check(commands.isEmpty(), "96 kHz model rejects pre-create 192 kHz request");
     status(0x101,1,48000);
-    check(commands.size() == 1 && commands.at(0).at(0).toString().endsWith("96000"),
+    check(commands.size() == 1 && qvariant_cast<AudioStreamRequest>(commands.at(0).at(0)).sampleRate == 96000,
           "new session clamps previously accepted 192 kHz intent before reapply");
     commands.clear();
     iq.setSampleRate(1,192000);
@@ -475,13 +492,13 @@ int main(int argc, char** argv)
     pendingApplet.setRadioModel(nullptr);
 
     // Profile recovery seeds the supported remembered rate before creating.
-    QSignalSpy recoveryCommands(&replacementIq, &DaxIqModel::commandReady);
+    QSignalSpy recoveryCommands(&replacementIq, &DaxIqModel::controlRequested);
     replacementIq.setSampleRate(4, replacementIq.sampleRateForPreference(192000));
     replacementIq.createStream(4);
     replacementIq.applyStreamStatus(0x204, {{"daxiq_channel", "4"}, {"daxiq_rate", "48000"}});
     bool recoveredAt96k = false;
     for (const QList<QVariant>& command : recoveryCommands) {
-        recoveredAt96k = recoveredAt96k || command.first().toString().endsWith("daxiq_rate=96000");
+        recoveredAt96k = recoveredAt96k || qvariant_cast<AudioStreamRequest>(command.first()).sampleRate == 96000;
     }
     check(recoveredAt96k, "profile recovery restores a saved 192k preference at 96k");
     return failures == 0 ? 0 : 1;

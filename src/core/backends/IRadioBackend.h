@@ -16,12 +16,15 @@
 #include <QMap>
 #include <QHostAddress>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <QVariant>
 #include <QVariantMap>
 
 #include "core/backends/AmpDelta.h"
+#include "core/backends/AudioControlRequest.h"
+#include "core/backends/DaxTxStream.h"
 #include "core/backends/GpsDelta.h"
 #include "core/backends/MemoryDelta.h"
 #include "core/backends/MeterDef.h"
@@ -140,6 +143,10 @@ class IRadioBackend : public QObject {
     Q_OBJECT
 
 public:
+    virtual ReceiveDispatch requestAudioStream(const AudioStreamRequest&, const AudioStreamCompletion& = {})
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestGraphicEq(const GraphicEqRequest&)
+    { return ReceiveDispatch::Unsupported; }
     // Desktop control routing only: these do not extend the daemon registry.
     virtual ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request)
     {
@@ -152,6 +159,11 @@ public:
     }
     virtual ReceiveDispatch requestTransmitControl(const TransmitControlRequest&,
                                                     TunePowerContext = TunePowerContext::Deferred)
+    { return ReceiveDispatch::Unsupported; }
+    // Requests selection of our audio stream, never a global source or PTT edit.
+    // A dispatched command's acceptance does not confirm the observed TX bit.
+    virtual ReceiveDispatch requestDaxTxOwnership(const DaxTxOwnershipRequest&,
+                                                 DaxTxOwnershipCompletion = {})
     { return ReceiveDispatch::Unsupported; }
     // Radio-owned identity; client-owned nicknames retain their local store.
     using NicknameCompletion = std::function<void(bool accepted)>;
@@ -190,6 +202,56 @@ public:
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestTxBand(const TxBandRequest&)
     { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestPanDisplay(const QString& panId, const QString&,
+        const PanDisplayRequest& request, const RadioControlCompletion& = {},
+        const RadioControlFence& current = {})
+    {
+        const auto control = capabilities().panDisplayControl;
+        if (panId.isEmpty() || !request.valid() || !control
+            || !control->supports(request.field) || (current && !current())) {
+            return ReceiveDispatch::Unsupported;
+        }
+        const QPointer<IRadioBackend> alive(this);
+        using Field = PanDisplayField;
+        switch (request.field) {
+        case Field::Geometry: {
+            const PanGeometryRequest geometry = std::get<PanGeometryRequest>(request.value);
+            if ((geometry.centerMhz && !control->geometry.contains(PanGeometryComponent::Center))
+                || (geometry.bandwidthMhz && !control->geometry.contains(PanGeometryComponent::Bandwidth))) {
+                return ReceiveDispatch::Unsupported;
+            }
+            if (geometry.centerMhz) {
+                setPanCenter(panId, *geometry.centerMhz * 1.0e6,
+                    geometry.intent == PanGeometryRequest::Intent::Drag ? PanCenterIntent::Drag : PanCenterIntent::Range);
+            }
+            if (!alive || (current && !current())) { return ReceiveDispatch::Unsupported; }
+            if (geometry.bandwidthMhz) { alive->setPanBandwidth(panId, *geometry.bandwidthMhz * 1.0e6); }
+            break;
+        }
+        case Field::Average: setPanAverage(panId, std::get<int>(request.value)); break;
+        case Field::FrameRate: setPanFrameRate(panId, std::get<int>(request.value)); break;
+        case Field::WeightedAverage: setPanWeightedAverage(panId, std::get<bool>(request.value)); break;
+        case Field::SpectrumPoints: setPanPixelWidth(panId, std::get<int>(request.value)); break;
+        case Field::RfGain: setPanRfGain(panId, std::get<int>(request.value)); break;
+        default: return ReceiveDispatch::Unsupported;
+        }
+        return ReceiveDispatch::Dispatched;
+    }
+    virtual ReceiveDispatch requestPanLifecycle(const PanLifecycleRequest& request,
+        const PanLifecycleCompletion& = {}, const RadioControlFence& current = {})
+    {
+        const auto control = capabilities().panLifecycleControl;
+        if (!control || !control->supports(request.action) || (current && !current())) {
+            return ReceiveDispatch::Unsupported;
+        }
+        if (request.action == PanLifecycleAction::Create) {
+            return createPanadapter() ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+        }
+        if (request.action == PanLifecycleAction::Remove && !request.panId.isEmpty()) {
+            return removePanadapter(request.panId) ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+        }
+        return ReceiveDispatch::Unsupported;
+    }
     virtual ReceiveDispatch requestProfile(const ProfileRequest&,
                                            const RadioControlCompletion& = {},
                                            const RadioControlFence& = {})
@@ -1040,6 +1102,7 @@ public:
                                  quint64 requestId, const QVariant& arg = {}) = 0;
 
 signals:
+    void audioStreamChanged(const AetherSDR::AudioStreamDelta& delta);
     void independentTxStopped(const AetherSDR::TxStopEvidence& evidence);
     // The radio's own answer to a dispatched TransmitControlRequest whose
     // answerTicket was nonzero: applied when it accepted the setting. Emitted
@@ -1125,6 +1188,7 @@ signals:
     // fields the wire reported (across the transmit / interlock / ATU / APD /
     // APD-sampler status planes) and RadioModel drives the TransmitModel.
     void transmitChanged(const TransmitDelta& delta);
+    void daxTxStreamChanged(const AetherSDR::DaxTxStreamDelta& delta);
     // An explicit radio readback confirmed the keyed state. This is distinct
     // from transmitChanged because optimistic state may already equal the
     // answer and therefore produce no delta. Backends without a separate

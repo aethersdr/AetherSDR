@@ -6,6 +6,8 @@
 #include <QString>
 #include <QStringList>
 #include <optional>
+#include <array>
+#include "core/backends/PanDisplayRequest.h"
 
 namespace AetherSDR {
 
@@ -17,6 +19,14 @@ class PanadapterModel : public QObject {
 
 public:
     explicit PanadapterModel(const QString& panId, QObject* parent = nullptr);
+    ~PanadapterModel() override { cancelIqBinding(); }
+    AudioControlGuard beginIqBinding()
+    {
+        cancelIqBinding();
+        m_iqBindingGuard = AudioControlGuard::create(30000);
+        return m_iqBindingGuard;
+    }
+    void cancelIqBinding() { m_iqBindingGuard.revoke(); }
 
     // Identity
     QString panId() const { return m_panId; }
@@ -26,6 +36,12 @@ public:
     void setWaterfallId(const QString& id);
     QString clientHandle() const { return m_clientHandle; }
     void setClientHandle(const QString& h);
+    quint64 controlRevision() const { return m_controlRevision; }
+    quint64 ownershipRevision() const { return m_ownershipRevision; }
+    quint64 displayIntentRevision(PanDisplayField field) const
+    { return m_displayIntentRevisions.at(static_cast<size_t>(field)); }
+    quint64 noteDisplayIntent(PanDisplayField field)
+    { return ++m_displayIntentRevisions.at(static_cast<size_t>(field)); }
     // #3977: true when this pan belongs to the given connection handle. The
     // radio reassigns client_handle when another session reclaims the pan;
     // callers gate outbound pan-set commands on this so a superseded session
@@ -167,6 +183,7 @@ public:
     // can ACK a display setter without echoing status to the setting client.
     void setRequestedFftSettings(int average, int fps);
     int radioReportedAverage() const { return m_radioReportedAverage; }
+    quint64 fftObservationRevision() const { return m_fftObservationRevision; }
     int radioReportedFps() const { return m_radioReportedFps; }
     bool averageIsRequest() const { return m_averageIsRequest; }
     bool fpsIsRequest() const { return m_fpsIsRequest; }
@@ -266,6 +283,11 @@ signals:
     void segmentZoomChanged(bool on);
 
 private:
+    AudioControlGuard m_iqBindingGuard;
+    quint64 m_controlRevision{0};
+    quint64 m_ownershipRevision{0};
+    quint64 m_fftObservationRevision{0};
+    std::array<quint64, static_cast<size_t>(PanDisplayField::Count)> m_displayIntentRevisions{};
     QString     m_panId;
     QString     m_waterfallId;
     QString     m_clientHandle;
