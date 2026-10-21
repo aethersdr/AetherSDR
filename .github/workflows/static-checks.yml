@@ -250,6 +250,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: node tools/docs/test_log_rules.mjs
 
+      # ── full-suite.yml's red-main attribution only runs when main is red, so
+      # a regression in it would surface as a wrong verdict on a red main.
+      # This runs that step's script against stubbed GitHub data, plus the
+      # failed-list producer against a CTest summary. Stdlib-only, no network.
+      - name: Red-main attribution
+        if: ${{ !cancelled() }}
+        run: node tools/test_full_suite_attribution.mjs
+
       # ── Test registration stays in tests/tests.cmake. The root CMakeLists.txt
       # was 6,357 lines, over half of it 300+ test-target declarations; the split
       # cut it to ~2,780. tests/tests.cmake fails the CONFIGURE step if a test
