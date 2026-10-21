@@ -50,12 +50,6 @@ cmake --build build -j$(nproc)
 ./build/AetherSDR
 ```
 
-### macOS development identity
-
-A locally built app can use its own macOS permission identity while a downloaded release remains installed. Add `-DAETHER_MACOS_BUNDLE_IDENTIFIER=com.aethersdr.AetherSDR.dev` when configuring your development build. Use a different identifier for each build you want macOS to treat as a separate app.
-
-The complete **AetherSDR** target signs and verifies the finished app bundle. Launch that `.app` with `open -n /path/to/AetherSDR.app`, then allow its **Local Network** request. The downloaded release keeps its own permissions. See [macOS](./macos.md#allowing-local-network-access).
-
 ### Build on Windows 11
 
 From an MSVC developer prompt:

@@ -185,16 +185,6 @@ Additional cache values accept a value rather than ON/OFF:
 | `AETHER_TEST_FFTW_TIMELIMIT` | `0.001` | Seconds FFTW may spend measuring each plan under test; an empty value allows unbounded measurement. |
 | `AETHER_SANITIZER_TIMEOUT_SCALE` | `4` | Positive integer. Multiplier applied to every test `TIMEOUT` when the build is sanitizer-instrumented (`AETHERSDR_SANITIZER` set, or `-fsanitize=` in the global C/C++ flags or in any configuration's `CMAKE_<LANG>_FLAGS_<CONFIG>`). An uninstrumented build keeps every limit exactly as written. |
 
-## macOS application identity
-
-| Setting | Default | Purpose |
-|---|---|---|
-| `AETHER_MACOS_BUNDLE_IDENTIFIER` | `com.aethersdr.AetherSDR` | macOS only. Set a distinct reverse-DNS identifier, such as `com.aethersdr.AetherSDR.dev`, to give a local development build its own privacy permissions alongside an installed release. |
-
-Non-Xcode macOS builds sign and verify the complete app bundle after copying
-resources and helpers. Xcode handles bundle signing itself. Release packaging
-can replace the local ad-hoc signature with its distribution signature.
-
 ## Keeping this reference current
 
 Option definitions live in [CMakeLists.txt](CMakeLists.txt),
