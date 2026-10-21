@@ -41,7 +41,7 @@ To update the radio from AetherSDR, see [Firmware Update](./firmware-update.md) 
 
 - For local operation, the computer and the radio on the same LAN. Discovery uses UDP port 4992.
 - For a routed network or a VPN, the radio's IP address ([Manual Connection](./manual-connection.md)).
-- For remote operation, SmartLink with port forwarding ([SmartLink Setup](./smartlink-setup.md)), or Tailscale on a FLEX-8000 series or Aurora radio ([Tailscale Remote Access](./tailscale-remote-access.md)).
+- For remote operation, SmartLink with port forwarding ([SmartLink Setup](./smartlink-setup.md)), or Tailscale on a FLEX-8000 series or Aurora radio with firmware 4.2.18 or later ([Tailscale Remote Access](./tailscale-remote-access.md)).
 
 ## Setup
 
