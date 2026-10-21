@@ -644,6 +644,12 @@ late replies cannot overwrite newer memory observations. Other dialogs,
 controllers and the remaining
 `RadioModel` command-plane sites are still follow-up work. This does not
 complete M4 or the UI/engine split.
+CWX text, macro and keyer-control intents also use typed backend requests;
+Flex owns their encoding and queue-reply decoding. Original producer/session,
+batch-cancellation and speed-edit guards survive queued delivery. Native keyer
+adapters, radio-authoritative status and existing held-MOX behavior are preserved.
+This adds no daemon TX methods or backend support. Legacy CWX status decoding,
+NetCW startup and the separate TCI delay/ownership issues are not migrated here.
 The desktop adapter has not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX

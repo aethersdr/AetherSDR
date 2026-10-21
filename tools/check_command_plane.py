@@ -76,7 +76,6 @@ from pathlib import Path
 BASELINE = {
     # ---- models ----
     "src/models/RadioModel.cpp": 115,
-    "src/models/CwxModel.cpp": 9,
     "src/models/DaxIqModel.cpp": 4,
     "src/models/EqualizerModel.cpp": 4,
     "src/models/FlexWaveformModel.cpp": 3,
@@ -153,6 +152,7 @@ ABOVE_SEAM_DIR_FLOOR = 20
 # to catch a reintroduction of its retired raw-command helper.
 PLANE_HELPER_FILES = {
     "src/models/RadioModel.cpp",
+    "src/models/RadioModel_TxCoordinator.cpp",
     "src/models/SliceModel.cpp",
 }
 

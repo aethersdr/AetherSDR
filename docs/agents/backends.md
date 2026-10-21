@@ -192,6 +192,14 @@ sessions are rechecked after cache signals, which can synchronously retire them.
 Neutral storage validation covers supported backend modes and wide FM filters;
 the legacy Flex editor dropdown is not the storage vocabulary.
 These desktop operations add no daemon catalogue methods or TX authority.
+CWX buffered-keyer requests are typed `CwTextRequest` values; Flex owns their
+encoding and queue-reply decoding. Native text keyers retain the existing
+`sendCwText` adapter, with one actual sender per backend. Keep original producer,
+operation, batch and speed-edit fences at the terminal writer. Configuration is
+not keying; queue consumption is not radio-idle evidence. Unknown delivery must
+never retry text. Session reset retires transient speed echoes and queued restores.
+No connect-time delay push or minimum is permitted (#5945); TCI delay semantics
+and TCI producer ownership remain separate work (#6193, #5873).
 Independent slice create/remove, TX-slice selection, full duplex and runtime
 slice refresh also use typed `RadioModel` routes. `FlexSliceLifecycleControls`
 owns their wire encoding; the initial connection subscription batch is separate.

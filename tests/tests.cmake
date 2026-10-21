@@ -6424,6 +6424,12 @@ target_include_directories(cwx_quote_test PRIVATE src)
 target_link_libraries(cwx_quote_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME cwx_quote_test COMMAND cwx_quote_test)
 
+# Socket-free typed CWX requests, callback ordering and original-batch fences.
+add_executable(cwx_control_routing_test tests/cwx_control_routing_test.cpp)
+target_include_directories(cwx_control_routing_test PRIVATE src)
+target_link_libraries(cwx_control_routing_test PRIVATE aethercore Qt6::Core)
+add_test(NAME cwx_control_routing_test COMMAND cwx_control_routing_test)
+
 add_executable(cwx_panel_test
     tests/cwx_panel_test.cpp
     src/gui/CwxPanel.cpp
@@ -9647,6 +9653,7 @@ set(AETHER_SETTINGS_CONSUMERS
     cwx_speed_modifier_test
     cwx_drain_watch_test
     cwx_quote_test
+    cwx_control_routing_test
     cwx_panel_test
     dvk_panel_test
     local_voice_keyer_test

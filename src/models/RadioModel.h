@@ -2040,10 +2040,8 @@ private:
     void sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
     TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation,
                                            std::function<void()> finished = {});
-    void sendCwxCommand(const QString& command, bool keying,
-                        const TxCoordinator::Operation& operation, ResponseCallback reply = {});
-    void dispatchCwxCommand(const QString& command, TxCoordinator::Operation operation,
-                            int epoch = -1, int nChars = -1);
+    ReceiveDispatch dispatchCwxRequest(const CwTextRequest& request, TxCoordinator::Operation operation,
+                                       int epoch, int nChars, RadioControlFence current);
     bool dispatchCwxText(const QString& text, TxCoordinator::Operation operation);
     void finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator::Intent intent);
     TxCoordinator::Completion trackCwxQueue(const TxCoordinator::Operation& operation);

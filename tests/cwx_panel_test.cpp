@@ -5,6 +5,7 @@
 #include "core/AppSettings.h"
 #include "gui/CwxPanel.h"
 #include "models/CwxModel.h"
+#include "CwxControlTestFixture.h"
 
 #include <QApplication>
 #include <QByteArray>
@@ -95,15 +96,15 @@ struct Fixture {
 
     Fixture()
     {
-        QObject::connect(&model, &CwxModel::commandReady,
-                         [this](const QString& command) {
-                             commands.push_back(command);
+        QObject::connect(&model, &CwxModel::controlRequested,
+                         [this](const CwTextRequest& request) {
+                             commands.push_back(FlexCwxControls::encode(request));
                          });
         // replyCommandReady carries the final cwx send of each macro block, and
         // every live-mode char, plus the drain-watch epoch + batch char count (#3949)
-        QObject::connect(&model, &CwxModel::replyCommandReady,
-                         [this](const QString& command, int /*epoch*/, int /*nChars*/) {
-                             commands.push_back(command);
+        QObject::connect(&model, &CwxModel::replyControlRequested,
+                         [this](const CwTextRequest& request, int /*epoch*/, int /*nChars*/) {
+                             commands.push_back(FlexCwxControls::encode(request));
                          });
     }
 };

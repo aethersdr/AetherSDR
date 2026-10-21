@@ -911,6 +911,11 @@ void RadioModel::setupBackend(const QString& family)
             flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
                 sendTxKeyingCommand(cmd, fence);
             });
+            flex->setCwxCommandSink([this](const QString& command, const TxCoordinator::Command& fence,
+                                           const RadioControlFence& current, FlexBackend::CommandReply reply) {
+                return sendTxTcpCommand(command, fence.operation, fence.keying,
+                    [completion = fence.completion] { completion.finish(); }, std::move(reply), current);
+            });
             // Slice verbs route through the TX-inhibit-guarded slice sink (§6), so
             // moving slice encode behind the seam keeps TX safety above it.
             flex->setSliceCommandSink([this](const QString& cmd){
@@ -2112,6 +2117,8 @@ RadioModel::RadioModel(QObject* parent)
     wireSliceLifecycle();
     qRegisterMetaType<SliceControlRequest>();
     qRegisterMetaType<TransmitControlRequest>();
+    qRegisterMetaType<CwTextRequest>();
+    qRegisterMetaType<CwTextReply>();
     qRegisterMetaType<RadioSetupRequest>();
     qRegisterMetaType<SpotRequest>();
     qRegisterMetaType<PanControlRequest>();
@@ -2522,13 +2529,9 @@ RadioModel::RadioModel(QObject* parent)
         const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(input);
         return [operation] { return operation.permitsDispatch(txMonotonicMs()); };
     });
-    connect(&m_cwxModel, &CwxModel::commandReady, this, [this](const QString& cmd){
-        dispatchCwxCommand(cmd, m_cwxCommandOperation);
-    });
-    connect(&m_cwxModel, &CwxModel::speedCommandIssued, this, [this](int wpm) {
-        if (!usesFlexCommandPlane()) {
-            m_transmitModel.setCwSpeed(wpm);
-        }
+    m_cwxModel.setRequestSender([this](const CwTextRequest& request, int epoch, int nChars,
+                                      CwxModel::TransmissionPermit current) {
+        return dispatchCwxRequest(request, m_cwxCommandOperation, epoch, nChars, std::move(current));
     });
     m_cwxModel.setTextSender([this](const QString& text, int wpm) {
         Q_UNUSED(wpm);
@@ -2540,7 +2543,7 @@ RadioModel::RadioModel(QObject* parent)
         (void)m_txCoordinator.requestIntentEnd(intent);
         m_cwxActive = false;
         m_cwxDrainArmed = false;
-        if (m_backend && !usesFlexCommandPlane()
+        if (m_backend && !backendCapabilities().cwTextControl
             && backendCapabilities().hasRadioSideCwKeyer) {
             m_backend->abortCwText(operation.permitsCleanup() ? operation : m_txCoordinator.cleanupFence(),
                                    trackTxQueue(operation));
@@ -2550,14 +2553,6 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_cwxModel, &CwxModel::transmissionDispatched, this,
             [this](int epoch, bool untrackedMacro) {
         finishCwxDispatch(epoch, untrackedMacro, m_cwxCommandIntent);
-    });
-    // Final cwx send of each macro/text block goes via replyCommandReady so we
-    // can capture the radio_index from the reply.  CwxModel::handleSendReply
-    // stores it; applyStatus fires queueEmpty() when cwx sent= reaches it.
-    // This replaces the broken cwx queue= path — firmware never sends it
-    // (observed on FLEX-6500 fw 4.2.20.41343; the 8600 target runs 4.2.18). (#3949)
-    connect(&m_cwxModel, &CwxModel::replyCommandReady, this, [this](const QString& cmd, int epoch, int nChars){
-        dispatchCwxCommand(cmd, m_cwxCommandOperation, epoch, nChars);
     });
     // Release TX when the radio reports the CWX buffer drained (#2450): with
     // sync_cwx=1 the radio needs an explicit `xmit 0` or holds TX for its ~60 s
