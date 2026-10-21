@@ -2861,6 +2861,66 @@ void tciDeferredAudioClassificationStaysOriginal()
     }
 }
 
+void tciRefusedInputCannotClassifyFreshRequest()
+{
+    for (const bool selected : {false, true}) {
+        for (const bool refusedAudio : {false, true}) {
+            DaxTciFixture f(selected, QStringLiteral("USB"));
+            f.text(refusedAudio ? QStringLiteral("trx:999,true,tci;")
+                                : QStringLiteral("trx:999,true,mic;"));
+            check(!TxOperationIntegrationTestAccess::tciClientRequest(f.server, f.client).valid()
+                && !f.f.commands.contains(QStringLiteral("mox:on")),
+                "a definitive TCI refusal retires the captured request without keying");
+            const bool freshAudio = !refusedAudio;
+            f.text(freshAudio ? QStringLiteral("trx:0,true,tci;")
+                              : QStringLiteral("trx:0,true,mic;"));
+            const bool shouldKey = !freshAudio || selected;
+            const bool keyed = f.f.commands.contains(QStringLiteral("mox:on"));
+            check(keyed == shouldKey
+                && (!keyed || TxOperationIntegrationTestAccess::tciWantsAudio(f.server) == freshAudio),
+                "a fresh TCI input uses its own source classification and DAX selection grant");
+            if (keyed) {
+                check(TxOperationIntegrationTestAccess::tciMedia(f.server)
+                        .permitsDispatch(TxCoordinator::monotonicMs()),
+                    "a fresh admitted TCI request carries its own permitted media");
+            }
+        }
+    }
+}
+
+void tciRefusedPromotionCannotClassifyFreshRequest()
+{
+    for (const bool selected : {false, true}) {
+        for (const bool refusedAudio : {false, true}) {
+            if (refusedAudio && !selected) { continue; }
+            DaxTciFixture f(selected, QStringLiteral("USB"));
+            f.txSlice(false);
+            f.text(refusedAudio ? QStringLiteral("trx:0,true,tci;")
+                                : QStringLiteral("trx:0,true,mic;"));
+            const TxCoordinator::Request original =
+                TxOperationIntegrationTestAccess::tciClientRequest(f.server, f.client);
+            const RadioControlCompletion reply = f.f.backend->selectionReplies.empty()
+                ? RadioControlCompletion{} : f.f.backend->selectionReplies.front();
+            check(reply && original.valid(), "a TCI promotion retains its input while awaiting the reply");
+            if (!reply) { continue; }
+            reply({RadioControlReply::Kind::Refused, 1, QStringLiteral("refused")});
+            check(!original.valid()
+                && !TxOperationIntegrationTestAccess::tciClientRequest(f.server, f.client).valid()
+                && !TxOperationIntegrationTestAccess::hasDeferredTciRequest(f.server)
+                && !f.f.commands.contains(QStringLiteral("mox:on")),
+                "a refused promotion retires the original TCI input without keying");
+            f.txSlice(true);
+            const bool freshAudio = !refusedAudio;
+            f.text(freshAudio ? QStringLiteral("trx:0,true,tci;")
+                              : QStringLiteral("trx:0,true,mic;"));
+            const bool keyed = f.f.commands.contains(QStringLiteral("mox:on"));
+            check(keyed == (!freshAudio || selected)
+                && (!keyed || TxOperationIntegrationTestAccess::tciWantsAudio(f.server) == freshAudio),
+                "a fresh input after a refused promotion rechecks its source and DAX grant");
+        }
+    }
+}
+
 void tciHardwareAndCwIgnoreDaxSelection()
 {
     {
@@ -3215,6 +3275,8 @@ int main(int argc, char** argv)
     tciDeferredDaxInputCannotSurviveRetake();
     tciPromotingDaxInputCannotSurviveRetake();
     tciDeferredAudioClassificationStaysOriginal();
+    tciRefusedInputCannotClassifyFreshRequest();
+    tciRefusedPromotionCannotClassifyFreshRequest();
     tciHardwareAndCwIgnoreDaxSelection();
     tciHostModulationIgnoresDaxSelection();
     tciProducerLifetimes();

@@ -2407,6 +2407,24 @@ bool TciServer::trxWantsAudio(TciClient* client, const TciProtocol::TrxRequest& 
         || mode == QStringLiteral("FDVU") || mode == QStringLiteral("FDVL");
 }
 
+void TciServer::retireTrxRequest(TciClient* client, const TxCoordinator::Request& request)
+{
+    ClientState* state = client ? clientStateFor(client) : nullptr;
+    if (!state || !state->pttRequest.sameRequest(request)) {
+        return;
+    }
+    const bool wantsAudio = state->pttWantsAudio;
+    // Retire before replying: a fresh or reentrant input must not inherit
+    // a refused request's source classification or DAX grant.
+    state->pttRequest = {};
+    state->pttDaxPermit = DaxTxAudioPermit::blocked();
+    state->pttWantsAudio = false;
+    if (m_model) {
+        m_model->requestProducerPttOff(request, wantsAudio ? TransmitModel::PttSource::Dax
+                                                        : TransmitModel::PttSource::TciHardware);
+    }
+}
+
 void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxRequest& request)
 {
     ClientState* state = clientStateFor(client);
@@ -2442,23 +2460,34 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
                                 const DaxTxAudioPermit& daxPermit)
 {
     if (!client || !client->live() || !m_model) {
+        retireTrxRequest(client, txRequest);
         return;
     }
+    const QPointer<TciServer> receiver(this);
+    const QPointer<TciClient> requester(client);
+    const auto refuse = [receiver, requester, txRequest, trx = request.trx] {
+        if (!receiver || !requester) { return; }
+        receiver->retireTrxRequest(requester, txRequest);
+        if (receiver && requester) {
+            receiver->replyText(requester, QStringLiteral("trx:%1,false;").arg(trx));
+        }
+    };
     if (request.transmitting && wantsAudio) {
         if (m_model->backendCapabilities().hasDaxStreams && !daxPermit.permits()) {
-            const QPointer<TciServer> self(this);
-            const QPointer<TciClient> socket(client);
-            m_model->requestProducerPttOff(txRequest, TransmitModel::PttSource::Dax);
-            if (self && socket) { replyText(socket, QStringLiteral("trx:%1,false;").arg(request.trx)); }
+            refuse();
             return;
         }
         m_model->noteDaxTxInput(txRequest);
     }
     if (request.transmitting && m_icomUnkeySettle.isAwaitingConfirmation()
         && !m_icomUnkeySettle.isSettling()) {
-        replyText(client, QStringLiteral("trx:%1,%2;")
-                              .arg(request.trx)
-                              .arg(m_tciPttClient == client ? "true" : "false"));
+        const bool transmitting = m_tciPttClient == client;
+        retireTrxRequest(client, txRequest);
+        if (receiver && requester) {
+            receiver->replyText(requester, QStringLiteral("trx:%1,%2;")
+                                              .arg(request.trx)
+                                              .arg(transmitting ? "true" : "false"));
+        }
         return;
     }
     if (request.transmitting
@@ -2542,7 +2571,7 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
         qCWarning(lcCat) << "TCI PTT: trx" << request.trx
                          << "declined - another client holds TCI PTT"
                          << "peer=" << client->peerAddress().toString();
-        replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
+        refuse();
         return;
     }
     if (m_tciPttClient == client && m_tciPttRequestedOn) {
@@ -2551,6 +2580,8 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
     if (m_model->isRadioTransmitting()) {
         if (m_tciPttClient == client) {
             replyText(client, QStringLiteral("trx:%1,true;").arg(request.trx));
+        } else {
+            retireTrxRequest(client, txRequest);
         }
         return;
     }
@@ -2577,11 +2608,11 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
                                       " mid-recreate) - request declined"
                                     : "cannot be resolved - radio not connected, or no slices"
                                       " - request declined");
-        replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
+        refuse();
         return;
     }
     if (!m_model->sliceOwnedByUs(rxSlice->sliceId())) {
-        replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
+        refuse();
         return;
     }
     // With the requester: a TX slice another client operates as its receiver
@@ -2622,7 +2653,7 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
     if (!txSlice) {
         qCWarning(lcCat).noquote() << "TCI PTT: resolved tx slice" << sliceTag(txSliceId)
                                    << "does not exist - request declined";
-        replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
+        refuse();
         return;
     }
     const QString inhibitReason = m_model->panTransmitInhibitReason(txSlice->panId());
@@ -2632,7 +2663,7 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
         // than one that wraps: this is a translated sentence, not a token.
         qCWarning(lcCat).noquote() << "TCI PTT: slice" << sliceTag(txSliceId)
                                    << "is transmit-inhibited -" << inhibitReason.simplified();
-        replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
+        refuse();
         return;
     }
 
@@ -2648,7 +2679,7 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
     QPointer<TciServer> self(this);
     QPointer<TciClient> socket(client);
     promoteTxSliceAndContinue(txSliceId,
-        [self, socket, request, txRequest, wantsAudio, daxPermit, transitionGeneration](bool selected) {
+        [self, socket, request, txRequest, wantsAudio, daxPermit, transitionGeneration, refuse](bool selected) {
         if (!self) {
             return;
         }
@@ -2667,10 +2698,7 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
                 qCWarning(lcCat) << "TCI PTT: trx" << request.trx
                                  << "declined - TX producer request is invalid";
             }
-            if (socket) {
-                self->replyText(socket,
-                    QStringLiteral("trx:%1,false;").arg(request.trx));
-            }
+            refuse();
             if (self) { self->finishRouteTransition(transitionGeneration); }
             return;
         }
@@ -2715,9 +2743,7 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
         if (!admitted) {
             self->abortTciPtt();
             if (!self) { return; }
-            if (socket) {
-                self->replyText(socket, QStringLiteral("trx:%1,false;").arg(request.trx));
-            }
+            refuse();
             if (self) { self->finishRouteTransition(transitionGeneration); }
             return;
         }

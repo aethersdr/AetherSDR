@@ -125,6 +125,7 @@ Several TCI programs can be connected at once, and each keys the slice it asked 
 - An externally selected TX slice only wins when split was requested, or when VFO B set up a route for that exact receiver, so satellite and cross-band split still work.
 - A receiver that cannot be resolved is **declined**, never keyed on slice A instead.
 - **Every refused PTT is answered with `trx:<n>,false;`**, including a second client trying to key while another holds TCI PTT. WSJT-X shows this as "TCI failed to set ptt".
+- After a refusal, a new request uses its own microphone or transmit-audio source. On FlexRadio, a TCI transmit-audio request also requires AetherSDR’s **TX stream** to be **Selected** in **DAX Audio** (see [DAX Virtual Audio](./dax-virtual-audio.md#the-dax-audio-applet)).
 - **Receiver numbers are stable.** If a slice closes mid-session, the other slices keep their receiver numbers, and the freed number goes to the next new slice.
 - A VFO B request from one client does not retune another client's slice.
 
