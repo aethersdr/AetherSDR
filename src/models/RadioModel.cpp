@@ -6634,14 +6634,15 @@ void RadioModel::setBinauralRx(bool on)
     sendCmd(QString("radio set binaural_rx=%1").arg(on ? 1 : 0));
 }
 
+// The connect-time replay of the stored WNB state: no operator moved a control.
 void RadioModel::setPanWnb(bool on)
 {
-    requestPanDisplay(activePanadapter(), {PanDisplayField::Wnb, on});
+    requestPanDisplay(activePanadapter(), {PanDisplayField::Wnb, on}, {}, false);
 }
 
 void RadioModel::setPanWnbLevel(int level)
 {
-    requestPanDisplay(activePanadapter(), {PanDisplayField::WnbLevel, level});
+    requestPanDisplay(activePanadapter(), {PanDisplayField::WnbLevel, level}, {}, false);
 }
 
 void RadioModel::setPanRfGain(int gain)
