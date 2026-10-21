@@ -41,9 +41,10 @@ work in `.md` files.
 The **Docs** workflow (`.github/workflows/docs.yml`) builds the site and the
 PDF on every pull request that touches `docs/user/`, `tools/docs/` or the
 workflow itself. A merge to `main` deploys nothing: the site is deployed to
-Cloudflare Pages when an app release is published, from the release's tag.
+Cloudflare Pages when an app release is published, from the release's tag,
+unless it is a backport (not the highest version), which deploys nothing.
 A maintainer can redeploy by hand with **Run workflow** on the Docs workflow,
-from the latest release by default, or from `ref`: `main`, to publish a
+from the highest app release by default, or from `ref`: `main`, to publish a
 docs-only fix between releases, or a published app release tag. Any other
 branch or tag is refused. The deploy runs in the `cloudflare-pages`
 environment, which holds `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`;

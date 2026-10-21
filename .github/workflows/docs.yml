@@ -21,10 +21,13 @@ name: Docs
 # https://docs.aethersdr.com/AetherSDR-Manual.pdf; the deploy writes a
 # _redirects entry sending that URL to the signed PDF on the release.
 #
-# A manual run (workflow_dispatch) redeploys the site: from the latest app
+# Only the highest app release version deploys, so a backport release gets
+# its PDF but leaves the site as it is.
+#
+# A manual run (workflow_dispatch) redeploys the site: from the highest app
 # release by default, or from `ref`, which must be `main` (for a docs-only
 # fix between releases) or a published app release tag. Its PDF link always
-# points at the latest app release.
+# points at the highest app release.
 #
 # This is NOT a required status check, which is what makes the `paths:`
 # filter safe here. A required check that a PR never triggers blocks that PR
@@ -40,7 +43,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'main or a published app release tag (empty: the latest app release)'
+        description: 'main or a published app release tag (empty: the highest app release)'
         required: false
         default: ''
   release:
@@ -294,8 +297,10 @@ jobs:
   # out.
   #
   # A release deploys its own tag, after sign-release-pdf has attached the
-  # PDF, so the redirect never points at a missing file. A manual run deploys
-  # the latest app release, or `ref`, which may only be `main` or a published
+  # PDF, so the redirect never points at a missing file; a release that is
+  # not the highest app release version (a backport) gets its PDF but
+  # deploys nothing, so the site never moves back. A manual run deploys the
+  # highest app release, or `ref`, which may only be `main` or a published
   # app release tag: any other branch or tag is refused, so a manual run
   # cannot publish unreviewed code. The PDF link always names a release,
   # because a run from main has no signed PDF of its own.
@@ -315,6 +320,7 @@ jobs:
     permissions:
       contents: read
     outputs:
+      deploy: ${{ steps.target.outputs.deploy }}
       sha: ${{ steps.target.outputs.sha }}
       pdf_url: ${{ steps.target.outputs.pdf_url }}
     steps:
@@ -334,20 +340,31 @@ jobs:
             [[ "$1" =~ $tag_re ]] || return 1
             [ "$(gh release view "$1" --repo "$GITHUB_REPOSITORY" \
                    --json isDraft,isPrerelease \
-                   --jq '(.isDraft or .isPrerelease) | not' 2>/dev/null)" = "true" ]
+                   --jq '(.isDraft or .isPrerelease) | not')" = "true" ]
           }
 
+          # The highest published, non-pre-release app release by version,
+          # not by creation date or GitHub's Latest marker, either of which a
+          # backport or a non-app release can take.
+          highest=$(gh release list --repo "$GITHUB_REPOSITORY" \
+            --exclude-drafts --exclude-pre-releases --limit 100 \
+            --json tagName --jq '.[].tagName | select(test("^v[0-9]+(\\.[0-9]+){1,3}$"))' \
+            | sort -V | tail -n 1)
+          if [ -z "$highest" ]; then
+            echo "::error::No published app release (v*) found."
+            exit 1
+          fi
+
           if [ -n "$RELEASE_TAG" ]; then
+            if [ "$RELEASE_TAG" != "$highest" ]; then
+              echo "::notice::${RELEASE_TAG} is not the highest app release (${highest}); the site is not deployed."
+              echo "deploy=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             pdf_tag="$RELEASE_TAG"
             ref="$RELEASE_TAG"
           else
-            pdf_tag=$(gh release list --repo "$GITHUB_REPOSITORY" \
-              --exclude-drafts --exclude-pre-releases --limit 50 \
-              --json tagName --jq '[.[] | select(.tagName | test("^v[0-9]"))][0].tagName')
-            if [ -z "$pdf_tag" ]; then
-              echo "::error::No published app release (v*) found."
-              exit 1
-            fi
+            pdf_tag="$highest"
             ref="${INPUT_REF:-$pdf_tag}"
           fi
 
@@ -384,6 +401,7 @@ jobs:
 
           echo "Deploying ${ref} (${sha}); PDF manual from ${pdf_tag}"
           {
+            echo "deploy=true"
             echo "sha=${sha}"
             echo "pdf_url=https://github.com/${GITHUB_REPOSITORY}/releases/download/${pdf_tag}/${pdf}"
           } >> "$GITHUB_OUTPUT"
@@ -392,7 +410,7 @@ jobs:
   build-site:
     name: Build docs site for deploy
     needs: resolve-target
-    if: ${{ !cancelled() && needs.resolve-target.result == 'success' }}
+    if: ${{ !cancelled() && needs.resolve-target.result == 'success' && needs.resolve-target.outputs.deploy == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -406,11 +424,12 @@ jobs:
           ref: ${{ needs.resolve-target.outputs.sha }}
           persist-credentials: false
 
+      # No dependency cache: this build is what gets published, so it
+      # installs from the lockfile rather than from a restored cache.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: docs/user/package-lock.json
+          package-manager-cache: false
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
@@ -464,6 +483,11 @@ jobs:
     timeout-minutes: 10
     environment: cloudflare-pages
     permissions: {}
+    # One deploy at a time, so a manual run and a release run cannot race
+    # and leave the older site live.
+    concurrency:
+      group: docs-deploy
+      cancel-in-progress: false
     steps:
       # The secrets are configured, so a missing one is a misconfiguration
       # to fix, not a reason to skip the deploy.
