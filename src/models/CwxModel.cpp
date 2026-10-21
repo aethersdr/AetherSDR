@@ -149,7 +149,8 @@ ReceiveDispatch CwxModel::dispatchRequest(const CwTextRequest& request, int epoc
     const TransmissionPermit batch = queuedTransmissionPermit();
     const std::shared_ptr<std::atomic<bool>> speed = m_speedIntentValid;
     const bool speedRequest = request.field == CwTextRequest::Field::Speed;
-    const bool batchRequest = request.keys() || request.origin != CwTextRequest::Origin::Operator;
+    const bool batchRequest = request.keys() || request.origin != CwTextRequest::Origin::Operator
+        || request.field == CwTextRequest::Field::Clear || request.field == CwTextRequest::Field::Erase;
     const TransmissionPermit current = [batch, speed, speedRequest, batchRequest] {
         return (!batchRequest || batch())
             && (!speedRequest || speed->load(std::memory_order_acquire));

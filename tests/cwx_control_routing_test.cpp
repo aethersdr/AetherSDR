@@ -231,6 +231,20 @@ void modelIntentAndEchoFences()
     check(configurationWrites == 1 && configured(),
           "repeating the current speed does not cancel its still-queued original write");
 
+    for (const CwTextRequest::Field field : {CwTextRequest::Field::Clear, CwTextRequest::Field::Erase}) {
+        CwxModel cleanup;
+        CwxModel::TransmissionPermit queuedCleanup;
+        cleanup.setRequestSender([&](const CwTextRequest& request, int, int, CwxModel::TransmissionPermit current) {
+            if (request.field == field) { queuedCleanup = std::move(current); }
+            return ReceiveDispatch::Dispatched;
+        });
+        if (field == CwTextRequest::Field::Clear) { cleanup.clearBuffer(); }
+        else { cleanup.erase(1); }
+        check(queuedCleanup && queuedCleanup(), "original-batch cleanup has a positive delivery fence");
+        cleanup.resetDrainWatch();
+        check(queuedCleanup && !queuedCleanup(), "queued cleanup retires with its original batch");
+    }
+
     int idle = 0;
     QObject::connect(&delayed, &CwxModel::queueEmpty, &delayed, [&] { ++idle; });
     const int epoch = delayed.drainEpoch();
