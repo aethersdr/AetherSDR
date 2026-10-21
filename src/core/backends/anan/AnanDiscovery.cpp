@@ -274,6 +274,11 @@ bool AnanDiscovery::openSocket()
 
 void AnanDiscovery::sweepNow()
 {
+    // start() starts the timer before its first sweep, and stop() stops it,
+    // so this is also the stopped case.
+    if (!isRunning()) {
+        return;
+    }
     // One socket for the session: a wildcard bind does not depend on which
     // interfaces are up, so it is made once, when there is none.
     if (!m_socket && !openSocket()) {

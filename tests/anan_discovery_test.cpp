@@ -36,8 +36,17 @@
 #include <cstdio>
 #include <functional>
 
+namespace AetherSDR::anan {
+// AnanDiscovery's friend: whether it holds a socket, read without opening one.
+class AnanDiscoveryTestAccess {
+public:
+    static bool hasSocket(const AnanDiscovery& d) { return d.m_socket != nullptr; }
+};
+}  // namespace AetherSDR::anan
+
 using AetherSDR::anan::AnanDiscovery;
 using AetherSDR::anan::AnanDiscoveryLog;
+using AetherSDR::anan::AnanDiscoveryTestAccess;
 
 static int g_failures = 0;
 static void check(bool cond, const char* what)
@@ -297,6 +306,16 @@ void resetForgetsEverything()
           "reset (AnanDiscovery::stop): all four conditions are logged again");
 }
 
+// A discovery that is not running opens no socket, so sends nothing. Never
+// started is the same state stop() leaves: timer stopped, no socket.
+void sweepWhileStoppedSendsNothing()
+{
+    AnanDiscovery discovery;
+    discovery.sweepNow();
+    check(!AnanDiscoveryTestAccess::hasSocket(discovery),
+          "sweepNow() on a discovery that is not running opens no socket");
+}
+
 }  // namespace
 
 // One ordinary IPv4 entry: an address, its netmask, and the broadcast address
@@ -431,12 +450,15 @@ int main(int argc, char** argv)
     const QtMessageHandler previous = qInstallMessageHandler(capture);
 
     // Control: the capture sees the category, and the filter rule is live.
+    // Info is checked too: the silence line is the one Info line.
     const QStringList control = logged([] {
         qCDebug(AetherSDR::lcDiscovery) << "control debug";
+        qCInfo(AetherSDR::lcDiscovery) << "control info";
         qCWarning(AetherSDR::lcDiscovery) << "control warning";
     });
-    check(control.size() == 1 && control.first().startsWith(QStringLiteral("W|")),
-          "control: an aether.discovery warning is captured, its debug is filtered");
+    check(control.size() == 2 && control.at(0).startsWith(QStringLiteral("I|"))
+              && control.at(1).startsWith(QStringLiteral("W|")),
+          "control: aether.discovery info and warning are captured, its debug is filtered");
 
     bindFailureIsLoggedOncePerCondition();
     noSubnetIsLoggedOncePerCondition();
@@ -444,6 +466,7 @@ int main(int argc, char** argv)
     silenceIsLoggedOnceAfterThreshold();
     sweepWithNoProbeSentIsNotSilence();
     resetForgetsEverything();
+    sweepWhileStoppedSendsNothing();
 
     qInstallMessageHandler(previous);
 

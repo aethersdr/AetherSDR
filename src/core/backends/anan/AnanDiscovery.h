@@ -79,7 +79,8 @@ public:
     void start(int intervalMs = 5000);
     void stop();
     // Broadcast one discovery datagram now (also called by the interval timer).
-    // Binds the socket first when there is none.
+    // Binds the socket first when there is none. Does nothing unless started:
+    // a stopped discovery opens no socket and sends nothing.
     void sweepNow();
 
     [[nodiscard]] bool isRunning() const noexcept;
@@ -128,6 +129,8 @@ private slots:
     void onSweepTimer();
 
 private:
+    friend class AnanDiscoveryTestAccess;
+
     // Binds the wildcard socket and wires it; false, with the failure
     // reported, when the bind fails.
     bool openSocket();
