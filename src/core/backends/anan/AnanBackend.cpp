@@ -423,6 +423,7 @@ RadioCapabilities AnanBackend::capabilities() const
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
         PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage,
         PanDisplayField::SpectrumPoints}, {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove
     // No setTune() implementation, so no tune generator to select a mode on.
     c.twoToneGenerator = std::nullopt;
     c.firmwareUpdateSource = std::nullopt;  // gateware number; no published list covers it.

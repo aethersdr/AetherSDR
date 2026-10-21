@@ -117,6 +117,31 @@ are in [local receive control](../aetherd-local-receive-control.md#qualified-bac
 `control_receive_test` pins declarations and action-time admission; the optional
 RTL declaration check runs only when the RTL backend is built.
 
+### Pan display and lifecycle requests
+
+`panDisplayControl` lists the `PanDisplayField`s a backend implements, plus which
+geometry components (center, span) it can change. `panLifecycleControl` lists the
+pan actions it implements and whether creation is `Native` (published before the
+call returns) or `Answered` (the reply names the ID; publication follows). Both are
+desktop request records: `RadioModel::requestPanDisplay()`, `requestPanCreation()`,
+`removePanadapter()`, `resyncDisplayInventory()` and the RF gain range query refuse
+anything undeclared. They do not widen the daemon capability catalogue.
+
+| Backend | `panDisplayControl` fields | Span | `panLifecycleControl` |
+|---|---|---|---|
+| Flex | geometry, band, level range, pixels, average, FPS, weighted average, RF gain, WNB + level, loops A/B, noise-floor position + enable, waterfall rate/color gain/black level/auto-black/defaults | ✅ | Answered: create, remove, inventory refresh, RF gain info |
+| HL2 | geometry, RF gain, FPS, average, weighted average | ✅ | Native: create, remove |
+| ANAN | geometry, RF gain, FPS, average, weighted average, spectrum points | ✅ | absent |
+| RTL | geometry, RF gain, FPS, average, weighted average | ✅ | absent |
+| Icom | geometry, RF gain | ✅ | absent |
+| Demo | geometry | ❌ center only | Answered: create, remove |
+
+A declared record without span (`!PanDisplayControl::declaresSpan()`, today the
+Demo) dims every pane's −/+ pair with its reason, and the other zoom routes send
+no span request (`MainWindow::panSpanFixedByBackend()`, `PanSpanControlGate.h`).
+An absent record dims nothing. `pan_dimension_routing_test` builds each family's
+real record; `pan_control_routing_test` pins the Flex encoder and fences.
+
 ### Native receive audio export
 
 `receiveAudioExport` describes the typed pre-monitor `sliceAudioFrameReady`

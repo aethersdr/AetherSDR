@@ -294,6 +294,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.family = QStringLiteral("icom");
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove
     c.manufacturer = QStringLiteral("Icom");
     c.model = QString::fromUtf8(m.name.data(), static_cast<int>(m.name.size()));
 
