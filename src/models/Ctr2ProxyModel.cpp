@@ -11,6 +11,7 @@
 #include <QNetworkInterface>
 #include <QRegularExpression>
 #include <QTimer>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include <utility>
 
@@ -81,6 +82,8 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     });
 #ifdef HAVE_HIDAPI
     m_usbDevices = [] { return Ctr2HidapiPort::enumerate(); };
+    // HidDiscovery serializes HIDAPI discovery across threads (#6604).
+    m_usbDevicesThreadSafe = true;
     m_usbOpener = [](const Ctr2HidPort::DeviceInfo& device, QString* error) -> Ctr2HidPort* {
         return Ctr2HidapiPort::open(device, error);
     };
@@ -110,11 +113,12 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     connect(m_autoStartTimer, &QTimer::timeout, this, &Ctr2ProxyModel::tryAutoStart);
     if (m_settings.autoStart)
         m_autoStartTimer->start();
+    m_rescanWatcher = new QFutureWatcher<DeviceScan>(this);
     m_deviceRescan = new QTimer(this);
     m_deviceRescan->setInterval(kDeviceRescanMs);
     connect(m_deviceRescan, &QTimer::timeout, this, [this] {
         if (m_usbDevices && !isRunning() && !m_firmware->isRunning())
-            refreshDevices();
+            rescanInBackground();
     });
     m_deviceRescan->start();
     refreshDevices();
@@ -130,9 +134,10 @@ Ctr2ProxyModel::~Ctr2ProxyModel()
 }
 
 void Ctr2ProxyModel::setUsbBackend(UsbDeviceSource devices, UsbPortOpener opener,
-                                   UsbCapsPortOpener firmwareOpener)
+                                   UsbCapsPortOpener firmwareOpener, bool threadSafeSource)
 {
     m_usbDevices = std::move(devices);
+    m_usbDevicesThreadSafe = threadSafeSource;
     m_usbOpener = std::move(opener);
     m_firmwareOpener = std::move(firmwareOpener);
     m_usbChoices.clear();
@@ -140,7 +145,7 @@ void Ctr2ProxyModel::setUsbBackend(UsbDeviceSource devices, UsbPortOpener opener
     emit configurationChanged();
 }
 
-void Ctr2ProxyModel::refreshDevices()
+QStringList Ctr2ProxyModel::scanListenAddresses()
 {
     QStringList choices;
     for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
@@ -158,9 +163,48 @@ void Ctr2ProxyModel::refreshDevices()
         }
     }
     choices.removeDuplicates();
+    return choices;
+}
 
-    const QList<Ctr2HidPort::DeviceInfo> usb = m_usbDevices ? m_usbDevices()
-                                                            : QList<Ctr2HidPort::DeviceInfo>();
+void Ctr2ProxyModel::refreshDevices()
+{
+    ++m_scanGeneration;   // a background scan already under way is stale
+    applyDeviceScan({scanListenAddresses(),
+                     m_usbDevices ? m_usbDevices() : QList<Ctr2HidPort::DeviceInfo>()});
+}
+
+// Enumerating interfaces and HID devices can block for a long time, on
+// Windows and inside HidDiscovery's process-wide lock alike, so the periodic
+// rescan does it on the thread pool and only applies the result here.
+void Ctr2ProxyModel::rescanInBackground()
+{
+    if (!m_usbDevicesThreadSafe) {
+        refreshDevices();
+        return;
+    }
+    if (m_rescanWatcher->isRunning()) {
+        return;   // the previous scan is still out; this tick is not needed
+    }
+    const quint64 generation = m_scanGeneration;
+    disconnect(m_rescanWatcher, &QFutureWatcher<DeviceScan>::finished, this, nullptr);
+    connect(m_rescanWatcher, &QFutureWatcher<DeviceScan>::finished, this, [this, generation] {
+        // Dropped if a synchronous scan or a backend change came first, or
+        // the relay or an update started while it was out.
+        if (generation != m_scanGeneration || isRunning() || m_firmware->isRunning()) {
+            return;
+        }
+        applyDeviceScan(m_rescanWatcher->result());
+    });
+    // A copy of the source, never `this`: the scan may outlive the model.
+    m_rescanWatcher->setFuture(QtConcurrent::run([source = m_usbDevices] {
+        return DeviceScan{scanListenAddresses(), source()};
+    }));
+}
+
+void Ctr2ProxyModel::applyDeviceScan(DeviceScan scan)
+{
+    QStringList& choices = scan.listenChoices;
+    const QList<Ctr2HidPort::DeviceInfo>& usb = scan.usb;
     bool usbChanged = usb.size() != m_usbChoices.size();
     for (int i = 0; !usbChanged && i < usb.size(); ++i) {
         usbChanged = usb[i].path != m_usbChoices[i].path;
@@ -168,7 +212,7 @@ void Ctr2ProxyModel::refreshDevices()
     if (choices == m_listenChoices && !usbChanged) {
         return;
     }
-    m_listenChoices = choices;
+    m_listenChoices = std::move(choices);
     m_usbChoices = usb;
     // Default to the first recognized CTR2 while nothing is selected or the
     // selected device has gone; an existing choice stands.
@@ -356,7 +400,8 @@ void Ctr2ProxyModel::tryAutoStart()
         || m_firmware->isRunning() || m_aetherRadioAddress.isNull()) {
         return;
     }
-    refreshDevices();   // the device may have been plugged in since
+    // The device list is the one the periodic rescan keeps current, so a
+    // controller plugged in since shows up within kDeviceRescanMs.
     if (!configurationProblem().isEmpty())
         return;
     if (m_transport == Transport::Usb) {

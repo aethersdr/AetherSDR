@@ -5,6 +5,7 @@
 #include "core/Ctr2HidPort.h"
 #include "core/TcpByteProxy.h"
 
+#include <QFutureWatcher>
 #include <QHostAddress>
 #include <QList>
 #include <QObject>
@@ -42,7 +43,9 @@ public:
     ~Ctr2ProxyModel() override;
 
     // USB HID access. Defaults to hidapi (absent when the build has none);
-    // tests inject a device list and a port opener.
+    // tests inject a device list and a port opener. The periodic rescan calls
+    // a source marked thread-safe on the thread pool, off the GUI thread; any
+    // other source is called on this object's thread.
     using UsbDeviceSource = std::function<QList<Ctr2HidPort::DeviceInfo>()>;
     using UsbPortOpener =
         std::function<Ctr2HidPort*(const Ctr2HidPort::DeviceInfo&, QString* error)>;
@@ -52,10 +55,12 @@ public:
     using UsbCapsPortOpener = std::function<Ctr2HidPort*(const Ctr2HidPort::DeviceInfo&,
                                                          quint32 hostCapabilities, QString* error)>;
     void setUsbBackend(UsbDeviceSource devices, UsbPortOpener opener,
-                       UsbCapsPortOpener firmwareOpener = {});
+                       UsbCapsPortOpener firmwareOpener = {},
+                       bool threadSafeSource = false);
     bool usbAvailable() const { return static_cast<bool>(m_usbOpener); }
 
-    // Rescans local IPv4 addresses and CTR2-class USB HID devices.
+    // Rescans local IPv4 addresses and CTR2-class USB HID devices, now, on
+    // this thread. The periodic rescan does the same work off the GUI thread.
     void refreshDevices();
 
     // Setters refuse (return false) while running.
@@ -184,6 +189,13 @@ signals:
     void firmwareVersionChanged();
 
 private:
+    struct DeviceScan {
+        QStringList listenChoices;
+        QList<Ctr2HidPort::DeviceInfo> usb;
+    };
+    static QStringList scanListenAddresses();
+    void applyDeviceScan(DeviceScan scan);
+    void rescanInBackground();
     void tryAutoStart();
     void saveSetup();
     static bool parsePort(const QString& text, quint16* port);
@@ -213,6 +225,7 @@ private:
     QString m_runningRadioLabel;
     QString m_stopReason;                // why the relay stopped on its own
     UsbDeviceSource m_usbDevices;
+    bool m_usbDevicesThreadSafe{false};
     UsbPortOpener m_usbOpener;
     UsbCapsPortOpener m_firmwareOpener;
     void probeFirmwareVersion();
@@ -225,6 +238,10 @@ private:
     Ctr2RelaySettings m_settings;
     QTimer* m_autoStartTimer{nullptr};
     QTimer* m_deviceRescan{nullptr};
+    QFutureWatcher<DeviceScan>* m_rescanWatcher{nullptr};
+    // Bumped by every synchronous scan and backend change, so a background
+    // scan that started before one of them is dropped.
+    quint64 m_scanGeneration{0};
     bool m_autoStartHeld{false};   // the operator stopped it this connection
 };
 

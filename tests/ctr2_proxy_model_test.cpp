@@ -14,6 +14,8 @@
 #include <QThread>
 #include <QFile>
 #include <QHostAddress>
+#include <QMutex>
+#include <QTimer>
 #include <QPointer>
 #include <QRegularExpression>
 #include <QSet>
@@ -363,6 +365,84 @@ void testDevicesRescanByThemselves()
           "after a firmware switch the new device is found without a Rescan");
 }
 
+// The periodic rescan enumerates a thread-safe source off the GUI thread:
+// the event loop keeps turning during a slow scan, the result still reaches
+// the list, and a scan overtaken by an explicit Rescan is dropped.
+void testRescanRunsOffGuiThread()
+{
+    using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
+    const Info a{QStringLiteral("ctr2-a"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"), {}};
+    const Info b{QStringLiteral("ctr2-b"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"), {}};
+    struct Source {
+        QMutex mutex;
+        QList<Info> devices;
+        int slowMs{0};
+        int workerCalls{0};
+        QThread* gui{nullptr};
+    };
+    auto source = std::make_shared<Source>();
+    source->devices = {a};
+    source->gui = QThread::currentThread();
+    Ctr2ProxyModel model;
+    model.setUsbBackend(
+        [source] {
+            int slowMs = 0;
+            QList<Info> devices;
+            {
+                const QMutexLocker lock(&source->mutex);
+                if (QThread::currentThread() != source->gui) {
+                    ++source->workerCalls;
+                    slowMs = source->slowMs;
+                }
+                devices = source->devices;
+            }
+            QThread::msleep(slowMs);
+            return devices;
+        },
+        [](const Info&, QString*) { return static_cast<AetherSDR::Ctr2HidPort*>(nullptr); },
+        {}, true);
+    check(model.usbDevicePath() == a.path, "the first scan lists the device");
+
+    {
+        const QMutexLocker lock(&source->mutex);
+        source->slowMs = 1500;
+        source->devices = {b};
+    }
+    const auto workerCalls = [&] {
+        const QMutexLocker lock(&source->mutex);
+        return source->workerCalls;
+    };
+    check(waitUntil([&] { return workerCalls() > 0; }, Ctr2ProxyModel::kDeviceRescanMs + 2000),
+          "the periodic rescan calls the source off the GUI thread");
+    // The scan now sleeps 1.5 s on its worker; the event loop must not.
+    int ticks = 0;
+    QTimer tick;
+    tick.setInterval(20);
+    QObject::connect(&tick, &QTimer::timeout, [&] { ++ticks; });
+    tick.start();
+    waitUntil([] { return false; }, 600);
+    tick.stop();
+    check(ticks >= 10, "the event loop keeps running while a slow scan is out");
+    check(model.usbDevicePath() == a.path, "the list changes only when the scan completes");
+    check(waitUntil([&] { return model.usbDevicePath() == b.path; }, 3000),
+          "the background scan's result reaches the device list");
+
+    // A synchronous Rescan while a background scan is out wins: the older
+    // result, which still lists b, is dropped when it arrives.
+    const int before = workerCalls();
+    check(waitUntil([&] { return workerCalls() > before; }, Ctr2ProxyModel::kDeviceRescanMs + 2000),
+          "another background scan starts");
+    {
+        const QMutexLocker lock(&source->mutex);
+        source->slowMs = 0;
+        source->devices = {a};
+    }
+    model.refreshDevices();
+    check(model.usbDevicePath() == a.path, "an explicit Rescan applies at once");
+    waitUntil([] { return false; }, 1800);
+    check(model.usbDevicePath() == a.path, "a background scan overtaken by a Rescan is dropped");
+}
+
 // Selecting another CTR2 while the first one's version probe is still
 // pending probes the new one once the first finishes; a model destroyed
 // mid-probe closes the probe's port.
@@ -602,6 +682,7 @@ int main(int argc, char** argv)
     testAutoStart(QStringLiteral("AetherCTR2"));   // names itself
     testAutoStart(QStringLiteral("AETHER_KNOB"));  // the fixed AetherKnob identity
     testDevicesRescanByThemselves();
+    testRescanRunsOffGuiThread();
     testFirmwareCommandsOffered();
 
     if (g_failures) {
