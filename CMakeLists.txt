@@ -2520,12 +2520,17 @@ endif()
 
 # macOS app bundle
 if(APPLE)
+    set(AETHER_MACOS_BUNDLE_IDENTIFIER "com.aethersdr.AetherSDR" CACHE STRING
+        "macOS app identity; use a distinct reverse-DNS identifier for a local development build")
+    if(NOT AETHER_MACOS_BUNDLE_IDENTIFIER MATCHES "^[A-Za-z0-9][A-Za-z0-9.-]*$")
+        message(FATAL_ERROR "AETHER_MACOS_BUNDLE_IDENTIFIER must contain only letters, digits, periods and hyphens")
+    endif()
     target_sources(AetherSDR PRIVATE src/MacStartupAbortGuard.cpp)
     target_sources(AetherSDR PRIVATE src/gui/mac/NativeWindowTitle.mm)
     target_link_libraries(AetherSDR PRIVATE "-framework AppKit")
     set_target_properties(AetherSDR PROPERTIES
         MACOSX_BUNDLE TRUE
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.aethersdr.AetherSDR"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "${AETHER_MACOS_BUNDLE_IDENTIFIER}"
         MACOSX_BUNDLE_BUNDLE_NAME "AetherSDR"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
@@ -3571,6 +3576,21 @@ foreach(_aether_tgt aethercore aetherdesktop_support AetherSDR aetherd)
         )
     endif()
 endforeach()
+
+# The linker signature leaves Info.plist unbound. Sign the finished bundle so
+# LaunchServices uses its declared identity for macOS local-network permission.
+# Keep this after all resource/helper copies. Xcode handles bundle signing itself.
+if(APPLE AND NOT CMAKE_GENERATOR STREQUAL "Xcode")
+    find_program(AETHER_CODESIGN_EXECUTABLE codesign REQUIRED)
+    add_custom_command(TARGET AetherSDR POST_BUILD
+        COMMAND "${AETHER_CODESIGN_EXECUTABLE}" --force --sign -
+            --identifier "$<TARGET_PROPERTY:AetherSDR,MACOSX_BUNDLE_GUI_IDENTIFIER>"
+            "$<TARGET_BUNDLE_DIR:AetherSDR>"
+        COMMAND "${AETHER_CODESIGN_EXECUTABLE}" --verify --deep --strict
+            "$<TARGET_BUNDLE_DIR:AetherSDR>"
+        COMMENT "Signing the macOS app bundle for local network discovery"
+        VERBATIM)
+endif()
 
 # ── Unit test harnesses ──────────────────────────────────────────────────────
 # MOVED: every test target is now declared in tests/tests.cmake, which cut this
