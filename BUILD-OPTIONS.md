@@ -194,6 +194,8 @@ Additional cache values accept a value rather than ON/OFF:
 Non-Xcode macOS builds sign and verify the complete app bundle after copying
 resources and helpers. Xcode handles bundle signing itself. Release packaging
 can replace the local ad-hoc signature with its distribution signature.
+An ad-hoc signature does not guarantee that privacy or Keychain approvals
+survive a rebuild; persistent development signing is a separate workflow.
 
 ## Keeping this reference current
 

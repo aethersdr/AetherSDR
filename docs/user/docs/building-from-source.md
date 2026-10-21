@@ -56,6 +56,10 @@ A locally built app can use its own macOS permission identity while a downloaded
 
 The complete **AetherSDR** target signs and verifies the finished app bundle. Launch that `.app` with `open -n /path/to/AetherSDR.app`, then allow its **Local Network** request. The downloaded release keeps its own permissions. See [macOS](./macos.md#allowing-local-network-access).
 
+This uses an ad-hoc signature. macOS may ask for privacy or Keychain approval again after a rebuild; this does not provide a stable signing identity across builds. See [Apple’s code-signing requirements](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
+
+The signing hook runs when the app links. If you change only bundle metadata or rebuild a bundled helper, force a full relink or re-sign the complete app before launching it.
+
 ### Build on Windows 11
 
 From an MSVC developer prompt:
