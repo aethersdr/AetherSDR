@@ -1449,7 +1449,10 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
         MeterDef def;
         def.index = index;
         carry(f, "src", def.source);
-        carry(f, "num", def.sourceIndex, /*base=*/0);
+        // num is a uint (FlexLib Meter.SourceIndex): decimal for most meters,
+        // 0x%08X for a handle-owned one, which can exceed INT_MAX.
+        if (const auto num = parseUInt(f, "num", /*base=*/0))
+            def.sourceIndex = static_cast<int>(*num);
         carry(f, "nam", def.name);
         carry(f, "unit", def.unit);
         carry(f, "low", def.low);
