@@ -37,7 +37,7 @@ Mic input settings: source, gain, bias, boost and compander level. Useful when y
 
 ### CW profiles
 
-CW settings, kept as named profiles on radios running SmartSDR v4.3.16 or later. On older firmware the **CW** tab is dimmed and says why.
+CW settings, kept as named profiles on radios running SmartSDR v4.3.16 or later. On older firmware the contents of the **CW** tab are dimmed; hover over them (or use a screen reader) to see why.
 
 ## Using the Profiles menu
 

@@ -516,8 +516,10 @@ signals:
     void profileListChanged();
     void micStateChanged();
     void micProfileListChanged();
-    // CW profile list, active name or unsaved-changes flag changed.
+    // CW profile list or active name changed.
     void cwProfilesChanged();
+    // The radio's unsaved-changes flag for the active CW profile changed.
+    void cwProfileUnsavedChanged(bool unsaved);
     void micInputListChanged();
     void phoneStateChanged();       // VOX or CW property changed
     // Fires only when txFilterLow / txFilterHigh actually change.  Use this

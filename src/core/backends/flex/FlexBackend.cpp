@@ -2082,7 +2082,7 @@ void FlexBackend::decodeProfileStatus(const QString& profileType, const QString&
     // FlexLib 4.3.16 reports the CW profile's dirty flag as
     // unsaved_changes_cw (Radio.cs:12002); the suffix names the profile type.
     static const QLatin1String unsavedPrefix("unsaved_changes_");
-    if (key.startsWith(unsavedPrefix)) {
+    if (key.startsWith(unsavedPrefix) && key.size() > unsavedPrefix.size()) {
         d.type = key.mid(unsavedPrefix.size());
         d.unsavedChanges = val == QLatin1String("1");
         emit profileChanged(d);
@@ -2110,11 +2110,15 @@ void FlexBackend::decodeProfileFlags(const QMap<QString, QString>& kvs)
     carry(kvs, "exporting", d.exporting);
     if (d.importing || d.exporting)
         emit profileChanged(d);
-    if (kvs.contains(QStringLiteral("unsaved_changes_cw"))) {
-        ProfileDelta unsaved;
-        unsaved.type = QStringLiteral("cw");
-        carry(kvs, "unsaved_changes_cw", unsaved.unsavedChanges);
-        emit profileChanged(unsaved);
+    // Same unsaved_changes_<type> rule as decodeProfileStatus.
+    static const QLatin1String unsavedPrefix("unsaved_changes_");
+    for (auto it = kvs.cbegin(); it != kvs.cend(); ++it) {
+        if (it.key().startsWith(unsavedPrefix) && it.key().size() > unsavedPrefix.size()) {
+            ProfileDelta unsaved;
+            unsaved.type = it.key().mid(unsavedPrefix.size());
+            unsaved.unsavedChanges = it.value() == QLatin1String("1");
+            emit profileChanged(unsaved);
+        }
     }
 }
 

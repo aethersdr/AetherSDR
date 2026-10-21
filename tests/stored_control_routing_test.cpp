@@ -2,6 +2,7 @@
 #include "RadioSetupControlFixture.h"
 #include "core/AppSettings.h"
 #include "core/LocalMemoryStore.h"
+#include "core/backends/flex/CommandParser.h"
 #include "core/backends/sim/SimBackend.h"
 #include "models/TransmitModel.h"
 
@@ -22,6 +23,16 @@ class StoredControlTestAccess {
 public:
     static void memory(RadioModel& model, const MemoryDelta& delta) { model.applyMemoryChanges(delta); }
     static void profile(RadioModel& model, const ProfileDelta& delta) { model.applyProfileChanges(delta); }
+    static void message(RadioModel& model, const QString& line)
+    {
+        model.handleMessageReceived(CommandParser::parseLine(line), model.m_gpsSessionGeneration);
+    }
+    static void status(RadioModel& model, const QString& line)
+    {
+        const ParsedMessage msg = CommandParser::parseLine(line);
+        model.onStatusReceived(msg.object, msg.kvs);
+    }
+    static void capabilitiesChanged(RadioModel& model) { model.refreshCwProfilesOnCapabilityChange(); }
     static bool flush(RadioModel& model) { return model.m_localMemories.flush(); }
 };
 }
@@ -182,6 +193,38 @@ void cwProfileState()
     dirty.unsavedChanges = false;
     StoredControlTestAccess::profile(model, dirty);
     check(!tx.cwProfileUnsaved(), "CW unsaved flag clears");
+}
+void cwProfileRawStatus()
+{
+    RadioModel model;
+    check(model.rebuildBackendForTest(QStringLiteral("flex")), "raw CW status test installs the Flex decoder");
+    StoredControlTestAccess::message(model, QStringLiteral("S0|profile cw list=Default^Default Casual^Default Contest"));
+    StoredControlTestAccess::message(model, QStringLiteral("S0|profile cw current=Default Contest"));
+    StoredControlTestAccess::message(model, QStringLiteral("S0|profile cw unsaved_changes_cw=1"));
+    const TransmitModel& tx = model.transmitModel();
+    check(tx.cwProfileList() == QStringList{QStringLiteral("Default"), QStringLiteral("Default Casual"),
+                                            QStringLiteral("Default Contest")},
+          "raw CW list keeps names with spaces");
+    check(tx.activeCwProfile() == QStringLiteral("Default Contest") && tx.cwProfileUnsaved(),
+          "raw CW current and unsaved flag reach the transmit model");
+    StoredControlTestAccess::status(model, QStringLiteral("S0|profile unsaved_changes_cw=0"));
+    check(!tx.cwProfileUnsaved(), "space-free unsaved flag clears through the kv path");
+}
+void cwProfileLateCapability()
+{
+    // Connect-by-IP: the firmware version arrives after the connect-time refresh.
+    RadioModel model;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(model);
+    model.refreshProfiles();
+    check(!backend->commands.contains(QStringLiteral("profile cw info")),
+          "no CW refresh before the firmware version is known");
+    backend->setFirmwareVersionProvider([] { return QStringLiteral("4.3.16.42034"); });
+    StoredControlTestAccess::capabilitiesChanged(model);
+    check(backend->commands.count(QStringLiteral("profile cw info")) == 1,
+          "CW refresh follows the capability engaging mid-session");
+    StoredControlTestAccess::capabilitiesChanged(model);
+    check(backend->commands.count(QStringLiteral("profile cw info")) == 1,
+          "CW refresh is sent once per session");
 }
 void localBank()
 {
@@ -440,6 +483,6 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     if (!profile.isValid()) { return 2; }
     AppSettings::instance().load();
-    encoders(); cwProfileState(); localBank(); unreadableBank(); earlySlotReuse(); reentrantPublication(); asynchronous();
+    encoders(); cwProfileState(); cwProfileRawStatus(); cwProfileLateCapability(); localBank(); unreadableBank(); earlySlotReuse(); reentrantPublication(); asynchronous();
     return failures == 0 ? 0 : 1;
 }

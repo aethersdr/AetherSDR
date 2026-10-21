@@ -1206,6 +1206,7 @@ void RadioModel::setupBackend(const QString& family)
     connect(m_backend.get(), &IRadioBackend::capabilitiesChanged, this,
             [this] {
         publishCapabilities(isConnected());
+        refreshCwProfilesOnCapabilityChange();
         // All currently supported wake profiles transmit. If an RX-only Icom
         // profile is added, readiness must use an explicit identity signal.
         if (m_radioWakeActive && m_backend->capabilities().canTransmit) {
@@ -8223,6 +8224,7 @@ void RadioModel::onDisconnected()
         m_pendingProfileLoadPanWrites.clear();
     }
     m_profileLoadPanWriteFlushTimer.stop();
+    m_cwProfilesRequested = false;
 
     // Release sleep inhibition on disconnect (#1420)
     m_sleepInhibitor.release();
@@ -9752,8 +9754,24 @@ void RadioModel::refreshProfiles()
             ProfileRequest::Kind::Transmit, ProfileRequest::Kind::Mic}) {
         requestProfile({kind, ProfileRequest::Action::Refresh, {}});
     }
-    if (backendCapabilities().cwProfileControl.has_value()) {
-        requestProfile({ProfileRequest::Kind::Cw, ProfileRequest::Action::Refresh, {}});
+    refreshCwProfilesIfSupported();
+}
+
+void RadioModel::refreshCwProfilesOnCapabilityChange()
+{
+    if (isConnected() && !m_cwProfilesRequested) {
+        refreshCwProfilesIfSupported();
+    }
+}
+
+void RadioModel::refreshCwProfilesIfSupported()
+{
+    // A connect-by-IP learns the firmware version after the connect-time
+    // refresh, so the CW capability can engage later in the session (#6668).
+    if (backendCapabilities().cwProfileControl.has_value()
+        && requestProfile({ProfileRequest::Kind::Cw, ProfileRequest::Action::Refresh, {}})
+            == ReceiveDispatch::Dispatched) {
+        m_cwProfilesRequested = true;
     }
 }
 

@@ -194,6 +194,11 @@ int main(int argc, char** argv)
         const ProfileDelta flag = spy.takeFirst().at(0).value<ProfileDelta>();
         CHECK(flag.type == QStringLiteral("cw"));
         CHECK(flag.unsavedChanges.has_value() && *flag.unsavedChanges);
+
+        QSignalSpy spy2(&b, &IRadioBackend::profileChanged);
+        b.decodeProfileFlags({{QStringLiteral("unsaved_changes_tx"), QStringLiteral("0")}});
+        CHECK(spy2.count() == 1);
+        CHECK(spy2.takeFirst().at(0).value<ProfileDelta>().type == QStringLiteral("tx"));
     }
 
     // ---- Profile: unknown key for a type → no emission ----

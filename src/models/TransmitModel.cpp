@@ -706,7 +706,7 @@ void TransmitModel::setCwProfileUnsaved(bool unsaved)
 {
     if (m_cwProfileUnsaved != unsaved) {
         m_cwProfileUnsaved = unsaved;
-        emit cwProfilesChanged();
+        emit cwProfileUnsavedChanged(unsaved);
     }
 }
 

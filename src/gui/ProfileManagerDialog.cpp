@@ -136,6 +136,14 @@ ProfileManagerDialog::ProfileManagerDialog(RadioModel* model, QWidget* parent)
     connect(&model->transmitModel(), &TransmitModel::cwProfilesChanged, this, [this] {
         refreshTab("cw");
     });
+    // The dirty flag only toggles its line; rebuilding the list would drop the
+    // operator's selection on every CW setting change.
+    connect(&model->transmitModel(), &TransmitModel::cwProfileUnsavedChanged, this,
+            [this](bool unsaved) {
+        if (m_cwUnsavedLabel) {
+            m_cwUnsavedLabel->setVisible(unsaved);
+        }
+    });
 }
 
 QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
@@ -594,9 +602,6 @@ void ProfileManagerDialog::refreshTab(const QString& type)
     } else if (type == "cw") {
         profiles = m_model->transmitModel().cwProfileList();
         active = m_model->transmitModel().activeCwProfile();
-        if (m_cwUnsavedLabel) {
-            m_cwUnsavedLabel->setVisible(m_model->transmitModel().cwProfileUnsaved());
-        }
     }
 
     tw.list->clear();
