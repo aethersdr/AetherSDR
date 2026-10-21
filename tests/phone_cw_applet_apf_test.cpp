@@ -30,6 +30,7 @@
 #include "gui/HGauge.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#include "core/backends/TransmitDelta.h"
 
 #include <QApplication>
 #include <QLineEdit>
@@ -149,11 +150,17 @@ int main(int argc, char** argv)
     applet.setTransmitModel(&tx);
     QSignalSpy cwCommands(&tx, &AetherSDR::TransmitModel::controlRequested);
     QSlider* speed = nullptr;
+    QSlider* pitchSlider = nullptr;
     QLineEdit* pitch = nullptr;
     QLineEdit* speedText = nullptr;
     for (QSlider* slider : applet.findChildren<QSlider*>()) {
         if (slider->accessibleName() == QStringLiteral("CW speed")) {
             speed = slider;
+        }
+    }
+    for (QSlider* slider : applet.findChildren<QSlider*>()) {
+        if (slider->accessibleName() == QStringLiteral("CW pitch")) {
+            pitchSlider = slider;
         }
     }
     for (QLineEdit* editor : applet.findChildren<QLineEdit*>()) {
@@ -164,8 +171,8 @@ int main(int argc, char** argv)
             pitch = editor;
         }
     }
-    check("CW controls are accessible", speed && pitch && speedText);
-    if (!speed || !pitch || !speedText) {
+    check("CW controls are accessible", speed && pitch && speedText && pitchSlider);
+    if (!speed || !pitch || !speedText || !pitchSlider) {
         return 1;
     }
     speed->setValue(60);
@@ -175,18 +182,55 @@ int main(int argc, char** argv)
           speed->value() == 48 && speedText->text() == QStringLiteral("48"));
     check("Icom CW speed endpoints", speed->minimum() == 6 && speed->maximum() == 48);
     check("changing CW capabilities emits no command", cwCommands.isEmpty());
+    check("pitch range and step follow capabilities",
+          pitchSlider->minimum() == 300 && pitchSlider->maximum() == 900
+              && pitchSlider->singleStep() == 5);
+    pitchSlider->setValue(612);
+    check("slider snaps pitch and sends exactly one request",
+          tx.cwPitch() == 610 && pitchSlider->value() == 610
+              && pitch->text() == QStringLiteral("610") && cwCommands.size() == 1);
+    cwCommands.clear();
+    pitch->setText(QStringLiteral("623"));
+    QMetaObject::invokeMethod(pitch, "editingFinished", Qt::DirectConnection);
+    check("editor uses the same capability step with one request",
+          tx.cwPitch() == 625 && pitchSlider->value() == 625
+              && pitch->text() == QStringLiteral("625") && cwCommands.size() == 1);
     pitch->setText(QStringLiteral("950"));
     QMetaObject::invokeMethod(pitch, "editingFinished", Qt::DirectConnection);
-    check("pitch text commits at the radio maximum", tx.cwPitch() == 900);
+    check("pitch text commits at the radio maximum", tx.cwPitch() == 900 && pitchSlider->value() == 900);
     pitch->setText(QStringLiteral("250"));
     QMetaObject::invokeMethod(pitch, "editingFinished", Qt::DirectConnection);
-    check("pitch text commits at the radio minimum", tx.cwPitch() == 300);
+    check("pitch text commits at the radio minimum", tx.cwPitch() == 300 && pitchSlider->value() == 300);
     applet.setCwControlLimits(5, 100, 100, 6000, 10);
     check("subsequent Flex session restores CW speed endpoints",
           speed->minimum() == 5 && speed->maximum() == 100);
     pitch->setText(QStringLiteral("1500"));
     QMetaObject::invokeMethod(pitch, "editingFinished", Qt::DirectConnection);
-    check("subsequent Flex session restores pitch range", tx.cwPitch() == 1500);
+    check("subsequent Flex session restores pitch range",
+          tx.cwPitch() == 1500 && pitchSlider->value() == 1500
+              && pitchSlider->minimum() == 100 && pitchSlider->maximum() == 6000
+              && pitchSlider->singleStep() == 10);
+    cwCommands.clear();
+    AetherSDR::TransmitDelta echo;
+    echo.cwPitch = 733;
+    tx.applyChanges(echo);
+    check("radio echo preserves pitch without rounding or sending a request",
+          pitchSlider->value() == 733 && pitch->text() == QStringLiteral("733")
+              && cwCommands.isEmpty());
+    applet.setCwControlLimits(6, 48, 300, 700, 5);
+    check("capability clamp preserves the authoritative pitch readout",
+          pitchSlider->value() == 700 && pitch->text() == QStringLiteral("733")
+              && tx.cwPitch() == 733 && cwCommands.isEmpty());
+    AetherSDR::TransmitDelta unrelatedStatus;
+    unrelatedStatus.cwSpeed = 31;
+    tx.applyChanges(unrelatedStatus);
+    check("unrelated status leaves the authoritative pitch readout unchanged",
+          pitchSlider->value() == 700 && pitch->text() == QStringLiteral("733")
+              && tx.cwPitch() == 733 && cwCommands.isEmpty());
+    applet.setCwControlLimits(5, 100, 100, 6000, 10);
+    check("expanded pitch range restores the slider from radio state without a request",
+          pitchSlider->value() == 733 && pitch->text() == QStringLiteral("733")
+              && tx.cwPitch() == 733 && cwCommands.isEmpty());
 
     // ── §1  Unbound, then bound ─────────────────────────────────────────────
     std::printf("\nSection 1 — binding\n");
@@ -288,6 +332,41 @@ int main(int argc, char** argv)
     applet.setHasAudioPeakingFilter(true);
     check("4.5  the row comes back when a capable radio attaches",
           !apfRow->isHidden() && apfBtn->isEnabled());
+
+    applet.setMode(QStringLiteral("CWR"));
+    applet.setTransmitControlsAvailable(false);
+    check("receive-only CW keeps pitch and APF reachable while disabling keyer controls",
+          pitch->isEnabled() && apfBtn->isEnabled() && !speed->isEnabled()
+              && !speedText->isEnabled() && !speed->accessibleDescription().isEmpty());
+    tx.setReceiveCwPitchConfirmation(true);
+    QSignalSpy receivePitch(&tx, &AetherSDR::TransmitModel::cwPitchCommandIssued);
+    cwCommands.clear();
+    const int acceptedReceivePitch = tx.cwPitch();
+    pitch->setText(QStringLiteral("720"));
+    QMetaObject::invokeMethod(pitch, "editingFinished", Qt::DirectConnection);
+    check("receive pitch editor shows accepted pitch until adoption",
+          receivePitch.size() == 1 && receivePitch.last().at(0).toInt() == 720
+              && pitch->text() == QString::number(acceptedReceivePitch)
+              && pitchSlider->value() == acceptedReceivePitch && cwCommands.isEmpty());
+    AetherSDR::TransmitDelta acceptedPitch;
+    acceptedPitch.cwPitch = 720;
+    tx.applyChanges(acceptedPitch);
+    check("accepted receive pitch reaches the existing CW editor",
+          pitch->text() == QStringLiteral("720") && pitchSlider->value() == 720
+              && receivePitch.size() == 1);
+    pitchSlider->setValue(800);
+    check("receive pitch slider retains accepted state until adoption",
+          receivePitch.size() == 2 && receivePitch.last().at(0).toInt() == 800
+              && pitchSlider->value() == 720 && pitch->text() == QStringLiteral("720")
+              && tx.cwPitch() == 720 && cwCommands.isEmpty());
+    acceptedPitch.cwPitch = 800;
+    tx.applyChanges(acceptedPitch);
+    check("accepted receive pitch updates both controls without another request",
+          pitchSlider->value() == 800 && pitch->text() == QStringLiteral("800")
+              && receivePitch.size() == 2);
+    applet.setTransmitControlsAvailable(true);
+    check("next transmitter session restores the existing keyer controls",
+          speed->isEnabled() && speedText->isEnabled() && pitch->isEnabled());
 
     std::printf("\n%s — %d failure(s)\n", g_failures ? "FAILED" : "PASSED",
                 g_failures);

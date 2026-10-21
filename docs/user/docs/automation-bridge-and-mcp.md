@@ -38,6 +38,10 @@ Open **Settings → Radio Setup... → Network** and find the **Advanced** group
 | **Allow TX via MCP:** "Enable transmit control" | Lets bridge clients key the transmitter. Off by default; turning it on asks for a one-time confirmation. |
 | **Observe only:** "Read-only (block all driving)" | Blocks every action that changes anything; reads still work. |
 
+The `interlock probe` diagnostic works with **Observe only** enabled. It
+checks transmit-state reconciliation on an isolated model without changing
+your session or keying the radio. It still requires the access token.
+
 You can also start the bridge for a single run by launching with `AETHER_AUTOMATION=1`. In that case the Enabled/Disabled button is grayed out, because the environment variable wins.
 
 ### Access token
@@ -65,6 +69,36 @@ The token decides which client you have deliberately let in. It is not a wall ag
   On Windows use `python` (or `py -3`).
 
 It offers typed tools (`bridge_status`, `dump_tree`, `grab_widget`, `get_state`, `get_log`, `invoke`, `tune`, `slice`, `pan`, `record`, `menu`, `connect`, `capture_audio`, `wait_for`, `assert_state` and more), plus a raw `bridge_command` for everything else, a `validate_ui_change` prompt, and read-only state resources. The transmit verbs are deliberately reachable only through `bridge_command`.
+
+### Editing the radio nickname
+
+Open **Settings → Radio Setup... → Radio**. Use `invoke` with target
+`radioNicknameEdit`, action `editText`, and the desired `value` (an empty
+string clears it). Then invoke action `commit` without a value. The dialog
+sends the nickname request; check `get_state` for the radio's accepted nickname.
+Repeated commits of an unchanged field do not send another request. These
+actions currently support only **Radio nickname**; `setText` alone does not
+commit it.
+
+### Temporary station identity
+
+On FlexRadio, `station <name>` sets this client's session-only station label for
+other MultiFlex clients. Use one token without spaces. It does not change your
+saved station name or radio-wide callsign. A successful reply means the request
+was sent, not that the radio confirmed it. Unsupported or disconnected radios
+refuse the request.
+
+Your saved station-name edits are retained even if an automation request
+applies a temporary label at the same time.
+
+Stopping the bridge restores your saved name only while that bridge still owns
+the override in the same radio session. A newer operator edit takes precedence;
+an old restore or reconnect callback cannot overwrite it.
+
+The `txwaterfall on|off` command changes **Show TX in Waterfall** through the same
+route as Radio Setup. FlexRadio owns the flag on the radio; Hermes-Lite 2 keeps
+it client-side. Other unsupported radios refuse it. This display setting never
+keys the transmitter.
 
 ## Using transmit safety
 

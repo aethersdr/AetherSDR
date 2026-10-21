@@ -101,7 +101,9 @@ void TnfModel::setTnfFreq(int id, double freqMhz)
 {
     NotchDelta delta;
     delta.centerHz = freqMhz * 1.0e6;
+    const bool confirmed = confirmsControls();
     emit notchChangeRequested(id, delta);
+    if (confirmed) { return; }
 
     auto it = m_tnfs.find(id);
     if (it != m_tnfs.end() && !qFuzzyCompare(it->freqMhz + 1.0, freqMhz + 1.0)) {
@@ -115,7 +117,9 @@ void TnfModel::setTnfWidth(int id, int widthHz)
     const int clampedWidthHz = std::max(10, widthHz);
     NotchDelta delta;
     delta.widthHz = static_cast<double>(clampedWidthHz);
+    const bool confirmed = confirmsControls();
     emit notchChangeRequested(id, delta);
+    if (confirmed) { return; }
 
     auto it = m_tnfs.find(id);
     if (it != m_tnfs.end() && it->widthHz != clampedWidthHz) {
@@ -129,7 +133,9 @@ void TnfModel::setTnfDepth(int id, int depthDb)
     const int clampedDepthDb = std::clamp(depthDb, 1, 3);
     NotchDelta delta;
     delta.depthDb = clampedDepthDb;
+    const bool confirmed = confirmsControls();
     emit notchChangeRequested(id, delta);
+    if (confirmed) { return; }
 
     auto it = m_tnfs.find(id);
     if (it != m_tnfs.end() && it->depthDb != clampedDepthDb) {
@@ -142,7 +148,9 @@ void TnfModel::setTnfPermanent(int id, bool on)
 {
     NotchDelta delta;
     delta.permanent = on;
+    const bool confirmed = confirmsControls();
     emit notchChangeRequested(id, delta);
+    if (confirmed) { return; }
     // Radio doesn't send status update — update locally
     auto it = m_tnfs.find(id);
     if (it != m_tnfs.end()) {
@@ -153,14 +161,18 @@ void TnfModel::setTnfPermanent(int id, bool on)
 
 void TnfModel::requestRemoveTnf(int id)
 {
+    const bool confirmed = confirmsControls();
     emit notchRemoveRequested(id);
+    if (confirmed) { return; }
     // Radio does not send a removal status — remove optimistically
     removeTnf(id);
 }
 
 void TnfModel::requestGlobalTnfEnabled(bool on)
 {
+    const bool confirmed = confirmsControls();
     emit notchesEnabledRequested(on);
+    if (confirmed) { return; }
     // Optimistic update — radio echoes tnf_enabled in status, but update
     // immediately so the UI reflects the change without waiting for the echo.
     if (m_globalEnabled != on) {

@@ -60,6 +60,52 @@ int main(int argc, char** argv)
     model.handleStatusForTest(QStringLiteral("tnf 2"), tnf1);
     check(model.tnfModel().tnf(2) != nullptr, "a normal 'tnf 2 <fields>' status still creates an entry");
 
+    TnfModel confirmed;
+    confirmed.setControlPolicy(ReceiveControlPolicy::Confirmed);
+    NotchDelta initial;
+    initial.centerHz = 14'200'000; initial.widthHz = 400;
+    confirmed.applyNotchDelta(9, initial);
+    int changes = 0;
+    QObject::connect(&confirmed, &TnfModel::notchChangeRequested, &confirmed,
+        [&](int, const NotchDelta&) { ++changes; });
+    confirmed.setTnfFreq(9, 14.201);
+    confirmed.setTnfWidth(9, 800);
+    confirmed.requestGlobalTnfEnabled(false);
+    check(changes == 2 && confirmed.tnf(9)->freqMhz == 14.2
+              && confirmed.tnf(9)->widthHz == 400 && confirmed.globalEnabled(),
+          "confirmed notch edits remain intents until graph adoption");
+    // The backend may normalize a width and report it synchronously. Its
+    // accepted observation must survive the remainder of the setter.
+    const auto normalize = QObject::connect(&confirmed, &TnfModel::notchChangeRequested,
+        &confirmed, [&](int id, const NotchDelta& request) {
+            if (request.widthHz) {
+                NotchDelta accepted; accepted.widthHz = 400;
+                confirmed.applyNotchDelta(id, accepted);
+            }
+        });
+    confirmed.setTnfWidth(9, 100);
+    check(confirmed.tnf(9)->widthHz == 400,
+          "confirmed normalized width echo is not overwritten by requested width");
+    QObject::disconnect(normalize);
+    NotchDelta accepted; accepted.centerHz = 14'201'000; accepted.widthHz = 800;
+    confirmed.applyNotchDelta(9, accepted);
+    confirmed.applyGlobalEnabled(false);
+    check(confirmed.tnf(9)->freqMhz == 14.201 && confirmed.tnf(9)->widthHz == 800
+              && !confirmed.globalEnabled(), "accepted notch and global bypass advance presentation");
+    confirmed.requestRemoveTnf(9);
+    check(confirmed.tnf(9) != nullptr, "pending removal keeps the accepted notch visible");
+    confirmed.removeTnf(9);
+    check(confirmed.tnf(9) == nullptr, "adopted removal deletes the notch");
+    confirmed.setControlPolicy(ReceiveControlPolicy::Optimistic);
+    confirmed.applyNotchDelta(9, initial);
+    confirmed.setTnfFreq(9, 14.202);
+    confirmed.setTnfWidth(9, 1200);
+    confirmed.requestGlobalTnfEnabled(true);
+    check(confirmed.tnf(9)->freqMhz == 14.202 && confirmed.tnf(9)->widthHz == 1200
+              && confirmed.globalEnabled(), "legacy sessions retain optimistic notch edits");
+    confirmed.requestRemoveTnf(9);
+    check(!confirmed.tnf(9), "legacy sessions retain immediate removal");
+
     if (g_failures == 0) std::printf("ALL PASS\n");
     return g_failures == 0 ? 0 : 1;
 }

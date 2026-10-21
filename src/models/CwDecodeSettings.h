@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/AppSettings.h"
+#include "CwRxModel.h"
 
 #include <QByteArray>
 #include <QJsonDocument>
@@ -19,7 +20,11 @@ namespace AetherSDR {
 class CwDecodeSettings {
 public:
     static QString backend() { return readObj().value("backend").toString("ggmorse"); }
-    static bool deepFistSelected() { return backend() == "deepfist"; }
+    static bool neuralSelected()
+    {
+        const QString key = backend();
+        return key != QLatin1String("ggmorse") && CwRxModel::availableBackends().contains(key);
+    }
     static void setBackend(const QString& backend)
     {
         QJsonObject o = readObj();

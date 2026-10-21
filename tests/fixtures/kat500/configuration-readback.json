@@ -1,0 +1,414 @@
+[
+  {
+    "request": "AKIP;",
+    "reply": "AKIP 1500W VFWD 2753;"
+  },
+  {
+    "request": "PSI;",
+    "reply": "PSI1;"
+  },
+  {
+    "request": "SL;",
+    "reply": "SL0;"
+  },
+  {
+    "request": "FDT;",
+    "reply": "FDT 0;"
+  },
+  {
+    "request": "AE001;",
+    "reply": "AE0011;"
+  },
+  {
+    "request": "AE002;",
+    "reply": "AE0021;"
+  },
+  {
+    "request": "AE003;",
+    "reply": "AE0031;"
+  },
+  {
+    "request": "AP00;",
+    "reply": "AP000;"
+  },
+  {
+    "request": "AB00;",
+    "reply": "AB006;"
+  },
+  {
+    "request": "AFT00;",
+    "reply": "AFT001;"
+  },
+  {
+    "request": "ST00K;",
+    "reply": "ST00K 3.00;"
+  },
+  {
+    "request": "ST00A;",
+    "reply": "ST00A 1.50;"
+  },
+  {
+    "request": "ST00B;",
+    "reply": "ST00B 1.20;"
+  },
+  {
+    "request": "AE011;",
+    "reply": "AE0111;"
+  },
+  {
+    "request": "AE012;",
+    "reply": "AE0121;"
+  },
+  {
+    "request": "AE013;",
+    "reply": "AE0131;"
+  },
+  {
+    "request": "AP01;",
+    "reply": "AP010;"
+  },
+  {
+    "request": "AB01;",
+    "reply": "AB016;"
+  },
+  {
+    "request": "AFT01;",
+    "reply": "AFT011;"
+  },
+  {
+    "request": "ST01K;",
+    "reply": "ST01K 3.00;"
+  },
+  {
+    "request": "ST01A;",
+    "reply": "ST01A 1.50;"
+  },
+  {
+    "request": "ST01B;",
+    "reply": "ST01B 1.20;"
+  },
+  {
+    "request": "AE021;",
+    "reply": "AE0211;"
+  },
+  {
+    "request": "AE022;",
+    "reply": "AE0221;"
+  },
+  {
+    "request": "AE023;",
+    "reply": "AE0231;"
+  },
+  {
+    "request": "AP02;",
+    "reply": "AP020;"
+  },
+  {
+    "request": "AB02;",
+    "reply": "AB026;"
+  },
+  {
+    "request": "AFT02;",
+    "reply": "AFT021;"
+  },
+  {
+    "request": "ST02K;",
+    "reply": "ST02K 3.00;"
+  },
+  {
+    "request": "ST02A;",
+    "reply": "ST02A 1.50;"
+  },
+  {
+    "request": "ST02B;",
+    "reply": "ST02B 1.20;"
+  },
+  {
+    "request": "AE031;",
+    "reply": "AE0311;"
+  },
+  {
+    "request": "AE032;",
+    "reply": "AE0321;"
+  },
+  {
+    "request": "AE033;",
+    "reply": "AE0331;"
+  },
+  {
+    "request": "AP03;",
+    "reply": "AP030;"
+  },
+  {
+    "request": "AB03;",
+    "reply": "AB036;"
+  },
+  {
+    "request": "AFT03;",
+    "reply": "AFT031;"
+  },
+  {
+    "request": "ST03K;",
+    "reply": "ST03K 3.00;"
+  },
+  {
+    "request": "ST03A;",
+    "reply": "ST03A 1.50;"
+  },
+  {
+    "request": "ST03B;",
+    "reply": "ST03B 1.20;"
+  },
+  {
+    "request": "AE041;",
+    "reply": "AE0411;"
+  },
+  {
+    "request": "AE042;",
+    "reply": "AE0421;"
+  },
+  {
+    "request": "AE043;",
+    "reply": "AE0431;"
+  },
+  {
+    "request": "AP04;",
+    "reply": "AP040;"
+  },
+  {
+    "request": "AB04;",
+    "reply": "AB046;"
+  },
+  {
+    "request": "AFT04;",
+    "reply": "AFT041;"
+  },
+  {
+    "request": "ST04K;",
+    "reply": "ST04K 3.00;"
+  },
+  {
+    "request": "ST04A;",
+    "reply": "ST04A 1.50;"
+  },
+  {
+    "request": "ST04B;",
+    "reply": "ST04B 1.20;"
+  },
+  {
+    "request": "AE051;",
+    "reply": "AE0511;"
+  },
+  {
+    "request": "AE052;",
+    "reply": "AE0521;"
+  },
+  {
+    "request": "AE053;",
+    "reply": "AE0531;"
+  },
+  {
+    "request": "AP05;",
+    "reply": "AP050;"
+  },
+  {
+    "request": "AB05;",
+    "reply": "AB056;"
+  },
+  {
+    "request": "AFT05;",
+    "reply": "AFT051;"
+  },
+  {
+    "request": "ST05K;",
+    "reply": "ST05K 3.00;"
+  },
+  {
+    "request": "ST05A;",
+    "reply": "ST05A 1.50;"
+  },
+  {
+    "request": "ST05B;",
+    "reply": "ST05B 1.20;"
+  },
+  {
+    "request": "AE061;",
+    "reply": "AE0611;"
+  },
+  {
+    "request": "AE062;",
+    "reply": "AE0621;"
+  },
+  {
+    "request": "AE063;",
+    "reply": "AE0631;"
+  },
+  {
+    "request": "AP06;",
+    "reply": "AP060;"
+  },
+  {
+    "request": "AB06;",
+    "reply": "AB066;"
+  },
+  {
+    "request": "AFT06;",
+    "reply": "AFT061;"
+  },
+  {
+    "request": "ST06K;",
+    "reply": "ST06K 3.00;"
+  },
+  {
+    "request": "ST06A;",
+    "reply": "ST06A 1.50;"
+  },
+  {
+    "request": "ST06B;",
+    "reply": "ST06B 1.20;"
+  },
+  {
+    "request": "AE071;",
+    "reply": "AE0711;"
+  },
+  {
+    "request": "AE072;",
+    "reply": "AE0721;"
+  },
+  {
+    "request": "AE073;",
+    "reply": "AE0731;"
+  },
+  {
+    "request": "AP07;",
+    "reply": "AP070;"
+  },
+  {
+    "request": "AB07;",
+    "reply": "AB076;"
+  },
+  {
+    "request": "AFT07;",
+    "reply": "AFT071;"
+  },
+  {
+    "request": "ST07K;",
+    "reply": "ST07K 3.00;"
+  },
+  {
+    "request": "ST07A;",
+    "reply": "ST07A 1.50;"
+  },
+  {
+    "request": "ST07B;",
+    "reply": "ST07B 1.20;"
+  },
+  {
+    "request": "AE081;",
+    "reply": "AE0811;"
+  },
+  {
+    "request": "AE082;",
+    "reply": "AE0821;"
+  },
+  {
+    "request": "AE083;",
+    "reply": "AE0831;"
+  },
+  {
+    "request": "AP08;",
+    "reply": "AP080;"
+  },
+  {
+    "request": "AB08;",
+    "reply": "AB086;"
+  },
+  {
+    "request": "AFT08;",
+    "reply": "AFT081;"
+  },
+  {
+    "request": "ST08K;",
+    "reply": "ST08K 3.00;"
+  },
+  {
+    "request": "ST08A;",
+    "reply": "ST08A 1.50;"
+  },
+  {
+    "request": "ST08B;",
+    "reply": "ST08B 1.20;"
+  },
+  {
+    "request": "AE091;",
+    "reply": "AE0911;"
+  },
+  {
+    "request": "AE092;",
+    "reply": "AE0921;"
+  },
+  {
+    "request": "AE093;",
+    "reply": "AE0931;"
+  },
+  {
+    "request": "AP09;",
+    "reply": "AP090;"
+  },
+  {
+    "request": "AB09;",
+    "reply": "AB096;"
+  },
+  {
+    "request": "AFT09;",
+    "reply": "AFT091;"
+  },
+  {
+    "request": "ST09K;",
+    "reply": "ST09K 3.00;"
+  },
+  {
+    "request": "ST09A;",
+    "reply": "ST09A 1.50;"
+  },
+  {
+    "request": "ST09B;",
+    "reply": "ST09B 1.20;"
+  },
+  {
+    "request": "AE101;",
+    "reply": "AE1011;"
+  },
+  {
+    "request": "AE102;",
+    "reply": "AE1021;"
+  },
+  {
+    "request": "AE103;",
+    "reply": "AE1031;"
+  },
+  {
+    "request": "AP10;",
+    "reply": "AP100;"
+  },
+  {
+    "request": "AB10;",
+    "reply": "AB106;"
+  },
+  {
+    "request": "AFT10;",
+    "reply": "AFT101;"
+  },
+  {
+    "request": "ST10K;",
+    "reply": "ST10K 3.00;"
+  },
+  {
+    "request": "ST10A;",
+    "reply": "ST10A 1.50;"
+  },
+  {
+    "request": "ST10B;",
+    "reply": "ST10B 1.20;"
+  }
+]

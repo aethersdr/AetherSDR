@@ -33,8 +33,12 @@ const QStringList& ctcssTones();
 // Common tuning-step suggestions in Hz, as strings.
 const QStringList& tuningSteps();
 
-// True if `mode` (compared case-insensitively) is one the radio supports.
+// True if `mode` (compared case-insensitively) is in the legacy Flex editor list.
 bool isKnownMode(const QString& mode);
+
+// Storage accepts supported modes and aliases across backends, not only the
+// legacy Flex editor choices. Applying a stored mode remains capability-gated.
+bool isStorableMode(const QString& mode);
 
 // Offset direction: any-case in -> canonical lower-case wire form
 // ("simplex"/"up"/"down"); empty if unrecognized.

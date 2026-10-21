@@ -1,4 +1,5 @@
 #include "TitleBar.h"
+#include "AudioButtonIcon.h"
 #include "RoundedMenu.h"
 #include "BrandMark.h"
 #include "FramelessMessageBox.h"
@@ -48,6 +49,7 @@
 #include <QNetworkReply>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <utility>
 #include "core/VersionNumber.h"
 #include "core/ThemeManager.h"
 
@@ -139,73 +141,7 @@ QPixmap buildPopOutIcon(const QWidget* widget, bool active)
 }
 
 // ── Audio-cluster icons ─────────────────────────────────────────────────────
-// Thin-line marks in the house style (1.8 px stroke, no fill), replacing the
-// speaker/headphone emoji the strip used to carry: emoji render in the
-// platform's own colour and weight, so they never matched the bar around them
-// and could not follow the theme.
-enum class AudioIcon { Speaker, Headphone };
 
-QPixmap buildAudioIcon(AudioIcon kind, bool muted, const QColor& stroke, qreal dpr)
-{
-    constexpr int kBox = 20;
-    QPixmap pm(int(kBox * dpr), int(kBox * dpr));
-    pm.setDevicePixelRatio(dpr);
-    pm.fill(Qt::transparent);
-
-    QPainter p(&pm);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    QPen pen(stroke, 1.8);
-    pen.setCapStyle(Qt::RoundCap);
-    pen.setJoinStyle(Qt::RoundJoin);
-    p.setPen(pen);
-    p.setBrush(Qt::NoBrush);
-
-    if (kind == AudioIcon::Speaker) {
-        // Cone: a small rectangle at the pivot with a flared face.
-        QPainterPath cone;
-        cone.moveTo(3.0, 8.0);
-        cone.lineTo(6.5, 8.0);
-        cone.lineTo(10.5, 4.5);
-        cone.lineTo(10.5, 15.5);
-        cone.lineTo(6.5, 12.0);
-        cone.lineTo(3.0, 12.0);
-        cone.closeSubpath();
-        p.drawPath(cone);
-        if (!muted) {
-            // Two radiating arcs.  QPainter angles are sixteenths of a degree.
-            p.drawArc(QRectF(9.0, 5.5, 6.0, 9.0), -60 * 16, 120 * 16);
-            p.drawArc(QRectF(9.0, 2.5, 9.0, 15.0), -55 * 16, 110 * 16);
-        } else {
-            p.drawLine(QPointF(13.0, 7.0), QPointF(17.5, 13.0));
-            p.drawLine(QPointF(17.5, 7.0), QPointF(13.0, 13.0));
-        }
-    } else {
-        // Headband arc plus two ear cups.
-        p.drawArc(QRectF(3.5, 3.5, 13.0, 13.0), 0, 180 * 16);
-        p.drawRoundedRect(QRectF(3.0, 10.0, 3.6, 6.5), 1.6, 1.6);
-        p.drawRoundedRect(QRectF(13.4, 10.0, 3.6, 6.5), 1.6, 1.6);
-        if (muted) {
-            p.drawLine(QPointF(3.5, 16.5), QPointF(16.5, 3.5));
-        }
-    }
-    p.end();
-    return pm;
-}
-
-// Set (or re-set) an audio button's icon at the current DPR and theme colour.
-// Called on construction, on every mute toggle, and on theme change.
-void applyAudioIcon(QPushButton* button, AudioIcon kind, bool muted)
-{
-    if (!button) {
-        return;
-    }
-    const QColor stroke =
-        AetherSDR::ThemeManager::instance().color(button,
-                                                  QStringLiteral("color.text.secondary"));
-    button->setIcon(QIcon(buildAudioIcon(kind, muted, stroke,
-                                         button->devicePixelRatioF())));
-    button->setIconSize(QSize(20, 20));
-}
 }
 
 TitleBar::TitleBar(QWidget* parent)
@@ -341,6 +277,7 @@ TitleBar::TitleBar(QWidget* parent)
     auto* audio = new QHBoxLayout(audioCluster);
     audio->setContentsMargins(0, 0, 0, 0);
     audio->setSpacing(8);
+    markDragHandle(audioCluster);   // the reserved timer band keeps the open-hand cursor
 
     m_otherTxLabel = new QLabel();
     ThemeManager::instance().applyStyleSheet(
@@ -384,8 +321,21 @@ TitleBar::TitleBar(QWidget* parent)
     m_txTimerOpacity = new QGraphicsOpacityEffect(m_txTimerLabel);
     m_txTimerOpacity->setOpacity(1.0);
     m_txTimerLabel->setGraphicsEffect(m_txTimerOpacity);
+    // Keep the slot reserved while idle so the cluster's size hint never
+    // changes.  The settled row does not move (the drag gutter absorbs the
+    // 52+8 px), but hiding the label made the nested cluster re-lay its
+    // children inside its old rect for one pass, flicking PC Audio and
+    // everything right of it left for a frame before m_hbox caught up (#6455).
+    {
+        QSizePolicy sp = m_txTimerLabel->sizePolicy();
+        sp.setRetainSizeWhenHidden(true);
+        m_txTimerLabel->setSizePolicy(sp);
+    }
     m_txTimerLabel->setVisible(false);   // idle: not displayed
     audio->addWidget(m_txTimerLabel);
+    // The speaker icon sits inset in its 22 px button, so the gap to its right
+    // reads ~3 px wider than the layout's 8 px; match it on the timer side.
+    audio->addSpacing(3);
 
     // 5 Hz tick that repaints the elapsed time while keyed.
     m_txTimerTick = new QTimer(this);
@@ -409,8 +359,12 @@ TitleBar::TitleBar(QWidget* parent)
     m_txTimerFade = new QPropertyAnimation(m_txTimerOpacity, "opacity", this);
     m_txTimerFade->setDuration(800);
     connect(m_txTimerFade, &QPropertyAnimation::finished, this, [this]() {
-        if (m_txTimerOpacity->opacity() <= 0.01)
+        if (m_txTimerOpacity->opacity() <= 0.01) {
             m_txTimerLabel->setVisible(false);
+            // Reset so the retained slot returns to its normal width after an
+            // over longer than an hour (H:MM:SS).
+            m_txTimerLabel->setText(QStringLiteral("0:00"));
+        }
     });
 
     // PC Audio pill
@@ -486,6 +440,7 @@ TitleBar::TitleBar(QWidget* parent)
     m_masterSlider->setValue(savedVol);
     m_masterSlider->setFixedWidth(64);
     m_masterSlider->setFixedHeight(16);
+    m_masterSlider->setCursor(Qt::ArrowCursor);   // not the cluster's drag hand
     m_masterSlider->setAccessibleName("Master volume");
     m_masterSlider->setAccessibleDescription("Line out volume level, 0 to 100 percent");
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_masterSlider, barSliderStyle);
@@ -526,6 +481,7 @@ TitleBar::TitleBar(QWidget* parent)
     m_hpSlider->setValue(50);
     m_hpSlider->setFixedWidth(64);
     m_hpSlider->setFixedHeight(16);
+    m_hpSlider->setCursor(Qt::ArrowCursor);   // not the cluster's drag hand
     m_hpSlider->setAccessibleName("Headphone volume");
     m_hpSlider->setAccessibleDescription("Headphone volume level, 0 to 100 percent");
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_hpSlider, barSliderStyle);
@@ -723,6 +679,18 @@ void TitleBar::setRadioTabs(const QList<RadioTabEntry>& radios)
     if (m_radioTabs) {
         m_radioTabs->setRadios(radios);
     }
+    // A new connection finishes discovery without requiring a heartbeat.
+    // Repeated snapshots must not cancel a rescan begun while already connected.
+    QList<QString> connectedIds;
+    for (const RadioTabEntry& radio : radios) {
+        if (radio.status == RadioTabStatus::Connected) {
+            connectedIds.append(radio.id);
+            if (!m_connectedRadioIds.contains(radio.id)) {
+                setDiscovering(false);
+            }
+        }
+    }
+    m_connectedRadioIds = std::move(connectedIds);
 }
 
 void TitleBar::setActiveRadio(const QString& id)
@@ -1737,6 +1705,13 @@ void TitleBar::setMinimalMode(bool on)
     if (m_dockRightLbl) m_dockRightLbl->setVisible(!on);
     if (m_popOutLbl)    m_popOutLbl->setVisible(!on);
     if (m_dockSep)      m_dockSep->setVisible(!on);
+    // Minimal mode hides the audio row to free the strip; don't let the idle
+    // timer's retained slot hold 52 px of it.
+    if (m_txTimerLabel) {
+        QSizePolicy sp = m_txTimerLabel->sizePolicy();
+        sp.setRetainSizeWhenHidden(!on);
+        m_txTimerLabel->setSizePolicy(sp);
+    }
     // Don't touch m_otherTxLabel or m_mfBtn — their visibility is
     // managed by setOtherClientTx() and setMultiFlexStatus() respectively
     updateMaximizeIcon();

@@ -10,7 +10,7 @@ description: "the station accessories it talks to directly, over the network or 
 the station accessories it talks to directly, over the network or a serial
 port, rather than through the radio. It covers the 4O3A Tuner Genius XL
 (TGXL), Power Genius XL (PGXL) and Antenna Genius (AG), the ShackSwitch, ACOM,
-SPE Expert, VK3AMP and Elecraft KPA1500 amplifiers, and the TelePost LP-100A
+SPE Expert, VK3AMP and Elecraft KPA1500 amplifiers, the Elecraft KAT500 tuner, and the TelePost LP-100A
 wattmeter.
 
 Each device has its own applet once it is connected. Those are described on
@@ -72,6 +72,9 @@ Serial-capable devices have a **Connection Type** choice, an
 Ports**. The ShackSwitch page has a **⚙ Web UI** button that opens the
 device's own web interface. Connection defaults for every device type are
 under [Reference](#reference).
+
+
+The **Elecraft KXPA100** page combines amplifier and optional tuner controls. Click **Use with current radio** to associate it explicitly; this enables its VU/PWR metering and applet frequency context for that radio. TX Controls remains radio-side. The **Advanced** section provides antenna configuration, native backup/restore, faults and memory tools. See [KXPA100 Amplifier and Tuner](./kxpa100-amplifier-control.md).
 
 ### Connecting automatically
 
@@ -266,6 +269,8 @@ The fields are locked while the device is connected.
 - [Radio Setup](./radio-setup.md)
 - [Amplifiers](./amplifiers.md)
 - [TGXL Tuner Control](./tgxl-tuner-control.md)
+- [KAT500 Tuner Control](./kat500-tuner-control.md)
+- [KXPA100 Amplifier and Tuner](./kxpa100-amplifier-control.md)
 - [ShackSwitch](./shackswitch.md)
 - [Green Heron Everyware](./green-heron-everyware.md)
 - [AetherSweep](./aethersweep.md)

@@ -157,6 +157,41 @@ int LocalMemoryBank::importedSlot(const QString& source, const QString& key) con
     return -1;
 }
 
+LocalMemoryBank::EditResult LocalMemoryBank::createEntry(const MemoryEntry& entry)
+{
+    load();
+    if (!m_writable) { return {kLocalMemoryError, m_lastError, -1}; }
+    if (!MemoryPatch::fromEntry(entry).valid()) {
+        return {kLocalMemoryError, QStringLiteral("Invalid memory entry."), -1};
+    }
+    if (m_entries.size() >= kMaxSlots) {
+        return {kLocalMemoryError, QStringLiteral("The memory bank is full."), -1};
+    }
+    const int index = allocateSlot();
+    record(index, entry);
+    return {0, {}, index};
+}
+
+LocalMemoryBank::EditResult LocalMemoryBank::updateEntry(int index, const MemoryPatch& patch)
+{
+    load();
+    if (!m_writable) { return {kLocalMemoryError, m_lastError, index}; }
+    if (!patch.valid() || !m_entries.contains(index)) {
+        return {kLocalMemoryError, QStringLiteral("Invalid memory update or unknown slot."), index};
+    }
+    record(index, patch.appliedTo(m_entries.value(index)));
+    return {0, {}, index};
+}
+
+LocalMemoryBank::EditResult LocalMemoryBank::removeEntry(int index)
+{
+    load();
+    if (!m_writable) { return {kLocalMemoryError, m_lastError, index}; }
+    if (index < 0) { return {kLocalMemoryError, QStringLiteral("Invalid memory slot."), index}; }
+    forget(index);
+    return {0, {}, index};
+}
+
 LocalMemoryBank::CommandResult LocalMemoryBank::handleCommand(const QString& command)
 {
     CommandResult result;

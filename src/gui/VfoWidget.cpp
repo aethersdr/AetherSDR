@@ -1,10 +1,14 @@
 #include "VfoWidget.h"
+#include "AudioButtonIcon.h"
+
+#include <QList>
+#include <QPair>
 #include <QScopeGuard>
 #include "ControlAvailabilityRegistry.h"
 #include "AntennaChoiceGate.h"
 #include "SplitAudioProfile.h"
 #include "VfoDisplayDefaults.h"
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
 #include "models/CwDecodeSettings.h"
 #endif
 #include "ScopedChildWidget.h"
@@ -64,6 +68,8 @@
 #include <QFormLayout>
 #include <QFontMetrics>
 #include <QSignalBlocker>
+#include <QStandardItemModel>
+#include <QVariant>
 #include <QDir>
 #include <QFile>
 #include <QPixmap>
@@ -860,7 +866,7 @@ void VfoWidget::buildUI()
                 emit kiwiRxAntennaSelected(slice->sliceId(), profileId);
             } else {
                 emit flexRxAntennaSelected(slice->sliceId());
-                slice->setRxAntenna(token);
+                if (slice->rxAntenna() != token) { slice->setRxAntenna(token); }
             }
         });
         menu->popup(m_rxAntBtn->mapToGlobal(QPoint(0, m_rxAntBtn->height())));
@@ -1497,7 +1503,7 @@ void VfoWidget::buildUI()
     tabLayout->setContentsMargins(0, 0, 0, 0);
     tabLayout->setSpacing(0);
 
-    const QStringList tabLabels = {"\xF0\x9F\x94\x8A", "DSP", "USB", "X/RIT", "DAX"};
+    const QStringList tabLabels = {QString(), "DSP", "USB", "X/RIT", "DAX"};
     m_daxTabIndex = tabLabels.indexOf(QLatin1String("DAX"));
     for (int i = 0; i < tabLabels.size(); ++i) {
         if (i > 0) {
@@ -1518,6 +1524,7 @@ void VfoWidget::buildUI()
         btn->setFocusPolicy(Qt::TabFocus);
         connect(btn, &QPushButton::clicked, this, [this, i]() { showTab(i); });
         if (i == 0) {
+            applyAudioIcon(btn, AudioIcon::Speaker, false, 16);
             // Right-click on speaker tab toggles mute directly
             btn->setContextMenuPolicy(Qt::CustomContextMenu);
             connect(btn, &QPushButton::customContextMenuRequested, this, [this](const QPoint&) {
@@ -1625,7 +1632,13 @@ void VfoWidget::buildTabContent()
         // AF row: mute-toggle label + gain slider
         auto* gainRow = new QHBoxLayout;
         gainRow->setSpacing(3);
-        m_muteBtn = new QPushButton(QString::fromUtf8("AF  \xF0\x9F\x94\x8A")); // AF 🔊
+        m_muteBtn = new QPushButton(QStringLiteral("AF"));
+        applyAudioIcon(m_muteBtn, AudioIcon::Speaker, false, 16);
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, [this] {
+            const bool muted = m_slice && m_slice->audioMute();
+            applyAudioIcon(m_muteBtn, AudioIcon::Speaker, muted, 16);
+            applyAudioIcon(m_tabBtns[0], AudioIcon::Speaker, muted, 16);
+        });
         m_muteBtn->setAccessibleName("Slice audio mute");
         m_muteBtn->setCheckable(true);
         m_muteBtn->setFixedHeight(20);
@@ -1693,6 +1706,30 @@ void VfoWidget::buildTabContent()
         m_agcValueLbl->setFixedWidth(20);
         m_agcValueLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         agcRow->addWidget(m_agcValueLbl);
+        m_autoAgcTButton = new QPushButton(tr("Auto"));
+        m_autoAgcTButton->setObjectName(QStringLiteral("sliceAutoAgcT"));
+        m_autoAgcTButton->setAccessibleName(tr("Auto AGC-T"));
+        m_autoAgcTButton->setCheckable(true);
+        m_autoAgcTButton->setFixedSize(40, 20);
+        m_autoAgcTButton->setEnabled(false);
+        ThemeManager::instance().applyStyleSheet(m_autoAgcTButton,
+            "QPushButton { background: {{color.canon.control}}; "
+            "border: 1px solid {{color.canon.lineHi}}; border-radius: 3px; "
+            "color: {{color.canon.cyan}}; font-size: 10px; padding: 1px 2px; }"
+            "QPushButton:hover { background: {{color.canon.nested}}; }"
+            "QPushButton:checked { background: {{color.canon.cyan}}; "
+            "color: {{color.canon.onAccent}}; }"
+            "QPushButton:disabled { color: {{color.canon.muted}}; }");
+        connect(m_autoAgcTButton, &QPushButton::clicked, this, [this] {
+            if (m_slice && m_radioModel
+                && m_radioModel->autoAgcThresholdUnavailableReason(m_slice).isEmpty()) {
+                const bool automatic = m_slice->automaticAgcThresholdActiveOrPending();
+                m_slice->requestAgcThresholdMode(automatic
+                    ? AgcThresholdMode::Manual : AgcThresholdMode::Automatic);
+            }
+            syncAutoAgcThreshold();
+        });
+        agcRow->addWidget(m_autoAgcTButton);
         vb->addLayout(agcRow);
 
         // Pan row: DIV button + L + slider (with center marker) + R
@@ -1839,10 +1876,8 @@ void VfoWidget::buildTabContent()
                 AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
                 m_slice->setAudioMute(on);
             }
-            m_muteBtn->setText(on ? QString::fromUtf8("AF  \xF0\x9F\x94\x87")    // 🔇 AF
-                                  : QString::fromUtf8("AF  \xF0\x9F\x94\x8A"));  // 🔊 AF
-            m_tabBtns[0]->setText(on ? QString::fromUtf8("\xF0\x9F\x94\x87")
-                                     : QString::fromUtf8("\xF0\x9F\x94\x8A"));
+            applyAudioIcon(m_muteBtn, AudioIcon::Speaker, on, 16);
+            applyAudioIcon(m_tabBtns[0], AudioIcon::Speaker, on, 16);
             if (!m_updatingFromModel) emit audioMuteToggled(on);  // (#1560)
         });
         // SQL button: when wired to an RxApplet (the normal case in
@@ -2078,6 +2113,75 @@ void VfoWidget::buildTabContent()
         m_dspGrid->addWidget(m_mnBtn,   2, 2);
         dspVb->addLayout(m_dspGrid);
 
+        auto* resetRow = new QHBoxLayout;
+        resetRow->setSpacing(3);
+        auto* resetLabel = new QLabel(tr("Parameters:"));
+        resetRow->addWidget(resetLabel);
+        m_dspResetTarget = new GuardedComboBox;
+        m_dspResetTarget->setObjectName(QStringLiteral("dspParameterResetTarget"));
+        m_dspResetTarget->setAccessibleName(tr("DSP parameter reset target"));
+        resetLabel->setBuddy(m_dspResetTarget);
+        using ResetTarget = DspParameterResetTarget;
+        const QList<QPair<QString, ResetTarget>> resetTargets = {
+            {tr("All"), ResetTarget::All}, {QStringLiteral("NR"), ResetTarget::Nr},
+            {QStringLiteral("ANF"), ResetTarget::Anf}, {QStringLiteral("NRL"), ResetTarget::Nrl},
+            {QStringLiteral("ANFL"), ResetTarget::Anfl}, {QStringLiteral("NRF"), ResetTarget::Nrf},
+            {QStringLiteral("NRS"), ResetTarget::Nrs}, {QStringLiteral("ANFT"), ResetTarget::Anft}};
+        for (const auto& [label, target] : resetTargets) {
+            m_dspResetTarget->addItem(label, static_cast<int>(target));
+        }
+        resetRow->addWidget(m_dspResetTarget, 1);
+        m_dspResetButton = new QPushButton(tr("Reset"));
+        m_dspResetButton->setObjectName(QStringLiteral("dspParameterResetButton"));
+        m_dspResetButton->setAccessibleName(tr("Reset DSP parameters"));
+        m_dspResetButton->setFixedHeight(22);
+        m_dspResetTarget->setFixedHeight(22);
+        const QString resetStyle = QStringLiteral(
+            "QPushButton, QComboBox { background: {{color.canon.control}};"
+            "color: {{color.canon.cyan}}; border: 1px solid {{color.canon.lineHi}};"
+            "border-radius: 3px; padding: 1px 4px; }"
+            "QPushButton:hover, QComboBox:hover { background: {{color.canon.nested}};"
+            "color: {{color.canon.aqua}}; }"
+            "QPushButton:disabled { color: {{color.canon.muted}}; }"
+            "QPushButton:focus, QComboBox:focus { border-color: {{color.canon.cyan}}; }");
+        ThemeManager::instance().applyStyleSheet(m_dspResetTarget, resetStyle);
+        ThemeManager::instance().applyStyleSheet(m_dspResetButton, resetStyle);
+        ThemeManager::instance().applyStyleSheet(resetLabel,
+            QStringLiteral("QLabel { color: {{color.canon.muted}}; }"));
+        resetRow->addWidget(m_dspResetButton);
+        dspVb->addLayout(resetRow);
+        connect(m_dspResetTarget, &QComboBox::currentIndexChanged,
+                this, [this] {
+            m_dspResetIntentArmed = false;
+            updateDspParameterResetControls();
+        });
+        connect(m_dspResetButton, &QPushButton::pressed, this, [this] {
+            m_dspResetIntentArmed = false;
+            const std::optional<DspParameterResetTarget> target =
+                dspParameterResetTarget(m_dspResetTarget->currentIndex());
+            if (!target) {
+                return;
+            }
+            m_dspResetIntentRadio = m_radioModel;
+            m_dspResetIntentSlice = m_dspResetSlice;
+            m_dspResetIntentTarget = *target;
+            m_dspResetSession = m_radioModel ? m_radioModel->receiveControlSession() : 0;
+            m_dspResetIntentArmed = true;
+        });
+        connect(m_dspResetButton, &QPushButton::clicked, this, [this] {
+            const bool armed = std::exchange(m_dspResetIntentArmed, false);
+            const std::optional<DspParameterResetTarget> target =
+                dspParameterResetTarget(m_dspResetTarget->currentIndex());
+            if (armed && target && m_dspResetIntentRadio && m_dspResetIntentRadio == m_radioModel
+                && m_dspResetIntentSlice == m_dspResetSlice
+                && m_dspResetIntentTarget == *target) {
+                m_dspResetIntentRadio->requestDspParameterReset(m_dspResetIntentSlice.data(),
+                    m_dspResetSession, m_dspResetIntentTarget);
+            }
+            updateDspParameterResetControls();
+        });
+        updateDspParameterResetControls();
+
         // Shared DSP-level row — one slider that re-targets based on which
         // leveled DSP is most recently turned on.  Hidden when the active
         // target is None (no leveled DSP on, or only RNN / ANFT / APF on).
@@ -2094,6 +2198,7 @@ void VfoWidget::buildTabContent()
             lvlHb->addWidget(m_dspLevelLabel);
 
             m_dspLevelSlider = new GuardedSlider(Qt::Horizontal);
+            m_dspLevelSlider->setObjectName(QStringLiteral("dspLevelSlider"));
             m_dspLevelSlider->setRange(0, 100);
             applyPrimarySliderStyle(m_dspLevelSlider);
             lvlHb->addWidget(m_dspLevelSlider, 1);
@@ -2119,6 +2224,18 @@ void VfoWidget::buildTabContent()
                     case LvlNone: break;
                 }
             });
+
+            // A readback above the request ceiling leaves the thumb at the
+            // endpoint. Explicit activation must still request that endpoint.
+            const auto requestNrsEndpoint = [this] {
+                if (!m_updatingFromModel && m_slice && m_dspLevelTarget == LvlNrs
+                    && m_slice->nrsLevel() > m_slice->nrsLevelMaximum()
+                    && m_dspLevelSlider->sliderPosition() == m_slice->nrsLevelMaximum()) {
+                    m_slice->setNrsLevel(m_slice->nrsLevelMaximum());
+                }
+            };
+            connect(m_dspLevelSlider, &QSlider::actionTriggered, this, requestNrsEndpoint);
+            connect(m_dspLevelSlider, &QSlider::sliderReleased, this, requestNrsEndpoint);
 
             // Keep the panel compact when no leveled DSP is active. The row
             // appears only when it has a real target; setDspLevelTarget()
@@ -2940,6 +3057,13 @@ void VfoWidget::buildTabContent()
             auto* plus = new TriBtn(TriBtn::Right);
             row->addWidget(plus);
 
+            m_ritControls = {m_ritBtn, zero, minus, m_ritLabel, plus};
+            m_ritBtn->setAccessibleName(tr("Receive incremental tuning"));
+            zero->setAccessibleName(tr("Reset receive offset"));
+            minus->setAccessibleName(tr("Decrease receive offset"));
+            plus->setAccessibleName(tr("Increase receive offset"));
+            m_ritLabel->setAccessibleName(tr("Receive offset"));
+
             connect(m_ritBtn, &QPushButton::toggled, this, [this](bool on) {
                 if (!m_updatingFromModel && m_slice) m_slice->setRit(on, m_slice->ritFreq());
             });
@@ -3483,21 +3607,28 @@ void VfoWidget::updateExtendedDspVisibility()
 // capability is applied here.
 void VfoWidget::applyRadioSideDspVisibility()
 {
-    m_nrBtn->setVisible(m_nrModeOk && m_hasRadioSideDsp);
+    const auto controls = m_radioModel && m_radioModel->isConnected()
+        ? m_radioModel->backendCapabilities().receiveDspControl : std::nullopt;
+    using Feature = ReceiveDspControl::Feature;
+    const auto supplied = [&controls](Feature feature, bool legacy) {
+        return controls ? controls->features.contains(feature) : legacy;
+    };
+    m_nrBtn->setVisible(m_nrModeOk && (controls || supplied(Feature::Nr, m_hasRadioSideDsp)));
     // NB is the one member of the trio that does NOT need the radio to run its
     // own DSP: on a direct-sampling backend this host blanks the IQ itself, so
     // the button drives something real. OR'd rather than replaced, because on a
     // Flex the blanker is still the radio's — see
     // RadioCapabilities::hasHostNoiseBlanker.
-    m_nbBtn->setVisible(m_nbModeOk && (m_hasRadioSideDsp || m_hasHostNoiseBlanker));
-    m_anfBtn->setVisible(m_anfModeOk && m_hasRadioSideDsp);
+    m_nbBtn->setVisible(m_nbModeOk && (controls || supplied(Feature::Nb, m_hasRadioSideDsp || m_hasHostNoiseBlanker)));
+    m_anfBtn->setVisible(m_anfModeOk && (controls || supplied(Feature::Anf, m_hasRadioSideDsp)));
     // The LMS/FFT three carry a SECOND capability on top of the first. A radio
     // can run its own DSP without running FlexRadio's — see
     // RadioCapabilities::hasLmsNoiseFilters.
     m_nrlBtn->setVisible(m_nrlModeOk && m_hasRadioSideDsp && m_hasLmsNoiseFilters);
     m_anflBtn->setVisible(m_anflModeOk && m_hasRadioSideDsp && m_hasLmsNoiseFilters);
     m_anftBtn->setVisible(m_anftModeOk && m_hasRadioSideDsp && m_hasLmsNoiseFilters);
-    m_mnBtn->setVisible(m_mnModeOk && m_hasRadioSideDsp && m_hasManualNotch);
+    m_mnBtn->setVisible(m_mnModeOk && (controls || supplied(Feature::ManualNotch, m_hasRadioSideDsp && m_hasManualNotch)));
+    if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
 }
 
 void VfoWidget::setHasLmsNoiseFilters(bool has)
@@ -4758,6 +4889,10 @@ void VfoWidget::setSlice(SliceModel* slice)
     if (m_slice)
         m_slice->disconnect(this);
     m_slice = slice;
+    syncAutoAgcThreshold();
+    m_dspResetSlice = slice;
+    m_dspResetIntentArmed = false;
+    updateDspParameterResetControls();
     setProperty("sliceId", m_slice ? m_slice->sliceId() : -1);
     if (!m_slice) {
         updateFreqLabel();
@@ -4765,16 +4900,34 @@ void VfoWidget::setSlice(SliceModel* slice)
         return;
     }
 
+    const auto refreshConfirmed = [this] {
+        if (m_slice && m_slice->receiveControlsConfirmed()) { syncFromSlice(); }
+    };
+    // Restore accepted presentation after the originating widget finishes its
+    // click handler; pending requests never masquerade as DSP readback.
+    connect(m_slice, &SliceModel::receiveAgcRequested, this, refreshConfirmed, Qt::QueuedConnection);
+    connect(m_slice, &SliceModel::receiveDspRequested, this, refreshConfirmed, Qt::QueuedConnection);
+    connect(m_slice, &SliceModel::ritCommandIssued, this, refreshConfirmed, Qt::QueuedConnection);
+
     // Load per-slice display prefs now that we know the slice ID, then push
     // them out so the SpectrumWidget's overlay picks up the saved style. This
     // runs after wireVfoWidget() has connected markerStyleChanged (#1526).
     loadDisplayPrefs();
+    connect(m_slice, &SliceModel::agcThresholdModeChanged,
+            this, &VfoWidget::syncAutoAgcThreshold);
+    connect(m_slice, &SliceModel::externalReceiveReplacementChanged,
+            this, &VfoWidget::syncAutoAgcThreshold);
     emit markerStyleChanged(m_markerWidth, m_filterEdgesHidden);
     // Restore the per-slice adaptive RX filter config (RFC #3878) — bounds and
     // presets only; the enabled state is session-scoped and always starts off
     // (the operator opts in each session). Single load site (the flag is always
     // present per slice); the RX-applet copy just reflects the loaded slice.
     AdaptiveFilterControls::loadPrefs(m_slice);
+
+    connect(m_slice, &SliceModel::externalReceiveReplacementChanged,
+            this, &VfoWidget::updateDspParameterResetControls);
+    connect(m_slice, &SliceModel::receiveObservationChanged,
+            this, &VfoWidget::updateDspParameterResetControls);
 
     // Frequency
     connect(m_slice, &SliceModel::frequencyChanged, this, [this](double) { updateFreqLabel(); });
@@ -4813,6 +4966,11 @@ void VfoWidget::setSlice(SliceModel* slice)
     wireLevelEcho(&SliceModel::anfLevelChanged,  LvlAnf);
     wireLevelEcho(&SliceModel::nrlLevelChanged,  LvlNrl);
     wireLevelEcho(&SliceModel::nrsLevelChanged,  LvlNrs);
+    connect(m_slice, &SliceModel::nrsLevelMaximumChanged, this, [this](int) {
+        if (m_dspLevelTarget == LvlNrs) {
+            setDspLevelTarget(LvlNrs);
+        }
+    });
     wireLevelEcho(&SliceModel::nrfLevelChanged,  LvlNrf);
     wireLevelEcho(&SliceModel::anflLevelChanged, LvlAnfl);
     wireLevelEcho(&SliceModel::mnLevelChanged,   LvlMn);
@@ -4852,6 +5010,8 @@ void VfoWidget::setSlice(SliceModel* slice)
     });
     // Mode
     connect(m_slice, &SliceModel::modeChanged, this, [this](const QString& mode) {
+        updateAgcSliderFromSlice();
+        updateDspParameterResetControls();
         m_tabBtns[2]->setText(mode);  // update mode tab label
         updateModeTab();
         // Show/hide mode-specific DSP controls
@@ -4881,8 +5041,12 @@ void VfoWidget::setSlice(SliceModel* slice)
         // Digital/RTTY: audio feeds external decoders via DAX, SQL not meaningful
         //   and gates weak FSK signals (#2504)
         // CW: radio locks squelch on at fixed level, rejects changes
+        const RadioCapabilities sqlCaps = m_radioModel ? m_radioModel->backendCapabilities()
+                                                   : RadioCapabilities{};
         const bool sqlDisabled = !ModeFilters::squelchAvailableInMode(mode,
-            m_exclusiveSquelch ? &*m_exclusiveSquelch : nullptr,
+            m_radioModel && m_radioModel->isConnected()
+                ? (sqlCaps.squelchLevelScale ? &*sqlCaps.squelchLevelScale : nullptr)
+                : (m_exclusiveSquelch ? &*m_exclusiveSquelch : nullptr),
             m_radioModel && m_radioModel->isConnected()
                 && m_radioModel->backendCapabilities().hasModeIndependentSquelch,
             m_slice && m_slice->externalReceiveReplacementActive());
@@ -4890,19 +5054,22 @@ void VfoWidget::setSlice(SliceModel* slice)
         m_sqlSlider->setEnabled(!sqlDisabled);
         if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
         if (sqlDisabled && m_slice) {
-            // Only digital/RTTY modes get a client-side squelch-off override
-            // (#2504). CW/CWL squelch is radio-managed — no client push, so no
-            // "save" either, or the unpaired flag would fabricate a restore on
-            // the next mode change (#3263).
-            if (m_slice->receiveSquelchOn() && (isDig || isRtty)) {
-                m_savedSquelchOn = true;
+            m_slice->setSquelchEchoIsManual(false);
+            // CW keeps native SQL untouched while Auto's manual provenance
+            // survives the unavailable visit on the slice, independent of focus.
+            if (m_slice->displayAutoSquelch()) {
+                m_slice->setRestoreManualSquelchAfterMode(true);
+            }
+            if ((m_slice->receiveSquelchOn() || m_slice->displayAutoSquelch())
+                && (isDig || isRtty || mode == "DFM")) {
+                m_slice->setRestoreManualSquelchAfterMode(true);
                 m_slice->setSquelch(false, m_slice->receiveSquelchLevel());
                 QSignalBlocker sb(m_sqlBtn);
                 m_sqlBtn->setChecked(false);
             }
-        } else if (!sqlDisabled && m_slice && m_savedSquelchOn) {
-            m_savedSquelchOn = false;
-            m_slice->setSquelch(true, m_slice->receiveSquelchLevel());
+        } else if (!sqlDisabled && m_slice && !m_slice->externalReceiveReplacementActive()
+            && m_slice->restoreManualSquelchAfterMode()) {
+            m_slice->restoreManualSquelchAfterModeChange();
             QSignalBlocker sb(m_sqlBtn);
             m_sqlBtn->setChecked(true);
         }
@@ -5423,10 +5590,8 @@ void VfoWidget::syncFromSlice()
         QSignalBlocker sb(m_muteBtn);
         bool muted = m_slice->audioMute();
         m_muteBtn->setChecked(muted);
-        m_muteBtn->setText(muted ? QString::fromUtf8("AF  \xF0\x9F\x94\x87")
-                                 : QString::fromUtf8("AF  \xF0\x9F\x94\x8A"));
-        m_tabBtns[0]->setText(muted ? QString::fromUtf8("\xF0\x9F\x94\x87")
-                                    : QString::fromUtf8("\xF0\x9F\x94\x8A"));
+        applyAudioIcon(m_muteBtn, AudioIcon::Speaker, muted, 16);
+        applyAudioIcon(m_tabBtns[0], AudioIcon::Speaker, muted, 16);
     }
     syncSqlVisuals();
     {
@@ -5521,8 +5686,12 @@ void VfoWidget::syncFromSlice()
     m_fmContainer->setVisible(isFm);
     m_fmToneContainer->setVisible(hasToneControls);
     // CW: radio locks squelch on at fixed level; Digital: not meaningful
+    const RadioCapabilities sqlCaps = m_radioModel ? m_radioModel->backendCapabilities()
+                                               : RadioCapabilities{};
     const bool squelchAvailable = ModeFilters::squelchAvailableInMode(m_slice->mode(),
-        m_exclusiveSquelch ? &*m_exclusiveSquelch : nullptr,
+        m_radioModel && m_radioModel->isConnected()
+                ? (sqlCaps.squelchLevelScale ? &*sqlCaps.squelchLevelScale : nullptr)
+                : (m_exclusiveSquelch ? &*m_exclusiveSquelch : nullptr),
         m_radioModel && m_radioModel->isConnected()
             && m_radioModel->backendCapabilities().hasModeIndependentSquelch,
         m_slice->externalReceiveReplacementActive());
@@ -5584,6 +5753,7 @@ void VfoWidget::syncFromSlice()
     }
 
     m_updatingFromModel = false;
+    if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
 }
 
 void VfoWidget::updateFreqLabel()
@@ -5769,11 +5939,14 @@ void VfoWidget::setDspLevelTarget(DspLevelTarget t)
         case LvlNone: return;
     }
     m_dspLevelLabel->setText(name);
+    m_dspLevelSlider->setAccessibleName(tr("%1 level").arg(name));
     {
         QSignalBlocker b(m_dspLevelSlider);
+        m_dspLevelSlider->setRange(0, t == LvlNrs ? m_slice->nrsLevelMaximum() : 100);
         m_dspLevelSlider->setValue(level);
     }
     m_dspLevelValue->setText(QString::number(level));
+    if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
     if (visibilityChanged && m_activeTab == 1 && m_tabStack->isVisible()) {
         QTimer::singleShot(0, this, [this] { relayoutToCurrentContent(); });
     }
@@ -5945,13 +6118,23 @@ void VfoWidget::updateAgcSliderFromSlice()
     if (!m_slice || !m_agcTSlider || !m_agcValueLbl) return;
 
     const bool connected = m_radioModel && m_radioModel->isConnected();
-    const bool available = !connected || m_slice->externalReceiveReplacementActive()
-        || m_radioModel->backendCapabilities().hasAgcThreshold;
+    const RadioCapabilities backendCaps = connected
+        ? m_radioModel->backendCapabilities() : RadioCapabilities{};
+    const bool modeAvailable = !connected || m_slice->externalReceiveReplacementActive()
+        || !backendCaps.receiveDspControl
+        || backendCaps.receiveDspControl->supports(ReceiveDspControl::Feature::Agc, m_slice->mode());
+    const bool available = modeAvailable && (!connected || m_slice->externalReceiveReplacementActive()
+        || backendCaps.hasAgcThreshold);
     m_agcTSlider->setEnabled(available);
     m_agcValueLbl->setEnabled(available);
     const RadioCapabilities caps = connected && !m_slice->externalReceiveReplacementActive()
         ? m_radioModel->backendCapabilities() : RadioCapabilities{};
     setAgcModeAvailability(m_agcCmb, caps.agcModes);
+    m_agcCmb->setEnabled(modeAvailable);
+    m_agcCmb->setAccessibleDescription(modeAvailable ? tr("Automatic gain control speed")
+        : tr("AGC is unavailable in this receive mode"));
+    m_agcTSlider->setAccessibleDescription(available ? tr("Receive AGC gain control")
+        : tr("AGC threshold and off level are unavailable in this receive mode"));
     const bool agcOff = (m_slice->receiveAgcMode() == "off");
     const int minimum = agcOff ? 0 : agcThresholdMinimum();
     const int maximum = agcOff ? 100 : agcThresholdMaximum();
@@ -6229,7 +6412,7 @@ void VfoWidget::rebuildFilterButtons()
         } else {
             m_zeroBeatBtn = new QPushButton("Zero Beat");
             m_zeroBeatBtn->setFixedHeight(26);
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
             refreshCwDecoderControls();
 #endif
             m_zeroBeatBtn->setStyleSheet(btnStyle);
@@ -6249,14 +6432,14 @@ void VfoWidget::rebuildFilterButtons()
     updateFilterHighlight();
 }
 
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
 void VfoWidget::refreshCwDecoderControls()
 {
     if (!m_zeroBeatBtn) { return; }
-    const bool selected = CwDecodeSettings::deepFistSelected();
+    const bool selected = CwDecodeSettings::neuralSelected();
     m_zeroBeatBtn->setEnabled(!selected);
     const QString reason = selected
-        ? tr("DeepFist does not provide a pitch estimate for Zero Beat") : QString{};
+        ? tr("Zero Beat uses ggmorse's pitch estimate; neural decoder pitch is not used") : QString{};
     m_zeroBeatBtn->setToolTip(reason);
     m_zeroBeatBtn->setAccessibleDescription(reason);
 }
@@ -6497,6 +6680,32 @@ int VfoWidget::agcThresholdMaximum() const
         : 100;
 }
 
+void VfoWidget::syncAutoAgcThreshold()
+{
+    const QSignalBlocker blocker(m_autoAgcTButton);
+    m_autoAgcTButton->setChecked(m_slice && m_slice->agcThresholdMode()
+        == AgcThresholdMode::Automatic);
+    if (m_filterAvailability) {
+        m_filterAvailability->refreshEngaged();
+    }
+    const QString reason = m_radioModel
+        ? m_radioModel->autoAgcThresholdUnavailableReason(m_slice)
+        : tr("Connect a radio to use Auto AGC-T");
+    if (!reason.isEmpty()) {
+        m_autoAgcTButton->setEnabled(false);
+        m_autoAgcTButton->setToolTip(reason);
+        m_autoAgcTButton->setAccessibleDescription(reason);
+    } else {
+        const QString description = m_slice->automaticAgcThresholdActiveOrPending()
+            && m_slice->agcThresholdMode() != AgcThresholdMode::Automatic
+            ? tr("Waiting for radio Auto AGC-T confirmation. Click again to request manual mode.")
+            : tr("Auto AGC-T: automatically adjusts the threshold as band noise changes. "
+                 "AGC speed stays independent. Move the slider to return to manual control.");
+        m_autoAgcTButton->setToolTip(description);
+        m_autoAgcTButton->setAccessibleDescription(description);
+    }
+}
+
 void VfoWidget::syncSqlVisuals()
 {
     if (!m_sqlBtn || !m_sqlSlider) return;
@@ -6715,10 +6924,64 @@ void VfoWidget::populateDaxCombo()
     m_daxCmb->setCurrentIndex(want);
 }
 
+std::optional<DspParameterResetTarget> VfoWidget::dspParameterResetTarget(int index) const
+{
+    if (!m_dspResetTarget || index < 0 || index >= m_dspResetTarget->count()) {
+        return std::nullopt;
+    }
+    const QVariant data = m_dspResetTarget->itemData(index);
+    if (data.metaType().id() != QMetaType::Int) {
+        return std::nullopt;
+    }
+    const DspParameterResetTarget target = static_cast<DspParameterResetTarget>(data.toInt());
+    return validDspParameterResetTarget(target) ? std::optional(target) : std::nullopt;
+}
+
+void VfoWidget::updateDspParameterResetControls()
+{
+    if (!m_dspResetButton || !m_dspResetTarget) {
+        return;
+    }
+    const auto unavailableReason = [this](DspParameterResetTarget target) {
+        return m_radioModel
+            ? m_radioModel->dspParameterResetUnavailableReason(m_dspResetSlice.data(), m_radioModel->receiveControlSession(), target)
+            : tr("Connect to a radio to reset DSP parameters");
+    };
+    auto* targets = qobject_cast<QStandardItemModel*>(m_dspResetTarget->model());
+    if (targets) {
+        for (int row = 0; row < m_dspResetTarget->count(); ++row) {
+            const std::optional<DspParameterResetTarget> choice = dspParameterResetTarget(row);
+            const QString reason = choice ? unavailableReason(*choice) : tr("Select a valid DSP parameter reset target");
+            QStandardItem* item = targets->item(row);
+            item->setEnabled(reason.isEmpty());
+            item->setSelectable(reason.isEmpty());
+            item->setData(reason, Qt::ToolTipRole);
+            item->setData(reason, Qt::AccessibleDescriptionRole);
+        }
+    }
+    const std::optional<DspParameterResetTarget> target =
+        dspParameterResetTarget(m_dspResetTarget->currentIndex());
+    const QString scope = target == DspParameterResetTarget::All
+        ? tr("Reset every DSP block's parameters, including NB and APF levels. Keeps all on/off states.")
+        : tr("Reset the selected algorithm's parameters to radio defaults. Keeps its on/off state.");
+    const QString reason = target ? unavailableReason(*target) : tr("Select a valid DSP parameter reset target");
+    const QString description = reason.isEmpty() ? scope : reason + QStringLiteral(". ") + scope;
+    m_dspResetButton->setEnabled(reason.isEmpty());
+    m_dspResetButton->setToolTip(description);
+    m_dspResetButton->setAccessibleDescription(description);
+    m_dspResetTarget->setToolTip(description);
+    m_dspResetTarget->setAccessibleDescription(description + tr(" Selecting a target does not reset it; press Reset to apply."));
+}
+
 void VfoWidget::setRadioModel(RadioModel* radioModel)
 {
     if (m_radioModel) {
         releaseTransmitFrequencyCheck();
+        disconnect(m_radioModel, &RadioModel::connectionStateChanged, this, &VfoWidget::updateDspParameterResetControls);
+        disconnect(m_radioModel, &RadioModel::capabilitiesChanged, this, &VfoWidget::updateDspParameterResetControls);
+        disconnect(m_radioModel, &RadioModel::infoChanged, this, &VfoWidget::updateDspParameterResetControls);
+        disconnect(m_radioModel, &RadioModel::licenseFeaturesChanged, this, &VfoWidget::updateDspParameterResetControls);
+        disconnect(m_radioModel, &RadioModel::slotOccupancyChanged, this, &VfoWidget::updateDspParameterResetControls);
         disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
                    this, &VfoWidget::updateAntennaButtons);
         disconnect(m_radioModel, &RadioModel::infoChanged,
@@ -6729,22 +6992,93 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
                    this, nullptr);
         disconnect(m_radioModel, &RadioModel::transmitFrequencyCheckChanged,
                    this, nullptr);
+        disconnect(m_radioModel, &RadioModel::autoAgcThresholdAvailabilityChanged,
+                   this, nullptr);
     }
     delete m_filterAvailability;
     m_filterAvailability = nullptr;
     m_radioModel = radioModel;
+    m_dspResetIntentArmed = false;
+    if (m_radioModel) {
+        connect(m_radioModel, &RadioModel::connectionStateChanged,
+                this, &VfoWidget::updateDspParameterResetControls);
+        connect(m_radioModel, &RadioModel::capabilitiesChanged,
+                this, &VfoWidget::updateDspParameterResetControls);
+        connect(m_radioModel, &RadioModel::infoChanged,
+                this, &VfoWidget::updateDspParameterResetControls);
+        connect(m_radioModel, &RadioModel::licenseFeaturesChanged,
+                this, &VfoWidget::updateDspParameterResetControls);
+        connect(m_radioModel, &RadioModel::slotOccupancyChanged,
+                this, &VfoWidget::updateDspParameterResetControls);
+    }
+    updateDspParameterResetControls();
     m_receiveFilterControl = m_radioModel && m_radioModel->isConnected()
         ? m_radioModel->backendCapabilities().receiveFilterControl : std::nullopt;
     m_exclusiveSquelch = m_radioModel && m_radioModel->isConnected()
         ? exclusiveSquelchScaleValue(m_radioModel->backendCapabilities().squelchLevelScale) : std::nullopt;
     if (m_radioModel) {
         m_filterAvailability = new ControlAvailabilityRegistry(*m_radioModel, this);
+        m_filterAvailability->registerRestriction(m_txAntBtn,
+            tr("This radio is receive-only; no transmit antenna is available"),
+            [](bool connected, const RadioCapabilities& caps) {
+                return !connected || caps.canTransmit;
+            });
+        m_filterAvailability->registerRestriction(m_rxAntBtn,
+            tr("This receiver has one fixed receive input"),
+            [this](bool connected, const RadioCapabilities& caps) {
+                const bool virtualAntennas = m_kiwiSdrManager
+                    && !m_kiwiSdrManager->virtualAntennaTokens().isEmpty();
+                return !connected || caps.canTransmit || !m_slice
+                    || m_slice->rxAntennaList().size() != 1 || virtualAntennas;
+            });
+        using Feature = ReceiveDspControl::Feature;
+        const auto signalAvailable = [this](bool connected, const RadioCapabilities& caps, Feature feature) {
+            return !connected || !caps.receiveDspControl
+                || (m_slice && caps.receiveDspControl->supports(feature, m_slice->mode()));
+        };
+        const auto registerSignalControl = [this, signalAvailable](QWidget* widget, Feature feature) {
+            m_filterAvailability->registerRestriction(widget,
+                tr("This receive control is unavailable in the current mode"),
+                [signalAvailable, feature](bool connected, const RadioCapabilities& caps) {
+                    return signalAvailable(connected, caps, feature);
+                });
+        };
+        registerSignalControl(m_nbBtn, Feature::Nb);
+        registerSignalControl(m_nrBtn, Feature::Nr);
+        registerSignalControl(m_anfBtn, Feature::Anf);
+        registerSignalControl(m_mnBtn, Feature::ManualNotch);
+        registerSignalControl(m_apfBtn, Feature::Apf);
+        registerSignalControl(m_apfSlider, Feature::Apf);
+        registerSignalControl(m_nbFillCombo, Feature::Nb);
+        m_filterAvailability->registerRestriction(m_dspLevelSlider,
+            tr("This DSP parameter is unavailable in the current receive mode"),
+            [this, signalAvailable](bool connected, const RadioCapabilities& caps) {
+                if (!connected || !caps.receiveDspControl) { return true; }
+                switch (m_dspLevelTarget) {
+                case LvlNB: return signalAvailable(connected, caps, Feature::Nb);
+                case LvlNR: return signalAvailable(connected, caps, Feature::Nr);
+                case LvlAnf: return signalAvailable(connected, caps, Feature::Anf);
+                case LvlMn: return signalAvailable(connected, caps, Feature::ManualNotch);
+                default: return true; // Client-chain targets have their own availability rules.
+                }
+            });
+        for (QWidget* widget : m_ritControls) { registerSignalControl(widget, Feature::Rit); }
+
+        m_filterAvailability->registerWidget(m_autoAgcTButton,
+            tr("Auto AGC-T requires a connected supported radio, an enabled license, and confirmed slice status"),
+            [this](bool, const RadioCapabilities&) {
+                return m_radioModel->autoAgcThresholdUnavailableReason(m_slice).isEmpty();
+            },
+            [this] { return m_slice && m_slice->agcThresholdMode()
+                == AgcThresholdMode::Automatic; }, false);
+        connect(m_radioModel, &RadioModel::autoAgcThresholdAvailabilityChanged,
+                this, &VfoWidget::syncAutoAgcThreshold);
         const auto supportsSquelch = [this](bool connected, const RadioCapabilities& caps) {
             if (!m_slice) {
                 return !exclusiveSquelchScale(caps.squelchLevelScale);
             }
             return ModeFilters::squelchAvailableInMode(m_slice->mode(),
-                connected ? exclusiveSquelchScale(caps.squelchLevelScale) : nullptr,
+                connected && caps.squelchLevelScale ? &*caps.squelchLevelScale : nullptr,
                 connected && caps.hasModeIndependentSquelch,
                 m_slice->externalReceiveReplacementActive());
         };
@@ -6772,6 +7106,7 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
                 [this](bool connected, const RadioCapabilities& caps) {
             m_receiveFilterControl = connected ? caps.receiveFilterControl : std::nullopt;
             m_exclusiveSquelch = connected ? exclusiveSquelchScaleValue(caps.squelchLevelScale) : std::nullopt;
+            updateAntennaButtons();
             configureRepeaterReverseControl();
             configureFmToneControls();
             updateAgcSliderFromSlice();
@@ -6789,6 +7124,7 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
     configureRepeaterReverseControl();
     configureFmToneControls();
     updateAgcSliderFromSlice();
+    syncAutoAgcThreshold();
     if (m_slice) {
         updateModeTab();
     }
@@ -7005,6 +7341,11 @@ QString VfoWidget::antennaMenuLabel(const QString& token,
 
 QStringList VfoWidget::rxAntennaOptions() const
 {
+    if (m_radioModel && m_radioModel->isConnected()
+        && !m_radioModel->backendCapabilities().canTransmit && m_slice
+        && !m_slice->rxAntennaList().isEmpty()) {
+        return m_slice->rxAntennaList();
+    }
     QStringList options;
     auto append = [&options](const QString& token) {
         if (!token.isEmpty() && !options.contains(token)) {
@@ -7036,6 +7377,8 @@ QStringList VfoWidget::rxAntennaOptions() const
 
 QStringList VfoWidget::txAntennaOptions() const
 {
+    if (m_radioModel && m_radioModel->isConnected()
+        && !m_radioModel->backendCapabilities().canTransmit) { return {}; }
     QStringList options;
     auto append = [&options](const QString& token) {
         if (!token.isEmpty() && !options.contains(token))
@@ -7064,6 +7407,10 @@ void VfoWidget::updateAntennaButton(QPushButton* button, const QString& token, b
         return;
 
     QString effectiveToken = token;
+    if (tx && m_radioModel && m_radioModel->isConnected()
+        && !m_radioModel->backendCapabilities().canTransmit) {
+        effectiveToken = tr("None");
+    }
     if (!tx && m_kiwiSdrManager && m_slice) {
         const QString profileId =
             m_kiwiSdrManager->assignedProfileForSlice(m_slice->sliceId());
@@ -7098,6 +7445,7 @@ void VfoWidget::updateAntennaButton(QPushButton* button, const QString& token, b
         : QStringLiteral("%1 antenna port: %2")
               .arg(tx ? QStringLiteral("Transmit") : QStringLiteral("Receive"),
                    full));
+    if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
 }
 
 void VfoWidget::updateAntennaButtons()

@@ -1,9 +1,12 @@
 #include "core/backends/anan/AnanSettings.h"
 
 #include "core/AppSettings.h"
+#include "core/backends/anan/P2Protocol.h"   // kDdc0RatesKsps
 
 #include <QJsonDocument>
 #include <QJsonObject>
+
+#include <iterator>
 
 namespace AetherSDR::anan {
 namespace {
@@ -11,7 +14,7 @@ namespace {
 // Single nested-JSON key holding this backend's config (Principle V).
 // Shape: {"ddc0RateKsps":int, "dither":bool,
 //         "random":bool, "ddc0AdcIndex":int, "bypassAdc0Filters":bool,
-//         "bypassAdc1Filters":bool}
+//         "bypassAdc1Filters":bool, "speakerAudioEnabled":bool}
 const QString kRootKey = QStringLiteral("Anan");
 
 constexpr const char* kFieldDdc0RateKsps      = "ddc0RateKsps";
@@ -131,6 +134,15 @@ void AnanSettings::setBypassAdc1Filters(bool on)
     QJsonObject obj = readObj();
     obj[QLatin1String(kFieldBypassAdc1Filters)] = on;
     writeObj(obj);
+}
+
+QList<int> AnanSettings::validDdc0RatesKsps()
+{
+    QList<int> rates;
+    rates.reserve(static_cast<int>(std::size(kDdc0RatesKsps)));
+    for (const int ksps : kDdc0RatesKsps)
+        rates.append(ksps);
+    return rates;
 }
 
 void AnanSettings::reset()

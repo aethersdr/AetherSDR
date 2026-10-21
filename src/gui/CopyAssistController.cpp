@@ -16,6 +16,10 @@
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
 #include "gui/AsrAudioTap.h"
+#include "gui/ControlAvailabilityRegistry.h"
+#include "models/DecoderAudioModel.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include <QPushButton>
 
@@ -438,6 +442,10 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
                 .toString())
         == AsrTapPoint::PreDsp);
     connect(m_settings, &CopyAssistSettingsDialog::rawAudioToggled, this, [this](bool raw) {
+        if (m_tap && m_tap->usesNativeInput()) {
+            m_settings->setNativeAudioRoute(true);
+            return;
+        }
         const AsrTapPoint point = raw ? AsrTapPoint::PreDsp : AsrTapPoint::PostDsp;
         CopyAssistSettings::setValue(QStringLiteral("AsrTapPoint"), asrTapPointToSetting(point));
         if (m_tap) {
@@ -766,10 +774,66 @@ PersistentDialog* CopyAssistController::settingsDialog() const
     return m_settings;
 }
 
+void CopyAssistController::setReceiver(RadioModel& radio, SliceModel* slice)
+{
+    if (m_radio != &radio) {
+        if (m_radio) { disconnect(m_radio, nullptr, this, nullptr); }
+        if (m_tap) { m_tap->setNativeInput(nullptr); }
+        delete m_nativeAudio;
+        m_radio = &radio;
+        delete m_audioAvailability;
+        m_audioAvailability = new ControlAvailabilityRegistry(radio, this);
+        m_audioAvailability->registerWidget(m_settings->rawAudioControl(),
+            tr("The selected receiver supplies independent audio before speaker gain, mute, "
+               "client noise reduction and RX effects. Post-effects audio is not available for this route."),
+            [](bool, const RadioCapabilities& caps) { return !caps.receiveAudioExport.has_value(); });
+        m_nativeAudio = new DecoderAudioModel(radio, DecoderAudioModel::Consumer::NativeAsr, this);
+        connect(&radio, &RadioModel::capabilitiesChanged, this, [this] { refreshNativeInput(); });
+        connect(m_nativeAudio, &DecoderAudioModel::routeStatusChanged, this, [this] {
+            if (m_tap && m_tap->isEnabled() && m_tap->usesNativeInput()) {
+                m_panel->setStatus(listeningStatus());
+            }
+        });
+    }
+    setSelectedSlice(slice);
+    refreshNativeInput();
+}
+
+void CopyAssistController::setSelectedSlice(SliceModel* slice)
+{
+    m_selectedSlice = slice;
+    if (m_nativeAudio) { m_nativeAudio->setSlice(slice); }
+}
+
+void CopyAssistController::refreshNativeInput()
+{
+    const bool native = m_radio && m_radio->backendCapabilities().receiveAudioExport.has_value();
+    m_settings->setNativeAudioRoute(native);
+    if (!native) {
+        m_settings->setRawAudio(asrTapPointFromSetting(CopyAssistSettings::value(
+            QStringLiteral("AsrTapPoint"), asrTapPointToSetting(AsrTapPoint::PostDsp)).toString())
+            == AsrTapPoint::PreDsp);
+    }
+    if (m_tap) { m_tap->setNativeInput(native ? m_nativeAudio : nullptr); }
+}
+
+QString CopyAssistController::listeningStatus() const
+{
+    if (m_tap && m_tap->usesNativeInput()) {
+        if (!m_nativeAudio || m_nativeAudio->routeStatus() != DecoderAudioModel::RouteStatus::Bound) {
+            return tr("Waiting for selected receiver — audio before RX effects");
+        }
+        return m_backend == AsrBackendKind::Remote
+            ? tr("Listening (remote) — selected receiver before RX effects")
+            : tr("Listening — selected receiver before RX effects");
+    }
+    return m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…") : tr("Listening…");
+}
+
 void CopyAssistController::clearDecode()
 {
     m_panel->clearText();
-    m_asr->reset(); // drop any half-built utterance so it doesn't cross frequencies
+    m_asr->restartSession(); // retire queued audio and results from the previous context
 }
 
 void CopyAssistController::onRetune(double freqMhz)
@@ -1058,6 +1122,7 @@ void CopyAssistController::buildEngine()
         break;
     }
     m_tap = new AsrAudioTap(m_audio, m_asr, this);
+    refreshNativeInput();
     // Before any enable, so the first connection is already the right signal.
     m_tap->setTapPoint(asrTapPointFromSetting(
         CopyAssistSettings::value(QStringLiteral("AsrTapPoint"),
@@ -1077,8 +1142,7 @@ void CopyAssistController::buildEngine()
                 m_panel->setStatus(m_gpuFallbackNotice);
                 m_gpuFallbackNotice.clear();
             } else {
-                m_panel->setStatus(m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…")
-                                                                       : tr("Listening…"));
+                m_panel->setStatus(listeningStatus());
             }
             writeFreqMarkerIfNeeded(); // "on start": head the log with the frequency
         }
@@ -1614,8 +1678,7 @@ void CopyAssistController::restoreListeningStatus()
     if (!m_enabled || !m_asr->isReady()) {
         return; // not listening — leave "Disabled"/"Loading model…" alone
     }
-    m_panel->setStatus(m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…")
-                                                           : tr("Listening…"));
+    m_panel->setStatus(listeningStatus());
     // The ready() lambda skips its whole body while a speaker load is pending,
     // so this resume point owes the log the same "on start" frequency header it
     // would have written. writeFreqMarkerIfNeeded() dedups, so the ordinary

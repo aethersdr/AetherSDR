@@ -6,7 +6,7 @@
 
 namespace AetherSDR {
 
-DvkModel::DvkModel(QObject* parent) : QObject(parent) {}
+DvkModel::DvkModel(QObject* parent) : VoiceKeyer(parent) {}
 
 // ── Commands ────────────────────────────────────────────────────────────────
 //
@@ -23,7 +23,12 @@ void DvkModel::recStart(int id)
     setPending(Recording);
     emit replyCommandReady(QString("dvk rec_start id=%1").arg(id), "rec_start", id);
 }
-void DvkModel::recStop()
+// The radio's stop verbs carry no slot — `dvk rec_stop`, `preview_stop` and
+// `playback_stop` each stop whatever is running — so the interface's id is
+// unused in the three stop methods below. The slot still reaches the reply as
+// the one this model has in flight, which is the slot the radio is acting on
+// even if the panel's selection has moved since.
+void DvkModel::recStop(int /*id*/)
 {
     emit replyCommandReady(QStringLiteral("dvk rec_stop"), "rec_stop",
                            m_activeId > 0 ? m_activeId : m_pendingId);
@@ -34,7 +39,7 @@ void DvkModel::previewStart(int id)
     setPending(Preview);
     emit replyCommandReady(QString("dvk preview_start id=%1").arg(id), "preview_start", id);
 }
-void DvkModel::previewStop()
+void DvkModel::previewStop(int /*id*/)
 {
     emit replyCommandReady(QStringLiteral("dvk preview_stop"), "preview_stop",
                            m_activeId > 0 ? m_activeId : m_pendingId);
@@ -45,7 +50,7 @@ void DvkModel::playbackStart(int id)
     setPending(Playback);
     emit replyCommandReady(QString("dvk playback_start id=%1").arg(id), "playback_start", id);
 }
-void DvkModel::playbackStop()
+void DvkModel::playbackStop(int /*id*/)
 {
     emit replyCommandReady(QStringLiteral("dvk playback_stop"), "playback_stop",
                            m_activeId > 0 ? m_activeId : m_pendingId);
@@ -55,6 +60,12 @@ void DvkModel::clear(int id)
     // The radio is authoritative: fw 4.2.20 `clear` erases the audio and keeps
     // the slot's name, and the client leaves it that way.
     emit replyCommandReady(QString("dvk clear id=%1").arg(id), "clear", id);
+}
+// clear() keeps the name; remove() is the one that takes the slot's name with
+// it, which is the radio's own `dvk remove`.
+void DvkModel::remove(int id)
+{
+    emit replyCommandReady(QString("dvk remove id=%1").arg(id), "remove", id);
 }
 void DvkModel::setName(int id, const QString& name)
 {
@@ -90,6 +101,15 @@ QString DvkModel::sanitizeName(const QString& name)
         }
     }
     return clean.trimmed();
+}
+
+void DvkModel::importWav(int id, const QString& path)
+{
+    emit wavUploadRequested(id, path);
+}
+void DvkModel::exportWav(int id, const QString& path)
+{
+    emit wavDownloadRequested(id, path);
 }
 
 // ── Reply handling ──────────────────────────────────────────────────────────

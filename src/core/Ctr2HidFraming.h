@@ -48,6 +48,7 @@ enum class MessageType : std::uint8_t {
     RelayUdpPort = 0x41,   // host -> device: [port hi][port lo], this link's UDP endpoint
     AudioSpectrumLinear = 0x42,  // host -> device: [bars N][low Hz][high Hz][N levels], even split
     CwText = 0x43,         // host -> device: [confidence 0..3][decoded CW, ASCII]
+    Firmware = 0x44,       // both: an application update session (see firmware below)
 };
 
 constexpr std::uint8_t kExtensionFirst = 0x40;
@@ -58,7 +59,8 @@ constexpr std::uint32_t capabilityBit(MessageType type)
 }
 // Largest payload each extension type may carry; 0 for one not defined.
 int extensionMaxLength(MessageType type);
-// Extensions this build of AetherSDR uses.
+// Extensions the relay uses. Firmware is negotiated only by the updater
+// (Ctr2FirmwareUpdater), never on a relaying link.
 constexpr std::uint32_t kHostCapabilities = capabilityBit(MessageType::AudioSpectrum)
     | capabilityBit(MessageType::RelayUdpPort) | capabilityBit(MessageType::AudioSpectrumLinear)
     | capabilityBit(MessageType::CwText);
@@ -111,6 +113,84 @@ struct Window {
     int highHz;
 };
 Window cwWindow(int filterLo, int filterHi, int pitchHz, double sampleRate);
+}
+
+// Firmware: replaces a device's application over the link. The session opens
+// in place of the host's Ready: after the device answers Hello, the host
+// resets its counter and sends Begin. No radio connection opens. Payloads
+// [op][...], integers big-endian:
+//   host Begin    [0x01][image size u32][SHA-256 of the image]
+//   host Data     [0x02][offset u32][1..kChunkBytes image bytes], in order
+//   host End      [0x03]: verify, select the new image, restart into it
+//   host Abort    [0x04]
+//   host Switch   [0x05]: restart into the device's other firmware (the
+//                 maker's own, kept beside this one); BadState if none
+//   host Bootloader [0x06]: restart into the chip's ROM download mode, for
+//                 an install there; BadMessage from firmware without it
+//   device Status [0x81][op answered][Status][value u32]
+// Every host message gets one Status; for Data, value is the bytes stored so
+// far. The new image keeps itself only after it completes a link (answers
+// Hello); a device that resets before then returns to its previous image.
+namespace firmware {
+constexpr int kChunkBytes = 512;
+constexpr std::uint8_t kBegin = 0x01;
+constexpr std::uint8_t kData = 0x02;
+constexpr std::uint8_t kEnd = 0x03;
+constexpr std::uint8_t kAbort = 0x04;
+constexpr std::uint8_t kSwitch = 0x05;
+constexpr std::uint8_t kBootloader = 0x06;
+constexpr std::uint8_t kStatus = 0x81;
+constexpr int kDataHeaderBytes = 5;
+enum class Status : std::uint8_t {
+    Ok = 0x00,
+    BadState = 0x01,       // no session, or a second Begin
+    BadOffset = 0x02,      // Data not at the next byte
+    TooLarge = 0x03,       // image larger than the device's slot
+    FlashError = 0x04,
+    Rejected = 0x05,       // not a valid, correctly signed image
+    HashMismatch = 0x06,   // stored bytes do not match Begin's hash
+    BadMessage = 0x07,     // unknown op or wrong length
+};
+QByteArray encodeBegin(quint32 imageBytes, const QByteArray& sha256);
+QByteArray encodeData(quint32 offset, const QByteArray& chunk);
+QByteArray encodeEnd();
+QByteArray encodeAbort();
+QByteArray encodeSwitch();
+QByteArray encodeBootloader();
+struct Reply {
+    std::uint8_t op{0};
+    Status status{Status::Ok};
+    quint32 value{0};
+};
+// A device Status payload; false for anything else.
+bool decodeStatus(const QByteArray& payload, Reply* reply);
+QString statusText(Status status);
+}
+
+// HID Feature report 0x03, Get only, exactly 24 bytes after the report ID:
+//   ['F']['W'][layout 0x01][major][minor][patch][flags][0x00]
+//   [build ID, 16 bytes of printable ASCII, NUL-padded]
+// The device's firmware version, readable without a link. Devices without it
+// (any stock CTR2) fail the Get.
+namespace deviceinfo {
+constexpr std::uint8_t kReportId = 0x03;
+constexpr int kBytes = 24;
+constexpr std::uint8_t kLayout = 0x01;
+constexpr int kBuildBytes = 16;
+constexpr std::uint8_t kPending = 0x01;   // not yet confirmed by a link; dropped on reset
+constexpr std::uint8_t kSigned = 0x02;    // Firmware accepts only signed images
+struct Info {
+    int major{0};
+    int minor{0};
+    int patch{0};
+    std::uint8_t flags{0};
+    QString build;
+    QString version() const;   // "major.minor.patch"
+    bool pending() const { return flags & kPending; }
+};
+QByteArray encode(const Info& info);
+// The fields of a Get reply (report ID stripped); false for anything else.
+bool decode(const QByteArray& report, Info* info);
 }
 
 // CwText payload: [confidence][1..kMaxChars text bytes]. Text decoded by the

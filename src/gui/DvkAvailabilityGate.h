@@ -1,5 +1,7 @@
 #pragma once
 
+#include "models/VoiceKeyerSource.h"
+
 #include <QLatin1String>
 #include <QString>
 
@@ -39,6 +41,60 @@ inline DvkIndicatorBlocker dvkIndicatorBlocker(bool txModeIsVoice,
         return DvkIndicatorBlocker::TxModeNotVoice;
     }
     return DvkIndicatorBlocker::None;
+}
+
+// The same gate once RFC #4214's client-side keyer exists. With the Local keyer
+// selected, recordings and playback never touch the radio's DVK, so the radio's
+// entitlement is irrelevant and only the TX-mode gate applies. With the Radio
+// keyer selected, nothing changes.
+inline DvkIndicatorBlocker voiceKeyerIndicatorBlocker(VoiceKeyerSource source,
+                                                      bool txModeIsVoice,
+                                                      bool licenseSeen,
+                                                      bool licenseEnabled,
+                                                      bool radioRefused)
+{
+    if (source == VoiceKeyerSource::Local) {
+        // radioRefused is deliberately ignored: a refusal from the radio's DVK
+        // says nothing about a keyer that never asks the radio to store or play
+        // anything. Only the TX-mode gate survives.
+        return txModeIsVoice ? DvkIndicatorBlocker::None
+                             : DvkIndicatorBlocker::TxModeNotVoice;
+    }
+    return dvkIndicatorBlocker(txModeIsVoice, licenseSeen, licenseEnabled, radioRefused);
+}
+
+// Whether the keyer surface can be driven at all, before the mode and licence
+// gate above. The radio's own DVK is required only when the operator is driving
+// it: the client-side keyer stores and plays everything on this computer, so a
+// radio with no DVK is no reason to hide it — it only has to be able to
+// transmit. A receive-only radio can drive neither.
+inline bool voiceKeyerUsable(VoiceKeyerSource source, bool radioHasKeyer, bool canTransmit)
+{
+    return source == VoiceKeyerSource::Local ? canTransmit : radioHasKeyer;
+}
+
+// Why the "Radio DVK" choice in the keyer-source menu cannot be picked, or an
+// empty string when it can. Same radio-authoritative, fail-open rules as the
+// indicator: a radio with no DVK at all, one that SAYS the entitlement is off,
+// or one that has refused a `dvk` command with 50004001, disables the choice;
+// an entitlement not yet reported leaves it open.
+//
+// radioRefused is taken for the same reason the indicator takes it (#6262): a
+// refusing radio still reports `dvk ... enabled=1`, so licenseSeen &&
+// !licenseEnabled is false and the menu would otherwise offer Radio DVK on a
+// radio that cannot store a recording — the operator picks it and gets silence.
+inline QString radioVoiceKeyerUnavailableReason(bool hasVoiceKeyer,
+                                                bool licenseSeen,
+                                                bool licenseEnabled,
+                                                bool radioRefused)
+{
+    if (!hasVoiceKeyer) {
+        return QStringLiteral("not available on this radio");
+    }
+    if (radioRefused || (licenseSeen && !licenseEnabled)) {
+        return QStringLiteral("requires an active SmartSDR+ subscription");
+    }
+    return QString();
 }
 
 // Tooltip for the DVK indicator. Names the SmartSDR+ requirement directly

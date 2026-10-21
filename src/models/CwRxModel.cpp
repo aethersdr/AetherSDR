@@ -4,6 +4,9 @@
 #ifdef HAVE_DEEPFIST
 #include "DeepFistCwModel.h"
 #endif
+#ifdef HAVE_DEEPCW
+#include "DeepCwRxBackend.h"
+#endif
 namespace AetherSDR {
 namespace {
 // Not advertised; see StubRxBackend below.
@@ -89,6 +92,9 @@ std::shared_ptr<CwRxBackend> makeBackend(const QString& key)
 #ifdef HAVE_DEEPFIST
     if (key == "deepfist") { return std::make_shared<DeepFistRxBackend>(); }
 #endif
+#ifdef HAVE_DEEPCW
+    if (key == "deepcw") { return std::make_shared<DeepCwRxBackend>(); }
+#endif
     return {};
 }
 }
@@ -108,6 +114,9 @@ QStringList CwRxModel::availableBackends()
     QStringList result{QStringLiteral("ggmorse")};
 #ifdef HAVE_DEEPFIST
     result.append(QStringLiteral("deepfist"));
+#endif
+#ifdef HAVE_DEEPCW
+    result.append(QStringLiteral("deepcw"));
 #endif
     return result;
 }

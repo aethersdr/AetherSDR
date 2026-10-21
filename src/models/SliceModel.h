@@ -8,6 +8,8 @@
 #include <QTimer>
 #include <QPointer>
 #include <array>
+#include <functional>
+#include <optional>
 
 #include "core/backends/NoiseBlankerKind.h"
 #include "core/backends/SliceDelta.h"
@@ -23,6 +25,7 @@ class SliceModel : public QObject {
     Q_PROPERTY(int    sliceId    READ sliceId)
     Q_PROPERTY(double frequency  READ frequency  WRITE setFrequency  NOTIFY frequencyChanged)
     Q_PROPERTY(QString mode      READ mode       WRITE setMode       NOTIFY modeChanged)
+    Q_PROPERTY(QString chainMode READ chainMode NOTIFY chainModeChanged)
     Q_PROPERTY(int filterLow     READ filterLow  NOTIFY filterChanged)
     Q_PROPERTY(int filterHigh    READ filterHigh NOTIFY filterChanged)
     Q_PROPERTY(bool active       READ isActive   NOTIFY activeChanged)
@@ -70,6 +73,8 @@ public:
     bool frequencyReportedKnown() const { return m_frequencyReportedKnown; }
     void invalidateFrequencyObservation();
     QString mode()       const { return m_mode; }
+    // Radio-reported processing chain; empty means unknown, never inferred from mode.
+    QString chainMode() const { return m_chainMode; }
     QStringList modeList() const { return m_modeList; }
     int     filterLow()  const { return m_filterLow; }   // Hz offset
     int     filterHigh() const { return m_filterHigh; }
@@ -88,6 +93,7 @@ public:
     bool    adaptiveActive()        const { return m_adaptiveActive; }
     bool    isActive()   const { return m_active; }
     bool    inCapture()  const { return m_inCapture; }
+    bool receiveControlsConfirmed() const { return confirmsControls(); }
     bool    isTxSlice()  const { return m_txSlice; }
     float   rfGain()     const { return m_rfGain; }
     float   audioGain()  const { return m_externalReceiveAudioReplacement
@@ -131,6 +137,7 @@ public:
     int     anfLevel()    const { return m_anfLevel; }
     int     nrlLevel()    const { return m_nrlLevel; }
     int     nrsLevel()    const { return m_nrsLevel; }
+    int     nrsLevelMaximum() const { return m_nrsLevelMaximum; }
     int     nrfLevel()    const { return m_nrfLevel; }
     int     anflLevel()   const { return m_anflLevel; }
     int     mnLevel()     const { return m_mnLevel; }
@@ -139,6 +146,13 @@ public:
     QString receiveAgcMode() const { return m_externalReceiveAudioReplacement
                                           ? m_externalReceiveAgcMode
                                           : m_agcMode; }
+    std::optional<AgcThresholdMode> agcThresholdMode() const { return m_agcThresholdMode; }
+    void requestAgcThresholdMode(AgcThresholdMode mode);
+    bool automaticAgcThresholdActiveOrPending() const;
+    bool agcCalibrationAllowed() const;
+    quint64 receiveSessionGeneration() const { return m_receiveSessionGeneration; }
+    void setAgcThresholdFromCalibration(int value);
+    void recallAgcThreshold(int value);
     int     agcThreshold() const { return m_agcThreshold; }
     int     flexAgcThreshold() const { return m_agcThreshold; }
     int     receiveAgcThreshold() const { return m_externalReceiveAudioReplacement
@@ -169,12 +183,23 @@ public:
                                       ? m_externalReceiveAudioMute
                                       : m_audioMute; }
     bool    flexAudioMute() const { return m_audioMute; }
-    // Only inbound reports establish current-session truth; local setters do not.
+    // Display-owned Auto intent is local to this receiver's lifetime. It is
+    // separate from engine-owned Auto and never replays radio state on reconnect.
+    bool restoreManualSquelchAfterMode() const { return m_restoreManualSquelchAfterMode; }
+    void setRestoreManualSquelchAfterMode(bool restore);
+    void restoreManualSquelchAfterModeChange();
+    bool displayAutoSquelch() const { return m_displayAutoSquelch; }
+    std::optional<int> displayAutoSquelchMarginDb() const { return m_displayAutoSquelchMarginDb; }
+    void setDisplayAutoSquelch(bool enabled);
+    void setDisplayAutoSquelchMarginDb(int marginDb);
+    void applyDisplayAutoSquelchLevel(int level);
+
     bool automaticSquelch() const { return m_automaticSquelch; }
     int automaticSquelchMarginDb() const { return m_automaticSquelchMarginDb; }
     void setAutomaticSquelch(bool enabled, int marginDb);
+    // Only inbound reports establish current-session truth; local setters do not.
     bool squelchStateKnown() const { return m_squelchOnKnown && m_squelchLevelKnown; }
-    void invalidateSquelchState() { m_squelchOnKnown = false; m_squelchLevelKnown = false; }
+    void invalidateSquelchState() { m_squelchOnKnown = false; m_squelchLevelKnown = false; setRestoreManualSquelchAfterMode(false); m_squelchRecoveryAwaitingModeReport = false; setDisplayAutoSquelch(false); }
     bool    squelchOn()   const { return m_squelchOn; }
     bool    flexSquelchOn() const { return m_squelchOn; }
     bool    receiveSquelchOn() const { return m_externalReceiveAudioReplacement
@@ -438,11 +463,12 @@ signals:
     // Canonical receive dispatch. Emitted after local notifications so a
     // synchronous backend observation cannot be overwritten by an optimistic
     // notification. RadioModel wires these once for every slice lifecycle.
-    // Explicit compatibility origins preserve Kiwi suppression and NRS profile
-    // restoration; routine status updates do not create operator intents.
+    // Compatibility origins preserve Kiwi suppression; routine status updates
+    // do not create operator intents.
     void receiveTuneRequested(const AetherSDR::SliceTuneRequest& request);
     void receiveFilterRequested(const AetherSDR::SliceFilterRequest& request);
     void receiveAgcRequested(const AetherSDR::SliceAgcRequest& request);
+    void receiveAgcThresholdModeRequested(AetherSDR::AgcThresholdMode mode);
     void receiveDspRequested(const AetherSDR::SliceDspRequest& request);
     void receiveAudioRequested(const AetherSDR::SliceAudioRequest& request);
     void receiveSquelchRequested(const AetherSDR::SliceSquelchRequest& request);
@@ -461,6 +487,7 @@ signals:
     void activeSliceCommandIssued();
     void panIdChanged(const QString& panId);
     void modeChanged(const QString& mode);
+    void chainModeChanged(const QString& chainMode);
     void filterChanged(int low, int high);
     void adaptiveFilterEnabledChanged(bool on);
     void adaptiveMinLowCutChanged(int hz);
@@ -505,11 +532,13 @@ signals:
     void anfLevelChanged(int v);
     void nrlLevelChanged(int v);
     void nrsLevelChanged(int v);
+    void nrsLevelMaximumChanged(int maximum);
     void nrfLevelChanged(int v);
     void anflLevelChanged(int v);
     void mnLevelChanged(int v);
     void agcModeChanged(const QString& mode);
     void agcThresholdChanged(int value);
+    void agcThresholdModeChanged();
     void agcOffLevelChanged(int value);
     void audioMuteChanged(bool mute);
     void diversityChanged(bool on);
@@ -522,6 +551,7 @@ signals:
     void externalReceiveAgcOffLevelChanged(int value);
     void externalReceiveAutoSquelchChanged(bool on);
     void externalReceiveReplacementChanged(bool active);
+    void displayAutoSquelchChanged();
     void squelchChanged(bool on, int level);
     void wfmDeemphasisChanged(int microseconds);
     void wfmForceMonoChanged(bool forceMono);
@@ -592,6 +622,8 @@ private:
     }
     friend class RadioModel;
     bool refuseOffThread(const char* setter) const;
+    void setNrsLevelMaximum(int maximum);
+    int m_nrsLevelMaximum = 100;
     void setControlPolicy(ReceiveControlPolicy policy) { m_controlPolicy = policy; }
     bool confirmsControls() const { return m_controlPolicy == ReceiveControlPolicy::Confirmed; }
     ReceiveControlPolicy m_controlPolicy = ReceiveControlPolicy::Optimistic;
@@ -601,6 +633,12 @@ private:
     quint64 m_tuneIntentRevision{0};
     quint64 m_modeIntentRevision{0};
     quint64 m_filterIntentRevision{0};
+    std::optional<AgcThresholdMode> m_agcThresholdMode;
+    bool m_automaticAgcThresholdPending{false};
+    bool m_autoAgcThresholdSupported{false};
+    quint64 m_receiveSessionGeneration{0};
+    std::function<bool()> m_agcCalibrationAuthority;
+    void setAutomaticAgcThresholdPending(bool pending);
     quint64 m_agcModeIntentRevision{0};
     quint64 m_agcThresholdIntentRevision{0};
     quint64 m_agcOffLevelIntentRevision{0};
@@ -650,6 +688,7 @@ private:
     bool    m_frequencyReportedKnown{false};
     ReceiveObservation m_receiveObservation;
     QString m_mode{"USB"};
+    QString m_chainMode;
     QString m_modeBeforeDigitalVoice;
     QStringList m_modeList;
     int     m_filterLow{-1500};
@@ -727,6 +766,13 @@ private:
     QString m_agcMode{"med"};
     int     m_agcThreshold{65};
     int     m_agcOffLevel{10};
+    bool m_restoreManualSquelchAfterMode{false};
+    bool m_manualSquelchRestoreSent{false};
+    QString m_manualSquelchRestoreMode;
+    bool m_squelchRecoveryAwaitingModeReport{false};
+    bool m_displayAutoSquelch{false};
+    std::optional<int> m_displayAutoSquelchMarginDb;
+    std::optional<int> m_displayAutoSquelchLevel;
     bool m_automaticSquelch{false};
     int m_automaticSquelchMarginDb{10};
     bool m_squelchOnKnown{false};

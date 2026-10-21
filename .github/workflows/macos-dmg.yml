@@ -5,8 +5,11 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# The build job compiles with a read-only token and no secrets; only
+# sign-dmg below holds the Apple signing identities and can write to the
+# release, and it runs no build code.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-dmg:
@@ -60,6 +63,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           clean: false  # skip post-run cleanup — the aqt Qt tree is large
+          persist-credentials: false
 
       - name: Install dependencies via Homebrew
         run: |
@@ -544,27 +548,163 @@ jobs:
           bash scripts/build/assert-macos-deployment-floor.sh \
             build/AetherSDR.app "${{ matrix.deploy_target }}"
 
-      - name: Import code signing certificate
+      # sign-dmg takes the bundle from here. tar keeps the frameworks'
+      # symlinks and the executables' modes, which an artifact alone does not.
+      - name: Stage the unsigned bundle for signing
+        run: |
+          set -euo pipefail
+          mkdir -p stage
+          # The DAX driver PKG carries the app's version.
+          sed -n 's/^project(AetherSDR VERSION \([^ ]*\).*/\1/p' CMakeLists.txt > stage/APP_VERSION
+          cp packaging/macos/AetherSDR.entitlements stage/
+          parts="build/AetherSDR.app build/AetherSDR.icns driver-root stage"
+          # Split debug symbols is continue-on-error; symbols/ may be absent.
+          if [ -f symbols/SYMBOLS.txt ]; then parts="$parts symbols"; fi
+          # shellcheck disable=SC2086
+          tar -cf macos-unsigned.tar $parts
+
+      - name: Upload unsigned bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: macOS-unsigned-${{ matrix.label }}
+          path: macos-unsigned.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  # ----------------------------------------------------------------------
+  # Code signing, packaging and notarization. The only job holding the
+  # Apple identities: it checks out nothing, compiles nothing, and works on
+  # the bundle build-dmg produced. The identities sit in a per-run keychain
+  # with a random password and non-exportable private keys, deleted when
+  # the job ends. Release tags and main sign; other refs stop at the
+  # unsigned bundle above.
+  # ----------------------------------------------------------------------
+  sign-dmg:
+    name: Sign and notarize (${{ matrix.label }})
+    needs: build-dmg
+    # !cancelled(): a failed build leg must not skip the other leg's signing.
+    # A leg whose build failed has no unsigned bundle and stops at download.
+    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        label: [apple-silicon, intel]
+    # codesign, productbuild, hdiutil and notarytool are architecture
+    # independent, so both legs sign on the Apple Silicon image.
+    runs-on: macos-15
+    environment: release
+    permissions:
+      contents: write
+    # The bundle is unpacked into input/ and every step works there; what
+    # this job publishes is written to out/, which the bundle cannot reach.
+    defaults:
+      run:
+        working-directory: input
+
+    steps:
+      - name: Install create-dmg
+        working-directory: ${{ github.workspace }}
+        run: brew install create-dmg
+
+      - name: Download unsigned bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: macOS-unsigned-${{ matrix.label }}
+          path: .
+
+      # Only the four entries build-dmg stages, as real directories, and no
+      # symlink that resolves outside them. bsdtar already refuses absolute
+      # and ../ member names.
+      - name: Unpack unsigned bundle
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          mkdir input out
+          tar -xf macos-unsigned.tar -C input
+          rm macos-unsigned.tar
+          cd input
+          extra=$(find . -mindepth 1 -maxdepth 1 ! -name build ! -name driver-root ! -name stage ! -name symbols)
+          if [ -n "$extra" ]; then
+            echo "::error::Unexpected entries in the unsigned bundle:"
+            printf '%s\n' "$extra"
+            exit 1
+          fi
+          for d in build driver-root stage symbols; do
+            if [ -L "$d" ] || { [ -e "$d" ] && [ ! -d "$d" ]; }; then
+              echo "::error::$d in the unsigned bundle is not a directory."
+              exit 1
+            fi
+          done
+          python3 - <<'PY'
+          import os, sys
+          root = os.path.realpath(".")
+          bad = []
+          for dirpath, dirnames, filenames in os.walk("."):
+              for name in dirnames + filenames:
+                  path = os.path.join(dirpath, name)
+                  if os.path.islink(path):
+                      target = os.path.realpath(path)
+                      if os.path.commonpath([root, target]) != root:
+                          bad.append(f"{path} -> {os.readlink(path)}")
+          if bad:
+              print("::error::Symlinks in the unsigned bundle point outside it:")
+              print("\n".join(bad))
+              sys.exit(1)
+          PY
+
+      - name: Import signing identities
         env:
           APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_INSTALLER_CERT_BASE64: ${{ secrets.APPLE_INSTALLER_CERT_BASE64 }}
+          APPLE_INSTALLER_CERT_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          security create-keychain -p "" build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "" build.keychain
-          security set-keychain-settings build.keychain
+          set -euo pipefail
+          umask 077
+          KEYCHAIN="$RUNNER_TEMP/aethersdr-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          APP_P12="$RUNNER_TEMP/app.p12"
+          INSTALLER_P12="$RUNNER_TEMP/installer.p12"
+          trap 'rm -f "$APP_P12" "$INSTALLER_P12"' EXIT
+          # The cleanup step deletes the keychain from this path.
+          echo "SIGNING_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
 
-          # Application cert — for codesign (app, driver, DMG)
-          echo "$APPLE_CERT_BASE64" | base64 --decode > cert.p12
-          security import cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" \
-            -T /usr/bin/codesign -T /usr/bin/productsign
-          rm cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
 
-          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+          # -x: the private keys can be used to sign but not exported.
+          # Application cert: codesign (app, helpers, driver, DMG).
+          printf '%s' "$APPLE_CERT_BASE64" | base64 --decode > "$APP_P12"
+          security import "$APP_P12" -k "$KEYCHAIN" -P "$APPLE_CERT_PASSWORD" \
+            -x -T /usr/bin/codesign
+          # Installer cert: productbuild (the DAX driver PKG).
+          printf '%s' "$APPLE_INSTALLER_CERT_BASE64" | base64 --decode > "$INSTALLER_P12"
+          security import "$INSTALLER_P12" -k "$KEYCHAIN" -P "$APPLE_INSTALLER_CERT_PASSWORD" \
+            -x -T /usr/bin/productbuild
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+
+          # Searched first, ahead of the runner's own keychains; the default
+          # keychain is left as it was.
+          set -- "$KEYCHAIN"
+          while IFS= read -r kc; do
+            kc="${kc#"${kc%%[![:space:]]*}"}"; kc="${kc#\"}"; kc="${kc%\"}"
+            [ -n "$kc" ] && set -- "$@" "$kc"
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$@"
+
+          # Notarization credentials, kept in the same keychain.
+          xcrun notarytool store-credentials aethersdr-notary \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --keychain "$KEYCHAIN"
 
       - name: Code sign application
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           APP="build/AetherSDR.app"
           SIGN_ID="Developer ID Application"
@@ -603,7 +743,7 @@ jobs:
 
           # 3. Sign the main app bundle last (no --deep)
           codesign --force --options runtime --timestamp \
-            --entitlements packaging/macos/AetherSDR.entitlements \
+            --entitlements stage/AetherSDR.entitlements \
             --sign "$SIGN_ID" \
             "$APP"
 
@@ -620,21 +760,14 @@ jobs:
             driver-root/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver
           echo "DAX driver signing verified"
 
-      - name: Import installer certificate for PKG signing
-        env:
-          APPLE_INSTALLER_CERT_BASE64: ${{ secrets.APPLE_INSTALLER_CERT_BASE64 }}
-          APPLE_INSTALLER_CERT_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERT_PASSWORD }}
-        run: |
-          echo "$APPLE_INSTALLER_CERT_BASE64" | base64 --decode > installer-cert.p12
-          security import installer-cert.p12 -k build.keychain -P "$APPLE_INSTALLER_CERT_PASSWORD" \
-            -T /usr/bin/productbuild -T /usr/bin/pkgbuild -T /usr/bin/productsign
-          rm installer-cert.p12
-          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
-
       - name: Build DAX driver PKG
         run: |
-          # Extract version from CMakeLists.txt to keep driver PKG in sync
-          APP_VERSION=$(sed -n 's/^project(AetherSDR VERSION \([^ ]*\).*/\1/p' CMakeLists.txt)
+          # The app's version, read from CMakeLists.txt by build-dmg
+          APP_VERSION=$(cat stage/APP_VERSION)
+          if [[ ! "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]]; then
+            echo "::error::stage/APP_VERSION is not a version number."
+            exit 1
+          fi
 
           # Component package (unsigned — only the outer product archive needs signing)
           pkgbuild \
@@ -667,6 +800,7 @@ jobs:
             --distribution distribution.xml \
             --package-path . \
             --sign "Developer ID Installer" \
+            --keychain "$SIGNING_KEYCHAIN" \
             "AetherSDR DAX Drivers.pkg"
 
           echo "DAX driver PKG v${APP_VERSION} built and signed"
@@ -675,7 +809,7 @@ jobs:
         run: |
           # Branch dispatches contain slashes; preserve release tag filenames.
           SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
-          echo "DMG_FILENAME=AetherSDR-${SAFE_REF}-macOS-${{ matrix.label }}.dmg" >> "$GITHUB_ENV"
+          echo "DMG_FILENAME=$GITHUB_WORKSPACE/out/AetherSDR-${SAFE_REF}-macOS-${{ matrix.label }}.dmg" >> "$GITHUB_ENV"
 
       - name: Create DMG
         run: |
@@ -722,24 +856,17 @@ jobs:
           fi
 
       - name: Sign DMG
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           codesign --force --timestamp \
             --sign "Developer ID Application" \
             "$DMG_FILENAME"
 
       - name: Notarize DMG
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           xcrun notarytool submit \
             "$DMG_FILENAME" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
+            --keychain-profile aethersdr-notary \
+            --keychain "$SIGNING_KEYCHAIN" \
             --wait --timeout 600 2>&1 | tee notarize-output.txt || true
 
           # Extract submission ID and fetch detailed log on failure
@@ -747,9 +874,8 @@ jobs:
           if grep -q "Invalid" notarize-output.txt; then
             echo "=== Notarization FAILED — fetching Apple's rejection log ==="
             xcrun notarytool log "$SUB_ID" \
-              --apple-id "$APPLE_ID" \
-              --password "$APPLE_APP_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" || true
+              --keychain-profile aethersdr-notary \
+              --keychain "$SIGNING_KEYCHAIN" || true
             exit 1
           fi
 
@@ -773,21 +899,48 @@ jobs:
             echo "$name $arch: UUID $uuid matches the bundle"
           done < symbols/SYMBOLS.txt
           SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
-          tar -cJf "AetherSDR-${SAFE_REF}-macOS-${{ matrix.label }}-symbols.tar.xz" -C symbols .
-          ls -l AetherSDR-*-symbols.tar.xz
+          tar -cJf "$GITHUB_WORKSPACE/out/AetherSDR-${SAFE_REF}-macOS-${{ matrix.label }}-symbols.tar.xz" -C symbols .
+          ls -l "$GITHUB_WORKSPACE"/out/AetherSDR-*-symbols.tar.xz
+
+      # out/ holds only what this job wrote: the DMG and the symbol archive,
+      # as regular files.
+      - name: Check outputs
+        working-directory: ${{ github.workspace }}/out
+        run: |
+          set -euo pipefail
+          for f in * .[!.]*; do
+            [ -e "$f" ] || [ -L "$f" ] || continue
+            case "$f" in
+              AetherSDR-*-macOS-${{ matrix.label }}.dmg|AetherSDR-*-macOS-${{ matrix.label }}-symbols.tar.xz) ;;
+              *) echo "::error::Unexpected output: $f"; exit 1 ;;
+            esac
+            if [ -L "$f" ] || [ ! -f "$f" ]; then
+              echo "::error::$f is not a regular file."
+              exit 1
+            fi
+          done
+          ls -l
 
       - name: Upload artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: macOS-DMG-${{ matrix.label }}
           path: |
-            AetherSDR-*.dmg
-            AetherSDR-*-symbols.tar.xz
+            out/AetherSDR-*.dmg
+            out/AetherSDR-*-symbols.tar.xz
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           files: |
-            AetherSDR-*.dmg
-            AetherSDR-*-symbols.tar.xz
+            out/AetherSDR-*.dmg
+            out/AetherSDR-*-symbols.tar.xz
+
+      # Deleting the keychain also drops it from the search list.
+      - name: Delete signing keychain
+        if: always()
+        run: |
+          if [ -n "${SIGNING_KEYCHAIN:-}" ] && [ -e "$SIGNING_KEYCHAIN" ]; then
+            security delete-keychain "$SIGNING_KEYCHAIN"
+          fi

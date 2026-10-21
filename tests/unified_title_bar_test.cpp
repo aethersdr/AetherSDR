@@ -889,12 +889,52 @@ int main(int argc, char** argv)
         check(tabWithId(*bar, inUse.id)->isLinkCarrier(), "link status stays on a visible tab after removal");
         tabs->setCompactMode(false);
 
+        // A confirmed USB connection does not need a network heartbeat to
+        // dismiss discovery; real link alarms still take precedence.
+        bar->setRadioTabs({nowAvailable});
+        bar->setActiveRadio(nowAvailable.id);
+        bar->setDiscovering(true);
+        const QString warning = ThemeManager::instance().color(
+            bar, QStringLiteral("color.accent.warning")).name();
+        check(tabs->state().value(QStringLiteral("linkOverrideColor")).toString() == warning,
+              "discovery is amber before a connection is confirmed");
+        bar->setRadioTabs({connected});
+        check(tabs->state().value(QStringLiteral("linkOverrideColor")).toString().isEmpty(),
+              "a connected radio clears discovery without a heartbeat");
+        check(tabs->state().value(QStringLiteral("linkPulse")).toDouble() == 0.0,
+              "connecting does not invent a heartbeat pulse");
+        bar->setRadioTabs({nowAvailable});
+        bar->setDiscovering(true);
+        bar->setRadioTabs({connected});
+        check(tabs->state().value(QStringLiteral("linkOverrideColor")).toString().isEmpty(),
+              "reconnecting clears discovery without a heartbeat");
+
+        // Rescanning while connected must survive repeated status snapshots.
+        bar->setDiscovering(true);
+        bar->setRadioTabs({connected});
+        check(tabs->state().value(QStringLiteral("linkOverrideColor")).toString() == warning,
+              "an unchanged connected snapshot preserves a newly requested scan");
+        RadioTabEntry renamed = connected;
+        renamed.name = QStringLiteral("Renamed connected radio");
+        bar->setRadioTabs({renamed});
+        check(tabs->state().value(QStringLiteral("linkOverrideColor")).toString() == warning,
+              "a connected radio metadata refresh does not end discovery");
+        RadioTabEntry secondConnection = connected;
+        secondConnection.id = QStringLiteral("SECOND-CONNECTION");
+        bar->setRadioTabs({renamed, secondConnection});
+        check(tabs->state().value(QStringLiteral("linkOverrideColor")).toString().isEmpty(),
+              "a newly confirmed connection ends discovery with another radio already connected");
+
         // A lost link raises the alarm; an operator disconnect clears it.
         for (int miss = 0; miss < 3; ++miss) {
             bar->onHeartbeatLost();
         }
         check(tabs->state().value(QStringLiteral("linkAlarm")).toBool(),
               "three missed beats raise the link alarm");
+        bar->setDiscovering(true);
+        bar->setRadioTabs({connected});
+        check(tabs->state().value(QStringLiteral("linkAlarm")).toBool(),
+              "a connected snapshot does not suppress a real link alarm");
         bar->clearLinkAlarm();
         check(!tabs->state().value(QStringLiteral("linkAlarm")).toBool(),
               "an operator disconnect clears the link alarm");
@@ -1076,6 +1116,62 @@ int main(int argc, char** argv)
                   "clicking the hamburger pops its menu without a nested loop");
             appMenu->close();
             app.processEvents();
+        }
+    }
+
+    // #6455: hiding the transmit timer (or the other-client TX label) must not
+    // flick PC Audio left for a frame.  Hide directly to skip the 15 s hold and
+    // 800 ms fade, pump exactly one layout pass, and compare against the shown
+    // position.
+    {
+        QWidget layoutHost;
+        auto* layoutBar = new TitleBar(&layoutHost);
+        layoutHost.resize(1400, 200);
+        layoutHost.show();
+        app.processEvents();
+
+        auto* pcBtn = layoutBar->findChild<QPushButton*>(QStringLiteral("pcAudioBtn"));
+        auto* timer = layoutBar->findChild<QLabel*>(QStringLiteral("txTimerLabel"));
+        check(pcBtn && timer, "layout probe finds PC Audio and the transmit timer");
+        if (pcBtn && timer) {
+            auto pcX = [&]() { return pcBtn->mapTo(layoutBar, QPoint(0, 0)).x(); };
+            auto onePass = []() {
+                QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+            };
+
+            layoutBar->setOperatorTransmitting(true);
+            app.processEvents();
+            check(timer->isVisible(), "timer shows while the operator transmits");
+            const int shownX = pcX();
+            timer->setVisible(false);
+            onePass();
+            checkEqual(pcX(), shownX, "hiding the timer does not move PC Audio in the first layout pass");
+            layoutBar->setOperatorTransmitting(false);
+
+            layoutBar->setOtherClientTx(true, QStringLiteral("X"));
+            app.processEvents();
+            const int otherShownX = pcX();
+            layoutBar->setOtherClientTx(false, QString());
+            onePass();
+            checkEqual(pcX(), otherShownX,
+                       "clearing the other-client TX label does not move PC Audio in the first layout pass");
+
+            for (const char* name : {"Master volume", "Headphone volume"}) {
+                QSlider* slider = nullptr;
+                for (auto* c : layoutBar->findChildren<QSlider*>())
+                    if (c->accessibleName() == QLatin1String(name)) slider = c;
+                check(slider && slider->cursor().shape() != Qt::OpenHandCursor,
+                      "audio sliders do not inherit the drag-handle cursor");
+            }
+
+            layoutBar->setMinimalMode(true);
+            app.processEvents();
+            check(!timer->sizePolicy().retainSizeWhenHidden(),
+                  "minimal mode does not reserve the idle timer's slot");
+            layoutBar->setMinimalMode(false);
+            app.processEvents();
+            check(timer->sizePolicy().retainSizeWhenHidden(),
+                  "leaving minimal mode reserves the timer's slot again");
         }
     }
 

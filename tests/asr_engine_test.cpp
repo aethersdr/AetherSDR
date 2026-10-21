@@ -13,6 +13,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QSignalSpy>
+#include <QSemaphore>
 #include <QThread>
 #include <QTimer>
 #include <QVector>
@@ -21,6 +22,16 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+
+namespace AetherSDR {
+struct AsrEngineTestAccess {
+    static bool awaitWorker(AsrEngine& engine) {
+        auto done = std::make_shared<QSemaphore>();
+        QMetaObject::invokeMethod(engine.m_worker, [done] { done->release(); }, Qt::QueuedConnection);
+        return done->tryAcquire(1, 5000);
+    }
+};
+}
 
 using namespace AetherSDR;
 
@@ -289,6 +300,53 @@ int main(int argc, char** argv)
                "failed replacement settles its pending load");
         expect(!lifecycle.isLoaded(QStringLiteral("/replayed-intent.onnx")),
                "failed replacement clears stale cached speaker state");
+    }
+
+    // A real worker finishes inference while main-thread delivery is withheld.
+    // Restarting must suppress the already-queued old transcript as well as audio.
+    {
+        AsrEngine engine(factory(true));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/fixture"));
+        expect(readySpy.wait(5000), "generation fixture loads");
+        engine.setEnabled(true);
+        QSignalSpy texts(&engine, &AsrEngine::finalText);
+        engine.pushAudio(silence(150), kSrcRate);
+        engine.pushAudio(tone(500), kSrcRate);
+        engine.pushAudio(silence(700), kSrcRate);
+        expect(AsrEngineTestAccess::awaitWorker(engine), "old inference and its result are queued");
+        engine.restartSession();
+        engine.restartSession();
+        QCoreApplication::processEvents();
+        expect(texts.isEmpty(), "queued transcript from old generation is suppressed");
+        engine.pushAudio(silence(150), kSrcRate);
+        engine.pushAudio(tone(500), kSrcRate);
+        engine.pushAudio(silence(700), kSrcRate);
+        expect(texts.wait(5000), "fresh generation still transcribes after repeated restart");
+    }
+
+    {
+        AsrEngine engine(factory(true));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/fixture"));
+        expect(readySpy.wait(5000), "native lease fixture loads");
+        engine.setEnabled(true);
+        QSignalSpy texts(&engine, &AsrEngine::finalText);
+        PcmProducer producer;
+        producer.start(PcmPurpose::Slice, 3, {kSrcRate, PcmLayout::Mono});
+        engine.pushNativePcm(*producer.produce(silence(150)));
+        engine.pushNativePcm(*producer.produce(tone(500)));
+        engine.pushNativePcm(*producer.produce(silence(700)));
+        expect(AsrEngineTestAccess::awaitWorker(engine), "native inference result awaits delivery");
+        producer.invalidate();
+        QCoreApplication::processEvents();
+        expect(texts.isEmpty(), "producer retirement suppresses queued native transcript without a reset callback");
+        engine.restartSession();
+        producer.start(PcmPurpose::Slice, 3, {kSrcRate, PcmLayout::Mono});
+        engine.pushNativePcm(*producer.produce(silence(150)));
+        engine.pushNativePcm(*producer.produce(tone(500)));
+        engine.pushNativePcm(*producer.produce(silence(700)));
+        expect(texts.wait(5000), "new native receiver epoch transcribes after retirement");
     }
 
     // ---- Async load emits ready() -----------------------------------------

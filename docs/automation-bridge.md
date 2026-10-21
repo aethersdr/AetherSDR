@@ -266,7 +266,7 @@ without letting it change anything — check **"Observe only"** in Radio
 Setup → Network. The bridge then refuses **every** mutating verb and
 answers only pure-introspection reads (`ping`, `verbs`, `whoami`, `get`,
 `dumpTree`, `grab`, `cell`, the read-only `log` actions, `floors`, the inventory-only
-`streams` actions, and `hitTest`). In particular, it blocks `log set/reset`
+`streams` actions, `interlock probe`, and `hitTest`). In particular, it blocks `log set/reset`
 and `streams reset/resync/refresh`; the latter two stream actions clear local
 diagnostics or request a fresh radio inventory. It is
 enforced in the app, not in the MCP server, so no client can flip it
@@ -652,6 +652,8 @@ the no-op is an explicit, assertable signal.
 | `setValue` | slider / scrollbar / spinbox | integer (or number for double-spin) |
 | `wheel` | any visible widget | one wheel notch: `-1` or `1` |
 | `setText` | `QLineEdit` | the text (side-effect-free — does **not** submit) |
+| `editText` | opted-in editable `QLineEdit` (currently **Radio nickname** only) | text, including empty; a changed value marks the field modified without committing |
+| `commit` | the same opted-in field | no value; emits `editingFinished` on a later event-loop turn, preserving the modified flag |
 | `submit` | `QLineEdit` | optional text, then fires `returnPressed` (retune / login / send) |
 | `setCurrentText` | `QComboBox` (item text) / `QTabBar` (tab label, case-insensitive — reaches deferred setup-dialog tabs) | text |
 | `setCurrentIndex` | `QComboBox` / `QTabBar` | integer index |
@@ -668,6 +670,15 @@ actions to `returnPressed` (SmartLink login, manual-connect host, DX-cluster
 send). `submit` is the explicit opt-in that sets (optional) then fires
 `returnPressed` — use it to commit a frequency entry, a login, or a cluster
 command.
+
+**Nickname edits.** Use `invoke radioNicknameEdit editText <text>`, then
+`invoke radioNicknameEdit commit`. In JSON, `"value":""` clears the field.
+The production dialog handler sends the request and waits for the radio's
+reply; read `get radio` and `dumpTree` afterward to verify the accepted value.
+Repeating `commit` does not re-arm an unchanged field. These actions require
+the field owner to set `aetherAutomationEditCommit=true`; they refuse other
+fields and read-only edits. Deferred commits recheck visibility, enabled state,
+the opt-in, and observe-only authorization before running.
 
 **`selectRow`** selects a whole row in an item view (sets the current index
 **and** a full-row selection), so a dialog's row-scoped buttons (Tune / Edit /
@@ -756,7 +767,7 @@ connects).
 | `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, Opus TX pacing counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
 | `dsp` | — | client-side AetherDSP noise-reduction state, **plus a `backend` object** carrying the backend-owned DSP read-back (`family` and a `chains` list, each entry naming its `chain` and its `level`) when the active backend reports one — see [`get dsp`](#get-dsp) |
 | `radio` | — | radio snapshot (name, model, version, connected, **connectState**, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) — see [`connectState`](#connectstate). `txPower` (measured forward power, Watts, **display-smoothed** — the same number as `get meters`.`fwdPower`; `get meters`.`fwdPowerInstant` is the unsmoothed sample, which is what a gate reading back a drive change wants) and `paTemp` are **null** unless a live sample says otherwise; neither reports a fabricated zero. The operator's requested drive is `get transmit`.`rfPower`, which is a different quantity. |
-| `gps` | — | GPS status, backend-normalized `positionValid` and `source`, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time and date, frequency error, the Flex-hosted `ntpServerAddress`, the radio-owned NTP client state (`ntpClientEnabled`, `ntpClientServer`, `gpsTimeCorrection`, `ntpSyncStatus` — IC-705), and oscillator-reference state. This authenticated diagnostic response contains precise location data; the compact status bar and tooltip do not. |
+| `gps` | — | GPS status, normalized `fixState` (`3D`, `2D`, `TIME_ONLY`, `NO_FIX`, `Unknown`), backend-normalized `positionValid`, `timeValid` and `source`, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time and date, frequency error, the Flex-hosted `ntpServerAddress`, the radio-owned NTP client state (`ntpClientEnabled`, `ntpClientServer`, `gpsTimeCorrection`, `ntpSyncStatus` — IC-705), and oscillator-reference state. This authenticated diagnostic response contains precise location data; the compact status bar and tooltip do not. |
 | `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/break-in/delay/sidetone/iambic mode/paddle swap/CWL/monitor gain+pan), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
 | `cwx` | — | CWX keyer + queue-drain watch — see [`get cwx`](#get-cwx) |
 | `equalizer` (or `eq`) | — | 8-band RX+TX graphic EQ: `rxEnabled`/`txEnabled` and `rx`/`tx` band maps keyed by label (`63`…`8k`). Validate EQ-applet slider changes. |
@@ -776,6 +787,16 @@ connects).
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
 | `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
 | `waveforms` | — | installed legacy/Docker waveforms, WFP state, local Digital Voice service/mode configuration and delivery metrics, raw radio `mode_list` values, duplicate counts, last maintenance response, and recent `waveform status` reports |
+
+Read-only Flex metadata is available as `get radio` → `iaruRegion` (1–3 or
+`null`) and `get slice` / `get slices` → `chainMode` (bounded radio-reported
+text or `null`). Missing, unsupported and invalid observations are unknown.
+`chainMode` is separate from `mode`: a waveform can report `mode=FDVU` with
+`chainMode=DIGU`. Neither observation sends commands or changes the client band
+plan, RF limits or transmit permission. Partial slice reports preserve the
+chain; full `info` replies replace the region observation. Both observations
+reset across sessions and radio/slice replacement. The troubleshooting JSON
+uses `radio.iaru_region` and `slices[].chain_mode` for the same observations.
 
 Add a trailing **property** name to any single-object form to get just that
 field: `get slice active mode` → `{"value":"LSB"}`.
@@ -1893,7 +1914,7 @@ re-poll `get slices`.
 | `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, which emits a typed `receiveFilterRequested` with Operator origin and reaches `IRadioBackend::requestSliceFilter`. Mode normalization emits a separately tagged request: host DSP applies it, while Flex preserves its radio-owned mode-filter memory. Assert the passband before measuring the audio path. Returns requested edges and post-normalization `filterLow`/`filterHigh`; desktop model readback alone does not prove hardware application. Use `-4000 4000` for a carrier-straddling AM passband |
 | `filterpreset` | `<FIL1\|FIL2\|FIL3>` | select a stable radio-owned RX filter slot without conflating it with a passband-width edit. Returns the requested slot; re-poll `get slice active filterPreset` and the filter edges for radio-authoritative readback |
 | `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set receive AGC through `SliceModel` operator setters and typed `receiveAgcRequested` requests. Applies threshold before mode; each changed field dispatches independently. Flex writes only that field; the default backend adapter passes the current mode/threshold pair to host DSP for either edit. HL2 maps this to WDSP RXA AGC mode and ceiling in dB. This is not an atomic paired command. Use `off` with a low threshold for a linear measurement path |
-| `dsp` | `<nr\|nb\|nb2\|anf\|squelch> <on\|off> [level] [fill]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `nb2` selects WDSP's second impulse blanker and takes an optional fill mode 0..4; at most one blanker runs, so `nb2 on` replaces `nb`. `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
+| `dsp` | `<nr\|nb\|nb2\|anf\|squelch> <on\|off> [level] [fill]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `nb2` selects WDSP's second impulse blanker and takes an optional fill mode 0..4; at most one blanker runs, so `nb2 on` replaces `nb`. An explicit ANF level is forwarded like the NR level. Mode-dependent receive DSP rejects unsupported `on` requests but still accepts `off` intents for cleanup; command success is not a confirmed DSP readback. `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
 | `tone` | `<off\|ctcss_tx> [freq]` | set the FM CTCSS encode mode and tone. The value is applied before the mode, so enabling CTCSS never keys on the previous tone for a round trip. The mode pair is what a FlexRadio slice carries |
 | `offset` | `<simplex\|up\|down> [mhz]` | set repeater duplex. The magnitude is unsigned (0..100 MHz — the GUI spinboxes' own bound); the direction carries the sign. Writes all three radio fields — `repeater_offset_dir`, `fm_repeater_offset_freq` **and** the signed `tx_offset_freq` that actually moves the transmitter — then reports `txOffsetFreq` so the applied split can be asserted rather than assumed |
 | `diversity` | `<sliceId> <on\|off>` | enable or disable diversity through the slice model; re-poll `get slices` for parent/child state |
@@ -1989,6 +2010,9 @@ never sends a radio command.
 → {"cmd":"gps","action":"fixture","value":"8000"}
 ← {"ok":true,"gps":"fixture","profile":"8000","snapshot":{"status":"Locked","latitude":"34.224400000","ntpServerAddress":"192.0.2.80",…}}
 
+→ {"cmd":"gps","action":"fixfixture","value":"TIME_ONLY"}
+← {"ok":true,"gps":"fixfixture","snapshot":{"fixState":"TIME_ONLY","positionValid":false,…}}
+
 → {"cmd":"gps","action":"clearfixture"}
 ← {"ok":true,"gps":"clearfixture"}
 ```
@@ -1999,7 +2023,16 @@ minutes form seen from a FLEX-6700 GPSDO. The `8000` profile exercises decimal
 degrees and the `track` (course-over-ground) field captured from FLEX-8600
 firmware 4.2.18, plus the reserved TEST-NET-1 address `192.0.2.80` for testing
 the 8000-series NTP tip. Use `get gps` or `dumpTree` after injecting to assert
-model or widget state.
+model or widget state. Both location profiles initialize fix state to Unknown,
+matching firmware without the field. `gps fixfixture <3D|2D|TIME_ONLY|NO_FIX|UNKNOWN>`
+injects only the normalized fix-state field, preserving receiver status,
+coordinates and oscillator lock. It never establishes position validity or lock.
+`clearfixture` clears fix state, position validity, source, UTC date and the location report.
+These fixtures prove presentation and propagation, not physical GPS acquisition.
+Run `python3 tools/automation_gps_fix_probe.py --socket <socket> --output <directory>`
+against an isolated disconnected app to check all five states in the real
+AetherGPS readout, independent lock/time/position validity, and save screenshots
+and JSON evidence. The probe clears its fixture when it finishes.
 
 #### `slice rxsource`
 Selects the receive source for a slice through the same virtual-Kiwi path as
@@ -3091,9 +3124,8 @@ and the note says so:
 ```
 
 Flex owns the flag in the radio. ANAN, Icom, RTL-SDR and the **demo simulator**
-declare no owner: there the verb sends the wire text and answers with the first
-note above, nothing echoes, `get transmit showTxInWaterfall` stays `false`, and
-nothing is stored. A `true` flag only says keyed rows are allowed: the demo,
+declare no owner: the verb refuses without writing or storing a value. A
+`true` flag only says keyed rows are allowed: the demo,
 ANAN and RTL-SDR cannot key, and on a Hermes-Lite 2 what those rows show while
 keyed has not been measured.
 
@@ -4049,9 +4081,13 @@ is persisted on the front panel.
 ← {"ok":true,"station":"Claude"}
 ```
 
-Must be a single token (no spaces) and requires a connected radio. The agent name
-is applied automatically on connect and the user's real name is restored when the
-bridge stops.
+Must be a single token (no spaces) and requires a connected radio that supports
+per-client station identity. Success means the request was dispatched, not that
+firmware confirmed it. The override never changes the saved station name.
+On bridge stop, restoration is limited to the original session and this bridge's
+still-current override. A newer operator edit or override takes precedence. A
+reconnect callback is cancelled by bridge stop, session replacement or a newer
+station edit.
 
 ### `qrz`
 QRZ.com callsign-lookup subsystem (live CW contacts window + View → Callsign
@@ -4809,8 +4845,31 @@ stops the sweep without issuing a restoration rate change. No calibration
 code changes RX audio or keys TX. Physical-radio persistence validation is
 still a separate radiocert task.
 
+### `interlock probe`
+
+`interlock probe source=MIC,VOX [vox=0|1] [owner=local|other]` runs the same
+TX-state reconciler used by incoming interlock status, with an isolated
+`TransmitModel`. It constructs no radio model, backend, transport or device,
+and never touches the active session or its GUI/audio/serial outputs.
+
+The result includes snapshots for requested, transmitting, bare VOX, empty
+source and READY phases; local transmit/audio-gate state edges; and captured
+command/keying intents. `source=` explicitly selects an empty source. Sources
+are limited to 128 uppercase ASCII letters, digits, underscores and commas;
+unknown tokens are allowed so exact-token refusal can be tested. Duplicate or
+unknown options are rejected. `owner` is an input to the ownership policy,
+not a claim that a real radio was tested. The diagnostic requires no TX
+permission and cannot create an operator intent or send a command. It also
+works in **Observe only** mode; the configured access token is still required.
+Other `interlock` actions remain blocked in observe-only mode.
+
+This provides isolated client reconciliation evidence. Status parsing,
+ownership-handle mapping and cached-source lifecycle are covered by the
+socket-free production-router tests; live firmware, visible GUI meters and
+audio devices require separate hardware validation.
+
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 79 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 80 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4846,7 +4905,8 @@ still a separate radiocert task.
 | `atu` | — | atu <bypass\|start> — antenna tuner (start is TX-gated) |
 | `slice` | — | slice <action> [args] — slice lifecycle/config (see doSlice) |
 | `notch` | — | notch <list\|add\|set\|remove\|enable> [args] — manual notch filters (add <freqMhz> [widthHz]; set <id> [freq=<mhz>] [width=<hz>]; remove <id>; enable <0\|1>) |
-| `gps` | — | gps <fixture\|clearfixture> [6000\|8000] — disconnected GPS test data |
+| `interlock` | — | interlock probe source=<tokens> [vox=0\|1] [owner=local\|other] — isolated production TX-state reconciliation; no radio or device access |
+| `gps` | — | gps <fixture\|fixfixture\|clearfixture> [profile\|fix] — disconnected GPS test data |
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
 | `freqcal` | — | freqcal [get\|set <ppb>\|from_vfo <reference_mhz>\|reset] — manual frequency calibration (radios that cannot calibrate themselves) |

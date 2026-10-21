@@ -38,8 +38,7 @@ QVector<int> widthsForMode(const QString& mode, const ReceiveFilterControl* cont
 // Analog FM spellings. DFM retains its existing separate preset behavior.
 bool isFmMode(const QString& mode);
 
-// The passband a labelled width means in this mode. Invalid modern FreeDV
-// widths return empty edges, which acceptsFilterEdges rejects.
+// The passband a labelled width means in this mode.
 Edges edgesForWidth(const QString& mode, int widthHz, const SliceContext& ctx);
 bool acceptsFmEdges(const QString& mode, const ReceiveFilterControl* control, Edges edges);
 
@@ -50,9 +49,9 @@ bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control
                         bool radioPublishesWidths);
 bool acceptsFilterEdges(const QString& mode, const ReceiveFilterControl* control,
                         bool radioPublishesWidths, Edges edges);
-// The receive-mode squelch rule shared by the RX applet and VFO. `exclusive` is
-// exclusiveSquelchScale(caps.squelchLevelScale): non-null replaces the rule.
-bool squelchAvailableInMode(const QString& mode, const SquelchLevelScale* exclusive,
+// The receive-mode squelch rule shared by controls and panadapter Auto/lines.
+// A published scale can exclude controls separately from its display mapping.
+bool squelchAvailableInMode(const QString& mode, const SquelchLevelScale* scale,
                             bool modeIndependentSquelch, bool externalReplacement);
 
 // A passband's labelled width, for matching a ladder entry against what the

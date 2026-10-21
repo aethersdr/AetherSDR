@@ -571,5 +571,114 @@ int main(int argc, char** argv)
                   && bookmarks.entries(RadioSettingsScope("flex", "")).isEmpty(),
               "identified bookmark scope works and ordinary empty scopes still refuse");
     }
+    {
+        const RadioSettingsScope dspScope("rtl", "dsp-settings");
+        RtlSliceSettings dspSettings(dspScope);
+        auto entry = slice(5);
+        entry.mode = "CWR"; entry.filterLowHz = -100; entry.filterHighHz = 100;
+        entry.agcOffLevel = 31; entry.cwPitchHz = 900;
+        entry.ritEnabled = true; entry.ritOffsetHz = -321;
+        entry.nbKind = NoiseBlankerKind::Advanced; entry.nbLevel = 72;
+        entry.nbFill = NoiseBlankerFill::Interpolate; entry.apfEnabled = true; entry.apfLevel = 88;
+        entry.nrEnabled = true; entry.nrLevel = 71; entry.anfEnabled = true; entry.anfLevel = 62;
+        entry.mnEnabled = true; entry.mnLevel = 39;
+        check(dspSettings.patch(100'000'000, 2'400'000, {entry}), "receive DSP object saves atomically");
+        const auto read = dspSettings.load();
+        const auto roundTrip = read.document.slices.value(5);
+        check(read.status == Read::Ready && roundTrip.agcOffLevel == 31 && roundTrip.cwPitchHz == 900
+            && roundTrip.ritEnabled && roundTrip.ritOffsetHz == -321
+            && roundTrip.nbKind == NoiseBlankerKind::Advanced && roundTrip.nbLevel == 72
+            && roundTrip.nbFill == NoiseBlankerFill::Interpolate && roundTrip.apfEnabled && roundTrip.apfLevel == 88,
+            "all receive DSP controls survive typed settings roundtrip");
+        check(roundTrip.nrEnabled && roundTrip.nrLevel == 71 && roundTrip.anfEnabled && roundTrip.anfLevel == 62
+            && roundTrip.mnEnabled && roundTrip.mnLevel == 39, "noise and notch settings survive roundtrip");
+        const auto good = dspScope.featureExact(feature);
+        for (const auto& [key, value] : QList<QPair<QString, QJsonValue>>{
+                {"cwPitchHz", 0}, {"ritOffsetHz", 100000}, {"agcOffLevel", 101},
+                {"nbKind", 3}, {"nbLevel", -1}, {"nbFill", 5}, {"apfLevel", 101}, {"apfEnabled", "true"},
+                {"nrLevel", -1}, {"anfLevel", 101}, {"mnLevel", 101}, {"nrEnabled", 1}}) {
+            auto invalid = good;
+            auto slices = invalid.value("slices").toObject();
+            auto candidate = slices.value("5").toObject();
+            auto dsp = candidate.value("receiveDsp").toObject();
+            dsp.insert(key, value); candidate.insert("receiveDsp", dsp);
+            slices.insert("5", candidate); invalid.insert("slices", slices);
+            RtlSliceSettings::Document decoded; QString reason;
+            check(!RtlSliceSettings::decode(invalid, decoded, reason), "malformed receive DSP object is refused");
+        }
+        auto legacyDocument = good;
+        auto slices = legacyDocument.value("slices").toObject();
+        auto candidate = slices.value("5").toObject(); candidate.remove("receiveDsp");
+        slices.insert("5", candidate); legacyDocument.insert("slices", slices);
+        RtlSliceSettings::Document decoded; QString reason;
+        check(RtlSliceSettings::decode(legacyDocument, decoded, reason)
+            && decoded.slices.value(5).cwPitchHz == 600 && !decoded.slices.value(5).ritEnabled
+            && decoded.slices.value(5).nbKind == NoiseBlankerKind::Off,
+            "schema-1 documents without receive DSP use established defaults");
+    }
+    {
+        const RadioSettingsScope scope("rtl", "tracking-settings");
+        RtlSliceSettings settings(scope);
+        rtl::RtlTrackingNotches notches;
+        notches.enabled = false;
+        notches.entries = {{7, 100'000'700, 200, true}, {19, 100'001'900, 400, false}};
+        check(settings.patch(100'000'000, 2'400'000, {slice(0)}, {}, notches),
+            "tracking bank and configured receivers save in one atomic document");
+        check(settings.load().document.trackingNotches == notches,
+            "tracking IDs, RF frequency, width, individual and global bypass roundtrip");
+        check(settings.patch(100'000'000, 2'400'000, {slice(0)})
+            && settings.load().document.trackingNotches == notches,
+            "partial slice-only patch preserves the global notch bank");
+        const auto original = scope.featureExact(RtlSliceSettings::featureName());
+        notches.entries[0].widthHz = 199;
+        check(!settings.patch(100'000'000, 2'400'000, {slice(0)}, {}, notches)
+            && scope.featureExact(RtlSliceSettings::featureName()) == original,
+            "invalid notch bank cannot overwrite accepted settings");
+        notches.entries[0].widthHz = 200;
+        notches.entries[1].id = notches.entries[0].id;
+        check(!settings.patch(100'000'000, 2'400'000, {slice(0)}, {}, notches)
+            && scope.featureExact(RtlSliceSettings::featureName()) == original,
+            "duplicate caller-supplied notch IDs cannot overwrite accepted settings");
+        notches.entries.clear(); notches.enabled = true;
+        check(settings.patch(100'000'000, 2'400'000, {slice(0)}, {}, notches)
+            && settings.load().document.trackingNotches == notches,
+            "explicit empty accepted notch bank removes old saved notches");
+    }
+    {
+        const RadioSettingsScope scope("rtl", "mode-filter-settings");
+        RtlSliceSettings owner(scope);
+        auto accepted = slice(3);
+        accepted.modeFilters = {{"USB", {200, 2700}}, {"FM", {-7000, 7000}}};
+        check(owner.patch(100'000'000, 2'400'000, {accepted}), "mode filters stored atomically with receiver");
+        check(owner.load().document.slices.value(3).modeFilters == accepted.modeFilters,
+            "per-mode filters roundtrip without sharing between modes");
+        const auto good = scope.featureExact(feature);
+        for (const QJsonValue& malformed : QList<QJsonValue>{
+                 false, QJsonObject{{"UNKNOWN", QJsonObject{{"low", 0}, {"high", 2500}}}},
+                 QJsonObject{{"USB", QJsonObject{{"low", 2700}, {"high", 200}}}},
+                 QJsonObject{{"USB", QJsonObject{{"low", 200.5}, {"high", 2700}}}},
+                 QJsonObject{{"USB", QJsonObject{{"low", 200}, {"high", 100001}}}},
+                 QJsonObject{{"USB", QJsonObject{{"low", "200"}, {"high", 2700}}}}}) {
+            auto invalid = good;
+            auto entries = invalid.value("slices").toObject();
+            auto entry = entries.value("3").toObject();
+            entry.insert("modeFilters", malformed);
+            entries.insert("3", entry); invalid.insert("slices", entries);
+            RtlSliceSettings::Document decoded; QString reason;
+            check(!RtlSliceSettings::decode(invalid, decoded, reason),
+                "malformed remembered filter is rejected before publishing parsed settings");
+        }
+        auto legacy = good;
+        auto entries = legacy.value("slices").toObject();
+        auto entry = entries.value("3").toObject(); entry.remove("modeFilters");
+        entries.insert("3", entry); legacy.insert("slices", entries);
+        RtlSliceSettings::Document decoded; QString reason;
+        check(RtlSliceSettings::decode(legacy, decoded, reason)
+            && decoded.slices.value(3).modeFilters.isEmpty(),
+            "old schema-1 documents have no invented filter history");
+        accepted.modeFilters["USB"] = {300, 100001};
+        check(!owner.patch(100'000'000, 2'400'000, {accepted})
+            && scope.featureExact(feature) == good, "invalid history cannot replace the saved document");
+    }
     return failures == 0 ? 0 : 1;
 }

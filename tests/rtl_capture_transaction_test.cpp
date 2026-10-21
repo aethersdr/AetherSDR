@@ -100,8 +100,8 @@ int main()
     {
         T tx({8, 4}); Device usb; if (!establish(tx, usb)) { return 1; }
         auto configured = desired();
-        configured.receivers.push_back({{7, 98'948'000, -8000, 8000, 0, 20'000, 20'000}, T::Mode::Usb});
-        configured.receivers.push_back({{3, 101'052'000, -8000, 8000, 0, 20'000, 20'000}, T::Mode::Usb});
+        configured.receivers.push_back({{7, 98'948'000, -8000, 8000, 0, 20'000, 20'000}, T::Mode::Am});
+        configured.receivers.push_back({{3, 101'052'000, -8000, 8000, 0, 20'000, 20'000}, T::Mode::Am});
         check(bool(tx.submit(configured)), "receivers at both guarded capture edges admitted");
         auto job = tx.takeWork();
         check(job && job->target.receivingIds == (std::vector<int>{0, 3, 7}),
@@ -452,6 +452,34 @@ int main()
         check((job->target.hardware.directSampling != 0) == (carrier < 24'000'000),
               "DC placement does not switch automatic front-end mode across 24 MHz");
         check(job->target.receivers == next.receivers, "band-edge placement never rewrites RF or filters");
+    }
+    for (const auto mode : {T::Mode::Cw, T::Mode::Cwr}) {
+        T tx({8, 1}); Device usb; tx.beginSession();
+        auto next = desired();
+        next.dcSuppression = true;
+        next.receivers = {{{3, 100'000'000, -250, 250, 100, 3000, 3000}, mode}};
+        next.receivers[0].ritEnabled = true; next.receivers[0].ritOffsetHz = 100;
+        next.followReceiverId = 3; next.avoidDc = true;
+        check(bool(tx.submit(next)), "CW/CWR admission places its RIT-adjusted carrier away from converter DC");
+        auto job = tx.takeWork();
+        check(job && T::dcClear(job->target), "DC suppression cannot erase the followed CW carrier");
+        if (!job) { continue; }
+        check(job->target.receivers == next.receivers,
+              "DC placement preserves RF marker, RIT, pitch and carrier-relative filter");
+        check(tx.complete(T::execute(*job, usb)) == T::Completion::Published, "CW placement adopts readback");
+        next.followReceiverId.reset(); next.avoidDc = false;
+        next.hardware.centerHz = 103'000'000;
+        check(bool(tx.submit(next)), "free pan remains independent of CW DC placement");
+        job = tx.takeWork();
+        check(job && job->target.receivingIds.empty() && job->target.hardware.centerHz == 103'000'000,
+              "free pan parks the CW receiver without snapping capture back");
+        if (!job) { continue; }
+        tx.complete(T::execute(*job, usb));
+        next.receivers[0].cwPitchHz = 900;
+        check(bool(tx.submit(next)), "parked CW accepts a pitch recipe change");
+        job = tx.takeWork();
+        check(job && !job->hardwareChanged && job->target.receivingIds.empty(),
+              "parked pitch change does not retune hardware or resume audio");
     }
     std::fprintf(stderr, "rtl_capture_transaction_test: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -1,5 +1,6 @@
 #include "core/backends/rtl/RtlCaptureTransaction.h"
 #include "core/backends/rtl/RtlViewport.h"
+#include "RtlReceiveRecipe.h"
 
 #include <array>
 #include <algorithm>
@@ -44,6 +45,7 @@ Policy::Error validateConfigured(const std::vector<T::Receiver>& receivers,
     if (receivers.size() > limits.capacity) { return Policy::Error::CapacityExceeded; }
     std::array<bool, 8> used{};
     for (const T::Receiver& receiver : receivers) {
+        if (!RtlReceiveRecipe::valid(receiver)) { return Policy::Error::InvalidNumber; }
         const int id = receiver.passband.stableId;
         if (id < 0 || static_cast<std::size_t>(id) >= limits.slotCount) {
             return Policy::Error::InvalidIdentity;
@@ -104,9 +106,9 @@ std::vector<Policy::SliceDescriptor> receivingPassbands(const T::State& state)
     return result;
 }
 
-bool narrowFm(const T::Receiver& receiver)
+bool dcSensitive(const T::Receiver& receiver)
 {
-    return receiver.mode == T::Mode::Fm || receiver.mode == T::Mode::Fmn;
+    return RtlReceiveRecipe::dcSensitive(receiver.mode);
 }
 
 Policy::Interval dcExclusion(const T::Receiver& receiver)
@@ -249,10 +251,12 @@ RtlCaptureTransaction::Submission RtlCaptureTransaction::submit(const Desired& d
             return {{}, Policy::Error::InvalidNumber};
         }
     }
+    if (!desired.trackingNotches.valid()) { return {{}, Policy::Error::InvalidNumber}; }
     State target;
     target.token = {m_session, m_revision + 1};
     target.hardware = desired.hardware;
     target.receivers = desired.receivers;
+    target.trackingNotches = desired.trackingNotches;
     target.automaticDirectSampling = desired.automaticDirectSampling;
     target.dcSuppression = desired.dcSuppression;
     target.capture = {m_session, target.token.revision, double(desired.hardware.centerHz),
@@ -273,7 +277,7 @@ RtlCaptureTransaction::Submission RtlCaptureTransaction::submit(const Desired& d
             const auto found = std::ranges::find_if(target.receivers, [id](const Receiver& receiver) {
                 return receiver.passband.stableId == id;
             });
-            if (found != target.receivers.end() && narrowFm(*found)) {
+            if (found != target.receivers.end() && dcSensitive(*found)) {
                 followed = &*found;
                 break;
             }
@@ -303,7 +307,7 @@ RtlCaptureTransaction::Submission RtlCaptureTransaction::submit(const Desired& d
         target.capture = *centered.capture;
     }
     const bool recentered = target.capture.centerHz != desired.hardware.centerHz;
-    if (followed && narrowFm(*followed)
+    if (followed && dcSensitive(*followed)
         && (!m_confirmed || recentered || desired.avoidDc)
         && (!m_confirmed || recentered || !dcClearFor(*followed, target.capture.centerHz))) {
         // An explicit slice tune may move capture away from converter DC;
@@ -362,7 +366,7 @@ bool RtlCaptureTransaction::dcClear(const State& state)
             return value.passband.stableId == id;
         });
         if (receiver == state.receivers.end()) { return false; }
-        if (narrowFm(*receiver) && (!Policy::occupiedInterval(receiver->passband).interval
+        if (dcSensitive(*receiver) && (!Policy::occupiedInterval(receiver->passband).interval
             || !dcClearFor(*receiver, state.capture.centerHz))) { return false; }
     }
     return true;
@@ -406,6 +410,7 @@ RtlCaptureTransaction::Completion RtlCaptureTransaction::complete(const Result& 
                 || result.actual->capture != work.target.capture
                 || result.actual->receivingIds != work.target.receivingIds
                 || result.actual->receivers != work.target.receivers
+                || result.actual->trackingNotches != work.target.trackingNotches
                 || result.actual->dcSuppression != work.target.dcSuppression
                 || result.actual->automaticDirectSampling != work.target.automaticDirectSampling
                 || !matches(work.target, result.actual->hardware)))
@@ -414,6 +419,7 @@ RtlCaptureTransaction::Completion RtlCaptureTransaction::complete(const Result& 
                 || result.actual->capture != work.before->capture
                 || result.actual->receivingIds != work.before->receivingIds
                 || result.actual->receivers != work.before->receivers
+                || result.actual->trackingNotches != work.before->trackingNotches
                 || result.actual->dcSuppression != work.before->dcSuppression
                 || result.actual->automaticDirectSampling != work.before->automaticDirectSampling
                 || !matches(*work.before, result.actual->hardware)))) {

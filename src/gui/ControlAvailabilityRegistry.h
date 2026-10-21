@@ -46,6 +46,13 @@ public:
     using EngagedPredicate = std::function<bool()>;
 
     explicit ControlAvailabilityRegistry(RadioModel& model, QObject* parent = nullptr);
+    ~ControlAvailabilityRegistry() override;
+
+    // Gate an existing control without taking over its available presentation.
+    // Optional capability records use this so legacy controls retain their own
+    // checked styling, tooltips and accessibility descriptions.
+    void registerRestriction(QWidget* widget, QString reason,
+                             AvailabilityPredicate available);
 
     // Register a widget. `reason` is REQUIRED: while unavailable it replaces the
     // tooltip and accessibleDescription, because a dimmed control with no reason
@@ -86,11 +93,17 @@ private:
         EngagedPredicate engaged;
         ControlAvailability state{ControlAvailability::Unavailable};
         bool availableWhenDisconnected = true;
+        bool restrictionOnly = false;
+        bool restricted = false;
+        bool previouslyEnabled = true;
+        QString previousToolTip;
+        QString previousDescription;
     };
 
     void applyAll(bool connected, const RadioCapabilities& caps);
     void applyOne(Entry& entry, bool connected, const RadioCapabilities& caps);
     void pruneDead();
+    void restoreRestriction(Entry& entry);
 
     RadioModel& m_model;
     QVector<Entry> m_entries;

@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 #include "core/KiwiSdrProtocol.h"
 #include "core/backends/RadioCapabilities.h"
@@ -55,7 +56,7 @@ class VfoWidget : public QWidget {
 public:
     explicit VfoWidget(QWidget* parent = nullptr);
     ~VfoWidget() override;
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
     void refreshCwDecoderControls();
 #endif
 
@@ -425,6 +426,7 @@ private:
     void applyFilterPreset(int widthHz);
     void saveFilterPresets();
     void updateAgcSliderFromSlice();
+    void syncAutoAgcThreshold();
     void updateAntennaButton(QPushButton* button, const QString& token, bool tx);
     void updateAntennaButtons();
     QStringList rxAntennaOptions() const;
@@ -592,7 +594,6 @@ private:
     QPushButton* m_sqlBtn{nullptr};
     QPointer<RxApplet> m_rxApplet;       // mirrored only while this VFO's slice is active
     QLabel*      m_sqlValueLbl{nullptr}; // captured during buildUI() for syncSqlVisuals
-    bool         m_savedSquelchOn{false};
     // Apply the current SqlMode from m_rxApplet to the VfoWidget's SQL
     // button label/style and slider range/value.  Called on rxApplet's
     // sqlModeChanged signal and once after setRxApplet().
@@ -677,6 +678,18 @@ private:
     QComboBox* m_agcCmb{nullptr};
     QSlider* m_agcTSlider{nullptr};
     QLabel* m_agcValueLbl{nullptr};
+    QPushButton* m_autoAgcTButton{nullptr};
+    void updateDspParameterResetControls();
+    std::optional<DspParameterResetTarget> dspParameterResetTarget(int index) const;
+    QPointer<SliceModel> m_dspResetSlice;
+    QPointer<SliceModel> m_dspResetIntentSlice;
+    QPointer<RadioModel> m_dspResetIntentRadio;
+    DspParameterResetTarget m_dspResetIntentTarget{DspParameterResetTarget::All};
+    quint64 m_dspResetSession{0};
+    bool m_dspResetIntentArmed{false};
+    QComboBox* m_dspResetTarget{nullptr};
+    QPushButton* m_dspResetButton{nullptr};
+
     // DSP tab
     QPushButton* m_nbBtn{nullptr};
     QPushButton* m_nrBtn{nullptr};
@@ -832,6 +845,7 @@ private:
     bool         m_anftModeOk{true};
     bool         m_mnModeOk{true};
     // RIT/XIT tab
+    QList<QWidget*> m_ritControls;
     QPushButton* m_ritBtn{nullptr};
     QPushButton* m_xitBtn{nullptr};
     ScrollableLabel* m_ritLabel{nullptr};

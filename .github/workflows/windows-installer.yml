@@ -837,16 +837,18 @@ jobs:
             AetherSDR-*.appxsym
 
   # Publishing, apart from the signing identity: attaching to the GitHub
-  # release needs contents: write, and the Store CLI is a third-party action.
+  # release needs contents: write. The Store submission is its own job below.
   release-windows:
     needs: [build-windows, package-windows]
-    if: needs.build-windows.outputs.release-artifacts == 'true' || needs.build-windows.outputs.production-draft == 'true'
+    if: needs.build-windows.outputs.release-artifacts == 'true'
     runs-on: windows-latest
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
       - name: Download signed packages
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -864,7 +866,6 @@ jobs:
           path: .
 
       - name: Attach to release
-        if: needs.build-windows.outputs.release-artifacts == 'true'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           # .msixupload is the Partner Center upload artifact (manual Store
@@ -882,30 +883,48 @@ jobs:
             AetherSDR-*.msixupload
             AetherSDR-*-symbols.tar.xz
 
-      # ----------------------------------------------------------------------
-      # Automated Microsoft Store submission (weekly release cycle).
-      #
-      # Runs ONLY on a v* tag push, and ONLY when the AETHERSDR_STORE_PRODUCT_ID
-      # repository VARIABLE is set. The plan rejects manual tag dispatches and
-      # forks for this path; manual flight requests have their own job below.
-      #
-      # The submission is staged as a DRAFT (publish-store.ps1 passes
-      # --noCommit): the package uploads to Partner Center but certification is
-      # NOT started. A maintainer reviews the pending submission and clicks
-      # "Submit to Store". CI never publishes to the live channel on its own.
-      #
-      # Free-product only (AetherSDR qualifies). The app must already be live in
-      # the Store. One-time Entra/Partner Center setup is in
-      # docs/WINDOWS-STORE-MSIX.md.
-      # ----------------------------------------------------------------------
+  # ----------------------------------------------------------------------
+  # Automated Microsoft Store submission (weekly release cycle).
+  #
+  # Runs ONLY on a v* tag push, and ONLY when the AETHERSDR_STORE_PRODUCT_ID
+  # repository VARIABLE is set. The plan rejects manual tag dispatches and
+  # forks for this path; manual flight requests have their own job below.
+  #
+  # The submission is staged as a DRAFT (publish-store.ps1 passes
+  # --noCommit): the package uploads to Partner Center but certification is
+  # NOT started. A maintainer reviews the pending submission and clicks
+  # "Submit to Store". CI never publishes to the live channel on its own.
+  #
+  # Free-product only (AetherSDR qualifies). The app must already be live in
+  # the Store. One-time Entra/Partner Center setup is in
+  # docs/WINDOWS-STORE-MSIX.md.
+  # ----------------------------------------------------------------------
+  stage-store-draft:
+    name: Stage Microsoft Store submission
+    needs: [build-windows, package-windows]
+    if: needs.build-windows.outputs.production-draft == 'true'
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Download signed packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: Windows-Installer
+          path: .
+
       - name: Setup Microsoft Store Developer CLI
-        if: needs.build-windows.outputs.production-draft == 'true'
         uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0
         with:
           version: v0.4.2
 
       - name: Stage Microsoft Store submission (draft)
-        if: needs.build-windows.outputs.production-draft == 'true'
         env:
           AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
           AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
@@ -921,6 +940,20 @@ jobs:
             --clientSecret $env:AZURE_AD_APPLICATION_SECRET
           powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\publish-store.ps1 -ProductId $env:AETHERSDR_STORE_PRODUCT_ID -UploadTimeoutSeconds 300
 
+      # msstore keeps the client secret in Windows Credential Manager and its
+      # settings under LocalAppData; `msstore reconfigure --reset` needs an
+      # interactive confirmation, so remove both directly.
+      - name: Remove Microsoft Store CLI credentials
+        if: always()
+        env:
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+        run: |
+          if ($env:AZURE_AD_APPLICATION_CLIENT_ID) {
+            cmdkey "/delete:MicrosoftStoreCli:user=$env:AZURE_AD_APPLICATION_CLIENT_ID" | Out-Null
+          }
+          Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA 'Microsoft\MSStore.CLI') -ErrorAction SilentlyContinue
+          $global:LASTEXITCODE = 0
+
   # A manually requested build can be committed to the restricted developer
   # package flight. This job is isolated from the tag-only production path:
   # it requires an explicit workflow_dispatch checkbox and a nonempty flight
@@ -930,6 +963,7 @@ jobs:
     needs: [build-windows, package-windows]
     if: needs.build-windows.outputs.publish-flight == 'true'
     runs-on: windows-latest
+    environment: store-flight
     permissions:
       contents: read
 
@@ -942,6 +976,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
       - name: Download verified Windows package
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -992,3 +1028,17 @@ jobs:
             -SearchDir flight-package `
             -UploadTimeoutSeconds 300 `
             -Commit
+
+      # msstore keeps the client secret in Windows Credential Manager and its
+      # settings under LocalAppData; `msstore reconfigure --reset` needs an
+      # interactive confirmation, so remove both directly.
+      - name: Remove Microsoft Store CLI credentials
+        if: always()
+        env:
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+        run: |
+          if ($env:AZURE_AD_APPLICATION_CLIENT_ID) {
+            cmdkey "/delete:MicrosoftStoreCli:user=$env:AZURE_AD_APPLICATION_CLIENT_ID" | Out-Null
+          }
+          Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA 'Microsoft\MSStore.CLI') -ErrorAction SilentlyContinue
+          $global:LASTEXITCODE = 0

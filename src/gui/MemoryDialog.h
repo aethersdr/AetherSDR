@@ -5,6 +5,7 @@
 #include <QEvent>
 #include <QKeyEvent>
 #include <QShowEvent>
+#include <QString>
 #include <QSet>
 #include <QTableWidget>
 #include <QMap>
@@ -17,6 +18,8 @@ class QPushButton;
 namespace AetherSDR {
 
 class RadioModel;
+struct MemoryCsvParseResult;
+struct RadioControlSession;
 
 class MemoryDialog : public PersistentDialog {
     Q_OBJECT
@@ -33,6 +36,7 @@ protected:
     void showEvent(QShowEvent* event) override;
 
 private:
+    friend class StoredDialogsTestAccess;
     void activateMemoryRow(int row);
     void beginEditingMemoryName(int memoryIndex);
     void focusTableOnCurrentRow();
@@ -41,6 +45,8 @@ private:
     void submitCellEdit(int row, int col);
     void onAdd();
     void onImport();
+    void startImport(const MemoryCsvParseResult& parsed, const QString& fileName,
+                     const RadioControlSession& session, bool localStore);
     void onExport();
     void onSelect();
     void onSelectAll();

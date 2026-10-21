@@ -21,16 +21,37 @@ AgcTCalibrator::AgcTCalibrator(QObject* parent)
     connect(&m_manualTimer, &QTimer::timeout, this, &AgcTCalibrator::onManualSettle);
 }
 
+SliceModel* AgcTCalibrator::slice() const
+{
+    return m_slice.data();
+}
+
 void AgcTCalibrator::setSlice(SliceModel* slice)
 {
-    if (m_slice == slice) {
+    if (m_slice == slice
+        && (!slice || m_sliceGeneration == slice->receiveSessionGeneration())) {
         return;
     }
     // Changing slices invalidates any in-flight calibration.
     if (m_running) {
         stop();
     }
+    if (m_slice) {
+        disconnect(m_slice, &SliceModel::agcThresholdModeChanged, this, nullptr);
+        disconnect(m_slice, &SliceModel::externalReceiveReplacementChanged, this, nullptr);
+    }
     m_slice = slice;
+    m_sliceGeneration = slice ? slice->receiveSessionGeneration() : 0;
+    if (slice) {
+        const auto cancelIfUnavailable = [this] {
+            if (!canWrite()) {
+                cancelWithoutRestore();
+            }
+        };
+        connect(slice, &SliceModel::agcThresholdModeChanged, this, cancelIfUnavailable);
+        connect(slice, &SliceModel::externalReceiveReplacementChanged, this, cancelIfUnavailable);
+    }
+    m_originalValue = -1;
     clear();
 }
 
@@ -52,16 +73,39 @@ int AgcTCalibrator::currentValue() const
     return useOffLevel() ? m_slice->agcOffLevel() : m_slice->agcThreshold();
 }
 
+bool AgcTCalibrator::canWrite() const
+{
+    return m_slice && m_sliceGeneration == m_slice->receiveSessionGeneration()
+        && m_slice->agcCalibrationAllowed();
+}
+
+void AgcTCalibrator::cancelWithoutRestore()
+{
+    const bool hadCalibration = m_running || m_auto || m_originalValue >= 0
+        || m_recommended >= 0 || m_pendingManualValue >= 0 || !m_curve.isEmpty();
+    m_stepTimer.stop();
+    m_manualTimer.stop();
+    m_running = false;
+    m_auto = false;
+    m_originalValue = -1;
+    m_recommended = -1;
+    m_pendingManualValue = -1;
+    m_curve.clear();
+    if (hadCalibration) {
+        emit finished(false);
+    }
+}
+
 void AgcTCalibrator::applyValue(int value)
 {
-    if (!m_slice) {
+    if (!canWrite()) {
         return;
     }
     value = std::clamp(value, 0, 100);
     if (useOffLevel()) {
         m_slice->setAgcOffLevel(value);
     } else {
-        m_slice->setAgcThreshold(value);
+        m_slice->setAgcThresholdFromCalibration(value);
     }
 }
 
@@ -123,6 +167,9 @@ void AgcTCalibrator::evaluateQuietSpot()
 
 void AgcTCalibrator::onValueChanged(int value)
 {
+    if (!canWrite()) {
+        return;
+    }
     if (m_auto) {
         return; // the sweep drives the value itself
     }
@@ -133,7 +180,7 @@ void AgcTCalibrator::onValueChanged(int value)
 
 void AgcTCalibrator::onManualSettle()
 {
-    if (m_auto || m_pendingManualValue < 0) {
+    if (!canWrite() || m_auto || m_pendingManualValue < 0) {
         return;
     }
     recordPoint(m_pendingManualValue);
@@ -149,14 +196,15 @@ void AgcTCalibrator::startAutoSweep()
         qCWarning(lcAgcCal) << "startAutoSweep with no slice";
         return;
     }
-    if (m_slice->externalReceiveReplacementActive()) {
+    if (!m_slice->agcCalibrationAllowed()) {
         qCWarning(lcAgcCal)
-            << "startAutoSweep skipped for external receive replacement";
+            << "startAutoSweep skipped: threshold calibration is unavailable";
         return;
     }
     if (m_running) {
         return;
     }
+    m_sliceGeneration = m_slice->receiveSessionGeneration();
     m_originalValue = currentValue();
     m_recommended = -1;
     m_curve.clear();
@@ -169,8 +217,16 @@ void AgcTCalibrator::startAutoSweep()
     m_sweepValue = m_sweepUp ? 0 : 100;
 
     applyValue(m_sweepValue);
+    if (!m_running || !canWrite()) {
+        cancelWithoutRestore();
+        return;
+    }
     emit started(strategy(), m_originalValue);
     emit progress(m_sweepValue, 0);
+    if (!m_running || !canWrite()) {
+        cancelWithoutRestore();
+        return;
+    }
     // Wait for the AGC to settle before sampling this first point.
     m_stepTimer.start(m_settleMs);
 }
@@ -180,12 +236,20 @@ void AgcTCalibrator::onSweepStep()
     if (!m_running || !m_auto) {
         return;
     }
+    if (!canWrite()) {
+        cancelWithoutRestore();
+        return;
+    }
     // Sample the value currently applied (already settled).
     recordPoint(m_sweepValue);
 
     // The range is 0..100, so the distance swept is the percentage done.
     emit progress(m_sweepValue, m_sweepUp ? m_sweepValue : 100 - m_sweepValue);
 
+    if (!m_running || !canWrite()) {
+        cancelWithoutRestore();
+        return;
+    }
     // recompute() needs three points.
     const bool reachedTarget = m_sweepUp && m_curve.size() >= 3
         && currentRmsDb() >= m_targetDb;
@@ -234,7 +298,7 @@ void AgcTCalibrator::recordPoint(int value)
 
 void AgcTCalibrator::recompute()
 {
-    if (m_curve.size() < 3) {
+    if (!canWrite() || m_curve.size() < 3) {
         return;
     }
 
@@ -301,6 +365,10 @@ void AgcTCalibrator::recompute()
 
 void AgcTCalibrator::stop()
 {
+    if (!canWrite()) {
+        cancelWithoutRestore();
+        return;
+    }
     const bool wasRunning = m_running || m_auto;
     m_stepTimer.stop();
     m_manualTimer.stop();
@@ -308,6 +376,7 @@ void AgcTCalibrator::stop()
     m_auto = false;
     if (m_originalValue >= 0) {
         applyValue(m_originalValue); // restore what we found
+        m_originalValue = -1;
     }
     if (wasRunning) {
         emit finished(false);
@@ -316,6 +385,10 @@ void AgcTCalibrator::stop()
 
 void AgcTCalibrator::applyRecommendation()
 {
+    if (!canWrite()) {
+        cancelWithoutRestore();
+        return;
+    }
     m_stepTimer.stop();
     m_manualTimer.stop();
     m_running = false;

@@ -161,6 +161,8 @@ Use the icons at the right of the title bar:
 - **Dock left** / **Dock right** — put the panel on that side of the panadapters. Clicking the side it is already on hides it.
 - **Pop out** — float the panel in its own window (also **Ctrl+Shift+S**). Popped-out applets have a pin for always-on-top.
 
+The dock side is remembered when you restart AetherSDR.
+
 ### The button bar
 
 The top row of the panel holds **five favorite buttons** (by default VU, PWR, RX, TX and P/CW) and a **▼/▲** drawer button that shows the rest. Right-click the bar (or the drawer button) and choose **Customize Button Bar** to pick your favorites and hide buttons you don't use; the first five active entries fill the bar and the rest go in the drawer. Hiding a button also closes its applet. Buttons for accessories you don't have (tuner, amplifier, Antenna Genius and so on) appear only when that hardware is present.
@@ -188,7 +190,7 @@ Drag an applet by its title bar (⋮⋮ grip) to reorder it. The order is rememb
 - **Frequency scale** — between spectrum and waterfall, in MHz
 - **Waterfall** — scrolling time-versus-frequency history
 - **dBm scale** — right edge of the spectrum
-- **Time scale** — right edge of the waterfall
+- **Time scale** — right edge of the waterfall. It is measured from the rows as they arrive and then held steady, so jitter between rows does not move the labels. If the rows settle at a different pace for a sustained stretch (after a slow start, or a change of **FPS** on a radio whose rows follow it), the scale recalibrates once to the new pace. At slow **WtrFall Rate** settings that takes longer, up to most of a minute at one row per second.
 - **Band plan** — colored strip along the bottom of the spectrum
 - **Overlay menu** — the button column at the left: **+RX**, **+TNF**, **Band**, **ANT**, **Display**, **Memory**, **DAX** (the DAX flyout holds the **IQ Ch** selector and the **WFM** demodulator, and only appears on radios with DAX)
 

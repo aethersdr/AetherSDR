@@ -6,6 +6,7 @@
 #include "core/AcomConnection.h"
 #include "core/SpeConnection.h"
 #include "core/LpMeterConnection.h"
+#include "core/Kpa500Connection.h"
 #include "core/AppSettings.h"
 #include "core/PeripheralSettings.h"
 #include "core/ThemeManager.h"
@@ -365,7 +366,7 @@ bool checkPendingRemoval()
             QWidget owner;
             QPointer<RadioSetupDialog> dialog = new RadioSetupDialog(
                 &model, nullptr, &tgxl, &pgxl, &ag, nullptr,
-                nullptr, nullptr, nullptr, nullptr, nullptr, &owner);
+                nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &owner);
             dialog->setAttribute(Qt::WA_DeleteOnClose);
             dialog->selectTab("Peripherals");
             dialog->show();
@@ -843,7 +844,7 @@ bool checkRemovalOwnerTeardown()
             auto owner = std::make_unique<QWidget>();
             QPointer<RadioSetupDialog> dialog = new RadioSetupDialog(
                 &model, nullptr, &tgxl, &pgxl, nullptr, nullptr,
-                nullptr, nullptr, nullptr, nullptr, nullptr, owner.get());
+                nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, owner.get());
             dialog->selectTab("Peripherals");
             auto* remove = dialog->findChild<QPushButton*>("peripheralRemoveButton");
             if (!remove) {
@@ -1936,6 +1937,79 @@ bool checkStatusPresentation()
     return sawDisabled;
 }
 
+bool checkKpa500NetworkSetup()
+{
+    AppSettings::instance().remove(QStringLiteral("Peripherals"));
+    PeripheralSettings::setVisibleDeviceIds({QStringLiteral("kpa500")});
+    PeripheralSettings::setDeviceString("Kpa500", "SerialPort", "COM4");
+    PeripheralSettings::setDeviceInt("Kpa500", "BaudRate", 38400);
+    PeripheralSettings::setDeviceString("Kpa500", "ManualIp", "amp.example.test");
+    PeripheralSettings::setDeviceInt("Kpa500", "ManualPort", 4200);
+    PeripheralSettings::setAutoConnect("kpa500", false);
+    RadioModel model;
+    Kpa500Connection amp;
+    {
+        RadioSetupDialog dialog(&model, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                nullptr, nullptr, nullptr, nullptr, nullptr, &amp);
+        dialog.selectTab(QStringLiteral("Peripherals"));
+        auto* mode = dialog.findChild<QComboBox*>("peripheralMode_kpa500");
+        auto* host = dialog.findChild<QLineEdit*>("peripheralNetworkHost_kpa500");
+        auto* ports = dialog.findChild<QStackedWidget*>("peripheralPort_kpa500");
+        auto* info = dialog.findChild<QLabel*>("peripheralDeviceInfo_kpa500");
+        auto* automatic = dialog.findChild<QCheckBox*>("peripheralAutoConnect_kpa500");
+        if (!mode || !host || !ports || !info || !automatic || automatic->isChecked()
+            || host->text() != "amp.example.test" || amp.isConnected() || amp.isConnecting()
+            || !info->text().contains("Not reported")) {
+            return false;
+        }
+#ifdef HAVE_SERIALPORT
+        if (mode->currentData().toString() != "Serial") { return false; }
+        auto* baud = dialog.findChild<QComboBox*>("peripheralBaud_kpa500");
+        if (!baud || baud->currentData().toInt() != 38400) { return false; }
+#endif
+        dialog.revealKpa500AdvancedSettings();
+        auto* advanced = dialog.findChild<QPushButton*>("peripheralAdvanced_kpa500");
+        auto* maintenance = dialog.findChild<QWidget*>("kpa500Advanced");
+        auto* backup = dialog.findChild<QPushButton*>("kpaSaveBackup");
+        auto* banner = dialog.findChild<QPushButton*>("kpaWriteBanner");
+        if (!advanced || !advanced->isChecked() || !maintenance || maintenance->isHidden()
+            || !backup || backup->isEnabled() || !banner || banner->isEnabled()) {
+            return false;
+        }
+        mode->setCurrentIndex(mode->findData("Network"));
+        auto* tcpPort = qobject_cast<QSpinBox*>(ports->currentWidget());
+        if (!tcpPort || tcpPort->value() != 4200
+            || PeripheralSettings::deviceString("Kpa500", "ConnectionMode") != "Network"
+            || PeripheralSettings::deviceString("Kpa500", "SerialPort") != "COM4"
+            || PeripheralSettings::deviceInt("Kpa500", "BaudRate") != 38400) {
+            return false;
+        }
+        dialog.editPeripheralStatusForTest("kpa500", [](PeripheralDeviceStatus& state) {
+            state.connecting = true;
+        });
+        pokeRefresh(model);
+        auto* connect = dialog.findChild<QPushButton*>("peripheralConnect_kpa500");
+        if (!connect || connect->text() != "Cancel" || mode->isEnabled() || host->isEnabled()) {
+            return false;
+        }
+        dialog.editPeripheralStatusForTest("kpa500", [](PeripheralDeviceStatus& state) {
+            state.connecting = false;
+        });
+        pokeRefresh(model);
+        if (!mode->isEnabled() || !host->isEnabled() || connect->text() != "Connect") {
+            return false;
+        }
+    }
+    RadioSetupDialog reopened(&model, nullptr, nullptr, nullptr, nullptr, nullptr,
+                              nullptr, nullptr, nullptr, nullptr, nullptr, &amp);
+    reopened.selectTab(QStringLiteral("Peripherals"));
+    auto* restoredMode = reopened.findChild<QComboBox*>("peripheralMode_kpa500");
+    const bool ok = restoredMode && restoredMode->currentData().toString() == "Network"
+        && !amp.isConnected() && !amp.isConnecting() && !PeripheralSettings::autoConnect("kpa500");
+    AppSettings::instance().remove(QStringLiteral("Peripherals"));
+    return ok;
+}
+
 int checkInteraction(QApplication& app)
 {
     AppSettings::instance().remove(QStringLiteral("Peripherals"));
@@ -2532,7 +2606,7 @@ int main(int argc, char** argv)
         return !selectedCase || std::strcmp(selectedCase, name) == 0;
     };
     if (selected("automatic") && runStage("automatic", [] {
-            if (!checkRemovalWithUnknownOwner() || !checkRemovalKeepsNewerEndpoint()
+            if (!checkKpa500NetworkSetup() || !checkRemovalWithUnknownOwner() || !checkRemovalKeepsNewerEndpoint()
                 || !checkRemovalOfUnconfiguredSharedRow() || !checkConnectAutomaticallyToggle()
                 || !checkConnectAutomaticallyGates() || !checkStatusPresentation()) {
                 std::fprintf(stderr, "Connect automatically regressed\n");

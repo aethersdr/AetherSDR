@@ -8,8 +8,6 @@
 
 #include <QtTest>
 
-#include <limits>
-
 using namespace AetherSDR::ModeFilters;
 
 class ModeFilterPresetsTest : public QObject {
@@ -18,11 +16,10 @@ class ModeFilterPresetsTest : public QObject {
 private slots:
     void ssbPinsItsLowCutAndDerivesTheHigh();
     void cwCentresOnTheCarrier();
+    void narrowbandBoundsRespectSignedEdges();
     void amAndFmStraddleIt_data();
     void amAndFmStraddleIt();
     void diguCentresOnItsOffsetAndClampsAt95();
-    void freeDvUsesDigitalLadderAndPreservesSideband();
-    void freeDvRejectsUnrepresentableWidths();
     void rttyStraddlesMarkAndSpace();
     void laddersAreNarrowToWide();
     void unknownModesGetTheSsbLadder();
@@ -51,11 +48,43 @@ void ModeFilterPresetsTest::cwCentresOnTheCarrier()
 {
     // The radio's BFO handles the pitch offset, so the filter sits on the
     // carrier rather than on the tone.
-    for (const char* mode : {"CW", "CWL", "CWU"}) {
+    for (const char* mode : {"CW", "CWL", "CWU", "CWR"}) {
         const Edges e = edgesForWidth(QString::fromLatin1(mode), 500, {});
         QCOMPARE(e.lo, -250);
         QCOMPARE(e.hi, 250);
     }
+}
+
+void ModeFilterPresetsTest::narrowbandBoundsRespectSignedEdges()
+{
+    const AetherSDR::ReceiveFilterControl control{
+        AetherSDR::SliceFrequencyControl::Authority::Engine,
+        {{QStringLiteral("USB"), 0, 11998, 2, 12000, 2, 12000},
+         {QStringLiteral("LSB"), -12000, -2, -11998, 0, 2, 12000},
+         {QStringLiteral("CW"), -12000, -1, 1, 12000, 2, 24000},
+         {QStringLiteral("CWR"), -12000, -1, 1, 12000, 2, 24000}}};
+    for (const QString mode : {QStringLiteral("USB"), QStringLiteral("LSB"),
+                               QStringLiteral("CW"), QStringLiteral("CWR")}) {
+        for (int width : widthsForMode(mode, &control)) {
+            const Edges edges = edgesForWidth(mode, width, {});
+            QVERIFY(acceptsFilterEdges(mode, &control, false, edges));
+            QCOMPARE(widthForEdges(mode, edges.lo, edges.hi), width);
+        }
+    }
+    QVERIFY(acceptsFilterEdges("USB", &control, false, {0, 12000}));
+    QVERIFY(!acceptsFilterEdges("USB", &control, false, {-1, 2900}));
+    QVERIFY(!acceptsFilterEdges("USB", &control, false, {100, 12001}));
+    QVERIFY(acceptsFilterEdges("LSB", &control, false, {-12000, 0}));
+    QVERIFY(!acceptsFilterEdges("LSB", &control, false, {-2900, 1}));
+    QVERIFY(!acceptsFilterEdges("LSB", &control, false, {-12001, -100}));
+    for (const QString mode : {QStringLiteral("CW"), QStringLiteral("CWR")}) {
+        QVERIFY(acceptsFilterEdges(mode, &control, false, {-1, 1}));
+        QVERIFY(acceptsFilterEdges(mode, &control, false, {-12000, 12000}));
+        QVERIFY(!acceptsFilterEdges(mode, &control, false, {0, 500}));
+        QVERIFY(!acceptsFilterEdges(mode, &control, false, {-500, 0}));
+    }
+    QVERIFY(acceptsFilterEdges("USB", nullptr, false, {-1, 12001}));
+    QVERIFY(acceptsFilterEdges("AM", &control, false, {-14000, 14000}));
 }
 
 void ModeFilterPresetsTest::amAndFmStraddleIt_data()
@@ -105,51 +134,6 @@ void ModeFilterPresetsTest::rttyStraddlesMarkAndSpace()
     QCOMPARE((e.lo + e.hi) / 2, -85);        // midway between the two tones
     QCOMPARE(e.hi - e.lo, 500);
     QVERIFY(e.lo < -170 && e.hi > 0);        // both tones inside the passband
-}
-
-void ModeFilterPresetsTest::freeDvUsesDigitalLadderAndPreservesSideband()
-{
-    // FlexLib 4.3 Filter.cs groups FDVU/FDVL with DIGU/DIGL.
-    const QVector<int> digital{100, 300, 600, 1000, 1500, 2000, 3000, 6000};
-    for (const QString& mode : {QStringLiteral("FDVU"), QStringLiteral("FDVL")}) {
-        QCOMPARE(widthsForMode(mode), digital);
-        QCOMPARE(widthsForMode(mode, nullptr), digital);
-        for (int width : digital) {
-            const Edges edges = edgesForWidth(mode, width, {});
-            QCOMPARE(edges.hi - edges.lo, width);
-            QCOMPARE(widthForEdges(mode, edges.lo, edges.hi), width);
-            if (mode == QStringLiteral("FDVL")) {
-                QCOMPARE(edges.lo, -95 - width);
-                QCOMPARE(edges.hi, -95);
-            } else {
-                QCOMPARE(edges.lo, 95);
-                QCOMPARE(edges.hi, 95 + width);
-            }
-        }
-    }
-    // Legacy memories retain the existing FDV ladder and edge convention.
-    QCOMPARE(widthsForMode(QStringLiteral("FDV")), widthsForMode(QStringLiteral("USB")));
-    const Edges legacy = edgesForWidth(QStringLiteral("FDV"), 2400, {});
-    QCOMPARE(legacy.lo, 95);
-    QCOMPARE(legacy.hi, 2400);
-}
-
-void ModeFilterPresetsTest::freeDvRejectsUnrepresentableWidths()
-{
-    constexpr int kMaximumWidth = std::numeric_limits<int>::max() - 95;
-    for (const QString& mode : {QStringLiteral("FDVU"), QStringLiteral("FDVL")}) {
-        for (int width : {std::numeric_limits<int>::max(), kMaximumWidth + 1,
-                          0, -1, std::numeric_limits<int>::min()}) {
-            const Edges edges = edgesForWidth(mode, width, {});
-            QCOMPARE(edges.lo, 0);
-            QCOMPARE(edges.hi, 0);
-            QVERIFY(!acceptsFilterEdges(mode, nullptr, false, edges));
-            QVERIFY(!acceptsFilterEdges(mode, nullptr, true, edges));
-        }
-        const Edges edges = edgesForWidth(mode, kMaximumWidth, {});
-        QVERIFY(edges.lo < edges.hi);
-        QCOMPARE(qint64(edges.hi) - edges.lo, qint64(kMaximumWidth));
-    }
 }
 
 void ModeFilterPresetsTest::laddersAreNarrowToWide()

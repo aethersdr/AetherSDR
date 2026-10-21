@@ -23,7 +23,7 @@ Open **Tools → Configure KiwiSDR...**. It opens **Settings → Radio Setup... 
 
 Each receiver has:
 
-<img src="/img/screens/radio-setup-kiwi.png" width="649" alt="KiwiSDR RX Antennas group. A note says passwords are kept only for the current session. Configured Receivers reads No KiwiSDR receivers configured. Under Add Receiver, the Name field holds Example Kiwi, the Server field kiwi.example.org:8073, the Password field is empty and Type is KiwiSDR, with an Auto-connect checkbox and Browse public… and Add receiver buttons. Import… and Export… buttons sit at the bottom right." />
+<img src="/img/screens/radio-setup-kiwi.png" width="649" alt="KiwiSDR RX Antennas group. A note says passwords are kept only for the current session. Configured Receivers reads No KiwiSDR receivers configured. Under Add Receiver, the Name field holds Example Kiwi, the Server field kiwi.example.org:8073, the Password field is empty and Type is KiwiSDR, with an Auto-connect checkbox and Browse Public… and Add Receiver buttons. Import… and Export… buttons sit at the bottom right." />
 
 *The KiwiSDR RX Antennas group on the Antennas page, with a receiver typed in but not yet added.*
 
@@ -37,7 +37,7 @@ Each receiver has:
 | **Keep audio during TX** | Off (default): the receiver's audio is silenced while you transmit and resumes immediately at unkey. The stream stays warm, so there is no gap or re-sync. On: keep listening while you transmit. |
 | **Resume audio after TX delay** | After unkey, wait out this receiver's stream delay before unmuting, so you don't hear your own delayed transmission. No effect while **Keep audio during TX** is on. |
 
-Each row also has **Connect** / **Disconnect** and a **Remove** (bin) button. To add a receiver by hand, fill in the empty row at the bottom (name, `host:8073`, optional password and type) and click **Add receiver**.
+Each row also has **Connect** / **Disconnect** and a **Remove** (bin) button. To add a receiver by hand, fill in the empty row at the bottom (name, `host:8073`, optional password and type) and click **Add Receiver**.
 
 ### Import and export
 
@@ -45,7 +45,7 @@ Each row also has **Connect** / **Disconnect** and a **Remove** (bin) button. To
 
 ### Browsing public KiwiSDRs
 
-Click **Browse public…** to open **Browse public KiwiSDR receivers**:
+Click **Browse Public…** to open **Browse public KiwiSDR receivers**:
 
 - A filter box ("Filter by name, location, or host…") and **Refresh list**.
 - Columns **Receiver**, **Location**, **Users**, **API** and **Limits**.
@@ -109,7 +109,7 @@ Every channel on the receiver is in use.
 
 1. Leave the slice on the receiver: AetherSDR waits for a free slot and connects when one opens.
 2. Accept a monitor (camp) session if one is offered.
-3. Or choose another receiver with **Browse public…**.
+3. Or choose another receiver with **Browse Public…**.
 
 ### The receiver shows Error
 

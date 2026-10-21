@@ -47,6 +47,8 @@ opens a browse panel (see [Memory browse panel](#memory-browse-panel)).
 
 The result reads "Imported N … (format)". Export always writes SmartSDR CSV.
 
+An import stops if the original radio connection or memory store changes. Records already completed remain in that store; unfinished records are not redirected to another radio. If a new radio slot cannot be populated, AetherSDR attempts cleanup only while that original slot is still identifiable. An unanswered request can leave a partial slot; inspect the memory list before retrying.
+
 To move a whole radio database (memories along with profiles) between
 SmartSDR and AetherSDR, use **Profiles → Import/Export Profiles...**; see
 [Profile Management](./profile-management.md).
@@ -99,7 +101,7 @@ Sortable columns:
 |---|---|
 | **Import...** | Import memories from a CSV file (see below) |
 | **Export...** | Export the displayed memories to CSV |
-| **Add** | Create a new memory from the active slice |
+| **Add** | Create a new memory from the active slice, preserving its mode and receive-filter edges |
 | **Tune** | Tune the active slice to the selected memory (also: double-click any row) |
 | **Select All** | Select every visible row |
 | **Remove** | Delete the selected memory or memories |
@@ -116,8 +118,11 @@ The selection count is shown beside the buttons.
   bank** used by all such radios, not one per radio.
 - **Networked Icom:** where the radio supports it, a **Sync Memories** button
   reads the radio's memory channels into the list (on the IC-705, choose a
-  memory group first). Where the radio's memories are read-only, Add, Import
-  and in-place editing are disabled with the reason in the tooltip.
+  memory group first). The imported channels join the shared computer-side
+  bank. Editing that bank does not write channels back to the Icom radio;
+  Sync updates tuning data while preserving your name, owner and group annotations.
+
+Computer-side changes are coalesced before writing to `AetherSDR.db` and flushed on disconnect or exit. A storage failure is reported; seeing a row in the current list alone does not prove it was saved to disk.
 
 ## Troubleshooting
 
@@ -128,12 +133,13 @@ The **Profile** filter is showing one profile's memories, or the search box is f
 1. Set **Profile** to "All Memories".
 2. Clear the **Search** box.
 
-### Add, Import and editing are grayed out on my Icom
+### An import or removal stopped after reconnecting
 
-The radio's memories are read-only.
+The operation belongs to the connection and slots you originally selected.
 
-1. Hover over the grayed control; the tooltip gives the reason.
-2. Where the dialog has a **Sync Memories** button, use it to read the radio's channels into the list, then recall them as usual.
+1. Let the current connection finish loading its memory list.
+2. Check which records completed and whether any partial slot remains.
+3. Select the intended records again before retrying.
 
 ### Memories don't appear as markers on the panadapter
 

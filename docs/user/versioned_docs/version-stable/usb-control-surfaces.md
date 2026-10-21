@@ -4,7 +4,7 @@ slug: "/usb-control-surfaces"
 description: "AetherSDR works with hardware knobs, jog wheels, button decks and keying interfaces connected to the computer."
 ---
 
-AetherSDR works with hardware knobs, jog wheels, button decks and keying interfaces connected to the computer. Most of them are set up on one Radio Setup page, **Settings → Radio Setup... → Serial & Controllers**, which you can also reach from **Settings → FlexControl Knob & Buttons...**.
+AetherSDR works with hardware knobs, jog wheels, button decks and keying interfaces connected to the computer. Most of them are set up on one Radio Setup page, **Settings → Radio Setup... → Serial & Controllers**, which you can also reach from **Settings → Controllers → FlexControl Knob & Buttons...**.
 
 These are host devices: they plug into your computer, not the radio, so the page and its controllers stay available on every radio family. Actions the connected radio cannot perform (for example band zoom on some radios) are refused with a notice rather than sent.
 
@@ -18,7 +18,7 @@ These are host devices: they plug into your computer, not the radio, so the page
 | Device | Connection | Where it is set up |
 |--------|-----------|--------------------|
 | FlexRadio FlexControl | USB serial | [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md) |
-| Icom RC-28 remote encoder | USB HID | **Settings → Icom RC-28 Remote Encoder...** |
+| Icom RC-28 remote encoder | USB HID | **Settings → Controllers → Icom RC-28 Remote Encoder...** |
 | Griffin PowerMate | USB HID | Serial & Controllers → HID encoder groups |
 | Contour ShuttleXpress / ShuttlePro v2 | USB HID | Serial & Controllers → HID encoder groups |
 | ELAD / WoodBoxRadio TMate 2 | USB HID | Serial & Controllers → TMate 2 groups |
@@ -72,7 +72,7 @@ The full action lists are under [Reference](#reference).
 The RC-28 is a weighted tuning knob with **F1**, **F2** and a **TX** bar. A community Arduino emulator (`aether-pad`) that speaks the same protocol is also recognized.
 
 1. Tick **Enable HID encoders / StreamDeck+** (see [Setup](#setup)).
-2. Open **Settings → Icom RC-28 Remote Encoder...** ("Icom RC-28 Button Mapping").
+2. Open **Settings → Controllers → Icom RC-28 Remote Encoder...** ("Icom RC-28 Button Mapping").
 
 The dialog has:
 
@@ -94,6 +94,23 @@ Tuning speed follows how fast you turn the knob. Auto-snap rounds to the nearest
 ## Using the Griffin PowerMate and Contour Shuttle
 
 The PowerMate (one knob with a push) and the Contour ShuttleXpress (5 buttons) and ShuttlePro v2 (15 buttons) work as single-encoder devices. Enable HID encoders, then choose the knob or jog wheel's action as **Encoder 1**. Their buttons are numbered from 1 and use the **Key 1–8** slots in **StreamDeck+ LCD Button Actions**; the PowerMate's push is Key 1.
+
+Contour reports can contain several button changes together. Every press and release is handled, and turning the jog wheel while pressing a button still tunes normally.
+
+On ShuttlePro v2, buttons 1–8 use **Key 1–8**, buttons 9–12 use **StreamDeck+ Encoder Push Actions**, and buttons 13–15 have no action mapping.
+
+### Contour shuttle ring
+
+The spring-loaded outer ring tunes continuously while held. A small deflection tunes slowly; full deflection sweeps at about 100 kHz/s at **Normal** speed. Releasing the ring stops tuning. A new deflection applies its first step after about 60 ms; larger tuning steps have a minimum step rate so the inner positions remain usable.
+
+Set it up under **Settings → Radio Setup... → Serial & Controllers → Shuttle Ring (ShuttleXpress / ShuttlePro)**:
+
+| Setting | Choices | Default |
+|---------|---------|---------|
+| **Action** | Tune Slice, RIT (Receive Incremental Tuning), XIT (Transmit Incremental Tuning), None | Tune Slice |
+| **Speed** | Slow (×0.5), Normal, Fast (×2) | Normal |
+
+The ring uses the same direction setting as the jog wheel. Tune Slice respects the active slice's Tune Lock. RIT and XIT move in 10 Hz increments, capped at 1 kHz/s and ±9999 Hz. Unplugging the controller stops ring tuning. The ring does not trigger auto-snap on release.
 
 ## Using the TMate 2
 

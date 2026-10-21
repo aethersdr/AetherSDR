@@ -10,7 +10,7 @@ Each slice (A–H) has its own color, used for its frequency marker, filter pass
 
 Open **Settings → Radio Setup... → Appearance & Behavior** and find the **Slice Colors** group:
 
-<img src="/img/screens/radio-setup-appearance.png" width="679" alt="Appearance &amp; Behavior page. Slice Letter Display offers Global slot index (selected) or Radio-assigned letter with global subscript. Slice Colors offers Use Aether defaults or Custom colors (selected), with eight color buttons A to H in cyan, magenta, green, yellow, orange, teal, pink and purple and a Reset All to Defaults button. Further down, Single-click delay is 400 ms with a Reset button, and Mouse wheel has a Reverse mouse-wheel tuning direction checkbox." />
+<img src="/img/screens/radio-setup-appearance.png" width="679" alt="Appearance &amp; Behavior page. Slice Letter Display offers Global slot index (selected) or Radio-assigned letter with global subscript. Slice Colors offers Use Aether defaults or Custom colors (selected), with eight color buttons A to H in cyan, magenta, green, yellow, orange, teal, pink and purple and a Reset All to Defaults button. Further down, Single-Click Delay is 400 ms with a Reset button, and Mouse Wheel has a Reverse mouse-wheel tuning direction checkbox." />
 
 *Radio Setup, Appearance & Behavior page with Custom colors chosen, so each slice letter's color can be changed.*
 

@@ -85,6 +85,19 @@ void RadioConnection::init()
         m_independentPtt->poll(TxCoordinator::monotonicMs());
         updateIndependentPttTimer();
     });
+    resetSocket();
+    m_heartbeat = new QTimer(this);
+
+    m_heartbeat->setInterval(HEARTBEAT_INTERVAL_MS);
+    connect(m_heartbeat, &QTimer::timeout, this, &RadioConnection::onHeartbeat);
+}
+
+void RadioConnection::resetSocket()
+{
+    if (m_socket) {
+        m_socket->disconnect(this);
+        m_socket->deleteLater();
+    }
     m_socket = new QTcpSocket(this);
     // LAN radio uses a proprietary CAT/VITA stream on port 4992; an OS or
     // application HTTP/SOCKS proxy can never tunnel it sensibly.  SmartSDR
@@ -93,7 +106,6 @@ void RadioConnection::init()
     // default.  Force NoProxy so a system proxy doesn't block the connect.
     // (WAN/SmartLink paths intentionally keep default proxy handling.) (#3389)
     m_socket->setProxy(QNetworkProxy::NoProxy);
-    m_heartbeat = new QTimer(this);
 
     connect(m_socket, &QTcpSocket::connected,
             this, &RadioConnection::onSocketConnected);
@@ -103,9 +115,6 @@ void RadioConnection::init()
             this, &RadioConnection::onReadyRead);
     connect(m_socket, &QAbstractSocket::errorOccurred,
             this, &RadioConnection::onSocketError);
-
-    m_heartbeat->setInterval(HEARTBEAT_INTERVAL_MS);
-    connect(m_heartbeat, &QTimer::timeout, this, &RadioConnection::onHeartbeat);
 }
 
 void RadioConnection::connectToRadio(const RadioInfo& info)
@@ -241,6 +250,12 @@ void RadioConnection::connectToHost(const QHostAddress& address,
     m_localAddr = QHostAddress();
     m_localPort = 0;
     m_socket->abort();
+    // Qt 6.11/6.12 can retain a bound transport after a refused connect while
+    // reporting UnconnectedState. abort()/close() leave that engine intact;
+    // discard it before the next bind or connect instead of reusing its error.
+    if (m_socket->socketDescriptor() != -1) {
+        resetSocket();
+    }
     resetSessionState();
 
     const QHostAddress preferredBindAddr =
@@ -259,6 +274,8 @@ void RadioConnection::connectToHost(const QHostAddress& address,
                 m_socket->close();
                 setState(ConnectionState::Error);
                 emit errorOccurred(msg);
+                // The selected source remains mandatory, but the attempt can be retried.
+                setState(ConnectionState::Disconnected);
                 return;
             }
 

@@ -4,6 +4,7 @@
 #include "core/NetRecurrence.h"
 #include "core/NetScheduleStore.h"
 #include "core/DigitalVoiceFeature.h"
+#include "core/MemoryFieldValues.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -51,14 +52,15 @@ QStringList commonModes()
 
 void selectPresetMode(QComboBox& combo, const QString& mode)
 {
-    if (mode.isEmpty()) {
+    const QString token = MemoryFields::modeToWire(mode);
+    if (token.isEmpty()) {
         return;
     }
     // Saved and captured waveforms can extend the common offline choices.
-    if (combo.findText(mode) < 0) {
-        combo.addItem(mode);
+    if (combo.findText(token) < 0) {
+        combo.addItem(token);
     }
-    combo.setCurrentText(mode);
+    combo.setCurrentText(token);
 }
 
 // Friendly one-line preview of the next firing, e.g.

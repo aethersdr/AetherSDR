@@ -142,6 +142,10 @@ signals:
     void operateRequested(bool on);
     void bypassRequested(bool on);
     void autotuneRequested();
+    // Emitted when an autotune goes out over the direct port-9010 channel, which
+    // bypasses autotuneRequested. The TGXL then keys the radio over its interlock
+    // line, so RadioModel arms its tune-carrier window from this edge.
+    void directAutotuneStarted();
     // OPERATE / STANDBY / BYPASS were asked of a tuner this client reaches
     // ONLY over its direct port-9010 link. Those three are relayed by a Flex
     // radio (the handle above), and the direct link carries no equivalent that

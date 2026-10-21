@@ -93,6 +93,8 @@ To watch your own sending, turn on the **TX** decode of the [CW Decoder](./cw-de
 
 ### Special characters
 
+On FlexRadio with SmartSDR 4.3 firmware, double quotation marks (`"`) are preserved in **Send**, **Live**, and stored macros, including macros received from the radio. Enter them directly; no escaping is needed. Quotation-mark handling is unverified on earlier firmware.
+
 The legend under the macros lists the special characters:
 
 - **Prosigns:** `=` (BT), `+` (AR), `(` (KN), `&` (BK), `$` (SK)

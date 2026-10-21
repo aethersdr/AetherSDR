@@ -29,7 +29,7 @@ The **Radio IP address** group starts with two rows:
 | **Radio type:** | The radio family to look for: **FlexRadio**, **Hermes-Lite 2**, **ANAN-G2**, **Icom (network)** or **RTL-SDR (USB)**. Only this family is probed. |
 | **Radio IP:** | The IP address or host name, for example `10.0.0.25`. |
 
-**RTL-SDR (USB)** appears only in builds that include the RTL-SDR backend. Choosing **Icom (network)** or **ANAN-G2** adds that family's own rows; see [Networked Icom](./networked-icom.md) and [ANAN-G2](./anan-g2.md). For every family's status, see [Supported Radios](./supported-radios.md).
+**RTL-SDR (USB)** appears only in builds that include the RTL-SDR backend. Choosing **Icom (network)** adds its connection rows. **ANAN-G2** shows a pointer to **Settings → Radio Setup... → Radio → ANAN Front End**, where its receive options are configured before connecting; see [Networked Icom](./networked-icom.md) and [ANAN-G2](./anan-g2.md). For every family's status, see [Supported Radios](./supported-radios.md).
 
 ## Using Connect by IP
 
@@ -57,6 +57,8 @@ For a networked Icom behind NAT, see the **Icom ports:** row on [Networked Icom]
 **Use low bandwidth mode** and **Enable adaptive frame-rate throttle** are in the same window, under "Connection options for slower links". See [Low Bandwidth Connections](./low-bandwidth-connections.md).
 
 ### Auto-reconnect
+
+If a FlexRadio connection drops unexpectedly, AetherSDR retries every five seconds. During a radio reboot, **Connection refused** can appear until the radio's command service is ready. The retries continue in the same running app. If an explicitly selected source interface is unavailable, AetherSDR keeps retrying that source instead of switching interfaces. Disconnecting deliberately stops these retries.
 
 Connect by IP remembers the radio type you chose and the addresses you have used. With **Connect to last radio on start up** checked, AetherSDR reconnects to the last radio on the next launch. If startup auto-connect gives up, the Connect to Radio window opens again.
 

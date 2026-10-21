@@ -54,6 +54,13 @@ struct TransmitControlRequest {
                                MonitorSetting, TxPassband, ApdSamplerSetting>;
     Field field{Field::Count};
     Value value;
+    // Nonzero when the caller must not act until the radio itself has answered
+    // (recording holds VOX off and may not start on the request alone). The
+    // backend that hears the answer reports it through
+    // IRadioBackend::transmitControlAnswered(); RadioModel answers for one that
+    // cannot (IRadioBackend::answersTransmitControl()). Zero for every ordinary
+    // control, which stays fire-and-forget.
+    quint64 answerTicket{0};
     bool valid() const;
     QString label() const;
 };

@@ -3,12 +3,12 @@ title: "TNF (Tracking Notch Filters)"
 slug: "/tnf-tracking-notch-filters"
 description: "Tracking Notch Filters remove persistent interfering carriers from the audio passband."
 status: "Supported"
-applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)"]
+applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)", "RTL-SDR (experimental)"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2 (experimental)
+**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2 (experimental), RTL-SDR (experimental)
 
 :::
 
@@ -69,6 +69,12 @@ Permanent** entries are not offered. A notch (or a very narrow CW filter)
 lengthens the receive filter slightly, which adds a little audio delay. See
 [Hermes-Lite 2](./hermes-lite-2.md).
 
+### RTL-SDR
+
+RTL-SDR supports up to 32 shared tracking notches in USB, LSB, CW and CWR. Each notch stays at its RF frequency and affects only receivers whose passbands overlap it. RIT and CW pitch changes preserve that RF position. Notches do not affect FM, FM-N or WFM.
+
+Add, move, resize and remove notches using the same gestures. The minimum width is 200 Hz. Changes appear after the receiver accepts them. The computer saves the notch bank with the RTL radio settings, including the global enabled state; **Depth** and **Make Permanent** are not offered. A parked receiver retains its notches and applies them when reception resumes.
+
 ## Reference
 
 ### Permanent vs temporary
@@ -78,8 +84,10 @@ lengthens the receive filter slightly, which adds a little audio delay. See
 | Temporary | Yellow | No | Yes |
 | Permanent | Green | Yes | No |
 
-TNF removal and permanent-state changes are applied straight away in the
+FlexRadio TNF removal and permanent-state changes are applied straight away in the
 display; the radio does not send a status confirmation for these commands.
+RTL-SDR waits for accepted state before changing its markers. The temporary/permanent
+distinction above applies to radio-stored FlexRadio notches, not the locally saved RTL bank.
 
 ## Troubleshooting
 
@@ -91,11 +99,11 @@ supports.
 1. Remove a notch you no longer need (right-click it → **Remove TNF**), then
    try again.
 2. If the entry never appears, your radio doesn't offer notches. TNFs work on
-   FlexRadio and Hermes-Lite 2.
+   FlexRadio, Hermes-Lite 2 and RTL-SDR.
 
 ### My notches disappeared after the radio restarted
 
-They were temporary (yellow). Temporary notches don't survive a power cycle.
+On FlexRadio, temporary (yellow) notches do not survive a power cycle. RTL-SDR instead restores its locally saved notch bank.
 
 1. Add the notch again.
 2. Right-click it and choose **Make Permanent**. It turns green.

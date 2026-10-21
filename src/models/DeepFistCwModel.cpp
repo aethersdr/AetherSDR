@@ -1,7 +1,7 @@
 #include "DeepFistCwModel.h"
 #include "core/Resampler.h"
 #include "core/deepfist/DeepFistStream.h"
-#include "core/deepfist/DeepFistModelAssets.h"
+#include "core/CwModelAssets.h"
 #include "DeepFistModel.h"
 #include <QCryptographicHash>
 #include <QDir>
@@ -35,26 +35,26 @@ DeepFistStream::Parameters DeepFistCwModel::appParameters()
     return parameters;
 }
 DeepFistCwModel::DeepFistCwModel(QObject* parent)
-    : DeepFistCwModel(modelDirectory(), DeepFistModelAssets::releaseBaseUrl(), nullptr, parent) {}
+    : DeepFistCwModel(modelDirectory(), CwModelAssets::releaseBaseUrl(), nullptr, parent) {}
 DeepFistCwModel::DeepFistCwModel(QString directory, QString baseUrl,
     QNetworkAccessManager* network, QObject* parent)
-    : QObject(parent), m_assets(std::make_unique<DeepFistModelAssets>(directory, baseUrl,
-          DeepFistModelAssets::manifest(), network)), m_directory(std::move(directory))
+    : QObject(parent), m_assets(std::make_unique<CwModelAssets>(directory, baseUrl,
+          CwModelAssets::manifest(), network)), m_directory(std::move(directory))
 {
     m_parameters = appParameters();
-    connect(m_assets.get(), &DeepFistModelAssets::checking, this, [this] {
+    connect(m_assets.get(), &CwModelAssets::checking, this, [this] {
         setStatus(tr("Checking model…"));
     });
-    connect(m_assets.get(), &DeepFistModelAssets::progress, this, [this](qint64 got, qint64 total) {
+    connect(m_assets.get(), &CwModelAssets::progress, this, [this](qint64 got, qint64 total) {
         setStatus(tr("Download %1%").arg(total > 0 ? got * 100 / total : 0));
     });
-    connect(m_assets.get(), &DeepFistModelAssets::failed, this, [this](const QString& reason) {
+    connect(m_assets.get(), &CwModelAssets::failed, this, [this](const QString& reason) {
         m_preparing = false;
         m_canRetry = true;
         m_detail = reason;
         setStatus(tr("Model unavailable"));
     });
-    connect(m_assets.get(), &DeepFistModelAssets::ready, this, [this] {
+    connect(m_assets.get(), &CwModelAssets::ready, this, [this] {
         if (!m_running || !m_preparing) { return; }
         m_preparing = false;
         const quint64 generation = m_runId;
@@ -77,7 +77,7 @@ DeepFistCwModel::~DeepFistCwModel()
 }
 QString DeepFistCwModel::modelDirectory()
 {
-    // Development-only override in this opt-in prototype. No file picker or installer.
+    // Development override: a local verified bundle instead of the download.
     const QString overridePath = qEnvironmentVariable("AETHER_DEEPFIST_MODEL_DIR");
     return overridePath.isEmpty()
         ? QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
@@ -183,10 +183,10 @@ void DeepFistCwModel::feed(const PcmFrame& frame)
 }
 void DeepFistCwModel::run(quint64 runId, const QString& directory)
 {
-    // One manifest, owned by DeepFistModelAssets. Re-declaring the sizes and
+    // One manifest, owned by CwModelAssets. Re-declaring the sizes and
     // hashes here let a model bump update one copy and not the other, which
     // downloads and verifies clean and then reports "Model unavailable" forever.
-    for (const DeepFistModelAssets::Asset& asset : DeepFistModelAssets::manifest()) {
+    for (const CwModelAssets::Asset& asset : CwModelAssets::manifest()) {
         if (asset.name == QLatin1String("LICENSE")) { continue; }
         if (!matches(QDir(directory).filePath(asset.name), asset.bytes, asset.sha256)) {
             postStatus(runId, tr("Model unavailable"), true);

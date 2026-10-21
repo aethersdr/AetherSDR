@@ -265,7 +265,7 @@ Default applet order is:
 - `P/CW` — Phone/CW
 - `EQ` — Equalizer
 - `WAVE` — Waveform (tray button `WAV`)
-- `TXDSP` — Channel Strip
+- `TXDSP` — Aetherial Audio (tray button `VUDU`)
 - `CAT` — CAT Control
 - `DAX` — DAX Audio
 - `TCI` — TCI Server

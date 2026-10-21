@@ -84,7 +84,7 @@ adapter, and no daemon AGC method is added.
 
 ## Auto-Reconnect
 
-`RadioModel` has a 3-second `m_reconnectTimer` for unexpected disconnects.
+`RadioModel` has a 5-second `m_reconnectTimer` for unexpected disconnects.
 Disabled by `m_intentionalDisconnect` flag on user-initiated disconnect.
 
 ## Optimistic Updates Policy

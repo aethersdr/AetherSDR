@@ -117,6 +117,49 @@ int ctr2_caps_decode(const uint8_t *in, size_t len, uint32_t *caps)
     return 1;
 }
 
+void ctr2_info_encode(const ctr2_info *info, uint8_t out[CTR2_INFO_BYTES])
+{
+    uint8_t i;
+    out[0] = 'F';
+    out[1] = 'W';
+    out[2] = CTR2_INFO_LAYOUT;
+    out[3] = info->major;
+    out[4] = info->minor;
+    out[5] = info->patch;
+    out[6] = info->flags;
+    out[7] = 0x00u;
+    for (i = 0; i < CTR2_INFO_BUILD_LEN; ++i) {
+        const char c = info->build[i];
+        out[8 + i] = (uint8_t)c;
+        if (c == '\0') {
+            break;
+        }
+    }
+    for (; i < CTR2_INFO_BUILD_LEN; ++i) {
+        out[8 + i] = 0x00u;
+    }
+}
+
+int ctr2_info_decode(const uint8_t *in, size_t len, ctr2_info *info)
+{
+    uint8_t i;
+    if (len != CTR2_INFO_BYTES || in[0] != 'F' || in[1] != 'W' || in[2] != CTR2_INFO_LAYOUT) {
+        return 0;
+    }
+    info->major = in[3];
+    info->minor = in[4];
+    info->patch = in[5];
+    info->flags = in[6];
+    for (i = 0; i < CTR2_INFO_BUILD_LEN && in[8 + i] != 0; ++i) {
+        if (in[8 + i] < 0x20u || in[8 + i] > 0x7Eu) {
+            return 0;
+        }
+        info->build[i] = (char)in[8 + i];
+    }
+    info->build[i] = '\0';
+    return 1;
+}
+
 float ctr2_spectrum_band_edge(uint16_t low_hz, uint16_t span_hz, uint8_t n, uint8_t i)
 {
     if (n == 0 || i == 0) {
@@ -152,6 +195,8 @@ uint16_t ctr2_ext_max_length(uint8_t type)
         return 2u;
     case CTR2_EXT_CW_TEXT:
         return (uint16_t)(1u + CTR2_CW_TEXT_MAX);
+    case CTR2_EXT_FIRMWARE:
+        return (uint16_t)(CTR2_FW_DATA_HEADER + CTR2_FW_CHUNK);
     default:
         return 0;
     }
@@ -185,6 +230,12 @@ void ctr2_rx_reset(ctr2_rx *rx)
     rx->length = 0;
     rx->received = 0;
     rx->error = CTR2_ERR_NONE;
+}
+
+void ctr2_rx_start(ctr2_rx *rx, uint8_t counter)
+{
+    rx->started = 1;
+    rx->expected = (uint8_t)(counter & CTR2_COUNTER_MASK);
 }
 
 static ctr2_rx_result rx_fail(ctr2_rx *rx, ctr2_rx_error error)

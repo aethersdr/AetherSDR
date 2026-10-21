@@ -25,6 +25,10 @@ on:
 permissions:
   contents: write
 
+# Dispatch input, reaching scripts only through the environment.
+env:
+  SHERPA_VERSION: ${{ github.event.inputs.version || '1.13.4' }}
+
 jobs:
   build-aarch64:
     runs-on: ubuntu-24.04-arm
@@ -43,7 +47,7 @@ jobs:
 
       - name: Clone sherpa-onnx ${{ github.event.inputs.version || '1.13.4' }}
         run: |
-          git clone --depth 1 --branch v${{ github.event.inputs.version || '1.13.4' }} \
+          git clone --depth 1 --branch "v${SHERPA_VERSION}" \
             https://github.com/k2-fsa/sherpa-onnx sherpa-src
 
       # Cache sherpa's downloaded dependencies (the ONNX Runtime prebuilt +
@@ -77,7 +81,7 @@ jobs:
       - name: Package (upstream layout)
         id: pkg
         run: |
-          VER="${{ github.event.inputs.version || '1.13.4' }}"
+          VER="$SHERPA_VERSION"
           PKG="sherpa-onnx-v${VER}-linux-aarch64-shared-no-tts-lib"
           mkdir -p "${PKG}/lib"
           # Gather the C-API + cxx-api + the bundled ONNX Runtime from wherever the
@@ -99,13 +103,15 @@ jobs:
       - name: Upload to the sherpa-onnx-libs release
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PKG: ${{ steps.pkg.outputs.pkg }}
+          PKG_SHA: ${{ steps.pkg.outputs.sha }}
         run: |
           # The repo isn't checked out (we only clone sherpa-onnx), so gh can't
           # infer it from git — pass --repo explicitly.
-          REPO="${{ github.repository }}"
           gh release view sherpa-onnx-libs --repo "$REPO" >/dev/null 2>&1 \
             || gh release create sherpa-onnx-libs --repo "$REPO" \
                  --title "sherpa-onnx runtime libraries" \
                  --notes "Self-built sherpa-onnx C-API shared libraries (Apache-2.0, k2-fsa) for platforms k2-fsa doesn't prebuild (linux-aarch64), each bundling ONNX Runtime (MIT). Built by .github/workflows/build-sherpa-onnx-aarch64.yml. See THIRD_PARTY_LICENSES."
-          gh release upload sherpa-onnx-libs --repo "$REPO" "${{ steps.pkg.outputs.pkg }}" --clobber
-          echo "Uploaded ${{ steps.pkg.outputs.pkg }} (sha256 ${{ steps.pkg.outputs.sha }})"
+          gh release upload sherpa-onnx-libs --repo "$REPO" "$PKG" --clobber
+          echo "Uploaded $PKG (sha256 $PKG_SHA)"

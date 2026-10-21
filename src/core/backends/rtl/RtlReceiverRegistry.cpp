@@ -39,6 +39,10 @@ bool validCapture(const Registry::Capture& capture)
 
 bool boundedDsp(const WdspChannel::Config& config)
 {
+    if (config.amReceive && ((config.mode != WdspChannel::Mode::Am
+        && config.mode != WdspChannel::Mode::Sam) || config.fmReceive || config.wbfmReceive
+        || config.filterLowHz > -100 || config.filterHighHz < 100
+        || config.filterLowHz < -12000 || config.filterHighHz > 12000)) { return false; }
     if (config.wbfmReceive) {
         const auto& wide = *config.wbfmReceive;
         if (config.mode != WdspChannel::Mode::Wbfm || config.fmReceive
@@ -110,6 +114,7 @@ public:
         : m_channel(std::move(channel)), m_left(m_channel->outputBlockSize()),
           m_right(m_channel->outputBlockSize()), m_spec(spec)
     {
+        if (spec.conjugateIq) { m_conjugatedQ.resize(spec.dsp.inputBlockSize); }
         if (spec.extractRf) {
             m_extractor = std::make_unique<RtlRfExtractor>(RtlRfExtractor::Config{
                 spec.capture, spec.passband, spec.dsp.inputSampleRate, spec.dsp.inputBlockSize,
@@ -153,6 +158,10 @@ public:
     WdspChannel::ProcessResult processIq(std::span<const float> i,
         std::span<const float> q) noexcept override
     {
+        if (m_spec.conjugateIq && q.size() == m_conjugatedQ.size() && q.data()) {
+            std::transform(q.begin(), q.end(), m_conjugatedQ.begin(), [](float value) { return -value; });
+            q = m_conjugatedQ;
+        }
         const WdspChannel::ProcessResult result = i.data() == nullptr || q.data() == nullptr
             ? WdspChannel::ProcessResult::InvalidBuffer : m_channel->processIq(i, q, m_left, m_right);
         if (result != WdspChannel::ProcessResult::Ok && !m_failure) {
@@ -168,6 +177,7 @@ public:
     std::optional<Registry::ProcessingFailure> processingFailure() const noexcept override { return m_failure; }
 private:
     std::unique_ptr<WdspChannel> m_channel;
+    std::vector<float> m_conjugatedQ;
     std::vector<float> m_left;
     std::vector<float> m_right;
     const Registry::ReceiverSpec m_spec;

@@ -1576,10 +1576,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
             return;
         }
         if (m_radioModel != nullptr && call != m_radioModel->callsign()) {
-            if (m_radioModel->usesFlexCommandPlane()) {
-                m_radioModel->sendCommand("radio callsign " + call);
-            }
-            m_radioModel->setStationCallsign(call);
+            m_radioModel->requestRadioSetup({RadioSetupField::Callsign, call});
         }
     });
     // Selecting a band tunes the dial to that WSPR sub-band, so the operator can

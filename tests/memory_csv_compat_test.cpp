@@ -3,6 +3,7 @@
 // unit scaling). No radio, no Qt event loop required.
 
 #include "core/MemoryCsvCompat.h"
+#include "core/MemoryFieldValues.h"
 
 #include <QByteArray>
 #include <QFile>
@@ -165,6 +166,8 @@ void testFreeDvRoundTrip()
 {
     for (const QString& mode : {QStringLiteral("FDVU"), QStringLiteral("FDVL"),
                                 QStringLiteral("FDV")}) {
+        expect(AetherSDR::MemoryFields::isKnownMode(mode),
+               "FreeDV modes are recognized rather than passed through as unknown CSV modes");
         MemoryCsvRecord record;
         record.memory.name = "FreeDV";
         record.memory.freq = 14.236;

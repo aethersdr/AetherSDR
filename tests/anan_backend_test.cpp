@@ -843,6 +843,14 @@ int main(int argc, char** argv)
         check(AnanSupplyRailTestAccess::samples(backend) == 1, "and full scale is kept");
     }
 
+    // ---- The front-end record: what keeps the setup page listed ----
+    {
+        AnanBackend backend;
+        check(backend.capabilities().adcFrontEnd.has_value(),
+              "ANAN declares adcFrontEnd, which is what keeps the ANAN Front End"
+              " setup page listed while this radio is connected");
+    }
+
     // ---- LinkStats: silence before the first snapshot, never a zeroed one ----
     {
         AnanBackend backend;

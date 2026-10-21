@@ -31,6 +31,7 @@ class RadioConnection : public QObject {
     Q_OBJECT
     friend class TxOperationIntegrationTestAccess;
     friend class RadioConnectionSessionTestAccess;
+    friend class TuneOutputControlTestAccess;
     std::function<void(quint32, const QString&)> m_commandSinkForTest;
 
 public:
@@ -112,6 +113,7 @@ private slots:
     void onHeartbeat();
 
 private:
+    void resetSocket();
     void resetSessionState();
     void processLine(const QString& line);
     void setState(ConnectionState s);

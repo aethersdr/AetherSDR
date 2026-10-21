@@ -1215,6 +1215,13 @@ void MainWindow::wireRadioModel()
     // txSliceChanged edge, so the span control's owner is re-derived (#5750).
     connect(&m_radioModel, &RadioModel::slotOccupancyChanged,
             this, [this](int) { syncPanSpanControlPlacement(); });
+    // ...and CWX/DVK availability follows the TX slice for the same reason. The
+    // licence statuses land before the slice statuses, so the pass they trigger
+    // finds no TX slice yet and disables the indicator. A new slice's
+    // txSliceChanged re-runs it; a reclaimed one carries tx=1 over and emits no
+    // such edge, so this is what re-runs it after a reconnect.
+    connect(&m_radioModel, &RadioModel::slotOccupancyChanged,
+            this, [this](int) { updateKeyerAvailability(); });
     connect(&m_radioModel, &RadioModel::sliceConnectEnumerationStarted,
             this, [this]() {
         m_connectSliceEnumeration.arm(QDateTime::currentMSecsSinceEpoch());

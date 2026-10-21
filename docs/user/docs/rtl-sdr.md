@@ -26,9 +26,11 @@ Building from source: the `ENABLE_RTL` option is on by default and takes effect 
 2. Open **File → Connect to Radio...** → **On This Network**. Supported dongles on USB are listed with the network radios.
 3. Select the dongle and click **Connect Selected Radio**.
 
+The radio tab shows **Connected** with a green status dot once the USB connection is established. Amber indicates discovery; a USB receiver does not need a network heartbeat to show its connected state.
+
 ## Using an RTL-SDR
 
-- **Modes:** AM, SAM, FM, FM-N, WFM, USB, LSB, CW and CW-R.
+- **Modes:** AM, SAM, FM, FM-N, WFM, USB, LSB, CW and CWR.
 - **Tuning range:** 24 kHz to 1.766 GHz. Below 24 MHz the dongle uses direct sampling; HF reception on particular dongles (for example ones with an upconverter or the RTL-SDR Blog V4) has not been qualified.
 - **Sample rates** up to 3.0 MS/s; 2.4 MS/s is the default.
 - **Browsing the capture:** pan around the captured bandwidth and your slice keeps its frequency and settings. A slice that falls outside the usable capture is parked (silent) and resumes when it fits again.
@@ -39,6 +41,34 @@ Building from source: the `ENABLE_RTL` option is on by default and takes effect 
 - **Tools → Radio Health...** shows the dongle's status.
 
 Normal launches admit **one receiver**, even though the capture is wide.
+
+The **RX ANT** controls show the dongle's fixed **RX** input. They do not offer FlexRadio antenna ports. The RX applet and VFO antenna button are dimmed unless a configured virtual receiver is available. **TX ANT** shows **None** and is dimmed because RTL-SDR cannot transmit.
+
+### SSB and CW
+
+Select **USB** or **LSB** for single-sideband reception, or **CW** / **CWR** (reverse CW) for Morse. These modes use independent receive DSP and 48 kHz audio. Filter presets and draggable edges change the actual receive passband. The CW marker remains on the station carrier; **Pitch** changes the audio tone without moving the dial frequency. Pitch is shared by the RTL session's CW receivers.
+
+**AGC** offers Off, Slow, Med and Fast. **AGC-T** sets the local DSP's maximum gain; with AGC Off, **Off Level** controls fixed gain. These are local receiver controls, not a calibrated match for a FlexRadio's AGC-T scale. **NB** operates on receiver IQ; **APF** narrows CW audio around the selected pitch. **RIT** offsets reception while keeping the displayed dial frequency. These settings belong to each slice, except the shared CW pitch, and survive parking and reconnecting.
+
+The speaker icon opens a slice's audio controls; right-click it to toggle mute. A crossed speaker marks muted audio. The RX Controls speaker button also follows the selected slice's mute state.
+
+The [CW decoder](./cw-decoder.md) follows the selected CW or CWR slice. [Copy Assist](./copy-assist.md) follows the selected voice slice's independent audio before speaker volume, mute and client audio effects. A muted slice can still decode; a parked slice cannot. Selecting another slice or parking it discards queued audio from the old source. Copy Assist needs a downloaded speech model.
+
+Each slice remembers its last accepted filter separately for each mode. Switching from USB to FM and back recalls that slice’s USB passband, including after reconnecting. A mode you have not used on that slice starts with its normal default filter. Pending or refused filter changes do not replace the remembered passband.
+
+**NR**, **ANF** and **MN** run independently inside each SSB/CW receiver. NR reduces noise, ANF suppresses sustained tones, and MN places a fixed-width notch within the passband. Their settings use the local WDSP algorithms, so the values are not equivalent to a FlexRadio's settings. [Tracking notch filters](./tnf-tracking-notch-filters.md) stay at an RF frequency as receivers tune past them.
+
+Client **AetherDSP** voice processing applies to the speaker stream; it is not independent per-slice processing and is not included in the native Copy Assist feed.
+
+### AM and synchronous AM
+
+**AM** uses envelope detection. **SAM** follows the station carrier with a phase-locked synchronous detector; it combines both received sidebands. Both modes have independent 48 kHz audio and the same **AGC**, **AGC-T**, **Off Level**, **NB**, **NR**, **ANF** and **RIT** controls described above. **APF** remains a CW control, and squelch remains available only in FM and FM-N.
+
+Filter edges describe RF relative to the displayed carrier. Each edge can be moved independently, from −12,000 to −100 Hz below the carrier and +100 to +12,000 Hz above it. Narrow the interfered side while keeping the other side wide. Switching between AM and SAM preserves these cuts. SAM needs a received carrier within its tracking range (up to ±2 kHz); tune close to the station for acquisition. If the carrier jumps after a dropout and does not recover, retune to restart acquisition. It is not a suppressed-carrier SSB decoder.
+
+**MN** places a 400 Hz notch in both RF sidebands at the selected audio frequency, leaving the carrier intact. Tracking notches keep their absolute RF positions; placing one on the station carrier can prevent SAM acquisition. The receiver removes demodulated carrier/DC from its audio, independently of **Suppress IQ DC**. Copy Assist, TCI and DAX receive the independent audio before speaker mute and volume.
+
+Tuning or using **Move capture away from DC** places the carrier away from the converter's centre where possible. Free panning preserves station frequencies. If you bring an AM/SAM carrier onto the capture centre while **Suppress IQ DC** is enabled, move the capture away or disable that correction: removing the wanted carrier distorts AM and can break SAM tracking.
 
 ### Broadcast FM
 
@@ -58,7 +88,7 @@ Use the [TCI Server](./tci-server.md) on Linux, macOS or Windows. On Linux and m
 
 The process-only evaluation setting admits 2, 4 or 8 receivers on Linux x86-64, Windows x64 and macOS arm64. It requires both `AETHER_AUTOMATION=1` and `AETHER_RTL_EVALUATION_RECEIVERS=2`, `4` or `8` at launch; it is not saved and cannot resize a running session. Use an isolated settings profile for evaluation. It does **not** change the one-receiver production limit or qualify a platform for sustained multi-receiver use.
 
-FM, FM-N and analog WFM can share the capture in this evaluation. Each receiver retains its frequency, filter, squelch and audio controls when parked. Selecting another slice does not retune the capture or change its audio settings. AM, SAM, USB, LSB, CW and CW-R remain singleton configurations, even if another configured receiver is parked. See the [evaluation procedure](https://github.com/aethersdr/AetherSDR/blob/main/docs/rtl-multirx-analog.md) for the validation boundaries.
+AM, SAM, FM, FM-N, analog WFM, USB, LSB, CW and CWR can share the capture in this evaluation. Each receiver retains its frequency, filter, squelch and audio controls when parked. Selecting another slice does not retune the capture or change its audio settings. See the [evaluation procedure](https://github.com/aethersdr/AetherSDR/blob/main/docs/rtl-multirx-analog.md) for the validation boundaries.
 
 ## Reference
 

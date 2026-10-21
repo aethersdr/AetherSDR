@@ -73,6 +73,8 @@ Radio Health is a different thing from the **HLTH** (Antenna Health) applet, whi
 
 **Tools → Network Diagnostics...** shows the health of the link between AetherSDR and the radio. A **Connect by IP** connection also has a **Network Diagnostics** button beside the connect button.
 
+In the status bar, hover anywhere over the **Network:** block, including its heading and quality readout, for live link statistics. Double-click anywhere in that block to open or raise **Network Diagnostics**. You can also Tab to **Network diagnostics** and press Return or Enter, or use your screen reader's Press action.
+
 Pages are grouped in a tree on the left:
 
 <img src="/img/screens/network-diagnostics.png" width="1200" alt="Network Diagnostics window. A sidebar lists Status (Overview, Connection Details), Trends (Latency &amp; Jitter, Stream Rates, Packet Loss, Audio Health) and Support (Application Logs, TCI Clients). The Overview page shows cards for Status Excellent, Latency in ms, Packet Loss 0.00% and Audio Buffer, above charts of Latency and Jitter, Recent Packet Loss, Total Stream Rates and RX Audio Timing over the last minute." />

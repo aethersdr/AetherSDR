@@ -14,7 +14,7 @@ AetherSDR supports class-compliant USB MIDI controllers for hands-on control of 
 ## Setup
 
 1. Plug in your MIDI controller.
-2. Open **Settings → MIDI Mapping...**.
+2. Open **Settings → Controllers → MIDI Mapping...**.
 3. Click **Refresh**, pick your controller from the **Port** list and click **Connect** — the status turns green.
 4. Move a knob or fader — the activity line shows the MIDI message.
 5. Choose a parameter (for example "AF Gain").

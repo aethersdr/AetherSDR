@@ -207,6 +207,28 @@ int main()
               "Empty model string returns Unknown, no extended DSP");
     }
 
+    // Official published FlexLib_API_v4.2.20.41343/FlexLib/ModelInfo.cs,
+    // DaxIqSampleRates (including AU-510M, AU-520M and DEFAULT).
+    for (const char* model : {"FLEX-6300", "FLEX-6400", "FLEX-6400M",
+                              "FLEX-8400", "FLEX-8400M", "AU-510", "AU-510M"}) {
+        check(capabilitiesFor(QString::fromLatin1(model)).daxIqSampleRates()
+                  == QList<int>{24000, 48000, 96000},
+              std::string(model) + ": IQ rates end at 96 kHz");
+    }
+    for (const char* model : {"FLEX-6500", "FLEX-6600", "FLEX-6600M",
+                              "FLEX-6700", "FLEX-6700R", "FLEX-8600", "FLEX-8600M",
+                              "ML-9600", "ML-9600W", "ML-9600X", "MLS-9601",
+                              "CL-9300", "CLS-9301", "AU-520", "AU-520M", "RT-2122"}) {
+        check(capabilitiesFor(QString::fromLatin1(model)).daxIqSampleRates()
+                  == QList<int>{24000, 48000, 96000, 192000},
+              std::string(model) + ": IQ rates include 192 kHz");
+    }
+    check(capabilitiesFor(QStringLiteral("flex-6700/A")).daxIqSampleRates().contains(192000),
+          "IQ table retains existing case-insensitive vendor suffix contract");
+    check(capabilitiesFor(QStringLiteral("FLEX-9999")).daxIqSampleRates().isEmpty()
+              && capabilitiesFor(QString()).daxIqSampleRates().isEmpty(),
+          "Unknown IQ models have no supported rates (FlexLib DEFAULT)");
+
     if (failures == 0) {
         std::cout << "\nAll model-capability tests passed.\n";
         return 0;

@@ -552,6 +552,16 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
                const_cast<float*>(channelI),
                const_cast<float*>(channelQ),
                outputLeft.data(), outputRight.data(), &wdspError);
+    if (m_config.amReceive && wdspError == 0) {
+        // AMD duplicates real audio into I/Q. The positive analytic audio
+        // filter leaves opposite Hilbert terms; their mean restores the real
+        // waveform and level, with equal mono channels for every receiver tap.
+        for (std::size_t sample = 0; sample < outputLeft.size(); ++sample) {
+            const float mono = 0.5f * (outputLeft[sample] + outputRight[sample]);
+            outputLeft[sample] = mono;
+            outputRight[sample] = mono;
+        }
+    }
     if (m_wbfm) {
         if (wdspError == 0) {
             for (std::size_t sample = 0; sample < outputLeft.size(); ++sample) {
@@ -664,9 +674,10 @@ bool WdspChannel::reconfigure(const Config& config, std::string* error) noexcept
 
 bool WdspChannel::setMode(Mode mode) noexcept
 {
-    // An opt-in FM channel changes family through a complete reconfiguration;
-    // otherwise its panel normalization would leak into another demodulator.
-    if ((m_config.fmReceive && mode != Mode::Fm)
+    // An opt-in analog recipe changes family through full reconfiguration;
+    // otherwise its filtering or normalization would leak into another mode.
+    if ((m_config.amReceive && mode != Mode::Am && mode != Mode::Sam)
+        || (m_config.fmReceive && mode != Mode::Fm)
         || (m_config.wbfmReceive && mode != Mode::Wbfm)) { return false; }
     if (!beginControlOperation()) {
         return false;
@@ -691,6 +702,8 @@ bool WdspChannel::setMode(Mode mode) noexcept
 bool WdspChannel::setFilter(double lowHz, double highHz) noexcept
 {
     if (!std::isfinite(lowHz) || !std::isfinite(highHz) || lowHz >= highHz ||
+        (m_config.amReceive && (lowHz > -100 || highHz < 100
+            || lowHz < -12000 || highHz > 12000)) ||
         (m_config.wbfmReceive && (lowHz < -0.45 * m_config.inputSampleRate
             || highHz > 0.45 * m_config.inputSampleRate)) || !beginControlOperation()) {
         return false;
@@ -705,7 +718,8 @@ bool WdspChannel::setFilter(double lowHz, double highHz) noexcept
             // bandpass and leaves the NBP stage — the filter actually in
             // circuit — untouched, so nothing selects a sideband. Both
             // reference clients use the composite call.
-            SetRXABandpassFreqs(m_channelId, lowHz, highHz);
+            SetRXABandpassFreqs(m_channelId, m_config.amReceive ? 50.0 : lowHz,
+                m_config.amReceive ? std::max(-lowHz, highHz) : highHz);
             RXANBPSetFreqs(m_channelId, lowHz, highHz);
         } else {
             SetTXABandpassFreqs(m_channelId, lowHz, highHz);
@@ -1315,6 +1329,14 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
         setError(error, "WDSP filter edges are invalid");
         return false;
     }
+    if (config.amReceive && (config.direction != Direction::Receive
+        || (config.mode != Mode::Am && config.mode != Mode::Sam)
+        || config.fmReceive || config.wbfmReceive
+        || config.filterLowHz > -100 || config.filterHighHz < 100
+        || config.filterLowHz < -12000 || config.filterHighHz > 12000)) {
+        setError(error, "WDSP AM receive recipe requires a carrier-spanning RF passband");
+        return false;
+    }
     if (config.fmReceive && (config.direction != Direction::Receive || config.mode != Mode::Fm
         || !std::isfinite(config.fmDeviationHz) || config.fmDeviationHz <= 0.0
         || config.fmDeviationHz >= config.dspSampleRate / 2.0)) {
@@ -1338,6 +1360,21 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
     }
     if (config.direction == Direction::Transmit && config.mode == Mode::Wbfm) {
         setError(error, "WDSP TX does not define a WBFM mode");
+        return false;
+    }
+    // The TXA modulator settings open() pushes; a receive Config never uses them.
+    if (config.direction == Direction::Transmit &&
+        (!std::isfinite(config.txAmCarrierLevel) || config.txAmCarrierLevel < 0.0 ||
+         config.txAmCarrierLevel > 1.0)) {
+        setError(error, "WDSP TX AM carrier level must be within [0, 1]");
+        return false;
+    }
+    if (config.direction == Direction::Transmit &&
+        (!std::isfinite(config.txFmDeviationHz) ||
+         config.txFmDeviationHz < Config::kMinFmDeviationHz ||
+         config.txFmDeviationHz > Config::kMaxFmDeviationHz)) {
+        setError(error,
+            "WDSP TX FM deviation is outside Config::kMinFmDeviationHz..kMaxFmDeviationHz");
         return false;
     }
     // Receive only: filterTaps reaches WDSP solely through open()'s RXASetNC
@@ -1380,6 +1417,28 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
     if (config.direction == Direction::Receive && !std::isfinite(config.agcFixedGainDb)) {
         setError(error, "WDSP AGC fixed gain must be finite");
         return false;
+    }
+    if (config.analogReceiveDsp) {
+        const auto& receive = *config.analogReceiveDsp;
+        if (receive.trackingNotches.size() > 32
+            || std::ranges::any_of(receive.trackingNotches, [&](const ReceiveNotch& notch) {
+                return !std::isfinite(notch.centerHz) || std::abs(notch.centerHz) > config.dspSampleRate
+                    || !std::isfinite(notch.widthHz) || notch.widthHz < 200 || notch.widthHz > 12000;
+            })) {
+            setError(error, "WDSP tracking notch bank is outside its valid range");
+            return false;
+        }
+        if (config.direction != Direction::Receive
+            || receive.nrLevel < 0 || receive.nrLevel > 100
+            || receive.anfLevel < 0 || receive.anfLevel > 100
+            || !std::isfinite(receive.manualNotchCenterHz)
+            || std::abs(receive.manualNotchCenterHz) >= config.dspSampleRate / 2.0
+            || !std::isfinite(receive.manualNotchWidthHz)
+            || receive.manualNotchWidthHz <= 0
+            || receive.manualNotchWidthHz >= config.dspSampleRate / 2.0) {
+            setError(error, "WDSP analog receive controls are outside their valid range");
+            return false;
+        }
     }
     if (config.rxPanelGain && (config.direction != Direction::Receive
         || !std::isfinite(*config.rxPanelGain) || *config.rxPanelGain < 0.0)) {
@@ -1547,8 +1606,17 @@ bool WdspChannel::open() noexcept
             m_wbfmStereo.store(0, std::memory_order_relaxed);
             m_wbfmReception.reset();
         } else {
-            SetRXABandpassFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);
+            // AMD emits carrier/DC along with modulation. Its post-detector
+            // filter selects positive audio (gain two in RXAbp1Check); the NBP
+            // retains the independent signed RF cuts ahead of the detector.
+            SetRXABandpassFreqs(m_channelId, m_config.amReceive ? 50.0 : m_config.filterLowHz,
+                m_config.amReceive ? std::max(-m_config.filterLowHz, m_config.filterHighHz)
+                                   : m_config.filterHighHz);
             RXANBPSetFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);
+        }
+        if (m_config.amReceive) {
+            SetRXAAMDSBMode(m_channelId, 0);
+            SetRXAAMDFadeLevel(m_channelId, 1);
         }
         applyRxAgc(m_channelId, m_config.agcMode, m_config.maximumAgcGainDb,
                    m_config.agcSlopeDb, m_config.agcFixedGainDb);
@@ -1574,9 +1642,51 @@ bool WdspChannel::open() noexcept
         SetRXASPCWBandwidth(m_channelId, m_config.apfBandwidthHz);
         SetRXASPCWGain(m_channelId, m_config.apfGain);
         SetRXASPCWRun(m_channelId, m_config.apfEnabled ? 1 : 0);
+        if (m_config.analogReceiveDsp) {
+            const auto& receive = *m_config.analogReceiveDsp;
+            // Bounded adaptation strength; the midpoint is RXA.c's default.
+            const auto gain = [](int level) { return 0.00001 * std::pow(100.0, level / 100.0); };
+            SetRXAANRVals(m_channelId, 64, 16, gain(receive.nrLevel), 0.1);
+            SetRXAANFVals(m_channelId, 64, 16, gain(receive.anfLevel), 0.1);
+            SetRXAANRRun(m_channelId, receive.nrEnabled ? 1 : 0);
+            SetRXAANFRun(m_channelId, receive.anfEnabled ? 1 : 0);
+            RXANBPSetTuneFrequency(m_channelId, 0.0);
+            int notchIndex = 0;
+            for (const auto& notch : receive.trackingNotches) {
+                if (RXANBPAddNotch(m_channelId, notchIndex++, notch.centerHz,
+                                  notch.widthHz, notch.active ? 1 : 0) != 0) {
+                    CloseChannel(m_channelId); return false;
+                }
+            }
+            if (receive.manualNotchEnabled) {
+                if (RXANBPAddNotch(m_channelId, notchIndex++, receive.manualNotchCenterHz,
+                                  receive.manualNotchWidthHz, 1) != 0) {
+                    CloseChannel(m_channelId);
+                    return false;
+                }
+            }
+            // A real AM audio tone occupies both RF sidebands. The mirror is
+            // part of the manual control, leaving all tracking slots available.
+            if (m_config.amReceive && receive.manualNotchEnabled
+                && RXANBPAddNotch(m_channelId, notchIndex, -receive.manualNotchCenterHz,
+                                 receive.manualNotchWidthHz, 1) != 0) {
+                CloseChannel(m_channelId);
+                return false;
+            }
+            RXANBPSetNotchesRun(m_channelId,
+                receive.manualNotchEnabled || !receive.trackingNotches.empty() ? 1 : 0);
+        }
     } else {
         SetTXAMode(m_channelId, wdspMode(m_config.mode));
         SetTXABandpassFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);
+        // Pushed in every transmit mode: a later setMode() into AM or FM must
+        // find them set, and SetTXAMode touches neither.
+        SetTXAAMCarrierLevel(m_channelId, m_config.txAmCarrierLevel);
+        SetTXAFMDeviation(m_channelId, m_config.txFmDeviationHz);
+        // CTCSS encode off, unconditionally: create_txa() builds fmmod with
+        // ctcss_run = 1 (100 Hz, level 0.10), and no host-modulated radio here
+        // has a tone-encode control to carry a value in Config.
+        SetTXACTCSSRun(m_channelId, 0);
     }
     // Cache what this open measured, right now, while we still hold the setup
     // lock -- a kill or a crash before exit must not throw the measurement away.

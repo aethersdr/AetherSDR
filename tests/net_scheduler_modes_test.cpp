@@ -80,13 +80,25 @@ private slots:
     {
         QTest::addColumn<QString>("mode");
         QTest::addColumn<int>("source");
+        QTest::addColumn<QString>("expected");
         for (const char* mode : {"FDVU", "FDVL", "FDV", "NT", "CUSTOM-WF", "fdvu"}) {
             // 0: Add's automatic VFO seed; 1: explicit Capture current VFO;
             // 2: reopen a serialized preset without capturing the live VFO.
             for (int source = 0; source < 3; ++source) {
                 const QByteArray name = QByteArray(mode) + '-' + QByteArray::number(source);
-                QTest::newRow(name.constData()) << QString::fromLatin1(mode) << source;
+                QTest::newRow(name.constData()) << QString::fromLatin1(mode) << source
+                                              << (QString(mode) == "fdvu" ? QStringLiteral("FDVU")
+                                                                        : QString::fromLatin1(mode));
             }
+        }
+        for (int source = 0; source < 3; ++source) {
+            const QByteArray suffix = '-' + QByteArray::number(source);
+            QTest::newRow(("padded-fdvl" + suffix).constData())
+                << QStringLiteral(" fdvl ") << source << QStringLiteral("FDVL");
+            QTest::newRow(("control-fdvu" + suffix).constData())
+                << QStringLiteral("F\nD\rV\tU") << source << QStringLiteral("FDVU");
+            QTest::newRow(("custom-lowercase" + suffix).constData())
+                << QStringLiteral("custom-wf") << source << QStringLiteral("CUSTOM-WF");
         }
     }
 
@@ -94,6 +106,7 @@ private slots:
     {
         QFETCH(QString, mode);
         QFETCH(int, source);
+        QFETCH(QString, expected);
 
         MemoryEntry captured;
         captured.freq = 14.236;
@@ -170,10 +183,10 @@ private slots:
         QVERIFY(openedEditor);
         QCOMPARE(capturedByButton, source == 1);
         QCOMPARE(captures, source == 2 ? 0 : 1);
-        QCOMPARE(displayedMode, mode);
+        QCOMPARE(displayedMode, expected);
         QCOMPARE(changes, 1);
         QCOMPARE(saved.size(), 1);
-        QCOMPARE(saved.first().preset.mode, mode);
+        QCOMPARE(saved.first().preset.mode, expected);
         QCOMPARE(saved.first().preset.freq, captured.freq);
         QCOMPARE(saved.first().preset.rxFilterLow, captured.rxFilterLow);
         QCOMPARE(saved.first().preset.rxFilterHigh, captured.rxFilterHigh);
@@ -182,7 +195,7 @@ private slots:
             NetScheduleStore::parse(NetScheduleStore::serialize(saved));
         QVERIFY(reloaded.ok());
         QCOMPARE(reloaded.nets.size(), 1);
-        QCOMPARE(reloaded.nets.first().preset.mode, mode);
+        QCOMPARE(reloaded.nets.first().preset.mode, expected);
 
         NetSchedulerDialog reopened(reloaded.nets, {});
         int tunes = 0;
@@ -200,7 +213,7 @@ private slots:
         QVERIFY(tune->isEnabled());
         tune->click();
         QCOMPARE(tunes, 1);
-        QCOMPARE(tuned.preset.mode, mode);
+        QCOMPARE(tuned.preset.mode, expected);
         QCOMPARE(tuned.preset.freq, captured.freq);
         QCOMPARE(tuned.preset.rxFilterLow, captured.rxFilterLow);
         QCOMPARE(tuned.preset.rxFilterHigh, captured.rxFilterHigh);

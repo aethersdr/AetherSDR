@@ -1,4 +1,5 @@
 #include "WhatsNewDialog.h"
+#include "WhatsNewLinks.h"
 #include "core/UpdateChecker.h"
 #include "core/VersionNumber.h"
 #include "core/AppSettings.h"
@@ -41,13 +42,6 @@ QString normalizedTag(const QString& version)
     if (!tag.startsWith('v', Qt::CaseInsensitive))
         tag.prepend('v');
     return tag;
-}
-
-QUrl githubUrlForMaybeRelativeLink(const QUrl& url)
-{
-    if (!url.isRelative())
-        return url;
-    return QUrl("https://github.com/aethersdr/AetherSDR/").resolved(url);
 }
 
 QString releaseApiUrl(const QString& tagName)
@@ -275,7 +269,9 @@ void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
         "QScrollBar::handle:vertical { background: {{color.background.2}}; border-radius: 5px; }"
         "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
     connect(m_browser, &QTextBrowser::anchorClicked, this, [](const QUrl& url) {
-        QDesktopServices::openUrl(githubUrlForMaybeRelativeLink(url));
+        if (const auto target = whatsNewLinkTarget(url)) {
+            QDesktopServices::openUrl(*target);
+        }
     });
     layout->addWidget(m_browser, 1);
 

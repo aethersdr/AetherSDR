@@ -13,6 +13,7 @@
 #include "core/IambicKeyer.h"
 
 #include <QApplication>
+#include <QHelpEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
 
@@ -39,6 +40,7 @@
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
 #include "models/BandDefs.h"
+#include "models/VoiceKeyerController.h"
 #include "models/SliceModel.h"
 #include "workspace/WorkspaceController.h"
 
@@ -820,24 +822,26 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         setPaTempDisplayUnit(!m_paTempUseFahrenheit);
         return true;
     }
-    if (obj == m_networkLabel && event->type() == QEvent::MouseButtonDblClick) {
-        showNetworkDiagnosticsDialog();
+    const bool isNetworkStatus = obj == m_networkStatusBlock || obj == m_networkLabel;
+    if (isNetworkStatus && event->type() == QEvent::MouseButtonDblClick) {
+        activateStatusIndicator(m_networkStatusBlock);
         return true;
     }
-    if (obj == m_networkLabel && event->type() == QEvent::Enter) {
+    if (isNetworkStatus && event->type() == QEvent::Enter) {
         m_networkTooltipRefreshTimer.start();
     }
-    if (obj == m_networkLabel && event->type() == QEvent::Leave) {
+    if (isNetworkStatus && event->type() == QEvent::Leave) {
         m_networkTooltipRefreshTimer.stop();
         QToolTip::hideText();
     }
-    if (obj == m_networkLabel && event->type() == QEvent::ToolTip) {
+    if (isNetworkStatus && event->type() == QEvent::ToolTip) {
         const QString tooltip = buildNetworkTooltip(m_radioModel,
                                                      m_adaptiveFpsCap,
                                                      m_radioModel.pendingThrottleLift());
         m_networkLabel->setToolTip(tooltip);
+        m_networkStatusBlock->setToolTip(tooltip);
         auto* helpEvent = static_cast<QHelpEvent*>(event);
-        QToolTip::showText(helpEvent->globalPos(), tooltip, m_networkLabel);
+        QToolTip::showText(helpEvent->globalPos(), tooltip, m_networkStatusBlock);
         m_networkTooltipRefreshTimer.start();
         return true;
     }
@@ -852,9 +856,32 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         toggleConnectionDialog();
         return true;
     }
+    // The context-menu key and Shift+F10 open the keyer-source chooser on the
+    // DVK indicator, so the choice is reachable without a mouse there too, not
+    // only from Settings.
+    if (obj == m_dvkIndicator && event->type() == QEvent::KeyPress) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Menu
+            || (key->key() == Qt::Key_F10 && key->modifiers().testFlag(Qt::ShiftModifier))) {
+            showVoiceKeyerSourceMenu(voiceKeyerSourceMenuAnchor());
+            return true;
+        }
+    }
     // Status-bar indicators: a press and the keyboard (StatusIndicator's
     // Return/Enter/Space and the accessible Press action) run one action.
     if (event->type() == QEvent::MouseButtonPress && isStatusIndicator(obj)) {
+        // Right-click on the DVK indicator chooses the keyer (radio DVK or
+        // local recordings). It is handled here, not in
+        // activateStatusIndicator(), because that path is shared with the
+        // keyboard and cannot see which button was pressed; and it runs ahead
+        // of the enabled check because a dimmed indicator on an unlicensed
+        // radio is exactly where an operator needs to reach "Local".
+        if (obj == m_dvkIndicator
+            && static_cast<QMouseEvent*>(event)->button() == Qt::RightButton) {
+            showVoiceKeyerSourceMenu(
+                static_cast<QMouseEvent*>(event)->globalPosition().toPoint());
+            return true;
+        }
         // Left button only for these two: TX must not key from a stray
         // right-click, and the firmware row must not open a browser out from
         // under a context menu.
@@ -886,6 +913,13 @@ bool MainWindow::isStatusIndicator(const QObject* obj) const
 
 void MainWindow::activateStatusIndicator(QObject* obj)
 {
+    // Network uses this keyboard/AT path without joining the single-click indicators.
+    if (obj == m_networkStatusBlock) {
+        m_networkTooltipRefreshTimer.stop();
+        QToolTip::hideText();
+        showNetworkDiagnosticsDialog();
+        return;
+    }
 #ifdef AETHER_ASR_ENABLED
     if (obj == m_asrIndicator) {
         if (!m_asrIndicator->isEnabled()) return;
@@ -909,17 +943,14 @@ void MainWindow::activateStatusIndicator(QObject* obj)
     }
     if (obj == m_fdxIndicator) {
         bool on = !m_radioModel.fullDuplexEnabled();
-        m_radioModel.sendCmdPublic(
-            QString("radio set full_duplex_enabled=%1").arg(on ? 1 : 0),
-            [this, on](int code, const QString& body) {
-                if (code != 0) {
+        m_radioModel.requestFullDuplex(on, this,
+            [this](const RadioControlReply& result) {
+                if (result.kind != RadioControlReply::Kind::Accepted
+                    && result.kind != RadioControlReply::Kind::Cancelled) {
                     showPanadapterInterlockNotification(
-                        QString("FDX not available: %1").arg(body.trimmed()),
+                        QString("FDX not available: %1").arg(result.message.trimmed()),
                         QStringLiteral("fdx-unavailable"));
-                    return;
                 }
-                // Radio accepted; no status echo follows, so apply manually.
-                m_radioModel.setFullDuplex(on);
             });
         return;
     }
@@ -1013,6 +1044,9 @@ void MainWindow::toggleVoiceKeyerPanel()
     const bool show = !m_dvkPanel->isVisible();
     if (show && m_cwxPanel && m_cwxPanel->isVisible()) {
         m_cwxPanel->hide();
+    }
+    if (show && m_voiceKeyer) {
+        m_voiceKeyer->reloadLocalSlots();  // pick up WAVs dropped into the folder
     }
 
     m_dvkPanel->setVisible(show);
@@ -1372,32 +1406,7 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("split_toggle", "Split Toggle", "Slice",
         QKeySequence(), [this]() {
             if (!m_splitActive) {
-                // Same gate, same reasons, as the VfoWidget::splitToggled
-                // lambda in MainWindow_Wiring.cpp — see the comment there for
-                // why this returns ahead of the m_splitActive write rather
-                // than only skipping the send (issue 5277) — and for why it
-                // is deliberately not permissive on disconnect, and which
-                // families the predicate refuses.
-                if (!m_radioModel.hasCommandPlane()) {
-                    qCWarning(lcDevices)
-                        << "split_toggle ignored: this backend takes no Flex"
-                        << "slice-create command";
-                    showUnsupportedControlNotice();
-                    return;
-                }
-                if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) return;
-                auto* s = activeSlice();
-                if (!s) return;
-                QString panId = s->panId();
-                if (panId.isEmpty())
-                    panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
-                bool isCw = isCwMode(s->mode());
-                double txFreq = s->frequency() + (isCw ? 0.001 : 0.005);
-                m_splitActive = true;
-                m_splitRxSliceId = s->sliceId();
-                m_splitRxFrequencyMhz = s->reportedFrequency();
-                m_radioModel.sendCommand(
-                    QString("slice create pan=%1 freq=%2").arg(panId).arg(txFreq, 0, 'f', 6));
+                if (SliceModel* source = activeSlice()) { enterSplit(source->sliceId()); }
             } else {
                 disableSplit();
             }
@@ -1870,11 +1879,8 @@ void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
         return;
     }
     const bool on = segmentZoom ? !pan->segmentZoomOn() : !pan->bandZoomOn();
-    m_radioModel.sendCommand(QString("display pan set %1 %2=%3")
-        .arg(panId,
-             segmentZoom ? QStringLiteral("segment_zoom")
-                         : QStringLiteral("band_zoom"))
-        .arg(on ? 1 : 0));
+    m_radioModel.requestPanControl(pan, {
+        segmentZoom ? PanControlField::SegmentZoom : PanControlField::BandZoom, on});
 }
 
 void MainWindow::zoomActivePanadapter(double factor)
@@ -1956,11 +1962,8 @@ void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)
     }
     const bool current = segmentZoom ? pan->segmentZoomOn() : pan->bandZoomOn();
     if (current != enable) {
-        m_radioModel.sendCommand(QString("display pan set %1 %2=%3")
-            .arg(panId,
-                 segmentZoom ? QStringLiteral("segment_zoom")
-                             : QStringLiteral("band_zoom"))
-            .arg(enable ? 1 : 0));
+        m_radioModel.requestPanControl(pan, {
+            segmentZoom ? PanControlField::SegmentZoom : PanControlField::BandZoom, enable});
     }
 }
 

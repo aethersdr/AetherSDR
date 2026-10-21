@@ -134,8 +134,17 @@ void SpeLcdWidget::paintEvent(QPaintEvent* event)
         QFont f = p.font();
         f.setPointSize(9);
         p.setFont(f);
-        p.drawText(QRect(x, y, w, h), Qt::AlignCenter, tr("waiting for display…"));
+        p.drawText(QRect(x, y, w, h), Qt::AlignCenter | Qt::TextWordWrap,
+                   m_unavailableText.isEmpty() ? tr("waiting for display…")
+                                               : m_unavailableText);
     }
+}
+
+void SpeLcdWidget::setUnavailableText(const QString& text)
+{
+    m_unavailableText = text;
+    setAccessibleDescription(text);
+    update();
 }
 
 }  // namespace AetherSDR

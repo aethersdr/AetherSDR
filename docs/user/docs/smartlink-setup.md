@@ -76,6 +76,10 @@ Forget a pin only when you have deliberately changed a radio's certificate.
 - Your password is not stored. The SmartLink **refresh token** is saved in the operating system's keychain, so AetherSDR signs you in automatically on the next launch. Builds without keychain support keep it for the current session only. See [Settings and Backups](./settings-and-backups.md).
 - Logs redact email addresses, tokens, IP addresses and serial numbers — see [Support and Logging](./support-and-logging.md).
 
+### UDP session maintenance
+
+AetherSDR registers the SmartLink UDP endpoint every 50 ms until it receives a packet with a complete Flex VITA-49 preamble, including compressed audio. It then sends a registration keepalive every five seconds for the rest of the connection to maintain the NAT mapping. Disconnecting stops these keepalives; reconnecting registers the new session. This happens automatically and needs no client-side setting.
+
 ### Limitations
 
 - Port forwarding (or working UPnP) is required at the radio's location.

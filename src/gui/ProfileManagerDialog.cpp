@@ -19,6 +19,14 @@
 
 namespace AetherSDR {
 
+namespace {
+ProfileRequest::Kind profileKind(const QString& type)
+{
+    return type == QLatin1String("global") ? ProfileRequest::Kind::Global
+        : type == QLatin1String("transmit") ? ProfileRequest::Kind::Transmit : ProfileRequest::Kind::Mic;
+}
+}
+
 static const QString kDialogStyle =
     "QDialog { background: #0f0f1a; color: #c8d8e8; }"
     "QTabWidget::pane { border: 1px solid #203040; background: #0f0f1a; }"
@@ -213,12 +221,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
         if (!item) return;
         const QString name = item->text();
         setTabStatus(type, QString(), false);   // same staleness as Load (#4362)
-        if (type == "global")
-            m_model->loadGlobalProfile(name);
-        else if (type == "transmit")
-            m_model->sendCommand(QString("profile tx load \"%1\"").arg(name));
-        else if (type == "mic")
-            m_model->sendCommand(QString("profile mic load \"%1\"").arg(name));
+        m_model->requestProfile({profileKind(type), ProfileRequest::Action::Load, name}, this);
     });
 
     // Load button
@@ -230,12 +233,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
         // stale (and after a Delete it would name a profile that no longer
         // exists). Only a human keystroke clears it otherwise (#4362).
         setTabStatus(type, QString(), false);
-        if (type == "global")
-            m_model->loadGlobalProfile(name);
-        else if (type == "transmit")
-            m_model->sendCommand(QString("profile tx load \"%1\"").arg(name));
-        else if (type == "mic")
-            m_model->sendCommand(QString("profile mic load \"%1\"").arg(name));
+        m_model->requestProfile({profileKind(type), ProfileRequest::Action::Load, name}, this);
     });
 
     // Save/Create button — Global truly saves (creates or overwrites); TX/Mic
@@ -280,9 +278,11 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
             const quint64 token = ++m_saveSeq;
             m_pendingSaveToken[type] = token;
             setTabStatus(type, QString("Saving \"%1\"...").arg(name), false);
-            m_model->sendCmdPublic(
-                QString("profile global save \"%1\"").arg(name),
-                [self, type, name, token](int code, const QString& body) {
+            m_model->requestProfile(
+                {ProfileRequest::Kind::Global, ProfileRequest::Action::Save, name}, this,
+                [self, type, name, token](const RadioControlReply& result) {
+                    const int code = result.kind == RadioControlReply::Kind::Accepted ? 0 : (result.code == 0 ? -1 : result.code);
+                    const QString body = result.message;
                     if (!self) {
                         return;
                     }
@@ -303,6 +303,10 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
                         }
                         self->setTabStatus(
                             type, QString("Saved profile \"%1\".").arg(name), false);
+                    } else if (result.kind == RadioControlReply::Kind::Cancelled
+                               || result.kind == RadioControlReply::Kind::Refused) {
+                        self->setTabStatus(type, QString("Save of \"%1\" was not completed: %2")
+                            .arg(name, body), true);
                     } else {
                         // Keep the name field: the user's target survives for a
                         // retry instead of being cleared as if it had worked.
@@ -322,6 +326,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
             // answered — the radio drops, or a SmartLink session ends, between
             // the send and the R-line. Without this the dialog keeps claiming
             // the save is in flight for the life of the window.
+            if (!self) { return; }
             QTimer::singleShot(kSaveResponseTimeoutMs, this,
                                [self, type, name, token] {
                 if (!self) {
@@ -348,6 +353,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
                     // remedy without hunting for the Auto-Save tab.
                     const QPointer<ProfileManagerDialog> self(this);
                     const QPointer<RadioModel> modelGuard(m_model);
+                    const RadioControlSession session = m_model->controlSession();
                     ScopedChildWidget<QMessageBox> boxOwner(this);
                     QMessageBox& box = *boxOwner.get();
                     box.setWindowTitle("Profile already exists");
@@ -364,14 +370,16 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
                     box.addButton("Close", QMessageBox::RejectRole);
                     box.setDefaultButton(enableBtn);
                     box.exec();
-                    if (!self || !modelGuard || self->m_model != modelGuard.data() || !boxOwner) {
+                    if (!self || !modelGuard || self->m_model != modelGuard.data() || !boxOwner
+                        || modelGuard->controlSession() != session) {
                         return;
                     }
                     if (box.clickedButton() == enableBtn) {
                         // The sibling Auto-Save tab checkbox is wired to
                         // RadioModel::autoSaveChanged below, so the radio's
                         // confirmation of auto_save=1 will sync it.
-                        modelGuard->sendCommand("profile autosave on");
+                        modelGuard->requestProfile({ProfileRequest::Kind::Global,
+                            ProfileRequest::Action::AutoSave, {}, true}, self, {}, session);
                     }
                     return;
                 }
@@ -390,10 +398,10 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
                 info.exec();
                 return;
             }
-            if (type == "transmit")
-                m_model->sendCommand(QString("profile transmit create \"%1\"").arg(name));
-            else
-                m_model->sendCommand(QString("profile mic create \"%1\"").arg(name));
+            const QPointer<ProfileManagerDialog> self(this);
+            if (m_model->requestProfile({profileKind(type), ProfileRequest::Action::Create, name}, this)
+                == ReceiveDispatch::Unsupported) { return; }
+            if (!self) { return; }
         }
 
         // TX/Mic only — the Global path clears inside its success callback, so
@@ -410,6 +418,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
 
         const QPointer<ProfileManagerDialog> self(this);
         const QPointer<RadioModel> modelGuard(m_model);
+        const RadioControlSession session = m_model->controlSession();
         ScopedChildWidget<QMessageBox> boxOwner(this);
         QMessageBox& box = *boxOwner.get();
         box.setIcon(QMessageBox::Question);
@@ -417,7 +426,8 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
         box.setText(QString("Delete profile \"%1\"?").arg(name));
         box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
         const int reply = box.exec();
-        if (!self || !modelGuard || self->m_model != modelGuard.data() || !boxOwner) {
+        if (!self || !modelGuard || self->m_model != modelGuard.data() || !boxOwner
+            || modelGuard->controlSession() != session) {
             return;
         }
         if (reply != QMessageBox::Yes) return;
@@ -426,12 +436,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
         // 'Saved profile "X".' for the profile just deleted (#4362).
         setTabStatus(type, QString(), false);
 
-        if (type == "global")
-            modelGuard->sendCommand(QString("profile global delete \"%1\"").arg(name));
-        else if (type == "transmit")
-            modelGuard->sendCommand(QString("profile transmit delete \"%1\"").arg(name));
-        else if (type == "mic")
-            modelGuard->sendCommand(QString("profile mic delete \"%1\"").arg(name));
+        modelGuard->requestProfile({profileKind(type), ProfileRequest::Action::Remove, name}, self, {}, session);
     });
 
     return page;
@@ -456,7 +461,13 @@ QWidget* ProfileManagerDialog::buildAutoSaveTab()
     m_autoSaveTx->setChecked(m_model->autoSave());
 
     connect(m_autoSaveTx, &QCheckBox::toggled, this, [this](bool on) {
-        m_model->sendCommand(QString("profile autosave %1").arg(on ? "on" : "off"));
+        const QPointer<ProfileManagerDialog> self(this);
+        if (m_model->requestProfile({ProfileRequest::Kind::Global,
+                ProfileRequest::Action::AutoSave, {}, on}, this) == ReceiveDispatch::Unsupported) {
+            if (!self) { return; }
+            const QSignalBlocker blocker(m_autoSaveTx);
+            m_autoSaveTx->setChecked(m_model->autoSave());
+        }
     });
 
     // React to Auto-Save flips that originate outside this checkbox —

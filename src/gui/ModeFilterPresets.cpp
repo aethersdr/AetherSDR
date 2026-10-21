@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <limits>
 
 namespace AetherSDR::ModeFilters {
 
@@ -21,6 +20,15 @@ QString canonicalFmMode(const QString& mode)
     if (mode == "NFM") { return QStringLiteral("FMN"); }
     if (mode == "WBFM") { return QStringLiteral("WFM"); }
     return mode;
+}
+
+bool withinRange(const ReceiveFilterMode& range, Edges edges)
+{
+    const qint64 width = qint64(edges.hi) - edges.lo;
+    return edges.lo < edges.hi
+        && edges.lo >= range.minimumLowHz && edges.lo <= range.maximumLowHz
+        && edges.hi >= range.minimumHighHz && edges.hi <= range.maximumHighHz
+        && width >= range.minimumWidthHz && width <= range.maximumWidthHz;
 }
 
 const ReceiveFilterMode* fmControlFor(const QString& mode, const ReceiveFilterControl* control)
@@ -45,11 +53,7 @@ bool acceptsFmEdges(const QString& mode, const ReceiveFilterControl* control, Ed
     if (!range) {
         return false;
     }
-    const qint64 width = qint64(edges.hi) - edges.lo;
-    return edges.lo < edges.hi
-        && edges.lo >= range->minimumLowHz && edges.lo <= range->maximumLowHz
-        && edges.hi >= range->minimumHighHz && edges.hi <= range->maximumHighHz
-        && width >= range->minimumWidthHz && width <= range->maximumWidthHz;
+    return withinRange(*range, edges);
 }
 
 bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control,
@@ -72,21 +76,29 @@ bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control
 bool acceptsFilterEdges(const QString& mode, const ReceiveFilterControl* control,
                         bool radioPublishesWidths, Edges edges)
 {
-    if (edges.lo >= edges.hi) {
-        return false;
-    }
-    if (!isFmMode(mode) || radioPublishesWidths) {
+    if (!isFmMode(mode)) {
+        if (control) {
+            for (const ReceiveFilterMode& range : control->modes) {
+                if (range.mode == mode) { return withinRange(range, edges); }
+            }
+        }
         return true;
     }
+    if (radioPublishesWidths) { return true; }
     return fmControlFor(mode, control) ? acceptsFmEdges(mode, control, edges)
                                        : fmFilterAdjustable(mode, control, false);
 }
 
-bool squelchAvailableInMode(const QString& mode, const SquelchLevelScale* exclusive,
+bool squelchAvailableInMode(const QString& mode, const SquelchLevelScale* scale,
                             bool modeIndependentSquelch, bool externalReplacement)
 {
-    if (exclusive && !externalReplacement) {
-        return exclusive->appliesTo(mode);
+    if (scale && !externalReplacement) {
+        if (scale->controlUnavailableModes.contains(mode, Qt::CaseInsensitive)) {
+            return false;
+        }
+        if (scale->modesExclusive) {
+            return scale->appliesTo(mode);
+        }
     }
     // Digital/RTTY feed decoders and SQL gates weak FSK (#2504); a radio holds
     // CW squelch itself. Only an all-mode radio squelch lifts that rule.
@@ -127,10 +139,7 @@ const QVector<int>& widthsForMode(const QString& mode)
     if (mode == "USB" || mode == "LSB") return usb;
     if (mode == "AM" || mode == "SAM") return am;
     if (isCwMode(mode)) return cw;
-    if (mode == "DIGU" || mode == "DIGL" || mode == "NT"
-        || mode == "FDVU" || mode == "FDVL") {
-        return dig;
-    }
+    if (mode == "DIGU" || mode == "DIGL" || mode == "NT") return dig;
     if (mode == "RTTY") return rtty;
     if (mode == "DFM") return dfm;
     if (isFmMode(mode)) {
@@ -141,10 +150,6 @@ const QVector<int>& widthsForMode(const QString& mode)
 
 Edges edgesForWidth(const QString& mode, int widthHz, const SliceContext& ctx)
 {
-    if ((mode == "FDVU" || mode == "FDVL")
-        && (widthHz <= 0 || widthHz > std::numeric_limits<int>::max() - 95)) {
-        return {};
-    }
     int lo = 0, hi = 0;
 
     if (mode == "DIGU") {
@@ -196,24 +201,15 @@ Edges edgesForWidth(const QString& mode, int widthHz, const SliceContext& ctx)
         int mid = -shift / 2;
         lo = mid - widthHz / 2;
         hi = mid + widthHz / 2;
-    } else if (mode == "CW" || mode == "CWL" || mode == "CWU") {
-        // Centered on carrier — radio's BFO handles pitch offset.
-        // CWU belongs with the other two spellings: it was falling through to
-        // the final else and getting a USB-shaped {95, width} with no carrier
-        // in it. It is reachable — NetSchedulerDialog lists it as a schedulable
-        // mode and RadioSetupDialog has it as the CWU/CWL sideband toggle — and
-        // it was wrong under the old passband convention too, just less visibly.
+    } else if (isCwMode(mode)) {
+        // Carrier-relative on both sidebands; the receiver's BFO owns pitch.
         lo = -widthHz / 2;
         hi =  widthHz / 2;
     } else if (mode == "AM" || mode == "SAM" || mode == "DSB"
                || isFmMode(mode) || mode == "DFM") {
         lo = -(widthHz / 2); hi = (widthHz / 2);
     } else if (mode == "FDVL") {
-        lo = -95 - widthHz; hi = -95;
-    } else if (mode == "FDVU") {
-        // Preset labels are passband spans; keep the carrier rejection edge
-        // fixed so even the 100 Hz digital preset delivers its labeled width.
-        lo = 95; hi = 95 + widthHz;
+        lo = -widthHz; hi = -95;
     } else if (mode == "USB") {
         // SSB low cut is a fixed 100 Hz (matches SmartSDR for every SSB
         // filter); the high cut is derived as lo + width so the effective
@@ -223,7 +219,7 @@ Edges edgesForWidth(const QString& mode, int widthHz, const SliceContext& ctx)
         // matcher comparing against off-by-95 widths. (#3292)
         lo = 100; hi = 100 + widthHz;
     } else {
-        // Legacy FDV and unknown modes retain their high-cut convention.
+        // FDVU/FDV/etc: low cut at 95 Hz to reject carrier/hum
         lo = 95; hi = widthHz;
     }
     return {lo, hi};

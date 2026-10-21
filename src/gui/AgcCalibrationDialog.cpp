@@ -354,6 +354,10 @@ void AgcCalibrationDialog::done(int result)
 void AgcCalibrationDialog::setSlice(SliceModel* slice)
 {
     if (m_slice == slice) {
+        // Reconnect can reclaim the same object with a new session generation.
+        m_engine.setSlice(slice);
+        updateModeUi();
+        refreshFromSlice();
         return;
     }
     if (m_slice) {
@@ -372,6 +376,10 @@ void AgcCalibrationDialog::setSlice(SliceModel* slice)
 
 void AgcCalibrationDialog::connectSlice(SliceModel* slice)
 {
+    connect(slice, &SliceModel::agcThresholdModeChanged,
+            this, &AgcCalibrationDialog::updateModeUi);
+    connect(slice, &SliceModel::externalReceiveReplacementChanged,
+            this, &AgcCalibrationDialog::updateModeUi);
     connect(slice, &SliceModel::agcModeChanged, this, &AgcCalibrationDialog::updateModeUi);
     connect(slice, &SliceModel::externalReceiveAgcModeChanged,
             this, &AgcCalibrationDialog::updateModeUi);
@@ -454,7 +462,23 @@ void AgcCalibrationDialog::updateModeUi()
         m_startStopBtn->setEnabled(false);
         return;
     }
+    if (!m_slice->agcCalibrationAllowed()) {
+        const QString reason = tr("Select manual AGC-T on a current connected slice before calibrating.");
+        m_modeLabel->setText(reason);
+        m_startStopBtn->setEnabled(false);
+        m_startStopBtn->setToolTip(reason);
+        m_startStopBtn->setAccessibleDescription(reason);
+        m_applyBtn->setEnabled(false);
+        m_applyBtn->setToolTip(reason);
+        m_applyBtn->setAccessibleDescription(reason);
+        return;
+    }
     m_startStopBtn->setEnabled(true);
+    m_startStopBtn->setToolTip(QString());
+    m_startStopBtn->setAccessibleDescription(QString());
+    m_applyBtn->setToolTip(QString());
+    m_applyBtn->setAccessibleDescription(QString());
+    m_applyBtn->setEnabled(!m_engine.isRunning() && m_engine.hasRecommendation());
     if (off) {
         m_modeLabel->setText(QStringLiteral(
             "AGC: OFF — calibrating fixed gain (agc_off_level) to a comfortable "
@@ -488,7 +512,7 @@ void AgcCalibrationDialog::onStartStop()
         m_engine.stop(); // restores original value
         return;
     }
-    if (m_slice && m_slice->externalReceiveReplacementActive()) {
+    if (!m_slice || !m_slice->agcCalibrationAllowed()) {
         updateModeUi();
         return;
     }
@@ -572,7 +596,12 @@ void AgcCalibrationDialog::onFinished(bool applied)
     } else if (m_engine.hasRecommendation()) {
         // Sweep done; recommendation applied to the radio but not yet confirmed.
         m_applyBtn->setEnabled(true);
+    } else {
+        m_applyBtn->setEnabled(false);
+        m_curve->clear();
+        m_recLabel->setText(tr("Calibration stopped."));
     }
+    updateModeUi();
     refreshFromSlice();
 }
 

@@ -95,7 +95,7 @@ WSJT-X takes CAT, PTT **and audio** over TCI, so there are no sound-card devices
 
 ### CW Skimmer and SDC
 
-Point SDC or CW Skimmer at AetherSDR's TCI port. IQ flows as DAX IQ at 24, 48, 96 or 192 kHz (SDC negotiates 96 kHz), and `dds:` follows the panadapter center. Up to **four** IQ subscriptions can run at once, so several skimmers can share one server. Receivers on the same panadapter share its IQ stream, so four independent bands need four panadapters. IQ is not offered as int16 or over `wss`.
+Point SDC or CW Skimmer at AetherSDR's TCI port. IQ flows as DAX IQ at 24, 48, 96 or 192 kHz within the connected model’s [DAX IQ limits](./dax-iq-streaming.md#limits) (SDC negotiates 96 kHz), and `dds:` follows the panadapter center. Up to **four** IQ subscriptions can run at once, so several skimmers can share one server. Receivers on the same panadapter share its IQ stream, so four independent bands need four panadapters. IQ is not offered as int16 or over `wss`. Requests outside an identified model’s supported `iq_samplerate` rates leave the rate unchanged and return the current rate. A valid rate negotiated before model identification is remembered without starting IQ streams; it is applied within the model’s limits once the model is known. A retained 192 kHz subscription uses 96 kHz on a model limited to 96 kHz, then returns to 192 kHz when a capable model is connected.
 
 ### JTDX
 
@@ -189,9 +189,15 @@ Notes:
 
 - `volume` is in dB, as the spec defines it; the older percent form is still accepted. It is the same master level as the title-bar slider: the computer's level with PC Audio on, the radio's Line Out level with it off. `mic_level` is a global 0–100 %.
 - The server also broadcasts which slice has focus in the GUI, plus DSP, squelch, RIT/XIT and TX power when they change.
-- Opening a slice announces its receiver with `rx_enable:<trx>,true;`. Closing a slice announces `rx_enable:<trx>,false;` after approximately 500 ms. A band-change recreation that returns the same slice within that window keeps its receiver and sends neither notification; surviving receivers keep their numbers. `trx_count` is not re-sent.
+- Opening a slice announces `rx_enable:<trx>,true;` and its `tx_enable` permission. Closing a slice sends `tx_enable:<trx>,false;` and `rx_enable:<trx>,false;` after approximately 500 ms. A band-change recreation within that window keeps its receiver number and sends no close notifications; surviving receivers keep their numbers. TX permission still follows ownership, mode, and panadapter inhibits. `trx_count` is not re-sent.
 - Malformed arguments (for example to `volume:` or `modulation:`) are rejected, never applied to slice 0.
 - A `vfo:` confirmation reports the frequency the radio actually reached.
+- `tx_enable:<trx>,true;` means that receiver may request PTT. It is not the
+  current TX-slice assignment: AetherSDR routes a PTT request when it arrives,
+  and the radio still enforces its own frequency and safety interlocks.
+  Permission is withheld while disconnected, on receive-only backends or modes,
+  and for transmit-inhibited panadapters. On multi-client radios, the receiver's
+  ownership must be confirmed as belonging to this AetherSDR session first.
 - **Panadapter spectrum forwarding:** subscribed clients receive the panadapter's FFT rows.
 
 ### Tune notifications

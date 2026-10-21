@@ -4581,7 +4581,8 @@ void SpectrumWidget::setSquelchLine(bool visible, int level)
     // Manual SQL: 3 s auto-hide; each slider adjustment restarts the timer.
     // Auto SQL: line stays pinned to the tracked floor level — no timer.
     if (m_squelchLineHideTimer) {
-        if (visible && !m_autoSquelchEnabled && !m_kiwiSdrWaterfallActive) {
+        if (visible && !(m_autoSquelchEnabled && m_autoSquelchFloorVisible)
+            && !m_kiwiSdrWaterfallActive) {
             m_squelchLineHideTimer->start();
         } else if (!m_kiwiSdrWaterfallActive) {
             m_squelchLineHideTimer->stop();
@@ -4712,7 +4713,7 @@ void SpectrumWidget::drawAutoSqlFloor(QPainter& p, const QRect& specRect)
     const float floorDbm = useKiwiFloor
         ? m_kiwiSdrSquelchLiveFloorDbm
         : m_sqlNoiseFloorDbm;
-    if (!m_autoSquelchEnabled || floorDbm <= -500.0f) { return; }
+    if (!m_autoSquelchEnabled || !m_autoSquelchFloorVisible || floorDbm <= -500.0f) { return; }
     const float norm = (m_refLevel - floorDbm) / m_dynamicRange;
     const int y = specRect.top()
         + static_cast<int>(std::clamp(norm, 0.0f, 1.0f) * specRect.height());
@@ -4733,6 +4734,10 @@ void SpectrumWidget::setSquelchScale(std::optional<SquelchLevelScale> scale)
         return;
     }
     m_squelchScale = std::move(scale);
+    if (!m_squelchScale) {
+        setAutoSquelchEnable(false);
+        setSquelchLine(false, 0);
+    }
     // A new scale can mean new bin units (dBm vs RTL's dBFS/bin): restart the
     // Auto floor rather than blend one unit into the other.
     m_sqlNoiseFloorDbm = -999.0f;
@@ -4796,8 +4801,12 @@ void SpectrumWidget::drawSquelchLine(QPainter& p, const QRect& specRect)
     p.drawText(4, y - 2, label);
 }
 
-void SpectrumWidget::setAutoSquelchEnable(bool on)
+void SpectrumWidget::setAutoSquelchEnable(bool on, bool showFloor)
 {
+    if (m_autoSquelchFloorVisible != showFloor) {
+        m_autoSquelchFloorVisible = showFloor;
+        markOverlayDirty();
+    }
     if (m_autoSquelchEnabled == on) {
         return;
     }
@@ -4807,8 +4816,12 @@ void SpectrumWidget::setAutoSquelchEnable(bool on)
         m_sqlNoiseFloorDbm = -999.0f;  // cold-start the floor EWMA on enable
         m_lastAutoSquelchLevel = -1;
     }
-    if (on && m_squelchLineHideTimer) {
-        // Auto pins the line — cancel any pending manual auto-hide.
+    if (!on) {
+        m_sqlNoiseFloorDbm = -999.0f;
+        setSquelchLine(false, 0);
+        markOverlayDirty();
+    }
+    if (on && showFloor && m_squelchLineHideTimer) {
         m_squelchLineHideTimer->stop();
     }
 }
@@ -4844,6 +4857,7 @@ void SpectrumWidget::updateAutoSquelchFromBins(const QVector<float>& binsDbm)
         std::span(binsDbm.constData(), binsDbm.size()), m_sqlNoiseFloorDbm,
         m_squelchScale->offsetDb, m_squelchScale->dbPerStep, m_autoSqlMarginDb);
     if (!suggestion) { return; }
+    emit autoSquelchNoiseFloorChanged(m_sqlNoiseFloorDbm);
     const int level = *suggestion;
     if (level != m_lastAutoSquelchLevel) {
         m_lastAutoSquelchLevel = level;
@@ -5064,6 +5078,7 @@ void SpectrumWidget::resetWfTimeScale() {
     m_wfPrevTimecodeMs = 0;
     m_wfCalibrationCount = 0;
     m_wfTimeScaleLocked = false;
+    m_wfTimeScaleDriftSamples = 0;
     m_wfRowsSinceRateChange = 0;
     m_wfCalibrationResumeMs = nowMs + 500;
     m_nextFallbackWaterfallRowMs = 0;
@@ -5137,13 +5152,9 @@ void SpectrumWidget::updateWaterfallMsPerRowFromHistory()
         return;
     }
 
-    constexpr int kSampleRows = 24;
-    constexpr int kMinSampleRows = 8;
-    constexpr int kSamplesBeforeVisibleUpdate = 3;
-    const int maxAgeRows = std::min({kSampleRows,
-                                     m_wfHistoryRowCount - 1,
-                                     m_wfRowsSinceRateChange - 1});
-    if (maxAgeRows < kMinSampleRows) {
+    const int maxAgeRows = waterfallTimeScaleSampleSpanRows(
+        m_wfHistoryRowCount, m_wfRowsSinceRateChange);
+    if (maxAgeRows <= 0) {
         return;
     }
 
@@ -5173,23 +5184,30 @@ void SpectrumWidget::updateWaterfallMsPerRowFromHistory()
         const int lineDuration = std::clamp(m_wfLineDuration,
                                             kWaterfallRateMin,
                                             kWaterfallRateMax);
-        const int previousSamples =
-            m_wfMeasuredSampleCountByLineDuration.value(lineDuration, 0);
-        const float previousMeasured =
-            m_wfMeasuredMsPerRowByLineDuration.value(lineDuration, measured);
-        const float updatedMeasured = previousSamples > 0
-            ? (0.85f * previousMeasured + 0.15f * measured)
-            : measured;
-        const int updatedSamples = std::min(previousSamples + 1, 1000);
+        const WaterfallTimeScaleEstimate estimate = foldWaterfallTimeScaleSample(
+            {m_wfMeasuredMsPerRowByLineDuration.value(lineDuration, measured),
+             m_wfMeasuredSampleCountByLineDuration.value(lineDuration, 0)},
+            measured);
 
-        m_wfMeasuredMsPerRowByLineDuration.insert(lineDuration, updatedMeasured);
-        m_wfMeasuredSampleCountByLineDuration.insert(lineDuration, updatedSamples);
+        m_wfMeasuredMsPerRowByLineDuration.insert(lineDuration, estimate.msPerRow);
+        m_wfMeasuredSampleCountByLineDuration.insert(lineDuration, estimate.samples);
         m_wfHasMeasuredMsPerRow = true;
         m_wfLastMeasuredLineDurationMs = lineDuration;
-        m_wfLastMeasuredMsPerRow = updatedMeasured;
-        if (!m_wfTimeScaleLocked && updatedSamples >= kSamplesBeforeVisibleUpdate) {
-            m_wfMsPerRow = updatedMeasured;
-            m_wfTimeScaleLocked = true;
+        m_wfLastMeasuredMsPerRow = estimate.msPerRow;
+        // The lock keeps per-row jitter off the scale (#106). It is not final:
+        // an estimate that has settled away from the visible value replaces it
+        // (WaterfallTimeScaleLock.h). Fallback and TX rows are paced from
+        // m_wfMsPerRow itself, so re-locking waits while fallback or TX pacing
+        // is active. Backend-derived rows delivered by updateWaterfallRow()
+        // use the independent row cadence, just like Flex tiles.
+        const bool rowsPacedByScale = m_transmitting || m_waterfallFallbackActive;
+        WaterfallTimeScaleLock lock{m_wfTimeScaleLocked, m_wfTimeScaleDriftSamples};
+        const bool adopt = waterfallTimeScaleShouldAdopt(
+            lock, m_wfMsPerRow, measured, estimate, rowsPacedByScale);
+        m_wfTimeScaleLocked = lock.locked;
+        m_wfTimeScaleDriftSamples = lock.driftSamples;
+        if (adopt) {
+            m_wfMsPerRow = estimate.msPerRow;
             markOverlayDirty();
         }
         return;
@@ -6745,6 +6763,7 @@ void SpectrumWidget::clearCurrentWaterfallRows()
     m_wfVisiblePaletteToken = waterfallPaletteToken();
     m_wfLive = true;
     m_wfRowsSinceRateChange = 0;
+    m_wfTimeScaleDriftSamples = 0;
     m_prevTileLevels.clear();
     resetWfBlankerState();
     m_kiwiSdrFftTrace.clear();
@@ -11079,18 +11098,24 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const int newWidthHz = std::clamp(
             static_cast<int>(std::lround(static_cast<double>(m_dragTnfOrigWidthHz) * widthScale)),
             m_notchMinWidthHz, m_notchMaxWidthHz);
-        for (auto& t : m_tnfMarkers) {
-            if (t.id == m_draggingTnfId) {
-                t.freqMhz = newFreq;
-                t.widthHz = newWidthHz;
-                break;
+        const bool frequencyChanged = !qFuzzyCompare(newFreq + 1.0, m_dragTnfLastFreq + 1.0);
+        const bool widthChanged = newWidthHz != m_dragTnfLastWidthHz;
+        // Every preview mutation must dispatch an intent so a confirmed-state
+        // binding can restore the accepted marker, including repeated motion.
+        if (frequencyChanged || widthChanged) {
+            for (auto& t : m_tnfMarkers) {
+                if (t.id == m_draggingTnfId) {
+                    t.freqMhz = newFreq;
+                    t.widthHz = newWidthHz;
+                    break;
+                }
             }
         }
-        if (!qFuzzyCompare(newFreq + 1.0, m_dragTnfLastFreq + 1.0)) {
+        if (frequencyChanged) {
             m_dragTnfLastFreq = newFreq;
             emit tnfMoveRequested(m_draggingTnfId, newFreq);
         }
-        if (newWidthHz != m_dragTnfLastWidthHz) {
+        if (widthChanged) {
             m_dragTnfLastWidthHz = newWidthHz;
             emit tnfWidthRequested(m_draggingTnfId, newWidthHz);
         }

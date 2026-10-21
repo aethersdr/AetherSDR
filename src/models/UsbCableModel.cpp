@@ -1,5 +1,8 @@
 #include "UsbCableModel.h"
 #include <QDebug>
+#include <QStringList>
+#include <QPointer>
+#include <QThread>
 
 namespace AetherSDR {
 
@@ -129,6 +132,17 @@ void UsbCableModel::handleRemoved(const QString& serialNumber)
     }
 }
 
+void UsbCableModel::clear()
+{
+    const QStringList serials = m_cables.keys();
+    m_cables.clear();
+    const QPointer<UsbCableModel> alive(this);
+    for (const QString& serial : serials) {
+        emit cableRemoved(serial);
+        if (!alive) { return; }
+    }
+}
+
 void UsbCableModel::parseBaseStatus(UsbCable& cable, const QMap<QString, QString>& kvs)
 {
     for (auto it = kvs.begin(); it != kvs.end(); ++it) {
@@ -226,21 +240,34 @@ void UsbCableModel::parseLdpaStatus(UsbCable& cable, const QMap<QString, QString
     }
 }
 
-// ── Command builders ────────────────────────────────────────────────────────
-
-void UsbCableModel::sendSet(const QString& sn, const QString& key, const QString& value)
+void UsbCableModel::requestSetting(const QString& sn, UsbCableRequest::Field field,
+                                  const QString& text, int bit)
 {
-    emit commandReady(QString("usb_cable set %1 %2=%3").arg(sn, key, value));
+    if (QThread::currentThread() != thread()) { return; }
+    using Field = UsbCableRequest::Field;
+    UsbCableRequest request{sn, bit, field, text};
+    bool valid = true;
+    switch (field) {
+    case Field::Enabled: case Field::AutoReport: case Field::Preamp: case Field::PttDependent:
+        valid = text == QLatin1String("0") || text == QLatin1String("1");
+        request.value = text == QLatin1String("1"); break;
+    case Field::ActiveHigh:
+        valid = text == QLatin1String("active_high") || text == QLatin1String("active_low");
+        request.value = text == QLatin1String("active_high"); break;
+    case Field::SerialSpeed: case Field::DataBits: case Field::StopBits:
+    case Field::PttDelayMs: case Field::TxDelayMs:
+        request.value = text.toInt(&valid); break;
+    case Field::LowFrequencyMhz: case Field::HighFrequencyMhz:
+        request.value = text.toDouble(&valid); break;
+    default: break;
+    }
+    if (valid && request.valid()) { emit controlRequested(request); }
 }
 
-void UsbCableModel::sendSetBit(const QString& sn, int bit, const QString& key, const QString& value)
+void UsbCableModel::requestRemoval(const QString& sn)
 {
-    emit commandReady(QString("usb_cable setbit %1 %2 %3=%4").arg(sn).arg(bit).arg(key, value));
-}
-
-void UsbCableModel::sendRemove(const QString& sn)
-{
-    emit commandReady(QString("usb_cable remove %1").arg(sn));
+    if (QThread::currentThread() != thread()) { return; }
+    emit controlRequested({sn, -1, UsbCableRequest::Field::Remove, std::monostate{}});
 }
 
 } // namespace AetherSDR

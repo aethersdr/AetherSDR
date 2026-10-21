@@ -14,14 +14,14 @@ bool aetherDspModeRequiresDisable(QStringView mode)
     // NNR means a measured 28 dB hole where the signal was, since it treats a
     // steady carrier as noise.
     return mode == u"DIGU" || mode == u"DIGL" || mode == u"RTTY"
-        || mode == u"CW" || mode == u"CWU" || mode == u"CWL"
+        || mode == u"CW" || mode == u"CWU" || mode == u"CWL" || mode == u"CWR"
         || mode == u"NT";
 }
 
 bool aetherDspMixRequiresDisable(const QList<AetherDspSliceAudioState>& slices)
 {
     for (const AetherDspSliceAudioState& slice : slices) {
-        if (!slice.muted && slice.gain > 0.0f
+        if (slice.receiving && !slice.muted && slice.gain > 0.0f
             && aetherDspModeRequiresDisable(slice.mode)) {
             return true;
         }

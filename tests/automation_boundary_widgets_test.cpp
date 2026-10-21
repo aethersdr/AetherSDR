@@ -13,7 +13,10 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QIntValidator>
+#include <QLineEdit>
 #include <QMouseEvent>
+#include <QStringList>
 #include <QVector>
 #include <QWidget>
 
@@ -280,6 +283,113 @@ int main(int argc, char** argv)
     check(isDrag(reply, dragTarget.events),
           "authenticated JSON args use the positional dragAt parser", reply);
     server.setAuthToken({});
+
+    QLineEdit field(QStringLiteral("Original"));
+    field.setObjectName(QStringLiteral("commitProbe"));
+    field.show();
+    settle();
+    QStringList committed;
+    int submitted = 0;
+    QObject::connect(&field, &QLineEdit::returnPressed, [&] { ++submitted; });
+    QObject::connect(&field, &QLineEdit::editingFinished, [&] {
+        if (field.isModified()) {
+            committed.append(field.text());
+            field.setModified(false);
+        }
+    });
+    check(!ok(send("invoke commitProbe editText Changed"))
+              && !ok(send("invoke commitProbe commit"))
+              && field.text() == QStringLiteral("Original") && committed.isEmpty(),
+          "editing and commit require owner opt-in");
+    field.setProperty("aetherAutomationEditCommit", true);
+    check(ok(send("invoke commitProbe setText Seed")) && !field.isModified()
+              && committed.isEmpty() && submitted == 0,
+          "setText still neither marks an edit nor submits");
+    check(ok(send(R"({"cmd":"invoke","target":"commitProbe","action":"editText","value":""})"))
+              && field.text().isEmpty() && field.isModified() && committed.isEmpty(),
+          "empty editText arms an edit without committing");
+    reply = send("invoke commitProbe commit");
+    check(ok(reply) && reply.value(QStringLiteral("deferred")).toBool()
+              && committed == QStringList{QString()} && !field.isModified() && submitted == 0,
+          "commit reaches editingFinished, including empty text, without returnPressed", reply);
+    check(ok(send("invoke commitProbe commit"))
+              && ok(send(R"({"cmd":"invoke","target":"commitProbe","action":"editText","value":""})"))
+              && ok(send("invoke commitProbe commit")) && committed.size() == 1,
+          "unchanged edits and repeated commits do not re-arm the owner's guard");
+    check(!ok(send("invoke commitProbe commit Unexpected")) && field.text().isEmpty(),
+          "commit refuses a value rather than silently replacing the field");
+    field.setReadOnly(true);
+    check(!ok(send("invoke commitProbe editText Changed"))
+              && !ok(send("invoke commitProbe commit")) && field.text().isEmpty(),
+          "read-only field refuses editing and commit");
+    field.setReadOnly(false);
+    field.setEnabled(false);
+    check(!ok(send("invoke commitProbe editText Changed"))
+              && !ok(send("invoke commitProbe commit")), "disabled field refuses both actions");
+    field.setEnabled(true);
+    field.hide();
+    check(!ok(send("invoke commitProbe editText Changed"))
+              && !ok(send("invoke commitProbe commit")), "hidden field refuses both actions");
+    field.show();
+    settle();
+    server.setReadOnly(true);
+    check(!ok(send("invoke commitProbe editText Changed"))
+              && !ok(send("invoke commitProbe commit")), "observe-only refuses both actions");
+    server.setReadOnly(false);
+    server.setAuthToken(QStringLiteral("test-token"));
+    check(!ok(send("invoke commitProbe editText Changed"))
+              && !ok(send("invoke commitProbe commit")), "unauthenticated edits and commits refused");
+    server.setAuthToken({});
+    check(ok(send("invoke commitProbe editText Pending")), "later edit remains drivable");
+    const auto queueCommit = [&] {
+        return AutomationServerTestAccess::request(server, "invoke commitProbe commit");
+    };
+    reply = queueCommit();
+    field.setProperty("aetherAutomationEditCommit", false);
+    settle();
+    check(ok(reply) && committed.size() == 1 && field.isModified(),
+          "revoked owner opt-in cancels a queued commit");
+    field.setProperty("aetherAutomationEditCommit", true);
+    reply = queueCommit();
+    server.setReadOnly(true);
+    settle();
+    check(ok(reply) && committed.size() == 1 && field.isModified(),
+          "observe-only enabled after admission cancels a queued commit");
+    server.setReadOnly(false);
+    reply = queueCommit();
+    server.setAuthToken(QStringLiteral("rotated-token"));
+    server.setAuthToken({});
+    settle();
+    check(ok(reply) && committed.size() == 1 && field.isModified(),
+          "token rotation cancels an admitted commit even after authorization is restored");
+    reply = queueCommit();
+    field.setText(QStringLiteral("Newer"));
+    field.setModified(true);
+    settle();
+    check(ok(reply) && committed.size() == 1 && field.isModified(),
+          "queued commit does not consume a newer edit");
+    check(ok(send("invoke commitProbe commit"))
+              && committed == QStringList{QString(), QStringLiteral("Newer")},
+          "a fresh authorized commit consumes the preserved pending edit");
+    QIntValidator validator(0, 100);
+    field.setValidator(&validator);
+    check(ok(send("invoke commitProbe editText invalid"))
+              && !ok(send("invoke commitProbe commit")) && committed.size() == 2,
+          "commit honors the field validator instead of bypassing Qt acceptance");
+    field.setValidator(nullptr);
+    for (int state = 0; state < 3; ++state) {
+        reply = queueCommit();
+        if (state == 0) { field.setEnabled(false); }
+        if (state == 1) { field.hide(); }
+        if (state == 2) { field.setReadOnly(true); }
+        settle();
+        check(ok(reply) && committed.size() == 2 && field.isModified(),
+              "queued commit rechecks field enabled/visible/read-only state");
+        field.setEnabled(true);
+        field.setReadOnly(false);
+        field.show();
+        settle();
+    }
 
     std::printf("\n%s\n", failures == 0 ? "ALL PASS" : "FAILURES PRESENT");
     return failures == 0 ? 0 : 1;

@@ -170,7 +170,7 @@ void TxApplet::buildUI()
         m_rfPowerSlider->setAccessibleDescription("Transmit RF power level, 0 to 100 percent of maximum");
         row->addWidget(m_rfPowerSlider, 1);
 
-        m_rfPowerLabel = new QLabel("100");
+        m_rfPowerLabel = new QLabel("100%");
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_rfPowerLabel, "QLabel { color: {{color.text.primary}}; font-size: 10px; }");
         m_rfPowerLabel->setFixedWidth(30);
         m_rfPowerLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -195,7 +195,7 @@ void TxApplet::buildUI()
         m_tunePowerSlider->setAccessibleDescription("Tune carrier power level, 0 to 100 percent of maximum");
         row->addWidget(m_tunePowerSlider, 1);
 
-        m_tunePowerLabel = new QLabel("10");
+        m_tunePowerLabel = new QLabel("10%");
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_tunePowerLabel, "QLabel { color: {{color.text.primary}}; font-size: 10px; }");
         m_tunePowerLabel->setFixedWidth(30);
         m_tunePowerLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -351,14 +351,14 @@ void TxApplet::buildUI()
 
     // ── Slider → label + command connections ────────────────────────────────
     connect(m_rfPowerSlider, &QSlider::valueChanged, this, [this](int v) {
-        m_rfPowerLabel->setText(QString::number(v));
+        m_rfPowerLabel->setText(percentText(v));
         if (!m_updatingFromModel && m_model)
             m_model->setRfPower(v);
     });
     connect(m_rfPowerSlider, &QSlider::sliderReleased,
             this, &TxApplet::syncFromModel);
     connect(m_tunePowerSlider, &QSlider::valueChanged, this, [this](int v) {
-        m_tunePowerLabel->setText(QString::number(v));
+        m_tunePowerLabel->setText(percentText(v));
         if (!m_updatingFromModel && m_model)
             m_model->setTunePower(v);
     });
@@ -698,13 +698,13 @@ void TxApplet::syncFromModel()
         && m_rfPowerSlider->value() != m_model->rfPower()) {
         m_rfPowerSlider->setValue(m_model->rfPower());
     }
-    m_rfPowerLabel->setText(QString::number(m_model->rfPower()));
+    m_rfPowerLabel->setText(percentText(m_model->rfPower()));
 
     if (!m_tunePowerSlider->isSliderDown()
         && m_tunePowerSlider->value() != m_model->tunePower()) {
         m_tunePowerSlider->setValue(m_model->tunePower());
     }
-    m_tunePowerLabel->setText(QString::number(m_model->tunePower()));
+    m_tunePowerLabel->setText(percentText(m_model->tunePower()));
 
     // Active profile — update combo selection
     if (!m_model->activeProfile().isEmpty()) {

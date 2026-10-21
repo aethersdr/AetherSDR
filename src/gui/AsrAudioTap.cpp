@@ -2,6 +2,7 @@
 
 #include "asr/AsrEngine.h"
 #include "core/AudioEngine.h"
+#include "models/DecoderAudioModel.h"
 
 #include <QByteArray>
 #include <QLoggingCategory>
@@ -18,6 +19,20 @@ AsrAudioTap::AsrAudioTap(AudioEngine* audio, AsrEngine* asr, QObject* parent)
     , m_audio(audio)
     , m_asr(asr)
 {
+}
+
+void AsrAudioTap::setNativeInput(DecoderAudioModel* route)
+{
+    if (m_nativeInput == route) { return; }
+    disconnect(m_conn);
+    disconnect(m_nativeResetConn);
+    if (m_nativeInput) { m_nativeInput->setEnabled(false); }
+    m_nativeInput = route;
+    m_policy.reset();
+    m_speechRmsApplied = false;
+    if (m_asr && m_enabled) { m_asr->restartSession(); }
+    applySpeechRmsForTapPoint();
+    if (m_enabled) { connectSelectedTap(); }
 }
 
 void AsrAudioTap::setEnabled(bool on)
@@ -40,6 +55,8 @@ void AsrAudioTap::setEnabled(bool on)
         connectSelectedTap();
     } else {
         disconnect(m_conn);
+        disconnect(m_nativeResetConn);
+        if (m_nativeInput) { m_nativeInput->setEnabled(false); }
         m_policy.reset();
         // m_asr->setEnabled(false) above already resets and drops any queued
         // backlog — no separate reset() needed here.
@@ -52,8 +69,8 @@ void AsrAudioTap::setTapPoint(AsrTapPoint point)
         return;
     }
     m_tapPoint = point;
-    if (!m_enabled) {
-        return; // the next setEnabled(true) connects the new point
+    if (!m_enabled || m_nativeInput) {
+        return; // the saved presentation preference applies when that route returns
     }
 
     disconnect(m_conn);
@@ -90,9 +107,15 @@ void AsrAudioTap::setBaseSpeechRms(float rms)
 
 void AsrAudioTap::applySpeechRmsForTapPoint()
 {
-    if (m_asr == nullptr || m_audio == nullptr || m_baseSpeechRms <= 0.0f) {
+    if (m_asr == nullptr || m_baseSpeechRms <= 0.0f) {
         return;   // nothing seeded yet
     }
+    if (m_nativeInput) {
+        if (!m_speechRmsApplied) { m_asr->setSpeechRms(m_baseSpeechRms); }
+        m_speechRmsApplied = true;
+        return;
+    }
+    if (!m_audio) { return; }
     const bool boost = m_audio->rxBoost();
     const float trimDb = m_audio->rxOutputTrimDb();
     const float chainDb = m_audio->rxStaticChainMakeupDb();
@@ -119,6 +142,20 @@ void AsrAudioTap::applySpeechRmsForTapPoint()
 
 void AsrAudioTap::connectSelectedTap()
 {
+    const quint64 generation = ++m_bindingGeneration;
+    if (m_nativeInput) {
+        m_conn = connect(m_nativeInput, &DecoderAudioModel::nativePcmReady, this,
+            [this](const PcmFrame& frame) {
+                if (m_enabled && m_asr && m_nativeInput && frame.current()) {
+                    m_asr->pushNativePcm(frame);
+                }
+            });
+        m_nativeResetConn = connect(m_nativeInput, &DecoderAudioModel::sourceReset, this, [this] {
+            if (m_enabled && m_asr) { m_asr->restartSession(); }
+        });
+        m_nativeInput->setEnabled(true);
+        return;
+    }
     if (m_audio == nullptr) {
         return;
     }
@@ -129,10 +166,20 @@ void AsrAudioTap::connectSelectedTap()
     // Every block they carry must reach the engine.
     if (m_tapPoint == AsrTapPoint::PreDsp) {
         m_conn = connect(m_audio, &AudioEngine::receivePresentationPreDspAudioReady,
-                         this, &AsrAudioTap::onPreDspAudio, Qt::QueuedConnection);
+                         this, [this, generation](const QString& source, const QString& id,
+                                                  const QByteArray& pcm, int rate, int channels) {
+                             if (generation == m_bindingGeneration) {
+                                 onPreDspAudio(source, id, pcm, rate, channels);
+                             }
+                         }, Qt::QueuedConnection);
     } else {
         m_conn = connect(m_audio, &AudioEngine::receivePresentationPostDspAudioReady,
-                         this, &AsrAudioTap::onPostDspAudio, Qt::QueuedConnection);
+                         this, [this, generation](const QString& source, const QString& id,
+                                                  const QByteArray& pcm, int rate, int channels) {
+                             if (generation == m_bindingGeneration) {
+                                 onPostDspAudio(source, id, pcm, rate, channels);
+                             }
+                         }, Qt::QueuedConnection);
     }
 }
 
@@ -161,7 +208,7 @@ void AsrAudioTap::onRxAudio(AsrTapPoint from,
     // posted, so blocks from the old point can still arrive after a switch —
     // after the engine reset above, where they would open the new session
     // with audio from the wrong chain. They name their point; drop them.
-    if (!m_enabled || m_asr == nullptr || from != m_tapPoint) {
+    if (!m_enabled || m_asr == nullptr || m_nativeInput || from != m_tapPoint) {
         return;
     }
 

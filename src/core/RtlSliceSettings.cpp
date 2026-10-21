@@ -5,6 +5,7 @@
 #include <QDebug>
 #include <QSet>
 
+#include <algorithm>
 #include <cmath>
 
 namespace AetherSDR {
@@ -44,6 +45,14 @@ QJsonObject encodeSlice(const RtlSliceSettings::Slice& slice, QJsonObject previo
     previous.insert(QStringLiteral("mode"), slice.mode);
     previous.insert(QStringLiteral("filterLow"), slice.filterLowHz);
     previous.insert(QStringLiteral("filterHigh"), slice.filterHighHz);
+    QJsonObject filters = previous.value(QStringLiteral("modeFilters")).toObject();
+    for (auto it = slice.modeFilters.cbegin(); it != slice.modeFilters.cend(); ++it) {
+        QJsonObject filter = filters.value(it.key()).toObject();
+        filter.insert(QStringLiteral("low"), it->lowHz);
+        filter.insert(QStringLiteral("high"), it->highHz);
+        filters.insert(it.key(), filter);
+    }
+    previous.insert(QStringLiteral("modeFilters"), filters);
     previous.insert(QStringLiteral("agcMode"), slice.agcMode);
     previous.insert(QStringLiteral("agcThreshold"), slice.agcThreshold);
     QJsonObject squelch = previous.value(QStringLiteral("squelch")).toObject();
@@ -57,6 +66,23 @@ QJsonObject encodeSlice(const RtlSliceSettings::Slice& slice, QJsonObject previo
     previous.insert(QStringLiteral("audioPan"), slice.audioPan);
     previous.insert(QStringLiteral("wfmDeemphasisUs"), slice.wfmDeemphasisUs);
     previous.insert(QStringLiteral("wfmForceMono"), slice.wfmForceMono);
+    QJsonObject receive = previous.value(QStringLiteral("receiveDsp")).toObject();
+    receive.insert(QStringLiteral("agcOffLevel"), slice.agcOffLevel);
+    receive.insert(QStringLiteral("cwPitchHz"), slice.cwPitchHz);
+    receive.insert(QStringLiteral("ritEnabled"), slice.ritEnabled);
+    receive.insert(QStringLiteral("ritOffsetHz"), slice.ritOffsetHz);
+    receive.insert(QStringLiteral("nbKind"), static_cast<int>(slice.nbKind));
+    receive.insert(QStringLiteral("nbLevel"), slice.nbLevel);
+    receive.insert(QStringLiteral("nbFill"), static_cast<int>(slice.nbFill));
+    receive.insert(QStringLiteral("apfEnabled"), slice.apfEnabled);
+    receive.insert(QStringLiteral("apfLevel"), slice.apfLevel);
+    receive.insert(QStringLiteral("nrEnabled"), slice.nrEnabled);
+    receive.insert(QStringLiteral("nrLevel"), slice.nrLevel);
+    receive.insert(QStringLiteral("anfEnabled"), slice.anfEnabled);
+    receive.insert(QStringLiteral("anfLevel"), slice.anfLevel);
+    receive.insert(QStringLiteral("mnEnabled"), slice.mnEnabled);
+    receive.insert(QStringLiteral("mnLevel"), slice.mnLevel);
+    previous.insert(QStringLiteral("receiveDsp"), receive);
     return previous;
 }
 
@@ -116,6 +142,54 @@ bool RtlSliceSettings::decode(const QJsonObject& object, Document& output, QStri
             || !entry.value(QStringLiteral("squelch")).isObject()) {
             return false;
         }
+        if (entry.contains(QStringLiteral("modeFilters"))) {
+            if (!entry.value(QStringLiteral("modeFilters")).isObject()) { return false; }
+            const QJsonObject filters = entry.value(QStringLiteral("modeFilters")).toObject();
+            if (filters.size() > modes.size()) { return false; }
+            for (auto filter = filters.begin(); filter != filters.end(); ++filter) {
+                Filter value;
+                if (!modes.contains(filter.key()) || !filter.value().isObject()
+                    || !number(filter.value().toObject(), QStringLiteral("low"), -100000, 100000, value.lowHz, true)
+                    || !number(filter.value().toObject(), QStringLiteral("high"), -100000, 100000, value.highHz, true)
+                    || value.lowHz >= value.highHz) { return false; }
+                slice.modeFilters.insert(filter.key(), value);
+            }
+        }
+        // Optional schema-1 object: old documents use the existing UI defaults.
+        if (entry.contains(QStringLiteral("receiveDsp"))) {
+            if (!entry.value(QStringLiteral("receiveDsp")).isObject()) { return false; }
+            const QJsonObject receive = entry.value(QStringLiteral("receiveDsp")).toObject();
+            double pitch = 0, rit = 0, kind = 0, fill = 0;
+            if (!percent(receive, QStringLiteral("agcOffLevel"), slice.agcOffLevel)
+                || !number(receive, QStringLiteral("cwPitchHz"), 100, 6000, pitch, true)
+                || !number(receive, QStringLiteral("ritOffsetHz"), -99999, 99999, rit, true)
+                || !number(receive, QStringLiteral("nbKind"), 0, 2, kind, true)
+                || !number(receive, QStringLiteral("nbFill"), 0, 4, fill, true)
+                || !percent(receive, QStringLiteral("nbLevel"), slice.nbLevel)
+                || !percent(receive, QStringLiteral("apfLevel"), slice.apfLevel)
+                || !receive.value(QStringLiteral("ritEnabled")).isBool()
+                || !receive.value(QStringLiteral("apfEnabled")).isBool()) { return false; }
+            slice.cwPitchHz = static_cast<int>(pitch);
+            slice.ritOffsetHz = static_cast<int>(rit);
+            slice.nbKind = static_cast<NoiseBlankerKind>(static_cast<int>(kind));
+            slice.nbFill = static_cast<NoiseBlankerFill>(static_cast<int>(fill));
+            slice.ritEnabled = receive.value(QStringLiteral("ritEnabled")).toBool();
+            slice.apfEnabled = receive.value(QStringLiteral("apfEnabled")).toBool();
+            const auto optionalToggle = [&](const QString& key, bool& value) {
+                if (!receive.contains(key)) { return true; }
+                if (!receive.value(key).isBool()) { return false; }
+                value = receive.value(key).toBool(); return true;
+            };
+            const auto optionalLevel = [&](const QString& key, int& value) {
+                return !receive.contains(key) || percent(receive, key, value);
+            };
+            if (!optionalToggle(QStringLiteral("nrEnabled"), slice.nrEnabled)
+                || !optionalToggle(QStringLiteral("anfEnabled"), slice.anfEnabled)
+                || !optionalToggle(QStringLiteral("mnEnabled"), slice.mnEnabled)
+                || !optionalLevel(QStringLiteral("nrLevel"), slice.nrLevel)
+                || !optionalLevel(QStringLiteral("anfLevel"), slice.anfLevel)
+                || !optionalLevel(QStringLiteral("mnLevel"), slice.mnLevel)) { return false; }
+        }
         if (entry.contains(QStringLiteral("wfmDeemphasisUs"))) {
             double microseconds = 0;
             if (!number(entry, QStringLiteral("wfmDeemphasisUs"), 50, 75, microseconds, true)
@@ -144,6 +218,28 @@ bool RtlSliceSettings::decode(const QJsonObject& object, Document& output, QStri
         if (slice.automaticSquelch && !slice.squelchEnabled) { return false; }
         slice.audioMute = entry.value(QStringLiteral("audioMute")).toBool();
         parsed.slices.insert(slice.id, slice);
+    }
+    if (object.contains(QStringLiteral("trackingNotches"))) {
+        if (!object.value(QStringLiteral("trackingNotches")).isObject()) { return false; }
+        const auto notches = object.value(QStringLiteral("trackingNotches")).toObject();
+        if (!notches.value(QStringLiteral("enabled")).isBool()
+            || !notches.value(QStringLiteral("entries")).isObject()) { return false; }
+        parsed.trackingNotches.enabled = notches.value(QStringLiteral("enabled")).toBool();
+        const auto entries = notches.value(QStringLiteral("entries")).toObject();
+        for (auto it = entries.begin(); it != entries.end(); ++it) {
+            bool ok = false;
+            rtl::RtlTrackingNotch notch;
+            notch.id = it.key().toInt(&ok);
+            if (!ok || notch.id < 0 || QString::number(notch.id) != it.key() || !it.value().isObject()) { return false; }
+            const auto entry = it.value().toObject();
+            if (!number(entry, QStringLiteral("centerHz"), 24000, 1766000000, notch.centerHz)
+                || !number(entry, QStringLiteral("widthHz"), 200, 12000, notch.widthHz)
+                || !entry.value(QStringLiteral("active")).isBool()) { return false; }
+            notch.active = entry.value(QStringLiteral("active")).toBool();
+            parsed.trackingNotches.entries.push_back(notch);
+        }
+        std::ranges::sort(parsed.trackingNotches.entries, {}, &rtl::RtlTrackingNotch::id);
+        if (!parsed.trackingNotches.valid()) { return false; }
     }
     output = std::move(parsed); // Never expose a partially parsed document.
     reason.clear();
@@ -180,7 +276,8 @@ RtlSliceSettings::ReadResult RtlSliceSettings::load() const
 }
 
 bool RtlSliceSettings::patch(double captureCenterHz, double sampleRateHz,
-                             const QVector<Slice>& accepted, const QVector<int>& removed) const
+                             const QVector<Slice>& accepted, const QVector<int>& removed,
+                             const std::optional<rtl::RtlTrackingNotches>& trackingNotches) const
 {
     if (m_scope.family() != QLatin1String("rtl")) {
         return refuse(QStringLiteral("invalid RTL write scope"));
@@ -222,6 +319,26 @@ bool RtlSliceSettings::patch(double captureCenterHz, double sampleRateHz,
     object.insert(QStringLiteral("captureCenterHz"), captureCenterHz);
     object.insert(QStringLiteral("sampleRateHz"), sampleRateHz);
     object.insert(QStringLiteral("slices"), slices);
+    // An absent bank already means enabled with no entries. A reconnect that
+    // merely observes that default must not rewrite the saved document.
+    if (trackingNotches && (object.contains(QStringLiteral("trackingNotches"))
+        || !trackingNotches->enabled || !trackingNotches->entries.empty())) {
+        if (!trackingNotches->valid()) { return refuse(QStringLiteral("invalid tracking notch bank")); }
+        auto notches = object.value(QStringLiteral("trackingNotches")).toObject();
+        const auto previousEntries = notches.value(QStringLiteral("entries")).toObject();
+        QJsonObject entries;
+        for (const auto& notch : trackingNotches->entries) {
+            const QString key = QString::number(notch.id);
+            auto entry = previousEntries.value(key).toObject();
+            entry.insert(QStringLiteral("centerHz"), notch.centerHz);
+            entry.insert(QStringLiteral("widthHz"), notch.widthHz);
+            entry.insert(QStringLiteral("active"), notch.active);
+            entries.insert(key, entry);
+        }
+        notches.insert(QStringLiteral("enabled"), trackingNotches->enabled);
+        notches.insert(QStringLiteral("entries"), entries);
+        object.insert(QStringLiteral("trackingNotches"), notches);
+    }
     Document checked;
     if (!decode(object, checked, reason)) {
         return refuse(reason);

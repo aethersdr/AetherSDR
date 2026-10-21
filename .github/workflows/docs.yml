@@ -1,19 +1,33 @@
 name: Docs
 
-# Builds the user documentation site (docs/user, Docusaurus) and, on main,
-# deploys it to Cloudflare Pages at https://docs.aethersdr.com. A manual run
-# (workflow_dispatch) on main redeploys without a content change.
+# Builds the user documentation site (docs/user, Docusaurus) and the
+# printable PDF manual (tools/docs/build_pdf.py: Pandoc + Typst).
 #
-# It also typesets the printable PDF manual (tools/docs/build_pdf.py: Pandoc
-# + Typst). On a pull request the PDF is a render check and a downloadable
-# artifact; on main it is deployed with the site as
-# https://docs.aethersdr.com/AetherSDR-Manual.pdf; and when a release is
-# published it is attached to that release as AetherSDR-Manual-<tag>.pdf,
-# with a detached signature (.pdf.asc) made with the release key.
+# On a pull request both are checks: the build is the link check
+# (docusaurus.config.js sets onBrokenLinks, onBrokenAnchors and
+# onBrokenMarkdownLinks to 'throw', so a page that links to a missing page or
+# heading fails this workflow), and the PDF is a render check and a
+# downloadable artifact. Nothing is deployed.
 #
-# The build is the link check: docusaurus.config.js sets onBrokenLinks,
-# onBrokenAnchors and onBrokenMarkdownLinks to 'throw', so a page that links
-# to a missing page or heading fails this workflow.
+# Publishing the site is a release-time job (#6556). When an app release (a
+# v* tag, not a pre-release) is published, the PDF is attached to it as
+# AetherSDR-Manual-<tag>.pdf with a detached signature (.pdf.asc) made with
+# the release key, and then the site is built from the tag and deployed to
+# Cloudflare Pages at https://docs.aethersdr.com. A merge to main deploys
+# nothing, so Next (/next/) shows main as of the last deploy.
+#
+# The PDF is not uploaded to Pages, which refuses any file over 25 MiB (the
+# manual passed that on 2026-10-17). The app and the site link to
+# https://docs.aethersdr.com/AetherSDR-Manual.pdf; the deploy writes a
+# _redirects entry sending that URL to the signed PDF on the release.
+#
+# Only the highest app release version deploys, so a backport release gets
+# its PDF but leaves the site as it is.
+#
+# A manual run (workflow_dispatch) redeploys the site: from the highest app
+# release by default, or from `ref`, which must be `main` (for a docs-only
+# fix between releases) or a published app release tag. Its PDF link always
+# points at the highest app release.
 #
 # This is NOT a required status check, which is what makes the `paths:`
 # filter safe here. A required check that a PR never triggers blocks that PR
@@ -26,21 +40,20 @@ on:
       - 'docs/user/**'
       - 'tools/docs/**'
       - '.github/workflows/docs.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'docs/user/**'
-      - 'tools/docs/**'
-      - '.github/workflows/docs.yml'
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 'main or a published app release tag (empty: the highest app release)'
+        required: false
+        default: ''
   release:
     types: [published]
 
-# Superseded PR runs are cancelled; every main run completes so a deploy is
-# never cut off half-way (same expression as ci.yml / static-checks.yml).
+# Superseded PR runs are cancelled; a deploy run always completes so it is
+# never cut off half-way.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -57,18 +70,16 @@ env:
 jobs:
   build:
     name: Build docs site
-    if: ${{ github.event_name != 'release' }}
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      # Mapped from the secret so steps can be gated on its presence: the
-      # `secrets` context is not available in step `if:` conditions.
-      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     defaults:
       run:
         working-directory: docs/user
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -88,8 +99,10 @@ jobs:
         working-directory: .
         run: python3 tools/docs/gen_reference.py --check
 
+      # No package in the lockfile needs its install script for the site
+      # build (core-js prints a banner; fsevents is macOS-only).
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build (fails on any broken link or anchor)
         run: npm run build
@@ -109,71 +122,42 @@ jobs:
           bin/pandoc --version | head -1
           bin/typst --version
 
-      # After the site build, which empties build/: the PDF lands in the
-      # site's root and is deployed with it on main.
       - name: Build PDF manual
         working-directory: .
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [ -n "$PR_NUMBER" ]; then
-            version="PR #${PR_NUMBER} @ ${HEAD_SHA::9}"
-          else
-            version="${GITHUB_REF_NAME} @ ${HEAD_SHA::9}"
-          fi
-          python3 tools/docs/build_pdf.py --version "$version" \
-            --output docs/user/build/AetherSDR-Manual.pdf
+          python3 tools/docs/build_pdf.py --version "PR #${PR_NUMBER} @ ${HEAD_SHA::9}" \
+            --output "${RUNNER_TEMP}/AetherSDR-Manual.pdf"
 
       - name: Upload PDF manual
-        if: ${{ github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: AetherSDR-Manual
-          path: docs/user/build/AetherSDR-Manual.pdf
+          path: ${{ runner.temp }}/AetherSDR-Manual.pdf
           if-no-files-found: error
           retention-days: 14
 
-      - name: Check deploy configuration
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && env.CF_TOKEN == '' }}
-        run: |
-          echo "::notice::CLOUDFLARE_API_TOKEN not set — skipping deploy."
-          echo "Add CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID repo secrets to enable it."
-
-      # First run creates the project; later runs no-op (hence continue-on-error).
-      - name: Ensure Pages project exists
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && env.CF_TOKEN != '' }}
-        continue-on-error: true
-        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages project create aethersdr-docs --production-branch main
-
-      - name: Deploy to Cloudflare Pages
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && env.CF_TOKEN != '' }}
-        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy docs/user/build --project-name=aethersdr-docs --branch=main --commit-dirty=true
-
-  # A published release gets the manual for its tag. Only this job can write
-  # to the repository (release assets); the site build above cannot.
+  # A published release gets the manual for its tag. The tag's own code
+  # renders it here, with a read-only token and no secrets; sign-release-pdf
+  # below signs and attaches the finished file in a job that runs none of it.
   release-pdf:
-    name: Attach PDF manual to release
-    if: ${{ github.event_name == 'release' }}
+    name: Render PDF manual for release
+    if: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write
+      contents: read
     env:
       TAG: ${{ github.event.release.tag_name }}
-      GH_TOKEN: ${{ github.token }}
+    outputs:
+      present: ${{ steps.docs.outputs.present }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
 
       - name: Check the tag has the docs
         id: docs
@@ -211,39 +195,332 @@ jobs:
           python3 tools/docs/build_pdf.py --version "$TAG" \
             --output "${RUNNER_TEMP}/AetherSDR-Manual-${TAG}.pdf"
 
-      # Signed with the release key, as sign-release.yml signs the binaries.
-      # The PDF is not in SHA256SUMS.txt; its .asc is its own check.
-      - name: Import GPG key
+      - name: Upload PDF manual
         if: ${{ steps.docs.outputs.present == 'true' }}
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-manual
+          path: ${{ runner.temp }}/AetherSDR-Manual-${{ github.event.release.tag_name }}.pdf
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signed with the release key, as sign-release.yml signs the binaries.
+  # The PDF is not in SHA256SUMS.txt; its .asc is its own check. This job
+  # checks out nothing and runs no repository code.
+  sign-release-pdf:
+    name: Attach PDF manual to release
+    needs: release-pdf
+    if: ${{ needs.release-pdf.outputs.present == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Check the tag
         run: |
-          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          if [[ ! "$TAG" =~ ^v[0-9]+(\.[0-9]+){1,3}(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
+            echo "::error::Not a release tag; refusing to sign."
+            exit 1
+          fi
+
+      - name: Download PDF manual
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: release-manual
+          path: ${{ runner.temp }}/manual
+
+      # Exactly the one expected file, and a regular file.
+      - name: Check the download
+        working-directory: ${{ runner.temp }}/manual
+        run: |
+          pdf="AetherSDR-Manual-${TAG}.pdf"
+          listing=$(find . -mindepth 1 -printf '%y %P\n')
+          if [ "$listing" != "f $pdf" ]; then
+            echo "::error::Expected only $pdf as a regular file; found:"
+            printf '%s\n' "$listing"
+            exit 1
+          fi
+
+      - name: Import GPG key
+        env:
+          # A keyring of its own, removed at the end of the job.
+          GNUPGHOME: ${{ runner.temp }}/gnupg
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          install -d -m 700 "$GNUPGHOME"
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
           KEY_FP=$(gpg --list-secret-keys --with-colons | grep fpr | head -1 | cut -d: -f10)
           echo "${KEY_FP}:6:" | gpg --import-ownertrust
 
       - name: Sign PDF manual (detached .asc)
-        if: ${{ steps.docs.outputs.present == 'true' }}
         env:
+          GNUPGHOME: ${{ runner.temp }}/gnupg
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        working-directory: ${{ runner.temp }}
+        working-directory: ${{ runner.temp }}/manual
         run: |
-          gpg --batch --yes --pinentry-mode loopback \
-            --passphrase "$GPG_PASSPHRASE" \
+          printf '%s' "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
+            --passphrase-fd 0 \
             --detach-sign --armor "AetherSDR-Manual-${TAG}.pdf"
           echo "Signed: AetherSDR-Manual-${TAG}.pdf -> AetherSDR-Manual-${TAG}.pdf.asc"
 
       - name: Verify the signature
-        if: ${{ steps.docs.outputs.present == 'true' }}
-        working-directory: ${{ runner.temp }}
+        working-directory: ${{ runner.temp }}/manual
+        env:
+          GNUPGHOME: ${{ runner.temp }}/gnupg
         run: gpg --batch --verify "AetherSDR-Manual-${TAG}.pdf.asc" "AetherSDR-Manual-${TAG}.pdf"
 
       # One upload, so the PDF and its signature carry the same timestamp.
       - name: Upload to the release
-        if: ${{ steps.docs.outputs.present == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "$TAG" \
-            "${RUNNER_TEMP}/AetherSDR-Manual-${TAG}.pdf" \
-            "${RUNNER_TEMP}/AetherSDR-Manual-${TAG}.pdf.asc" \
+            "${RUNNER_TEMP}/manual/AetherSDR-Manual-${TAG}.pdf" \
+            "${RUNNER_TEMP}/manual/AetherSDR-Manual-${TAG}.pdf.asc" \
             --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Remove the signing keyring
+        if: ${{ always() }}
+        env:
+          GNUPGHOME: ${{ runner.temp }}/gnupg
+        run: |
+          gpgconf --kill gpg-agent || true
+          rm -rf "$GNUPGHOME"
+
+  # Deploying the site is three jobs, so that no job both runs repository
+  # code and holds the Cloudflare token: resolve-target picks a reviewed
+  # commit, build-site builds it with no secrets, and deploy publishes the
+  # result under the cloudflare-pages environment without checking anything
+  # out.
+  #
+  # A release deploys its own tag, after sign-release-pdf has attached the
+  # PDF, so the redirect never points at a missing file; a release that is
+  # not the highest app release version (a backport) gets its PDF but
+  # deploys nothing, so the site never moves back. A manual run deploys the
+  # highest app release, or `ref`, which may only be `main` or a published
+  # app release tag: any other branch or tag is refused, so a manual run
+  # cannot publish unreviewed code. The PDF link always names a release,
+  # because a run from main has no signed PDF of its own.
+  resolve-target:
+    name: Resolve what to deploy
+    needs: sign-release-pdf
+    if: >-
+      ${{ !cancelled()
+          && ((github.event_name == 'workflow_dispatch'
+               && needs.sign-release-pdf.result == 'skipped')
+              || (github.event_name == 'release'
+                  && needs.sign-release-pdf.result == 'success'
+                  && startsWith(github.event.release.tag_name, 'v')
+                  && !github.event.release.prerelease)) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      deploy: ${{ steps.target.outputs.deploy }}
+      sha: ${{ steps.target.outputs.sha }}
+      pdf_url: ${{ steps.target.outputs.pdf_url }}
+    steps:
+      - name: Resolve the commit and the PDF
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          tag_re='^v[0-9]+(\.[0-9]+){1,3}$'
+
+          # A published, non-pre-release app release. Drafts are not visible
+          # to this read-only token, so they fail here too.
+          is_app_release() {
+            [[ "$1" =~ $tag_re ]] || return 1
+            [ "$(gh release view "$1" --repo "$GITHUB_REPOSITORY" \
+                   --json isDraft,isPrerelease \
+                   --jq '(.isDraft or .isPrerelease) | not')" = "true" ]
+          }
+
+          # The highest published, non-pre-release app release by version,
+          # not by creation date or GitHub's Latest marker, either of which a
+          # backport or a non-app release can take.
+          highest=$(gh release list --repo "$GITHUB_REPOSITORY" \
+            --exclude-drafts --exclude-pre-releases --limit 100 \
+            --json tagName --jq '.[].tagName | select(test("^v[0-9]+(\\.[0-9]+){1,3}$"))' \
+            | sort -V | tail -n 1)
+          if [ -z "$highest" ]; then
+            echo "::error::No published app release (v*) found."
+            exit 1
+          fi
+
+          if [ -n "$RELEASE_TAG" ]; then
+            if [ "$RELEASE_TAG" != "$highest" ]; then
+              echo "::notice::${RELEASE_TAG} is not the highest app release (${highest}); the site is not deployed."
+              echo "deploy=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            pdf_tag="$RELEASE_TAG"
+            ref="$RELEASE_TAG"
+          else
+            pdf_tag="$highest"
+            ref="${INPUT_REF:-$pdf_tag}"
+          fi
+
+          if ! is_app_release "$pdf_tag"; then
+            echo "::error::${pdf_tag} is not a published app release."
+            exit 1
+          fi
+          if [ "$ref" != "main" ] && ! is_app_release "$ref"; then
+            echo "::error::Refusing to deploy '${ref}': ref must be empty, main, or a published app release tag (vX.Y.Z)."
+            exit 1
+          fi
+
+          # Pin the commit now, so the build cannot pick up a later push.
+          # The full ref keeps a tag named "main" from standing in for the
+          # branch.
+          if [ "$ref" = "main" ]; then
+            full_ref="refs/heads/main"
+          else
+            full_ref="refs/tags/${ref}"
+          fi
+          sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${full_ref}" --jq .sha)
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve ${ref} to a commit."
+            exit 1
+          fi
+
+          pdf="AetherSDR-Manual-${pdf_tag}.pdf"
+          has_pdf=$(gh release view "$pdf_tag" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq ".assets | any(.name == \"${pdf}\")")
+          if [ "$has_pdf" != "true" ]; then
+            echo "::error::Release ${pdf_tag} has no ${pdf}; the PDF redirect would be broken."
+            exit 1
+          fi
+
+          echo "Deploying ${ref} (${sha}); PDF manual from ${pdf_tag}"
+          {
+            echo "deploy=true"
+            echo "sha=${sha}"
+            echo "pdf_url=https://github.com/${GITHUB_REPOSITORY}/releases/download/${pdf_tag}/${pdf}"
+          } >> "$GITHUB_OUTPUT"
+
+  # Builds the resolved commit with a read-only token and no secrets.
+  build-site:
+    name: Build docs site for deploy
+    needs: resolve-target
+    if: ${{ !cancelled() && needs.resolve-target.result == 'success' && needs.resolve-target.outputs.deploy == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: docs/user
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve-target.outputs.sha }}
+          persist-credentials: false
+
+      # No dependency cache: this build is what gets published, so it
+      # installs from the lockfile rather than from a restored cache.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build (fails on any broken link or anchor)
+        run: npm run build
+
+      # The PDF lives on the release, not on Pages (25 MiB per-file limit).
+      - name: Redirect the PDF manual to the release
+        env:
+          PDF_URL: ${{ needs.resolve-target.outputs.pdf_url }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          redirects = Path('build/_redirects')
+          lines = redirects.read_text().splitlines() if redirects.exists() else []
+          lines = [line for line in lines
+                   if not line.split() or line.split()[0] != '/AetherSDR-Manual.pdf']
+          lines.append(f"/AetherSDR-Manual.pdf {os.environ['PDF_URL']} 302")
+          redirects.write_text('\n'.join(lines) + '\n')
+          PY
+          cat build/_redirects
+
+      - name: Check no file exceeds the Pages limit
+        run: |
+          big=$(find build -type f -size +25M)
+          if [ -n "$big" ]; then
+            echo "::error::Cloudflare Pages refuses files over 25 MiB:"
+            echo "$big" | xargs ls -l
+            exit 1
+          fi
+
+      - name: Upload site
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docs-site
+          path: docs/user/build
+          if-no-files-found: error
+          retention-days: 1
+
+  # Publishing is its own job: it checks out nothing and runs only the
+  # pinned wrangler-action, with an exact wrangler version (the action
+  # otherwise installs the newest 4.x), on the site build-site produced.
+  deploy:
+    name: Deploy docs site
+    needs: [resolve-target, build-site]
+    if: ${{ !cancelled() && needs.resolve-target.result == 'success' && needs.build-site.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: cloudflare-pages
+    permissions: {}
+    # One deploy at a time, so a manual run and a release run cannot race
+    # and leave the older site live.
+    concurrency:
+      group: docs-deploy
+      cancel-in-progress: false
+    steps:
+      # The secrets are configured, so a missing one is a misconfiguration
+      # to fix, not a reason to skip the deploy.
+      - name: Check deploy configuration
+        env:
+          HAS_CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+        run: |
+          if [ "$HAS_CF_TOKEN" != "true" ] || [ "$HAS_CF_ACCOUNT" != "true" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must be set in the cloudflare-pages environment."
+            exit 1
+          fi
+
+      - name: Download site
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: docs-site
+          path: site
+
+      # First run creates the project; later runs no-op (hence continue-on-error).
+      - name: Ensure Pages project exists
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.147.0'
+          command: pages project create aethersdr-docs --production-branch main
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.147.0'
+          command: pages deploy site --project-name=aethersdr-docs --branch=main --commit-hash=${{ needs.resolve-target.outputs.sha }} --commit-dirty=true

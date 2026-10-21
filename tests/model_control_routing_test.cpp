@@ -311,6 +311,54 @@ void deletionAndMalformedInput()
     check(!slice && requests == 1, "deletion from slice dispatch has no stale notification tail");
 }
 }
+// A VOX change the caller waits on (the voice keyer's recording hold, #6292)
+// goes through the Flex encoder's reply-aware sink and reports the radio's own
+// code, matched by ticket; every other control stays on the plain sink. No
+// optimistic write: the model follows the answer.
+static void answeredVoxEncoding()
+{
+    TransmitModel model;
+    FlexBackend backend;
+    check(!backend.answersTransmitControl(), "without a reply-aware sink the encoder says it cannot answer");
+    QStringList plain;
+    QStringList answered;
+    std::function<void(bool)> reply;
+    backend.setCommandSink([&plain](const QString& command) { plain << command; });
+    backend.setAnsweredCommandSink([&answered, &reply](const QString& command,
+                                                       std::function<void(bool)> done) {
+        answered << command;
+        reply = std::move(done);
+    });
+    QObject::connect(&model, &TransmitModel::controlRequested, &backend,
+                     [&backend](const TransmitControlRequest& request) {
+        backend.requestTransmitControl(request);
+    });
+    QObject::connect(&backend, &IRadioBackend::transmitControlAnswered, &model,
+                     [&model](quint64 ticket, bool applied) { model.handleControlAnswer(ticket, applied); });
+    QSignalSpy answers(&model, &TransmitModel::voxEnableAnswered);
+
+    model.setVoxEnable(true);
+    const quint64 ticket = model.requestVoxEnable(false);
+    check(backend.answersTransmitControl()
+              && plain == QStringList{QStringLiteral("transmit set vox_enable=1")}
+              && answered == QStringList{QStringLiteral("transmit set vox_enable=0")} && ticket != 0,
+          "a ticketed VOX request takes the reply-aware sink and an operator click does not");
+    check(model.voxEnable() && answers.isEmpty(), "the model does not move before the radio answers");
+    reply(true);
+    check(!model.voxEnable() && answers.size() == 1
+              && answers[0][0].toULongLong() == ticket && !answers[0][1].toBool()
+              && answers[0][2].toBool() && answers[0][3].toBool(),
+          "the radio's answer is reported by ticket and moves the model");
+    reply(true);
+    check(answers.size() == 1, "a second answer to the same ticket is ignored");
+
+    const quint64 refused = model.requestVoxEnable(true);
+    reply(false);
+    check(!model.voxEnable() && answers.size() == 2 && answers[1][0].toULongLong() == refused
+              && !answers[1][2].toBool(),
+          "a refused request leaves the model as the radio last reported");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settings(QStringLiteral("model-control-routing"));
@@ -325,5 +373,6 @@ int main(int argc, char** argv)
     noOpReentrancy();
     heldDelayReentrancy();
     deletionAndMalformedInput();
+    answeredVoxEncoding();
     return failures ? 1 : 0;
 }

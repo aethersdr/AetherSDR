@@ -26,7 +26,7 @@ struct NetEntry {
     int         durationMinutes{60};     // informational; how long the net runs
 
     // Tuning preset — reuses the radio memory-channel shape so recall can drive
-    // the same MemoryRecallPolicy command builders the memory dialog uses.
+    // typed slice corrections, without a radio-side memory slot.
     MemoryEntry preset;
 
     QString     notes;                   // free text: NCS callsign, NetLogger name, etc.

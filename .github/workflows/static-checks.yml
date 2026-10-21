@@ -250,6 +250,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: node tools/docs/test_log_rules.mjs
 
+      # ── full-suite.yml's red-main attribution only runs when main is red, so
+      # a regression in it would surface as a wrong verdict on a red main.
+      # This runs that step's script against stubbed GitHub data, plus the
+      # failed-list producer against a CTest summary. Stdlib-only, no network.
+      - name: Red-main attribution
+        if: ${{ !cancelled() }}
+        run: node tools/test_full_suite_attribution.mjs
+
       # ── Test registration stays in tests/tests.cmake. The root CMakeLists.txt
       # was 6,357 lines, over half of it 300+ test-target declarations; the split
       # cut it to ~2,780. tests/tests.cmake fails the CONFIGURE step if a test
@@ -469,8 +477,10 @@ jobs:
       # silently pass an empty base to `git worktree add`.
       - name: Hardcoded-colour ratchet
         if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          BASE=$(git merge-base HEAD "origin/${{ github.base_ref }}")
+          BASE=$(git merge-base HEAD "origin/${BASE_REF}")
           git worktree add /tmp/colour-base "$BASE"
           python tools/audit_colours.py \
             --src src \
@@ -482,8 +492,10 @@ jobs:
       # Scoped to src/gui/ files changed by this PR rather than the whole tree.
       - name: Get changed src/gui/ files
         if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          git diff --name-only origin/${{ github.base_ref }}...HEAD \
+          git diff --name-only "origin/${BASE_REF}...HEAD" \
             | grep -E '^src/gui/.*\.(cpp|h)$' \
             > /tmp/changed_gui_files.txt || true
           echo "Changed src/gui files:"

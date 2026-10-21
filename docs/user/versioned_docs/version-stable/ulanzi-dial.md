@@ -36,7 +36,7 @@ Windows cannot take exclusive control of the dial, so each key press also still 
 
 ## Using the mapper
 
-Open **Settings → Ulanzi Dial Mapping...** ("Ulanzi Dial — Control Mapping"). The dialog shows a picture of the dial with a drop-down "pill" on each physical control, plus:
+Open **Settings → Controllers → Ulanzi Dial Mapping...** ("Ulanzi Dial — Control Mapping"). The dialog shows a picture of the dial with a drop-down "pill" on each physical control, plus:
 
 <img src="/img/screens/ulanzi-mapper.png" width="640" alt="Ulanzi Dial Control Mapping window. A picture of the dial sits in the center with a label beside each of its controls: three top buttons (unassigned, RIT/XIT toggle, unassigned), two side buttons on each side (unassigned and Next Slice), the Tuning knob set to Frequency Tune Slice and its Single tap set to Audio Mute Toggle. The status at the bottom left reads Disconnected, beside Last event, Reset to Defaults and Close." />
 
@@ -110,7 +110,7 @@ Zoom and other actions the connected radio cannot perform are refused rather tha
 The dial is turned off in Radio Setup, or AetherSDR has not claimed it.
 
 1. Check that **Use a Ulanzi Dial when detected** is ticked in **Settings → Radio Setup... → Serial & Controllers**.
-2. Open **Settings → Ulanzi Dial Mapping...** and turn the knob: the **Last event** line should change.
+2. Open **Settings → Controllers → Ulanzi Dial Mapping...** and turn the knob: the **Last event** line should change.
 3. Turn on the **Ext Devices** log category (see [Support and Logging](./support-and-logging.md)) to see dial detection and connection events.
 
 ### Linux: the mapper says "needs permission"

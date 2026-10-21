@@ -52,8 +52,7 @@ public:
 
     // Cross-widget access for the bidirectional SQL sync with VfoWidget.
     // VfoWidget mirrors mode + value via these methods; RxApplet stays the
-    // source of truth for SqlMode, the current surface's manual level, and
-    // the AutoSqlMarginDb persistence.
+    // presentation owner for the attached slice's mode and thresholds.
     SqlMode sqlMode() const { return m_sqlMode; }
     bool    isAttachedToSlice(const SliceModel* slice) const { return m_slice == slice; }
     int     sqlManualLevel() const;
@@ -67,14 +66,16 @@ public:
     // receive surface; Flex persists the level on the attached SliceModel
     // (per-slice, #3326) plus AppSettings as the seed for future new
     // slices, while Kiwi keeps its replacement-source level independent.
-    // Auto writes AppSettings AutoSqlMarginDb and emits
-    // autoSqlMarginDbChanged. Off is a no-op.
+    // Auto retains this slice's margin, seeds new slices through the existing
+    // AutoSqlMarginDb setting, and emits autoSqlMarginDbChanged. Off is a no-op.
     void    setSqlSliderValueExternal(int v);
     // Whether Auto SQL can drive this slice's level, and if not, why
     // (RadioCapabilities::squelchLevelScale). Kiwi external receive keeps its
     // own Auto. Unavailable: the cycle skips Auto, a slice in Auto drops to
     // Manual, and the reason goes on the button's accessible description.
-    void    setAutoSqlAvailability(bool available, const QString& reason);
+    // Before attachment, reconcile=false updates the gate without changing
+    // the previously attached slice's intent.
+    void    setAutoSqlAvailability(bool available, const QString& reason, bool reconcile = true);
     bool    autoSqlAvailable() const;
     QString autoSqlUnavailableReason() const;
     // The SQL button's accessible description; VfoWidget's mirror reads it too.
@@ -225,6 +226,7 @@ private:
     TransmitModel* m_txModel{nullptr};
     RadioModel* m_radioModel{nullptr};
     ControlAvailabilityRegistry* m_filterAvailability{nullptr};
+    QPushButton* m_autoAgcTButton{nullptr};
     std::optional<ReceiveFilterControl> m_receiveFilterControl;
     // exclusiveSquelchScaleValue(caps.squelchLevelScale): the receiver's own gate.
     std::optional<SquelchLevelScale> m_exclusiveSquelch;
@@ -324,8 +326,6 @@ private:
     QPushButton* m_sqlBtn{nullptr};
     QSlider*     m_sqlSlider{nullptr};
     SqlMode      m_sqlMode{SqlMode::Off};
-    SqlMode      m_flexSqlMode{SqlMode::Off};
-    bool         m_savedSquelchOn{false};
     // Fallback only, for the rare case no slice is attached (#3326): Auto
     // mode overwrites the slice's squelchLevel with algorithm-suggested
     // values every FFT tick, so the manual value needs to be cached
@@ -360,6 +360,7 @@ private:
     int agcThresholdMinimum() const;
     int agcThresholdMaximum() const;
     void syncAgcSliderFromSlice();
+    void syncAutoAgcThreshold();
     bool usesTransmitFrequencyCheck() const;
     void configureRepeaterReverseControl();
     void configureFmToneControls();
