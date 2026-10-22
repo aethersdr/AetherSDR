@@ -27,7 +27,6 @@
 #include "core/backends/icom/IcomNtpAccess.h"
 #include "core/backends/icom/IcomScope.h"
 #include "core/backends/icom/IcomSession.h"
-#include "core/backends/icom/IcomSettings.h"
 
 class QTimer;
 
@@ -659,6 +658,7 @@ private:
     // Set by applyScopeStartup until the first reported mode has been seen.
     bool m_scopeInitPending = false;
     void initialiseScopeMode(ScopeMode reported);
+    void queueScopeStartupReads();
     // The mode the radio last reported (sweep or 27 14 read).
     std::optional<ScopeMode> m_scopeReportedMode;
     int m_scopePublishedModeIndex = -2;   // -2 = nothing published yet

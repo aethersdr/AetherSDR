@@ -3423,7 +3423,9 @@ void SpectrumOverlayMenu::rebuildScopeModeButtons()
     }
     qDeleteAll(m_scopeModeBtns);
     m_scopeModeBtns.clear();
-    const QStringList labels = m_scopeModeLabels.size() > 1
+    // A radio with no choice publishes the one mode it has; show that mode
+    // dimmed, not three buttons it does not offer.
+    const QStringList labels = !m_scopeModeLabels.isEmpty()
         ? m_scopeModeLabels : QStringList{tr("Center"), tr("Scroll-F"), tr("Fixed")};
     for (int i = 0; i < labels.size(); ++i) {
         auto* btn = new QPushButton(labels.at(i));

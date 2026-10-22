@@ -69,7 +69,7 @@ Click **Connect by IP**. The model is identified over the wire, not from the rad
 
 AetherSDR treats an Icom differently from a FlexRadio:
 
-- **The radio is authoritative.** It remembers its own frequency, mode and filter. AetherSDR reads the radio's state and levels when it connects and never pushes saved state onto it.
+- **The radio is authoritative.** It remembers its own frequency, mode and filter. AetherSDR reads the radio's state and levels when it connects and never pushes saved state onto it. The one thing it initialises is the scope mode, described under [Panadapter scope modes](#panadapter-scope-modes).
 - **Unknown models fail closed.** Each verified model has its own command profile. A control that has not been proven on a model is hidden, and a radio AetherSDR does not recognize gets no panadapter and no transmit, rather than guessed defaults.
 
 What you can do:
@@ -81,6 +81,22 @@ What you can do:
 - **Radio Health** (**Tools → Radio Health...**) shows the radio's modulation inputs and levels.
 - **Decoders:** the CW, RTTY and AetherClock decoders work. The CW decoder opens in CW.
 - **Memory channels** use AetherSDR's shared bank on this computer, and the radio's own memories can be read in on models that support it. The IC-9700's radio memories are read-only.
+
+### Panadapter scope modes
+
+The panadapter is the radio's own scope, and the radio owns the scope mode. On the IC-7300MK2, the IC-705 (firmware 1.20 or later) and the IC-9700 (firmware 1.30 or later) the **Scope** row in the Display panel offers the radio's three modes:
+
+| Mode | What the window does |
+|---|---|
+| **Scroll-F** | The window stays put while you tune inside it, like a FlexRadio panadapter. Click to tune in place, drag the panadapter to pan the window, and the window follows the tuned frequency when it reaches an edge. This is the mode AetherSDR starts in. |
+| **Fixed** | The window is one of the radio's stored Fixed Edges presets and does not move on its own. |
+| **Center** | The window is centred on the tuned frequency and moves with every tune. Dragging the panadapter retunes the radio. |
+
+**At connect, AetherSDR reads the radio's scope mode and edge preset.** A radio found in Scroll-F or Fixed is left exactly as it was: nothing is written. A radio found in Center is switched to Scroll-F once per session, so the panadapter never starts slaved to the VFO. Picking Center in the Display panel is honoured for that session, and the next connect initialises Scroll-F again. Picking Scroll-F or Fixed is written to the radio and stays across reconnects.
+
+**AetherSDR's window is the radio's Fixed Edges preset 4.** In Scroll-F and in Fixed chosen from the Display panel, every pan and zoom rewrites preset 4 for the band segment you are on; presets 1–3 are never written. If the radio is in Fixed on one of presets 1–3 (chosen on its front panel), the panadapter shows that preset as it is, and a drag or zoom is refused with the view put back. The window cannot cross one of the radio's band-segment boundaries (for example 8.000 MHz on HF), so near a boundary it shifts rather than centres.
+
+Tuning works the same way as on other radios: click, drag the tuned-frequency marker, scroll the wheel, type a frequency, or recall a memory. A tune that leaves the window brings the window with it. The original IC-7300 has Center only, and the Scope row is dimmed with that reason. On the IC-9700 the scope that is streaming (MAIN or SUB) is the one read and initialised.
 
 ### PC Audio and data modes
 
