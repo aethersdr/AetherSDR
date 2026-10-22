@@ -3581,19 +3581,20 @@ foreach(_aether_tgt aethercore aetherdesktop_support AetherSDR aetherd)
     endif()
 endforeach()
 
-# The linker signature leaves Info.plist unbound. Sign the finished bundle so
-# LaunchServices uses its declared identity for macOS local-network permission.
-# Keep this after all resource/helper copies. Xcode handles bundle signing itself.
-if(APPLE AND NOT CMAKE_GENERATOR STREQUAL "Xcode")
-    find_program(AETHER_CODESIGN_EXECUTABLE codesign REQUIRED)
-    add_custom_command(TARGET AetherSDR POST_BUILD
-        COMMAND "${AETHER_CODESIGN_EXECUTABLE}" --force --sign -
-            --identifier "$<TARGET_PROPERTY:AetherSDR,MACOSX_BUNDLE_GUI_IDENTIFIER>"
-            "$<TARGET_BUNDLE_DIR:AetherSDR>"
-        COMMAND "${AETHER_CODESIGN_EXECUTABLE}" --verify --deep --strict
-            "$<TARGET_BUNDLE_DIR:AetherSDR>"
-        COMMENT "Signing the macOS app bundle for local network discovery"
-        VERBATIM)
+# Development-only, opt-in signing runs after all resource/helper copies.
+# Release CI leaves it OFF and retains its Apple signing/notarization workflow.
+include(cmake/MacOSDevelopmentSigning.cmake)
+if(APPLE)
+    set(_aether_development_nested_code)
+    if(TARGET aether-dv-waveform)
+        list(APPEND _aether_development_nested_code "$<TARGET_FILE:aether-dv-waveform>")
+    endif()
+    if(Qt6Keychain_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/qtkeychain/lib/libqt6keychain.1.dylib")
+        list(APPEND _aether_development_nested_code
+            "$<TARGET_BUNDLE_CONTENT_DIR:AetherSDR>/Frameworks/libqt6keychain.1.dylib")
+    endif()
+    aether_sign_macos_development_bundle(AetherSDR ${_aether_development_nested_code})
+    unset(_aether_development_nested_code)
 endif()
 
 # ── Unit test harnesses ──────────────────────────────────────────────────────

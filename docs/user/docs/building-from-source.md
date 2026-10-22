@@ -52,9 +52,11 @@ cmake --build build -j$(nproc)
 
 ### macOS development identity
 
-A locally built app can use its own macOS permission identity while a downloaded release remains installed. Add `-DAETHER_MACOS_BUNDLE_IDENTIFIER=com.aethersdr.AetherSDR.dev` when configuring your development build. Use a different identifier for each build you want macOS to treat as a separate app.
+A locally built app can use its own macOS permission identity while a downloaded release remains installed. Add `-DAETHER_MACOS_ADHOC_SIGN=ON -DAETHER_MACOS_BUNDLE_IDENTIFIER=com.aethersdr.AetherSDR.dev` when configuring your development build. Use a different identifier for each build you want macOS to treat as a separate app.
 
-The complete **AetherSDR** target signs and verifies the finished app bundle. Launch that `.app` with `open -n /path/to/AetherSDR.app`, then allow its **Local Network** request. The downloaded release keeps its own permissions. See [macOS](./macos.md#allowing-local-network-access).
+With development signing enabled, the complete **AetherSDR** target signs bundled helpers and libraries first, then signs and verifies the finished app bundle. Launch that `.app` with `open -n /path/to/AetherSDR.app`, then allow its **Local Network** request. The downloaded release keeps its own permissions. See [macOS](./macos.md#allowing-local-network-access).
+
+This option defaults to **OFF** and is only for ad-hoc local development signing. Production Apple signing, notarization and release CI use their existing workflow with this option disabled. Xcode retains its own signing path.
 
 This uses an ad-hoc signature. macOS may ask for privacy or Keychain approval again after a rebuild; this does not provide a stable signing identity across builds. See [Apple’s code-signing requirements](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
 

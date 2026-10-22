@@ -5782,6 +5782,13 @@ endif()
 # no app or Qt needed — guards the schema ↔ bridge verb field mapping.
 find_program(PYTHON3_EXECUTABLE NAMES python3 python)
 if(PYTHON3_EXECUTABLE)
+    if(APPLE)
+        # Socket-free CMake fixtures compile/sign binaries but never execute them.
+        add_test(NAME macos_development_signing_test
+                 COMMAND ${PYTHON3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_macos_development_signing.py)
+        set_tests_properties(macos_development_signing_test PROPERTIES TIMEOUT 60)
+    endif()
     # Socket-free Ninja graph fixtures; no compiler or application is executed.
     add_test(NAME codeql_coverage_guard
              COMMAND ${PYTHON3_EXECUTABLE}

@@ -85,7 +85,7 @@ Automatic discovery needs incoming network broadcasts and Local Network permissi
 
 1. Open **System Settings → Privacy & Security → Local Network** and allow AetherSDR.
 2. In **Connect to Radio**, click **Retry Discovery**.
-3. For a source build, rebuild the complete **AetherSDR** target before launching its `.app`; the build signs the finished bundle so macOS recognizes its permission identity.
+3. For a local source build, configure with `-DAETHER_MACOS_ADHOC_SIGN=ON`, then rebuild the complete **AetherSDR** target before launching its `.app`. This development-only option signs the finished bundle so macOS recognizes its permission identity; production signing and release CI leave it disabled. See [macOS development identity](./building-from-source.md#macos-development-identity).
 4. If broadcasts are blocked by a router or VPN, use **Connect by IP**. See [Manual Connection](./manual-connection.md).
 
 ### Enabling DAX shows "DAX Audio Driver Missing"
