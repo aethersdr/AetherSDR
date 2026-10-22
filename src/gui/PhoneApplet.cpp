@@ -170,7 +170,7 @@ void PhoneApplet::buildUI()
         });
         // The automation bridge may switch VOX off and never on: the scoped
         // action exists for a disarm only. Disarming lowers TX risk and does
-        // not require bridge TX permission (Principle VI).
+        // not require bridge TX permission.
         // Arming verbs and pointer input have no action and require permission,
         // so they stay refused.
         const auto isDisarm = [](const QString& action, const QString& value) {

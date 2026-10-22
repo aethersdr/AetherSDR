@@ -9298,7 +9298,7 @@ add_test(NAME phone_applet_dexp_visibility_test
 set_tests_properties(phone_applet_dexp_visibility_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# The bridge may switch VOX off with TX permission and never on (#6053): the
+# The bridge may switch VOX off with or without TX permission, never on (#6053): the
 # VOX button's disarm-only scoped action through the real invoke path, with
 # every refusal and the operator's own input pinned. Offscreen, no radio.
 add_executable(phone_applet_vox_disarm_test
