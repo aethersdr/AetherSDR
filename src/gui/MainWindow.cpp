@@ -10369,6 +10369,7 @@ void MainWindow::toggleMinimalModeFromAction()
 
 void MainWindow::toggleMinimalMode(bool on)
 {
+    if (on && m_aetherLabActive) { returnFromAetherLab(); }
     // Canvas mode owns the shell; minimal mode owns the window — they
     // cannot overlap.  Entering minimal from canvas used to reparent an
     // EMPTY applet panel (every applet lent to the canvas, every pan on
@@ -10420,6 +10421,7 @@ void MainWindow::toggleMinimalMode(bool on)
         // Hide the splitter (contains spectrum + applet panel) and reparent
         // the applet panel directly into the central layout
         m_splitter->hide();
+        if (m_labWorkspaceStack) { m_labWorkspaceStack->hide(); }
         m_appletPanel->setParent(centralWidget());
         centralWidget()->layout()->addWidget(m_appletPanel);
         m_appletPanel->show();
@@ -10502,6 +10504,7 @@ void MainWindow::toggleMinimalMode(bool on)
                 heldSpectra.append(sw);
             }
         }
+        if (m_labWorkspaceStack) { m_labWorkspaceStack->show(); }
         m_splitter->show();
 
         // Release fixed width and restore minimum size

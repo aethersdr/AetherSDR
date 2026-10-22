@@ -630,6 +630,30 @@ int main(int argc, char** argv)
         bar->setActiveRadio(connected.id);
     }
 
+    {
+        RadioTabEntry lab;
+        lab.kind = RadioTabEntry::Kind::Workspace;
+        lab.id = QStringLiteral("aetherlab");
+        lab.name = QStringLiteral("AetherLab");
+        lab.detail = QStringLiteral("Antenna Analyzer · USB");
+        bar->setRadioTabs({connected, inUse, lab});
+        bar->setActiveRadio(connected.id);
+        bar->setActiveRadio(lab.id);
+        RadioTab* labTab = tabWithId(*bar, lab.id);
+        check(labTab && labTab->isChecked(), "workspace can be selected independently of the radio");
+        check(labTab && !labTab->isLinkCarrier(), "workspace never carries the radio heartbeat");
+        check(tabWithId(*bar, connected.id)->isLinkCarrier(), "radio retains heartbeat while lab is selected");
+        check(labTab && labTab->statusLine() == lab.detail, "workspace has its own status description");
+        bar->radioTabBar()->setLinkIndicator(QColor(Qt::red), true);
+        check(labTab && !labTab->accessibleName().contains(QStringLiteral("Link lost")), "radio loss never labels the analyzer as lost");
+        bar->radioTabBar()->setLinkIndicator(QColor(), false);
+        bar->setRadioTabs({lab});
+        bar->setActiveRadio(lab.id);
+        check(!tabWithId(*bar, lab.id)->isLinkCarrier(), "workspace-only strip has no fake radio carrier");
+        bar->setRadioTabs({connected, inUse});
+        bar->setActiveRadio(connected.id);
+    }
+
     // ── Discovered-radios popover ───────────────────────────────────────────
     RadioTabBar* tabs = bar->radioTabBar();
     check(tabs != nullptr, "the bar owns a radio tab strip");
@@ -648,6 +672,9 @@ int main(int argc, char** argv)
             QLabel* heading = popover->findChild<QLabel*>(
                 QStringLiteral("discoveredRadiosHeading"));
             check(manual != nullptr, "the popover exposes its manual-connect row");
+            QPushButton* lab = popover->findChild<QPushButton*>(QStringLiteral("radioSwitcherAetherLab"));
+            QPushButton* rescan = popover->findChild<QPushButton*>(QStringLiteral("radioSwitcherRescan"));
+            check(lab && rescan && lab->y() > rescan->y(), "AetherLab is offered below Rescan radios");
             check(heading != nullptr, "the popover exposes its heading");
             if (manual) {
                 check(manual->text() == QStringLiteral("Connect manually\u2026"),

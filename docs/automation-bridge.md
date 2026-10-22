@@ -3243,8 +3243,9 @@ Setup instead.
 currently clipping configured radios. `radios.tabs[].visibleInTabs` is the
 retained tab preference and `visible` is current widget visibility (which can
 also change in minimal mode). `radios.tabs[].linkCarrier` identifies
-the one tab carrying discovery/heartbeat state. `radios.tabs[].status` is one of `connected` / `available` /
-`in use` — a lower-case, untranslated token, and the field to match on.
+the one tab carrying discovery/heartbeat state. `radios.tabs[].kind` distinguishes `radio` from `workspace`. Radio `status` is
+one of `connected` / `available` / `in use`, lower-case and untranslated.
+AetherLab has `status: "workspace"` and never carries the radio link indicator.
 The text the tab *renders* is sentence case and translated (`Connected`,
 `Available`, `In use`, and `Link lost` while the link alarm is up), so
 `statusLine` and `accessibleName` deliberately disagree with `status` on
@@ -4681,6 +4682,43 @@ Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
 
 ---
 
+## Stick Pro analyzer bring-up
+
+`lab status|devices|connect <index>|sweep <startHz> <stopHz> <intervals> isolated|stop|disconnect`
+controls the AetherLab USB proof of concept (RFC #6471). `status`
+returns identity, all accepted raw/derived samples, count hypothesis, terminal
+state and the last 128 HID reports. `devices` explicitly scans normal-mode
+Stick Pro interfaces. `connect` queries VER/FULLINFO and never starts RF.
+
+Acquisition requires `AETHER_AUTOMATION_ALLOW_LAB_RF=1` on the app process and
+an explicit `isolated` token. This permission is separate from radio TX.
+Generic invoke/pointer/coordinate automation refuses the Sweep button; use the typed `lab sweep` request. Status, device enumeration and
+stop work in observe-only mode; connect, sweep and disconnect are blocked.
+Every acquisition attempts `off` and closes USB; reconnect explicitly for the
+next sweep. RF-off and station TX interlock remain unproven/unimplemented.
+
+Through MCP, use `bridge_command` with e.g.
+`{"request":{"cmd":"lab","action":"status"}}` or
+`{"request":{"cmd":"lab","action":"sweep","value":"14000000 14350000 200 isolated"}}`.
+The app must be connected to the instrument on the MCP server's host.
+See [the implementation and qualification guide](./rigexpert-usb-poc.md).
+
+AetherLab is embedded in the main window. Invoke `aetherLabAction` to open it,
+`radioSwitcherAetherLab` in the open **+** popover, or `radioTab_aetherlab`
+after first use. Invoke `aetherLabReturn` to stop the analyzer session and
+restore the radio workspace. The `titlebar` tab model distinguishes
+`kind: "workspace"` / `status: "workspace"` from radio entries, and the radio
+retains `linkCarrier` while AetherLab is selected. Discovery lists contain only
+radios. Marker labels use stable `aetherLabValue_<sampleField>` object names.
+
+Samples also contain `impedanceMagnitudeOhm`, `impedancePhaseDeg`,
+`reflectionMagnitude`, `reflectionPhaseDeg`, `seriesInductanceH`,
+`seriesCapacitanceF`, `parallelResistanceOhm`, `parallelReactanceOhm`,
+`parallelInductanceH` and `parallelCapacitanceF`. Units are SI in JSON;
+non-finite or undefined results are null. The UI formats engineering prefixes.
+Raw CSV and device R/X are preserved. Reflection phase and impedance phase are
+separate quantities; reflection phase is null at a perfect match.
+
 ## Targeting a widget
 
 `grab` and `invoke` resolve a `target` string in this order. Within each match
@@ -4880,7 +4918,7 @@ socket-free production-router tests; live firmware, visible GUI meters and
 audio devices require separate hardware validation.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 80 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 81 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4936,6 +4974,7 @@ audio devices require separate hardware validation.
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
+| `lab` | — | lab <status\|devices\|connect index\|sweep startHz stopHz intervals isolated\|stop\|disconnect> — Stick Pro USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1) |
 | `devices` | — | devices <list\|ulanzi\|ulanzi-start\|ulanzi-stop> — external-device diagnostics and lifecycle control |
 | `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>\|digi [status\|on\|off\|beacon]> — AetherModem demod profile, TXDELAY, RX tap, WIDE1-1 fill-in digipeater, and decoder health |
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |

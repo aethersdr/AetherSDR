@@ -66,7 +66,8 @@ const sidebars = {
         "memory-channels",
         "profile-management",
         "xvtr-transverters",
-        "workspace-canvas"
+        "workspace-canvas",
+        "aetherlab"
       ]
     },
     {

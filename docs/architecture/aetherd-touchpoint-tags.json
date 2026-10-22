@@ -1,4 +1,16 @@
 {
+ "core/RigExpertHidTransport.h": {
+  "tag": "peripheral(rigexpert)",
+  "note": "Independent Stick Pro HID instrument transport; no radio backend, audio or transceiver commands. USB proof of concept under RFC #6471.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/AntennaAnalyzerModel.h": {
+  "tag": "peripheral(rigexpert)",
+  "note": "Independent antenna analyzer state and finite-sweep model, exposed to the GUI and automation bridge. Does not use RadioModel or IRadioBackend.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/DxSpotLineParser.h": {
   "tag": "universal",
   "note": "Parses DX-cluster `DX de` lines (DXSpider/AR/CC/RBN/GoCluster) into DxSpot, including the GoCluster fixed-column tail and SNR report, and replays saved spot logs with per-session provenance. Pure line-to-value logic; no vendor radio ties.",
