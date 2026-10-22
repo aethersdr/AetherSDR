@@ -12,7 +12,7 @@ applies_to: ["FlexRadio"]
 
 :::
 
-DAX IQ delivers raw I/Q samples from the radio's digital down-converter to other SDR programs. Regular [DAX Virtual Audio](./dax-virtual-audio.md) carries demodulated audio from a slice; DAX IQ carries the unprocessed complex signal of a **panadapter**, before any mode, filter or AGC. AetherSDR offers **four IQ channels** at 24, 48, 96 or 192 kHz. DAX IQ is a FlexRadio feature.
+DAX IQ delivers raw I/Q samples from the radio's digital down-converter to other SDR programs. Regular [DAX Virtual Audio](./dax-virtual-audio.md) carries demodulated audio from a slice; DAX IQ carries the unprocessed complex signal of a **panadapter**, before any mode, filter or AGC. AetherSDR offers **four IQ channels** at 24, 48, 96 or 192 kHz, depending on the radio model. DAX IQ is a FlexRadio feature.
 
 Typical uses:
 
@@ -67,16 +67,21 @@ The applet has one row per channel, **IQ 1** to **IQ 4**:
 
 | Control | What it does |
 |---|---|
-| Rate | 24k, 48k, 96k or 192k |
+| Rate | 24k, 48k, 96k or 192k; unsupported rates remain visible and disabled, with a reason |
 | **Off / On** | Creates or removes the IQ stream for that channel |
 | Level meter | Signal level in dBFS over a −70 to −10 dBFS window. Normal signals sit low; a full bar means you are near overload. |
 
-The rate and on/off state of each channel are saved and restored at startup.
+The rate and on/off state of each channel are saved and restored at startup. A saved 192k selection uses 96k when connecting to a model limited to 96 kHz. This fallback does not overwrite the saved preference: it returns to 192k on a model that supports it, unless you choose another rate.
+
+The same rate limits apply when IQ streams are recreated after a profile load.
 
 Higher rates use more of the radio's resources and more network bandwidth.
 
 ### Limits
 
+- FLEX-6300, FLEX-6400/6400M, FLEX-8400/8400M and AU-510/510M support 24, 48 and 96 kHz.
+- FLEX-6500, FLEX-6600/6600M, FLEX-6700/6700R, FLEX-8600/8600M, AU-520/520M, ML-9600/W/X, MLS-9601, CL-9300, CLS-9301 and RT-2122 also support 192 kHz.
+- Until a supported model is identified, IQ rate selection and stream creation are unavailable. TCI rate requests follow the same model limits.
 - The radio reports how many IQ channels it can supply; four is the maximum.
 - Receivers on the same panadapter share that panadapter's IQ stream, so four independent band views need four panadapters.
 

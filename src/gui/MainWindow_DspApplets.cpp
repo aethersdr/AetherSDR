@@ -224,6 +224,7 @@ void MainWindow::updateAetherDspModePolicy()
             slice->mode(),
             slice->audioMute(),
             slice->audioGain(),
+            slice->inCapture(),
         });
     }
 
@@ -420,6 +421,12 @@ void MainWindow::wireDspApplets()
         });
     }
     m_appletPanel->phoneCwApplet()->setTransmitModel(&m_radioModel.transmitModel());
+    const auto updatePhoneCwReceiveOnly = [this](bool connected, const RadioCapabilities& caps) {
+        m_appletPanel->phoneCwApplet()->setTransmitControlsAvailable(!connected || caps.canTransmit);
+    };
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged, this, updatePhoneCwReceiveOnly);
+    updatePhoneCwReceiveOnly(m_radioModel.isConnected(), m_radioModel.backendCapabilities());
+
 
 
 
@@ -924,13 +931,42 @@ void MainWindow::applyGraphicEqToClientEq(bool transmit)
 
 void MainWindow::wireHostModulatedVoiceChain()
 {
+    // The persisted graphic EQ comes back BEFORE the ClientEq binding below, so
+    // restoring writes nothing into the shared objects; the connect-edge re-push
+    // does, and only on a host-modulating backend. A restored layout licenses
+    // that re-push and is not ownership, so a Flex connected first unwinds nothing.
+    {
+        const EqualizerModel::State restored = EqualizerModel::loadPersistedState();
+        m_radioModel.equalizerModel().restoreState(restored);
+        m_restoredGraphicEqPending = restoredGraphicEqHoldsLayout(
+            restored.anyBandNonZero(), restored.anyEnabled());
+    }
+
     // The graphic EQ. Bound on BOTH state signals rather than on a capability
     // check at wiring time, because the capability is not known until a backend
     // attaches; applyGraphicEqToClientEq() re-checks on every call.
     connect(&m_radioModel.equalizerModel(), &EqualizerModel::txStateChanged,
-            this, [this] { applyGraphicEqToClientEq(true); });
+            this, [this] {
+        if (!m_graphicEqReloading)
+            applyGraphicEqToClientEq(true);
+    });
     connect(&m_radioModel.equalizerModel(), &EqualizerModel::rxStateChanged,
-            this, [this] { applyGraphicEqToClientEq(false); });
+            this, [this] {
+        if (!m_graphicEqReloading)
+            applyGraphicEqToClientEq(false);
+    });
+
+    // Operator -> settings, in the EqApplet object and never in the strip's
+    // ClientEq keys. Not on a Flex, whose EQ the radio keeps, nor while the
+    // model still holds a Flex's values.
+    connect(&m_radioModel.equalizerModel(), &EqualizerModel::operatorEdited,
+            this, [this] {
+        if (graphicEqPersistAllowed(m_radioModel.isConnected(),
+                                    hostModulatesTxAudio(),
+                                    m_graphicEqFromRadio)) {
+            EqualizerModel::savePersistedState(m_radioModel.equalizerModel().state());
+        }
+    });
 
     // Operator -> DSP.
     //
@@ -951,25 +987,53 @@ void MainWindow::wireHostModulatedVoiceChain()
         const bool hostModulates = hostModulatesTxAudio();
 
         if (connected && hostModulates) {
+            // After a Flex the model holds the radio's EQ: the saved layout comes
+            // back silently first, and licenses the re-push as at startup.
+            if (graphicEqReloadRequired(connected, hostModulates,
+                                        m_graphicEqFromRadio)) {
+                const EqualizerModel::State saved = EqualizerModel::loadPersistedState();
+                m_graphicEqReloading = true;
+                m_radioModel.equalizerModel().restoreState(saved);
+                m_graphicEqReloading = false;
+                m_restoredGraphicEqPending = restoredGraphicEqHoldsLayout(
+                    saved.anyBandNonZero(), saved.anyEnabled());
+                m_graphicEqFromRadio = false;
+            }
             // Re-push on connect, since the capability was unknown before. Only
-            // what the operator moved (hostVoiceChainRepushAllowed; see
-            // core/HostVoiceChainPolicy.h): EqualizerModel/TransmitModel do not
-            // persist, ClientEq/ClientComp do, so an unconditional push would
-            // overwrite the saved strip with defaults. The cache is reset so the
-            // preset re-applies.
+            // what the operator set or what was restored
+            // (hostVoiceChainRepushAllowed; core/HostVoiceChainPolicy.h): an
+            // unconditional push would overwrite the saved strip with defaults.
+            const bool restoredEq = m_restoredGraphicEqPending;
+            m_restoredGraphicEqPending = false;
+            // PROC does not persist: a restored graphic EQ alone must leave the
+            // strip's compressor as the operator saved it.
             if (hostVoiceChainRepushAllowed(connected, hostModulates,
                                             m_hostVoiceChainOwned)) {
+                // The cache is reset so the preset re-applies.
                 m_lastAppliedProcLevel = -1;
                 m_lastAppliedProcEnable = false;
                 applySpeechProcessorToClientComp(true);
+            }
+            if (hostVoiceChainRepushAllowed(connected, hostModulates,
+                                            m_hostVoiceChainOwned || restoredEq)) {
                 applyGraphicEqToClientEq(true);
                 applyGraphicEqToClientEq(false);
+                // Sliders moved while disconnected are saved once they apply.
+                EqualizerModel::savePersistedState(
+                    m_radioModel.equalizerModel().state());
             }
             m_hostVoiceChainTimer.start();
             return;
         }
 
         m_hostVoiceChainTimer.stop();
+
+        // A Flex writes its own EQ into the model, so the layout restored from
+        // settings is no longer what the model holds: it must not be re-pushed.
+        if (connected && m_radioModel.usesFlexCommandPlane()) {
+            m_restoredGraphicEqPending = false;
+            m_graphicEqFromRadio = true;
+        }
 
         // Unwind on a family swap: after host-modulated EQ/PROC on an HL2, a
         // later Flex session's applies all return early, but ClientEq/ClientComp

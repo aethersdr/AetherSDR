@@ -548,8 +548,8 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         if (m_keyed)
             m_txMicPeakMaxDbfs = std::max(m_txMicPeakMaxDbfs, dbfs);
     });
-    // The post-ALC transmit peak — the level the modulator is actually handing
-    // to the wire.
+    // The post-ALC audio peak — the level handed to the modulator, not the
+    // envelope it puts on the wire.
     //
     // MeterModel's TX:ALC is a LEVEL in dBFS, not a gain, which is why this is
     // fed from alcPeak() and not from the alcGain() signal sitting next to it.
@@ -1840,16 +1840,21 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.txPowerBands = {};
     c.declaredBandRanges = {};
     c.family = QStringLiteral("hl2");
+    c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
+        PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage},
+        {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    c.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Native,
+        {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
     // setTune() is the built-in test tone at ZERO offset — a single carrier
     // exactly on the TX NCO. Nothing here can produce a second tone.
     c.twoToneGenerator = std::nullopt;
     c.firmwareUpdateSource = std::nullopt;  // gateware number; no published list covers it.
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
-    // No repeater duplex and no tone encode: FM/NFM are receive-only below on
-    // every build, so these would imply FM transmit. hasFmRepeaterOffset
-    // defaults true and this backend overrides no repeater-offset setter;
-    // Hidden tone presentation since there is no CTCSS/DCS encoder.
+    // No repeater duplex and no tone encode, although the TXA build keys FM:
+    // hasFmRepeaterOffset defaults true and this backend overrides no
+    // repeater-offset setter, and no tone control reaches TXA's CTCSS encoder,
+    // which WdspChannel::open() forces off. Simplex FM without a tone.
     c.hasFmRepeaterOffset = false;
     c.fmTonePresentation = FmTonePresentation::Hidden;
     c.fmDtcsCodes = {};
@@ -1926,6 +1931,7 @@ RadioCapabilities Hl2Backend::capabilities() const
         {QStringLiteral("SAM"), -12000, -10, 10, 12000, 20, 24000}}};
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
                                                       100'000, 38'400'000};
     c.receivePanBandwidthControl = std::nullopt; // radio-wide rate can retire other receivers
@@ -1939,16 +1945,20 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
-    // Modes this radio demodulates but cannot modulate: Hl2TxDsp only
-    // distinguishes sidebands, so these would go out as USB. SSB family and CW
-    // (gateware-keyed at the TX NCO) are not listed. Both spellings are listed
-    // because refuseKeyInReceiveOnlyMode() compares the slice's string. This
-    // also refuses TUNE in these modes, since the list has no per-activity
-    // granularity (same on IC-705, #5040).
-    c.receiveOnlyModes = {QStringLiteral("AM"),   QStringLiteral("SAM"),
-                          QStringLiteral("DSB"),  QStringLiteral("FM"),
-                          QStringLiteral("NFM"),  QStringLiteral("WBFM"),
+    // Modes this radio demodulates but does not modulate. SAM is a receive
+    // detector (TXA would send plain AM), WDSP TX has no WBFM mode, and there
+    // is no DRM encoder. Both spellings of an alias are listed because
+    // refuseKeyInReceiveOnlyMode() compares the slice's string. The list also
+    // refuses TUNE in these modes: it has no per-activity granularity.
+    c.receiveOnlyModes = {QStringLiteral("SAM"),  QStringLiteral("WBFM"),
                           QStringLiteral("WFM"),  QStringLiteral("DRM")};
+    // AM, DSB and FM (NFM is the same TXA mode) are modulated by the TXA build
+    // only. The phasing modulator only distinguishes sidebands and would send
+    // them as USB, so that build keeps refusing them.
+    if (!AETHER_HL2_TX_TXA) {
+        c.receiveOnlyModes << QStringLiteral("AM")  << QStringLiteral("DSB")
+                           << QStringLiteral("FM")  << QStringLiteral("NFM");
+    }
     c.hostModulates = true;
     // Same tap, same seam — see RadioCapabilities::takesTxAudioOverSeam.
     c.takesTxAudioOverSeam = true;             // PC runs the modulator; no on-radio mic jacks
@@ -8115,12 +8125,12 @@ void Hl2Backend::defineMeters()
         0.0, 100.0,    QStringLiteral("PA temperature"));
     def(6, QStringLiteral("TX"),  QStringLiteral("MICPEAK"), QStringLiteral("dBFS"),
         -100.0, 0.0,   QStringLiteral("Microphone peak"));
-    // The post-ALC transmit level. Named ALC because that is the name MeterModel
-    // binds to its swAlc() accessor, which is what the Phone/CW applet's ALC
-    // gauges read — the meter is defined by what consumes it, not by which stage
-    // happens to produce it.
+    // The post-ALC audio peak, before the modulator. Named ALC because that is
+    // the name MeterModel binds to its swAlc() accessor, which the Phone/CW
+    // applet's ALC gauges read: the meter is defined by what consumes it, not
+    // by which stage produces it.
     def(7, QStringLiteral("TX"),  QStringLiteral("ALC"),     QStringLiteral("dBFS"),
-        -100.0, 0.0,   QStringLiteral("Post-ALC transmit peak"));
+        -100.0, 0.0,   QStringLiteral("Post-ALC audio peak, before the modulator"));
     // Speech-processor gain reduction, as a POSITIVE amount of compression in
     // dB — the sign convention MeterModel's COMPPEAK path already expects, and
     // the opposite of ClientComp::gainReductionDb()'s own (which is <= 0).

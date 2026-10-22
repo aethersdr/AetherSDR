@@ -14,7 +14,7 @@ AetherSDR supports class-compliant USB MIDI controllers for hands-on control of 
 ## Setup
 
 1. Plug in your MIDI controller.
-2. Open **Settings → MIDI Mapping...**.
+2. Open **Settings → Controllers → MIDI Mapping...**.
 3. Click **Refresh**, pick your controller from the **Port** list and click **Connect** — the status turns green.
 4. Move a knob or fader — the activity line shows the MIDI message.
 5. Choose a parameter (for example "AF Gain").
@@ -179,9 +179,9 @@ midi.settings      — device preferences and active bindings
 midi/<name>.xml    — saved profiles
 ```
 
-## Known issues
-
-- A crash or a failed write while bindings are being saved can leave `midi.settings` partly written or empty, losing your live bindings without an error ([#5160](https://github.com/aethersdr/AetherSDR/issues/5160)). Export a profile as a backup.
+Saves to `midi.settings` replace the file atomically. If writing the new
+document fails, the previous file remains intact and AetherSDR logs a warning.
+Export a profile to keep a separate backup of your bindings.
 
 ## Troubleshooting
 

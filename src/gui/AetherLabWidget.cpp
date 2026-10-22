@@ -288,7 +288,7 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
     static_cast<QVBoxLayout*>(connection->layout())->addLayout(devicesRow);
     m_status = new QLabel(connection);
     m_status->setObjectName(QStringLiteral("aetherLabStatus"));
-    m_status->setAccessibleName(tr("Analyzer session status"));
+    m_status->setAccessibleDescription(tr("Analyzer session status"));
     m_status->setWordWrap(true);
     connection->layout()->addWidget(m_status);
     auto* guidance = new QLabel(tr("Isolate the analyzer RF port from transmitters. Stop AntScope before connecting."), connection);
@@ -367,7 +367,7 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
     m_frequency = new QLabel(tr("No measurement"), markerCard);
     m_frequency->setObjectName(QStringLiteral("aetherLabMarkerFrequency"));
     m_frequency->setProperty("labFrequency", true);
-    m_frequency->setAccessibleName(tr("Marker frequency"));
+    m_frequency->setAccessibleName(tr("Marker frequency: %1").arg(m_frequency->text()));
     markerCard->layout()->addWidget(m_frequency);
     const auto metric = [this](QGridLayout* grid, int row, int column, const QString& label,
                                const QString& key, const QString& description = QString()) {
@@ -382,7 +382,8 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
         box->addWidget(caption);
         auto* value = new QLabel(QStringLiteral("—"), cell);
         value->setObjectName(QStringLiteral("aetherLabValue_") + key);
-        value->setAccessibleName(label);
+        value->setProperty("labAccessibleCaption", label);
+        value->setAccessibleName(tr("%1: %2").arg(label, value->text()));
         value->setAccessibleDescription(description);
         value->setToolTip(description);
         value->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -526,9 +527,9 @@ void AetherLabWidget::refresh()
     availability(m_sweep, status == AntennaAnalyzerModel::State::Ready && m_isolated->isChecked(), tr("Connect and identify the Stick Pro, then confirm RF isolation"));
     availability(m_cancel, active, tr("No open instrument session"));
     const QString statusText = tr("%1 · %2 · %3 received rows%4").arg(analyzerStatusLabel(status),
-        state.value(QStringLiteral("identity")).toString().isEmpty() ? tr("No verified identity") : state.value(QStringLiteral("identity")).toString())
-        .arg(state.value(QStringLiteral("receivedRows")).toInt())
-        .arg(m_model->lastError().isEmpty() ? QString() : QStringLiteral(" · ") + m_model->lastError());
+        state.value(QStringLiteral("identity")).toString().isEmpty() ? tr("No verified identity") : state.value(QStringLiteral("identity")).toString(),
+        QString::number(state.value(QStringLiteral("receivedRows")).toInt()),
+        m_model->lastError().isEmpty() ? QString() : QStringLiteral(" · ") + m_model->lastError());
     if (m_status->text() != statusText) {
         m_status->setText(statusText);
         QAccessibleEvent event(m_status, QAccessible::NameChanged);
@@ -549,7 +550,12 @@ void AetherLabWidget::refresh()
     const QJsonObject sample = samples.isEmpty() ? QJsonObject() : samples.at(m_marker->value()).toObject();
     const QString frequency = samples.isEmpty() ? tr("No measurement")
         : tr("%1 MHz").arg(QString::number(sample.value(QStringLiteral("frequencyHz")).toDouble() / 1e6, 'f', 6));
-    m_frequency->setText(frequency);
+    if (m_frequency->text() != frequency) {
+        m_frequency->setText(frequency);
+        m_frequency->setAccessibleName(tr("Marker frequency: %1").arg(frequency));
+        QAccessibleEvent event(m_frequency, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
     m_quality->setText(samples.isEmpty() ? tr("Run a sweep to place a marker")
         : tr("Sample %1 / %2 · %3").arg(m_marker->value() + 1).arg(samples.size()).arg(sample.value(QStringLiteral("quality")).toString()));
     for (auto it = m_values.cbegin(); it != m_values.cend(); ++it) {
@@ -568,7 +574,8 @@ void AetherLabWidget::refresh()
         }
         if (it.value()->text() != text) {
             it.value()->setText(text);
-            QAccessibleValueChangeEvent event(it.value(), text);
+            it.value()->setAccessibleName(tr("%1: %2").arg(it.value()->property("labAccessibleCaption").toString(), text));
+            QAccessibleEvent event(it.value(), QAccessible::NameChanged);
             QAccessible::updateAccessibility(&event);
         }
     }

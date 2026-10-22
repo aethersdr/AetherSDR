@@ -6,6 +6,8 @@
 #include <QString>
 #include <QStringList>
 #include <optional>
+#include <array>
+#include "core/backends/PanDisplayRequest.h"
 
 namespace AetherSDR {
 
@@ -26,6 +28,12 @@ public:
     void setWaterfallId(const QString& id);
     QString clientHandle() const { return m_clientHandle; }
     void setClientHandle(const QString& h);
+    quint64 controlRevision() const { return m_controlRevision; }
+    quint64 ownershipRevision() const { return m_ownershipRevision; }
+    quint64 displayIntentRevision(PanDisplayField field) const
+    { return m_displayIntentRevisions.at(static_cast<size_t>(field)); }
+    quint64 noteDisplayIntent(PanDisplayField field)
+    { return ++m_displayIntentRevisions.at(static_cast<size_t>(field)); }
     // #3977: true when this pan belongs to the given connection handle. The
     // radio reassigns client_handle when another session reclaims the pan;
     // callers gate outbound pan-set commands on this so a superseded session
@@ -167,6 +175,7 @@ public:
     // can ACK a display setter without echoing status to the setting client.
     void setRequestedFftSettings(int average, int fps);
     int radioReportedAverage() const { return m_radioReportedAverage; }
+    quint64 fftObservationRevision() const { return m_fftObservationRevision; }
     int radioReportedFps() const { return m_radioReportedFps; }
     bool averageIsRequest() const { return m_averageIsRequest; }
     bool fpsIsRequest() const { return m_fpsIsRequest; }
@@ -213,6 +222,9 @@ public:
     // zoom toggles read (#4057).
     bool bandZoomOn() const { return m_bandZoomOn; }
     bool segmentZoomOn() const { return m_segmentZoomOn; }
+    // Radio-owned noise floor range in dB (FlexLib Panadapter.NoiseFloorRange);
+    // empty until the radio reports it.
+    std::optional<double> noiseFloorRange() const { return m_noiseFloorRange; }
 
     // Configuration flags
     bool isResized() const { return m_resized; }
@@ -264,8 +276,13 @@ signals:
     void daxiqChannelChanged(int channel);
     void bandZoomChanged(bool on);
     void segmentZoomChanged(bool on);
+    void noiseFloorRangeChanged(double db);
 
 private:
+    quint64 m_controlRevision{0};
+    quint64 m_ownershipRevision{0};
+    quint64 m_fftObservationRevision{0};
+    std::array<quint64, static_cast<size_t>(PanDisplayField::Count)> m_displayIntentRevisions{};
     QString     m_panId;
     QString     m_waterfallId;
     QString     m_clientHandle;
@@ -314,6 +331,7 @@ private:
     int         m_daxiqChannel{0};
     bool        m_bandZoomOn{false};
     bool        m_segmentZoomOn{false};
+    std::optional<double> m_noiseFloorRange;
     bool        m_resized{false};
     bool        m_wfConfigured{false};
 };

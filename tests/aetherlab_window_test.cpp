@@ -74,8 +74,26 @@ private slots:
         marker->setValue(2);
         QCOMPARE(frequency->text(), QStringLiteral("14.350000 MHz"));
         QCOMPARE(readout->text(), QStringLiteral("1.080"));
+        const auto accessibleText = [](QWidget* widget) {
+            QAccessibleInterface* interface = QAccessible::queryAccessibleInterface(widget);
+            return interface ? interface->text(QAccessible::Name) : QString();
+        };
+        QCOMPARE(accessibleText(frequency), QStringLiteral("Marker frequency: 14.350000 MHz"));
+        QCOMPARE(accessibleText(readout), QStringLiteral("SWR: 1.080"));
+        auto* status = window.findChild<QLabel*>("aetherLabStatus");
+        QVERIFY(status);
+        QCOMPARE(accessibleText(status), status->text());
+        QVERIFY(accessibleText(status).startsWith("Complete · Stick Pro"));
+        for (QLabel* value : window.findChildren<QLabel*>()) {
+            if (!value->objectName().startsWith("aetherLabValue_")) { continue; }
+            QVERIFY2(accessibleText(value).contains(value->text()), qPrintable(value->objectName()));
+        }
         marker->setValue(1);
         QCOMPARE(readout->text(), QStringLiteral("1.000"));
+        QCOMPARE(accessibleText(frequency), QStringLiteral("Marker frequency: 14.175000 MHz"));
+        QCOMPARE(accessibleText(readout), QStringLiteral("SWR: 1.000"));
+        QCOMPARE(accessibleText(window.findChild<QLabel*>("aetherLabValue_returnLossDb")), QStringLiteral("Return loss: ∞ dB"));
+        QCOMPARE(accessibleText(window.findChild<QLabel*>("aetherLabValue_reflectionPhaseDeg")), QStringLiteral("Phase ∠S11: undefined"));
         QCOMPARE(window.findChild<QLabel*>("aetherLabValue_returnLossDb")->text(), QStringLiteral("∞ dB"));
         QCOMPARE(window.findChild<QLabel*>("aetherLabValue_reflectionPhaseDeg")->text(), QStringLiteral("undefined"));
         QVERIFY(!sweep->isEnabled());

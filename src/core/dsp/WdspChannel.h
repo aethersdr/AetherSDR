@@ -80,6 +80,14 @@ public:
         bool operator==(const FmReceive&) const = default;
     };
 
+    // Carrier-spanning RF cuts belong to the pre-detector NBP. The audio
+    // bandpass removes demodulated carrier/DC at 50 Hz and keeps the wider
+    // sideband's audio. SAM uses WDSP's PLL and dual-sideband detector.
+    struct AmReceive
+    {
+        bool operator==(const AmReceive&) const = default;
+    };
+
     // Broadcast receive recipe from WDSP Guide section 5.3.10. This opt-in
     // owns an RF FIR before WDSP's 384 -> 192 kHz conversion and normalizes
     // paired audio before any receiver tap. Other channel owners are unchanged.
@@ -93,6 +101,28 @@ public:
         bool operator==(const WbfmReceive&) const = default;
     };
 
+    // Optional host receive stages, prepared before the channel starts. Other
+    // owners retain WDSP's defaults unless they supply this recipe.
+    struct ReceiveNotch
+    {
+        double centerHz = 0;
+        double widthHz = 200;
+        bool active = true;
+        bool operator==(const ReceiveNotch&) const = default;
+    };
+    struct AnalogReceiveDsp
+    {
+        std::vector<ReceiveNotch> trackingNotches;
+        bool nrEnabled = false;
+        int nrLevel = 50;
+        bool anfEnabled = false;
+        int anfLevel = 50;
+        bool manualNotchEnabled = false;
+        double manualNotchCenterHz = 1500.0;
+        double manualNotchWidthHz = 400.0;
+        bool operator==(const AnalogReceiveDsp&) const = default;
+    };
+
     struct Config
     {
         Direction direction = Direction::Receive;
@@ -103,6 +133,8 @@ public:
         int outputSampleRate = 48000;
         Mode mode = Mode::Usb;
         std::optional<FmReceive> fmReceive;
+        std::optional<AmReceive> amReceive;
+        std::optional<AnalogReceiveDsp> analogReceiveDsp;
         std::optional<WbfmReceive> wbfmReceive;
         // RXA output panel gain, linear, applied after the AGC. Unset keeps
         // WDSP's create_rxa() default of 4.0 (+12.04 dB, #5942).
@@ -149,6 +181,13 @@ public:
         static constexpr double kMinFmDeviationHz = 100.0;
         static constexpr double kMaxFmDeviationHz = 100000.0;
         double fmDeviationHz = 5000.0;
+        // Transmit-only: TXA's AM carrier level (ammod c_level, [0, 1]) and FM
+        // peak deviation for unit audio (fmmod; bounded by kMin/kMaxFmDeviationHz).
+        // Separate from fmDeviationHz above, which is the RXA detector's. open()
+        // pushes both on every transmit open; each is inert outside its mode.
+        // The defaults are create_txa()'s own.
+        double txAmCarrierLevel = 0.5;
+        double txFmDeviationHz = 5000.0;
         // true: fexchange waits for each output block. The r1/r2 buffer phase is
         // still set per channel open (flush_iobuffs() drains with a 1 ms timed
         // wait), so two opens fed the same burst can differ (#5629).

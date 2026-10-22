@@ -25,15 +25,17 @@ AetherSDR can receive with an Apache Labs **ANAN-G2** over openHPSDR Protocol 2.
 
 The G2 is found automatically on your LAN: open **File → Connect to Radio...** → **On This Network**, select it and click **Connect Selected Radio**.
 
-To reach it across a VPN or another subnet, use **Connect by IP** with **Radio type:** set to **ANAN-G2** (see [Manual Connection](./manual-connection.md)). That form also holds the G2's connection options, which apply on both paths:
+Discovery also sends a directed broadcast to each attached IPv4 subnet. This can find a G2 on a second NIC with its own subnet. Two NICs sharing a subnet still use the preferred route; VPNs and routers may block broadcast discovery. If the G2 does not appear, use **Connect by IP** with **Radio type:** set to **ANAN-G2** (see [Manual Connection](./manual-connection.md)).
+
+Configure the receive front end under **Settings → Radio Setup... → Radio → ANAN Front End**. The page is available while disconnected, and while connected to a G2. Its options apply on the next connection, whether you use **Available radios** or **Connect by IP**:
 
 | Option | Default | What it does |
 |--------|---------|--------------|
 | **Sample rate:** | 48 ksps | DDC0 sample rate: 48, 96, 192, 384, 768 or 1536 ksps. It is also the starting width of the panadapter. Higher rates use more of the radio's Ethernet link. |
-| **Select ADC:** | ADC0 (ANT1/2/3) | Which receive chain feeds the receiver: **ADC0 (ANT1/2/3)**, behind the switched antenna relays, or **ADC1 (RX2)**, wired straight to the RX2 jack. |
-| **Dither** / **Random** | On | The ADC's linearization bits. Leave them on unless you are testing. |
-| **ADC0 RF filter bypass** / **ADC1 RF filter bypass** | On | Routes the antenna around the front-end filter bank. **Leave these checked:** no band filter is selected in this version, so unchecked means nothing reaches the ADC. |
-| **Send RX audio to the radio's speaker** | Off | Also plays receive audio through the G2's own speaker and headphone jack. Takes effect on the next connect. |
+| **Feed the receiver from:** | ADC0 — behind the ANT1/2/3 relays | Which receive chain feeds the receiver: **ADC0 — behind the ANT1/2/3 relays**, behind the switched antenna relays, or **ADC1 — the RX2 jack**, wired straight to the RX2 jack. |
+| **Dither** / **Randomization** | On | The ADC's linearization bits. Leave them on unless you are testing. |
+| **Bypass ADC0's bank** / **Bypass ADC1's bank (RX2)** | On | Routes the antenna around the front-end filter bank. **Leave these checked:** no band filter is selected in this version, so unchecked means nothing reaches the ADC. |
+| **Send receive audio to the radio** | Off | Also plays receive audio through the G2's own speaker and headphone jack. Takes effect on the next connect. |
 
 ## Receiving with the G2
 
@@ -43,7 +45,7 @@ To reach it across a VPN or another subnet, use **Connect by IP** with **Radio t
 - **NB** cycles Off → **NB** → **NB2** → Off: WDSP's two impulse blankers, run on this computer before the demodulator. **NB** silences each impulse; **NB2** reconstructs the blanked window from the samples either side, and shows an **NB2** fill selector (**Zero**, **Sample hold**, **Mean hold**, **Hold sample** or **Interpolate**) while it runs. Neither is offered in FM.
 - **AGC-T** sets the AGC's maximum gain from −20 to 120 dB, 1.4 dB per slider step, starting at 71 (79.4 dB). With AGC off it sets the fixed gain instead, starting at 29 (20.6 dB). AGC-T and the AGC-off level are not remembered across launches; each launch starts at 71 and 29.
 - **RF Gain** from −31 to 0 dB drives the G2's ADC step attenuator, and is restored per radio.
-- **AF gain, mute and balance** apply. With **Send RX audio to the radio's speaker** on, the receiver's mute and volume apply to both the computer and the radio's speaker, and the title-bar speaker button mutes the radio's speaker too.
+- **AF gain, mute and balance** apply. With **Send receive audio to the radio** on, the receiver's mute and volume apply to both the computer and the radio's speaker, and the title-bar speaker button mutes the radio's speaker too.
 - Manual **Black Level** and waterfall **NB Blank**. See [Panadapter Controls](./panadapter-controls.md).
 - **Status bar:** the **Network:** indicator follows the G2's link (received data and packet loss; round-trip time and jitter are not measured on this radio). The G2's supply voltage is shown in the status bar and the Meter applet. The G2 reports no PA temperature, so that reading is not shown.
 - **Tools → Radio Health...**
@@ -87,17 +89,17 @@ Controls the G2 cannot honor are dimmed with a reason, or refuse with a notice; 
 
 ### Nothing is received at all
 
-An **RF filter bypass** box is unchecked. No band filter is selected, so an unchecked bypass means nothing reaches the ADC.
+A **Bypass ADC0's bank** or **Bypass ADC1's bank (RX2)** box is unchecked. No band filter is selected, so an unchecked bypass means nothing reaches the ADC.
 
 1. Disconnect from the G2.
-2. Open **Connect by IP** with **Radio type:** set to **ANAN-G2**.
-3. Tick **ADC0 RF filter bypass** and **ADC1 RF filter bypass**, then connect again.
+2. Open **Settings → Radio Setup... → Radio → ANAN Front End**.
+3. Tick **Bypass ADC0's bank** and **Bypass ADC1's bank (RX2)**, then connect again.
 
 ### No audio from the radio's own speaker
 
-**Send RX audio to the radio's speaker** is off, or was turned on during the session. It takes effect on the next connect.
+**Send receive audio to the radio** is off, or was turned on during the session. It takes effect on the next connect.
 
-1. Tick **Send RX audio to the radio's speaker** in the ANAN-G2 options.
+1. Open **Settings → Radio Setup... → Radio → ANAN Front End** and tick **Send receive audio to the radio**.
 2. Disconnect and connect again.
 3. Check that the receiver and the title-bar speaker button are not muted; they mute the radio's speaker too.
 

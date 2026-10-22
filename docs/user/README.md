@@ -40,7 +40,15 @@ work in `.md` files.
 
 The **Docs** workflow (`.github/workflows/docs.yml`) builds the site and the
 PDF on every pull request that touches `docs/user/`, `tools/docs/` or the
-workflow itself, and deploys both to Cloudflare Pages on a push to `main`.
+workflow itself. A merge to `main` deploys nothing: the site is deployed to
+Cloudflare Pages when an app release is published, from the release's tag,
+unless it is a backport (not the highest version), which deploys nothing.
+A maintainer can redeploy by hand with **Run workflow** on the Docs workflow,
+from the highest app release by default, or from `ref`: `main`, to publish a
+docs-only fix between releases, or a published app release tag. Any other
+branch or tag is refused. The deploy runs in the `cloudflare-pages`
+environment, which holds `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`;
+it fails if either is missing.
 
 ## Writing pages
 
@@ -65,8 +73,11 @@ at Stable for every page the snapshot now has:
 python3 tools/docs/snapshot_stable.py 26.10.2
 ```
 
-The PDF manual is built from `docs/`: Next on `main`, the tag's docs on a
-release.
+The PDF manual is built from `docs/`: Next on a pull request, the tag's docs
+on a release.
+
+Between releases the site does not follow `main`: Next shows `main` as of the
+last deploy.
 
 ## Generated reference pages
 
@@ -131,8 +142,11 @@ font in `tools/docs/pdf/fonts/`). It needs `node`, `pandoc` 3.6 or newer and
 python3 tools/docs/build_pdf.py --output AetherSDR-Manual.pdf
 ```
 
-CI deploys it with the site as `/AetherSDR-Manual.pdf`, and attaches it to
-every release with a detached signature made with the release key.
+CI attaches it to every release, as `AetherSDR-Manual-<tag>.pdf`, with a
+detached signature made with the release key. It is not deployed with the site,
+because Cloudflare Pages refuses any file over 25 MiB. Instead the deploy writes
+a `_redirects` entry that sends `/AetherSDR-Manual.pdf`, the address the app and
+the site link to, to the PDF on the release.
 
 ## Log Analyzer
 

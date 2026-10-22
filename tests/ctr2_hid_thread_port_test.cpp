@@ -311,16 +311,18 @@ void testNegotiation()
         QByteArray reply;
         bool featureIo;
         quint32 expect;
+        quint32 offered;   // what the device offered, taken or not
     };
     const Case cases[] = {
-        {"a stock CTR2 (no Feature report) stays version 0", {}, true, 0},
-        {"a build without Feature report access stays version 0", {}, false, 0},
+        {"a stock CTR2 (no Feature report) stays version 0", {}, true, 0, 0},
+        {"a build without Feature report access stays version 0", {}, false, 0, 0},
         {"a device answering with something else offers nothing",
-         featureReport(QByteArray("NOTCAPS!")), true, 0},
+         featureReport(QByteArray("NOTCAPS!")), true, 0, 0},
         {"an offer with a nonzero reserved byte offers nothing",
-         featureReport(QByteArray::fromHex("435801ff00000003")), true, 0},
+         featureReport(QByteArray::fromHex("435801ff00000003")), true, 0, 0},
         {"an offer is narrowed to what the host uses",
-         featureReport(capabilities::encode(spectrumBit | (1u << 9))), true, spectrumBit},
+         featureReport(capabilities::encode(spectrumBit | (1u << 9))), true, spectrumBit,
+         spectrumBit | (1u << 9)},
     };
     for (const Case& c : cases) {
         auto dev = std::make_shared<FakeDevice>();
@@ -344,6 +346,8 @@ void testNegotiation()
         });
         check(waitUntil([&] { return negotiated && gotReports; }), c.name);
         check(result == c.expect && port->extensions() == c.expect, c.name);
+        check(port->offeredExtensions() == c.offered,
+              "the port remembers everything the device offered, taken or not");
         check(negotiatedFirst, "the negotiation result arrives before any report");
         std::vector<QByteArray> sets;
         {

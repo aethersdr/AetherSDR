@@ -84,6 +84,37 @@ void testInterlockTxGate()
     check(interlockKeepsLocalTxOn(true, false, false, false, true,
                                   QString(), false),
           "tune keeps local TX on");
+    for (const QString& source : {QStringLiteral("RCA"), QStringLiteral("MIC,VOX"),
+                                  QStringLiteral("VOX,MIC"), QStringLiteral("ACC,SW"),
+                                  QStringLiteral("SW,RCA"), QStringLiteral("TC2,ACC,DVK"),
+                                  QStringLiteral(",MIC,,")}) {
+        check(interlockKeepsLocalTxOn(true, false, false, false, false, source, false),
+              "exact hardware token anywhere in source list reconciles local TX");
+        check(!interlockKeepsLocalTxOn(false, true, true, true, true, source, true),
+              "foreign owner overrides all sources and local intents");
+    }
+    for (const QString& source : {QString(), QStringLiteral("SW"), QStringLiteral("VOX"),
+                                  QStringLiteral("SW,VOX"), QStringLiteral("TUNE"),
+                                  QStringLiteral("UNKNOWN"), QStringLiteral("MICROPHONE"),
+                                  QStringLiteral("XACC,RCAX,VOXX"), QStringLiteral("MIC;VOX"),
+                                  QStringLiteral(" MIC ")}) {
+        check(!interlockKeepsLocalTxOn(true, false, false, false, false, source, false),
+              "no exact hardware token or local intent keeps VOX-disabled TX off");
+        check(interlockKeepsLocalTxOn(true, false, false, false, false, source, true),
+              "VOX enable preserves legacy source-independent reconciliation");
+    }
+    const QString commaDense(1024 * 1024, QLatin1Char(','));
+    check(!interlockKeepsLocalTxOn(true, false, false, false, false, commaDense, false),
+          "large comma-dense source does not manufacture a hardware token");
+    for (const QString& token : {QStringLiteral("MIC"), QStringLiteral("ACC"), QStringLiteral("RCA")}) {
+        check(interlockKeepsLocalTxOn(true, false, false, false, false, commaDense + token, false),
+              "large source preserves exact hardware token at the end without truncation");
+        check(!interlockKeepsLocalTxOn(true, false, false, false, false,
+                                      commaDense + token + QLatin1Char('X'), false),
+              "large source preserves token boundaries at the end");
+    }
+    check(interlockKeepsLocalTxOn(true, false, false, true, false, QString(), false),
+          "CWX intent keeps local TX on without a source");
 }
 
 void testOperatorTransmitGate()
@@ -330,6 +361,13 @@ void testDaxTxPolicy()
     check(daxTxRequestReasonName(DaxTxRequestReason::RxPlaybackTx)
               == QStringLiteral("rx_playback_tx"),
           "RxPlaybackTx has a diagnostic name");
+    DaxTxPolicyContext windowsVoiceKeyer = windowsExternalRoute;
+    windowsVoiceKeyer.reason = DaxTxRequestReason::ClientVoiceKeyerTx;
+    check(evaluateDaxTxPolicy(windowsVoiceKeyer).allowed,
+          "client voice keyer creates its own dax_tx stream independently of DAX2 (RFC #4214)");
+    check(daxTxRequestReasonName(DaxTxRequestReason::ClientVoiceKeyerTx)
+              == QStringLiteral("client_voice_keyer_tx"),
+          "client voice keyer reason has its own log name");
 }
 
 void testUdpRegistrationPolicy()
@@ -391,6 +429,77 @@ void testBoundedSliceCapacity()
           "slice capacity does not change before model limit is known");
 }
 
+void testTgxlTuneCycle()
+{
+    using RadioStatusOwnership::TgxlTuneCycle;
+    using RadioStatusOwnership::kTgxlTuneConfirmMs;
+
+    {   // Normal tune: arm, key, tuning=1, tuning=0, unkey.
+        TgxlTuneCycle c;
+        c.arm(1000);
+        check(c.update(true, false, 1010), "armed key edge is a provisional tune carrier");
+        check(c.provisional && !c.latched, "key edge inside the window is provisional");
+        check(c.update(true, true, 1100) && c.latched && !c.provisional,
+              "tuning=1 confirms the tune");
+        c.onTuningChanged(false, true);
+        check(c.update(true, false, 1500), "latch holds after tuning=0 while keyed");
+        check(!c.update(false, false, 1600), "unkey ends the tune cycle");
+        check(!c.update(true, false, 1700), "quick MOX after the tune is the operator's");
+    }
+    {   // tuning=0 lands before the unkey.
+        TgxlTuneCycle c;
+        c.arm(0);
+        c.update(true, true, 10);
+        c.onTuningChanged(false, true);
+        check(c.update(true, false, 20), "tuning=0 before unkey still holds the cycle");
+        c.update(false, false, 30);
+        check(!c.update(true, false, 40), "re-key after a clean tune is the operator's");
+    }
+    {   // Refused tune, then an operator key inside the window.
+        TgxlTuneCycle c;
+        c.arm(0);
+        check(c.update(true, false, 100), "refused tune: key edge is provisional at first");
+        check(c.update(true, false, 100 + kTgxlTuneConfirmMs - 1),
+              "provisional holds until the deadline");
+        check(!c.update(true, false, 100 + kTgxlTuneConfirmMs),
+              "provisional released at the deadline: the over is the operator's");
+        check(!c.update(true, false, 100 + kTgxlTuneConfirmMs + 500),
+              "released over stays the operator's");
+        c.update(false, false, 9000);
+        check(!c.update(true, false, 9100), "arm window was cleared");
+    }
+    {   // Stale completion: radio unkeys before tuning=0, operator re-keys.
+        TgxlTuneCycle c;
+        c.arm(0);
+        c.update(true, true, 10);
+        check(!c.update(false, true, 20), "unkey ends the cycle while tuning is still true");
+        check(!c.update(true, true, 30),
+              "re-key while the tuner still says tuning is NOT latched");
+        c.onTuningChanged(false, true);
+        check(!c.update(true, false, 40),
+              "late tuning=0 during the operator over leaves it operator-owned");
+        c.update(false, false, 50);
+        check(!c.update(true, false, 60), "next over is the operator's");
+    }
+    {   // Front-panel tune: no arm, tuning=1 mid-over.
+        TgxlTuneCycle c;
+        check(!c.update(true, false, 10), "unarmed key edge is the operator's");
+        check(c.update(true, true, 20), "tuning=1 mid-over latches (front-panel tune)");
+        check(!c.update(false, false, 30), "unkey ends it");
+    }
+    {   // tuning=0 unkeyed clears the window (refused, never keyed).
+        TgxlTuneCycle c;
+        c.arm(0);
+        c.onTuningChanged(false, false);
+        check(!c.update(true, false, 100), "window cleared by unkeyed tuning=0");
+    }
+    {   // Window expiry.
+        TgxlTuneCycle c;
+        c.arm(0);
+        check(!c.update(true, false, 5000), "key after the 5 s window is the operator's");
+    }
+}
+
 } // namespace
 
 int main()
@@ -406,6 +515,7 @@ int main()
     testUdpRegistrationPolicy();
     testCreateResponseParsing();
     testBoundedSliceCapacity();
+    testTgxlTuneCycle();
 
     if (failures) {
         std::printf("\n%d failure(s)\n", failures);

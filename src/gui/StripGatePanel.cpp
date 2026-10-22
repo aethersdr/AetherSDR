@@ -215,7 +215,7 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
             "any DSP chain stage so noise is suppressed before it can be "
             "amplified by gate / compressor / saturator.  Voice modes only — "
             "digital modes (RADE, DAX, RTTY, FT8, FDV, CW) bypass this stage.  "
-            "Saved per Channel Strip profile, and suppressed by the strip's "
+            "Saved per AetherTX profile, and suppressed by the strip's "
             "BYPASS button alongside every other voice stage."));
         // Share the Mode pair's idiom so the toolbar's switches read alike.
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_rn2Btn, kFlipStyle);

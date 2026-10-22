@@ -1,4 +1,6 @@
 #include "models/CwRxModel.h"
+#include "models/CwDecodeSettings.h"
+#include "TestSettingsProfile.h"
 #include <QCoreApplication>
 #include <iostream>
 #include <QPointer>
@@ -122,7 +124,18 @@ bool retainLockedEstimates()
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile settings(QStringLiteral("cw-rx-model"));
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
+    CwDecodeSettings::setBackend(QStringLiteral("unknown"));
+    if (!require(!CwDecodeSettings::neuralSelected(),
+                 "Unknown saved backend disables ggmorse controls")) { return 1; }
+    for (const QString& key : CwRxModel::availableBackends()) {
+        CwDecodeSettings::setBackend(key);
+        if (!require(CwDecodeSettings::neuralSelected() == (key != QLatin1String("ggmorse")),
+                     "Saved backend gating disagrees with the decoder catalog")) { return 1; }
+    }
+    CwDecodeSettings::setBackend(QStringLiteral("ggmorse"));
     QTemporaryDir cache;
     qputenv("AETHER_DEEPFIST_MODEL_DIR", cache.path().toUtf8());
     CwRxModel decoder;

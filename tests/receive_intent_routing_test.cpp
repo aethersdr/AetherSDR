@@ -21,6 +21,7 @@
 namespace AetherSDR {
 class RadioModelSliceLifecycleTestAccess {
 public:
+    static void publishCapabilities(RadioModel& radio) { radio.publishCapabilities(true); }
     static void wire(RadioModel& radio, SliceModel* slice)
     {
         radio.wireSliceReceiveIntentsToBackend(slice);
@@ -53,6 +54,16 @@ void check(bool ok, const char* message)
 class Backend final : public IRadioBackend {
 public:
     bool connected = false;
+    bool confirmed = false;
+    QList<int> pitches;
+    QList<bool> ritEnables;
+    QList<int> ritOffsets;
+    void setSliceRitEnabled(int id, bool enabled) override
+    { ritEnables.append(enabled); if (observe) { observe(id); } }
+    void setSliceRitOffset(int, int hz) override { ritOffsets.append(hz); }
+    ReceiveControlPolicy receiveControlPolicy() const override
+    { return confirmed ? ReceiveControlPolicy::Confirmed : ReceiveControlPolicy::Optimistic; }
+    void setCwPitch(int hz) override { pitches.append(hz); }
     QList<SliceTuneRequest> tunes;
     QList<SliceFilterRequest> filters;
     QList<SliceAgcRequest> agcs;
@@ -66,7 +77,12 @@ public:
     int pairedAgcCalls = 0;
     int keyCalls = 0;
     std::function<void(int)> observe;
-    RadioCapabilities capabilities() const override { return {}; }
+    RadioCapabilities capabilities() const override
+    {
+        RadioCapabilities caps;
+        if (confirmed) { caps.receiveCwPitchControl = ReceiveCwPitchControl{}; }
+        return caps;
+    }
     bool isConnected() const override { return connected; }
     void connectRadio(const RadioConnectRequest&) override { connected = true; }
     void disconnectRadio() override { connected = false; }
@@ -156,10 +172,11 @@ SliceDelta report(double frequency = 14.2)
 struct Fixture {
     RadioModel radio;
     Backend* backend;
-    explicit Fixture(bool commandPlaneCreation = false)
+    explicit Fixture(bool commandPlaneCreation = false, bool confirmed = false)
     {
         auto owned = std::make_unique<Backend>();
         backend = owned.get();
+        backend->confirmed = confirmed;
         radio.setBackendForTest(std::move(owned), QStringLiteral("receive-intent-test"));
         if (commandPlaneCreation) {
             check(radio.automationApplySliceFixture(0, QStringLiteral("A")),
@@ -171,6 +188,155 @@ struct Fixture {
     }
     SliceModel* slice() { return radio.slice(0); }
 };
+
+void confirmedReceiveControls()
+{
+    Fixture f(false, true);
+    SliceModel* s = f.slice();
+    QSignalSpy changed(s, &SliceModel::agcModeChanged);
+    QSignalSpy nbChanged(s, &SliceModel::nbChanged);
+    QSignalSpy raw(s, &SliceModel::commandReady);
+    s->setAgcMode(QStringLiteral("fast"));
+    s->setAgcThreshold(37);
+    s->setAgcOffLevel(22);
+    check(s->agcMode() == QStringLiteral("med") && s->agcThreshold() == 65
+              && s->agcOffLevel() == 10 && changed.isEmpty(),
+          "confirmed AGC edits do not publish requested state before adoption");
+    check(f.backend->agcs.size() == 3
+              && f.backend->agcs[0].mode == QStringLiteral("fast")
+              && f.backend->agcs[1].threshold == 37 && f.backend->agcs[2].offLevel == 22,
+          "independent AGC field intents reach backend without stale paired overwrite");
+    s->setNbKind(NoiseBlankerKind::Advanced);
+    s->setNbLevel(73);
+    s->setApf(true);
+    s->setApfLevel(61);
+    s->setRit(true, 130);
+    check(!s->nbOn() && !s->apfOn() && !s->ritOn() && s->ritFreq() == 0
+              && nbChanged.isEmpty() && raw.isEmpty(),
+          "confirmed DSP and RIT edits remain intent and emit no raw wire command");
+    check(f.backend->dsps.size() == 4
+              && f.backend->dsps[0].requestedBlanker() == NoiseBlankerKind::Advanced
+              && f.backend->dsps[1].level == 73 && f.backend->dsps[2].enabled
+              && f.backend->dsps[3].level == 61,
+          "confirmed DSP requests retain selected feature and field");
+    SliceDelta accepted;
+    accepted.agcMode = QStringLiteral("fast"); accepted.agcThreshold = 37;
+    accepted.agcOffLevel = 22; accepted.apf = true; accepted.apfLevel = 61;
+    accepted.ritOn = true; accepted.ritFreq = 130;
+    accepted.nbKind = NoiseBlankerKind::Advanced; accepted.nbLevel = 73;
+    emit f.backend->sliceChanged(0, accepted);
+    check(s->agcMode() == QStringLiteral("fast") && s->agcThreshold() == 37
+              && s->agcOffLevel() == 22 && s->apfOn() && s->apfLevel() == 61
+              && s->ritOn() && s->ritFreq() == 130 && changed.size() == 1
+              && s->nbKind() == NoiseBlankerKind::Advanced && s->nbLevel() == 73,
+          "only accepted readback advances AGC DSP and RIT state");
+    // Correct back to the currently accepted value while an edit is pending.
+    // Equal-to-observed is still a new intent; it must supersede the pending one.
+    s->setAgcThreshold(70); s->setAgcThreshold(37);
+    check(f.backend->agcs.last().threshold == 37,
+          "confirmed same-value correction is dispatched to cancel pending AGC edit");
+
+    const int priorDspRequests = f.backend->dsps.size();
+    s->setNr(true); s->setNrLevel(72);
+    s->setAnf(true); s->setAnfLevel(63);
+    s->setMn(true); s->setMnLevel(28);
+    check(!s->nrOn() && !s->anfOn() && !s->mnOn() && s->mnLevel() == 50,
+          "NR ANF and manual notch remain accepted state while edits are pending");
+    check(f.backend->dsps.size() == priorDspRequests + 6
+              && f.backend->dsps[priorDspRequests].feature == SliceDspRequest::Feature::Nr
+              && f.backend->dsps[priorDspRequests + 2].feature == SliceDspRequest::Feature::Anf
+              && f.backend->dsps.last().feature == SliceDspRequest::Feature::Mn
+              && f.backend->dsps.last().field == SliceDspRequest::Field::Level
+              && f.backend->dsps.last().level == 28 && raw.isEmpty(),
+          "NR ANF and manual notch dispatch selected fields without raw commands");
+    SliceDelta acceptedFilters;
+    acceptedFilters.nr = true; acceptedFilters.nrLevel = 72;
+    acceptedFilters.anf = true; acceptedFilters.anfLevel = 63;
+    acceptedFilters.mn = true; acceptedFilters.mnLevel = 28;
+    emit f.backend->sliceChanged(0, acceptedFilters);
+    check(s->nrOn() && s->nrLevel() == 72 && s->anfOn() && s->anfLevel() == 63
+              && s->mnOn() && s->mnLevel() == 28,
+          "adopted NR ANF and manual notch readbacks publish their actual state");
+    s->setMn(false); s->setMn(true);
+    check(f.backend->dsps.last().enabled,
+          "same-value manual notch correction supersedes pending disable");
+
+    RadioModelSliceLifecycleTestAccess::publishCapabilities(f.radio);
+    TransmitModel& tx = f.radio.transmitModel();
+    QSignalSpy pitchChanged(&tx, &TransmitModel::cwPitchChanged);
+    QSignalSpy pitchRaw(&tx, &TransmitModel::commandReady);
+    tx.setCwPitch(720);
+    check(tx.cwPitch() == 600 && pitchChanged.isEmpty() && pitchRaw.isEmpty()
+              && f.backend->pitches == QList<int>{720} && f.backend->keyCalls == 0,
+          "receive pitch sends one intent without optimistic readback wire command or TX");
+    TransmitDelta pitchAccepted; pitchAccepted.cwPitch = 720;
+    tx.applyChanges(pitchAccepted);
+    check(tx.cwPitch() == 720 && pitchChanged.size() == 1 && f.backend->pitches.size() == 1,
+          "accepted receive pitch updates presentation without feeding back into backend");
+    f.backend->confirmed = false;
+    RadioModelSliceLifecycleTestAccess::publishCapabilities(f.radio);
+    QSignalSpy pitchControls(&tx, &TransmitModel::controlRequested);
+    tx.setCwPitch(800);
+    check(tx.cwPitch() == 800 && pitchRaw.isEmpty() && pitchControls.size() == 1
+              && qvariant_cast<TransmitControlRequest>(pitchControls.first().first()).field
+                    == TransmitControlRequest::Field::CwPitch
+              && std::get<int>(qvariant_cast<TransmitControlRequest>(pitchControls.first().first()).value) == 800,
+          "optimistic pitch uses the typed upstream control route once without raw wire text");
+}
+
+void ritLifecycle()
+{
+    Fixture f(false, true);
+    SliceModel* original = f.slice();
+    original->setRit(true, 120);
+    check(f.backend->ritEnables == QList<bool>{true} && f.backend->ritOffsets == QList<int>{120},
+          "connected current receiver dispatches both RIT fields");
+    f.backend->observe = [&](int) { f.backend->connected = false; };
+    original->setRit(true, 230);
+    check(f.backend->ritEnables.size() == 2 && f.backend->ritOffsets.size() == 1,
+          "disconnect during RIT enable suppresses companion offset");
+    original->setRit(true, 340);
+    check(f.backend->ritEnables.size() == 2, "disconnected RIT intent never reaches backend");
+    f.backend->connected = true;
+    f.backend->observe = [&](int id) {
+        emit f.backend->sliceRemoved(id);
+        emit f.backend->sliceChanged(id, report());
+    };
+    original->setRit(true, 450);
+    check(f.slice() != original && f.backend->ritEnables.size() == 3
+              && f.backend->ritOffsets.size() == 1,
+          "receiver retirement during RIT enable cannot offset replacement");
+    original->setRit(true, 560);
+    check(f.backend->ritEnables.size() == 3, "retired receiver cannot send another RIT intent");
+    f.backend->observe = {};
+    f.slice()->setRit(true, 670);
+    check(f.backend->ritEnables.size() == 4 && f.backend->ritOffsets.last() == 670,
+          "replacement receiver retains functional RIT controls");
+}
+
+void notchReadbackLifecycle()
+{
+    Fixture f(false, true);
+    RadioModelSliceLifecycleTestAccess::publishCapabilities(f.radio);
+    NotchDelta initial; initial.centerHz = 14'200'000; initial.widthHz = 400;
+    emit f.backend->notchChanged(11, initial);
+    check(f.radio.tnfModel().tnf(11) != nullptr, "backend notch observation reaches shared model");
+    RadioDelta global; global.tnfEnabled = false;
+    emit f.backend->radioChanged(global);
+    check(!f.radio.tnfModel().globalEnabled(), "backend global notch bypass reaches shared model");
+
+    f.radio.tnfModel().setTnfFreq(11, 14.201);
+    check(f.radio.tnfModel().tnf(11)->freqMhz == 14.2,
+          "capability publication selects confirmed tracking-notch policy");
+    std::thread delayed([&] { emit f.backend->notchChanged(12, initial); });
+    delayed.join();
+    auto next = std::make_unique<Backend>();
+    f.backend = next.get();
+    f.radio.setBackendForTest(std::move(next), QStringLiteral("replacement"));
+    QCoreApplication::processEvents();
+    check(f.radio.tnfModel().tnf(12) == nullptr,
+          "queued notch observation from retired backend cannot populate new session");
+}
 
 void externalReceiveHandoffOrdering()
 {
@@ -190,7 +356,10 @@ void externalReceiveHandoffOrdering()
         s->prepareExternalReceiveAudioReplacementBandRecall(false);
         order.append(QStringLiteral("continue band attempt"));
     });
-    f.radio.requestPanBand(QStringLiteral("receiver"), QStringLiteral("20"));
+    // Band requests address a published model pan, not the backend's own ID.
+    emit f.backend->panCenterBandwidthChanged(QStringLiteral("receiver"), 14.2, 0.2);
+    check(f.radio.panadapters().size() == 1, "the backend's pan is published to the model");
+    f.radio.requestPanBand(f.radio.panadapters().first()->panId(), QStringLiteral("20"));
     check(order == QStringList{"restore primary mute", "continue band attempt"}
               && f.backend->audio.size() == 2 && f.backend->audio.last().value == 0
               && f.backend->audio.last().origin == SliceAudioRequest::Origin::ExternalReceiveSuppression
@@ -669,6 +838,9 @@ int main(int argc, char** argv)
     qputenv("AETHER_AUTOMATION", "1");
     QCoreApplication app(argc, argv);
     if (!profile.isValid()) { return 1; }
+    confirmedReceiveControls();
+    ritLifecycle();
+    notchReadbackLifecycle();
     creationPaths();
     externalReceiveHandoffOrdering();
     receiveControls();

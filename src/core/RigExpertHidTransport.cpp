@@ -2,7 +2,9 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QFile>
 #include <QLockFile>
+#include <QStandardPaths>
 #include <QThread>
 #include <QTimer>
 
@@ -11,7 +13,7 @@
 #include <memory>
 
 #ifdef HAVE_HIDAPI
-#include <hidapi/hidapi.h>
+#include "HidDiscovery.h"
 #endif
 
 namespace AetherSDR {
@@ -29,8 +31,8 @@ QList<RigExpertUsbDevice> RigExpertHidTransport::enumerate()
 {
     QList<RigExpertUsbDevice> devices;
 #ifdef HAVE_HIDAPI
-    if (hid_init() != 0) { return devices; }
-    hid_device_info* list = hid_enumerate(0x0483, 0xa1de);
+    if (HidDiscovery::init() != 0) { return devices; }
+    hid_device_info* list = HidDiscovery::enumerate(0x0483, 0xa1de);
     for (const hid_device_info* d = list; d; d = d->next) {
         const QString serial = d->serial_number ? QString::fromWCharArray(d->serial_number) : QString();
         // This PoC deliberately excludes other RigExpert models and bootloaders.
@@ -58,13 +60,27 @@ public:
     void open(const QString& path)
     {
         const QByteArray key = QCryptographicHash::hash(path.toUtf8(), QCryptographicHash::Sha256).toHex();
-        m_lock = std::make_unique<QLockFile>(QDir::temp().filePath(
-            QStringLiteral("aethersdr-rigexpert-%1.lock").arg(QString::fromLatin1(key))));
+        QString lockRoot = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+        if (lockRoot.isEmpty()) {
+            lockRoot = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+        }
+        const QDir lockDirectory(QDir(lockRoot).filePath(QStringLiteral("aethersdr-rigexpert")));
+        if (lockRoot.isEmpty() || !QDir().mkpath(lockDirectory.path())
+            || !QFile::setPermissions(lockDirectory.path(), QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner)) {
+            fail(QStringLiteral("Cannot create the private Stick Pro lock directory"));
+            return;
+        }
+        m_lock = std::make_unique<QLockFile>(lockDirectory.filePath(
+            QStringLiteral("%1.lock").arg(QString::fromLatin1(key))));
         if (!m_lock->tryLock(0)) { fail(QStringLiteral("Stick Pro is claimed by another AetherSDR instance")); return; }
         if (m_cancelled->load()) { finish({}); return; }
-        if (hid_init() != 0) { fail(QStringLiteral("HID initialization failed")); return; }
-        m_handle = hid_open_path(path.toUtf8().constData());
-        if (!m_handle) { fail(QStringLiteral("Cannot open Stick Pro: %1").arg(error())); return; }
+        if (HidDiscovery::init() != 0) { fail(QStringLiteral("HID initialization failed")); return; }
+        std::wstring openError;
+        m_handle = HidDiscovery::openPath(path.toUtf8().constData(), &openError);
+        if (!m_handle) {
+            fail(QStringLiteral("Cannot open Stick Pro: %1").arg(QString::fromStdWString(openError)));
+            return;
+        }
         if (hid_set_nonblocking(m_handle, 1) != 0) { fail(QStringLiteral("Cannot enable nonblocking HID reads")); return; }
         // Discard bytes left by an earlier host before requesting a new identity.
         std::array<unsigned char, 64> buffer{};
@@ -138,6 +154,8 @@ private:
     }
     void fail(const QString& message)
     {
+        if (m_failed) { return; }
+        m_failed = true;
         emit failed(message);
         QByteArray stop(64, '\0');
         stop[0] = 0x07;
@@ -151,6 +169,7 @@ private:
     hid_device* m_handle{nullptr};
     QTimer* m_timer{nullptr};
     bool m_finished{false};
+    bool m_failed{false};
 };
 
 class HidTransport final : public RigExpertHidTransport {

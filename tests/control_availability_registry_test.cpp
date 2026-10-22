@@ -74,6 +74,25 @@ int main(int argc, char** argv)
     RadioModel model;                       // not connected
     ControlAvailabilityRegistry registry(model);
 
+    // Feature-specific mode restrictions can narrow, never expand, a record.
+    {
+        using Feature = ReceiveDspControl::Feature;
+        ReceiveDspControl control{{QStringLiteral("USB"), QStringLiteral("CW")},
+                                  {Feature::Nr, Feature::Apf}};
+        check(control.supports(Feature::Apf, QStringLiteral("USB")),
+              "an absent per-feature restriction retains the common mode list");
+        control.featureModes.insert(Feature::Apf, {QStringLiteral("CW"), QStringLiteral("FM")});
+        check(!control.supports(Feature::Apf, QStringLiteral("USB"))
+                  && control.supports(Feature::Apf, QStringLiteral("CW"))
+                  && !control.supports(Feature::Apf, QStringLiteral("FM"))
+                  && control.supports(Feature::Nr, QStringLiteral("USB")),
+              "a per-feature restriction narrows only its declared feature and modes");
+        control.featureModes.insert(Feature::Apf, {});
+        control.featureModes.insert(Feature::Anf, {QStringLiteral("CW")});
+        check(!control.supports(Feature::Apf, QStringLiteral("CW"))
+                  && !control.supports(Feature::Anf, QStringLiteral("CW")),
+              "an empty restriction disables support and cannot add an undeclared feature");
+    }
     const QString reason = QStringLiteral("Not supported by this radio");
 
     // ---- permissive while disconnected ----
@@ -264,6 +283,72 @@ int main(int argc, char** argv)
         check(button.toolTip().isEmpty() && action.statusTip().isEmpty(), "disconnect clears stale reasons");
         check(registry.stateOf(&button) == ControlAvailability::Inactive,
               "disconnect always returns to Inactive even with retained engagement");
+    }
+    // Optional receive restrictions leave existing Flex presentation owned by
+    // the control, including after an unsupported mode or a backend switch.
+    for (const QString& themeName : {QStringLiteral("Default Dark"),
+                                    QStringLiteral("Default Light")}) {
+        check(theme.setActiveTheme(themeName), "load theme for optional receive restriction");
+        QPushButton button(QStringLiteral("NR"));
+        button.setCheckable(true);
+        button.setChecked(true);
+        const QString help = QStringLiteral("Noise reduction: adjust the DSP level");
+        const QString description = QStringLiteral("Noise reduction enabled");
+        button.setToolTip(help);
+        button.setAccessibleDescription(description);
+        theme.applyStyleSheet(&button, QStringLiteral(
+            "QPushButton:checked { color: {{color.accent}}; padding: 7px; }"));
+        button.show();
+        QApplication::processEvents();
+        const QString baseStyle = button.styleSheet();
+        const QImage basePixels = button.grab().toImage();
+        RadioCapabilities restrictedCaps;
+        restrictedCaps.receiveDspControl = ReceiveDspControl{
+            {QStringLiteral("USB")}, {ReceiveDspControl::Feature::Nr}};
+        const auto supported = [](bool, const RadioCapabilities& caps) {
+            return !caps.receiveDspControl || caps.receiveDspControl->supports(
+                ReceiveDspControl::Feature::Nr, QStringLiteral("FM"));
+        };
+        {
+            ControlAvailabilityRegistry restriction(model);
+            restriction.registerRestriction(&button, reason, supported);
+            check(button.toolTip() == help && button.accessibleDescription() == description
+                      && button.styleSheet() == baseStyle && button.isChecked(),
+                  "absent optional record preserves checked legacy styling and help");
+            emit model.capabilitiesChanged(true, restrictedCaps);
+            emit model.capabilitiesChanged(true, restrictedCaps);
+            check(!button.isEnabled() && button.isChecked() && button.toolTip() == reason
+                      && button.accessibleDescription() == reason && !button.isHidden(),
+                  "unsupported receive mode is disabled with a reason without changing its value");
+            emit model.capabilitiesChanged(true, {});
+            QApplication::processEvents();
+            check(button.isEnabled() && button.isChecked() && button.toolTip() == help
+                      && button.accessibleDescription() == description
+                      && button.styleSheet() == baseStyle && button.grab().toImage() == basePixels,
+                  "switch to legacy backend restores original checked pixels and help");
+            emit model.capabilitiesChanged(true, restrictedCaps);
+            emit model.capabilitiesChanged(false, restrictedCaps);
+            check(button.isEnabled() && button.toolTip() == help,
+                  "disconnect lifts optional restriction and restores help");
+            emit model.capabilitiesChanged(true, restrictedCaps);
+        }
+        check(button.isEnabled() && button.styleSheet() == baseStyle && button.toolTip() == help
+                  && button.accessibleDescription() == description,
+              "replacing a registry restores restricted widgets before the next backend registers");
+
+        QWidget disabledParent;
+        QPushButton inherited(&disabledParent);
+        QPushButton explicitlyDisabled;
+        explicitlyDisabled.setEnabled(false);
+        disabledParent.setEnabled(false);
+        ControlAvailabilityRegistry restriction(model);
+        restriction.registerRestriction(&inherited, reason, supported);
+        restriction.registerRestriction(&explicitlyDisabled, reason, supported);
+        emit model.capabilitiesChanged(true, restrictedCaps);
+        emit model.capabilitiesChanged(true, {});
+        disabledParent.setEnabled(true);
+        check(inherited.isEnabled() && !explicitlyDisabled.isEnabled(),
+              "restriction restoration distinguishes inherited and explicit disablement");
     }
     {
         bool engaged = false;

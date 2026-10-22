@@ -104,7 +104,7 @@ The FM controls set tone, duplex and offset where the model supports them. On an
 
 ### Controllers
 
-The Icom RC-28 remote encoder is supported (**Settings → Icom RC-28 Remote Encoder...**); see [USB Control Surfaces](./usb-control-surfaces.md).
+The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom RC-28 Remote Encoder...**); see [USB Control Surfaces](./usb-control-surfaces.md).
 
 ## Reference
 
@@ -142,7 +142,6 @@ The Icom RC-28 remote encoder is supported (**Settings → Icom RC-28 Remote Enc
 - On the IC-7300MK2, transmit audio drops out for about a third of a second roughly every 1.2 seconds while the radio stays keyed ([#6169](https://github.com/aethersdr/AetherSDR/issues/6169)).
 - CW speed, break-in and pitch do nothing on models without a CW text keyer, such as the IC-9700 ([#6110](https://github.com/aethersdr/AetherSDR/issues/6110)).
 - On the IC-9700, the panadapter trace can sit on the bottom line and look blank on a quiet band with the preamp off ([#4814](https://github.com/aethersdr/AetherSDR/issues/4814)).
-- On the IC-9700, the waterfall rate returns to 100 after you restart AetherSDR. This is fixed for the next release ([#5996](https://github.com/aethersdr/AetherSDR/issues/5996)).
 
 ## Troubleshooting
 

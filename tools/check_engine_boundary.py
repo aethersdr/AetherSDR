@@ -221,7 +221,6 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/ConnectionPanel.h": ["SmartLinkClient"],
     "src/gui/DaxIqApplet.cpp": ["DaxIqModel"],
     "src/gui/DemoApplet.cpp": ["NoiseMixer"],
-    "src/gui/DvkPanel.cpp": ["DvkWavTransfer"],
     "src/gui/KiwiPublicReceiverPicker.h": ["KiwiPublicDirectory"],
     "src/gui/KiwiSdrApplet.h": ["KiwiSdrClient"],
     "src/gui/MainWindow.cpp": ["DvkWavTransfer", "Hl2Backend", "KiwiSdrManager", "PanadapterStream", "RadioStatusOwnership", "SimBackend", "StreamStatus"],

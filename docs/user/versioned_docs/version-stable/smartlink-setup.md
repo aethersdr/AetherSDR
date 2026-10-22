@@ -14,7 +14,7 @@ applies_to: ["FlexRadio"]
 
 SmartLink lets you operate your FlexRadio over the internet. AetherSDR supports the full SmartLink sign-in and connection flow, including audio, panadapter and waterfall streaming.
 
-Can't forward ports at the station (CGNAT, Starlink, cellular)? On a FLEX-8000 series or Aurora radio, see [Tailscale Remote Access](./tailscale-remote-access.md). It needs no port forwarding and runs on Tailscale's free plan.
+Can't forward ports at the station (CGNAT, Starlink, cellular)? On a FLEX-8000 series or Aurora radio with firmware 4.2.18 or later, see [Tailscale Remote Access](./tailscale-remote-access.md). It needs no port forwarding and runs on Tailscale's free plan.
 
 ## Requirements
 
@@ -61,10 +61,10 @@ AetherSDR pins each SmartLink radio's TLS certificate on first use, to protect y
 
 ### Managing pins
 
-**Settings → Radio Setup... → SmartLink → Pinned SmartLink Certificates** lists each pinned radio with its **Host**, **SHA-256 fingerprint** and the date it was **Pinned**.
+**Settings → Radio Setup... → SmartLink → Pinned SmartLink Certificates** lists each pinned radio with its **Host**, **SHA-256 Fingerprint** and the date it was **Pinned**.
 
-- **Forget selected** removes one pin.
-- **Forget all** clears every pin after confirmation. Each radio is pinned again, silently, on its next connection.
+- **Forget Selected** removes one pin.
+- **Forget All** clears every pin after confirmation. Each radio is pinned again, silently, on its next connection.
 
 Forget a pin only when you have deliberately changed a radio's certificate.
 
@@ -75,6 +75,10 @@ Forget a pin only when you have deliberately changed a radio's certificate.
 - Sign-in uses FlexRadio's identity provider, and all SmartLink connections use TLS with certificate pinning (above).
 - Your password is not stored. The SmartLink **refresh token** is saved in the operating system's keychain, so AetherSDR signs you in automatically on the next launch. Builds without keychain support keep it for the current session only. See [Settings and Backups](./settings-and-backups.md).
 - Logs redact email addresses, tokens, IP addresses and serial numbers — see [Support and Logging](./support-and-logging.md).
+
+### UDP session maintenance
+
+AetherSDR registers the SmartLink UDP endpoint every 50 ms until it receives a packet with a complete Flex VITA-49 preamble, including compressed audio. It then sends a registration keepalive every five seconds for the rest of the connection to maintain the NAT mapping. Disconnecting stops these keepalives; reconnecting registers the new session. This happens automatically and needs no client-side setting.
 
 ### Limitations
 

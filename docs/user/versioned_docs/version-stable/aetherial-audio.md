@@ -233,7 +233,7 @@ compact companion to the two windows:
 - The chain strip shows each stage as a box. Single-click a box to switch the
   stage on or off, double-click it to open that stage's editor, and drag it to
   reorder. The delay used to tell a single click from a double click is
-  **Settings → Radio Setup... → Appearance & Behavior → Single-click delay**.
+  **Settings → Radio Setup... → Appearance & Behavior → Single-Click Delay**.
 - On the TX side, ⏺ / ▶ drive the same transmit monitor as AetherTX's
   REC / PLAY.
 - Compact tiles for individual stages sit below the strip.

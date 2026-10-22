@@ -11,6 +11,7 @@
 #include "IcomTciUnkeySettle.h"
 #include "PcmFrame.h"
 #include "TxCoordinator.h"
+#include "core/backends/SliceLifecycleRequest.h"
 
 #include <QWebSocketProtocol>  // CloseCode for the m_rxClose test seam
 #include <QObject>
@@ -38,6 +39,7 @@ namespace AetherSDR {
 class RadioModel;
 class AudioEngine;
 class SliceModel;
+class PanadapterModel;
 class Resampler;
 class TciRxConverter;
 
@@ -72,6 +74,7 @@ struct TciClientInfo {
 class TciServer : public QObject {
     Q_OBJECT
     friend class TciServerReviewTest;
+    friend class TciSliceLifecycleTestAccess;
     friend class TciRxAudioTest;
     friend class Hl2TciSignalingTest;
     friend class TxOperationIntegrationTestAccess;
@@ -244,6 +247,7 @@ private:
     void tuneSliceAndConfirm(
         TciClient* client, int trx, int channel, int sliceId, long long frequencyHz);
     void promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation);
+    void reapCreatedVfoBSlice(int sliceId);
     void createTxSliceForVfoB(TciClient* client,
         const TciProtocol::VfoRequest& request,
         SliceModel* rxSlice,
@@ -344,6 +348,8 @@ private:
     void releaseAllIqStreams();
     void resetIqStreamBookkeeping();
     int  achievedIqSampleRate() const;
+    int  effectiveIqSampleRate() const;
+    void announceEffectiveIqSampleRate();
 
     void syncClient(const ClientState& client);
     TciClient* clientById(quint64 id) const;
@@ -391,6 +397,7 @@ private:
     QSet<int>          m_iqCreateInFlight;   // create issued, status not yet seen
     QSet<int>          m_pendingIqRemovals;  // awaiting a create status to reap
     QHash<QString,int> m_iqPanChannel;       // panId → TCI-owned DAX IQ channel
+    int                m_announcedIqSampleRate{48000};
     int                m_iqSampleRate{48000};// shared requested rate, all TCI receivers
     QHash<QString, long long> m_lastDdsCenterHz; // panId → last broadcast dds center, gates zoom-only re-emits (#3910)
     TciRoutingState m_routingState;
@@ -409,8 +416,18 @@ private:
         QString routeConfirmation;
         bool splitOnly { false };
         quint64 transitionGeneration { 0 };
+        quint64 ticket { 0 };
+        QPointer<SliceModel> rxIdentity;
+        RadioControlSession session{};
     };
     std::optional<PendingVfoBCreate> m_pendingVfoBCreate;
+    QHash<int, CreatedSliceReceipt> m_createdVfoBSlices;
+    struct CreatedVfoBPan {
+        QPointer<SliceModel> slice;
+        QPointer<PanadapterModel> pan;
+        RadioControlSession session{};
+    };
+    QHash<int, CreatedVfoBPan> m_createdVfoBPans;
     struct PendingTrxRequest
     {
         QPointer<TciClient> client;

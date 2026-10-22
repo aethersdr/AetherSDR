@@ -8,6 +8,7 @@
 #include "models/MeterModel.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
+#include "models/Kat500TxController.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
@@ -46,20 +47,21 @@ struct BandSpec {
     double  searchLowMhz;
     double  searchHighMhz;
     int     segmentKhz;
+    int     katSegmentKhz;
 };
 
 constexpr BandSpec kBandSpecs[] = {
-    {"160m",  1.6,  2.1,    9},
-    {"80m",   3.3,  4.1,    9},
-    {"60m",   5.2,  5.5,    9},
-    {"40m",   6.9,  7.4,   25},
-    {"30m",  10.0, 10.2,   25},
-    {"20m",  13.9, 14.5,   51},
-    {"17m",  18.0, 18.3,   51},
-    {"15m",  20.9, 21.6,   75},
-    {"12m",  24.8, 25.1,   75},
-    {"10m",  27.9, 30.0,   75},
-    {"6m",   49.0, 54.5,  101},
+    {"160m",  1.6,  2.1,    9,  10},
+    {"80m",   3.3,  4.1,    9,  20},
+    {"60m",   5.2,  5.5,    9,  20},
+    {"40m",   6.9,  7.4,   25,  20},
+    {"30m",  10.0, 10.2,   25,  20},
+    {"20m",  13.9, 14.5,   51,  20},
+    {"17m",  18.0, 18.3,   51,  20},
+    {"15m",  20.9, 21.6,   75,  20},
+    {"12m",  24.8, 25.1,   75,  20},
+    {"10m",  27.9, 30.0,   75, 100},
+    {"6m",   49.0, 54.5,  101, 200},
 };
 
 constexpr const char* kDisclaimerText =
@@ -83,10 +85,9 @@ constexpr int kMaxConsecutiveFailBypass = 3;
 // unattended. (#2649 #4)
 constexpr int kMaxPointsSoftCap = 100;
 
-// Equipment guardrail: warn if tune power exceeds this watts when entering
-// Auto mode. Some amps need higher drive, so the gate is a warning rather
-// than a refusal — Principle XIII (the operator outranks the agent). (#2649 #5)
-constexpr int kAutoModeTunePowerWarnW = 20;
+// Warn above this radio tune-power level in Auto mode. Some amplifiers need
+// higher drive, so the operator can confirm the warning and continue. (#2649)
+constexpr int kAutoModeTunePowerWarnLevel = 20;
 
 // AppSettings key for the operator's licence class code (e.g. "G" for
 // General). Stored as a single nested-JSON-equivalent flat string per
@@ -105,7 +106,7 @@ constexpr const char* kLicenseClassKey = "OperatorLicenseClass";
 QVector<double> computeCentersForBand(
     const BandPlanManager& bandPlan,
     double searchLowMhz, double searchHighMhz, int segmentKhz,
-    const QString& allowedLicenseClass = QString())
+    const QString& allowedLicenseClass = QString(), bool alignBins = false)
 {
     QVector<double> out;
     if (segmentKhz <= 0) return out;
@@ -124,7 +125,18 @@ QVector<double> computeCentersForBand(
     // narrow ranges.
     const double segMhz = segmentKhz / 1000.0;
     for (const auto& r : regions) {
-        if (r.highMhz - r.lowMhz < segMhz) {
+        if (alignBins) {
+            // Elecraft FY: globally aligned 10/20/100/200 kHz memory bins.
+            // Clip each bin to legal coverage before choosing a tune point.
+            const double lowKhz = r.lowMhz * 1000.0;
+            const double highKhz = r.highMhz * 1000.0;
+            for (int bin = static_cast<int>(std::floor(lowKhz / segmentKhz)) * segmentKhz;
+                 bin < highKhz; bin += segmentKhz) {
+                const double low = std::max(lowKhz, static_cast<double>(bin));
+                const double high = std::min(highKhz, static_cast<double>(bin + segmentKhz));
+                if (high - low > 0.001) { out.append((low + high) / 2000.0); }
+            }
+        } else if (r.highMhz - r.lowMhz < segMhz) {
             out.append((r.lowMhz + r.highMhz) / 2.0);
         } else {
             out.append(computeCenters(r.lowMhz, r.highMhz, segmentKhz));
@@ -137,13 +149,16 @@ QVector<double> computeCentersForBand(
 
 AtuPreTuneDialog::AtuPreTuneDialog(RadioModel* radio,
                                    BandPlanManager* bandPlan,
-                                   QWidget* parent)
+                                   QWidget* parent,
+                                   Kat500TxController* kat500)
     : QDialog(parent),
       m_radio(radio),
+      m_kat500(kat500),
+      m_externalTuner(kat500 != nullptr),
       m_bandPlan(bandPlan)
 {
     theme::setContainer(this, QStringLiteral("dialog/atuPreTune"));
-    setWindowTitle("ATU Band Pre-Tune Sweep");
+    setWindowTitle(m_externalTuner ? tr("KAT500 Band Pre-Tune Sweep") : tr("ATU Band Pre-Tune Sweep"));
     setModal(false);
     resize(560, 640);
 
@@ -151,7 +166,7 @@ AtuPreTuneDialog::AtuPreTuneDialog(RadioModel* radio,
     m_settleTimer->setSingleShot(true);
     m_settleTimer->setInterval(kSettleMs);
     connect(m_settleTimer, &QTimer::timeout, this, [this]() {
-        if (!m_radio || !m_sweepActive || !m_programInput.valid() || !m_pointInput.valid()) {
+        if (!routeMatches() || !m_radio || !m_sweepActive || !m_programInput.valid() || !m_pointInput.valid()) {
             finishSweep(" Aborted: transmit authorization ended.");
             return;
         }
@@ -161,8 +176,20 @@ AtuPreTuneDialog::AtuPreTuneDialog(RadioModel* radio,
         m_tuneLastSwr = 0.0f;
         m_swrTracking = true;
         m_timeoutTimer->start(kPerPointTimeoutMs);
-        if (!input.start() && self
-            && input.request().sameRequest(m_pointInput.request())) {
+        bool started = false;
+        if (m_externalTuner) {
+            if (m_kat500 && m_kat500->selected() && m_currentIndex >= 0
+                && m_currentIndex < m_points.size()
+                && m_radio->activeTxSliceNum() == m_txSliceId
+                && std::abs(m_radio->transmitModel().transmitFreq()
+                    - m_points[m_currentIndex].freqMhz) < 0.0000005) {
+                started = m_kat500->start(input);
+                m_externalPointStarted = started;
+            }
+        } else {
+            started = input.start();
+        }
+        if (!started && self && input.request().sameRequest(m_pointInput.request())) {
             finishSweep(" Aborted: ATU request refused.");
         }
     });
@@ -176,7 +203,7 @@ AtuPreTuneDialog::AtuPreTuneDialog(RadioModel* radio,
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
-    auto* titleBar = new FramelessWindowTitleBar("ATU Band Pre-Tune Sweep", this);
+    auto* titleBar = new FramelessWindowTitleBar(windowTitle(), this);
     m_titleBar = titleBar;
     outer->addWidget(m_titleBar);
 
@@ -222,6 +249,25 @@ AtuPreTuneDialog::AtuPreTuneDialog(RadioModel* radio,
         });
     }
 
+    if (m_kat500) {
+        connect(m_kat500, &Kat500TxController::tunerDisconnected, this, [this] {
+            if (m_externalTuner) {
+                invalidateRoute(tr("KAT500 disconnected. Close and reopen the sweep after reconnecting."));
+            }
+        });
+        connect(m_kat500, &Kat500TxController::changed, this, [this] {
+            if (!routeMatches()) {
+                invalidateRoute(tr("Tuner selection changed. Close and reopen the pre-tune sweep."));
+            }
+        });
+        // Completion publishes carrier-stop and match readback in the same turn.
+        // Observe the settled result, never the intermediate idle transition.
+        connect(m_kat500, &Kat500TxController::changed, this,
+                &AtuPreTuneDialog::onKat500Changed, Qt::QueuedConnection);
+        connect(m_kat500, &QObject::destroyed, this, [this] {
+            invalidateRoute(tr("Tuner route closed. Close and reopen the pre-tune sweep."));
+        });
+    }
     setFramelessMode(AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     FramelessResizer::install(this);
     configureTxActions();
@@ -239,7 +285,7 @@ void AtuPreTuneDialog::configureTxActions()
         if (action != QLatin1String("click") || !controller->belongsTo(m_radio)) {
             return {};
         }
-        const TxController::Input input = controller->captureProgram(TxController::Activity::Atu);
+        const TxController::Input input = controller->captureProgram(m_externalTuner ? TxController::Activity::Tune : TxController::Activity::Atu);
         return [this, controller, input] { startSweep(controller, input); };
     });
     for (QPushButton* button : {m_tuneBtn, m_continueAfterFailBtn, m_skipBtn}) {
@@ -477,7 +523,7 @@ void AtuPreTuneDialog::populateBands()
     for (const auto& spec : kBandSpecs) {
         BandRow row;
         row.name = spec.name;
-        row.segmentKhz = spec.segmentKhz;
+        row.segmentKhz = m_externalTuner ? spec.katSegmentKhz : spec.segmentKhz;
 
         // Walk segments per contiguous region — discrete-channel bands
         // (US 60m) get one center per legal channel instead of stepping
@@ -487,7 +533,7 @@ void AtuPreTuneDialog::populateBands()
                                             spec.searchLowMhz,
                                             spec.searchHighMhz,
                                             row.segmentKhz,
-                                            allowedClass);
+                                            allowedClass, m_externalTuner);
         if (row.centers.isEmpty()) continue;  // no coverage in active plan
         double lo = 1e9;
         double hi = -1.0;
@@ -546,7 +592,7 @@ void AtuPreTuneDialog::onStartClicked()
     }
     const std::shared_ptr<TxController> controller = m_radio->localTxController();
     if (controller) {
-        startSweep(controller, controller->captureProgram(TxController::Activity::Atu));
+        startSweep(controller, controller->captureProgram(m_externalTuner ? TxController::Activity::Tune : TxController::Activity::Atu));
     }
 }
 
@@ -557,6 +603,7 @@ void AtuPreTuneDialog::startSweep(const std::shared_ptr<TxController>& controlle
     if (m_preparingSweep || m_sweepActive || !input.valid() || !input.belongsTo(m_radio)) {
         return;
     }
+    if (!routeMatches() || (m_externalTuner && !m_kat500->unavailableReason().isEmpty())) { return; }
     m_preparingSweep = true;
     const auto preparing = qScopeGuard([self] { if (self) { self->m_preparingSweep = false; } });
     m_programController = controller;
@@ -614,6 +661,11 @@ void AtuPreTuneDialog::startSweep(const std::shared_ptr<TxController>& controlle
         }
     }
 
+    if (m_externalTuner) {
+        m_points.removeIf([](const Point& point) {
+            return point.freqMhz < 1.8 || point.freqMhz > 54.0;
+        });
+    }
     if (m_points.isEmpty()) {
         m_sweepStatus->setText("No bands selected — nothing to do.");
         m_pages->setCurrentWidget(m_sweepPage);
@@ -654,13 +706,13 @@ void AtuPreTuneDialog::startSweep(const std::shared_ptr<TxController>& controlle
     // force a deliberate choice before unattended TX.
     if (m_mode == Mode::Auto && m_radio) {
         const int tunePower = m_radio->transmitModel().tunePower();
-        if (tunePower > kAutoModeTunePowerWarnW) {
+        if (tunePower > kAutoModeTunePowerWarnLevel) {
             ScopedChildWidget<QMessageBox> boxOwner(
                 QMessageBox::Warning, "High Tune Power",
-                QString("Tune power is %1 W — higher than the recommended "
-                        "%2 W ceiling for unattended Auto mode.\n\n"
-                        "Continue?")
-                    .arg(tunePower).arg(kAutoModeTunePowerWarnW),
+                QString(m_externalTuner
+                    ? "Tune power is %1% — higher than the recommended %2% ceiling for unattended Auto mode.\n\nContinue?"
+                    : "Tune power is %1 W — higher than the recommended %2 W ceiling for unattended Auto mode.\n\nContinue?")
+                    .arg(tunePower).arg(kAutoModeTunePowerWarnLevel),
                 QMessageBox::Ok | QMessageBox::Cancel, this);
             boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
             const int reply = boxOwner.get()->exec();
@@ -671,6 +723,7 @@ void AtuPreTuneDialog::startSweep(const std::shared_ptr<TxController>& controlle
         }
     }
 
+    if (!routeMatches() || (m_externalTuner && !m_kat500->unavailableReason().isEmpty())) { return; }
     m_currentIndex = -1;
     m_successCount = 0;
     m_skipCount = 0;
@@ -817,8 +870,45 @@ void AtuPreTuneDialog::onPerPointTimeout()
     finishSweep(" Aborted: per-point timeout.");
 }
 
+bool AtuPreTuneDialog::routeMatches() const
+{
+    return !m_routeInvalidated && (m_kat500 ? m_kat500->selected() == m_externalTuner : !m_externalTuner);
+}
+
+void AtuPreTuneDialog::invalidateRoute(const QString& reason)
+{
+    if (m_routeInvalidated) { return; }
+    m_routeInvalidated = true;
+    m_startBtn->setEnabled(false);
+    m_startBtn->setToolTip(reason);
+    m_startBtn->setAccessibleDescription(reason);
+    if (m_sweepActive) { finishSweep(reason); }
+}
+
+void AtuPreTuneDialog::onKat500Changed()
+{
+    if (!m_sweepActive || !m_externalTuner) { return; }
+    if (!m_programInput.valid() || m_routeInvalidated || !m_kat500 || !m_kat500->selected()) {
+        finishSweep(tr(" Aborted: KAT500 selection or transmit authorization changed."));
+        return;
+    }
+    if (!m_waitingForAtu || !m_externalPointStarted || m_kat500->busy()) { return; }
+    m_waitingForAtu = false;
+    m_externalPointStarted = false;
+    m_swrTracking = false;
+    m_timeoutTimer->stop();
+    if (m_kat500->matched()) {
+        ++m_successCount;
+        beginNextPoint();
+    } else {
+        ++m_failCount;
+        finishSweep(tr(" KAT500 stopped: %1").arg(m_kat500->message()));
+    }
+}
+
 void AtuPreTuneDialog::onAtuStateChanged()
 {
+    if (m_externalTuner) { return; }
     if (!m_waitingForAtu || !m_radio) return;
     if (!m_programInput.valid()) {
         finishSweep(" Aborted: transmit authorization ended.");
@@ -972,6 +1062,9 @@ void AtuPreTuneDialog::cancelProgram(bool restore)
     restore = restore && root.valid();
     root.stop(); // close future derivation before ending the current point
     point.abort();
+    if (std::exchange(m_externalPointStarted, false) && m_kat500) {
+        m_kat500->cancel();
+    }
     // #2624: a sweep abandoned mid-cycle (Abort, the per-point stuck-ATU
     // timeout, or the dialog closing between points) must still bypass. A
     // bypass is not only a stop edge — it also configures idle ATU relays —
@@ -979,7 +1072,7 @@ void AtuPreTuneDialog::cancelProgram(bool restore)
     // cycle is in flight, which is exactly the case the timeout exists for.
     // bypassAtu() delegates to requestProducerAtu() when an Atu intent IS
     // bound and still reaches transmitModel().atuBypass() when none is.
-    if (!point.bypassAtu()) {
+    if (!m_externalTuner && !point.bypassAtu()) {
         (void)root.bypassAtu();
     }
     if (self && restore && controller && controller->valid()) {

@@ -1,13 +1,18 @@
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/TuneOutputPolicy.h"
 #include "core/AppActivity.h"
 
 #include <algorithm>
 #include <limits>
 
 #include <QDateTime>
+#include <QHash>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QPointer>
+#include <QRegularExpression>
 #include <QThread>
+#include <QStringView>
 #include <QVersionNumber>
 
 #include "core/AppSettings.h"
@@ -129,7 +134,81 @@ FlexBackend::~FlexBackend()
 
 void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
 {
+    if (!sink) {
+        m_sink = {};
+        return;
+    }
+    m_sink = [sink = std::move(sink)](const QString& command, CommandReply reply) {
+        if (reply) {
+            return false;
+        }
+        sink(command);
+        return true;
+    };
+}
+
+void FlexBackend::setCommandSink(std::function<bool(const QString&, CommandReply)> sink)
+{
     m_sink = std::move(sink);
+}
+
+void FlexBackend::requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId)
+{
+    const QString version = m_firmwareVersionProvider ? m_firmwareVersionProvider() : QString();
+    if (!TuneOutputPolicy::firmwareSupportsSuppression(version)
+        || !TuneOutputPolicy::validBandId(bandId) || !m_tuneOutputKnownBands.contains(bandId)
+        || requestId == 0 || !m_sink) {
+        emit tuneOutputSuppressionCommandFinished(requestId, false,
+            QStringLiteral("TUNE output suppression requires SmartSDR 4.3 or later and a reported band row."));
+        return;
+    }
+    m_tuneOutputRequests[bandId] = requestId;
+    const quint64 session = m_tuneOutputSession;
+    const QPointer<FlexBackend> receiver(this);
+    // Verified on FLEX-6700 4.3.16: this exact key changes the addressed
+    // band's separately persisted setting, independently of the active band.
+    const bool dispatched = m_sink(QStringLiteral("interlock bandset %1 tune_tx_suppress=%2")
+                    .arg(bandId).arg(suppressed ? 1 : 0),
+        [receiver, session, bandId, requestId](int code, const QString& body) {
+            if (!receiver || receiver->m_tuneOutputSession != session
+                || receiver->m_tuneOutputRequests.value(bandId) != requestId) {
+                return;
+            }
+            receiver->m_tuneOutputRequests.remove(bandId);
+            emit receiver->tuneOutputSuppressionCommandFinished(requestId, code == 0,
+                code == 0 ? QString() : QStringLiteral("Radio rejected TUNE output suppression (%1): %2")
+                    .arg(static_cast<quint32>(code), 0, 16).arg(body));
+            // An ACK can succeed for an unknown bandset key. Only the per-band
+            // interlock observation confirms this radio-persisted setting.
+            if (code == 0 && receiver && receiver->m_tuneOutputSession == session
+                && !receiver->m_tuneOutputRequests.contains(bandId)) {
+                receiver->send(QStringLiteral("sub tx all"));
+            }
+        });
+    if (!dispatched && receiver && receiver->m_tuneOutputSession == session
+        && receiver->m_tuneOutputRequests.value(bandId) == requestId) {
+        receiver->m_tuneOutputRequests.remove(bandId);
+        emit receiver->tuneOutputSuppressionCommandFinished(requestId, false,
+            QStringLiteral("TUNE output suppression was not dispatched to the radio."));
+    }
+}
+
+void FlexBackend::decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs)
+{
+    // Subscription readback can precede info's software_ver on reconnect or
+    // manual-IP connections. Validate observations now; gate edits on capability.
+    static const QRegularExpression bandPattern(QStringLiteral("^interlock band ([0-9]{1,3})$"));
+    const QRegularExpressionMatch match = bandPattern.match(object);
+    if (!match.hasMatch()) {
+        return;
+    }
+    const int bandId = match.captured(1).toInt();
+    const QString value = kvs.value(QStringLiteral("tune_tx_suppress"));
+    if (TuneOutputPolicy::validBandId(bandId)
+        && (value == QLatin1String("0") || value == QLatin1String("1"))) {
+        m_tuneOutputKnownBands.insert(bandId);
+        emit tuneOutputSuppressionObserved(bandId, value == QLatin1String("1"));
+    }
 }
 
 void FlexBackend::setFirmwareVersionProvider(std::function<QString()> provider)
@@ -137,7 +216,44 @@ void FlexBackend::setFirmwareVersionProvider(std::function<QString()> provider)
     m_firmwareVersionProvider = std::move(provider);
 }
 
-ReceiveDispatch FlexBackend::requestRadioNickname(const QString& nickname)
+void FlexBackend::setAutoAgcThresholdLicenseProvider(std::function<bool()> provider)
+{
+    m_autoAgcThresholdLicenseProvider = std::move(provider);
+}
+
+void FlexBackend::setDspResetLicenseProvider(std::function<std::optional<bool>()> provider)
+{
+    m_dspResetLicenseProvider = std::move(provider);
+}
+
+bool FlexBackend::firmwareAtLeast(const QVersionNumber& minimum) const
+{
+    const QString text = m_firmwareVersionProvider ? m_firmwareVersionProvider() : QString();
+    qsizetype suffixIndex = 0;
+    const QVersionNumber version = QVersionNumber::fromString(text, &suffixIndex);
+    return suffixIndex == text.size() && version >= minimum;
+}
+
+int FlexBackend::nrsLevelMaximum() const
+{
+    // Published FlexLib 4.3.16 Slice.NRSLevel reduces the maximum from 100 to 50.
+    return firmwareAtLeast(QVersionNumber(4, 3, 16)) ? 50 : 100;
+}
+
+void FlexBackend::refreshFirmwareCapabilities()
+{
+    const int maximum = nrsLevelMaximum();
+    const bool cwProfiles = firmwareAtLeast(QVersionNumber(4, 3, 16));
+    if (maximum == m_announcedNrsLevelMaximum && cwProfiles == m_announcedCwProfiles) {
+        return;
+    }
+    m_announcedNrsLevelMaximum = maximum;
+    m_announcedCwProfiles = cwProfiles;
+    emit capabilitiesChanged();
+}
+
+ReceiveDispatch FlexBackend::requestRadioNickname(const QString& nickname,
+                                                 NicknameCompletion completion)
 {
     if (!m_sink) {
         return ReceiveDispatch::Unsupported;
@@ -155,22 +271,46 @@ ReceiveDispatch FlexBackend::requestRadioNickname(const QString& nickname)
             sanitized.append(ch);
         }
     }
+    QString command;
     if (sanitized.isEmpty()) {
-        const QString versionText = m_firmwareVersionProvider
-            ? m_firmwareVersionProvider() : QString();
-        qsizetype suffixIndex = 0;
-        const QVersionNumber version = QVersionNumber::fromString(versionText, &suffixIndex);
         // Older firmware interprets an empty name argument as a query, not a clear.
-        if (suffixIndex != versionText.size() || version < QVersionNumber(4, 3)) {
+        if (!firmwareAtLeast(QVersionNumber(4, 3))) {
             qCWarning(lcProtocol) << "FlexBackend: nickname clear refused:"
                                  << "firmware 4.3 or later is required";
             return ReceiveDispatch::Unsupported;
         }
-        send(QStringLiteral("radio clear_name"));
+        command = QStringLiteral("radio clear_name");
     } else {
-        send(QStringLiteral("radio name ") + sanitized);
+        command = QStringLiteral("radio name ") + sanitized;
     }
-    return ReceiveDispatch::Dispatched;
+    const QPointer<FlexBackend> self(this);
+    const quint64 session = m_nicknameSession;
+    const quint64 request = ++m_nicknameRequest;
+    const bool dispatched = m_sink(command,
+        [self, session, request, sanitized, completion = std::move(completion)]
+        (int code, const QString&) {
+            const bool current = self && session == self->m_nicknameSession;
+            const bool accepted = current && code == 0;
+            // SmartSDR 4.3.16 confirms identity writes with R|0 but no status echo.
+            // A full radio status before this reply can still carry the old name.
+            // Status received after confirmation continues to update the model.
+            if (accepted && request > self->m_nicknameAppliedRequest) {
+                self->m_nicknameAppliedRequest = request;
+                RadioDelta delta;
+                delta.nickname = sanitized;
+                emit self->radioChanged(delta);
+            }
+            if (completion) {
+                completion(accepted);
+            }
+        });
+    return dispatched ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+}
+
+void FlexBackend::setSetupCommandSink(
+    std::function<bool(const QString&, const RadioSetupCompletion&)> sink)
+{
+    m_setupSink = std::move(sink);
 }
 
 void FlexBackend::setTxCommandSink(std::function<void(const QString&, const TxCoordinator::Command&)> sink)
@@ -381,6 +521,10 @@ void FlexBackend::refreshPublishedFirmwareVersion()
 RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
+    const QString tuneVersion = m_firmwareVersionProvider ? m_firmwareVersionProvider() : QString();
+    if (TuneOutputPolicy::firmwareSupportsSuppression(tuneVersion)) {
+        caps.tuneOutputSuppression = TuneOutputSuppressionControl{};
+    }
     caps.broadcastFmReceive = std::nullopt;
     // FlexLib 4.2.18 Slice.Freq delegates range refusal to firmware; its old
     // bounds are commented out. Do not guess coverage (including transverters).
@@ -401,11 +545,22 @@ RadioCapabilities FlexBackend::capabilities() const
         {QStringLiteral("DSB"), -12000, -10, 10, 12000, 20, 24000}}};
     caps.receiveAudioControl = std::nullopt; // legacy wire mixer path has not migrated
     caps.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    caps.dspParameterReset = std::nullopt;
     caps.receivePanCenterControl = std::nullopt; // unknown coverage including transverters
     caps.receivePanBandwidthControl = std::nullopt; // legacy coupled geometry path
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = QStringLiteral("flex");
+    using PanField = PanDisplayField;
+    caps.panDisplayControl = PanDisplayControl{{PanField::Geometry, PanField::Band,
+        PanField::LevelRange, PanField::Pixels, PanField::Average, PanField::FrameRate,
+        PanField::WeightedAverage, PanField::RfGain, PanField::Wnb, PanField::WnbLevel, PanField::LoopA, PanField::LoopB,
+        PanField::NoiseFloorPosition, PanField::NoiseFloorEnabled, PanField::WaterfallRate,
+        PanField::WaterfallColorGain, PanField::WaterfallBlackLevel, PanField::WaterfallAutoBlack,
+        PanField::WaterfallDefaults}, {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    caps.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Answered,
+        {PanLifecycleAction::Create, PanLifecycleAction::Remove,
+         PanLifecycleAction::RefreshInventory, PanLifecycleAction::RfGainInfo}};
     // SmartSDR `transmit set tune_mode=two_tone` is a real on-radio two-tone
     // generator; FlexBackend is the only consumer of that key.
     caps.twoToneGenerator = RadioCapabilities::TwoToneGenerator{
@@ -428,8 +583,10 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.fmTonePresentation = FmTonePresentation::Legacy;
     caps.fmDtcsCodes = {};
     // squelch_level 0..100 is dBm above -160 on the calibrated pan axis, in
-    // every mode, so the pan floor plus a margin is the level to send.
+    // eligible voice modes, so the pan floor plus a margin is the level to send.
     caps.squelchLevelScale = legacyDbmSquelchScale();
+    caps.squelchLevelScale->controlUnavailableModes = {
+        "DIGU", "DIGL", "RTTY", "NT", "CW", "CWU", "CWL", "DFM"};
 
     // Seed from the FlexLib-sourced platform table (Principle I). This is the
     // derived-from-name truth used to *seed* the reported capabilities; a fuller
@@ -451,6 +608,37 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.maxPanadapters =
         m_reportedMaxPanadapters > 0 ? m_reportedMaxPanadapters : mc.maxSlices;
     caps.hasExtendedDsp = mc.hasExtendedDsp();
+    caps.daxIqSampleRates = mc.daxIqSampleRates();
+    caps.nrsLevelControl = RadioCapabilities::NrsLevelControl{nrsLevelMaximum()};
+    const QString resetVersionText = m_firmwareVersionProvider
+        ? m_firmwareVersionProvider() : QString();
+    qsizetype resetVersionEnd = 0;
+    const QVersionNumber resetVersion = QVersionNumber::fromString(resetVersionText, &resetVersionEnd);
+    const bool numericResetVersion = std::ranges::all_of(resetVersionText, [](QChar ch) {
+        return (ch >= QLatin1Char('0') && ch <= QLatin1Char('9')) || ch == QLatin1Char('.');
+    });
+    if (numericResetVersion && resetVersionEnd == resetVersionText.size() && resetVersion.segmentCount() >= 3
+        && resetVersion >= QVersionNumber(4, 3, 16) && mc.platform != RadioPlatform::Unknown) {
+        using Target = DspParameterResetTarget;
+        DspParameterResetControl reset;
+        reset.hardwareTargets = {Target::All, Target::Nr, Target::Anf, Target::Nrl,
+                                 Target::Anfl, Target::Anft};
+        if (mc.hasExtendedDsp()) {
+            reset.hardwareTargets.append({Target::Nrf, Target::Nrs});
+        }
+        const std::optional<bool> licensed = m_dspResetLicenseProvider
+            ? m_dspResetLicenseProvider() : std::nullopt;
+        reset.advancedAccess = !licensed ? DspParameterResetControl::AdvancedAccess::Unknown
+            : *licensed ? DspParameterResetControl::AdvancedAccess::Granted
+                        : DspParameterResetControl::AdvancedAccess::Denied;
+        reset.modes = {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("AM"),
+            QStringLiteral("SAM"), QStringLiteral("DSB"), QStringLiteral("CW"),
+            QStringLiteral("RTTY"), QStringLiteral("DIGU"), QStringLiteral("DIGL"),
+            QStringLiteral("FDVU"), QStringLiteral("FDVL")};
+        reset.notchModes = {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("AM"),
+                           QStringLiteral("SAM"), QStringLiteral("DSB")};
+        caps.dspParameterReset = reset;
+    }
     // The LMS/FFT family is base Flex firmware, not an 8000-series extra —
     // every radio with hasRadioSideDsp below also has NRL/ANFL/ANFT.
     caps.hasLmsNoiseFilters = true;
@@ -505,6 +693,17 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasFlexControlIntegration = true;
     caps.hasAudioCompression = true;
     caps.hasSharpFilters = true;
+    RadioSetupControl setup;
+    for (int field = 0; field < int(RadioSetupRequest::Field::Count); ++field) {
+        setup.fields.insert(static_cast<RadioSetupRequest::Field>(field));
+    }
+    caps.radioSetupControl = setup;
+    caps.spotControl = SpotControl{{SpotAction::Add, SpotAction::Remove,
+                                    SpotAction::Clear, SpotAction::Trigger}};
+    caps.panControl = PanControl{{PanControlField::BandZoom, PanControlField::SegmentZoom,
+                                  PanControlField::ReceiveAntenna}};
+    caps.slicePresetControl = SlicePresetControl{{SlicePresetField::Step, SlicePresetField::RepeaterOffset,
+                                                  SlicePresetField::ToneMode, SlicePresetField::ToneValue}};
     caps.usesVita49Transport = true;
     caps.hasNetworkConfigurationReadback = true;
     caps.hasPrivateIpConnectionPolicy = true;
@@ -516,11 +715,29 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hostDroopCalibration = false;   // no known DDC edge droop on this radio
     // Global / TX / mic profiles are a SmartSDR feature on every current model.
     caps.hasProfiles = true;
+    // Published FlexLib 4.3.16 adds the CW profile type (Radio.cs:8780-8919).
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16))) {
+        caps.cwProfileControl = RadioCapabilities::CwProfileControl{};
+    }
     caps.hasSelectableMicInputs = true;
     // SmartSDR's compander command is the authoritative DEXP path used by
     // TransmitModel::setDexp/setDexpLevel.
     caps.hasDownwardExpander = true;
     caps.hasAgcThreshold = true;
+    const QString firmware = m_firmwareVersionProvider ? m_firmwareVersionProvider() : QString();
+    qsizetype versionEnd = 0;
+    const QVersionNumber firmwareVersion = QVersionNumber::fromString(firmware, &versionEnd);
+    if (!firmware.isEmpty() && versionEnd == firmware.size()
+        && firmwareVersion >= QVersionNumber(4, 3, 16)) {
+        caps.autoAgcThresholdControl = RadioCapabilities::AutoAgcThresholdControl{
+            QStringLiteral("auto_agc_t")};
+        // FLEX-8000 and Aurora only, under the Relative Noise Floor Scaling
+        // license (FlexLib v4.3.16 FeatureLicense.cs:212, Panadapter.cs:549).
+        if (mc.platform == RadioPlatform::BigBend) {
+            caps.noiseFloorRangeControl = RadioCapabilities::NoiseFloorRangeControl{
+                QStringLiteral("noise_floor")};
+        }
+    }
     caps.hasAmCarrierLevel = true;
     caps.voxControl = RadioCapabilities::VoxControl{/*hasDelay*/ true};
     caps.txMonitorControl = RadioCapabilities::TxMonitorControl{};
@@ -675,6 +892,19 @@ void FlexBackend::requestSliceFilter(int sliceId, const SliceFilterRequest& requ
     }
 }
 
+ReceiveDispatch FlexBackend::requestSliceAgcThresholdMode(int sliceId, AgcThresholdMode mode)
+{
+    if (sliceId < 0 || (mode != AgcThresholdMode::Manual && mode != AgcThresholdMode::Automatic)
+        || !capabilities().autoAgcThresholdControl || !m_autoAgcThresholdLicenseProvider
+        || !m_autoAgcThresholdLicenseProvider() || (!m_sliceSink && !m_sink)) {
+        return ReceiveDispatch::Unsupported;
+    }
+    // FlexLib 4.3.16 Slice.AGCThresholdMode writes only the selected mode.
+    sendSlice(QStringLiteral("slice set %1 agc_threshold_mode=%2").arg(sliceId).arg(
+        mode == AgcThresholdMode::Automatic ? QStringLiteral("auto") : QStringLiteral("manual")));
+    return ReceiveDispatch::Dispatched;
+}
+
 void FlexBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
 {
     // FlexLib 4.2.18 Slice: each AGC setter writes only its own field.
@@ -689,6 +919,30 @@ void FlexBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
         sendSlice(QStringLiteral("slice set %1 agc_off_level=%2").arg(sliceId).arg(request.offLevel));
         break;
     }
+}
+
+ReceiveDispatch FlexBackend::requestDspParameterReset(int sliceId, DspParameterResetTarget target)
+{
+    const RadioCapabilities caps = capabilities();
+    const std::optional<DspParameterResetControl> control = caps.dspParameterReset;
+    if (sliceId < 0 || sliceId >= caps.maxSlices || !control || !control->permits(target) || (!m_sliceSink && !m_sink)) {
+        return ReceiveDispatch::Unsupported;
+    }
+    QString algorithm;
+    // FlexLib 4.3.16 Slice.SendDspControlsResetCommand: fixed protocol whitelist.
+    switch (target) {
+    case DspParameterResetTarget::All: algorithm = QStringLiteral("all"); break;
+    case DspParameterResetTarget::Nr: algorithm = QStringLiteral("nr"); break;
+    case DspParameterResetTarget::Anf: algorithm = QStringLiteral("anf"); break;
+    case DspParameterResetTarget::Nrl: algorithm = QStringLiteral("lms_nr"); break;
+    case DspParameterResetTarget::Anfl: algorithm = QStringLiteral("lms_anf"); break;
+    case DspParameterResetTarget::Nrf: algorithm = QStringLiteral("nrf"); break;
+    case DspParameterResetTarget::Nrs: algorithm = QStringLiteral("speex_nr"); break;
+    case DspParameterResetTarget::Anft: algorithm = QStringLiteral("anft"); break;
+    default: return ReceiveDispatch::Unsupported;
+    }
+    sendSlice(QStringLiteral("slice reset %1 dsp_param=%2").arg(sliceId).arg(algorithm));
+    return ReceiveDispatch::Dispatched;
 }
 
 ReceiveDispatch FlexBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
@@ -725,9 +979,15 @@ ReceiveDispatch FlexBackend::requestSliceDsp(int sliceId, const SliceDspRequest&
         }
         key += QStringLiteral("_level");
     }
+    const int level = request.feature == SliceDspRequest::Feature::Nrs
+        ? std::min(request.level, nrsLevelMaximum()) : request.level;
+    if (request.field == SliceDspRequest::Field::Level && level != request.level) {
+        qCDebug(lcProtocol) << "FlexBackend: NRS level request clamped"
+                           << "slice" << sliceId << "requested" << request.level << "sent" << level;
+    }
     sendSlice(QStringLiteral("slice set %1 %2=%3").arg(sliceId).arg(key)
                   .arg(request.field == SliceDspRequest::Field::Enabled
-                           ? int(request.enabled) : request.level));
+                           ? int(request.enabled) : level));
     return ReceiveDispatch::Dispatched;
 }
 
@@ -1094,6 +1354,7 @@ void FlexBackend::decodePanState(const QString& panId,
     // uint-parse + >1-invalid semantics (Panadapter.cs 933/1159).
     carry(kvs, "band_zoom", st);
     carry(kvs, "segment_zoom", st);
+    carry(kvs, "noise_floor_range", st);
     if (!st.isEmpty()) {
         st.insert(QStringLiteral("panId"), panId);
         emit extensionStatus(QStringLiteral("flex"),
@@ -1212,7 +1473,10 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
         MeterDef def;
         def.index = index;
         carry(f, "src", def.source);
-        carry(f, "num", def.sourceIndex, /*base=*/0);
+        // num is a uint (FlexLib Meter.SourceIndex): decimal for most meters,
+        // 0x%08X for a handle-owned one, which can exceed INT_MAX.
+        if (const auto num = parseUInt(f, "num", /*base=*/0))
+            def.sourceIndex = static_cast<int>(*num);
         carry(f, "nam", def.name);
         carry(f, "unit", def.unit);
         carry(f, "low", def.low);
@@ -1242,6 +1506,16 @@ void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& k
     carry(kvs, "index_letter", d.letter);
     carry(kvs, "RF_frequency", d.frequency);
     carry(kvs, "mode", d.mode);
+    if (kvs.contains(QStringLiteral("chain_mode"))) {
+        const QString value = kvs.value(QStringLiteral("chain_mode"));
+        // FlexLib 4.3.16 Slice.ChainMode is independent of the selected mode.
+        // Keep future chain names, but bound this diagnostic token at ingress.
+        const bool valid = value.size() <= 32
+            && std::all_of(value.cbegin(), value.cend(), [](QChar ch) {
+                return ch.unicode() >= 0x21 && ch.unicode() <= 0x7e;
+            });
+        d.chainMode = valid ? value : QString();
+    }
     carry(kvs, "filter_lo", d.filterLow);
     carry(kvs, "filter_hi", d.filterHigh);
     if (kvs.contains(QStringLiteral("mode_list"))) {
@@ -1318,6 +1592,13 @@ void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& k
     // AGC / squelch / RIT / XIT
     carry(kvs, "agc_mode", d.agcMode);
     carry(kvs, "agc_threshold", d.agcThreshold);
+    // FlexLib 4.3.16 accepts exactly these case-sensitive status values.
+    const QString thresholdMode = kvs.value(QStringLiteral("agc_threshold_mode"));
+    if (thresholdMode == QLatin1String("auto")) {
+        d.agcThresholdMode = AgcThresholdMode::Automatic;
+    } else if (thresholdMode == QLatin1String("manual")) {
+        d.agcThresholdMode = AgcThresholdMode::Manual;
+    }
     carry(kvs, "agc_off_level", d.agcOffLevel);
     carry(kvs, "squelch", d.squelchOn);
     carry(kvs, "squelch_level", d.squelchLevel);
@@ -1576,6 +1857,11 @@ void FlexBackend::decodeTunerStatus(const QString& handle, const QMap<QString, Q
 
 void FlexBackend::clearExtensionHandles()
 {
+    // Identity replies belong to the same session as the cached encode handles.
+    ++m_nicknameSession;
+    ++m_tuneOutputSession;
+    m_tuneOutputRequests.clear();
+    m_tuneOutputKnownBands.clear();
     // #4198: forget the amp/tuner encode handles on disconnect/reset so a stale
     // handle can't survive into a reconnect (possibly a different radio).
     m_ampHandle.clear();
@@ -1604,6 +1890,24 @@ void FlexBackend::decodeApdStatus(const QMap<QString, QString>& kvs)
     // Bare flag (no `=`): the model clears apdEqActive + emits the reset signal.
     if (kvs.contains(QStringLiteral("equalizer_reset")))
         d.apdEqualizerReset = true;
+    // Matched by name, as FlexLib APD.cs does: an unrecognized token stays
+    // disengaged rather than guessing a state.
+    static const QHash<QString, ApdLifecycleState> kLifecycle{
+        {QStringLiteral("OFF"), ApdLifecycleState::Off},
+        {QStringLiteral("IDLE"), ApdLifecycleState::Idle},
+        {QStringLiteral("TRAINING"), ApdLifecycleState::Training},
+        {QStringLiteral("ACTIVE"), ApdLifecycleState::Active},
+        {QStringLiteral("HOLD"), ApdLifecycleState::Hold},
+        {QStringLiteral("FAULT"), ApdLifecycleState::Fault},
+    };
+    const auto state = kLifecycle.constFind(kvs.value(QStringLiteral("state")).toUpper());
+    if (state != kLifecycle.constEnd())
+        d.apdLifecycle = state.value();
+    const QString ant = kvs.value(QStringLiteral("ant"));
+    if (!ant.isEmpty())
+        d.apdEqAntenna = ant;
+    carry(kvs, "freq", d.apdEqFrequencyMhz);
+    carry(kvs, "rfpower", d.apdEqRfPower);
     emit transmitChanged(d);
 }
 
@@ -1627,6 +1931,32 @@ void FlexBackend::decodeApdSamplerStatus(const QMap<QString, QString>& kvs)
     if (kvs.contains(QStringLiteral("selected_sampler")))
         d.apdSamplerSelected = kvs.value(QStringLiteral("selected_sampler")).toUpper();
     emit transmitChanged(d);
+}
+
+void FlexBackend::decodeRadioInfoMetadata(const QString& body)
+{
+    // FlexLib 4.3.16 Radio.UpdateInfo: this belongs to the comma-separated
+    // info reply, not radio status. A reply is a snapshot, unlike slice deltas.
+    RadioDelta delta;
+    delta.iaruRegion = 0;
+    for (QStringView field : QStringView(body).split(QLatin1Char(','))) {
+        const qsizetype eq = field.indexOf(QLatin1Char('='));
+        if (eq < 0 || field.left(eq).trimmed() != QLatin1String("iaru_region")) {
+            continue;
+        }
+        QStringView value = field.mid(eq + 1).trimmed();
+        delta.iaruRegion = 0;
+        if (value.size() > 16) { continue; }
+        const auto wrapper = [](QChar ch) {
+            return ch == QLatin1Char('\\') || ch == QLatin1Char('"');
+        };
+        while (!value.isEmpty() && wrapper(value.front())) { value = value.mid(1); }
+        while (!value.isEmpty() && wrapper(value.back())) { value = value.left(value.size() - 1); }
+        bool ok = false;
+        const int region = value.size() <= 8 ? value.toInt(&ok) : 0;
+        delta.iaruRegion = ok && region >= 1 && region <= 3 ? region : 0;
+    }
+    emit radioChanged(delta);
 }
 
 void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
@@ -1700,6 +2030,21 @@ void FlexBackend::decodeGpsStatus(const QString& rawBody)
 
     GpsDelta d;
     carry(kvs, "status", d.status);
+    if (kvs.contains(QStringLiteral("fix"))) {
+        // Published FlexLib 4.3.16: exact tokens, ignoring case only. A
+        // reported unknown value clears the fix; an absent key preserves it.
+        const QString fix = kvs.value(QStringLiteral("fix")).toUpper();
+        d.fixState = GpsFixState::Unknown;
+        if (fix == QLatin1String("3D")) {
+            d.fixState = GpsFixState::ThreeD;
+        } else if (fix == QLatin1String("2D")) {
+            d.fixState = GpsFixState::TwoD;
+        } else if (fix == QLatin1String("TIME_ONLY")) {
+            d.fixState = GpsFixState::TimeOnly;
+        } else if (fix == QLatin1String("NO_FIX")) {
+            d.fixState = GpsFixState::NoFix;
+        }
+    }
     if (kvs.contains(QStringLiteral("status"))) {
         const QString status = kvs.value(QStringLiteral("status")).trimmed().toLower();
         const bool saysLock = status.contains(QLatin1String("lock"));
@@ -1708,9 +2053,8 @@ void FlexBackend::decodeGpsStatus(const QString& rawBody)
             || status.contains(QLatin1String("not lock"))
             || status.contains(QLatin1String("lost"))
             || status.contains(QLatin1String("loss"));
-        // Lock alone decides validity; the coordinates are carried by their
-        // own keys and consumers parse the persisted lat/lon, so a status
-        // line without them must not invalidate a fix the radio still has.
+        // Preserve legacy validity for firmware without fix=. RadioModel
+        // additionally vetoes it when a reported fix cannot supply position.
         d.positionValid = saysLock && !saysNoLock;
         d.source = QStringLiteral("GPSDO");
     }
@@ -1764,6 +2108,16 @@ void FlexBackend::decodeProfileStatus(const QString& profileType, const QString&
         return;
     }
 
+    // FlexLib 4.3.16 reports the CW profile's dirty flag as
+    // unsaved_changes_cw (Radio.cs:12002); the suffix names the profile type.
+    static const QLatin1String unsavedPrefix("unsaved_changes_");
+    if (key.startsWith(unsavedPrefix) && key.size() > unsavedPrefix.size()) {
+        d.type = key.mid(unsavedPrefix.size());
+        d.unsavedChanges = val == QLatin1String("1");
+        emit profileChanged(d);
+        return;
+    }
+
     d.type = profileType;
     if (key == QLatin1String("list"))
         d.list = val.split('^', Qt::SkipEmptyParts);
@@ -1785,12 +2139,22 @@ void FlexBackend::decodeProfileFlags(const QMap<QString, QString>& kvs)
     carry(kvs, "exporting", d.exporting);
     if (d.importing || d.exporting)
         emit profileChanged(d);
+    // Same unsaved_changes_<type> rule as decodeProfileStatus.
+    static const QLatin1String unsavedPrefix("unsaved_changes_");
+    for (auto it = kvs.cbegin(); it != kvs.cend(); ++it) {
+        if (it.key().startsWith(unsavedPrefix) && it.key().size() > unsavedPrefix.size()) {
+            ProfileDelta unsaved;
+            unsaved.type = it.key().mid(unsavedPrefix.size());
+            unsaved.unsavedChanges = it.value() == QLatin1String("1");
+            emit profileChanged(unsaved);
+        }
+    }
 }
 
 void FlexBackend::send(const QString& cmd)
 {
     if (m_sink) {
-        m_sink(cmd);
+        m_sink(cmd, {});
     }
 }
 
@@ -1799,7 +2163,7 @@ void FlexBackend::sendSlice(const QString& cmd)
     if (m_sliceSink) {
         m_sliceSink(cmd);
     } else if (m_sink) {
-        m_sink(cmd);
+        m_sink(cmd, {});
     }
 }
 

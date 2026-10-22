@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <QTimer>
 #include <QThread>
+#include <cmath>
 #include <utility>
 
 namespace AetherSDR {
@@ -24,13 +25,30 @@ bool TransmitModel::refuseControlOffThread() const
     return true;
 }
 
+void TransmitModel::resetDaxSessionState()
+{
+    // Observations and unanswered requests belong to one session. Keep ticket
+    // numbers monotonic so queued old answers cannot consume new requests.
+    // Retirement emits no control intent or model notification.
+    m_pendingDaxAnswers.clear();
+    m_daxRequested = false;
+    m_daxOn = false;
+}
+
 void TransmitModel::resetState()
 {
+    m_confirmReceiveCwPitch = false;
     for (quint64& revision : m_controlIntentRevisions) { ++revision; }
+    // A request of the ending session is answered, if at all, by a dead link.
+    m_pendingVoxAnswers.clear();
+    resetDaxSessionState();
+    m_voxUnconfirmed = true;   // the next radio has not said yet
     cancelPttRelease();
     m_apdEnabled = false;
     m_apdConfigurable = false;
     m_apdEqActive = false;
+    // The next radio may not report a lifecycle at all.
+    m_apdLifecycle.reset();
     m_apdSamplers.clear();
     m_rfPower = 100;
     // 100 is a default again, not a reported value (#5518): clearing provenance
@@ -50,10 +68,6 @@ void TransmitModel::resetState()
     m_usingMemory = false;
     m_showTxInWaterfall = false;
     resetPttMicOverrideReport();
-    // Radio-reported; a new session re-reports it. A radio with no Flex command
-    // plane never echoes dax=, so a Flex session's DAX=on must not survive into
-    // it and hold the client TX chain's MIC-ready indicator off (#5871).
-    m_daxOn = false;
     m_txSliceMode.clear();
     setTuneAvailable(true);
 
@@ -168,6 +182,8 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     micChanged |= assign(d.monGainSb, m_monGainSb);
 
     // ── VOX / phone ──
+    // The radio said what VOX is, so the state no longer rests on a request.
+    if (d.voxEnable) { m_voxUnconfirmed = false; }
     phoneChanged |= assign(d.voxEnable, m_voxEnable);
     phoneChanged |= assign(d.voxLevel, m_voxLevel);
     phoneChanged |= assign(d.voxDelay, m_voxDelay);
@@ -267,7 +283,27 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
         bool apdChanged = false;
         apdChanged |= assign(d.apdEnabled, m_apdEnabled);
         apdChanged |= assign(d.apdConfigurable, m_apdConfigurable);
-        apdChanged |= assign(d.apdEqActive, m_apdEqActive);
+        if (d.apdLifecycle && m_apdLifecycle != d.apdLifecycle) {
+            m_apdLifecycle = d.apdLifecycle;
+            apdChanged = true;
+        }
+        // FlexLib APD.cs: an equalizer status describes one TX antenna,
+        // frequency and power, and applies only to a matching transmit slice.
+        // Once the radio reports a lifecycle, equalizer_active is no longer
+        // trusted (any deployed table sets it): a correction is on air only in
+        // ACTIVE or HOLD. A status with no scope is older firmware's global form.
+        const bool scoped = d.apdEqAntenna || d.apdEqFrequencyMhz;
+        std::optional<bool> eqActive = d.apdEqActive;
+        if (m_apdLifecycle) {
+            eqActive.reset();
+            if (scoped) {
+                eqActive = *m_apdLifecycle == ApdLifecycleState::Active
+                        || *m_apdLifecycle == ApdLifecycleState::Hold;
+            }
+        }
+        if (eqActive && (!scoped || apdStatusMatchesTxSlice(d))) {
+            apdChanged |= assign(eqActive, m_apdEqActive);
+        }
         // Bare equalizer_reset flag: clear active + emit the reset signal.
         if (d.apdEqualizerReset) {
             if (m_apdEqActive) { m_apdEqActive = false; apdChanged = true; }
@@ -296,6 +332,38 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
             emit apdSamplerChanged(txAnt);
         }
     }
+}
+
+bool TransmitModel::apdStatusMatchesTxSlice(const TransmitDelta& d) const
+{
+    if (!d.apdEqAntenna || !d.apdEqFrequencyMhz || !m_apdTxSliceResolver) {
+        return false;
+    }
+    const std::optional<ApdTxSlice> slice = m_apdTxSliceResolver();
+    if (!slice
+        || d.apdEqAntenna->compare(slice->txAntenna, Qt::CaseInsensitive) != 0) {
+        return false;
+    }
+    // The radio reports the frequency to the Hz; the slice may carry sub-Hz.
+    if (std::llround(*d.apdEqFrequencyMhz * 1e6) != std::llround(slice->frequencyMhz * 1e6)) {
+        return false;
+    }
+    // Tune power while tuning (SMART-12625). Firmware that omits rfpower is
+    // matched on antenna and frequency alone.
+    return !d.apdEqRfPower || *d.apdEqRfPower == (m_tune ? m_tunePower : m_rfPower);
+}
+
+QString TransmitModel::apdLifecycleStateName(ApdLifecycleState state)
+{
+    switch (state) {
+    case ApdLifecycleState::Off:      return QStringLiteral("off");
+    case ApdLifecycleState::Idle:     return QStringLiteral("idle");
+    case ApdLifecycleState::Training: return QStringLiteral("training");
+    case ApdLifecycleState::Active:   return QStringLiteral("active");
+    case ApdLifecycleState::Hold:     return QStringLiteral("hold");
+    case ApdLifecycleState::Fault:    return QStringLiteral("fault");
+    }
+    return {};
 }
 
 void TransmitModel::setApdEnabled(bool on)
@@ -673,6 +741,30 @@ void TransmitModel::setActiveMicProfile(const QString& profile)
     }
 }
 
+void TransmitModel::setCwProfileList(const QStringList& profiles)
+{
+    if (m_cwProfileList != profiles) {
+        m_cwProfileList = profiles;
+        emit cwProfilesChanged();
+    }
+}
+
+void TransmitModel::setActiveCwProfile(const QString& profile)
+{
+    if (m_activeCwProfile != profile) {
+        m_activeCwProfile = profile;
+        emit cwProfilesChanged();
+    }
+}
+
+void TransmitModel::setCwProfileUnsaved(bool unsaved)
+{
+    if (m_cwProfileUnsaved != unsaved) {
+        m_cwProfileUnsaved = unsaved;
+        emit cwProfileUnsavedChanged(unsaved);
+    }
+}
+
 void TransmitModel::setMicInputList(const QStringList& inputs)
 {
     if (m_micInputList != inputs) {
@@ -808,7 +900,14 @@ void TransmitModel::setDax(bool on)
         emit micStateChanged();  // PhoneCwApplet's DAX button binds to this
         if (!current()) { return; }
     }
-    emit controlRequested({field, on});
+    // Every dax command is tracked until answered, so a holder deciding
+    // whether the radio is already on can tell a settled flag from a stale
+    // status overtaking this request (#6593 review).
+    TransmitControlRequest request{field, on};
+    request.answerTicket = ++m_lastAnswerTicket;
+    m_pendingDaxAnswers.insert(request.answerTicket);
+    m_daxRequested = on;
+    emit controlRequested(request);
 }
 
 void TransmitModel::setSbMonitor(bool on)
@@ -860,11 +959,48 @@ void TransmitModel::setVoxEnable(bool on)
     const auto field = TransmitControlRequest::Field::VoxEnabled;
     const auto current = captureControlIntent(field);
     m_voxEnable = on;  // optimistic update — radio may not echo
+    // ...so until the radio confirms it, the model says what was ASKED for.
+    m_voxUnconfirmed = true;
     emit phoneStateChanged();
     if (!current()) { return; }
     emit controlRequested({field, VoxSetting{m_voxEnable, m_voxLevel, m_voxDelay}});
     if (!current()) { return; }
     emit voxCommandIssued(on, m_voxLevel, m_voxDelay);
+}
+
+quint64 TransmitModel::requestVoxEnable(bool on)
+{
+    if (refuseControlOffThread()) { return 0; }
+    const auto field = TransmitControlRequest::Field::VoxEnabled;
+    // A VOX intent like an operator click, so a click after it supersedes it.
+    captureControlIntent(field);
+    const quint64 ticket = ++m_lastAnswerTicket;
+    m_pendingVoxAnswers.insert(ticket, {on, m_controlIntentRevisions[static_cast<size_t>(field)]});
+    TransmitControlRequest request{field, VoxSetting{on, m_voxLevel, m_voxDelay}};
+    request.answerTicket = ticket;
+    emit controlRequested(request);
+    return ticket;
+}
+
+void TransmitModel::handleControlAnswer(quint64 ticket, bool applied)
+{
+    if (m_pendingDaxAnswers.remove(ticket)) { return; }
+    const auto it = m_pendingVoxAnswers.constFind(ticket);
+    if (it == m_pendingVoxAnswers.constEnd()) { return; }
+    const PendingVoxAnswer pending = it.value();
+    m_pendingVoxAnswers.erase(it);
+    const bool current = m_controlIntentRevisions[static_cast<size_t>(
+        TransmitControlRequest::Field::VoxEnabled)] == pending.revision;
+    // Only the latest intent may write the model: an answer to a superseded
+    // request describes a VOX state the radio has since been asked to leave.
+    if (applied && current) {
+        m_voxUnconfirmed = false;
+        if (m_voxEnable != pending.on) {
+            m_voxEnable = pending.on;
+            emit phoneStateChanged();
+        }
+    }
+    emit voxEnableAnswered(ticket, pending.on, applied, current);
 }
 
 void TransmitModel::setVoxLevel(int level)
@@ -1062,6 +1198,10 @@ void TransmitModel::setCwPitch(int hz)
     const auto field = TransmitControlRequest::Field::CwPitch;
     const auto current = captureControlIntent(field);
     hz = qBound(100, hz, 6000);
+    if (m_confirmReceiveCwPitch) {
+        emit cwPitchCommandIssued(hz);
+        return;
+    }
     if (m_cwPitch != hz) {
         m_cwPitch = hz;  // update local cache so rapid steppers accumulate
         emit phoneStateChanged();

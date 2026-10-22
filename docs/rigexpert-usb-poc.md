@@ -90,8 +90,10 @@ from an overclaimed measurement report.
    and that row count. Completion means this **host cutoff**, not an observed
    firmware end-of-sweep marker. Extra data after cutoff is discarded locally;
    the bounded report trace may retain it while USB closes.
-8. Completion, Stop, Disconnect, leaving AetherLab, app close, malformed data or timeout
-   cancels queued sends, attempts `off\r`, closes USB, and retains data until the next Connect. A new
+8. Completion, Stop, Disconnect, leaving AetherLab, malformed data or timeout
+   cancels queued sends, attempts `off\r`, closes USB, and retains data until the next Connect. App
+   shutdown queues the same best-effort cleanup without joining the I/O thread;
+   process exit can precede the final write and USB-close callbacks. A new
    sweep requires an explicit new Connect. No automatic sweep, retry or
    reconnect occurs.
 
@@ -181,11 +183,11 @@ Remote acquisition requires **both** an explicit `isolated` token on the
 request and exact environment value `AETHER_AUTOMATION_ALLOW_LAB_RF=1` on the
 app process. This grants analyzer RF only, separate from radio TX permission.
 Generic invoke, pointer and coordinate automation refuse the Sweep button
-(`aetherLabRf`) even with permission: automation must use the typed `lab sweep`
+(`aetherLabSweep`, marked with the `aetherLabRf` property) even with permission: automation must use the typed `lab sweep`
 request with its explicit isolation token. Manual UI activation still uses
 the isolation checkbox.
-Observe-only mode permits status, enumeration and stop/disconnect, but blocks
-connect/acquisition. Stop remains available when permission is absent.
+Observe-only mode permits status, enumeration and stop, but blocks
+connect, acquisition and disconnect. Stop remains available when permission is absent.
 Bridge responses also report `automationRfAllowed` without starting a sweep.
 Authentication uses the existing automation token. The existing MCP
 `bridge_command` tool accepts `{"request":{"cmd":"lab","action":"status"}}`

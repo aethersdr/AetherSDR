@@ -1,20 +1,7 @@
-// Radio Setup → Transmit → Timings: ACC TX, TX Delay, RCA TX1-3 and Timeout
-// write `interlock set <key>=`, which only a command plane carries (#5370).
-//
-// Pinned here, each with its control:
-//   1. connected with no command plane, every field is dimmed (disabled, not
-//      hidden) and says why on the tooltip AND accessibleDescription;
-//   2. finishing an edit there sends nothing and raises no commandDropped;
-//   3. on disconnect the fields let go, and dim again on the next connect;
-//   4. with a command plane every field is enabled, carries no reason, and an
-//      edit sends the same `interlock set` text as before, Timeout in ms.
-//
-// No hardware and no transport: the no-command-plane radio is an injected
-// backend that reports itself connected, and the command-plane radios are a
-// bare model on the Flex backend and the Demo, whose connection is synthetic
-// and never dialled.
-
+// Timing availability, typed dispatch and seconds-to-ms conversion on the
+// production dialog. Injected Flex transport and socket-free Demo; no RF.
 #include "TestSettingsProfile.h"
+#include "RadioSetupControlFixture.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/sim/SimBackend.h"
@@ -134,14 +121,14 @@ struct TimingField {
     const char* wireText;   // as sendCommand logs it, quotes included
 };
 
-// Every field the Timings group wires to `interlock set`.
+// Every field the Timings group wires to `interlock`.
 const TimingField kFields[] = {
-    {"ACC TX:",        "ACC TX",        "11", "\"interlock set acc_tx_delay=11\""},
-    {"TX Delay:",      "TX Delay",      "30", "\"interlock set tx_delay=30\""},
-    {"RCA TX1:",       "RCA TX1",       "12", "\"interlock set tx1_delay=12\""},
-    {"Timeout (sec):", "Timeout (sec)", "45", "\"interlock set timeout=45000\""},
-    {"RCA TX2:",       "RCA TX2",       "13", "\"interlock set tx2_delay=13\""},
-    {"RCA TX3:",       "RCA TX3",       "14", "\"interlock set tx3_delay=14\""},
+    {"ACC TX:",        "ACC TX",        "11", "\"interlock acc_tx_delay=11\""},
+    {"TX Delay:",      "TX Delay",      "30", "\"interlock tx_delay=30\""},
+    {"RCA TX1:",       "RCA TX1",       "12", "\"interlock tx1_delay=12\""},
+    {"Timeout (sec):", "Timeout (sec)", "45", "\"interlock timeout=45000\""},
+    {"RCA TX2:",       "RCA TX2",       "13", "\"interlock tx2_delay=13\""},
+    {"RCA TX3:",       "RCA TX3",       "14", "\"interlock tx3_delay=14\""},
 };
 
 // Found from the caption the operator reads, so the lookup does not depend on
@@ -213,7 +200,7 @@ private slots:
             ScopedCommandLog log;
             edit->setText(QLatin1String(field.typed));
             emit edit->editingFinished();
-            QCOMPARE(log.count(QStringLiteral("interlock set")), 0);
+            QCOMPARE(log.count(QStringLiteral("interlock")), 0);
         }
         QCOMPARE(dropped.count(), 0);
 
@@ -237,15 +224,15 @@ private slots:
     }
 
     // POSITIVE CONTROL, the wire text: each field is enabled and sends its
-    // `interlock set` text exactly once, so the assertions above cannot be
+    // `interlock` text exactly once, so the assertions above cannot be
     // passed by fields dimmed, or disconnected from their write, on every radio.
-    // The model is NOT connected, so the gate opens on its disconnected arm;
-    // connectedCommandPlaneStaysLive() covers the command-plane arm.
+    // The injected Flex backend is connected and advertises the implemented
+    // timing fields; unsupported connected backends are checked separately.
     void commandPlaneSendsTheSameWireText()
     {
-        RadioModel model;  // a bare model is on the Flex backend
-        QVERIFY2(!model.isConnected(), "a bare model is not connected");
-        QVERIFY2(model.hasCommandPlane(), "the bare Flex model has a command plane: no drop");
+        RadioModel model;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(model);
+        QVERIFY(model.isConnected());
 
         RadioSetupDialog dialog(&model);
         dialog.show();
@@ -258,51 +245,38 @@ private slots:
             QVERIFY2(edit->accessibleDescription().isEmpty(), field.caption);
             QVERIFY2(edit->toolTip().isEmpty(), field.caption);
 
-            ScopedCommandLog log;
+            backend->commands.clear();
             edit->setText(QLatin1String(field.typed));
             emit edit->editingFinished();
-            QVERIFY2(log.count(QLatin1String(field.wireText)) == 1, field.wireText);
-            QCOMPARE(log.count(QStringLiteral("interlock set")), 1);
+            QCOMPARE(backend->commands.size(), 1);
+            QCOMPARE(backend->commands.front(), QString::fromLatin1(field.wireText).remove(QLatin1Char('"')));
             QCOMPARE(edit->text(), QLatin1String(field.typed));
         }
 
         // Unchanged clamp: a negative entry is sent, and shown, as 0.
         QLineEdit* txDelay = findTimingEdit(dialog, QStringLiteral("TX Delay:"));
         QVERIFY(txDelay);
-        ScopedCommandLog log;
+        backend->commands.clear();
         txDelay->setText(QStringLiteral("-5"));
         emit txDelay->editingFinished();
-        QCOMPARE(log.count(QStringLiteral("\"interlock set tx_delay=0\"")), 1);
+        QCOMPARE(backend->commands, QStringList{QStringLiteral("interlock tx_delay=0")});
         QCOMPARE(txDelay->text(), QStringLiteral("0"));
     }
 
-    // A CONNECTED radio with a command plane: the gate keys on the command
-    // plane, not on being connected.
-    void connectedCommandPlaneStaysLive()
+    void demoDoesNotAdvertiseUnimplementedTimings()
     {
         RadioModel model;
         connectDemo(model);
         QTRY_VERIFY_WITH_TIMEOUT(model.isConnected(), 5000);
-        QVERIFY2(model.hasCommandPlane(), "the Demo has a command plane");
-
-        QSignalSpy dropped(&model, &RadioModel::commandDropped);
-
         RadioSetupDialog dialog(&model);
         dialog.show();
         dialog.selectTab(QStringLiteral("Transmit"));
-
         for (const TimingField& field : kFields) {
             QLineEdit* edit = findTimingEdit(dialog, QLatin1String(field.caption));
-            QVERIFY2(edit, field.caption);
-            QVERIFY2(edit->isEnabled(), field.caption);
-            QVERIFY2(edit->accessibleDescription().isEmpty(), field.caption);
-
-            ScopedCommandLog log;
-            edit->setText(QLatin1String(field.typed));
-            emit edit->editingFinished();
-            QVERIFY2(log.count(QLatin1String(field.wireText)) == 1, field.wireText);
+            QVERIFY(edit);
+            QVERIFY(!edit->isEnabled());
+            QVERIFY(!edit->accessibleDescription().isEmpty());
         }
-        QCOMPARE(dropped.count(), 0);
     }
 
     // PTT Mic Override (#6442) shows the RADIO's value: unreported (firmware

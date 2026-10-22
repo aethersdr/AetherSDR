@@ -779,6 +779,14 @@ void testAtuCapabilityUsesThreeVisibleStates()
                && inactiveSuccessStyle == inactiveBypassStyle
                && inactiveSuccessStyle == inactiveMemoryStyle);
 
+    TransmitDelta power;
+    power.rfPower = 50;
+    power.tunePower = 7;
+    model.applyChanges(power);
+    report("power controls display percentage units without an external tuner",
+           labelWithText(applet, QStringLiteral("50%"))
+               && labelWithText(applet, QStringLiteral("7%")));
+
     ModelControlWireSpy commandSpy(&model);
     QSignalSpy atuIntents(&model, &TransmitModel::atuCommandIssued);
     model.setHasTuner(false);
@@ -1064,6 +1072,18 @@ void testMemButtonResyncsOnResetState()
     report("MEM clears on disconnect", !mem->isChecked());
 }
 
+static void nativePowerLabels()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+    TransmitDelta values;
+    values.rfPower = 50;
+    values.tunePower = 7;
+    model.applyChanges(values);
+    report("radio power readouts include percent units", labelWithText(applet, "50%") && labelWithText(applet, "7%"));
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settingsProfile(
@@ -1078,6 +1098,7 @@ int main(int argc, char** argv)
     qputenv("AETHER_AUTOMATION", "1");
 
     QApplication app(argc, argv);
+    nativePowerLabels();
 
     std::printf("TxApplet power reconciliation test harness\n\n");
 

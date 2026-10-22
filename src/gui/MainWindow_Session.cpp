@@ -7,6 +7,7 @@
 
 #include "MainWindow.h"
 #include "models/AntennaAnalyzerModel.h"
+
 #include "MeterApplet.h"
 
 #include "AetherialAudioStrip.h"
@@ -1230,6 +1231,16 @@ void MainWindow::wireRadioModel()
     // txSliceChanged edge, so the span control's owner is re-derived (#5750).
     connect(&m_radioModel, &RadioModel::slotOccupancyChanged,
             this, [this](int) { syncPanSpanControlPlacement(); });
+    // A late capability republish can change whether the span is fixed.
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged,
+            this, [this](bool, const RadioCapabilities&) { syncPanSpanControlPlacement(); });
+    // ...and CWX/DVK availability follows the TX slice for the same reason. The
+    // licence statuses land before the slice statuses, so the pass they trigger
+    // finds no TX slice yet and disables the indicator. A new slice's
+    // txSliceChanged re-runs it; a reclaimed one carries tx=1 over and emits no
+    // such edge, so this is what re-runs it after a reconnect.
+    connect(&m_radioModel, &RadioModel::slotOccupancyChanged,
+            this, [this](int) { updateKeyerAvailability(); });
     connect(&m_radioModel, &RadioModel::sliceConnectEnumerationStarted,
             this, [this]() {
         m_connectSliceEnumeration.arm(QDateTime::currentMSecsSinceEpoch());
@@ -3308,6 +3319,8 @@ void MainWindow::syncPanSpanControlPlacement()
     const bool radioWide = m_radioModel.isConnected()
         && caps.panSpanModel.has_value()
         && caps.panSpanModel->radioWide;
+    const bool displayDeclared = caps.panDisplayControl.has_value();
+    const bool spanDeclared = displayDeclared && caps.panDisplayControl->declaresSpan();
     const SliceModel* tx = m_radioModel.txSlice();
     const QString txPanId = tx ? tx->panId() : QString();
     // Docked panes in the order the layout shows them, then floating or
@@ -3321,8 +3334,17 @@ void MainWindow::syncPanSpanControlPlacement()
             continue;
         }
         sw->setSpanControlPlacement(
-            spanControlLiveOnPan(radioWide, panIds, txPanId, panId), radioWide);
+            spanControlLiveOnPan(radioWide, panIds, txPanId, panId), radioWide,
+            spanFixedOnPan(m_radioModel.isConnected(), displayDeclared, spanDeclared,
+                           kiwiSdrPanDisplaysKiwi(panId)));
     }
+}
+
+bool MainWindow::panSpanFixedByBackend() const
+{
+    const auto display = m_radioModel.backendCapabilities().panDisplayControl;
+    return spanFixedOnPan(m_radioModel.isConnected(), display.has_value(),
+                          display && display->declaresSpan(), false);
 }
 
 // Color the version row by how current the firmware is, and make it a link to
@@ -3410,6 +3432,53 @@ void MainWindow::openFirmwareReleaseNotes()
             source->publishedReleases, m_radioVersionLabel->text()));
     if (!url.isEmpty())
         QDesktopServices::openUrl(QUrl(url));
+}
+
+void MainWindow::createPansSequentially(const QString& layoutId, int total,
+    std::shared_ptr<QStringList> panIds, int created)
+{
+    const quint64 generation = m_panLayoutRequestGeneration;
+    const AetherSDR::RadioControlSession session = m_radioModel.controlSession();
+    const auto current = [this, generation, session] {
+        return !m_shuttingDown && m_panStack && generation == m_panLayoutRequestGeneration
+            && m_radioModel.controlSessionCurrent(session);
+    };
+    if (!current()) { return; }
+    if (created >= total) {
+        QTimer::singleShot(800, this, [this, current, layoutId] {
+            if (!current()) { return; }
+            for (PanadapterApplet* applet : m_panStack->allApplets()) {
+                if (AetherSDR::PanadapterModel* pan = m_radioModel.panadapter(applet->panId())) {
+                    applet->spectrumWidget()->setDbmRange(pan->minDbm(), pan->maxDbm());
+                    applet->spectrumWidget()->observeFrequencyRange(pan->centerMhz(), pan->bandwidthMhz());
+                }
+            }
+            if (!m_workspaceController || !m_workspaceController->isEnabled()) {
+                m_panStack->rearrangeLayout(layoutId);
+            }
+            startCanvasPanLayoutSettle(layoutId, panCountForLayoutId(layoutId));
+            m_panApplet = m_panStack->activeApplet();
+        });
+        return;
+    }
+    const AetherSDR::ReceiveDispatch dispatched = m_radioModel.requestPanCreation(this,
+        [this, current, panIds, layoutId, total, created]
+        (const AetherSDR::RadioControlReply& reply, AetherSDR::PanadapterModel* pan) {
+            if (!current()) { return; }
+            if (reply.kind != AetherSDR::RadioControlReply::Kind::Accepted || !pan) {
+                if (reply.kind != AetherSDR::RadioControlReply::Kind::Cancelled) {
+                    showPanadapterSliceCapacityMessage();
+                }
+                return;
+            }
+            panIds->append(pan->panId());
+            QTimer::singleShot(200, this, [this, current, panIds, layoutId, total, created] {
+                if (current()) { createPansSequentially(layoutId, total, panIds, created + 1); }
+            });
+        }, false);
+    if (dispatched == AetherSDR::ReceiveDispatch::Unsupported && current()) {
+        showPanadapterSliceCapacityMessage();
+    }
 }
 
 } // namespace AetherSDR

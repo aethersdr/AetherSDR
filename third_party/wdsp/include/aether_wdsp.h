@@ -52,6 +52,13 @@ void fexchange2(int channel, float* inputI, float* inputQ,
 // must pace a burst of input blocks against the worker.
 int GetChannelOutputReady(int channel);
 void SetRXAMode(int channel, int mode);
+// Existing amd.c controls; mode 0 combines both SAM sidebands.
+void SetRXAAMDSBMode(int channel, int sbmode);
+void SetRXAAMDFadeLevel(int channel, int levelfade);
+void SetRXAANRRun(int channel, int run);
+void SetRXAANRVals(int channel, int taps, int delay, double gain, double leakage);
+void SetRXAANFRun(int channel, int run);
+void SetRXAANFVals(int channel, int taps, int delay, double gain, double leakage);
 // Broadcast decoder controls, WDSP Guide section 5.3.10. The local patch
 // applies deemphasis to both live filters; indicator readback is an atomic
 // latest-completed-block observation. The caller must own channel lifetime.
@@ -355,6 +362,13 @@ void SetRXAAMSQRun(int channel, int run);
 void SetRXAAMSQThreshold(int channel, double thresholdDb);
 void SetTXAMode(int channel, int mode);
 void SetTXABandpassFreqs(int channel, double lowHz, double highHz);
+// TXA's AM and FM modulator stages (ammod.c, fmmod.c). create_txa() defaults:
+// carrier 0.5, deviation 5000 Hz, and ctcss_run = 1 (100 Hz, level 0.10), so
+// FM carries a CTCSS tone unless SetTXACTCSSRun turns it off.
+// WdspChannel::open() pushes all three on every transmit open.
+void SetTXAAMCarrierLevel(int channel, double carrierLevel);
+void SetTXAFMDeviation(int channel, double deviationHz);
+void SetTXACTCSSRun(int channel, int run);
 // RXA meter readouts. RXA_S_PK / RXA_S_AV are the real signal-strength
 // meters. RXA_ADC_PK / RXA_ADC_AV measure the POST-DDC slice, which is a
 // different question from the HL2's own pre-DDC full-spectrum clip

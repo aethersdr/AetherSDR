@@ -621,8 +621,8 @@ report PortAudio/portaudio#1176.
   Source:  https://github.com/PortAudio/portaudio (tag v19.7.0, sha256
            5af29ba58bbdbb7bbcefaaecc77ec8fc413f0db6f4c4e286c40c3e1b83174fa0)
 
-DeepFist native helpers (experimental)
---------------------------------------
+DeepFist native helpers
+-----------------------
 MIT License
 
 Copyright (c) 2026 Brent Crier
@@ -726,3 +726,87 @@ tools/docs/pdf/fonts/OFL.txt.
   Copyright: Copyright 2022 The Noto Project Authors
   License:   SIL Open Font License, Version 1.1
   Source:    https://github.com/notofonts/symbols
+
+
+29. esp-serial-flasher and esp-flasher-stub — ESP32 ROM bootloader protocol
+-------------------------------------------------------------------------------
+Bundled at third_party/esp-serial-flasher/ (library v2.0.0; the flasher
+stubs in src/stubs/ regenerated from esp-flasher-stub v1.4.1 with the
+library's cmake/gen_stub_sources.py, see COMMIT). Used to install firmware
+on ESP32-family controllers held in their ROM download mode; the stubs are
+uploaded to the device's RAM, not run on the host. The full license text is
+in third_party/esp-serial-flasher/LICENSE.
+
+  Copyright: Copyright 2020-2026 Espressif Systems (Shanghai) CO LTD
+  License:   Apache License 2.0 (library); Apache-2.0 OR MIT (stubs)
+  Source:    https://github.com/espressif/esp-serial-flasher
+             https://github.com/espressif/esp-flasher-stub
+
+
+30. Monocypher — Ed25519 signature verification
+-------------------------------------------------------------------------------
+Bundled at third_party/monocypher/ (4.0.3: monocypher.c and the optional
+monocypher-ed25519.c). Verifies the signatures on downloaded firmware
+manifests. The full license text is in third_party/monocypher/LICENCE.md.
+
+  Copyright: Copyright (c) 2017-2023 Loup Vaillant, Michael Savage,
+             Fabio Scotoni
+  License:   CC0-1.0 OR BSD-2-Clause (at the user's choice)
+  Source:    https://monocypher.org
+
+
+31. littlefs — CTR2-Max registration check (read-only)
+-------------------------------------------------------------------------------
+Bundled at third_party/littlefs/ (v2.11.3), built with LFS_READONLY so no
+write path is compiled. Reads the CTR2-Max stock firmware's file system to
+check the unit is registered before AetherCTR2 is installed. The full
+license text is in third_party/littlefs/LICENSE.md.
+
+  Copyright: Copyright (c) 2022, The littlefs authors.
+             Copyright (c) 2017, Arm Limited.
+  License:   BSD-3-Clause
+  Source:    https://github.com/littlefs-project/littlefs
+
+
+32. DeepCW — Neural CW Decoder (ported code in-binary + model download-on-demand)
+---------------------------------------------------------------------------------
+The optional neural CW decode backend (DeepCwEngine, RFC #4817). Unlike the
+download-only ASR entries above, this has TWO distinct AGPL-3.0 obligations:
+
+  a) Ported code (compiled into the binary). src/core/DeepCwEngine.{h,cpp} is a
+     C++ port of decode_morse.py from e04/deepcw-engine — the spectrogram build
+     (256-pt FFT, hop 48, periodic Hann, 400-1200 Hz -> 65 bins, log1p) and the
+     greedy-CTC decode. A faithful port of AGPL-3.0 source is a derivative of it,
+     so this code ships AGPL-3.0 in every binary regardless of whether a user
+     ever downloads the weights. AetherSDR is GPL-3.0-or-later; GPLv3 §13
+     permits the combination (its only added obligation, AGPL's network clause,
+     affects hosting the combined work as a network service — desktop use is
+     unaffected, and AetherSDR source is already public).
+
+  b) Model weights (NOT bundled). Downloaded on first enable of the DeepCW
+     backend (source: the e04/deepcw-engine repository), SHA-256-verified,
+     cached under the user's data dir. Run by ONNX Runtime (entry 11).
+
+  Attribution: "deepcw-engine" by e04.
+  License: AGPL-3.0-or-later (both the ported code and the model)
+  Source:  https://github.com/e04/deepcw-engine
+
+
+33. DeepFist — CW model weights (download-on-demand)
+-------------------------------------------------------------------------------
+The exp27_bt-champion model (deepfist.onnx and deepfist.onnx.json) is downloaded
+on first selection, never bundled or mirrored by AetherSDR. Size and SHA-256
+are pinned in src/core/CwModelAssets.cpp. The accompanying LICENSE is fetched
+from the release tag's resolved source revision, not a historical MIT revision.
+The native helpers' separate historical MIT notice above remains in effect.
+
+  Copyright: Copyright (C) 2026 Brent Crier (N9BC)
+  License understanding: GPL-3.0-or-later, following the published release's
+             LICENSE and README; accepted for this pinned download by the
+             operator on 2026-10-17. This is not a separate upstream ruling on
+             the older checkpoint. See docs/deepfist-cw-backend.md.
+  Release:   https://github.com/n9bc/DeepFist/releases/tag/exp27_bt-champion
+  Source:    https://github.com/n9bc/DeepFist/tree/930bd3cea7d9bf19fd45413acc9064b54c722871
+  License:   https://raw.githubusercontent.com/n9bc/DeepFist/930bd3cea7d9bf19fd45413acc9064b54c722871/LICENSE
+  LICENSE:   35927 bytes; SHA-256
+             d8dcabd2c59c9e96be89f094a94474685e3fcd5ee8c4304ae7fbbf6c722df6ab

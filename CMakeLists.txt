@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.10.2 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.10.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -179,7 +179,8 @@ option(REQUIRE_RTL "Fail configuration unless the RTL backend and float FFTW are
 #       signed-16-bit wire (MetisProtocol.cpp, ep2WriteTxIq), so TXA's
 #       advantage THERE is below the wire and unusable.
 # OFF — the in-tree phasing modulator, unchanged. The fallback for a machine or
-#       a report where TXA misbehaves.
+#       a report where TXA misbehaves. SSB and digital only: AM, DSB and FM
+#       stay receive-only in this build.
 #
 #       THIS LINE USED TO SAY "kept building and kept tested" AND THE FLIP
 #       BELOW MAKES THAT FALSE. `grep AETHER_HL2_TX_TXA .github/workflows/*.yml`
@@ -234,8 +235,15 @@ option(REQUIRE_RTL "Fail configuration unless the RTL backend and float FFTW are
 # radio was keyed. No antenna port was observed." -- now exists, and it is named
 # rather than asserted.
 option(AETHER_HL2_TX_TXA
-       "Hermes-Lite 2 SSB transmit modulator: ON (default) uses WDSP's TXA chain, OFF the in-tree phasing modulator"
+       "Hermes-Lite 2 transmit modulator: ON (default) uses WDSP's TXA chain, OFF the in-tree phasing modulator (SSB only)"
        ON)
+# Lets AETHER_FIRMWARE_CATALOG and AETHER_FIRMWARE_TRUST_KEYS replace the
+# firmware catalog and add firmware-signing keys, for testing a publisher's own
+# builds. Off by default and never for release: a release build installs only
+# firmware from aethersdr.com signed by a key built into it.
+option(AETHER_FIRMWARE_DEV_OVERRIDES
+       "Honor the AETHER_FIRMWARE_CATALOG and AETHER_FIRMWARE_TRUST_KEYS environment overrides (testing only)"
+       OFF)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 if(WIN32)
@@ -891,6 +899,11 @@ set(CORE_SOURCES
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/flex/FlexModelControls.cpp
+    src/core/backends/flex/FlexSetupControls.cpp
+    src/core/backends/flex/FlexUtilityControls.cpp
+    src/core/backends/flex/FlexStoredControls.cpp
+    src/core/backends/flex/FlexSliceLifecycleControls.cpp
+    src/core/backends/flex/FlexPanControls.cpp
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
     src/core/backends/flex/FlexPttWireSession.cpp
     src/core/backends/flex/RadioConnection.cpp  # SmartSDR TCP command/reply/status wire
@@ -1009,6 +1022,7 @@ set(CORE_SOURCES
     src/core/DecoderPcmAdapter.cpp
     src/core/AetherClockSettings.cpp
     src/core/MiniPanSettings.cpp
+    src/core/Ctr2RelaySettings.cpp
     src/core/GreenHeronProtocol.cpp
     src/core/PacketLossConcealment.cpp
     src/core/PerfTelemetry.cpp
@@ -1018,6 +1032,16 @@ set(CORE_SOURCES
     src/core/TcpByteProxy.cpp
     src/core/RigExpertHidTransport.cpp
     src/models/AntennaAnalyzerModel.cpp
+    src/core/Ctr2FirmwareUpdater.cpp
+    src/core/Ctr2MaxRegistration.cpp
+    src/core/CappedDownload.cpp
+    src/core/Ctr2DeviceLock.cpp
+    src/core/Ctr2MaxStockCatalog.cpp
+    src/core/Ctr2MaxStockFirmware.cpp
+    src/core/EspFirmwareCatalog.cpp
+    src/core/EspFirmwareInstaller.cpp
+    src/core/EspFirmwareJob.cpp
+    src/core/EspFirmwareManifest.cpp
     src/core/Ctr2HidFraming.cpp
     src/core/Ctr2HidPort.cpp
     src/core/Ctr2HidThreadPort.cpp
@@ -1066,7 +1090,23 @@ set(CORE_SOURCES
     src/core/AcomProtocol.cpp
     src/core/AcomConnection.cpp
     src/core/SpeProtocol.cpp
+    src/core/SpeLegacyProtocol.cpp
     src/core/SpeConnection.cpp
+    src/models/Kxpa100RadioAssociation.cpp
+    src/models/Kxpa100RadioAssociation.h
+    src/models/Kat500TxController.cpp
+    src/models/Kat500TxController.h
+    src/models/Kxpa100Model.cpp
+    src/models/Kxpa100Model_Maintenance.cpp
+    src/models/Kat500Model.cpp
+    src/core/Kxpa100Protocol.cpp
+    src/core/Kxpa100Maintenance.cpp
+    src/core/Kat500Protocol.cpp
+    src/core/Kat500Maintenance.cpp
+    src/core/Kpa500Protocol.cpp
+    src/core/Kpa500Maintenance.cpp
+    src/core/Kpa500FaultHistory.cpp
+    src/core/Kpa500Connection.cpp
     src/core/VkampProtocol.cpp
     src/core/VkampConnection.cpp
     src/core/Kpa1500Protocol.cpp
@@ -1087,6 +1127,12 @@ set(CORE_SOURCES
     src/core/DvkWavConverter.cpp
     src/core/DvkWavTransfer.cpp
     src/core/weather/OperaRadarImage.cpp
+    src/core/VoiceKeyerWavDecoder.cpp
+    src/core/VoiceKeyerSettings.cpp
+    src/core/LocalVoiceKeyerStore.cpp
+    src/core/LocalWavPlayer.cpp
+    src/core/GeneratedAudioTransmitter.cpp
+    src/core/VoiceKeyerTxRoute.cpp
     src/core/ZipArchive.cpp
     src/core/ProfileTransfer.cpp
     src/core/QsoRecorder.cpp
@@ -1094,6 +1140,7 @@ set(CORE_SOURCES
     src/core/QsoWavFormat.cpp
     src/core/QsoWavPlayback.cpp
     src/core/FirmwareStager.cpp
+    src/core/MsiFirmwareMetadata.cpp
     src/core/UpdateChecker.cpp
     src/core/NetworkDiagnostics.cpp
     src/core/WindowsFirewall.cpp
@@ -1138,7 +1185,6 @@ set(CORE_SOURCES
     src/core/LocalMemoryStore.cpp
     src/core/MemoryCsvCompat.cpp
     src/core/MemoryFieldValues.cpp
-    src/core/MemoryRecallPolicy.cpp
     src/core/NetRecurrence.cpp
     src/core/NetSchedulePlanner.cpp
     src/core/NetScheduleStore.cpp
@@ -1194,6 +1240,11 @@ set(MODEL_SOURCES
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
     src/models/RadioModel.cpp
+    src/models/RadioModel_Setup.cpp
+    src/models/RadioModel_Utilities.cpp
+    src/models/RadioModel_StoredControls.cpp
+    src/models/RadioModel_SliceLifecycle.cpp
+    src/models/RadioModel_PanControls.cpp
     src/models/RadioModel_TxCoordinator.cpp
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
@@ -1214,6 +1265,9 @@ set(MODEL_SOURCES
     src/models/SpotModel.cpp
     src/models/CwxModel.cpp
     src/models/DvkModel.cpp
+    src/models/VoiceKeyer.cpp
+    src/models/LocalVoiceKeyer.cpp
+    src/models/VoiceKeyerController.cpp
     src/models/NavtexModel.cpp
     src/models/FlexWaveformModel.cpp
     src/models/DStarModel.cpp
@@ -1225,6 +1279,7 @@ set(MODEL_SOURCES
     src/models/GreenHeronModel.cpp
     src/models/AetherClockModel.cpp
     src/models/Ctr2ProxyModel.cpp
+    src/models/FirmwareInstallModel.cpp
 )
 
 # Vendored QGeoView (LGPL-3.0) — slippy-map widget for the common
@@ -1348,11 +1403,18 @@ set(GUI_SOURCES
     src/gui/AmpApplet.cpp
     src/gui/AcomApplet.cpp
     src/gui/SpeApplet.cpp
+    src/gui/Kxpa100Applet.cpp
+    src/gui/Kat500Applet.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
+    src/gui/Kat500AdvancedWidget.cpp
+    src/gui/Kpa500Applet.cpp
+    src/gui/Kpa500AdvancedWidget.cpp
     src/gui/SpeLcdWidget.cpp
     src/gui/VkampApplet.cpp
     src/gui/Kpa1500Applet.cpp
     src/gui/LpMeterApplet.cpp
-    src/gui/Ctr2ProxyApplet.cpp
+    src/gui/Ctr2ProxyPanel.cpp
+    src/gui/FirmwareInstallDialog.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp
@@ -1579,6 +1641,78 @@ else()
     set_source_files_properties(${GGMORSE_SOURCES} PROPERTIES COMPILE_FLAGS "-w")
 endif()
 
+# Bundled esp-serial-flasher (Apache-2.0; its flasher stubs Apache-2.0 OR MIT):
+# Espressif's protocol for an ESP32-family chip's ROM bootloader, used to
+# install firmware on ESP32-based controllers in download mode. AetherSDR
+# supplies the serial port (EspFlasher.cpp).
+set(ESP_FLASHER_DIR ${CMAKE_SOURCE_DIR}/third_party/esp-serial-flasher)
+file(GLOB ESP_FLASHER_STUBS ${ESP_FLASHER_DIR}/src/stubs/*.c)
+add_library(aether_esp_flasher STATIC
+    ${ESP_FLASHER_DIR}/src/esp_loader.c
+    ${ESP_FLASHER_DIR}/src/esp_targets.c
+    ${ESP_FLASHER_DIR}/src/md5_hash.c
+    ${ESP_FLASHER_DIR}/src/protocol_serial.c
+    ${ESP_FLASHER_DIR}/src/protocol_uart.c
+    ${ESP_FLASHER_DIR}/src/protocol_spi.c
+    ${ESP_FLASHER_DIR}/src/protocol_sdio.c
+    ${ESP_FLASHER_DIR}/src/slip.c
+    ${ESP_FLASHER_STUBS}
+)
+target_include_directories(aether_esp_flasher
+    PUBLIC ${ESP_FLASHER_DIR}/include
+    PRIVATE ${ESP_FLASHER_DIR}/private_include
+)
+target_compile_definitions(aether_esp_flasher PUBLIC
+    SERIAL_FLASHER_LOG_LEVEL=1
+    SERIAL_FLASHER_WRITE_BLOCK_RETRIES=3
+    SERIAL_FLASHER_RESET_HOLD_TIME_MS=100
+    SERIAL_FLASHER_BOOT_HOLD_TIME_MS=50
+    SERIAL_FLASHER_RESET_INVERT=false
+    SERIAL_FLASHER_BOOT_INVERT=false
+)
+set_target_properties(aether_esp_flasher PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
+if(MSVC)
+    target_compile_options(aether_esp_flasher PRIVATE /w)
+else()
+    target_compile_options(aether_esp_flasher PRIVATE -w)
+endif()
+
+# Bundled Monocypher (CC0-1.0 OR BSD-2-Clause): Ed25519 signature checks on
+# downloaded firmware manifests, without depending on OpenSSL being present.
+add_library(aether_monocypher STATIC
+    ${CMAKE_SOURCE_DIR}/third_party/monocypher/monocypher.c
+    ${CMAKE_SOURCE_DIR}/third_party/monocypher/monocypher-ed25519.c
+)
+target_include_directories(aether_monocypher PUBLIC ${CMAKE_SOURCE_DIR}/third_party/monocypher)
+set_target_properties(aether_monocypher PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+    target_compile_options(aether_monocypher PRIVATE /w)
+else()
+    target_compile_options(aether_monocypher PRIVATE -w)
+endif()
+
+# CTR2-Max registration check: the stock firmware's LittleFS volume, read
+# with littlefs (BSD-3-Clause) built read-only (LFS_READONLY: no write path is
+# compiled). src/core/ctr2max_reg.c is shared with the AetherCTR2 firmware.
+add_library(aether_ctr2max_reg STATIC
+    ${CMAKE_SOURCE_DIR}/src/core/ctr2max_reg.c
+    ${CMAKE_SOURCE_DIR}/third_party/littlefs/lfs.c
+    ${CMAKE_SOURCE_DIR}/third_party/littlefs/lfs_util.c
+)
+target_include_directories(aether_ctr2max_reg
+    PUBLIC ${CMAKE_SOURCE_DIR}/src/core
+    PRIVATE ${CMAKE_SOURCE_DIR}/third_party/littlefs)
+target_compile_definitions(aether_ctr2max_reg PRIVATE
+    LFS_READONLY LFS_NO_MALLOC LFS_NO_DEBUG LFS_NO_WARN LFS_NO_ERROR LFS_NO_ASSERT)
+set_target_properties(aether_ctr2max_reg PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+    target_compile_options(aether_ctr2max_reg PRIVATE /w)
+else()
+    target_compile_options(aether_ctr2max_reg PRIVATE -w)
+endif()
+
 add_library(aether_libmodem_core STATIC
     third_party/libmodem_core/bitstream.cpp
     third_party/libmodem_core/demodulator.cpp
@@ -1694,6 +1828,10 @@ add_library(aethercore ${_aether_core_library_type}
     ${SPECBLEACH_SOURCES}
 )
 target_link_libraries(aethercore PRIVATE aether::wdsp)
+target_link_libraries(aethercore PRIVATE aether_monocypher)   # core: EspFirmwareCatalog
+target_compile_definitions(aethercore PRIVATE
+    AETHER_FIRMWARE_DEV_OVERRIDES=$<BOOL:${AETHER_FIRMWARE_DEV_OVERRIDES}>)
+target_link_libraries(aethercore PRIVATE aether_ctr2max_reg)  # core: Ctr2MaxRegistration
 
 # Desktop-only implementations kept out of libaethercore. Their public headers
 # remain temporarily in src/core while call sites migrate. A library keeps the
@@ -2507,6 +2645,8 @@ if(Qt6SerialPort_FOUND)
     # #ifdef HAVE_SERIALPORT directly.
     target_compile_definitions(aethercore PUBLIC HAVE_SERIALPORT)
     target_link_libraries(aethercore PUBLIC Qt6::SerialPort)
+    target_sources(aethercore PRIVATE src/core/EspFlasher.cpp)
+    target_link_libraries(aethercore PRIVATE aether_esp_flasher)
 endif()
 
 if(Qt6WebSockets_FOUND)
@@ -2891,12 +3031,15 @@ if(HIDAPI_FOUND)
     # HAVE_HIDAPI directly.
     target_compile_definitions(aethercore PUBLIC HAVE_HIDAPI)
     target_sources(aethercore PRIVATE
+        src/core/HidDiscovery.cpp
+        src/core/HidDiscovery.h
         src/core/HidEncoderManager.cpp
         src/core/HidEncoderManager.h
         src/core/HidDeviceParser.cpp
         src/core/HidDeviceParser.h
         src/core/Ctr2HidapiPort.cpp
-        src/core/Ctr2HidapiPort.h)
+        src/core/Ctr2HidapiPort.h
+        src/core/ShuttleRateIntegrator.h)
     target_sources(AetherSDR PRIVATE
         src/gui/RC28MappingDialog.cpp
         src/gui/RC28MappingDialog.h)
@@ -3072,27 +3215,36 @@ endif()
 
 target_sources(aethercore PRIVATE src/models/CwRxModel.cpp src/models/CwRxModel.h)
 
-option(ENABLE_DEEPFIST_EXPERIMENT "Build the local DeepFist CW prototype" OFF)
-set(DEEPFIST_MODEL_BASE_URL "" CACHE STRING "Published, versioned HTTPS DeepFist asset directory (empty before publication)")
-if(ENABLE_DEEPFIST_EXPERIMENT)
-    if(NOT ORT_FOUND)
-        message(FATAL_ERROR "The DeepFist prototype requires the packaged ONNX Runtime")
-    endif()
-    target_compile_definitions(aethercore PUBLIC HAVE_DEEPFIST)
-    target_compile_definitions(aethercore PRIVATE DEEPFIST_MODEL_BASE_URL="${DEEPFIST_MODEL_BASE_URL}")
-    target_sources(aethercore PRIVATE
-        src/models/DeepFistCwModel.cpp src/models/DeepFistCwModel.h
-        src/core/deepfist/DeepFistStream.cpp
-        src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h
-        third_party/deepfist/DeepFistConditioner.cpp
-        third_party/deepfist/DeepFistSpectrogram.cpp
-        third_party/deepfist/DeepFistCtc.cpp
-        third_party/deepfist/DeepFistModel.cpp)
-    target_include_directories(aethercore PRIVATE "${CMAKE_SOURCE_DIR}/third_party/deepfist")
+# Neural CW receive decoders (RFC #4817): built wherever ONNX Runtime is found
+# (Apple Silicon, Linux, Windows; the pinned runtime has no Intel-macOS build).
+# Their models are never shipped: each downloads on first use from its upstream
+# release at a pinned size and SHA-256.
+# Empty selects the published release; a value replaces it. Not a cache default,
+# so build directories configured before the release keep downloading.
+set(DEEPFIST_MODEL_BASE_URL "" CACHE STRING "DeepFist asset directory override (empty = the published release)")
+set(_deepfist_model_url "https://github.com/n9bc/DeepFist/releases/download/exp27_bt-champion/")
+if(DEEPFIST_MODEL_BASE_URL)
+    set(_deepfist_model_url "${DEEPFIST_MODEL_BASE_URL}")
 endif()
+target_compile_definitions(aethercore PRIVATE DEEPFIST_MODEL_BASE_URL="${_deepfist_model_url}")
 
 if(ORT_FOUND)
     target_compile_definitions(aethercore PUBLIC HAVE_ONNX)
+    # Every CW receive backend beyond ggmorse needs ONNX Runtime, so this one
+    # gate decides whether the CW panel offers a decoder selector (RFC #4817).
+    target_compile_definitions(aethercore PUBLIC HAVE_DEEPFIST HAVE_DEEPCW HAVE_CW_RX_BACKENDS)
+    target_sources(aethercore PRIVATE
+        src/models/DeepFistCwModel.cpp src/models/DeepFistCwModel.h
+        src/core/deepfist/DeepFistStream.cpp
+        third_party/deepfist/DeepFistConditioner.cpp
+        third_party/deepfist/DeepFistSpectrogram.cpp
+        third_party/deepfist/DeepFistCtc.cpp
+        third_party/deepfist/DeepFistModel.cpp
+        src/core/DeepCwEngine.cpp src/core/DeepCwEngine.h
+        src/core/DeepCwCommitter.cpp src/core/DeepCwCommitter.h
+        src/models/DeepCwRxBackend.cpp src/models/DeepCwRxBackend.h
+        src/core/CwModelAssets.cpp src/core/CwModelAssets.h)
+    target_include_directories(aethercore PRIVATE "${CMAKE_SOURCE_DIR}/third_party/deepfist")
     # PUBLIC include dir: core/SignalClassifier.h includes onnxruntime under
     # HAVE_ONNX (PUBLIC) and is pulled in by gui/MainWindow.h. Same transitive
     # leak as FFTW3 above. Library link stays PRIVATE (transitive via the lib).
@@ -3439,6 +3591,16 @@ endforeach()
 # it keep resolving against the repository root. The header of that file explains
 # why that matters and why it should not be "tidied up" into a subdirectory.
 enable_testing()
+# DeepCW offline replay harness (RFC #4817 regression take): not built by default.
+if(ORT_FOUND)
+    add_executable(deepcw_replay EXCLUDE_FROM_ALL
+        tools/deepcw_replay.cpp src/core/DeepCwEngine.cpp src/core/DeepCwCommitter.cpp
+        src/core/Resampler.cpp)
+    target_compile_definitions(deepcw_replay PRIVATE HAVE_ONNX)
+    target_include_directories(deepcw_replay PRIVATE src
+        ${CMAKE_SOURCE_DIR}/third_party/r8brain ${ORT_INCLUDE_DIRS})
+    target_link_libraries(deepcw_replay PRIVATE Qt6::Widgets ${ORT_LIBRARIES})
+endif()
 include(tests/tests.cmake)
 
 

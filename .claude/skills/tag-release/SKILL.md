@@ -402,12 +402,17 @@ A run that exists and is neither concluded nor waiting for a missing asset
 is an "Always ask" before a second dispatch.
 
 **Docs** runs on `release: published`, so creating the release (step 2)
-starts it, not the tag push. Its "Attach PDF manual to release" job checks out
-the tag, typesets `AetherSDR-Manual-vX.Y.Z.pdf` from the tag's
-`docs/user/docs/`, signs it with the release key (the same
-`GPG_PRIVATE_KEY`/`GPG_PASSPHRASE` secrets as `sign-release.yml`), verifies the
-signature and uploads the PDF and its `.asc` together. Its runs execute on the
-tag; read its conclusion with the build workflows. A red run is re-run once
+starts it, not the tag push. "Render PDF manual for release" checks out the
+tag and typesets `AetherSDR-Manual-vX.Y.Z.pdf` from the tag's
+`docs/user/docs/`. "Attach PDF manual to release" runs in the `release`
+environment, so it waits for the same approval as the signing workflows; it
+signs the PDF with the release key (the same `GPG_PRIVATE_KEY`/`GPG_PASSPHRASE`
+secrets as `sign-release.yml`), verifies the signature and uploads the PDF and
+its `.asc` together. Then "Resolve what to deploy", "Build docs site for
+deploy" and "Deploy docs site" publish docs.aethersdr.com from the tag, through
+the `cloudflare-pages` environment, with `/AetherSDR-Manual.pdf` redirected to
+the PDF just attached. A pre-release attaches the PDF but deploys nothing. Its
+runs execute on the tag; read its conclusion with the build workflows. A red run is re-run once
 without asking (`gh run rerun <id> --failed`): it builds nothing the other
 workflows depend on.
 

@@ -51,6 +51,7 @@ public:
     static QString freqField(double mhz);
     static QString modeToKenwood(const QString& ssdrMode);
     static QString modeToZZ(const QString& ssdrMode);
+    static QString freeDvModeFor(const QString& currentMode, const QStringList& modeList);
 
 private:
     // ── Frequency / Mode ────────────────────────────────────────────────────

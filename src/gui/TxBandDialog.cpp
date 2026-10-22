@@ -1,5 +1,7 @@
 #include "TxBandDialog.h"
 
+#include "ControlAvailabilityRegistry.h"
+
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -10,10 +12,12 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QList>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <algorithm>
 
 namespace AetherSDR {
+using BandField = TxBandRequest::Field;
 
 TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
     : PersistentDialog(
@@ -37,7 +41,8 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
     headerGrid->setSpacing(1);
     const QStringList headers = {"Band", "RF PWR(%)", "Tune PWR(%)", "PTT Inhibit",
                                   "ACC TX", "RCA TX Req", "ACC TX Req",
-                                  "RCA TX1", "RCA TX2", "RCA TX3", "HWALC"};
+                                  "RCA TX1", "RCA TX2", "RCA TX3", "HWALC",
+                                  "RCA off/TUNE"};
     for (int c = 0; c < headers.size(); ++c) {
         auto* lbl = new QLabel(headers[c]);
         lbl->setStyleSheet(QStringLiteral(
@@ -45,6 +50,7 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
             "font-weight: bold; background: #1a2a3a; "
             "padding: 2px 4px; }"));
         lbl->setAlignment(Qt::AlignCenter);
+        lbl->setMinimumSize(lbl->sizeHint());
         headerGrid->addWidget(lbl, 0, c);
     }
 
@@ -54,7 +60,11 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
         return;
     }
 
+    auto* availability = new ControlAvailabilityRegistry(*m_model, this);
+    connect(m_model, &RadioModel::tuneOutputControlChanged, availability,
+            &ControlAvailabilityRegistry::refreshEngaged);
     const auto& bands = m_model->txBandSettings();
+    const RadioControlSession session = m_model->controlSession();
     QList<int> sortedIds = bands.keys();
     std::sort(sortedIds.begin(), sortedIds.end());
 
@@ -82,9 +92,13 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
         rfEdit->setFixedWidth(50);
         rfEdit->setAlignment(Qt::AlignCenter);
         int bandId = id;
-        connect(rfEdit, &QLineEdit::editingFinished, this, [this, rfEdit, bandId] {
-            m_model->sendCommand(
-                QStringLiteral("transmit bandset %1 rfpower=%2").arg(bandId).arg(rfEdit->text()));
+        connect(rfEdit, &QLineEdit::editingFinished, this, [this, rfEdit, bandId, session] {
+            bool valid = false;
+            const int parsed = rfEdit->text().toInt(&valid);
+            if (!valid) { rfEdit->setText(QString::number(m_model->txBandSettings().value(bandId).rfPower)); return; }
+            const int percent = qBound(0, parsed, 100);
+            rfEdit->setText(QString::number(percent));
+            m_model->requestTxBand({bandId, BandField::RfPowerPercent, percent}, session);
         });
         headerGrid->addWidget(rfEdit, row, col++);
 
@@ -92,22 +106,26 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
         tuneEdit->setStyleSheet(kEditStyle);
         tuneEdit->setFixedWidth(50);
         tuneEdit->setAlignment(Qt::AlignCenter);
-        connect(tuneEdit, &QLineEdit::editingFinished, this, [this, tuneEdit, bandId] {
-            m_model->sendCommand(
-                QStringLiteral("transmit bandset %1 tunepower=%2").arg(bandId).arg(tuneEdit->text()));
+        connect(tuneEdit, &QLineEdit::editingFinished, this, [this, tuneEdit, bandId, session] {
+            bool valid = false;
+            const int parsed = tuneEdit->text().toInt(&valid);
+            if (!valid) { tuneEdit->setText(QString::number(m_model->txBandSettings().value(bandId).tunePower)); return; }
+            const int percent = qBound(0, parsed, 100);
+            tuneEdit->setText(QString::number(percent));
+            m_model->requestTxBand({bandId, BandField::TunePowerPercent, percent}, session);
         });
         headerGrid->addWidget(tuneEdit, row, col++);
 
-        struct CbDef { bool val; const char* txCmd; const char* ilCmd; };
+        struct CbDef { bool val; BandField field; };
         CbDef cbs[] = {
-            {b.inhibit, "inhibit", nullptr},
-            {b.accTx,   nullptr, "acc_tx_enabled"},
-            {b.rcaTxReq,nullptr, "rca_txreq_enable"},
-            {b.accTxReq,nullptr, "acc_txreq_enable"},
-            {b.tx1,     nullptr, "tx1_enabled"},
-            {b.tx2,     nullptr, "tx2_enabled"},
-            {b.tx3,     nullptr, "tx3_enabled"},
-            {b.hwAlc,   "hwalc_enabled", nullptr},
+            {b.inhibit, BandField::Inhibit},
+            {b.accTx, BandField::AccessoryTx},
+            {b.rcaTxReq, BandField::RcaTxRequest},
+            {b.accTxReq, BandField::AccessoryTxRequest},
+            {b.tx1, BandField::Tx1},
+            {b.tx2, BandField::Tx2},
+            {b.tx3, BandField::Tx3},
+            {b.hwAlc, BandField::HardwareAlc},
         };
 
         for (const auto& cb : cbs) {
@@ -120,23 +138,62 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
             hb->setContentsMargins(0, 0, 0, 0);
             hb->setAlignment(Qt::AlignCenter);
             hb->addWidget(chk);
-            const char* txC = cb.txCmd;
-            const char* ilC = cb.ilCmd;
-            connect(chk, &QCheckBox::toggled, this, [this, bandId, txC, ilC](bool on) {
-                if (txC)
-                    m_model->sendCommand(
-                        QStringLiteral("transmit bandset %1 %2=%3").arg(bandId).arg(txC).arg(on ? 1 : 0));
-                if (ilC)
-                    m_model->sendCommand(
-                        QStringLiteral("interlock bandset %1 %2=%3").arg(bandId).arg(ilC).arg(on ? 1 : 0));
+            const BandField field = cb.field;
+            connect(chk, &QCheckBox::toggled, this, [this, bandId, field, session](bool on) {
+                m_model->requestTxBand({bandId, field, on}, session);
             });
             headerGrid->addWidget(w, row, col++);
         }
+        auto* suppression = new QCheckBox;
+        suppression->setObjectName(QStringLiteral("tuneOutputSuppressionBand%1").arg(bandId));
+        suppression->setAccessibleName(tr("Suppress RCA during TUNE, band %1").arg(b.bandName));
+        ThemeManager::instance().applyStyleSheet(suppression, kCbStyle);
+        auto* suppressionCell = new QWidget;
+        ThemeManager::instance().applyStyleSheet(suppressionCell,
+            QStringLiteral("background: {{color.background.0}};"));
+        auto* suppressionLayout = new QHBoxLayout(suppressionCell);
+        suppressionLayout->setContentsMargins(0, 0, 0, 0);
+        suppressionLayout->setAlignment(Qt::AlignCenter);
+        suppressionLayout->addWidget(suppression);
+        headerGrid->addWidget(suppressionCell, row, col);
+        availability->registerWidget(suppression,
+            tr("Requires SmartSDR 4.3 or later and this band's radio readback."),
+            [this, bandId](bool connected, const RadioCapabilities& caps) {
+                const TuneOutputControlState state = m_model->tuneOutputControl(bandId);
+                return connected && caps.tuneOutputSuppression.has_value()
+                    && state.haveValue && !state.pending;
+            }, [this, bandId] {
+                const TuneOutputControlState state = m_model->tuneOutputControl(bandId);
+                return state.haveValue && state.suppressed;
+            }, false);
+        const auto syncSuppression = [this, suppression, bandId] {
+            const TuneOutputControlState state = m_model->tuneOutputControl(bandId);
+            const QSignalBlocker blocker(suppression);
+            suppression->setChecked(state.haveValue && state.suppressed);
+            const QString description = state.reason.isEmpty()
+                ? tr("Suppress TX1, TX2 and TX3 RCA outputs during TUNE for this band. "
+                     "Normal PTT and TX REQ inputs are unchanged.")
+                : state.reason;
+            suppression->setToolTip(description);
+            suppression->setAccessibleDescription(description);
+        };
+        connect(m_model, &RadioModel::tuneOutputControlChanged, suppression, syncSuppression);
+        connect(m_model, &RadioModel::capabilitiesChanged, suppression, syncSuppression);
+        connect(suppression, &QCheckBox::clicked, this, [this, bandId, syncSuppression](bool checked) {
+            m_model->requestTuneOutputSuppression(bandId, checked);
+            syncSuppression();
+        });
+        syncSuppression();
         ++row;
     }
 
     vb->addWidget(gridContainer);
+    auto* explanation = new QLabel(tr("RCA off/TUNE: suppress TX1/TX2/TX3 keying outputs during TUNE "
+                                     "on SmartSDR 4.3 or later. ACC TX remains under Inhibit during TUNE."));
+    explanation->setWordWrap(true);
+    vb->addWidget(explanation);
     vb->addStretch();
+    setMinimumSize(minimumSize().expandedTo(minimumSizeHint()));
 }
 
 } // namespace AetherSDR

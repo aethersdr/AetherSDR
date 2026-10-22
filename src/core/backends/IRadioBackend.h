@@ -8,12 +8,15 @@
 #include "core/PcmFrame.h"
 
 #include <map>
+#include <functional>
+#include <variant>
 
 #include <QByteArray>
 #include <QLoggingCategory>
 #include <QMap>
 #include <QHostAddress>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <QVariant>
@@ -30,6 +33,13 @@
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/ReceiveCommand.h"
 #include "core/backends/ModelControlRequest.h"
+#include "core/backends/RadioSetupRequest.h"
+#include "core/backends/SpotRequest.h"
+#include "core/backends/PanControlRequest.h"
+#include "core/backends/SlicePresetRequest.h"
+#include "core/backends/ProfileRequest.h"
+#include "core/backends/MemoryRequest.h"
+#include "core/backends/SliceLifecycleRequest.h"
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
@@ -145,8 +155,113 @@ public:
                                                     TunePowerContext = TunePowerContext::Deferred)
     { return ReceiveDispatch::Unsupported; }
     // Radio-owned identity; client-owned nicknames retain their local store.
-    virtual ReceiveDispatch requestRadioNickname(const QString&)
+    using NicknameCompletion = std::function<void(bool accepted)>;
+    virtual ReceiveDispatch requestRadioNickname(const QString&, NicknameCompletion = {})
     { return ReceiveDispatch::Unsupported; }
+    // Whether a Dispatched request carrying an answerTicket will be answered
+    // through transmitControlAnswered(). False by default: a backend that cannot
+    // hear the radio's reply leaves it to RadioModel, which reports it as not
+    // confirmed rather than assume the radio agreed.
+    virtual bool answersTransmitControl() const { return false; }
+    virtual ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
+                                              const RadioSetupCompletion& = {},
+                                              const RadioControlFence& current = {})
+    {
+        if ((!current || current()) && request.valid() && isConnected() && capabilities().lineoutControl) {
+            if (request.field == RadioSetupField::LineoutGain) {
+                setLineoutGain(std::get<int>(request.value));
+                return ReceiveDispatch::Dispatched;
+            }
+            if (request.field == RadioSetupField::LineoutMute) {
+                setLineoutMute(std::get<bool>(request.value));
+                return ReceiveDispatch::Dispatched;
+            }
+        }
+        // The station identity is consumed by the desktop even on families
+        // with no radio-side copy. This is not a fabricated hardware write.
+        return (!current || current()) && request.valid() && (request.field == RadioSetupRequest::Field::Callsign
+            || request.field == RadioSetupRequest::Field::ClientStation)
+            ? ReceiveDispatch::LocalOnly : ReceiveDispatch::Unsupported;
+    }
+    virtual ReceiveDispatch requestSpot(const SpotRequest&, const QString& = {})
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestPanControl(const QString&, const PanControlRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestSlicePreset(int, const SlicePresetRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestTxBand(const TxBandRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestPanDisplay(const QString& panId, const QString&,
+        const PanDisplayRequest& request, const RadioControlCompletion& = {},
+        const RadioControlFence& current = {})
+    {
+        const auto control = capabilities().panDisplayControl;
+        if (panId.isEmpty() || !request.valid() || !control
+            || !control->supports(request.field) || (current && !current())) {
+            return ReceiveDispatch::Unsupported;
+        }
+        const QPointer<IRadioBackend> alive(this);
+        using Field = PanDisplayField;
+        switch (request.field) {
+        case Field::Geometry: {
+            const PanGeometryRequest geometry = std::get<PanGeometryRequest>(request.value);
+            if ((geometry.centerMhz && !control->geometry.contains(PanGeometryComponent::Center))
+                || (geometry.bandwidthMhz && !control->geometry.contains(PanGeometryComponent::Bandwidth))) {
+                return ReceiveDispatch::Unsupported;
+            }
+            if (geometry.centerMhz) {
+                setPanCenter(panId, *geometry.centerMhz * 1.0e6,
+                    geometry.intent == PanGeometryRequest::Intent::Drag ? PanCenterIntent::Drag : PanCenterIntent::Range);
+            }
+            if (!alive || (current && !current())) { return ReceiveDispatch::Unsupported; }
+            if (geometry.bandwidthMhz) { alive->setPanBandwidth(panId, *geometry.bandwidthMhz * 1.0e6); }
+            break;
+        }
+        case Field::Average: setPanAverage(panId, std::get<int>(request.value)); break;
+        case Field::FrameRate: setPanFrameRate(panId, std::get<int>(request.value)); break;
+        case Field::WeightedAverage: setPanWeightedAverage(panId, std::get<bool>(request.value)); break;
+        case Field::SpectrumPoints: setPanPixelWidth(panId, std::get<int>(request.value)); break;
+        case Field::RfGain: setPanRfGain(panId, std::get<int>(request.value)); break;
+        default: return ReceiveDispatch::Unsupported;
+        }
+        return ReceiveDispatch::Dispatched;
+    }
+    virtual ReceiveDispatch requestPanLifecycle(const PanLifecycleRequest& request,
+        const PanLifecycleCompletion& = {}, const RadioControlFence& current = {})
+    {
+        const auto control = capabilities().panLifecycleControl;
+        if (!control || !control->supports(request.action) || (current && !current())) {
+            return ReceiveDispatch::Unsupported;
+        }
+        if (request.action == PanLifecycleAction::Create) {
+            return createPanadapter() ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+        }
+        if (request.action == PanLifecycleAction::Remove && !request.panId.isEmpty()) {
+            return removePanadapter(request.panId) ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+        }
+        return ReceiveDispatch::Unsupported;
+    }
+    virtual ReceiveDispatch requestProfile(const ProfileRequest&,
+                                           const RadioControlCompletion& = {},
+                                           const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestMemory(const MemoryRequest&,
+                                          const RadioControlCompletion& = {},
+                                          const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestUsbCable(const UsbCableRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestTransverter(const TransverterRequest&,
+                                               const RadioSetupCompletion& = {})
+    { return ReceiveDispatch::Unsupported; }
+    // This changes a radio-owned setting and never starts TUNE or keys TX.
+    virtual void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId)
+    {
+        Q_UNUSED(bandId);
+        Q_UNUSED(suppressed);
+        emit tuneOutputSuppressionCommandFinished(requestId, false,
+            QStringLiteral("This radio does not support TUNE output suppression."));
+    }
     explicit IRadioBackend(QObject* parent = nullptr) : QObject(parent)
     {
         connect(this, &IRadioBackend::connected, this, [this] {
@@ -255,6 +370,8 @@ public:
     {
         setSliceFilter(sliceId, request.lowHz, request.highHz);
     }
+    virtual ReceiveDispatch requestSliceAgcThresholdMode(int, AgcThresholdMode)
+    { return ReceiveDispatch::Unsupported; }
     virtual void requestSliceAgc(int sliceId, const SliceAgcRequest& request)
     {
         if (request.field != SliceAgcRequest::Field::OffLevel) {
@@ -265,6 +382,8 @@ public:
     // receiveAudioControl record: its authorization/readback contract is
     // narrower than the existing desktop controls. Unsupported is explicit,
     // never acceptance through an inherited empty implementation hook.
+    virtual ReceiveDispatch requestDspParameterReset(int, DspParameterResetTarget)
+    { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSliceDsp(int, const SliceDspRequest&)
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSliceAudio(int, const SliceAudioRequest&)
@@ -482,13 +601,46 @@ public:
     // a single answer.
     virtual void setActiveSlice(int sliceId) { Q_UNUSED(sliceId); }
 
+    // Typed desktop lifecycle requests. Native receiver topologies retain their
+    // existing verbs; an accepted dispatch does not manufacture observed state.
+    virtual ReceiveDispatch requestSliceCreate(const SliceCreateRequest& request,
+                                               const SliceCreateCompletion& completion = {},
+                                               const RadioControlFence& current = {})
+    {
+        if (!request.valid() || request.requiresReceipt || request.mode || request.rxAntenna || (current && !current())
+            || !createSlice(request.panId, request.frequencyHz)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        if (completion) { completion({{RadioControlReply::Kind::Accepted, 0, {}}, {}}); }
+        return ReceiveDispatch::Dispatched;
+    }
+    virtual ReceiveDispatch requestSliceRemove(int sliceId,
+                                               const RadioControlCompletion& = {},
+                                               const RadioControlFence& current = {})
+    {
+        return sliceId >= 0 && (!current || current()) && removeSlice(sliceId)
+            ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+    }
+    virtual ReceiveDispatch requestTxSlice(int sliceId, bool enabled,
+                                           const RadioControlCompletion& = {},
+                                           const RadioControlFence& current = {})
+    {
+        if (current && !current()) { return ReceiveDispatch::Unsupported; }
+        return requestSliceControl(sliceId, {SliceControlRequest::Field::TxSlice, enabled});
+    }
+    virtual ReceiveDispatch requestFullDuplex(bool, const RadioControlCompletion& = {},
+                                              const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestSliceInventoryRefresh(const RadioControlCompletion& = {},
+                                                         const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+
     // ---- ordinary receive-slice lifecycle ----
     // panId is backend-owned and opaque; frequencyHz is absolute RF in Hz.
     // true means the request was accepted, not completed: confirmed state arrives via
     // sliceChanged / sliceRemoved, a later failure via sliceLifecycleFailed. false is
     // final refusal; callers never fall back to another command plane. Fixed/paired
-    // receiver topologies keep the default refusal; Flex and Sim keep RadioModel's
-    // command-plane adapter. A backend cancels pending work on disconnect/reconnect
+    // receiver topologies keep the default refusal. A backend cancels pending work on disconnect/reconnect
     // and discards completions from retired sessions or receivers before emitting;
     // reused slice ids alone cannot identify pending work.
     virtual bool createSlice(const QString& panId, double frequencyHz)
@@ -940,6 +1092,10 @@ public:
 
 signals:
     void independentTxStopped(const AetherSDR::TxStopEvidence& evidence);
+    // The radio's own answer to a dispatched TransmitControlRequest whose
+    // answerTicket was nonzero: applied when it accepted the setting. Emitted
+    // at most once per ticket.
+    void transmitControlAnswered(quint64 ticket, bool applied);
     // ---- connection state UP ----
     void connected();
     void disconnected();
@@ -952,6 +1108,11 @@ signals:
     void configurationWarning(const QString& message);
 
     void capabilitiesChanged();
+
+    void tuneOutputSuppressionObserved(int bandId, bool suppressed);
+    // Acceptance is not confirmation; only the observation changes live state.
+    void tuneOutputSuppressionCommandFinished(quint64 requestId, bool accepted,
+                                              const QString& reason);
 
     // Radio-authoritative state for the momentary transmit-frequency monitor.
     void transmitFrequencyCheckChanged(bool on);

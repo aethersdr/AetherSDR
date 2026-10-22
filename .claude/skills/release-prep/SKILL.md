@@ -337,9 +337,10 @@ time:
   that shipped in v26.8.2 and was only removed by the next prep.
 - **The Stable docs snapshot.** docs.aethersdr.com serves two versions:
   **Stable** at `/` from `docs/user/versioned_docs/version-stable/`, and
-  **Next (main)** at `/next/` from `docs/user/docs/`. The release makes
-  today's Next the new Stable, so run, after `git merge origin/main` brings
-  the docs current:
+  **Next** at `/next/` from `docs/user/docs/`. The site is deployed when the
+  release is published, not on merge, so Next shows `main` as of the last
+  deploy. The release makes today's Next the new Stable, so run, after
+  `git merge origin/main` brings the docs current:
 
   ```sh
   python3 tools/docs/snapshot_stable.py X.Y.Z

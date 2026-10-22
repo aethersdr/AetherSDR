@@ -71,7 +71,12 @@ and path information. **Return to radio**, or selecting a radio tab, stops an op
 session and restores the radio workspace. The AetherLab tab and last trace
 remain available. Opening the tab again does not reconnect or sweep. The radio
 connection, tuning and audio session are retained; restore the antenna path
-manually before transmitting. Minimal mode returns to the radio workspace.
+manually before transmitting. Minimal mode returns to the radio workspace and uses the full applet area,
+even after visiting AetherLab. Opening AetherLab dismisses the radio connection
+picker; reopen it from the radio switcher when needed.
+
+Screen readers can read the current marker frequency, each measurement with
+its units, and the current device status after acquisition or marker movement.
 
 The layout places the plot beside the marker panel in wide windows and stacks
 them in narrower windows. Scroll vertically when the window is short. L and C

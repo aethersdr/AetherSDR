@@ -1,5 +1,6 @@
 // Opt-in real-widget test: no sockets, radio, USB, or synthetic firmware peer.
 #include "TestSettingsProfile.h"
+#include "FlexSquelchBridgeFixture.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/VfoWidget.h"
 #include "gui/SpectrumOverlayMenu.h"
@@ -10,13 +11,16 @@
 #include "core/backends/rtl/RtlSdrBackend.h"
 #include "models/SliceModel.h"
 #include "models/PanadapterModel.h"
+#include "models/BandPlanManager.h"
 #include <QImage>
+#include <QToolTip>
 #include <QPainter>
 
 #include <QApplication>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QThread>
+#include <QTimer>
 #include <QSlider>
 #include <QPushButton>
 #include <cmath>
@@ -26,6 +30,20 @@ using namespace AetherSDR;
 
 namespace AetherSDR {
 struct SpectrumOffscreenTestAccess {
+    static QImage sqlImage(SpectrumWidget& widget) {
+        QImage image(800, 300, QImage::Format_ARGB32);
+        image.fill(Qt::black);
+        QPainter painter(&image);
+        widget.drawSquelchLine(painter, image.rect());
+        widget.drawAutoSqlFloor(painter, image.rect());
+        return image;
+    }
+    static bool sqlHideTimerActive(const SpectrumWidget& widget) {
+        return widget.m_squelchLineHideTimer->isActive();
+    }
+    static void sqlBins(SpectrumWidget& widget) {
+        widget.updateAutoSquelchFromBins(QVector<float>(256, -110.0f));
+    }
     static void release(SpectrumWidget& widget, DbmRangeTransition::Range old,
                         DbmRangeTransition::Range target, quint64 generation) {
         widget.m_refLevel = target.maxDbm;
@@ -67,6 +85,14 @@ struct SpectrumOffscreenTestAccess {
         widget.m_frequencyPreviewBaseBandwidthMhz = span * 2;
         widget.m_frequencyPreviewTargetCenterMhz = target;
         widget.m_frequencyPreviewTargetBandwidthMhz = span;
+    }
+    // A point inside the band-plan hover row at `mhz` — the same geometry
+    // mouseMoveEvent() hit-tests (bottom 8 px of the spectrum area). (#4667)
+    static QPoint bandRow(const SpectrumWidget& widget, double mhz) {
+        const int specH = static_cast<int>((widget.height() - widget.freqScaleH()
+                                            - SpectrumWidget::DIVIDER_H)
+                                           * widget.m_spectrumFrac);
+        return {widget.mhzToX(mhz), specH - 4};
     }
     static QPoint marker(SpectrumWidget& widget) {
         QImage image(widget.size(), QImage::Format_ARGB32);
@@ -121,11 +147,52 @@ int main(int argc, char** argv)
 {
     TestSettingsProfile profile("spectrum-confirmed-geometry");
     QApplication app(argc, argv);
+    if (app.arguments().contains(QStringLiteral("--flex-squelch-bridge-fixture"))) {
+        return runFlexSquelchBridgeFixture(app);
+    }
     int failures = 0;
     const auto check = [&](bool ok, const char* name) {
         std::printf("[%s] %s\n", ok ? "OK" : "FAIL", name);
         failures += !ok;
     };
+    {
+        SpectrumWidget sql;
+        sql.setSquelchScale(legacyDbmSquelchScale());
+        sql.setAutoSquelchEnable(true);
+        sql.setSquelchLine(true, 60);
+        int suggestions = 0;
+        QObject::connect(&sql, &SpectrumWidget::autoSquelchLevelSuggested,
+                         &sql, [&](int) { ++suggestions; });
+        SpectrumOffscreenTestAccess::sqlBins(sql);
+        QImage empty(800, 300, QImage::Format_ARGB32);
+        empty.fill(Qt::black);
+        check(SpectrumOffscreenTestAccess::sqlImage(sql) != empty,
+              "Auto produces visible SQL/floor lines before disable");
+        check(suggestions > 0, "eligible Auto produces threshold suggestions");
+        sql.setSquelchLine(false, 0);
+        sql.setAutoSquelchEnable(true, false);
+        check(SpectrumOffscreenTestAccess::sqlImage(sql) == empty,
+              "background same-pan estimator hides floor for selected non-Auto slice");
+        sql.setSquelchLine(true, 60);
+        check(SpectrumOffscreenTestAccess::sqlHideTimerActive(sql),
+              "manual line retains its hide timer while a background slice runs Auto");
+        sql.setAutoSquelchEnable(false);
+        check(SpectrumOffscreenTestAccess::sqlImage(sql) == empty,
+              "Auto disable clears both lines immediately without another FFT");
+        const int before = suggestions;
+        SpectrumOffscreenTestAccess::sqlBins(sql);
+        check(suggestions == before, "disabled Auto produces no suggestions");
+        sql.setAutoSquelchEnable(true);
+        sql.setSquelchLine(true, 60);
+        SpectrumOffscreenTestAccess::sqlBins(sql);
+        sql.setSquelchScale(std::nullopt);
+        sql.setSquelchLine(true, 69);
+        check(SpectrumOffscreenTestAccess::sqlImage(sql) == empty,
+              "unavailable scale blocks late threshold status and clears floor");
+        const int unavailable = suggestions;
+        SpectrumOffscreenTestAccess::sqlBins(sql);
+        check(suggestions == unavailable, "unavailable scale stops estimator");
+    }
     // Deterministic replay of the captured decode-before-release / ingest-after-
     // release ordering, including both shifts and a span change. The production
     // widget must correct inputs before smoothing and keep late apertures valid.
@@ -689,5 +756,56 @@ int main(int argc, char** argv)
               "Hermes Range centering moves its DDC pan while preserving slice RF");
     }
     widget.prepareForShutdown();
+    {
+        // Band-plan segment `usage` surfaces on hover over the band strip, and
+        // only there: a segment without usage, or a hidden strip, shows nothing.
+        // (#4667)
+        BandPlanManager plans;
+        plans.loadPlans();
+        plans.setActivePlan(QStringLiteral("IARU Region 1"));
+        check(plans.activePlanName() == QStringLiteral("IARU Region 1"),
+              "usage hover: IARU Region 1 plan loads from resources");
+        SpectrumWidget band;
+        band.resize(800, 400);
+        band.setBandPlanManager(&plans);
+        band.setBandPlanFontSize(6);
+        band.setFrequencyRangeImmediate(14.110, 0.040);
+        band.show();
+        // Offscreen there is no QRhi, so PanadapterMessageOverlay shows its
+        // "Spectrum renderer unavailable" notice over the band row just after
+        // show(), and mouseMoveEvent() yields to any child under the pointer.
+        // Wait for it to clear the row.
+        for (int i = 0; i < 100 && band.childAt(SpectrumOffscreenTestAccess::bandRow(band, 14.105)); ++i)
+            wait(50);
+        const auto hoverAt = [&](double mhz) {
+            const QPoint p = SpectrumOffscreenTestAccess::bandRow(band, mhz);
+            mouse(band, QEvent::MouseMove, p.x(), p.y());
+            wait(50);
+        };
+        const auto tipGone = [&]() {
+            wait(500);  // QToolTip::hideText() fades on a timer
+            return !QToolTip::isVisible();
+        };
+        // Control: the pre-existing spot tooltip must work under this harness,
+        // or the usage assertions below prove nothing.
+        hoverAt(14.100);
+        check(QToolTip::isVisible() && QToolTip::text().contains(QStringLiteral("IBP")),
+              "usage hover: control — spot tooltip at 14.100 shows");
+        QToolTip::hideText();
+        wait(500);
+        hoverAt(14.105);
+        const QString tip = QToolTip::text();
+        std::printf("    tooltip at 14.105: %s\n", qPrintable(tip));
+        check(QToolTip::isVisible()
+                  && tip.contains(QStringLiteral("14.101"))
+                  && tip.contains(QStringLiteral("ALL"))
+                  && tip.contains(QStringLiteral("automatically controlled data stations")),
+              "usage hover: 14.101-14.112 shows its chart usage note");
+        hoverAt(14.120);  // 14.112-14.350 ALL, no usage
+        check(tipGone(), "usage hover: a segment without usage shows no tooltip");
+        band.setBandPlanFontSize(0);
+        hoverAt(14.105);
+        check(tipGone(), "usage hover: no tooltip while the band strip is Off");
+    }
     return failures ? 1 : 0;
 }

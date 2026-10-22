@@ -13,7 +13,7 @@ This page is generated from `src/gui/MainWindow_Controllers.cpp`, `src/gui/MainW
 
 :::
 
-These are the controls you can map to a MIDI controller in **Settings → MIDI Mapping...**. The same list feeds the Ulanzi Dial button menus.
+These are the controls you can map to a MIDI controller in **Settings → Controllers → MIDI Mapping...**. The same list feeds the Ulanzi Dial button menus.
 
 - **Slider**: a continuous control (knob, fader, pitch bend), scaled to the range shown.
 - **Toggle**: on/off. A CC above 63 is on; a note toggles.

@@ -32,7 +32,7 @@ inline bool profileLoadMayRebuildRadioTopology(const QString& profileType)
 inline ProfileLoadCommand parseProfileLoadCommand(const QString& command)
 {
     static const QRegularExpression re(
-        QStringLiteral("^\\s*profile\\s+(global|tx|mic)\\s+load\\s+\"([^\"]*)\"\\s*$"),
+        QStringLiteral("^\\s*profile\\s+(global|tx|mic|cw)\\s+load\\s+\"([^\"]*)\"\\s*$"),
         QRegularExpression::CaseInsensitiveOption);
     const QRegularExpressionMatch match = re.match(command);
     if (!match.hasMatch()) {

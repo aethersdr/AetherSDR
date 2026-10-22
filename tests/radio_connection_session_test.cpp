@@ -4,6 +4,10 @@
 #include "core/backends/flex/FlexPttWireSession.h"
 
 #include <QSignalSpy>
+#include <QCoreApplication>
+#include <QEvent>
+#include <QNetworkProxy>
+#include <QPointer>
 #include <QtTest>
 #include <algorithm>
 #include <cstring>
@@ -15,6 +19,9 @@ public:
     explicit MemorySocket(QObject* parent) : QTcpSocket(parent) { open(ReadWrite); }
     QByteArray input;
     int connectAttempts{0};
+    qintptr reportedDescriptor{-1};
+    // Report retained-engine state without creating or adopting an OS socket.
+    qintptr socketDescriptor() const override { return reportedDescriptor; }
     // QAbstractSocket's address overload dispatches to this virtual overload.
     // Stop at the transport boundary: never call the OS socket implementation.
     void connectToHost(const QString&, quint16, OpenMode mode = ReadWrite,
@@ -49,6 +56,12 @@ public:
         connection.onReadyRead();
     }
     static void remoteDisconnect(RadioConnection& connection) { connection.onSocketDisconnected(); }
+    static QTcpSocket* socket(const RadioConnection& connection) { return connection.m_socket; }
+    static void wireErrors(RadioConnection& connection, MemorySocket& socket)
+    {
+        QObject::connect(&socket, &QAbstractSocket::errorOccurred,
+                         &connection, &RadioConnection::onSocketError);
+    }
     static void failedDisconnect(RadioConnection& connection)
     {
         connection.onSocketError(QAbstractSocket::RemoteHostClosedError);
@@ -80,6 +93,49 @@ public:
 class RadioConnectionSessionTest final : public QObject {
     Q_OBJECT
 private slots:
+    void retainedTransportIsReplacedBeforeRetry()
+    {
+        RadioConnection connection;
+        MemorySocket* failed = RadioConnectionSessionTestAccess::attach(connection);
+        RadioConnectionSessionTestAccess::wireErrors(connection, *failed);
+        QPointer<MemorySocket> retired(failed);
+        QSignalSpy errors(&connection, &RadioConnection::errorOccurred);
+        const QHostAddress target(QHostAddress::LocalHost);
+        connection.connectToHost(target);
+        QCOMPARE(failed->connectAttempts, 1);
+        emit failed->errorOccurred(QAbstractSocket::ConnectionRefusedError);
+        QCOMPARE(connection.state(), ConnectionState::Disconnected);
+        QCOMPARE(errors.size(), 1);
+        failed->reportedDescriptor = 42;
+
+        bool replaced = false;
+        bool noProxy = false;
+        MemorySocket* retry = nullptr;
+        // Observe the production replacement before TCP dispatch, then inject
+        // its in-memory destination so this test cannot open a native socket.
+        connect(&connection, &RadioConnection::stateChanged, &connection,
+                [&](ConnectionState state) {
+            if (state != ConnectionState::Connecting) {
+                return;
+            }
+            QTcpSocket* replacement = RadioConnectionSessionTestAccess::socket(connection);
+            replaced = replacement != failed;
+            noProxy = replacement->proxy().type() == QNetworkProxy::NoProxy;
+            emit failed->errorOccurred(QAbstractSocket::ConnectionRefusedError);
+            retry = RadioConnectionSessionTestAccess::attach(connection);
+        });
+        connection.connectToHost(target);
+        QVERIFY(replaced);
+        QVERIFY(noProxy);
+        QCOMPARE(errors.size(), 1); // retired socket callbacks are detached
+        QCOMPARE(failed->connectAttempts, 1);
+        QVERIFY(retry);
+        QCOMPARE(retry->connectAttempts, 1);
+        QCOMPARE(retry->socketDescriptor(), qintptr(-1));
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(retired.isNull());
+    }
+
     void demoIdentitySelectsSyntheticConnection()
     {
         RadioConnection connection;

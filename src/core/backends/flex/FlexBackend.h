@@ -1,13 +1,16 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 
 #include <QMap>
+#include <QSet>
 #include <QString>
 
 #include "core/backends/IRadioBackend.h"
 
 class QThread;
+class QVersionNumber;
 
 namespace AetherSDR {
 
@@ -41,9 +44,22 @@ public:
     RadioConnection*  connection() const { return m_connection; }
     PanadapterStream* panStream()  const { return m_panStream; }
 
-    // Where the core verbs emit their SmartSDR command strings — RadioModel's
-    // existing sendCommand() funnel, so verbs reuse the one wire-write path.
+    // Core verbs share RadioModel's guarded command funnel and wire-write path.
+    using CommandReply = std::function<void(int, const QString&)>;
+    void setCommandSink(std::function<bool(const QString&, CommandReply)> sink);
+    // Encoding-only observers cannot dispatch requests that need a radio reply.
     void setCommandSink(std::function<void(const QString&)> sink);
+    // The same funnel for a write whose caller waits on the radio's answer
+    // (TransmitControlRequest::answerTicket). The sink reports the reply code;
+    // with none installed, such a request goes out unanswered.
+    using AnsweredCommandSink =
+        std::function<void(const QString&, std::function<void(bool applied)>)>;
+    void setAnsweredCommandSink(AnsweredCommandSink sink) { m_answeredSink = std::move(sink); }
+    bool answersTransmitControl() const override { return bool(m_answeredSink); }
+    // Configuration writes share LAN/WAN sequencing and report actual dispatch.
+    void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
+    void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId) override;
+    void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
     // Primary keying verbs use an operation-fenced writer, never the generic
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
@@ -58,6 +74,9 @@ public:
     // caller exists yet; this documents the assumption).
     void setModelProvider(std::function<QString()> provider);
     void setFirmwareVersionProvider(std::function<QString()> provider);
+    void refreshFirmwareCapabilities();
+    void setAutoAgcThresholdLicenseProvider(std::function<bool()> provider);
+    void setDspResetLicenseProvider(std::function<std::optional<bool>()> provider);
     void setIndependentTxSequenceProvider(std::function<quint32()> sequence);
     IndependentTxControl independentTxControl() const override;
     bool independentTxReady() const override;
@@ -77,14 +96,50 @@ public:
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     bool isConnected() const override;
-    ReceiveDispatch requestRadioNickname(const QString& nickname) override;
+    ReceiveDispatch requestRadioNickname(const QString& nickname,
+                                         NicknameCompletion completion = {}) override;
     ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
+    ReceiveDispatch requestSliceCreate(const SliceCreateRequest& request,
+                                       const SliceCreateCompletion& completion = {},
+                                       const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestSliceRemove(int sliceId, const RadioControlCompletion& completion = {},
+                                       const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestTxSlice(int sliceId, bool enabled,
+                                   const RadioControlCompletion& completion = {},
+                                   const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestFullDuplex(bool enabled, const RadioControlCompletion& completion = {},
+                                      const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestSliceInventoryRefresh(const RadioControlCompletion& completion = {},
+                                                 const RadioControlFence& current = {}) override;
     ReceiveDispatch requestTransmitControl(const TransmitControlRequest& request,
         TunePowerContext context = TunePowerContext::Deferred) override;
+    ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
+                                      const RadioSetupCompletion& completion = {},
+                                      const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestTxBand(const TxBandRequest& request) override;
+    ReceiveDispatch requestSpot(const SpotRequest& request, const QString& panId = {}) override;
+    ReceiveDispatch requestPanControl(const QString& panId, const PanControlRequest& request) override;
+    ReceiveDispatch requestSlicePreset(int sliceId, const SlicePresetRequest& request) override;
+    ReceiveDispatch requestPanDisplay(const QString& panId, const QString& waterfallId,
+        const PanDisplayRequest& request, const RadioControlCompletion& completion = {},
+        const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestPanLifecycle(const PanLifecycleRequest& request,
+        const PanLifecycleCompletion& completion = {}, const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestProfile(const ProfileRequest& request,
+                                   const RadioControlCompletion& completion = {},
+                                   const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestMemory(const MemoryRequest& request,
+                                  const RadioControlCompletion& completion = {},
+                                  const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestUsbCable(const UsbCableRequest& request) override;
+    ReceiveDispatch requestTransverter(const TransverterRequest& request,
+                                       const RadioSetupCompletion& completion = {}) override;
     void requestSliceTune(int sliceId, const SliceTuneRequest& request) override;
     void requestSliceFilter(int sliceId, const SliceFilterRequest& request) override;
     void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override;
+    ReceiveDispatch requestSliceAgcThresholdMode(int sliceId, AgcThresholdMode mode) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    ReceiveDispatch requestDspParameterReset(int sliceId, DspParameterResetTarget target) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
     ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
     ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
@@ -161,6 +216,8 @@ public:
     // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel
     // residual). Present-only, ok-guarded numeric parses.
     void decodeRadioStatus(const QMap<QString, QString>& kvs);
+    // Full info reply: missing/invalid region clears the observation.
+    void decodeRadioInfoMetadata(const QString& body);
     void decodeInterlockStatus(const QMap<QString, QString>& kvs);
     void decodeAtuStatus(const QMap<QString, QString>& kvs);
     void decodeApdStatus(const QMap<QString, QString>& kvs);
@@ -212,11 +269,25 @@ private:
     QThread*          m_connThread{nullptr};    // owned (this-parented)
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
-    std::function<void(const QString&)> m_sink;
+    std::function<bool(const QString&, CommandReply)> m_sink;
+    AnsweredCommandSink m_answeredSink;
+    std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;
+    quint64 m_nicknameSession{0};
+    quint64 m_nicknameRequest{0};
+    quint64 m_nicknameAppliedRequest{0};
+    quint64 m_tuneOutputSession = 0;
+    QMap<int, quint64> m_tuneOutputRequests;
+    QSet<int> m_tuneOutputKnownBands;
     std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
     std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;
+    bool firmwareAtLeast(const QVersionNumber& minimum) const;
+    int nrsLevelMaximum() const;
+    int m_announcedNrsLevelMaximum = 100;
+    bool m_announcedCwProfiles = false;
     std::function<QString()> m_firmwareVersionProvider;
+    std::function<bool()> m_autoAgcThresholdLicenseProvider;
+    std::function<std::optional<bool>()> m_dspResetLicenseProvider;
     std::function<quint32()> m_sequenceProvider;
 
     // Decode-side handle state (#4198). Captured from the amplifier/tgxl status

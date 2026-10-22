@@ -887,7 +887,7 @@ MIDI_BASE_CONDS = {}
 def render_midi(params, sources) -> str:
     intro = [
         "These are the controls you can map to a MIDI controller in "
-        "**Settings → MIDI Mapping...**. The same list feeds the Ulanzi Dial "
+        "**Settings → Controllers → MIDI Mapping...**. The same list feeds the Ulanzi Dial "
         "button menus.",
         "",
         "- **Slider**: a continuous control (knob, fader, pitch bend), scaled "
@@ -945,7 +945,7 @@ def render_flexcontrol(actions, defaults, sources) -> str:
     intro = [
         "The FlexControl knob's three Aux buttons can each run one action on "
         "a single tap and another on a double tap. Set them in **Settings → "
-        "FlexControl Knob & Buttons...**.",
+        "Controllers → FlexControl Knob & Buttons...**.",
     ]
     rows = []
     for i, row in enumerate(defaults):
@@ -1010,7 +1010,7 @@ def parse_ulanzi(shortcuts, midi):
 
 def render_ulanzi(rotary, default_rotary, pills, sources) -> str:
     intro = [
-        "Set the Ulanzi Dial up in **Settings → Ulanzi Dial Mapping...**.",
+        "Set the Ulanzi Dial up in **Settings → Controllers → Ulanzi Dial Mapping...**.",
         "",
         "- The **wheel** runs one of the actions below.",
         "- Each **button** can run any action from "
@@ -1152,7 +1152,7 @@ def parse_log_categories():
         if len(fields) != 3:
             raise ParseError(f"{where}: category entry with {len(fields)} fields")
         cats.append([need_literal(f, where) for f in fields])
-    loose = len(re.findall(r'\{\s*"aether\.', src.code[open_pos:close]))
+    loose = len(re.findall(r'\{\s*"(?:aether|aethersdr)\.', src.code[open_pos:close]))
     if loose != len(cats):
         raise ParseError(f"{src.rel}: {loose} category rows, parsed {len(cats)}")
     ids = [c[0] for c in cats]

@@ -322,6 +322,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 m_trxMap.clear();  // #4567: slices die with the connection
                 m_lastDdsCenterHz.clear();
                 m_routingState.reset();
+                m_createdVfoBSlices.clear();
+                m_createdVfoBPans.clear();
                 m_pendingVfoBCreate.reset();
                 m_pendingTrxRequest.reset();
                 m_pendingRouteCommands.clear();
@@ -418,6 +420,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // re-arm above re-acquires when a replacement slice appears.
         connect(m_model, &RadioModel::sliceRemoved,
                 this, [this](int sliceId) {
+            m_createdVfoBSlices.remove(sliceId);
+            m_createdVfoBPans.remove(sliceId);
             retireSliceRx(sliceId);
             const bool removedTxRoute = sliceId == m_routingState.txSliceId();
             m_routingState.removeSlice(sliceId);
@@ -510,7 +514,11 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         });
 
         connect(m_model, &RadioModel::capabilitiesChanged, this,
-                [this](bool, const RadioCapabilities&) { broadcastTxPermissions(); });
+                [this](bool, const RadioCapabilities&) {
+            broadcastTxPermissions();
+            announceEffectiveIqSampleRate();
+            reconcileIqStreams();
+        });
 
         // Panadapter recenter → dds: broadcast. The DAX IQ stream a skimmer
         // (CW Skimmer / SDC) decodes is centered on the panadapter, not the
@@ -712,6 +720,8 @@ void TciServer::stop()
     const bool hadResources = isRunning() || !m_clients.isEmpty() || !m_tciDaxSlices.isEmpty();
     abortTciPtt();
     stopTciOwnedTune();
+    m_pendingRouteCommands.clear();
+    m_pendingTrxRequest.reset();
     teardownTciRoute();
     releaseAllIqStreams();
     stopIo();
@@ -910,7 +920,7 @@ void TciServer::onClientOpened(std::shared_ptr<TciClientLifetime> lifetime,
     protocol->setActiveSlice(m_activeTrx, m_activeLetter);
     // The IQ rate is shared across clients; a client joining after another
     // has moved it must not be told the 48000 default in its init burst.
-    protocol->setIqSampleRate(m_iqSampleRate);
+    protocol->setIqSampleRate(achievedIqSampleRate());
 
     ClientState cs;
     cs.txProducer = ([model = m_model, ws]() {
@@ -1478,31 +1488,39 @@ void TciServer::onTextMessage(const QString& msg)
             }
             bool ok = false;
             const int rate = value.toInt(&ok);
+            const QList<int> modelRates = m_model
+                ? m_model->daxIqModel().supportedSampleRates() : QList<int>{};
+            // Clients can negotiate once before the radio identifies its model.
+            // Retain that preference; stream creation still requires known rates.
             const bool supported = ok
                 && (rate == 24000 || rate == 48000
-                    || rate == 96000 || rate == 192000);
+                    || rate == 96000 || rate == 192000)
+                && (modelRates.isEmpty() || modelRates.contains(rate));
             if (!supported) {
                 replyText(ws, QStringLiteral("iq_samplerate:%1;")
                                   .arg(achievedIqSampleRate()));
                 continue;
             }
             m_iqSampleRate = rate;
-            if (m_model) {
+            const int effectiveRate = effectiveIqSampleRate();
+            const int announcedRate = effectiveRate != 0 ? effectiveRate : rate;
+            m_announcedIqSampleRate = announcedRate;
+            if (m_model && effectiveRate != 0) {
                 for (int channel : std::as_const(m_tciIqChannels)) {
-                    m_model->daxIqModel().setSampleRate(channel, rate);
+                    m_model->daxIqModel().setSampleRate(channel, effectiveRate);
                 }
             }
-            // Keep every client's init burst honest: a client connecting after
-            // this SET must be told the rate in force, not the 48000 default.
+            // Seed later clients with the effective rate, or the deferred
+            // preference while no model has been identified.
             for (ClientState& cs : m_clients) {
                 if (cs.protocol) {
-                    cs.protocol->setIqSampleRate(rate);
+                    cs.protocol->setIqSampleRate(announcedRate);
                 }
             }
             // #3913: the requester and every peer each get exactly one copy.
             // Routed through sendClientText() so the peer sends stay in the
             // outbound accounting and the `TCI tx→client:` diagnostic log.
-            const QString response = QStringLiteral("iq_samplerate:%1;").arg(rate);
+            const QString response = QStringLiteral("iq_samplerate:%1;").arg(announcedRate);
             replyText(ws, response);
             for (ClientState& cs : m_clients) {
                 if (cs.socket != ws) {
@@ -1843,47 +1861,26 @@ void TciServer::promoteTxSliceAndContinue(int sliceId, std::function<void(bool)>
         return;
     }
 
-    // Seam backend (HL2): `slice set N tx=1` is Flex text, so a sendCmdPublic
-    // would be swallowed and the continuation never run, leaking
-    // m_routeTransitionInFlight and wedging TCI keying. Move TX via the seam
-    // instead; it's synchronous and the continuation runs on every path.
-    if (!m_model->usesFlexCommandPlane()) {
-        SliceModel* target = m_model->slice(sliceId);
-        if (!target) {
-            qCWarning(lcCat) << "TCI: TX-slice selection — no such slice" << sliceId;
-            continuation(false);
-            return;
-        }
-        target->setTxSlice(true);
-        // Confirm against the MODEL rather than assuming the request took. The
-        // backend republishes both the old and the new slice as part of the
-        // move, so by here txSlice() is the answer the radio actually gave.
-        const bool moved = target->isTxSlice();
-        if (!moved) {
-            qCWarning(lcCat) << "TCI: TX-slice selection refused by the backend"
-                             << "slice=" << sliceId;
-        }
-        continuation(moved);
-        return;
-    }
-
     QPointer<TciServer> self(this);
-    m_model->sendCmdPublic(QStringLiteral("slice set %1 tx=1").arg(sliceId),
-        [self, sliceId, continuation = std::move(continuation)](
-            int code, const QString& body) mutable {
+    const QPointer<SliceModel> original(slice);
+    const RadioControlSession session = m_model->controlSession();
+    m_model->requestTxSlice(slice, true, this,
+        [self, original, session, continuation = std::move(continuation)](
+            const RadioControlReply& result) mutable {
             if (!self) {
                 return;
             }
-            if (code != 0) {
+            if (result.kind != RadioControlReply::Kind::Accepted) {
                 qCWarning(lcCat) << "TCI: TX-slice selection rejected"
-                                 << "slice=" << sliceId << "code=" << Qt::hex << code
-                                 << "body=" << body;
+                                 << result.message;
                 continuation(false);
                 return;
             }
-            SliceModel* confirmed = self->m_model ? self->m_model->slice(sliceId) : nullptr;
-            continuation(TciProtocol::transmitPermitted(self->m_model, confirmed));
-        });
+            continuation(self->m_model && original
+                && self->m_model->controlSessionCurrent(session)
+                && self->m_model->slice(original->sliceId()) == original
+                && TciProtocol::transmitPermitted(self->m_model, original));
+        }, session);
 }
 
 void TciServer::createTxSliceForVfoB(TciClient* client,
@@ -1896,16 +1893,9 @@ void TciServer::createTxSliceForVfoB(TciClient* client,
         return;
     }
 
-    // Seam backend (HL2): `slice create` is Flex text that would be swallowed,
-    // leaving the route transition open and every later trx:true deferred forever.
-    // Instead createPanadapter() brings up another DDC with its slice for VFO B,
-    // up to maxSlices() (backend-authoritative, #4545). It is synchronous: no
-    // reply to parse or pending create to reconcile. Shared with the Flex path:
-    // one route transition closed on every exit, and teardown of a created slice
-    // that can't be used. A refusal via reportVfoBRouteFailure sends
-    // split_enable:...,false plus the channel-1 VFO, so WSJT-X Split=Rig/Fake It
-    // falls back to single-VFO.
-    if (!m_model->usesFlexCommandPlane()) {
+    // Paired receiver/pan topologies create their receiver through the native
+    // pan lifecycle. Independent creation uses the answered slice contract.
+    if (!m_model->backendCapabilities().canCreateSlices) {
         if (m_model->slices().size() >= m_model->maxSlices()) {
             reportVfoBRouteFailure(client, request,
                 QStringLiteral("cannot create VFO B: receiver capacity reached"),
@@ -1938,9 +1928,13 @@ void TciServer::createTxSliceForVfoB(TciClient* client,
             return;
         }
 
+        if (SliceModel* created = m_model->slice(createdId)) {
+            m_createdVfoBPans.insert(createdId,
+                {created, m_model->panadapter(created->panId()), m_model->controlSession()});
+        }
+
         const auto tearDown = [this, createdId] {
-            if (SliceModel* s = m_model->slice(createdId))
-                m_model->removePanadapter(s->panId());
+            reapCreatedVfoBSlice(createdId);
         };
 
         if (splitOnly && !m_routingState.splitRequested()) {
@@ -1956,6 +1950,7 @@ void TciServer::createTxSliceForVfoB(TciClient* client,
              transitionGeneration](bool selected) {
             if (!self)
                 return;
+            if (transitionGeneration != self->m_routeTransitionGeneration) { return; }
             if (!client || !client->live() || !selected) {
                 tearDown();
                 self->m_routingState.clearTciRoute();
@@ -1982,7 +1977,7 @@ void TciServer::createTxSliceForVfoB(TciClient* client,
     }
 
     if (m_pendingVfoBCreate) {
-        if (m_pendingVfoBCreate->rxSliceId == rxSlice->sliceId()) {
+        if (m_pendingVfoBCreate->rxIdentity == rxSlice) {
             m_pendingVfoBCreate->client = client;
             m_pendingVfoBCreate->request = request;
             if (!routeConfirmation.isEmpty()) {
@@ -1997,47 +1992,44 @@ void TciServer::createTxSliceForVfoB(TciClient* client,
     const quint64 transitionGeneration = beginRouteTransition();
     m_pendingVfoBCreate = PendingVfoBCreate {
         client, request, rxSlice->sliceId(), routeConfirmation, splitOnly,
-        transitionGeneration
+        transitionGeneration, 0, rxSlice, m_model->controlSession()
     };
-    const double mhz = static_cast<double>(request.frequencyHz) / 1.0e6;
-    const QString command
-        = QStringLiteral("slice create pan=%1 freq=%2").arg(rxSlice->panId()).arg(mhz, 0, 'f', 6);
     QPointer<TciServer> self(this);
-    m_model->sendCmdPublic(command, [self](int code, const QString& body) {
-        if (!self || !self->m_pendingVfoBCreate) {
+    const quint64 ticket = m_model->createSlice(
+        {rxSlice->panId(), static_cast<double>(request.frequencyHz), {}, {}}, this,
+        [self, transitionGeneration](const SliceCreationResult& result) {
+        if (!self) { return; }
+        if (!self->m_pendingVfoBCreate
+            || self->m_pendingVfoBCreate->transitionGeneration != transitionGeneration) {
+            if (self->m_model && result.created.valid()) {
+                self->m_model->removeCreatedSlice(result.created);
+            }
             return;
         }
         const PendingVfoBCreate pending = *self->m_pendingVfoBCreate;
         self->m_pendingVfoBCreate.reset();
-        if (code != 0) {
+        if (result.result.kind != RadioControlReply::Kind::Accepted || !result.created.valid()) {
             self->reportVfoBRouteFailure(pending.client, pending.request,
-                QStringLiteral("VFO-B slice create rejected: code=%1 body=%2")
-                    .arg(QString::number(code, 16), body),
+                QStringLiteral("VFO-B slice create rejected: %1").arg(result.result.message),
                 !pending.routeConfirmation.isEmpty());
             self->finishRouteTransition(pending.transitionGeneration);
             return;
         }
-
-        bool idOk = false;
-        const int sliceId = body.section(QLatin1Char(','), 0, 0).trimmed().toInt(&idOk);
-        if (!idOk || !self->m_model || !self->m_model->slice(sliceId)) {
-            self->reportVfoBRouteFailure(pending.client, pending.request,
-                QStringLiteral("VFO-B create reply had no settled slice: %1").arg(body),
-                !pending.routeConfirmation.isEmpty());
-            self->finishRouteTransition(pending.transitionGeneration);
-            return;
-        }
+        const int sliceId = result.created.sliceId();
+        self->m_createdVfoBSlices.insert(sliceId, result.created);
 
         const bool clientStillConnected = pending.client
             && std::any_of(self->m_clients.cbegin(), self->m_clients.cend(),
                 [&pending](const ClientState& state) {
                     return state.socket == pending.client;
                 });
-        if (!clientStillConnected) {
+        if (!clientStillConnected || !pending.rxIdentity || !self->m_model
+            || !self->m_model->controlSessionCurrent(pending.session)
+            || self->m_model->slice(pending.rxSliceId) != pending.rxIdentity) {
             // The asynchronous create completed after its requester left.
             // Reap only the slice created by this reply; never leave an
             // unowned TX route behind.
-            self->m_model->sendCommand(QStringLiteral("slice remove %1").arg(sliceId));
+            self->reapCreatedVfoBSlice(sliceId);
             if (!pending.routeConfirmation.isEmpty()) {
                 self->m_routingState.setSplitRequested(false);
             }
@@ -2045,7 +2037,7 @@ void TciServer::createTxSliceForVfoB(TciClient* client,
             return;
         }
         if (pending.splitOnly && !self->m_routingState.splitRequested()) {
-            self->m_model->sendCommand(QStringLiteral("slice remove %1").arg(sliceId));
+            self->reapCreatedVfoBSlice(sliceId);
             self->finishRouteTransition(pending.transitionGeneration);
             return;
         }
@@ -2055,10 +2047,15 @@ void TciServer::createTxSliceForVfoB(TciClient* client,
             if (!self) {
                 return;
             }
-            if (!pending.client || !pending.client->live() || !selected) {
+            if (pending.transitionGeneration != self->m_routeTransitionGeneration) { return; }
+            const bool originalRoute = self->m_model && pending.rxIdentity
+                && self->m_model->controlSessionCurrent(pending.session)
+                && self->m_model->slice(pending.rxSliceId) == pending.rxIdentity
+                && self->m_routingState.rxSliceId() == pending.rxSliceId
+                && self->m_routingState.txSliceId() == sliceId;
+            if (!pending.client || !pending.client->live() || !selected || !originalRoute) {
                 if (self->m_model) {
-                    self->m_model->sendCommand(
-                        QStringLiteral("slice remove %1").arg(sliceId));
+                    self->reapCreatedVfoBSlice(sliceId);
                 }
                 self->m_routingState.clearTciRoute();
                 self->reportVfoBRouteFailure(pending.client, pending.request,
@@ -2075,7 +2072,27 @@ void TciServer::createTxSliceForVfoB(TciClient* client,
                 sliceId, pending.request.frequencyHz);
             self->finishRouteTransition(pending.transitionGeneration);
         });
-    });
+    }, true);
+    if (self && m_pendingVfoBCreate
+        && m_pendingVfoBCreate->transitionGeneration == transitionGeneration) {
+        m_pendingVfoBCreate->ticket = ticket;
+    }
+}
+
+void TciServer::reapCreatedVfoBSlice(int sliceId)
+{
+    if (!m_model) { return; }
+    if (m_createdVfoBSlices.contains(sliceId)) {
+        m_model->removeCreatedSlice(m_createdVfoBSlices.take(sliceId));
+        return;
+    }
+    const CreatedVfoBPan created = m_createdVfoBPans.take(sliceId);
+    if (created.slice && created.pan && m_model->controlSessionCurrent(created.session)
+        && m_model->slice(sliceId) == created.slice
+        && m_model->panadapter(created.pan->panId()) == created.pan
+        && m_model->sliceOwnedByUs(sliceId)) {
+        m_model->removePanadapter(created.pan->panId());
+    }
 }
 
 void TciServer::reportVfoBRouteFailure(TciClient* client,
@@ -2175,6 +2192,7 @@ void TciServer::handleVfoRequest(TciClient* client, const TciProtocol::VfoReques
                 if (!self) {
                     return;
                 }
+                if (transitionGeneration != self->m_routeTransitionGeneration) { return; }
                 if (socket && socket->live() && selected) {
                     self->tuneSliceAndConfirm(
                         socket, request.trx, 1, route.txSliceId, request.frequencyHz);
@@ -2238,6 +2256,7 @@ void TciServer::handleSplitRequest(TciClient* client, const TciProtocol::SplitRe
                     if (!self) {
                         return;
                     }
+                    if (transitionGeneration != self->m_routeTransitionGeneration) { return; }
                     if (!selected) {
                         self->m_routingState.setSplitRequested(false);
                         self->finishRouteTransition(transitionGeneration);
@@ -2285,10 +2304,10 @@ void TciServer::handleSplitRequest(TciClient* client, const TciProtocol::SplitRe
             if (!self) {
                 return;
             }
+            if (transitionGeneration != self->m_routeTransitionGeneration) { return; }
             if (selected) {
                 if (createdSliceId >= 0 && self->m_model) {
-                    self->m_model->sendCommand(
-                        QStringLiteral("slice remove %1").arg(createdSliceId));
+                    self->reapCreatedVfoBSlice(createdSliceId);
                 }
                 self->m_routingState.clearTciRoute();
                 self->broadcast(confirmation);
@@ -2579,6 +2598,7 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
         if (!self) {
             return;
         }
+        if (transitionGeneration != self->m_routeTransitionGeneration) { return; }
         if (!socket || !socket->live() || !selected || !self->m_model || !txRequest.valid()) {
             // A refused promote used to be near-unreachable: resolvePttSlice()
             // returned the slice that already held TX, so promoteTxSlice took
@@ -3348,7 +3368,15 @@ void TciServer::prepareTxAudio()
         // to the modulator. Sending dax=0 keeps the radio on the physical
         // mic and silently discards every dax_tx packet. — fw v1.4.0.0
         m_model->ensureDaxTxStream(DaxTxRequestReason::TciTxAudio);
-        m_model->sendCmdPublic("transmit set dax=1", nullptr);
+        // The flag is the radio's TX audio source for every later
+        // transmission, not just this one: left on, the next mic
+        // transmission keys with no modulation, and on Windows nothing else
+        // ever clears it. Hold it through RadioModel so stopTxChrono() hands
+        // back what the operator had, without clearing it under RADE or any
+        // other producer still holding it (#5524, #6538).
+        if (m_model->hasCommandPlane()) {
+            m_model->acquireTransmitDax(RadioModel::DaxTxFlagHolder::Tci);
+        }
     }
 }
 
@@ -3432,6 +3460,9 @@ void TciServer::stopTxChrono()
     m_txChronoClient = nullptr;
     if (m_audio && m_txAudioPrepared) { m_audio->setDaxTxMode(false); }
     m_txAudioPrepared = false;
+    if (m_model) {
+        m_model->releaseTransmitDax(RadioModel::DaxTxFlagHolder::Tci);
+    }
 }
 
 
@@ -3680,6 +3711,11 @@ void TciServer::onRadioTransmitConfirmed(bool transmitting)
 
 void TciServer::teardownTciRoute()
 {
+    const quint64 pendingCreate = m_pendingVfoBCreate ? m_pendingVfoBCreate->ticket : 0;
+    m_pendingVfoBCreate.reset();
+    ++m_routeTransitionGeneration;
+    m_routeTransitionInFlight = false;
+    if (m_model && pendingCreate) { m_model->cancelSliceCreation(pendingCreate); }
     if (!m_model) {
         m_routingState.reset();
         return;
@@ -3695,15 +3731,19 @@ void TciServer::teardownTciRoute()
     const int rxSliceId = m_routingState.rxSliceId();
     const int txSliceId = m_routingState.txSliceId();
     const bool removeCreated = m_routingState.owner() == TciRoutingState::TxRouteOwner::TciCreated;
+    const QPointer<SliceModel> originalTx(m_model->slice(txSliceId));
+    const RadioControlSession session = m_model->controlSession();
     m_routingState.reset();
 
     if (rxSliceId < 0 || !m_model->slice(rxSliceId)) {
         return;
     }
     QPointer<TciServer> self(this);
-    promoteTxSliceAndContinue(rxSliceId, [self, txSliceId, removeCreated](bool selected) {
-        if (self && selected && removeCreated && self->m_model && txSliceId >= 0) {
-            self->m_model->sendCommand(QStringLiteral("slice remove %1").arg(txSliceId));
+    promoteTxSliceAndContinue(rxSliceId, [self, txSliceId, removeCreated, originalTx, session](bool selected) {
+        if (self && selected && removeCreated && self->m_model && originalTx
+            && self->m_model->controlSessionCurrent(session)
+            && self->m_model->slice(txSliceId) == originalTx) {
+            self->reapCreatedVfoBSlice(txSliceId);
         }
     });
 }
@@ -3878,6 +3918,12 @@ bool TciServer::ensureIqStream(int trx)
     }
     const QString panId = slice->panId();
     DaxIqModel& iq = m_model->daxIqModel();
+    const int rate = effectiveIqSampleRate();
+    if (rate == 0) {
+        return false;
+    }
+
+    announceEffectiveIqSampleRate();
 
     // A DAX IQ stream is inert until a pan owns its channel, and a pan owns
     // exactly one. If this receiver's pan already carries a TCI channel, share
@@ -3885,7 +3931,7 @@ bool TciServer::ensureIqStream(int trx)
     const int shared = m_iqPanChannel.value(panId, 0);
     if (shared != 0) {
         m_pendingIqRemovals.remove(shared);
-        iq.setSampleRate(shared, m_iqSampleRate);
+        iq.setSampleRate(shared, rate);
         if (!iq.stream(shared).exists && !m_iqCreateInFlight.contains(shared)) {
             m_iqCreateInFlight.insert(shared);
             iq.createStream(shared);
@@ -3935,7 +3981,7 @@ bool TciServer::ensureIqStream(int trx)
     m_iqPanChannel.insert(panId, channel);
     m_tciIqChannels.insert(channel);
     m_pendingIqRemovals.remove(channel);
-    iq.setSampleRate(channel, m_iqSampleRate);
+    iq.setSampleRate(channel, rate);
     if (!iq.stream(channel).exists && !m_iqCreateInFlight.contains(channel)) {
         m_iqCreateInFlight.insert(channel);
         iq.createStream(channel);
@@ -4040,7 +4086,29 @@ int TciServer::achievedIqSampleRate() const
             }
         }
     }
-    return m_iqSampleRate;  // nothing up yet: the rate that will be applied
+    const int rate = effectiveIqSampleRate();
+    return rate != 0 ? rate : m_iqSampleRate;
+}
+
+int TciServer::effectiveIqSampleRate() const
+{
+    return m_model ? m_model->daxIqModel().sampleRateForPreference(m_iqSampleRate)
+                   : m_iqSampleRate;
+}
+
+void TciServer::announceEffectiveIqSampleRate()
+{
+    const int rate = effectiveIqSampleRate();
+    if (rate == 0 || rate == m_announcedIqSampleRate) {
+        return;
+    }
+    m_announcedIqSampleRate = rate;
+    for (ClientState& cs : m_clients) {
+        if (cs.protocol) {
+            cs.protocol->setIqSampleRate(rate);
+        }
+    }
+    broadcast(QStringLiteral("iq_samplerate:%1;").arg(rate));
 }
 
 // ── Waterfall row → TCI binary spectrum frames (type=4) ──────────────────────

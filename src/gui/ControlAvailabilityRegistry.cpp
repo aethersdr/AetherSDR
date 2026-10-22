@@ -132,6 +132,42 @@ ControlAvailabilityRegistry::ControlAvailabilityRegistry(RadioModel& model, QObj
             });
 }
 
+ControlAvailabilityRegistry::~ControlAvailabilityRegistry()
+{
+    for (Entry& entry : m_entries) {
+        restoreRestriction(entry);
+    }
+}
+
+void ControlAvailabilityRegistry::registerRestriction(QWidget* widget, QString reason,
+                                                     AvailabilityPredicate available)
+{
+    if (!widget || !available) {
+        return;
+    }
+    Entry entry;
+    entry.widget = widget;
+    entry.reason = std::move(reason);
+    entry.available = std::move(available);
+    entry.restrictionOnly = true;
+    m_entries.push_back(entry);
+    applyOne(m_entries.last(), m_model.isConnected(), m_model.backendCapabilities());
+}
+
+void ControlAvailabilityRegistry::restoreRestriction(Entry& entry)
+{
+    if (!entry.restricted) {
+        return;
+    }
+    if (QWidget* widget = entry.widget) {
+        widget->setEnabled(entry.previouslyEnabled);
+        widget->setToolTip(entry.previousToolTip);
+        widget->setAccessibleDescription(entry.previousDescription);
+        ThemeManager::instance().setWidgetForegroundToken(widget, {});
+    }
+    entry.restricted = false;
+}
+
 void ControlAvailabilityRegistry::registerWidget(QWidget* widget,
                                                  QString reason,
                                                  AvailabilityPredicate available,
@@ -196,6 +232,27 @@ void ControlAvailabilityRegistry::applyOne(Entry& entry,
     entry.state = !available   ? ControlAvailability::Unavailable
                 : engaged      ? ControlAvailability::Active
                                : ControlAvailability::Inactive;
+
+    if (entry.restrictionOnly) {
+        if (available) {
+            restoreRestriction(entry);
+        } else if (QWidget* widget = entry.widget) {
+            if (!entry.restricted) {
+                // Inherited parent disablement must not become a permanent
+                // explicit disablement after the receive restriction lifts.
+                entry.previouslyEnabled = !widget->testAttribute(Qt::WA_ForceDisabled);
+                entry.previousToolTip = widget->toolTip();
+                entry.previousDescription = widget->accessibleDescription();
+                entry.restricted = true;
+            }
+            widget->setEnabled(false);
+            widget->setToolTip(entry.reason);
+            widget->setAccessibleDescription(entry.reason);
+            ThemeManager::instance().setWidgetForegroundToken(
+                widget, treatmentToken(ControlAvailability::Unavailable));
+        }
+        return;
+    }
 
     const bool unavailable = entry.state == ControlAvailability::Unavailable;
     const auto reasonOnly = [&](const QString&) {

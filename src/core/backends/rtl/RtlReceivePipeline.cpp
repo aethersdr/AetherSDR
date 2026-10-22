@@ -1,4 +1,5 @@
 #include "RtlReceivePipeline.h"
+#include "RtlReceiveRecipe.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -69,7 +70,7 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
     std::array<bool, 8> validated{};
     for (const auto& receiver : state.receivers) {
         const int id = receiver.passband.stableId;
-        if (id < 0 || id >= 8 || validated[id]
+        if (!RtlReceiveRecipe::valid(receiver) || id < 0 || id >= 8 || validated[id]
             || receiver.mode < Transaction::Mode::Am || receiver.mode > Transaction::Mode::Cwr
             || receiver.audioGain < 0
             || receiver.audioGain > 100 || receiver.audioPan < 0 || receiver.audioPan > 100
@@ -81,16 +82,16 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
         // Parking changes reception membership, not the configured graph's
         // admission contract. A legacy recipe cannot hide outside the capture
         // and then resume alongside a native 48 kHz receiver.
-        const bool native = receiver.mode == Transaction::Mode::Fm
-            || receiver.mode == Transaction::Mode::Fmn
-            || (m_enableWfm && receiver.mode == Transaction::Mode::Wfm);
+        const bool native = RtlReceiveRecipe::native(receiver.mode, m_enableWfm);
         if (!native && state.receivers.size() != 1) { return Submission::Failed; }
         validated[id] = true;
     }
+    if (!state.trackingNotches.valid()) { return Submission::Failed; }
     const unsigned faults = m_faults.load(std::memory_order_acquire);
     std::array<bool, 8> receiving{};
     bool legacy = false;
     bool wfmTransition = false;
+    bool analogTransition = false;
     std::uint8_t receivingMask = 0;
     for (int id : state.receivingIds) {
         if (id < 0 || id >= 8 || receiving[id] || !validated[id]) { return Submission::Failed; }
@@ -99,11 +100,18 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
         const auto receiver = std::ranges::find_if(state.receivers, [id](const auto& value) {
             return value.passband.stableId == id;
         });
-        legacy = legacy || (receiver->mode != Transaction::Mode::Fm
-            && receiver->mode != Transaction::Mode::Fmn
-            && !(m_enableWfm && receiver->mode == Transaction::Mode::Wfm));
+        legacy = legacy || !RtlReceiveRecipe::native(receiver->mode, m_enableWfm);
         if (legacy && receiver->squelchEnabled) { return Submission::Failed; }
         const auto& prior = m_specs[id];
+        const bool analog = RtlReceiveRecipe::analogDsp(receiver->mode);
+        if (analog || prior.conjugateIq) {
+            WdspChannel::Config dsp;
+            dsp.mode = dspMode(receiver->mode);
+            RtlReceiveRecipe::applyDsp(*receiver, dsp, state.trackingNotches);
+            analogTransition |= !analog || !prior.conjugateIq || (faults & (1u << id))
+                || prior.passband != RtlReceiveRecipe::extractionBand(*receiver)
+                || prior.dsp != dsp;
+        }
         const bool wide = m_enableWfm && receiver->mode == Transaction::Mode::Wfm;
         if (wide || prior.dsp.wbfmReceive) {
             const auto deemphasis = receiver->wfmDeemphasisUs == 50
@@ -117,12 +125,11 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
         }
     }
     if (legacy && (state.receivers.size() != 1 || state.receivingIds.size() != 1)) { return Submission::Failed; }
-    // WFM changes the causal decoder graph even when final PCM stays 48 kHz.
-    // Give the speaker a discontinuity too, retiring the previous graph's
-    // queued waveform and client-effect history instead of appending its tail.
-    // A withdrawn WFM receiver has lost that graph even if its recipe is unchanged.
+    // Decoder/filter changes retire the mixed waveform and client-effect
+    // history even when final PCM stays 48 kHz. A withdrawn receiver has lost
+    // that graph even if its requested recipe is unchanged.
     const bool advanceCaptureEpoch = resetCapture || legacy != m_legacy
-        || receivingMask != m_receivingMask || wfmTransition;
+        || receivingMask != m_receivingMask || wfmTransition || analogTransition;
     if (advanceCaptureEpoch && m_nextEpoch == std::numeric_limits<std::uint64_t>::max()) { return Submission::Failed; }
     auto epochs = m_epochs;
     auto specs = m_specs;
@@ -165,12 +172,17 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
                 spec.dsp.wbfmReceive->deemphasis = receiver.wfmDeemphasisUs == 50
                     ? WdspChannel::WbfmReceive::Deemphasis::Us50
                     : WdspChannel::WbfmReceive::Deemphasis::Us75;
-            } else {
+            } else if (receiver.mode == Transaction::Mode::Fm || receiver.mode == Transaction::Mode::Fmn) {
                 spec.dsp.fmReceive = WdspChannel::FmReceive{};
                 spec.dsp.fmDeviationHz = receiver.mode == Transaction::Mode::Fmn ? 2500.0 : 5000.0;
             }
             spec.dsp.filterLowHz = receiver.passband.filterLowHz;
             spec.dsp.filterHighHz = receiver.passband.filterHighHz;
+            if (RtlReceiveRecipe::analogDsp(receiver.mode)) {
+                spec.passband = RtlReceiveRecipe::extractionBand(receiver);
+                spec.conjugateIq = true;
+                RtlReceiveRecipe::applyDsp(receiver, spec.dsp, state.trackingNotches);
+            }
             if (resetCapture || (faults & (1u << id)) || m_specs[id].handle != spec.handle
                 || m_specs[id].passband != spec.passband || m_specs[id].dsp != spec.dsp) {
                 if (epochs[id] == std::numeric_limits<std::uint64_t>::max()) { return Submission::Failed; }
@@ -253,7 +265,7 @@ void RtlReceivePipeline::observeSpectrum(std::span<const float> bins, std::uint6
     for (int id = 0; id < 8; ++id) {
         if (!(m_receivingMask & (1u << id))) { continue; }
         const auto& band = m_meterPassbands[id];
-        const double offset = band.carrierHz - m_capture.centerHz;
+        const double offset = band.carrierHz + band.translationHz - m_capture.centerHz;
         const int low = std::clamp(int(std::floor((offset + band.filterLowHz) / binHz + 1024)), 0, 2047);
         const int high = std::clamp(int(std::ceil((offset + band.filterHighHz) / binHz + 1024)), low, 2047);
         float peak = -120.0f;
@@ -410,7 +422,7 @@ void RtlReceivePipeline::audioBlockWithStatus(const RtlReceiverRegistry::Receive
     for (std::size_t i = 0; i < left.size(); ++i) {
         // WBFM already applies WDSP's internal automatic squelch and the
         // qualified paired-channel gain before this independent tap.
-        const float gain = spec.dsp.wbfmReceive ? 1.0f : m_squelch[packet.slot].gain(first + i);
+        const float gain = spec.dsp.fmReceive ? m_squelch[packet.slot].gain(first + i) : 1.0f;
         gatedLeft[i] = left[i] * gain; gatedRight[i] = right[i] * gain;
         packet.samples[2 * i] = gatedLeft[i]; packet.samples[2 * i + 1] = gatedRight[i];
     }

@@ -225,6 +225,7 @@ void SliceModel::setMode(const QString& mode)
     }
 
     m_mode = mode;
+    m_squelchRecoveryAwaitingModeReport = true;
     const QPointer<SliceModel> alive(this);
     const quint64 modeRevision = ++m_modeIntentRevision;
     // aetherd RFC 2.3: express intent; FlexBackend builds "slice set N mode=…"
@@ -470,6 +471,14 @@ SliceDspRequest SliceModel::currentDspRequest(SliceDspRequest::Feature feature,
 
 void SliceModel::setNb(bool on)
 {
+    if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled);
+        request.enabled = on;
+        request.kind = on ? NoiseBlankerKind::Impulse : NoiseBlankerKind::Off;
+        emit receiveDspRequested(request);
+        return;
+    }
     m_nbKind = on ? AetherSDR::NoiseBlankerKind::Impulse
                   : AetherSDR::NoiseBlankerKind::Off;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled,
@@ -481,6 +490,14 @@ void SliceModel::setNb(bool on)
 
 void SliceModel::setNbKind(AetherSDR::NoiseBlankerKind kind)
 {
+    if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled);
+        request.enabled = kind != NoiseBlankerKind::Off;
+        request.kind = kind;
+        emit receiveDspRequested(request);
+        return;
+    }
     m_nbKind = kind;
     // Off is not a separate verb: the kind carries it, and nbOn() follows.
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled,
@@ -492,6 +509,13 @@ void SliceModel::setNbKind(AetherSDR::NoiseBlankerKind kind)
 
 void SliceModel::setNbFill(AetherSDR::NoiseBlankerFill fill)
 {
+    if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Fill);
+        request.fill = fill;
+        emit receiveDspRequested(request);
+        return;
+    }
     if (m_nbFill == fill) return;
     m_nbFill = fill;
     // No wire text: there is no Flex command for it. This is a parameter of a
@@ -502,6 +526,13 @@ void SliceModel::setNbFill(AetherSDR::NoiseBlankerFill fill)
 
 void SliceModel::setNr(bool on)
 {
+    if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Nr, SliceDspRequest::Field::Enabled);
+        request.enabled = on;
+        emit receiveDspRequested(request);
+        return;
+    }
     m_nr = on;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nr, SliceDspRequest::Field::Enabled,
                            [this, on] { emit nrChanged(on); });
@@ -509,6 +540,13 @@ void SliceModel::setNr(bool on)
 
 void SliceModel::setAnf(bool on)
 {
+    if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Anf, SliceDspRequest::Field::Enabled);
+        request.enabled = on;
+        emit receiveDspRequested(request);
+        return;
+    }
     m_anf = on;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Anf, SliceDspRequest::Field::Enabled,
                            [this, on] { emit anfChanged(on); });
@@ -521,6 +559,13 @@ void SliceModel::setAnf(bool on)
 // look wired on a family that does not have it.
 void SliceModel::setMn(bool on)
 {
+    if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Mn, SliceDspRequest::Field::Enabled);
+        request.enabled = on;
+        emit receiveDspRequested(request);
+        return;
+    }
     if (m_mn == on) return;
     m_mn = on;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Mn, SliceDspRequest::Field::Enabled,
@@ -530,6 +575,13 @@ void SliceModel::setMn(bool on)
 // v4 DSP toggles — command keys differ from status keys (FlexLib Slice.cs)
 void SliceModel::setNrl(bool on)
 {
+    if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Nrl, SliceDspRequest::Field::Enabled);
+        request.enabled = on;
+        emit receiveDspRequested(request);
+        return;
+    }
     m_nrl = on;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nrl, SliceDspRequest::Field::Enabled,
                            [this, on] { emit nrlChanged(on); });
@@ -537,6 +589,13 @@ void SliceModel::setNrl(bool on)
 
 void SliceModel::setNrs(bool on)
 {
+    if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Nrs, SliceDspRequest::Field::Enabled);
+        request.enabled = on;
+        emit receiveDspRequested(request);
+        return;
+    }
     m_nrs = on;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nrs, SliceDspRequest::Field::Enabled,
                            [this, on] { emit nrsChanged(on); });
@@ -544,6 +603,13 @@ void SliceModel::setNrs(bool on)
 
 void SliceModel::setRnn(bool on)
 {
+    if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Rnn, SliceDspRequest::Field::Enabled);
+        request.enabled = on;
+        emit receiveDspRequested(request);
+        return;
+    }
     m_rnn = on;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Rnn, SliceDspRequest::Field::Enabled,
                            [this, on] { emit rnnChanged(on); });
@@ -551,6 +617,13 @@ void SliceModel::setRnn(bool on)
 
 void SliceModel::setNrf(bool on)
 {
+    if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Nrf, SliceDspRequest::Field::Enabled);
+        request.enabled = on;
+        emit receiveDspRequested(request);
+        return;
+    }
     m_nrf = on;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nrf, SliceDspRequest::Field::Enabled,
                            [this, on] { emit nrfChanged(on); });
@@ -558,6 +631,13 @@ void SliceModel::setNrf(bool on)
 
 void SliceModel::setAnfl(bool on)
 {
+    if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Anfl, SliceDspRequest::Field::Enabled);
+        request.enabled = on;
+        emit receiveDspRequested(request);
+        return;
+    }
     m_anfl = on;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Anfl, SliceDspRequest::Field::Enabled,
                            [this, on] { emit anflChanged(on); });
@@ -565,6 +645,13 @@ void SliceModel::setAnfl(bool on)
 
 void SliceModel::setAnft(bool on)
 {
+    if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Anft, SliceDspRequest::Field::Enabled);
+        request.enabled = on;
+        emit receiveDspRequested(request);
+        return;
+    }
     m_anft = on;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Anft, SliceDspRequest::Field::Enabled,
                            [this, on] { emit anftChanged(on); });
@@ -572,6 +659,13 @@ void SliceModel::setAnft(bool on)
 
 void SliceModel::setApf(bool on)
 {
+    if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Apf, SliceDspRequest::Field::Enabled);
+        request.enabled = on;
+        emit receiveDspRequested(request);
+        return;
+    }
     m_apf = on;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Apf, SliceDspRequest::Field::Enabled,
                            [this, on] { emit apfChanged(on); });
@@ -579,7 +673,14 @@ void SliceModel::setApf(bool on)
 
 void SliceModel::setApfLevel(int v)
 {
+    if (refuseOffThread(__func__)) { return; }
     v = std::clamp(v, 0, 100);
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Apf, SliceDspRequest::Field::Level);
+        request.level = v;
+        emit receiveDspRequested(request);
+        return;
+    }
     if (m_apfLevel == v) return;
     m_apfLevel = v;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Apf, SliceDspRequest::Field::Level,
@@ -588,7 +689,14 @@ void SliceModel::setApfLevel(int v)
 
 void SliceModel::setNbLevel(int v)
 {
+    if (refuseOffThread(__func__)) { return; }
     v = std::clamp(v, 0, 100);
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Level);
+        request.level = v;
+        emit receiveDspRequested(request);
+        return;
+    }
     if (m_nbLevel == v) return;
     m_nbLevel = v;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Level,
@@ -597,7 +705,14 @@ void SliceModel::setNbLevel(int v)
 
 void SliceModel::setNrLevel(int v)
 {
+    if (refuseOffThread(__func__)) { return; }
     v = std::clamp(v, 0, 100);
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Nr, SliceDspRequest::Field::Level);
+        request.level = v;
+        emit receiveDspRequested(request);
+        return;
+    }
     if (m_nrLevel == v) return;
     m_nrLevel = v;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nr, SliceDspRequest::Field::Level,
@@ -606,7 +721,14 @@ void SliceModel::setNrLevel(int v)
 
 void SliceModel::setAnfLevel(int v)
 {
+    if (refuseOffThread(__func__)) { return; }
     v = std::clamp(v, 0, 100);
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Anf, SliceDspRequest::Field::Level);
+        request.level = v;
+        emit receiveDspRequested(request);
+        return;
+    }
     if (m_anfLevel == v) return;
     m_anfLevel = v;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Anf, SliceDspRequest::Field::Level,
@@ -619,7 +741,14 @@ void SliceModel::setAnfLevel(int v)
 // was not given.
 void SliceModel::setMnLevel(int v)
 {
+    if (refuseOffThread(__func__)) { return; }
     v = std::clamp(v, 0, 100);
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Mn, SliceDspRequest::Field::Level);
+        request.level = v;
+        emit receiveDspRequested(request);
+        return;
+    }
     if (m_mnLevel == v) return;
     m_mnLevel = v;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Mn, SliceDspRequest::Field::Level,
@@ -628,16 +757,40 @@ void SliceModel::setMnLevel(int v)
 
 void SliceModel::setNrlLevel(int v)
 {
+    if (refuseOffThread(__func__)) { return; }
     v = std::clamp(v, 0, 100);
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Nrl, SliceDspRequest::Field::Level);
+        request.level = v;
+        emit receiveDspRequested(request);
+        return;
+    }
     if (m_nrlLevel == v) return;
     m_nrlLevel = v;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nrl, SliceDspRequest::Field::Level,
                            [this, v] { emit nrlLevelChanged(v); });
 }
 
+void SliceModel::setNrsLevelMaximum(int maximum)
+{
+    if (m_nrsLevelMaximum == maximum) {
+        return;
+    }
+    m_nrsLevelMaximum = maximum;
+    // A request limit never changes radio-authoritative readback or sends intent.
+    emit nrsLevelMaximumChanged(maximum);
+}
+
 void SliceModel::setNrsLevel(int v)
 {
-    v = std::clamp(v, 0, 100);
+    if (refuseOffThread(__func__)) { return; }
+    v = std::clamp(v, 0, m_nrsLevelMaximum);
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Nrs, SliceDspRequest::Field::Level);
+        request.level = v;
+        emit receiveDspRequested(request);
+        return;
+    }
     if (m_nrsLevel == v) return;
     m_nrsLevel = v;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nrs, SliceDspRequest::Field::Level,
@@ -646,7 +799,14 @@ void SliceModel::setNrsLevel(int v)
 
 void SliceModel::setNrfLevel(int v)
 {
+    if (refuseOffThread(__func__)) { return; }
     v = std::clamp(v, 0, 100);
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Nrf, SliceDspRequest::Field::Level);
+        request.level = v;
+        emit receiveDspRequested(request);
+        return;
+    }
     if (m_nrfLevel == v) return;
     m_nrfLevel = v;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nrf, SliceDspRequest::Field::Level,
@@ -655,7 +815,14 @@ void SliceModel::setNrfLevel(int v)
 
 void SliceModel::setAnflLevel(int v)
 {
+    if (refuseOffThread(__func__)) { return; }
     v = std::clamp(v, 0, 100);
+    if (confirmsControls()) {
+        auto request = currentDspRequest(SliceDspRequest::Feature::Anfl, SliceDspRequest::Field::Level);
+        request.level = v;
+        emit receiveDspRequested(request);
+        return;
+    }
     if (m_anflLevel == v) return;
     m_anflLevel = v;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Anfl, SliceDspRequest::Field::Level,
@@ -674,6 +841,7 @@ void SliceModel::recallAgcMode(const QString& mode)
 
 void SliceModel::applyAgcMode(const QString& mode, SliceAgcRequest::Origin origin)
 {
+    if (refuseOffThread(__func__)) { return; }
     if (m_externalReceiveAudioReplacement) {
         if (m_externalReceiveAgcMode == mode) {
             return;
@@ -683,6 +851,11 @@ void SliceModel::applyAgcMode(const QString& mode, SliceAgcRequest::Origin origi
         return;
     }
 
+    if (confirmsControls()) {
+        emit receiveAgcRequested({SliceAgcRequest::Field::Mode, mode,
+            m_agcThreshold, m_agcOffLevel, origin});
+        return;
+    }
     if (m_agcMode == mode) {
         return;
     }
@@ -741,8 +914,53 @@ void SliceModel::setAgcTKnobLevel(int value)
     }
 }
 
+bool SliceModel::automaticAgcThresholdActiveOrPending() const
+{
+    return m_automaticAgcThresholdPending
+        || m_agcThresholdMode == AgcThresholdMode::Automatic;
+}
+
+bool SliceModel::agcCalibrationAllowed() const
+{
+    return !m_externalReceiveAudioReplacement && !automaticAgcThresholdActiveOrPending()
+        && (!m_autoAgcThresholdSupported || m_agcThresholdMode.has_value())
+        && (!m_agcCalibrationAuthority || m_agcCalibrationAuthority());
+}
+
+void SliceModel::recallAgcThreshold(int value)
+{
+    if (agcCalibrationAllowed()) {
+        setAgcThreshold(value);
+    }
+}
+
+void SliceModel::setAgcThresholdFromCalibration(int value)
+{
+    if (agcCalibrationAllowed()) {
+        setAgcThreshold(value);
+    }
+}
+
+void SliceModel::requestAgcThresholdMode(AgcThresholdMode mode)
+{
+    if (refuseOffThread("requestAgcThresholdMode")
+        || (mode != AgcThresholdMode::Manual && mode != AgcThresholdMode::Automatic)) {
+        return;
+    }
+    emit receiveAgcThresholdModeRequested(mode);
+}
+
+void SliceModel::setAutomaticAgcThresholdPending(bool pending)
+{
+    if (m_automaticAgcThresholdPending != pending) {
+        m_automaticAgcThresholdPending = pending;
+        emit agcThresholdModeChanged();
+    }
+}
+
 void SliceModel::setAgcThreshold(int value)
 {
+    if (refuseOffThread(__func__)) { return; }
     if (m_externalReceiveAudioReplacement) {
         value = qBound(KiwiSdrProtocol::kAgcThresholdMinDb, value,
                        KiwiSdrProtocol::kAgcThresholdMaxDb);
@@ -755,12 +973,22 @@ void SliceModel::setAgcThreshold(int value)
     }
 
     value = qBound(0, value, 100);
-    if (m_agcThreshold == value) {
+    const bool manualOverride = automaticAgcThresholdActiveOrPending();
+    if (!confirmsControls() && m_agcThreshold == value && !manualOverride) {
+        return;
+    }
+    const QPointer<SliceModel> alive(this);
+    const quint64 revision = ++m_agcThresholdIntentRevision;
+    setAutomaticAgcThresholdPending(false);
+    if (!alive || revision != m_agcThresholdIntentRevision) {
+        return;
+    }
+    if (confirmsControls()) {
+        emit receiveAgcRequested({SliceAgcRequest::Field::Threshold, m_agcMode,
+            value, m_agcOffLevel, SliceAgcRequest::Origin::Operator});
         return;
     }
     m_agcThreshold = value;
-    const QPointer<SliceModel> alive(this);
-    const quint64 revision = ++m_agcThresholdIntentRevision;
     emit agcThresholdChanged(value);
     if (!alive || revision != m_agcThresholdIntentRevision) {
         return;
@@ -776,6 +1004,7 @@ void SliceModel::setAgcThreshold(int value)
 
 void SliceModel::setAgcOffLevel(int value)
 {
+    if (refuseOffThread(__func__)) { return; }
     value = qBound(0, value, 100);
     if (m_externalReceiveAudioReplacement) {
         if (m_externalReceiveAgcOffLevel == value) {
@@ -786,6 +1015,11 @@ void SliceModel::setAgcOffLevel(int value)
         return;
     }
 
+    if (confirmsControls()) {
+        emit receiveAgcRequested({SliceAgcRequest::Field::OffLevel, m_agcMode,
+            m_agcThreshold, value, SliceAgcRequest::Origin::Operator});
+        return;
+    }
     if (m_agcOffLevel == value) {
         return;
     }
@@ -812,6 +1046,71 @@ void SliceModel::setWfmDeemphasis(int microseconds)
     if (microseconds != 50 && microseconds != 75) { return; }
     // Requests never update observed state, even on optimistic legacy slices.
     emit wfmDeemphasisRequested(microseconds);
+}
+
+void SliceModel::setRestoreManualSquelchAfterMode(bool restore)
+{
+    if (refuseOffThread(__func__)) { return; }
+    if (restore == m_restoreManualSquelchAfterMode
+        && (!restore || m_manualSquelchRestoreMode.isEmpty()
+            || m_manualSquelchRestoreMode == m_mode)) { return; }
+    m_restoreManualSquelchAfterMode = restore;
+    m_manualSquelchRestoreSent = false;
+    m_manualSquelchRestoreMode.clear();
+    if (restore) { m_squelchEchoIsManual = false; }
+}
+
+void SliceModel::restoreManualSquelchAfterModeChange()
+{
+    if (refuseOffThread(__func__) || !m_restoreManualSquelchAfterMode
+        || externalReceiveReplacementActive()) { return; }
+    if (m_manualSquelchRestoreSent) { return; }
+    m_manualSquelchRestoreMode = m_mode;
+    // The mode setter can be optimistic. Restore only after radio mode
+    // readback; retained Auto levels remain non-manual until recovery echoes.
+    if (m_squelchRecoveryAwaitingModeReport || m_receiveObservation.mode != m_mode) { return; }
+    m_manualSquelchRestoreSent = true;
+    // A previous mode's snapshot must not suppress either recovery field.
+    m_squelchOnKnown = false;
+    m_squelchLevelKnown = false;
+    if (!confirmsControls()) {
+        m_squelchEnableIntentPending = true;
+        m_squelchLevelIntentPending = true;
+    }
+    setSquelch(true, m_manualSquelchLevel);
+}
+
+void SliceModel::setDisplayAutoSquelch(bool enabled)
+{
+    if (refuseOffThread(__func__)) { return; }
+    if (m_displayAutoSquelch == enabled) { return; }
+    m_displayAutoSquelch = enabled;
+    m_displayAutoSquelchLevel.reset();
+    if (enabled) {
+        setRestoreManualSquelchAfterMode(false);
+        m_squelchEchoIsManual = false;
+    }
+    emit displayAutoSquelchChanged();
+}
+
+void SliceModel::setDisplayAutoSquelchMarginDb(int marginDb)
+{
+    if (refuseOffThread(__func__)) { return; }
+    marginDb = qBound(5, marginDb, 20);
+    if (m_displayAutoSquelchMarginDb == marginDb) { return; }
+    m_displayAutoSquelchMarginDb = marginDb;
+    m_displayAutoSquelchLevel.reset();
+    emit displayAutoSquelchChanged();
+}
+
+void SliceModel::applyDisplayAutoSquelchLevel(int level)
+{
+    if (refuseOffThread(__func__)) { return; }
+    if (!m_displayAutoSquelch) { return; }
+    level = qBound(1, level, 100);
+    if (m_displayAutoSquelchLevel == level) { return; }
+    m_displayAutoSquelchLevel = level;
+    setSquelch(true, level);
 }
 
 void SliceModel::setSquelch(bool on, int level)
@@ -875,6 +1174,7 @@ void SliceModel::setAutomaticSquelch(bool enabled, int marginDb)
 
 void SliceModel::setManualSquelch(bool on, int level)
 {
+    setRestoreManualSquelchAfterMode(false);
     const QPointer<SliceModel> alive(this);
     const quint64 expectedRevision = m_squelchIntentRevision + 1;
     setSquelch(on, level);
@@ -897,6 +1197,10 @@ void SliceModel::setExternalReceiveAutoSquelch(bool on)
 void SliceModel::setRit(bool on, int hz)
 {
     if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        emit ritCommandIssued(on, hz);
+        return;
+    }
     const auto field = SliceControlRequest::Field::Rit;
     hz = std::clamp(hz, -kIncrementalTuningMaxHz, kIncrementalTuningMaxHz);
     const auto current = captureControlIntent(field);
@@ -1537,8 +1841,13 @@ void SliceModel::emitLetterRefresh()
 void SliceModel::applyChanges(const SliceDelta& d)
 {
     const QPointer<SliceModel> alive(this);
+    const bool chainChanged = d.chainMode && m_chainMode != *d.chainMode;
+    if (chainChanged) {
+        m_chainMode = *d.chainMode;
+    }
     const ReceiveObservation previousObservation = m_receiveObservation;
     if (d.mode) {
+        m_squelchRecoveryAwaitingModeReport = false;
         // A mode change invalidates the old mode's passband. Partial filter
         // reports may restore each edge independently, never from UI state.
         if (m_receiveObservation.mode != d.mode) {
@@ -1961,6 +2270,20 @@ void SliceModel::applyChanges(const SliceDelta& d)
     // emitSliceState(), and an unchanged-value agcThresholdChanged drives
     // AgcTCalibrator::onValueChanged, whose settle timer would overwrite a
     // calibration point with a mid-tune RMS reading.
+    if (d.agcThresholdMode.has_value()
+        && (*d.agcThresholdMode == AgcThresholdMode::Manual
+            || *d.agcThresholdMode == AgcThresholdMode::Automatic)) {
+        const bool clearsPending = *d.agcThresholdMode == AgcThresholdMode::Automatic;
+        const bool changed = m_agcThresholdMode != d.agcThresholdMode
+            || (clearsPending && m_automaticAgcThresholdPending);
+        m_agcThresholdMode = d.agcThresholdMode;
+        if (clearsPending) {
+            m_automaticAgcThresholdPending = false;
+        }
+        if (changed) {
+            emit agcThresholdModeChanged();
+        }
+    }
     if (d.agcMode.has_value()) {
         const QString v = *d.agcMode;
         if (m_agcMode != v) { m_agcMode = v; emit agcModeChanged(v); }
@@ -2025,8 +2348,10 @@ void SliceModel::applyChanges(const SliceDelta& d)
         || d.automaticSquelch || d.automaticSquelchMarginDb) {
         m_squelchOnKnown |= d.squelchOn.has_value();
         m_squelchLevelKnown |= d.squelchLevel.has_value();
-        if (d.squelchOn.has_value())
+        if (d.squelchOn.has_value()) {
             m_squelchOn = *d.squelchOn;
+            if (!m_squelchOn) { setDisplayAutoSquelch(false); }
+        }
         if (d.squelchLevel.has_value()) {
             m_squelchLevel = *d.squelchLevel;
             // Adopt the echoed level as the operator's manual choice only
@@ -2041,9 +2366,15 @@ void SliceModel::applyChanges(const SliceDelta& d)
             // not a computed Auto level. Restore that memory even if the
             // attached applet already marked its echo surface Off/Auto.
             if ((m_squelchEchoIsManual || d.automaticSquelch.has_value())
-                && !m_externalReceiveAudioReplacement) {
+                && !m_restoreManualSquelchAfterMode && !m_externalReceiveAudioReplacement) {
                 setManualSquelchLevel(*d.squelchLevel);
             }
+        }
+        if (m_manualSquelchRestoreSent && m_squelchOnKnown && m_squelchLevelKnown
+            && m_squelchOn && m_receiveObservation.mode == m_manualSquelchRestoreMode
+            && m_squelchLevel == m_manualSquelchLevel) {
+            setRestoreManualSquelchAfterMode(false);
+            m_squelchEchoIsManual = true;
         }
         emit squelchChanged(m_squelchOn, m_squelchLevel);
     }
@@ -2194,6 +2525,12 @@ void SliceModel::applyChanges(const SliceDelta& d)
         emit frequencyStatusReported(m_reportedFrequency);
     }
     if (modeChanged_)   emit modeChanged(m_mode);
+    if (!alive) { return; }
+    if (m_restoreManualSquelchAfterMode && !m_manualSquelchRestoreMode.isEmpty()
+        && m_manualSquelchRestoreMode == m_mode) {
+        restoreManualSquelchAfterModeChange();
+        if (!alive) { return; }
+    }
     if (filterChanged_) emit filterChanged(m_filterLow, m_filterHigh);
     if (previousObservation != m_receiveObservation) {
         emit receiveObservationChanged();
@@ -2201,10 +2538,20 @@ void SliceModel::applyChanges(const SliceDelta& d)
     if (d.mode) {
         emit receiveModeReported();
     }
+    if (!alive) { return; }
+    // Publish after the matching mode/filter state; a newer nested report
+    // supersedes this notification just as it supersedes the observation.
+    if (chainChanged && m_chainMode == *d.chainMode) {
+        emit chainModeChanged(m_chainMode);
+    }
 }
 
 void SliceModel::invalidateFrequencyObservation()
 {
+    ++m_receiveSessionGeneration;
+    m_agcThresholdMode.reset();
+    m_automaticAgcThresholdPending = false;
+    emit agcThresholdModeChanged();
     for (auto& feature : m_dspIntentRevisions) {
         for (quint64& revision : feature) {
             ++revision;

@@ -96,9 +96,13 @@ and completed-block stereo observation. Its RF and audio limits, generated
 reference results and remaining validation boundaries are documented in
 [`rtl-wfm.md`](rtl-wfm.md). Manual WFM squelch remains unavailable with a stated
 reason; WDSP's internal automatic squelch remains in use. Saved sessions use a
-muted legacy bootstrap before adopting the original receiver recipe and ID.
+muted native bootstrap which reserves the first restorable saved receiver ID
+before adopting its saved recipe and monitor state.
 
-The other non-FM modes retain their exclusive legacy DDC and 24 kHz format.
+USB, LSB, CW and CWR use native independent 48 kHz receiver recipes, with
+carrier-relative filtering and CW BFO translation described in
+[SSB/CW reception](rtl-ssb-cw.md). AM and SAM also use independent 48 kHz
+receiver recipes; see [AM/SAM reception](rtl-am-sam.md).
 Monitor mute continues to clock an independent pre-monitor tap. Production
 admission remains one receiver. Selecting FM with an incompatible inherited
 wide/sideband filter chooses a 16 kHz passband; ordinary filter requests and
@@ -127,29 +131,28 @@ closed until measured and closes after 100 ms without detector input. The
 detector runs at 30 Hz independently of display throttling, sharing the FFT
 and a fixed buffer without allocating a detector frame. Threshold changes
 travel in the existing capture transaction and preserve the receiver's DSP
-epoch/history. Capture/receiver changes reset detector history. Legacy modes
+epoch/history. Capture/receiver changes reset detector history. AM, SAM, USB, LSB, CW and CWR
 remain unsquelched; changing into one confirms squelch Off. No RF test or
 calibration is implied by these offline semantics. The scale, presets and FM
 recipe remain subject to maintainer review under RFC #5468.
 
 ## Capture placement and display geometry
 
-FM/FM-N establishment and necessary capture recentering prefer a hardware
-center one quarter of the capture rate above the selected FM carrier. The existing
+AM/SAM, FM/FM-N and CW/CWR establishment and necessary capture recentering prefer a hardware
+center one quarter of the capture rate above the selected carrier. The existing
 receiver NCO translates the unchanged absolute RF to baseband. The requested
 viewport is fitted to the confirmed usable capture. For each slice that
 will be DSP-active, its complete passband and guards must fit; a configured
 slice that cannot fit remains parked at its original RF. The center preference
-keeps converter DC at least 48 kHz from the selected FM carrier (or outside
+keeps converter DC at least 48 kHz from the selected DC-sensitive carrier (or outside
 its guarded passband, whichever is wider) where a legal placement allows it.
-Other receiving FM slices can overlap DC; Radio Health reports that condition.
+Other DC-sensitive receivers can overlap DC; Radio Health reports that condition.
 Legal integer-Hz tuner bounds and the automatic 24 MHz
 direct-sampling boundary still constrain capture movement. DC overlap is
 reported truthfully rather than silently moving a slice or refusing browsing
 solely to keep another slice active. This does not enable librtlsdr offset
 tuning, alter the R82xx guard, erase FFT bins, subtract a signal mean, or notch
-demodulated audio. This FM-specific DC preference does not alter WFM or other
-legacy demodulators. Free-pan membership and parking apply to every configured
+demodulated audio. This DC preference does not alter WFM, USB or LSB. Free-pan membership and parking apply to every configured
 RTL slice.
 
 Ordinary in-window frequency changes keep the existing legal capture, including
@@ -206,7 +209,7 @@ USB writes. A distant Center follows its selected slice with a capture retune;
 other configured slices may park. The transaction fits the selected slice's
 complete guarded passband and requires its RF to center in the real 65536-bin view
 within half a bin plus integer-Hz tolerance. At full width this view requirement
-can leave converter DC on the selected FM carrier when no DC-clear position also
+can leave converter DC on the selected DC-sensitive carrier when no DC-clear position also
 fits. Radio Health reports the accepted overlap. If no legal capture can satisfy
 both the passband and Center view, the request refuses. Exact behavior at the
 tuner RF limits has no dedicated regression yet. Pan requests beyond capture

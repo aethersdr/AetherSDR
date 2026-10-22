@@ -1,5 +1,7 @@
 #include "FlexBackend.h"
 
+#include <QPointer>
+
 namespace AetherSDR {
 namespace {
 bool token(const QString& value)
@@ -197,6 +199,17 @@ ReceiveDispatch FlexBackend::requestTransmitControl(const TransmitControlRequest
         && std::get<QString>(request.value) != QLatin1String("single_tone")
         && std::get<QString>(request.value) != QLatin1String("two_tone")) {
         return ReceiveDispatch::Unsupported;
+    }
+    // A FLEX-6500 on 4.2.20 answers `transmit set vox_enable` with R<seq>|0|
+    // and never repeats vox_enable in a status, so for a caller that must know
+    // the radio agreed, the reply is the only confirmation there is.
+    if (request.answerTicket != 0 && m_answeredSink) {
+        const QPointer<FlexBackend> self(this);
+        const quint64 ticket = request.answerTicket;
+        m_answeredSink(command, [self, ticket](bool applied) {
+            if (self) { emit self->transmitControlAnswered(ticket, applied); }
+        });
+        return ReceiveDispatch::Dispatched;
     }
     send(command);
     return ReceiveDispatch::Dispatched;

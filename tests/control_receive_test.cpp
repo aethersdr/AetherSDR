@@ -646,19 +646,31 @@ void productionCapabilityContracts()
     // build gate #5973 turned on); legacy WFM never does.
     const bool qualifiedWfm = rtl::RtlReceivePipeline::kQualifiedWfmEnabled;
     const auto& rtlFilters = rtlCaps.receiveFilterControl;
-    check(rtlFilters && rtlFilters->modes.size() == (qualifiedWfm ? 3 : 2)
-        && rtlFilters->modes[0].mode == QStringLiteral("FM")
-        && rtlFilters->modes[1].mode == QStringLiteral("FMN")
-        && rtlFilters->modes[0].minimumLowHz == -21600
-        && rtlFilters->modes[1].maximumHighHz == 21600,
-        "RTL adjustable filters are FM and FMN, plus WFM only when qualified");
+    QStringList rtlFilterModes;
+    if (rtlFilters) {
+        for (const auto& filter : rtlFilters->modes) { rtlFilterModes.append(filter.mode); }
+    }
+    QStringList expectedFilterModes{"AM", "SAM", "FM", "FMN", "USB", "LSB", "CW", "CWR"};
+    if (qualifiedWfm) { expectedFilterModes.append(QStringLiteral("WFM")); }
+    const auto rtlFilter = [&](const QString& mode) -> const ReceiveFilterMode* {
+        if (!rtlFilters) { return nullptr; }
+        for (const auto& filter : rtlFilters->modes) {
+            if (filter.mode == mode) { return &filter; }
+        }
+        return nullptr;
+    };
+    const ReceiveFilterMode* fm = rtlFilter(QStringLiteral("FM"));
+    const ReceiveFilterMode* fmn = rtlFilter(QStringLiteral("FMN"));
+    check(rtlFilterModes == expectedFilterModes
+        && fm && fm->minimumLowHz == -21600
+        && fmn && fmn->maximumHighHz == 21600,
+        "RTL adjustable filters are AM/SAM, FM/FMN, SSB and CW, plus WFM only when qualified");
+    const ReceiveFilterMode* wfm = rtlFilter(QStringLiteral("WFM"));
     check(!qualifiedWfm
-        || (rtlFilters && rtlFilters->modes.size() == 3
-            && rtlFilters->modes[2].mode == QStringLiteral("WFM")
-            && rtlFilters->modes[2].minimumLowHz == -100000
-            && rtlFilters->modes[2].maximumHighHz == 100000
-            && rtlFilters->modes[2].minimumWidthHz == 30000
-            && rtlFilters->modes[2].maximumWidthHz == 200000
+        || (wfm && wfm->minimumLowHz == -100000
+            && wfm->maximumHighHz == 100000
+            && wfm->minimumWidthHz == 30000
+            && wfm->maximumWidthHz == 200000
             && rtlCaps.broadcastFmReceive),
         "qualified WFM declares its own filter range and the broadcast-FM controls");
     check(qualifiedWfm || !rtlCaps.broadcastFmReceive,
@@ -777,8 +789,8 @@ void hl2DeclaredModesDriveTheControlPlane()
     // THE REQUEST SIDE OF THE FM DECLARATION, said out loud because it is what
     // the change widens: slice.setMode mode="FM" is accepted here where it was
     // refused "request.out_of_range". Keying is a different list --
-    // receiveOnlyModes -- and hl2_fm_controls_declaration_test pins that FM
-    // and NFM are still on it.
+    // receiveOnlyModes -- and hl2_fm_controls_declaration_test pins whether FM
+    // and NFM are on it for this build.
     expect("USB", "FM", "result", "and FM can be ASKED for, not only sat in");
     // THE ALIAS SPELLINGS ARE REFUSED, and that is the intended shape rather
     // than a gap. "CWU" and "NFM" are not on this list, so a request for one

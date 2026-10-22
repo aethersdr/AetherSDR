@@ -258,6 +258,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.receiveFilterControl = std::nullopt; // demo passband setters only echo state
     caps.receiveAudioControl = std::nullopt; // no independently controlled RX mixer yet
     caps.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    caps.dspParameterReset = std::nullopt;
     caps.receivePanCenterControl = std::nullopt; // spectrum remains anchored to the VFO
     caps.receivePanBandwidthControl = std::nullopt; // fixed synthetic span
     caps.canReboot = false;
@@ -275,6 +276,9 @@ RadioCapabilities SimBackend::capabilities() const
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = familyName();
+    caps.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry}, {PanGeometryComponent::Center}};
+    caps.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Answered,
+        {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
     // The demo cannot key at all (Principle VI), let alone synthesise tones.
     caps.twoToneGenerator = std::nullopt;
     caps.firmwareUpdateSource = std::nullopt;  // synthetic radio; nothing to compare.
@@ -903,6 +907,27 @@ void SimBackend::pushPanIndicesToSource()
 
 bool SimBackend::createPanadapter()
 {
+    return createPanadapterWithId(nullptr);
+}
+
+ReceiveDispatch SimBackend::requestPanLifecycle(const PanLifecycleRequest& request,
+    const PanLifecycleCompletion& completion, const RadioControlFence& current)
+{
+    if (request.action != PanLifecycleAction::Create) {
+        return IRadioBackend::requestPanLifecycle(request, completion, current);
+    }
+    if (current && !current()) { return ReceiveDispatch::Unsupported; }
+    QString id;
+    const bool accepted = createPanadapterWithId(&id);
+    if (completion) {
+        completion({{accepted ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Refused,
+                     accepted ? 0 : -1, {}}, id, {}});
+    }
+    return accepted ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+}
+
+bool SimBackend::createPanadapterWithId(QString* createdId)
+{
     // The seam branch of RadioModel::createPanadapter() lands here (the demo
     // has no m_flexBackend). Mint the pan the way pan 0 was minted: inject
     // the SAME "display pan"/"display waterfall" status shape the synthetic
@@ -923,6 +948,7 @@ bool SimBackend::createPanadapter()
         ++index;
     const QString panId = wirePanIdFor(index);
     const QString wfId  = wireWfIdFor(index);
+    if (createdId) { *createdId = panId; }
 
     // Centered on the current VFO: the demo's spectrum row IS the ±4 kHz
     // audio scene, so every pan views the same antenna and the same span

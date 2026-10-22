@@ -274,7 +274,14 @@ std::vector<float> AsrWorker::toSixteenK(const QVector<float>& monoSamples, int 
     return out;
 }
 
-void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
+bool AsrWorker::inputCurrent() const
+{
+    return m_generation == m_requestedGeneration.load()
+        && (m_source.stream().source == 0 || m_source.current());
+}
+
+void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate,
+                             quint64 generation, const PcmEpochLease& source)
 {
     // Duration of this input chunk; reported as "processed" once the worker has
     // handled it (including any blocking transcription), so the engine can show a
@@ -284,7 +291,9 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
     const double chunkMs = 1000.0 * static_cast<double>(monoSamples.size()) / rate;
 
     [&] {
-    if (m_cancelPending.load(std::memory_order_relaxed)) {
+    if (m_cancelPending.load(std::memory_order_relaxed)
+        || generation != m_requestedGeneration.load()
+        || (source.stream().source != 0 && !source.current())) {
         // Shutting down or ASR was disabled: drop this queued chunk instead of
         // segmenting/blocking-transcribing it. Still falls through to
         // emit processedMs(chunkMs) below so the backlog meter's accounting
@@ -295,6 +304,7 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
         return;
     }
 
+    m_source = source;
     const std::vector<float> pcm16k = toSixteenK(monoSamples, sampleRate);
     if (pcm16k.empty()) {
         return;
@@ -382,8 +392,10 @@ void AsrWorker::clearContext()
 void AsrWorker::decodeSegments(std::vector<AsrSegmenter::ClosedSegment>& segments)
 {
     for (AsrSegmenter::ClosedSegment& seg : segments) {
+        if (!inputCurrent()) { return; }
         QString error;
         const AsrTranscript result = m_backend->transcribe(seg.samples, &error);
+        if (!inputCurrent()) { return; }
         if (!error.isEmpty()) {
             emit errorOccurred(error);
             // A failed decode yields no tail — same as an empty one below: drop
@@ -425,7 +437,8 @@ void AsrWorker::decodeSegments(std::vector<AsrSegmenter::ClosedSegment>& segment
             speaker = m_clusterer.assign(
                 m_embedder->embed(seg.samples.data(), static_cast<int>(seg.samples.size())));
         }
-        emit segmentText(emitText, result.confidence, speaker);
+        if (!inputCurrent()) { return; }
+        emit segmentText(emitText, result.confidence, speaker, m_generation, m_source);
     }
 }
 
@@ -447,8 +460,10 @@ void AsrWorker::markDiscontinuity()
     }
 }
 
-void AsrWorker::reset()
+void AsrWorker::reset(quint64 generation)
 {
+    m_generation = generation;
+    m_source = {};
     m_segmenter.reset();
     // A retune/clear is a new context — don't prime the next decode with the
     // previous QSO's carried prompt (retune is the one boundary where the
@@ -462,8 +477,9 @@ void AsrWorker::reset()
     m_resamplerSrcRate = 0;
 }
 
-void AsrWorker::resumeAfterCancel()
+void AsrWorker::resumeAfterCancel(quint64 generation)
 {
+    if (generation != m_requestedGeneration.load()) { return; }
     // Runs on the worker thread, behind everything restartSession() meant to
     // discard, so clearing here cannot let an old-chain block through.
     m_cancelPending.store(false, std::memory_order_relaxed);
@@ -492,6 +508,7 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
     // Info thread table and in external profilers (#2554); Qt propagates this
     // to the OS thread name when the thread starts.
     m_thread->setObjectName(QStringLiteral("AsrWorker"));
+    qRegisterMetaType<PcmEpochLease>();
     m_worker = new AsrWorker(std::move(factory), segConfig,
                              std::move(speakerEmbedderFactory));
     m_worker->moveToThread(m_thread);
@@ -537,7 +554,10 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
     connect(m_worker, &AsrWorker::speakerModelLoaded, this,
             &AsrEngine::speakerModelLoaded);
     connect(m_worker, &AsrWorker::segmentText, this,
-            [this](const QString& text, float confidence, int speaker) {
+            [this](const QString& text, float confidence, int speaker, quint64 generation,
+                   const PcmEpochLease& source) {
+                if (!m_enabled || generation != m_generation
+                    || (source.stream().source != 0 && !source.current())) { return; }
                 // A queued worker toggle can be behind an in-flight decode. Mask
                 // its late result on the main side so the latest UI intent never
                 // appends a stale [A]/[B] label.
@@ -630,6 +650,24 @@ void AsrEngine::setSpeakerLabelingEnabled(bool on)
 
 void AsrEngine::pushAudio(const QVector<float>& monoSamples, int sampleRate)
 {
+    pushAudioInput(monoSamples, sampleRate, {});
+}
+
+void AsrEngine::pushNativePcm(const PcmFrame& frame)
+{
+    if (!frame.current() || frame.stream().purpose != PcmPurpose::Slice) { return; }
+    const int channels = frame.stream().format.channels();
+    QVector<float> mono(frame.frameCount());
+    for (qsizetype i = 0; i < frame.frameCount(); ++i) {
+        mono[i] = frame.samples()[i * channels];
+        if (channels == 2) { mono[i] = mono[i] * 0.5f + frame.samples()[i * channels + 1] * 0.5f; }
+        mono[i] = std::clamp(mono[i], -1.0f, 1.0f);
+    }
+    pushAudioInput(mono, frame.stream().format.sampleRateHz, frame.epochLease());
+}
+
+void AsrEngine::pushAudioInput(const QVector<float>& monoSamples, int sampleRate, const PcmEpochLease& source)
+{
     if (!m_enabled || monoSamples.isEmpty()) {
         return;
     }
@@ -673,7 +711,7 @@ void AsrEngine::pushAudio(const QVector<float>& monoSamples, int sampleRate)
 
     m_pushedMs += chunkMs;
     updateBacklog();
-    emit requestProcess(monoSamples, sampleRate);
+    emit requestProcess(monoSamples, sampleRate, m_generation, source);
 }
 
 void AsrEngine::updateBacklog()
@@ -733,6 +771,8 @@ void AsrEngine::setContextCarryEnabled(bool on)
 
 void AsrEngine::reset()
 {
+    ++m_generation;
+    if (m_worker) { m_worker->setInputGeneration(m_generation); }
     // A retune/clear drops buffered work; zero the backlog meter so it doesn't
     // carry a stale lag across the reset. Whatever is still queued on the worker
     // will be reported as processed later — remember it so those reports don't
@@ -747,7 +787,7 @@ void AsrEngine::reset()
     m_droppedMs = 0.0;
     m_droppedAtEntryMs = 0.0;
     updateDropped();
-    emit requestReset();
+    emit requestReset(m_generation);
 }
 
 void AsrEngine::restartSession()
@@ -760,7 +800,7 @@ void AsrEngine::restartSession()
     reset();   // queued behind them
     // Queued behind the reset, so the flag clears only once the old-chain
     // backlog has been discarded.
-    emit requestResumeAfterCancel();
+    emit requestResumeAfterCancel(m_generation);
 }
 
 } // namespace AetherSDR

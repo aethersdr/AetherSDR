@@ -102,7 +102,9 @@ bool contract(const QByteArray& validDirectory)
 
     QTemporaryDir directory;
     qputenv("AETHER_DEEPFIST_MODEL_DIR", directory.path().toUtf8());
-    DeepFistCwModel model;
+    // No download source: a missing or corrupt bundle reports unavailable
+    // without the test reaching the network.
+    DeepFistCwModel model(directory.path(), QString{}, nullptr);
     QString text;
     QObject::connect(&model, &DeepFistCwModel::textDecoded, &model, [&](const QString& s) { text += s; });
     model.start();

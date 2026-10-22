@@ -327,6 +327,7 @@ private:
     QPointer<PanadapterModel> m_panadapter;
     QMetaObject::Connection m_panRxAntennaConnection;
     QMetaObject::Connection m_panLoopConnection;
+    QMetaObject::Connection m_panNoiseFloorRangeConnection;
     SpectrumOverlayWheelGuard* m_wheelGuard{nullptr};
     void setKiwiWaterfallControlMode(bool kiwiMode);
     void toggle();
@@ -348,6 +349,8 @@ private:
     void syncAntPanel();
     void wirePanadapterRxAntenna();
     void refreshAntennaCombo();
+    void syncNoiseFloorRange();
+    void requestNoiseFloorRange();
     void setRxAntennaComboToken(const QString& token);
     QString currentRxAntennaToken() const;
     QString antennaComboLabel(const QString& token, const QStringList& options) const;
@@ -530,6 +533,8 @@ private:
     QSlider*     m_floorSlider{nullptr};
     QLabel*      m_floorLabel{nullptr};
     QPushButton* m_floorEnableBtn{nullptr};
+    QSlider*     m_floorRangeSlider{nullptr};   // half-dB steps
+    QLabel*      m_floorRangeLabel{nullptr};
     QPushButton* m_cloneToAllPansBtn{nullptr};
 
     QComboBox*   m_freqGridSpacingCmb{nullptr};

@@ -33,6 +33,7 @@
 #include "SpectrumPreviewLogic.h"
 #include "WaterfallHistoryBuffer.h"
 #include "WaterfallTimeMarkers.h"
+#include "WaterfallTimeScaleLock.h"
 
 class QVariantAnimation;
 class QSoundEffect;
@@ -344,7 +345,7 @@ public:
     // at or below pass-1 mean to exclude signal peaks).  An EMA (α=0.1)
     // smooths frame-to-frame variation.  Emits autoSquelchLevelSuggested()
     // with a squelch level just above the smoothed floor.
-    void setAutoSquelchEnable(bool on);
+    void setAutoSquelchEnable(bool on, bool showFloor = true);
 
     // Margin above the EMA-smoothed noise floor for auto-squelch suggestion
     // (5-20 dB, default 10).  User-tunable via Display > SQL Margin.
@@ -499,14 +500,21 @@ public:
     // pair states its reason in the tooltip (shown on a disabled button by
     // eventFilter()) and in the accessible description, which is what a
     // screen reader announces; the live pair says the span is shared.
+    // `spanFixed` dims the pair on every pane: the backend cannot change span.
     // `live = true, radioWide = false` is the per-pan default and restores
     // exactly what the constructor built: enabled, no tooltip, no description.
-    void setSpanControlPlacement(bool live, bool radioWide)
+    void setSpanControlPlacement(bool live, bool radioWide, bool spanFixed = false)
     {
         QString outTip;
         QString inTip;
         QString desc;
-        if (radioWide && live) {
+        if (spanFixed) {
+            live = false;
+            desc = tr("Span buttons unavailable: this radio's span is fixed, so zoom "
+                      "cannot change it.");
+            outTip = desc;
+            inTip = desc;
+        } else if (radioWide && live) {
             outTip = tr("Zoom out. The span is shared: this changes every panadapter on this radio.");
             inTip = tr("Zoom in. The span is shared: this changes every panadapter on this radio.");
             desc = tr("This radio has one span for all panadapters, so this control changes every panadapter.");
@@ -518,15 +526,18 @@ public:
             outTip = desc;
             inTip = desc;
         }
+        // Re-derived often; an unchanged description is not re-announced.
         if (m_zoomOutBtn) {
             m_zoomOutBtn->setEnabled(live);
             m_zoomOutBtn->setToolTip(outTip);
-            m_zoomOutBtn->setAccessibleDescription(desc);
+            if (m_zoomOutBtn->accessibleDescription() != desc)
+                m_zoomOutBtn->setAccessibleDescription(desc);
         }
         if (m_zoomInBtn) {
             m_zoomInBtn->setEnabled(live);
             m_zoomInBtn->setToolTip(inTip);
-            m_zoomInBtn->setAccessibleDescription(desc);
+            if (m_zoomInBtn->accessibleDescription() != desc)
+                m_zoomInBtn->setAccessibleDescription(desc);
         }
     }
 
@@ -994,6 +1005,7 @@ signals:
     // Emitted when auto-squelch computes a new suggested level (0-100 radio units).
     // Connect to SliceModel::setSquelch and setSquelchLine to apply.
     void autoSquelchLevelSuggested(int level);
+    void autoSquelchNoiseFloorChanged(float floor);
 
     // Emitted when user clicks on an inactive slice marker.
     void sliceClicked(int sliceId);
@@ -1737,6 +1749,7 @@ private:
     bool  m_kiwiSdrSquelchMeterFloorValid{false};
     QVector<float> m_kiwiSdrSquelchMeterSamples;
     QTimer* m_squelchLineHideTimer{nullptr}; // auto-hides yellow line 3 s after enable/adjust (manual SQL only)
+    bool  m_autoSquelchFloorVisible{true};
     bool  m_autoSquelchEnabled{false};
     float m_sqlNoiseFloorDbm{-999.0f};  // auto-squelch own two-pass trimmed-mean EWMA
     // dBm above noise floor for auto-squelch suggestion (5-20, default 10)
@@ -2172,11 +2185,14 @@ private:
     // corrected from real appended-row timestamps once the current rate has
     // enough samples.  Per-rate measurements are cached so later drags can use
     // the observed cadence immediately without re-jittering the visible scale.
+    // The visible value is locked against per-row jitter and re-locked only
+    // when the estimate has settled somewhere else (WaterfallTimeScaleLock.h).
     float    m_wfMsPerRow{100.0f};
     quint32  m_wfPrevTimecode{0};      // previous tile timecode (frame counter)
     qint64   m_wfPrevTimecodeMs{0};    // wall-clock time of previous timecode
     int      m_wfCalibrationCount{0};  // tiles measured so far
     bool     m_wfTimeScaleLocked{false};
+    int      m_wfTimeScaleDriftSamples{0}; // consecutive settled-elsewhere samples
     bool     m_wfHasMeasuredMsPerRow{false};
     int      m_wfLastMeasuredLineDurationMs{100};
     float    m_wfLastMeasuredMsPerRow{100.0f};

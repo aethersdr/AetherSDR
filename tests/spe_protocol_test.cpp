@@ -220,6 +220,12 @@ int main()
     report("powerLevelName expands L/M/H",
            powerLevelName(u'L') == "LOW" && powerLevelName(u'M') == "MID"
                && powerLevelName(u'H') == "HIGH");
+    report("powerLevelName reads HALF/FULL on the 1K-FA, LOW/HIGH elsewhere",
+           powerLevelName(u'L', modelSpec("10K")) == "HALF"
+               && powerLevelName(u'H', modelSpec("10K")) == "FULL"
+               && powerLevelName(u'L', modelSpec("15K")) == "LOW"
+               && powerLevelName(u'M', modelSpec("15K")) == "MID"
+               && powerLevelName(QChar(), modelSpec("10K")).isEmpty());
 
     // ── Per-model display scaling.
     const auto& s15 = modelSpec("15K");
@@ -235,7 +241,17 @@ int main()
            modelSpec("13K").displayName == "1.3K-FA");
     report("an unknown ID falls back to the hardware-validated 1.5K-FA entry",
            modelSpec("99K").displayName == "1.5K-FA");
-    report("modelIds() lists all three documented models", modelIds().size() == 3);
+    report("modelIds() lists the three documented models plus the original 1K-FA",
+           modelIds().size() == 4);
+    report("the original 1K-FA row: no ATU SWR, no LCD mirror, ON holds DTR",
+           modelSpec("10K").displayName == "1K-FA" && !modelSpec("10K").reportsAtuSwr
+               && !modelSpec("10K").hasLcdMirror && modelSpec("10K").powerOnHoldsDtr);
+    report("the newer family keeps ATU SWR and LCD mirror, ON is a pulse",
+           modelSpec("15K").reportsAtuSwr && modelSpec("15K").hasLcdMirror
+               && !modelSpec("15K").powerOnHoldsDtr);
+    report("1K-FA rated output: FULL 1000 W, HALF 500 W",
+           levelNominalW(modelSpec("10K"), u'H') == 1000.0f
+               && levelNominalW(modelSpec("10K"), u'L') == 500.0f);
     report("per-level nominals: 1.5K-FA LOW/MID/HIGH = 500/1000/1500 "
            "(hardware-validated — the reference app's bar rescaled to these)",
            levelNominalW(s15, u'L') == 500.0f && levelNominalW(s15, u'M') == 1000.0f

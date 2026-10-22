@@ -5,6 +5,7 @@
 
 #include <QObject>
 #include <QHash>
+#include <QSet>
 #include <QMap>
 #include <QString>
 #include <QStringList>
@@ -123,6 +124,12 @@ public:
     bool    companderOn()           const { return m_companderOn; }
     int     companderLevel()        const { return m_companderLevel; }
     bool    daxOn()                 const { return m_daxOn; }
+    // `transmit dax` commands sent but not yet answered. Until the radio's
+    // reply lands, a status for an EARLIER command can still arrive and put
+    // daxOn() back to a value already superseded; daxRequested() is what the
+    // newest command asked for (#6593 review).
+    bool    daxSettled()            const { return m_pendingDaxAnswers.isEmpty(); }
+    bool    daxRequested()          const { return m_daxRequested; }
     bool    sbMonitor()             const { return m_sbMonitor; }
     int     monGainSb()             const { return m_monGainSb; }
 
@@ -208,6 +215,18 @@ public:
     bool    apdEnabled()        const { return m_apdEnabled; }
     bool    apdConfigurable()   const { return m_apdConfigurable; }
     bool    apdEqualizerActive()const { return m_apdEqActive; }
+    // Unset until the radio reports a lifecycle state (SmartSDR 4.3+).
+    std::optional<ApdLifecycleState> apdLifecycleState() const { return m_apdLifecycle; }
+    static QString apdLifecycleStateName(ApdLifecycleState state);
+
+    // The transmit slice an equalizer status is matched against. RadioModel
+    // supplies it; without one, scoped equalizer statuses never apply.
+    struct ApdTxSlice {
+        QString txAntenna;
+        double  frequencyMhz{0.0};
+    };
+    using ApdTxSliceResolver = std::function<std::optional<ApdTxSlice>()>;
+    void setApdTxSliceResolver(ApdTxSliceResolver resolver) { m_apdTxSliceResolver = std::move(resolver); }
 
     // External APD per-TX-antenna sampler-port assignment (SmartSDR 4.2.18+).
     struct ApdSampler {
@@ -230,6 +249,9 @@ public:
     QString     activeProfile()     const { return m_activeProfile; }
     QStringList micProfileList()    const { return m_micProfileList; }
     QString     activeMicProfile()  const { return m_activeMicProfile; }
+    QStringList cwProfileList()     const { return m_cwProfileList; }
+    QString     activeCwProfile()   const { return m_activeCwProfile; }
+    bool        cwProfileUnsaved()  const { return m_cwProfileUnsaved; }
     QStringList micInputList()      const { return m_micInputList; }
 
     // Apply a normalized, typed transmit delta from the backend
@@ -241,6 +263,9 @@ public:
     void setActiveProfile(const QString& profile);
     void setMicProfileList(const QStringList& profiles);
     void setActiveMicProfile(const QString& profile);
+    void setCwProfileList(const QStringList& profiles);
+    void setActiveCwProfile(const QString& profile);
+    void setCwProfileUnsaved(bool unsaved);
     void setMicInputList(const QStringList& inputs);
 
     // PTT request coordinator (#2262) — single entry point for "user
@@ -402,6 +427,34 @@ public:
 
     // ── VOX commands ────────────────────────────────────────────────────────
     void setVoxEnable(bool on);
+    // Ask the radio to change VOX and report what it answered, rather than
+    // assuming it agreed. A FLEX-6500 on 4.2.20 answers `transmit set
+    // vox_enable` with R<seq>|0| in ~30 ms and then never repeats vox_enable in
+    // a transmit status, so the reply is the only confirmation there is. No
+    // optimistic write: the model changes only when the radio says it applied
+    // the request, and only if no later VOX change superseded it. Returns the
+    // ticket voxEnableAnswered() will carry, or 0 when nothing was asked (off
+    // the owner thread). For a caller that must not act until VOX really has
+    // changed; a control that only reflects an operator click wants
+    // setVoxEnable().
+    quint64 requestVoxEnable(bool on);
+    // Changes whenever VOX is asked to change, by anyone, and when a session
+    // ends. A caller that changed VOX on the operator's behalf compares it
+    // before putting VOX back, so a change the operator made since wins.
+    // Whether voxEnable() is what the radio has said — in a status, or in its
+    // answer to requestVoxEnable() — rather than what was last asked for.
+    // setVoxEnable() is optimistic: it writes the model at once and the radio
+    // may answer late, or refuse, and a FLEX-6500 never repeats vox_enable in
+    // a status, so a caller that must know VOX is really off (recording) asks
+    // the radio again while this is false.
+    bool voxStateConfirmed() const { return !m_voxUnconfirmed; }
+    quint64 voxIntentMark() const
+    {
+        return m_controlIntentRevisions[static_cast<size_t>(TransmitControlRequest::Field::VoxEnabled)];
+    }
+    // RadioModel: the backend's (or RadioModel's own) answer to a request this
+    // model sent with a ticket. Unknown and repeated tickets are ignored.
+    void handleControlAnswer(quint64 ticket, bool applied);
     void setVoxLevel(int level);
     void setVoxDelay(int delay);
     void setMicBoost(bool on);
@@ -417,6 +470,9 @@ public:
     // ── CW commands ─────────────────────────────────────────────────────────
     void setCwSpeed(int wpm);
     void setCwPitch(int hz);
+    // Receive-only engines acknowledge pitch after their DSP bank is adopted.
+    void setReceiveCwPitchConfirmation(bool confirmed) { m_confirmReceiveCwPitch = confirmed; }
+    bool confirmsReceiveCwPitch() const { return m_confirmReceiveCwPitch; }
     void setCwBreakIn(bool on);
     void setCwDelay(int ms);
     void setCwSidetone(bool on);
@@ -440,6 +496,12 @@ public:
 
 signals:
     void stateChanged();
+    // The answer to requestVoxEnable(): which request, what it asked for, and
+    // whether the radio applied it. current is false when a VOX change was
+    // asked for after it (an operator click, another request, a session
+    // ending): the radio may then have applied this one and moved on, so the
+    // answer no longer says what VOX is now.
+    void voxEnableAnswered(quint64 ticket, bool on, bool applied, bool current);
     // (rfPowerChanged is declared once below — main already has it for the
     // external-surface mirror path; backends that set drive through the seam
     // reuse that same signal rather than a duplicate. #4449 recovery.)
@@ -466,6 +528,10 @@ signals:
     void profileListChanged();
     void micStateChanged();
     void micProfileListChanged();
+    // CW profile list or active name changed.
+    void cwProfilesChanged();
+    // The radio's unsaved-changes flag for the active CW profile changed.
+    void cwProfileUnsavedChanged(bool unsaved);
     void micInputListChanged();
     void phoneStateChanged();       // VOX or CW property changed
     // Fires only when txFilterLow / txFilterHigh actually change.  Use this
@@ -547,6 +613,7 @@ signals:
 
 private:
     friend class RadioModel;
+    void resetDaxSessionState();
     auto captureControlIntent(TransmitControlRequest::Field field)
     {
         const QPointer<TransmitModel> alive(this);
@@ -557,6 +624,16 @@ private:
     }
     bool refuseControlOffThread() const;
     std::array<quint64, static_cast<size_t>(TransmitControlRequest::Field::Count)> m_controlIntentRevisions{};
+    // requestVoxEnable() tickets still waiting on an answer, with what each
+    // asked for and the VOX intent revision it was issued at.
+    struct PendingVoxAnswer { bool on; quint64 revision; };
+    QHash<quint64, PendingVoxAnswer> m_pendingVoxAnswers;
+    // setDax() tickets still waiting on an answer; see daxSettled().
+    QSet<quint64> m_pendingDaxAnswers;
+    bool m_daxRequested{false};
+    quint64 m_lastAnswerTicket{0};
+    // See voxStateConfirmed(). Unconfirmed until the radio first reports VOX.
+    bool m_voxUnconfirmed{true};
     static ATUStatus parseAtuTuneStatus(const QString& s);
     bool isPhoneModeForQuindar() const;
     bool runPttPreflight(PttSource source, bool resyncMoxOnBlock = true);
@@ -583,6 +660,9 @@ private:
     bool m_apdEnabled{false};
     bool m_apdConfigurable{false};
     bool m_apdEqActive{false};
+    std::optional<ApdLifecycleState> m_apdLifecycle;
+    ApdTxSliceResolver m_apdTxSliceResolver;
+    bool apdStatusMatchesTxSlice(const TransmitDelta& d) const;
     QHash<QString, ApdSampler> m_apdSamplers;  // keyed by ANT1/ANT2/XVTA/XVTB
 
     // Transmit state
@@ -631,6 +711,7 @@ private:
 
     // CW state
     int  m_cwSpeed{20};       // 5–100 WPM
+    bool    m_confirmReceiveCwPitch{false};
     int  m_cwPitch{600};      // 100–6000 Hz
     bool m_cwBreakIn{false};
     int  m_cwDelay{500};      // 0–2000 ms
@@ -683,6 +764,11 @@ private:
     QStringList m_micProfileList;
     QString     m_activeMicProfile;
     QStringList m_micInputList;
+
+    // CW profiles (SmartSDR 4.3.16+)
+    QStringList m_cwProfileList;
+    QString     m_activeCwProfile;
+    bool        m_cwProfileUnsaved{false};
 };
 
 } // namespace AetherSDR

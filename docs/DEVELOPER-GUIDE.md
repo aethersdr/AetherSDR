@@ -253,3 +253,5 @@ If your AI agent hits an issue requiring maintainer coordination, open a
 GitHub issue with: your analysis, relevant log output, code references,
 and proposed fix. The maintainer's Claude instance monitors issues and
 will respond.
+
+RTL receiver signal contracts: [SSB/CW](rtl-ssb-cw.md) and [AM/SAM](rtl-am-sam.md) describe native RF extraction, accepted controls and offline validation.

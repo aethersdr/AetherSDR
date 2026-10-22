@@ -18,7 +18,7 @@ class HidEncoderManager;
 
 // RC-28 Button Mapping dialog — configure TX bar PTT mode, F1/F2 press and
 // hold actions, and view live device info + button activity.
-// Opened from Settings → Icom RC-28 Remote Encoder...   (#3323)
+// Opened from Settings → Controllers → Icom RC-28 Remote Encoder...   (#3323)
 class RC28MappingDialog : public PersistentDialog {
     Q_OBJECT
 

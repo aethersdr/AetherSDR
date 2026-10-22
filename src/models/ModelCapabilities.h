@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QList>
 
 namespace AetherSDR {
 
@@ -40,6 +41,9 @@ struct ModelCapabilities {
     // FlexLib's DEFAULT entry (SliceList {A,B}); the radio's live "slices=N"
     // status overrides this initial estimate once connected.
     int maxSlices{2};
+    // FlexLib v4.2.20 ModelInfo.DaxIqSampleRates: unknown models have no rates.
+    int maxDaxIqRateHz{0};
+    QList<int> daxIqSampleRates() const;
 
     // Extended firmware DSP filters (NRL / NRS / RNN / NRF) exist on the
     // BigBend and DragonFire platforms.  Unknown (pre-discovery) and the

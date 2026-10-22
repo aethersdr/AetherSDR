@@ -48,6 +48,23 @@ AetherSDR does not download the installer for you.
    - an already extracted **`.ssdr`** firmware file.
 3. AetherSDR extracts the firmware for your radio's model family and shows its progress. When staging finishes, **Upload Firmware** becomes available.
 
+For an **`.msi`** installer, AetherSDR identifies the firmware by the installer's
+recorded filename and cabinet metadata. It checks that the extracted file's size
+matches that record. A missing or ambiguous firmware entry stops staging.
+The staged file keeps the installer's firmware filename, including its build
+number when present; the upload confirmation and log use that same name.
+The firmware log records the staged filename, byte count, and MD5 for diagnostics.
+For FLEX-8000 and Aurora radios, a note below the staged filename explains:
+"FLEX-8000 and Aurora radios use FLEX-9600 firmware."
+An already extracted **`.ssdr`** file whose name identifies the other firmware
+family is rejected instead of being renamed for your radio.
+Manually selected **`.ssdr`** files keep their original filename. If the name
+contains no version, the staged version is reported as `unknown`.
+
+Delete firmware files staged by earlier AetherSDR versions and select the
+original installer again. Those cached **`.ssdr`** files can contain firmware
+for a different family despite their filename; renaming them cannot fix it.
+
 ### Upload
 
 1. Click **Upload Firmware**.
@@ -74,10 +91,18 @@ Closing Radio Setup during an upload asks for confirmation first. Closing it sto
 
 | File | Models |
 |------|--------|
-| `FLEX-6x00_vX.Y.Z.ssdr` | All consumer radios (6000, 8000, Aurora series) |
-| `FLEX-9600_vX.Y.Z.ssdr` | Government only (FLEX-9600 / DragonFire) |
+| `FLEX-6x00_vX.Y.Z[.build].ssdr` | FLEX-6000 series (Microburst and DeepEddy) |
+| `FLEX-9600_vX.Y.Z[.build].ssdr` | FLEX-8000 and Aurora series (BigBend), in SmartSDR 4.2/4.3 MSI installers |
 
-All consumer FlexRadios (Microburst, DeepEddy, BigBend, Aurora platforms) use the same `FLEX-6x00` firmware.
+The MSI's `FLEX-9600` filename also identifies the firmware used by FLEX-8000
+and Aurora radios. Choose firmware for the radio's hardware platform; neither
+file size nor a renamed filename establishes compatibility. FlexRadio's
+[update instructions](https://helpdesk.flexradio.com/hc/en-us/articles/50209943129371-Upgrading-your-FLEX-6000-8000-Aurora-Radio-using-SmartSDR-for-Mac)
+distinguish FLEX-6000 and FLEX-8000 firmware.
+
+Automatic staging stops for an unknown model or an unverified firmware family,
+including RT-2122 (DragonFire). For commercial radios, obtain the appropriate
+software from FlexRadio; its public SmartSDR download is for amateur models.
 
 ### Firmware compatibility
 
@@ -88,6 +113,18 @@ The active test target is FLEX-8600 firmware 4.2.18 (SmartSDR protocol v1.4.0.0)
 - The transfer reaches 100%, but the radio does not apply the update or reboot, and can report that the installation failed ([#5572](https://github.com/aethersdr/AetherSDR/issues/5572)).
 
 ## Troubleshooting
+
+### The installer cannot be staged
+
+The installer may be incomplete, use unsupported metadata, or lack an unambiguous
+firmware entry for your radio.
+
+1. Download the original SmartSDR installer from FlexRadio again.
+2. Select the installer with **Select Installer...**.
+3. If staging still fails, use SmartSDR for Windows to extract the appropriate
+   **`.ssdr`** file and select that file instead. In SmartSDR 4.2/4.3 MSI
+   installers, FLEX-6000 radios use **`FLEX-6x00`**, while FLEX-8000 and Aurora
+   radios use **`FLEX-9600`**. Renaming a file does not change its compatibility.
 
 ### The Firmware Update group is missing
 

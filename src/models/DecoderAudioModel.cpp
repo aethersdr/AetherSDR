@@ -47,6 +47,7 @@ struct DecoderAudioModel::Impl {
         case Consumer::Cw: return "CW";
         case Consumer::Rtty: return "RTTY";
         case Consumer::Ax25: return "AX.25";
+        case Consumer::NativeAsr: return "ASR";
         }
         return "Decoder";
     }
@@ -83,6 +84,7 @@ struct DecoderAudioModel::Impl {
         case Consumer::Cw: return PanadapterStream::DaxConsumer::CwDecoder;
         case Consumer::Rtty: return PanadapterStream::DaxConsumer::RttyDecoder;
         case Consumer::Ax25: return PanadapterStream::DaxConsumer::Ax25Decoder;
+        case Consumer::NativeAsr: break; // Native-only consumers never acquire DAX.
         }
         Q_UNREACHABLE();
     }
@@ -141,7 +143,7 @@ struct DecoderAudioModel::Impl {
     void drain(const std::shared_ptr<Inbox>& box)
     {
         if (box != inbox || !enabled || !radio || !radio->isConnected()
-            || !slice || radio->slice(slice->sliceId()) != slice) {
+            || !slice || !slice->inCapture() || radio->slice(slice->sliceId()) != slice) {
             // Leaving `scheduled` set on a box that is still the live inbox
             // stops enqueue() ever posting another drain: the route would keep
             // reporting Bound while every later frame piled up to the overflow
@@ -214,9 +216,11 @@ struct DecoderAudioModel::Impl {
         if (!guard || revision != bindingRevision) {
             return;
         }
+        const bool nativeOnly = consumer == Consumer::NativeAsr;
         const bool live = enabled && radio && radio->isConnected() && slice
-            && radio->slice(slice->sliceId()) == slice;
-        const bool dax = live && radio->hasDaxStreams();
+            && radio->slice(slice->sliceId()) == slice && slice->inCapture()
+            && (!nativeOnly || radio->backendCapabilities().receiveAudioExport.has_value());
+        const bool dax = live && !nativeOnly && radio->hasDaxStreams();
         const int channel = dax ? slice->daxChannel() : 0;
         const int wantedHold = channel >= 1 && channel <= 8 ? channel : 0;
         bool acquired = true;
@@ -340,6 +344,7 @@ void DecoderAudioModel::setSlice(SliceModel* slice)
         auto reset = [this] { m_impl->rebind(); };
         d.sliceConnections.append(connect(slice, &SliceModel::frequencyChanged, this, reset));
         d.sliceConnections.append(connect(slice, &SliceModel::modeChanged, this, reset));
+        d.sliceConnections.append(connect(slice, &SliceModel::inCaptureChanged, this, reset));
         d.sliceConnections.append(connect(slice, &SliceModel::daxChannelChanged, this, reset));
         d.sliceConnections.append(connect(slice, &QObject::destroyed, this, [this] {
             m_impl->slice = nullptr;

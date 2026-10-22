@@ -58,7 +58,7 @@ The HL2 IO board's amplifier control follows the band.
 
 1. Let the radio warm up for 15 minutes.
 2. Pick a **Reference:** (WWV/WWVH 2.5–25 MHz, CHU 3.330 / 7.850 / 14.670 MHz, or **GPSDO / signal generator (custom)** with its frequency). Attenuate a GPSDO by at least 30 dB.
-3. Zero-beat the reference with normal tuning, then click **Calibrate from current VFO**.
+3. Zero-beat the reference with normal tuning, then click **Calibrate from Current VFO**.
 4. Fine-tune with **Trim:** − / + (steps of 0.1, 1 or 10 Hz at 10 MHz), or type the **Error:** in ppb (±50,000 ppb). **Reset** returns to 0.
 
 One value corrects every band, receive and transmit. It is stored per radio (by MAC), so a second HL2 does not inherit it. While **External 10 MHz reference at CL1** is on, the manual calibration is zeroed and disabled.
@@ -128,12 +128,16 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 
 - **SSB voice** uses WDSP's TXA modulator. The EQ, PROC, TX low/high cut, eSSB, ALC and compression gauges act on the HL2.
 - **The Mic Level slider is the transmit level.** The ALC only ever reduces. The Phone panel shows the **ALC Gain** the radio reports.
+- **The ALC gauge shows the audio peak after the ALC, before the modulator.** It sits at the ALC target while the ALC is reducing. It is not the transmitted envelope, which can stand above it when the audio is limited or compressed.
 - **Data:** WSJT-X and similar programs work over the [TCI Server](./tci-server.md). Their power slider changes RF output, and the speech ALC does not raise client audio. The WSPR beacon defaults to −3 dBFS and is not moved by the mic slider.
 - **CW** is keyed with host-timed edges, with sidetone, at the same carrier level as TUNE. CW settings are restored after a restart.
+- **A key or PTT on the radio's own jack** shows as transmit and mutes the receiver for as long as the radio reports it. AetherSDR does not key or modulate because of it.
 - **TUNE** keys at **Tune Power**, and moving Tune Power during a tune changes the carrier. Tune Power is remembered per band.
+- **Show TX in Waterfall:** **Settings → Radio Setup... → Transmit → Show TX in Waterfall** lets the waterfall draw spectrum rows over the TX passband while transmitting. It starts off, and AetherSDR remembers your choice separately for each HL2 across reconnects and restarts. The control does not key the radio.
 - **Max Power:** **Settings → Radio Setup... → Transmit → Max Power** shows the HL2's rated watts, read-only. The power gauge uses a 5 W scale, and forward power reads near PEP on speech.
 - **RF power slider:** the radio has 16 drive steps, so several slider positions do nothing and then one position adds about 1.25 dB.
-- **Modes that refuse to transmit:** AM, SAM, DSB, FM, NFM, WBFM and DRM refuse MOX and TUNE, because the HL2 modulator is SSB only. A mode the HL2 cannot demodulate is refused everywhere.
+- **AM, DSB and FM** transmit through the same TXA modulator as SSB. FM is simplex and carries no CTCSS tone.
+- **Modes that refuse to transmit:** SAM, WBFM and DRM refuse MOX and TUNE. SAM is a receive detector choice; wide FM has no transmit modulator, and DRM has no encoder. A mode the HL2 cannot demodulate is refused everywhere.
 - **TX drive and LNA gain** are remembered per band.
 
 > **Upgrading from an older version:** CW keys at the same carrier level as TUNE, about 6 dB (four times the power) above earlier versions at the same RF power setting. Check your RF power before you key CW into an amplifier or a low-power load.
@@ -159,8 +163,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 
 ## Known issues
 
-- Graphic EQ band values are lost when you restart AetherSDR ([#5611](https://github.com/aethersdr/AetherSDR/issues/5611)).
-- Keying with the HL2's hardware PTT jack does not show as transmit in AetherSDR, and does not carry host audio ([#5998](https://github.com/aethersdr/AetherSDR/issues/5998)).
+- Keying with the HL2's hardware PTT jack shows as transmit in AetherSDR and mutes the receiver, but does not carry host audio: only the radio is keyed, and AetherSDR sends no modulation ([#5998](https://github.com/aethersdr/AetherSDR/issues/5998)).
 - Each over starts with about 100 ms of keyed silence before your audio is transmitted ([#6052](https://github.com/aethersdr/AetherSDR/issues/6052)).
 - Changing CW break-in or its delay shows a "nothing was sent to the radio" notice, although both settings take effect ([#6153](https://github.com/aethersdr/AetherSDR/issues/6153)).
 
@@ -195,9 +198,9 @@ The receivers share one sample rate, and only one pane controls it.
 
 ### MOX or TUNE is refused
 
-The HL2 modulator is SSB only, so AM, SAM, DSB, FM, NFM, WBFM and DRM refuse to transmit.
+SAM is receive-only. WBFM has no transmit modulator, and DRM has no encoder, so those modes also refuse to transmit.
 
-1. Switch the slice to USB, LSB, CW or a data mode before keying.
+1. Switch the slice to USB, LSB, AM, DSB, FM, CW or a data mode before keying.
 
 ### The Calibration controls are disabled
 

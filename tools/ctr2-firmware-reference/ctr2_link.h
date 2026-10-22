@@ -89,6 +89,71 @@ extern "C" {
 #define CTR2_EXT_CW_TEXT        0x43u
 #define CTR2_CW_TEXT_MAX        32u
 
+/* FIRMWARE, both directions: replaces the device's application over the
+ * link. A session opens in place of the host's READY: after the device
+ * answers HELLO, the host resets its counter and sends FIRMWARE BEGIN. No
+ * radio connection opens; the device takes that message's counter as the
+ * start of the sequence (ctr2_rx_start) and sends only FIRMWARE messages
+ * until the session ends (CLOSED, HELLO, or its own restart). Payload
+ * [op][...], integers big-endian:
+ *   host BEGIN    [0x01][image size u32][SHA-256 of the image, 32 bytes]
+ *   host DATA     [0x02][offset u32][1..CTR2_FW_CHUNK image bytes], in order
+ *   host END      [0x03]: verify, select the new image, restart into it
+ *   host ABORT    [0x04]
+ *   host SWITCH   [0x05]: restart into the device's other firmware (the
+ *                 maker's own, beside this one), keeping both; BAD_STATE if
+ *                 there is none
+ *   host BOOTLOADER [0x06]: restart into the chip's ROM download mode, for
+ *                 an install there (a device without one answers BAD_MESSAGE)
+ *   device STATUS [0x81][op answered][CTR2_FW_* status][value u32]
+ * Every host message gets one STATUS; for DATA, value is the bytes stored so
+ * far. After END answers OK the device leaves the bus and restarts on the
+ * new image, which must complete a link (answer HELLO) before it keeps
+ * itself: a device that resets before then returns to its previous image. */
+#define CTR2_EXT_FIRMWARE       0x44u
+#define CTR2_FW_CHUNK           512u
+#define CTR2_FW_BEGIN           0x01u
+#define CTR2_FW_DATA            0x02u
+#define CTR2_FW_END             0x03u
+#define CTR2_FW_ABORT           0x04u
+#define CTR2_FW_SWITCH          0x05u
+#define CTR2_FW_BOOTLOADER      0x06u   /* restart into the chip's ROM download mode */
+#define CTR2_FW_STATUS          0x81u
+#define CTR2_FW_OK              0x00u
+#define CTR2_FW_BAD_STATE       0x01u   /* no session, or a second BEGIN */
+#define CTR2_FW_BAD_OFFSET      0x02u   /* DATA not at the next byte */
+#define CTR2_FW_TOO_LARGE       0x03u   /* image larger than the device's slot */
+#define CTR2_FW_FLASH_ERROR     0x04u
+#define CTR2_FW_REJECTED        0x05u   /* not a valid, correctly signed image */
+#define CTR2_FW_HASH_MISMATCH   0x06u   /* stored bytes do not match BEGIN's hash */
+#define CTR2_FW_BAD_MESSAGE     0x07u   /* unknown op or wrong length */
+#define CTR2_FW_BEGIN_LEN       37u
+#define CTR2_FW_DATA_HEADER     5u
+#define CTR2_FW_STATUS_LEN      7u
+
+/* Device information: HID Feature report CTR2_INFO_REPORT_ID, Get only,
+ * CTR2_INFO_BYTES after the report ID, readable without a link:
+ *   ['F']['W'][layout 0x01][major][minor][patch][flags][0x00]
+ *   [build ID, 16 bytes of printable ASCII, NUL-padded]
+ * Flags: CTR2_INFO_PENDING (this image has not completed a link yet and is
+ * dropped on the next reset), CTR2_INFO_SIGNED (FIRMWARE accepts only signed
+ * images). A device without the report answers nothing. */
+#define CTR2_INFO_REPORT_ID     0x03u
+#define CTR2_INFO_BYTES         24u
+#define CTR2_INFO_LAYOUT        0x01u
+#define CTR2_INFO_BUILD_LEN     16u
+#define CTR2_INFO_PENDING       0x01u
+#define CTR2_INFO_SIGNED        0x02u
+
+typedef struct {
+    uint8_t major, minor, patch, flags;
+    char build[CTR2_INFO_BUILD_LEN + 1];   /* NUL-terminated */
+} ctr2_info;
+
+void ctr2_info_encode(const ctr2_info *info, uint8_t out[CTR2_INFO_BYTES]);
+/* Returns 1 and the fields for a well-formed report, else 0. */
+int ctr2_info_decode(const uint8_t *in, size_t len, ctr2_info *info);
+
 /* Lower edge in Hz of bar i of n (i == n gives span_hz, the top edge). */
 float ctr2_spectrum_band_edge(uint16_t low_hz, uint16_t span_hz, uint8_t n, uint8_t i);
 /* Lower edge in Hz of bar i of n for AUDIO_SPECTRUM_LINEAR. */
@@ -197,6 +262,12 @@ void ctr2_rx_reset(ctr2_rx *rx);
  * accepted (a device stores the host's SET masked by its own offer). A bit
  * for a type with no defined length is ignored. */
 void ctr2_rx_set_extensions(ctr2_rx *rx, uint32_t caps);
+
+/* After ctr2_rx_reset: starts the sequence so the next message must carry
+ * `counter`, as a control message would. For a session opened by an
+ * extension message instead of READY (FIRMWARE): call it with that
+ * header's counter, then feed the header. */
+void ctr2_rx_start(ctr2_rx *rx, uint8_t counter);
 
 /* Feed every received 8-byte report, in order. On CTR2_RX_MESSAGE the
  * payload points into rx->buffer and stays valid until the next call.

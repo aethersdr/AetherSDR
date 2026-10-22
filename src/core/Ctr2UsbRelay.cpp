@@ -584,6 +584,10 @@ void Ctr2UsbRelay::onMessage(const Message& message)
     case MessageType::RelayUdpPort:
         // Host-to-device only; a device has nothing to tell the host with these.
         return;
+    case MessageType::Firmware:
+        // Never negotiated on a relaying link (the updater's own); the
+        // reassembler rejects it before it gets here.
+        return;
     case MessageType::Ready:
         // The CTR2's answer to a HELLO sent since the last link ended. Any
         // other READY is a late answer to an earlier HELLO and changes nothing:
@@ -734,6 +738,16 @@ bool Ctr2UsbRelay::sendDatagram(quint16 port, const QByteArray& datagram)
 quint32 Ctr2UsbRelay::extensions() const
 {
     return m_port ? m_port->extensions() : 0;
+}
+
+std::optional<ctr2hid::deviceinfo::Info> Ctr2UsbRelay::firmwareInfo() const
+{
+    return m_port ? m_port->firmwareInfo() : std::nullopt;
+}
+
+quint32 Ctr2UsbRelay::offeredExtensions() const
+{
+    return m_port ? m_port->offeredExtensions() : 0;
 }
 
 void Ctr2UsbRelay::onExtensionsNegotiated(quint32 extensions)

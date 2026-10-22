@@ -73,6 +73,13 @@ audio_stop:0;            # stop it
 
 ## Using TCI with other programs
 
+When a VFO-B request needs a new receiver, AetherSDR waits for its acknowledged
+identity and radio status before selecting it for TX. A delayed reply cannot
+adopt another client's receiver. Disconnecting, stopping TCI, or closing the
+original receiver during setup cancels the pending route, including while TX
+selection is awaiting a reply; cleanup only removes the receiver created for it.
+Radios with paired receiver/panadapter topology keep that native topology.
+
 ### WSJT-X
 
 Use a WSJT-X build with TCI support (WSJT-X Improved, or WSJT-X 3.x).
@@ -95,7 +102,7 @@ WSJT-X takes CAT, PTT **and audio** over TCI, so there are no sound-card devices
 
 ### CW Skimmer and SDC
 
-Point SDC or CW Skimmer at AetherSDR's TCI port. IQ flows as DAX IQ at 24, 48, 96 or 192 kHz (SDC negotiates 96 kHz), and `dds:` follows the panadapter center. Up to **four** IQ subscriptions can run at once, so several skimmers can share one server. Receivers on the same panadapter share its IQ stream, so four independent bands need four panadapters. IQ is not offered as int16 or over `wss`.
+Point SDC or CW Skimmer at AetherSDR's TCI port. IQ flows as DAX IQ at 24, 48, 96 or 192 kHz within the connected model’s [DAX IQ limits](./dax-iq-streaming.md#limits) (SDC negotiates 96 kHz), and `dds:` follows the panadapter center. Up to **four** IQ subscriptions can run at once, so several skimmers can share one server. Receivers on the same panadapter share its IQ stream, so four independent bands need four panadapters. IQ is not offered as int16 or over `wss`. Requests outside an identified model’s supported `iq_samplerate` rates leave the rate unchanged and return the current rate. A valid rate negotiated before model identification is remembered without starting IQ streams; it is applied within the model’s limits once the model is known. A retained 192 kHz subscription uses 96 kHz on a model limited to 96 kHz, then returns to 192 kHz when a capable model is connected.
 
 ### JTDX
 
@@ -130,6 +137,7 @@ TCI audio is sent and received as binary frames on the same WebSocket.
 - RTL-SDR receive audio follows the stable receiver map and remains independent of speaker gain and mute; receiver squelch still applies. Normal launches offer one RTL receiver. Extra receivers belong to the [process-only evaluation](./rtl-sdr.md#multi-receiver-evaluation), not a higher production limit. RTL has no transmit or IQ export.
 - If a client reconnects more than 10 seconds later, its receive audio is re-bound to the right DAX channels automatically.
 - TX audio from a client is resampled from the rate the client declares, so 8, 12 and 24 kHz programs are not mis-pitched.
+- **DAX goes back the way it was after each transmission.** On a FlexRadio, TCI turns on the radio's DAX transmit input while a client transmits, then restores it once the radio is back in receive, so your next microphone transmission is not silent. Disconnecting or switching radios discards the previous session's DAX hold.
 
 ### Sample rate and format
 
@@ -233,7 +241,6 @@ keyer:0,false;                    # key up
 
 - If a client that holds PTT dies without closing its connection (power loss, a pulled cable, a dropped Wi-Fi link), the radio stays keyed until the operating system gives up on the TCP connection ([#5985](https://github.com/aethersdr/AetherSDR/issues/5985)).
 - Transmit audio from a TCI client passes through the Phone/CW microphone chain, so the mic profile, **MIC** level and **PROC** change what a digital-mode client puts on the air ([#5844](https://github.com/aethersdr/AetherSDR/issues/5844)).
-- After a TCI voice keyer (for example OpsLog) transmits, DAX stays on, so the next microphone transmission has no audio until you turn DAX off ([#5524](https://github.com/aethersdr/AetherSDR/issues/5524)).
 - A cross-band tune from a TCI client does not recall the radio's band stack, so the per-band antenna, mode and filters are not restored ([#3543](https://github.com/aethersdr/AetherSDR/issues/3543)).
 - The TCI port listens on every network interface with no password, so any machine that can reach it can tune and key the radio ([#5296](https://github.com/aethersdr/AetherSDR/issues/5296)).
 

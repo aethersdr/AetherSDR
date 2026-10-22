@@ -16,6 +16,7 @@ class ModeFilterPresetsTest : public QObject {
 private slots:
     void ssbPinsItsLowCutAndDerivesTheHigh();
     void cwCentresOnTheCarrier();
+    void narrowbandBoundsRespectSignedEdges();
     void amAndFmStraddleIt_data();
     void amAndFmStraddleIt();
     void diguCentresOnItsOffsetAndClampsAt95();
@@ -47,11 +48,43 @@ void ModeFilterPresetsTest::cwCentresOnTheCarrier()
 {
     // The radio's BFO handles the pitch offset, so the filter sits on the
     // carrier rather than on the tone.
-    for (const char* mode : {"CW", "CWL", "CWU"}) {
+    for (const char* mode : {"CW", "CWL", "CWU", "CWR"}) {
         const Edges e = edgesForWidth(QString::fromLatin1(mode), 500, {});
         QCOMPARE(e.lo, -250);
         QCOMPARE(e.hi, 250);
     }
+}
+
+void ModeFilterPresetsTest::narrowbandBoundsRespectSignedEdges()
+{
+    const AetherSDR::ReceiveFilterControl control{
+        AetherSDR::SliceFrequencyControl::Authority::Engine,
+        {{QStringLiteral("USB"), 0, 11998, 2, 12000, 2, 12000},
+         {QStringLiteral("LSB"), -12000, -2, -11998, 0, 2, 12000},
+         {QStringLiteral("CW"), -12000, -1, 1, 12000, 2, 24000},
+         {QStringLiteral("CWR"), -12000, -1, 1, 12000, 2, 24000}}};
+    for (const QString mode : {QStringLiteral("USB"), QStringLiteral("LSB"),
+                               QStringLiteral("CW"), QStringLiteral("CWR")}) {
+        for (int width : widthsForMode(mode, &control)) {
+            const Edges edges = edgesForWidth(mode, width, {});
+            QVERIFY(acceptsFilterEdges(mode, &control, false, edges));
+            QCOMPARE(widthForEdges(mode, edges.lo, edges.hi), width);
+        }
+    }
+    QVERIFY(acceptsFilterEdges("USB", &control, false, {0, 12000}));
+    QVERIFY(!acceptsFilterEdges("USB", &control, false, {-1, 2900}));
+    QVERIFY(!acceptsFilterEdges("USB", &control, false, {100, 12001}));
+    QVERIFY(acceptsFilterEdges("LSB", &control, false, {-12000, 0}));
+    QVERIFY(!acceptsFilterEdges("LSB", &control, false, {-2900, 1}));
+    QVERIFY(!acceptsFilterEdges("LSB", &control, false, {-12001, -100}));
+    for (const QString mode : {QStringLiteral("CW"), QStringLiteral("CWR")}) {
+        QVERIFY(acceptsFilterEdges(mode, &control, false, {-1, 1}));
+        QVERIFY(acceptsFilterEdges(mode, &control, false, {-12000, 12000}));
+        QVERIFY(!acceptsFilterEdges(mode, &control, false, {0, 500}));
+        QVERIFY(!acceptsFilterEdges(mode, &control, false, {-500, 0}));
+    }
+    QVERIFY(acceptsFilterEdges("USB", nullptr, false, {-1, 12001}));
+    QVERIFY(acceptsFilterEdges("AM", &control, false, {-14000, 14000}));
 }
 
 void ModeFilterPresetsTest::amAndFmStraddleIt_data()

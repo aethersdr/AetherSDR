@@ -29,6 +29,7 @@
 #include "core/AutomationServer.h"
 #include "core/backends/IRadioBackend.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include <QCoreApplication>
 #include <QJsonArray>
@@ -78,10 +79,22 @@ class StubBackend : public IRadioBackend
 public:
     explicit StubBackend(QVariantList chains) : m_chains(std::move(chains)) {}
 
-    RadioCapabilities capabilities() const override { return {}; }
+    RadioCapabilities caps;
+    bool connected = false;
+    QList<SliceDspRequest> requests;
+    QList<int> receivers;
+    RadioCapabilities capabilities() const override { return caps; }
+    ReceiveControlPolicy receiveControlPolicy() const override
+    { return ReceiveControlPolicy::Confirmed; }
+    ReceiveDispatch requestSliceDsp(int id, const SliceDspRequest& request) override
+    {
+        receivers.append(id);
+        requests.append(request);
+        return ReceiveDispatch::Dispatched;
+    }
     void connectRadio(const RadioConnectRequest&) override {}
     void disconnectRadio() override {}
-    bool isConnected() const override { return false; }
+    bool isConnected() const override { return connected; }
     void setSliceFrequency(int, double) override {}
     void setSliceMode(int, const QString&) override {}
     void setSliceFilter(int, int, int) override {}
@@ -250,6 +263,94 @@ int main(int argc, char** argv)
             get(server, QStringLiteral("dsp"), QStringLiteral("backend"));
         check(!narrowed.value(QStringLiteral("ok")).toBool(),
               "and the property form agrees, rather than answering an empty object");
+    }
+
+    // Explicit receive DSP records override legacy radio-side flags and apply
+    // to the selected slice's mode. Accepted state still comes from readback.
+    {
+        auto owned = std::make_unique<StubBackend>(QVariantList{});
+        StubBackend* source = owned.get();
+        source->connected = true;
+        source->caps.hasHostNoiseBlanker = true;
+        source->caps.receiveDspControl = ReceiveDspControl{
+            {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("CW"), QStringLiteral("CWR")},
+            {ReceiveDspControl::Feature::Nr, ReceiveDspControl::Feature::Anf,
+             ReceiveDspControl::Feature::Nb}};
+        radio.setBackendForTest(std::move(owned), QStringLiteral("receive-dsp-test"));
+        SliceDelta initial;
+        initial.inUse = true;
+        initial.active = false;
+        initial.mode = QStringLiteral("USB");
+        initial.nr = false;
+        initial.nrLevel = 10;
+        emit source->sliceChanged(0, initial);
+        initial.active = true;
+        emit source->sliceChanged(1, initial);
+        const auto command = [&server](const QByteArray& argument) {
+            return AutomationServerTestAccess::handleLine(server, QByteArray("slice dsp ") + argument);
+        };
+        check(command("nr on 50").value(QStringLiteral("ok")).toBool()
+                  && source->requests.size() == 2 && source->receivers == QList<int>{1, 1}
+                  && source->requests[0].feature == SliceDspRequest::Feature::Nr
+                  && source->requests[0].field == SliceDspRequest::Field::Level
+                  && source->requests[0].level == 50
+                  && source->requests[1].field == SliceDspRequest::Field::Enabled
+                  && source->requests[1].enabled,
+              "record-backed NR admits level and enable intents without radio-side DSP");
+        check(radio.slice(1) && !radio.slice(1)->nrOn() && radio.slice(1)->nrLevel() == 10,
+              "automation success does not fabricate confirmed NR state");
+        source->requests.clear();
+        check(command("anf on 57").value(QStringLiteral("ok")).toBool()
+                  && source->requests.size() == 2
+                  && source->requests[0].feature == SliceDspRequest::Feature::Anf
+                  && source->requests[0].field == SliceDspRequest::Field::Level
+                  && source->requests[0].level == 57 && source->requests[1].enabled,
+              "record-backed ANF forwards its advertised level and enable");
+        SliceDelta fm;
+        fm.mode = QStringLiteral("FM");
+        emit source->sliceChanged(1, fm);
+        source->requests.clear();
+        for (const QByteArray& argument : {QByteArray("nr on 50"), QByteArray("anf on 57"),
+                                         QByteArray("nb on 30"), QByteArray("nb2 on 30 4")}) {
+            const QJsonObject reply = command(argument);
+            check(!reply.value(QStringLiteral("ok")).toBool()
+                      && reply.value(QStringLiteral("error")).toString().contains(QStringLiteral("FM"))
+                      && source->requests.isEmpty(),
+                  "unsupported selected mode refuses DSP before any level or enable intent");
+        }
+        for (const QByteArray& argument : {QByteArray("nr off"), QByteArray("anf off"),
+                                         QByteArray("nb off"), QByteArray("nb2 off")}) {
+            source->requests.clear();
+            const QJsonObject reply = command(argument);
+            check(reply.value(QStringLiteral("ok")).toBool()
+                      && source->requests.size() == 1 && !source->requests.first().enabled,
+                  "unsupported selected mode still admits an idempotent DSP off intent");
+        }
+        source->requests.clear();
+        fm.mode = QStringLiteral("CWR");
+        emit source->sliceChanged(1, fm);
+        check(command("nb2 on 30 4").value(QStringLiteral("ok")).toBool()
+                  && source->requests.size() == 3,
+              "supported reverse CW mode admits declared blanker controls");
+        source->requests.clear();
+        source->caps.hasRadioSideDsp = true;
+        source->caps.receiveDspControl->features.removeAll(ReceiveDspControl::Feature::Nr);
+        check(!command("nr on 50").value(QStringLiteral("ok")).toBool()
+                  && source->requests.isEmpty(),
+              "explicit missing feature takes precedence over a legacy DSP flag");
+        source->caps.receiveDspControl.reset();
+        check(command("nr on 50").value(QStringLiteral("ok")).toBool()
+                  && source->requests.size() == 2,
+              "absent record retains legacy radio-side NR admission");
+        source->requests.clear();
+        source->caps.hasRadioSideDsp = false;
+        check(!command("nr on 50").value(QStringLiteral("ok")).toBool()
+                  && !command("anf on 50").value(QStringLiteral("ok")).toBool()
+                  && source->requests.isEmpty(),
+              "absent record retains legacy unsupported NR and ANF refusal");
+        check(command("nr off").value(QStringLiteral("ok")).toBool()
+                  && source->requests.size() == 1,
+              "legacy unsupported NR can still be switched off");
     }
 
     if (failures > 0) {

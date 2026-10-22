@@ -25,7 +25,7 @@ int main()
     for (const QString& mode :
          {QStringLiteral("DIGU"), QStringLiteral("DIGL"),
           QStringLiteral("RTTY"), QStringLiteral("CW"),
-          QStringLiteral("CWU"), QStringLiteral("CWL"),
+          QStringLiteral("CWU"), QStringLiteral("CWL"), QStringLiteral("CWR"),
           QStringLiteral("NT")}) {
         expect(qPrintable(mode + QStringLiteral(" disables AetherDSP")),
                aetherDspModeRequiresDisable(mode));
@@ -43,6 +43,16 @@ int main()
            aetherDspMixRequiresDisable({
                {QStringLiteral("LSB"), false, 50.0f},
                {QStringLiteral("CW"), false, 50.0f},
+           }));
+    expect("parked CW slice does not restrict mixed stream",
+           !aetherDspMixRequiresDisable({
+               {QStringLiteral("USB"), false, 50.0f, true},
+               {QStringLiteral("CW"), false, 50.0f, false},
+           }));
+    expect("resumed CW-R slice restricts mixed stream",
+           aetherDspMixRequiresDisable({
+               {QStringLiteral("USB"), false, 50.0f, true},
+               {QStringLiteral("CWR"), false, 50.0f, true},
            }));
     expect("muted CW slice does not restrict mixed stream",
            !aetherDspMixRequiresDisable({

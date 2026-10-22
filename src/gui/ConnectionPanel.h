@@ -238,8 +238,10 @@ private:
     void refitToContent();
     // Height the body would like if the screen allows it. The panel's own
     // sizeHint() cannot answer this — QScrollArea caps its hint by design, so
-    // it under-reports the body it is scrolling.
-    int preferredClientHeight() const;
+    // it under-reports the body it is scrolling. Taken at the client width the
+    // caller is about to apply, because that width decides whether a
+    // horizontal scrollbar takes its height out of the viewport.
+    int preferredClientHeight(int clientWidth) const;
     QScreen* screenFitTarget(QScreen* preferredScreen) const;
     void saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,
@@ -321,25 +323,11 @@ private:
     void         syncIcomCivCustomRow();
     void         syncIcomPortCustomRow();
     quint16      selectedIcomBasePort() const;
-    // ANAN-G2 connect-time settings. Shown only for family "anan" -- the row
-    // containers are held (matching the Icom rows above) so each hides as a
-    // unit. Selections persist via AnanSettings (Principle V) and reach the
-    // backend through populateFamilyParams() the same way Icom's CI-V
-    // address does, not through RadioInfo -- see that function's own comment.
-    QWidget*     m_manualAnanRateRow{nullptr};
-    QComboBox*   m_manualAnanRateCombo{nullptr};
-    QWidget*     m_manualAnanAdcRow{nullptr};
-    QComboBox*   m_manualAnanAdcCombo{nullptr};
-    QWidget*     m_manualAnanDitherRow{nullptr};
-    QCheckBox*   m_manualAnanDitherCheck{nullptr};
-    QWidget*     m_manualAnanRandomRow{nullptr};
-    QCheckBox*   m_manualAnanRandomCheck{nullptr};
-    QWidget*     m_manualAnanBypassAdc0Row{nullptr};
-    QCheckBox*   m_manualAnanBypassAdc0Check{nullptr};
-    QWidget*     m_manualAnanBypassAdc1Row{nullptr};
-    QCheckBox*   m_manualAnanBypassAdc1Check{nullptr};
-    QWidget*     m_manualAnanSpeakerAudioRow{nullptr};
-    QCheckBox*   m_manualAnanSpeakerAudioCheck{nullptr};
+    // Points at Radio Setup's "ANAN Front End" page, where this family's
+    // front-end options are set. Shown only for family "anan", like the Icom
+    // rows above, and held as a row container for the same reason -- it hides
+    // as a unit.
+    QWidget*     m_manualAnanHintRow{nullptr};
     // Staged by probeRadio(), committed by setConnected(true), discarded on
     // failure. A password is only worth persisting once the radio has said it
     // is the right one.

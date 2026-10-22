@@ -13,7 +13,7 @@ This page is generated from `src/gui/UlanziDialMapperDialog.cpp`, `src/core/Ulan
 
 :::
 
-Set the Ulanzi Dial up in **Settings → Ulanzi Dial Mapping...**.
+Set the Ulanzi Dial up in **Settings → Controllers → Ulanzi Dial Mapping...**.
 
 - The **wheel** runs one of the actions below.
 - Each **button** can run any action from [Default Keyboard Shortcuts](./default-shortcuts.md), or any Toggle, Trigger or Gate control from [MIDI Controller Actions](./midi-actions.md).

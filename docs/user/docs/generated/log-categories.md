@@ -32,6 +32,7 @@ These are the logging categories listed in **Help → Support & Diagnostics...**
 | Transmit | `aether.transmit` | TX state, ATU, profiles, power control |
 | Firmware | `aether.firmware` | Firmware download, staging, upload |
 | Tuner/AGM | `aether.tuner` | TGXL tuner, Antenna Genius state |
+| KAT500 Tuner | `aether.kat500` | Independent tuner connection, confirmed readbacks, configuration and maintenance diagnostics |
 | Peripheral Authorization | `aether.peripheral.auth` | Credential store availability and save failures; code values are never logged |
 | GUI | `aether.gui` | Window, applets, dialogs |
 | DX Cluster | `aether.dxcluster` | DX cluster telnet connection and spot parsing |

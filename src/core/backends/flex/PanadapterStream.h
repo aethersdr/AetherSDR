@@ -41,6 +41,8 @@ class PanadapterStream : public QObject {
     Q_OBJECT
     friend class TxOperationIntegrationTestAccess;
     friend class VitaDscpStreamTestAccess;
+    friend class WanUdpKeepaliveTestAccess;
+    friend class WanUdpKeepaliveSocketTestAccess;
     // Inject the terminal transport in socket-free queue/cancellation tests.
     std::function<void(const QByteArray&)> m_packetSinkForTest;
 
@@ -64,8 +66,8 @@ public:
     Q_INVOKABLE bool startWan(const QHostAddress& radioAddr, quint16 radioUdpPort);
 
     // Begin WAN UDP registration: sends "client udp_register handle=0x<handle>"
-    // via UDP every 50ms until VITA-49 packets arrive, then switches to
-    // "client ping handle=0x<handle>" keepalive every 5 seconds.
+    // via UDP every 50ms until a valid Flex VITA-49 packet arrives from the
+    // radio, then keeps sending udp_register every 5 seconds.
     Q_INVOKABLE void startWanUdpRegister(quint32 clientHandle);
     Q_INVOKABLE void stop();
 
@@ -227,6 +229,7 @@ signals:
 
 private slots:
     void onDatagramReady();
+    void sendWanUdpRegister();
 
 private:
     friend class PcmCompatibilityTestAccess;
@@ -237,6 +240,7 @@ private:
     void publishLegacyDaxAudio(quint32 streamId, int channel, const QByteArray& pcm);
     void publishLegacyAudio(const QByteArray& pcm);
     void processDatagram(const QByteArray& data);
+    void confirmWanRegistration(const QByteArray& data);
     // Raise the kernel receive buffer (SO_RCVBUF) on the bound VITA-49 socket so
     // bursts / brief drain stalls don't overflow it and surface as false
     // sequence-loss (which the adaptive throttle would react to). Logs the
@@ -478,9 +482,13 @@ private:
     // reason RadioConnection::m_syntheticDemo is.
     std::atomic<bool> m_hasReceivedPacket{false};
 
+    // Inject only the terminal WAN bind/write in socket-free lifecycle tests.
+    std::function<bool()> m_wanBindForTest;
+    std::function<qint64(const QByteArray&, const QHostAddress&, quint16)> m_wanWriteForTest;
+    bool m_wanBoundForTest{false};
+
     // WAN UDP registration and keepalive
-    QTimer*  m_wanRegisterTimer{nullptr};   // 50ms: "client udp_register" until first packet
-    QTimer*  m_wanPingTimer{nullptr};       // 5s: "client ping" keepalive after registration
+    QTimer*  m_wanRegisterTimer{nullptr};   // udp_register: 50 ms until VITA, then 5 s
     QTimer*  m_routedPrimeTimer{nullptr};   // 250ms: non-WAN UDP prime retry until first packet
     bool     m_isWanMode{false};
     bool     m_wanRegistered{false};

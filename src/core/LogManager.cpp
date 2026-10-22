@@ -27,7 +27,7 @@ Q_LOGGING_CATEGORY(lcCat,        "aether.cat",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcDax,        "aether.dax",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcMeters,     "aether.meters",      QtWarningMsg)
 Q_LOGGING_CATEGORY(lcTransmit,   "aether.transmit",    QtWarningMsg)
-Q_LOGGING_CATEGORY(lcFirmware,   "aether.firmware",    QtWarningMsg)
+Q_LOGGING_CATEGORY(lcFirmware,   "aether.firmware",    QtInfoMsg)
 Q_LOGGING_CATEGORY(lcTuner,      "aether.tuner",       QtWarningMsg)
 Q_LOGGING_CATEGORY(lcGui,        "aether.gui",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcDxCluster,  "aether.dxcluster",   QtWarningMsg)
@@ -87,6 +87,7 @@ LogManager::LogManager()
         {"aether.transmit",   "Transmit",     "TX state, ATU, profiles, power control"},
         {"aether.firmware",   "Firmware",     "Firmware download, staging, upload"},
         {"aether.tuner",      "Tuner/AGM",    "TGXL tuner, Antenna Genius state"},
+        {"aether.kat500", "KAT500 Tuner", "Independent tuner connection, confirmed readbacks, configuration and maintenance diagnostics"},
         {"aether.peripheral.auth", "Peripheral Authorization", "Credential store availability and save failures; code values are never logged"},
         {"aether.gui",        "GUI",          "Window, applets, dialogs"},
         {"aether.dxcluster",  "DX Cluster",   "DX cluster telnet connection and spot parsing"},

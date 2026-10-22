@@ -19,6 +19,7 @@ bool onlyMonitorDiffers(const T::State& before, const T::State& after)
         || before.capture != after.capture || before.dcSuppression != after.dcSuppression
         || before.automaticDirectSampling != after.automaticDirectSampling
         || before.receivingIds != after.receivingIds
+        || before.trackingNotches != after.trackingNotches
         || before.receivers.size() != after.receivers.size()) { return false; }
     for (std::size_t i = 0; i < before.receivers.size(); ++i) {
         T::Receiver previous = before.receivers[i];

@@ -36,12 +36,13 @@ private slots:
         QVERIFY(request("lab devices").value("ok").toBool());
         QVERIFY(!request("lab connect 0").value("ok").toBool());
         QVERIFY(request("lab stop").value("ok").toBool());
-        QVERIFY(request("lab disconnect").value("ok").toBool());
-        QCOMPARE(writes, 2);
+        QVERIFY(!request("lab disconnect").value("ok").toBool());
+        QCOMPARE(writes, 1);
         qputenv("AETHER_AUTOMATION_ALLOW_LAB_RF", "1");
         QVERIFY(!request("lab sweep 14000000 14350000 200 isolated").value("ok").toBool());
         bridge.setReadOnly(false);
         QVERIFY(request("lab sweep 14000000 14350000 200 isolated").value("ok").toBool());
+        QVERIFY(request("lab disconnect").value("ok").toBool());
         QCOMPARE(writes, 3);
         qunsetenv("AETHER_AUTOMATION_ALLOW_LAB_RF");
     }
@@ -63,7 +64,9 @@ private slots:
         QVERIFY(!accepted.value("ok").toBool());
         QVERIFY(!AutomationServerTestAccess::request(bridge, "clickAt injectedAnalyzerSweep 3 3").value("ok").toBool());
         QVERIFY(!AutomationServerTestAccess::request(bridge, "doubleClick injectedAnalyzerSweep").value("ok").toBool());
-        QVERIFY(!AutomationServerTestAccess::request(bridge, "gesture begin injectedAnalyzerSweep").value("ok").toBool());
+        const QJsonObject drag = AutomationServerTestAccess::request(bridge, "drag injectedAnalyzerSweep 1 1");
+        QVERIFY(!drag.value("ok").toBool());
+        QVERIFY(drag.value("error").toString().contains("analyzer", Qt::CaseInsensitive));
         QCoreApplication::processEvents();
         QCOMPARE(clicks, 0);
         qunsetenv("AETHER_AUTOMATION_ALLOW_LAB_RF");

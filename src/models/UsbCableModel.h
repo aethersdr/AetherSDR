@@ -4,6 +4,7 @@
 #include <QMap>
 #include <QString>
 #include <QVariantMap>
+#include "core/backends/UsbCableRequest.h"
 
 namespace AetherSDR {
 
@@ -74,17 +75,18 @@ public:
     // Status parsing — called from RadioModel::onStatusReceived
     void applyStatus(const QString& serialNumber, const QMap<QString, QString>& kvs);
     void handleRemoved(const QString& serialNumber);
+    void clear();
 
-    // Command builders
-    void sendSet(const QString& sn, const QString& key, const QString& value);
-    void sendSetBit(const QString& sn, int bit, const QString& key, const QString& value);
-    void sendRemove(const QString& sn);
+    // Parse editor text into a typed intent; no protocol property names.
+    void requestSetting(const QString& sn, UsbCableRequest::Field field,
+                        const QString& value, int bit = -1);
+    void requestRemoval(const QString& sn);
 
 signals:
     void cableAdded(const QString& serialNumber);
     void cableRemoved(const QString& serialNumber);
     void cableChanged(const QString& serialNumber);
-    void commandReady(const QString& cmd);
+    void controlRequested(const AetherSDR::UsbCableRequest& request);
 
 private:
     void parseBaseStatus(UsbCable& cable, const QMap<QString, QString>& kvs);

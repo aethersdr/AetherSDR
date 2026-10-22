@@ -1,4 +1,5 @@
 #include "CommandParser.h"
+#include <algorithm>
 #include <QStringList>
 
 namespace AetherSDR {
@@ -89,8 +90,14 @@ ParsedMessage CommandParser::parseLine(const QString& rawLine)
             // rejection into an apparent success. Preserve the protocol bit
             // pattern in the legacy int callback type.
             bool ok = false;
-            const quint32 resultCode = parts[1].toUInt(&ok, 16);
-            if (ok) {
+            const QString& code = parts[1];
+            const bool hexOnly = !code.isEmpty() && code.size() <= 8
+                && std::all_of(code.begin(), code.end(), [](QChar ch) {
+                    return (ch >= u'0' && ch <= u'9') || (ch >= u'a' && ch <= u'f')
+                        || (ch >= u'A' && ch <= u'F');
+                });
+            const quint32 resultCode = code.toUInt(&ok, 16);
+            if (hexOnly && ok) {
                 msg.resultCode = static_cast<int>(resultCode);
             }
         }

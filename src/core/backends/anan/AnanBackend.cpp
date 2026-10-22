@@ -420,6 +420,10 @@ RadioCapabilities AnanBackend::capabilities() const
     RadioCapabilities c;
     c.broadcastFmReceive = std::nullopt;
     c.family = QStringLiteral("anan");
+    c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
+        PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage,
+        PanDisplayField::SpectrumPoints}, {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove
     // No setTune() implementation, so no tune generator to select a mode on.
     c.twoToneGenerator = std::nullopt;
     c.firmwareUpdateSource = std::nullopt;  // gateware number; no published list covers it.
@@ -432,6 +436,7 @@ RadioCapabilities AnanBackend::capabilities() const
     // The radio's speaker output: setLineoutMute() sends it silence and
     // setLineoutGain() scales the samples this host feeds it.
     c.lineoutControl = RadioCapabilities::LineoutControl{};
+    c.radioSetupControl = RadioSetupControl{{RadioSetupField::LineoutGain, RadioSetupField::LineoutMute}};
     // No client owner is declared for "Show TX in Waterfall" on an ANAN.
     c.txWaterfallClientFlag = std::nullopt;
     // The panadapter dBm axis is dBFS with a dBm label: kUncalibratedDbfsToDbmOffset
@@ -461,6 +466,10 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");
+    // The session takes its receive front-end options from AnanSettings
+    // (populateFamilyParams()), so the setup page that edits them applies.
+    c.adcFrontEnd = RadioCapabilities::AdcFrontEnd{};
+
     // ---- PA telemetry ----
     // The DC supply rail, published as RAD:+13.8A from every status packet's
     // count (onSupplyRailCounts()). Claimed on a bench measurement, not on the
@@ -494,6 +503,7 @@ RadioCapabilities AnanBackend::capabilities() const
     // ours, the radio echoes nothing back, and there is no register to read.
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = std::nullopt; // center also retunes the slice
     c.receivePanBandwidthControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
                                                          48'000, 1'536'000};

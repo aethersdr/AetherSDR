@@ -237,6 +237,7 @@ private:
     static constexpr int kHeartbeatAlarmThreshold = 3;
     int          m_missedBeats{0};
     bool         m_blinkEnabled{true};  // persisted via AppSettings "HeartbeatBlinkEnabled"
+    QList<QString> m_connectedRadioIds;
     bool         m_discovering{false};  // solid amber while waiting for connection
     QString      m_throttleFlashColor; // empty = default green; set while adaptive throttle is active
     QString      m_pcAudioInputDevice;

@@ -3,6 +3,10 @@
 #include "RadioSettingsScope.h"
 #include "RadioSettingsIdentity.h"
 #include "SharedCapturePolicy.h"
+#include "core/backends/NoiseBlankerKind.h"
+#include "core/backends/rtl/RtlTrackingNotches.h"
+
+#include <optional>
 
 #include <QMap>
 #include <QStringList>
@@ -17,12 +21,18 @@ class RtlSliceSettings {
 public:
     static constexpr int kSchemaVersion = 1;
     static QString featureName() { return QStringLiteral("RtlSlices"); }
+    struct Filter {
+        double lowHz = 0;
+        double highHz = 0;
+        bool operator==(const Filter&) const = default;
+    };
     struct Slice {
         int id = -1;
         double frequencyHz = 0;
         QString mode;
         double filterLowHz = 0;
         double filterHighHz = 0;
+        QMap<QString, Filter> modeFilters;
         // Existing SliceModel defaults, also used for fields legacy RTL never saved.
         QString agcMode = QStringLiteral("med");
         int agcThreshold = 65;
@@ -36,11 +46,28 @@ public:
         bool wfmForceMono = false;
         bool automaticSquelch = false;
         int automaticSquelchMarginDb = 10;
+        int agcOffLevel = 10;
+        int cwPitchHz = 600;
+        bool ritEnabled = false;
+        int ritOffsetHz = 0;
+        NoiseBlankerKind nbKind = NoiseBlankerKind::Off;
+        int nbLevel = 50;
+        NoiseBlankerFill nbFill = NoiseBlankerFill::Zero;
+        bool apfEnabled = false;
+        int apfLevel = 50;
+        bool nrEnabled = false;
+        int nrLevel = 50;
+        bool anfEnabled = false;
+        int anfLevel = 50;
+        bool mnEnabled = false;
+        int mnLevel = 50;
+
     };
     struct Document {
         double captureCenterHz = 0;
         double sampleRateHz = 0;
         QMap<int, Slice> slices;
+        rtl::RtlTrackingNotches trackingNotches;
     };
     enum class ReadStatus { Missing, Ready, Refused };
     struct ReadResult {
@@ -58,7 +85,8 @@ public:
     // Only accepted runtime entries belong here. Omitted entries survive partial
     // restore/capacity reduction; explicit removals are separate stable IDs.
     bool patch(double captureCenterHz, double sampleRateHz,
-               const QVector<Slice>& accepted, const QVector<int>& removed = {}) const;
+               const QVector<Slice>& accepted, const QVector<int>& removed = {},
+               const std::optional<rtl::RtlTrackingNotches>& trackingNotches = {}) const;
     MigrationResult migrateLegacy(const RadioSerialIdentity& identity) const;
 
     // Adapter provides mode/BFO/guard metadata for EVERY saved entry. This

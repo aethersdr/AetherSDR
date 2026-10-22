@@ -34,6 +34,9 @@
 #include <QShortcut>
 #include <QSaveFile>
 #include <QSharedPointer>
+#include <QWeakPointer>
+#include <QVariant>
+#include <optional>
 #include <QTimer>
 #include <QCloseEvent>
 #include <QKeyEvent>
@@ -156,103 +159,44 @@ private:
     Validator m_validator;
 };
 
-bool buildMemoryFieldUpdate(int col, const QTableWidgetItem* item,
-                            QString& commandSuffix, QMap<QString, QString>& kvs)
+bool buildMemoryFieldUpdate(int col, const QTableWidgetItem* item, MemoryPatch& patch)
 {
-    if (!item)
-        return false;
-
+    if (!item) { return false; }
     const QString value = item->text();
+    const auto integer = [&value](std::optional<int>& field) {
+        bool ok = false;
+        const int parsed = value.toInt(&ok);
+        if (ok) { field = parsed; }
+        return ok;
+    };
+    const auto number = [&value](std::optional<double>& field) {
+        bool ok = false;
+        const double parsed = value.toDouble(&ok);
+        if (ok) { field = parsed; }
+        return ok;
+    };
     switch (col) {
-    case 0: {
-        const QString encoded = AetherSDR::encodeMemoryText(value);
-        commandSuffix = "group=" + encoded;
-        kvs["group"] = encoded;
-        return true;
+    case 0: patch.group = value; break;
+    case 1: patch.owner = value; break;
+    case 2: if (!number(patch.freq)) { return false; } break;
+    case 3: patch.name = value; break;
+    case 4: patch.mode = value; break;
+    case 5: if (!integer(patch.step)) { return false; } break;
+    case 6: patch.offsetDir = value; break;
+    case 7: if (!number(patch.repeaterOffset)) { return false; } break;
+    case 8: patch.toneMode = value; break;
+    case 9: if (!number(patch.toneValue)) { return false; } break;
+    case 10: patch.squelch = item->checkState() == Qt::Checked; break;
+    case 11: if (!integer(patch.squelchLevel)) { return false; } break;
+    case 12: if (!integer(patch.rxFilterLow)) { return false; } break;
+    case 13: if (!integer(patch.rxFilterHigh)) { return false; } break;
+    case 14: if (!integer(patch.rttyMark)) { return false; } break;
+    case 15: if (!integer(patch.rttyShift)) { return false; } break;
+    case 16: if (!integer(patch.diglOffset)) { return false; } break;
+    case 17: if (!integer(patch.diguOffset)) { return false; } break;
+    default: return false;
     }
-    case 1: {
-        const QString encoded = AetherSDR::encodeMemoryText(value);
-        commandSuffix = "owner=" + encoded;
-        kvs["owner"] = encoded;
-        return true;
-    }
-    case 2:
-        commandSuffix = "freq=" + value;
-        kvs["freq"] = value;
-        return true;
-    case 3: {
-        const QString encoded = AetherSDR::encodeMemoryText(value);
-        commandSuffix = "name=" + encoded;
-        kvs["name"] = encoded;
-        return true;
-    }
-    case 4: {
-        const QString mode = MemoryFields::modeToWire(value);
-        commandSuffix = "mode=" + mode;
-        kvs["mode"] = mode;
-        return true;
-    }
-    case 5:
-        commandSuffix = "step=" + value;
-        kvs["step"] = value;
-        return true;
-    case 6: {
-        const QString dir = MemoryFields::offsetDirToWire(value);
-        commandSuffix = "repeater=" + dir;
-        kvs["repeater"] = dir;
-        return true;
-    }
-    case 7:
-        commandSuffix = "repeater_offset=" + value;
-        kvs["repeater_offset"] = value;
-        return true;
-    case 8: {
-        const QString toneMode = MemoryFields::toneModeToWire(value);
-        commandSuffix = "tone_mode=" + toneMode;
-        kvs["tone_mode"] = toneMode;
-        return true;
-    }
-    case 9:
-        commandSuffix = "tone_value=" + value;
-        kvs["tone_value"] = value;
-        return true;
-    case 10: {
-        const QString squelch = item->checkState() == Qt::Checked ? "1" : "0";
-        commandSuffix = "squelch=" + squelch;
-        kvs["squelch"] = squelch;
-        return true;
-    }
-    case 11:
-        commandSuffix = "squelch_level=" + value;
-        kvs["squelch_level"] = value;
-        return true;
-    case 12:
-        commandSuffix = "rx_filter_low=" + value;
-        kvs["rx_filter_low"] = value;
-        return true;
-    case 13:
-        commandSuffix = "rx_filter_high=" + value;
-        kvs["rx_filter_high"] = value;
-        return true;
-    case 14:
-        commandSuffix = "rtty_mark=" + value;
-        kvs["rtty_mark"] = value;
-        return true;
-    case 15:
-        commandSuffix = "rtty_shift=" + value;
-        kvs["rtty_shift"] = value;
-        return true;
-    case 16:
-        commandSuffix = "digl_offset=" + value;
-        kvs["digl_offset"] = value;
-        return true;
-    case 17:
-        commandSuffix = "digu_offset=" + value;
-        kvs["digu_offset"] = value;
-        return true;
-    default:
-        return false;
-    }
+    return patch.valid();
 }
 
 QString defaultExportFilePath()
@@ -843,6 +787,7 @@ void MemoryDialog::populateTable()
 
         // Store memory index in first column's data for retrieval
         m_table->item(row, 0)->setData(Qt::UserRole, m.index);
+        m_table->item(row, 0)->setData(Qt::UserRole + 1, QVariant::fromValue(m_model->memorySlotRevision(m.index)));
 
         // Radio-backed Icom memories are read-only in the initial support
         // phase. Flex and the local bank retain their existing edit behavior.
@@ -970,10 +915,11 @@ void MemoryDialog::submitCellEdit(int row, int col)
     if (!indexItem || !item)
         return;
 
-    QString commandSuffix;
-    QMap<QString, QString> kvs;
-    if (!buildMemoryFieldUpdate(col, item, commandSuffix, kvs))
+    MemoryPatch patch;
+    if (!buildMemoryFieldUpdate(col, item, patch)) {
+        populateTable();
         return;
+    }
 
     const int memIdx = indexItem->data(Qt::UserRole).toInt();
     if (col == 3 && memIdx == m_pendingEditMemoryIndex) {
@@ -982,14 +928,13 @@ void MemoryDialog::submitCellEdit(int row, int col)
     }
     RadioModel* const model = m_model;
     const QPointer<MemoryDialog> dialogGuard(this);
-    model->sendCmdPublic(QString("memory set %1 %2").arg(memIdx).arg(commandSuffix),
-        [model, dialogGuard, memIdx, kvs](int code, const QString&) {
-        if (code == 0) {
-            model->handleMemoryStatus(memIdx, kvs);
-            return;
-        }
-        if (dialogGuard)
+    MemoryRequest request{MemoryRequest::Action::Update, memIdx, patch};
+    request.expectedRevision = indexItem->data(Qt::UserRole + 1).toULongLong();
+    model->requestMemory(request, this,
+        [dialogGuard](const RadioControlReply& result) {
+        if (result.kind != RadioControlReply::Kind::Accepted && dialogGuard) {
             dialogGuard->populateTable();
+        }
     });
 }
 
@@ -1092,12 +1037,15 @@ void MemoryDialog::onImport()
         return;
     const QPointer<MemoryDialog> self(this);
     const QPointer<RadioModel> modelGuard(m_model);
+    const RadioControlSession session = m_model->controlSession();
+    const bool localStore = m_model->usesLocalMemoryBank();
     const QString path = QFileDialog::getOpenFileName(
         this,
         "Import Memories",
         QDir::home().filePath("Documents"),
         "CSV Files (*.csv)");
-    if (!self || !modelGuard || self->m_model != modelGuard.data() || path.isEmpty()) {
+    if (!self || !modelGuard || self->m_model != modelGuard.data() || path.isEmpty()
+        || modelGuard->controlSession() != session || modelGuard->usesLocalMemoryBank() != localStore) {
         return;
     }
 
@@ -1110,6 +1058,12 @@ void MemoryDialog::onImport()
     }
 
     const MemoryCsvParseResult parsed = MemoryCsvCompat::parse(file.readAll());
+    startImport(parsed, QFileInfo(path).fileName(), session, localStore);
+}
+
+void MemoryDialog::startImport(const MemoryCsvParseResult& parsed, const QString& fileName,
+                               const RadioControlSession& session, bool localStore)
+{
 
     struct ImportState {
         QList<MemoryCsvRecord> records;
@@ -1124,7 +1078,7 @@ void MemoryDialog::onImport()
     const auto state = QSharedPointer<ImportState>::create();
     state->records = parsed.records;
     state->issues = parsed.errors;
-    state->fileName = QFileInfo(path).fileName();
+    state->fileName = fileName;
     state->format = parsed.format;
 
     const QPointer<MemoryDialog> dialogGuard(this);
@@ -1178,7 +1132,7 @@ void MemoryDialog::onImport()
     progressDialog->setValue(0);
     progressDialog->show();
 
-    RadioModel* const model = m_model;
+    const QPointer<RadioModel> model(m_model);
     const QPointer<QProgressDialog> progressGuard(progressDialog);
     auto advanceProgress = [state, progressGuard]() {
         ++state->processedCount;
@@ -1186,9 +1140,18 @@ void MemoryDialog::onImport()
             progressGuard->setValue(state->processedCount);
     };
     const auto runNext = QSharedPointer<std::function<void()>>::create();
-    *runNext = [model, dialogGuard, state, runNext, showSummary, progressGuard, advanceProgress]() {
-        if (!dialogGuard) {
+    const QWeakPointer<std::function<void()>> weakNext(runNext);
+    *runNext = [model, session, localStore, dialogGuard, state, weakNext, showSummary, progressGuard, advanceProgress]() {
+        const auto runNext = weakNext.toStrongRef();
+        if (!dialogGuard || !model || !runNext) {
             return;
+        }
+        if (model->controlSession() != session || model->usesLocalMemoryBank() != localStore) {
+            for (int row = state->nextRecord; row < state->records.size(); ++row) {
+                state->issues << formatImportIssue(describeImportedMemory(state->records.at(row).memory),
+                    "not attempted because the original memory session ended", {});
+            }
+            state->nextRecord = state->records.size();
         }
 
         if (state->nextRecord >= state->records.size()) {
@@ -1202,7 +1165,7 @@ void MemoryDialog::onImport()
 
         const MemoryCsvRecord record = state->records.at(state->nextRecord++);
         const QString rowLabel = describeImportedMemory(record.memory);
-        const MemoryUpdateData update = buildMemoryUpdateData(record.memory);
+        const MemoryEntry entry = record.memory;
         if (progressGuard) {
             const int currentRecord = state->processedCount + 1;
             const int percent = state->records.isEmpty()
@@ -1217,76 +1180,26 @@ void MemoryDialog::onImport()
                     .arg(rowLabel));
         }
 
-        model->sendCmdPublic("memory create",
-            [model, dialogGuard, state, runNext, rowLabel, update, advanceProgress](int code, const QString& body) {
-            if (!dialogGuard) {
-                return;
+        model->createMemory(entry, dialogGuard,
+            [model, dialogGuard, session, localStore, state, runNext, rowLabel, advanceProgress]
+            (const RadioControlReply& result, int) {
+            if (!model || !dialogGuard) { return; }
+            if (result.kind == RadioControlReply::Kind::Accepted) {
+                ++state->importedCount;
+            } else {
+                state->issues << formatImportIssue(rowLabel, "couldn't import memory", result.message);
             }
-
-            if (code != 0) {
-                state->issues << formatImportIssue(
-                    rowLabel,
-                    "couldn't create a new memory on the radio",
-                    body);
-                advanceProgress();
-                (*runNext)();
-                return;
-            }
-
-            bool ok = false;
-            const int idx = body.trimmed().toInt(&ok);
-            if (!ok) {
-                state->issues << formatImportIssue(
-                    rowLabel,
-                    "the radio returned an unrecognized memory id",
-                    body);
-                advanceProgress();
-                (*runNext)();
-                return;
-            }
-
-            model->sendCmdPublic(
-                QString("memory set %1 %2").arg(idx).arg(update.commandSuffix),
-                [model, dialogGuard, state, runNext, rowLabel, update, idx, advanceProgress](int setCode, const QString& setBody) {
-                if (!dialogGuard) {
-                    return;
+            if (result.kind == RadioControlReply::Kind::Cancelled || result.code == -1
+                || model->controlSession() != session || model->usesLocalMemoryBank() != localStore) {
+                for (int row = state->nextRecord; row < state->records.size(); ++row) {
+                    state->issues << formatImportIssue(describeImportedMemory(state->records.at(row).memory),
+                        "not attempted because the original operation stopped", {});
                 }
-
-                if (setCode == 0) {
-                    model->handleMemoryStatus(idx, update.kvs);
-                    ++state->importedCount;
-                    advanceProgress();
-                    (*runNext)();
-                    return;
-                }
-
-                state->issues << formatImportIssue(
-                    rowLabel,
-                    "the radio rejected one or more imported fields",
-                    setBody);
-
-                model->sendCmdPublic(QString("memory remove %1").arg(idx),
-                    [model, dialogGuard, state, runNext, rowLabel, idx, advanceProgress](int removeCode, const QString& removeBody) {
-                    if (!dialogGuard) {
-                        return;
-                    }
-
-                    if (removeCode == 0) {
-                        QMap<QString, QString> kvs;
-                        kvs["removed"] = QString{};
-                        model->handleMemoryStatus(idx, kvs);
-                    } else {
-                        state->issues << formatImportIssue(
-                            rowLabel,
-                            "the partially created memory couldn't be cleaned up automatically",
-                            removeBody);
-                    }
-
-                    advanceProgress();
-                    (*runNext)();
-                });
-            });
-        });
+                state->nextRecord = state->records.size();
+            }
+            advanceProgress();
+            QTimer::singleShot(0, dialogGuard, [runNext] { (*runNext)(); });
+        }, session);
     };
 
     (*runNext)();
@@ -1349,6 +1262,9 @@ void MemoryDialog::onRemove()
 
     const QPointer<MemoryDialog> dialogGuard(this);
     const QPointer<RadioModel> modelGuard(m_model);
+    const RadioControlSession session = m_model->controlSession();
+    QMap<int, quint64> revisions;
+    for (const int index : indices) { revisions.insert(index, m_model->memorySlotRevision(index)); }
     ScopedChildWidget<QMessageBox> confirmOwner(this);
     QMessageBox& confirm = *confirmOwner.get();
     confirm.setIcon(QMessageBox::Warning);
@@ -1362,7 +1278,8 @@ void MemoryDialog::onRemove()
     confirm.setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
     confirm.setDefaultButton(QMessageBox::Cancel);
     const int result = confirm.exec();
-    if (!dialogGuard || !modelGuard || dialogGuard->m_model != modelGuard.data() || !confirmOwner) {
+    if (!dialogGuard || !modelGuard || dialogGuard->m_model != modelGuard.data() || !confirmOwner
+        || modelGuard->controlSession() != session) {
         return;
     }
     if (result != QMessageBox::Yes) {
@@ -1370,7 +1287,7 @@ void MemoryDialog::onRemove()
         return;
     }
 
-    RadioModel* const model = modelGuard.data();
+    const QPointer<RadioModel> model(modelGuard);
     struct RemovalState {
         QList<int> indices;
         QStringList descriptions;
@@ -1408,9 +1325,16 @@ void MemoryDialog::onRemove()
     };
 
     const auto runNext = QSharedPointer<std::function<void()>>::create();
-    *runNext = [model, dialogGuard, state, runNext, progressGuard, advanceProgress]() {
-        if (!dialogGuard) {
+    const QWeakPointer<std::function<void()>> weakNext(runNext);
+    *runNext = [model, session, revisions, dialogGuard, state, weakNext, progressGuard, advanceProgress]() {
+        const auto runNext = weakNext.toStrongRef();
+        if (!dialogGuard || !model || !runNext) {
             return;
+        }
+        if (model->controlSession() != session) {
+            state->failed += state->indices.size() - state->nextIndex;
+            state->failedDescriptions << QStringLiteral("Original memory session ended.");
+            state->nextIndex = state->indices.size();
         }
 
         if (state->nextIndex >= state->indices.size()) {
@@ -1457,20 +1381,28 @@ void MemoryDialog::onRemove()
                     .arg(description));
         }
 
-        model->sendCmdPublic(QString("memory remove %1").arg(idx),
-            [model, dialogGuard, idx, description, state, runNext, advanceProgress](int code, const QString&) {
-            if (code == 0) {
-                QMap<QString, QString> kvs;
-                kvs["removed"] = QString{};
-                model->handleMemoryStatus(idx, kvs);
-            } else {
+        MemoryRequest request{MemoryRequest::Action::Remove, idx, {}};
+        request.expectedRevision = revisions.value(idx);
+        model->requestMemory(request, dialogGuard,
+            [model, dialogGuard, session, description, state, runNext, advanceProgress]
+            (const RadioControlReply& result) {
+            if (!model || !dialogGuard) { return; }
+            if (result.kind != RadioControlReply::Kind::Accepted) {
                 ++state->failed;
                 state->failedDescriptions << description;
             }
+            if (result.kind == RadioControlReply::Kind::Cancelled || result.code == -1
+                || model->controlSession() != session) {
+                state->failed += state->indices.size() - state->nextIndex;
+                for (int row = state->nextIndex; row < state->indices.size(); ++row) {
+                    state->failedDescriptions << state->descriptions.value(row)
+                        + QStringLiteral(" (not attempted because the original operation stopped)");
+                }
+                state->nextIndex = state->indices.size();
+            }
             advanceProgress();
-            if (dialogGuard)
-                (*runNext)();
-        });
+            QTimer::singleShot(0, dialogGuard, [runNext] { (*runNext)(); });
+        }, session);
     };
 
     (*runNext)();

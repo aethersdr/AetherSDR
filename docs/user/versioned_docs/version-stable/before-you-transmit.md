@@ -47,7 +47,7 @@ The checks are written so you can do them without putting a signal on the air. W
 - [ ] **The transmit antenna is the one you mean.** The RX applet header shows the RX and TX antenna buttons, with the names you gave them in **Settings → Radio Setup... → Antennas**. See [RX Controls](./rx-controls.md).
 - [ ] **The antenna is matched.** Run the radio's **ATU** from the TX applet (FlexRadio), or your external tuner, at low tune power, and check the **SWR** gauge. A Tuner Genius XL has its own applet; see [TGXL Tuner Control](./tgxl-tuner-control.md). **Tools → Pre-tune ATU Bands...** keys the transmitter repeatedly, so make sure the bands are clear first.
 - [ ] **External amplifiers are in STANDBY** until everything above checks out, and while you tune or sweep. The amplifier applets have **STANDBY** / **OPERATE** buttons; the PGXL has a **STBY** key. See [Amplifiers](./amplifiers.md) and [Peripherals](./peripherals.md).
-- [ ] **(FlexRadio)** **TUNE will not key anything you don't want it to:** **Settings → Inhibit during TUNE ▸** chooses which outputs (ACC TX, TX1, TX2, TX3) are held while the radio tunes. See [TX Controls](./tx-controls.md).
+- [ ] **(FlexRadio)** **TUNE will not key anything you don't want it to:** on firmware 4.3 and later, check **RCA off/TUNE** for each band you use under **Radio Setup → Transmit → TX Band Settings**. **Settings → Inhibit during TUNE ▸** selects ACC TX inhibition, and also selects individual RCA outputs on firmware 4.2 and older. See [TX Controls](./tx-controls.md#tune).
 
 ### Digital modes
 
@@ -63,6 +63,7 @@ The checks are written so you can do them without putting a signal on the air. W
   - Controller buttons can be bound to PTT, MOX or TUNE: [USB Control Surfaces](./usb-control-surfaces.md) (including serial PTT and foot switches), [MIDI Controller Mapping](./midi-controller-mapping.md), [Ulanzi Dial](./ulanzi-dial.md), [StreamDeck](./streamdeck.md) and the [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md).
   - CAT and TCI clients can key the radio. See [CAT Control](./cat-control.md) and [TCI Server](./tci-server.md).
   - The automation bridge cannot key the transmitter unless **Allow TX via MCP** is ticked, which is off by default. Leave it off unless you need it. See [Automation Bridge and MCP](./automation-bridge-and-mcp.md).
+- [ ] **(FlexRadio, firmware v4.3 and later)** **You know what your footswitch transmits.** A hardware PTT now sends the selected TX source, DAX or PC audio included, unless **PTT Mic Override** is on. See [Hardware PTT and the TX source](./tx-controls.md#hardware-ptt-and-the-tx-source).
 - [ ] **(FlexRadio)** **The radio's transmit time-out and interlocks are set:** **Timeout (sec):** and the **Interlocks - TX REQ** group on the **Transmit** page of Radio Setup. See [Radio Setup](./radio-setup.md).
 - [ ] **You can see when you are transmitting.** A green `M:SS` transmit timer appears in the title bar, just left of **PC Audio**, for each of your own transmissions, and the VFO marker turns orange/red. If an interlock blocks transmit, a notification says why. See [TX Controls](./tx-controls.md).
 

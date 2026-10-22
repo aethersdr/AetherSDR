@@ -5,6 +5,8 @@
 // transport: real backends, never connected.
 
 #include "TestSettingsProfile.h"
+#include "RadioSetupControlFixture.h"
+#include <QSignalSpy>
 #include "core/AppSettings.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "gui/RadioSetupDialog.h"
@@ -140,9 +142,9 @@ private slots:
         QPushButton* button = findShowTxButton(dialog);
         QVERIFY2(button, "Show TX in Waterfall button found");
 
-        ScopedCommandLog log;
+        QSignalSpy refused(&model, &RadioModel::commandDropped);
         button->click();
-        QVERIFY2(log.contains(kWireText + QLatin1Char('1')), "the wire route is taken");
+        QCOMPARE(refused.size(), 1);
         QVERIFY2(!model.transmitModel().showTxInWaterfall(), "the model is not set");
     }
 
@@ -151,8 +153,8 @@ private slots:
     // that takes the flag locally on every radio.
     void flexStillSendsTheWireText()
     {
-        RadioModel model;  // a bare model is on the Flex backend
-        QVERIFY(!model.shapesDisplayRatesLocally());
+        RadioModel model;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(model);
         QVERIFY(!model.backendCapabilities().clientPersistsShowTxInWaterfall());
 
         RadioSetupDialog dialog(&model);
@@ -161,12 +163,12 @@ private slots:
         QPushButton* button = findShowTxButton(dialog);
         QVERIFY2(button, "Show TX in Waterfall button found");
 
-        ScopedCommandLog log;
+        backend->commands.clear();
         button->click();
-        QVERIFY2(log.contains(kWireText + QLatin1Char('1')), "the radio is told");
+        QCOMPARE(backend->commands, QStringList{kWireText + QLatin1Char('1')});
         QVERIFY2(!model.transmitModel().showTxInWaterfall(), "the model waits for the echo");
         button->click();
-        QVERIFY2(log.contains(kWireText + QLatin1Char('0')), "and told again when switched off");
+        QCOMPARE(backend->commands.last(), kWireText + QLatin1Char('0'));
     }
 };
 

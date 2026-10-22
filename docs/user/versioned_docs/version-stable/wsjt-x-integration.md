@@ -82,6 +82,7 @@ AetherSDR can listen to WSJT-X's UDP decode messages and put the stations it dec
 - FT8 transmitted on slice B can show heavy ALC and be decoded far less often than the same signal on slice A ([#5340](https://github.com/aethersdr/AetherSDR/issues/5340)).
 - Over TCI, the mic profile, **MIC** level and **PROC** in the Phone/CW applet change the transmitted digital signal ([#5844](https://github.com/aethersdr/AetherSDR/issues/5844)).
 - Over TCI, the transmitted FT8 signal can show random jumps ([#5133](https://github.com/aethersdr/AetherSDR/issues/5133)).
+- **(FlexRadio, firmware v4.3 and later)** A footswitch or other hardware PTT transmits the selected TX source, so with DAX on it sends WSJT-X's audio, not your microphone. Turn on **PTT Mic Override** to make a hardware PTT use the microphone instead. See [Hardware PTT and the TX source](./tx-controls.md#hardware-ptt-and-the-tx-source).
 - On macOS, DAX transmit can stop sending audio to the radio until AetherSDR is restarted ([#5870](https://github.com/aethersdr/AetherSDR/issues/5870)).
 
 ## Troubleshooting

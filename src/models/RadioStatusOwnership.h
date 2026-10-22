@@ -5,6 +5,8 @@
 
 #include <QMap>
 #include <QString>
+#include <QStringList>
+#include <QStringView>
 
 #include <algorithm>
 #include <utility>
@@ -91,24 +93,38 @@ inline bool statusRemoved(const StreamObjectParts& stream,
         || kvs.value(QStringLiteral("in_use")) == QStringLiteral("0");
 }
 
-// Decide whether an interlock status update should keep local TX (SmartMtr TX
-// meter + TX audio gate) ON. Returns false => force off. Mirrors the gate in
-// RadioModel's interlock handler. VOX keys the radio autonomously (no
-// setTransmit(), so txRequested stays false); when VOX is enabled and we own
-// the transmitter, treat it as a legitimate owned-TX path like hardware PTT.
-// voxEnabled has zero effect when false, so all non-VOX behavior is unchanged.
+// Reconcile local TX audio/meters only after the radio reports TX. FlexLib
+// 4.3.16 Radio.cs ParsePTTSource describes comma-separated latched sources.
+// VOX still requires its enable flag: older firmware reports it as SW.
+// Neither a source token nor this predicate grants an intent or keys TX.
 inline bool interlockKeepsLocalTxOn(bool txOwnedByUs, bool txRequested,
                                     bool cwKeyActive, bool cwxActive, bool tuning,
                                     const QString& lastInterlockSource,
                                     bool voxEnabled)
 {
-    if (!txOwnedByUs)
-        return false;  // another client owns TX — always force off
-    const bool hardwarePtt = (lastInterlockSource == QLatin1String("MIC")
-                              || lastInterlockSource == QLatin1String("ACC")
-                              || lastInterlockSource == QLatin1String("RCA"));
-    return txRequested || cwKeyActive || cwxActive || tuning
-           || hardwarePtt || voxEnabled;
+    if (!txOwnedByUs) {
+        return false;
+    }
+    if (txRequested || cwKeyActive || cwxActive || tuning || voxEnabled) {
+        return true;
+    }
+    // Status retains this remote field across deltas. Scan views so repeated
+    // comma-dense input cannot amplify allocations into one string per token.
+    const QStringView sources(lastInterlockSource);
+    qsizetype from = 0;
+    for (;;) {
+        const qsizetype comma = sources.indexOf(QLatin1Char(','), from);
+        const qsizetype end = comma < 0 ? sources.size() : comma;
+        const QStringView token = sources.mid(from, end - from);
+        if (token == QLatin1String("MIC") || token == QLatin1String("ACC")
+            || token == QLatin1String("RCA")) {
+            return true;
+        }
+        if (comma < 0) {
+            return false;
+        }
+        from = comma + 1;
+    }
 }
 
 // Whether the *local operator* is the one keying the transmitter — mic/PTT,
@@ -125,6 +141,78 @@ inline bool operatorTransmitActive(bool transmitting, bool daxTxActive,
     return transmitting && !daxTxActive && !sourceIsTciHardware && !sourceIsDax
            && !sourceIsTuneCarrier && !modeIsCw;
 }
+
+// A TGXL autotune keys the radio over its interlock line, so the PTT source
+// can't identify it. AetherSDR arms a short window when it sends the autotune;
+// a key edge inside the window is a *provisional* tune that the tuner's
+// tuning=1 must confirm within kTgxlTuneConfirmMs, otherwise the tuner refused
+// and the over belongs to the operator. Clock-injected so it is unit-testable.
+inline constexpr qint64 kTgxlAutotuneKeyWindowMs = 5000;
+inline constexpr qint64 kTgxlTuneConfirmMs = 1500;
+
+struct TgxlTuneCycle {
+    qint64 armedUntilMs{0};
+    bool   provisional{false};
+    qint64 confirmByMs{0};
+    bool   latched{false};
+    // tuning was still true when the cycle unkeyed; ignore it until tuning=0
+    // so the late completion can't latch the operator's next over.
+    bool   staleTuning{false};
+    bool   wasTransmitting{false};
+
+    void arm(qint64 nowMs) { armedUntilMs = nowMs + kTgxlAutotuneKeyWindowMs; }
+
+    void reset() { *this = TgxlTuneCycle{}; }
+
+    void onTuningChanged(bool tuning, bool transmitting)
+    {
+        if (tuning)
+            return;
+        staleTuning = false;
+        if (!transmitting)
+            armedUntilMs = 0;  // tune ended/refused unkeyed: a quick MOX is the operator's
+    }
+
+    // Returns true while this cycle is a (possible) TGXL tune carrier.
+    bool update(bool transmitting, bool tunerTuning, qint64 nowMs)
+    {
+        if (!transmitting) {
+            if (latched || provisional) {
+                armedUntilMs = 0;
+                staleTuning = tunerTuning;
+            }
+            latched = false;
+            provisional = false;
+            wasTransmitting = false;
+            return false;
+        }
+
+        const bool liveTuning = tunerTuning && !staleTuning;
+        const bool rising = !wasTransmitting;
+        wasTransmitting = true;
+
+        if (rising) {
+            if (liveTuning) {
+                latched = true;
+                provisional = false;
+            } else if (nowMs < armedUntilMs) {
+                provisional = true;
+                confirmByMs = nowMs + kTgxlTuneConfirmMs;
+            }
+        } else if (provisional) {
+            if (liveTuning) {
+                latched = true;
+                provisional = false;
+            } else if (nowMs >= confirmByMs) {
+                provisional = false;
+                armedUntilMs = 0;
+            }
+        } else if (!latched && liveTuning) {
+            latched = true;  // front-panel tune: no arm, tuning=1 mid-over
+        }
+        return latched || provisional;
+    }
+};
 
 enum class OwnedStatusAction {
     Defer,

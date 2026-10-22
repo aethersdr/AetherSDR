@@ -32,6 +32,8 @@ This page walks through connecting to a FlexRadio for the first time. AetherSDR 
 
 The window has no title bar. It opens above the status bar; drag any empty part of it to move it, and drag an edge or corner to resize it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). **View → Frameless Window** does not apply to it, and pressing **Return** in a field (an IP address, a SmartLink password) does only what that field does.
 
+The window automatically fits its height to the available screen space, including room for a horizontal scrollbar when the contents are wider than the window. On a smaller screen, scroll the body to reach its controls; the connection status and **Disconnect** button remain below it.
+
 1. **Launch AetherSDR.** The **Connect to Radio** window opens. You can reopen it at any time with **File → Connect to Radio...**, or from the **+** button beside the title bar's radio tabs.
 2. Choose **On This Network** ("Recommended for new users when the radio and computer are on the same LAN").
 3. Your radio appears under **Available radios** within a few seconds.

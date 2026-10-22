@@ -1,7 +1,7 @@
 ---
 title: "CW Decoder"
 slug: "/cw-decoder"
-description: "AetherSDR includes a built-in CW (Morse code) decoder powered by ggmorse (MIT license)."
+description: "AetherSDR includes a built-in CW (Morse code) decoder: ggmorse by default, with two optional neural decoders, DeepFist and DeepCW."
 status: "Supported"
 applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)", "Networked Icom (early; IC-7300MK2 supported)"]
 ---
@@ -14,11 +14,13 @@ applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)", "Networked Icom (early
 
 AetherSDR includes a built-in CW (Morse code) decoder powered by [ggmorse](https://github.com/ggerganov/ggmorse) (MIT license). It automatically detects the CW tone pitch and keying speed, and displays decoded text in real time in a panel below the waterfall. It can decode what you receive, what you send, or both.
 
-The decoder works on every radio family that has a CW mode: FlexRadio, the [Hermes-Lite 2](./hermes-lite-2.md), and [Networked Icom](./networked-icom.md) radios (it opens when an Icom slice is in CW).
+On Apple Silicon Macs, Linux and Windows you can also choose one of two neural decoders, **DeepFist** or **DeepCW**, which can copy weak or irregular signals that ggmorse misses. See [Choosing a decoder](#choosing-a-decoder).
+
+The decoder works on every radio family that has a CW mode: FlexRadio, the [Hermes-Lite 2](./hermes-lite-2.md), [Networked Icom](./networked-icom.md), and experimental [RTL-SDR](./rtl-sdr.md) reception.
 
 ## Requirements
 
-- The selected slice is in **CW** or **CWL**.
+- The selected slice is in a supported CW mode: **CW**, **CWU**, **CWL** or **CWR** (reverse CW on RTL-SDR).
 - On a FlexRadio, a **DAX RX channel** (1–8) assigned to the selected slice is recommended, so the decoder hears that slice alone. See [Which audio is decoded](#which-audio-is-decoded).
 
 ## Setup
@@ -38,13 +40,38 @@ Both appear in the same panel. Your own sending is shown in **cyan**, so it stan
 
 ## Using the CW decoder
 
-When the selected slice is in **CW** or **CWL**, the decode panel appears below the waterfall, and it hides again when you switch to another mode.
+When the selected slice is in **CW**, **CWU**, **CWL** or **CWR**, the decode panel appears below the waterfall, and it hides again when you switch to another mode.
 
 Drag the grip on the panel's edge to resize it; the height is remembered. Right-click the text for font size and Clear.
 
 <img src="/img/screens/cw-decoder-panel.png" width="1340" alt="The bottom of the panadapter in CW mode. The lower part of the waterfall shows CW signals as dotted vertical lines. Below it, the decoder pane's control row reads CW, (selected slice), the detected tone and speed, a Sens slider with two lock buttons, Pitch 500 to 700 Hz and WPM 15 to 40 range sliders, and CPY ALL, CPY VIS, A-, A+, CLR and close buttons, above the decoded-text line." />
 
 *The CW decoder pane under the waterfall, with its sensitivity, pitch and speed controls.*
+
+### Choosing a decoder
+
+The decoder selector in the panel's toolbar picks which decoder reads the received CW. Only the selected decoder runs. Your own sending (the **TX** toggle) is always decoded by ggmorse.
+
+| Decoder | Text appears | Typical use | Model |
+|---|---|---|---|
+| **ggmorse** (default) | About half a second after each character | Clean, steady signals | None; built in |
+| **DeepFist** | About 2 seconds behind the signal | Weak and hand-sent CW | Downloaded on first use, about 13 MB |
+| **DeepCW** | About 6–8 seconds behind the signal, a few characters at a time; it holds text back so later audio can correct it | Weak signals | Downloaded on first use, about 15 MB |
+
+No decoder is best on every signal. Try each on the signals you work. DeepCW analyzes tones from **400 to 1200 Hz**; keep the received CW tone in that range.
+
+The neural decoders' models are not part of the AetherSDR download. The first time you select one, AetherSDR downloads its model from the model's own published source and checks it before use; the status beside the selector shows the progress. **Cancel** stops a download, and **Retry** appears if it fails. Once downloaded, the model is kept and works offline. If a model cannot be downloaded, the decoder shows **Model unavailable** and you can switch back to ggmorse.
+
+With a neural decoder selected:
+
+- **Sens**, the lock buttons and the Pitch and WPM ranges are unavailable; they apply to ggmorse only.
+- Characters are coloured by the model's own confidence, on the same green-to-red scale, and are never hidden.
+- Callsign contact cards and the MQTT text stream come from ggmorse only.
+- AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on radios with SmartSDR+) works with any decoder.
+
+DeepCW discards its provisional text (about 5–7 seconds) when the source changes, audio is interrupted, or decoding stops. Its worker finishes the current inference or model load before stopping, so switching decoders can pause the interface until that work finishes.
+
+The neural decoders are not available on Intel Macs; there the selector does not appear and ggmorse decodes as before.
 
 ### How it works
 
@@ -60,6 +87,7 @@ Retuning resets the decoder state; pitch and speed locks survive a retune.
 
 The decoder follows the **selected slice**, independently of speaker volume or mute:
 
+- **On RTL-SDR**, CW and CWR use the selected slice's independent audio. Speaker gain and mute do not affect decoding. Moving that receiver outside capture suspends decoding until it can receive again.
 - **On a FlexRadio, assign a DAX RX channel to the selected slice** (1–8). The decoder then reads that slice's audio alone, regardless of speaker gain, mute, or other audible slices.
 - Without a DAX channel, it uses the shared receive audio, which mixes every audible slice and follows speaker gain and mute. The panel shows **RX: shared audio**; hover it for the explanation.
 
@@ -73,7 +101,7 @@ Turn on **View → Show live CW contacts** to see the station the decoder copies
 
 ### MQTT
 
-Decoded text is published to the MQTT topic `aethersdr/cw/decode`, one JSON message per character, with `"rx": false` marking text from the TX decoder. See [MQTT Station Automation](./mqtt-station-automation.md).
+Decoded text is published to the MQTT topic `aethersdr/cw/decode`, one JSON message per character, with `"rx": false` marking text from the TX decoder. Received text is published only while ggmorse is the selected decoder. See [MQTT Station Automation](./mqtt-station-automation.md).
 
 ### Tips for best results
 
@@ -91,7 +119,8 @@ Decoded text is published to the MQTT topic `aethersdr/cw/decode`, one JSON mess
 
 | Control | What it does |
 |---|---|
-| **Stats** | Detected pitch (Hz) and speed (WPM) |
+| **Decoder** | ggmorse, DeepFist or DeepCW (Apple Silicon, Linux and Windows); see [Choosing a decoder](#choosing-a-decoder) |
+| **Stats** | Detected pitch (Hz) and speed (WPM); with a neural decoder, its status |
 | **Sens** | 0–100 (default 30). Hides low-confidence characters: 0 shows everything, higher values show only confident decodes. |
 | **🔒P** | Lock the decoder's pitch at the current value |
 | **🔒S** | Lock the decoder's speed at the current WPM |
@@ -116,7 +145,8 @@ Colors are based on ggmorse's cost function:
 ### Technical details
 
 - Library: [ggmorse](https://github.com/ggerganov/ggmorse) by Georgi Gerganov (MIT license)
-- Bundled directly — no external dependency
+- Neural decoders: DeepFist ([n9bc/DeepFist](https://github.com/n9bc/DeepFist), downloaded with the pinned upstream release’s GPL-3.0-or-later notice) and DeepCW ([e04/deepcw-engine](https://github.com/e04/deepcw-engine), AGPL-3.0); both run with ONNX Runtime, and their models are downloaded, not bundled
+- ggmorse is built in — no external dependency
 - Runs on a dedicated worker thread — does not block audio playback
 - CPU usage: negligible
 

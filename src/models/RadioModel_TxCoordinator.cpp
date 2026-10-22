@@ -255,8 +255,15 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         }
     }
     if (m_txSessionClosing) {
-        emitInterlockNotification(tr("Transmit is unavailable while the radio disconnects."),
-                                  QStringLiteral("tx-session-closing"));
+        // Admission stays closed from the teardown until onConnected(), so a
+        // connect attempt reaches this refusal too; name the phase it is in.
+        if (m_connectAttemptActive) {
+            emitInterlockNotification(tr("Transmit is unavailable until the radio has connected."),
+                                      QStringLiteral("tx-session-connecting"));
+        } else {
+            emitInterlockNotification(tr("Transmit is unavailable while the radio disconnects."),
+                                      QStringLiteral("tx-session-closing"));
+        }
         return false;
     }
     if (!m_backend || !refuseKeyOnTransmitIncapableBackend()
@@ -496,13 +503,25 @@ bool RadioModel::dispatchTuneIntent(bool on, const TxCoordinator::Request* reque
     }
     if (on) {
         armInterlockNotification(m_transmitModel.activePttSource());
-        applyTuneInhibit();
     }
     const TxCoordinator::Operation cleanup = request ? operation : m_txCoordinator.cleanupFence();
     bool releaseQueued = false;
     bool dispatched = false;
     if (m_backend && commandEpoch == m_tuneCommandEpoch
         && (on ? operation.permitsDispatch(txMonotonicMs()) : cleanup.permitsCleanup())) {
+        if (on) {
+            const quint64 previousInhibitEpoch = m_tuneInhibitEpoch;
+            if (!applyTuneInhibit()) {
+                return false;
+            }
+            if (!m_backend || commandEpoch != m_tuneCommandEpoch
+                || !operation.permitsDispatch(txMonotonicMs())) {
+                if (m_tuneInhibitEpoch == previousInhibitEpoch + 1) {
+                    restoreTuneInhibit();
+                }
+                return false;
+            }
+        }
         const QPointer<RadioModel> receiver(this);
         const auto finished = request && !on ? std::function<void()>([receiver, intent] {
             if (receiver) {
@@ -539,13 +558,25 @@ bool RadioModel::dispatchAtuIntent(bool start, const TxCoordinator::Request* req
     if (start) {
         m_transmitModel.noteActivePttSource(TransmitModel::PttSource::Atu);
         armInterlockNotification(TransmitModel::PttSource::Atu);
-        applyTuneInhibit();
     }
     const TxCoordinator::Operation cleanup = request ? operation : m_txCoordinator.cleanupFence();
     bool releaseQueued = false;
     bool dispatched = false;
     if (m_backend && commandEpoch == m_atuCommandEpoch
         && (start ? operation.permitsDispatch(txMonotonicMs()) : cleanup.permitsCleanup())) {
+        if (start) {
+            const quint64 previousInhibitEpoch = m_tuneInhibitEpoch;
+            if (!applyTuneInhibit()) {
+                return false;
+            }
+            if (!m_backend || commandEpoch != m_atuCommandEpoch
+                || !operation.permitsDispatch(txMonotonicMs())) {
+                if (m_tuneInhibitEpoch == previousInhibitEpoch + 1) {
+                    restoreTuneInhibit();
+                }
+                return false;
+            }
+        }
         m_atuCommandIntent = intent;
         const QPointer<RadioModel> receiver(this);
         const auto finished = request && !start ? std::function<void()>([receiver, intent] {
