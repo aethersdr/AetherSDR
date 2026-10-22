@@ -117,6 +117,8 @@ Open **Settings** for the availability explanation, or read the control's toolti
 
 ### Tune or WAIT does not clear
 
+If a Tune request is not confirmed, fresh idle readback clears the pending search. Missing replies keep Cancel available until the tuner reports its state or the search watchdog requests cancellation.
+
 **TUNING** means the tuner reports an active search. Click **Cancel** and stop any radio carrier separately. A search started with **Tune** or **Full tune without saving** has a 30-second watchdog that requests cancellation once. It does not key or stop a radio carrier. Searches started outside this client are not automatically canceled.
 
 Cancellation polls for idle for up to 10 seconds; missing replies can end it sooner with an error. If cancellation is not confirmed, the applet keeps the reported tuner state and allows another explicit **Cancel**. It never assumes the tuner stopped just because a deadline expired.

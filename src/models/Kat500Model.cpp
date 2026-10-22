@@ -414,7 +414,9 @@ void Kat500Model::receiveFrame(const QByteArray& frame)
         m_received[key] = m_now(); m_lastReply = m_now();
         if (key == QStringLiteral("TP") && m_searchDeadline) {
             if (m_status.tuning == true) { m_searchObserved = true; }
-            else if (m_searchObserved) { m_searchDeadline = 0; }
+            else if (m_searchObserved || m_operation != QStringLiteral("Request tuner search")) {
+                m_searchDeadline = 0;
+            }
         }
         static const QStringList stateKeys{QStringLiteral("I"),QStringLiteral("RV"),QStringLiteral("SN"),QStringLiteral("PS"),
             QStringLiteral("MD"),QStringLiteral("AN"),QStringLiteral("FLT"),QStringLiteral("BYP"),QStringLiteral("AMPI"),
@@ -448,6 +450,13 @@ void Kat500Model::finish(const QString& message)
 }
 void Kat500Model::fail(const QString& reason)
 {
+    // Only post-dispatch idle readback can retire an unconfirmed search.
+    // A lost reply retains the watchdog until polling establishes its outcome.
+    if (m_operation == QStringLiteral("Request tuner search") && m_searchDeadline &&
+        !m_searchObserved && m_status.tuning == false &&
+        m_received.value(QStringLiteral("TP"), -1) >= m_searchDeadline - 30000) {
+        m_searchDeadline = 0;
+    }
     ++m_generation; m_resetAt = 0; m_pendingBackup = {};
     m_tunePermit = {};
     m_settleGetter.clear(); m_settleVerify = {}; m_settleDeadline = 0;
@@ -557,6 +566,7 @@ bool Kat500Model::tuneSearchPending() const
 }
 void Kat500Model::cancelTuneAfterPendingOperation()
 {
+    // CT is a device-specific command: never send retained intent to an unidentified peer.
     if (!m_connected || !m_detected || m_status.identity != QStringLiteral("KAT500")) { return; }
     if (tuneCancellationPending()) { return; }
     m_searchDeadline = 0;

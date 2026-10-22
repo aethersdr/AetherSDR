@@ -201,6 +201,38 @@ static int searchDeadline(bool saveMatch)
     CHECK(peer.model.unavailableReason(true).isEmpty());
     return 0;
 }
+static int unconfirmedSearchRecovers(bool saveMatch, bool silent, bool lateTuning = false)
+{
+    Peer peer;
+    const auto transport = peer.model.m_write;
+    bool responding = !silent;
+    peer.model.m_write = [&](const QByteArray& bytes) {
+        if (!responding || bytes == "T;TP;" || bytes == "FTNS;TP;") {
+            peer.wire.append(bytes);
+            if (responding) { peer.model.receiveBytes("TP0;"); }
+            return true;
+        }
+        return transport(bytes);
+    };
+    CHECK(peer.model.startTune(saveMatch));
+    peer.complete();
+    CHECK(!peer.model.operationBusy());
+    if (silent) {
+        // A missing reply is not proof of idle. Keep Cancel until fresh readback.
+        CHECK(peer.model.tuneSearchPending());
+        CHECK(!peer.model.setAntenna(2));
+        peer.tuning = lateTuning;
+        responding = true;
+    } else {
+        CHECK(!peer.model.tuneSearchPending());
+    }
+    for (int i = 0; i < 450; ++i) { peer.step(); }
+    CHECK(peer.wire.count("CT;TP;") == (lateTuning ? 1 : 0));
+    CHECK(peer.model.unavailableReason(true).isEmpty());
+    CHECK(!peer.model.tuneSearchPending());
+    return 0;
+}
+
 static int cancellationRetainsSafetyAndCanRetry()
 {
     Peer peer;
@@ -810,7 +842,7 @@ static int run()
     model.transportOpened(); model.m_timer.stop(); sent.clear();
     CHECK(next() == ";"); CHECK(!sent.contains("MDM;MD;"));
     model.transportClosed();
-    const int failures = carrierControllerKeepsItsOwnDeadline() | watchdogDoesNotInventRecovery() | cancellationIntentConsumedOnce() | searchDeadline(true) | searchDeadline(false) | cancellationRetainsSafetyAndCanRetry() |
+    const int failures = unconfirmedSearchRecovers(true, true, true) | unconfirmedSearchRecovers(false, true, true) | unconfirmedSearchRecovers(true, false) | unconfirmedSearchRecovers(false, false) | unconfirmedSearchRecovers(true, true) | unconfirmedSearchRecovers(false, true) | carrierControllerKeepsItsOwnDeadline() | watchdogDoesNotInventRecovery() | cancellationIntentConsumedOnce() | searchDeadline(true) | searchDeadline(false) | cancellationRetainsSafetyAndCanRetry() |
         searchIntentIsSessionScoped() | boundedMaintenancePreflight(false) | boundedMaintenancePreflight(true) | keyBlockReadback() | rejectUnsupportedMemoryFrequency() | followDoesNotRetryAdmittedIntent() | lateEepromRepliesStopRestore(false) | lateEepromRepliesStopRestore(true) |
         lateMemoryTerminatorCannotPublish() | antennaPermissionsLoadWhilePolling() | ordinaryPollLatencyKeepsSafetyFresh() | settlingReadback() | rejectNewUnsafeReadback() | doNotExposeFailedBackup() |
         cancelResetDuringDiagnostic() | canceledMemoryDrainsWithoutTelemetry();
