@@ -15,8 +15,9 @@ two local changes to the otherwise exact upstream snapshot:
    decoder (`CwDecoder` sets them from the slider; PR #3330). To go with it the
    coarse pass steps 2 WPM (upstream 10), every speed is capped at 115 WPM, a
    fixed `speed_wpm` is accepted below 200 (upstream 100), and `intervalsAll`
-   grows from 100 to 120 to hold the larger speed index. The comment above the
-   coarse search states those limits (#6669 corrected it from "5..115").
+   grows from 100 to 120 to hold the larger speed index. Upstream's own
+   `&& s < 55` loop bound is deleted so the raised clamps are reachable.
+   The comment above the coarse search states those limits (#6669 corrected it from "5..115").
 
 ## When refreshing ggmorse
 
