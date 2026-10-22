@@ -10,6 +10,7 @@
 #include "core/AutomationServer.h"
 #include "core/ClientDisplaySettings.h"
 #include "core/backends/SliceDelta.h"
+#include "core/backends/TransmitDelta.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
@@ -17,6 +18,7 @@
 
 #include <QCoreApplication>
 #include <QJsonObject>
+#include <QStringList>
 
 #include <cstdio>
 #include <memory>
