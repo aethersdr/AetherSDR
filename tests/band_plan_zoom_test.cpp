@@ -98,6 +98,16 @@ int main(int argc, char** argv)
     }
     check(!nativePanZoomWidthHz(14.05, 14.070, 14.025, widthsHz),
           "reversed region edges are refused");
+
+    // MainWindow measures the width from the allocation's own midpoint, so a
+    // window dragged off-centre (a SCROLL-F pan) cannot inflate the detent:
+    // the 14.025-14.070 segment needs 50 kHz from its midpoint however far
+    // the pan centre has wandered.
+    const double midpoint = (14.025 + 14.070) / 2.0;
+    check(nativePanZoomWidthHz(midpoint, 14.025, 14.070, widthsHz) == 50000,
+          "measured from the allocation midpoint, the segment fits 50 kHz");
+    check(nativePanZoomWidthHz(14.110, 14.025, 14.070, widthsHz) == 200000,
+          "measured from a pan centre dragged 40 kHz off, the same segment would need 200 kHz");
     check(!nativePanZoomWidthHz(14.05, 14.025, 14.025, widthsHz),
           "zero-width region is refused");
     check(!nativePanZoomWidthHz(14.05, 14.025, 14.0250001, widthsHz),

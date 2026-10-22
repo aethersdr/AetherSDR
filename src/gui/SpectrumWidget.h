@@ -471,16 +471,22 @@ public:
         m_resetFftSmoothingOnNextFrame = true;
     }
 
-    // Flex uses radio-owned zoom flags; scope-capable Icom radios use native
-    // span detents around their radio-owned center.
-    void setBandSegmentZoomAvailable(bool available, bool icomScope = false)
+    // Flex uses radio-owned zoom flags; a radio declaring a native scope span
+    // (Icom today) zooms by setting that span. Keyed on the declaration, not
+    // the family, so the text stays right for the next backend that declares it.
+    void setBandSegmentZoomAvailable(bool available, bool nativeSpan = false)
     {
         const QString tip = !available
-            ? (icomScope ? tr("Waiting for Icom scope geometry.")
-                         : tr("Band/segment zoom requires FlexRadio or an Icom scope."))
-            : icomScope
-                ? tr("Zoom using the Icom scope span; the radio frequency stays unchanged.")
+            ? (nativeSpan ? tr("Waiting for the radio's scope geometry.")
+                          : tr("Band/segment zoom needs a radio that declares it."))
+            : nativeSpan
+                ? tr("Zoom using the radio's scope span; the tuned frequency stays unchanged.")
                 : QString();
+        // Called on every scope sweep: skip the work when nothing changed.
+        if (m_zoomBandBtn && m_zoomBandBtn->isEnabled() == available
+            && m_zoomBandBtn->toolTip() == tip) {
+            return;
+        }
         if (m_zoomBandBtn) {
             m_zoomBandBtn->setEnabled(available);
             m_zoomBandBtn->setToolTip(tip);
