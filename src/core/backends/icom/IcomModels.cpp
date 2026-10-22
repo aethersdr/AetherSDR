@@ -551,7 +551,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .gps = GpsProfile{setting::kNtpEnabled, setting::kNtpServer,
                           setting::kGpsTimeCorrect, true},
         .setMenu = SetMenuProfile{359, 131},
-        .scope = ScopeCommandProfile{true, false, false, false, false},
+        .scope = ScopeCommandProfile{true, true, true, true, false, 4, ScopeEdgeTable::Ic705},
         .meters = MeterCalibrationProfile{
             .calibration = MeterCalibration::Ic705,
             .currentFullScaleAmps = 4.0,
@@ -582,7 +582,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .fmRepeater = FmRepeaterProfile{FmRepeaterDialect::Extended,
                                        kExtendedFmAccessModes,
                                        true, true, true, true, true, true},
-        .scope = ScopeCommandProfile{true, false, false, false, false},
+        .scope = ScopeCommandProfile{true, true, true, true, false, 4, ScopeEdgeTable::Ic9700, true},
         .meters = MeterCalibrationProfile{
             .calibration = MeterCalibration::Ic9700,
             .currentFullScaleAmps = 20.0,
@@ -630,7 +630,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .cwTextKeyer = CwTextKeyerProfile{},
         .rxAntenna = RxAntennaProfile{true, true},
         .setMenu = SetMenuProfile{267, 89},
-        .scope = ScopeCommandProfile{true, true, true, true, true},
+        .scope = ScopeCommandProfile{true, true, true, true, true, 4, ScopeEdgeTable::Hf},
         .meters = MeterCalibrationProfile{
             .calibration = MeterCalibration::Ic7300Mk2,
             .currentFullScaleAmps = 25.0,
