@@ -6636,13 +6636,13 @@ void RadioModel::setBinauralRx(bool on)
 
 void RadioModel::setPanWnb(bool on)
 {
-    // The band-state replay of the stored value: no operator moved a control.
+    // Stored-state replay has no individual control action behind it.
     requestPanDisplay(activePanadapter(), {PanDisplayField::Wnb, on}, {}, /*announce=*/false);
 }
 
 void RadioModel::setPanWnbLevel(int level)
 {
-    // The band-state replay of the stored value: no operator moved a control.
+    // Stored-state replay has no individual control action behind it.
     requestPanDisplay(activePanadapter(), {PanDisplayField::WnbLevel, level}, {}, /*announce=*/false);
 }
 

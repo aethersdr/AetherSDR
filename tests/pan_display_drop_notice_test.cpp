@@ -103,6 +103,8 @@ struct Fixture {
     QString pan1;
     QString wf0;
     QString wf1;
+    const QString backendPan0{QStringLiteral("0x40000000")};
+    const QString backendPan1{QStringLiteral("0x40000001")};
 
     explicit Fixture(const RadioCapabilities& caps)
     {
@@ -112,8 +114,8 @@ struct Fixture {
         radio.setBackendForTest(std::move(owned), caps.family);
         QObject::connect(&radio, &RadioModel::commandDropped, &radio,
                          [this](const QString& cmd) { dropped << cmd; });
-        emit backend->panCenterBandwidthChanged(QStringLiteral("first"), 7.100, 0.384);
-        emit backend->panCenterBandwidthChanged(QStringLiteral("second"), 14.100, 0.384);
+        emit backend->panCenterBandwidthChanged(backendPan0, 7.100, 0.384);
+        emit backend->panCenterBandwidthChanged(backendPan1, 14.100, 0.384);
         pan0 = RadioModel::neutralPanIdStringForTest(0);
         pan1 = RadioModel::neutralPanIdStringForTest(1);
         if (const PanadapterModel* pan = radio.panadapter(pan0)) {
@@ -277,6 +279,51 @@ void otherRowsWithoutCommandPlane()
     check(f.dropped.isEmpty(), "icom: the connect-time replay raises nothing");
 }
 
+void storedDisplayReplayIsSilent()
+{
+    for (const RadioCapabilities& caps : {icomCapabilities(), hl2Capabilities()}) {
+        Fixture f(caps);
+        f.radio.setPanWnb(true);
+        check(f.dropped.isEmpty(), caps.family + ": stored WNB replay is silent");
+        f.dropped.clear();
+        f.radio.setPanWnbLevel(73);
+        check(f.dropped.isEmpty(), caps.family + ": stored WNB level replay is silent");
+        f.dropped.clear();
+
+        PanadapterModel* pan = f.radio.activePanadapter();
+        check(f.radio.requestPanDisplay(pan, {PanDisplayField::LevelRange,
+                  PanLevelRange{-130.0, -30.0}}, {}, false) == ReceiveDispatch::Unsupported,
+              caps.family + ": silent level-range replay still refuses unsupported control");
+        check(f.dropped.isEmpty(), caps.family + ": stored level-range replay is silent");
+
+        for (const PanDisplayRequest& request : {
+                 PanDisplayRequest{PanDisplayField::Wnb, true},
+                 PanDisplayRequest{PanDisplayField::WnbLevel, 73}}) {
+            check(f.radio.requestPanDisplay(pan, request, {}, false) == ReceiveDispatch::Unsupported,
+                  caps.family + ": band-stack replay still refuses unsupported WNB");
+        }
+        check(f.dropped.isEmpty(), caps.family + ": band-stack WNB replay is silent");
+        f.radio.requestPanDisplay(pan, {PanDisplayField::Wnb, true});
+        f.radio.requestPanDisplay(pan, {PanDisplayField::WnbLevel, 73});
+        f.radio.requestPanDisplay(pan, {PanDisplayField::LevelRange,
+            PanLevelRange{-130.0, -30.0}});
+        check(f.dropped.size() == 3, caps.family + ": explicit operator requests still announce");
+    }
+
+    // Geometry-only display support, as declared by the demo backend. Do not
+    // construct SimBackend here: its transport threads initialize sockets.
+    RadioCapabilities geometryOnly = icomCapabilities();
+    geometryOnly.panDisplayControl = PanDisplayControl{
+        {PanDisplayField::Geometry}, {PanGeometryComponent::Center}};
+    Fixture f(geometryOnly);
+    check(f.radio.requestPanDisplay(f.radio.activePanadapter(),
+              {PanDisplayField::RfGain, 12}, {}, false) == ReceiveDispatch::Unsupported,
+          "geometry-only: RF-gain replay still refuses unsupported control");
+    check(f.dropped.isEmpty(), "geometry-only: stored RF-gain replay is silent");
+    f.radio.setPanRfGain(12);
+    check(f.dropped.size() == 1, "geometry-only: explicit RF-gain setter still announces");
+}
+
 // ── 1c. A command plane: the wire text, whole ───────────────────────────────
 
 void commandPlaneGetsTheWireText()
@@ -328,6 +375,18 @@ void commandPlaneGetsTheWireText()
         f.radio.setWaterfallBlackLevel(44);
         check(written == QStringList{gainText(f.wf1, 33), blackText(f.wf1, 44)},
               QStringLiteral("flex connect-time replay: wire text for the active pan (got: %1)")
+                  .arg(written.join(QStringLiteral(" | "))));
+
+        written.clear();
+        f.radio.setPanWnb(true);
+        f.radio.setPanWnbLevel(73);
+        f.radio.requestPanDisplay(f.radio.activePanadapter(),
+            {PanDisplayField::RfGain, 12}, {}, false);
+        check(written == QStringList{
+                  QStringLiteral("display pan set %1 wnb=1").arg(f.backendPan1),
+                  QStringLiteral("display pan set %1 wnb_level=73").arg(f.backendPan1),
+                  QStringLiteral("display pan set %1 rfgain=12").arg(f.backendPan1)},
+              QStringLiteral("flex: silent replay still writes WNB and RF gain to the active second pan (got: %1)")
                   .arg(written.join(QStringLiteral(" | "))));
 
         written.clear();
@@ -465,6 +524,7 @@ int main(int argc, char** argv)
 
     absoluteRowsWithoutCommandPlane();
     otherRowsWithoutCommandPlane();
+    storedDisplayReplayIsSilent();
     commandPlaneGetsTheWireText();
     commandPlaneOutranksTheRowUnit();
     guiSitesCallTheModelSetters();

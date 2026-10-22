@@ -5696,13 +5696,15 @@ void MainWindow::buildUI()
         // AGC (outside KiwiSDR replacement), NB and NR through the SliceModel
         // setters, so they reach every backend, not only a command plane.
         m_radioModel.recallBandStackReceiveDsp(slice, e);
-        // WNB (panadapter-level, not slice)
+        // Stored WNB values are optional replay, not individual control actions.
         if (auto* pan = m_radioModel.activePanadapter()) {
             if (e.wnbOn != pan->wnbActive()) {
-                m_radioModel.requestPanDisplay(pan, {PanDisplayField::Wnb, e.wnbOn});
+                m_radioModel.requestPanDisplay(pan, {PanDisplayField::Wnb, e.wnbOn},
+                    {}, /*announce=*/false);
             }
             if (e.wnbLevel != pan->wnbLevel()) {
-                m_radioModel.requestPanDisplay(pan, {PanDisplayField::WnbLevel, e.wnbLevel});
+                m_radioModel.requestPanDisplay(pan, {PanDisplayField::WnbLevel, e.wnbLevel},
+                    {}, /*announce=*/false);
             }
         }
     });
@@ -11418,12 +11420,13 @@ void MainWindow::restoreBandState(const BandSnapshot& snap)
         // Don't push center or bandwidth — slice tune recenters the pan and
         // the radio determines bandwidth. Pushing stale saved values causes
         // FFT/waterfall misalignment during the transition (#279, #291).
-        // Only restore dBm scale (client-side display preference).
+        // Replay optional display fields without unsupported-control notices.
         m_radioModel.requestPanDisplay(pan,
             {PanDisplayField::LevelRange, PanLevelRange{snap.minDbm, snap.maxDbm}},
             {}, /*announce=*/false);
+        m_radioModel.requestPanDisplay(pan,
+            {PanDisplayField::RfGain, snap.rfGain}, {}, /*announce=*/false);
     }
-    m_radioModel.setPanRfGain(snap.rfGain);
     m_radioModel.setPanWnb(snap.wnbOn);
     if (auto* sw = spectrum()) {
         sw->setSpectrumFrac(snap.spectrumFrac);
