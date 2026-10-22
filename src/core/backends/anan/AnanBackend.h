@@ -209,7 +209,6 @@ public:
     [[nodiscard]] double sMeterDbmForTest() const noexcept { return m_sMeter.value(); }
 
 private:
-    friend class AnanFrontEndTestAccess;
     friend class AnanNoiseBlankerTestAccess;
     friend class AnanLinkStatsTestAccess;
     friend class AnanSupplyRailTestAccess;

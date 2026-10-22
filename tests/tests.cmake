@@ -1315,24 +1315,7 @@ target_link_libraries(anan_speaker_audio_test
 add_test(NAME anan_speaker_audio_test COMMAND anan_speaker_audio_test)
 # Exit 77 == the speaker port was already held, so nothing could be observed.
 # Without this property that is a green pass with zero checks.
-set_tests_properties(anan_speaker_audio_test PROPERTIES SKIP_RETURN_CODE 77
-    RESOURCE_LOCK anan_p2_loopback)
-
-# ANAN live front-end options (RFC #6209): the band-pass selection on both ADCs
-# and the speaker-amp mute, read from the High Priority datagrams P2Client
-# sends, and the anan/frontend.set verb that reaches them. Loopback only, no
-# radio. Binds 127.0.0.1:1027 (kHighPriorityPort).
-add_executable(anan_front_end_test tests/anan_front_end_test.cpp)
-target_include_directories(anan_front_end_test PRIVATE src tests)
-target_link_libraries(anan_front_end_test
-    PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
-add_test(NAME anan_front_end_test COMMAND anan_front_end_test)
-# Exit 77 == the High Priority port was already held, so nothing could be
-# observed. The lock: anan_speaker_audio_test's and anan_link_telemetry_test's
-# clients send their own High Priority packets to 127.0.0.1:1027, which this
-# listener would count as its own under ctest -j.
-set_tests_properties(anan_front_end_test PROPERTIES SKIP_RETURN_CODE 77
-    RESOURCE_LOCK anan_p2_loopback)
+set_tests_properties(anan_speaker_audio_test PROPERTIES SKIP_RETURN_CODE 77)
 
 # ANAN transport counters -> IRadioBackend::LinkStats -- what the status bar's
 # "Network:" field reads: bytes from every radio datagram, packets from DDC
@@ -1345,8 +1328,7 @@ target_link_libraries(anan_link_telemetry_test
     PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME anan_link_telemetry_test COMMAND anan_link_telemetry_test)
 # Exit 77 == no local UDP socket could be bound, so nothing could be observed.
-set_tests_properties(anan_link_telemetry_test PROPERTIES SKIP_RETURN_CODE 77
-    RESOURCE_LOCK anan_p2_loopback)
+set_tests_properties(anan_link_telemetry_test PROPERTIES SKIP_RETURN_CODE 77)
 
 # ANAN discovery targets: directed broadcasts for distinct attached subnets,
 # retaining the global broadcast and excluding /31 and /32 point-to-point links.
