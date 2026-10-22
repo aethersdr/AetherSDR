@@ -337,6 +337,7 @@ private:
     // Adopt (or refuse) the address the radio reported in its 0x19 0x00 reply.
     bool adoptCivIdentity(std::uint8_t address, std::uint8_t modelId);
     void publishModelControls();
+    void publishPreampControls();
     void requestCivIdentity(std::uint64_t sessionGeneration);
     [[nodiscard]] int sliceId() const noexcept { return 0; }
     [[nodiscard]] QString panId() const { return QStringLiteral("0"); }

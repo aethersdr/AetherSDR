@@ -14,7 +14,8 @@ namespace {
 // Single nested-JSON key holding this backend's config (Principle V).
 // Shape: {"ddc0RateKsps":int, "dither":bool,
 //         "random":bool, "ddc0AdcIndex":int, "bypassAdc0Filters":bool,
-//         "bypassAdc1Filters":bool, "speakerAudioEnabled":bool}
+//         "bypassAdc1Filters":bool, "speakerAudioEnabled":bool,
+//         "bandFilters":bool, "speakerAmpMuted":bool}
 const QString kRootKey = QStringLiteral("Anan");
 
 constexpr const char* kFieldDdc0RateKsps      = "ddc0RateKsps";
@@ -24,6 +25,8 @@ constexpr const char* kFieldDdc0AdcIndex      = "ddc0AdcIndex";
 constexpr const char* kFieldBypassAdc0Filters = "bypassAdc0Filters";
 constexpr const char* kFieldSpeakerAudioEnabled = "speakerAudioEnabled";
 constexpr const char* kFieldBypassAdc1Filters = "bypassAdc1Filters";
+constexpr const char* kFieldBandFilters       = "bandFilters";
+constexpr const char* kFieldSpeakerAmpMuted   = "speakerAmpMuted";
 
 }  // namespace
 
@@ -133,6 +136,33 @@ void AnanSettings::setBypassAdc1Filters(bool on)
 {
     QJsonObject obj = readObj();
     obj[QLatin1String(kFieldBypassAdc1Filters)] = on;
+    writeObj(obj);
+}
+
+bool AnanSettings::bandFiltersEnabled()
+{
+    // false on absence: an operator who never chose it has not asked for
+    // relays in the signal path.
+    return readObj().value(QLatin1String(kFieldBandFilters)).toBool(false);
+}
+
+void AnanSettings::setBandFiltersEnabled(bool on)
+{
+    QJsonObject obj = readObj();
+    obj[QLatin1String(kFieldBandFilters)] = on;
+    writeObj(obj);
+}
+
+bool AnanSettings::speakerAmpMuted()
+{
+    // false on absence: the radio powers up with its amplifier live.
+    return readObj().value(QLatin1String(kFieldSpeakerAmpMuted)).toBool(false);
+}
+
+void AnanSettings::setSpeakerAmpMuted(bool on)
+{
+    QJsonObject obj = readObj();
+    obj[QLatin1String(kFieldSpeakerAmpMuted)] = on;
     writeObj(obj);
 }
 

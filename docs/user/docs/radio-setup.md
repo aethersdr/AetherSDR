@@ -79,7 +79,7 @@ their nicknames on this computer.
 | **Calibration** | Host-side frequency calibration in ppb, for radios that cannot calibrate themselves ([Hermes-Lite 2](./hermes-lite-2.md)). Hidden on FlexRadio, which calibrates on the Receive page. |
 | **RTL Receiver** | ppm correction, IQ DC suppression and serial for an [RTL-SDR](./rtl-sdr.md) dongle. Only when one is connected. |
 | **HL2 Hardware** | Board variant, dither, companion filter board, CL1 external 10 MHz reference and tuner for the [Hermes-Lite 2](./hermes-lite-2.md). Only when an HL2 is connected. |
-| **ANAN Front End** | Starting sample rate, ADC choice, dither, randomization, filter-bank bypass and radio-speaker audio for the [ANAN-G2](./anan-g2.md). Available while disconnected or connected to a G2; changes apply on the next connect. |
+| **ANAN Front End** | Starting sample rate, ADC choice, dither, randomization, filter-bank bypass and radio-speaker audio for the [ANAN-G2](./anan-g2.md), which apply on the next connect, plus the band-pass filter bank and the speaker amplifier mute, which also apply at once. Available while disconnected or connected to a G2. |
 | **Droop Correction** | Panadapter edge-droop correction for the [ANAN-G2](./anan-g2.md). Only when one is connected. |
 
 ### RECEIVE & TRANSMIT

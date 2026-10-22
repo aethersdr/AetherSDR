@@ -185,10 +185,30 @@ Additional cache values accept a value rather than ON/OFF:
 | `AETHER_TEST_FFTW_TIMELIMIT` | `0.001` | Seconds FFTW may spend measuring each plan under test; an empty value allows unbounded measurement. |
 | `AETHER_SANITIZER_TIMEOUT_SCALE` | `4` | Positive integer. Multiplier applied to every test `TIMEOUT` when the build is sanitizer-instrumented (`AETHERSDR_SANITIZER` set, or `-fsanitize=` in the global C/C++ flags or in any configuration's `CMAKE_<LANG>_FLAGS_<CONFIG>`). An uninstrumented build keeps every limit exactly as written. |
 
+## macOS application identity
+
+| Option | Default | Purpose |
+|---|---|---|
+| `AETHER_MACOS_ADHOC_SIGN` | OFF | Opt in to ad-hoc signing for local non-Xcode macOS development builds. Signs nested code before the complete app bundle. Leave OFF for production/distribution builds. |
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `AETHER_MACOS_BUNDLE_IDENTIFIER` | `com.aethersdr.AetherSDR` | macOS only. Set a distinct reverse-DNS identifier, such as `com.aethersdr.AetherSDR.dev`, to give a local development build its own privacy permissions alongside an installed release. |
+
+With `AETHER_MACOS_ADHOC_SIGN=ON`, non-Xcode macOS builds sign nested code,
+then sign and verify the complete app bundle after copying resources and helpers.
+This is local development signing only: ad-hoc signatures, not an Apple
+distribution identity or a persistent self-signed certificate.
+The option defaults to OFF; production Apple signing, notarization and release CI
+keep their existing workflow and do not enable it. Xcode handles signing itself.
+An ad-hoc signature does not guarantee that privacy or Keychain approvals
+survive a rebuild; persistent development signing is a separate workflow.
+
 ## Keeping this reference current
 
 Option definitions live in [CMakeLists.txt](CMakeLists.txt),
-[cmake/AetherQtPin.cmake](cmake/AetherQtPin.cmake) and
+[cmake/AetherQtPin.cmake](cmake/AetherQtPin.cmake),
+[cmake/MacOSDevelopmentSigning.cmake](cmake/MacOSDevelopmentSigning.cmake), and
 [tests/tests.cmake](tests/tests.cmake). Update this reference in the same change
 that adds, removes or changes a project option or its default.
 `tools/check_build_options.py --strict` runs in Static checks and fails when an

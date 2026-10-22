@@ -27,13 +27,16 @@ ReceiveDispatch RadioModel::requestProfile(const ProfileRequest& request,
         return ReceiveDispatch::Unsupported;
     };
     if (!m_backend || !request.valid() || !backendCapabilities().hasProfiles
+        || (request.kind == ProfileRequest::Kind::Cw && !backendCapabilities().cwProfileControl.has_value())
         || !controlSessionCurrent(session) || (expectedSession && *expectedSession != session)) {
         return refuse();
     }
     if (request.action == ProfileRequest::Action::Create) {
         const QString name = QString(request.name).remove(QLatin1Char('*'));
         const QStringList names = request.kind == ProfileRequest::Kind::Transmit
-            ? m_transmitModel.profileList() : m_transmitModel.micProfileList();
+            ? m_transmitModel.profileList()
+            : request.kind == ProfileRequest::Kind::Cw ? m_transmitModel.cwProfileList()
+            : m_transmitModel.micProfileList();
         if (name.trimmed().isEmpty() || names.contains(name)) { return refuse(); }
     }
     const RadioControlFence current = [alive, session] {

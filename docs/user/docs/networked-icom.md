@@ -134,6 +134,7 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 
 ### IC-705
 
+- On the IC-705, the preamp cycles through **OFF**, **P.AMP1** and **P.AMP2** below 74.800 MHz. At 74.800 MHz and above it toggles **OFF** / **P.AMP1**. The choices follow the radio's reported frequency; until that frequency is known, only OFF and P.AMP1 are offered. Changing ranges does not change the radio's preamp setting; its readback takes priority over routine meter polling. After reconnecting, S-meter readings wait for the radio's frequency so they use the correct HF or VHF reference.
 - 2 m and 70 cm are available alongside HF.
 - The speech processor button reads **COMP**, with a 0–10 slider and a numeric readout, as on the MK2.
 - **WFM** (broadcast FM) is receive-only.

@@ -5355,17 +5355,34 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
         QStringLiteral("QLabel { color: {{color.text.primary}}; font-size: 12px; }");
     static const QString kHint =
         QStringLiteral("QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    // The :disabled rule restates the dialog's own: this widget-level sheet
+    // would otherwise keep a disabled checkbox at full ink.
     static const QString kCheck =
-        QStringLiteral("QCheckBox { color: {{color.text.primary}}; font-size: 12px; }");
+        QStringLiteral("QCheckBox { color: {{color.text.primary}}; font-size: 12px; }"
+                       "QCheckBox:disabled { color: {{color.control.unavailable}}; }");
     static const QString kGroup =
         QStringLiteral("QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 4px; "
                        "margin-top: 8px; padding-top: 12px; font-weight: bold; "
                        "color: {{color.text.secondary}}; }"
                        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
 
+    // The live options reach a connected radio through the "anan"/"frontend.set"
+    // verb; the control that calls this has already written AnanSettings, which
+    // the next connect reads. A no-op with nothing connected. Gated on the
+    // declared namespace, not on a family name.
+    auto pushLive = [this](const QVariantMap& fields) {
+        if (!m_model || !m_model->backendDeclaresExtension(QStringLiteral("anan"))) {
+            return;
+        }
+        m_model->invokeBackendExtension(QStringLiteral("anan"),
+                                        QStringLiteral("frontend.set"), 0, fields);
+    };
+
     auto* intro = new QLabel(
-        "Receive front-end options for the ANAN-G2. Each is read when a session starts, "
-        "so a change here takes effect on the NEXT CONNECT. The panadapter's zoom can "
+        "Receive front-end options for the ANAN-G2. The sample rate, ADC, dither, "
+        "randomization and the bypass checkboxes are read when a session starts, so a "
+        "change to them takes effect on the NEXT CONNECT. The filter bank and the speaker "
+        "amplifier mute also apply at once to a connected G2. The panadapter's zoom can "
         "still change the sample rate during a session; this sets where a session begins.");
     themed(intro, kHint);
     intro->setWordWrap(true);
@@ -5471,12 +5488,40 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
     fvb->setSpacing(6);
 
     auto* feFilterIntro = new QLabel(
-        "Each ADC has a band-pass filter bank in series ahead of it, and this client never "
-        "selects one of its filters, so the bypass is that ADC's only signal path. Leave "
-        "both checked.");
+        "Each ADC has a band-pass filter bank in series ahead of it. With no filter selected "
+        "and the bank not bypassed, nothing reaches the ADC, so one of the two is always "
+        "set.");
     themed(feFilterIntro, kHint);
     feFilterIntro->setWordWrap(true);
     fvb->addWidget(feFilterIntro);
+
+    auto* feBankCombo = new QComboBox;
+    feBankCombo->setObjectName(QStringLiteral("ananFilterBank"));
+    AetherSDR::applyComboStyle(feBankCombo);
+    feBankCombo->addItem(QStringLiteral("Bypassed"), false);
+    feBankCombo->addItem(QStringLiteral("Follow the tuned frequency"), true);
+    feBankCombo->setAccessibleName(QStringLiteral("ANAN filter bank"));
+    feBankCombo->setAccessibleDescription(QStringLiteral(
+        "Bypassed holds both ADCs' band-pass banks out of circuit. Follow the tuned "
+        "frequency selects the band-pass filter covering the receiver's frequency on both "
+        "ADCs and changes it as you tune. A filter that does not cover the tuned frequency "
+        "leaves no signal, so check each band you use. Takes effect at once."));
+    feBankCombo->setToolTip(QStringLiteral(
+        "Bypassed: both band-pass banks are held out of circuit, and the\n"
+        "front end sees all of HF.\n\n"
+        "Follow the tuned frequency: the band-pass filter covering the receiver's\n"
+        "frequency is selected on both ADCs, and changes as you tune. Strong\n"
+        "signals outside the band are rejected before the ADC.\n\n"
+        "Takes effect at once. The bank is in series, so a filter that does not\n"
+        "cover the tuned frequency leaves no signal at all, not a weaker one.\n"
+        "Check each band you use, and go back to Bypassed if one goes quiet."));
+    auto* bankRow = new QHBoxLayout;
+    auto* bankLabel = new QLabel(QStringLiteral("Filter bank:"));
+    themed(bankLabel, kLabel);
+    bankRow->addWidget(bankLabel);
+    bankRow->addWidget(feBankCombo);
+    bankRow->addStretch(1);
+    fvb->addLayout(bankRow);
 
     auto* feBypass0Chk = new QCheckBox("Bypass ADC0's bank");
     feBypass0Chk->setObjectName(QStringLiteral("ananBypassAdc0"));
@@ -5485,16 +5530,21 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
     feBypass1Chk->setObjectName(QStringLiteral("ananBypassAdc1"));
     themed(feBypass1Chk, kCheck);
     const QString bypassHint = QStringLiteral(
-        "Routes this ADC's signal around its front-end filter bank. Leave it checked:\n"
-        "no band filter is ever selected, so unchecked means nothing reaches the ADC\n"
-        "at all — not just a less selective receiver.\n\n"
+        "Routes this ADC's signal around its front-end filter bank while the filter\n"
+        "bank is Bypassed. Leave it checked: with no band filter selected, unchecked\n"
+        "means nothing reaches the ADC at all, not just a less selective receiver.\n\n"
+        "Following the tuned frequency switches the same relay, so this is disabled\n"
+        "while it does.\n\n"
         "Takes effect on the next connect.");
     feBypass0Chk->setToolTip(bypassHint);
     feBypass1Chk->setToolTip(bypassHint);
+    // Disabled while the bank follows the tuned frequency, so the reason is in
+    // the accessible description as well as the tooltip.
     const QString bypassAccessible = QStringLiteral(
-        "Routes this ADC's signal around its front-end filter bank. Leave it checked: no "
-        "band filter is ever selected, so with it unchecked nothing reaches the ADC at all. "
-        "Takes effect on the next connect.");
+        "Routes this ADC's signal around its front-end filter bank while the filter bank "
+        "is Bypassed. Leave it checked: with no band filter selected, nothing reaches the "
+        "ADC with it unchecked. Disabled while the filter bank follows the tuned frequency, "
+        "which switches the same relay. Takes effect on the next connect.");
     feBypass0Chk->setAccessibleDescription(bypassAccessible);
     feBypass1Chk->setAccessibleDescription(bypassAccessible);
     fvb->addWidget(feBypass0Chk);
@@ -5503,6 +5553,23 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
             [](bool on) { AnanSettings::setBypassAdc0Filters(on); });
     connect(feBypass1Chk, &QCheckBox::toggled, this,
             [](bool on) { AnanSettings::setBypassAdc1Filters(on); });
+
+    // The bypass checkboxes switch the same relay bit as the selection, so
+    // they are disabled, not hidden, while it drives the banks.
+    auto syncBypassEnabled = [feBypass0Chk, feBypass1Chk](bool followTuned) {
+        feBypass0Chk->setEnabled(!followTuned);
+        feBypass1Chk->setEnabled(!followTuned);
+    };
+    connect(feBankCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [feBankCombo, pushLive, syncBypassEnabled](int index) {
+        if (index < 0) {
+            return;
+        }
+        const bool followTuned = feBankCombo->itemData(index).toBool();
+        AnanSettings::setBandFiltersEnabled(followTuned);
+        syncBypassEnabled(followTuned);
+        pushLive({{QStringLiteral("bandFiltersEnabled"), followTuned}});
+    });
 
     vbox->addWidget(feFilterGroup);
 
@@ -5530,6 +5597,30 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
     connect(speakerAudioChk, &QCheckBox::toggled, this,
             [](bool on) { AnanSettings::setSpeakerAudioEnabled(on); });
 
+    auto* ampMuteChk = new QCheckBox("Mute the radio's speaker amplifier");
+    ampMuteChk->setObjectName(QStringLiteral("ananSpeakerAmpMute"));
+    themed(ampMuteChk, kCheck);
+    ampMuteChk->setAccessibleDescription(QStringLiteral(
+        "Mutes the amplifier inside the radio. Sending the radio silence leaves its "
+        "amplifier running and hissing; this stops it. A clean disconnect hands the radio "
+        "back unmuted. Takes effect at once."));
+    ampMuteChk->setToolTip(QStringLiteral(
+        "Mute the amplifier inside the radio.\n\n"
+        "Sending the radio silence leaves its amplifier running and hissing;\n"
+        "this stops it.\n\n"
+        "Takes effect at once."));
+    avb->addWidget(ampMuteChk);
+    connect(ampMuteChk, &QCheckBox::toggled, this, [pushLive](bool on) {
+        AnanSettings::setSpeakerAmpMuted(on);
+        pushLive({{QStringLiteral("speakerAmpMuted"), on}});
+    });
+
+    auto* ampMuteHint = new QLabel(QStringLiteral(
+        "A clean disconnect hands the radio back unmuted."));
+    themed(ampMuteHint, kHint);
+    ampMuteHint->setWordWrap(true);
+    avb->addWidget(ampMuteHint);
+
     vbox->addWidget(audioGroup);
 
     // Re-read AnanSettings into every control. Needed on show as well as on a
@@ -5537,22 +5628,29 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
     // another surface (or another profile load) can have moved them while this
     // dialog sat hidden -- the same reason the audio-device and serial-port
     // combos have reseeds.
-    m_ananFrontEndReseed = [feRateCombo, feAdcCombo, feDitherChk, feRandomChk,
-                            feBypass0Chk, feBypass1Chk, speakerAudioChk] {
+    m_ananFrontEndReseed = [feRateCombo, feAdcCombo, feDitherChk, feRandomChk, feBankCombo,
+                            feBypass0Chk, feBypass1Chk, speakerAudioChk, ampMuteChk,
+                            syncBypassEnabled] {
         // Blocked while seeding: every one of these controls persists on change,
         // so an unblocked setCurrentIndex() would write back the value it just
-        // read.
+        // read and, for the live ones, push it to the radio.
         const QSignalBlocker b1(feRateCombo), b2(feAdcCombo), b3(feDitherChk), b4(feRandomChk),
-                             b5(feBypass0Chk), b6(feBypass1Chk), b7(speakerAudioChk);
+                             b5(feBankCombo), b6(feBypass0Chk), b7(feBypass1Chk),
+                             b8(speakerAudioChk), b9(ampMuteChk);
         const int rateIdx = feRateCombo->findData(AnanSettings::ddc0RateKsps());
         feRateCombo->setCurrentIndex(rateIdx >= 0 ? rateIdx : 0);
         const int adcIdx = feAdcCombo->findData(AnanSettings::ddc0AdcIndex());
         feAdcCombo->setCurrentIndex(adcIdx >= 0 ? adcIdx : 0);
         feDitherChk->setChecked(AnanSettings::ditherEnabled());
         feRandomChk->setChecked(AnanSettings::randomEnabled());
+        const bool followTuned = AnanSettings::bandFiltersEnabled();
+        const int bankIdx = feBankCombo->findData(followTuned);
+        feBankCombo->setCurrentIndex(bankIdx >= 0 ? bankIdx : 0);
         feBypass0Chk->setChecked(AnanSettings::bypassAdc0Filters());
         feBypass1Chk->setChecked(AnanSettings::bypassAdc1Filters());
+        syncBypassEnabled(followTuned);
         speakerAudioChk->setChecked(AnanSettings::speakerAudioEnabled());
+        ampMuteChk->setChecked(AnanSettings::speakerAmpMuted());
     };
     m_ananFrontEndReseed();
 

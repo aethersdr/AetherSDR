@@ -284,6 +284,7 @@ private:
     bool firmwareAtLeast(const QVersionNumber& minimum) const;
     int nrsLevelMaximum() const;
     int m_announcedNrsLevelMaximum = 100;
+    bool m_announcedCwProfiles = false;
     std::function<QString()> m_firmwareVersionProvider;
     std::function<bool()> m_autoAgcThresholdLicenseProvider;
     std::function<std::optional<bool>()> m_dspResetLicenseProvider;

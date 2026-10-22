@@ -467,13 +467,16 @@ std::span<const CurvePoint> powerCurveFor(const IcomModel& model)
     return powerCurveForCalibration(meters.calibration);
 }
 
-std::span<const std::string_view> preampLabelsFor(const IcomModel& model)
+std::span<const std::string_view> preampLabelsFor(const IcomModel& model,
+                                                      std::uint64_t frequencyHz)
 {
-    // The IC-705's HF ladder. Above 50 MHz the radio collapses to OFF/P.AMP1
-    // and refuses P.AMP2, then reports what it actually did — which is why this
-    // is published once rather than rewritten on every band change under an
-    // operator who may be mid-adjustment.
-    return profileFor(model).preampLabels;
+    const IcomModelProfile& profile = profileFor(model);
+    const auto labels = profile.preampLabels;
+    const std::uint64_t limit = profile.preampTwoStageUpperExclusiveHz;
+    if (limit != 0 && (frequencyHz == 0 || frequencyHz >= limit)) {
+        return labels.first(std::min<std::size_t>(2, labels.size()));
+    }
+    return labels;
 }
 
 std::span<const std::string_view> modeListFor(const IcomModel& model)
@@ -564,6 +567,8 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .powerOn = PowerOnProfile{0, kControllerAddress, 1000},
         .memory = MemoryProfile{MemoryDialect::Ic705, 0, 99, 0, 99, true, "Group"},
         .preampLabels = kHfPreampLabels,
+        // IC-705 receiver range transition: stage 2 ends at 74.800 MHz (#6497).
+        .preampTwoStageUpperExclusiveHz = 74'800'000,
         .attenuatorSteps = kHfAttenuatorSteps,
         .modes = kIc705Modes,
         .receiveOnlyModes = kIc705ReceiveOnlyModes,

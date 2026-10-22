@@ -1506,6 +1506,7 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     }
     m_connected = true;
     m_connectedAtMs = nowMs();
+    m_frequencyHz = 0; // A new session must establish its own receive frequency.
     m_lastIncident.clear();
     m_civScheduler.clearTransactionHistory();
     m_pttIncidentReported = false;
@@ -1615,18 +1616,7 @@ void IcomCivBackend::publishModelControls()
         // the construction default or a client-side saved antenna.
     }
     emit sliceChanged(sliceId(), s);
-    // Preamp and attenuator published as per-model named positions; a model
-    // with no verified ladder publishes nothing (same rule as powerCurveFor).
-    // The HF preamp ladder is published even on VHF/UHF (00/01 only there):
-    // the radio refuses P.AMP2 and reports what it did, and republishing per
-    // band would rewrite the control under the operator.
-    const auto preampLabels = preampLabelsFor(*m_model);
-    if (!preampLabels.empty()) {
-        QStringList labels;
-        for (std::string_view l : preampLabels)
-            labels << QString::fromUtf8(l.data(), static_cast<int>(l.size()));
-        emit panPreampInfoChanged(panId(), labels);
-    }
+    publishPreampControls();
     // ONE step, and naming it in dB is honest here where it was not for the
     // preamp: the guide gives this attenuator an actual figure. HF and 50 MHz
     // only — on higher bands the radio ignores the request and reports OFF.
@@ -1638,6 +1628,19 @@ void IcomCivBackend::publishModelControls()
         emit panAttenuatorInfoChanged(panId(), labels);
     }
 
+}
+
+void IcomCivBackend::publishPreampControls()
+{
+    const auto preampLabels = preampLabelsFor(*m_model, m_frequencyHz);
+    if (preampLabels.empty()) {
+        return;
+    }
+    QStringList labels;
+    for (std::string_view label : preampLabels) {
+        labels << QString::fromUtf8(label.data(), static_cast<int>(label.size()));
+    }
+    emit panPreampInfoChanged(panId(), labels);
 }
 
 void IcomCivBackend::onSessionDisconnected(const QString& reason)
@@ -2653,9 +2656,20 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         if (auto hz = decodeFreq(frame.data)) {
             confirmState(QStringLiteral("frequency"), QVariant::fromValue<qulonglong>(*hz));
             const std::uint64_t previousHz = m_frequencyHz;
+            const auto oldPreampLabels = preampLabelsFor(*m_model, m_frequencyHz);
             m_frequencyHz = *hz;
             m_frequencyEchoAtMs = nowMs();
             onScopeVfoMoved(previousHz, *hz);
+            if (!std::ranges::equal(oldPreampLabels, preampLabelsFor(*m_model, m_frequencyHz))) {
+                publishPreampControls();
+                // A range change changes the choices, never the radio setting.
+                // Read back the current stage after publishing its new ladder.
+                if (m_session) {
+                    const auto read = cmdReadFunction(m_session->civAddress(), func::kPreamp);
+                    queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Operator);
+                    pumpCiv(frameAtMs);
+                }
+            }
             SliceDelta s;
             s.frequency = static_cast<double>(*hz) / 1e6;
             emit sliceChanged(sliceId(), s);
@@ -3593,6 +3607,11 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
 
         const qint64 answeredAtMs = nowMs();
         m_meters.markAnswered(spec->id, answeredAtMs);
+        // S-meter dBm needs the radio's band-dependent S9 reference. A new
+        // session has no receive frequency until the radio reports it.
+        if (spec->id == MeterId::SMeter && m_frequencyHz == 0) {
+            return;
+        }
         const MeterCalibrationProfile meterProfile = m_model
             ? profileFor(*m_model).meters : MeterCalibrationProfile{};
         const std::span<const CurvePoint> powerCurve = m_model
@@ -5205,8 +5224,7 @@ void IcomCivBackend::queueFrontEndInterlockRead(const std::vector<std::uint8_t>&
 
 // Publish the requested step optimistically: a set is answered with a bare FB,
 // never an echo of the new value, so waiting would leave the widget stuck. If
-// the radio refused (the IC-705 has no P.AMP2 and no attenuator above 50 MHz),
-// the write's confirmation read corrects it.
+// the radio refused, the write's confirmation read corrects it.
 void IcomCivBackend::setPanPreamp(const QString&, int step)
 {
     // Operator intent is bounded by the model's verified presentation ladder.
@@ -5214,7 +5232,7 @@ void IcomCivBackend::setPanPreamp(const QString&, int step)
     // P.AMP states while still allowing radio-originated state 02 to be
     // mirrored and reasserted unchanged by the diagnostic scrub path below.
     const int maxStep = std::max(
-        0, static_cast<int>(preampLabelsFor(*m_model).size()) - 1);
+        0, static_cast<int>(preampLabelsFor(*m_model, m_frequencyHz).size()) - 1);
     const int wanted = std::clamp(step, 0, maxStep);
     m_preampStep = wanted;
     sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,

@@ -741,6 +741,30 @@ void TransmitModel::setActiveMicProfile(const QString& profile)
     }
 }
 
+void TransmitModel::setCwProfileList(const QStringList& profiles)
+{
+    if (m_cwProfileList != profiles) {
+        m_cwProfileList = profiles;
+        emit cwProfilesChanged();
+    }
+}
+
+void TransmitModel::setActiveCwProfile(const QString& profile)
+{
+    if (m_activeCwProfile != profile) {
+        m_activeCwProfile = profile;
+        emit cwProfilesChanged();
+    }
+}
+
+void TransmitModel::setCwProfileUnsaved(bool unsaved)
+{
+    if (m_cwProfileUnsaved != unsaved) {
+        m_cwProfileUnsaved = unsaved;
+        emit cwProfileUnsavedChanged(unsaved);
+    }
+}
+
 void TransmitModel::setMicInputList(const QStringList& inputs)
 {
     if (m_micInputList != inputs) {

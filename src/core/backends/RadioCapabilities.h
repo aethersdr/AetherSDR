@@ -907,6 +907,12 @@ struct RadioCapabilities {
     // applet, the Profile Manager, import/export, the Profiles menu — goes away,
     // rather than offering an empty list the operator cannot populate.
     bool hasProfiles = false;
+    // The radio also stores named CW profiles (Flex `profile cw …`, SmartSDR
+    // 4.3.16+) that a client can list, load, create, delete and reset. Engaged
+    // gates ProfileRequest::Kind::Cw and the Profile Manager CW tab; meaningless
+    // unless hasProfiles is also true.
+    struct CwProfileControl {};
+    std::optional<CwProfileControl> cwProfileControl;
 
     // Per-slice RX audio and per-pan IQ as separate streams routed to virtual audio
     // devices for external decoders (Flex DAX). UI visibility only; the crash guard

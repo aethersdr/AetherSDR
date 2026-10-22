@@ -1332,8 +1332,10 @@ set_tests_properties(anan_link_telemetry_test PROPERTIES SKIP_RETURN_CODE 77)
 
 # ANAN discovery targets: directed broadcasts for distinct attached subnets,
 # retaining the global broadcast and excluding /31 and /32 point-to-point links.
-# Two NICs sharing a subnet still use the preferred route. Pure address
-# arithmetic: nothing is sent and no socket is opened.
+# Two NICs sharing a subnet still use the preferred route. Also discovery's log
+# lines (#6299): failed bind, no subnet, failed send, a run of unanswered
+# sweeps, each once per occurrence, captured off aether.discovery. Pure address
+# arithmetic and bookkeeping: nothing is sent and no socket is opened.
 add_executable(anan_discovery_test tests/anan_discovery_test.cpp)
 target_include_directories(anan_discovery_test PRIVATE src)
 target_link_libraries(anan_discovery_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -5798,6 +5800,13 @@ endif()
 # no app or Qt needed — guards the schema ↔ bridge verb field mapping.
 find_program(PYTHON3_EXECUTABLE NAMES python3 python)
 if(PYTHON3_EXECUTABLE)
+    if(APPLE)
+        # Socket-free CMake fixtures compile/sign binaries but never execute them.
+        add_test(NAME macos_development_signing_test
+                 COMMAND ${PYTHON3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_macos_development_signing.py)
+        set_tests_properties(macos_development_signing_test PROPERTIES TIMEOUT 60)
+    endif()
     # Socket-free Ninja graph fixtures; no compiler or application is executed.
     add_test(NAME codeql_coverage_guard
              COMMAND ${PYTHON3_EXECUTABLE}
@@ -7747,6 +7756,7 @@ set_tests_properties(stored_control_routing_test PROPERTIES TIMEOUT 45)
 add_executable(stored_control_dialogs_test
     tests/stored_control_dialogs_test.cpp
     src/gui/ProfileManagerDialog.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/MemoryDialog.cpp
     src/gui/MemoryCommands.cpp
     src/gui/PersistentDialog.cpp

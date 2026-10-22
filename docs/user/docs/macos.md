@@ -24,6 +24,10 @@ AetherSDR runs natively on macOS, with separate signed and notarized DMGs for Ap
 3. Start AetherSDR from Applications. Both DMGs are signed and notarized by Apple, so Gatekeeper verifies them with no extra steps.
 4. The **Connect to Radio** window opens. Continue with [First Connection](./first-connection.md), or try [Your First Session](./your-first-session.md) with no radio.
 
+### Allowing Local Network access
+
+Radio discovery needs **Local Network** permission on macOS 15 and later. Allow AetherSDR when macOS asks, or enable it in **System Settings → Privacy & Security → Local Network**. This permission is separate from the firewall.
+
 ### Installing the DAX audio driver
 
 [DAX Virtual Audio](./dax-virtual-audio.md) on macOS uses the **DAX Virtual Audio Driver** that ships in the AetherSDR DMG. Install it from the DMG before you enable DAX. Without it, enabling DAX shows **DAX Audio Driver Missing**.
@@ -74,6 +78,15 @@ To use the settings command line, run the program inside the app bundle, for exa
 - An RTL-SDR Blog V4 dongle shows only noise, with no signals ([#6016](https://github.com/aethersdr/AetherSDR/issues/6016)).
 
 ## Troubleshooting
+
+### The radio is reachable by IP but missing from the list
+
+Automatic discovery needs incoming network broadcasts and Local Network permission.
+
+1. Open **System Settings → Privacy & Security → Local Network** and allow AetherSDR.
+2. In **Connect to Radio**, click **Retry Discovery**.
+3. For a local source build, configure with `-DAETHER_MACOS_ADHOC_SIGN=ON`, then rebuild the complete **AetherSDR** target before launching its `.app`. This development-only option signs the finished bundle so macOS recognizes its permission identity; production signing and release CI leave it disabled. See [macOS development identity](./building-from-source.md#macos-development-identity).
+4. If broadcasts are blocked by a router or VPN, use **Connect by IP**. See [Manual Connection](./manual-connection.md).
 
 ### Enabling DAX shows "DAX Audio Driver Missing"
 
