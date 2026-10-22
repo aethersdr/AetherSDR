@@ -845,9 +845,9 @@ int main(int argc, char** argv)
         ok &= expect(settings.save(),
                      "midi.settings: save() returns true");
 
-        // 3. Block destination with an unwritable path so open fails
+        // 3. A directory at the destination must refuse the save
         const QString settingsPath = configRoot + "/AetherSDR/midi.settings";
-        // Remove file and replace with a directory of the same name to block opening as file
+        // A directory target cannot be replaced by a settings document.
         QFile::remove(settingsPath);
         QDir().mkdir(settingsPath);
         ok &= expect(!settings.saveBindings(saved),
@@ -873,6 +873,8 @@ int main(int argc, char** argv)
                          "midi.settings: write into read-only directory returns false");
             ok &= expect(settings.loadBindings().size() == saved.size(),
                          "midi.settings: failed write left previous file intact");
+        } else {
+            std::cout << "[SKIP] midi.settings: read-only directory arm (running as root)\n";
         }
 #endif
     }

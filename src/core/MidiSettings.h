@@ -38,12 +38,12 @@ class MidiSettings {
 public:
     static MidiSettings& instance();
 
-    // Load/save the default settings file (atomic write via QSaveFile, Principle XIV).
-    // Returns false on open/commit failure so callers can detect persistence failure. (#5160)
+    // Load/save the default settings file. Saves replace the file atomically
+    // and return false on open, serialization, or commit failure. (#5160)
     void load();
     bool save();
 
-    // Bindings (atomic write via QSaveFile, Principle XIV). (#5160)
+    // Binding saves use the same atomic write and failure reporting. (#5160)
     QVector<MidiBinding> loadBindings() const;
     bool saveBindings(const QVector<MidiBinding>& bindings);
 
@@ -103,7 +103,7 @@ private:
     static bool writeBindingsToXml(const QString& filePath,
                                    const QVector<MidiBinding>& bindings);
     bool writeSettingsDocument(const QString& filePath,
-                               const QVector<MidiBinding>& bindings);
+                                const QVector<MidiBinding>& bindings);
 
     QString m_lastDevice;
     bool    m_autoConnect{true};

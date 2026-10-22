@@ -513,13 +513,13 @@ bool MidiSettings::saveBindings(const QVector<MidiBinding>& bindings)
 }
 
 bool MidiSettings::writeSettingsDocument(const QString& filePath,
-                                         const QVector<MidiBinding>& bindings)
+                                        const QVector<MidiBinding>& bindings)
 {
     QDir().mkpath(QFileInfo(filePath).absolutePath());
 
     // QSaveFile writes beside the target and renames over it on commit(), so
     // a crash or full disk leaves the previous settings intact instead of a
-    // truncated file (Principle XIV). (#5160)
+    // truncated file. (#5160)
     QSaveFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         qWarning() << "MidiSettings: failed to save" << filePath;
@@ -538,8 +538,9 @@ bool MidiSettings::writeSettingsDocument(const QString& filePath,
 
         // Write bindings inline in the main settings file
         xml.writeStartElement("Bindings");
-        for (const auto& b : bindings)
+        for (const auto& b : bindings) {
             writeBindingElement(xml, b);
+        }
         xml.writeEndElement(); // Bindings
 
         xml.writeEndElement(); // MidiSettings
