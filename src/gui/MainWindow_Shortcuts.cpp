@@ -61,8 +61,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <iterator>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -1905,23 +1907,14 @@ void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
         }
         // The radio owns center. Request the smallest declared native width
         // that covers both allocation edges; saturate at the widest detent.
-        const double centerMhz = pan->centerMhz();
-        if (!std::isfinite(centerMhz) || centerMhz <= 0.0) {
+        const std::optional<int> targetHz = nativePanZoomWidthHz(
+            pan->centerMhz(), region->lowMhz, region->highMhz,
+            {zoom->nativeWidthsHz.constData(),
+             static_cast<std::size_t>(zoom->nativeWidthsHz.size())});
+        if (!targetHz) {
             return;
         }
-        const double neededHz = 2.0e6 * std::max(centerMhz - region->lowMhz,
-                                                   region->highMhz - centerMhz);
-        if (!std::isfinite(neededHz) || neededHz <= 0.0) {
-            return;
-        }
-        int targetHz = zoom->nativeWidthsHz.last();
-        for (int widthHz : zoom->nativeWidthsHz) {
-            if (widthHz >= neededHz) {
-                targetHz = widthHz;
-                break;
-            }
-        }
-        const double targetMhz = targetHz / 1.0e6;
+        const double targetMhz = *targetHz / 1.0e6;
         if (!qFuzzyCompare(pan->bandwidthMhz(), targetMhz)) {
             m_radioModel.requestPanBandwidth(panId, targetMhz);
         }

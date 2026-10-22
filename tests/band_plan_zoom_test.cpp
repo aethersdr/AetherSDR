@@ -1,9 +1,12 @@
 #include "models/BandPlanManager.h"
+#include "gui/PanZoomModeGate.h"
 
 #include <QCoreApplication>
 
+#include <array>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 using namespace AetherSDR;
 
@@ -55,6 +58,50 @@ int main(int argc, char** argv)
           "10 m stays separate from 12 m");
     check(!plan.zoomRegionAt(13.000, false), "outside the plan does not guess a band");
     check(!plan.zoomRegionAt(std::nan(""), true), "invalid frequency is refused");
+
+    // Exercise the same width selector used by MainWindow, after the plan
+    // lookup. These ARRL segment edges fit a native 50 kHz span exactly.
+    plan.setSegmentsForTest({
+        {7.125, 7.175, "", "", {}},
+        {14.025, 14.070, "", "", {}},
+    });
+    constexpr std::array widthsHz{5000, 10000, 20000, 50000,
+                                 100000, 200000, 500000, 1000000};
+    for (double centerMhz : {7.150, 14.050}) {
+        const auto region = plan.zoomRegionAt(centerMhz, true);
+        check(region.has_value(), "regression frequency resolves a plan segment");
+        if (region) {
+            check(nativePanZoomWidthHz(centerMhz, region->lowMhz,
+                                       region->highMhz, widthsHz) == 50000,
+                  "an exact 50 kHz fit does not round up to 100 kHz");
+        }
+    }
+    check(nativePanZoomWidthHz(14.049999, 14.025, 14.070, widthsHz) == 50000,
+          "one Hz below the detent boundary still fits 50 kHz");
+    check(nativePanZoomWidthHz(14.050001, 14.025, 14.070, widthsHz) == 100000,
+          "one Hz beyond the detent boundary requires 100 kHz");
+    check(nativePanZoomWidthHz(14.044999, 14.025, 14.070, widthsHz) == 100000,
+          "the high allocation edge also determines the detent");
+    check(nativePanZoomWidthHz(28.4, 28.0, 29.68, widthsHz) == 1000000,
+          "a region wider than every detent saturates at the widest");
+    check(!nativePanZoomWidthHz(14.05, 14.025, 14.070, {}),
+          "an empty detent list is refused");
+    for (double invalid : {std::nan(""), std::numeric_limits<double>::infinity(),
+                           -std::numeric_limits<double>::infinity(),
+                           std::numeric_limits<double>::max(), 1.0e13, -1.0, 0.0}) {
+        check(!nativePanZoomWidthHz(invalid, 14.025, 14.070, widthsHz),
+              "invalid center cannot reach an integer conversion");
+        check(!nativePanZoomWidthHz(14.05, invalid, 14.070, widthsHz),
+              "invalid low edge cannot reach an integer conversion");
+        check(!nativePanZoomWidthHz(14.05, 14.025, invalid, widthsHz),
+              "invalid high edge cannot reach an integer conversion");
+    }
+    check(!nativePanZoomWidthHz(14.05, 14.070, 14.025, widthsHz),
+          "reversed region edges are refused");
+    check(!nativePanZoomWidthHz(14.05, 14.025, 14.025, widthsHz),
+          "zero-width region is refused");
+    check(!nativePanZoomWidthHz(14.05, 14.025, 14.0250001, widthsHz),
+          "region edges that collapse to the same Hz are refused");
 
     return failures == 0 ? 0 : 1;
 }
