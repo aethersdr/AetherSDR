@@ -195,8 +195,8 @@ void P2Client::stop()
         // radio before the socket that would carry any further keepalive
         // goes away. Without highPriorityOptions(): p2app keeps the last
         // byte 1400 and Alex words it was sent, and no client is left to
-        // change them, so a clean stop hands the radio back bypassed and
-        // unmuted.
+        // change them, so a clean stop hands the radio back unmuted, with the
+        // bypass flags, not a band filter, deciding both banks.
         sendTo(*m_socket,
               buildHighPriority(false, 0, m_bypassAdc0Filters, m_bypassAdc1Filters,
                                 m_adc0AttenuationDb, m_adc1AttenuationDb),

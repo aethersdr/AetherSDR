@@ -5382,8 +5382,8 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
         "Receive front-end options for the ANAN-G2. The sample rate, ADC, dither, "
         "randomization and the bypass checkboxes are read when a session starts, so a "
         "change to them takes effect on the NEXT CONNECT. The filter bank and the speaker "
-        "amplifier mute take effect at once. The panadapter's zoom can still change the "
-        "sample rate during a session; this sets where a session begins.");
+        "amplifier mute also apply at once to a connected G2. The panadapter's zoom can "
+        "still change the sample rate during a session; this sets where a session begins.");
     themed(intro, kHint);
     intro->setWordWrap(true);
     vbox->addWidget(intro);

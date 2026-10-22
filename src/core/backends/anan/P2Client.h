@@ -264,10 +264,10 @@ private:
 
     QHostAddress m_host;
     std::uint32_t m_ddc0FreqWord = 0;   // last value sent; the keepalive resends this
-    // Set once from Params at start(); every buildHighPriority() call for
-    // the rest of this session (the keepalive tick included) carries these
-    // same values, since there is no live setter for either (see Params'
-    // own comment on why these are connect-time-only).
+    // Set once from Params at start(), since there is no live setter for
+    // either (see Params' own comment on why these are connect-time-only).
+    // While m_bandFiltersEnabled is set, a run=1 packet's band filter
+    // replaces them (highPriorityOptions()); the stop packet always uses them.
     bool m_bypassAdc0Filters = true;
     bool m_bypassAdc1Filters = true;
     // Step attenuation per ADC, seeded from Params at start() and changed
