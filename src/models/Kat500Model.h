@@ -50,7 +50,9 @@ public:
     // Explicit operator intent only. No command here keys a radio/carrier.
     bool startTune(bool saveMatch = true, std::function<bool()> permit = {});
     bool cancelTune();
-    // Retain stop intent if its controller goes away while a serial request drains.
+    bool tuneSearchPending() const;
+    bool tuneCancellationPending() const;
+    // Retain explicit stop intent while an operation or late reply drains.
     void cancelTuneAfterPendingOperation();
     bool readMatchStatus();
     bool memorize(int frequencyKhz = 0);
@@ -130,9 +132,9 @@ private:
     void preflight(std::function<void()> ready);
     void readRegion(bool external, int address, int end, std::function<void(QByteArray)> complete);
     void readRegionBlock();
-    void restoreBlock();
+    void restoreBlock(bool refreshed = false);
     void restoreNextRegion();
-    void applyNextSetting();
+    void applyNextSetting(bool refreshed = false);
     void eraseNextBand();
     void queueIdentity();
     void pollTuneCancellation();
@@ -208,6 +210,8 @@ private:
     qint64 m_settleNext = 0;
     quint64 m_settleGeneration = 0;
     bool m_settleAllowOff = false;
+    qint64 m_searchDeadline = 0;
+    bool m_searchObserved = false;
     qint64 m_cancelTuneDeadline = 0;
     qint64 m_tuneResultDeadline = 0;
     bool m_deferredTuneCancel = false;

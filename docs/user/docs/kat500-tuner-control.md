@@ -23,14 +23,14 @@ Use a local USB serial port or a raw TCP serial bridge such as ser2net or aether
 
 1. Open **Settings → Radio Setup... → Peripherals → Elecraft KAT500**.
 2. Select **Serial** and the tuner port/baud (4800, 9600, 19200 or 38400), or **Network** and the raw TCP host/port. The network bridge owns baud and 8N1 line settings. Telnet/RFC 2217 and Elecraft Remote authentication are not supported.
-3. Click **Connect**. **Auto-connect** reconnects using the saved client connection preferences when enabled.
+3. Click **Connect**. **Connect automatically** reconnects using the saved client connection preferences when enabled.
 4. The **KT500** button appears after KAT500 identification. It remains available during logical power-off or stale replies and disappears when the transport closes.
 
 For **Network**, enter a hostname or IP address without a URL scheme, path, spaces or control characters, and a port from 1 to 65535. Invalid entries are rejected before connecting.
 
 ## Using the applet
 
-**ON/OFF** shows confirmed power. Click it to request the opposite state; the label changes after readback. Silence is stale, not OFF. **Tune** requests tuner search only after your explicit click; supply RF according to the Elecraft manual. **Cancel** requests cancellation while the tuner reports an active search. AetherSDR does not generate a radio carrier for these controls.
+**ON/OFF** shows confirmed power. Click it to request the opposite state; the label changes after readback. Silence is stale, not OFF. **Tune** requests tuner search only after your explicit click; supply RF according to the Elecraft manual. **Cancel** requests cancellation while a search is pending or the tuner reports an active search. If another request or late reply is draining, cancellation waits for that drain before being sent once. The button stays dimmed while cancellation is pending; normal controls require confirmed idle state and fresh zero forward ADC readback. AetherSDR does not generate a radio carrier for these controls.
 
 **Auto**, **Manual** and **Bypass** select the tuner mode. **ANT 1**, **ANT 2** and **ANT 3** remain visible. The applet automatically reads antenna availability for the confirmed band after connecting and when a new band is reported. Buttons become available after those replies; antennas disabled in the tuner configuration remain dimmed with a reason. Confirmed mode and antenna selections remain visible with dimmed text while actions are unavailable. **Clear fault** clears the current fault, not stored fault history.
 
@@ -114,6 +114,18 @@ Restore requires a complete firmware 02.16 backup matching the connected tuner s
 ### Controls are disabled
 
 Open **Settings** for the availability explanation, or read the control's tooltip or accessible description. Connect and identify the tuner, wait for fresh replies, turn it on, and keep it idle with no RF before writes. Configuration and memory tools require firmware 02.16. Bootloader identity directs you to the official Utility.
+
+### Tune or WAIT does not clear
+
+**TUNING** means the tuner reports an active search. Click **Cancel** and stop any radio carrier separately. A search started with **Tune** or **Full tune without saving** has a 30-second watchdog that requests cancellation once. It does not key or stop a radio carrier. Searches started outside this client are not automatically canceled.
+
+Cancellation polls for idle for up to 10 seconds; missing replies can end it sooner with an error. If cancellation is not confirmed, the applet keeps the reported tuner state and allows another explicit **Cancel**. It never assumes the tuner stopped just because a deadline expired.
+
+**WAIT** can mean an operation is pending, late replies are draining, or safety readback is missing or unsafe. Hover over a disabled control or open **Settings** for the reason. A nonzero forward ADC count keeps normal writes disabled even if another device's power meter shows zero. Wait for fresh **TP** idle and **VFWD** zero readbacks; do not use reconnect as a substitute for stopping RF.
+
+If configuration or restore cannot obtain fresh idle/no-RF preflight replies, it stops with an error instead of repeating preflight indefinitely. Confirmed writes remain applied. Check the connection and readback before explicitly retrying.
+
+**Disconnect → Connect** discards queued client commands and reads the tuner again; it does not cancel a hardware search or replay a previous Tune/Cancel. **Connect automatically** only changes automatic connection behavior and does not reset an active connection.
 
 ### A requested value is not confirmed
 

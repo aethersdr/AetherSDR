@@ -92,6 +92,7 @@ void Kat500Model::reconnect()
 void Kat500Model::transportOpened()
 {
     m_deferredTuneCancel = false;
+    m_searchDeadline = 0; m_searchObserved = false;
     ++m_generation; m_resetAt = 0; m_pendingBackup = {};
     m_tunePermit = {};
     m_settleGetter.clear(); m_settleVerify = {}; m_settleDeadline = 0;
@@ -105,6 +106,7 @@ void Kat500Model::transportOpened()
 void Kat500Model::transportClosed(const QString& reason)
 {
     m_deferredTuneCancel = false;
+    m_searchDeadline = 0; m_searchObserved = false;
     ++m_generation; m_resetAt = 0; m_pendingBackup = {};
     m_tunePermit = {};
     m_settleGetter.clear(); m_settleVerify = {}; m_settleDeadline = 0;
@@ -150,9 +152,18 @@ QString Kat500Model::unavailableReason(bool writing) const
     if (operationBusy() || m_deferredTuneCancel) { return QStringLiteral("Another KAT500 operation is in progress."); }
     if (m_now() < m_quarantineUntil) { return QStringLiteral("Waiting for late replies to drain."); }
     if (m_status.powerOn != true) { return QStringLiteral("KAT500 power is off or unknown."); }
-    if (writing && (m_status.tuning != false || m_status.forwardAdc != 0 || fieldAgeMs(QStringLiteral("TP")) < 0 ||
-                    fieldAgeMs(QStringLiteral("VFWD")) < 0 || fieldAgeMs(QStringLiteral("TP")) > 5000 || fieldAgeMs(QStringLiteral("VFWD")) > 5000)) {
-        return QStringLiteral("A fresh idle tuner and zero forward ADC count are required.");
+    if (writing) {
+        if (m_status.tuning == true) { return QStringLiteral("KAT500 is tuning; use Cancel to stop the search."); }
+        if (m_searchDeadline) { return QStringLiteral("Waiting for tuner search completion; Cancel remains available."); }
+        if (!m_status.tuning || fieldAgeMs(QStringLiteral("TP")) < 0 || fieldAgeMs(QStringLiteral("TP")) > 5000) {
+            return QStringLiteral("Waiting for a fresh tuner idle readback (TP).");
+        }
+        if (!m_status.forwardAdc || fieldAgeMs(QStringLiteral("VFWD")) < 0 || fieldAgeMs(QStringLiteral("VFWD")) > 5000) {
+            return QStringLiteral("Waiting for a fresh forward ADC readback (VFWD).");
+        }
+        if (*m_status.forwardAdc != 0) {
+            return QStringLiteral("Forward ADC is %1; zero is required before changing tuner settings. Stop RF and wait for readback.").arg(*m_status.forwardAdc);
+        }
     }
     return {};
 }
@@ -200,6 +211,10 @@ void Kat500Model::tick()
     const qint64 now = m_now();
     if (m_connecting && now - m_connectStarted > 10000) { transportClosed(QStringLiteral("Connection timed out.")); return; }
     if (!m_connected) { return; }
+    if (m_searchDeadline && now >= m_searchDeadline) {
+        cancelTuneAfterPendingOperation();
+        report(QStringLiteral("Tuner search exceeded 30 seconds; cancellation requested. No radio carrier command was sent."));
+    }
     emit availabilityChanged();
     if (!m_connected) { return; }
     if (m_resetAt) {
@@ -303,6 +318,12 @@ void Kat500Model::tick()
     }
     const QByteArray wire = m_active->wire;
     if (wire.startsWith("DM") || wire.contains(";DM")) { m_memoryReading = true; }
+    if ((wire == "T;TP;" || wire == "FTNS;TP;") && !m_tunePermit) {
+        // Carrier-controlled searches have their own stop-RF-before-cancel deadline.
+        // This watchdog owns only a direct search actually sent in this session.
+        m_searchDeadline = now + 30000;
+        m_searchObserved = false;
+    }
     write(wire);
 }
 bool Kat500Model::expireActiveRequest()
@@ -357,6 +378,7 @@ void Kat500Model::receiveFrame(const QByteArray& frame)
         return;
     }
     if (frame == "FT") {
+        m_searchDeadline = 0;
         m_tuneCompleted = true;
         emit telemetryReceived(QStringLiteral("FT"), m_status);
         return;
@@ -390,6 +412,10 @@ void Kat500Model::receiveFrame(const QByteArray& frame)
         const QList<QByteArray> commands = requested.split(';');
         const QString key = QString::fromLatin1(commands.size() >= 2 ? commands[commands.size()-2] : requested);
         m_received[key] = m_now(); m_lastReply = m_now();
+        if (key == QStringLiteral("TP") && m_searchDeadline) {
+            if (m_status.tuning == true) { m_searchObserved = true; }
+            else if (m_searchObserved) { m_searchDeadline = 0; }
+        }
         static const QStringList stateKeys{QStringLiteral("I"),QStringLiteral("RV"),QStringLiteral("SN"),QStringLiteral("PS"),
             QStringLiteral("MD"),QStringLiteral("AN"),QStringLiteral("FLT"),QStringLiteral("BYP"),QStringLiteral("AMPI"),
             QStringLiteral("ATTN"),QStringLiteral("SIDE"),QStringLiteral("C"),QStringLiteral("L")};
@@ -520,16 +546,30 @@ bool Kat500Model::startTune(bool saveMatch, std::function<bool()> permit)
     if (accepted) { m_tunePermit = std::move(permit); }
     return accepted;
 }
+bool Kat500Model::tuneCancellationPending() const
+{
+    return m_deferredTuneCancel || m_operation == QStringLiteral("Cancel tuner search");
+}
+bool Kat500Model::tuneSearchPending() const
+{
+    return m_status.tuning == true || m_searchDeadline || tuneCancellationPending()
+        || m_operation == QStringLiteral("Request tuner search");
+}
 void Kat500Model::cancelTuneAfterPendingOperation()
 {
-    if (!m_connected || !m_detected) { return; }
-    if (m_operation == QStringLiteral("Cancel tuner search")) { return; }
+    if (!m_connected || !m_detected || m_status.identity != QStringLiteral("KAT500")) { return; }
+    if (tuneCancellationPending()) { return; }
+    m_searchDeadline = 0;
     m_deferredTuneCancel = true;
     cancelOperation();
+    report(QStringLiteral("Tuner cancellation queued; waiting for pending replies to drain."));
+    emit availabilityChanged();
 }
 bool Kat500Model::cancelTune()
 {
     if (!m_connected || !m_detected || m_status.identity != QStringLiteral("KAT500") || operationBusy() || m_now() < m_quarantineUntil) { return false; }
+    m_searchDeadline = 0;
+    m_deferredTuneCancel = false;
     ++m_generation; m_operation = QStringLiteral("Cancel tuner search"); m_operationWriting = true;
     m_queue.clear(); m_cancelTuneDeadline = m_now() + 10000; emit operationBusyChanged(true);
     enqueue({"CT;TP;",[](const QByteArray& frame) { return matchesStatusQuery("TP;",frame); },
@@ -660,14 +700,15 @@ bool Kat500Model::applyConfiguration(const Configuration& changedFields)
     std::stable_sort(edits.begin(),edits.end(),[&](const auto& a,const auto& b) { return order(a) < order(b); });
     m_edits.clear(); for (const auto& edit : edits) { m_edits.enqueue(edit); }
     m_total = m_edits.size();
-    preflight([this] { applyNextSetting(); }); return true;
+    preflight([this] { applyNextSetting(true); }); return true;
 }
-void Kat500Model::applyNextSetting()
+void Kat500Model::applyNextSetting(bool refreshed)
 {
     if (!m_connected || !operationBusy()) { return; }
     if (m_edits.isEmpty()) { const Configuration result = m_configuration; finish(QStringLiteral("All changed settings confirmed by readback.")); emit configurationRead(result); return; }
     if (fieldAgeMs(QStringLiteral("VFWD")) > 1000 || fieldAgeMs(QStringLiteral("TP")) > 1000) {
-        preflight([this] { applyNextSetting(); }); return;
+        if (refreshed) { fail(QStringLiteral("Configuration stopped: preflight replies were too slow for fresh idle/no-RF confirmation. No pending writes were sent.")); return; }
+        preflight([this] { applyNextSetting(true); }); return;
     }
     const auto edit = m_edits.dequeue(); const SettingKey key = edit.first; const double requested = edit.second;
     const QByteArray wire = configurationSet(key,requested) + configurationQuery(key);
@@ -732,15 +773,16 @@ bool Kat500Model::restoreBackup(const Backup& backup, bool confirmed)
     }
     if (!begin(QStringLiteral("Restore and verify backup"),true)) { return false; }
     m_restore = backup; m_restoreExternal = false; m_restoreAddress = 32; m_total = 992 + 61440;
-    preflight([this] { restoreBlock(); }); return true;
+    preflight([this] { restoreBlock(true); }); return true;
 }
-void Kat500Model::restoreBlock()
+void Kat500Model::restoreBlock(bool refreshed)
 {
     if (!m_connected || !operationBusy()) { return; }
     const int end = m_restoreExternal ? 65536 : 1024;
     if (m_restoreAddress >= end) { restoreNextRegion(); return; }
     if (fieldAgeMs(QStringLiteral("VFWD")) > 1000 || fieldAgeMs(QStringLiteral("TP")) > 1000) {
-        preflight([this] { restoreBlock(); }); return;
+        if (refreshed) { fail(QStringLiteral("Restore stopped: preflight replies were too slow for fresh idle/no-RF confirmation. Confirmed blocks remain applied; no pending writes were sent.")); return; }
+        preflight([this] { restoreBlock(true); }); return;
     }
     const int address = m_restoreAddress; const bool external = m_restoreExternal;
     const QByteArray data = (external ? m_restore.external : m_restore.internal).mid(address,std::min(32,end-address));
