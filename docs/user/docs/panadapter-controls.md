@@ -10,7 +10,7 @@ The panadapter is the main display: the FFT spectrum on top and the scrolling wa
 
 *A panadapter on 20 m with its waterfall, the slice A VFO flag and the overlay menu down the left edge.*
 
-The **B** and **S** buttons at the bottom left zoom to the active band or band-plan segment. On a scope-capable Icom, they choose the smallest supported scope span that covers both allocation edges around the radio's reported center; the tuned frequency stays put. An exact fit uses that span: with the ARRL US plan and a center of 14.050 MHz, **S** selects 50 kHz for the 14.025–14.070 MHz segment. Allocations wider than the scope's maximum use its widest span. FlexRadio uses its own band and segment zoom modes. The buttons remain disabled when the connected radio does not declare either control.
+The **B** and **S** buttons at the bottom left zoom to the active band or band-plan segment. On a scope-capable Icom, they choose the smallest supported scope span that covers both allocation edges around the radio's reported center; the tuned frequency stays put. An exact fit uses that span: with the ARRL US plan and a center of 14.050 MHz, **S** selects 50 kHz for the 14.025–14.070 MHz segment. Near an allocation edge, the span widens to keep both edges visible: at a center of 14.069 MHz, the same segment uses 100 kHz without moving the center. Allocations wider than the scope's maximum use its widest span. FlexRadio uses its own band and segment zoom modes. The buttons remain disabled when the connected radio does not declare either control.
 
 ## Using the panadapter
 

@@ -1924,16 +1924,11 @@ void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
                 6000);
             return;
         }
-        // Ask for the smallest declared native width that covers both
-        // allocation edges (saturating at the widest), centred on the
-        // allocation. Where the radio owns the centre (Center scope mode) the
-        // centre is refused and re-asserted and only the width lands, snapped
-        // to a detent; where the window is free (SCROLL-F / Fixed) the band
-        // is centred and fitted. Measured from the allocation's own midpoint
-        // so a window dragged off-centre cannot inflate the width it needs.
-        const double allocationCentreMhz = (region->lowMhz + region->highMhz) / 2.0;
+        // Fit both allocation edges around the radio-reported centre. Native
+        // scope span control does not guarantee a centre move, so requesting
+        // an allocation midpoint could leave the narrower span off target.
         const std::optional<int> targetHz = nativePanZoomWidthHz(
-            allocationCentreMhz, region->lowMhz, region->highMhz,
+            pan->centerMhz(), region->lowMhz, region->highMhz,
             {zoom->nativeWidthsHz.constData(),
              static_cast<std::size_t>(zoom->nativeWidthsHz.size())});
         if (!targetHz) {
@@ -1944,11 +1939,10 @@ void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
         }
         const double targetMhz = *targetHz / 1.0e6;
         const bool widthSame = qFuzzyCompare(pan->bandwidthMhz(), targetMhz);
-        const bool centreSame = std::abs(pan->centerMhz() - allocationCentreMhz) < 1.0e-6;
-        if (widthSame && centreSame) {
+        if (widthSame) {
             return;
         }
-        m_radioModel.requestPanCenter(panId, allocationCentreMhz, targetMhz);
+        m_radioModel.requestPanBandwidth(panId, targetMhz);
         return;
     }
     // Flex keeps its zoom flags in radio status, so a manual pan/zoom clears

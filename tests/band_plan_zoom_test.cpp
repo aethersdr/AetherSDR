@@ -2,6 +2,9 @@
 #include "gui/PanZoomModeGate.h"
 
 #include <QCoreApplication>
+#include <QFile>
+#include <QRegularExpression>
+#include <QString>
 
 #include <array>
 #include <cmath>
@@ -99,15 +102,49 @@ int main(int argc, char** argv)
     check(!nativePanZoomWidthHz(14.05, 14.070, 14.025, widthsHz),
           "reversed region edges are refused");
 
-    // MainWindow measures the width from the allocation's own midpoint, so a
-    // window dragged off-centre (a SCROLL-F pan) cannot inflate the detent:
-    // the 14.025-14.070 segment needs 50 kHz from its midpoint however far
-    // the pan centre has wandered.
-    const double midpoint = (14.025 + 14.070) / 2.0;
-    check(nativePanZoomWidthHz(midpoint, 14.025, 14.070, widthsHz) == 50000,
-          "measured from the allocation midpoint, the segment fits 50 kHz");
-    check(nativePanZoomWidthHz(14.110, 14.025, 14.070, widthsHz) == 200000,
-          "measured from a pan centre dragged 40 kHz off, the same segment would need 200 kHz");
+    // Native span changes leave the reported centre in place. These receiver
+    // frequencies share one segment but need different detents at its edges.
+    for (double centerMhz : {14.026, 14.069, 14.050001}) {
+        const auto region = plan.zoomRegionAt(centerMhz, true);
+        check(region.has_value(), "off-midpoint receiver resolves its segment");
+        if (!region) {
+            continue;
+        }
+        const auto widthHz = nativePanZoomWidthHz(
+            centerMhz, region->lowMhz, region->highMhz, widthsHz);
+        check(widthHz == 100000, "retaining an off-midpoint centre needs 100 kHz");
+        if (widthHz) {
+            const auto centerHz = std::llround(centerMhz * 1.0e6);
+            check(centerHz - *widthHz / 2 <= std::llround(region->lowMhz * 1.0e6)
+                      && centerHz + *widthHz / 2 >= std::llround(region->highMhz * 1.0e6),
+                  "the requested span covers both edges at the retained radio centre");
+        }
+    }
+    check(nativePanZoomWidthHz(14.0475, 14.025, 14.070, widthsHz) == 50000,
+          "a radio already centred on the allocation needs only 50 kHz");
+
+    // MainWindow has no socket-free construction seam. Pin only its wiring:
+    // the helper must receive the reported centre, and its result must go to
+    // the bandwidth-only request. Helper tests cannot detect a caller that
+    // instead fits a midpoint which the backend may refuse to apply.
+    QFile source(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Shortcuts.cpp"));
+    check(source.open(QIODevice::ReadOnly), "MainWindow source is available for wiring check");
+    const QString text = QString::fromUtf8(source.readAll());
+    const qsizetype begin = text.indexOf(QStringLiteral("void MainWindow::togglePanZoomModeForPan("));
+    const qsizetype end = text.indexOf(QStringLiteral("void MainWindow::zoomActivePanadapter("), begin);
+    check(begin >= 0 && end > begin, "native zoom handler is found for wiring check");
+    if (begin >= 0 && end > begin) {
+        const QString handler = text.mid(begin, end - begin);
+        const QRegularExpression reportedCenter(
+            QStringLiteral(R"(nativePanZoomWidthHz\s*\(\s*pan->centerMhz\(\)\s*,)"));
+        const QRegularExpression bandwidthRequest(
+            QStringLiteral(R"(requestPanBandwidth\s*\(\s*panId\s*,\s*targetMhz\s*\))"));
+        check(reportedCenter.match(handler).hasMatch(),
+              "native zoom fits around the radio-reported centre");
+        check(bandwidthRequest.match(handler).hasMatch()
+                  && !handler.contains(QStringLiteral("requestPanCenter(")),
+              "native zoom changes bandwidth without requesting a different centre");
+    }
     check(!nativePanZoomWidthHz(14.05, 14.025, 14.025, widthsHz),
           "zero-width region is refused");
     check(!nativePanZoomWidthHz(14.05, 14.025, 14.0250001, widthsHz),
