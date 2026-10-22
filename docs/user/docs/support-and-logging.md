@@ -37,6 +37,8 @@ A grid of checkboxes, one per log category. Hover a box for what it covers. Turn
 
 **Enable All** / **Disable All** toggle every category at once. The categories, and which are on by default, are listed under [Log categories](#log-categories).
 
+For refused audio-output or **Show TX in Waterfall** edits, the Protocol / Status log names the requested setting and value, such as `Backend refused operation line output gain 30`. This records a request that was not dispatched; it does not confirm a radio state change.
+
 ### Log viewer
 
 Below the grid, the dialog shows the path of the current log file, its size, and the last part of the log. **Refresh** re-reads it, **Clear Log** empties it (handy just before reproducing a bug), and **Open Log Folder** opens the log directory in your file manager.

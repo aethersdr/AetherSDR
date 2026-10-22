@@ -6,6 +6,7 @@
 // not tested. The Radio Setup button is in radio_setup_show_tx_waterfall_test.
 
 #include "TestSettingsProfile.h"
+#include "RadioSetupControlFixture.h"
 #include "core/AutomationServer.h"
 #include "core/ClientDisplaySettings.h"
 #include "core/backends/SliceDelta.h"
@@ -331,9 +332,8 @@ int main(int argc, char** argv)
                   && !radio.transmitModel().showTxInWaterfall(),
               "txwaterfall off: the model reads false");
     }
-    // Flex with no live session, and the demo simulator, which declares no
-    // setup control: nothing is dispatched, so the verb refuses and the model
-    // carries the drop notice.
+    // Neither backend has a live session: the session gate refuses before
+    // capability admission, and the model carries the drop notice.
     for (const QString& family : {QStringLiteral("flex"), QStringLiteral("sim")}) {
         const QByteArray tag = family.toLatin1();
         const auto named = [&tag](const char* what) -> QByteArray {
@@ -351,10 +351,37 @@ int main(int argc, char** argv)
         check(on.value(QStringLiteral("error")).toString()
                   == QStringLiteral("TX waterfall setting not dispatched"),
               named("the error says nothing was dispatched").constData());
-        check(dropped == QStringList{QStringLiteral("transmit set show_tx_in_waterfall=1")},
+        check(dropped == QStringList{QStringLiteral("show TX in waterfall 1")},
               named("the model announces the drop").constData());
         check(!radio.transmitModel().showTxInWaterfall(),
               named("the model is unchanged").constData());
+    }
+
+    // A dispatched request acknowledges delivery, then waits for radio status.
+    {
+        RadioModel radio;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+        check(radio.isConnected(), "dispatch fixture: connected injected transport");
+        QStringList dropped;
+        QObject::connect(&radio, &RadioModel::commandDropped, &radio,
+                         [&dropped](const QString& operation) { dropped << operation; });
+        AutomationServer bridge;
+        bridge.setRadioModel(&radio);
+        const QJsonObject on = AutomationServerTestAccess::request(bridge, "txwaterfall on");
+        check(on.value(QStringLiteral("ok")).toBool()
+                  && on.value(QStringLiteral("txwaterfall")).toBool(),
+              "dispatched txwaterfall on: accepted");
+        check(on.value(QStringLiteral("note")).toString()
+                  == QStringLiteral("radio echoes status; re-read with get transmit showTxInWaterfall"),
+              "dispatched txwaterfall on: receipt requires radio readback");
+        check(backend->commands == QStringList{QStringLiteral("transmit set show_tx_in_waterfall=1")}
+                  && dropped.isEmpty() && !radio.transmitModel().showTxInWaterfall(),
+              "dispatched txwaterfall on: one write, no drop or optimistic state");
+        TransmitDelta status;
+        status.showTxInWaterfall = true;
+        radio.transmitModel().applyChanges(status);
+        check(radio.transmitModel().showTxInWaterfall() && backend->commands.size() == 1,
+              "dispatched txwaterfall on: radio readback applies without another write");
     }
 
     // 5. The store's own boundary.

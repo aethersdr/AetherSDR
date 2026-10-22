@@ -62,20 +62,30 @@ QString setupOperationLabel(const RadioSetupRequest& request)
     using Field = RadioSetupRequest::Field;
     switch (request.field) {
     case Field::LineoutGain:
-        return QStringLiteral("mixer lineout gain %1").arg(std::get<int>(request.value));
+        return QStringLiteral("line output gain %1").arg(std::get<int>(request.value));
     case Field::LineoutMute:
-        return QStringLiteral("mixer lineout mute %1").arg(int(std::get<bool>(request.value)));
+        return QStringLiteral("line output mute %1").arg(int(std::get<bool>(request.value)));
     case Field::HeadphoneGain:
-        return QStringLiteral("mixer headphone gain %1").arg(std::get<int>(request.value));
+        return QStringLiteral("headphone gain %1").arg(std::get<int>(request.value));
     case Field::HeadphoneMute:
-        return QStringLiteral("mixer headphone mute %1").arg(int(std::get<bool>(request.value)));
+        return QStringLiteral("headphone mute %1").arg(int(std::get<bool>(request.value)));
     case Field::FrontSpeakerMute:
-        return QStringLiteral("mixer front_speaker mute %1").arg(int(std::get<bool>(request.value)));
+        return QStringLiteral("front speaker mute %1").arg(int(std::get<bool>(request.value)));
     case Field::ShowTxInWaterfall:
-        return QStringLiteral("transmit set show_tx_in_waterfall=%1").arg(int(std::get<bool>(request.value)));
-    default:
+        return QStringLiteral("show TX in waterfall %1").arg(int(std::get<bool>(request.value)));
+    case Field::Callsign: case Field::ClientStation: case Field::PrivateIpPolicy:
+    case Field::NetworkMtu: case Field::Dhcp: case Field::StaticNetwork:
+    case Field::AccTxDelayMs: case Field::TxDelayMs: case Field::Tx1DelayMs:
+    case Field::Tx2DelayMs: case Field::Tx3DelayMs: case Field::TimeoutMs:
+    case Field::MaximumPowerPercent: case Field::MeterDuringReceive:
+    case Field::SyncCwx: case Field::RttyMarkDefaultHz:
+    case Field::CalibrationFrequencyMhz: case Field::FrequencyCorrectionPpb:
+    case Field::ReferenceSource: case Field::MuteLocalWhenRemote:
+    case Field::BinauralReceive: case Field::SharpnessLevel: case Field::SharpnessAuto:
+    case Field::LowLatencyDigital: case Field::StartFrequencyCalibration: case Field::Count:
         return QStringLiteral("radio setup");
     }
+    return QStringLiteral("radio setup");
 }
 }
 
