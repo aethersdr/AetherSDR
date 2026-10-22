@@ -1,4 +1,10 @@
 {
+ "core/AutomationIsolationPolicy.h": {
+  "tag": "universal",
+  "note": "Immutable process-only radio admission policy shared by UI, models and transports. Simulator identity matching is implemented below the backend boundary; no vendor wire types or persisted state cross this interface.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/DxSpotLineParser.h": {
   "tag": "universal",
   "note": "Parses DX-cluster `DX de` lines (DXSpider/AR/CC/RBN/GoCluster) into DxSpot, including the GoCluster fixed-column tail and SNR report, and replays saved spot logs with per-session provenance. Pure line-to-value logic; no vendor radio ties.",

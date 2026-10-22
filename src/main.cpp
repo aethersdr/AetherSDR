@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "gui/MainWindow.h"
 #include "gui/ConnectionPanel.h"
 #include "gui/FramelessMessageBox.h"
@@ -134,10 +135,17 @@ static int runConfigCli(int argc, char* argv[])
             "  features [family]  list radio-scoped feature documents\n"
             "                     (sanitized; written by the app's own\n"
             "                     features — HL2 state, nicknames, band stacks)\n"
-            "  path               print the settings database path\n",
+            "  path               print the settings database path\n"
+            "  isolation-policy   report process demo-only admission support\n",
             stderr);
         return 1;
     };
+
+    if (op == QStringLiteral("isolation-policy")) {
+        std::printf("{\"demoOnlySupported\":true,\"demoOnly\":%s,\"version\":1}\n",
+                    AetherSDR::AutomationIsolationPolicy::demoOnly() ? "true" : "false");
+        return 0;
+    }
 
     if (op == QStringLiteral("path")) {
         std::printf("%s\n", qPrintable(AetherSDR::SettingsPaths::databasePath()));
@@ -262,6 +270,8 @@ static const char* displayPresenceName(AetherSDR::DisplayPresence p)
 
 int main(int argc, char* argv[])
 {
+    (void)AetherSDR::AutomationIsolationPolicy::demoOnly();
+
     if (argc >= 2 && qstrcmp(argv[1], "--config") == 0) {
         return runConfigCli(argc, argv);
     }

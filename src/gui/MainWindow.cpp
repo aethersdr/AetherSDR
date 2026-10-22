@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 // ─────────────────────────────────────────────────────────────────────────────
 // ⚠️  MainWindow is DECOMPOSED (#3351). This file is NOT the default home for new
 //     feature code. Feature lifecycle/handlers belong in the matching
@@ -708,6 +709,10 @@ bool MainWindow::confirmClientSlotAvailability(const WanRadioInfo& info,
 bool MainWindow::sendWanRadioClientDisconnects(const QString& serial,
                                                const QList<quint32>& handles)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        m_connPanel->setStatusText(AutomationIsolationPolicy::refusal());
+        return false;
+    }
     if (!m_smartLink.isConnected()) {
         m_connPanel->setStatusText("SmartLink is not connected");
         statusBar()->showMessage("SmartLink is not connected.", 4000);
@@ -794,6 +799,11 @@ void MainWindow::handleMultiFlexClientDisconnect(quint32 handle, const QString& 
 
 void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForClientSlots)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        m_connPanel->setStatusText(AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     QList<quint32> disconnectHandles;
     if (promptForClientSlots && !confirmClientSlotAvailability(info, &disconnectHandles)) {
         m_connPanel->setStatusText("Connection canceled");

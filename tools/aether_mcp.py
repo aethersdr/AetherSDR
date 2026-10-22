@@ -47,6 +47,7 @@ import os
 import re
 import secrets
 import signal
+import shutil
 import socket
 import stat
 import subprocess
@@ -54,6 +55,10 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+# runpy-based MCP wrappers need the source directory, not their own directory.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from automation_isolation import demo_environment, prepare_demo_launch, require_demo_identity
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "aethersdr-automation", "version": "1.0.0"}
@@ -63,6 +68,7 @@ MAX_INLINE_IMAGE_BYTES = 800_000  # larger grabs are returned as a path only
 _gesture_bridge = None
 _gesture_socket_path = None
 _owned_app = None
+_proof_session_started = False
 
 
 # --------------------------------------------------------------------------
@@ -97,6 +103,10 @@ def discover_sockets():
 def bridge_socket_path():
     if _owned_app is not None and _owned_app["process"].poll() is None:
         return _owned_app["socket"]
+    if _proof_session_started:
+        raise RuntimeError(
+            "Owned proof instance is not running; use app_instance launch to start "
+            "a new demo-only proof. Automatic attachment to another app is disabled.")
     override = os.environ.get("AETHER_MCP_SOCKET")
     if override:
         return override
@@ -282,8 +292,15 @@ def _wait_for_owned_app(instance, timeout=25):
             raise RuntimeError("authenticated bridge label did not match the launched instance")
         if whoami.get("txAllowed") is not False:
             raise RuntimeError("fresh-build bridge did not keep TX automation disabled")
+        require_demo_identity(whoami)
         return ping, whoami
     raise RuntimeError(last_error)
+
+
+def _remove_owned_profile(instance):
+    """Only called after the owned child has exited, or before GUI spawn."""
+    if instance.get("settingsDir"):
+        shutil.rmtree(instance["settingsDir"], ignore_errors=True)
 
 
 def _remove_owned_socket(instance):
@@ -345,6 +362,7 @@ def _stop_owned_app():
     instance = _owned_app
     if instance is None:
         return {"ok": True, "running": False}
+    _close_gesture_bridge()
     process = instance["process"]
     if process.poll() is None:
         _signal_owned_process(process)
@@ -367,6 +385,7 @@ def _stop_owned_app():
         }
     _owned_app = None
     _remove_owned_socket(instance)
+    _remove_owned_profile(instance)
     return {
         "ok": True,
         "running": False,
@@ -436,8 +455,10 @@ TOOLS = [
             "AetherSDR worktree and runs only its canonical build artifact, "
             "handing the existing AETHER_MCP_TOKEN to the child in memory. It "
             "uses a unique explicit socket/label, disables radio autoconnect, "
-            "pins TX automation off, and succeeds only after authenticated "
-            "whoami matches the child PID and identity. No token is returned, "
+            "requires a demo-only capable binary, pins demo-only/TX-off, and succeeds "
+            "only after authenticated "
+            "whoami confirms demo-only and matches the child PID and identity. "
+            "The fresh settings profile is deleted after the child exits. No token is returned, "
             "logged, passed on the command line, or written to settings."),
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["launch", "status", "stop"]},
@@ -858,10 +879,15 @@ def _maybe_suggest(resp, target):
 
 def handle_tool(name, args):
     if name == "app_instance":
-        global _owned_app
+        global _owned_app, _proof_session_started
         action = str(args.get("action") or "").strip().lower()
         if action not in ("launch", "status", "stop"):
             return error_result("app_instance action must be launch, status, or stop")
+        if action == "launch":
+            # Once proof launch is requested, failures and teardown must never
+            # redirect subsequent tools to an operator's discovered instance.
+            _proof_session_started = True
+            _close_gesture_bridge()
         if action == "stop":
             return text_result(_stop_owned_app())
         if action == "status":
@@ -873,6 +899,7 @@ def handle_tool(name, args):
             if return_code is not None:
                 _owned_app = None
                 _remove_owned_socket(instance)
+                _remove_owned_profile(instance)
                 return text_result({
                     "ok": True,
                     "running": False,
@@ -903,7 +930,8 @@ def handle_tool(name, args):
                 and whoami_pid == process.pid
                 and identity == instance["socket"]
                 and whoami.get("label") == instance["label"]
-                and whoami.get("txAllowed") is False)
+                and whoami.get("txAllowed") is False
+                and whoami.get("demoOnly") is True)
             return text_result({
                 "ok": True,
                 "running": True,
@@ -914,6 +942,7 @@ def handle_tool(name, args):
                 "label": instance["label"],
                 "readOnly": whoami.get("readOnly", False),
                 "txAllowed": whoami.get("txAllowed"),
+                "demoOnly": whoami.get("demoOnly"),
                 "version": whoami.get("version"),
             })
 
@@ -922,6 +951,7 @@ def handle_tool(name, args):
                 return error_result(
                     "this MCP server already owns a running AetherSDR instance; stop it first")
             _remove_owned_socket(_owned_app)
+            _remove_owned_profile(_owned_app)
             _owned_app = None
         if not os.environ.get("AETHER_MCP_TOKEN"):
             return error_result(
@@ -933,7 +963,8 @@ def handle_tool(name, args):
             return error_result(str(exc))
 
         socket_path = _instance_socket()
-        child_env = os.environ.copy()
+        settings_dir = tempfile.mkdtemp(prefix="aether-mcp-settings-")
+        child_env = demo_environment(settings_dir)
         child_env["AETHER_AUTOMATION"] = "1"
         child_env["AETHER_AUTOMATION_NO_TX"] = "1"
         child_env["AETHER_AUTOMATION_SOCKET"] = socket_path
@@ -942,6 +973,12 @@ def handle_tool(name, args):
         child_env["AETHER_AUTOMATION_AGENT_NAME"] = label
         child_env.pop("AETHER_AUTOMATION_ALLOW_TX", None)
         child_env.pop("AETHER_MCP_SOCKET", None)
+
+        try:
+            prepare_demo_launch(executable, child_env)
+        except RuntimeError as exc:
+            _remove_owned_profile({"settingsDir": settings_dir})
+            return error_result(f"fresh-build isolation preflight failed: {exc}")
 
         popen_kwargs = {
             "cwd": str(root),
@@ -958,6 +995,7 @@ def handle_tool(name, args):
         try:
             process = subprocess.Popen([str(executable)], **popen_kwargs)
         except OSError as exc:
+            _remove_owned_profile({"settingsDir": settings_dir})
             return error_result(f"could not launch fresh AetherSDR build: {exc}")
 
         _owned_app = {
@@ -966,6 +1004,7 @@ def handle_tool(name, args):
             "label": label,
             "worktree": str(root),
             "executable": str(executable),
+            "settingsDir": settings_dir,
         }
         try:
             ping, whoami = _wait_for_owned_app(_owned_app)
@@ -984,6 +1023,8 @@ def handle_tool(name, args):
             "executable": str(executable),
             "readOnly": whoami.get("readOnly", False),
             "txAllowed": whoami.get("txAllowed"),
+            "demoOnly": whoami.get("demoOnly"),
+            "settingsDir": settings_dir,
             "version": whoami.get("version"),
         })
 

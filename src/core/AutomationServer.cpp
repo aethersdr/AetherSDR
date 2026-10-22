@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "AutomationServer.h"
 #include "core/DroopCalibration.h"
 #include "core/backends/AutoRfGainControl.h"
@@ -7009,6 +7010,9 @@ namespace {
 // unable to disagree.
 QString offlineHealthRefusal(RadioModel::OfflineAimResult why, const QString& family)
 {
+    if (why == RadioModel::OfflineAimResult::DemoOnly) {
+        return AutomationIsolationPolicy::refusal();
+    }
     if (why == RadioModel::OfflineAimResult::SessionConnected)
         return QStringLiteral(
             "telemetry: this session is connected, and there is ONE poller — "
@@ -13113,6 +13117,7 @@ QJsonObject AutomationServer::doWhoami() const
         {QStringLiteral("guiClientIdTransient"),
          AppSettings::instance().guiClientIdentityIsTransient()},
         {QStringLiteral("txAllowed"), m_txAllowed},
+        {QStringLiteral("demoOnly"), AutomationIsolationPolicy::demoOnly()},
         {QStringLiteral("readOnly"), m_readOnly},
         {QStringLiteral("version"), QCoreApplication::applicationVersion()},
     };

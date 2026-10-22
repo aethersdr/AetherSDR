@@ -88,6 +88,17 @@ Discovery broadcasts do not cross routers or most VPNs, and guest Wi-Fi isolatio
 4. Click **Open Network Diagnostics** to narrow it down.
 5. If the radio is on another subnet or behind a VPN, use **Connect by IP**; see [Manual Connection](./manual-connection.md).
 
+### A proof instance refuses physical radios
+
+A simulator-only automation process allows only the demo radio. Its connection
+policy stays active for the life of that process, including connections from
+this window.
+
+1. Use the simulator in the proof instance.
+2. For normal radio work, open your normal interactive AetherSDR app without
+   `AETHER_AUTOMATION_DEMO_ONLY` in its launch environment. See
+   [Automation Bridge and MCP](./automation-bridge-and-mcp.md#launching-a-simulator-proof-instance).
+
 ### The radio refuses the connection
 
 The radio rejected AetherSDR's client registration (for example with error `F3000001`). AetherSDR closes the connection, does not retry on its own, and returns to the Connect to Radio window with the radio's error.

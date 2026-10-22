@@ -391,7 +391,7 @@ public:
     // them apart retries the one it cannot fix: "you are connected" is worth a
     // retry after disconnecting and "this family has no such instrument" never
     // is.
-    enum class OfflineAimResult { Ok, FamilyDeclaresNone, SessionConnected };
+    enum class OfflineAimResult { Ok, FamilyDeclaresNone, SessionConnected, DemoOnly };
 
     // Aim the offline source at a radio WITHOUT connecting. `family` is the
     // target radio's family (from discovery), not this session's. A null

@@ -389,17 +389,184 @@ def test_owned_process_shutdown():
         aether_mcp.os = original_os
 
 
+
+
+def test_owned_proof_routing():
+    """Ending a proof cannot redirect later tools to an operator's bridge."""
+    from unittest.mock import patch
+    original_owned = aether_mcp._owned_app
+    original_started = aether_mcp._proof_session_started
+    try:
+        aether_mcp._owned_app = None
+        aether_mcp._proof_session_started = False
+        with patch.dict(os.environ, {"AETHER_MCP_SOCKET": "/mock/operator"}), \
+                patch.object(aether_mcp, "discover_sockets", return_value=[
+                    {"socket": "/mock/discovered"}]), \
+                patch.object(aether_mcp, "Bridge") as bridge:
+            check("initial unowned explicit attachment behavior is unchanged",
+                  aether_mcp.bridge_socket_path() == "/mock/operator")
+            with patch.dict(os.environ):
+                os.environ.pop("AETHER_MCP_SOCKET", None)
+                check("initial unowned discovery behavior is unchanged",
+                      aether_mcp.bridge_socket_path() == "/mock/discovered")
+
+            def refuses(label):
+                refused = False
+                try:
+                    _REAL_BRIDGE_REQUEST({"cmd": "connect", "action": "list"})
+                except RuntimeError as exc:
+                    refused = "app_instance launch" in str(exc)
+                check(label, refused and not bridge.called)
+
+            # A failed first launch must also pin routing, before spawning.
+            gesture = SimpleNamespace(closed=False, requests=[])
+            gesture.request = lambda request: gesture.requests.append(request)
+            def close_gesture():
+                gesture.closed = True
+            gesture.close = close_gesture
+            aether_mcp._gesture_bridge = gesture
+            aether_mcp._gesture_socket_path = "/mock/operator"
+            with patch.dict(os.environ):
+                os.environ.pop("AETHER_MCP_TOKEN", None)
+                result = aether_mcp.handle_tool("app_instance", {
+                    "action": "launch", "worktree": "/mock/missing"})
+            check("failed proof launch establishes sticky ownership",
+                  result.get("isError") and aether_mcp._proof_session_started)
+            check("proof launch closes any previously held operator gesture transport",
+                  gesture.closed and aether_mcp._gesture_bridge is None)
+            move = aether_mcp.handle_tool("gesture", {"action": "move", "value": "1"})
+            check("gesture movement cannot use the previous operator transport",
+                  move.get("isError") and not gesture.requests)
+            refuses("failed launch never falls back to operator/discovery bridge")
+            process = SimpleNamespace(pid=4242, poll=lambda: None)
+            instance = {"process": process, "socket": "/mock/owned", "label": "proof"}
+            aether_mcp._owned_app = instance
+            check("running owned proof remains the sole target",
+                  aether_mcp.bridge_socket_path() == "/mock/owned")
+            process.poll = lambda: 0
+            refuses("dead proof never falls back before status cleanup")
+            aether_mcp.handle_tool("app_instance", {"action": "status"})
+            refuses("dead proof status cleanup preserves sticky routing")
+            aether_mcp._owned_app = instance
+            aether_mcp.handle_tool("app_instance", {"action": "stop"})
+            refuses("proof stop preserves sticky routing")
+    finally:
+        aether_mcp._owned_app = original_owned
+        aether_mcp._proof_session_started = original_started
+
+
+def test_screenshot_demo_isolation():
+    """Screenshot demos fail closed before setup; transports/processes are mocks."""
+    import importlib.util
+    from unittest.mock import patch
+    spec = importlib.util.spec_from_file_location(
+        "capture_screenshots", Path(__file__).parent / "docs" / "capture_screenshots.py")
+    capture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(capture)
+    requests, spawned, configs = [], [], []
+    supported, isolated = [True], [True]
+
+    class FakeBridge:
+        def __init__(self, *_args):
+            pass
+
+        def request(self, request, **_kwargs):
+            requests.append(request["cmd"])
+            return {"ok": True, "demoOnly": isolated[0]}
+
+        def close(self):
+            pass
+
+    def fake_run(argv, **kwargs):
+        configs.append(argv)
+        if argv[2] == "isolation-policy":
+            return SimpleNamespace(returncode=0, stdout=json.dumps({
+                "demoOnlySupported": supported[0], "demoOnly": True, "version": 1}))
+        return SimpleNamespace(returncode=0, stdout="False")
+
+    def fake_popen(argv, **kwargs):
+        spawned.append((argv, kwargs))
+        Path(tempfile.gettempdir(), kwargs["env"]["AETHER_AUTOMATION_SOCKET"]).touch()
+        return SimpleNamespace(pid=424242, poll=lambda: None, wait=lambda **kw: 0)
+
+    with tempfile.TemporaryDirectory() as out:
+        def runner(**overrides):
+            values = dict(radio_serial=None, platform="offscreen", binary="/mock/AetherSDR",
+                          allow_gpu_build=True,
+                          no_netns=True, token="mock-token", dpr=1, hypr_workspace=None,
+                          socket=None, keep=False, keep_workdir=False, out=out, only=None)
+            values.update(overrides)
+            return capture.Capture(SimpleNamespace(**values), {"shots": [
+                {"id": "demo", "radio": "demo", "offscreen": True}]})
+
+        with patch.object(capture, "Bridge", FakeBridge), \
+                patch.object(capture.subprocess, "run", fake_run), \
+                patch.object(capture.subprocess, "Popen", fake_popen), \
+                patch.object(capture.os, "kill") as killed, \
+                patch.object(capture.time, "sleep"):
+            demo = runner()
+            try:
+                demo.launch()
+                env = spawned[-1][1]["env"]
+                check("screenshot demo preflights and verifies pinned policy",
+                      env.get("AETHER_AUTOMATION_DEMO_ONLY") == "1"
+                      and env.get("AETHER_AUTOMATION_NO_TX") == "1"
+                      and [c[2] for c in configs] == ["isolation-policy", "set", "get"]
+                      and requests == ["whoami"] and demo.demo_verified)
+            finally:
+                demo.shutdown()
+            for attach in (False, True):
+                isolated[0] = False
+                requests.clear()
+                bad = runner(socket="/mock/bridge" if attach else None, keep=True)
+                failed = False
+                try:
+                    bad.run()
+                except RuntimeError:
+                    failed = True
+                check("screenshot rejects unisolated " + ("attachment" if attach else "child"),
+                      failed and requests == ["whoami"] and not Path(bad.workdir).exists()
+                      and not bad.args.keep)
+            isolated[0] = True
+            supported[0] = False
+            before = len(spawned)
+            old = runner(keep=True)
+            failed = False
+            try:
+                old.run()
+            except RuntimeError:
+                failed = True
+            check("screenshot refuses unsupported binary before GUI and removes scratch",
+                  failed and len(spawned) == before and not Path(old.workdir).exists())
+            configs.clear()
+            requests.clear()
+            hardware = runner(radio_serial="explicit-test-serial", socket="/mock/bridge")
+            try:
+                hardware.attach()
+                check("explicit hardware attachment does not claim demo-only verification",
+                      not hardware.demo and not hardware.demo_verified and not requests
+                      and not configs)
+            finally:
+                hardware.shutdown()
+
+
 def test_secure_app_instance():
     """Fresh builds inherit the token only at runtime and are identity-checked."""
     aether_mcp._stop_owned_app()
     original_popen = aether_mcp.subprocess.Popen
+    original_run = aether_mcp.subprocess.run
+    original_proof_session = aether_mcp._proof_session_started
     original_bridge = aether_mcp.Bridge
     original_os = aether_mcp.os
     saved_env = {key: os.environ.get(key) for key in (
-        "AETHER_MCP_TOKEN", "AETHER_MCP_SOCKET", "AETHER_AUTOMATION_ALLOW_TX")}
+        "AETHER_MCP_TOKEN", "AETHER_MCP_SOCKET", "AETHER_AUTOMATION_ALLOW_TX",
+        "AETHER_SETTINGS_DIR", "AETHER_AUTOMATION_DEMO_ONLY")}
     popen_calls = []
     bridge_requests = []
     tx_allowed = [False]
+    demo_only = [True]
+    preflight_failure = [None]
+    config_calls = []
     ignore_stop = [False]
     accept_tokenless = [False]  # simulate a bridge that advertises but doesn't enforce auth
 
@@ -434,6 +601,32 @@ def test_secure_app_instance():
         popen_calls.append((argv, kwargs, process))
         return process
 
+    def fake_run(argv, **kwargs):
+        config_calls.append((argv, kwargs))
+        op = argv[2]
+        failure = preflight_failure[0]
+        if failure == "timeout":
+            raise aether_mcp.subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        if failure == "oserror":
+            raise OSError("mock execution refusal")
+        if failure == op:
+            return SimpleNamespace(returncode=1, stdout="")
+        if op == "isolation-policy":
+            payload = {"demoOnlySupported": True, "demoOnly": True, "version": 1}
+            if failure == "unsupported":
+                payload["demoOnlySupported"] = False
+            elif failure == "unisolated":
+                payload["demoOnly"] = False
+            elif failure == "string-bool":
+                payload["demoOnly"] = "true"
+            elif failure == "version":
+                payload["version"] = True
+            return SimpleNamespace(returncode=0, stdout=(
+                "not JSON" if failure == "malformed" else
+                "[]" if failure == "nonobject" else json.dumps(payload)))
+        return SimpleNamespace(returncode=0, stdout=(
+            "True" if failure == "readback" else "False") if op == "get" else "")
+
     class _Bridge:
         def __init__(self, socket_path, timeout=None):
             self.socket_path = socket_path
@@ -457,6 +650,7 @@ def test_secure_app_instance():
                 "socket": instance["socket"],
                 "label": instance["label"],
                 "txAllowed": tx_allowed[0],
+                "demoOnly": demo_only[0],
                 "readOnly": False,
                 "version": "test",
             }
@@ -465,6 +659,7 @@ def test_secure_app_instance():
             pass
 
     aether_mcp.subprocess.Popen = fake_popen
+    aether_mcp.subprocess.run = fake_run
     aether_mcp.Bridge = _Bridge
     # A mocked Popen PID must never resolve to a real host process group.
     def no_process_group(_pid):
@@ -493,6 +688,8 @@ def test_secure_app_instance():
             os.environ["AETHER_MCP_TOKEN"] = "runtime-only-secret"
             os.environ["AETHER_MCP_SOCKET"] = "/tmp/unrelated.sock"
             os.environ["AETHER_AUTOMATION_ALLOW_TX"] = "1"
+            os.environ["AETHER_SETTINGS_DIR"] = temp_root
+            os.environ["AETHER_AUTOMATION_DEMO_ONLY"] = "0"
             launched = json.loads(aether_mcp.handle_tool(
                 "app_instance", {"action": "launch", "worktree": str(worktree),
                                  "label": "secure-proof"})["content"][0]["text"])
@@ -511,6 +708,17 @@ def test_secure_app_instance():
                   and child_env.get("AETHER_AUTOMATION_IDENTITY") == launched.get("socket")
                   and child_env.get("AETHER_AUTOMATION_AGENT_NAME") == "secure-proof"
                   and "AETHER_AUTOMATION_ALLOW_TX" not in child_env, str(child_env.keys()))
+            profile = Path(launched["settingsDir"])
+            check("app_instance replaces inherited profile and pins demo isolation",
+                  child_env["AETHER_SETTINGS_DIR"] != temp_root
+                  and child_env["AETHER_AUTOMATION_DEMO_ONLY"] == "1"
+                  and profile.is_dir() and launched.get("demoOnly") is True)
+            check("headless policy and config readback precede GUI startup",
+                  [call[0][2:] for call in config_calls] == [
+                      ["isolation-policy"], ["set", "AutoConnectToLastRadio", "False"],
+                      ["get", "AutoConnectToLastRadio"]]
+                  and all(call[1]["env"] == child_env and call[1]["timeout"] == 10
+                          for call in config_calls))
             whoami_reqs = [req for req in bridge_requests
                            if req.get("cmd") == "whoami"]
             check("app_instance verifies exact authenticated identity",
@@ -541,6 +749,33 @@ def test_secure_app_instance():
                   stopped.get("running") is False and process.terminated
                   and aether_mcp._owned_app is None, str(stopped))
 
+            check("owned profile removed after exit without touching inherited profile",
+                  not profile.exists() and Path(temp_root).is_dir())
+            for failure in ("isolation-policy", "unsupported", "unisolated", "string-bool",
+                            "version", "malformed", "nonobject", "timeout", "oserror",
+                            "set", "get", "readback"):
+                preflight_failure[0] = failure
+                before = len(popen_calls)
+                config_calls.clear()
+                refused = aether_mcp.handle_tool(
+                    "app_instance", {"action": "launch", "worktree": str(worktree)})
+                failed_profile = Path(config_calls[0][1]["env"]["AETHER_SETTINGS_DIR"])
+                check("preflight refuses before GUI and cleans profile: " + failure,
+                      refused.get("isError") is True and len(popen_calls) == before
+                      and not failed_profile.exists(), str(refused))
+                aether_mcp._stop_owned_app()
+            preflight_failure[0] = None
+            for value in (False, None, "true", 1):
+                demo_only[0] = value
+                refused = aether_mcp.handle_tool(
+                    "app_instance", {"action": "launch", "worktree": str(worktree)})
+                failed_process = popen_calls[-1][2]
+                check("runtime demo identity fails closed: " + repr(value),
+                      refused.get("isError") is True and failed_process.terminated
+                      and aether_mcp._owned_app is None)
+                aether_mcp._stop_owned_app()
+            demo_only[0] = True
+
             os.environ.pop("AETHER_MCP_TOKEN", None)
             before = len(popen_calls)
             refused = aether_mcp.handle_tool(
@@ -570,6 +805,8 @@ def test_secure_app_instance():
                   stubborn.get("running") is True and refused_stop.get("ok") is False
                   and refused_stop.get("running") is True
                   and aether_mcp._owned_app is not None, str(refused_stop))
+            check("running child retains its owned settings until exit",
+                  Path(stubborn["settingsDir"]).is_dir())
             ignore_stop[0] = False
             # The stubborn instance is reapable again now — clear it before the
             # next launch (which refuses while an instance is still owned).
@@ -598,6 +835,8 @@ def test_secure_app_instance():
     finally:
         aether_mcp._stop_owned_app()
         aether_mcp.subprocess.Popen = original_popen
+        aether_mcp.subprocess.run = original_run
+        aether_mcp._proof_session_started = original_proof_session
         aether_mcp.Bridge = original_bridge
         aether_mcp.os = original_os
         for key, value in saved_env.items():
@@ -785,6 +1024,8 @@ if __name__ == "__main__":
     test_gesture_session()
     test_owned_process_shutdown()
     test_secure_app_instance()
+    test_screenshot_demo_isolation()
+    test_owned_proof_routing()
     test_jsonrpc_robustness()
     test_robustness_tools()
     test_fuzzy_suggest()

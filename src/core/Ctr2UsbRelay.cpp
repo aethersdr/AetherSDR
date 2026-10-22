@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "Ctr2UsbRelay.h"
 
 #include "Ctr2HidPort.h"
@@ -114,6 +115,10 @@ public:
 
     void begin(const QHostAddress& address, quint16 port)
     {
+        if (AutomationIsolationPolicy::demoOnly()) {
+            end(AutomationIsolationPolicy::refusal(), true, true);
+            return;
+        }
         m_connectTimer->start();
         m_radio->connectToHost(address.toString(), port);
     }
@@ -381,6 +386,12 @@ void Ctr2UsbRelay::setRadioSocketFactory(TcpByteProxy::SocketFactory factory)
 
 bool Ctr2UsbRelay::start(Ctr2HidPort* port, const QHostAddress& radioAddress, quint16 radioPort)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        setLastError(AutomationIsolationPolicy::refusal());
+        setState(State::Error);
+        return false;
+    }
+
     if (m_state != State::Stopped && m_state != State::Error) {
         return false;
     }

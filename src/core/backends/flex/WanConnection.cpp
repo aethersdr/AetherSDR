@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "WanConnection.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
@@ -149,6 +150,11 @@ void WanConnection::resetSessionState()
 void WanConnection::connectToRadio(const QString& host, quint16 tlsPort,
                                     const QString& wanHandle)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        emit errorOccurred(AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     if (m_connected || m_socket.state() != QAbstractSocket::UnconnectedState) {
         qCWarning(lcSmartLink) << "WanConnection: already connected or still closing";
         return;

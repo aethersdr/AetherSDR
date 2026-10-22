@@ -145,6 +145,12 @@ and drive it to demonstrate the bug is gone.
 Read `docs/automation-bridge.md` for current launch options, isolation,
 authentication, targeting, and verb schemas. Use a headless isolated run where
 it can exercise the behavior; use a visible window for visual verification.
+For simulator proofs use MCP `app_instance launch` or the fail-closed demo
+recipe in `docs/automation-bridge.md`: fresh `AETHER_SETTINGS_DIR`, process-pinned
+`AETHER_AUTOMATION_DEMO_ONLY` and `AETHER_AUTOMATION_NO_TX=1`, a successful
+headless `--config isolation-policy` preflight, verified autoconnect disabled,
+and authenticated `whoami.demoOnly:true` before interaction. Unsupported builds
+must not launch as demo proofs; settings isolation alone is insufficient.
 Do not let saved autoconnect settings contact hardware without authorization.
 
 **Before using live hardware**, confirm the operator's intended radio and that

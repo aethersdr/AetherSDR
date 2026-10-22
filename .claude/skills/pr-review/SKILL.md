@@ -566,30 +566,30 @@ with real hardware, and by construction it **cannot key** (Principle VI). It
 is the correct target for a review: reproducible, no hardware contention, no
 emissions, and nothing you do to it can disturb the operator's station.
 
-The trap is that this is opt-*out*, not opt-in: `AutoConnectToLastRadio`
-defaults on, and on the operator's machine the saved settings point at the
-real radio — so a bridge instance launched with the default config **will
-connect itself to the live FLEX** before you have issued a single verb. Two
-things prevent it, and you do both:
-
-1. **Isolate the settings store**, so there is no saved radio to autoconnect
-   to. `AETHER_SETTINGS_DIR` is honoured at runtime (`SettingsPaths.cpp`);
-   point it at a fresh scratch dir. A per-session scratch `HOME` /
-   `XDG_CONFIG_HOME` does the same job. A clean store also means
-   `ShowDemoRadio` is at its default (on), so the demo entry is in the list.
-2. **Connect explicitly to the demo, and to nothing else.** Its discovery
-   serial is `DEMO-0001` (`SimBackend::demoSerial()`), family `sim`, shown as
-   "Simulator (not on the air)".
+A demo proof needs an enforced process policy, not only fresh settings or a
+choice in the connection window. Prefer MCP `app_instance launch`, which owns a
+fresh profile, preflights policy support, pins demo-only/TX-off, and validates the
+authenticated process identity. For a manual POSIX launch:
 
 ```sh
 export SCRATCH=<your scratch dir>
-AETHER_AUTOMATION=1 QT_QPA_PLATFORM=offscreen \
-AETHER_SETTINGS_DIR="$SCRATCH/settings" \
-AETHER_AUTOMATION_IDENTITY=pr-<PR>-review \
-AETHER_AUTOMATION_SOCKET=aethersdr-pr<PR> \
-AETHER_AUTOMATION_NO_TX=1 \
-nohup ./build/AetherSDR >"$SCRATCH/app.log" 2>&1 &
+mkdir -p "$SCRATCH/settings"
+export AETHER_SETTINGS_DIR="$SCRATCH/settings"
+export AETHER_AUTOMATION=1 AETHER_AUTOMATION_DEMO_ONLY=1 AETHER_AUTOMATION_NO_TX=1
+export QT_QPA_PLATFORM=offscreen
+export AETHER_AUTOMATION_IDENTITY=pr-<PR>-review
+export AETHER_AUTOMATION_SOCKET=aethersdr-pr<PR>
+unset AETHER_AUTOMATION_ALLOW_TX
+EXE="$PWD/build/AetherSDR"  # macOS: build/AetherSDR.app/Contents/MacOS/AetherSDR
+python3 tools/automation_isolation.py "$EXE" && nohup "$EXE" >"$SCRATCH/app.log" 2>&1 &
 ```
+
+The headless capability check must confirm policy v1, `demoOnlySupported:true`,
+and `demoOnly:true`, and the helper must verify autoconnect is disabled. Any
+unsupported binary or failed check means **do not launch**. Require authenticated
+`whoami.demoOnly:true` after startup before driving it. Setting the environment
+variable alone on an older binary is insufficient. Only connect to `DEMO-0001`
+(family `sim`, "Simulator (not on the air)").
 
 Detach so a shell exit cannot `SIGHUP` the instance — prefix `setsid` on Linux,
 where it exists. On macOS the binary is inside the bundle,
@@ -669,7 +669,7 @@ Non-negotiable operating rules:
   `AETHER_AUTOMATION_ALLOW_TX`; a review never needs them. Launch with
   `AETHER_AUTOMATION_NO_TX=1` (or via the MCP `app_instance` tool, which pins
   it) so the gate is off regardless of the saved preference.
-- **Demo mode, offscreen, isolated settings — always.** Never point a review
+- **Process-pinned demo-only mode, offscreen, isolated settings — always.** Never point a review
   instance at the FLEX-8600. It is single-occupancy and it is the operator's
   station, not test equipment; a review has no business on it. If a finding
   truly cannot be reached in demo mode, ask the operator rather than

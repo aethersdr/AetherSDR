@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "Ctr2ProxyModel.h"
 
 #include "core/Ctr2HidFraming.h"
@@ -566,6 +567,13 @@ bool Ctr2ProxyModel::usbDeviceNeedsAccessRule() const
 
 bool Ctr2ProxyModel::start()
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        m_stopReason = AutomationIsolationPolicy::refusal();
+        emit lastErrorChanged();
+        emit stateChanged();
+        return false;
+    }
+
     if (isRunning() || !configurationProblem().isEmpty()) {
         return false;
     }

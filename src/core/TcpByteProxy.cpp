@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "TcpByteProxy.h"
 
 #include "LogManager.h"
@@ -120,6 +121,10 @@ public:
 
     void begin(const QHostAddress& address, quint16 port)
     {
+        if (AutomationIsolationPolicy::demoOnly()) {
+            end(AutomationIsolationPolicy::refusal(), true);
+            return;
+        }
         m_connectTimer->start();
         // The QString overload is the virtual one, so a test factory's socket
         // can intercept it.
@@ -319,6 +324,12 @@ QString TcpByteProxy::validate(const Config& config)
 
 bool TcpByteProxy::start(const Config& config)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        setLastError(AutomationIsolationPolicy::refusal());
+        setState(State::Error);
+        return false;
+    }
+
     if (m_state != State::Stopped && m_state != State::Error) {
         return false;
     }

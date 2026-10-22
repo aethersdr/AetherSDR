@@ -9,7 +9,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7510,
+          "line": 7556,
           "text": "else if (key == \"model\")"
         }
       ]
@@ -21,7 +21,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7519,
+          "line": 7565,
           "text": "else if (key == \"software_ver\")"
         }
       ]
@@ -57,7 +57,7 @@
       "source": [
         {
           "file": "src/core/RadioDiscovery.cpp",
-          "line": 90,
+          "line": 93,
           "text": "RadioDiscovery: bind failed on UDP port"
         }
       ]
@@ -77,7 +77,7 @@
       "source": [
         {
           "file": "src/core/RadioDiscovery.cpp",
-          "line": 67,
+          "line": 68,
           "text": "RadioDiscovery: giving up re-bind after"
         }
       ]
@@ -94,7 +94,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7472,
+          "line": 7518,
           "text": "\"RadioModel: terminal GUI client registration failure\""
         }
       ]
@@ -111,12 +111,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7402,
+          "line": 7448,
           "text": "RadioModel: this GUI client was force-disconnected by another client"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7446,
+          "line": 7492,
           "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
         }
       ]
@@ -133,7 +133,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7312,
+          "line": 7358,
           "text": "RadioModel: multiFLEX disabled, other clients present"
         }
       ]
@@ -150,7 +150,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/RadioConnection.cpp",
-          "line": 624,
+          "line": 634,
           "text": "RadioConnection: socket error:"
         }
       ]
@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8653,
+          "line": 8699,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -188,12 +188,12 @@
       "source": [
         {
           "file": "src/core/backends/flex/RadioConnection.cpp",
-          "line": 685,
+          "line": 695,
           "text": "qCDebug(lcConnection) << \"RX:\" << line;"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7519,
+          "line": 7565,
           "text": "else if (key == \"software_ver\")"
         }
       ]
@@ -210,7 +210,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7713,
+          "line": 7759,
           "text": "RadioModel: no VITA-49 UDP data received after 10s"
         }
       ]
@@ -227,7 +227,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7691,
+          "line": 7737,
           "text": "RadioModel: UDP stream setup failed"
         },
         {
@@ -237,7 +237,7 @@
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7766,
+          "line": 7812,
           "text": "RadioModel: client udpport collision"
         }
       ]
@@ -288,17 +288,17 @@
       "source": [
         {
           "file": "src/core/backends/flex/SmartLinkClient.cpp",
-          "line": 100,
+          "line": 111,
           "text": "SmartLinkClient: Auth0 login failed:"
         },
         {
           "file": "src/core/backends/flex/SmartLinkClient.cpp",
-          "line": 154,
+          "line": 174,
           "text": "SmartLinkClient: Auth0 refresh failed:"
         },
         {
           "file": "src/core/backends/flex/SmartLinkClient.cpp",
-          "line": 434,
+          "line": 541,
           "text": "SmartLinkClient: registration invalid"
         }
       ]
@@ -315,7 +315,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/WanConnection.cpp",
-          "line": 252,
+          "line": 258,
           "text": "WanConnection: cert fingerprint MISMATCH for"
         }
       ]
@@ -332,12 +332,12 @@
       "source": [
         {
           "file": "src/core/backends/flex/WanConnection.cpp",
-          "line": 335,
+          "line": 341,
           "text": "WanConnection: socket error:"
         },
         {
           "file": "src/core/backends/flex/SmartLinkClient.cpp",
-          "line": 371,
+          "line": 472,
           "text": "SmartLinkClient: SSL error:"
         }
       ]
@@ -452,7 +452,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 1363,
+          "line": 1364,
           "text": "RadioModel: dax_rx stream create for channel"
         },
         {
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 13165,
+          "line": 13233,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -608,7 +608,7 @@
       "source": [
         {
           "file": "src/main.cpp",
-          "line": 85,
+          "line": 86,
           "text": "Non-fatal X11 error suppressed (error_code="
         }
       ]
@@ -890,7 +890,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 2854,
+          "line": 2860,
           "text": "HL2: could not open the UDP socket"
         }
       ]

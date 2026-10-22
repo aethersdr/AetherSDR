@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "RadioConnection.h"
 #include "FlexPttWireSession.h"
 #include "core/LogManager.h"
@@ -119,6 +120,11 @@ void RadioConnection::resetSocket()
 
 void RadioConnection::connectToRadio(const RadioInfo& info)
 {
+    if (!AutomationIsolationPolicy::allowsRadio(info.family, info.serial)) {
+        emit errorOccurred(AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     if (isDemoTarget(info)) {
         // Demo radio: no socket — play the radio's part locally (RFC #4288).
         startSyntheticDemoConnect();
@@ -240,6 +246,10 @@ void RadioConnection::connectToHost(const QHostAddress& address,
                                     const QHostAddress& explicitBindAddr,
                                     const QHostAddress& sessionBindAddr)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        emit errorOccurred(AutomationIsolationPolicy::refusal());
+        return;
+    }
     if (m_state.load() != ConnectionState::Disconnected) return;
     if (!m_socket) { qCWarning(lcConnection) << "RadioConnection: init() not called"; return; }
 

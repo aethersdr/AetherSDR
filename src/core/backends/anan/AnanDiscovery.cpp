@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "core/backends/anan/AnanDiscovery.h"
 
 #include "core/AppSettings.h"
@@ -146,6 +147,8 @@ bool AnanDiscovery::isRunning() const noexcept
 
 void AnanDiscovery::start(int intervalMs)
 {
+    if (AutomationIsolationPolicy::demoOnly()) { return; }
+
     if (!m_socket) {
         m_socket = new QUdpSocket(this);
         if (!m_socket->bind(QHostAddress::AnyIPv4, 0)) {
@@ -173,6 +176,8 @@ void AnanDiscovery::stop()
 
 void AnanDiscovery::sweepNow()
 {
+    if (AutomationIsolationPolicy::demoOnly()) { return; }
+
     if (!m_socket)
         return;
     const auto pkt = buildDiscovery();

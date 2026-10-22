@@ -912,6 +912,7 @@ set(CORE_SOURCES
     src/core/backends/flex/VitaDscpMarker.cpp
     src/core/backends/flex/SmartLinkClient.cpp  # SmartLink WAN auth + radio list
     src/core/backends/flex/WanConnection.cpp    # SmartLink TLS transport (#5554 §2.6)
+    src/core/backends/AutomationIsolationPolicy.cpp
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
     src/core/backends/sim/SimSignalSource.cpp  # demo RX engine, worker thread (#4878)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)

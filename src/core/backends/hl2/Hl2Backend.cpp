@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/AppActivity.h"
 #include "core/backends/WdspNoiseBlanker.h"
@@ -2184,6 +2185,11 @@ RadioCapabilities Hl2Backend::capabilities() const
 
 void Hl2Backend::connectRadio(const RadioConnectRequest& request)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        emit connectionError(AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     const QHostAddress host(request.host);
     if (host.isNull()) {
         emit connectionError(QStringLiteral("HL2: invalid host '%1'").arg(request.host));

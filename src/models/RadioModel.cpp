@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "RadioModel.h"
 #include "core/backends/TuneOutputPolicy.h"
 #include <QScopedValueRollback>
@@ -2684,6 +2685,11 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_operatingStateMaxWaitTimer, &QTimer::timeout, this,
             [this] { persistOperatingState(false); });
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
+        if (!AutomationIsolationPolicy::allowsRadio(m_lastInfo.family, m_lastInfo.serial)) {
+            m_reconnectTimer.stop();
+            emit connectionError(AutomationIsolationPolicy::refusal());
+            return;
+        }
         if (!m_intentionalDisconnect && !m_lastInfo.address.isNull()) {
             qCDebug(lcProtocol) << "RadioModel: auto-reconnecting to" << m_lastInfo.address.toString();
             // A retry is an attempt too (#4912). This path does NOT go through
@@ -3734,6 +3740,11 @@ void RadioModel::emitInterlockNotification(const QString& message,
 
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
+    if (!AutomationIsolationPolicy::allowsRadio(info.family, info.serial)) {
+        emit connectionError(AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     discardTuneInhibit();
     resetTuneOutputControl();
     cancelRadioWake();
@@ -3868,6 +3879,11 @@ void RadioModel::connectToRadio(const RadioInfo& info)
 
 void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        emit connectionError(AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     discardTuneInhibit();
     cancelRadioWake();
     qCDebug(lcProtocol) << "RadioModel: connectViaWan publicIp=" << publicIp
@@ -4110,6 +4126,11 @@ void RadioModel::finishRadioWake(const QString& message, bool success)
 
 bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        if (error) { *error = AutomationIsolationPolicy::refusal(); }
+        return false;
+    }
+
     // Namespace, not family (#5262 M1): this reaches for the icom `power.wake`
     // verb, so the question is whether the backend answers that namespace.
     if (m_radioWakeActive || !backendDeclaresExtension(QStringLiteral("icom"))
@@ -4152,6 +4173,7 @@ bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
     const quint64 generation = m_radioWakeGeneration;
     emit radioWakeProgress(tr("Waking radio…"), true);
     QTimer::singleShot(result.value("delayMs").toInt(), this, [this, generation, selectedRadio, address] {
+        if (AutomationIsolationPolicy::demoOnly()) { return; }
         if (!m_radioWakeActive || generation != m_radioWakeGeneration) { return; }
         // Own this single reconnect instead of arming the repeating retry timer.
         // Pin only this attempt to the operator's wake destination, never settings.
@@ -4759,6 +4781,9 @@ void RadioModel::releaseOfflineHealth()
 RadioModel::OfflineAimResult
 RadioModel::setOfflineHealthTarget(const QString& family, const QHostAddress& addr)
 {
+    if (AutomationIsolationPolicy::demoOnly() && !addr.isNull()) {
+        return OfflineAimResult::DemoOnly;
+    }
     // Gate on the family of the radio being aimed at, not m_family (set only by
     // connectToRadio()); the caller resolves the address to a discovered radio's
     // family. Aiming never connects and never touches m_family, and the registry,

@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "RtlSdrDiscovery.h"
 
 #include <QtConcurrent/QtConcurrentRun>
@@ -45,6 +46,8 @@ bool RtlSdrDiscovery::isAvailable()
 
 void RtlSdrDiscovery::start(int intervalMs)
 {
+    if (AutomationIsolationPolicy::demoOnly()) { return; }
+
     if (!isAvailable()) {
         return;
     }
@@ -63,6 +66,8 @@ void RtlSdrDiscovery::stop()
 
 void RtlSdrDiscovery::onScanTimer()
 {
+    if (AutomationIsolationPolicy::demoOnly()) { return; }
+
     if (!isAvailable() || m_scanning) {
         return; // Background scan still in progress or backend disabled
     }
