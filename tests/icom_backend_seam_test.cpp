@@ -148,6 +148,8 @@ struct IcomCivBackendTestAccess {
     static void forgetIdentity(IcomCivBackend& b) { b.m_civReported = 0; b.m_civModelId = 0; }
     static void publishControls(IcomCivBackend& b) { b.publishModelControls(); }
     static std::uint64_t frequency(const IcomCivBackend& b) { return b.m_frequencyHz; }
+    // No frequency reported yet this session: the next echo is the first report.
+    static void awaitFirstReport(IcomCivBackend& b) { b.m_frequencyHz = 0; }
     static int preampStep(const IcomCivBackend& b) { return b.m_preampStep; }
     static void reassertPreamp(IcomCivBackend& b) { b.reassertPanPreampWireStep(b.m_preampStep); }
     static void queuePendingRead(IcomCivBackend& b)
@@ -1204,12 +1206,30 @@ void testScopeStartupKeepsTheOperatorsSlot()
               "found in Fixed on slot 4: the window is ours, a drag writes it (no re-select)");
     }
     {
+        // Slot-4 reply first, then the session's first frequency report: ours
+        // already, so there is nothing to re-select and no edge state to reset.
+        IcomCivBackend backend;
+        Access::prepare(backend, "IC-7300MK2");
+        Access::scopeStartup(backend);
+        Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+        Access::deliver(backend, frame(cmd::kScope, scope::kMode, {0x00, 0x01}));
+        Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x01));
+        Access::awaitFirstReport(backend);
+        Access::forget(backend);
+        Access::deliver(backend, frequencyEcho(14'296'800));
+        Access::settleScope(backend);
+        check(slotSelects(Access::issued(backend)).empty()
+                  && edgeWrites(Access::issued(backend)).empty(),
+              "found on slot 4, the first frequency report writes no redundant 27 16 and no 27 1E");
+    }
+    {
         // The session's first frequency report lands in some range; it is not a
         // range entry, so nothing is re-selected even once the slot is known.
         IcomCivBackend backend;
         Access::prepare(backend, "IC-7300MK2");
         Access::scopeStartup(backend);
         Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x01));
+        Access::awaitFirstReport(backend);
         Access::forget(backend);
         Access::deliver(backend, frequencyEcho(14'296'800));
         check(slotSelects(Access::issued(backend)).empty(),
@@ -1352,6 +1372,7 @@ void testScopeSelectorChangeReadsTheOtherScope()
     Access::prepare(backend, "IC-9700");
     Access::scrollF(backend);
     Access::deliver(backend, frequencyEcho(145'500'000));
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
     Access::deliver(backend, *scopeEdgeSweep(145'400'000, 145'600'000, 0xA2));
 
     // The front panel switches to SUB: a sweep arrives with selector 01.
@@ -1364,6 +1385,13 @@ void testScopeSelectorChangeReadsTheOtherScope()
     Access::deliver(backend, frame(cmd::kScope, scope::kMode, {0x01, 0x01}));
     check(modeWritesTo(Access::issued(backend), 0x01).empty(),
           "a SUB scope the operator left in Fixed is kept, not forced to SCROLL-F");
+    // SUB's slot is unread for one round trip: MAIN's slot 4 must not carry
+    // over, or a SUB Fixed on an operator slot would be ours for that moment.
+    Access::forget(backend);
+    backend.setPanCenter(QStringLiteral("0"), 430'050'000.0, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    check(edgeWrites(Access::issued(backend)).empty() && slotSelects(Access::issued(backend)).empty(),
+          "before SUB's slot reply its Fixed window is not ours: a drag writes nothing");
     // Back to MAIN, which answers the mode read with Center before any of its
     // sweeps arrive (the read is queued on the switch): initialised, on MAIN only.
     // The sweep's own mode byte (Center) is a mode report, so the init

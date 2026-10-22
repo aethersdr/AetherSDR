@@ -2372,6 +2372,8 @@ void IcomCivBackend::onScopeSelectorChanged(std::uint8_t selector)
     resetScopeEdgeState();
     m_scopeReportedMode.reset();
     m_scopeModeRequestedAtMs = 0;
+    // The other scope's slot is unknown until its 27 16 reply: not ours.
+    m_scopeEdgeNumber = 0;
     if (!m_session || !scopeModesOffered()) {
         return;
     }

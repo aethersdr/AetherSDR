@@ -94,7 +94,7 @@ The panadapter is the radio's own scope, and the radio owns the scope mode. On t
 
 **At connect, AetherSDR reads the radio's scope mode and edge preset.** A radio found in Scroll-F or Fixed is left exactly as it was: nothing is written. A radio found in Center is switched to Scroll-F once per session, so the panadapter never starts slaved to the VFO. Picking Center in the Display panel is honoured for that session, and the next connect initialises Scroll-F again. Picking Scroll-F or Fixed is written to the radio and stays across reconnects.
 
-**AetherSDR's window is the radio's Fixed Edges preset 4.** In Scroll-F and in Fixed chosen from the Display panel, every pan and zoom rewrites preset 4 for the band segment you are on; presets 1–3 are never written. If the radio is in Fixed on one of presets 1–3 (chosen on its front panel), the panadapter shows that preset as it is, and a drag or zoom is refused with the view put back. The window cannot cross one of the radio's band-segment boundaries (for example 8.000 MHz on HF), so near a boundary it shifts rather than centres.
+**AetherSDR's window is the radio's Fixed Edges preset 4.** In Scroll-F and in Fixed chosen from the Display panel, every pan and zoom rewrites preset 4 for the band segment you are on; presets 1–3 are never written. If the radio is in Fixed on one of presets 1–3 (chosen on its front panel), the panadapter shows that preset as it is, and a drag or zoom is refused with the view put back. In Scroll-F on one of presets 1–3, the radio stays on that preset until the window first has to move: a drag or zoom in AetherSDR, or a dial move that reaches the edge of the window, switches the radio to preset 4 and writes there. The window cannot cross one of the radio's band-segment boundaries (for example 8.000 MHz on HF), so near a boundary it shifts rather than centres.
 
 Tuning works the same way as on other radios: click, drag the tuned-frequency marker, scroll the wheel, type a frequency, or recall a memory. A tune that leaves the window brings the window with it. The original IC-7300 has Center only, and the Scope row is dimmed with that reason. On the IC-9700 the scope that is streaming (MAIN or SUB) is the one read and initialised.
 
@@ -159,6 +159,7 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 - On the IC-7300MK2, transmit audio drops out for about a third of a second roughly every 1.2 seconds while the radio stays keyed ([#6169](https://github.com/aethersdr/AetherSDR/issues/6169)).
 - CW speed, break-in and pitch do nothing on models without a CW text keyer, such as the IC-9700 ([#6110](https://github.com/aethersdr/AetherSDR/issues/6110)).
 - On the IC-9700, the panadapter trace can sit on the bottom line and look blank on a quiet band with the preamp off ([#4814](https://github.com/aethersdr/AetherSDR/issues/4814)).
+- In Scroll-F, the IC-7300MK2 sends no scope data while it is transmitting, so the panadapter freezes for the length of a transmission; in Center it keeps sweeping ([#6168](https://github.com/aethersdr/AetherSDR/issues/6168)).
 
 ## Troubleshooting
 
