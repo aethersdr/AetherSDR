@@ -11556,8 +11556,9 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         if (m_bandPlanFontSize > 0 && m_bandPlanMgr) {
             const double cursorMhz = xToMhz(mx2);
             for (const auto& seg : m_bandPlanMgr->segments()) {
-                if (seg.usage.isEmpty() || cursorMhz < seg.lowMhz || cursorMhz >= seg.highMhz)
+                if (seg.usage.isEmpty() || cursorMhz < seg.lowMhz || cursorMhz >= seg.highMhz) {
                     continue;
+                }
                 const int x1 = mhzToX(seg.lowMhz);
                 const int x2 = mhzToX(seg.highMhz);
                 const QString tip = QString("<b>%1–%2 MHz — %3</b><br>%4")

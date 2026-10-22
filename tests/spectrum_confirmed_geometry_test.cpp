@@ -801,7 +801,7 @@ int main(int argc, char** argv)
                   && tip.contains(QStringLiteral("ALL"))
                   && tip.contains(QStringLiteral("automatically controlled data stations")),
               "usage hover: 14.101-14.112 shows its chart usage note");
-        hoverAt(14.120);  // 14.112-14.125 ALL, no usage
+        hoverAt(14.120);  // 14.112-14.350 ALL, no usage
         check(tipGone(), "usage hover: a segment without usage shows no tooltip");
         band.setBandPlanFontSize(0);
         hoverAt(14.105);

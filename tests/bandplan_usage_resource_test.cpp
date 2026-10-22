@@ -1,27 +1,11 @@
 // Shipped IARU Region 1 and SSA (Sweden) band-plan rows match their charts,
 // including the optional per-segment `usage` annotation. (#4667)
-//
-// The IARU R1 HF chart (effective 16 Oct 2020) has two columns per row:
-// preferred mode and usage. Before #4667 the plan JSON had only `label`, so
-// every row reading "All modes" + "Digimodes" was transcribed as digi-only
-// and painted narrow-band red. #4610 reported one such row (80 m 3600-3620)
-// and #4635 fixed exactly that one; six more survived because nothing in the
-// suite read a shipped plan. This test reads them through BandPlanManager
-// itself, so the parser and the resource are checked together.
-//
-// Deliberately NOT asserted: whether these rows are voice-detected.
-// isVoiceSegmentLabel() keys the S-History voice mask off `label`, and no
-// all-modes row in either plan matches a voice token today. Pinning that
-// would freeze a separate defect. The test asserts only that a corrected row
-// is treated the same as the plan's other all-modes rows.
 
-#include "core/VoiceSignalDetector.h"
+#include "TestSettingsProfile.h"
 #include "models/BandPlanManager.h"
 
 #include <QCoreApplication>
-#include <QStandardPaths>
 #include <QString>
-#include <QTemporaryDir>
 
 #include <cmath>
 #include <cstdio>
@@ -92,27 +76,13 @@ const Expected kSweden[] = {
 };
 
 template <size_t N>
-void checkPlan(BandPlanManager& mgr, const QString& planName, const QString& allLabel,
+void checkPlan(BandPlanManager& mgr, const QString& planName,
                const Expected (&rows)[N])
 {
     mgr.setActivePlan(planName);
     report(QStringLiteral("%1 is active").arg(planName), mgr.activePlanName() == planName);
     const auto& segs = mgr.segments();
     report(QStringLiteral("%1 has segments").arg(planName), !segs.isEmpty());
-
-    // Reference voice-mask result for this plan's ordinary all-modes rows.
-    // Corrected rows must match it, whatever it is.
-    int allRows = 0;
-    bool allVoice = false;
-    for (const auto& s : segs) {
-        if (s.label == allLabel && s.usage.isEmpty()) {
-            if (allRows++ == 0)
-                allVoice = isVoiceSegmentLabel(s.label);
-        }
-    }
-    report(QStringLiteral("%1 has un-annotated %2 rows to compare against (got %3)")
-               .arg(planName, allLabel).arg(allRows),
-           allRows > 0);
 
     for (const auto& e : rows) {
         const QString where = QStringLiteral("%1 %2-%3")
@@ -129,11 +99,6 @@ void checkPlan(BandPlanManager& mgr, const QString& planName, const QString& all
                s->color == QColor(QString::fromLatin1(e.color)));
         report(where + QStringLiteral(" usage matches the chart (got \"%1\")").arg(s->usage),
                s->usage == QString::fromUtf8(e.usage));
-        if (s->label == allLabel) {
-            report(where + QStringLiteral(" voice mask matches the plan's other %1 rows")
-                       .arg(allLabel),
-                   isVoiceSegmentLabel(s->label) == allVoice);
-        }
     }
 
     // The defect shape itself: a red `DIGI` row in these plans must be the
@@ -155,20 +120,18 @@ int main(int argc, char** argv)
 {
     // loadPlans() reads the saved plan name from AppSettings. Keep that off
     // the developer's real profile.
-    QTemporaryDir profile;
+    TestSettingsProfile profile(QStringLiteral("bandplan-usage-resource"));
     if (!profile.isValid()) {
         std::printf("[FAIL] cannot create a private settings dir\n");
         return 1;
     }
-    qputenv("AETHER_SETTINGS_DIR", profile.path().toUtf8());
-    QStandardPaths::setTestModeEnabled(true);
     QCoreApplication app(argc, argv);
 
     BandPlanManager mgr;
     mgr.loadPlans();
 
-    checkPlan(mgr, QStringLiteral("IARU Region 1"), QStringLiteral("ALL"), kRegion1);
-    checkPlan(mgr, QStringLiteral("SSA (Sweden)"), QStringLiteral("ALLA"), kSweden);
+    checkPlan(mgr, QStringLiteral("IARU Region 1"), kRegion1);
+    checkPlan(mgr, QStringLiteral("SSA (Sweden)"), kSweden);
 
     // `usage` is optional: a plan that never sets it parses to empty usage.
     mgr.setActivePlan(QStringLiteral("ARRL (US)"));

@@ -3158,7 +3158,6 @@ qt_add_resources(BANDPLAN_USAGE_RESOURCE_TEST_RESOURCES resources/resources.qrc)
 add_executable(bandplan_usage_resource_test
     tests/bandplan_usage_resource_test.cpp
     src/models/BandPlanManager.cpp
-    src/core/VoiceSignalDetector.cpp
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_settings>
