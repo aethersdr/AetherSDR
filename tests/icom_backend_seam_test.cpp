@@ -84,6 +84,8 @@ struct IcomCivBackendTestAccess {
         b.m_civTrace.clear();
         (void)b.m_civScheduler.reset();
     }
+    // Clear only the trace: what is in flight and queued stays so.
+    static void forgetSent(IcomCivBackend& b) { b.m_civTrace.clear(); }
     // Drain by letting each in-flight transaction time out on a future clock.
     static void settle(IcomCivBackend& b)
     {
@@ -1272,6 +1274,104 @@ void testScopeStartupKeepsTheOperatorsSlot()
     }
 }
 
+// A tune outside the span queues its window write behind the 05 (a CAT/TCI
+// AllowRecenter tune, or the GUI's Range reveal). If the radio refuses the 05,
+// that write is dropped before the next pump, or the refused destination's
+// window would land on the radio while the VFO stays where it was.
+void testRefusedTuneDropsItsQueuedWindow()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+    Access::forget(backend);
+    backend.setSliceFrequency(0, 14'200'000.0);
+    backend.setPanCenter(QStringLiteral("0"), 14'200'000.0,
+                         IRadioBackend::PanCenterIntent::Range);
+    Access::settleScope(backend);
+    // issued() lists what went out AND what is still queued behind the 05.
+    const auto tuneOut = any(Access::issued(backend), [](const CivFrame& f) {
+        return f.cmd == cmd::kSetFreq && !f.data.empty();
+    });
+    const auto queued = edgeWrites(Access::issued(backend));
+    check(tuneOut && queued.size() == 1 && queued.front().lowerHz <= 14'200'000
+              && queued.front().upperHz >= 14'200'000,
+          "the 05 is in flight and the window write for 14.200 is queued behind it");
+    // The radio refuses the tune (FA). Only the trace is cleared: the queue
+    // and the in-flight 05 are exactly what the refusal must act on.
+    Access::forgetSent(backend);
+    Access::deliver(backend, frame(kCivNg, std::nullopt, {}));
+    Access::settleScope(backend);
+    check(edgeWrites(Access::issued(backend)).empty(),
+          "a refused tune's queued window write is dropped: neither sent nor still queued");
+    check(Access::frequency(backend) == 14'050'000, "and the VFO is still where the radio says");
+}
+
+// A corrective drag back to the window still on screen must go out while an
+// earlier write is unconfirmed, or the scope settles on the earlier gesture
+// once that write's sweep lands. Once confirmed, a repeat is deduplicated.
+void testCorrectiveDragSurvivesAnUnconfirmedWrite()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+    Access::forget(backend);
+    backend.setPanCenter(QStringLiteral("0"), 14'030'000.0, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    auto edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().lowerHz == 13'980'000, "the first drag writes 13.980-14.080");
+    // Back to 14.050 before that write's sweep has arrived.
+    Access::forget(backend);
+    backend.setPanCenter(QStringLiteral("0"), 14'050'000.0, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().lowerHz == 14'000'000 && edges.front().upperHz == 14'100'000,
+          "the drag back to the window still on screen is written while the first is unconfirmed");
+    // The radio confirms the correction: a repeat of it is now a no-op.
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+    Access::forget(backend);
+    backend.setPanCenter(QStringLiteral("0"), 14'050'000.0, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    check(edgeWrites(Access::issued(backend)).empty(), "a confirmed window is not rewritten");
+}
+
+// A Fixed on one of the operator's presets lights no Scope button, so a click
+// on Fixed is a request (not "already selected") and reclaims slot 4 with the
+// window on screen; the operator's presets are never written.
+void testFixedClickReclaimsSlotFour()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    QSignalSpy lit(&backend, &IRadioBackend::panScopeModeChanged);
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x01}));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x01));
+    check(!lit.isEmpty() && lit.last().at(1).toInt() == -1,
+          "a Fixed on the operator's slot 1 lights no Scope button");
+    Access::forget(backend);
+    backend.setPanScopeMode(QStringLiteral("0"), 2);
+    Access::settleScope(backend);
+    const auto selects = slotSelects(Access::issued(backend));
+    const auto modes = writes(Access::issued(backend), cmd::kScope, scope::kMode);
+    const auto edges = edgeWrites(Access::issued(backend));
+    check(selects.size() == 1 && selects.front().data == std::vector<std::uint8_t>({0x00, 0x04})
+              && modes.size() == 1 && modes.front().data == std::vector<std::uint8_t>({0x00, 0x01})
+              && !edges.empty()
+              && std::ranges::all_of(edges, [](const EdgeWrite& e) { return e.slot == 4; }),
+          "clicking Fixed selects slot 4, keeps Fixed, and writes only our slot");
+    check(lit.last().at(1).toInt() == 2, "and Fixed lights");
+    // The radio confirms: Fixed on slot 4 is ours.
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x01));
+    check(lit.last().at(1).toInt() == 2, "and stays lit once the radio confirms slot 4");
+}
+
 // Fixed chosen here, but the radio shows one of the operator's slots (picked on
 // its front panel): the window is theirs, a retune would not move it, so a
 // drag or a zoom is refused rather than falling through to Center's retune.
@@ -1646,6 +1746,9 @@ int main(int argc, char** argv)
     testFixedOnOperatorSlotRefusesGestures();
     testScopeStartupInitialisesFromRadio();
     testScopeStartupKeepsTheOperatorsSlot();
+    testRefusedTuneDropsItsQueuedWindow();
+    testCorrectiveDragSurvivesAnUnconfirmedWrite();
+    testFixedClickReclaimsSlotFour();
     testCwTextLimits();
     testReceiveAudioRatio();
     testTraceTags();

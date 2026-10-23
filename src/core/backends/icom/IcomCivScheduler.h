@@ -157,6 +157,9 @@ public:
     [[nodiscard]] bool idle() const noexcept { return m_queue.empty() && !m_inFlight; }
     [[nodiscard]] bool hasPendingKeyPrefix(
         std::string_view prefix, std::int64_t nowMs) const noexcept;
+    // Remove every QUEUED request carrying this semantic key; one already in
+    // flight is left to complete. Returns how many were removed.
+    std::size_t cancelQueued(std::string_view key) noexcept;
 
     static constexpr int kSlotMs = 25;
     static constexpr int kReadTimeoutMs = 350;

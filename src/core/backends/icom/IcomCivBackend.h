@@ -660,6 +660,7 @@ private:
     bool m_scopeInitPending = false;
     void initialiseScopeMode(ScopeMode reported);
     void queueScopeStartupReads();
+    void publishReportedScopeMode();
     // The mode the radio last reported (sweep or 27 14 read).
     std::optional<ScopeMode> m_scopeReportedMode;
     int m_scopePublishedModeIndex = -2;   // -2 = nothing published yet

@@ -26,6 +26,7 @@
 #include <QWidget>
 
 #include <cstdio>
+#include <vector>
 
 using namespace AetherSDR;
 
@@ -109,6 +110,23 @@ int main(int argc, char* argv[])
                                  QStringLiteral("Fixed")});
         check(!scopeRow->isHidden() && scopeRow->isEnabled(),
               "an Icom offering modes -> Scope row shown and enabled");
+        // A Fixed on one of the radio's own presets is published as "nothing
+        // lit" (index -1): a click on Fixed must then ask for Fixed, so the
+        // backend can reclaim its slot; with Fixed already lit it asks nothing.
+        std::vector<int> picks;
+        QObject::connect(&menu, &SpectrumOverlayMenu::scopeModeChanged,
+                         [&picks](int i) { picks.push_back(i); });
+        auto* fixedBtn = parent.findChild<QPushButton*>(QStringLiteral("displayScopeMode_fixed"));
+        check(fixedBtn != nullptr, "the Fixed button is discoverable");
+        if (fixedBtn) {
+            menu.setScopeModeIndex(-1);
+            fixedBtn->click();
+            check(picks.size() == 1 && picks.back() == 2,
+                  "with nothing lit, clicking Fixed asks for Fixed");
+            menu.setScopeModeIndex(2);
+            fixedBtn->click();
+            check(picks.size() == 1, "with Fixed already lit, clicking it asks for nothing");
+        }
         menu.setRadioFamily(QStringLiteral("hl2"));
         check(scopeRow->isHidden(), "the next non-Icom radio -> no Scope row again");
     }

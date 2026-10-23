@@ -2104,16 +2104,24 @@ void IcomCivBackend::noteSweepScopeMode(ScopeMode mode)
     if (changed && !scopeWindowIsEdgeDriven()) {
         resetScopeEdgeState();
     }
-    if (!scopeModesOffered()) {
+    publishReportedScopeMode();
+}
+
+// The Scope row lights the radio's reported mode. Fixed lights only on our
+// slot: a front-panel Fixed on slot 1-3 shows the operator's preset, not the
+// Fixed this menu offers, so nothing lights (like SCROLL-C) and a click on
+// Fixed reclaims slot 4 through setPanScopeMode instead of being swallowed
+// as "already selected". Re-run when the slot changes, not only the mode.
+void IcomCivBackend::publishReportedScopeMode()
+{
+    if (!scopeModesOffered() || !m_scopeReportedMode) {
         return;
     }
-    // A front-panel Fixed shows the operator's slot, not the Fixed this menu
-    // offers, so it lights nothing (like SCROLL-C).
+    const ScopeMode mode = *m_scopeReportedMode;
     const int index = mode == ScopeMode::Centre  ? kScopeModeIndexCenter
                     : mode == ScopeMode::ScrollF ? kScopeModeIndexScrollF
-                    : (mode == ScopeMode::Fixed
-                       && m_scopeView == IcomCivBackend::ScopeView::Fixed) ? kScopeModeIndexFixed
-                                                                         : -1;
+                    : (mode == ScopeMode::Fixed && m_scopeEdgeNumber == scopeEdgeSlot())
+                        ? kScopeModeIndexFixed : -1;
     if (index == m_scopePublishedModeIndex) {
         return;
     }
@@ -2121,7 +2129,8 @@ void IcomCivBackend::noteSweepScopeMode(ScopeMode mode)
         && nowMs() - m_scopeModeRequestedAtMs < kScopeModeRequestGraceMs) {
         return;
     }
-    qCInfo(lcIcomPan) << "radio reports scope mode" << static_cast<int>(mode);
+    qCInfo(lcIcomPan) << "radio reports scope mode" << static_cast<int>(mode)
+                      << "on edge slot" << m_scopeEdgeNumber;
     m_scopePublishedModeIndex = index;
     emit panScopeModeChanged(panId(), index);
 }
@@ -2182,6 +2191,7 @@ void IcomCivBackend::handleScopeReply(const CivFrame& frame)
                 qCInfo(lcIcomPan) << "scope edge slot" << edge;
             }
             m_scopeEdgeNumber = edge;
+            publishReportedScopeMode();
         }
     } else if (frame.sub == scope::kMode) {
         const int mode = decodeBcdByte(frame.data[1]);
@@ -2334,7 +2344,13 @@ void IcomCivBackend::flushScopeEdgeWrite()
     const bool alreadyWritten = m_scopeEdgeWritten
         && m_scopeEdgeWrittenRange == m_scopeEdgeTargetRange
         && m_scopeEdgeWritten->lowerHz == t.lowerHz && m_scopeEdgeWritten->upperHz == t.upperHz;
-    if (alreadyShown || alreadyWritten) {
+    // A write still awaiting its sweep makes the shown geometry stale: a
+    // gesture back to what is on screen must still go out, or the scope
+    // settles on the earlier gesture once that write's sweep lands.
+    const bool writeUnconfirmed = m_scopeEdgeWritten
+        && (static_cast<std::int64_t>(m_scopeEdgeWritten->lowerHz) != m_scopeLowerHz
+            || static_cast<std::int64_t>(m_scopeEdgeWritten->upperHz) != m_scopeUpperHz);
+    if ((alreadyShown && !writeUnconfirmed) || alreadyWritten) {
         return;
     }
     writeScopeEdgeWindow(m_scopeEdgeTargetRange, t);
@@ -2572,6 +2588,28 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     // queued startup frame until adoptCivIdentity() has either confirmed
     // the address or discarded all work aimed at the old one.
     const bool identityReply = frame.cmd == cmd::kReadId;
+    // FA (NG) to a cmd 05 frequency write means the tune did not take (e.g.
+    // IC-9700 refuses a band the other receiver holds, #4840). Decided BEFORE
+    // the pump: a window placed for that tune (an AllowRecenter tune outside
+    // the span queues its 27 1E behind the 05) would otherwise be the next
+    // frame out, and would put the refused destination's window on the radio.
+    // Every clause is needed: Accepted means THIS frame retired the in-flight
+    // transaction (an Unmatched NG leaves a stale lastCompletedKey), and the
+    // cmd must be 05 because 03 reads share the "frequency" semantic key.
+    const bool refusedTune = frame.isNg()
+        && observation == IcomCivScheduler::Observation::Accepted
+        && m_civScheduler.stats().lastCompletedKey == "frequency"
+        && m_civScheduler.stats().lastCompletedCmd == cmd::kSetFreq
+        && m_frequencyHz != 0;
+    if (refusedTune) {
+        if (const std::size_t dropped = m_civScheduler.cancelQueued("scope.edgewin");
+            dropped > 0) {
+            qCInfo(lcIcomPan) << "dropped" << dropped
+                              << "scope window write(s) queued for the refused tune";
+        }
+        // A window placed for the refused tune must not stay on screen either.
+        resetScopeEdgeState();
+    }
     if (!identityReply)
         pumpCiv(frameAtMs);
     const bool isPttState = frame.cmd == cmd::kControl && frame.hasSub
@@ -2584,17 +2622,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         return;
     }
 
-    // FA (NG) to a cmd 05 frequency write means the tune did not take, so the
-    // radio-authoritative m_frequencyHz is restored (e.g. IC-9700 refuses a
-    // band the other receiver holds, #4840). Only frequency writes are handled.
-    // Every clause is needed: Accepted means THIS frame retired the in-flight
-    // transaction (an Unmatched NG leaves a stale lastCompletedKey), and the
-    // cmd must be 05 because 03 reads share the "frequency" semantic key.
-    if (frame.isNg()
-        && observation == IcomCivScheduler::Observation::Accepted
-        && m_civScheduler.stats().lastCompletedKey == "frequency"
-        && m_civScheduler.stats().lastCompletedCmd == cmd::kSetFreq
-        && m_frequencyHz != 0) {
+    // The refused tune (decided above, before the pump): restore the
+    // radio-authoritative m_frequencyHz. Only frequency writes are handled.
+    if (refusedTune) {
         // Re-assert the radio's real VFO one event-loop turn later, exactly as
         // the out-of-band gate in setSliceFrequency() and the refused mode in
         // setSliceMode() already do: SliceModel has accepted and announced the
@@ -2605,8 +2635,6 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             << "radio refused the frequency write (CI-V FA); restoring"
             << actualMhz << "MHz";
         scheduleFrequencyRestore();
-        // A window placed for the refused tune must not stay on screen.
-        resetScopeEdgeState();
         // The dual-receiver explanation is TRUE ONLY WHERE THERE ARE TWO.
         // This block fires on every Icom model, so an IC-705 refusing a write
         // for some other reason was being handed a reason that cannot apply to
