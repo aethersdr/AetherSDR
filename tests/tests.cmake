@@ -3297,6 +3297,13 @@ target_link_libraries(wan_udp_keepalive_test PRIVATE aethercore Qt6::Core)
 add_test(NAME wan_udp_keepalive_test COMMAND wan_udp_keepalive_test)
 set_tests_properties(wan_udp_keepalive_test PROPERTIES TIMEOUT 25)
 
+# Socket-free: injected LAN write; drives the production keepalive timer and lifecycle.
+add_executable(lan_udp_keepalive_test tests/lan_udp_keepalive_test.cpp)
+target_include_directories(lan_udp_keepalive_test PRIVATE src tests)
+target_link_libraries(lan_udp_keepalive_test PRIVATE aethercore Qt6::Core)
+add_test(NAME lan_udp_keepalive_test COMMAND lan_udp_keepalive_test)
+set_tests_properties(lan_udp_keepalive_test PROPERTIES TIMEOUT 25)
+
 # SOCKETS: manual check of the production ephemeral IPv4 VITA socket and two
 # own loopback UDP sinks. No firmware peer or RF. Build/run explicitly.
 # not registered: opt-in real socket wiring; default coverage above is socket-free.

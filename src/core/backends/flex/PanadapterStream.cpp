@@ -28,6 +28,10 @@ constexpr int kAudioSampleRate = AudioEngine::DEFAULT_SAMPLE_RATE;
 constexpr int kOpusFramesPerPacket = 240;
 constexpr int kWanRegisterIntervalMs = 50;
 constexpr int kWanKeepaliveIntervalMs = 5000;
+constexpr int kLanKeepaliveIntervalMs = 5000;
+// The radio sends LAN VITA from this port (measured, FLEX-8600 fw 4.3.16, IPv4
+// and IPv6). Sending to it keeps a stateful host firewall's return path open.
+constexpr quint16 kLanVitaSourcePort = 4993;
 
 QString streamCategoryName(PanadapterStream::StreamCategory cat)
 {
@@ -100,6 +104,9 @@ void PanadapterStream::init()
     if (!m_routedPrimeTimer) {
         m_routedPrimeTimer = new QTimer(this);
     }
+    if (!m_lanKeepaliveTimer) {
+        m_lanKeepaliveTimer = new QTimer(this);
+    }
 
     // Pick up the persisted PLC toggle. Default true — strictly better in
     // the failure mode and a no-op when no packets are lost. (#2731)
@@ -132,6 +139,10 @@ void PanadapterStream::init()
         if (sent > 0)
             m_totalTxBytes.fetch_add(sent);
     });
+
+    m_lanKeepaliveTimer->setInterval(kLanKeepaliveIntervalMs);
+    connect(m_lanKeepaliveTimer, &QTimer::timeout,
+            this, &PanadapterStream::sendLanKeepalive, Qt::UniqueConnection);
 }
 
 bool PanadapterStream::isRunning() const
@@ -263,6 +274,7 @@ bool PanadapterStream::start(RadioConnection* conn)
     m_radioPort = 4991;
 
     m_conn = conn;
+    startLanKeepalive();
     return true;
 }
 
@@ -284,6 +296,8 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
 
     if (m_routedPrimeTimer)
         m_routedPrimeTimer->stop();
+    if (m_lanKeepaliveTimer)
+        m_lanKeepaliveTimer->stop();
 
     m_dscpMarker.reset();
     if (m_socket->state() != QAbstractSocket::UnconnectedState)
@@ -341,7 +355,30 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
         qCWarning(lcVita49) << "PanadapterStream: radio address unknown - skipping UDP registration after rebind";
     }
 
+    startLanKeepalive();
     return true;
+}
+
+void PanadapterStream::startLanKeepalive()
+{
+    if (m_isWanMode || m_radioAddress.isNull())
+        return;
+    sendLanKeepalive();
+    m_lanKeepaliveTimer->start();
+}
+
+// Without this, a host firewall that drops unsolicited UDP (UFW, firewalld)
+// sees radio VITA as a new inbound flow and drops it while TCP stays up.
+void PanadapterStream::sendLanKeepalive()
+{
+    if (m_isWanMode || m_radioAddress.isNull())
+        return;
+    const QByteArray ping(1, '\x00');
+    const qint64 sent = m_lanWriteForTest
+        ? m_lanWriteForTest(ping, m_radioAddress, kLanVitaSourcePort)
+        : m_socket->writeDatagram(ping, m_radioAddress, kLanVitaSourcePort);
+    if (sent > 0)
+        m_totalTxBytes.fetch_add(sent);
 }
 
 bool PanadapterStream::startWan(const QHostAddress& radioAddr, quint16 radioUdpPort)
@@ -462,6 +499,9 @@ void PanadapterStream::stop()
     }
     if (m_routedPrimeTimer) {
         m_routedPrimeTimer->stop();
+    }
+    if (m_lanKeepaliveTimer) {
+        m_lanKeepaliveTimer->stop();
     }
     m_wanBoundForTest = false;
     m_isWanMode = false;
