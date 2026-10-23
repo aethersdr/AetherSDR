@@ -83,7 +83,7 @@ void Ctr2ProxyPanel::buildUi()
     m_modeCombo = new GuardedComboBox(this);
     m_modeCombo->setObjectName(QStringLiteral("ctr2ProxyMode"));
     m_modeCombo->setAccessibleName(tr("CTR2 connection mode"));
-    m_modeCombo->addItem(tr("Wi-Fi (TCP)"));
+    m_modeCombo->addItem(tr("Wi-Fi"));
     m_modeCombo->addItem(tr("USB"));
     grid->addWidget(m_modeCombo, 0, 1, 1, 2);
 
@@ -576,8 +576,10 @@ void Ctr2ProxyPanel::syncConfiguration()
     }
 
     const QString problem = editable ? m_model->configurationProblem() : QString();
-    m_problemLabel->setText(problem);
-    m_problemLabel->setVisible(!problem.isEmpty());
+    // While running, the hint that the CTR2 has not answered the link.
+    const QString hint = problem.isEmpty() && running ? m_model->noAnswerHint() : problem;
+    m_problemLabel->setText(hint);
+    m_problemLabel->setVisible(!hint.isEmpty());
     m_startBtn->setText(m_installingRule ? tr("Authorizing\u2026")
                                           : (running ? tr("Stop") : tr("Start")));
     m_startBtn->setAccessibleName(m_installingRule ? tr("Authorizing CTR2 USB access")

@@ -278,8 +278,7 @@ bool waitUntil(const std::function<bool()>& predicate, int timeoutMs)
 
 // The relay starts by itself when AetherSDR connects to a radio, retries
 // until the device is plugged in, stays stopped after the operator's Stop
-// until the next connection, remembers its device, and never starts a stock
-// CTR2 (no USB mode).
+// until the next connection, and remembers its device.
 void testAutoStart(const QString& product)
 {
     using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
@@ -335,14 +334,66 @@ void testAutoStart(const QString& product)
               "and the relay starts on connecting");
         model.stop();
     }
-    {
-        *devices = {stock};
-        Ctr2ProxyModel model;
-        backend(model);
-        model.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
-        check(!waitUntil([&] { return model.isRunning(); }, retry),
-              "a stock CTR2, which has no USB mode, is never started automatically");
-    }
+    AetherSDR::Ctr2RelaySettings{}.save();
+}
+
+// Lynovation's firmware relays over USB from v1.02.00 on, so a CTR2-Max on
+// it starts by itself like AetherCTR2; one that never answers the link (an
+// earlier version) gets the hint, which an answer or a stop clears. Other
+// stock CTR2 identities still have no USB mode.
+void testStockFirmwareOverUsb()
+{
+    using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
+    const Info stock{QStringLiteral("stock"), 0x303A, 0x1001, {}, QStringLiteral("ESP32S3_DEV"),
+                     QStringLiteral("000000000001")};
+    const Info dial{QStringLiteral("dial"), 0x303A, 0x1001, {}, QStringLiteral("M5STACK_DIAL"),
+                    QStringLiteral("000000000002")};
+    check(stock.usbLink(), "a CTR2-Max on Lynovation's firmware relays over USB");
+    check(!dial.usbLink(), "a stock M5Dial CTR2 has no USB mode");
+
+    AetherSDR::Ctr2RelaySettings settings;
+    settings.autoStart = true;
+    settings.save();
+    auto devices = std::make_shared<QList<Info>>(QList<Info>{stock});
+    auto log = std::make_shared<PortLog>();
+    QPointer<FakePort> port;
+    Ctr2ProxyModel model;
+    model.setUsbBackend([devices] { return *devices; },
+                        [log, &port](const Info&, QString*) {
+                            port = new FakePort(log);
+                            return static_cast<AetherSDR::Ctr2HidPort*>(port.data());
+                        });
+    model.setTransport(Ctr2ProxyModel::Transport::Usb);
+    model.setNoAnswerHintMs(300);
+    const QHostAddress radio(QStringLiteral("192.0.2.10"));
+    model.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
+    check(waitUntil([&] { return model.isRunning(); }, 1000),
+          "a CTR2-Max on Lynovation's firmware is started automatically");
+    check(model.noAnswerHint().isEmpty(), "no hint while the CTR2 may still answer");
+    check(waitUntil([&] { return !model.noAnswerHint().isEmpty(); }, 2000),
+          "a CTR2 that never answers gets the hint");
+    check(model.noAnswerHint().contains(QStringLiteral("v1.02.00"))
+              && model.noAnswerHint().contains(QStringLiteral("Wi-Fi")),
+          "the hint names the firmware needed and the Wi-Fi alternative");
+    model.stop();
+    check(model.noAnswerHint().isEmpty(), "stopping clears the hint");
+
+    model.start();
+    check(waitUntil([&] { return model.isRunning() && port; }, 1000), "started again");
+    const auto ready = QByteArray::fromHex("ff00000200010000");   // READY, counter 0
+    emit port->reportsReceived(ready);
+    check(!waitUntil([&] { return !model.noAnswerHint().isEmpty(); }, 800),
+          "a CTR2 that answered gets no hint");
+    model.stop();
+
+    model.setAetherRadio({}, 0, {}, {});
+    *devices = {dial};
+    check(waitUntil([&] { return model.usbDevicePath() == dial.path; },
+                    Ctr2ProxyModel::kDeviceRescanMs + 2000),
+          "the M5Dial is selected");
+    model.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
+    check(!waitUntil([&] { return model.isRunning(); }, Ctr2ProxyModel::kAutoStartRetryMs + 2000),
+          "a CTR2 identity with no USB mode is never started automatically");
     AetherSDR::Ctr2RelaySettings{}.save();
 }
 
@@ -364,6 +415,17 @@ void testDevicesRescanByThemselves()
     check(waitUntil([&] { return model.usbDevicePath() == aether.path; },
                     Ctr2ProxyModel::kDeviceRescanMs + 2000),
           "after a firmware switch the new device is found without a Rescan");
+
+    // On Linux the switched firmware comes back at the same hidraw path.
+    Info samePath = stock;
+    samePath.path = aether.path;
+    samePath.serial.clear();
+    *devices = {samePath};
+    check(waitUntil([&] {
+              const auto list = model.availableUsbDevices();
+              return list.size() == 1 && list[0].product == samePath.product;
+          }, Ctr2ProxyModel::kDeviceRescanMs + 2000),
+          "a firmware switch at the same device path is noticed too");
 }
 
 // The periodic rescan enumerates a thread-safe source off the GUI thread:
@@ -799,6 +861,7 @@ int main(int argc, char** argv)
     testSelfNamedDevices();
     testAutoStart(QStringLiteral("AetherCTR2"));   // names itself
     testAutoStart(QStringLiteral("AETHER_KNOB"));  // the fixed AetherKnob identity
+    testStockFirmwareOverUsb();
     testDevicesRescanByThemselves();
     testRescanRunsOffGuiThread();
     testInterfacesRescanWithoutUsbSource();
