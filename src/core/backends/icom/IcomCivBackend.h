@@ -638,6 +638,10 @@ private:
     [[nodiscard]] std::optional<ScopeEdgeRange> scopeShownRange() const;
     [[nodiscard]] std::uint64_t scopeVfoHz() const;
     [[nodiscard]] double scopeDragCentre(double requestedHz, double widthHz) const;
+    // Our own mode write is still inside its grace window (its sweeps lag it).
+    [[nodiscard]] bool scopeModeChangeInFlight() const;
+    // Re-assert the radio's own window on the pan (a refused centre or zoom).
+    void putBackScopeView();
     [[nodiscard]] int scopeEdgeSlot() const;
     void publishScopeModes();
     void noteSweepScopeMode(ScopeMode mode);
@@ -687,6 +691,8 @@ private:
     bool m_scopeScrollRefused = false;
     // 27 00 byte 1: the scope the radio streams (IC-9700 MAIN 00 / SUB 01).
     std::uint8_t m_scopeSelector = 0;
+    // When a sweep of m_scopeSelector's scope last arrived.
+    std::optional<qint64> m_scopeSelectorSeenAtMs;
     struct CommandedTune {
         std::uint64_t hz = 0;
         qint64 atMs = 0;

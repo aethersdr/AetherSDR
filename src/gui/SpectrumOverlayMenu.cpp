@@ -1907,13 +1907,13 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         m_scopeModeLayout->addWidget(new QLabel(tr("Scope:")));
         m_scopeModeRow->setToolTip(tr(
             "How the radio's scope window follows the VFO.\n"
-            "Center: the window is centred on the VFO; dragging retunes.\n"
+            "Center: the window is centered on the VFO; dragging retunes.\n"
             "Scroll-F: the window stays put; click to tune, drag to scroll.\n"
             "  A drag stops before the VFO leaves the screen.\n"
             "Fixed: as Scroll-F, but the window can be dragged away from\n"
             "  the VFO; AetherSDR follows the VFO when you tune off-screen.\n"
-            "Scroll-F and Fixed use the radio's Fixed Edge slot 4;\n"
-            "slots 1-3 are left as you set them."));
+            "Scroll-F and Fixed rewrite the radio's stored Fixed Edges\n"
+            "preset 4; presets 1-3 are left as you set them."));
         rebuildScopeModeButtons();
         grid->addWidget(m_scopeModeRow, row, 0, 1, 4);
         ++row;
@@ -3454,10 +3454,10 @@ void SpectrumOverlayMenu::refreshScopeModeButtons()
     if (!m_scopeModeRow) {
         return;
     }
-    // The row belongs to the Icom family (the applet-level hide gui.md allows);
-    // within it the backend's label list decides: one entry = an Icom whose
-    // model or firmware has no choice, dimmed with the reason; two or more =
-    // the choice.
+    // Shown for the Icom family only (a maintainer-ruled exception to
+    // dim-never-hide); within it the backend's label list decides: fewer than
+    // two = an Icom whose model or firmware has no choice, dimmed with the
+    // reason; two or more = the choice.
     m_scopeModeRow->setVisible(m_radioFamily.compare(QLatin1String("icom"),
                                                      Qt::CaseInsensitive) == 0);
     const bool available = m_scopeModeLabels.size() > 1;

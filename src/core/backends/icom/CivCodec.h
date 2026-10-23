@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -710,25 +711,15 @@ inline constexpr std::array<ScopeEdgeRange, 13> kScopeEdgeRangesHf{{
     {13,    60'000'000, 74'800'000},
 }};
 // IC-705 adds 14-17 (guide ed. 6 p. 29); there is no range over 200-400 MHz.
-inline constexpr std::array<ScopeEdgeRange, 17> kScopeEdgeRangesIc705{{
-    {1,         30'000,  1'600'000},
-    {2,      1'600'000,  2'000'000},
-    {3,      2'000'000,  6'000'000},
-    {4,      6'000'000,  8'000'000},
-    {5,      8'000'000, 11'000'000},
-    {6,     11'000'000, 15'000'000},
-    {7,     15'000'000, 20'000'000},
-    {8,     20'000'000, 22'000'000},
-    {9,     22'000'000, 26'000'000},
-    {10,    26'000'000, 30'000'000},
-    {11,    30'000'000, 45'000'000},
-    {12,    45'000'000, 60'000'000},
-    {13,    60'000'000, 74'800'000},
-    {14,    74'800'000, 108'000'000},
-    {15,   108'000'000, 137'000'000},
-    {16,   137'000'000, 200'000'000},
-    {17,   400'000'000, 470'000'000},
-}};
+inline constexpr std::array<ScopeEdgeRange, 17> kScopeEdgeRangesIc705 = [] {
+    std::array<ScopeEdgeRange, 17> ranges{};
+    std::ranges::copy(kScopeEdgeRangesHf, ranges.begin());
+    ranges[13] = {14,  74'800'000, 108'000'000};
+    ranges[14] = {15, 108'000'000, 137'000'000};
+    ranges[15] = {16, 137'000'000, 200'000'000};
+    ranges[16] = {17, 400'000'000, 470'000'000};
+    return ranges;
+}();
 // IC-9700: one range per band (guide ed. 4 p. 26).
 inline constexpr std::array<ScopeEdgeRange, 3> kScopeEdgeRangesIc9700{{
     {1,   144'000'000,   148'000'000},

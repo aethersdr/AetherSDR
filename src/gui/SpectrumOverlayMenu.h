@@ -177,12 +177,12 @@ public:
     void setPreampStep(int step);
     void setAttenuatorLabels(const QStringList& labels);
     void setAttenuatorStep(int step);
-    // The radio's own scope mode (Display panel, PANADAPTER group). No labels:
-    // no row; one label: dimmed with a reason; index -1 lights none.
+    // The radio's own scope mode (Display panel, PANADAPTER group). Fewer than
+    // two labels: dimmed with a reason; index -1 lights none.
     void setScopeModeLabels(const QStringList& labels);
     void setScopeModeIndex(int index);
-    // The connected radio's family. The Scope row is an Icom-only cluster, so
-    // it exists only for "icom" (gui.md: hiding is allowed at that granularity).
+    // The connected radio's family. The Scope row is shown for "icom" only, a
+    // deliberate family exception to dim-never-hide (maintainer ruling).
     void setRadioFamily(const QString& family);
     void setLoopState(bool loopA, bool loopB);
     void syncNoiseFloorPosition(int pos);

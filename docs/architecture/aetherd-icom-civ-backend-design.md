@@ -144,7 +144,7 @@ and it is the cleanest part of that codebase.
 | `setSliceAgc` | CI-V `16 12` — FAST/MID/SLOW only; **no threshold**, ignore `thresholdDb` |
 | `setPanCenter` | Center: a drag retunes (CI-V `05`). SCROLL-F / Fixed: a drag scrolls and a range change (reveal, band, zoom anchor) moves the window — `27 1E` on the **dedicated edge slot** (slot 4), at most every 200 ms. Front-panel Fixed (an operator slot): refused |
 | `setPanBandwidth` | Center: CI-V `27 15` — **snaps to one of eight spans**; report what was taken. SCROLL-F / Fixed: `27 1E` width, continuous to 1 MHz. Front-panel Fixed: refused |
-| `setPanScopeMode` | CI-V `27 14` Center (`00`) / SCROLL-F (`03`) / Fixed (`01`), after the scope selector byte; offered where the profile has `scrollFixed` and a `dedicatedEdgeSlot` (IC-7300MK2, IC-705 ≥ fw 1.20, IC-9700 ≥ fw 1.30). The radio owns and persists the mode: startup reads `27 14` and initialises a radio found in Center to SCROLL-F; SCROLL-F or Fixed is kept. An FA falls back to Center for the session |
+| `setPanScopeMode` | CI-V `27 14` Center (`00`) / SCROLL-F (`03`) / Fixed (`01`), after the scope selector byte; offered where the profile has `scrollFixed` and a `dedicatedEdgeSlot` (IC-7300MK2, IC-705 ≥ fw 1.20, IC-9700 ≥ fw 1.30). The radio owns and persists the mode: startup reads `27 14` and initializes a radio found in Center to SCROLL-F; SCROLL-F or Fixed is kept. An FA falls back to Center for the session |
 | `setPanRfGain` | CI-V `14 02`, continuous 0000–0255 BCD |
 | `setPanPreamp` | CI-V `16 02`, OFF/P.AMP1/P.AMP2 where the model supports them |
 | `setPanAttenuator` | CI-V `11`, OFF/20 dB on IC-705 and IC-7300MK2 |
@@ -979,7 +979,7 @@ the IC-7300MK2, IC-705 and IC-9700) and writes only that one; front-panel Fixed,
 which shows an operator slot, refuses drag and zoom. Edge ranges are per model
 (`ScopeCommandProfile::edgeTable`: 13 HF ranges, the IC-705's 17, the IC-9700's
 one per band); a window may not cross a range boundary (the radio answers FA),
-so near one it is shifted, not centred. The radio remembers the selected slot
+so near one it is shifted, not centered. The radio remembers the selected slot
 per band, so slot 4 is re-selected whenever the VFO enters a new range.
 
 Who moves the window:
@@ -988,12 +988,12 @@ Who moves the window:
   the same margins as on a Flex) arrives as a `PanCenterIntent::Range` request.
   The slice announces its new frequency before it dispatches the tune, so a range
   request waits one event-loop turn and is placed in the range of the newest
-  commanded tune; a zoom in the same turn absorbs it, so centre and width are
+  commanded tune; a zoom in the same turn absorbs it, so center and width are
   one write.
 - **The backend**, for VFO moves it did not command (the dial, a front-panel
   recall, another CI-V client): entering the outer 10 % toward an edge pans so
-  the VFO sits 25 % inside it; a jump of more than one width re-centres.
-- **CAT / TCI** out-of-span tunes (`SliceTuneRequest::AllowRecenter`) re-centre.
+  the VFO sits 25 % inside it; a jump of more than one width re-centers.
+- **CAT / TCI** out-of-span tunes (`SliceTuneRequest::AllowRecenter`) re-center.
 
 The radio's own SCROLL-F rule waits until the VFO is off screen and then pages a
 whole width (IC-7300MK2, measured); every window AetherSDR writes therefore keeps
@@ -1006,7 +1006,9 @@ queued or in flight sweeps are remapped into the requested window
 (`remapToWindow`); the 1 s hold starts when the write goes on the wire, since
 behind a memory recall's writes it can wait seconds. The IC-9700's scope
 commands carry a MAIN/SUB selector where the others have a fixed `00`; the
-backend addresses the scope the radio is streaming (`27 00` byte 1). Edge limits
+backend addresses the scope the radio is streaming (`27 00` byte 1). In Dual
+scope both are streamed, interleaved; the backend follows the one it is on and
+drops the other's sweeps until its own have been silent for a second. Edge limits
 (inside the range, ≤ 1 MHz, whole kHz) are in the IC-7300MK2 Advanced Manual
 p. 3-5, the IC-705 CI-V guide ed. 6 p. 29 and the IC-9700 guide ed. 4 p. 26.
 

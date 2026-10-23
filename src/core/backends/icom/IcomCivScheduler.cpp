@@ -181,6 +181,13 @@ std::size_t IcomCivScheduler::cancelQueued(std::string_view key) noexcept
                          [key](const Queued& queued) { return queued.request.key == key; });
 }
 
+bool IcomCivScheduler::hasQueuedOrInFlight(std::string_view key) const noexcept
+{
+    return (m_inFlight && m_inFlight->request.key == key)
+        || std::any_of(m_queue.cbegin(), m_queue.cend(),
+                       [key](const Queued& queued) { return queued.request.key == key; });
+}
+
 void IcomCivScheduler::dropStaleExpired(std::int64_t nowMs)
 {
     while (!m_expired.empty() && m_expired.front().forgetAtMs <= nowMs) {

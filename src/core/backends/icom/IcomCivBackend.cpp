@@ -106,6 +106,9 @@ constexpr std::int64_t kScopeEdgeMatchHz = 1000;
 constexpr int kScopeBlankSweepMs = 300;
 // Sweeps still carry the old mode this long after the operator picks one.
 constexpr int kScopeModeRequestGraceMs = 1500;
+// IC-9700 Dual scope interleaves MAIN and SUB sweeps; the other scope's selector
+// is a MAIN/SUB switch only once ours has been silent this long.
+constexpr int kScopeSelectorSwitchMs = 1000;
 // The menu's choices, by index: the order is the contract with the menu.
 constexpr int kScopeModeIndexCenter = 0;
 constexpr int kScopeModeIndexScrollF = 1;
@@ -1870,8 +1873,7 @@ bool IcomCivBackend::scopeWindowIsEdgeDriven() const
     if (!scopeModesOffered()) {
         return false;
     }
-    if (m_scopeModeRequestedAtMs > 0
-        && nowMs() - m_scopeModeRequestedAtMs < kScopeModeRequestGraceMs) {
+    if (scopeModeChangeInFlight()) {
         return scopeViewUsesEdgeSlot() && m_scopeUpperHz > m_scopeLowerHz;
     }
     if (!m_scopeReportedMode) {
@@ -2033,9 +2035,7 @@ void IcomCivBackend::onScopeVfoMoved(std::uint64_t previousHz, std::uint64_t hz)
 double IcomCivBackend::scopeDragCentre(double requestedHz, double widthHz) const
 {
     const std::uint64_t vfoHz = scopeVfoHz();
-    const bool commandedRecently = m_scopeModeRequestedAtMs > 0
-        && nowMs() - m_scopeModeRequestedAtMs < kScopeModeRequestGraceMs;
-    const bool scrollF = commandedRecently
+    const bool scrollF = scopeModeChangeInFlight()
         ? m_scopeView == IcomCivBackend::ScopeView::ScrollF
         : m_scopeReportedMode && *m_scopeReportedMode == ScopeMode::ScrollF;
     if (!scrollF || vfoHz == 0) {
@@ -2049,6 +2049,26 @@ double IcomCivBackend::scopeDragCentre(double requestedHz, double widthHz) const
 int IcomCivBackend::scopeEdgeSlot() const
 {
     return m_model ? profileFor(*m_model).scope.dedicatedEdgeSlot : 0;
+}
+
+bool IcomCivBackend::scopeModeChangeInFlight() const
+{
+    return m_scopeModeRequestedAtMs > 0
+        && nowMs() - m_scopeModeRequestedAtMs < kScopeModeRequestGraceMs;
+}
+
+// Queued: RadioModel writes the requested centre into the pan model after the
+// refusing call returns, so a direct emit would be overwritten.
+void IcomCivBackend::putBackScopeView()
+{
+    if (m_scopeSpanHz <= 0) {
+        return;
+    }
+    const double centreMhz = static_cast<double>(m_scopeCentreHz) / 1e6;
+    const double widthMhz = static_cast<double>(m_scopeSpanHz * 2) / 1e6;
+    QMetaObject::invokeMethod(this, [this, centreMhz, widthMhz] {
+        emit panCenterBandwidthChanged(panId(), centreMhz, widthMhz);
+    }, Qt::QueuedConnection);
 }
 
 void IcomCivBackend::selectScopeEdgeSlot(IcomCivScheduler::Priority priority)
@@ -2065,8 +2085,8 @@ void IcomCivBackend::selectScopeEdgeSlot(IcomCivScheduler::Priority priority)
 void IcomCivBackend::publishScopeModes()
 {
     if (!scopeModesOffered()) {
-        // An Icom scope without a choice (model or firmware) shows the row
-        // dimmed; no scope at all hides it, as on every other family.
+        // An Icom scope without a choice (model or firmware) publishes its one
+        // mode; no scope publishes none. The row shows dimmed either way.
         const bool hasScope = m_model && m_model->hasScope;
         emit panScopeModesChanged(panId(), hasScope ? QStringList{QStringLiteral("Center")}
                                                     : QStringList{});
@@ -2089,15 +2109,16 @@ void IcomCivBackend::noteSweepScopeMode(ScopeMode mode)
     m_scopeReportedMode = mode;
     // The radio's mode is the mirror's source, except while our own change is
     // still in flight (sweeps queued before it carry the old mode).
-    const bool ourChangeInFlight = m_scopeModeRequestedAtMs > 0
-        && nowMs() - m_scopeModeRequestedAtMs < kScopeModeRequestGraceMs;
-    if (!ourChangeInFlight) {
+    if (!scopeModeChangeInFlight()) {
         if (mode == ScopeMode::Centre) {
             m_scopeView = ScopeView::Center;
         } else if (mode == ScopeMode::Fixed) {
             m_scopeView = ScopeView::Fixed;
         } else if (mode == ScopeMode::ScrollF) {
             m_scopeView = ScopeView::ScrollF;
+        } else {
+            // SCROLL-C is span-based like Center and uses no edge slot.
+            m_scopeView = ScopeView::Center;
         }
     }
     initialiseScopeMode(mode);
@@ -2122,11 +2143,7 @@ void IcomCivBackend::publishReportedScopeMode()
                     : mode == ScopeMode::ScrollF ? kScopeModeIndexScrollF
                     : (mode == ScopeMode::Fixed && m_scopeEdgeNumber == scopeEdgeSlot())
                         ? kScopeModeIndexFixed : -1;
-    if (index == m_scopePublishedModeIndex) {
-        return;
-    }
-    if (m_scopeModeRequestedAtMs > 0
-        && nowMs() - m_scopeModeRequestedAtMs < kScopeModeRequestGraceMs) {
+    if (index == m_scopePublishedModeIndex || scopeModeChangeInFlight()) {
         return;
     }
     qCInfo(lcIcomPan) << "radio reports scope mode" << static_cast<int>(mode)
@@ -2149,6 +2166,9 @@ void IcomCivBackend::setPanScopeMode(const QString&, int index)
     const auto seedWindow = scopeShownWindow();
     m_scopeView = view;
     resetScopeEdgeState();
+    // The operator's pick is the mode now; a startup report still in flight
+    // must not initialize over it.
+    m_scopeInitPending = false;
     m_scopeModeRequestedAtMs = nowMs();
     m_scopePublishedModeIndex = scopeModeIndexFor(view);
     emit panScopeModeChanged(panId(), m_scopePublishedModeIndex);
@@ -2162,9 +2182,16 @@ void IcomCivBackend::setPanScopeMode(const QString&, int index)
     bool seeded = false;
     if (usesSlot && seedWindow) {
         if (const auto range = scopeEdgeRangeAt(scopeVfoHz())) {
-            const ScopeEdgeWindow w = clampScopeEdgeWindow(
-                *range, (static_cast<double>(seedWindow->lowerHz) + seedWindow->upperHz) / 2.0,
-                static_cast<double>(seedWindow->upperHz - seedWindow->lowerHz));
+            const double width = static_cast<double>(seedWindow->upperHz - seedWindow->lowerHz);
+            double centre = (static_cast<double>(seedWindow->lowerHz) + seedWindow->upperHz) / 2.0;
+            // A Fixed window the VFO was dragged off would make the radio page
+            // as soon as SCROLL-F lands, so it keeps the VFO inside like a drag.
+            if (view == IcomCivBackend::ScopeView::ScrollF && scopeVfoHz() > 0) {
+                centre = scopeCentreHoldingVfo(centre, width, static_cast<double>(scopeVfoHz()),
+                                               std::max(width * kScopeDragVfoMarginFraction,
+                                                        kScopeDragVfoMarginMinHz));
+            }
+            const ScopeEdgeWindow w = clampScopeEdgeWindow(*range, centre, width);
             writeScopeEdgeWindow(range->number, w);
             seeded = true;
         }
@@ -2186,6 +2213,11 @@ void IcomCivBackend::handleScopeReply(const CivFrame& frame)
     }
     if (frame.sub == scope::kEdgeNumber) {
         const int edge = decodeBcdByte(frame.data[1]);
+        // A read answered before our queued select went out describes the
+        // slot that select is replacing.
+        if (m_civScheduler.hasQueuedOrInFlight("scope.edge")) {
+            return;
+        }
         if (edge >= 1 && edge <= 4) {
             if (edge != m_scopeEdgeNumber) {
                 qCInfo(lcIcomPan) << "scope edge slot" << edge;
@@ -2228,6 +2260,8 @@ void IcomCivBackend::handleScopeRefusal(const std::string& key)
     resetScopeEdgeState();
     publishScopeModes();
     if (m_session) {
+        // A SCROLL-F write still queued behind the refused one must not follow it.
+        m_civScheduler.cancelQueued("scope.mode");
         queueWrite(cmdScopeMode(m_session->civAddress(),
                                 static_cast<std::uint8_t>(ScopeMode::Centre), m_scopeSelector),
                    "scope.centre", IcomCivScheduler::Priority::Operator, true);
@@ -2235,7 +2269,7 @@ void IcomCivBackend::handleScopeRefusal(const std::string& key)
     }
     emit configurationWarning(
         tr("This radio's firmware has no SCROLL-F scope mode, so the panadapter stays "
-           "centred on the VFO. Updating the radio's firmware (IC-705 1.20 or later, "
+           "centered on the VFO. Updating the radio's firmware (IC-705 1.20 or later, "
            "IC-9700 1.30 or later) adds it."));
 }
 
@@ -2263,6 +2297,7 @@ void IcomCivBackend::resetScopeEdgeState()
         m_scopeInitPending = false;
         m_scopeView = ScopeView::ScrollF;
         m_scopeSelector = 0;
+        m_scopeSelectorSeenAtMs.reset();
         m_scopeLastEdgeWriteMs.reset();
         m_scopeBlankSweepUntilMs = 0;
         m_scopeRecentTunes.clear();
@@ -2448,8 +2483,13 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         // which of the eight spans it is leaving, and a centre request has to
         // know what to snap the view back to.
         if (profileFor(*m_model).scope.mainSubSelector && sweep->selector != m_scopeSelector) {
+            if (m_scopeSelectorSeenAtMs
+                && nowMs() - *m_scopeSelectorSeenAtMs < kScopeSelectorSwitchMs) {
+                return;   // Dual scope: the other scope's sweep; the pan follows one.
+            }
             onScopeSelectorChanged(sweep->selector);
         }
+        m_scopeSelectorSeenAtMs = nowMs();
         // The radio answers each 27 1E with one sweep of all-zero bins at the
         // new edges (IC-7300MK2, 20-50 ms later). Drawn, it dips the noise
         // floor on every drag step.
@@ -2486,11 +2526,15 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 std::llabs(sweep->startHz - static_cast<std::int64_t>(t.lowerHz)) <= kScopeEdgeMatchHz
                 && std::llabs(sweep->endHz - static_cast<std::int64_t>(t.upperHz)) <= kScopeEdgeMatchHz;
             const bool holding = scopeWindowIsEdgeDriven() && nowMs() < m_scopeEdgeHoldUntilMs;
-            if (!arrived && holding && sweep->bandwidthHz() > 0) {
-                const float fill = static_cast<float>(m_scopeCal.floorDbm - m_scopeCal.referenceDb);
-                emit spectrumFrameReady(0, floatBytes(remapToWindow(
-                    dbm, sweep->startHz, sweep->endHz, static_cast<std::int64_t>(t.lowerHz),
-                    static_cast<std::int64_t>(t.upperHz), fill)));
+            if (!arrived && holding) {
+                // A sweep with no window (out-of-range flag) says nothing about the write.
+                if (sweep->bandwidthHz() > 0) {
+                    const float fill =
+                        static_cast<float>(m_scopeCal.floorDbm - m_scopeCal.referenceDb);
+                    emit spectrumFrameReady(0, floatBytes(remapToWindow(
+                        dbm, sweep->startHz, sweep->endHz, static_cast<std::int64_t>(t.lowerHz),
+                        static_cast<std::int64_t>(t.upperHz), fill)));
+                }
                 return;
             }
             if (!arrived && m_session) {
@@ -2606,6 +2650,13 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             dropped > 0) {
             qCInfo(lcIcomPan) << "dropped" << dropped
                               << "scope window write(s) queued for the refused tune";
+        }
+        // So is the slot select that rode with it (radio on an operator slot),
+        // and the slot it optimistically recorded is re-read from the radio.
+        if (m_civScheduler.cancelQueued("scope.edge") > 0 && m_session) {
+            m_scopeEdgeNumber = 0;
+            queueRead(cmdReadScopeEdgeNumber(m_session->civAddress(), m_scopeSelector),
+                      "scope.edge.read", IcomCivScheduler::Priority::Maintenance);
         }
         // A window placed for the refused tune must not stay on screen either.
         resetScopeEdgeState();
@@ -5100,11 +5151,7 @@ void IcomCivBackend::setPanCenter(const QString&, double hz, PanCenterIntent int
     // re-assert. Our own Fixed returned above as edge-driven.
     if (scopeModesOffered() && m_scopeReportedMode
         && *m_scopeReportedMode == ScopeMode::Fixed) {
-        const double fixedCentreMhz = static_cast<double>(m_scopeCentreHz) / 1e6;
-        const double fixedWidthMhz = static_cast<double>(m_scopeSpanHz * 2) / 1e6;
-        QMetaObject::invokeMethod(this, [this, fixedCentreMhz, fixedWidthMhz] {
-            emit panCenterBandwidthChanged(panId(), fixedCentreMhz, fixedWidthMhz);
-        }, Qt::QueuedConnection);
+        putBackScopeView();
         return;
     }
 
@@ -5188,13 +5235,7 @@ void IcomCivBackend::setPanBandwidth(const QString&, double hz)
     // operator's preset, so put the view back rather than send a dead span.
     if (scopeModesOffered() && m_scopeReportedMode
         && *m_scopeReportedMode == ScopeMode::Fixed) {
-        if (m_scopeSpanHz > 0) {
-            const double centreMhz = static_cast<double>(m_scopeCentreHz) / 1e6;
-            const double widthMhz = static_cast<double>(m_scopeSpanHz * 2) / 1e6;
-            QMetaObject::invokeMethod(this, [this, centreMhz, widthMhz] {
-                emit panCenterBandwidthChanged(panId(), centreMhz, widthMhz);
-            }, Qt::QueuedConnection);
-        }
+        putBackScopeView();
         return;
     }
     // hz is a TOTAL width and Icom's span is a HALF-width, so the conversion is
