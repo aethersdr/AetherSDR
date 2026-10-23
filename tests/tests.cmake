@@ -426,6 +426,12 @@ target_include_directories(byte_relay_test PRIVATE src)
 target_link_libraries(byte_relay_test PRIVATE aethercore Qt6::Core)
 add_test(NAME byte_relay_test COMMAND byte_relay_test)
 
+# VPN source-path resolver family rules. Socket-free (reads the interface list only).
+add_executable(network_path_resolver_test tests/network_path_resolver_test.cpp)
+target_include_directories(network_path_resolver_test PRIVATE src)
+target_link_libraries(network_path_resolver_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME network_path_resolver_test COMMAND network_path_resolver_test)
+
 # Unicast-endpoint helpers (IPv4/IPv6 radio address, bracketed endpoint text). Socket-free.
 add_executable(unicast_endpoint_test tests/unicast_endpoint_test.cpp)
 target_include_directories(unicast_endpoint_test PRIVATE src)
@@ -3276,6 +3282,15 @@ endif()
 add_executable(vita_dscp_flow_test tests/vita_dscp_flow_test.cpp)
 target_include_directories(vita_dscp_flow_test PRIVATE src)
 add_test(NAME vita_dscp_flow_test COMMAND vita_dscp_flow_test)
+
+# Socket-free: unbound native IPv4/IPv6 UDP descriptors (no bind, send or connect);
+# checks the marker sets the option that marks each family. Exit 77 without IPv6.
+add_executable(vita_dscp_family_test tests/vita_dscp_family_test.cpp
+    src/core/backends/flex/VitaDscpMarker.cpp)
+target_include_directories(vita_dscp_family_test PRIVATE src)
+target_link_libraries(vita_dscp_family_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME vita_dscp_family_test COMMAND vita_dscp_family_test)
+set_tests_properties(vita_dscp_family_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 10)
 
 # SOCKETS: two ephemeral IPv4 UDP sockets on 127.0.0.1, our own sender/sink.
 # Tests the native marker across close/rebind; no firmware peer or RF.

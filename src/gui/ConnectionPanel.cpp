@@ -1820,7 +1820,8 @@ void ConnectionPanel::updateLowBandwidthVisibility()
 
 void ConnectionPanel::updateManualAdvancedVisibility()
 {
-    const auto candidates = NetworkPathResolver::enumerateIpv4Candidates();
+    const auto candidates = NetworkPathResolver::enumerateCandidates(
+        NetworkPathResolver::targetFamily(m_manualIpEdit ? m_manualIpEdit->text() : QString()));
     const RadioBindSettings settings = currentManualBindSettings();
     const bool hasExplicitSelection = settings.mode == RadioBindMode::Explicit;
     const bool showToggle = candidates.size() > 1
@@ -2182,7 +2183,8 @@ void ConnectionPanel::refreshManualSourceOptions(const RadioBindSettings* select
     m_manualSourceCombo->setItemData(0, false, kSourceStaleRole);
 
     int selectedIndex = 0;
-    const auto candidates = NetworkPathResolver::enumerateIpv4Candidates();
+    const auto candidates = NetworkPathResolver::enumerateCandidates(
+        NetworkPathResolver::targetFamily(m_manualIpEdit ? m_manualIpEdit->text() : QString()));
     for (const auto& candidate : candidates) {
         const int idx = m_manualSourceCombo->count();
         m_manualSourceCombo->addItem(candidate.label());
@@ -2269,7 +2271,8 @@ void ConnectionPanel::applySavedSourceSelection(const QString& ip, bool restoreF
     RadioBindSettings settings = bindSettingsFromProfile(profile);
     if (settings.mode == RadioBindMode::Explicit) {
         const auto resolved = NetworkPathResolver::resolveExplicitSelection(
-            settings.interfaceId, settings.interfaceName, settings.bindAddress);
+            settings.interfaceId, settings.interfaceName, settings.bindAddress,
+            NetworkPathResolver::targetFamily(trimmedIp));
         if (resolved.isValid()) {
             settings.interfaceId = resolved.interfaceId;
             settings.interfaceName = resolved.interfaceName;
