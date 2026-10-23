@@ -409,15 +409,24 @@ void RfkitApplet::setStatus(const Rfkit::Status& status)
 
 void RfkitApplet::refreshControls()
 {
-    const bool operate = m_status.operate
-        && *m_status.operate == Rfkit::OperateMode::Operate;
-    m_operateBtn->setText(operate ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
+    const bool known = m_status.operate.has_value();
+    const bool operate = known && *m_status.operate == Rfkit::OperateMode::Operate;
+    // Until /operate-mode has answered the state is unknown: show "—" and keep
+    // the button off, so a click cannot send OPERATE on a guess.
+    m_operateBtn->setText(!known ? QStringLiteral("—")
+                          : operate ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
+    m_operateBtn->setEnabled(m_connected && known);
     // The label is a STATE, not an action, so spell that out for an AT rather
-    // than leaving it to infer a verb (docs/a11y.md §1).
-    m_operateBtn->setAccessibleName(operate ? tr("Amplifier in operate") : tr("Amplifier in standby"));
-    if (QAccessible::isActive()) {
-        QAccessibleEvent event(m_operateBtn, QAccessible::NameChanged);
-        QAccessible::updateAccessibility(&event);
+    // than leaving it to infer a verb (docs/a11y.md §1). Announce a change
+    // only when the name actually changed: this runs on every status update.
+    const QString a11yName = !known ? tr("Amplifier state unknown")
+                             : operate ? tr("Amplifier in operate") : tr("Amplifier in standby");
+    if (m_operateBtn->accessibleName() != a11yName) {
+        m_operateBtn->setAccessibleName(a11yName);
+        if (QAccessible::isActive()) {
+            QAccessibleEvent event(m_operateBtn, QAccessible::NameChanged);
+            QAccessible::updateAccessibility(&event);
+        }
     }
     // The m_connected guard is load-bearing, not cosmetic: a [rkState] rule and
     // QPushButton:disabled are equal CSS2 specificity and the variant is
@@ -473,7 +482,6 @@ void RfkitApplet::refreshAntennas()
 void RfkitApplet::setConnected(bool connected)
 {
     m_connected = connected;
-    m_operateBtn->setEnabled(connected);
     m_resetErrorBtn->setEnabled(connected);
     if (!connected) {
         m_tunerBtn->setText(QStringLiteral("TUNER —"));

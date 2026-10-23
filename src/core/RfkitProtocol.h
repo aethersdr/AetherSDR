@@ -91,8 +91,9 @@ struct FloatValue {
     QString unit;
 };
 
-// maxValue is the device's own full-scale for the reading and is what the
-// applet sizes its gauge to. 0 means "not reported".
+// maxValue is the device's reported max_value (the present power limit, not a
+// meter range); parsed for completeness, not used for scaling. 0 means "not
+// reported".
 struct IntWithMax {
     int value{0};
     int maxValue{0};

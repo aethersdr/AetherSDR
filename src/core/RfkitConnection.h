@@ -78,6 +78,7 @@ private:
         QString path;
         QByteArray body;
         bool probe{false};  // the connect handshake (GET /info)
+        bool command{false};  // operator-issued; kept in issue order ahead of polls
     };
 
     void enqueue(const Request& request, bool front = false);

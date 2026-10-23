@@ -90,8 +90,8 @@ std::optional<FloatValue> parseFloatValue(const QJsonValue& v)
     return out;
 }
 
-// max_value is the device's own full-scale; absent or unusable means 0, which
-// the applet reads as "not reported" and falls back to a default scale.
+// max_value is the device's reported limit (not a meter range); absent or
+// unusable means 0, "not reported". The applet uses fixed scales and ignores it.
 std::optional<IntWithMax> parseIntWithMax(const QJsonValue& v)
 {
     if (!v.isObject()) {

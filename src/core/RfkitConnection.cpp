@@ -145,7 +145,15 @@ void RfkitConnection::resetSession()
 void RfkitConnection::enqueue(const Request& request, bool front)
 {
     if (front) {
-        m_queue.prepend(request);
+        // Ahead of queued polls, behind earlier commands: two clicks must
+        // reach the amplifier in the order they were made.
+        Request command = request;
+        command.command = true;
+        qsizetype at = 0;
+        while (at < m_queue.size() && m_queue.at(at).command) {
+            ++at;
+        }
+        m_queue.insert(at, command);
     } else {
         m_queue.enqueue(request);
     }
@@ -190,7 +198,8 @@ void RfkitConnection::pump()
     const int epoch = m_epoch;
 
     // Principle VII: bound what a LAN peer can make us buffer. The transfer
-    // timeout bounds the time; this bounds the size.
+    // timeout only aborts a transfer that goes silent for its interval; this
+    // bounds the size.
     connect(reply, &QNetworkReply::downloadProgress, reply, [reply](qint64 received, qint64) {
         if (received > Rfkit::kMaxBodyBytes) {
             reply->setProperty("rfkitOversize", true);
@@ -283,8 +292,8 @@ bool RfkitConnection::applyReply(const Request& request, const QByteArray& body)
     if (request.method == Request::Method::Post) {
         // POST /error/reset. Nothing in the reply is needed; re-read what an
         // error can have changed.
-        enqueue(Request{Request::Method::Get, path(Rfkit::kPathData), {}, false});
-        enqueue(Request{Request::Method::Get, path(Rfkit::kPathInterface), {}, false});
+        enqueue(Request{Request::Method::Get, path(Rfkit::kPathData), {}, false, false});
+        enqueue(Request{Request::Method::Get, path(Rfkit::kPathInterface), {}, false, false});
         return false;
     }
     if (request.method == Request::Method::Put && p == QLatin1String(Rfkit::kPathAntennaActive)) {
@@ -293,7 +302,7 @@ bool RfkitConnection::applyReply(const Request& request, const QByteArray& body)
         }
         // The reply names only the new active antenna; the per-antenna states
         // come from the list.
-        enqueue(Request{Request::Method::Get, path(Rfkit::kPathAntennas), {}, false});
+        enqueue(Request{Request::Method::Get, path(Rfkit::kPathAntennas), {}, false, false});
         return false;
     }
 
@@ -352,7 +361,7 @@ void RfkitConnection::enqueueFullRefresh()
         Rfkit::kPathAntennas, Rfkit::kPathTuner, Rfkit::kPathInterface,
     };
     for (const char* literal : kPaths) {
-        enqueue(Request{Request::Method::Get, path(literal), {}, false});
+        enqueue(Request{Request::Method::Get, path(literal), {}, false, false});
     }
 }
 
@@ -401,10 +410,10 @@ void RfkitConnection::poll()
     if (!m_connected || m_inFlight || !m_queue.isEmpty()) {
         return;
     }
-    enqueue(Request{Request::Method::Get, path(Rfkit::kPathPower), {}, false});
-    enqueue(Request{Request::Method::Get, path(Rfkit::kPathData), {}, false});
+    enqueue(Request{Request::Method::Get, path(Rfkit::kPathPower), {}, false, false});
+    enqueue(Request{Request::Method::Get, path(Rfkit::kPathData), {}, false, false});
     const QStringList& slow = slowPollPaths();
-    enqueue(Request{Request::Method::Get, slow.at(m_slowPollIndex % slow.size()), {}, false});
+    enqueue(Request{Request::Method::Get, slow.at(m_slowPollIndex % slow.size()), {}, false, false});
     m_slowPollIndex = (m_slowPollIndex + 1) % slow.size();
 }
 

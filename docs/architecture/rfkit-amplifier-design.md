@@ -62,8 +62,9 @@ HTTP has no connection to be "up", so:
 - **Disconnected** after three consecutive transport failures (refused,
   timeout, reset, oversized). An HTTP error *status* (4xx/5xx) is the device
   answering, so it is logged and does not count as link loss.
-- Requests are **strictly serialized**, one in flight. Commands jump the queue;
-  a poll round is only enqueued when the queue is empty, so a slow device
+- Requests are **strictly serialized**, one in flight. Commands go ahead of
+  queued polls but stay in the order they were issued (two antenna clicks reach
+  the amplifier in click order); a poll round is only enqueued when the queue is empty, so a slow device
   lowers the poll rate instead of growing a backlog. The device is a small
   embedded controller.
 - Poll: `/power` and `/data` every 250 ms, plus one of `/operate-mode`,

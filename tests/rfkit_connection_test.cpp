@@ -281,6 +281,27 @@ int main(int argc, char** argv)
         conn.disconnect();
     }
 
+    // ── Commands queued behind a slow reply reach the amp in click order ──
+    {
+        StubAmp amp;
+        RfkitConnection conn;
+        QSignalSpy connectedSpy(&conn, &RfkitConnection::connected);
+        conn.connectNetwork(QStringLiteral("127.0.0.1"), amp.port());
+        spin([&] { return connectedSpy.count() > 0; });
+        spinFor(300);
+
+        amp.replyDelayMs = 300;
+        const auto seen = amp.requests.size();
+        spin([&] { return amp.requests.size() > seen; });  // the stub now holds one request
+        conn.selectAntenna({Rfkit::AntennaType::Internal, 2});
+        conn.selectAntenna({Rfkit::AntennaType::Internal, 3});
+        report("two queued antenna commands both reach the wire",
+               spin([&] { return amp.count("PUT /antennas/active") == 2; }));
+        report("the last antenna clicked is the last one sent",
+               amp.bodies.value("PUT /antennas/active") == QByteArray(R"({"type":"INTERNAL","number":3})"));
+        conn.disconnect();
+    }
+
     // ── A refused command (409) does not drop the link ────────────────────
     {
         StubAmp amp;
