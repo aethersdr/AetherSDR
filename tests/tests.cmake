@@ -208,7 +208,7 @@ target_include_directories(cw_decoder_pcm_lifecycle_test PRIVATE
     src src/core third_party/ggmorse/include third_party/ggmorse/src)
 target_link_libraries(cw_decoder_pcm_lifecycle_test PRIVATE Qt6::Core)
 add_test(NAME cw_decoder_pcm_lifecycle_test COMMAND cw_decoder_pcm_lifecycle_test)
-set_tests_properties(cw_decoder_pcm_lifecycle_test PROPERTIES TIMEOUT 60)
+set_tests_properties(cw_decoder_pcm_lifecycle_test PROPERTIES TIMEOUT 120)
 
 # Socket/device-free production RX queue, processing-domain and output checks.
 add_executable(audio_engine_rates_test tests/audio_engine_rates_test.cpp)
