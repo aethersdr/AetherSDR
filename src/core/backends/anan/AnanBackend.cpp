@@ -66,6 +66,17 @@ QString agcModeName(int wdspMode)
     }
 }
 
+// The WDSP AGC mode for a slice model AGC name: medium, WDSP's own default,
+// for any name but the three others agcModeName() gives.
+int agcModeFromName(const QString& name)
+{
+    const QString m = name.trimmed().toLower();
+    if (m == QLatin1String("off"))  return 0;
+    if (m == QLatin1String("slow")) return 2;
+    if (m == QLatin1String("fast")) return 4;
+    return 3;
+}
+
 }  // namespace
 
 WdspChannel::Mode AnanBackend::modeFromString(const QString& mode) noexcept
@@ -464,6 +475,8 @@ RadioCapabilities AnanBackend::capabilities() const
     span.radioWide = false;
     c.panSpanModel = span;
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
+    // agcKnobDb()'s scale, so the AGC-T tooltips show the gain, not the knob.
+    c.agcGainScale = RadioCapabilities::AgcGainScale{kAgcKnobMinDb, kAgcKnobDbPerStep};
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");
     // The session takes its receive front-end options from AnanSettings
@@ -535,11 +548,13 @@ RadioCapabilities AnanBackend::capabilities() const
     // No band/segment zoom: the protocol carries no per-pan zoom flag.
     c.panZoomModes = std::nullopt;
     c.persistsMemories = false;    // default; stated explicitly
-    // The radio reports no frequency, mode or output level of its own, so the
-    // client is their only memory, per radio.
+    // The radio reports no frequency, mode, output level or AGC of its own (the
+    // AGC runs in AnanRxDsp), so the client is their only memory, per radio.
+    // With hasAgcThreshold, Agc also keeps the AGC-off level.
     c.clientSettingsDomains = RadioCapabilities::ClientSettingsDomain::RfGain
                               | RadioCapabilities::ClientSettingsDomain::Tuning
-                              | RadioCapabilities::ClientSettingsDomain::ReceiveOutputLevel;
+                              | RadioCapabilities::ClientSettingsDomain::ReceiveOutputLevel
+                              | RadioCapabilities::ClientSettingsDomain::Agc;
     c.hostDroopCalibration = true; // AnanDroopCorrection.h -- real DDC0 roll-off,
                                     // corrected client-side via AnanDroopCalibrator
     c.extensionNamespaces = {QStringLiteral("anan")};  // "frontend.set", "droop.apply" -- see invokeExtension()
@@ -577,6 +592,14 @@ void AnanBackend::applyRestoredState(const RestoredRadioState& state)
     m_restoredMode = isKnownModeString(state.mode) ? state.mode.toUpper() : QString();
     m_lineoutGainPercent = state.receiveOutputLevelPct >= 0
         ? state.receiveOutputLevelPct : kDefaultLineoutGainPercent;
+    // The AGC too, live: connectRadio() builds the DSP config from these. A
+    // knob value outside 0..100 is not restored and the default stands; a mode
+    // name setSliceAgc() would not set reads as medium, as it does there.
+    m_agcMode = agcModeFromName(state.agcMode);
+    m_agcThreshold = state.agcThreshold >= 0 && state.agcThreshold <= 100
+        ? state.agcThreshold : kDefaultAgcThreshold;
+    const int offLevel = state.agcOffLevels.value(0, -1);
+    m_agcOffLevel = offLevel >= 0 && offLevel <= 100 ? offLevel : kDefaultAgcOffLevel;
 }
 
 RestoredRadioState AnanBackend::currentOperatingState() const
@@ -587,6 +610,9 @@ RestoredRadioState AnanBackend::currentOperatingState() const
     state.rfFrequencyHz = m_sliceFreqHz;
     state.mode = m_mode;
     state.receiveOutputLevelPct = m_lineoutGainPercent;
+    state.agcMode = agcModeName(m_agcMode);
+    state.agcThreshold = m_agcThreshold;
+    state.agcOffLevels = {m_agcOffLevel};   // one receiver
     state.extensionSchemaVersion = 1;
     state.extension = QJsonObject{{QStringLiteral("rfGain"), QJsonObject{
         {QStringLiteral("adc0AttenuationDb"), m_pendingParams.adc0AttenuationDb},
@@ -720,9 +746,9 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     // default until RadioModel pushes the operator's rate through
     // setPanFrameRate().
     m_pendingDspConfig.panPoints = m_panPoints;
-    // This backend retains the AGC and NB requests across reconnects.
-    // emitSliceState() also supplies them if a different radio requires a
-    // fresh slice.
+    // The AGC as applyRestoredState() set it for this radio, and the NB request
+    // this backend retains across reconnects. emitSliceState() also supplies
+    // them if a different radio requires a fresh slice.
     applyLiveRxState(m_pendingDspConfig);
 
     ++m_connectGeneration;
@@ -970,20 +996,21 @@ void AnanBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
 {
     Q_UNUSED(sliceId);
     // thresholdDb is the AGC-T knob's 0..100, not dB: agcKnobDb() maps it.
-    const QString m = mode.trimmed().toLower();
-    int wdspMode = 3;   // medium, WDSP's own default
-    if (m == QLatin1String("off"))  wdspMode = 0;
-    else if (m == QLatin1String("slow")) wdspMode = 2;
-    else if (m == QLatin1String("fast")) wdspMode = 4;
+    const int wdspMode = agcModeFromName(mode);
+    const int threshold = std::clamp(thresholdDb, 0, 100);
+    const bool changed = wdspMode != m_agcMode || threshold != m_agcThreshold;
     // Live state for connectRadio() and beginRateChange() -- see the member
     // declaration comment.
     m_agcMode = wdspMode;
-    m_agcThreshold = std::clamp(thresholdDb, 0, 100);
+    m_agcThreshold = threshold;
     if (m_dsp) {
         QMetaObject::invokeMethod(m_dsp, "setAgc", Qt::QueuedConnection,
             Q_ARG(int, wdspMode), Q_ARG(double, agcKnobDb(m_agcThreshold)));
     }
     emitSliceState();
+    if (changed) {
+        emit operatingStateChanged();   // Agc capture
+    }
 }
 
 void AnanBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
@@ -994,12 +1021,17 @@ void AnanBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
     }
     // Sent in every AGC mode: WDSP applies the fixed gain only with AGC off
     // (wcpAGC.c xwcpagc), so a level set first takes effect when AGC goes off.
-    m_agcOffLevel = std::clamp(request.offLevel, 0, 100);
+    const int offLevel = std::clamp(request.offLevel, 0, 100);
+    const bool changed = offLevel != m_agcOffLevel;
+    m_agcOffLevel = offLevel;
     if (m_dsp) {
         QMetaObject::invokeMethod(m_dsp, "setAgcFixedGain", Qt::QueuedConnection,
             Q_ARG(double, agcKnobDb(m_agcOffLevel)));
     }
     emitSliceState();
+    if (changed) {
+        emit operatingStateChanged();   // Agc capture
+    }
 }
 
 ReceiveDispatch AnanBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
