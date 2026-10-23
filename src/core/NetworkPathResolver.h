@@ -30,6 +30,14 @@ public:
                                                          const QString& interfaceName,
                                                          const QHostAddress& lastSuccessfulAddress,
                                                          Family family = QAbstractSocket::IPv4Protocol);
+    // The candidate a saved selection names, or -1: the exact saved address
+    // on the saved interface, else the interface by id, then by name, else the
+    // exact address on any interface. An IPv6 interface usually carries both a
+    // GUA and a ULA, so the exact address must win over "first on the interface".
+    static qsizetype matchSelection(const QList<NetworkPathCandidate>& candidates,
+                                    const QString& interfaceId,
+                                    const QString& interfaceName,
+                                    const QHostAddress& lastSuccessfulAddress);
     static NetworkPathCandidate autoCandidate();
     static bool isUsableIpv4(const QHostAddress& address);
     static bool isUsableSourceAddress(const QHostAddress& address);

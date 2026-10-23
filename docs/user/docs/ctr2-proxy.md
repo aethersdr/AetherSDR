@@ -81,6 +81,10 @@ connects to a radio. The choice is saved.
    addresses. The listen port is 4992; it can be changed while stopped.
 3. Press **Start**.
 
+The relay reaches the radio at the address AetherSDR is connected to, IPv4
+or IPv6, in both Wi-Fi and USB mode; only the Wi-Fi **Listen** address must be
+IPv4.
+
 Each CTR2 connection gets a fresh connection to the radio. Only one CTR2
 connection is active at a time; extra ones are closed and counted as
 rejected. Wi-Fi mode relays TCP only (no UDP discovery or UDP streams), so

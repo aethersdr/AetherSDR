@@ -79,40 +79,55 @@ NetworkPathCandidate NetworkPathResolver::resolveExplicitSelection(const QString
                                                                    Family family)
 {
     const auto candidates = enumerateCandidates(family);
+    const qsizetype index = matchSelection(candidates, interfaceId, interfaceName,
+                                           lastSuccessfulAddress);
+    return index < 0 ? NetworkPathCandidate{} : candidates.at(index);
+}
 
-    auto findMatch = [&](auto&& predicate) -> NetworkPathCandidate {
-        for (const auto& candidate : candidates) {
-            if (predicate(candidate))
-                return candidate;
+qsizetype NetworkPathResolver::matchSelection(const QList<NetworkPathCandidate>& candidates,
+                                              const QString& interfaceId,
+                                              const QString& interfaceName,
+                                              const QHostAddress& lastSuccessfulAddress)
+{
+    auto find = [&](auto&& predicate) -> qsizetype {
+        for (qsizetype i = 0; i < candidates.size(); ++i) {
+            if (candidates.at(i).isValid() && predicate(candidates.at(i)))
+                return i;
         }
-        return {};
+        return -1;
     };
+    const bool hasId = !interfaceId.trimmed().isEmpty();
+    const bool hasName = !interfaceName.trimmed().isEmpty();
+    const bool hasAddress = isUsableSourceAddress(lastSuccessfulAddress);
 
-    if (!interfaceId.trimmed().isEmpty()) {
-        auto match = findMatch([&](const NetworkPathCandidate& candidate) {
-            return candidate.interfaceId == interfaceId;
+    if (hasAddress && (hasId || hasName)) {
+        const qsizetype exact = find([&](const NetworkPathCandidate& c) {
+            return c.address == lastSuccessfulAddress
+                && (hasId ? c.interfaceId == interfaceId : c.interfaceName == interfaceName);
         });
-        if (match.isValid())
-            return match;
+        if (exact >= 0)
+            return exact;
     }
-
-    if (!interfaceName.trimmed().isEmpty()) {
-        auto match = findMatch([&](const NetworkPathCandidate& candidate) {
-            return candidate.interfaceName == interfaceName;
+    if (hasId) {
+        const qsizetype byId = find([&](const NetworkPathCandidate& c) {
+            return c.interfaceId == interfaceId;
         });
-        if (match.isValid())
-            return match;
+        if (byId >= 0)
+            return byId;
     }
-
-    if (isUsableSourceAddress(lastSuccessfulAddress)) {
-        auto match = findMatch([&](const NetworkPathCandidate& candidate) {
-            return candidate.address == lastSuccessfulAddress;
+    if (hasName) {
+        const qsizetype byName = find([&](const NetworkPathCandidate& c) {
+            return c.interfaceName == interfaceName;
         });
-        if (match.isValid())
-            return match;
+        if (byName >= 0)
+            return byName;
     }
-
-    return {};
+    if (hasAddress) {
+        return find([&](const NetworkPathCandidate& c) {
+            return c.address == lastSuccessfulAddress;
+        });
+    }
+    return -1;
 }
 
 NetworkPathCandidate NetworkPathResolver::autoCandidate()

@@ -304,7 +304,7 @@ QString staleSelectionText(const RadioBindSettings& settings)
     if (iface.isEmpty())
         iface = QStringLiteral("Saved source");
     const QString addr = settings.bindAddress.isNull()
-        ? QStringLiteral("unknown IPv4")
+        ? QStringLiteral("unknown address")
         : settings.bindAddress.toString();
     return QStringLiteral("%1 (unavailable, last %2)").arg(iface, addr);
 }
@@ -2193,13 +2193,12 @@ void ConnectionPanel::refreshManualSourceOptions(const RadioBindSettings* select
         m_manualSourceCombo->setItemData(idx, candidate.interfaceName, kSourceInterfaceNameRole);
         m_manualSourceCombo->setItemData(idx, candidate.address.toString(), kSourceAddressRole);
         m_manualSourceCombo->setItemData(idx, false, kSourceStaleRole);
-
-        if (selected
-            && selected->mode == RadioBindMode::Explicit
-            && ((!selected->interfaceId.isEmpty() && selected->interfaceId == candidate.interfaceId)
-                || (!selected->bindAddress.isNull() && selected->bindAddress == candidate.address))) {
-            selectedIndex = idx;
-        }
+    }
+    if (selected && selected->mode == RadioBindMode::Explicit) {
+        const qsizetype match = NetworkPathResolver::matchSelection(
+            candidates, selected->interfaceId, selected->interfaceName, selected->bindAddress);
+        if (match >= 0)
+            selectedIndex = 1 + static_cast<int>(match);   // row 0 is Auto
     }
 
     if (selected

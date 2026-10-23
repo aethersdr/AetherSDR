@@ -59,12 +59,41 @@ int main()
             }
             for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
                 const QHostAddress ip = entry.ip();
-                live += ip.protocol() == family && !ip.isLoopback() && !ip.isLinkLocal();
+                live += ip.protocol() == family && R::isUsableSourceAddress(ip);
             }
         }
         check(R::enumerateCandidates(family).size() == live,
               "every live address of the family is a candidate");
     }
+    // One interface with a GUA and a ULA (sorted GUA first), as IPv6 LANs
+    // usually have, plus a second interface.
+    const auto cand = [](const char* id, const char* name, const char* addr) {
+        return NetworkPathCandidate{QString::fromLatin1(id), QString::fromLatin1(name), a(addr)};
+    };
+    const QList<NetworkPathCandidate> list{
+        cand("wlan0", "Wi-Fi", "2001:db8:1::20"),
+        cand("wlan0", "Wi-Fi", "fd00:1::20"),
+        cand("tun0", "VPN", "fd7a:115c:a1e0::5"),
+    };
+    const QString wlan = QStringLiteral("wlan0"), wifi = QStringLiteral("Wi-Fi");
+    check(R::matchSelection(list, wlan, wifi, a("fd00:1::20")) == 1,
+          "the exact saved ULA wins over the interface's first (GUA) address");
+    check(R::matchSelection(list, wlan, wifi, a("2001:db8:1::20")) == 0,
+          "the exact saved GUA is kept too");
+    check(R::matchSelection(list, wlan, wifi, a("192.168.50.236")) == 0,
+          "a saved address of the other family falls back to the interface");
+    check(R::matchSelection(list, wlan, wifi, a("fd00:1::99")) == 0,
+          "a vanished address falls back to the interface");
+    check(R::matchSelection(list, QStringLiteral("wlan1"), wifi, a("fd00:1::99")) == 0,
+          "a renamed interface id still matches by name");
+    check(R::matchSelection(list, QStringLiteral("eth9"), QStringLiteral("Gone"),
+                            a("fd7a:115c:a1e0::5")) == 2,
+          "with no interface match, the exact address on any interface is used");
+    check(R::matchSelection(list, QStringLiteral("eth9"), QStringLiteral("Gone"), a("fd00:9::1")) == -1,
+          "nothing matching resolves to no candidate");
+    check(R::matchSelection(list, QStringLiteral("tun0"), QString(), a("fd00:1::20")) == 2,
+          "an exact address on another interface does not override the saved interface");
+
     check(R::enumerateIpv4Candidates().size()
               == R::enumerateCandidates(QAbstractSocket::IPv4Protocol).size(),
           "the IPv4 list is unchanged for existing callers");

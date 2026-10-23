@@ -50,7 +50,23 @@ int main()
     marker.reset();
     ::close(v6);
 
+#if defined(Q_OS_LINUX)
+    // A dual-stack IPv6 socket sending to an IPv4 radio emits IPv4-mapped
+    // packets, which take IP_TOS. (macOS refuses IP_TOS on an IPv6 socket.)
+    const int dual = ::socket(AF_INET6, SOCK_DGRAM, 0);
+    result = marker.apply(dual, QHostAddress(QStringLiteral("192.168.50.254")), {4991});
+    check(result.applied && option(dual, IPPROTO_IP, IP_TOS) == kVitaIpTosEf
+              && option(dual, IPPROTO_IPV6, IPV6_TCLASS) != kVitaIpTosEf,
+          "an IPv6 socket with an IPv4 destination is marked with IP_TOS, not IPV6_TCLASS");
+    marker.reset();
+    ::close(dual);
+#endif
+
     const int v4 = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (v4 < 0) {
+        std::fprintf(stderr, "SKIP: no IPv4 UDP socket on this host\n");
+        return 77;
+    }
     result = marker.apply(v4, QHostAddress(QStringLiteral("192.168.50.254")), {4991});
     check(result.applied && option(v4, IPPROTO_IP, IP_TOS) == kVitaIpTosEf,
           "IPv4 socket still carries EF in IP_TOS");

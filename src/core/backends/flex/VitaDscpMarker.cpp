@@ -170,15 +170,18 @@ VitaDscpResult VitaDscpMarker::apply(qintptr descriptor, const QHostAddress& des
     }
     return {true, QStringLiteral("qWAVE accepted EF for outgoing UDP endpoints")};
 #elif defined(Q_OS_UNIX)
-    Q_UNUSED(destination);
     Q_UNUSED(ports);
     const int fd = static_cast<int>(descriptor);
-    // An IPv6 socket's own packets take their class from IPV6_TCLASS. IP_TOS
-    // set there reads back fine but marks only IPv4-mapped traffic.
+    // Native IPv6 packets take their class from IPV6_TCLASS; IP_TOS on an
+    // IPv6 socket reads back fine but marks only IPv4-mapped traffic, which a
+    // dual-stack socket sends to an IPv4 destination.
     sockaddr_storage local{};
     socklen_t localLength = sizeof(local);
-    const bool ipv6 = ::getsockname(fd, reinterpret_cast<sockaddr*>(&local), &localLength) == 0
+    const bool ipv6Socket = ::getsockname(fd, reinterpret_cast<sockaddr*>(&local), &localLength) == 0
         && local.ss_family == AF_INET6;
+    bool ipv4Destination = false;
+    destination.toIPv4Address(&ipv4Destination);
+    const bool ipv6 = ipv6Socket && !ipv4Destination;
     const int level = ipv6 ? IPPROTO_IPV6 : IPPROTO_IP;
     const int option = ipv6 ? IPV6_TCLASS : IP_TOS;
     const QString name = ipv6 ? QStringLiteral("IPV6_TCLASS") : QStringLiteral("IP_TOS");
