@@ -1,12 +1,14 @@
 // Ctr2ProxyModel destination handling: the relay targets only the radio its
 // owner pushes in, and every unusable case keeps Start disabled with the
-// pushed reason. Socket-free: nothing is started or bound.
+// pushed reason. Socket-free: nothing is bound, and a relay that reaches
+// its radio connection gets an injected socket.
 
 #include "TestSettingsProfile.h"
 #include "core/Ctr2HidFraming.h"
 #include "core/AppSettings.h"
 #include "core/Ctr2RelaySettings.h"
 #include "core/Ctr2HidPort.h"
+#include "core/Ctr2UsbRelay.h"
 #include "models/Ctr2ProxyModel.h"
 
 #include <QCoreApplication>
@@ -20,6 +22,7 @@
 #include <QPointer>
 #include <QRegularExpression>
 #include <QSet>
+#include <QTcpSocket>
 #include <QTemporaryDir>
 
 #include <cstdio>
@@ -76,6 +79,25 @@ private:
     std::shared_ptr<PortLog> m_log;
     bool m_open{true};
 };
+
+// A radio socket that never connects: a test whose CTR2 answers READY keeps
+// the relay Connecting without reaching the network.
+class InertRadioSocket final : public QTcpSocket {
+public:
+    using QTcpSocket::connectToHost;
+    void connectToHost(const QString&, quint16, OpenMode = ReadWrite,
+                       NetworkLayerProtocol = AnyIPProtocol) override
+    {
+    }
+};
+
+void injectInertRadio(Ctr2ProxyModel& model)
+{
+    auto* relay = model.findChild<AetherSDR::Ctr2UsbRelay*>();
+    check(relay != nullptr, "the model owns a USB relay");
+    if (relay)
+        relay->setRadioSocketFactory([] { return new InertRadioSocket; });
+}
 
 // A relay port whose device offers link extensions it did not take.
 class OfferPort : public FakePort {
@@ -364,6 +386,7 @@ void testStockFirmwareOverUsb()
                             return static_cast<AetherSDR::Ctr2HidPort*>(port.data());
                         });
     model.setTransport(Ctr2ProxyModel::Transport::Usb);
+    injectInertRadio(model);
     model.setNoAnswerHintMs(300);
     const QHostAddress radio(QStringLiteral("192.0.2.10"));
     model.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
@@ -419,6 +442,7 @@ void testNoRetryWithoutAnswer()
                             return static_cast<AetherSDR::Ctr2HidPort*>(port.data());
                         });
     model.setTransport(Ctr2ProxyModel::Transport::Usb);
+    injectInertRadio(model);
     const QHostAddress radio(QStringLiteral("192.0.2.10"));
     const int retry = Ctr2ProxyModel::kAutoStartRetryMs + 2000;
     model.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
