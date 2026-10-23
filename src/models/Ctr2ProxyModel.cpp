@@ -3,6 +3,7 @@
 #include "core/Ctr2HidFraming.h"
 #include "core/Ctr2UsbRelay.h"
 #include "core/LogManager.h"
+#include "core/UnicastEndpoint.h"
 #ifdef HAVE_HIDAPI
 #include "core/Ctr2HidapiPort.h"
 #endif
@@ -374,18 +375,13 @@ bool Ctr2ProxyModel::setUsbDevicePath(const QString& path)
 void Ctr2ProxyModel::setAetherRadio(const QHostAddress& address, quint16 port,
                                     const QString& label, const QString& unavailableReason)
 {
-    QHostAddress ipv4;
-    bool ok = false;
-    const quint32 v4 = address.toIPv4Address(&ok);
-    if (ok && v4 != 0 && port != 0) {
-        ipv4 = QHostAddress(v4);
-    }
-    const QString reason = ipv4.isNull() && unavailableReason.isEmpty()
+    const QHostAddress radio = port != 0 ? usableUnicastAddress(address) : QHostAddress();
+    const QString reason = radio.isNull() && unavailableReason.isEmpty()
         ? tr("Connect AetherSDR to a radio first") : unavailableReason;
-    if (isRunning() && (ipv4 != m_runningRadioAddress || port != m_runningRadioPort)) {
+    if (isRunning() && (radio != m_runningRadioAddress || port != m_runningRadioPort)) {
         const QString was = m_runningRadioLabel.isEmpty() ? m_runningRadioAddress.toString()
                                                           : m_runningRadioLabel;
-        const QString why = ipv4.isNull()
+        const QString why = radio.isNull()
             ? tr("Stopped: AetherSDR is no longer connected to %1").arg(was)
             : tr("Stopped: AetherSDR switched from %1 to another radio").arg(was);
         qCInfo(lcDevices) << "CTR2 relay:" << why;
@@ -393,16 +389,16 @@ void Ctr2ProxyModel::setAetherRadio(const QHostAddress& address, quint16 port,
         m_stopReason = why;
         emit lastErrorChanged();
     }
-    if (ipv4 == m_aetherRadioAddress && port == m_aetherRadioPort
+    if (radio == m_aetherRadioAddress && port == m_aetherRadioPort
         && label == m_aetherRadioLabel && reason == m_aetherRadioReason) {
         return;
     }
-    const bool newRadio = !ipv4.isNull()
-        && (ipv4 != m_aetherRadioAddress || port != m_aetherRadioPort);
-    m_aetherRadioAddress = ipv4;
+    const bool newRadio = !radio.isNull()
+        && (radio != m_aetherRadioAddress || port != m_aetherRadioPort);
+    m_aetherRadioAddress = radio;
     m_aetherRadioPort = port;
     m_aetherRadioLabel = label;
-    m_aetherRadioReason = ipv4.isNull() ? reason : QString();
+    m_aetherRadioReason = radio.isNull() ? reason : QString();
     emit configurationChanged();
     if (newRadio) {
         m_autoStartHeld = false;   // a new connection: start again

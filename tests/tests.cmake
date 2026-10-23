@@ -426,6 +426,12 @@ target_include_directories(byte_relay_test PRIVATE src)
 target_link_libraries(byte_relay_test PRIVATE aethercore Qt6::Core)
 add_test(NAME byte_relay_test COMMAND byte_relay_test)
 
+# Unicast-endpoint helpers (IPv4/IPv6 radio address, bracketed endpoint text). Socket-free.
+add_executable(unicast_endpoint_test tests/unicast_endpoint_test.cpp)
+target_include_directories(unicast_endpoint_test PRIVATE src)
+target_link_libraries(unicast_endpoint_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME unicast_endpoint_test COMMAND unicast_endpoint_test)
+
 # CTR2 relay model: the destination is only the radio the owner pushes in, and
 # every unusable case keeps Start disabled with its reason. Socket-free.
 add_executable(ctr2_proxy_model_test tests/ctr2_proxy_model_test.cpp)

@@ -923,8 +923,14 @@ int main(int argc, char** argv)
     model.setAetherRadio(QHostAddress(QStringLiteral("0.0.0.0")), 4992, QStringLiteral("bogus"), {});
     check(!model.configurationProblem().isEmpty() && !model.start(),
           "an unspecified address is never a destination");
-    model.setAetherRadio(QHostAddress(QStringLiteral("fe80::1")), 4992, QStringLiteral("v6"), {});
-    check(!model.configurationProblem().isEmpty(), "IPv6 is out of scope and stays unavailable");
+    model.setAetherRadio(QHostAddress(QStringLiteral("ff02::1")), 4992, QStringLiteral("v6"), {});
+    check(model.configurationProblem().contains(QStringLiteral("radio"), Qt::CaseInsensitive),
+          "an IPv6 multicast address is never a destination");
+    model.setAetherRadio(QHostAddress(QStringLiteral("fd58:eee:46e8::10")), 4992,
+                         QStringLiteral("FLEX-8600  fd58:eee:46e8::10"), {});
+    check(!model.configurationProblem().contains(QStringLiteral("radio"), Qt::CaseInsensitive),
+          "a radio AetherSDR reached over IPv6 is a usable destination");
+    model.setAetherRadio({}, 0, {}, {});
 
     int changes = 0;
     QObject::connect(&model, &Ctr2ProxyModel::configurationChanged, &model, [&] { ++changes; });
@@ -934,6 +940,9 @@ int main(int argc, char** argv)
     model.setAetherRadio(QHostAddress(QStringLiteral("192.0.2.10")), 4992,
                          QStringLiteral("FLEX-8600 \"Shack\"  192.0.2.10"), {});
     check(changes == 1, "re-pushing the same radio is not a change");
+    model.setAetherRadio(QHostAddress(QStringLiteral("::ffff:192.0.2.10")), 4992,
+                         QStringLiteral("FLEX-8600 \"Shack\"  192.0.2.10"), {});
+    check(changes == 1, "the IPv4-mapped form of the same radio is not a change");
     check(model.aetherRadioLabel() == QStringLiteral("FLEX-8600 \"Shack\"  192.0.2.10"),
           "the radio label is exposed for display");
     const QString wifi = model.configurationProblem();
