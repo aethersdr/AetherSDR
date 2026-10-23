@@ -325,6 +325,8 @@ void TgxlConnection::processBytes(const QByteArray& bytes)
 
 void TgxlConnection::processLine(const QString& line)
 {
+    qCDebug(lcTuner) << "TgxlConnection: recv" << line;
+
     // Version line: V1.2.17
     if (!m_gotVersion && line.startsWith('V')) {
         const bool requiresAuth = line.endsWith(" AUTH");
@@ -402,6 +404,21 @@ void TgxlConnection::processLine(const QString& line)
         if (pipe2 >= 0) {
             QString body = line.mid(pipe2 + 1).trimmed();
             if (!body.isEmpty()) {
+            // antenna name1=X name2=Y name3=Z  (3-way model, v1.2.41+)
+            if (body.startsWith(QStringLiteral("antenna "))) {
+                QMap<QString, QString> kvs;
+                const auto parts = body.mid(8).split(' ', Qt::SkipEmptyParts);
+                for (const auto& part : parts) {
+                    int eq = part.indexOf('=');
+                    if (eq > 0) kvs.insert(part.left(eq), part.mid(eq + 1));
+                }
+                auto decode = [](const QString& s) {
+                    return QString(s).replace(QLatin1Char('_'), QLatin1Char(' ')).trimmed();
+                };
+                emit antennaNamesChanged(decode(kvs.value(QStringLiteral("name1"))),
+                                         decode(kvs.value(QStringLiteral("name2"))),
+                                         decode(kvs.value(QStringLiteral("name3"))));
+            } else {
                 QMap<QString, QString> kvs;
                 const auto parts = body.split(' ', Qt::SkipEmptyParts);
                 for (const auto& part : parts) {
@@ -414,6 +431,7 @@ void TgxlConnection::processLine(const QString& line)
                     applyPollRateFor(kvs);
                     emit statusUpdated(kvs);
                 }
+            }
             }
         }
         return;
@@ -462,6 +480,7 @@ void TgxlConnection::finishHandshake()
     m_authBlocked = false;
     m_authFailures = 0;
     sendCommand("info");
+    sendCommand("antenna read");  // 3-way custom antenna names (v1.2.41+); no-op on SO2R
     sendCommand("status");
     m_connected = true;
     m_pollTimer.start();

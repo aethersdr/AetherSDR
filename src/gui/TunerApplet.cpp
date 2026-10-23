@@ -1103,8 +1103,20 @@ void TunerApplet::setTunerModel(TunerModel* model)
                     auto* gauge = static_cast<HGauge*>(m_fwdGauge);
                     gauge->setWindowPeakEnabled(true);
                     gauge->clearPeak();
+                    // Reset antenna buttons to defaults on disconnect
+                    if (m_ant1Btn) m_ant1Btn->setText(tr("ANT 1"));
+                    if (m_ant2Btn) m_ant2Btn->setText(tr("ANT 2"));
+                    if (m_ant3Btn) m_ant3Btn->setText(tr("ANT 3"));
                 }
                 updatePortRows();
+            });
+
+    // Custom antenna names from the TGXL 3-way model (v1.2.41+)
+    connect(m_model, &TunerModel::antennaNamesChanged, this,
+            [this](const QString& n1, const QString& n2, const QString& n3) {
+                if (m_ant1Btn) m_ant1Btn->setText(n1.isEmpty() ? tr("ANT 1") : n1);
+                if (m_ant2Btn) m_ant2Btn->setText(n2.isEmpty() ? tr("ANT 2") : n2);
+                if (m_ant3Btn) m_ant3Btn->setText(n3.isEmpty() ? tr("ANT 3") : n3);
             });
 
     connect(m_model, &TunerModel::alertChanged, this, &TunerApplet::setAlertText);
