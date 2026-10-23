@@ -1049,7 +1049,6 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
         serialCustomEdit->setAccessibleName(tr("%1 custom serial port").arg(ui.label));
         populateSerialPortCombo(serialCombo, serialCustomEdit,
                                 PeripheralSettings::deviceString(group, "SerialPort"));
-        serialCustomEdit->setVisible(serialCombo->currentData().toString() == "__custom__");
         connect(serialCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
                 [serialCombo, serialCustomEdit](int idx) {
             serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
@@ -1066,6 +1065,8 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
         pageReseeds->append(reseed);
         lay->addWidget(serialCombo, 1);
         lay->addWidget(serialCustomEdit, 1);
+        // Show only after parenting: a visible parentless widget is a transient window.
+        serialCustomEdit->setVisible(serialCombo->currentData().toString() == "__custom__");
         serialPageIdx = ui.addressStack->addWidget(serialPage);
     }
 #endif

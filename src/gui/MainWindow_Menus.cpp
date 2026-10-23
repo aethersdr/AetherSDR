@@ -388,7 +388,7 @@ void MainWindow::buildMenuBar()
     // (RadioSetupDialog.cpp) and the AetherControl "Settings…" button
     // (MainWindow_Controllers.cpp) that offers the same deep-link from
     // inside the controller window.
-    auto* flexControlKnobAction = controllersMenu->addAction("FlexControl Knob & Buttons...");
+    auto* flexControlKnobAction = controllersMenu->addAction("FlexControl Knob && Buttons...");
     m_flexControlKnobAction = flexControlKnobAction;
     flexControlKnobAction->setVisible(true); // host serial device, never gated (#5778)
     flexControlKnobAction->setMenuRole(QAction::NoRole);

@@ -2,6 +2,7 @@
 
 #include "Ctr2DeviceLock.h"
 #include "Ctr2HidThreadPort.h"
+#include "HidDiscovery.h"
 
 #include <hidapi/hidapi.h>
 
@@ -21,11 +22,9 @@ QString fromWide(const wchar_t* s)
     return s ? QString::fromWCharArray(s) : QString();
 }
 
-// hid_init() is idempotent. hid_exit() is never called: it is process-wide
-// and other HID controllers may still be open.
 bool ensureHidInit()
 {
-    return hid_init() == 0;
+    return HidDiscovery::init() == 0;
 }
 
 } // namespace
@@ -36,21 +35,33 @@ QList<Ctr2HidPort::DeviceInfo> Ctr2HidapiPort::enumerate()
     if (!ensureHidInit()) {
         return out;
     }
-    hid_device_info* list = hid_enumerate(0, 0);
-    for (hid_device_info* d = list; d; d = d->next) {
-        if (d->usage_page != kUsagePage || d->usage != kUsage) {
-            continue;
+    // Ask only for the known VID:PID pairs: hid_enumerate(0, 0) makes the
+    // Windows backend request strings and descriptors from every HID device
+    // on the machine, a GUI-thread stall on each rescan (#6256 has the detail).
+    QList<std::pair<quint16, quint16>> ids;
+    for (const Ctr2HidPort::KnownCtr2& known : Ctr2HidPort::knownCtr2Devices()) {
+        const std::pair<quint16, quint16> id{known.vendorId, known.productId};
+        if (!ids.contains(id)) {
+            ids.append(id);
         }
-        Ctr2HidPort::DeviceInfo info;
-        info.path = QString::fromUtf8(d->path);
-        info.vendorId = d->vendor_id;
-        info.productId = d->product_id;
-        info.manufacturer = fromWide(d->manufacturer_string);
-        info.product = fromWide(d->product_string);
-        info.serial = fromWide(d->serial_number);
-        out.append(info);
     }
-    hid_free_enumeration(list);
+    for (const auto& [vendorId, productId] : std::as_const(ids)) {
+        hid_device_info* list = HidDiscovery::enumerate(vendorId, productId);
+        for (hid_device_info* d = list; d; d = d->next) {
+            if (d->usage_page != kUsagePage || d->usage != kUsage) {
+                continue;
+            }
+            Ctr2HidPort::DeviceInfo info;
+            info.path = QString::fromUtf8(d->path);
+            info.vendorId = d->vendor_id;
+            info.productId = d->product_id;
+            info.manufacturer = fromWide(d->manufacturer_string);
+            info.product = fromWide(d->product_string);
+            info.serial = fromWide(d->serial_number);
+            out.append(info);
+        }
+        hid_free_enumeration(list);
+    }
     std::stable_sort(out.begin(), out.end(),
                      [](const Ctr2HidPort::DeviceInfo& a, const Ctr2HidPort::DeviceInfo& b) {
         return !a.ctr2Model().isEmpty() && b.ctr2Model().isEmpty();
@@ -80,10 +91,11 @@ Ctr2HidPort* Ctr2HidapiPort::open(const Ctr2HidPort::DeviceInfo& device, QString
         return nullptr;
     }
     errno = 0;
-    hid_device* handle = hid_open_path(device.path.toUtf8().constData());
+    std::wstring openError;
+    hid_device* handle = HidDiscovery::openPath(device.path.toUtf8().constData(), &openError);
     if (!handle) {
         const int openErrno = errno;
-        const QString why = fromWide(hid_error(nullptr));
+        const QString why = fromWide(openError.c_str());
         *error = QStringLiteral("Cannot open %1: %2")
             .arg(device.label(), why.isEmpty() ? QStringLiteral("HID I/O error") : why);
 #ifdef Q_OS_LINUX

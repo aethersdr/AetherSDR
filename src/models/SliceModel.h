@@ -25,6 +25,7 @@ class SliceModel : public QObject {
     Q_PROPERTY(int    sliceId    READ sliceId)
     Q_PROPERTY(double frequency  READ frequency  WRITE setFrequency  NOTIFY frequencyChanged)
     Q_PROPERTY(QString mode      READ mode       WRITE setMode       NOTIFY modeChanged)
+    Q_PROPERTY(QString chainMode READ chainMode NOTIFY chainModeChanged)
     Q_PROPERTY(int filterLow     READ filterLow  NOTIFY filterChanged)
     Q_PROPERTY(int filterHigh    READ filterHigh NOTIFY filterChanged)
     Q_PROPERTY(bool active       READ isActive   NOTIFY activeChanged)
@@ -72,6 +73,8 @@ public:
     bool frequencyReportedKnown() const { return m_frequencyReportedKnown; }
     void invalidateFrequencyObservation();
     QString mode()       const { return m_mode; }
+    // Radio-reported processing chain; empty means unknown, never inferred from mode.
+    QString chainMode() const { return m_chainMode; }
     QStringList modeList() const { return m_modeList; }
     int     filterLow()  const { return m_filterLow; }   // Hz offset
     int     filterHigh() const { return m_filterHigh; }
@@ -484,6 +487,7 @@ signals:
     void activeSliceCommandIssued();
     void panIdChanged(const QString& panId);
     void modeChanged(const QString& mode);
+    void chainModeChanged(const QString& chainMode);
     void filterChanged(int low, int high);
     void adaptiveFilterEnabledChanged(bool on);
     void adaptiveMinLowCutChanged(int hz);
@@ -684,6 +688,7 @@ private:
     bool    m_frequencyReportedKnown{false};
     ReceiveObservation m_receiveObservation;
     QString m_mode{"USB"};
+    QString m_chainMode;
     QString m_modeBeforeDigitalVoice;
     QStringList m_modeList;
     int     m_filterLow{-1500};

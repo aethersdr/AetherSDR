@@ -135,6 +135,22 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "FAIL: injected bind should succeed\n");
         return 1;
     }
+    // The UDP registration encoder already follows ClientHandleHelper.X8.
+    // Keep its full uint32 contract aligned with the NetCW production captures.
+    struct HandleCase { quint32 value; const char* payload; };
+    const HandleCase handles[] = {
+        {0x0000000Au, "client udp_register handle=0x0000000A"},
+        {0x0012ABCDu, "client udp_register handle=0x0012ABCD"},
+        {0x1234ABCDu, "client udp_register handle=0x1234ABCD"},
+        {0x80000001u, "client udp_register handle=0x80000001"},
+        {0xFFFFFFFFu, "client udp_register handle=0xFFFFFFFF"},
+    };
+    for (const HandleCase& handle : handles) {
+        stream.startWanUdpRegister(handle.value);
+        const std::vector<QByteArray> captured = drain(recorded, kSinkPort);
+        check(captured.size() == 1 && allEqual(captured, QByteArray(handle.payload)),
+              "registration preserves the full uint32 handle in exact X8 command framing");
+    }
     stream.startWanUdpRegister(0);
     pump(100);
     check(drain(recorded, kSinkPort).empty(), "wait for a nonzero client handle");

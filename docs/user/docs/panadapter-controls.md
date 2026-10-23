@@ -144,6 +144,10 @@ Status cards appear over the spectrum for things like "Center Lock released", a 
 
 The status bar at the bottom of the window starts with the band-stack indicator and **+PAN** (add a panadapter), followed by indicators such as **TNF**, **CWX**, **ASR**, **DVK** and **FDX** (each only on radios and builds that support it). Click an indicator to toggle it, or press **Tab** to reach it and **Return** or **Enter** to activate it.
 
+**FDX** requests full duplex through the connected radio. A refusal leaves its
+state unchanged; a delayed reply cannot overwrite a newer request or a newer
+radio status. Enabling full duplex does not start a transmission.
+
 **View → FPS Meters** (Ctrl+F) adds spectrum and waterfall frame-rate readouts to each pan.
 
 <img src="/img/screens/pan-status-bar.png" width="1430" alt="The status bar. From left: the add-panadapter icon, the indicators TNF, CWX, ASR, DVK and FDX, the radio model FLEX-8600 with firmware 4.2.20.41343, the nickname FLX8600 in a box, the GPS satellite count with Fine Lock, CPU and memory use, the PA temperature and supply voltage, Network: [Excellent], a TUN STANDBY indicator, a TX indicator and the date and UTC time." />

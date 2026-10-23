@@ -5,6 +5,7 @@
 
 #include <QObject>
 #include <QHash>
+#include <QSet>
 #include <QMap>
 #include <QString>
 #include <QStringList>
@@ -123,6 +124,12 @@ public:
     bool    companderOn()           const { return m_companderOn; }
     int     companderLevel()        const { return m_companderLevel; }
     bool    daxOn()                 const { return m_daxOn; }
+    // `transmit dax` commands sent but not yet answered. Until the radio's
+    // reply lands, a status for an EARLIER command can still arrive and put
+    // daxOn() back to a value already superseded; daxRequested() is what the
+    // newest command asked for (#6593 review).
+    bool    daxSettled()            const { return m_pendingDaxAnswers.isEmpty(); }
+    bool    daxRequested()          const { return m_daxRequested; }
     bool    sbMonitor()             const { return m_sbMonitor; }
     int     monGainSb()             const { return m_monGainSb; }
 
@@ -584,6 +591,7 @@ signals:
 
 private:
     friend class RadioModel;
+    void resetDaxSessionState();
     auto captureControlIntent(TransmitControlRequest::Field field)
     {
         const QPointer<TransmitModel> alive(this);
@@ -598,6 +606,9 @@ private:
     // asked for and the VOX intent revision it was issued at.
     struct PendingVoxAnswer { bool on; quint64 revision; };
     QHash<quint64, PendingVoxAnswer> m_pendingVoxAnswers;
+    // setDax() tickets still waiting on an answer; see daxSettled().
+    QSet<quint64> m_pendingDaxAnswers;
+    bool m_daxRequested{false};
     quint64 m_lastAnswerTicket{0};
     // See voxStateConfirmed(). Unconfirmed until the radio first reports VOX.
     bool m_voxUnconfirmed{true};

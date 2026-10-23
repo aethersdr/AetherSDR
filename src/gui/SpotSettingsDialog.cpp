@@ -322,7 +322,9 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
     auto* clearBtn = new QPushButton("Clear All Spots");
     clearBtn->setFixedWidth(120);
     connect(clearBtn, &QPushButton::clicked, this, [this] {
-        m_model->sendCommand("spot clear");
+        SpotRequest request;
+        request.action = SpotAction::Clear;
+        m_model->requestSpot(request);
         m_totalSpotsLabel->setText("0");
         emit settingsChanged();
     });

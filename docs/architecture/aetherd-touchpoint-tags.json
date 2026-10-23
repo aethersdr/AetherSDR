@@ -455,12 +455,6 @@
   "split": "Memory-field vocab (modes, offset dirs, tone modes, CTCSS tones, tuning steps) is core-profile; wire-form casing, 0x7f-space encoding, and mode set mirrored from FlexLib Slice.cs/Memory.cs are flex extension",
   "confidence": "high"
  },
- "core/MemoryRecallPolicy.h": {
-  "tag": "mixed(flex)",
-  "note": "Memory-recall intent (offset/tone math) is core, but builders emit SmartSDR slice command strings (flex)",
-  "split": "memoryRepeaterTxOffsetFreq (repeater offset semantics) is core-profile; buildMemoryRecall*Command emit literal SmartSDR \"slice tune/set\" wire strings \u2014 flex encoding",
-  "confidence": "high"
- },
  "core/MidiControlManager.h": {
   "tag": "ui-support",
   "note": "RtMidi input-device manager (ports, bindings, MIDI Learn) driving client setters; control-surface plumbing",

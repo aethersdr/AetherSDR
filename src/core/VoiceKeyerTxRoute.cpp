@@ -59,19 +59,14 @@ void VoiceKeyerTxRoute::claimAudioPath()
         m_prevAudioDax = m_audio->isDaxTxMode();
         m_audio->setDaxTxMode(true);
     }
-    m_restoreTransmitDax = needsStream();
-    if (m_restoreTransmitDax) {
-        auto& tx = m_radio.transmitModel();
-        m_prevTransmitDax = tx.daxOn();
-        tx.setDax(true);
+    if (needsStream()) {
+        m_radio.acquireTransmitDax(RadioModel::DaxTxFlagHolder::VoiceKeyer);
     }
 }
 
 void VoiceKeyerTxRoute::releaseAudioPath()
 {
-    if (m_restoreTransmitDax)
-        m_radio.transmitModel().setDax(m_prevTransmitDax);
-    m_restoreTransmitDax = false;
+    m_radio.releaseTransmitDax(RadioModel::DaxTxFlagHolder::VoiceKeyer);
     if (m_audio)
         m_audio->setDaxTxMode(m_prevAudioDax);
 }

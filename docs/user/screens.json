@@ -4183,7 +4183,7 @@
         }
       ],
       "caption": "The Add menu on the Peripherals page: every device type AetherSDR can configure.",
-      "alt": "Peripherals Add menu: Tuner Genius XL, Power Genius XL, Antenna Genius, ShackSwitch, ACOM Amplifier, SPE Expert Amplifier, VK3AMP Amplifier, Elecraft KPA1500 and LP-100A Meter."
+      "alt": "Peripherals Add menu: Tuner Genius XL, Power Genius XL, Antenna Genius, ShackSwitch, ACOM Amplifier, SPE Expert Amplifier, VK3AMP Amplifier, RF-KIT Amplifier, Elecraft KPA1500 and LP-100A Meter."
     },
     {
       "id": "radio-list-popup",

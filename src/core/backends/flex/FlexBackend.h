@@ -99,12 +99,27 @@ public:
     ReceiveDispatch requestRadioNickname(const QString& nickname,
                                          NicknameCompletion completion = {}) override;
     ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
+    ReceiveDispatch requestSliceCreate(const SliceCreateRequest& request,
+                                       const SliceCreateCompletion& completion = {},
+                                       const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestSliceRemove(int sliceId, const RadioControlCompletion& completion = {},
+                                       const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestTxSlice(int sliceId, bool enabled,
+                                   const RadioControlCompletion& completion = {},
+                                   const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestFullDuplex(bool enabled, const RadioControlCompletion& completion = {},
+                                      const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestSliceInventoryRefresh(const RadioControlCompletion& completion = {},
+                                                 const RadioControlFence& current = {}) override;
     ReceiveDispatch requestTransmitControl(const TransmitControlRequest& request,
         TunePowerContext context = TunePowerContext::Deferred) override;
     ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
                                       const RadioSetupCompletion& completion = {},
                                       const RadioControlFence& current = {}) override;
     ReceiveDispatch requestTxBand(const TxBandRequest& request) override;
+    ReceiveDispatch requestSpot(const SpotRequest& request, const QString& panId = {}) override;
+    ReceiveDispatch requestPanControl(const QString& panId, const PanControlRequest& request) override;
+    ReceiveDispatch requestSlicePreset(int sliceId, const SlicePresetRequest& request) override;
     ReceiveDispatch requestProfile(const ProfileRequest& request,
                                    const RadioControlCompletion& completion = {},
                                    const RadioControlFence& current = {}) override;
@@ -196,6 +211,8 @@ public:
     // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel
     // residual). Present-only, ok-guarded numeric parses.
     void decodeRadioStatus(const QMap<QString, QString>& kvs);
+    // Full info reply: missing/invalid region clears the observation.
+    void decodeRadioInfoMetadata(const QString& body);
     void decodeInterlockStatus(const QMap<QString, QString>& kvs);
     void decodeAtuStatus(const QMap<QString, QString>& kvs);
     void decodeApdStatus(const QMap<QString, QString>& kvs);
