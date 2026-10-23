@@ -397,6 +397,58 @@ void testStockFirmwareOverUsb()
     AetherSDR::Ctr2RelaySettings{}.save();
 }
 
+// A relay that fails before the CTR2 ever answered (firmware with no USB
+// mode, whose first write fails on Windows and macOS) is not reopened every
+// kAutoStartRetryMs on the GUI thread: it waits for the device list to
+// change. One that fails after an answer is retried as before.
+void testNoRetryWithoutAnswer()
+{
+    using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
+    const Info stock{QStringLiteral("stock"), 0x303A, 0x1001, {}, QStringLiteral("ESP32S3_DEV"),
+                     QStringLiteral("000000000001")};
+    AetherSDR::Ctr2RelaySettings settings;
+    settings.autoStart = true;
+    settings.save();
+    auto devices = std::make_shared<QList<Info>>(QList<Info>{stock});
+    auto log = std::make_shared<PortLog>();
+    QPointer<FakePort> port;
+    Ctr2ProxyModel model;
+    model.setUsbBackend([devices] { return *devices; },
+                        [log, &port](const Info&, QString*) {
+                            port = new FakePort(log);
+                            return static_cast<AetherSDR::Ctr2HidPort*>(port.data());
+                        });
+    model.setTransport(Ctr2ProxyModel::Transport::Usb);
+    const QHostAddress radio(QStringLiteral("192.0.2.10"));
+    const int retry = Ctr2ProxyModel::kAutoStartRetryMs + 2000;
+    model.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
+    check(waitUntil([&] { return model.isRunning() && port; }, 1000), "auto-start opens the CTR2");
+    const int opened = log->opened;
+    emit port->failed(QStringLiteral("HID write failed"));
+    check(!model.isRunning(), "a failed write stops the relay");
+    check(model.lastError().contains(QStringLiteral("never answered"))
+              && model.lastError().contains(QStringLiteral("HID write failed")),
+          "the error says the CTR2 never answered, after the port's own error");
+    check(!waitUntil([&] { return model.isRunning(); }, retry) && log->opened == opened,
+          "a CTR2 that never answered is not reopened automatically");
+
+    Info replugged = stock;
+    replugged.serial = QStringLiteral("000000000002");
+    *devices = {replugged};
+    check(waitUntil([&] { return model.isRunning(); }, Ctr2ProxyModel::kDeviceRescanMs + retry),
+          "a change in the device list tries it again");
+
+    check(waitUntil([&] { return bool(port); }, 1000), "with a new port");
+    emit port->reportsReceived(QByteArray::fromHex("ff00000200010000"));   // READY
+    waitUntil([] { return false; }, 100);
+    const int answeredOpens = log->opened;
+    emit port->failed(QStringLiteral("HID read failed"));
+    check(waitUntil([&] { return model.isRunning() && log->opened > answeredOpens; }, retry),
+          "a CTR2 that had answered is retried as before");
+    model.stop();
+    AetherSDR::Ctr2RelaySettings{}.save();
+}
+
 // A controller that switches firmware changes its USB identity; while the
 // relay is stopped the list follows without a Rescan.
 void testDevicesRescanByThemselves()
@@ -862,6 +914,7 @@ int main(int argc, char** argv)
     testAutoStart(QStringLiteral("AetherCTR2"));   // names itself
     testAutoStart(QStringLiteral("AETHER_KNOB"));  // the fixed AetherKnob identity
     testStockFirmwareOverUsb();
+    testNoRetryWithoutAnswer();
     testDevicesRescanByThemselves();
     testRescanRunsOffGuiThread();
     testInterfacesRescanWithoutUsbSource();

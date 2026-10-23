@@ -241,6 +241,7 @@ void Ctr2ProxyModel::applyDeviceScan(DeviceScan scan)
     }
     m_listenChoices = std::move(choices);
     m_usbChoices = usb;
+    m_noAnswerHold = false;   // replugged, or switched firmware: try it again
     // Default to the first recognized CTR2 while nothing is selected or the
     // selected device has gone; an existing choice stands.
     if (!isRunning() && !selectedUsbDevice()) {
@@ -402,6 +403,7 @@ void Ctr2ProxyModel::setAetherRadio(const QHostAddress& address, quint16 port,
     emit configurationChanged();
     if (newRadio) {
         m_autoStartHeld = false;   // a new connection: start again
+        m_noAnswerHold = false;
         QTimer::singleShot(0, this, &Ctr2ProxyModel::tryAutoStart);
     }
 }
@@ -423,7 +425,7 @@ void Ctr2ProxyModel::setAutoStart(bool on)
 
 void Ctr2ProxyModel::tryAutoStart()
 {
-    if (!m_settings.autoStart || m_autoStartHeld || isRunning()
+    if (!m_settings.autoStart || m_autoStartHeld || m_noAnswerHold || isRunning()
         || m_firmware->isRunning() || m_aetherRadioAddress.isNull()) {
         return;
     }
@@ -450,6 +452,16 @@ void Ctr2ProxyModel::onUsbStateChanged()
         if (!m_usbAnswered && !m_noAnswerTimer->isActive() && !m_noAnswer)
             m_noAnswerTimer->start();
         return;
+    }
+    if (s == State::Error && !m_usbAnswered && usbActive()) {
+        m_noAnswerHold = true;
+        QString why = m_usb->lastError();
+        while (why.endsWith(QLatin1Char('.')))
+            why.chop(1);
+        m_stopReason = (why.isEmpty() ? QString() : why + QStringLiteral(". "))
+            + tr("The CTR2 never answered: USB mode needs CTR2-Max firmware v1.02.00 or later, "
+                 "or AetherCTR2. For other firmware, use Wi-Fi mode.");
+        emit lastErrorChanged();
     }
     // Connecting means the CTR2 answered; Stopped and Error end the run.
     m_usbAnswered = s != State::Stopped && s != State::Error;
@@ -619,6 +631,7 @@ bool Ctr2ProxyModel::start()
     m_activeTransport = m_transport;
     m_usbStartError.clear();
     m_stopReason.clear();
+    m_noAnswerHold = false;
     m_runningRadioAddress = m_aetherRadioAddress;
     m_runningRadioPort = m_aetherRadioPort;
     m_runningRadioLabel = m_aetherRadioLabel;

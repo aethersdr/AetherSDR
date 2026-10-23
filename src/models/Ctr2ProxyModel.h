@@ -109,7 +109,9 @@ public:
     // Starts the relay by itself whenever AetherSDR is connected to a radio,
     // with the setup it last started with (Ctr2RelaySettings, saved), and
     // keeps trying while the device is missing. In USB mode only a device
-    // whose firmware relays over USB (usbLink()) is started.
+    // whose firmware relays over USB (usbLink()) is started, and a device
+    // that failed without ever answering is not retried until the device
+    // list changes or AetherSDR connects to a radio.
     bool autoStart() const { return m_settings.autoStart; }
     void setAutoStart(bool on);
     static constexpr int kAutoStartRetryMs = 5000;
@@ -258,6 +260,11 @@ private:
     // background scan that started before one of them is dropped.
     quint64 m_scanGeneration{0};
     bool m_autoStartHeld{false};   // the operator stopped it this connection
+    // The USB relay failed before the CTR2 ever answered (firmware with no
+    // USB mode): no automatic retry, which would open the device on this
+    // thread every kAutoStartRetryMs, until the device list changes or a
+    // radio connects.
+    bool m_noAnswerHold{false};
 };
 
 } // namespace AetherSDR

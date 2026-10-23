@@ -363,6 +363,11 @@ later, or AetherCTR2."
 3. Or stop the relay and use **Wi-Fi** mode with the firmware it has. Other
    CTR2 controllers always use Wi-Fi mode.
 
+If the relay stops with an error before the CTR2 ever answered, **Start
+automatically** does not keep retrying it. It tries again once the CTR2 is
+plugged in again or switches firmware, or when AetherSDR next connects to a
+radio.
+
 ### "... is in use by another AetherSDR"
 
 Another AetherSDR on this computer has the CTR2 open over USB. Two relays on
