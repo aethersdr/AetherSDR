@@ -101,6 +101,7 @@ class Kat500ModelTest
         Kat500Model model;
         ready(model);
         model.m_status.forwardAdc = 2;
+        antennas(model);
         Kat500Applet widget;
         widget.setModel(&model);
         CHECK(widget.findChild<QLabel*>("katReadiness")->text() == "READY");
@@ -108,6 +109,7 @@ class Kat500ModelTest
                                  "katAttenuatorStatus", "katAmpInterruptStatus"}) {
             CHECK(widget.findChild<QPushButton*>(name)->isEnabled());
         }
+        CHECK(!widget.findChild<QPushButton*>("katAntenna2")->isEnabled());
         stale(model);
         CHECK(!widget.findChild<QPushButton*>("katTune")->isEnabled());
         return 0;
