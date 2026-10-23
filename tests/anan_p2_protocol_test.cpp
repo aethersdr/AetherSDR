@@ -488,9 +488,10 @@ int main()
         check(ddcIndexForSenderPort(1038, 4).has_value(),
               "the last active DDC's port IS accepted (boundary, not off-by-one)");
 
-        // A single-DDC session must reject DDC1's port -- this is the case
-        // that keeps a leftover stream from a previous multi-DDC session
-        // from being fed to DDC0.
+        // The helper's own bound with a count of one. P2Client passes
+        // kMaxDdcs; a session drops the ports of DDCs it did not enable in
+        // handleDatagram() (isEnabledDdc()), which anan_link_telemetry_test
+        // covers.
         check(ddcIndexForSenderPort(1035, 1).has_value(),
               "single-DDC session accepts DDC0's port");
         check(!ddcIndexForSenderPort(1036, 1).has_value(),
