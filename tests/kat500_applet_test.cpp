@@ -7,6 +7,8 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QFileDialog>
+#include <QFontDatabase>
+#include <QFontMetrics>
 #include <QPointer>
 #include <QPlainTextEdit>
 #include <QLabel>
@@ -320,6 +322,12 @@ int main(int argc, char** argv)
 {
     TestSettingsProfile profile("kat500-applet-test");
     QApplication app(argc, argv);
+    // Standalone widget tests bypass main.cpp's bundled-font registration.
+    // Windows offscreen can otherwise measure missing-glyph boxes as text.
+    for (const char* font : {":/fonts/Inter-Regular.ttf", ":/fonts/Inter-Bold.ttf"}) {
+        CHECK(QFontDatabase::addApplicationFont(QString::fromLatin1(font)) >= 0);
+    }
+    CHECK(QFontMetrics(QApplication::font()).inFontUcs4(U'A'));
     AetherSDR::AppSettings::instance().load();
     const int debugResult = AetherSDR::Kat500ModelTest::debugScrolling();
     const int historyResult = AetherSDR::Kat500ModelTest::historyResizing();
