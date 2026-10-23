@@ -33,7 +33,7 @@ public:
     QString description() const;
     const Kat500::Status& status() const { return m_status; }
     qint64 fieldAgeMs(const QString& command) const;
-    QString unavailableReason(bool writing = false) const;
+    QString unavailableReason(bool writing = false, bool requireZeroRf = false) const;
     bool operationBusy() const { return !m_operation.isEmpty(); }
     QString operationName() const { return m_operation; }
 
@@ -113,6 +113,7 @@ private:
         int timeoutMs = 2000;
         bool mutation = false;
         bool requiresIdle = true;
+        bool requiresZeroRf = false;
     };
     void transportOpened();
     void transportClosed(const QString& reason = {});
@@ -129,7 +130,7 @@ private:
     void report(const QString& text, bool polling = false);
     bool requestValue(const QByteArray& setter, const QByteArray& getter, std::function<bool(const Kat500::Status&)> verify,
                       const QString& name, bool allowOff = false);
-    void preflight(std::function<void()> ready);
+    void preflight(std::function<void()> ready, bool requireZeroRf = true);
     void readRegion(bool external, int address, int end, std::function<void(QByteArray)> complete);
     void readRegionBlock();
     void restoreBlock(bool refreshed = false);

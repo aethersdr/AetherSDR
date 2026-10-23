@@ -74,9 +74,9 @@ static int settlingReadback() {
  const int count=wire.size(); now+=100;model.tick();CHECK(wire.size()==count && !model.operationBusy());
  now+=2100;model.m_lastIo=now;model.m_lastReply=now;model.m_received["TP"]=now;model.m_received["VFWD"]=now;
  CHECK(model.setAntenna(2)); model.tick(); model.receiveBytes("AN1;");
- model.query("VFWD;"); model.tick(); model.receiveBytes("VFWD1;"); now+=100; const int before=wire.size(); model.tick();
+ model.query("TP;"); model.tick(); model.receiveBytes("TP1;"); now+=100; const int before=wire.size(); model.tick();
  CHECK(!model.operationBusy() && wire.size()==before);
- now+=2100;model.m_lastIo=now;model.m_lastReply=now;model.m_received["TP"]=now;model.m_received["VFWD"]=now;model.m_status.forwardAdc=0;
+ now+=2100;model.m_lastIo=now;model.m_lastReply=now;model.m_received["TP"]=now;model.m_received["VFWD"]=now;model.m_status.forwardAdc=0;model.m_status.tuning=false;
  CHECK(model.setAntenna(3));model.tick();model.receiveBytes("AN1;");
  now+=1900;model.m_lastIo=now;model.tick();CHECK(wire.last()=="AN;");
  const int beforeLate=wire.size(),beforeFinished=finished.size();now+=150;model.receiveBytes("AN3;");
@@ -105,6 +105,7 @@ struct Peer {
     bool dropRead = false;
     bool wrongMemory = false;
     bool rf = false;
+    int idleAdc = 0;
     Peer()
     {
         QFile fixture(QStringLiteral(KAT500_CONFIGURATION_PATH));
@@ -137,7 +138,7 @@ struct Peer {
                 else if (command == "C") { reply = "C00;"; }
                 else if (command == "L") { reply = "L00;"; }
                 else if (command.startsWith("DM")) { reply = wrongMemory ? "DM 14080-14099;AN2;BYP;VSWRB 1.00;5 UNUSED;" : "DM 14080-14099;AN1;BYP;VSWRB 1.00;5 UNUSED;"; }
-                else if (command == "VFWD") { reply = rf ? "VFWD 1;" : "VFWD 0;"; }
+                else if (command == "VFWD") { reply = "VFWD " + QByteArray::number(rf ? 1 : idleAdc) + ';'; }
                 else if (command == "AMPI" || command == "ATTN" || command == "FLT" || command == "VRFL") { reply = command + "0;"; }
                 else if (command == "VSWR" || command == "VSWRB") { reply = command + " 1.00;"; }
                 else if (command == "F" || command == "FC" || command == "FX") { reply = command + " 14096;"; }
@@ -188,6 +189,94 @@ struct Peer {
     void complete() { for (int i=0; i<50000 && model.operationBusy(); ++i) { step(); } }
 };
 
+static int smallIdleOffsetRecovers()
+{
+    Peer peer;
+    peer.idleAdc = 2;
+    peer.model.query("VFWD;"); peer.step();
+    CHECK(peer.model.status().forwardAdc == 2);
+    CHECK(peer.model.unavailableReason(true).isEmpty());
+    CHECK(peer.model.startTune(true)); peer.complete();
+    CHECK(peer.model.status().tuning == true);
+    CHECK(peer.model.cancelTune()); peer.complete();
+    CHECK(peer.model.status().tuning == false);
+    CHECK(peer.model.unavailableReason(true).isEmpty());
+    QSignalSpy finished(&peer.model, &Kat500Model::operationFinished);
+    QSignalSpy failed(&peer.model, &Kat500Model::operationFailed);
+    CHECK(peer.model.readMatchStatus()); peer.complete();
+    CHECK(finished.size() == 1 && failed.isEmpty());
+    peer.model.transportClosed(); peer.model.transportOpened(); peer.model.m_timer.stop();
+    for (int i = 0; i < 10; ++i) { peer.step(); }
+    CHECK(peer.model.status().forwardAdc == 2);
+    CHECK(peer.model.unavailableReason(true).isEmpty());
+    return 0;
+}
+static int hardwareRefusalDoesNotRetry()
+{
+    Peer peer;
+    peer.idleAdc = 2;
+    peer.model.query("VFWD;"); peer.step();
+    QSignalSpy failed(&peer.model, &Kat500Model::operationFailed);
+    QSignalSpy finished(&peer.model, &Kat500Model::operationFinished);
+    // The transport keeps reporting the old capacitor state: the request
+    // is not confirmed merely because it was sent or TP reports no search.
+    CHECK(peer.model.setCapacitorMask(4)); peer.complete();
+    CHECK(peer.wire.count("C04;C;") == 1);
+    CHECK(peer.model.status().capacitorMask == 0);
+    CHECK(failed.size() == 1 && finished.isEmpty());
+    for (int i = 0; i < 60; ++i) { peer.step(); }
+    CHECK(peer.wire.count("C04;C;") == 1);
+    CHECK(peer.model.unavailableReason(true).isEmpty());
+    CHECK(!peer.model.unavailableReason(true, true).isEmpty());
+    return 0;
+}
+static int maintenanceKeepsZeroRfFence()
+{
+    Peer peer;
+    peer.idleAdc = 2;
+    QSignalSpy failed(&peer.model, &Kat500Model::operationFailed);
+    CHECK(peer.model.eraseMemories(5, 1, true)); peer.complete();
+    CHECK(failed.size() == 1);
+    for (const QByteArray& request : peer.wire) {
+        CHECK(!request.startsWith("EM"));
+    }
+    CHECK(peer.writes == 0);
+    return 0;
+}
+static int maintenanceRejectsNewRfReadback()
+{
+    for (int operation = 0; operation < 3; ++operation) {
+        Peer peer;
+        CHECK(peer.model.readConfiguration()); peer.complete();
+        QSignalSpy failed(&peer.model, &Kat500Model::operationFailed);
+        if (operation == 0) {
+            CHECK(peer.model.applyConfiguration({{{Setting::AmpKeyPower}, 1400}}));
+        } else if (operation == 1) {
+            CHECK(peer.model.eraseMemories(5, 1, true));
+        } else {
+            Backup backup;
+            backup.serial = peer.model.status().serial;
+            backup.firmware = peer.model.status().firmware;
+            backup.internal = peer.internal;
+            backup.external = peer.external;
+            CHECK(peer.model.restoreBackup(backup, true));
+        }
+        // Complete preflight at zero, then deliver newer telemetry before
+        // dispatching the first configuration, erase or EEPROM write.
+        for (int i = 0; i < 100 && (peer.model.m_queue.isEmpty() ||
+             !peer.model.m_queue.head().mutation); ++i) { peer.step(); }
+        CHECK(!peer.model.m_queue.isEmpty() && peer.model.m_queue.head().mutation);
+        peer.model.query("VFWD;");
+        const auto poll = peer.model.m_queue.takeLast();
+        peer.model.m_queue.prepend(poll);
+        peer.idleAdc = 2;
+        peer.step(); peer.step();
+        CHECK(failed.size() == 1 && !peer.model.operationBusy());
+        CHECK(peer.setters.isEmpty() && peer.writes == 0);
+        for (const QByteArray& request : peer.wire) { CHECK(!request.startsWith("EM")); }
+    }
+    return 0;
+}
 static int searchDeadline(bool saveMatch)
 {
     Peer peer;
@@ -261,7 +350,7 @@ static int cancellationRetainsSafetyAndCanRetry()
     for (int i = 0; i < 100; ++i) { peer.step(); }
     CHECK(peer.wire.count("CT;TP;") == 2);
     CHECK(peer.model.status().tuning == false);
-    CHECK(!peer.model.setAntenna(2)); // Cancel is permitted during RF; relay changes are not.
+    CHECK(!peer.model.unavailableReason(true, true).isEmpty()); // Maintenance retains the RF fence.
     peer.rf = false;
     for (int i = 0; i < 50; ++i) { peer.step(); }
     CHECK(peer.model.unavailableReason(true).isEmpty());
@@ -560,7 +649,7 @@ static int ordinaryPollLatencyKeepsSafetyFresh()
     }
     CHECK(peer.model.ampKeyBlockConfirmed());
     CHECK(peer.wire.count("SN;") >= 3); // Background round-robin is not starved.
-    peer.rf = true;
+    peer.tuning = true;
     for (int i = 0; i < 35; ++i) {
         peer.step();
         if (!pending.isEmpty() && peer.now >= replyAt) {
@@ -573,7 +662,7 @@ static int ordinaryPollLatencyKeepsSafetyFresh()
 }
 static int rejectNewUnsafeReadback()
 {
-    const QList<QPair<QByteArray,QByteArray>> cases{{"VFWD;","VFWD 1;"},{"TP;","TP1;"},{"PS;","PS0;"}};
+    const QList<QPair<QByteArray,QByteArray>> cases{{"TP;","TP1;"},{"PS;","PS0;"}};
     for (const auto& [query,reply] : cases) {
         Peer peer;
         const auto transport = peer.model.m_write;
@@ -845,7 +934,8 @@ static int run()
     const int failures = unconfirmedSearchRecovers(true, true, true) | unconfirmedSearchRecovers(false, true, true) | unconfirmedSearchRecovers(true, false) | unconfirmedSearchRecovers(false, false) | unconfirmedSearchRecovers(true, true) | unconfirmedSearchRecovers(false, true) | carrierControllerKeepsItsOwnDeadline() | watchdogDoesNotInventRecovery() | cancellationIntentConsumedOnce() | searchDeadline(true) | searchDeadline(false) | cancellationRetainsSafetyAndCanRetry() |
         searchIntentIsSessionScoped() | boundedMaintenancePreflight(false) | boundedMaintenancePreflight(true) | keyBlockReadback() | rejectUnsupportedMemoryFrequency() | followDoesNotRetryAdmittedIntent() | lateEepromRepliesStopRestore(false) | lateEepromRepliesStopRestore(true) |
         lateMemoryTerminatorCannotPublish() | antennaPermissionsLoadWhilePolling() | ordinaryPollLatencyKeepsSafetyFresh() | settlingReadback() | rejectNewUnsafeReadback() | doNotExposeFailedBackup() |
-        cancelResetDuringDiagnostic() | canceledMemoryDrainsWithoutTelemetry();
+        cancelResetDuringDiagnostic() | canceledMemoryDrainsWithoutTelemetry() | smallIdleOffsetRecovers() |
+        hardwareRefusalDoesNotRetry() | maintenanceKeepsZeroRfFence() | maintenanceRejectsNewRfReadback();
     return failures ? 1 : stateful();
 }
 };

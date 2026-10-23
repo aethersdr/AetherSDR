@@ -17,6 +17,7 @@
 #include <QSpinBox>
 #include <QTest>
 #include <cstdio>
+#include <optional>
 #define CHECK(x)                                                                                             \
     do {                                                                                                     \
         if (!(x)) {                                                                                          \
@@ -84,7 +85,7 @@ class Kat500ModelTest
     }
     static void blocked(Kat500Model& model, int condition)
     {
-        model.m_status.forwardAdc = condition == 0 ? 1 : 0;
+        model.m_status.forwardAdc = condition == 0 ? std::nullopt : std::optional<int>(0);
         model.m_operation = condition == 1 ? QStringLiteral("Test maintenance") : QString();
         model.m_status.tuning = condition == 2;
         emit model.availabilityChanged();
@@ -93,6 +94,23 @@ class Kat500ModelTest
     {
         model.m_lastReply = -10000;
         emit model.availabilityChanged();
+    }
+
+    static int smallIdleOffsetIsReady()
+    {
+        Kat500Model model;
+        ready(model);
+        model.m_status.forwardAdc = 2;
+        Kat500Applet widget;
+        widget.setModel(&model);
+        CHECK(widget.findChild<QLabel*>("katReadiness")->text() == "READY");
+        for (const char* name : {"katTune", "katAuto", "katAntenna1", "katBypassedStatus",
+                                 "katAttenuatorStatus", "katAmpInterruptStatus"}) {
+            CHECK(widget.findChild<QPushButton*>(name)->isEnabled());
+        }
+        stale(model);
+        CHECK(!widget.findChild<QPushButton*>("katTune")->isEnabled());
+        return 0;
     }
 
     static int cancelBeforeSearchReadback()
@@ -304,6 +322,7 @@ int main(int argc, char** argv)
     const int debugResult = AetherSDR::Kat500ModelTest::debugScrolling();
     const int historyResult = AetherSDR::Kat500ModelTest::historyResizing();
     CHECK(debugResult == 0 && historyResult == 0);
+    CHECK(AetherSDR::Kat500ModelTest::smallIdleOffsetIsReady() == 0);
     CHECK(AetherSDR::Kat500ModelTest::signalPathToggles() == 0);
     CHECK(AetherSDR::Kat500ModelTest::cancelWhileRequestDrains() == 0);
     CHECK(AetherSDR::Kat500ModelTest::cancelBeforeSearchReadback() == 0);
