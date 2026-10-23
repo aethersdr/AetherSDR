@@ -135,6 +135,8 @@ signals:
     void pttChanged(bool pttA, bool pttB);  // either port's PTT line moved
     void presenceChanged(bool present); // tuner detected / lost
     void directConnectionChanged(bool connected);
+    // Custom antenna names from the TGXL 3-way model (v1.2.41+).
+    void antennaNamesChanged(const QString& name1, const QString& name2, const QString& name3);
     // Neutral relay intents. RadioModel translates each to the Flex TGXL wire
     // ("tgxl set handle=<h> mode=/bypass=", "tgxl autotune handle=<h>") via
     // IRadioBackend::invokeExtension. autotuneRequested also carries the TX
