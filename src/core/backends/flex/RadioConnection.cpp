@@ -266,10 +266,12 @@ void RadioConnection::connectToHost(const QHostAddress& address,
         const QString msg = QStringLiteral("Local TCP source address %1 has a different address family from radio %2")
                                 .arg(preferredBindAddr.toString(), address.toString());
         qCWarning(lcConnection) << "RadioConnection:" << msg;
-        m_socket->abort();
-        m_socket->close();
         setState(ConnectionState::Error);
         emit errorOccurred(msg);
+        // The selected source remains mandatory, but the attempt can be retried
+        // once it is corrected -- so leave the session Disconnected, not wedged
+        // in Error (connectToHost early-returns unless state is Disconnected).
+        setState(ConnectionState::Disconnected);
         return;
     }
 

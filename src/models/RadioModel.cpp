@@ -9861,7 +9861,9 @@ void RadioModel::createRxAudioStream()
     // registered GUI session can send it. The connect handshake retries it.
     if (!hasCommandPlane() || !isConnected()
         || m_guiClientRegistrationState.phase() != GuiClientRegistrationState::Phase::Registered) {
-        logRemoteAudioRxSummary(QStringLiteral("create deferred: GUI session not ready"));
+        logRemoteAudioRxSummary(hasCommandPlane()
+            ? QStringLiteral("create deferred: GUI session not ready")
+            : QStringLiteral("create skipped: backend has no command plane"));
         return;
     }
 
