@@ -6766,6 +6766,12 @@ target_include_directories(vu_meter_settings_test PRIVATE src)
 target_link_libraries(vu_meter_settings_test PRIVATE Qt6::Core)
 add_test(NAME vu_meter_settings_test COMMAND vu_meter_settings_test)
 
+# LAN source-family selection, without binding sockets or contacting a radio.
+add_executable(flex_lan_bind_address_test tests/flex_lan_bind_address_test.cpp)
+target_include_directories(flex_lan_bind_address_test PRIVATE src)
+target_link_libraries(flex_lan_bind_address_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME flex_lan_bind_address_test COMMAND flex_lan_bind_address_test)
+
 # aetherd RFC step 2.2b regression guard: FlexBackend ctor/dtor thread ownership
 # + #502 teardown ordering. FlexBackend pulls RadioConnection/PanadapterStream
 # and their deep deps, so link the engine library rather than list sources.
