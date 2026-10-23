@@ -73,8 +73,11 @@ HTTP has no connection to be "up", so:
 - Each reply carries the session epoch it was issued under; a late reply from a
   previous session is discarded unread (#2380).
 - Boundary hygiene (Principle VII): bodies capped at 64 KiB (also enforced
-  while streaming), no redirects, no proxy, no cache, a 4 s transfer timeout on
-  every request, and the address field is built into a `QUrl` in strict mode so
+  while streaming), no redirects, no proxy, no cache, a 4 s transfer timeout (an
+  inactivity timeout) plus a 10 s deadline on the whole of every request, so a
+  peer that trickles bytes cannot hold the single serialized slot; a transfer
+  that breaks after the headers counts as a transport failure, while an HTTP
+  error status does not. The address field is built into a `QUrl` in strict mode so
   a stray `/`, `@` or space cannot change the request target.
 
 ## 5. What the operator can and cannot do

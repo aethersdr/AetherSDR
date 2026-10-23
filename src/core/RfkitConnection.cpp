@@ -51,6 +51,15 @@ RfkitConnection::RfkitConnection(QObject* parent)
 
     m_pollTimer.setInterval(kPollIntervalMs);
     connect(&m_pollTimer, &QTimer::timeout, this, &RfkitConnection::poll);
+
+    m_deadlineTimer.setSingleShot(true);
+    m_deadlineTimer.setInterval(kRequestDeadlineMs);
+    connect(&m_deadlineTimer, &QTimer::timeout, this, [this]() {
+        if (m_reply) {
+            m_reply->setProperty("rfkitDeadline", true);
+            m_reply->abort();  // finished() follows and counts it as a transport failure
+        }
+    });
 }
 
 RfkitConnection::~RfkitConnection()
@@ -128,6 +137,7 @@ void RfkitConnection::resetSession()
 {
     ++m_epoch;
     m_pollTimer.stop();
+    m_deadlineTimer.stop();
     m_queue.clear();
     m_inFlight = false;
     if (m_reply) {
@@ -195,6 +205,7 @@ void RfkitConnection::pump()
 
     m_inFlight = true;
     m_reply = reply;
+    m_deadlineTimer.start();
     const int epoch = m_epoch;
 
     // Principle VII: bound what a LAN peer can make us buffer. The transfer
@@ -219,15 +230,26 @@ void RfkitConnection::onReplyFinished(QNetworkReply* reply, const Request& reque
     }
     m_inFlight = false;
     m_reply = nullptr;
+    m_deadlineTimer.stop();
 
     const int http = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const bool oversize = reply->property("rfkitOversize").toBool();
     const QByteArray body = oversize ? QByteArray() : reply->read(Rfkit::kMaxBodyBytes + 1);
 
     // No HTTP status at all means the exchange never completed: refused,
-    // timed out, unresolvable, reset, or aborted for size.
-    if (oversize || http == 0) {
-        onTransportFailure(oversize ? tr("Response too large") : reply->errorString(), request);
+    // timed out, unresolvable, reset, or aborted for size or time. A transfer
+    // that broke after the headers (reset or timeout mid-body) has a status of
+    // 200 but a network-level error, so that counts too. HTTP error statuses
+    // set a content/protocol error (201 and up) and are the device answering,
+    // not link loss.
+    const bool deadline = reply->property("rfkitDeadline").toBool();
+    const QNetworkReply::NetworkError netError = reply->error();
+    const bool brokeInTransit = netError != QNetworkReply::NoError
+        && netError < QNetworkReply::ContentAccessDenied;
+    if (oversize || deadline || http == 0 || brokeInTransit) {
+        onTransportFailure(oversize ? tr("Response too large")
+                           : deadline ? tr("Response took too long")
+                                      : reply->errorString(), request);
         return;
     }
 

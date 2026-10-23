@@ -380,9 +380,9 @@ The **RF-KIT Amplifier** applet:
 - The amplifier's own status text and, when it reports one, an error banner.
 - **OPERATE / STANDBY**. The label changes only when the amplifier confirms.
 - **ANT** buttons for the internal antennas (1–4). Antennas the amplifier
-  reports as disabled are dimmed, and the amplifier may refuse a change at
-  times (it answers 409). **EXT** shows that the amplifier lists an external
-  antenna and lights, with the switch port ("EXT 16") when the amplifier gives
+  reports as disabled, or does not list, are dimmed (hover for the reason), and the amplifier may refuse a change at
+  times (it answers 409). **EXT** is dimmed unless the amplifier lists an external
+  antenna, and lights, with the switch port ("EXT 16") when the amplifier gives
   one, while the external antenna is in use. It is an indicator only: the
   external antenna cannot be selected from AetherSDR.
 - **RESET ERR**, which asks for confirmation and then clears the amplifier's

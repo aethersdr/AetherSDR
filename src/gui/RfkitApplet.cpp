@@ -198,6 +198,14 @@ RfkitApplet::RfkitApplet(QWidget* parent)
                             this, kSwrGaugeYellow);
     m_swrGauge->setAccessibleName(tr("SWR"));
     m_swrGauge->setCautionColor(theme.color(this, QStringLiteral("color.accent.warning")));
+    // The caution colour is a paint-code colour, so the theme does not repaint it
+    // for us: follow a theme change, or a custom theme would go stale until restart.
+    connect(&AetherSDR::ThemeManager::instance(), &AetherSDR::ThemeManager::themeChanged, this, [this]() {
+        const QColor caution = AetherSDR::ThemeManager::instance().color(
+            this, QStringLiteral("color.accent.warning"));
+        m_refGauge->setCautionColor(caution);
+        m_swrGauge->setCautionColor(caution);
+    });
     auto* swrRow = new QHBoxLayout;
     swrRow->setSpacing(4);
     swrRow->addWidget(m_swrLabel);
@@ -348,7 +356,6 @@ RfkitApplet::RfkitApplet(QWidget* parent)
         tr("Shows whether the amplifier's external antenna is in use. It cannot be selected "
            "from AetherSDR."));
     theme.applyStyleSheet(m_extAntBtn, antBtnStyle);
-    m_extAntBtn->hide();
     antRow->addWidget(m_extAntBtn);
     antRow->addStretch();
     vbox->addLayout(antRow);
@@ -453,10 +460,11 @@ void RfkitApplet::refreshAntennas()
         QPushButton* btn = m_antBtns.at(i);
         const int number = Rfkit::kMinInternalAntenna + i;
         const auto* item = find(Rfkit::AntennaType::Internal, number);
-        // Until the list arrives, show every button (disabled); once it has,
-        // show only the antennas the device actually has.
-        btn->setVisible(!listKnown || item != nullptr);
+        // Every button stays visible; one the amplifier does not list (or that
+        // it has not listed yet) is dimmed, with the reason on hover.
         btn->setEnabled(m_connected && item && item->state != Rfkit::AntennaState::Disabled);
+        btn->setToolTip(item ? QString()
+                        : listKnown ? tr("Not reported by the amplifier") : tr("Waiting for the amplifier's antenna list"));
         const bool active = m_connected && item && item->state == Rfkit::AntennaState::Active;
         setBtnState(btn, active ? QStringLiteral("active") : QString());
     }
@@ -472,7 +480,11 @@ void RfkitApplet::refreshAntennas()
         }
     }
     const bool extActive = m_connected && ext && ext->state == Rfkit::AntennaState::Active;
-    m_extAntBtn->setVisible(ext != nullptr);
+    // Always shown; dimmed with a reason when the amplifier does not list it.
+    m_extAntBtn->setEnabled(m_connected && ext != nullptr);
+    m_extAntBtn->setToolTip(ext ? QString()
+                            : listKnown ? tr("Not reported by the amplifier")
+                                        : tr("Waiting for the amplifier's antenna list"));
     m_extAntBtn->setText(extActive && ext->externalPort > 0
                              ? QStringLiteral("EXT %1").arg(ext->externalPort)
                              : QStringLiteral("EXT"));

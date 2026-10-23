@@ -118,6 +118,7 @@ public:
     QMap<QString, QByteArray> bodies;  // last body per "METHOD /path"
     int maxOutstanding{0};
     int replyDelayMs{15};
+    bool truncateReplies{false};  // promise more body than is sent, then hang up
 
 private:
     void onReadyRead(QTcpSocket* socket)
@@ -150,10 +151,14 @@ private:
             QTimer::singleShot(replyDelayMs, this, [this, guard, reply]() {
                 --m_outstanding;
                 if (!guard) { return; }
+                const qsizetype promised = reply.body.size() + (truncateReplies ? 64 : 0);
                 QByteArray out = "HTTP/1.1 " + QByteArray::number(reply.status) + " X\r\n"
                     "Content-Type: application/json\r\nContent-Length: "
-                    + QByteArray::number(reply.body.size()) + "\r\n\r\n" + reply.body;
+                    + QByteArray::number(promised) + "\r\n\r\n" + reply.body;
                 guard->write(out);
+                if (truncateReplies) {
+                    guard->disconnectFromHost();
+                }
             });
         }
     }
@@ -299,6 +304,22 @@ int main(int argc, char** argv)
                spin([&] { return amp.count("PUT /antennas/active") == 2; }));
         report("the last antenna clicked is the last one sent",
                amp.bodies.value("PUT /antennas/active") == QByteArray(R"({"type":"INTERNAL","number":3})"));
+        conn.disconnect();
+    }
+
+    // ── A link that keeps dying mid-body is declared lost ─────────────────
+    {
+        StubAmp amp;
+        RfkitConnection conn;
+        QSignalSpy connectedSpy(&conn, &RfkitConnection::connected);
+        QSignalSpy disconnectedSpy(&conn, &RfkitConnection::disconnected);
+        conn.connectNetwork(QStringLiteral("127.0.0.1"), amp.port());
+        spin([&] { return connectedSpy.count() > 0; });
+        spinFor(300);
+
+        amp.truncateReplies = true;  // 200 OK headers, then the transfer breaks
+        report("replies that break after the headers count as link loss",
+               spin([&] { return disconnectedSpy.count() > 0; }, 8000));
         conn.disconnect();
     }
 
