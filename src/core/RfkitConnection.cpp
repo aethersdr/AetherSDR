@@ -319,12 +319,13 @@ bool RfkitConnection::applyReply(const Request& request, const QByteArray& body)
         return false;
     }
     if (request.method == Request::Method::Put && p == QLatin1String(Rfkit::kPathAntennaActive)) {
+        // The reply names only the new active antenna; the per-antenna states
+        // come from the list. Re-read it whatever the reply looks like: a 2xx
+        // means the switch was accepted, and the highlight must follow it.
+        enqueue(Request{Request::Method::Get, path(Rfkit::kPathAntennas), {}, false, false});
         if (!Rfkit::parseAntenna(body)) {
             return malformed();
         }
-        // The reply names only the new active antenna; the per-antenna states
-        // come from the list.
-        enqueue(Request{Request::Method::Get, path(Rfkit::kPathAntennas), {}, false, false});
         return false;
     }
 

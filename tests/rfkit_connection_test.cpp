@@ -13,6 +13,8 @@
 #include <QCoreApplication>
 #include <QDeadlineTimer>
 #include <QHostAddress>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMap>
 #include <QPointer>
 #include <QSignalSpy>
@@ -45,6 +47,13 @@ bool spin(std::function<bool()> done, int timeoutMs = 5000)
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
     }
     return done();
+}
+
+// A request body as the amp would read it. QJsonObject writes its keys sorted,
+// so compare by value rather than by byte order.
+QJsonObject jsonBody(const QByteArray& body)
+{
+    return QJsonDocument::fromJson(body).object();
 }
 
 void spinFor(int ms)
@@ -258,7 +267,8 @@ int main(int argc, char** argv)
         report("selectAntenna sends PUT /antennas/active",
                spin([&] { return amp.count("PUT /antennas/active") == 1; }));
         report("the antenna body is exact",
-               amp.bodies.value("PUT /antennas/active") == QByteArray(R"({"type":"INTERNAL","number":2})"));
+               jsonBody(amp.bodies.value("PUT /antennas/active"))
+                   == QJsonObject{{QStringLiteral("type"), QStringLiteral("INTERNAL")}, {QStringLiteral("number"), 2}});
         report("an antenna change re-reads the antenna list",
                spin([&] { return amp.count("GET /antennas") > antennaReads; }));
 
@@ -303,7 +313,38 @@ int main(int argc, char** argv)
         report("two queued antenna commands both reach the wire",
                spin([&] { return amp.count("PUT /antennas/active") == 2; }));
         report("the last antenna clicked is the last one sent",
-               amp.bodies.value("PUT /antennas/active") == QByteArray(R"({"type":"INTERNAL","number":3})"));
+               jsonBody(amp.bodies.value("PUT /antennas/active"))
+                   == QJsonObject{{QStringLiteral("type"), QStringLiteral("INTERNAL")}, {QStringLiteral("number"), 3}});
+        conn.disconnect();
+    }
+
+    // ── An accepted switch re-reads the list even if its reply won't parse ──
+    {
+        StubAmp amp;
+        amp.routes["PUT /antennas/active"] = {200, R"({"status":"ok"})"};
+        RfkitConnection conn;
+        QSignalSpy connectedSpy(&conn, &RfkitConnection::connected);
+        conn.connectNetwork(QStringLiteral("127.0.0.1"), amp.port());
+        spin([&] { return connectedSpy.count() > 0; });
+        spinFor(300);
+
+        // With the re-read queued, GET /antennas is among the next four
+        // requests: the PUT can only sit ahead of the rest of one poll round.
+        // Without it, that happens only when the slow-poll rotation lands on
+        // /antennas, so four clicks a round or more apart cannot all pass by luck.
+        bool everyClickReread = true;
+        for (int click = 0; click < 4; ++click) {
+            const int puts = amp.count("PUT /antennas/active");
+            conn.selectAntenna({Rfkit::AntennaType::Internal, 2});
+            spin([&] { return amp.count("PUT /antennas/active") > puts; });
+            const qsizetype at = amp.requests.lastIndexOf(QStringLiteral("PUT /antennas/active"));
+            spin([&] { return amp.requests.size() > at + 4; });
+            everyClickReread = everyClickReread
+                && amp.requests.mid(at + 1, 4).contains(QStringLiteral("GET /antennas"));
+            spinFor(60 * (click + 1));
+        }
+        report("an accepted antenna switch re-reads the list even when its reply is unparseable",
+               everyClickReread);
         conn.disconnect();
     }
 
@@ -454,6 +495,9 @@ int main(int argc, char** argv)
         report("disconnect() emits disconnected() itself", disconnectedSpy.count() == 1);
         report("the connection reports itself down", !conn.isConnected());
 
+        // A request already written before the disconnect can still be read by
+        // the stub afterwards; let it land before counting.
+        spinFor(300);
         const int before = amp.requests.size();
         conn.setOperate(true);
         conn.resetError();

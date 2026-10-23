@@ -662,11 +662,14 @@ void closeSaverForNetworkField(PeripheralDeviceUi* ui, QVector<std::function<voi
         }
         // The user cleared a previously-saved IP. If still connected (e.g.
         // auto-connect ran at startup), disconnect first so downstream
-        // visibility handlers see the cleared settings.
+        // visibility handlers see the cleared settings. A reconnect loop still
+        // aimed at the cleared address is stopped too, or it would keep
+        // dialing it until restart.
         settings.remove(ui->ipKey);
         settings.remove(ui->portKey);
         settings.save();
-        if (ui->isConnected()) {
+        if (ui->isConnected()
+            || (ui->description && ui->description().startsWith(savedIp + ":"))) {
             ui->disconnectNow();
         }
     });
@@ -686,11 +689,10 @@ void closeSaverForSettingsGroup(PeripheralDeviceUi* ui, QVector<std::function<vo
         }
         PeripheralSettings::clearDeviceField(ui->settingsGroup, "ManualIp");
         PeripheralSettings::clearDeviceField(ui->settingsGroup, "ManualPort");
-        // Only disconnect if the live connection is actually the network target
-        // being cleared; it may be connected over Serial, which this saved IP
-        // has nothing to do with.
-        if (ui->isConnected() && ui->description
-            && ui->description().startsWith(savedIp + ":")) {
+        // Only disconnect if the connection is actually the network target
+        // being cleared, whether connected or still retrying it; it may be on
+        // Serial, which this saved IP has nothing to do with.
+        if (ui->description && ui->description().startsWith(savedIp + ":")) {
             ui->disconnectNow();
         }
     });
@@ -1340,7 +1342,9 @@ void RadioSetupDialog::buildVkampDevice(PeripheralDeviceUi& ui, QWidget* stackPa
         }
         PeripheralSettings::clearDeviceField("Vkamp", "ManualIp");
         PeripheralSettings::clearDeviceField("Vkamp", "ManualPort");
-        if (u->isConnected() && u->description().startsWith(savedIp + ":")) {
+        // Connected or still retrying: a reconnect loop aimed at the cleared
+        // address would otherwise keep dialing it until restart.
+        if (u->description().startsWith(savedIp + ":")) {
             u->disconnectNow();
         }
     });
@@ -1631,7 +1635,9 @@ void RadioSetupDialog::buildRfkitDevice(PeripheralDeviceUi& ui, QWidget* stackPa
         }
         PeripheralSettings::clearDeviceField("Rfkit", "ManualIp");
         PeripheralSettings::clearDeviceField("Rfkit", "ManualPort");
-        if (u->isConnected() && u->description().startsWith(savedIp + ":")) {
+        // Connected or still retrying: a reconnect loop aimed at the cleared
+        // address would otherwise keep dialing it until restart.
+        if (u->description().startsWith(savedIp + ":")) {
             u->disconnectNow();
         }
     });
@@ -1694,7 +1700,9 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
         }
         PeripheralSettings::clearDeviceField("Kpa1500", "ManualIp");
         PeripheralSettings::clearDeviceField("Kpa1500", "ManualPort");
-        if (u->isConnected() && u->description().startsWith(savedIp + ":")) {
+        // Connected or still retrying: a reconnect loop aimed at the cleared
+        // address would otherwise keep dialing it until restart.
+        if (u->description().startsWith(savedIp + ":")) {
             u->disconnectNow();
         }
     });
@@ -1806,6 +1814,12 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         ui->authDevice = PeripheralAuthStore::Device::Tgxl;
         ui->isConnected = [this]() { return m_tgxl->isConnected(); };
         ui->isConnecting = [this]() { return m_tgxl->isConnecting(); };
+        // The target reconnects aim at, so clearing its address can stop them.
+        ui->description = [this]() {
+            const QString host = m_tgxl->reconnectHost();
+            return host.isEmpty() ? QString()
+                                  : QStringLiteral("%1:%2").arg(host).arg(m_tgxl->reconnectPort());
+        };
         ui->hasRadioRelay = [this]() {
             return m_model->isConnected() && !m_model->tunerModel().handle().isEmpty();
         };
@@ -1845,6 +1859,12 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         ui->authDevice = PeripheralAuthStore::Device::Pgxl;
         ui->isConnected = [this]() { return m_pgxl->isConnected(); };
         ui->isConnecting = [this]() { return m_pgxl->isConnecting(); };
+        // The target reconnects aim at, so clearing its address can stop them.
+        ui->description = [this]() {
+            const QString host = m_pgxl->reconnectHost();
+            return host.isEmpty() ? QString()
+                                  : QStringLiteral("%1:%2").arg(host).arg(m_pgxl->reconnectPort());
+        };
         ui->hasRadioRelay = [this]() {
             return m_model->isConnected() && !m_model->amplifier().handle().isEmpty();
         };

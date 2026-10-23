@@ -46,6 +46,7 @@ private:
     void updateValueLabels();
     void refreshControls();
     void refreshAntennas();
+    QString extIndicatorDescription() const;
     // Colour the reflected-power bar by SWR: orange past 1.5:1, red past 2:1.
     void updateReflectedZones(float forwardWatts);
 
@@ -73,12 +74,12 @@ private:
     QLabel* m_faultLabel{nullptr};
 
     QPushButton* m_operateBtn{nullptr};
-    QPushButton* m_tunerBtn{nullptr};  // read-only tuner on/off indicator
+    QLabel* m_tunerIndicator{nullptr};  // read-only tuner on/off indicator
     QPushButton* m_resetErrorBtn{nullptr};
-    // One button per internal antenna (the API allows 1-4), plus one for the
-    // amplifier's single external selection.
+    // One button per internal antenna (the API allows 1-4), plus a read-only
+    // indicator for the amplifier's single external selection.
     QVector<QPushButton*> m_antBtns;
-    QPushButton* m_extAntBtn{nullptr};
+    QLabel* m_extIndicator{nullptr};  // read-only external-antenna indicator
 
     QTimer m_labelTimer;
 

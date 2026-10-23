@@ -317,6 +317,18 @@ public:
         update();
     }
 
+    // Move only the yellow/red zone starts on an unchanged axis. Unlike
+    // setRange() this leaves the smoother alone, so a caller that tracks the
+    // zones to a live reading (RF-KIT's SWR zones follow forward power) does
+    // not snap the bar several times a second.
+    void setZones(float redStart, float yellowStart) {
+        if (redStart == m_redStart && yellowStart == m_yellowStart) return;
+        m_redStart = redStart;
+        m_yellowStart = yellowStart;
+        publishAutomationState();
+        update();
+    }
+
     // Opt-in hover popup showing the numeric value, reusing the DragValuePopup
     // badge; lingers briefly after leave (#3936). Only one badge app-wide:
     // showHoverPopup() closes the previous gauge's badge, since each gauge owns

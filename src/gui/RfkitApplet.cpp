@@ -79,38 +79,42 @@ QLabel* makeValueLabel(QWidget* parent)
 // One named [rkState="..."] QSS variant, combined with neutralBtnStyle() into
 // a single template applied ONCE per button — state changes then just toggle
 // the dynamic property and repolish, instead of re-running applyStyleSheet()
-// on every transition. Same pattern as VkampApplet/Kpa1500Applet.
+// on every transition. Same pattern as VkampApplet/Kpa1500Applet. `widget` is
+// the QSS type selector: the read-only indicators are QLabels styled to match
+// the buttons beside them.
 QString activeStateStyle(const QString& state, const QString& bg,
-                         const QString& border, const QString& fg)
+                         const QString& border, const QString& fg,
+                         const QString& widget = QStringLiteral("QPushButton"))
 {
     return QStringLiteral(
-        "QPushButton[rkState=\"%1\"] { background: %2; border: 2px solid %3; border-radius: 4px; "
+        "%5[rkState=\"%1\"] { background: %2; border: 2px solid %3; border-radius: 4px; "
         "color: %4; font-size: 10px; font-weight: bold; } "
-        "QPushButton[rkState=\"%1\"]:hover { background: %2; border: 2px solid %3; } "
-        "QPushButton[rkState=\"%1\"]:pressed { background: %2; border: 2px solid %3; }")
-        .arg(state, bg, border, fg);
+        "%5[rkState=\"%1\"]:hover { background: %2; border: 2px solid %3; } "
+        "%5[rkState=\"%1\"]:pressed { background: %2; border: 2px solid %3; }")
+        .arg(state, bg, border, fg, widget);
 }
 
-QString neutralBtnStyle()
+QString neutralBtnStyle(const QString& widget = QStringLiteral("QPushButton"))
 {
     return QStringLiteral(
-        "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+        "%1 { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-        "QPushButton:hover { background: {{color.background.1}}; }"
-        "QPushButton:disabled { background: {{color.background.0}}; border: 1px solid {{color.border.subtle}}; "
-        "color: {{color.text.disabled}}; }");
+        "%1:hover { background: {{color.background.1}}; }"
+        "%1:disabled { background: {{color.background.0}}; border: 1px solid {{color.border.subtle}}; "
+        "color: {{color.text.disabled}}; }").arg(widget);
 }
 
-QString makeStateBtnStyle(std::initializer_list<QString> stateVariants)
+QString makeStateBtnStyle(std::initializer_list<QString> stateVariants,
+                          const QString& widget = QStringLiteral("QPushButton"))
 {
-    QString sheet = neutralBtnStyle();
+    QString sheet = neutralBtnStyle(widget);
     for (const auto& variant : stateVariants) {
         sheet += variant;
     }
     return sheet;
 }
 
-void setBtnState(QPushButton* btn, const QString& state)
+void setBtnState(QWidget* btn, const QString& state)
 {
     if (btn->property("rkState").toString() == state) { return; }
     btn->setProperty("rkState", state);
@@ -123,6 +127,32 @@ QPushButton* makeSmallButton(const QString& text, QWidget* parent)
     auto* btn = new QPushButton(text, parent);
     btn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     return btn;
+}
+
+// A read-only indicator (tuner, external antenna): a QLabel, so an AT reads it
+// as text rather than offering a press that does nothing. It takes the height of
+// the button row it sits in, so it matches the buttons beside it.
+QLabel* makeIndicator(const QString& text, QWidget* parent)
+{
+    auto* lbl = new QLabel(text, parent);
+    lbl->setAlignment(Qt::AlignCenter);
+    lbl->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
+    lbl->setContentsMargins(6, 0, 6, 0);
+    return lbl;
+}
+
+// Set an accessible name and announce it, only when it actually changed: the
+// callers run on every status update, and docs/a11y.md asks for settled values.
+void setAnnouncedName(QWidget* widget, const QString& name)
+{
+    if (widget->accessibleName() == name) {
+        return;
+    }
+    widget->setAccessibleName(name);
+    if (QAccessible::isActive()) {
+        QAccessibleEvent event(widget, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
 }
 
 const QString& telemetryLabelStyle()
@@ -281,18 +311,20 @@ RfkitApplet::RfkitApplet(QWidget* parent)
 
     // Read-only indicator: the API has no tuner control, so this shows the
     // device's reported tuner mode and cannot be pressed.
-    m_tunerBtn = makeSmallButton(QStringLiteral("TUNER —"), this);
-    m_tunerBtn->setFocusPolicy(Qt::NoFocus);
-    m_tunerBtn->setAttribute(Qt::WA_TransparentForMouseEvents);
-    m_tunerBtn->setAccessibleName(tr("Tuner state"));
-    theme.applyStyleSheet(m_tunerBtn, makeStateBtnStyle({
+    const QString indicator = QStringLiteral("QLabel");
+    m_tunerIndicator = makeIndicator(QStringLiteral("TUNER —"), this);
+    m_tunerIndicator->setAccessibleName(tr("Tuner state unknown"));
+    m_tunerIndicator->setAccessibleDescription(
+        tr("Shows whether the amplifier's tuner is in the signal path. It cannot be changed "
+           "from AetherSDR."));
+    theme.applyStyleSheet(m_tunerIndicator, makeStateBtnStyle({
         activeStateStyle(QStringLiteral("tuner"), QStringLiteral("{{color.background.0}}"),
                          QStringLiteral("{{color.accent.success}}"),
-                         QStringLiteral("{{color.accent.success}}")),
+                         QStringLiteral("{{color.accent.success}}"), indicator),
         activeStateStyle(QStringLiteral("tunerOff"), QStringLiteral("{{color.background.0}}"),
                          QStringLiteral("{{color.accent.danger}}"),
-                         QStringLiteral("{{color.accent.danger}}")),
-    }));
+                         QStringLiteral("{{color.accent.danger}}"), indicator),
+    }, indicator));
 
     m_resetErrorBtn = makeSmallButton(QStringLiteral("RESET ERR"), this);
     m_resetErrorBtn->setAccessibleName(tr("Reset amplifier error"));
@@ -315,7 +347,7 @@ RfkitApplet::RfkitApplet(QWidget* parent)
     auto* ctrlRow = new QHBoxLayout;
     ctrlRow->setSpacing(6);
     ctrlRow->addWidget(m_operateBtn);
-    ctrlRow->addWidget(m_tunerBtn);
+    ctrlRow->addWidget(m_tunerIndicator);
     ctrlRow->addStretch();
     ctrlRow->addWidget(m_resetErrorBtn);
     vbox->addLayout(ctrlRow);
@@ -328,6 +360,11 @@ RfkitApplet::RfkitApplet(QWidget* parent)
                          QStringLiteral("{{color.accent}}"),
                          QStringLiteral("{{color.text.primary}}")),
     });
+    const QString extIndicatorStyle = makeStateBtnStyle({
+        activeStateStyle(QStringLiteral("active"), QStringLiteral("{{color.background.1}}"),
+                         QStringLiteral("{{color.accent}}"),
+                         QStringLiteral("{{color.text.primary}}"), indicator),
+    }, indicator);
     auto* antRow = new QHBoxLayout;
     antRow->setSpacing(6);
     antRow->addWidget(antLabel);
@@ -348,21 +385,17 @@ RfkitApplet::RfkitApplet(QWidget* parent)
     // The external antenna is shown, not selectable: nobody has yet seen what
     // the amplifier does with a request to switch to it, and it moves the RF
     // path. Same treatment as the tuner and the operational interface.
-    m_extAntBtn = makeSmallButton(QStringLiteral("EXT"), this);
-    m_extAntBtn->setFocusPolicy(Qt::NoFocus);
-    m_extAntBtn->setAttribute(Qt::WA_TransparentForMouseEvents);
-    m_extAntBtn->setAccessibleName(tr("External antenna"));
-    m_extAntBtn->setAccessibleDescription(
-        tr("Shows whether the amplifier's external antenna is in use. It cannot be selected "
-           "from AetherSDR."));
-    theme.applyStyleSheet(m_extAntBtn, antBtnStyle);
-    antRow->addWidget(m_extAntBtn);
+    m_extIndicator = makeIndicator(QStringLiteral("EXT"), this);
+    m_extIndicator->setAccessibleName(tr("External antenna"));
+    m_extIndicator->setAccessibleDescription(extIndicatorDescription());
+    theme.applyStyleSheet(m_extIndicator, extIndicatorStyle);
+    antRow->addWidget(m_extIndicator);
     antRow->addStretch();
     vbox->addLayout(antRow);
 
     m_labelTimer.setInterval(kMeterReadoutUpdateMs);
     connect(&m_labelTimer, &QTimer::timeout, this, &RfkitApplet::updateValueLabels);
-    m_labelTimer.start();
+    // Started by setConnected(true): with no amplifier there is nothing to show.
 
     setConnected(false);
 }
@@ -379,7 +412,7 @@ void RfkitApplet::updateReflectedZones(float forwardWatts)
     }
     m_refRedW = red;
     m_refYellowW = yellow;
-    m_refGauge->setRange(0.0f, refMax, red, evenTicks(refMax), yellow);
+    m_refGauge->setZones(red, yellow);
 }
 
 void RfkitApplet::setStatus(const Rfkit::Status& status)
@@ -426,15 +459,8 @@ void RfkitApplet::refreshControls()
     // The label is a STATE, not an action, so spell that out for an AT rather
     // than leaving it to infer a verb (docs/a11y.md §1). Announce a change
     // only when the name actually changed: this runs on every status update.
-    const QString a11yName = !known ? tr("Amplifier state unknown")
-                             : operate ? tr("Amplifier in operate") : tr("Amplifier in standby");
-    if (m_operateBtn->accessibleName() != a11yName) {
-        m_operateBtn->setAccessibleName(a11yName);
-        if (QAccessible::isActive()) {
-            QAccessibleEvent event(m_operateBtn, QAccessible::NameChanged);
-            QAccessible::updateAccessibility(&event);
-        }
-    }
+    setAnnouncedName(m_operateBtn, !known ? tr("Amplifier state unknown")
+                                   : operate ? tr("Amplifier in operate") : tr("Amplifier in standby"));
     // The m_connected guard is load-bearing, not cosmetic: a [rkState] rule and
     // QPushButton:disabled are equal CSS2 specificity and the variant is
     // appended last, so source order would paint a DISCONNECTED amp in
@@ -442,10 +468,24 @@ void RfkitApplet::refreshControls()
     setBtnState(m_operateBtn, operate && m_connected ? QStringLiteral("operate") : QString());
 }
 
+QString RfkitApplet::extIndicatorDescription() const
+{
+    return tr("Shows whether the amplifier's external antenna is in use. It cannot be selected "
+              "from AetherSDR.");
+}
+
 void RfkitApplet::refreshAntennas()
 {
     const bool listKnown = m_status.antennas.has_value();
     const QVector<Rfkit::AntennaWithState> list = m_status.antennas.value_or(QVector<Rfkit::AntennaWithState>());
+    // Why a port is dimmed, on hover; empty when it is not dimmed.
+    const auto dimReason = [this, listKnown](bool listed, bool disabled) -> QString {
+        if (!m_connected) { return tr("Not connected"); }
+        if (!listKnown) { return tr("Waiting for the amplifier's antenna list"); }
+        if (!listed) { return tr("Not reported by the amplifier"); }
+        if (disabled) { return tr("Disabled on the amplifier"); }
+        return QString();
+    };
 
     auto find = [&list](Rfkit::AntennaType type, int number) -> const Rfkit::AntennaWithState* {
         for (const auto& item : list) {
@@ -462,11 +502,16 @@ void RfkitApplet::refreshAntennas()
         const auto* item = find(Rfkit::AntennaType::Internal, number);
         // Every button stays visible; one the amplifier does not list (or that
         // it has not listed yet) is dimmed, with the reason on hover.
-        btn->setEnabled(m_connected && item && item->state != Rfkit::AntennaState::Disabled);
-        btn->setToolTip(item ? QString()
-                        : listKnown ? tr("Not reported by the amplifier") : tr("Waiting for the amplifier's antenna list"));
+        const bool disabled = item && item->state == Rfkit::AntennaState::Disabled;
+        btn->setEnabled(m_connected && item && !disabled);
+        // The reason goes on the accessible channel too: an AT never sees a tooltip.
+        const QString reason = dimReason(item != nullptr, disabled);
+        btn->setToolTip(reason);
+        btn->setAccessibleDescription(reason);
         const bool active = m_connected && item && item->state == Rfkit::AntennaState::Active;
         setBtnState(btn, active ? QStringLiteral("active") : QString());
+        // The highlight is colour only; say it for an AT too.
+        setAnnouncedName(btn, active ? tr("Antenna %1, in use").arg(number) : tr("Antenna %1").arg(number));
     }
 
     // Read-only external indicator: listed by the amplifier, lit while it
@@ -481,23 +526,31 @@ void RfkitApplet::refreshAntennas()
     }
     const bool extActive = m_connected && ext && ext->state == Rfkit::AntennaState::Active;
     // Always shown; dimmed with a reason when the amplifier does not list it.
-    m_extAntBtn->setEnabled(m_connected && ext != nullptr);
-    m_extAntBtn->setToolTip(ext ? QString()
-                            : listKnown ? tr("Not reported by the amplifier")
-                                        : tr("Waiting for the amplifier's antenna list"));
-    m_extAntBtn->setText(extActive && ext->externalPort > 0
+    m_extIndicator->setEnabled(m_connected && ext != nullptr);
+    const QString extReason = dimReason(ext != nullptr, false);
+    m_extIndicator->setToolTip(extReason);
+    m_extIndicator->setAccessibleDescription(extReason.isEmpty() ? extIndicatorDescription()
+                                             : extIndicatorDescription() + QLatin1Char(' ') + extReason);
+    m_extIndicator->setText(extActive && ext->externalPort > 0
                              ? QStringLiteral("EXT %1").arg(ext->externalPort)
                              : QStringLiteral("EXT"));
-    setBtnState(m_extAntBtn, extActive ? QStringLiteral("active") : QString());
+    setBtnState(m_extIndicator, extActive ? QStringLiteral("active") : QString());
+    setAnnouncedName(m_extIndicator, !extActive ? tr("External antenna, not in use")
+                     : ext->externalPort > 0 ? tr("External antenna, port %1, in use").arg(ext->externalPort)
+                                             : tr("External antenna, in use"));
 }
 
 void RfkitApplet::setConnected(bool connected)
 {
     m_connected = connected;
     m_resetErrorBtn->setEnabled(connected);
-    if (!connected) {
-        m_tunerBtn->setText(QStringLiteral("TUNER —"));
-        setBtnState(m_tunerBtn, QString());
+    if (connected) {
+        m_labelTimer.start();
+    } else {
+        m_labelTimer.stop();
+        m_tunerIndicator->setText(QStringLiteral("TUNER —"));
+        setAnnouncedName(m_tunerIndicator, tr("Tuner state unknown"));
+        setBtnState(m_tunerIndicator, QString());
     }
 
     m_statusPill->setText(connected ? QStringLiteral("CONNECTED") : QStringLiteral("—"));
@@ -600,16 +653,17 @@ void RfkitApplet::updateValueLabels()
         const bool enabled = t.mode == Rfkit::TunerMode::Manual
             || t.mode == Rfkit::TunerMode::Auto
             || t.mode == Rfkit::TunerMode::AutoTuning;
-        m_tunerBtn->setText(!known ? QStringLiteral("TUNER —")
+        m_tunerIndicator->setText(!known ? QStringLiteral("TUNER —")
                             : enabled ? QStringLiteral("TUNER ON") : QStringLiteral("TUNER OFF"));
-        m_tunerBtn->setAccessibleName(!known ? tr("Tuner state unknown")
-                                      : enabled ? tr("Tuner enabled") : tr("Tuner disabled"));
-        setBtnState(m_tunerBtn, !known || !m_connected ? QString()
+        setAnnouncedName(m_tunerIndicator, !known ? tr("Tuner state unknown")
+                                     : enabled ? tr("Tuner enabled") : tr("Tuner disabled"));
+        setBtnState(m_tunerIndicator, !known || !m_connected ? QString()
                     : enabled ? QStringLiteral("tuner") : QStringLiteral("tunerOff"));
     } else {
         m_tunerLabel->setText(QStringLiteral("TUNER  —"));
-        m_tunerBtn->setText(QStringLiteral("TUNER —"));
-        setBtnState(m_tunerBtn, QString());
+        m_tunerIndicator->setText(QStringLiteral("TUNER —"));
+        setAnnouncedName(m_tunerIndicator, tr("Tuner state unknown"));
+        setBtnState(m_tunerIndicator, QString());
     }
 }
 
