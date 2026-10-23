@@ -165,19 +165,22 @@ std::array<std::uint8_t, 1444> buildDdcSpecific(int ddc0RateKsps = 48, int numAd
 // Discovery value. The one-byte enable bitmap caps the format at 8.
 inline constexpr int kMaxDdcs = 4;
 
-// One DDC's slot in the DDC-Specific packet. `rateKsps` must be one of
+// One DDC's slot in the DDC-Specific packet. `ddc` names the slot, so a session
+// can run DDC2 without enabling DDC0 or DDC1. `rateKsps` must be one of
 // 48/96/192/384/768/1536 (p.24); `adcIndex` selects which ADC feeds it,
 // same meaning as buildDdcSpecific()'s ddc0AdcIndex above.
 struct DdcConfig {
+    int ddc = 0;
     int rateKsps = 48;
     int adcIndex = 0;
 };
 
-// Multi-DDC form: enables DDC 0..N-1 (N capped at kMaxDdcs; excess IGNORED),
-// setting byte-7 enable bits and one 6-byte row per DDC at 17 + 6*n (ADC select,
-// 2-byte rate, CIC1/CIC2 = 0 "for future use", sample size). An EMPTY span
-// disables all DDCs -- how a session stops streaming without teardown. The
-// single-DDC overload delegates here, so there is one row-layout implementation.
+// Multi-DDC form: each entry enables DDC `ddc` (byte-7 bit `ddc`) and fills its
+// 6-byte row at 17 + 6*ddc (ADC select, 2-byte rate, CIC1/CIC2 = 0 "for future
+// use", sample size). An entry whose `ddc` is outside 0..kMaxDdcs-1, or repeats
+// an earlier entry's, is IGNORED. An EMPTY span disables all DDCs -- how a session
+// stops streaming without teardown. The single-DDC overload delegates here, so
+// there is one row-layout implementation.
 std::array<std::uint8_t, 1444> buildDdcSpecific(std::span<const DdcConfig> ddcs,
                                                 int numAdcs = 2,
                                                 bool ditherEnabled = true,
