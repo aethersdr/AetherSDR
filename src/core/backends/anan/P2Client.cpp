@@ -471,7 +471,8 @@ void P2Client::sendRunningHighPriority()
 
 bool P2Client::setDdcRateLive(int ddcIndex, int rateKsps)
 {
-    if (!m_running || !m_socket)
+    // isEnabledDdc() range-checks ddcIndex, which indexes m_expectedSeq below.
+    if (!m_running || !m_socket || !isEnabledDdc(ddcIndex))
         return false;
     const auto slot = std::find_if(m_activeDdcs.begin(), m_activeDdcs.end(),
                                    [ddcIndex](const DdcConfig& ddc) { return ddc.ddc == ddcIndex; });
