@@ -6,7 +6,8 @@
 namespace AetherSDR {
 
 // The address as a unicast endpoint, IPv4 or IPv6, or a null address when it
-// cannot be one (null, unspecified, broadcast, multicast). An IPv4-mapped IPv6
+// cannot be one (null, unspecified, broadcast, multicast, or IPv6 link-local
+// with no scope, which names no interface to reach it on). An IPv4-mapped IPv6
 // address folds to plain IPv4, so one radio compares equal however a socket
 // reports it.
 inline QHostAddress usableUnicastAddress(const QHostAddress& address)
@@ -21,7 +22,8 @@ inline QHostAddress usableUnicastAddress(const QHostAddress& address)
         return plain.isMulticast() ? QHostAddress() : plain;
     }
     if (address.protocol() != QAbstractSocket::IPv6Protocol
-        || address == QHostAddress::AnyIPv6 || address.isMulticast()) {
+        || address == QHostAddress::AnyIPv6 || address.isMulticast()
+        || (address.isLinkLocal() && address.scopeId().isEmpty())) {
         return {};
     }
     return address;

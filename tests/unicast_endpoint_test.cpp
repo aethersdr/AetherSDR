@@ -34,6 +34,9 @@ int main()
     check(usableUnicastAddress(a("224.0.0.1")).isNull(), "IPv4 multicast is rejected");
     check(usableUnicastAddress(a("::ffff:224.0.0.1")).isNull(), "mapped IPv4 multicast is rejected");
     check(usableUnicastAddress(a("ff02::1")).isNull(), "IPv6 multicast is rejected");
+    check(usableUnicastAddress(a("fe80::1")).isNull(),
+          "IPv6 link-local with no scope names no interface and is rejected");
+    check(!usableUnicastAddress(a("fe80::1%1")).isNull(), "IPv6 link-local with a scope is kept");
 
     check(endpointText(a("192.168.50.254"), 4992) == QStringLiteral("192.168.50.254:4992"),
           "IPv4 endpoint is host:port");

@@ -19,12 +19,7 @@ namespace {
 
 bool isUsableUnicastIpv4(const QHostAddress& address)
 {
-    bool ok = false;
-    const quint32 v4 = address.toIPv4Address(&ok);
-    if (!ok) {
-        return false;
-    }
-    return v4 != 0 && v4 != 0xFFFFFFFFu && !address.isMulticast();
+    return usableUnicastAddress(address).protocol() == QAbstractSocket::IPv4Protocol;
 }
 
 QString endReasonText(ByteRelay::EndReason reason)
@@ -324,7 +319,7 @@ bool TcpByteProxy::start(const Config& config)
     }
 
     m_config = config;
-    m_config.listenAddress = QHostAddress(config.listenAddress.toIPv4Address());
+    m_config.listenAddress = usableUnicastAddress(config.listenAddress);
     m_config.upstreamAddress = usableUnicastAddress(config.upstreamAddress);
     m_lastSessionStats = {};
     m_rejectedClients = 0;
@@ -412,7 +407,7 @@ void TcpByteProxy::onNewConnection()
 
         ++m_generation;
         m_lastSessionStats = {};
-        m_peerDescription = endpointText(QHostAddress(socket->peerAddress().toIPv4Address()),
+        m_peerDescription = endpointText(usableUnicastAddress(socket->peerAddress()),
                                          socket->peerPort());
         QTcpSocket* upstream = m_socketFactory();
         m_session = new Session(this, m_generation, socket, upstream, m_tuning);

@@ -8104,6 +8104,26 @@ add_test(NAME connection_panel_size_test COMMAND connection_panel_size_test)
 set_tests_properties(connection_panel_size_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The VPN source-path picker keeps the operator's own pick across family
+# flips while the address is edited. Socket-free (reads the interface list);
+# exit 77 without an adapter carrying an IPv6 GUA and ULA.
+add_executable(connection_panel_source_pick_test
+    tests/connection_panel_source_pick_test.cpp
+    src/gui/ConnectionPanel.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(connection_panel_source_pick_test PRIVATE src tests)
+target_link_libraries(connection_panel_source_pick_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets
+)
+set_target_properties(connection_panel_source_pick_test PROPERTIES AUTOMOC ON)
+add_test(NAME connection_panel_source_pick_test COMMAND connection_panel_source_pick_test)
+set_tests_properties(connection_panel_source_pick_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" SKIP_RETURN_CODE 77)
+
 # Leaving minimal mode after a launch in it must not draw the spectrum's first
 # QRhi frame inside the exit's resize cascade (#5915; #4363, #4990). Plain
 # widgets, offscreen, no GPU; the MainWindow ordering is read from the source,

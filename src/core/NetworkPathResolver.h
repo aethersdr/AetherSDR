@@ -29,15 +29,19 @@ public:
     static NetworkPathCandidate resolveExplicitSelection(const QString& interfaceId,
                                                          const QString& interfaceName,
                                                          const QHostAddress& lastSuccessfulAddress,
-                                                         Family family = QAbstractSocket::IPv4Protocol);
+                                                         Family family = QAbstractSocket::IPv4Protocol,
+                                                         const QHostAddress& target = {});
     // The candidate a saved selection names, or -1: the exact saved address
     // on the saved interface, else the interface by id, then by name, else the
     // exact address on any interface. An IPv6 interface usually carries both a
-    // GUA and a ULA, so the exact address must win over "first on the interface".
+    // GUA and a ULA, so the exact address must win over "first on the interface";
+    // without it, the interface's address sharing the longest prefix with
+    // `target` wins (RFC 6724 rule 8), so a ULA radio gets the ULA source.
     static qsizetype matchSelection(const QList<NetworkPathCandidate>& candidates,
                                     const QString& interfaceId,
                                     const QString& interfaceName,
-                                    const QHostAddress& lastSuccessfulAddress);
+                                    const QHostAddress& lastSuccessfulAddress,
+                                    const QHostAddress& target = {});
     static NetworkPathCandidate autoCandidate();
     static bool isUsableIpv4(const QHostAddress& address);
     static bool isUsableSourceAddress(const QHostAddress& address);

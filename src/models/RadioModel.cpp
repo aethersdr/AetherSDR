@@ -717,8 +717,7 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
     // The probe's winning local address is transport metadata, not a family
     // parameter. Keep it neutral so each backend can use the route without
     // adding a family-string branch above the backend seam.
-    if (!sessionBindAddress.isNull())
-        req.localBindAddress = sessionBindAddress;
+    req.localBindAddress = usableUnicastAddress(sessionBindAddress);
 
     // The DDC0 rate and the front-end options are preferences the operator sets
     // in Radio Setup's "ANAN Front End" page. READ FROM AnanSettings, NOT FROM
@@ -9115,6 +9114,7 @@ QString RadioModel::selectedSourcePath() const
     QHostAddress resolved = m_lastInfo.sessionBindAddress;
     if (resolved.isNull() && m_connection)
         resolved = m_connection->localAddress();
+    resolved = usableUnicastAddress(resolved);
     if (!resolved.isNull())
         return QStringLiteral("Auto (%1)").arg(resolved.toString());
     return QStringLiteral("Auto");
