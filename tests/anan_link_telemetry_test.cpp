@@ -16,10 +16,15 @@
 //   * start() resets the session, so a reconnect does not inherit totals.
 //   * Each Status packet's supply-rail count is emitted raw, once; AnanBackend
 //     averages it (anan_backend_test).
+//   * The session runs RX1 on DDC2 with DDC0 and DDC1 off, the layout the
+//     reference clients use on a Saturn board (AnanReceiverRoutes.h): the
+//     DDC-Specific row and enable bit, the High Priority phase word, the band
+//     filters and a live rate change all key on DDC2, and DDC0's port is not
+//     the session's. Read from the packets the client builds, not captured.
 //
-// The last block BINDS A UDP SOCKET (AnyIPv4, ephemeral port) and sends the
-// startup sequence to 127.0.0.1; nothing listens and no radio is involved. It
-// skips (exit 77) when it cannot bind, unless an earlier check already failed.
+// The last two blocks BIND A UDP SOCKET (AnyIPv4, ephemeral port) and send the
+// startup sequence to 127.0.0.1; nothing listens and no radio is involved. They
+// skip (exit 77) when they cannot bind, unless an earlier check already failed.
 
 #include "core/backends/anan/P2Client.h"
 #include "core/backends/anan/P2Protocol.h"
@@ -28,6 +33,8 @@
 #include <QHostAddress>
 #include <QSignalSpy>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <span>
@@ -65,8 +72,31 @@ struct P2ClientTestAccess {
     static quint64 rxBytes(const P2Client& c) { return c.m_rxBytes; }
     static quint64 rxPackets(const P2Client& c) { return c.m_rxPackets; }
     static quint64 txBytes(const P2Client& c) { return c.m_txBytes; }
+    static std::array<std::uint8_t, 1444> ddcSpecific(const P2Client& c)
+    {
+        return c.ddcSpecificPacket();
+    }
+    static std::array<std::uint8_t, 1444> highPriority(const P2Client& c)
+    {
+        return c.runningHighPriorityPacket();
+    }
 };
 }  // namespace AetherSDR::anan
+
+// RX1's IQ arrives from DDC2's port. Spelled out rather than taken from
+// kRx1Route, so a change to the layout fails here instead of following it.
+static constexpr quint16 kRx1Port = kDdc0DefaultPort + 2;
+
+static std::uint32_t readU32(const std::array<std::uint8_t, 1444>& p, std::size_t at)
+{
+    return static_cast<std::uint32_t>(p[at]) << 24 | static_cast<std::uint32_t>(p[at + 1]) << 16
+         | static_cast<std::uint32_t>(p[at + 2]) << 8 | p[at + 3];
+}
+
+static std::uint16_t readU16(const std::array<std::uint8_t, 1444>& p, std::size_t at)
+{
+    return static_cast<std::uint16_t>(p[at] << 8 | p[at + 1]);
+}
 
 static P2Client::Params loopbackParams()
 {
@@ -139,11 +169,18 @@ int main(int argc, char** argv)
         check(P2ClientTestAccess::rxPackets(client) == 0,
               "...and not as a packet: drops are never counted for that port");
 
-        // The positive case: DDC0's own port.
-        const auto ddc0 = ddcFrame(1);
-        P2ClientTestAccess::feedDatagram(client, ddc0, kDdc0DefaultPort);
+        // DDC0's port is no longer the session's: RX1 runs on DDC2.
+        const quint64 beforeDdc0 = P2ClientTestAccess::rxBytes(client);
+        P2ClientTestAccess::feedDatagram(client, ddcFrame(3), kDdc0DefaultPort);
+        check(P2ClientTestAccess::rxBytes(client) == beforeDdc0 + ddcFrame(3).size()
+                  && P2ClientTestAccess::rxPackets(client) == 0,
+              "a frame from DDC0's port counts as bytes, not as a packet: DDC0 is off");
+
+        // The positive case: RX1's port.
+        const auto rx1 = ddcFrame(1);
+        P2ClientTestAccess::feedDatagram(client, rx1, kRx1Port);
         check(P2ClientTestAccess::rxPackets(client) == 1,
-              "a DDC0 frame from the session's own port is one packet");
+              "a frame from RX1's port, DDC2's, is one packet");
 
         check(client.droppedPackets() == 0,
               "...and none of those is a sequence drop -- the two counters are"
@@ -158,13 +195,13 @@ int main(int argc, char** argv)
         const auto frame = ddcFrame(1);
 
         P2ClientTestAccess::feedFrom(client, QHostAddress(QStringLiteral("192.0.2.99")),
-                                     frame, kDdc0DefaultPort);
+                                     frame, kRx1Port);
         check(P2ClientTestAccess::rxBytes(client) == 0
                   && P2ClientTestAccess::rxPackets(client) == 0,
               "a DDC frame from another LAN host counts toward nothing, so it"
               " cannot hold the link alive after the radio has gone");
 
-        P2ClientTestAccess::feedFrom(client, radio, frame, kDdc0DefaultPort);
+        P2ClientTestAccess::feedFrom(client, radio, frame, kRx1Port);
         check(P2ClientTestAccess::rxBytes(client) == frame.size()
                   && P2ClientTestAccess::rxPackets(client) == 1,
               "the same frame from the radio's address counts");
@@ -173,7 +210,7 @@ int main(int argc, char** argv)
         // in v4-mapped form; the comparison must not drop it then either.
         P2ClientTestAccess::feedFrom(client,
                                      QHostAddress(QStringLiteral("::ffff:192.0.2.10")),
-                                     ddcFrame(2), kDdc0DefaultPort);
+                                     ddcFrame(2), kRx1Port);
         check(P2ClientTestAccess::rxPackets(client) == 2,
               "the radio's address in v4-mapped form is still the radio");
     }
@@ -183,8 +220,8 @@ int main(int argc, char** argv)
         P2Client client;
         std::vector<std::uint8_t> status(kHighPriorityStatusBytes, 0);
         P2ClientTestAccess::feedDatagram(client, status, 1025);
-        const auto ddc0 = ddcFrame(1);
-        P2ClientTestAccess::feedDatagram(client, ddc0, kDdc0DefaultPort);
+        const auto rx1 = ddcFrame(1);
+        P2ClientTestAccess::feedDatagram(client, rx1, kRx1Port);
 
         QSignalSpy snapshots(&client, &P2Client::linkCountersUpdated);
         P2ClientTestAccess::publish(client);
@@ -193,7 +230,7 @@ int main(int argc, char** argv)
             const auto counters =
                 snapshots.at(0).at(0).value<P2Client::LinkCounters>();
             check(counters.rxPackets == 1
-                      && counters.rxBytes == kHighPriorityStatusBytes + ddc0.size(),
+                      && counters.rxBytes == kHighPriorityStatusBytes + rx1.size(),
                   "the snapshot carries the receive counters as the client has"
                   " them");
             check(counters.drops == 0, "and the drop total alongside them");
@@ -209,7 +246,7 @@ int main(int argc, char** argv)
         P2ClientTestAccess::feedDatagram(client, status, 1025);
         check(rail.count() == 1 && rail.at(0).at(0).toInt() == 536,
               "a Status packet hands on its supply-rail count, unsmoothed, once");
-        P2ClientTestAccess::feedDatagram(client, ddcFrame(1), kDdc0DefaultPort);
+        P2ClientTestAccess::feedDatagram(client, ddcFrame(1), kRx1Port);
         check(rail.count() == 1, "a DDC frame carries no rail reading");
     }
 
@@ -220,7 +257,7 @@ int main(int argc, char** argv)
         // Traffic from a PREVIOUS notional session, which must not survive.
         std::vector<std::uint8_t> status(kHighPriorityStatusBytes, 0);
         P2ClientTestAccess::feedDatagram(client, status, 1025);
-        P2ClientTestAccess::feedDatagram(client, ddcFrame(1), kDdc0DefaultPort);
+        P2ClientTestAccess::feedDatagram(client, ddcFrame(1), kRx1Port);
         check(P2ClientTestAccess::rxBytes(client) > 0
                   && P2ClientTestAccess::rxPackets(client) > 0,
               "pre-start traffic counted");
@@ -254,6 +291,51 @@ int main(int argc, char** argv)
         }();
         check(endpoint.contains(QLatin1Char(':')),
               "a running client reports its bound local endpoint as \"ip:port\"");
+
+        client.stop();
+    }
+
+    // ---- the session runs RX1 on DDC2, with DDC0 and DDC1 off ----
+    {
+        P2Client client;
+        P2Client::Params params = loopbackParams();
+        params.rx1RateKsps = 192;
+        params.rx1AdcIndex = 1;
+        params.bandFiltersEnabled = true;
+        if (!client.start(params)) {
+            std::fprintf(stderr,
+                         "anan_link_telemetry_test: SKIP -- client could not bind"
+                         " a local UDP socket\n");
+            return g_failures == 0 ? 77 : 1;
+        }
+
+        const auto ddcSpecific = P2ClientTestAccess::ddcSpecific(client);
+        check(ddcSpecific[7] == 0x04, "DDC-Specific enables DDC2 alone (byte7 = 0x04)");
+        check(ddcSpecific[29] == 1
+                  && (static_cast<int>(ddcSpecific[30]) << 8 | ddcSpecific[31]) == 192,
+              "RX1's row is DDC2's (bytes 29-31): ADC1 at 192 ksps");
+        bool lowRowsZero = true;
+        for (std::size_t i = 17; i < 29; ++i)
+            if (ddcSpecific[i] != 0) { lowRowsZero = false; break; }
+        check(lowRowsZero, "DDC0's and DDC1's rows stay zero");
+
+        client.setDdcFrequencyHz(2, 14'200'000.0);
+        client.setDdcFrequencyHz(0, 7'100'000.0);   // DDC0 is off: ignored
+        const auto hp = P2ClientTestAccess::highPriority(client);
+        check(readU32(hp, 17) == phaseWord(14'200'000.0),
+              "High Priority carries RX1's phase word in DDC2's slot (bytes 17-20)");
+        check(readU32(hp, 9) == 0 && readU32(hp, 13) == 0,
+              "DDC0's and DDC1's words stay zero, even when DDC0 is asked to tune");
+        const std::uint16_t band = alexRxFilterBits(alexRxFilterFor(14'200'000.0));
+        check(readU16(hp, 1434) == band && readU16(hp, 1430) == band,
+              "both band filters follow RX1's frequency on DDC2");
+
+        check(client.setDdcRateLive(2, 768), "a live rate change reaches DDC2");
+        check(!client.setDdcRateLive(0, 768), "...and is refused for DDC0, which is off");
+        const auto rated = P2ClientTestAccess::ddcSpecific(client);
+        check(rated[7] == 0x04 && rated[29] == 1
+                  && (static_cast<int>(rated[30]) << 8 | rated[31]) == 768,
+              "the resent DDC-Specific packet changes only DDC2's rate");
 
         client.stop();
     }

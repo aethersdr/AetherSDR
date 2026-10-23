@@ -2,6 +2,7 @@
 #include "core/AppActivity.h"
 #include "core/backends/anan/AnanDroopCalibrator.h"
 #include "core/backends/anan/AnanDroopDefaults.h"
+#include "core/backends/anan/AnanReceiverRoutes.h"
 #include "core/backends/WdspNoiseBlanker.h"
 #include "core/AppSettings.h"
 #include "core/RadioSettingsScope.h"
@@ -229,14 +230,18 @@ AnanBackend::AnanBackend(QObject* parent)
     // explicit to document intent and match Hl2Backend's own explicit
     // DirectConnection on the equivalent wire-to-DSP wiring: no queue, no
     // event-loop hop for the sample path.
-    connect(m_client, &P2Client::ddc0IqReady, m_dsp, &AnanRxDsp::processIqBlock,
-            Qt::DirectConnection);
+    connect(m_client, &P2Client::ddcIqReady, m_dsp,
+            [dsp = m_dsp](int ddcIndex, const std::vector<std::complex<float>>& block) {
+        if (ddcIndex == kRx1Route.ddc) {
+            dsp->processIqBlock(block);
+        }
+    }, Qt::DirectConnection);
 
     // Everything below crosses from the I/O thread to whichever thread this
     // object lives on -- plain AutoConnection resolves to Queued, which is
     // why AnanRxDsp's constructor registers std::vector<float> as a Qt
-    // metatype (P2Client's ddc0IqReady never needs that: it is only ever
-    // DirectConnection'd, above).
+    // metatype (the IQ connection above never needs that: it is only ever
+    // DirectConnection'd).
     connect(m_client, &P2Client::linkUp, this, [this] {
         m_connected = true;
         // See m_rateChanging's declaration comment: a live rate change is a
@@ -307,11 +312,11 @@ AnanBackend::AnanBackend(QObject* parent)
     // signals are emitted from the backend's own thread.
     connect(m_client, &P2Client::supplyRailSampled, this,
             &AnanBackend::onSupplyRailCounts);
-    // Only DDC0 feeds this DSP. Like ddc0IqReady above, notification and
-    // processing run directly on the I/O thread, with the DSP as context.
+    // Only RX1's DDC feeds this DSP. Like the IQ connection above, notification
+    // and processing run directly on the I/O thread, with the DSP as context.
     // Invalidate its partial FFT before the discontinuous block arrives.
     connect(m_client, &P2Client::ddcSequenceGap, m_dsp, [dsp = m_dsp](int ddcIndex) {
-        if (ddcIndex == 0) {
+        if (ddcIndex == kRx1Route.ddc) {
             dsp->onSequenceGap();
         }
     }, Qt::DirectConnection);
@@ -546,7 +551,7 @@ RadioCapabilities AnanBackend::capabilities() const
     // From this session's own Discovery reply (P2Client::discoveryInfoReceived()).
     // Absent until it lands ("not reported yet", like tuningMinHz/MaxHz);
     // capabilitiesChanged() fires when it does. numDdc is informational:
-    // maxSlices/maxPanadapters stay 1 because only DDC0 is driven.
+    // maxSlices/maxPanadapters stay 1 because only RX1's DDC is driven.
     if (m_discoveryInfoReceived) {
         QVariantMap anan;
         anan[QStringLiteral("gatewareVersion")] = m_discoveredFirmwareVer;
@@ -566,7 +571,7 @@ void AnanBackend::applyRestoredState(const RestoredRadioState& state)
         gain.value(QStringLiteral("adc0AttenuationDb")).toInt(0), 0, kMaxStepAttenuationDb);
     m_pendingParams.adc1AttenuationDb = std::clamp(
         gain.value(QStringLiteral("adc1AttenuationDb")).toInt(0), 0, kMaxStepAttenuationDb);
-    m_attenuationDb = m_pendingParams.ddc0AdcIndex == 1
+    m_attenuationDb = m_pendingParams.rx1AdcIndex == 1
         ? m_pendingParams.adc1AttenuationDb : m_pendingParams.adc0AttenuationDb;
 
     // Unconditional, like the ADC values above, so a same-family backend reuse
@@ -652,7 +657,7 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     }
 
     m_pendingParams.host = request.host;
-    m_pendingParams.ddc0RateKsps =
+    m_pendingParams.rx1RateKsps =
         request.params.value(QStringLiteral("anan.ddc0RateKsps"), 48).toInt();
     // Connect-time-only ADC options -- see P2Client::Params' own comment
     // for why none of these have a live setter. Defaults match
@@ -663,8 +668,9 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
         request.params.value(QStringLiteral("anan.ditherEnabled"), true).toBool();
     m_pendingParams.randomEnabled =
         request.params.value(QStringLiteral("anan.randomEnabled"), true).toBool();
-    m_pendingParams.ddc0AdcIndex =
-        request.params.value(QStringLiteral("anan.ddc0AdcIndex"), 0).toInt() == 1 ? 1 : 0;
+    m_pendingParams.rx1AdcIndex =
+        request.params.value(QStringLiteral("anan.ddc0AdcIndex"), kRx1Route.adc).toInt() == 1
+            ? 1 : 0;
     m_pendingParams.bypassAdc0Filters =
         request.params.value(QStringLiteral("anan.bypassAdc0Filters"), true).toBool();
     m_pendingParams.bypassAdc1Filters =
@@ -684,7 +690,7 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     m_pendingParams.speakerAmpMuted =
         request.params.value(QStringLiteral("anan.speakerAmpMuted"), false).toBool();
     // applyRestoredState() seeds both ADC values before this connect.
-    m_attenuationDb = m_pendingParams.ddc0AdcIndex == 1
+    m_attenuationDb = m_pendingParams.rx1AdcIndex == 1
         ? m_pendingParams.adc1AttenuationDb
         : m_pendingParams.adc0AttenuationDb;
 
@@ -711,7 +717,7 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
 
     m_speakerAudioEnabled = m_pendingParams.speakerAudioEnabled;
     m_pendingDspConfig = AnanRxDsp::Config{};
-    m_pendingDspConfig.inputSampleRateHz = m_pendingParams.ddc0RateKsps * 1000;
+    m_pendingDspConfig.inputSampleRateHz = m_pendingParams.rx1RateKsps * 1000;
     m_pendingDspConfig.audioSampleRateHz = 24000;
     m_pendingDspConfig.dspBlockSize = 1024;
     // The panel's width in points (setPanPixelWidth()), or one point per
@@ -840,9 +846,9 @@ void AnanBackend::startP2ClientSession(quint64 generation)
         // Push the operator's current tune once the session is up.
         // linkUp() (P2Client's own signal, connected in the constructor)
         // is what actually fires connected()/emitSliceState()/emitPanState()
-        // once the first genuine DDC0 frame arrives -- not this call.
+        // once the first genuine IQ frame arrives -- not this call.
         if (m_sliceFreqHz > 0.0)
-            m_client->setDdc0FrequencyHz(m_sliceFreqHz);
+            m_client->setDdcFrequencyHz(kRx1Route.ddc, m_sliceFreqHz);
     }, Qt::QueuedConnection);
 }
 
@@ -930,7 +936,7 @@ void AnanBackend::setSliceFrequency(int sliceId, double hz)
     // Phase 1b has no NCO-vs-slice decoupling (the class comment is explicit:
     // "the shift is ALWAYS exactly -cwBfoHz... because the NCO IS the slice
     // frequency, always") -- so unthrottled, EVERY one of those events would
-    // retune the actual DDC0 hardware and re-broadcast the pan's geometry.
+    // retune the actual DDC hardware and re-broadcast the pan's geometry.
     scheduleTuneApply();
     // The Tuning capture rides the same throttle: applyTuneToRadioAndPan().
 }
@@ -1110,7 +1116,7 @@ void AnanBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent 
 
 int AnanBackend::nearestDdc0RateKsps(int requestedKsps) noexcept
 {
-    // DDC0 runs at exactly one of these rates (no continuous zoom). Nearest by RATIO
+    // The DDC runs at exactly one of these rates (no continuous zoom). Nearest by RATIO
     // (log domain), like Hl2Backend::nearestIqSampleRateHz (HERMES.md §15.1): the
     // rates are octave-spaced and zoom is multiplicative, so 140 ksps belongs to 192
     // (geometric mean 135.8), not 96. The equidistant point (e.g. 96*sqrt(2)) is
@@ -1138,7 +1144,7 @@ void AnanBackend::setPanBandwidth(const QString& panId, double hz)
     const int requestedKsps = static_cast<int>(hz / 1000.0 + 0.5);
     const int snappedKsps = nearestDdc0RateKsps(requestedKsps);
 
-    if (snappedKsps == m_pendingParams.ddc0RateKsps) {
+    if (snappedKsps == m_pendingParams.rx1RateKsps) {
         // Already at the closest rate: republish so an optimistic GUI span snaps back
         // (as PanadapterModel::republishCenterBandwidth(), #4470), and clear any pending
         // request so a stale older zoom cannot fire after this one.
@@ -1175,8 +1181,8 @@ void AnanBackend::beginRateChange(int newRateKsps)
     // RUNNING session (P2Client::setDdcRateLive()). Build-before-disturb is what
     // keeps zoom from freezing. m_preRateChangeKsps records the running rate so the
     // failure path can roll back: emitPanState() reports from m_pendingDspConfig.
-    m_preRateChangeKsps = m_pendingParams.ddc0RateKsps;
-    m_pendingParams.ddc0RateKsps = newRateKsps;
+    m_preRateChangeKsps = m_pendingParams.rx1RateKsps;
+    m_pendingParams.rx1RateKsps = newRateKsps;
     m_pendingDspConfig.inputSampleRateHz = newRateKsps * 1000;
     // Refresh from CURRENT live operator state, not connectRadio()'s
     // connect-time snapshot: m_pendingDspConfig otherwise only ever had its
@@ -1231,7 +1237,7 @@ void AnanBackend::finishRateChange(quint64 generation, bool ok, const QString& e
         // applied to another rate's bins, which is exactly the cross-rate
         // corruption anan_rxdsp_handedness_test's Group 6 exists to prevent.
         if (m_preRateChangeKsps > 0) {
-            m_pendingParams.ddc0RateKsps = m_preRateChangeKsps;
+            m_pendingParams.rx1RateKsps = m_preRateChangeKsps;
             m_pendingDspConfig.inputSampleRateHz = m_preRateChangeKsps * 1000;
         }
         emit connectionError(error);
@@ -1268,7 +1274,7 @@ void AnanBackend::finishRateChange(quint64 generation, bool ok, const QString& e
         if (generation != m_connectGeneration)
             return;
         QMetaObject::invokeMethod(m_client, "setDdcRateLive", Qt::QueuedConnection,
-                                  Q_ARG(int, 0), Q_ARG(int, rateKsps));
+                                  Q_ARG(int, kRx1Route.ddc), Q_ARG(int, rateKsps));
     };
     sendRate();
     for (const int delayMs : kRateChangeResendMs)
@@ -1315,14 +1321,14 @@ void AnanBackend::setPanRfGain(const QString& panId, int gainDb)
     m_attenuationDb = attenuation;
     // Kept in the params too: a rate change that restarts the session
     // resends everything from m_pendingParams.
-    if (m_pendingParams.ddc0AdcIndex == 1) {
+    if (m_pendingParams.rx1AdcIndex == 1) {
         m_pendingParams.adc1AttenuationDb = attenuation;
     } else {
         m_pendingParams.adc0AttenuationDb = attenuation;
     }
     if (m_client) {
         QMetaObject::invokeMethod(m_client, "setStepAttenuationDb", Qt::QueuedConnection,
-                                  Q_ARG(int, m_pendingParams.ddc0AdcIndex),
+                                  Q_ARG(int, m_pendingParams.rx1AdcIndex),
                                   Q_ARG(int, attenuation));
     }
     emit panRfGainChanged(kPanId, -attenuation);
@@ -1861,15 +1867,16 @@ void AnanBackend::scheduleTuneApply()
 void AnanBackend::applyTuneToRadioAndPan()
 {
     // The two genuinely expensive things a retune does: an actual UDP
-    // High Priority packet to the radio (P2Client::setDdc0FrequencyHz --
-    // real hardware DDC0/NCO retuning, which is not glitch-free at the rate
+    // High Priority packet to the radio (P2Client::setDdcFrequencyHz --
+    // real hardware DDC/NCO retuning, which is not glitch-free at the rate
     // a raw mouse-move stream would otherwise drive it), and the pan's
     // center re-broadcast (PanadapterModel::setCenterBandwidth(), which
     // re-lays-out the spectrum/waterfall geometry on every call). Both are
     // throttled together by scheduleTuneApply() -- see its comment.
     if (m_client && m_connected) {
         const double hz = m_sliceFreqHz;
-        QMetaObject::invokeMethod(m_client, [this, hz]() { m_client->setDdc0FrequencyHz(hz); },
+        QMetaObject::invokeMethod(m_client,
+                                  [this, hz]() { m_client->setDdcFrequencyHz(kRx1Route.ddc, hz); },
                                   Qt::QueuedConnection);
     }
     emitPanState();
