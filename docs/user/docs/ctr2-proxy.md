@@ -67,7 +67,10 @@ connects to a radio. The choice is saved.
 - Pressing **Stop** holds it off until AetherSDR next connects to a radio.
 - In USB mode it starts a CTR2-Max (on Lynovation's firmware or AetherCTR2)
   or an AetherKnob. A CTR2-Max on firmware older than v1.02.00 never answers; see
-  [No answer from the CTR2](#no-answer-from-the-ctr2).
+  [No answer from the CTR2](#no-answer-from-the-ctr2). Lynovation's firmware
+  uses Espressif's generic USB name, so another ESP32-S3 board with the same
+  name and kind of HID interface may be tried too. A device that never
+  answers is tried about once a minute.
 - **Linux:** if the CTR2 udev rule is not installed yet, press **Start** once
   to install it.
 
@@ -364,9 +367,11 @@ later, or AetherCTR2."
    CTR2 controllers always use Wi-Fi mode.
 
 If the relay stops with an error before the CTR2 ever answered, **Start
-automatically** does not keep retrying it. It tries again once the CTR2 is
-plugged in again or switches firmware, or when AetherSDR next connects to a
-radio.
+automatically** waits a minute before trying it again, instead of a few
+seconds. It tries again at once when the USB device list changes (the CTR2
+switches firmware, or another device is plugged in or out), when you pick
+another device or mode, when you tick **Start automatically** again, or when
+AetherSDR next connects to a radio. **Start** always tries again.
 
 ### "... is in use by another AetherSDR"
 

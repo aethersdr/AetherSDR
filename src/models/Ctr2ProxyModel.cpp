@@ -241,7 +241,8 @@ void Ctr2ProxyModel::applyDeviceScan(DeviceScan scan)
     }
     m_listenChoices = std::move(choices);
     m_usbChoices = usb;
-    m_noAnswerHold = false;   // replugged, or switched firmware: try it again
+    if (usbChanged)
+        m_noAnswerHold = QDeadlineTimer();   // replugged, or switched firmware: try it again
     // Default to the first recognized CTR2 while nothing is selected or the
     // selected device has gone; an existing choice stands.
     if (!isRunning() && !selectedUsbDevice()) {
@@ -321,6 +322,7 @@ bool Ctr2ProxyModel::setTransport(Transport transport)
         m_activeTransport = transport;
         m_usbStartError.clear();
         m_stopReason.clear();
+        m_noAnswerHold = QDeadlineTimer();
         emit configurationChanged();
         emit stateChanged();
         emit endpointsChanged();
@@ -362,6 +364,7 @@ bool Ctr2ProxyModel::setUsbDevicePath(const QString& path)
     }
     if (m_usbDevicePath != path) {
         m_usbDevicePath = path;
+        m_noAnswerHold = QDeadlineTimer();
         emit configurationChanged();
         probeFirmwareVersion();
     }
@@ -403,7 +406,7 @@ void Ctr2ProxyModel::setAetherRadio(const QHostAddress& address, quint16 port,
     emit configurationChanged();
     if (newRadio) {
         m_autoStartHeld = false;   // a new connection: start again
-        m_noAnswerHold = false;
+        m_noAnswerHold = QDeadlineTimer();
         QTimer::singleShot(0, this, &Ctr2ProxyModel::tryAutoStart);
     }
 }
@@ -415,6 +418,7 @@ void Ctr2ProxyModel::setAutoStart(bool on)
     m_settings.autoStart = on;
     m_settings.save();
     if (on) {
+        m_noAnswerHold = QDeadlineTimer();
         m_autoStartTimer->start();
         QTimer::singleShot(0, this, &Ctr2ProxyModel::tryAutoStart);
     } else {
@@ -425,7 +429,7 @@ void Ctr2ProxyModel::setAutoStart(bool on)
 
 void Ctr2ProxyModel::tryAutoStart()
 {
-    if (!m_settings.autoStart || m_autoStartHeld || m_noAnswerHold || isRunning()
+    if (!m_settings.autoStart || m_autoStartHeld || !m_noAnswerHold.hasExpired() || isRunning()
         || m_firmware->isRunning() || m_aetherRadioAddress.isNull()) {
         return;
     }
@@ -454,13 +458,13 @@ void Ctr2ProxyModel::onUsbStateChanged()
         return;
     }
     if (s == State::Error && !m_usbAnswered && usbActive()) {
-        m_noAnswerHold = true;
+        m_noAnswerHold = QDeadlineTimer(m_noAnswerRetryMs);
         QString why = m_usb->lastError();
         while (why.endsWith(QLatin1Char('.')))
             why.chop(1);
         m_stopReason = (why.isEmpty() ? QString() : why + QStringLiteral(". "))
-            + tr("The CTR2 never answered: USB mode needs CTR2-Max firmware v1.02.00 or later, "
-                 "or AetherCTR2. For other firmware, use Wi-Fi mode.");
+            + tr("The CTR2 never answered. If it is still plugged in, USB mode needs CTR2-Max "
+                 "firmware v1.02.00 or later, or AetherCTR2. For other firmware, use Wi-Fi mode.");
         emit lastErrorChanged();
     }
     // Connecting means the CTR2 answered; Stopped and Error end the run.
@@ -483,6 +487,11 @@ QString Ctr2ProxyModel::noAnswerHint() const
 void Ctr2ProxyModel::setNoAnswerHintMs(int ms)
 {
     m_noAnswerTimer->setInterval(ms);
+}
+
+void Ctr2ProxyModel::setNoAnswerRetryMs(int ms)
+{
+    m_noAnswerRetryMs = ms;
 }
 
 void Ctr2ProxyModel::saveSetup()
@@ -631,7 +640,7 @@ bool Ctr2ProxyModel::start()
     m_activeTransport = m_transport;
     m_usbStartError.clear();
     m_stopReason.clear();
-    m_noAnswerHold = false;
+    m_noAnswerHold = QDeadlineTimer();
     m_runningRadioAddress = m_aetherRadioAddress;
     m_runningRadioPort = m_aetherRadioPort;
     m_runningRadioLabel = m_aetherRadioLabel;

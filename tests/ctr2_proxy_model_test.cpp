@@ -455,6 +455,18 @@ void testNoRetryWithoutAnswer()
           "the error says the CTR2 never answered, after the port's own error");
     check(!waitUntil([&] { return model.isRunning(); }, retry) && log->opened == opened,
           "a CTR2 that never answered is not reopened automatically");
+    model.setTransport(Ctr2ProxyModel::Transport::Wifi);
+    model.setTransport(Ctr2ProxyModel::Transport::Usb);
+    check(waitUntil([&] { return model.isRunning() && log->opened > opened; }, retry),
+          "changing the mode tries it again");
+    emit port->failed(QStringLiteral("HID write failed"));
+    check(!model.isRunning(), "and the second unanswered run stops too");
+    const int beforeToggle = log->opened;
+    model.setAutoStart(false);
+    model.setAutoStart(true);
+    check(waitUntil([&] { return model.isRunning() && log->opened > beforeToggle; }, 1000),
+          "ticking Start automatically again tries it again");
+    emit port->failed(QStringLiteral("HID write failed"));
 
     Info replugged = stock;
     replugged.serial = QStringLiteral("000000000002");
@@ -469,6 +481,15 @@ void testNoRetryWithoutAnswer()
     emit port->failed(QStringLiteral("HID read failed"));
     check(waitUntil([&] { return model.isRunning() && log->opened > answeredOpens; }, retry),
           "a CTR2 that had answered is retried as before");
+
+    // The hold is a slower retry, not a stop: a fault on the way up heals.
+    model.setNoAnswerRetryMs(500);
+    check(waitUntil([&] { return bool(port); }, 1000), "the retry has a port");
+    const int slowOpens = log->opened;
+    emit port->failed(QStringLiteral("HID write failed"));
+    check(!model.isRunning(), "the retry failed without an answer");
+    check(waitUntil([&] { return model.isRunning() && log->opened > slowOpens; }, retry),
+          "once the hold expires it is tried again");
     model.stop();
     AetherSDR::Ctr2RelaySettings{}.save();
 }
