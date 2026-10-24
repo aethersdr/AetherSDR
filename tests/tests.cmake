@@ -2631,6 +2631,11 @@ if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
     add_test(NAME spectrum_confirmed_geometry_test COMMAND spectrum_confirmed_geometry_test)
     set_tests_properties(spectrum_confirmed_geometry_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
+    # Same binary at a Retina device pixel ratio: pins the Flex pan xpixels cap.
+    add_test(NAME spectrum_pan_pixels_retina_test
+        COMMAND spectrum_confirmed_geometry_test --pan-pixels-retina)
+    set_tests_properties(spectrum_pan_pixels_retina_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2;AETHER_AUTOMATION_NO_TX=1")
 endif()
 
 add_executable(pan_frame_guard_test tests/pan_frame_guard_test.cpp)

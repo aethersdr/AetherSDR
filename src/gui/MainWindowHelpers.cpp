@@ -464,10 +464,12 @@ constexpr int kDefaultPanXpixels = 1024;
 constexpr int kDefaultPanYpixels = 700;
 constexpr int kMinPanXpixels = 100;
 constexpr int kMinPanYpixels = 20;
-// FLEX radios cap panadapter FFT frames at a 4096-bin boundary. Requesting
-// that boundary (or more) leaves the right edge malformed on firmware
-// 4.2.18/4.2.20, so stay one bin below it.
-constexpr int kMaxRadioPanXPixels = 4095;
+// FLEX radios cap panadapter FFT frames at a 4096-bin boundary: at or past it
+// the right edge is malformed on firmware 4.2.18/4.2.20, and on a FLEX-8600
+// running 4.3.16 xpixels of 4093 or more stops FFT and waterfall data for
+// every connected client until the radio reboots (4092 works). 3840 leaves
+// margin for models and firmware not yet measured.
+constexpr int kMaxRadioPanXPixels = 3840;
 constexpr int kMaxRadioPanYPixels = 8192;
 // A sanity bound on a device-pixel width, not a backend limit: each backend
 // clamps to the point count it can produce.
