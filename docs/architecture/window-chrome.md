@@ -146,7 +146,7 @@ window resize.
 Each tab shows the radio's name on line one and `[model ·] status [· detail]`
 on line two — the model only when a nickname hides it, the state always in
 words (WCAG 1.4.1; the dot's colour is never the only carrier), in sentence
-case: "Connected", "Available", "In use". The automation bridge's `status`
+case: "Connected", "Available", "In use", "Saved". The automation bridge's `status`
 field keeps the lower-case token those labels are rendered from. The active
 tab's dot is also the radio-link indicator: it swells once per discovery
 heartbeat, turns amber while discovering and red after three missed beats
@@ -159,7 +159,15 @@ only once that runs out; then a vertical mouse wheel scrolls it, and dragging
 a tab sideways past the system drag distance pans it (that press is not a
 click; a still press still is).
 
-The "+" panel has a bounded scrollable list, search by name/model/address/
+The strip holds the three most recently connected radios, newest first
+(`kMaxRecentRadios`, `RadioTabRecents.h`), plus the connected radio; every other
+radio waits in the drawer. A recent radio that no source reports right now (a
+saved manual connection, which discovery never sees, or a radio that is off)
+keeps its tab from its stored name and reads "Saved": known, reachability
+unknown, never asserted "Available".
+
+The ⌄⌄ drawer beside the tabs lists every radio AetherSDR knows about: discovered,
+SmartLink, routed, and saved manual connections. It has a bounded scrollable list, search by name/model/address/
 status, active-radio-first ordering, readable status text, and one Actions menu
 per row. Names and addresses are elided visually but kept in tooltips and
 accessible names. Search and controls are keyboard reachable.
@@ -170,12 +178,15 @@ accessible names. Search and controls are keyboard reachable.
 | Disconnect | Enabled only for this client's connected radio; uses the intentional-disconnect path. |
 | Rename | Client-owned names use the per-radio identity store and a non-modal dialog (built by MainWindow; `ConnectionPanel` decides and applies). Radio-owned names open Radio Setup while connected and are disabled while disconnected. The demo radio's "not on the air" name is a safety label and cannot be renamed. An empty nickname resets it. |
 | Radio setup | Enabled only for this client's connected radio. |
-| Remove from tabs | Available only while not connected here. Hides the tab; does not erase credentials, operating state, or the radio. |
-| Add to tabs | Restores a hidden tab. Hidden radios stay in the "+" list; selecting one also restores it. |
+| Remove from tabs | Available only while not connected here. Moves the tab to the drawer, where the radio stays while discovery, SmartLink or a saved manual connection knows it; does not erase credentials, operating state, or the radio. |
+| Add to tabs | Makes the radio one of the recent tabs; the oldest tab moves to the drawer. |
 | Connect manually | Opens the IP connection page. |
 | Rescan radios | Requests discovery without connecting; list changes preserve the current search. |
 
-Tab visibility is client UI state in `AppSettings["RadioSwitcher"].hiddenRadios`.
+Which radios have tabs is client UI state in `AppSettings["RadioSwitcher"]`
+(version 2): `recentRadios`, newest first, each with the name, model and address
+a Saved tab needs. Version 1's `hiddenRadios` is dropped once on load, and the
+recent list is seeded from the radio last connected.
 Disconnect, rename and removal are revalidated against the current session when
 executed. This is **not** a destructive Forget Radio operation: discovery keeps
 seeing the radio, and deleting saved endpoints or credentials needs its own
@@ -185,10 +196,11 @@ explicit workflow.
 
 `unified_title_bar_test` (headless) covers bar geometry, the painted fill and
 border under MainWindow's real stylesheet cascade, tab insets, status text,
-overflow, wheel and drag scrolling, hidden-tab link carrier, link-alarm raise/clear,
+overflow, wheel and drag scrolling, drawer-radio link carrier, link-alarm raise/clear,
 minimal mode, search, action enablement/dispatch, keyboard-only focus rings and
 light-theme panel colours. These are QWidget checks, not native frame
-certification.
+certification. `radio_tab_recents_test` covers the recent list: ordering, the
+cap, Saved tabs for radios no source reports, and which radio's tab is active.
 
 Drive the live bar with the [automation bridge](../automation-bridge.md#titlebar)
 (`get titlebar`, `titlebar`, `applet`) on an isolated settings profile and the
