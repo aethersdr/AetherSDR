@@ -31,7 +31,7 @@ What you can expect:
 ## Using the keyboard
 
 - You can reach controls with Tab and Shift+Tab, including the tabs on the VFO flag (Audio, DSP, mode, X/RIT, DAX).
-- The title bar's radio list ("+") is keyboard reachable, including its search box and per-radio actions.
+- The title bar's radio list (the **⌄⌄** button) is keyboard reachable, including its search box and per-radio actions.
 - The status-bar indicators (band stack, **+PAN**, **TNF**, **CWX**, **ASR**, **DVK**, **FDX**, **TUN**, **AMP** and **TX**) are in the Tab order and read as buttons. Press **Return** or **Enter** to activate one. On/off indicators report their state, and **TUN** and **AMP** start their description with their state (for example OPERATE, BYPASS or STANDBY). With keyboard shortcuts on, **Space** is still push-to-talk on a focused indicator.
 - Operating shortcuts (tuning, MOX, PTT hold, band and mode changes) are off by default. Turn them on with **Settings → Keyboard Shortcuts**; see [Keyboard Shortcuts](./keyboard-shortcuts.md). With them off, keys go to the focused control.
 - On Windows and Linux, Alt+letter opens each menu from the title bar's ☰ button. See [Menu Reference](./menu-reference.md).

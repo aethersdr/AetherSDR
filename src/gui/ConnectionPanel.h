@@ -44,6 +44,25 @@ public:
 
     bool selectRadio(const QString& serial);
     void selectManualConnection();
+
+    // A saved manual connection the title bar offers: an address that connected
+    // before (an Icom, a routed Flex or HL2). Discovery may not see these, so
+    // whether one is reachable now is unknown.
+    struct SavedRadio {
+        QString id;       // the serial its live connection reported
+        QString key;      // the saved address as entered (an IP or host name)
+        QString address;  // the resolved address it was reached at
+        QString name;     // identified model, else the name it connected under
+    };
+    QList<SavedRadio> savedRadios() const;
+    // Records the model a live manual connection identified ("IC-9700"), so its
+    // saved tab can show it. Ignored unless `radio` is a saved radio's serial.
+    // True when a saved profile of `radio` now holds `model`.
+    bool rememberSavedRadioModel(const RadioInfo& radio, const QString& model);
+    // Opens Connect manually on a saved radio's address, its radio type and
+    // source path restored: the radio `id`, else the one saved at `address`.
+    // False when neither is a saved radio.
+    bool selectSavedRadio(const QString& id, const QString& address = QString());
     bool canRenameRadio(const QString& serial) const;
     bool canRenameRadio(const RadioInfo& radio) const;
     QString radioDisplayName(const RadioInfo& radio, const QString& fallback) const;
@@ -247,9 +266,12 @@ private:
     // horizontal scrollbar takes its height out of the viewport.
     int preferredClientHeight(int clientWidth) const;
     QScreen* screenFitTarget(QScreen* preferredScreen) const;
+    // `radio` is the connection the profile proved: its serial, resolved address
+    // and name are kept so the title bar can offer the radio as a saved tab.
     void saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,
                            const QHostAddress& lastSuccessfulLocalIp,
+                           const RadioInfo& radio,
                            quint16 icomBasePort = 0);
     void saveLowBandwidthPreference(bool enabled);
     void setManualMessage(const QString& text, bool error = false);
@@ -345,6 +367,7 @@ private:
     quint16      m_pendingIcomBasePort{0};
     RadioBindSettings m_pendingIcomBindSettings;
     QHostAddress m_pendingIcomSessionBindAddress;
+    RadioInfo    m_pendingIcomRadio;
     QLineEdit*   m_manualIpEdit{nullptr};
     QLabel*      m_manualResultLabel{nullptr};
     QToolButton* m_manualAdvancedToggle{nullptr};

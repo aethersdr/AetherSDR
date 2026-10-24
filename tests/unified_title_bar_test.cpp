@@ -458,6 +458,69 @@ int main(int argc, char** argv)
         check(!updateState().value(QStringLiteral("visible")).toBool(), "empty version clears the badge");
     }
 
+    // ── Saved radio tabs ────────────────────────────────────────────────────
+    // A saved manual connection (an Icom, a routed Flex) has no discovery, so
+    // its tab must not claim Available: it says Saved, in words, and bridge
+    // drivers read the lower-case token.
+    {
+        check(radioTabStatusText(RadioTabStatus::Saved) == QLatin1String("saved"),
+              "the bridge token for a saved radio is \"saved\"");
+        check(radioTabStatusLabel(RadioTabStatus::Saved) == QLatin1String("Saved"),
+              "a saved radio's state reads \"Saved\"");
+        RadioTabBar strip;
+        RadioTabEntry saved;
+        saved.id = QStringLiteral("icom:192.168.1.110");
+        saved.name = QStringLiteral("IC-9700");
+        saved.detail = QStringLiteral("192.168.1.110");
+        saved.status = RadioTabStatus::Saved;
+        strip.setRadios({saved});
+        RadioTab* savedTab = strip.findChild<RadioTab*>();
+        check(savedTab && savedTab->accessibleDescription().contains(QLatin1String("Saved")),
+              "a saved tab spells its state on the rendered status line");
+        check(savedTab && !savedTab->accessibleDescription().contains(QLatin1String("Available")),
+              "a saved tab never claims the radio is available");
+    }
+    {
+        // The tabs are the radios connected to most recently: picking one out
+        // of the radio list only opens it, and never asks to make it a tab.
+        RadioTabBar strip;
+        RadioTabEntry saved;
+        saved.id = QStringLiteral("icom:192.168.1.110");
+        saved.name = QStringLiteral("IC-9700");
+        saved.status = RadioTabStatus::Saved;
+        RadioTabEntry lan;
+        lan.id = QStringLiteral("FLEX-1");
+        lan.name = QStringLiteral("FLEX-8600");
+        lan.status = RadioTabStatus::Available;
+        strip.setRadios({saved, lan});
+        strip.setActiveRadio(QString());
+        QString carrier;
+        for (const QVariant& t : strip.state().value(QStringLiteral("tabs")).toList()) {
+            if (t.toMap().value(QStringLiteral("linkCarrier")).toBool()) {
+                carrier = t.toMap().value(QStringLiteral("id")).toString();
+            }
+        }
+        check(carrier == lan.id,
+              "with no session the searching dot rides a radio discovery sees, not a Saved one");
+
+        QStringList requested;
+        QString activated;
+        QObject::connect(&strip, &RadioTabBar::radioActionRequested,
+                         [&requested](const QString&, const QString& action) { requested << action; });
+        QObject::connect(&strip, &RadioTabBar::radioActivated,
+                         [&activated](const QString& id) { activated = id; });
+        strip.setDiscoveredRadios({saved, lan});
+        strip.showDiscoveryPopover();
+        auto* row = strip.findChild<QPushButton*>(QStringLiteral("radioSwitcherRow_") + lan.id);
+        check(row != nullptr, "the radio list has a row for each radio");
+        if (row) {
+            row->click();
+        }
+        check(activated == lan.id, "picking a radio from the list opens it");
+        check(!requested.contains(QStringLiteral("restore")),
+              "picking a radio from the list does not make it a tab");
+    }
+
     // ── Radio tabs ──────────────────────────────────────────────────────────
     RadioTabEntry connected;
     connected.id = QStringLiteral("SERIAL-1");
