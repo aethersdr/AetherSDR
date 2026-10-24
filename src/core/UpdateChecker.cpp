@@ -56,12 +56,13 @@ QString probeStoreName()
 }
 } // namespace
 
-UpdateChecker::UpdateChecker(QObject* parent)
+UpdateChecker::UpdateChecker(QObject* parent, QNetworkAccessManager* network)
     : QObject(parent)
+    , m_nam(network ? network : new QNetworkAccessManager(this))
 {
     // One fixed endpoint, read only for tag_name: a redirect is never a
     // legitimate answer here, so it fails the check instead of being followed.
-    m_nam.setRedirectPolicy(QNetworkRequest::ManualRedirectPolicy);
+    m_nam->setRedirectPolicy(QNetworkRequest::ManualRedirectPolicy);
 }
 
 QString UpdateChecker::storeName()
@@ -162,7 +163,7 @@ bool UpdateChecker::checkNow(Trigger trigger)
         QByteArrayLiteral("AetherSDR/") + QCoreApplication::applicationVersion().toUtf8());
     req.setTransferTimeout(15000);
 
-    auto* reply = m_nam.get(req);
+    auto* reply = m_nam->get(req);
     NetworkDiagnostics::watch(reply, "update check");
     connect(reply, &QNetworkReply::downloadProgress, this,
             [this, reply](qint64 received, qint64) {

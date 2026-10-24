@@ -4655,6 +4655,14 @@ target_include_directories(update_settings_test PRIVATE src)
 target_link_libraries(update_settings_test PRIVATE aethercore Qt6::Core)
 add_test(NAME update_settings_test COMMAND update_settings_test)
 
+# UpdateChecker's request lifecycle over an in-memory QNetworkAccessManager
+# (createRequest override, no sockets): which failures start the daily wait,
+# the trigger a result reports, parsed digits only.
+add_executable(update_checker_test tests/update_checker_test.cpp)
+target_include_directories(update_checker_test PRIVATE src)
+target_link_libraries(update_checker_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME update_checker_test COMMAND update_checker_test)
+
 add_executable(extended_tnf_settings_test tests/extended_tnf_settings_test.cpp)
 target_include_directories(extended_tnf_settings_test PRIVATE src)
 target_link_libraries(extended_tnf_settings_test PRIVATE aethercore Qt6::Core)
@@ -9736,6 +9744,7 @@ set(AETHER_SETTINGS_CONSUMERS
     waterfall_time_marker_settings_test
     extended_tnf_settings_test
     update_settings_test
+    update_checker_test
     client_display_settings_test
     client_display_pan_settings_test
     spectrum_overlay_fft_fps_bounds_test

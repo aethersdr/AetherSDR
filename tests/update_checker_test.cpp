@@ -1,0 +1,157 @@
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
+#include "core/UpdateChecker.h"
+#include "core/UpdateSettings.h"
+
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QDebug>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QPointer>
+
+#include <cstring>
+
+// UpdateChecker's request lifecycle over an in-memory transport (no sockets):
+// which failures start the daily wait, the trigger a result reports, and that
+// only parsed digits leave the checker. The test finishes each reply by hand,
+// so an automatic check can still be in flight when a manual request arrives.
+
+using namespace AetherSDR;
+
+namespace {
+
+class HeldReply final : public QNetworkReply {
+public:
+    HeldReply(const QNetworkRequest& request, QObject* parent)
+        : QNetworkReply(parent)
+    {
+        setRequest(request);
+        setUrl(request.url());
+        setOperation(QNetworkAccessManager::GetOperation);
+        open(QIODevice::ReadOnly | QIODevice::Unbuffered);
+    }
+    void finishWithError(NetworkError error)
+    {
+        setError(error, QStringLiteral("test transport failure"));
+        setFinished(true);
+        emit finished();
+    }
+    void finishWithBody(const QByteArray& body)
+    {
+        m_body = body;
+        setAttribute(QNetworkRequest::HttpStatusCodeAttribute, 200);
+        emit readyRead();
+        setFinished(true);
+        emit finished();
+    }
+    void abort() override { finishWithError(OperationCanceledError); }
+    qint64 bytesAvailable() const override
+    {
+        return m_body.size() - m_offset + QNetworkReply::bytesAvailable();
+    }
+
+protected:
+    qint64 readData(char* data, qint64 capacity) override
+    {
+        const qint64 count = std::min(capacity, m_body.size() - m_offset);
+        if (count <= 0) {
+            return -1;
+        }
+        std::memcpy(data, m_body.constData() + m_offset, count);
+        m_offset += count;
+        return count;
+    }
+
+private:
+    QByteArray m_body;
+    qint64 m_offset = 0;
+};
+
+class HeldNetwork final : public QNetworkAccessManager {
+public:
+    QPointer<HeldReply> last;
+    int requests = 0;
+
+protected:
+    QNetworkReply* createRequest(Operation, const QNetworkRequest& request, QIODevice*) override
+    {
+        ++requests;
+        auto* reply = new HeldReply(request, this);
+        last = reply;
+        return reply;
+    }
+};
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    TestSettingsProfile profile(QStringLiteral("update-checker"));
+    if (!profile.isValid()) { return 1; }
+    QCoreApplication app(argc, argv);
+    QCoreApplication::setApplicationVersion(QStringLiteral("26.10.2"));
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+    int failures = 0;
+    const auto check = [&](bool ok, const char* label) {
+        if (!ok) { qCritical() << "FAIL:" << label; ++failures; }
+    };
+
+    auto* network = new HeldNetwork;
+    UpdateChecker checker(nullptr, network);
+    network->setParent(&checker);
+    check(network->redirectPolicy() == QNetworkRequest::ManualRedirectPolicy,
+          "the update fetch follows no redirects");
+
+    QList<UpdateChecker::Trigger> failed;
+    QStringList available;
+    QObject::connect(&checker, &UpdateChecker::checkFailed, &app,
+                     [&](UpdateChecker::Trigger t) { failed.append(t); });
+    QObject::connect(&checker, &UpdateChecker::updateAvailable, &app,
+                     [&](const QString& v, UpdateChecker::Trigger) { available.append(v); });
+
+    // Automatic, upgraded to manual mid-flight, then failing: the operator
+    // hears about it, and the attempt still starts the daily wait.
+    check(checker.checkNow(UpdateChecker::Trigger::Automatic), "automatic check starts");
+    check(!checker.checkNow(UpdateChecker::Trigger::Manual), "manual request joins the one in flight");
+    check(network->requests == 1, "joining makes no second request");
+    network->last->finishWithError(QNetworkReply::HostNotFoundError);
+    app.processEvents();
+    check(failed.size() == 1 && failed.last() == UpdateChecker::Trigger::Manual,
+          "the upgraded check reports its failure as manual");
+    const QDateTime recorded = UpdateSettings::lastCheckUtc();
+    check(recorded.isValid(), "an automatic-origin failure starts the daily wait");
+
+    // A manual-only failure leaves the wait alone, so the origin resets per request.
+    // Whole seconds: the store keeps ISO 8601 to the second.
+    const QDateTime earlier = QDateTime::fromString(QStringLiteral("2026-10-20T12:00:00Z"), Qt::ISODate);
+    UpdateSettings::setLastCheckUtc(earlier);
+    check(checker.checkNow(UpdateChecker::Trigger::Manual), "manual check starts");
+    network->last->finishWithError(QNetworkReply::HostNotFoundError);
+    app.processEvents();
+    check(failed.size() == 2 && failed.last() == UpdateChecker::Trigger::Manual,
+          "manual failure is reported");
+    check(UpdateSettings::lastCheckUtc() == earlier,
+          "a manual-only failure does not start the daily wait");
+
+    // A plain automatic failure counts too.
+    check(checker.checkNow(UpdateChecker::Trigger::Automatic), "second automatic check starts");
+    network->last->finishWithError(QNetworkReply::HostNotFoundError);
+    app.processEvents();
+    check(failed.size() == 3 && failed.last() == UpdateChecker::Trigger::Automatic,
+          "automatic failure is reported as automatic");
+    check(UpdateSettings::lastCheckUtc() > earlier, "an automatic failure starts the daily wait");
+
+    // A newer release leaves the checker as parsed digits only.
+    check(checker.checkNow(UpdateChecker::Trigger::Manual), "check for a newer release starts");
+    network->last->finishWithBody(QByteArrayLiteral(R"({"tag_name":"v26.10.3<b>x"})"));
+    app.processEvents();
+    check(available == QStringList{QStringLiteral("26.10.3")},
+          "updateAvailable carries parsed digits, never the raw tag");
+    check(UpdateSettings::latestVersion() == QLatin1String("26.10.3"),
+          "the known release is stored as parsed digits");
+
+    return failures ? 1 : 0;
+}

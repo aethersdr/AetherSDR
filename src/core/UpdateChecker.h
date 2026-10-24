@@ -22,7 +22,8 @@ public:
     enum class Trigger { Manual, Automatic };
     Q_ENUM(Trigger)
 
-    explicit UpdateChecker(QObject* parent = nullptr);
+    // `network` lets a test supply an in-memory transport; null makes one.
+    explicit UpdateChecker(QObject* parent = nullptr, QNetworkAccessManager* network = nullptr);
 
     // Starts a check; false when one is already in flight. A manual request
     // made during an automatic check upgrades that check, so the operator
@@ -62,7 +63,7 @@ signals:
 private:
     void fail(const QString& reason);
 
-    QNetworkAccessManager m_nam;
+    QNetworkAccessManager* m_nam{nullptr};
     bool m_inFlight = false;
     bool m_tooLarge = false;
     // Whether the request in flight began as the automatic check. A manual
