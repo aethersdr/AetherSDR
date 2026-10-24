@@ -220,7 +220,7 @@ TitleBar::TitleBar(QWidget* parent)
     m_hbox->addWidget(m_updateBadge);
 
     // The menu bar (Linux/Windows only — macOS puts it in the system bar) is
-    // inserted here by setMenuBar(), between the brand and the radio tabs.
+    // inserted here by setMenuBar(), after the brand and the UPDATE badge.
     m_menuBarSlot = m_hbox->count();
 
     // ── 3. Radio tabs ───────────────────────────────────────────────────────

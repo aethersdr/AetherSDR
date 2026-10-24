@@ -65,6 +65,9 @@ private:
     QNetworkAccessManager m_nam;
     bool m_inFlight = false;
     bool m_tooLarge = false;
+    // Whether the request in flight began as the automatic check. A manual
+    // request can upgrade m_trigger mid-flight; the daily wait still counts it.
+    bool m_startedAutomatically = false;
     Trigger m_trigger = Trigger::Manual;
 };
 

@@ -58,7 +58,11 @@ QString probeStoreName()
 
 UpdateChecker::UpdateChecker(QObject* parent)
     : QObject(parent)
-{}
+{
+    // One fixed endpoint, read only for tag_name: a redirect is never a
+    // legitimate answer here, so it fails the check instead of being followed.
+    m_nam.setRedirectPolicy(QNetworkRequest::ManualRedirectPolicy);
+}
 
 QString UpdateChecker::storeName()
 {
@@ -131,7 +135,7 @@ void UpdateChecker::fail(const QString& reason)
     // A failed automatic check still starts the daily wait, so a blocking
     // proxy or a rate-limited reply costs one request a day, not one a launch.
     // The known release is left as it was.
-    if (m_trigger == Trigger::Automatic) {
+    if (m_startedAutomatically) {
         UpdateSettings::setLastCheckUtc(QDateTime::currentDateTimeUtc());
     }
     emit checkFailed(m_trigger);
@@ -147,6 +151,7 @@ bool UpdateChecker::checkNow(Trigger trigger)
     }
     m_inFlight = true;
     m_tooLarge = false;
+    m_startedAutomatically = trigger == Trigger::Automatic;
     m_trigger = trigger;
     qCInfo(lcUpdater) << triggerName(trigger) << "check started";
 
