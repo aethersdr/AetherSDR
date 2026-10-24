@@ -17,7 +17,11 @@
 //      once, then disables;
 //   5. Return or Enter on a station row does not click the Enabled /
 //      Disabled toggle, the dialog's default button
-//      (setReturnClicksDefault(false)).
+//      (setReturnClicksDefault(false));
+//   6. a selected row keeps its tick and station colors, a theme change
+//      recolors the rows without rebuilding them, hovering the toggle
+//      brightens its border to color.canon.aqua, and losing the radio closes
+//      the window.
 //
 // No radio: the model is bare and never connected, so the button's toggle
 // changes only the model's local state.
@@ -62,6 +66,37 @@ int pixelsNear(const QImage& image, const QColor& color, int slack)
         }
     }
     return n;
+}
+
+// Feeds two stations into a bare model: client 0x00000000 is us (a bare
+// model's own handle is 0), and the other station holds PTT.
+void addTwoStations(RadioModel& model)
+{
+    model.handleStatusForTest(QStringLiteral("client 0x00000000"),
+        {{QStringLiteral("connected"), QString()},
+         {QStringLiteral("program"), QStringLiteral("AetherSDR")},
+         {QStringLiteral("station"), QStringLiteral("Bench")}});
+    model.handleStatusForTest(QStringLiteral("client 0x7594C952"),
+        {{QStringLiteral("connected"), QString()},
+         {QStringLiteral("program"), QStringLiteral("SmartSDR")},
+         {QStringLiteral("station"), QStringLiteral("Shack")},
+         {QStringLiteral("local_ptt"), QStringLiteral("1")}});
+    QCoreApplication::processEvents();
+}
+
+int rowOfHandle(QTableWidget* table, quint32 handle)
+{
+    for (int row = 0; row < table->rowCount(); ++row) {
+        if (table->item(row, 0)->data(Qt::UserRole).toUInt() == handle)
+            return row;
+    }
+    return -1;
+}
+
+int cellPixelsNear(QTableWidget* table, int row, int column, const QColor& color, int slack)
+{
+    const QRect cell = table->visualItemRect(table->item(row, column));
+    return pixelsNear(table->viewport()->grab(cell).toImage(), color, slack);
 }
 
 // Returns the process to the theme it started on, on every exit from a slot.
@@ -185,13 +220,7 @@ private slots:
         MultiFlexDialog window(&model);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
-        model.handleStatusForTest(QStringLiteral("client 0x00000000"),
-            {{QStringLiteral("connected"), QString()},
-             {QStringLiteral("program"), QStringLiteral("AetherSDR")}});
-        model.handleStatusForTest(QStringLiteral("client 0x7594C952"),
-            {{QStringLiteral("connected"), QString()},
-             {QStringLiteral("program"), QStringLiteral("SmartSDR")}});
-        QCoreApplication::processEvents();
+        addTwoStations(model);
         auto* table = window.findChild<QTableWidget*>();
         QPushButton* button = findEnableButton(window);
         QVERIFY(table && button);
@@ -216,6 +245,132 @@ private slots:
         QCOMPARE(model.multiFlexEnabled(), !before);
     }
 
+    void selectedRowsKeepTheirColors()
+    {
+        auto& tm = ThemeManager::instance();
+        const ThemeRestore restoreTheme;
+        QStringList failures;
+        for (const char* theme : {"Default Dark", "Default Light"}) {
+            QVERIFY2(tm.setActiveTheme(QLatin1String(theme)), theme);
+            RadioModel model;
+            MultiFlexDialog window(&model);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            addTwoStations(model);
+            auto* table = window.findChild<QTableWidget*>();
+            QVERIFY(table);
+            const int ours = rowOfHandle(table, 0);
+            const int other = rowOfHandle(table, 0x7594C952);
+            QVERIFY(ours >= 0 && other >= 0);
+            const QColor success = tm.color(table, QStringLiteral("color.accent.success"));
+            const QColor cyan = tm.color(table, QStringLiteral("color.canon.cyan"));
+
+            table->selectRow(other);
+            QCoreApplication::processEvents();
+            // CONTROL: the row really is selected, so the selection band and
+            // its text color apply to it.
+            QVERIFY(table->item(other, 0)->isSelected());
+            const int tick = cellPixelsNear(table, other, 0, success, 40);
+
+            table->selectRow(ours);
+            QCoreApplication::processEvents();
+            QVERIFY(table->item(ours, 1)->isSelected());
+            const int station = cellPixelsNear(table, ours, 1, cyan, 40);
+
+            qInfo().noquote() << QStringLiteral("SELECTED %1: tick %2, our station %3")
+                                     .arg(QLatin1String(theme)).arg(tick).arg(station);
+            if (tick <= 0)
+                failures << QStringLiteral("%1: a selected row's tick is not green")
+                                .arg(QLatin1String(theme));
+            if (station <= 0)
+                failures << QStringLiteral("%1: our selected station is not cyan")
+                                .arg(QLatin1String(theme));
+        }
+        QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QStringLiteral("\n"))));
+    }
+
+    void themeChangeRecolorsWithoutRebuildingRows()
+    {
+        auto& tm = ThemeManager::instance();
+        const ThemeRestore restoreTheme;
+        QVERIFY(tm.setActiveTheme(QStringLiteral("Default Dark")));
+        RadioModel model;
+        MultiFlexDialog window(&model);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        addTwoStations(model);
+        auto* table = window.findChild<QTableWidget*>();
+        QVERIFY(table);
+        const int ours = rowOfHandle(table, 0);
+        const int other = rowOfHandle(table, 0x7594C952);
+        QWidget* disconnectBefore = table->cellWidget(other, 4);
+        QTableWidgetItem* tickBefore = table->item(other, 0);
+        QVERIFY(disconnectBefore && tickBefore);
+        const QColor darkCyan = tm.color(table, QStringLiteral("color.canon.cyan"));
+
+        QVERIFY(tm.setActiveTheme(QStringLiteral("Default Light")));
+        QCoreApplication::processEvents();
+        const QColor lightCyan = tm.color(table, QStringLiteral("color.canon.cyan"));
+        // CONTROL: the two themes' cyan differ, so a recolor is observable.
+        QVERIFY(darkCyan != lightCyan);
+        QCOMPARE(table->item(ours, 1)->foreground().color(), lightCyan);
+        QCOMPARE(table->item(other, 0)->foreground().color(),
+                 tm.color(table, QStringLiteral("color.accent.success")));
+        // The rows and their Disconnect buttons are the same objects.
+        QCOMPARE(table->cellWidget(other, 4), disconnectBefore);
+        QCOMPARE(table->item(other, 0), tickBefore);
+    }
+
+    void enableButtonHoverBrightensTheBorder()
+    {
+        auto& tm = ThemeManager::instance();
+        const ThemeRestore restoreTheme;
+        QStringList failures;
+        for (const char* theme : {"Default Dark", "Default Light"}) {
+            QVERIFY2(tm.setActiveTheme(QLatin1String(theme)), theme);
+            RadioModel model;
+            MultiFlexDialog window(&model);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            QPushButton* button = findEnableButton(window);
+            QVERIFY(button);
+            const QColor aqua = tm.color(button, QStringLiteral("color.canon.aqua"));
+            for (bool on : {true, false}) {
+                if (model.multiFlexEnabled() != on)
+                    QTest::mouseClick(button, Qt::LeftButton);
+                QTest::mouseMove(&window, QPoint(4, window.height() - 4));
+                QCoreApplication::processEvents();
+                const int rest = pixelsNear(button->grab().toImage(), aqua, 6);
+                QTest::mouseMove(button, button->rect().center());
+                QCoreApplication::processEvents();
+                const int hover = pixelsNear(button->grab().toImage(), aqua, 6);
+                qInfo().noquote() << QStringLiteral("HOVER %1 %2: aqua at rest %3, hovered %4")
+                                         .arg(QLatin1String(theme), button->text())
+                                         .arg(rest).arg(hover);
+                // CONTROL: no aqua at rest, so the hovered count is the border.
+                if (rest != 0 || hover <= 0)
+                    failures << QStringLiteral("%1 %2: aqua at rest %3, hovered %4")
+                                    .arg(QLatin1String(theme), button->text())
+                                    .arg(rest).arg(hover);
+            }
+        }
+        QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QStringLiteral("\n"))));
+    }
+
+    void closesWhenTheRadioDisconnects()
+    {
+        RadioModel model;
+        MultiFlexDialog window(&model);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        // CONTROL: a connect does not close it.
+        emit model.connectionStateChanged(true);
+        QCoreApplication::processEvents();
+        QVERIFY(window.isVisible());
+        emit model.connectionStateChanged(false);
+        QTRY_VERIFY(!window.isVisible());
+    }
+
     void rowsCarryTheirTokenColors()
     {
         auto& tm = ThemeManager::instance();
@@ -228,18 +383,7 @@ private slots:
             QSignalSpy disconnects(&window, &MultiFlexDialog::disconnectClientRequested);
             window.show();
             QVERIFY(QTest::qWaitForWindowExposed(&window));
-            // A bare model's own handle is 0, so client 0x00000000 is us; the
-            // other station holds PTT.
-            model.handleStatusForTest(QStringLiteral("client 0x00000000"),
-                {{QStringLiteral("connected"), QString()},
-                 {QStringLiteral("program"), QStringLiteral("AetherSDR")},
-                 {QStringLiteral("station"), QStringLiteral("Bench")}});
-            model.handleStatusForTest(QStringLiteral("client 0x7594C952"),
-                {{QStringLiteral("connected"), QString()},
-                 {QStringLiteral("program"), QStringLiteral("SmartSDR")},
-                 {QStringLiteral("station"), QStringLiteral("Shack")},
-                 {QStringLiteral("local_ptt"), QStringLiteral("1")}});
-            QCoreApplication::processEvents();
+            addTwoStations(model);
 
             auto* table = window.findChild<QTableWidget*>();
             QVERIFY(table);

@@ -25,6 +25,7 @@ signals:
 
 private:
     void refresh();
+    void applyItemColors();
 
     RadioModel* m_model;
     QTableWidget* m_table;

@@ -59,6 +59,15 @@ of a set, filled canon cyan when chosen. A disabled control takes
 `color.control.unavailable`, checked or not. Changing a role on a live widget
 re-polishes it, so a status that turns to an error restyles at once.
 
+A canon table takes its rules from `canonTableRules()` (`CanonTableStyle.h`):
+`color.canon.nested` cells with `color.canon.line` rules and border, a
+`color.canon.control` selection band and cyan header text on
+`color.canon.raised`. SpotHub and the multiFLEX Dashboard append their own
+sizes and paddings after it. The selection rule sets no text color, so a
+window that colors items (the dashboard's PTT tick and its own station) keeps
+those colors on a selected row through a delegate, and a window that wants
+plain ink there adds it, as SpotHub does.
+
 ### Consuming tokens
 
 ```cpp

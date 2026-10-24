@@ -40,7 +40,7 @@ AetherSDR handles this automatically:
 
 ## Using the multiFLEX Dashboard
 
-**Settings → multiFLEX...** opens the **multiFLEX Dashboard**, a live list of every connected station. It stays open beside the main window while you work; choosing **multiFLEX...** again brings it to the front. Drag any empty part of it to move it, drag an edge to resize it, and close it with the round button in its top-right corner, Escape or Ctrl+W (⌘W on macOS). It remembers its size and place:
+**Settings → multiFLEX...** opens the **multiFLEX Dashboard**, a live list of every connected station. It stays open beside the main window while you work; choosing **multiFLEX...** again brings it to the front, and it closes when the radio disconnects. Drag any empty part of it to move it, drag an edge to resize it, and close it with the round button in its top-right corner, Escape or Ctrl+W (⌘W on macOS). It remembers its size and place:
 
 <img src="/img/screens/multiflex-dashboard.png" width="760" alt="multiFLEX Dashboard window with a round close button in its top-right corner and a green Enabled button under its header. A table with columns Local PTT, Station, TX Ant and TX Freq (MHz) lists one row: a tick, AetherSDR, ANT1 and 14.250." />
 

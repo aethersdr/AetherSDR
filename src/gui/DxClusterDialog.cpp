@@ -1,5 +1,6 @@
 #include "DxClusterDialog.h"
 #include "CanonIndicators.h"
+#include "CanonTableStyle.h"
 #include "FramelessResizer.h"
 #include "ScopedChildWidget.h"
 #include "DxClusterStartupCommandsDialog.h"
@@ -475,28 +476,23 @@ QPlainTextEdit {
     selection-background-color: {{color.canon.control}};
     selection-color: {{color.canon.ink}};
 }
+)";
+
+// SpotHub's sizes and selection ink, after the shared canon table rules.
+static constexpr const char* kSpotHubTableStyle = R"(
 QTableView {
-    color: {{color.canon.ink}};
-    background: {{color.canon.nested}};
-    alternate-background-color: {{color.canon.raised}};
-    border: 1px solid {{color.canon.line}};
-    border-radius: 6px;
-    gridline-color: {{color.canon.line}};
     font-size: 11px;
 }
 QTableView::item:selected {
     color: {{color.canon.ink}};
-    background: {{color.canon.control}};
 }
 QHeaderView::section {
-    color: {{color.canon.cyan}};
-    background: {{color.canon.raised}};
-    border: none;
-    border-bottom: 1px solid {{color.canon.line}};
     padding: 3px 6px;
-    font-weight: 700;
     font-size: 11px;
 }
+)";
+
+static constexpr const char* kSpotHubTailStyle = R"(
 QScrollArea {
     background: transparent;
     border: none;
@@ -568,7 +564,9 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     resize(760, 680);
     FramelessResizer::install(this);
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kSpotHubStyle) + canonIndicatorRules();
+        return QString::fromLatin1(kSpotHubStyle) + canonTableRules()
+             + QString::fromLatin1(kSpotHubTableStyle)
+             + QString::fromLatin1(kSpotHubTailStyle) + canonIndicatorRules();
     });
 
     // Capture source log paths up front so the per-tab Clear handlers (built
