@@ -81,7 +81,18 @@ int main(int argc, char** argv)
     check(UpdateChecker::badgeVersion(QStringLiteral("v26.10.3<b>x"), QStringLiteral("26.10.2"))
               == QLatin1String("26.10.3"),
           "badge shows parsed digits, never the raw tag");
-    UpdateSettings::setSkippedVersion(QStringLiteral("26.10.3"));
+    // The automatic-check toggle governs the badge, restored or live.
+    UpdateChecker::setCheckOnStartup(false);
+    check(UpdateChecker::knownBadgeVersion().isEmpty(),
+          "no restored badge with the automatic check off");
+    check(UpdateChecker::badgeVersion(QStringLiteral("26.10.3"), QStringLiteral("26.10.2")).isEmpty(),
+          "no live badge with the automatic check off");
+    UpdateChecker::setCheckOnStartup(true);
+    check(UpdateChecker::knownBadgeVersion() == QLatin1String("26.10.3"),
+          "turning the check back on restores the known badge");
+    UpdateChecker::skipVersion(QStringLiteral("v26.10.3<b>x"));
+    check(UpdateSettings::skippedVersion() == QLatin1String("26.10.3"),
+          "Skip stores parsed digits, never the raw tag");
     check(UpdateChecker::knownBadgeVersion().isEmpty(), "no restored badge for a skipped release");
     UpdateSettings::setSkippedVersion(QString());
     QCoreApplication::setApplicationVersion(QStringLiteral("26.10.3"));

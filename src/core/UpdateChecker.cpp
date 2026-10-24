@@ -14,6 +14,9 @@
 #include <QUrl>
 
 #ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <appmodel.h>
 #endif
@@ -24,17 +27,16 @@ static constexpr char kReleasesApiUrl[] =
     "https://api.github.com/repos/aethersdr/AetherSDR/releases/latest";
 
 namespace {
+// A real answer is tens of KB (the release body plus its asset list). The
+// transfer timeout is an idle timeout, so a trickling peer is stopped here.
+constexpr qint64 kMaxResponseBytes = 1024 * 1024;
+
 const char* triggerName(UpdateChecker::Trigger trigger)
 {
     return trigger == UpdateChecker::Trigger::Manual ? "manual" : "automatic";
 }
-} // namespace
 
-UpdateChecker::UpdateChecker(QObject* parent)
-    : QObject(parent)
-{}
-
-QString UpdateChecker::storeName()
+QString probeStoreName()
 {
 #ifdef Q_OS_WIN
     // APPMODEL_ERROR_NO_PACKAGE: an installer or portable build. Anything else
@@ -44,18 +46,53 @@ QString UpdateChecker::storeName()
         return QStringLiteral("the Microsoft Store");
     }
 #elif defined(Q_OS_LINUX)
-    // Every Flatpak sandbox has /.flatpak-info at its root.
+    // Every Flatpak sandbox has /.flatpak-info at its root, whichever remote
+    // (or local build) it came from.
     if (QFile::exists(QStringLiteral("/.flatpak-info"))) {
-        return QStringLiteral("Flathub");
+        return QStringLiteral("Flatpak");
     }
 #endif
     return {};
+}
+} // namespace
+
+UpdateChecker::UpdateChecker(QObject* parent)
+    : QObject(parent)
+{}
+
+QString UpdateChecker::storeName()
+{
+    // How this copy was installed cannot change while it runs.
+    static const QString name = probeStoreName();
+    return name;
+}
+
+bool UpdateChecker::checkOnStartup()
+{
+    return UpdateSettings::checkOnStartup();
+}
+
+void UpdateChecker::setCheckOnStartup(bool enabled)
+{
+    UpdateSettings::setCheckOnStartup(enabled);
+    qCInfo(lcUpdater) << "automatic check turned" << (enabled ? "on" : "off");
+}
+
+void UpdateChecker::skipVersion(const QString& version)
+{
+    const VersionNumber parsed = VersionNumber::parse(version);
+    if (parsed.isNull()) {
+        return;
+    }
+    UpdateSettings::setSkippedVersion(parsed.toString());
+    qCInfo(lcUpdater).noquote() << "operator skipped v" + parsed.toString();
 }
 
 QString UpdateChecker::badgeVersion(const QString& latestVersion, const QString& runningVersion)
 {
     const VersionNumber latest = VersionNumber::parse(latestVersion);
     if (latest.isNull() || !(latest > VersionNumber::parse(runningVersion))
+        || !UpdateSettings::checkOnStartup()
         || UpdateSettings::isSkipped(latestVersion) || !storeName().isEmpty()) {
         return {};
     }
@@ -64,8 +101,12 @@ QString UpdateChecker::badgeVersion(const QString& latestVersion, const QString&
 
 QString UpdateChecker::knownBadgeVersion()
 {
-    return badgeVersion(UpdateSettings::latestVersion(),
-                        QCoreApplication::applicationVersion());
+    const QString known = badgeVersion(UpdateSettings::latestVersion(),
+                                       QCoreApplication::applicationVersion());
+    if (!known.isEmpty()) {
+        qCInfo(lcUpdater).noquote() << "known update v" + known + " restored without a request";
+    }
+    return known;
 }
 
 bool UpdateChecker::checkAutomaticallyIfDue()
@@ -77,29 +118,35 @@ bool UpdateChecker::checkAutomaticallyIfDue()
     }
     if (!UpdateSettings::automaticCheckDue(QDateTime::currentDateTimeUtc())) {
         qCInfo(lcUpdater) << "automatic check not due; checkOnStartup"
-                          << UpdateSettings::checkOnStartup() << "last answer"
+                          << UpdateSettings::checkOnStartup() << "last attempt"
                           << UpdateSettings::lastCheckUtc().toString(Qt::ISODate);
         return false;
     }
-    checkNow(Trigger::Automatic);
-    return true;
+    return checkNow(Trigger::Automatic);
 }
 
 void UpdateChecker::fail(const QString& reason)
 {
     qCWarning(lcUpdater) << triggerName(m_trigger) << "check failed:" << reason;
+    // A failed automatic check still starts the daily wait, so a blocking
+    // proxy or a rate-limited reply costs one request a day, not one a launch.
+    // The known release is left as it was.
+    if (m_trigger == Trigger::Automatic) {
+        UpdateSettings::setLastCheckUtc(QDateTime::currentDateTimeUtc());
+    }
     emit checkFailed(m_trigger);
 }
 
-void UpdateChecker::checkNow(Trigger trigger)
+bool UpdateChecker::checkNow(Trigger trigger)
 {
     if (m_inFlight) {
         if (trigger == Trigger::Manual) {
             m_trigger = Trigger::Manual;
         }
-        return;
+        return false;
     }
     m_inFlight = true;
+    m_tooLarge = false;
     m_trigger = trigger;
     qCInfo(lcUpdater) << triggerName(trigger) << "check started";
 
@@ -112,10 +159,21 @@ void UpdateChecker::checkNow(Trigger trigger)
 
     auto* reply = m_nam.get(req);
     NetworkDiagnostics::watch(reply, "update check");
+    connect(reply, &QNetworkReply::downloadProgress, this,
+            [this, reply](qint64 received, qint64) {
+        if (received > kMaxResponseBytes && !m_tooLarge) {
+            m_tooLarge = true;
+            reply->abort();
+        }
+    });
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
         m_inFlight = false;
 
+        if (m_tooLarge) {
+            fail(QStringLiteral("response larger than %1 bytes").arg(kMaxResponseBytes));
+            return;
+        }
         if (reply->error() != QNetworkReply::NoError) {
             fail(reply->errorString());
             return;
@@ -142,18 +200,23 @@ void UpdateChecker::checkNow(Trigger trigger)
             return;
         }
 
-        UpdateSettings::recordAnswer(QDateTime::currentDateTimeUtc(), latest.toString());
-        // Log the parsed version, never the raw tag: it is network text.
+        // From here on only the parsed digits travel: the tag is network text.
+        const QString latestText = latest.toString();
+        UpdateSettings::recordAnswer(QDateTime::currentDateTimeUtc(), latestText);
         if (latest > running) {
             qCInfo(lcUpdater).nospace().noquote() << triggerName(m_trigger) << " check: v"
-                << latest.toString() << " is newer than running v" << current;
-            emit updateAvailable(tag.startsWith('v') ? tag.mid(1) : tag, m_trigger);
+                << latestText << " is newer than running v" << current;
+            if (UpdateSettings::isSkipped(latestText)) {
+                qCInfo(lcUpdater).noquote() << "v" + latestText + " is the release the operator skipped";
+            }
+            emit updateAvailable(latestText, m_trigger);
         } else {
             qCInfo(lcUpdater).nospace().noquote() << triggerName(m_trigger) << " check: running v"
-                << current << " is current (latest v" << latest.toString() << ")";
+                << current << " is current (latest v" << latestText << ")";
             emit upToDate(current, m_trigger);
         }
     });
+    return true;
 }
 
 } // namespace AetherSDR

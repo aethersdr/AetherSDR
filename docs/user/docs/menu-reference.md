@@ -142,7 +142,7 @@ The Minimize and Full Screen keys can be rebound in **Settings → Configure Sho
 | **Support & Diagnostics...** | Logging categories and support bundles. See [Support and Logging](./support-and-logging.md). |
 | **Slice Troubleshooting...** | A diagnostics window for slice, audio and display state. |
 | **Check for Updates...** | Checks for a newer release now and always reports the result, including a release you skipped. See [Updates](#updates). |
-| **Check for Updates Automatically** | On by default. Checks for a newer release at startup, at most once a day, and shows **UPDATE** in the title bar when there is one. Dimmed on Microsoft Store and Flathub installs, which update themselves. |
+| **Check for Updates Automatically** | On by default. Checks for a newer release at startup, at most once a day, and shows **UPDATE** in the title bar when there is one. Turning it off also removes the badge. Dimmed on Microsoft Store and Flatpak installs, which update themselves. |
 | **About AetherSDR** | The About window (below). |
 
 ## The Title Bar
@@ -167,7 +167,7 @@ The main window has one 52 px title bar. From left to right:
 
 ### Updates
 
-AetherSDR checks GitHub for a newer release about 15 seconds after it starts, no more than once a day. The check never downloads or installs anything. When a newer release exists, the **UPDATE** badge appears after the **AetherSDR** brand mark; nothing pops up, and a check that finds nothing or cannot reach GitHub stays silent. The badge stays on across restarts until you update or skip that release, even on a day the check does not run. Turn it off with **Help → Check for Updates Automatically**.
+AetherSDR checks GitHub for a newer release about 15 seconds after it starts, no more than once a day, counting a check that could not reach GitHub. The check never downloads or installs anything. When a newer release exists, the **UPDATE** badge appears after the **AetherSDR** brand mark; nothing pops up, and a check that finds nothing or cannot reach GitHub stays silent. The badge stays on across restarts until you update or skip that release, even on a day the check does not run. **Help → Check for Updates Automatically** turns off both the check and the badge; turning it back on brings the badge back for a release AetherSDR already knows about.
 
 Click **UPDATE**, or use **Help → Check for Updates...**, for the update window:
 
@@ -175,7 +175,7 @@ Click **UPDATE**, or use **Help → Check for Updates...**, for the update windo
 - **Skip This Version** hides the badge for that release. **Help → Check for Updates...** still reports it, and the next release shows the badge again.
 - **Close** leaves the badge in place.
 
-On a Microsoft Store or Flathub install the store updates AetherSDR, so there is no automatic check and no badge, even after a manual check; **Help → Check for Updates...** still works and says where the update comes from.
+On a Microsoft Store or Flatpak install, the store updates AetherSDR, so there is no automatic check and no badge, even after a manual check. **Help → Check for Updates...** still works: its window says where the update comes from and offers no **Skip This Version**.
 
 ### Radio tabs
 

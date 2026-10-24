@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 273 touchpoint headers (222 core, 51 models) — 273/273 tagged, 0/273 converted.
+**Totals:** 272 touchpoint headers (221 core, 51 models) — 272/272 tagged, 0/272 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -89,7 +89,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/Kpa500Maintenance.h` | 1 | peripheral(elecraft) — Bounded KPA500 maintenance framing and configuration file codec; independent peripheral, no radio-family transport. See docs/architecture/elecraft-kpa500-kat500-design.md. | unconverted |
 | `core/Kpa500Protocol.h` | 1 | peripheral(elecraft) — Frame parser, status snapshot and command builders for the KPA500 '^CMD;' text protocol — the codec half of core/Kpa500Connection.h. A standalone accessory's own transport with no radio-family awareness, same precedent as core/AcomProtocol.h. Authority: KPA500 Programmer's Reference Rev. A2. | unconverted |
 | `core/LocationAddressResolver.h` | 1 | ui-support — Reverse-geocoding helper backing the GPS location dialog. Network/OS plumbing; no radio state. | unconverted |
-| `core/LogManager.h` | 35 | ui-support — App-wide diagnostic logging: category registry, log file/retention, runtime toggles. Plumbing, not radio state. | unconverted |
+| `core/LogManager.h` | 34 | ui-support — App-wide diagnostic logging: category registry, log file/retention, runtime toggles. Plumbing, not radio state. | unconverted |
 | `core/LpMeterConnection.h` | 3 | peripheral(lp100a) — Direct serial/ser2net client for the TelePost LP-100A digital vector RF wattmeter — a standalone RS-232 instrument with no FlexRadio awareness at all, same precedent as core/AcomConnection.h and core/SpeConnection.h. Poll-only (the meter never pushes), and the transport is commonly shared with other polling clients, so the poll loop is gated rather than free-running. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/lp-100a-wattmeter-design.md. | unconverted |
 | `core/LpMeterProtocol.h` | 1 | peripheral(lp100a) — TelePost LP-100A serial protocol codec for a standalone external wattmeter. Accessory wire code outside the radio-family seam. | unconverted |
 | `core/MacMicPermission.h` | 1 | ui-support — macOS mic permission dialog at app startup; OS permission plumbing, no radio state — belongs in the client app | unconverted |
@@ -177,7 +177,6 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/UlanziDialMacOSManager.h` | 1 | ui-support — macOS IOKit implementation of the Ulanzi Dial client input surface. Desktop hardware plumbing, not radio state. | unconverted |
 | `core/UlanziDialMappings.h` | 3 | ui-support — Owner of the Ulanzi Dial's pill→action bindings in one feature-owned document (Principle V). A control surface's own configuration — it belongs to the peripheral, not to any radio — same home decision as the FlexControl USB knob. | unconverted |
 | `core/UpdateChecker.h` | 2 | ui-support — App self-update checker polling GitHub releases API; pure client plumbing, no radio state — belongs in gui shell. | unconverted |
-| `core/UpdateSettings.h` | 1 | ui-support — Persisted app update-check preferences (auto-check, skipped and last known release, throttle time); pure client settings, no radio state. | unconverted |
 | `core/VersionNumber.h` | 3 | ui-support — Semver parse/compare utility used by update checker and What's New dialog; app plumbing, not radio state. | unconverted |
 | `core/VirtualAudioBridge.h` | 3 | mixed(flex) — POSIX-shm virtual audio device bridge feeding digi-mode apps; routing is generic, semantics are Flex DAX | unconverted |
 | `core/VkampConnection.h` | 3 | peripheral(vkamp) — Direct TCP control/status (port 5005) plus UDP telemetry (port 5010) client for the VK3AMP / Helios DX amplifier line (TCI_VKAMP firmware family) — a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h and core/SpeConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/vkamp-amplifier-design.md. | unconverted |

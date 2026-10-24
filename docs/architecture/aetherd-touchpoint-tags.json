@@ -797,12 +797,6 @@
   "split": "",
   "confidence": "high"
  },
- "core/UpdateSettings.h": {
-  "tag": "ui-support",
-  "note": "Persisted app update-check preferences (auto-check, skipped and last known release, throttle time); pure client settings, no radio state.",
-  "split": "",
-  "confidence": "high"
- },
  "core/VersionNumber.h": {
   "tag": "ui-support",
   "note": "Semver parse/compare utility used by update checker and What's New dialog; app plumbing, not radio state.",

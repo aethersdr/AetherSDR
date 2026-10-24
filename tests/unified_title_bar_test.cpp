@@ -430,6 +430,34 @@ int main(int argc, char** argv)
         check(visibleSeparators() > 0, "dock separator returns after minimal mode");
     }
 
+    // ── UPDATE badge ────────────────────────────────────────────────────────
+    // Hidden until a version is set; only parsed digits reach its text and the
+    // bridge; minimal mode hides it without forgetting the version.
+    {
+        auto updateState = [bar]() {
+            return bar->barState().value(QStringLiteral("update")).toMap();
+        };
+        auto* badge = bar->findChild<QPushButton*>(QStringLiteral("updateAvailableBadge"));
+        check(badge != nullptr, "UPDATE badge exists");
+        check(!updateState().value(QStringLiteral("visible")).toBool(), "badge hidden by default");
+        bar->setUpdateAvailable(QStringLiteral("26.10.3<b>x"));
+        app.processEvents();
+        check(updateState().value(QStringLiteral("version")).toString() == QLatin1String("26.10.3"),
+              "badge keeps parsed digits only");
+        check(updateState().value(QStringLiteral("visible")).toBool(), "badge shows for a version");
+        check(badge && !badge->toolTip().contains(QLatin1Char('<')), "tooltip carries no markup");
+        check(badge && !badge->accessibleDescription().isEmpty(), "badge states its version to a screen reader");
+        bar->setMinimalMode(true);
+        app.processEvents();
+        check(!updateState().value(QStringLiteral("visible")).toBool(), "minimal mode hides the badge");
+        bar->setMinimalMode(false);
+        app.processEvents();
+        check(updateState().value(QStringLiteral("visible")).toBool(), "badge returns after minimal mode");
+        bar->setUpdateAvailable(QString());
+        app.processEvents();
+        check(!updateState().value(QStringLiteral("visible")).toBool(), "empty version clears the badge");
+    }
+
     // ── Radio tabs ──────────────────────────────────────────────────────────
     RadioTabEntry connected;
     connected.id = QStringLiteral("SERIAL-1");

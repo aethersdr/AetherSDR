@@ -6,8 +6,10 @@
 
 namespace AetherSDR {
 
-// Checks the GitHub releases API for a newer AetherSDR version.
-// kReleasesPageUrl is the browser-facing page; the API endpoint lives in the .cpp.
+// Checks the GitHub releases API for a newer AetherSDR version, and is the
+// GUI's one entry point to the Updates settings (UpdateSettings stays inside
+// the engine). kReleasesPageUrl is the browser-facing page; the API endpoint
+// lives in the .cpp.
 class UpdateChecker : public QObject {
     Q_OBJECT
 public:
@@ -22,23 +24,31 @@ public:
 
     explicit UpdateChecker(QObject* parent = nullptr);
 
-    // A manual request made while an automatic check is in flight upgrades
-    // that check, so the operator still gets an answer.
-    void checkNow(Trigger trigger = Trigger::Manual);
+    // Starts a check; false when one is already in flight. A manual request
+    // made during an automatic check upgrades that check, so the operator
+    // still gets an answer.
+    bool checkNow(Trigger trigger = Trigger::Manual);
 
     // Starts an automatic check when UpdateSettings allow one now and this
     // install is not updated by a store. Returns whether a check started.
     bool checkAutomaticallyIfDue();
 
-    // "the Microsoft Store" or "Flathub" when that store installs this copy's
+    // "the Microsoft Store" or "Flatpak" when that installs this copy's
     // updates, worded to follow "come from"; empty for an installer,
-    // portable, DMG or AppImage build.
+    // portable, DMG or AppImage build. Probed once per process.
     static QString storeName();
 
+    // The Help menu's automatic-check toggle. Off also retires the badge.
+    static bool checkOnStartup();
+    static void setCheckOnStartup(bool enabled);
+
+    // Skip This Version: stores the parsed release, never the raw text.
+    static void skipVersion(const QString& version);
+
     // The release the title-bar badge should announce: `latestVersion` when
-    // it is newer than `runningVersion`, not skipped, and this copy is not
-    // updated by a store; otherwise empty. Live results and the one restored
-    // from settings at startup both go through it.
+    // it is newer than `runningVersion`, the automatic check is on, it is not
+    // skipped, and this copy is not updated by a store; otherwise empty. Live
+    // results and the one restored from settings at startup both go through it.
     static QString badgeVersion(const QString& latestVersion, const QString& runningVersion);
 
     // badgeVersion() for the release the last successful check recorded.
@@ -54,6 +64,7 @@ private:
 
     QNetworkAccessManager m_nam;
     bool m_inFlight = false;
+    bool m_tooLarge = false;
     Trigger m_trigger = Trigger::Manual;
 };
 

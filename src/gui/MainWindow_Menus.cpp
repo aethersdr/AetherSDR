@@ -54,8 +54,6 @@
 #include "WhatsNewDialog.h"
 #include "WindowShowState.h"
 #include "core/UpdateChecker.h"
-#include "core/UpdateSettings.h"
-#include "core/LogManager.h"
 #include "FramelessMessageBox.h"
 #include "ReleaseTagText.h"
 #include "core/AppSettings.h"
@@ -1753,6 +1751,7 @@ void MainWindow::buildMenuBar()
     refreshWindowMenu();
 
     auto* helpMenu = menuBar()->addMenu("&Help");
+    helpMenu->setToolTipsVisible(true);  // a dimmed item states its reason on hover
 
     // ── Documentation ─────────────────────────────────────────────────────
     // The online manual (docs.aethersdr.com), its printable PDF, and the Log
@@ -1894,14 +1893,20 @@ void MainWindow::buildMenuBar()
         autoUpdateAct->setStatusTip(reason);
         autoUpdateAct->setToolTip(reason);
     } else {
-        autoUpdateAct->setChecked(UpdateSettings::checkOnStartup());
+        autoUpdateAct->setChecked(UpdateChecker::checkOnStartup());
         autoUpdateAct->setStatusTip(QStringLiteral(
             "Check for a newer release at startup, at most once a day, and show "
             "UPDATE in the title bar when there is one"));
+        // The toggle governs the badge too: off retires it, and on brings a
+        // known update back at once when the daily wait skips the request.
         connect(autoUpdateAct, &QAction::toggled, this, [this](bool on) {
-            UpdateSettings::setCheckOnStartup(on);
-            if (on) {
-                m_updateChecker->checkAutomaticallyIfDue();
+            UpdateChecker::setCheckOnStartup(on);
+            if (!on) {
+                if (m_titleBar) {
+                    m_titleBar->setUpdateAvailable({});
+                }
+            } else if (!m_updateChecker->checkAutomaticallyIfDue()) {
+                restoreKnownUpdate();
             }
         });
     }
@@ -2293,9 +2298,6 @@ void MainWindow::wireUpdateChecker()
     connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
             [this](const QString& ver, UpdateChecker::Trigger trigger) {
         m_latestRelease = ver;
-        if (UpdateSettings::isSkipped(ver)) {
-            qCInfo(lcUpdater) << "newest release is the one the operator skipped";
-        }
         if (m_titleBar) {
             m_titleBar->setUpdateAvailable(
                 UpdateChecker::badgeVersion(ver, QCoreApplication::applicationVersion()));
@@ -2336,7 +2338,6 @@ void MainWindow::restoreKnownUpdate()
     if (known.isEmpty() || !m_titleBar) {
         return;
     }
-    qCInfo(lcUpdater).noquote() << "restored known update v" + known;
     m_latestRelease = known;
     m_titleBar->setUpdateAvailable(known);
 }
@@ -2352,18 +2353,23 @@ void MainWindow::showUpdateAvailableDialog()
     box.setWindowTitle("AetherSDR Update Available");
     box.setIcon(QMessageBox::Information);
     setUpdateAvailableText(box, current, ver);
-    if (const QString store = UpdateChecker::storeName(); !store.isEmpty()) {
+    const QString store = UpdateChecker::storeName();
+    if (!store.isEmpty()) {
         box.setInformativeText(
             QStringLiteral("You are running v%1. Updates for this copy come from %2.")
                 .arg(current, store));
     }
     QPushButton* viewBtn = box.addButton("View Latest Release", QMessageBox::ActionRole);
     viewBtn->setAutoDefault(false);
-    QPushButton* skipBtn = box.addButton("Skip This Version", QMessageBox::ActionRole);
-    skipBtn->setAutoDefault(false);
-    skipBtn->setAccessibleDescription(QStringLiteral(
-        "Stop showing UPDATE in the title bar for this release. "
-        "Help, Check for Updates still reports it."));
+    // A store install never shows the badge, so there is nothing to skip.
+    QPushButton* skipBtn = nullptr;
+    if (store.isEmpty()) {
+        skipBtn = box.addButton("Skip This Version", QMessageBox::ActionRole);
+        skipBtn->setAutoDefault(false);
+        skipBtn->setAccessibleDescription(QStringLiteral(
+            "Stop showing UPDATE in the title bar for this release. "
+            "Help, Check for Updates still reports it."));
+    }
     QPushButton* closeBtn = box.addButton(QMessageBox::Close);
     closeBtn->setAutoDefault(false);
     // Force minimum width via layout spacer — setMinimumWidth() is ignored by QMessageBox
@@ -2374,9 +2380,8 @@ void MainWindow::showUpdateAvailableDialog()
     box.exec();
     if (box.clickedButton() == viewBtn) {
         QDesktopServices::openUrl(QUrl(UpdateChecker::kReleasesPageUrl));
-    } else if (box.clickedButton() == skipBtn) {
-        UpdateSettings::setSkippedVersion(ver);
-        qCInfo(lcUpdater) << "operator skipped the newest release";
+    } else if (skipBtn && box.clickedButton() == skipBtn) {
+        UpdateChecker::skipVersion(ver);
         if (m_titleBar) {
             m_titleBar->setUpdateAvailable({});
         }

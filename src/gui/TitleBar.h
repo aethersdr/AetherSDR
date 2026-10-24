@@ -84,7 +84,6 @@ public:
     // A newer AetherSDR release, or empty to clear. Non-empty shows the
     // UPDATE pill after the wordmark; clicking it emits updateBadgeClicked().
     void setUpdateAvailable(const QString& latestVersion);
-    QString updateAvailableVersion() const { return m_updateVersion; }
 
     // Status-bar transmit timer (left of the PC Audio button). Driven by
     // RadioModel::operatorTransmitChanged — runs only for operator MOX/PTT/VOX
