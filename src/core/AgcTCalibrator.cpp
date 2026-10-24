@@ -248,7 +248,13 @@ void AgcTCalibrator::onSweepStep()
     // solve would then apply the first point.
     if (m_levelCount == m_levelCountAtApply) {
         qCWarning(lcAgcCal) << "auto sweep stopped: no audio level at" << m_sweepValue;
-        stop(); // restores the original value
+        stop(); // restores the original value, emits finished(false)
+        // stop() clears m_auto before it restores, so the restore re-enters
+        // onValueChanged as a manual edit and would record the stale reading
+        // this guard just rejected. Drop it, and the part curve with it.
+        m_manualTimer.stop();
+        m_curve.clear();
+        // After finished(false), which stop() has already emitted.
         emit noAudio();
         return;
     }
