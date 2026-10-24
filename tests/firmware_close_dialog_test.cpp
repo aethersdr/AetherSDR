@@ -3,13 +3,13 @@
 #include "core/FirmwareUploader.h"
 #include "UpdateTestNetwork.h"
 #include "core/UpdateChecker.h"
+#include "gui/CanonPrompt.h"
 #include "gui/FirmwareUpdateCard.h"
 #include "gui/UpdatesWindow.h"
 #include "models/RadioModel.h"
 
 #include <QApplication>
 #include <QLabel>
-#include <QMessageBox>
 #include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
@@ -105,18 +105,18 @@ private slots:
         bool reentrantRefused = false;
         QString prompt;
         QTimer::singleShot(0, &dialog, [&] {
-            auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            auto* box = qobject_cast<CanonPrompt*>(QApplication::activeModalWidget());
             if (!box) { return; }
             prompted = true;
             prompt = box->text();
-            safeDefault = box->defaultButton() == box->button(QMessageBox::Cancel);
+            safeDefault = box->cancelButton()->isDefault();
             // A second programmatic dismissal must not bypass the modal guard.
             dialog.reject();
             reentrantRefused = dialog.isVisible() && uploader.isUploading();
             if (!confirm && path == 1) {
                 QTest::keyClick(box, Qt::Key_Escape);
             } else {
-                box->button(confirm ? QMessageBox::Ok : QMessageBox::Cancel)->click();
+                (confirm ? box->confirmButton() : box->cancelButton())->click();
             }
         });
         if (path == 0) { dialog.close(); }
@@ -153,11 +153,11 @@ private slots:
         QSignalSpy finished(&uploader, &FirmwareUploader::finished);
         dialog.show();
         QTimer::singleShot(0, &dialog, [&] {
-            auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            auto* box = qobject_cast<CanonPrompt*>(QApplication::activeModalWidget());
             QVERIFY(box);
             FirmwareUploaderTestAccess::drain(uploader);
             QVERIFY(box->text().contains(QStringLiteral("does not undo")));
-            box->button(QMessageBox::Ok)->click();
+            box->confirmButton()->click();
         });
         dialog.close();
         QCOMPARE(finished.size(), 1);
@@ -176,11 +176,11 @@ private slots:
         QSignalSpy finished(&uploader, &FirmwareUploader::finished);
         dialog.show();
         QTimer::singleShot(0, &dialog, [&] {
-            auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            auto* box = qobject_cast<CanonPrompt*>(QApplication::activeModalWidget());
             QVERIFY(box);
             FirmwareUploaderTestAccess::succeed(uploader);
             QVERIFY(box->text().contains(QStringLiteral("has ended")));
-            box->button(QMessageBox::Ok)->click();
+            box->confirmButton()->click();
         });
         dialog.close();
         QCOMPARE(finished.size(), 1);
@@ -201,9 +201,9 @@ private slots:
         FirmwareUploaderTestAccess::start(*uploader, 1);
         dialog->show();
         QTimer::singleShot(0, dialog, [] {
-            auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            auto* box = qobject_cast<CanonPrompt*>(QApplication::activeModalWidget());
             QVERIFY(box);
-            box->button(QMessageBox::Ok)->click();
+            box->confirmButton()->click();
         });
         QTest::keyClick(dialog, Qt::Key_Escape);
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
@@ -232,9 +232,9 @@ private slots:
         connect(uploader, &FirmwareUploader::finished, qApp, [&] { dialog.reset(); });
         dialog->show();
         QTimer::singleShot(0, dialog.get(), [] {
-            auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            auto* box = qobject_cast<CanonPrompt*>(QApplication::activeModalWidget());
             QVERIFY(box);
-            box->button(QMessageBox::Ok)->click();
+            box->confirmButton()->click();
         });
         dialog->close();
         QVERIFY(!dialog);
@@ -289,11 +289,11 @@ private slots:
         UpdatesWindowTestAccess::beginNetworkInstall(window);
         QString prompt;
         QTimer::singleShot(0, &window, [&] {
-            auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            auto* box = qobject_cast<CanonPrompt*>(QApplication::activeModalWidget());
             QVERIFY(box);
             prompt = box->text();
-            QVERIFY(box->defaultButton() == box->button(QMessageBox::Cancel));
-            box->button(QMessageBox::Cancel)->click();
+            QVERIFY(box->cancelButton()->isDefault());
+            box->cancelButton()->click();
         });
         emit stager->stageComplete(QStringLiteral("FLEX-9600_v4.3.16.ssdr"), QStringLiteral("4.3.16"));
         QVERIFY(prompt.contains(QStringLiteral("was NOT checked")));

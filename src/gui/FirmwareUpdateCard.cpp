@@ -3,6 +3,7 @@
 #include "core/FirmwareCurrency.h"
 #include "core/FirmwareStager.h"
 #include "core/FirmwareUploader.h"
+#include "gui/CanonPrompt.h"
 #include "gui/ScopedChildWidget.h"
 #include "models/RadioModel.h"
 
@@ -13,7 +14,6 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMap>
-#include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QStyle>
@@ -463,15 +463,14 @@ void FirmwareUpdateCard::startInstall()
         return;
     }
     const QPointer<FirmwareUpdateCard> self(this);
-    ScopedChildWidget<QMessageBox> boxOwner(
-        QMessageBox::Warning, tr("Firmware Update"),
+    ScopedChildWidget<CanonPrompt> boxOwner(
+        tr("Firmware Update"),
         tr("Download SmartSDR %1 from FlexRadio and upload it to %2?\n\n"
            "The radio will reboot after the update.\nDo not disconnect during the upload.")
             .arg(release, m_model->model()),
-        QMessageBox::Ok | QMessageBox::Cancel, window());
-    boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
+        tr("Install"), window());
     const int reply = boxOwner.get()->exec();
-    if (!self || !boxOwner || reply != QMessageBox::Ok || !m_model) {
+    if (!self || !boxOwner || reply != QDialog::Accepted || !m_model) {
         return;
     }
     m_staging = true;
@@ -522,16 +521,14 @@ void FirmwareUpdateCard::uploadStaged(const QString& path, bool confirmFirst, bo
                      "The radio will reboot after the update.\nDo not disconnect during the upload.")
                 : tr("Upload %1 to %2?\n\nThe radio will reboot after the update.\n"
                      "Do not disconnect during the upload.");
-        ScopedChildWidget<QMessageBox> boxOwner(
-            QMessageBox::Warning, tr("Firmware Update"),
-            question.arg(QFileInfo(path).fileName(), m_model->model()),
-            QMessageBox::Ok | QMessageBox::Cancel, window());
-        boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
+        ScopedChildWidget<CanonPrompt> boxOwner(
+            tr("Firmware Update"), question.arg(QFileInfo(path).fileName(), m_model->model()),
+            tr("Upload"), window());
         const int reply = boxOwner.get()->exec();
         if (!self || !boxOwner) {
             return;
         }
-        if (reply != QMessageBox::Ok || !m_model) {
+        if (reply != QDialog::Accepted || !m_model) {
             setStep(Step::Idle);
             m_progress->hide();
             setStatus(tr("Firmware is ready; the upload was not started."), QStringLiteral("muted"));
@@ -593,20 +590,18 @@ bool FirmwareUpdateCard::confirmStop(QWidget* parent)
     }
     if (m_staging && !(m_uploader && m_uploader->isUploading())) {
         const QPointer<FirmwareUpdateCard> self(this);
-        ScopedChildWidget<QMessageBox> boxOwner(
-            QMessageBox::Warning, tr("Firmware Update In Progress"),
+        ScopedChildWidget<CanonPrompt> boxOwner(
+            tr("Firmware Update In Progress"),
             tr("The firmware is still being prepared. Nothing has been sent to the radio.\n\n"
                "Stop and close?"),
-            QMessageBox::Ok | QMessageBox::Cancel, parent);
-        boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
-        boxOwner.get()->setEscapeButton(QMessageBox::Cancel);
+            tr("Stop and Close"), parent);
         m_closePromptOpen = true;
         const int reply = boxOwner.get()->exec();
         if (!self) {
             return false;
         }
         m_closePromptOpen = false;
-        if (!boxOwner || reply != QMessageBox::Ok) {
+        if (!boxOwner || reply != QDialog::Accepted) {
             return false;
         }
         m_stager->cancel();
@@ -623,12 +618,9 @@ bool FirmwareUpdateCard::confirmStop(QWidget* parent)
     }
     const QPointer<FirmwareUpdateCard> self(this);
     const QPointer<FirmwareUploader> uploader(m_uploader);
-    ScopedChildWidget<QMessageBox> boxOwner(
-        QMessageBox::Warning, tr("Firmware Update In Progress"), QString(),
-        QMessageBox::Ok | QMessageBox::Cancel, parent);
-    QMessageBox* box = boxOwner.get();
-    box->setDefaultButton(QMessageBox::Cancel);
-    box->setEscapeButton(QMessageBox::Cancel);
+    ScopedChildWidget<CanonPrompt> boxOwner(tr("Firmware Update In Progress"), QString(),
+                                            tr("Close Anyway"), parent);
+    CanonPrompt* box = boxOwner.get();
     const auto refreshPrompt = [uploader, box] {
         if (!uploader) {
             return;
@@ -664,7 +656,7 @@ bool FirmwareUpdateCard::confirmStop(QWidget* parent)
         return false;
     }
     m_closePromptOpen = false;
-    if (!boxOwner || reply != QMessageBox::Ok) {
+    if (!boxOwner || reply != QDialog::Accepted) {
         return false;
     }
     if (uploader) {

@@ -90,6 +90,7 @@ The canon does not change control geometry.
 |---|---|
 | A window in the canon (no title bar, 16 px rounded corners, ambient ground, round close button, drag to move, Escape or ⌘W / Ctrl+W to close) | `CanonWindow`; put content in `bodyWidget()` |
 | A surface in the canon inside the main window: an applet, a panadapter, a canvas (the same ground, hairline and round close button, square corners) | `CanonApplet`, `CanonPan` or `CanonCanvas` from `gui/CanonSurface.h`; put content in `bodyWidget()` |
+| A confirmation inside a canon window (instead of a `QMessageBox`) | `CanonPrompt` from `gui/CanonPrompt.h`: a small `CanonWindow` with a `color.accent.warning` eyebrow, the question in `ink`, and Cancel (secondary, the default) beside a confirm button named for the action, outlined in `color.accent.warning`. Return, Escape and the corner button decline; `exec()` returns `Accepted` only for the confirm button |
 | A logo or avatar with a contrast ring and a cyan spark | `SparkRing` |
 | A recognition control (gold spark around a button) | `SparkBorder` |
 | The "AetherSDR" wordmark ("Aether" in ink, "SDR" in the gradient) | `BrandMark::paintWordmark` |
