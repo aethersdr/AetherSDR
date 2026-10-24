@@ -115,7 +115,7 @@ windows" lists what it keeps (the `FramelessMoveHelper` drag, Escape and
 Which windows the canon covers: short-lived, informational windows (About,
 Remote Access, and the candidates listed on #6239, once the maintainer picks
 them), and the tool windows the maintainer has moved to it (Updates, Waveforms,
-Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, Radio Setup, Connect to Radio, AGC-T Calibration). Other tool and workspace dialogs keep
+Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, the multiFLEX Dashboard, Radio Setup, Connect to Radio, AGC-T Calibration). Other tool and workspace dialogs keep
 `PersistentDialog` and `FramelessWindowTitleBar` as `docs/agents/gui.md`
 describes. For windows the canon covers,
 `FramelessWindowTitleBar` is deprecated: those dialogs move to
