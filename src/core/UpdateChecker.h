@@ -19,17 +19,11 @@ struct ReleaseAsset {
     qint64  size = 0;
 };
 
-struct ReleaseHighlight {
-    QString title;    // the bold lead, without its trailing "(#NNNN)."
-    QString detail;   // the first sentence after it, verbatim
-};
-
 struct ReleaseInfo {
     QString version;                    // parsed digits, "26.10.3"; empty if unusable
     QString tagline;                    // the release name after "AetherSDR vX — "
     QDateTime published;                // UTC; invalid when absent
     QStringList chapters;               // the body's ### headings, boilerplate dropped
-    QList<ReleaseHighlight> highlights; // first bold lead of the first chapters, at most 3
     QList<ReleaseAsset> assets;         // only download URLs that pass isTrustedDownloadUrl()
     // Only the version an earlier answer saved, not an answer from this run:
     // no details, and no claim about what GitHub says now.

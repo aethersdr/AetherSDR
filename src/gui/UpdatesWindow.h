@@ -19,8 +19,8 @@ class UpdateChecker;
 // File → Update...: what AetherSDR release is newest, what is in it, and the
 // download built for this computer (RFC #5304). Made to make an update worth
 // installing, after aethersdr.com/experience. Everything it shows comes from
-// UpdateChecker: the parsed version, and the release's tagline, chapters and
-// highlights as plain text. Opening it without the release's details starts a check.
+// UpdateChecker: the parsed version, and the release's tagline and chapters
+// as plain text. Opening it without the release's details starts a check.
 class UpdatesWindow : public CanonWindow {
     Q_OBJECT
 
@@ -59,8 +59,6 @@ private:
     QLabel*      m_chaptersTitle{nullptr};
     QWidget*     m_chips{nullptr};
     FlowLayout*  m_chipsLayout{nullptr};
-    QLabel*      m_highlightsTitle{nullptr};
-    QWidget*     m_cards{nullptr};
     QPushButton* m_get{nullptr};
     QPushButton* m_notes{nullptr};
     QPushButton* m_skip{nullptr};

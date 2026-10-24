@@ -25,7 +25,7 @@ namespace AetherSDR {
 
 namespace {
 
-// The order chapter dots and card edges take the category colours in.
+// The order chapter dots take the category colors in.
 const char* const kCategoryTokens[] = {
     "color.canon.category.cyan",  "color.canon.category.aqua", "color.canon.category.blue",
     "color.canon.category.amber", "color.canon.category.violet", "color.canon.category.rose",
@@ -73,6 +73,9 @@ protected:
         p.setRenderHint(QPainter::Antialiasing);
         QPainterPath path;
         const QFontMetrics fm(m_font);
+        // Winding, not the default odd-even: tight letter spacing overlaps
+        // glyphs, and odd-even would cut a hole where they meet.
+        path.setFillRule(Qt::WindingFill);
         path.addText(0, fm.ascent(), m_font, m_text);
         auto& tm = ThemeManager::instance();
         p.fillPath(path, m_gradient
@@ -110,7 +113,7 @@ QString sheet()
     return QStringLiteral(
                "QLabel { background: transparent; color: {{color.canon.inkSoft}}; }"
                // Plain containers stay see-through over the canon ground.
-               "QWidget#updatesHeader, QWidget#updatesVersion, QWidget#updatesChapters, QWidget#updatesHighlights,"
+               "QWidget#updatesHeader, QWidget#updatesVersion, QWidget#updatesChapters,"
                " QWidget#updatesContent, QScrollArea#updatesScroll,"
                " QScrollArea#updatesScroll > QWidget > QWidget { background: transparent; border: none; }"
                "QLabel[role=\"eyebrow\"] { color: {{color.canon.cyan}}; font-size: 11px; font-weight: 700;"
@@ -125,10 +128,6 @@ QString sheet()
                "QLabel[role=\"chip\"] { color: {{color.canon.inkSoft}}; font-size: 12px; }"
                "QFrame#updatesChip { background: {{color.canon.raised}}; border: 1px solid {{color.canon.lineHi}};"
                " border-radius: 12px; }"
-               "QFrame#updatesCard { background: {{color.canon.raised}}; border: 1px solid {{color.canon.line}};"
-               " border-radius: 12px; }"
-               "QLabel[role=\"cardTitle\"] { color: {{color.canon.ink}}; font-size: 14px; font-weight: 650; }"
-               "QLabel[role=\"cardDetail\"] { color: {{color.canon.muted}}; font-size: 12px; }"
                "QPushButton#updatesGet { background: {{color.brand.gradient}}; color: {{color.canon.onAccent}};"
                " font-size: 15px; font-weight: 700; border: 1px solid transparent; border-radius: 12px;"
                " padding: 11px 22px; }"
@@ -171,7 +170,7 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
     setObjectName(QStringLiteral("updatesWindow"));
     setAttribute(Qt::WA_DeleteOnClose);
     setGeometryKey(QStringLiteral("UpdatesWindowGeometry"));
-    setLaunchSize(QSize(760, 660));
+    setLaunchSize(QSize(760, 480));
     applyCanonSheet(bodyWidget(), sheet);
 
     auto* root = new QVBoxLayout(bodyWidget());
@@ -237,14 +236,6 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
     m_chips->setLayout(m_chipsLayout);
     content->addWidget(m_chips);
 
-    m_highlightsTitle = plainLabel(QStringLiteral("section"));
-    content->addWidget(m_highlightsTitle);
-    m_cards = new QWidget;
-    m_cards->setObjectName(QStringLiteral("updatesHighlights"));
-    auto* cardsLayout = new QHBoxLayout(m_cards);
-    cardsLayout->setContentsMargins(0, 0, 0, 0);
-    cardsLayout->setSpacing(8);
-    content->addWidget(m_cards);
 
     auto* actions = new QHBoxLayout;
     actions->setSpacing(10);
@@ -427,9 +418,6 @@ void UpdatesWindow::refresh()
     const bool showRelease = known && (view == View::Available || view == View::Current);
     m_chaptersTitle->setVisible(showRelease && !release.chapters.isEmpty());
     m_chips->setVisible(showRelease && !release.chapters.isEmpty());
-    m_highlightsTitle->setVisible(showRelease && !release.highlights.isEmpty());
-    m_cards->setVisible(showRelease && !release.highlights.isEmpty());
-    m_highlightsTitle->setText(view == View::Available ? tr("HIGHLIGHTS") : tr("NEW IN YOUR VERSION"));
 
     const ReleaseAsset asset = UpdateChecker::assetForThisComputer(release);
     const bool canDownload = view == View::Available && store.isEmpty();
@@ -498,33 +486,6 @@ void UpdatesWindow::rebuildRelease()
         m_chipsLayout->addWidget(chip);
     }
 
-    auto* cards = static_cast<QHBoxLayout*>(m_cards->layout());
-    while (QLayoutItem* item = cards->takeAt(0)) {
-        delete item->widget();
-        delete item;
-    }
-    for (int i = 0; i < release.highlights.size(); ++i) {
-        auto* card = new QFrame(m_cards);
-        card->setObjectName(QStringLiteral("updatesCard"));
-        // The left edge takes the colour of the chapter the highlight leads.
-        tm.applyStyleSheet(card, QStringLiteral("QFrame#updatesCard { border-left: 3px solid {{%1}}; }")
-                                     .arg(QString::fromLatin1(kCategoryTokens[i % kCategoryCount])));
-        auto* col = new QVBoxLayout(card);
-        col->setContentsMargins(14, 12, 14, 12);
-        col->setSpacing(4);
-        auto* title = plainLabel(QStringLiteral("cardTitle"), card);
-        title->setText(release.highlights[i].title);
-        title->setWordWrap(true);
-        col->addWidget(title);
-        auto* detail = plainLabel(QStringLiteral("cardDetail"), card);
-        detail->setText(release.highlights[i].detail);
-        detail->setWordWrap(true);
-        col->addWidget(detail);
-        col->addStretch(1);
-        card->setAccessibleName(release.highlights[i].title);
-        card->setAccessibleDescription(release.highlights[i].detail);
-        cards->addWidget(card, 1);
-    }
 }
 
 void UpdatesWindow::openDownload()

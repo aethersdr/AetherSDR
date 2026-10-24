@@ -89,13 +89,10 @@ int main(int argc, char** argv)
         }
         check(allPlain, "every label in the window is plain text");
         int chips = 0;
-        int cards = 0;
         for (const QFrame* f : w->findChildren<QFrame*>()) {
             chips += f->objectName() == QLatin1String("updatesChip");
-            cards += f->objectName() == QLatin1String("updatesCard");
         }
         check(chips == 10, "one chip per chapter");
-        check(cards == 3, "three highlight cards");
         const QPushButton* get = button(*w, QStringLiteral("Get AetherSDR 26.10.3"));
         check(get && get->isVisible(), "the primary action names the release");
         check(!text(*w, "updatesFootnote").isEmpty(), "the footnote says what the download is");
@@ -235,7 +232,7 @@ int main(int argc, char** argv)
 
     {
         // Opened on a saved version, then GitHub answers for that same
-        // version: the answer's chapters and highlights must be built.
+        // version: the answer's chapters must be built.
         for (const char* running : {"26.10.3", "26.10.2"}) {
             QCoreApplication::setApplicationVersion(QString::fromLatin1(running));
             UpdateSettings::setSkippedVersion(QString());

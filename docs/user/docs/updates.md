@@ -26,7 +26,6 @@ When a newer release exists, the window shows:
 
 - **NEW RELEASE** with its date, the version, and the release's one-line summary.
 - **WHAT'S INSIDE**: one chip for each chapter of the release notes.
-- **HIGHLIGHTS**: the first highlight from each of the first three chapters.
 - **Get AetherSDR** *version*: opens the download in your browser. The line under it names the file: the Windows installer, the Windows portable zip if you run the portable copy, the macOS Apple silicon disk image, or the Linux AppImage for your processor. When there is no build for your computer, it opens the release page instead.
 - **Full release notes**: opens the release page on GitHub.
 - **Skip this version**: hides the **UPDATE** badge for this release. The window still shows it, and the next release shows the badge again.

@@ -20,9 +20,6 @@ namespace {
 constexpr int kMaxTaglineChars = 160;
 constexpr int kMaxChapterChars = 80;
 constexpr int kMaxChapters = 12;
-constexpr int kMaxHighlightTitleChars = 80;
-constexpr int kMaxHighlightDetailChars = 220;
-constexpr int kMaxHighlights = 3;
 constexpr int kMaxAssets = 64;
 
 const QString kDownloadPathPrefix = QStringLiteral("/aethersdr/AetherSDR/releases/download/");
@@ -54,27 +51,6 @@ QString plainText(QString text, int maxChars)
     return out;
 }
 
-// "Radio-owned Auto AGC-T (#6508)." -> "Radio-owned Auto AGC-T".
-QString highlightTitle(QString lead)
-{
-    static const QRegularExpression issueTail(QStringLiteral(R"(\s*\(#\d+(?:,\s*#\d+)*\)\s*\.?\s*$)"));
-    lead.remove(issueTail);
-    while (lead.endsWith(QLatin1Char('.'))) {
-        lead.chop(1);
-    }
-    return plainText(lead, kMaxHighlightTitleChars);
-}
-
-// The first sentence of the text after a bold lead.
-QString firstSentence(const QString& text)
-{
-    const QString plain = plainText(text, 4 * kMaxHighlightDetailChars);
-    static const QRegularExpression sentenceEnd(QStringLiteral(R"([.!?](?=\s|$))"));
-    const QRegularExpressionMatch m = sentenceEnd.match(plain);
-    const QString sentence = m.hasMatch() ? plain.left(m.capturedEnd()) : plain;
-    return plainText(sentence, kMaxHighlightDetailChars);
-}
-
 } // namespace
 
 ReleaseInfo UpdateChecker::parseRelease(const QByteArray& json)
@@ -97,35 +73,18 @@ ReleaseInfo UpdateChecker::parseRelease(const QByteArray& json)
     info.published = QDateTime::fromString(root.value(QLatin1String("published_at")).toString(),
                                            Qt::ISODate).toUTC();
 
-    static const QRegularExpression boldLead(QStringLiteral(R"(^[-*]\s+\*\*(.+?)\*\*(.*)$)"));
-    bool chapterHasHighlight = true;   // no chapter yet: bullets before one are skipped
     const QStringList lines = root.value(QLatin1String("body")).toString().split(QLatin1Char('\n'));
     for (QString line : lines) {
         line = line.trimmed();
         if (line.startsWith(QLatin1String("### "))) {
-            chapterHasHighlight = true;
             if (info.chapters.size() >= kMaxChapters) {
-                continue;   // the cap bounds the work, not only the list
+                break;
             }
             const QString heading = plainText(line.mid(4), kMaxChapterChars);
             if (heading.isEmpty() || isBoilerplateHeading(heading)) {
                 continue;
             }
             info.chapters.append(heading);
-            chapterHasHighlight = false;
-            continue;
-        }
-        if (chapterHasHighlight || info.highlights.size() >= kMaxHighlights) {
-            continue;
-        }
-        const QRegularExpressionMatch m = boldLead.match(line);
-        if (!m.hasMatch()) {
-            continue;
-        }
-        ReleaseHighlight h{highlightTitle(m.captured(1)), firstSentence(m.captured(2))};
-        if (!h.title.isEmpty()) {
-            info.highlights.append(h);
-            chapterHasHighlight = true;
         }
     }
 

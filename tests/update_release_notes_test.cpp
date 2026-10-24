@@ -5,8 +5,8 @@
 #include <QFile>
 
 // UpdateChecker's release reading against the real v26.10.3 release JSON
-// (tests/fixtures/release/), plus hostile inputs: the tagline, chapters and
-// highlights the Updates window shows, the installer picked per platform,
+// (tests/fixtures/release/), plus hostile inputs: the tagline and chapters
+// the Updates window shows, the installer picked per platform,
 // and the download-URL allowlist. Pure: no network, no settings.
 
 using namespace AetherSDR;
@@ -40,17 +40,6 @@ int main(int argc, char** argv)
     check(!r.chapters.contains(QStringLiteral("Contributors"))
               && !r.chapters.contains(QStringLiteral("Downloads")),
           "no boilerplate chapter");
-
-    check(r.highlights.size() == 3, "three highlights");
-    check(r.highlights.value(0).title == QLatin1String("Radio-owned Auto AGC-T"),
-          "highlight 1 title drops the issue number and period");
-    check(r.highlights.value(0).detail
-              == QLatin1String("The RX applet gains an A button and the slice Audio tab an Auto button."),
-          "highlight 1 detail is the first sentence, verbatim");
-    check(r.highlights.value(1).title.startsWith(QLatin1String("DeepCW adds an AI CW receive decoder")),
-          "highlight 2 comes from the second chapter");
-    check(r.highlights.value(2).title.startsWith(QLatin1String("Twelve Auto SQL corrections")),
-          "highlight 3 comes from the third chapter");
 
     check(r.assets.size() == 20, "every real asset URL passes the allowlist");
     auto picked = [&](const char* os, const char* arch, bool portable) {
@@ -103,9 +92,6 @@ int main(int argc, char** argv)
     check(hostile.tagline == QLatin1String("<img src=x onerror=alert(1)> bold code"),
           "tagline loses markdown and control characters (markup stays text, shown as plain text)");
     check(hostile.chapters == QStringList{QStringLiteral("<b>Chap</b> one")}, "links reduced to their text");
-    check(hostile.highlights.size() == 1 && hostile.highlights[0].title == QLatin1String("Lead")
-              && hostile.highlights[0].detail == QLatin1String("First."),
-          "no highlight before a chapter or under boilerplate; multi-issue tail dropped");
     check(hostile.assets.size() == 1 && hostile.assets[0].url.host() == QLatin1String("github.com"),
           "an untrusted asset URL is dropped");
 
