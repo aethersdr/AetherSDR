@@ -528,6 +528,7 @@ void PanadapterStream::restartStreamSequence(quint32 streamId)
     const auto it = m_streamStats.find(streamId);
     if (it != m_streamStats.end()) {
         it->lastSeq = -1;
+        it->reorderTracker.reset();
         it->started = false;
     }
 }
@@ -537,6 +538,7 @@ void PanadapterStream::restartAllStreamSequences()
     QMutexLocker statsLock(&m_statsMutex);
     for (auto it = m_streamStats.begin(); it != m_streamStats.end(); ++it) {
         it->lastSeq = -1;
+        it->reorderTracker.reset();
         it->started = false;
     }
 }
@@ -847,30 +849,42 @@ void PanadapterStream::processDatagram(const QByteArray& data)
             }
             stats.lossLog.start(m_seqLossClock.elapsed());
         }
-        if (stats.lastSeq >= 0) {
-            const int expected = (stats.lastSeq + 1) & 0x0F;
-            if (vitaSeq != expected) {
-                sequenceError = true;
-                stats.errorCount++;
-                m_catStats[cat].errors++;
-                if (cat == CatAudio) {
-                    // 4-bit modular distance, minus the one packet we just got. (#2731)
-                    audioMissedThisPacket =
-                        ((vitaSeq - stats.lastSeq - 1) & 0x0F);
-                }
-                // The shared budget is asked only when this stream's line is
-                // due; when it says no, the error stays held for the next line.
-                const qint64 nowMs = m_seqLossClock.elapsed();
-                const bool mayReport =
-                    !stats.lossLog.due(nowMs) || m_seqLossBudget.allow(nowMs);
-                if (stats.lossLog.recordError(nowMs, mayReport)) {
-                    reportSequenceLoss = true;
-                    lossHeldBackErrors = m_seqLossBudget.takeSuppressed();
-                    lossErrors = stats.lossLog.reportErrors();
-                    lossWindowMs = stats.lossLog.reportWindowMs();
-                    lossStreamErrors = stats.errorCount - stats.startErrorCount;
-                    lossStreamPackets = stats.totalCount - stats.startTotalCount;
-                }
+        // Errors: on FFT, waterfall and meter streams the packets actually
+        // lost, as a short final packet routinely overtakes the ones sent
+        // before it (#6051). Elsewhere every break in the count: audio's
+        // concealment relies on it, and DAX audio is passed on unreordered.
+        int lostPackets = 0;
+        int breaks = 0;
+        if (cat == CatFFT || cat == CatWaterfall || cat == CatMeter) {
+            const VitaSequenceTracker::Result r = stats.reorderTracker.add(vitaSeq);
+            lostPackets = r.lost;
+            breaks = r.breaks;
+        } else if (stats.lastSeq >= 0 && vitaSeq != ((stats.lastSeq + 1) & 0x0F)) {
+            lostPackets = 1;
+            breaks = 1;
+        }
+        stats.breakCount += breaks;
+        if (lostPackets > 0) {
+            sequenceError = true;
+            stats.errorCount += lostPackets;
+            m_catStats[cat].errors += lostPackets;
+            if (cat == CatAudio) {
+                // 4-bit modular distance, minus the one packet we just got. (#2731)
+                audioMissedThisPacket =
+                    ((vitaSeq - stats.lastSeq - 1) & 0x0F);
+            }
+            // The shared budget is asked only when this stream's line is
+            // due; when it says no, the error stays held for the next line.
+            const qint64 nowMs = m_seqLossClock.elapsed();
+            const bool mayReport =
+                !stats.lossLog.due(nowMs) || m_seqLossBudget.allow(nowMs);
+            if (stats.lossLog.recordError(nowMs, mayReport, lostPackets)) {
+                reportSequenceLoss = true;
+                lossHeldBackErrors = m_seqLossBudget.takeSuppressed();
+                lossErrors = stats.lossLog.reportErrors();
+                lossWindowMs = stats.lossLog.reportWindowMs();
+                lossStreamErrors = stats.errorCount - stats.startErrorCount;
+                lossStreamPackets = stats.totalCount - stats.startTotalCount;
             }
         }
         stats.lastSeq = vitaSeq;
@@ -1557,6 +1571,15 @@ int PanadapterStream::packetErrorCount() const
     int total = 0;
     for (auto it = m_streamStats.constBegin(); it != m_streamStats.constEnd(); ++it)
         total += it->errorCount;
+    return total;
+}
+
+int PanadapterStream::packetBreakCount() const
+{
+    QMutexLocker lock(&m_statsMutex);
+    int total = 0;
+    for (auto it = m_streamStats.constBegin(); it != m_streamStats.constEnd(); ++it)
+        total += it->breakCount;
     return total;
 }
 
