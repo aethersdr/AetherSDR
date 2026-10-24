@@ -5452,6 +5452,7 @@ void MainWindow::buildUI()
             this, &MainWindow::showMultiFlexDialog);
     connect(m_titleBar, &TitleBar::updateBadgeClicked,
             this, &MainWindow::showUpdateAvailableDialog);
+    restoreKnownUpdate();
     connect(m_titleBar, &TitleBar::minimalModeRequested,
             this, &MainWindow::toggleMinimalModeFromAction);
     connect(m_titleBar, &TitleBar::minimalModeWindowedExitRequested, this, [this]() {

@@ -41,7 +41,7 @@ QString UpdateChecker::storeName()
     // (ERROR_INSUFFICIENT_BUFFER for a zero-length probe) means an MSIX package.
     UINT32 nameLength = 0;
     if (GetCurrentPackageFullName(&nameLength, nullptr) != APPMODEL_ERROR_NO_PACKAGE) {
-        return QStringLiteral("Microsoft Store");
+        return QStringLiteral("the Microsoft Store");
     }
 #elif defined(Q_OS_LINUX)
     // Every Flatpak sandbox has /.flatpak-info at its root.
@@ -52,11 +52,27 @@ QString UpdateChecker::storeName()
     return {};
 }
 
+QString UpdateChecker::badgeVersion(const QString& latestVersion, const QString& runningVersion)
+{
+    const VersionNumber latest = VersionNumber::parse(latestVersion);
+    if (latest.isNull() || !(latest > VersionNumber::parse(runningVersion))
+        || UpdateSettings::isSkipped(latestVersion) || !storeName().isEmpty()) {
+        return {};
+    }
+    return latest.toString();
+}
+
+QString UpdateChecker::knownBadgeVersion()
+{
+    return badgeVersion(UpdateSettings::latestVersion(),
+                        QCoreApplication::applicationVersion());
+}
+
 bool UpdateChecker::checkAutomaticallyIfDue()
 {
     const QString store = storeName();
     if (!store.isEmpty()) {
-        qCInfo(lcUpdater) << "automatic check skipped: updates come from" << store;
+        qCInfo(lcUpdater).noquote() << "automatic check skipped: updates come from" << store;
         return false;
     }
     if (!UpdateSettings::automaticCheckDue(QDateTime::currentDateTimeUtc())) {
@@ -126,7 +142,7 @@ void UpdateChecker::checkNow(Trigger trigger)
             return;
         }
 
-        UpdateSettings::setLastCheckUtc(QDateTime::currentDateTimeUtc());
+        UpdateSettings::recordAnswer(QDateTime::currentDateTimeUtc(), latest.toString());
         // Log the parsed version, never the raw tag: it is network text.
         if (latest > running) {
             qCInfo(lcUpdater).nospace().noquote() << triggerName(m_trigger) << " check: v"

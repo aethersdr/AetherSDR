@@ -4648,7 +4648,8 @@ target_link_libraries(waterfall_time_marker_settings_test PRIVATE aethercore Qt6
 add_test(NAME waterfall_time_marker_settings_test COMMAND waterfall_time_marker_settings_test)
 
 # Updates settings document (RFC #5304): defaults, daily throttle, skip
-# matching, stored shape. No network.
+# matching, the known update restored across a restart, stored shape.
+# No network.
 add_executable(update_settings_test tests/update_settings_test.cpp)
 target_include_directories(update_settings_test PRIVATE src)
 target_link_libraries(update_settings_test PRIVATE aethercore Qt6::Core)

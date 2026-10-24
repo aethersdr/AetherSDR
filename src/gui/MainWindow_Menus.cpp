@@ -1888,7 +1888,7 @@ void MainWindow::buildMenuBar()
     if (const QString store = UpdateChecker::storeName(); !store.isEmpty()) {
         // The store owns updates here, so the background check never runs.
         const QString reason =
-            QStringLiteral("Updates for this copy come from the %1.").arg(store);
+            QStringLiteral("Updates for this copy come from %1.").arg(store);
         autoUpdateAct->setChecked(false);
         autoUpdateAct->setEnabled(false);
         autoUpdateAct->setStatusTip(reason);
@@ -2293,12 +2293,12 @@ void MainWindow::wireUpdateChecker()
     connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
             [this](const QString& ver, UpdateChecker::Trigger trigger) {
         m_latestRelease = ver;
-        const bool skipped = UpdateSettings::isSkipped(ver);
-        if (skipped) {
+        if (UpdateSettings::isSkipped(ver)) {
             qCInfo(lcUpdater) << "newest release is the one the operator skipped";
         }
         if (m_titleBar) {
-            m_titleBar->setUpdateAvailable(skipped ? QString() : ver);
+            m_titleBar->setUpdateAvailable(
+                UpdateChecker::badgeVersion(ver, QCoreApplication::applicationVersion()));
         }
         if (trigger == UpdateChecker::Trigger::Manual) {
             showUpdateAvailableDialog();
@@ -2328,6 +2328,19 @@ void MainWindow::wireUpdateChecker()
     });
 }
 
+void MainWindow::restoreKnownUpdate()
+{
+    // The daily throttle may skip this launch's check, so the badge comes back
+    // from the release the last answer recorded, under the same rules.
+    const QString known = UpdateChecker::knownBadgeVersion();
+    if (known.isEmpty() || !m_titleBar) {
+        return;
+    }
+    qCInfo(lcUpdater).noquote() << "restored known update v" + known;
+    m_latestRelease = known;
+    m_titleBar->setUpdateAvailable(known);
+}
+
 void MainWindow::showUpdateAvailableDialog()
 {
     if (m_latestRelease.isEmpty()) {
@@ -2341,7 +2354,7 @@ void MainWindow::showUpdateAvailableDialog()
     setUpdateAvailableText(box, current, ver);
     if (const QString store = UpdateChecker::storeName(); !store.isEmpty()) {
         box.setInformativeText(
-            QStringLiteral("You are running v%1. The %2 installs updates for this copy.")
+            QStringLiteral("You are running v%1. Updates for this copy come from %2.")
                 .arg(current, store));
     }
     QPushButton* viewBtn = box.addButton("View Latest Release", QMessageBox::ActionRole);

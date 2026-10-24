@@ -30,9 +30,19 @@ public:
     // install is not updated by a store. Returns whether a check started.
     bool checkAutomaticallyIfDue();
 
-    // "Microsoft Store" or "Flathub" when that store installs this copy's
-    // updates; empty for an installer, portable, DMG or AppImage build.
+    // "the Microsoft Store" or "Flathub" when that store installs this copy's
+    // updates, worded to follow "come from"; empty for an installer,
+    // portable, DMG or AppImage build.
     static QString storeName();
+
+    // The release the title-bar badge should announce: `latestVersion` when
+    // it is newer than `runningVersion`, not skipped, and this copy is not
+    // updated by a store; otherwise empty. Live results and the one restored
+    // from settings at startup both go through it.
+    static QString badgeVersion(const QString& latestVersion, const QString& runningVersion);
+
+    // badgeVersion() for the release the last successful check recorded.
+    static QString knownBadgeVersion();
 
 signals:
     void updateAvailable(const QString& latestVersion, AetherSDR::UpdateChecker::Trigger trigger);

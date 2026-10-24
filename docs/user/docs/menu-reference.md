@@ -167,7 +167,7 @@ The main window has one 52 px title bar. From left to right:
 
 ### Updates
 
-AetherSDR checks GitHub for a newer release about 15 seconds after it starts, no more than once a day. The check never downloads or installs anything. When a newer release exists, the **UPDATE** badge appears after the **AetherSDR** brand mark; nothing pops up, and a check that finds nothing or cannot reach GitHub stays silent. Turn it off with **Help → Check for Updates Automatically**.
+AetherSDR checks GitHub for a newer release about 15 seconds after it starts, no more than once a day. The check never downloads or installs anything. When a newer release exists, the **UPDATE** badge appears after the **AetherSDR** brand mark; nothing pops up, and a check that finds nothing or cannot reach GitHub stays silent. The badge stays on across restarts until you update or skip that release, even on a day the check does not run. Turn it off with **Help → Check for Updates Automatically**.
 
 Click **UPDATE**, or use **Help → Check for Updates...**, for the update window:
 
@@ -175,7 +175,7 @@ Click **UPDATE**, or use **Help → Check for Updates...**, for the update windo
 - **Skip This Version** hides the badge for that release. **Help → Check for Updates...** still reports it, and the next release shows the badge again.
 - **Close** leaves the badge in place.
 
-On a Microsoft Store or Flathub install the store updates AetherSDR, so there is no automatic check and no badge; **Help → Check for Updates...** still works and says where the update comes from.
+On a Microsoft Store or Flathub install the store updates AetherSDR, so there is no automatic check and no badge, even after a manual check; **Help → Check for Updates...** still works and says where the update comes from.
 
 ### Radio tabs
 

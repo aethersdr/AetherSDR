@@ -32,6 +32,14 @@ public:
     static QDateTime lastCheckUtc();
     static void setLastCheckUtc(const QDateTime& when);
 
+    // The newest release that answer named, as parsed digits; empty before
+    // the first answer. Kept so a restart inside the throttle still knows
+    // an update exists without asking the server again.
+    static QString latestVersion();
+
+    // One write for a successful answer: its time and the release it named.
+    static void recordAnswer(const QDateTime& when, const QString& latestVersion);
+
     // Whether an automatic check may run at nowUtc: enabled, and the last
     // answer is missing, older than the interval, or in the future (the
     // clock moved backward).

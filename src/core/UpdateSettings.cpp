@@ -14,6 +14,7 @@ const QString kUpdatesKey = QStringLiteral("Updates");
 const QString kCheckOnStartupField = QStringLiteral("checkOnStartup");
 const QString kSkippedVersionField = QStringLiteral("skippedVersion");
 const QString kLastCheckUtcField = QStringLiteral("lastCheckUtc");
+const QString kLatestVersionField = QStringLiteral("latestVersion");
 } // namespace
 
 QJsonObject UpdateSettings::readObj()
@@ -78,6 +79,19 @@ void UpdateSettings::setLastCheckUtc(const QDateTime& when)
 {
     QJsonObject o = readObj();
     o[kLastCheckUtcField] = when.toUTC().toString(Qt::ISODate);
+    write(o);
+}
+
+QString UpdateSettings::latestVersion()
+{
+    return readObj().value(kLatestVersionField).toString();
+}
+
+void UpdateSettings::recordAnswer(const QDateTime& when, const QString& latestVersion)
+{
+    QJsonObject o = readObj();
+    o[kLastCheckUtcField] = when.toUTC().toString(Qt::ISODate);
+    o[kLatestVersionField] = latestVersion;
     write(o);
 }
 

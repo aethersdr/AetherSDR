@@ -448,6 +448,7 @@ private:
     void buildMenuBar();
     void wireUpdateChecker();          // MainWindow_Menus.cpp
     void showUpdateAvailableDialog();  // MainWindow_Menus.cpp
+    void restoreKnownUpdate();         // MainWindow_Menus.cpp
     void minimizeActiveApplicationWindow();
     void toggleActiveApplicationWindowFullScreen();
     void applyDarkTheme();
