@@ -14,6 +14,8 @@
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 
+#include <algorithm>
+
 #include <utility>
 
 #ifdef Q_OS_LINUX
@@ -84,6 +86,8 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     connect(m_firmware, &Ctr2FirmwareUpdater::stepChanged, this, &Ctr2ProxyModel::firmwareUpdateStep);
     connect(m_firmware, &Ctr2FirmwareUpdater::finished, this,
             [this](bool ok, const QString& message, const QString&) {
+        if (!ok)
+            m_restartedPath.clear();   // a refused restart: the device stays
         refreshDevices();   // the device re-enumerated, perhaps at a new path
         m_probedPath.clear();
         if (m_restartAfterFirmware) {
@@ -235,6 +239,15 @@ void Ctr2ProxyModel::applyDeviceScan(DeviceScan scan)
         return a.path == b.path && a.vendorId == b.vendorId && a.productId == b.productId
             && a.manufacturer == b.manufacturer && a.product == b.product && a.serial == b.serial;
     };
+    if (!m_restartedPath.isEmpty()) {
+        const bool listed = std::any_of(usb.begin(), usb.end(), [this](const auto& d) {
+            return d.path == m_restartedPath;
+        });
+        if (!listed)
+            m_restartedSeenGone = true;
+        else if (m_restartedSeenGone)
+            m_restartedPath.clear();   // back from its restart
+    }
     bool usbChanged = usb.size() != m_usbChoices.size();
     for (int i = 0; !usbChanged && i < usb.size(); ++i) {
         usbChanged = !same(usb[i], m_usbChoices[i]);
@@ -431,6 +444,11 @@ void Ctr2ProxyModel::tryAutoStart()
         || m_firmware->isRunning() || m_aetherRadioAddress.isNull()) {
         return;
     }
+    // Restarted on request and not back yet: opening it now would catch it
+    // on its way off the bus.
+    if (!m_restartedPath.isEmpty() && !m_restartedHold.hasExpired())
+        return;
+    m_restartedPath.clear();
     // The device list is the one the periodic rescan keeps current, so a
     // controller plugged in since shows up within kDeviceRescanMs.
     if (!configurationProblem().isEmpty())
@@ -817,6 +835,9 @@ bool Ctr2ProxyModel::restartUsbDevice(Ctr2FirmwareUpdater::Restart target, QStri
     }
     const Ctr2HidPort::DeviceInfo d = *device;
     m_restartAfterFirmware = false;   // the device leaves the bus
+    m_restartedPath = d.path;
+    m_restartedSeenGone = false;
+    m_restartedHold = QDeadlineTimer(kRestartHoldMs);
     if (isRunning()) {
         stop();
     }

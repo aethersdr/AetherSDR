@@ -5,6 +5,8 @@
 // restart after End, and a new image that keeps itself only once it answers
 // HELLO. No hidapi, no sockets, no device.
 
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "core/Ctr2FirmwareUpdater.h"
 #include "models/Ctr2ProxyModel.h"
 #include "models/FirmwareInstallModel.h"
@@ -674,6 +676,62 @@ void testDestroyedMidUpdate()
 // restarts it into AetherCTR2 on request, as AetherCTR2 itself, with no
 // download mode and no buttons. Firmware without the commands still waits
 // for the buttons.
+// A restart on request is answered before the device leaves the bus
+// (Lynovation's firmware waits about two seconds), so it is still listed for
+// a moment. Auto-start must not open it then: it would catch the device on
+// its way off the bus and leave the relay in Error. It starts once the device
+// has gone and come back.
+void testAutoStartWaitsForRestart()
+{
+    Ctr2HidPort::DeviceInfo info;
+    info.path = QStringLiteral("/sim/aether");
+    info.vendorId = 0x303A;
+    info.productId = 0x1001;
+    info.product = QStringLiteral("AetherCTR2");
+    info.serial = QStringLiteral("B81F3FC45888");
+    auto listed = std::make_shared<QList<Ctr2HidPort::DeviceInfo>>(
+        QList<Ctr2HidPort::DeviceInfo>{info});
+    Device dev;
+    int relayOpens = 0;
+    Ctr2ProxyModel relay;
+    relay.setUsbBackend(
+        [listed] { return *listed; },
+        [&relayOpens](const Ctr2HidPort::DeviceInfo&, QString* error) -> Ctr2HidPort* {
+            ++relayOpens;
+            *error = QStringLiteral("sim: the relay's port");
+            return nullptr;
+        },
+        [&dev](const Ctr2HidPort::DeviceInfo&, quint32 caps, QString*) -> Ctr2HidPort* {
+            return new SimPort(&dev, caps);
+        });
+    relay.setTransport(Ctr2ProxyModel::Transport::Usb);
+    relay.setUsbDevicePath(info.path);
+    relay.firmwareUpdater()->setTiming(fastTiming());
+    waitUntil([&dev] { return dev.opens > 0; });   // the version probe
+    waitUntil([] { return false; }, 100);
+
+    QString problem;
+    check(relay.restartUsbDevice(Ctr2FirmwareUpdater::Restart::Bootloader, &problem),
+          "a restart into download mode starts");
+    check(waitUntil([&] { return !dev.restartedInto.isEmpty() && !relay.firmwareUpdateRunning(); }),
+          "and is answered");
+
+    // Still listed: it has not left the bus yet.
+    relay.setAetherRadio(QHostAddress(QStringLiteral("192.0.2.10")), 4992, QStringLiteral("FLEX"),
+                         {});
+    relay.setAutoStart(true);
+    waitUntil([] { return false; }, 300);
+    check(relayOpens == 0, "auto-start leaves a device restarting on request alone while it is listed");
+
+    listed->clear();
+    relay.refreshDevices();   // gone
+    listed->append(info);
+    relay.refreshDevices();   // back
+    check(waitUntil([&] { return relayOpens > 0; }, Ctr2ProxyModel::kAutoStartRetryMs + 2000),
+          "and opens it once it has left the bus and come back");
+    relay.setAutoStart(false);
+}
+
 void testStockFirmwareCommands()
 {
     using Firmware = FirmwareInstallModel::Firmware;
@@ -818,7 +876,10 @@ void testStockFirmwareCommands()
 
 int main(int argc, char** argv)
 {
+    // Before the app: the relay model reads and saves its setup.
+    TestSettingsProfile profile(QStringLiteral("ctr2_firmware_updater_test"));
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
     testReadImage();
     testSuccess();
     testDeviceComesBackLater();
@@ -831,6 +892,7 @@ int main(int argc, char** argv)
     testCancel();
     testDestroyedMidUpdate();
     testRestartRequests();
+    testAutoStartWaitsForRestart();
     testStockFirmwareCommands();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
