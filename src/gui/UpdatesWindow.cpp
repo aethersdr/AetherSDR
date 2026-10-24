@@ -45,6 +45,9 @@ public:
         m_font.setPixelSize(60);
         m_font.setWeight(QFont::ExtraBold);
         m_font.setLetterSpacing(QFont::PercentageSpacing, 96);
+        // The "v" is set a little smaller, on the numerals' baseline.
+        m_prefixFont = m_font;
+        m_prefixFont.setPixelSize(48);
         setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         setAttribute(Qt::WA_TransparentForMouseEvents);
         setAttribute(Qt::WA_TranslucentBackground);
@@ -54,7 +57,7 @@ public:
     void setBaselinePartner(const QLabel* partner) { m_partner = partner; }
     void setVersion(const QString& version, bool gradient)
     {
-        m_text = version.isEmpty() ? QString() : QStringLiteral("v") + version;
+        m_text = version;
         m_gradient = gradient;
         setAccessibleName(version.isEmpty() ? QString() : QStringLiteral("Version %1").arg(version));
         updateGeometry();
@@ -63,7 +66,7 @@ public:
     QSize sizeHint() const override
     {
         const QFontMetrics fm(m_font);
-        return {fm.horizontalAdvance(m_text) + 4, fm.ascent() + belowBaseline()};
+        return {prefixAdvance() + fm.horizontalAdvance(m_text) + 4, fm.ascent() + belowBaseline()};
     }
 
 protected:
@@ -76,7 +79,10 @@ protected:
         // Winding, not the default odd-even: tight letter spacing overlaps
         // glyphs, and odd-even would cut a hole where they meet.
         path.setFillRule(Qt::WindingFill);
-        path.addText(0, fm.ascent(), m_font, m_text);
+        if (!m_text.isEmpty()) {
+            path.addText(0, fm.ascent(), m_prefixFont, kPrefix);
+            path.addText(prefixAdvance(), fm.ascent(), m_font, m_text);
+        }
         auto& tm = ThemeManager::instance();
         p.fillPath(path, m_gradient
                              ? tm.brush(QStringLiteral("color.brand.gradient"), path.boundingRect().toRect())
@@ -84,6 +90,13 @@ protected:
     }
 
 private:
+    static inline const QString kPrefix = QStringLiteral("v");
+
+    int prefixAdvance() const
+    {
+        return m_text.isEmpty() ? 0 : QFontMetrics(m_prefixFont).horizontalAdvance(kPrefix);
+    }
+
     // How far the partner's baseline sits above its bottom edge.
     int belowBaseline() const
     {
@@ -97,6 +110,7 @@ private:
     QPointer<const QLabel> m_partner;
     QString m_text;
     QFont m_font;
+    QFont m_prefixFont;
     bool m_gradient{false};
 };
 
