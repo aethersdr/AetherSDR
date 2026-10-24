@@ -138,12 +138,12 @@ void ShortcutDialog::buildUI()
 {
     auto* root = new QVBoxLayout(bodyWidget());
     root->setContentsMargins(14, 12, 14, 14);
-    root->setSpacing(8);
+    root->setSpacing(10);
     root->addWidget(makeCanonHeader(QStringLiteral("Keyboard Shortcuts")));
 
     // ── Keyboard map ────────────────────────────────────────────────────
     m_keyboardMap = new KeyboardMapWidget(m_mgr, this);
-    root->addWidget(m_keyboardMap, 4);
+    root->addWidget(m_keyboardMap);
     connect(m_keyboardMap, &KeyboardMapWidget::keySelected,
             this, [this](Qt::Key key) { onKeySelected(key); });
 
@@ -163,16 +163,19 @@ void ShortcutDialog::buildUI()
     }
     legendRow->addStretch();
     root->addLayout(legendRow);
+    // The editing rows stand a little apart from the map and its legend.
+    root->addSpacing(6);
 
     // ── Selected key info ───────────────────────────────────────────────
     auto* selGroup = new QHBoxLayout;
-    selGroup->setSpacing(8);
+    selGroup->setSpacing(10);
 
     selGroup->addWidget(new QLabel("Key:"));
     m_selectedKeyLabel = new QLabel("(none)");
     m_selectedKeyLabel->setObjectName(QStringLiteral("shortcutKeyLabel"));
     m_selectedKeyLabel->setFixedWidth(80);
     selGroup->addWidget(m_selectedKeyLabel);
+    selGroup->addSpacing(8);
 
     selGroup->addWidget(new QLabel("Action:"));
     m_actionCombo = new QComboBox;
@@ -189,6 +192,7 @@ void ShortcutDialog::buildUI()
     m_categoryLabel = new QLabel;
     m_categoryLabel->setObjectName(QStringLiteral("shortcutCategoryLabel"));
     selGroup->addWidget(m_categoryLabel);
+    selGroup->addSpacing(8);
 
     auto* clearBtn = new QPushButton("Clear");
     connect(clearBtn, &QPushButton::clicked, this, &ShortcutDialog::clearSelected);
@@ -203,6 +207,7 @@ void ShortcutDialog::buildUI()
 
     // ── Action table ────────────────────────────────────────────────────
     auto* filterRow = new QHBoxLayout;
+    filterRow->setSpacing(10);
     filterRow->addWidget(new QLabel("Filter:"));
     m_filterEdit = new QLineEdit;
     m_filterEdit->setPlaceholderText("Search actions...");
@@ -211,6 +216,7 @@ void ShortcutDialog::buildUI()
         populateTable(text, m_categoryFilter->currentText());
     });
     filterRow->addWidget(m_filterEdit);
+    filterRow->addSpacing(8);
 
     filterRow->addWidget(new QLabel("Category:"));
     m_categoryFilter = new QComboBox;
@@ -237,7 +243,7 @@ void ShortcutDialog::buildUI()
     connect(m_table, &QTableWidget::currentCellChanged, this, [this](int row) {
         onTableRowSelected(row);
     });
-    root->addWidget(m_table, 3);
+    root->addWidget(m_table, 1);
 
     // ── Bottom buttons ──────────────────────────────────────────────────
     auto* bottomRow = new QHBoxLayout;

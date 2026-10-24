@@ -2,6 +2,9 @@
 #include "core/ShortcutManager.h"
 
 #include <QAccessible>
+#include <QSizePolicy>
+
+#include <cmath>
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QPainter>
@@ -33,6 +36,19 @@ QColor KeyboardMapWidget::categoryColor(const QString& cat) const
     return kUnboundFill(this);
 }
 
+// The keys' extent in key units, gaps included: the right edge of the
+// numpad's last column (x 22) and the bottom of the last row (y 5.25).
+constexpr float kKeyGap = 0.08f;
+constexpr float kKeysW = 22.0f * (1 + kKeyGap) + 1.0f;
+constexpr float kKeysH = 5.25f * (1 + kKeyGap) + 1.0f;
+constexpr int kMapPadding = 10;
+
+int KeyboardMapWidget::heightForWidth(int width) const
+{
+    const float unit = (width - 2 * kMapPadding) / kKeysW;
+    return static_cast<int>(std::ceil(unit * kKeysH)) + 2 * kMapPadding;
+}
+
 // ─── Construction ───────────────────────────────────────────────────────────
 
 KeyboardMapWidget::KeyboardMapWidget(ShortcutManager* mgr, QWidget* parent)
@@ -40,6 +56,9 @@ KeyboardMapWidget::KeyboardMapWidget(ShortcutManager* mgr, QWidget* parent)
 {
     setMouseTracking(true);
     setFocusPolicy(Qt::TabFocus);
+    QSizePolicy policy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    policy.setHeightForWidth(true);
+    setSizePolicy(policy);
     setAccessibleName(tr("Keyboard shortcut map"));
     buildLayout();
     connect(mgr, &ShortcutManager::bindingsChanged, this, [this]() { update(); });
@@ -233,18 +252,14 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
     p.setBrush(AetherSDR::ThemeManager::instance().color(this, "color.background.0"));
     p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
 
-    // Compute key unit size to fit the layout (23 key units wide for main + numpad)
-    constexpr float totalKeysW = 23.5f;
-    constexpr float totalKeysH = 6.5f;
-    constexpr float gap = 0.08f;
-
-    float availW = width() - 20;
-    float availH = height() - 20;
-    float unitFromW = availW / (totalKeysW * (1 + gap));
-    float unitFromH = availH / (totalKeysH * (1 + gap));
+    float availW = width() - 2 * kMapPadding;
+    float availH = height() - 2 * kMapPadding;
+    float unitFromW = availW / kKeysW;
+    float unitFromH = availH / kKeysH;
     m_keyUnit = std::min(unitFromW, unitFromH);
-    m_originX = 10;
-    m_originY = 10;
+    // Centred, so a height-limited map keeps even margins on both sides.
+    m_originX = (width() - m_keyUnit * kKeysW) / 2;
+    m_originY = kMapPadding;
 
     QFont keyFont;
     keyFont.setPixelSize(std::max(8, static_cast<int>(m_keyUnit * 0.28f)));
