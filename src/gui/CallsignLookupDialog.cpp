@@ -13,6 +13,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QStyle>
+#include <QStyleOptionFrame>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -98,17 +100,24 @@ CallsignLookupDialog::CallsignLookupDialog(QWidget* parent)
     // PersistentDialog (the saved geometry carries over), and it resizes from
     // every edge.
     setGeometryKey(QStringLiteral("CallsignLookupDialogGeometry"));
-    // Wide enough that the callsign field shows its whole placeholder in the
-    // canon sheet's monospace font beside the two buttons.
-    setMinimumSize(500, 320);
     FramelessResizer::install(this);
     // The canon controls sheet the AetherRX and AetherTX Settings dialogs use,
-    // with their default button in cyan.
+    // with their default button in cyan. It clears every descendant to
+    // transparent, and the field's right-click menu is a child of the field,
+    // so QMenu gets its canon panel back.
     applyCanonSheet(bodyWidget(), [] {
         return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
                + QStringLiteral(
                    "QPushButton:default { color: {{color.canon.cyan}}; border-color: {{color.canon.cyan}}; }"
-                   "QLabel#callsignLookupStatus { color: {{color.canon.muted}}; font-size: 11px; }");
+                   "QLabel#callsignLookupStatus { color: {{color.canon.muted}}; font-size: 11px; }"
+                   "QMenu { color: {{color.canon.inkSoft}}; background: {{color.canon.raised}};"
+                   " border: 1px solid {{color.canon.lineHi}}; }"
+                   "QMenu::item { padding: 4px 18px; }"
+                   "QMenu::item:selected { color: {{color.canon.onAccent}};"
+                   " background: {{color.canon.cyan}}; }"
+                   "QMenu::item:disabled { color: {{color.control.unavailable}}; }"
+                   "QMenu::separator { height: 1px; margin: 4px 8px;"
+                   " background: {{color.canon.line}}; }");
     });
 
     auto* root = new QVBoxLayout(bodyWidget());
@@ -151,6 +160,19 @@ CallsignLookupDialog::CallsignLookupDialog(QWidget* parent)
 
     root->addLayout(inputRow);
 
+    // The field always shows its whole placeholder in the canon sheet's
+    // monospace font, whichever face the platform resolves it to; the window's
+    // minimum grows with it.
+    m_input->ensurePolished();
+    QStyleOptionFrame frame;
+    frame.initFrom(m_input);
+    frame.lineWidth = m_input->style()->pixelMetric(QStyle::PM_DefaultFrameWidth, &frame, m_input);
+    const int frameWidth = frame.rect.width()
+        - m_input->style()->subElementRect(QStyle::SE_LineEditContents, &frame, m_input).width();
+    m_input->setMinimumWidth(m_input->fontMetrics().horizontalAdvance(m_input->placeholderText())
+                             + frameWidth + m_input->textMargins().left()
+                             + m_input->textMargins().right() + 4);
+
     m_card = new CallsignCard(CallsignCard::Variant::Large, this);
     m_card->setVisible(false);
     root->addWidget(m_card);
@@ -161,6 +183,7 @@ CallsignLookupDialog::CallsignLookupDialog(QWidget* parent)
     root->addWidget(m_status);
 
     root->addStretch();
+    setMinimumSize(minimumSizeHint().expandedTo(QSize(500, 320)));
 
     auto& svc = CallsignLookupService::instance();
     connect(&svc, &CallsignLookupService::infoReady, this,

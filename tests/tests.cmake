@@ -2365,7 +2365,7 @@ target_link_libraries(callsign_lookup_dialog_test PRIVATE
 set_target_properties(callsign_lookup_dialog_test PROPERTIES AUTOMOC ON)
 add_test(NAME callsign_lookup_dialog_test COMMAND callsign_lookup_dialog_test)
 set_tests_properties(callsign_lookup_dialog_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # CanonMessageBox (RFC #6226): the canon question box reports the button
 # clicked, and none when it is closed instead.

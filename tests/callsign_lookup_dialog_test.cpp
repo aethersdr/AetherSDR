@@ -13,7 +13,9 @@
 #include <QApplication>
 #include <QDialog>
 #include <QLabel>
+#include <QImage>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPushButton>
 #include <QStyle>
 #include <QStyleOptionFrame>
@@ -76,14 +78,15 @@ void cardFollowsTheCanonScope()
 }
 
 // At the smallest the window can be, the callsign field still shows its whole
-// placeholder: the canon sheet's monospace font is wider than the old one, and
-// its buttons take more of the row.
+// placeholder: the field's minimum width comes from the placeholder in the
+// canon sheet's monospace font, so the fit holds whichever face the platform
+// resolves (SF Mono, Menlo, Consolas or a generic fallback).
 void fieldFitsItsPlaceholderAtMinimumSize()
 {
     CallsignLookupDialog dialog;
     dialog.resize(dialog.minimumSize());
     dialog.show();
-    QTest::qWaitForWindowExposed(&dialog);
+    check(QTest::qWaitForWindowExposed(&dialog), "the window is exposed");
     auto* input = dialog.findChild<QLineEdit*>(QStringLiteral("callsignLookupInput"));
     check(input != nullptr, "the callsign field exists");
     if (!input) return;
@@ -96,6 +99,28 @@ void fieldFitsItsPlaceholderAtMinimumSize()
     std::printf("  field %d px, text area %d px, placeholder %d px\n",
                 input->width(), text.width(), needed);
     check(needed <= text.width(), "the callsign field shows its whole placeholder at minimum size");
+    check(input->minimumWidth() >= needed + (input->width() - text.width()),
+          "the field's minimum width is measured from its placeholder, not a fixed window size");
+}
+
+// The field's standard right-click menu is a child of the field, so the canon
+// sheet's transparent-everything rule reaches it unless QMenu gets its panel.
+void rightClickMenuIsOpaque()
+{
+    CallsignLookupDialog dialog;
+    dialog.show();
+    check(QTest::qWaitForWindowExposed(&dialog), "the window is exposed");
+    auto* input = dialog.findChild<QLineEdit*>(QStringLiteral("callsignLookupInput"));
+    if (!input) return;
+    QMenu* menu = input->createStandardContextMenu();
+    check(menu->parentWidget() == input, "control: the field's menu is parented inside the canon body");
+    menu->popup(dialog.mapToGlobal(QPoint(40, 40)));
+    QTest::qWait(100);
+    const QImage image = menu->grab().toImage();
+    check(!image.isNull() && qAlpha(image.pixel(image.width() / 2, image.height() / 2)) == 255,
+          "the field's right-click menu has an opaque background");
+    menu->close();
+    delete menu;
 }
 
 // Size and position persist under CallsignLookupDialogGeometry, the key the old
@@ -141,6 +166,7 @@ int main(int argc, char** argv)
     controlsKeepTheirNames();
     cardFollowsTheCanonScope();
     fieldFitsItsPlaceholderAtMinimumSize();
+    rightClickMenuIsOpaque();
     geometryCarriesOver();
 
     return g_failures ? 1 : 0;
