@@ -1,4 +1,5 @@
 #include "SpectrumWidget.h"
+#include "SpectrumTraceBins.h"
 #include "SpectrumChromeGeometry.h"
 #include "SpectrumSquelchLogic.h"
 #include "ScopedChildWidget.h"
@@ -1812,6 +1813,18 @@ QVariantMap SpectrumWidget::automationDisplaySettingsSnapshot() const
     // mysterious floor-depth failure.
     snap[QStringLiteral("kiwiWaterfallActive")] = m_kiwiSdrWaterfallActive;
     return snap;
+}
+
+QVariantMap SpectrumWidget::traceBinsSnapshot() const
+{
+    // m_bins, not m_smoothed: the last frame as decoded, before display
+    // smoothing. During a Flex dBm range release it may hold rebased bins.
+    QVariantMap m = SpectrumTraceBins::snapshot(m_bins, m_centerMhz, m_bandwidthMhz,
+                                                m_fftFrameSequence);
+    m[QStringLiteral("panIndex")] = m_panIndex;
+    m[QStringLiteral("name")] = objectName();
+    m[QStringLiteral("kiwiWaterfallActive")] = m_kiwiSdrWaterfallActive;
+    return m;
 }
 
 QVariantMap SpectrumWidget::traceDebugSnapshot()
