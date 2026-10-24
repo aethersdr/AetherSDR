@@ -225,7 +225,6 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 
 - `src/gui/MemoryDialog.{h,cpp}`
 - `src/gui/AetherDspDialog.{h,cpp}`
-- `src/gui/MultiFlexDialog.{h,cpp}`
 - `src/gui/MidiMappingDialog.{h,cpp}`
 - `src/gui/PanLayoutDialog.{h,cpp}`
 - `src/gui/ProfileManagerDialog.{h,cpp}` — most complete reference; has the move/resize event saving

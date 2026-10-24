@@ -9919,6 +9919,7 @@ set(AETHER_SETTINGS_CONSUMERS
     help_dialog_test
     flex_control_dialog_size_test
     aethercontrol_window_test
+    multiflex_dashboard_window_test
     pan_layout_dialog_size_test
     transmit_model_test
     container_widget_test
