@@ -68,7 +68,9 @@ class PublicStore:
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None
-            raise
+            raise PublishError(f"GET {PUBLIC_BASE}{key}: HTTP {e.code}") from None
+        except urllib.error.URLError as e:
+            raise PublishError(f"GET {PUBLIC_BASE}{key}: {e.reason}") from None
 
     def put(self, key: str, data: bytes, content_type: str, cache_control: str) -> None:
         raise PublishError("the public store is read-only")
@@ -84,12 +86,20 @@ class S3Store:
             self.user = os.environ["R2_ACCESS_KEY_ID"] + ":" + os.environ["R2_SECRET_ACCESS_KEY"]
         except KeyError as e:
             raise PublishError(f"missing {e.args[0]}") from None
+        if any(c in self.user for c in '"\\\n'):
+            raise PublishError("the R2 credentials hold a character a curl config cannot carry")
 
     def _curl(self, key: str, *args: str) -> tuple[int, bytes]:
-        with tempfile.NamedTemporaryFile() as body:
+        # The credentials go to curl through a config file only this user can
+        # read (NamedTemporaryFile is 0600), never on its command line, where
+        # any process could read them for the life of the request.
+        with tempfile.NamedTemporaryFile() as body, \
+                tempfile.NamedTemporaryFile("w", suffix=".curlrc") as config:
+            config.write(f'user = "{self.user}"\n')
+            config.flush()
             out = subprocess.run(
                 ["curl", "-sS", "--retry", "3", "--aws-sigv4", "aws:amz:auto:s3",
-                 "--user", self.user, "-o", body.name, "-w", "%{http_code}", *args,
+                 "-K", config.name, "-o", body.name, "-w", "%{http_code}", *args,
                  f"https://{self.account}.r2.cloudflarestorage.com/{BUCKET}/{key}"],
                 capture_output=True, text=True)
             if out.returncode != 0:
@@ -139,6 +149,21 @@ def served(store, prefix: str, public_key: Path) -> tuple[bytes, dict] | None:
     try:
         return manifest, json.loads(manifest)
     except ValueError:
+        return None
+
+
+def named_tag(store, prefix: str) -> str | None:
+    """The release a prefix's manifest names, verified or not. Used only to
+    refuse a write: a torn pair (manifest written, signature not) still
+    says which release it is, and must not read as empty."""
+    raw = store.get(f"{prefix}/manifest.json")
+    if raw is None:
+        return None
+    try:
+        tag = json.loads(raw).get("tag")
+        version_key(tag)
+        return tag
+    except (ValueError, AttributeError, TypeError):
         return None
 
 
@@ -197,9 +222,9 @@ def publish(store, tag: str, latest_tag: str, manifest: bytes, sig: bytes,
         return written
     # Re-read immediately before the write: promote only over an older (or
     # this same, being repaired) release, never over a newer one.
-    current = served(store, "latest", public_key)
-    if current is not None and version_key(current[1].get("tag", "v0.0.0")) > version_key(tag):
-        print(f"latest/ already names {current[1]['tag']}, newer than {tag}; left as it is.")
+    named = named_tag(store, "latest")
+    if named is not None and version_key(named) > version_key(tag):
+        print(f"latest/ already names {named}, newer than {tag}; left as it is.")
         return written
     put_pair(store, "latest", manifest, sig, LATEST_CACHE, public_key)
     written.append("latest")

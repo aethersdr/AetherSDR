@@ -160,6 +160,65 @@ class PublicRead(Base):
             pub.urllib.request.urlopen = real
         ua = seen[0].get_header("User-agent")
         self.assertTrue(ua and ua.startswith("AetherSDR-"), ua)
+        self.assertEqual(seen[0].get_header("Cache-control"), "no-cache")
+
+    def test_a_refusal_is_an_error_not_absence(self) -> None:
+        """Only 404 means "not published"; a 403, a 5xx or no network is a
+        PublishError with a message, never a traceback, never "absent"."""
+        import urllib.error
+        real = pub.urllib.request.urlopen
+        try:
+            for err, expect in [
+                (urllib.error.HTTPError("u", 404, "Not Found", {}, None), None),
+                (urllib.error.HTTPError("u", 403, "Forbidden", {}, None), "HTTP 403"),
+                (urllib.error.HTTPError("u", 503, "Unavailable", {}, None), "HTTP 503"),
+                (urllib.error.URLError("timed out"), "timed out"),
+            ]:
+                def fail(req, timeout=None, err=err):
+                    raise err
+                pub.urllib.request.urlopen = fail
+                if expect is None:
+                    self.assertIsNone(pub.PublicStore().get("latest/manifest.json"))
+                else:
+                    with self.assertRaises(pub.PublishError) as ctx:
+                        pub.PublicStore().get("latest/manifest.json")
+                    self.assertIn(expect, str(ctx.exception))
+        finally:
+            pub.urllib.request.urlopen = real
+
+
+class S3Credentials(Base):
+    def test_the_secret_never_reaches_curls_command_line(self) -> None:
+        import os
+        env = {"R2_ACCOUNT_ID": "acct", "R2_ACCESS_KEY_ID": "keyid", "R2_SECRET_ACCESS_KEY": "s3cr3t"}
+        calls = []
+
+        class Done:
+            returncode = 0
+            stdout = "404"
+            stderr = ""
+
+        def run(argv, **kw):
+            config = argv[argv.index("-K") + 1]
+            calls.append((list(argv), Path(config).read_text()))
+            return Done()
+
+        saved = {k: os.environ.get(k) for k in env}
+        real = pub.subprocess.run
+        os.environ.update(env)
+        pub.subprocess.run = run
+        try:
+            self.assertIsNone(pub.S3Store().get("latest/manifest.json"))
+        finally:
+            pub.subprocess.run = real
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        argv, config = calls[0]
+        self.assertFalse(any("s3cr3t" in a for a in argv), argv)
+        self.assertIn('user = "keyid:s3cr3t"', config)
 
 
 class LatestPromotion(Base):
@@ -174,6 +233,15 @@ class LatestPromotion(Base):
         self.assertEqual(self.latest_tag(), "v26.10.5")
         self.assertTrue(pub.is_complete(self.store, "v26.10.4", "v26.10.4", self.pub),
                         "a newer latest/ completes an older release")
+
+    def test_a_torn_newer_latest_is_not_overwritten(self) -> None:
+        """A run killed between latest/'s two writes leaves a manifest with
+        no matching signature. It still names its release, so an older run
+        must not take latest/ over it as if it were empty."""
+        newer, _ = self.signed("v26.10.5")
+        self.store.objects["latest/manifest.json"] = newer   # its .sig never written
+        pub.publish(self.store, "v26.10.4", "v26.10.4", *self.signed("v26.10.4"), self.pub)
+        self.assertEqual(self.latest_tag(), "v26.10.5")
 
     def test_hotfix_promotes_over_its_base(self) -> None:
         pub.publish(self.store, "v26.10.4", "v26.10.4", *self.signed("v26.10.4"), self.pub)
