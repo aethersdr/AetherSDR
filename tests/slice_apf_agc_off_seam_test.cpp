@@ -19,6 +19,7 @@
 #include <QMetaMethod>
 #include <QMetaObject>
 #include <QSignalSpy>
+#include <QTest>
 
 #include <algorithm>
 #include <cmath>
@@ -295,6 +296,14 @@ void testSweepStopsWithoutAudio()
                 cal.onAudioLevel(0.001f);
         }
     });
+    // As the dialog wires them: a value that settles outside a sweep is
+    // recorded as a manual point, 120 ms later.
+    QObject::connect(&s, &SliceModel::agcOffLevelChanged, &cal, &AgcTCalibrator::onValueChanged);
+    QObject::connect(&s, &SliceModel::agcThresholdChanged, &cal, &AgcTCalibrator::onValueChanged);
+    const auto nothingRecordedOnceSettled = [&] {
+        QTest::qWait(400);
+        return cal.curve().isEmpty() && !cal.hasRecommendation();
+    };
     QSignalSpy finished(&cal, &AgcTCalibrator::finished);
     QSignalSpy noAudio(&cal, &AgcTCalibrator::noAudio);
 
@@ -305,6 +314,7 @@ void testSweepStopsWithoutAudio()
     check(applied == std::vector<int>{0, 47},
           "at its first step, before climbing, putting the off level back");
     check(!cal.isRunning() && !cal.hasRecommendation(), "with nothing to recommend");
+    check(nothingRecordedOnceSettled(), "and the put-back value is not recorded as a point");
 
     // Audio that stops part-way: levels for 0, 4 and 8, none from 12.
     applied.clear();
@@ -316,6 +326,8 @@ void testSweepStopsWithoutAudio()
     check(applied == std::vector<int>{0, 4, 8, 12, 47},
           "at the first silent step, putting the off level back");
     check(!cal.hasRecommendation(), "with no recommendation from a part curve");
+    check(nothingRecordedOnceSettled(),
+          "nor once the put-back value settles: the part curve is dropped");
 
     // Audio from before the sweep, none during it: the smoothed reading is
     // stale, not absent. The knee sweep (AGC on) stops the same way.
@@ -332,6 +344,7 @@ void testSweepStopsWithoutAudio()
           "a level from before the sweep does not count for its first step");
     check(thresholds == std::vector<int>{100, 47},
           "so the knee sweep stops at 100 and puts AGC-T back");
+    check(nothingRecordedOnceSettled(), "recording nothing once AGC-T settles");
 }
 
 }  // namespace
