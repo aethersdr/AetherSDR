@@ -11,6 +11,9 @@
 #include <QDialog>
 #include <QGridLayout>
 #include <QLabel>
+#include <QMenu>
+#include <QLineEdit>
+#include <QImage>
 #include <QTest>
 
 #include <cstdio>
@@ -195,6 +198,34 @@ void firmwareIdentityAfterReadback()
               && f.commands.isEmpty(),
           "late firmware identity enables the existing table with each earlier confirmed value");
 }
+// A field's standard right-click menu is a child of the field, so the canon
+// body's transparent-everything rule reaches it; the sheet gives popups their
+// panel back. Without that the menu draws no background at all.
+void rightClickMenuIsOpaque()
+{
+    Fixture f(QStringLiteral("4.3.16.42034"));
+    TxBandDialog dialog(&f.radio);
+    dialog.show();
+    QTest::qWaitForWindowExposed(&dialog);
+    const QList<QLineEdit*> edits = dialog.findChildren<QLineEdit*>();
+    check(!edits.isEmpty(), "the table exposes a power field");
+    if (edits.isEmpty()) {
+        return;
+    }
+    QMenu* menu = edits.first()->createStandardContextMenu();
+    check(menu->parentWidget() == edits.first(),
+          "control: the field's menu is parented inside the canon body");
+    menu->popup(dialog.mapToGlobal(QPoint(40, 40)));
+    QTest::qWait(100);
+    const QImage image = menu->grab().toImage();
+    check(!image.isNull()
+              && qAlpha(image.pixel(image.width() / 2, image.height() / 2)) == 255,
+          "a field's right-click menu has an opaque background");
+    menu->close();
+    delete menu;
+    check(f.commands.isEmpty(), "opening the menu sends no commands");
+}
+
 // TX Band Settings is a canon workspace (#6239) that restores geometry saved
 // under TxBandDialogGeometry, including the base64 rectangles earlier
 // releases wrote.
@@ -252,5 +283,6 @@ int main(int argc, char** argv)
     unavailableDialog();
     firmwareIdentityAfterReadback();
     canonWorkspace();
+    rightClickMenuIsOpaque();
     return failures == 0 ? 0 : 1;
 }

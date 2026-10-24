@@ -26,10 +26,31 @@ namespace {
 // The table is a grid of cells over a hairline-coloured ground: the 1 px
 // spacing between cells draws the rules. The body and everything in it start
 // transparent over the canon ground; the cell rules are scoped under #canonBody
-// so they outrank that.
+// so they outrank that, and popups (a field's right-click menu) are
+// descendants too, so they get their panel back.
 constexpr const char* kTxBandStyle = R"(
 QWidget#canonBody, QWidget#canonBody QWidget {
     background: transparent;
+}
+QWidget#canonBody QMenu {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
+}
+QWidget#canonBody QMenu::item {
+    padding: 4px 18px;
+}
+QWidget#canonBody QMenu::item:selected {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+}
+QWidget#canonBody QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QWidget#canonBody QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
 }
 QWidget#canonBody {
     color: {{color.canon.inkSoft}};
