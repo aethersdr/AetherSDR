@@ -124,7 +124,7 @@ Decoded text is published to the MQTT topic `aethersdr/cw/decode`, one JSON mess
 | **Sens** | 0–100 (default 30). Hides low-confidence characters: 0 shows everything, higher values show only confident decodes. |
 | **🔒P** | Lock the decoder's pitch at the current value |
 | **🔒S** | Lock the decoder's speed at the current WPM |
-| **Pitch** | Pitch search range, 300–1200 Hz (default 500–700 Hz), remembered and the same on every pan. It follows the CW pitch: a pitch change moves it to the pitch ±150 Hz, kept inside 300–1200 Hz, and on connect a remembered range is kept only if it contains the radio's pitch |
+| **Pitch** | Pitch search range, 300–1200 Hz (default 500–700 Hz), remembered and the same on every pan. It follows the CW pitch: a range that contains the pitch is kept, and one that misses it moves to the pitch ±150 Hz, kept inside 300–1200 Hz |
 | **WPM** | Speed search range, 5–60 WPM (default 15–40 WPM), remembered and the same on every pan |
 | **CPY ALL** / **CPY VIS** | Copy all decoded text, or just the visible text, to the clipboard |
 | **A− / A+** | Decoded-text size (8–32 px), remembered |
