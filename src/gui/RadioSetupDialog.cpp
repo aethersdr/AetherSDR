@@ -6,7 +6,6 @@
 // header rather than from the wire code.
 #include "core/backends/anan/AnanSettings.h"
 #include "RadioSetupDialog.h"
-#include "FirmwareReleasesDialog.h"
 #include "RtlReceiverSettingsWidget.h"
 #include "SerialPortCombo.h"
 #include "models/CwDecodeSettings.h"
@@ -46,8 +45,6 @@
 #include "core/FlexControlManager.h"
 #include <QSerialPortInfo>
 #endif
-#include "core/FirmwareUploader.h"
-#include "core/FirmwareStager.h"
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
 #include "core/AcomConnection.h"
@@ -1736,14 +1733,6 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     if (m_licenseInfoGroup) {
         applyCapabilityClusterVisibility(m_licenseInfoGroup, connected, caps.hasLicenseInfo);
     }
-    if (m_firmwareUpdateGroup) {
-        applyCapabilityClusterVisibility(
-            m_firmwareUpdateGroup, connected, caps.canUpgradeFirmware);
-    }
-    if (m_firmwareDisclaimer) {
-        applyCapabilityClusterVisibility(
-            m_firmwareDisclaimer, connected, caps.canUpgradeFirmware);
-    }
     if (m_networkIdentityGroup) {
         applyCapabilityClusterVisibility(
             m_networkIdentityGroup, connected, caps.hasNetworkConfigurationReadback);
@@ -1845,101 +1834,12 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     }
 }
 
-void RadioSetupDialog::showFirmwareReleases(const QStringList& releases)
-{
-    if (releases.isEmpty())
-        return;
-
-    // The release-notes template comes from the backend's capability record,
-    // not from a family check here: a backend that publishes firmware says
-    // where its notes live, and one that does not leaves the rows unlinked.
-    QString notesTemplate;
-    if (const auto& source = m_model->backendCapabilities().firmwareUpdateSource)
-        notesTemplate = source->releaseNotesUrlTemplate;
-
-    // Rebuilt on every check rather than re-raised: the list and the radio's
-    // own release are baked in at construction, so an open dialog from an
-    // earlier check would otherwise keep showing that check's answer.
-    if (m_firmwareReleasesDialog)
-        m_firmwareReleasesDialog->close();
-    auto* dlg = new FirmwareReleasesDialog(
-        releases, m_model->softwareVersion(), notesTemplate, this);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    m_firmwareReleasesDialog = dlg;
-    m_firmwareReleasesDialog->show();
-    m_firmwareReleasesDialog->raise();
-    m_firmwareReleasesDialog->activateWindow();
-}
-
-bool RadioSetupDialog::confirmFirmwareClose()
-{
-    // A nested close/reject must not destroy the owner underneath this prompt.
-    if (m_firmwareClosePromptOpen) {
-        return false;
-    }
-    if (!m_uploader || !m_uploader->isUploading()) {
-        return true;
-    }
-    const QPointer<RadioSetupDialog> self(this);
-    const QPointer<FirmwareUploader> uploader(m_uploader);
-    ScopedChildWidget<QMessageBox> boxOwner(
-        QMessageBox::Warning, tr("Firmware Update In Progress"), QString(),
-        QMessageBox::Ok | QMessageBox::Cancel, this);
-    QMessageBox* box = boxOwner.get();
-    box->setDefaultButton(QMessageBox::Cancel);
-    box->setEscapeButton(QMessageBox::Cancel);
-    const auto refreshPrompt = [uploader, box] {
-        if (!uploader) {
-            return;
-        }
-        switch (uploader->phase()) {
-        case FirmwareUploader::Phase::Preparing:
-            box->setText(tr("The firmware upload is being prepared. No image bytes have been sent."
-                            "\n\nClose this window and cancel the attempt?"));
-            break;
-        case FirmwareUploader::Phase::Transferring:
-            box->setText(tr("A firmware upload is in progress. Closing this window stops the transfer "
-                            "and may leave the radio with an incomplete image. The update outcome "
-                            "will remain unknown; reconnect before retrying.\n\nClose anyway?"));
-            break;
-        case FirmwareUploader::Phase::AwaitingConfirmation:
-            box->setText(tr("Firmware bytes have left the local write buffer, but the radio has not "
-                            "confirmed installation. Closing this window stops waiting for confirmation; "
-                            "it does not undo the update.\n\nReconnect to check the firmware version "
-                            "before retrying. Close anyway?"));
-            break;
-        case FirmwareUploader::Phase::Idle:
-            box->setText(tr("The firmware upload attempt has ended. Close this window?"));
-            break;
-        }
-    };
-    refreshPrompt();
-    // The upload can advance or finish while exec() runs its nested event loop.
-    connect(uploader, &FirmwareUploader::progressChanged, box, refreshPrompt);
-    connect(uploader, &FirmwareUploader::finished, box, refreshPrompt);
-    m_firmwareClosePromptOpen = true;
-    const int reply = box->exec();
-    if (!self) {
-        return false;
-    }
-    m_firmwareClosePromptOpen = false;
-    if (!boxOwner || reply != QMessageBox::Ok) {
-        return false;
-    }
-    if (uploader) {
-        // Classify the CURRENT phase; it may have changed inside the prompt.
-        // cancel() is a no-op if a terminal radio result already arrived.
-        uploader->cancel();
-    }
-    return !self.isNull();
-}
-
 void RadioSetupDialog::done(int result)
 {
     // QDialog routes Escape, reject() and accept() through done(), bypassing
-    // closeEvent. Keep those paths behind the same confirmation without
-    // redirecting reject() to close() (which recurses during Qt's close path).
-    if (!m_peripheralRemovalPending && confirmFirmwareClose()) {
+    // closeEvent. Keep those paths behind the same guard without redirecting
+    // reject() to close() (which recurses during Qt's close path).
+    if (!m_peripheralRemovalPending) {
         // Escape is a close like the corner button: it keeps the
         // uncommitted Peripherals edits too.
         for (const auto& saver : m_peripheralRowSavers)
@@ -1950,7 +1850,7 @@ void RadioSetupDialog::done(int result)
 
 void RadioSetupDialog::closeEvent(QCloseEvent* event)
 {
-    if (m_peripheralRemovalPending || !confirmFirmwareClose()) {
+    if (m_peripheralRemovalPending) {
         event->ignore();
         return;
     }
@@ -2090,6 +1990,16 @@ QWidget* RadioSetupDialog::buildRadioTab()
         m_rebootInfoField = makeInfoField(QStringLiteral("Reboot:"), rebootBtn,
                                           kInfoLeftLabelWidth);
         grid->addWidget(m_rebootInfoField, 3, 0);
+
+        // The radio's firmware, as it reports it. Updating it lives in the
+        // Updates window (File → Update...).
+        auto* fwVersion = makeValueLabel(displayOrDash(m_model->softwareVersion()));
+        grid->addWidget(makeCopyableInfoField(QStringLiteral("FW Version"),
+                                              QStringLiteral("FW Version:"), fwVersion),
+                        4, 0);
+        connect(m_model, &RadioModel::infoChanged, fwVersion, [this, fwVersion] {
+            fwVersion->setText(displayOrDash(m_model->softwareVersion()));
+        });
 
         connect(m_model, &RadioModel::infoChanged, this, [this] {
             if (m_serialLabel) {
@@ -2314,240 +2224,6 @@ QWidget* RadioSetupDialog::buildRadioTab()
             if (!m_model->licenseMaxVersion().isEmpty())
                 m_licMaxVersionLabel->setText(m_model->licenseMaxVersion());
         });
-
-        vbox->addWidget(group);
-    }
-
-    // Firmware Update group
-    {
-        auto* group = new QGroupBox("Firmware Update");
-        m_firmwareUpdateGroup = group;
-        auto* vlay = new QVBoxLayout(group);
-        vlay->setSpacing(6);
-
-        // Current version row
-        // Laid out like the info fields above it, so its value lines up
-        // with theirs; half the group's width, as theirs are.
-        auto* infoRow = new QGridLayout;
-        infoRow->setSpacing(6);
-        infoRow->setColumnStretch(0, 1);
-        infoRow->setColumnStretch(1, 1);
-        auto* curFw = makeValueLabel(displayOrDash(m_model->softwareVersion()));
-        infoRow->addWidget(makeCopyableInfoField(QStringLiteral("FW Version"),
-                                                 QStringLiteral("FW Version:"), curFw), 0, 0);
-        vlay->addLayout(infoRow);
-
-        connect(m_model, &RadioModel::infoChanged, this, [this, curFw] {
-            curFw->setText(displayOrDash(m_model->softwareVersion()));
-        });
-
-        // Progress bar
-        m_fwProgress = new QProgressBar;
-        m_fwProgress->setRange(0, 100);
-        m_fwProgress->setValue(0);
-        m_fwProgress->setTextVisible(true);
-        m_fwProgress->setFixedHeight(20);
-        m_fwProgress->hide();
-        vlay->addWidget(m_fwProgress);
-
-        // Status label (multi-line)
-        m_fwStatusLabel = new QLabel("");
-        setTone(m_fwStatusLabel, Tone::Hint);
-        m_fwStatusLabel->setWordWrap(true);
-        // Hidden until there is something to say, so an idle group has no
-        // blank line between the version and the buttons.
-        m_fwStatusLabel->hide();
-        vlay->addWidget(m_fwStatusLabel);
-
-        // Button row
-        auto* btnRow = new QHBoxLayout;
-        auto* checkBtn = new QPushButton("Check for Update");
-        btnRow->addWidget(checkBtn);
-
-        auto* browseBtn = new QPushButton("Select Installer...");
-        btnRow->addWidget(browseBtn);
-
-        m_fwUploadBtn = new QPushButton("Upload Firmware");
-        m_fwUploadBtn->setEnabled(false);
-        setButtonRole(m_fwUploadBtn, ButtonRole::Success);
-        btnRow->addWidget(m_fwUploadBtn);
-        btnRow->addStretch(1);
-        vlay->addLayout(btnRow);
-
-        auto* disclaimer = new QLabel(
-            "⚠ CAUTION: Firmware update is currently a highly experimental feature. "
-            "Use at your own risk. At this time we still recommend updating "
-            "via the SmartSDR Windows application.");
-        disclaimer->setWordWrap(true);
-        m_firmwareDisclaimer = disclaimer;
-        setTone(disclaimer, Tone::Warn);
-        vlay->addWidget(disclaimer);
-
-        // ── Stager wiring ─────────────────────────────────────────────
-        m_stager = new FirmwareStager(this);
-
-        connect(checkBtn, &QPushButton::clicked, this, [this, checkBtn] {
-            checkBtn->setEnabled(false);
-            setTone(m_fwStatusLabel, Tone::Hint);
-            m_stager->checkForUpdate(m_model->softwareVersion());
-        });
-
-        connect(m_stager, &FirmwareStager::updateCheckComplete, this,
-            [this, checkBtn](const QString& latest, bool avail,
-                             const QStringList& published) {
-            checkBtn->setEnabled(true);
-            if (avail) {
-                setTone(m_fwStatusLabel, Tone::Warn);
-                setShownText(m_fwStatusLabel, QString(
-                    "Update available: v%1").arg(latest));
-            } else {
-                setTone(m_fwStatusLabel, Tone::Ok);
-                setShownText(m_fwStatusLabel, "Firmware is up to date (v" + latest + ").");
-            }
-            // The verdict is one line; the LIST is the answer. FlexRadio
-            // publishes several lines at once, so "newer firmware exists" on
-            // its own does not tell a v3 operator which release is theirs.
-            showFirmwareReleases(published);
-        });
-
-        connect(m_stager, &FirmwareStager::updateCheckFailed, this,
-            [this, checkBtn](const QString& err) {
-            checkBtn->setEnabled(true);
-            setTone(m_fwStatusLabel, Tone::Error);
-            setShownText(m_fwStatusLabel, err);
-        });
-
-        connect(m_stager, &FirmwareStager::stageProgress, this,
-            [this](int pct, const QString& status) {
-            m_fwProgress->setValue(pct);
-            setTone(m_fwStatusLabel, Tone::Hint);
-            setShownText(m_fwStatusLabel, status);
-        });
-
-        connect(m_stager, &FirmwareStager::stageComplete, this,
-            [this](const QString& path, const QString&) {
-            m_fwFilePath = path;
-            m_fwUploadBtn->setEnabled(true);
-            setTone(m_fwStatusLabel, Tone::Ok);
-        });
-
-        connect(m_stager, &FirmwareStager::stageFailed, this,
-            [this](const QString& err) {
-            m_fwProgress->hide();
-            setTone(m_fwStatusLabel, Tone::Error);
-            setShownText(m_fwStatusLabel, err);
-        });
-
-        // ── Browse / select installer manually ────────────────────────
-        // Accepts the SmartSDR installer the user has already downloaded
-        // from FlexRadio (.msi for v4.2+, .exe for older releases) or a
-        // pre-extracted .ssdr file. The stager auto-detects which.
-        connect(browseBtn, &QPushButton::clicked, this, [this] {
-            const QPointer<RadioSetupDialog> self(this);
-            const QPointer<RadioModel> model(m_model);
-            const QString path = QFileDialog::getOpenFileName(
-                this, "Select SmartSDR Installer or Firmware File", QString(),
-                "SmartSDR installer or firmware (*.msi *.exe *.ssdr);;"
-                "MSI installer (*.msi);;"
-                "EXE installer (*.exe);;"
-                "Extracted firmware (*.ssdr);;"
-                "All files (*)");
-            if (!self || !model || self->m_model != model.data() || path.isEmpty()) {
-                return;
-            }
-
-            m_fwFilePath.clear();
-            m_fwUploadBtn->setEnabled(false);
-            m_fwProgress->show();
-            m_fwProgress->setValue(0);
-            setTone(m_fwStatusLabel, Tone::Hint);
-            setShownText(m_fwStatusLabel, "Preparing firmware from " + QFileInfo(path).fileName() + "...");
-
-            // The stager emits stageProgress / stageComplete / stageFailed.
-            // Existing slots wire to those (set above) so we just kick it off.
-            m_stager->stageFromLocalFile(path,
-                FirmwareStager::modelToFamily(m_model->model()));
-        });
-
-        // ── Upload ────────────────────────────────────────────────────
-        connect(m_fwUploadBtn, &QPushButton::clicked, this, [this] {
-            if (m_fwFilePath.isEmpty()) return;
-
-            const QPointer<RadioSetupDialog> self(this);
-            const QPointer<RadioModel> model(m_model);
-            ScopedChildWidget<QMessageBox> boxOwner(
-                QMessageBox::Warning, QStringLiteral("Firmware Update"),
-                QString("Upload %1 to %2?\n\n"
-                        "The radio will reboot after the update.\n"
-                        "Do not disconnect during the upload.")
-                    .arg(QFileInfo(m_fwFilePath).fileName(), m_model->model()),
-                QMessageBox::Ok | QMessageBox::Cancel, this);
-            boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
-            const int reply = boxOwner.get()->exec();
-            if (!self || !boxOwner || !model || self->m_model != model.data()
-                || reply != QMessageBox::Ok) {
-                return;
-            }
-
-            // Wire the uploader once, at creation. These used to be connected
-            // inside this clicked handler, so every click added another copy.
-            if (!m_uploader) {
-                m_uploader = new FirmwareUploader(m_model, this);
-
-                connect(m_uploader, &FirmwareUploader::progressChanged, this,
-                    [this](int pct, const QString& status) {
-                        m_fwProgress->setValue(pct);
-                        setShownText(m_fwStatusLabel, status);
-                        m_fwStatusLabel->setAccessibleDescription(status);
-                    });
-                connect(m_uploader, &FirmwareUploader::finished, this,
-                    [this](FirmwareUploader::Outcome outcome, const QString& msg) {
-                        // Three outcomes, not two. A drained socket or a
-                        // post-upload disconnect confirms nothing either way, so
-                        // it must not be painted as either (#5572): only the
-                        // radio's own `file update failed=` settles it. The
-                        // message carries the distinction in words as well as in
-                        // colour — colour alone never states it (docs/a11y.md).
-                        setShownText(m_fwStatusLabel, msg);
-                        m_fwStatusLabel->setAccessibleDescription(msg);
-                        Tone tone = Tone::Hint;
-                        switch (outcome) {
-                        case FirmwareUploader::Outcome::Succeeded:
-                            m_fwProgress->setValue(100);
-                            tone = Tone::Ok;
-                            m_fwUploadBtn->setEnabled(false);
-                            break;
-                        case FirmwareUploader::Outcome::Unconfirmed:
-                            // Bytes left the host and the radio is probably
-                            // applying them. Keep the progress bar — hiding it
-                            // reads as "nothing happened" — and do not offer a
-                            // retry: the uploader refuses one until reconnect.
-                            m_fwProgress->setValue(100);
-                            tone = Tone::Warn;
-                            m_fwUploadBtn->setEnabled(false);
-                            break;
-                        case FirmwareUploader::Outcome::Failed:
-                            m_fwProgress->hide();
-                            tone = Tone::Error;
-                            m_fwUploadBtn->setEnabled(true);
-                            break;
-                        }
-                        setTone(m_fwStatusLabel, tone);
-                    });
-            }
-
-            m_fwProgress->show();
-            m_fwProgress->setValue(0);
-            m_fwUploadBtn->setEnabled(false);
-            setTone(m_fwStatusLabel, Tone::Hint);
-
-            m_uploader->upload(m_fwFilePath);
-        });
-
-        for (auto* lbl : group->findChildren<QLabel*>()) {
-            if (!hasTone(lbl))
-                applyLabelStyle(lbl);
-        }
 
         vbox->addWidget(group);
     }

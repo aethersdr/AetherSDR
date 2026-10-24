@@ -1,6 +1,9 @@
 #include "TestSettingsProfile.h"
 #include "core/FirmwareUploader.h"
-#include "gui/RadioSetupDialog.h"
+#include "UpdateTestNetwork.h"
+#include "core/UpdateChecker.h"
+#include "gui/FirmwareUpdateCard.h"
+#include "gui/UpdatesWindow.h"
 #include "models/RadioModel.h"
 
 #include <QApplication>
@@ -40,11 +43,11 @@ public:
     }
     static bool blocked(FirmwareUploader& uploader) { return uploader.retryBarrierActive(); }
 };
-class RadioSetupDialogTestAccess {
+class UpdatesWindowTestAccess {
 public:
-    static void attach(RadioSetupDialog& dialog, FirmwareUploader* uploader)
+    static void attach(UpdatesWindow& window, FirmwareUploader* uploader)
     {
-        dialog.m_uploader = uploader;
+        window.m_firmware->m_uploader = uploader;
     }
 };
 }
@@ -74,9 +77,11 @@ private slots:
         QFETCH(int, path);
         QFETCH(bool, confirm);
         RadioModel model; // cold, disconnected; never calls connectRadio()
-        RadioSetupDialog dialog(&model);
+        HeldNetwork network; // no update request leaves the process
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow dialog(&checker, &model);
         FirmwareUploader uploader(nullptr);
-        RadioSetupDialogTestAccess::attach(dialog, &uploader);
+        UpdatesWindowTestAccess::attach(dialog, &uploader);
         FirmwareUploaderTestAccess::start(uploader, phase);
         QSignalSpy finished(&uploader, &FirmwareUploader::finished);
         dialog.show();
@@ -124,9 +129,11 @@ private slots:
     void advancesInsidePrompt()
     {
         RadioModel model;
-        RadioSetupDialog dialog(&model);
+        HeldNetwork network; // no update request leaves the process
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow dialog(&checker, &model);
         FirmwareUploader uploader(nullptr);
-        RadioSetupDialogTestAccess::attach(dialog, &uploader);
+        UpdatesWindowTestAccess::attach(dialog, &uploader);
         FirmwareUploaderTestAccess::start(uploader, 1);
         QSignalSpy finished(&uploader, &FirmwareUploader::finished);
         dialog.show();
@@ -145,9 +152,11 @@ private slots:
     void terminalInsidePrompt()
     {
         RadioModel model;
-        RadioSetupDialog dialog(&model);
+        HeldNetwork network; // no update request leaves the process
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow dialog(&checker, &model);
         FirmwareUploader uploader(nullptr);
-        RadioSetupDialogTestAccess::attach(dialog, &uploader);
+        UpdatesWindowTestAccess::attach(dialog, &uploader);
         FirmwareUploaderTestAccess::start(uploader, 2);
         QSignalSpy finished(&uploader, &FirmwareUploader::finished);
         dialog.show();
@@ -167,11 +176,13 @@ private slots:
     void deleteOnClose()
     {
         RadioModel model;
-        auto* dialog = new RadioSetupDialog(&model);
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        auto* dialog = new UpdatesWindow(&checker, &model);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
-        QPointer<RadioSetupDialog> guard(dialog);
+        QPointer<UpdatesWindow> guard(dialog);
         auto* uploader = new FirmwareUploader(nullptr, dialog);
-        RadioSetupDialogTestAccess::attach(*dialog, uploader);
+        UpdatesWindowTestAccess::attach(*dialog, uploader);
         FirmwareUploaderTestAccess::start(*uploader, 1);
         dialog->show();
         QTimer::singleShot(0, dialog, [] {
@@ -186,7 +197,9 @@ private slots:
     void idleDismissalNeedsNoConfirmation()
     {
         RadioModel model;
-        RadioSetupDialog dialog(&model);
+        HeldNetwork network; // no update request leaves the process
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow dialog(&checker, &model);
         dialog.show();
         QTest::keyClick(&dialog, Qt::Key_Escape);
         QVERIFY(!dialog.isVisible());
@@ -195,9 +208,11 @@ private slots:
     void finishedReceiverDeletesOwner()
     {
         RadioModel model;
-        auto dialog = std::make_unique<RadioSetupDialog>(&model);
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        auto dialog = std::make_unique<UpdatesWindow>(&checker, &model);
         auto* uploader = new FirmwareUploader(nullptr, dialog.get());
-        RadioSetupDialogTestAccess::attach(*dialog, uploader);
+        UpdatesWindowTestAccess::attach(*dialog, uploader);
         FirmwareUploaderTestAccess::start(*uploader, 2);
         connect(uploader, &FirmwareUploader::finished, qApp, [&] { dialog.reset(); });
         dialog->show();
@@ -212,9 +227,11 @@ private slots:
     void ownerDeletedInsidePrompt()
     {
         RadioModel model;
-        auto dialog = std::make_unique<RadioSetupDialog>(&model);
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        auto dialog = std::make_unique<UpdatesWindow>(&checker, &model);
         auto* uploader = new FirmwareUploader(nullptr, dialog.get());
-        RadioSetupDialogTestAccess::attach(*dialog, uploader);
+        UpdatesWindowTestAccess::attach(*dialog, uploader);
         FirmwareUploaderTestAccess::start(*uploader, 1);
         dialog->show();
         QTimer::singleShot(0, qApp, [&] { dialog.reset(); });

@@ -31,8 +31,6 @@ namespace AetherSDR {
 
 class RadioModel;
 class AudioEngine;
-class FirmwareUploader;
-class FirmwareStager;
 class TgxlConnection;
 class PgxlConnection;
 class AntennaGeniusModel;
@@ -154,10 +152,6 @@ private:
     // "Check for Update" button. Lazy-constructed and non-modal per
     // docs/style/dialog-patterns.md, so the operator can keep it open while
     // staging an installer.
-    void showFirmwareReleases(const QStringList& releases);
-    QPointer<class FirmwareReleasesDialog> m_firmwareReleasesDialog;
-    bool confirmFirmwareClose();
-    bool m_firmwareClosePromptOpen{false};
     bool isFlexOnlyPage(const QTreeWidgetItem* item) const;
     bool isCapabilityPageAvailable(const QTreeWidgetItem* item) const;
     bool isGpsSetupAvailable() const;
@@ -290,8 +284,6 @@ private:
     QWidget* m_remoteOnInfoField{nullptr};
     QWidget* m_rebootInfoField{nullptr};
     QGroupBox* m_licenseInfoGroup{nullptr};
-    QGroupBox* m_firmwareUpdateGroup{nullptr};
-    QLabel* m_firmwareDisclaimer{nullptr};
     QGroupBox* m_networkIdentityGroup{nullptr};
     QWidget* m_vitaReceiveBufferLabel{nullptr};
     QWidget* m_vitaReceiveBufferControls{nullptr};
@@ -350,14 +342,6 @@ private:
     QLabel* m_licExpirationLabel{nullptr};
     QLabel* m_licRadioIdLabel{nullptr};
     QLabel* m_licMaxVersionLabel{nullptr};
-
-    // Firmware update
-    QLabel*       m_fwStatusLabel{nullptr};
-    QProgressBar* m_fwProgress{nullptr};
-    QPushButton*  m_fwUploadBtn{nullptr};
-    QString       m_fwFilePath;
-    FirmwareUploader* m_uploader{nullptr};
-    FirmwareStager*   m_stager{nullptr};
 
     // Lazy page construction — deferred builders keyed by page index (#1776)
     QHash<int, std::function<QWidget*()>> m_deferredBuilders;

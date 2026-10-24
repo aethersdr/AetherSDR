@@ -2324,7 +2324,8 @@ void MainWindow::showUpdatesWindow(bool checkNow)
 {
     // A CanonWindow (style guide, RFC #6226): created or raised directly.
     if (!m_updatesWindow) {
-        auto* w = new UpdatesWindow(m_updateChecker, this);
+        auto* w = new UpdatesWindow(m_updateChecker, &m_radioModel, this);
+        w->setAttribute(Qt::WA_DeleteOnClose);
         connect(w, &UpdatesWindow::badgeChanged, this, [this](const QString& version) {
             if (m_titleBar) {
                 m_titleBar->setUpdateAvailable(version);

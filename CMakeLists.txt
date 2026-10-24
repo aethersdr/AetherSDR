@@ -1355,7 +1355,7 @@ set(GUI_SOURCES
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
     src/gui/MeterViewController.cpp
-    src/gui/FirmwareReleasesDialog.cpp
+    src/gui/FirmwareUpdateCard.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp

@@ -8,17 +8,21 @@
 
 class QCheckBox;
 class QFrame;
+class QScrollArea;
 class QLabel;
 class QPushButton;
 class QVBoxLayout;
 
 namespace AetherSDR {
 
+class FirmwareUpdateCard;
 class FlowLayout;
+class RadioModel;
 class UpdateChecker;
 
 // File → Update...: what AetherSDR release is newest, what is in it, and the
-// download built for this computer (RFC #5304). Made to make an update worth
+// download built for this computer (RFC #5304); below it, the connected
+// radio's firmware (FirmwareUpdateCard). Made to make an update worth
 // installing, after aethersdr.com/experience. Everything it shows comes from
 // UpdateChecker: the parsed version, and the release's tagline and chapters
 // as plain text. Opening it without the release's details starts a check.
@@ -26,7 +30,12 @@ class UpdatesWindow : public CanonWindow {
     Q_OBJECT
 
 public:
-    explicit UpdatesWindow(UpdateChecker* checker, QWidget* parent = nullptr);
+    // `radio` may be null (no radio section).
+    UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget* parent = nullptr);
+
+    // Scroll the radio firmware section into view (the status bar's
+    // out-of-date firmware version opens the window here).
+    void showFirmware();
 
     // Ask GitHub again now (Check Now, and Help → Check for Updates...).
     void checkNow();
@@ -41,7 +50,13 @@ signals:
     // toggle and the settings in step.
     void automaticCheckToggled(bool on);
 
+protected:
+    // Not while firmware is being written: every close path asks first.
+    void done(int result) override;
+
 private:
+    friend class UpdatesWindowTestAccess;
+
     enum class View { Checking, Available, Current, Failed };
 
     void refresh();
@@ -51,6 +66,9 @@ private:
 
     QPointer<UpdateChecker> m_checker;
     bool m_failed{false};
+    bool m_firmwareBusy{false};
+    FirmwareUpdateCard* m_firmware{nullptr};
+    QScrollArea* m_scroll{nullptr};
 
     QWidget*     m_header{nullptr};
     QLabel*      m_eyebrow{nullptr};
