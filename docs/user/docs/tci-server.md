@@ -237,6 +237,8 @@ keyer:0,true;                     # key down
 keyer:0,false;                    # key up
 ```
 
+A `keyer:` key-up releases only the key that same client pressed. It never releases the operator's own key or another client's. A client that disconnects with its key down releases it.
+
 ## Known issues
 
 - If a client that holds PTT dies without closing its connection (power loss, a pulled cable, a dropped Wi-Fi link), the radio stays keyed until the operating system gives up on the TCP connection ([#5985](https://github.com/aethersdr/AetherSDR/issues/5985)).
