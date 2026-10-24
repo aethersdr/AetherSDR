@@ -96,7 +96,9 @@ void supportedDialog()
 {
     Fixture f(QStringLiteral("4.3.16.42034"));
     TxBandDialog dialog(&f.radio);
-    dialog.resize(700, 450);
+    // The smallest the window can be: a restored rectangle below the minimum
+    // is clamped up to it, so this is the worst case for clipping.
+    dialog.resize(dialog.minimumSize());
     dialog.show();
     QApplication::processEvents();
     QCheckBox* forty = bandBox(dialog, 5);
@@ -113,7 +115,7 @@ void supportedDialog()
             check(dialog.rect().contains(headerBounds)
                       && label->width() >= label->sizeHint().width()
                       && label->height() >= label->sizeHint().height(),
-                  "restoring a small window cannot clip the header text");
+                  "the window at its minimum size cannot clip the header text");
         }
     }
     check(newHeaders == 1, "one added column has the approved concise label");
