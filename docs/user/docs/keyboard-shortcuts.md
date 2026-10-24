@@ -9,7 +9,7 @@ AetherSDR has two kinds of keyboard shortcut:
 - **Operating shortcuts** drive the radio: tuning, MOX, push-to-talk, AF gain, band and mode changes and so on. They are **off by default**.
 - **Application shortcuts** belong to menus and windows (Minimal Mode, UI scale, Full Screen). They always work.
 
-<img src="/img/screens/keyboard-shortcuts.png" width="1100" alt="Keyboard shortcuts editor. A full keyboard map fills the top half, with bound keys colored by category, for example T for MOX and Space for PTT in red, G for go to frequency, and the arrow keys for tuning. A color legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right, and Import…, Export…, Reset All to Defaults and Close buttons." />
+<img src="/img/screens/keyboard-shortcuts.png" width="1100" alt="Keyboard shortcuts editor. A full keyboard map fills the upper part of the window, with bound keys colored by category, for example T for MOX and Space for PTT in red, G for go to frequency, and the arrow keys for tuning. A color legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right, and Import…, Export…, Reset All to Defaults and Close buttons." />
 
 *The keyboard shortcuts editor. Bound keys are colored by category on the keyboard map; the table below lists every action.*
 

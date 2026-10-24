@@ -1955,8 +1955,8 @@
       "grab": {
         "target": "ShortcutDialog"
       },
-      "caption": "The keyboard shortcuts editor. Bound keys are coloured by category on the keyboard map; the table below lists every action.",
-      "alt": "Keyboard shortcuts editor. A full keyboard map fills the top half, with bound keys coloured by category, for example T for MOX and Space for PTT in red, G for go to frequency, and the arrow keys for tuning. A colour legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right, and Import…, Export…, Reset All to Defaults and Close buttons."
+      "caption": "The keyboard shortcuts editor. Bound keys are colored by category on the keyboard map; the table below lists every action.",
+      "alt": "Keyboard shortcuts editor. A full keyboard map fills the upper part of the window, with bound keys colored by category, for example T for MOX and Space for PTT in red, G for go to frequency, and the arrow keys for tuning. A color legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right, and Import…, Export…, Reset All to Defaults and Close buttons."
     },
     {
       "id": "theme-editor",

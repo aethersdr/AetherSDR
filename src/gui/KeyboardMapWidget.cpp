@@ -319,8 +319,11 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
         }
 
         // Key label (center-top)
+        // White on a bound key's dark category fill; an unbound key follows
+        // the theme, whose fill is light in a light theme.
         p.setFont(keyFont);
-        p.setPen(Qt::white);
+        p.setPen(act ? QColor(Qt::white)
+                     : AetherSDR::ThemeManager::instance().color(this, "color.text.primary"));
         QRectF labelR = r;
         if (act)
             labelR = r.adjusted(0, 2, 0, -r.height() * 0.4);
