@@ -282,8 +282,11 @@ private:
     // still listed until then. Auto-start leaves m_restartedPath alone until a
     // scan has seen it gone and back, or m_restartedHold expires.
     QString m_restartedPath;
+    Ctr2HidPort::DeviceInfo m_restartedDevice;   // as listed when restarted
     bool m_restartedSeenGone{false};
     QDeadlineTimer m_restartedHold;
+    // The restarted device is the one selected and still held.
+    bool restartHeld();
     int m_noAnswerRetryMs{kNoAnswerRetryMs};
 };
 

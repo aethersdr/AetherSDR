@@ -78,6 +78,9 @@ public:
     // was already answered. finished() follows.
     void cancel();
     bool isRunning() const { return m_phase != Phase::Idle; }
+    // The last restart request was written but never answered: the device
+    // may still be leaving the bus, though finished() reported a failure.
+    bool restartUnanswered() const { return m_restartUnanswered; }
 
 signals:
     void progress(qint64 bytesStored, qint64 imageBytes);
@@ -139,6 +142,7 @@ private:
     qint64 m_reportsQueued{0};
     qint64 m_reportsWritten{0};
     qint64 m_restartQueuedTo{0};
+    bool m_restartUnanswered{false};
     QString m_previousVersion;
 };
 

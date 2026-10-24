@@ -22,6 +22,7 @@ public:
         quint64 serial{0};
         Job job;
         QString doneText;
+        QString device;   // mark(): the device the press was for
     };
 
     // An action starting; retry: it is the one retry of the previous action.
@@ -35,18 +36,24 @@ public:
     // The operator cancelled: pending retries are stale.
     void invalidate() { ++m_serial; }
     // The operator pressed something that is not a job yet (a question is
-    // about to be asked): pending retries are stale, and the returned ticket
-    // stands for this press until the next start or cancel.
-    Ticket mark()
+    // about to be asked, or the device read again) for `device`: pending
+    // retries are stale, and the returned ticket stands for this press until
+    // the next start or cancel, and only while `device` is still the one
+    // selected (see current()).
+    Ticket mark(const QString& device = {})
     {
         ++m_serial;
-        return {m_serial, {}, {}};
+        return {m_serial, {}, {}, device};
     }
 
     // The action running now, to retry later.
     Ticket ticket() const { return {m_serial, m_job, m_doneText}; }
-    // No action has started, and nothing was cancelled, since the ticket.
-    bool current(const Ticket& ticket) const { return ticket.serial == m_serial; }
+    // No action has started, and nothing was cancelled, since the ticket;
+    // and a press's device is still the selected one.
+    bool current(const Ticket& ticket, const QString& selected = {}) const
+    {
+        return ticket.serial == m_serial && (ticket.device.isEmpty() || ticket.device == selected);
+    }
     bool hasJob() const { return static_cast<bool>(m_job); }
     // The running action is already the one retry.
     bool retried() const { return m_retried; }

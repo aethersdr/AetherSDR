@@ -85,6 +85,13 @@ FirmwareInstallModel::Target afterAlert(FirmwareInstallModel& fw,
                : target;
 }
 
+// The selected unit, for a press that waits (on the access question or a
+// fresh read of its offer) before acting: a change of selection drops it.
+QString unitKey(const FirmwareInstallModel::Target& target)
+{
+    return target.hidPath + QLatin1Char('|') + target.mac.toUpper();
+}
+
 // For a run after an access grant: the unit as it is now, if it is the one
 // the operator chose (same MAC, or the only one in download mode when the
 // choice had none); else false with the reason.
@@ -702,7 +709,7 @@ bool FirmwareInstallDialog::offerAccessFirst(std::function<void()> again)
     if (::access(path.constData(), R_OK | W_OK) == 0 || errno != EACCES)
         return false;
     // A ticket for this press: another action or Cancel meanwhile drops it.
-    const Ctr2ActionRetry::Ticket ticket = m_actions.mark();
+    const Ctr2ActionRetry::Ticket ticket = m_actions.mark(unitKey(target));
     // Declined, or no install could start: the action goes ahead as before.
     return m_relay->offerAccessRule(Ctr2ProxyPanel::RuleUse::Firmware, [this, ticket, again] {
         // What the action can do (restart on request, or the buttons) depends
@@ -728,7 +735,7 @@ bool FirmwareInstallDialog::refreshOfferFirst(std::function<void()> again)
         || (target.device != Device::LinkFirmware && target.device != Device::Stock)
         || m_fw->takesCommands(target))
         return false;
-    const Ctr2ActionRetry::Ticket ticket = m_actions.mark();
+    const Ctr2ActionRetry::Ticket ticket = m_actions.mark(unitKey(target));
     m_step->setText(tr("Reading the CTR2-Max's firmware…"));
     m_model->reprobeFirmware();
     waitForFirmwareInfo(8, ticket, [this, again] {
@@ -742,8 +749,11 @@ bool FirmwareInstallDialog::refreshOfferFirst(std::function<void()> again)
 void FirmwareInstallDialog::waitForFirmwareInfo(int tries, Ctr2ActionRetry::Ticket ticket,
                                                 std::function<void()> again)
 {
-    if (!m_actions.current(ticket))
+    // Another action, Cancel, or another unit selected meanwhile: drop it.
+    if (!m_actions.current(ticket, unitKey(m_fw->target()))) {
+        m_step->clear();
         return;
+    }
     // Known once the relay has read the device: a version (AetherCTR2), or
     // the restart commands (stock firmware that offers them). Stock firmware
     // without them stays unknown, and gets the buttons after the wait.
