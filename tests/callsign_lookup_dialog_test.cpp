@@ -15,6 +15,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QStyle>
+#include <QStyleOptionFrame>
 #include <QTest>
 #include <cstdio>
 
@@ -73,6 +75,29 @@ void cardFollowsTheCanonScope()
           "the card's ground resolves through the canon scope, not the root theme");
 }
 
+// At the smallest the window can be, the callsign field still shows its whole
+// placeholder: the canon sheet's monospace font is wider than the old one, and
+// its buttons take more of the row.
+void fieldFitsItsPlaceholderAtMinimumSize()
+{
+    CallsignLookupDialog dialog;
+    dialog.resize(dialog.minimumSize());
+    dialog.show();
+    QTest::qWaitForWindowExposed(&dialog);
+    auto* input = dialog.findChild<QLineEdit*>(QStringLiteral("callsignLookupInput"));
+    check(input != nullptr, "the callsign field exists");
+    if (!input) return;
+    QStyleOptionFrame opt;
+    opt.initFrom(input);
+    opt.lineWidth = input->style()->pixelMetric(QStyle::PM_DefaultFrameWidth, &opt, input);
+    const QRect text = input->style()->subElementRect(QStyle::SE_LineEditContents, &opt, input)
+                           .marginsRemoved(input->textMargins());
+    const int needed = input->fontMetrics().horizontalAdvance(input->placeholderText());
+    std::printf("  field %d px, text area %d px, placeholder %d px\n",
+                input->width(), text.width(), needed);
+    check(needed <= text.width(), "the callsign field shows its whole placeholder at minimum size");
+}
+
 // Size and position persist under CallsignLookupDialogGeometry, the key the old
 // dialog wrote, including its base64 rectangles.
 void geometryCarriesOver()
@@ -115,6 +140,7 @@ int main(int argc, char** argv)
     canonWorkspace();
     controlsKeepTheirNames();
     cardFollowsTheCanonScope();
+    fieldFitsItsPlaceholderAtMinimumSize();
     geometryCarriesOver();
 
     return g_failures ? 1 : 0;

@@ -98,7 +98,9 @@ CallsignLookupDialog::CallsignLookupDialog(QWidget* parent)
     // PersistentDialog (the saved geometry carries over), and it resizes from
     // every edge.
     setGeometryKey(QStringLiteral("CallsignLookupDialogGeometry"));
-    setMinimumSize(440, 320);
+    // Wide enough that the callsign field shows its whole placeholder in the
+    // canon sheet's monospace font beside the two buttons.
+    setMinimumSize(500, 320);
     FramelessResizer::install(this);
     // The canon controls sheet the AetherRX and AetherTX Settings dialogs use,
     // with their default button in cyan.
