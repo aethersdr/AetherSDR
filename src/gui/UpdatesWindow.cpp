@@ -132,6 +132,13 @@ QString sheet()
                "QPushButton#updatesGhost:hover { color: {{color.canon.inkSoft}}; }"
                "QPushButton#updatesGhost:focus { color: {{color.canon.ink}}; }"
                "QPushButton:disabled { color: {{color.canon.muted}}; }"
+               // An ID rule outranks the bare :disabled one, so each styled
+               // button states its own dimmed look.
+               "QPushButton#updatesSecondary:disabled { color: {{color.canon.muted}};"
+               " background: {{color.canon.nested}}; border-color: {{color.canon.line}}; }"
+               "QPushButton#updatesGet:disabled { color: {{color.canon.muted}};"
+               " background: {{color.canon.nested}}; border-color: {{color.canon.line}}; }"
+               "QPushButton#updatesGhost:disabled { color: {{color.canon.muted}}; }"
                "QCheckBox { color: {{color.canon.inkSoft}}; background: transparent; }"
                "QScrollBar:vertical { background: transparent; width: 8px; margin: 2px; }"
                "QScrollBar::handle:vertical { background: {{color.canon.lineHi}}; border-radius: 3px;"
