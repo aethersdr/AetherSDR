@@ -1,4 +1,5 @@
 #include "SpectrumWidget.h"
+#include "SpectrumTraceBins.h"
 #include "SpectrumChromeGeometry.h"
 #include "SpectrumSquelchLogic.h"
 #include "ScopedChildWidget.h"
@@ -1812,6 +1813,25 @@ QVariantMap SpectrumWidget::automationDisplaySettingsSnapshot() const
     // mysterious floor-depth failure.
     snap[QStringLiteral("kiwiWaterfallActive")] = m_kiwiSdrWaterfallActive;
     return snap;
+}
+
+QVariantMap SpectrumWidget::traceBinsSnapshot() const
+{
+    // m_bins: the last decoded radio frame, before display smoothing and the
+    // pan-edge crop. During a Flex dBm range release it may hold rebased bins.
+    // It stays the radio's frame while a Kiwi source is displayed.
+    QVariantMap m = SpectrumTraceBins::snapshot(m_bins, m_centerMhz, m_bandwidthMhz,
+                                                m_fftFrameSequence);
+    m[QStringLiteral("panIndex")] = m_panIndex;
+    m[QStringLiteral("name")] = objectName();
+    m[QStringLiteral("kiwiWaterfallActive")] = m_kiwiSdrWaterfallActive;
+    // The dBm encoder aperture the bins were decoded against: on Flex one
+    // amplitude step is (max - min) / (yPixels - 1).
+    m[QStringLiteral("encoderRangeValid")] = m_encoderRangeValid;
+    m[QStringLiteral("encoderMinDbm")] = m_encoderMinDbm;
+    m[QStringLiteral("encoderMaxDbm")] = m_encoderMaxDbm;
+    m[QStringLiteral("encoderYPixels")] = m_encoderYPixels;
+    return m;
 }
 
 QVariantMap SpectrumWidget::traceDebugSnapshot()
