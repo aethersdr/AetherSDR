@@ -199,11 +199,15 @@ FirmwareUpdateCard::FirmwareUpdateCard(RadioModel* model, QWidget* parent)
         releaseListCache() = {published, QDateTime::currentDateTimeUtc()};
         showReleases(published);
     });
+    // The release-list check owns the pill only: it never writes the
+    // install's status line, progress or stage ring, so a radio's reconnect
+    // after an install cannot overwrite the install's outcome.
     connect(m_stager, &FirmwareStager::updateCheckFailed, this, [this](const QString& error) {
         m_pill->setText(tr("Releases unavailable"));
+        m_pill->setToolTip(error);
+        m_pill->setAccessibleDescription(error);
         m_pill->setProperty("tone", QString());
         restyle(m_pill);
-        setStatus(error, QStringLiteral("muted"));
     });
     connect(m_stager, &FirmwareStager::stageProgress, this, [this](int percent, const QString& status) {
         if (!m_staging) {
@@ -325,7 +329,8 @@ void FirmwareUpdateCard::refreshAvailability()
 
 void FirmwareUpdateCard::requestReleases()
 {
-    if (!m_model || !m_model->isConnected() || !m_model->backendCapabilities().canUpgradeFirmware) {
+    if (!m_model || !m_model->isConnected() || !m_model->backendCapabilities().canUpgradeFirmware
+        || isBusy()) {
         return;
     }
     if (releaseListCache().fresh()) {

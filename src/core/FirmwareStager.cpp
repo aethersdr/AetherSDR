@@ -402,6 +402,7 @@ void FirmwareStager::downloadAndStage(const QString& version, const QString& mod
     m_modelFamily = modelFamily;
     m_cancelled = false;
     m_stagedVerified = false;
+    m_expectedMd5.clear();   // never verify one release against another's hash
     m_stagedPath.clear();
     m_stagedVersion.clear();
 

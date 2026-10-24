@@ -4,6 +4,7 @@
 #include "UpdateTestNetwork.h"
 #include "core/UpdateChecker.h"
 #include "gui/FirmwareUpdateCard.h"
+#include "gui/UpdateStage.h"
 #include "gui/UpdatesWindow.h"
 #include "models/RadioModel.h"
 
@@ -53,6 +54,10 @@ public:
     }
     static FirmwareStager* stager(UpdatesWindow& window) { return window.m_firmware->m_stager; }
     static QLabel* status(UpdatesWindow& window) { return window.m_firmware->m_status; }
+    static void showOutcome(UpdatesWindow& window, const QString& text)
+    {
+        window.m_firmware->setStatus(text, QStringLiteral("current"));
+    }
     // An Install (network download) that has just finished staging.
     static void beginNetworkInstall(UpdatesWindow& window)
     {
@@ -247,6 +252,27 @@ private slots:
         emit UpdatesWindowTestAccess::stager(window)->stageProgress(0, QStringLiteral("Checking for updates..."));
         QCOMPARE(progress.size(), 0);
         QVERIFY(UpdatesWindowTestAccess::status(window)->isHidden());
+    }
+    void indexCheckLeavesTheOutcome()
+    {
+        // After an install the radio reboots and reconnects, which re-runs
+        // the release-list check; its start, answer or failure must leave
+        // the install's outcome and the stage alone.
+        RadioModel model;
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow window(&checker, &model);
+        window.show();
+        const QString outcome = QStringLiteral("The radio confirmed the update.");
+        UpdatesWindowTestAccess::showOutcome(window, outcome);
+        FirmwareStager* stager = UpdatesWindowTestAccess::stager(window);
+        emit stager->stageProgress(0, QStringLiteral("Checking for updates..."));
+        emit stager->updateCheckComplete(QStringLiteral("4.3.16"), true, {QStringLiteral("4.3.16")});
+        emit stager->updateCheckFailed(QStringLiteral("index unavailable"));
+        QCOMPARE(UpdatesWindowTestAccess::status(window)->text(), outcome);
+        auto* stage = window.findChild<UpdateStage*>(QStringLiteral("updatesStage"));
+        QVERIFY(stage);
+        QCOMPARE(stage->progress(), -1);
     }
     void unverifiedDownloadAsksAgain()
     {
