@@ -97,6 +97,8 @@ has reported both supported firmware and the band's value, in either order.
 See [TX Controls](./tx-controls.md#tune) for the output scope and older firmware's
 **Inhibit during TUNE** settings.
 
+The TX Band Settings window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it; it reopens at the size and place you left it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). It's a window of its own, with its own taskbar entry. **View → Frameless Window** does not apply to it.
+
 | Page | What it covers |
 |------|----------------|
 | **Audio** | The radio's Line Out, Headphone and Front Speaker outputs; audio compression for SmartLink and tailnet connections; packet-loss smoothing; **Prevent system sleep while connected**; PC audio devices, Audio Boost and Audio Buffer; recording. See [Audio Settings](./audio-settings.md). |

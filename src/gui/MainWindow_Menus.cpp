@@ -853,7 +853,16 @@ void MainWindow::buildMenuBar()
             statusBar()->showMessage("Not connected to radio", 3000);
             return;
         }
-        showOrRaisePersistent(m_txBandDialog, &m_radioModel);
+        // A canon workspace window: created directly rather than through
+        // showOrRaisePersistent(), which would apply View → Frameless Window.
+        if (!m_txBandDialog) {
+            auto* dialog = new TxBandDialog(&m_radioModel, this);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            m_txBandDialog = dialog;
+        }
+        m_txBandDialog->show();
+        m_txBandDialog->raise();
+        m_txBandDialog->activateWindow();
     });
 
     // Inhibit during TUNE submenu — user selects which TX outputs to suppress.

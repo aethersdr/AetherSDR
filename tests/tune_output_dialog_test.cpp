@@ -1,13 +1,17 @@
 // Socket-free production TX Band Settings controls with injected command replies.
 #include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "gui/CanonWindow.h"
 #include "gui/TxBandDialog.h"
 #include "models/RadioModel.h"
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QDialog>
 #include <QGridLayout>
 #include <QLabel>
+#include <QTest>
 
 #include <cstdio>
 #include <functional>
@@ -189,6 +193,48 @@ void firmwareIdentityAfterReadback()
               && f.commands.isEmpty(),
           "late firmware identity enables the existing table with each earlier confirmed value");
 }
+// TX Band Settings is a canon workspace (#6239) that restores geometry saved
+// under TxBandDialogGeometry, including the base64 rectangles earlier
+// releases wrote.
+void canonWorkspace()
+{
+    static const QString kKey = QStringLiteral("TxBandDialogGeometry");
+    Fixture f(QStringLiteral("4.3.16.42034"));
+    auto& settings = AppSettings::instance();
+    settings.remove(kKey);
+    {
+        TxBandDialog dialog(&f.radio);
+        check(qobject_cast<CanonWindow*>(&dialog) != nullptr, "TX Band Settings is a CanonWindow");
+        check(dialog.windowType() == Qt::Window
+                  && dialog.windowFlags().testFlag(Qt::FramelessWindowHint),
+              "it is a frameless workspace window, not a dialog on its parent");
+    }
+
+    // A rectangle saved before the migration: QWidget::saveGeometry() in base64.
+    // Compared by height: the offscreen screen is 800 px wide, narrower than
+    // the table's minimum, so a restored width is clamped to the minimum.
+    TxBandDialog restored(&f.radio);
+    const QSize chosen(restored.minimumWidth(), restored.minimumHeight() + 110);
+    QDialog legacy;
+    legacy.resize(chosen);
+    settings.setValue(kKey, QString::fromLatin1(legacy.saveGeometry().toBase64()));
+    check(restored.height() != chosen.height(), "control: a fresh window is not born at the saved height");
+    restored.show();
+    check(QTest::qWaitForWindowExposed(&restored), "the window is exposed");
+    for (int i = 0; i < 50 && restored.height() != chosen.height(); ++i) {
+        QTest::qWait(20);
+    }
+    check(restored.height() == chosen.height(), "geometry saved by the old dialog restores under its key");
+
+    const QSize resized = chosen + QSize(40, 20);
+    restored.resize(resized);
+    QCoreApplication::processEvents();
+    restored.hide();
+    const QString saved = settings.value(kKey).toString();
+    check(saved.endsWith(QStringLiteral(",%1,%2").arg(resized.width()).arg(resized.height())),
+          "hiding the window saves its size under the same key");
+    check(f.commands.isEmpty(), "opening, resizing and hiding the window sends no commands");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -198,8 +244,11 @@ int main(int argc, char** argv)
         return 1;
     }
     QApplication app(argc, argv);
+    app.setQuitOnLastWindowClosed(false);
+    AppSettings::instance().load();
     supportedDialog();
     unavailableDialog();
     firmwareIdentityAfterReadback();
+    canonWorkspace();
     return failures == 0 ? 0 : 1;
 }
