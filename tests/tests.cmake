@@ -3297,10 +3297,10 @@ target_link_libraries(wan_udp_keepalive_test PRIVATE aethercore Qt6::Core)
 add_test(NAME wan_udp_keepalive_test COMMAND wan_udp_keepalive_test)
 set_tests_properties(wan_udp_keepalive_test PROPERTIES TIMEOUT 25)
 
-# Socket-free: injected LAN write; drives the production keepalive timer and lifecycle.
+# Socket-free: injected LAN bind/write; drives start(), rebind, receive and the keepalive timer.
 add_executable(lan_udp_keepalive_test tests/lan_udp_keepalive_test.cpp)
 target_include_directories(lan_udp_keepalive_test PRIVATE src tests)
-target_link_libraries(lan_udp_keepalive_test PRIVATE aethercore Qt6::Core)
+target_link_libraries(lan_udp_keepalive_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME lan_udp_keepalive_test COMMAND lan_udp_keepalive_test)
 set_tests_properties(lan_udp_keepalive_test PROPERTIES TIMEOUT 25)
 
