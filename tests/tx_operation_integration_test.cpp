@@ -92,6 +92,22 @@ public:
         client.txProducer = radio.registerTxProducer(&socket);
         server.m_clients.append(std::move(client));
     }
+    // A client whose text goes the production route: onTextMessage -> TciProtocol.
+    static void addTciTextClient(TciServer& server, TciClient& socket, RadioModel& radio)
+    {
+        addTciClient(server, socket, radio);
+        server.clientStateFor(&socket)->protocol =
+            new TciProtocol(&radio, &server.m_routingState, &server.m_trxMap);
+        QObject::connect(&socket, &TciClient::textMessageReceived, &server, &TciServer::onTextMessage);
+        QObject::connect(&socket, &TciClient::disconnected, &server, &TciServer::onClientDisconnected);
+    }
+    static void tciText(TciClient& socket, const QString& text)
+    {
+        emit socket.textMessageReceived(text);
+        for (int i = 0; i < 5; ++i) {
+            QCoreApplication::processEvents();
+        }
+    }
     static void tciRequest(TciServer& server, TciClient& socket, bool on, int receiver = 0)
     {
         server.handleTrxRequest(&socket, {receiver, on, QStringLiteral("tci")});
@@ -2706,6 +2722,51 @@ void tciProducerLifetimes()
           "worker-side input revocation still permits owner-thread PTT cleanup");
 }
 
+// #5873: keyer: reached RadioModel::sendCwKey unbound, in the operator's own
+// CwKey slot, so any TCI client's key-up released the operator's straight key.
+void tciKeyerReleasesOnlyItsOwnKey()
+{
+    Fixture f;
+    TciClient remote;
+    TciClient other;
+    TciServer server(&f.radio);
+    TxOperationIntegrationTestAccess::addTciTextClient(server, remote, f.radio);
+    TxOperationIntegrationTestAccess::addTciTextClient(server, other, f.radio);
+
+    f.radio.sendCwKey(true, QStringLiteral("operator"));
+    check(f.commands == QStringList({"cw:on"}), "fixture: the operator's straight key is down");
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,false;"));
+    check(!f.commands.contains("cw:off"), "a TCI client's key-up never releases the operator's key");
+    f.radio.sendCwKey(false, QStringLiteral("operator"));
+    check(f.commands.contains("cw:off"), "the operator's own key-up still releases it");
+
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,true;"));
+    check(f.commands.contains("cw:on"), "a TCI client keys its own CW");
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(other, QStringLiteral("keyer:0,false;"));
+    check(!f.commands.contains("cw:off"), "another TCI client's key-up never releases it");
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,false;"));
+    check(f.commands.contains("cw:off"), "the client's own key-up releases it");
+
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,true;"));
+    check(f.commands.contains("cw:on"), "fixture: the client keys again");
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,junk;"));
+    check(f.commands.contains("cw:off"), "an unparseable state still means key up (fail closed)");
+
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,true;"));
+    f.commands.clear();
+    emit remote.disconnected();
+    for (int i = 0; i < 5; ++i) {
+        QCoreApplication::processEvents();
+    }
+    check(f.commands.contains("cw:off"), "a client that disconnects with its key down releases it");
+}
+
 void tciPermissionRequiresConfirmedOwnership()
 {
     QStringList sent;
@@ -2912,6 +2973,7 @@ int main(int argc, char** argv)
     protocolCwxLifetimes();
 #ifdef HAVE_WEBSOCKETS
     tciProducerLifetimes();
+    tciKeyerReleasesOnlyItsOwnKey();
     tciPermissionRequiresConfirmedOwnership();
     tciPromotionRechecksPermissionAfterReply();
 #endif
