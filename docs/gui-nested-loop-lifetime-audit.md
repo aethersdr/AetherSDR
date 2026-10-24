@@ -45,7 +45,7 @@ the baseline, so they remain reproducible after this patch.
 | `MainWindow.cpp:4538` | Retained: MainWindow survives this dialog loop. |
 | `MidiMappingDialog.cpp:678` | Scoped manual-binding dialog and post-loop owner/manager/child checks. MIDI mapping is delete-on-close. |
 | `MiniPanApplet.cpp:83` | Retained: ordinary applet ownership. |
-| `NetSchedulerDialog.cpp:173` | Scoped editor, copied capture callback and stable schedule IDs across loops. Double-click opening is deferred until the table event returns. Scheduler is delete-on-close. |
+| `NetSchedulerDialog.cpp:212` | Scoped editor, copied capture callback and stable schedule IDs across loops. Double-click opening is deferred until the table event returns. Scheduler is delete-on-close. |
 | `NetworkDiagnosticsDialog.cpp:1387` | Scoped menu and persistent selected-row indexes. Diagnostics is delete-on-close and the log model can change. |
 | `RxApplet.cpp:454` | Scoped TX-antenna menu with original-slice survival/identity check. Ordinary owner deletion is not claimed as a production route; slice rebinding is the stale-intent hazard. |
 | `RxApplet.cpp:1064` | AGC menu retained: ordinary applet ownership; the callback uses current calibration state. |

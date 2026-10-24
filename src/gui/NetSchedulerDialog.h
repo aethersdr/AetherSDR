@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include "models/NetEntry.h"
 
 #include <QList>
@@ -21,7 +21,11 @@ namespace AetherSDR {
 // whenever it is mutated so the owner (MainWindow) can persist it and refeed the
 // scheduler. "Tune Now" emits tuneRequested() for typed slice corrections,
 // without recalling a radio memory slot.
-class NetSchedulerDialog : public PersistentDialog {
+//
+// A CanonWindow workspace (style guide, RFC #6226), like AetherRX and AetherTX:
+// always frameless, so MainWindow creates it directly rather than through
+// showOrRaisePersistent().
+class NetSchedulerDialog : public CanonWindow {
     Q_OBJECT
 
 public:

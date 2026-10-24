@@ -89,7 +89,15 @@ The window lists your nets with these columns:
 | **Mode** | The mode to tune |
 
 Buttons: **Add…**, **Edit…**, **Remove**, **Enable** / **Disable**,
-**Import…** and **Export…**.
+**Tune Now**, **Import…** and **Export…**.
+
+**Remove** asks first, with **Cancel** as the default, so pressing Return
+keeps the net; click **Remove** to delete it.
+
+The window has no title bar: drag any empty part of it to move it, drag an
+edge to resize it, and close it with the round button in its top-right
+corner, Escape, or ⌘W (Ctrl+W on Windows and Linux). It reopens where you
+left it.
 
 ## Troubleshooting
 
