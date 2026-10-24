@@ -3415,7 +3415,7 @@ void MainWindow::applyFirmwareCurrencyToVersionLabel()
 // open the Updates window at the radio's firmware, but ONLY while it shows an
 // out-of-date version, which is the state the tooltip invites a click in.
 // Otherwise it does nothing.
-void MainWindow::openFirmwareReleaseNotes()
+void MainWindow::openFirmwareUpdate()
 {
     if (m_radioFirmwareCurrency != AetherSDR::FirmwareCurrency::Status::Outdated)
         return;

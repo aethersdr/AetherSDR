@@ -21,7 +21,10 @@
 #include <QVBoxLayout>
 #include <QVersionNumber>
 
+#include <QDateTime>
+
 #include <algorithm>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -40,6 +43,25 @@ void restyle(QWidget* w)
 {
     w->style()->unpolish(w);
     w->style()->polish(w);
+}
+
+// FlexRadio's published list, shared by every window this process opens.
+// Fetched at most once a day, the policy FirmwareCurrency states for the
+// same index: an operator who connects daily contacts flexradio.com once a
+// day, not once per window or reconnect.
+struct ReleaseListCache {
+    QStringList releases;
+    QDateTime fetchedUtc;
+    bool fresh() const
+    {
+        return fetchedUtc.isValid()
+            && fetchedUtc.secsTo(QDateTime::currentDateTimeUtc()) < FirmwareCurrency::kPublishedVersionMaxAgeSecs;
+    }
+};
+ReleaseListCache& releaseListCache()
+{
+    static ReleaseListCache cache;
+    return cache;
 }
 
 QString displayVersion(const QString& version)
@@ -173,7 +195,10 @@ FirmwareUpdateCard::FirmwareUpdateCard(RadioModel* model, QWidget* parent)
     connect(m_cancel, &QPushButton::clicked, this, [this] { confirmStop(window()); });
 
     connect(m_stager, &FirmwareStager::updateCheckComplete, this,
-            [this](const QString&, bool, const QStringList& published) { showReleases(published); });
+            [this](const QString&, bool, const QStringList& published) {
+        releaseListCache() = {published, QDateTime::currentDateTimeUtc()};
+        showReleases(published);
+    });
     connect(m_stager, &FirmwareStager::updateCheckFailed, this, [this](const QString& error) {
         m_pill->setText(tr("Releases unavailable"));
         m_pill->setProperty("tone", QString());
@@ -181,15 +206,22 @@ FirmwareUpdateCard::FirmwareUpdateCard(RadioModel* model, QWidget* parent)
         setStatus(error, QStringLiteral("muted"));
     });
     connect(m_stager, &FirmwareStager::stageProgress, this, [this](int percent, const QString& status) {
+        if (!m_staging) {
+            return;   // checkForUpdate() reports on this signal too; listing releases is not an install
+        }
         m_progress->setValue(percent);
         setStatus(status, QString());
         emit progressChanged(percent / 2);   // preparing is the first half of the install
     });
     connect(m_stager, &FirmwareStager::stageComplete, this, [this](const QString& path, const QString&) {
         m_staging = false;
-        const bool confirmFirst = !m_uploadAfterStage;
+        // Install confirmed up front on the promise of an MD5 check; when
+        // FlexRadio's hash was unavailable that promise was not kept, so ask
+        // again and say so. Open Installer always asks before the upload.
+        const bool unverifiedDownload = m_uploadAfterStage && !m_stager->stagedVerified();
+        const bool confirmFirst = !m_uploadAfterStage || unverifiedDownload;
         m_uploadAfterStage = false;
-        uploadStaged(path, confirmFirst);
+        uploadStaged(path, confirmFirst, unverifiedDownload);
     });
     connect(m_stager, &FirmwareStager::stageFailed, this, [this](const QString& error) {
         m_staging = false;
@@ -201,6 +233,9 @@ FirmwareUpdateCard::FirmwareUpdateCard(RadioModel* model, QWidget* parent)
 
     if (m_model) {
         connect(m_model, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+            if (!connected) {
+                showReleases({});   // the next radio's installed release is not this one's
+            }
             refreshAvailability();
             if (connected) {
                 requestReleases();
@@ -257,6 +292,15 @@ void FirmwareUpdateCard::refreshAvailability()
     m_lanes->setVisible(capable && !m_releases.isEmpty());
     m_caution->setVisible(capable);
     m_notes->setVisible(capable);
+    // A backend that declares no release-notes source leaves the button dead
+    // rather than opening a URL invented here.
+    const auto& source = connected ? m_model->backendCapabilities().firmwareUpdateSource
+                                   : std::optional<FirmwareUpdateSource>{};
+    const bool hasNotes = source && !source->releaseNotesUrlTemplate.isEmpty();
+    m_notes->setEnabled(hasNotes);
+    const QString notesReason = hasNotes ? QString() : tr("This radio's vendor publishes no release-notes link.");
+    m_notes->setToolTip(notesReason);
+    m_notes->setAccessibleDescription(notesReason);
     m_install->setEnabled(usable && !selectedRelease().isEmpty());
     m_openInstaller->setEnabled(usable);
     // Dimmed controls state why, where a screen reader hears it.
@@ -282,6 +326,10 @@ void FirmwareUpdateCard::refreshAvailability()
 void FirmwareUpdateCard::requestReleases()
 {
     if (!m_model || !m_model->isConnected() || !m_model->backendCapabilities().canUpgradeFirmware) {
+        return;
+    }
+    if (releaseListCache().fresh()) {
+        showReleases(releaseListCache().releases);
         return;
     }
     m_pill->setText(tr("Checking…"));
@@ -401,8 +449,9 @@ void FirmwareUpdateCard::syncSelection()
     m_description->setText(
         release.isEmpty()
             ? tr("Choose a release to install, or open an installer you downloaded.")
-            : tr("SmartSDR %1 for the %2: Install downloads the installer from FlexRadio, checks its MD5, "
-                 "extracts the firmware and uploads it. The radio reboots.")
+            : tr("SmartSDR %1 for the %2: Install downloads the installer from FlexRadio, checks it "
+                 "against FlexRadio's MD5 (and asks again if that can't be done), extracts the firmware "
+                 "and uploads it. The radio reboots.")
                   .arg(release, m_model->model()));
 }
 
@@ -457,7 +506,7 @@ void FirmwareUpdateCard::openInstaller()
     m_stager->stageFromLocalFile(path, FirmwareStager::modelToFamily(m_model->model()));
 }
 
-void FirmwareUpdateCard::uploadStaged(const QString& path, bool confirmFirst)
+void FirmwareUpdateCard::uploadStaged(const QString& path, bool confirmFirst, bool unverifiedDownload)
 {
     if (!m_model) {
         setBusy(false);
@@ -465,11 +514,16 @@ void FirmwareUpdateCard::uploadStaged(const QString& path, bool confirmFirst)
     }
     if (confirmFirst) {
         const QPointer<FirmwareUpdateCard> self(this);
+        const QString question =
+            unverifiedDownload
+                ? tr("FlexRadio's MD5 hash for this installer could not be downloaded, so the "
+                     "firmware's integrity was NOT checked.\n\nUpload %1 to %2 anyway?\n\n"
+                     "The radio will reboot after the update.\nDo not disconnect during the upload.")
+                : tr("Upload %1 to %2?\n\nThe radio will reboot after the update.\n"
+                     "Do not disconnect during the upload.");
         ScopedChildWidget<QMessageBox> boxOwner(
             QMessageBox::Warning, tr("Firmware Update"),
-            tr("Upload %1 to %2?\n\nThe radio will reboot after the update.\n"
-               "Do not disconnect during the upload.")
-                .arg(QFileInfo(path).fileName(), m_model->model()),
+            question.arg(QFileInfo(path).fileName(), m_model->model()),
             QMessageBox::Ok | QMessageBox::Cancel, window());
         boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
         const int reply = boxOwner.get()->exec();

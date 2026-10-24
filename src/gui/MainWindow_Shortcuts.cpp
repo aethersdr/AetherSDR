@@ -929,7 +929,7 @@ void MainWindow::activateStatusIndicator(QObject* obj)
     }
 #endif
     if (obj == m_radioVersionLabel) {
-        openFirmwareReleaseNotes();   // no-op unless the row shows out-of-date firmware
+        openFirmwareUpdate();   // no-op unless the row shows out-of-date firmware
         return;
     }
     if (obj == m_cwxIndicator) {

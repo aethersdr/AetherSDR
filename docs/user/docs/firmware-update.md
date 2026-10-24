@@ -31,13 +31,13 @@ The radio's firmware version is also shown, read-only, as **FW Version** in **Se
 
 ### Choose a release
 
-The section lists every SmartSDR release FlexRadio publishes, one row per major line (v4, v3, v2), oldest to newest. The release installed on the radio has a thicker outline; the newest release in the radio's own line is highlighted. When the radio is behind, that newest release is already selected. Click another release to choose it, and **Release notes** opens its notes.
+The section lists every SmartSDR release FlexRadio publishes (AetherSDR fetches the list at most once a day), one row per major line (v4, v3, v2), oldest to newest. The release installed on the radio has a thicker outline; the newest release in the radio's own line is highlighted. When the radio is behind, that newest release is already selected. Click another release to choose it, and **Release notes** opens its notes.
 
 ### Install
 
 1. Click **Install** *version*.
 2. A confirmation names the release and the radio, and warns that the radio reboots after the update. Do not disconnect during the update.
-3. AetherSDR downloads the SmartSDR installer from FlexRadio, checks its MD5, extracts the firmware for your radio's model family, and uploads it. The steps **Prepare firmware**, **Upload to radio** and **Radio confirms** light in turn, the progress ring fills, and the status line says what is happening.
+3. AetherSDR downloads the SmartSDR installer from FlexRadio, checks it against FlexRadio's MD5, extracts the firmware for your radio's model family, and uploads it. If FlexRadio's MD5 can't be downloaded, AetherSDR stops before the upload and asks again, saying that the firmware's integrity was not checked. The steps **Prepare firmware**, **Upload to radio** and **Radio confirms** light in turn, the progress ring fills, and the status line says what is happening.
 
 ### Install from a file
 

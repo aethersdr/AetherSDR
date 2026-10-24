@@ -511,8 +511,10 @@ void UpdatesWindow::refresh()
         if (m_firmwareBusy) {
             w->setEnabled(false);
             w->setToolTip(waiting);
+            w->setAccessibleDescription(waiting);
         } else if (w->toolTip() == waiting) {
             w->setToolTip(QString());
+            w->setAccessibleDescription(QString());
         }
     }
     if (!m_firmwareBusy) {

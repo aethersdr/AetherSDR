@@ -68,7 +68,7 @@ private:
     void syncSelection();
     void startInstall();
     void openInstaller();
-    void uploadStaged(const QString& path, bool confirmFirst);
+    void uploadStaged(const QString& path, bool confirmFirst, bool unverifiedDownload = false);
     void ensureUploader();
     void setStep(Step step);
     void setStatus(const QString& text, const QString& tone);

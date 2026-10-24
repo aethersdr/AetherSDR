@@ -6110,7 +6110,7 @@ void MainWindow::buildUI()
     applyStatusBarCompactLabelStyle(m_radioVersionLabel, QStringLiteral("{{color.text.secondary}}"));
     m_radioVersionLabel->setAlignment(Qt::AlignCenter);
     // Only out-of-date firmware is actionable, but the row is wired once here
-    // rather than as the verdict changes: openFirmwareReleaseNotes() checks
+    // rather than as the verdict changes: openFirmwareUpdate() checks
     // m_radioFirmwareCurrency and does nothing otherwise, and
     // applyFirmwareCurrencyToVersionLabel() drops the tab stop it does not need.
     m_radioVersionLabel->installEventFilter(this);

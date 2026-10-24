@@ -1,4 +1,5 @@
 #include "TestSettingsProfile.h"
+#include "core/FirmwareStager.h"
 #include "core/FirmwareUploader.h"
 #include "UpdateTestNetwork.h"
 #include "core/UpdateChecker.h"
@@ -7,6 +8,7 @@
 #include "models/RadioModel.h"
 
 #include <QApplication>
+#include <QLabel>
 #include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
@@ -48,6 +50,14 @@ public:
     static void attach(UpdatesWindow& window, FirmwareUploader* uploader)
     {
         window.m_firmware->m_uploader = uploader;
+    }
+    static FirmwareStager* stager(UpdatesWindow& window) { return window.m_firmware->m_stager; }
+    static QLabel* status(UpdatesWindow& window) { return window.m_firmware->m_status; }
+    // An Install (network download) that has just finished staging.
+    static void beginNetworkInstall(UpdatesWindow& window)
+    {
+        window.m_firmware->m_staging = true;
+        window.m_firmware->m_uploadAfterStage = true;
     }
 };
 }
@@ -223,6 +233,44 @@ private slots:
         });
         dialog->close();
         QVERIFY(!dialog);
+    }
+    void indexCheckIsNotAnInstall()
+    {
+        // FirmwareStager reports its release-index check on stageProgress
+        // too; that must not paint an install that is not happening.
+        RadioModel model;
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow window(&checker, &model);
+        window.show();
+        QSignalSpy progress(window.findChild<FirmwareUpdateCard*>(), &FirmwareUpdateCard::progressChanged);
+        emit UpdatesWindowTestAccess::stager(window)->stageProgress(0, QStringLiteral("Checking for updates..."));
+        QCOMPARE(progress.size(), 0);
+        QVERIFY(UpdatesWindowTestAccess::status(window)->isHidden());
+    }
+    void unverifiedDownloadAsksAgain()
+    {
+        // FlexRadio's MD5 could not be fetched: the Install the operator
+        // confirmed on the promise of a check must ask again and say so.
+        RadioModel model;
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow window(&checker, &model);
+        window.show();
+        FirmwareStager* stager = UpdatesWindowTestAccess::stager(window);
+        QVERIFY(!stager->stagedVerified());
+        UpdatesWindowTestAccess::beginNetworkInstall(window);
+        QString prompt;
+        QTimer::singleShot(0, &window, [&] {
+            auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            QVERIFY(box);
+            prompt = box->text();
+            QVERIFY(box->defaultButton() == box->button(QMessageBox::Cancel));
+            box->button(QMessageBox::Cancel)->click();
+        });
+        emit stager->stageComplete(QStringLiteral("FLEX-9600_v4.3.16.ssdr"), QStringLiteral("4.3.16"));
+        QVERIFY(prompt.contains(QStringLiteral("was NOT checked")));
+        QVERIFY(UpdatesWindowTestAccess::status(window)->text().contains(QStringLiteral("not started")));
     }
     void ownerDeletedInsidePrompt()
     {
