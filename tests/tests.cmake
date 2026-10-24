@@ -2344,6 +2344,28 @@ add_test(NAME canon_window_test COMMAND canon_window_test)
 set_tests_properties(canon_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Reset Settings' CanonWindow dialogs (RFC #6226): Return and Escape cancel the
+# destructive confirmation, only Yes confirms. Socket-free; nothing is removed.
+add_executable(reset_settings_dialog_test
+    tests/reset_settings_dialog_test.cpp
+    src/gui/ResetSettingsDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(reset_settings_dialog_test PRIVATE src tests)
+target_link_libraries(reset_settings_dialog_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(reset_settings_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME reset_settings_dialog_test COMMAND reset_settings_dialog_test)
+set_tests_properties(reset_settings_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
 # CanonApplet, CanonPan and CanonCanvas (RFC #6226): the canon ground with
 # square corners inside the main window; the close button only requests.
 add_executable(canon_surface_test
@@ -9823,6 +9845,7 @@ set(AETHER_SETTINGS_CONSUMERS
     aether_rx_profiles_test
     theme_manager_test
     canon_window_test
+    reset_settings_dialog_test
     canon_surface_test
     kpa500_applet_test
     kxpa100_applet_test
