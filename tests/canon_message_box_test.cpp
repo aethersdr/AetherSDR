@@ -10,6 +10,7 @@
 #include <QApplication>
 #include <QLabel>
 #include <QPlainTextEdit>
+#include <QScrollBar>
 #include <QPushButton>
 #include <QTest>
 #include <QTimer>
@@ -194,15 +195,17 @@ int main(int argc, char** argv)
             rows << QStringLiteral("Line %1: invalid ACTION_ID '<b>x</b>'.").arg(i + 2);
         b.box.setDetailedText(rows.join(QLatin1Char('\n')));
         bool shown = false;
-        bool bounded = false;
+        bool scrolls = false;
         bool focused = false;
         b.run([&](CanonMessageBox& box) {
             shown = details && details->isVisible();
-            bounded = details && details->height() <= CanonMessageBox::kDetailsHeight;
+            // The 200 lines scroll inside the panel; none is cut off.
+            scrolls = details && details->verticalScrollBar()->maximum() > 0
+                      && details->height() <= CanonMessageBox::kDetailsHeight;
             focused = b.install->hasFocus();
             pressKey(box, Qt::Key_Escape);
         });
-        EXPECT_TRUE(shown && bounded && focused);
+        EXPECT_TRUE(shown && scrolls && focused);
         EXPECT_TRUE(details && details->isReadOnly());
         EXPECT_TRUE(details && details->toPlainText().startsWith(
                                    QStringLiteral("Line 2: invalid ACTION_ID '<b>x</b>'.")));

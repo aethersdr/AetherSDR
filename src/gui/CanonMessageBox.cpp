@@ -33,6 +33,11 @@ CanonMessageBox::CanonMessageBox(const QString& title, const QString& text, QWid
                    "QPlainTextEdit#canonMessageDetails { color: {{color.canon.inkSoft}};"
                    " background: {{color.canon.nested}}; border: 1px solid {{color.canon.line}};"
                    " border-radius: 6px; padding: 4px; }"
+                   "QScrollBar:horizontal { background: transparent; height: 12px;"
+                   " margin: 2px 8px 2px 8px; border-radius: 6px; }"
+                   "QScrollBar::handle:horizontal { background: {{color.canon.lineHi}};"
+                   " border-radius: 5px; min-width: 34px; }"
+                   "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }"
                    "QPushButton { padding: 6px 18px; }"
                    "QPushButton:default { color: {{color.canon.cyan}}; border-color: {{color.canon.cyan}}; }"
                    "QPushButton[role=\"destructive\"] { color: {{color.canon.sparkGold}}; }");

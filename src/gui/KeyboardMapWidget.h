@@ -13,8 +13,8 @@ class KeyboardMapWidget : public QWidget {
 public:
     explicit KeyboardMapWidget(ShortcutManager* mgr, QWidget* parent = nullptr);
 
-    // As tall as the keys at a width, so a layout gives spare height to its
-    // other widgets rather than leaving it empty below the keys.
+    // As tall as the keys at a width (up to a cap), so a layout gives spare
+    // height to its other widgets rather than leaving it empty below the keys.
     bool hasHeightForWidth() const override { return true; }
     int heightForWidth(int width) const override;
     QSize minimumSizeHint() const override { return {900, heightForWidth(900)}; }

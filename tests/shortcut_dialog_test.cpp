@@ -13,6 +13,9 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QLabel>
+#include <QLineEdit>
+#include <QMouseEvent>
+#include <QTableWidget>
 #include <QPushButton>
 #include <QTest>
 #include <QTimer>
@@ -37,7 +40,8 @@ const QString kPtt = QStringLiteral("ptt");
 const QString kMute = QStringLiteral("mute");
 
 // Answers the next CanonMessageBox to open, from inside its exec(). `seen`
-// records whether one opened at all, and which button it opened on.
+// records whether one opened at all, and which button it opened on. Any other
+// modal (a QMessageBox) is closed so the test fails rather than hangs.
 struct Answer {
     bool opened{false};
     QString defaultText;
@@ -47,8 +51,12 @@ struct Answer {
 void answerNextBox(Answer& seen, std::function<void(CanonMessageBox&)> act)
 {
     QTimer::singleShot(0, [&seen, act] {
-        auto* box = qobject_cast<CanonMessageBox*>(QApplication::activeModalWidget());
+        QWidget* modal = QApplication::activeModalWidget();
+        auto* box = qobject_cast<CanonMessageBox*>(modal);
         if (!box) {
+            if (modal) {
+                modal->close();
+            }
             return;
         }
         QTest::qWaitForWindowExposed(box);
@@ -62,6 +70,21 @@ void answerNextBox(Answer& seen, std::function<void(CanonMessageBox&)> act)
         act(*box);
     });
 }
+
+// Counts the mouse presses that reach a window.
+class PressSpy : public QObject {
+public:
+    int presses{0};
+
+protected:
+    bool eventFilter(QObject*, QEvent* event) override
+    {
+        if (event->type() == QEvent::MouseButtonPress) {
+            ++presses;
+        }
+        return false;
+    }
+};
 
 QPushButton* buttonText(CanonMessageBox& box, const QString& text)
 {
@@ -174,6 +197,67 @@ int main(int argc, char** argv)
         EXPECT_TRUE(again.opened);
         EXPECT_TRUE(mgr.action(kMute)->currentKey == QKeySequence(Qt::Key_Escape));
         EXPECT_TRUE(mgr.action(kPtt)->currentKey.isEmpty());
+    }
+
+    // ---- Return in the Filter field presses no button: it used to press
+    //      Clear and wipe the selected key's binding ----
+    auto* filter = dlg.findChild<QLineEdit*>();
+    EXPECT_TRUE(map && filter);
+    if (map && filter) {
+        mgr.resetToDefaults();
+        map->setFocus();
+        QTest::keyClick(map, Qt::Key_Return);   // selects Esc, bound to PTT
+        EXPECT_TRUE(map->selectedKey() == Qt::Key_Escape);
+        filter->setFocus();
+        QTest::keyClick(filter, Qt::Key_Return);
+        EXPECT_TRUE(mgr.action(kPtt)->currentKey == QKeySequence(Qt::Key_Escape));
+        EXPECT_TRUE(dlg.isVisible());
+    }
+
+    // ---- the map is as tall as its keys, and past its cap a wider window
+    //      leaves the table's height alone ----
+    auto* table = dlg.findChild<QTableWidget*>();
+    EXPECT_TRUE(map && table);
+    if (map && table) {
+        dlg.resize(1100, 840);
+        QTest::qWait(50);
+        EXPECT_TRUE(map->height() <= map->heightForWidth(map->width()) + 1);
+        dlg.resize(1400, 840);
+        QTest::qWait(50);
+        const int tableAt1400 = table->height();
+        dlg.resize(2000, 840);
+        QTest::qWait(50);
+        EXPECT_TRUE(table->height() == tableAt1400);
+        EXPECT_TRUE(table->height() >= 250);
+        dlg.resize(1100, 840);
+        QTest::qWait(50);
+    }
+
+    // ---- the layout fits within the minimum, which fits a 768 px screen ----
+    EXPECT_TRUE(dlg.minimumHeight() <= 700);
+    EXPECT_TRUE(dlg.bodyWidget()->minimumSizeHint().height() <= dlg.minimumHeight());
+
+    // ---- a press on a key is the map's; one between keys is the window's ----
+    if (map) {
+        const QPointF corner(map->width() - 3, map->height() - 3);
+        PressSpy spy;
+        dlg.installEventFilter(&spy);
+        QMouseEvent miss(QEvent::MouseButtonPress, corner, map->mapToGlobal(corner),
+                         Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(map, &miss);
+        QMouseEvent release(QEvent::MouseButtonRelease, corner, map->mapToGlobal(corner),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(map, &release);
+        dlg.removeEventFilter(&spy);
+        EXPECT_TRUE(spy.presses == 1);   // passed on to the window, which drags
+        // The Esc key is the map's first key, in its top-left corner.
+        const QPointF esc(map->width() * 0.03, map->height() * 0.12);
+        QMouseEvent hit(QEvent::MouseButtonPress, esc, map->mapToGlobal(esc),
+                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        hit.setAccepted(false);
+        QCoreApplication::sendEvent(map, &hit);
+        EXPECT_TRUE(hit.isAccepted());
+        EXPECT_TRUE(map->selectedKey() == Qt::Key_Escape);
     }
 
     if (g_failures == 0) {

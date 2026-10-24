@@ -1,6 +1,7 @@
 #include "ShortcutDialog.h"
 #include "CanonIndicators.h"
 #include "CanonMessageBox.h"
+#include "ComboStyle.h"
 #include "FramelessResizer.h"
 #include "KeyboardMapWidget.h"
 #include "ModemChrome.h"
@@ -88,7 +89,13 @@ QLabel[shortcutRole="legend"] {
 QLabel#shortcutCategoryLabel {
     color: {{color.canon.muted}};
 }
-)");
+QComboBox::drop-down {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 22px;
+    border: none;
+}
+)") + comboArrowRule();
 }
 
 // A notice with one OK button, over the editor.
@@ -122,8 +129,8 @@ ShortcutDialog::ShortcutDialog(ShortcutManager* mgr, QWidget* parent)
     : CanonWindow(QStringLiteral("Keyboard Shortcuts"), parent), m_mgr(mgr)
 {
     theme::setContainer(this, QStringLiteral("canon/shortcuts"));
-    // The canon header adds about 40 px to the old 950x700 minimum.
-    setMinimumSize(950, 740);
+    // 700 px tall fits a 768 px screen's usable height.
+    setMinimumSize(950, 700);
     resize(1100, 840);
     // A page of controls, not a form: Return in the filter field must not
     // press Clear or Reset to Default.
@@ -364,8 +371,11 @@ void ShortcutDialog::importShortcuts()
         detailLines << QStringLiteral("Displaced local bindings:");
         detailLines << result.displacedActions;
     }
+    // A canon box has no warning icon, so the text says it.
     showNotice(this, QStringLiteral("Import Keyboard Shortcuts"),
-               QStringLiteral("Imported %1 shortcut actions from %2.")
+               (informativeLines.isEmpty()
+                    ? QStringLiteral("Imported %1 shortcut actions from %2.")
+                    : QStringLiteral("Imported %1 shortcut actions from %2, with warnings."))
                    .arg(result.importedCount)
                    .arg(QFileInfo(path).fileName()),
                informativeLines.join(QLatin1Char('\n')),

@@ -4,6 +4,7 @@
 #include <QAccessible>
 #include <QSizePolicy>
 
+#include <algorithm>
 #include <cmath>
 #include <QFocusEvent>
 #include <QKeyEvent>
@@ -42,10 +43,13 @@ constexpr float kKeyGap = 0.08f;
 constexpr float kKeysW = 22.0f * (1 + kKeyGap) + 1.0f;
 constexpr float kKeysH = 5.25f * (1 + kKeyGap) + 1.0f;
 constexpr int kMapPadding = 10;
+// Past this width the keys stop growing and centre, so a wide window's spare
+// height goes to the widgets below the map rather than to bigger keys.
+constexpr int kMaxSizingWidth = 1100;
 
 int KeyboardMapWidget::heightForWidth(int width) const
 {
-    const float unit = (width - 2 * kMapPadding) / kKeysW;
+    const float unit = (std::min(width, kMaxSizingWidth) - 2 * kMapPadding) / kKeysW;
     return static_cast<int>(std::ceil(unit * kKeysH)) + 2 * kMapPadding;
 }
 
@@ -347,8 +351,11 @@ void KeyboardMapWidget::mousePressEvent(QMouseEvent* ev)
         update();
         emit keySelected(m_keys[idx].qtKey);
         announceKey(idx);
+        ev->accept();
+        return;
     }
-    ev->accept();
+    // A press between or around the keys is the window's, so it can drag it.
+    ev->ignore();
 }
 
 void KeyboardMapWidget::mouseMoveEvent(QMouseEvent* ev)
