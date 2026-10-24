@@ -446,6 +446,8 @@ private:
 
     void buildUI();
     void buildMenuBar();
+    void wireUpdateChecker();          // MainWindow_Menus.cpp
+    void showUpdateAvailableDialog();  // MainWindow_Menus.cpp
     void minimizeActiveApplicationWindow();
     void toggleActiveApplicationWindowFullScreen();
     void applyDarkTheme();
@@ -2184,6 +2186,7 @@ private:
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
     UpdateChecker* m_updateChecker{nullptr};
+    QString m_latestRelease;  // newest release a check found; empty until one does
 
 // CTR2 TCP proxy prototype (MainWindow_Controllers.cpp); never persisted, off at launch
     Ctr2ProxyModel* m_ctr2ProxyModel{nullptr};

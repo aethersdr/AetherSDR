@@ -54,6 +54,10 @@
 #include "WhatsNewDialog.h"
 #include "WindowShowState.h"
 #include "core/UpdateChecker.h"
+#include "core/UpdateSettings.h"
+#include "core/LogManager.h"
+#include "FramelessMessageBox.h"
+#include "ReleaseTagText.h"
 #include "core/AppSettings.h"
 #include "core/SpotModeResolver.h"
 #include "core/ThemeManager.h"
@@ -87,6 +91,9 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QAction>
+#include <QMessageBox>
+#include <QSizePolicy>
+#include <QSpacerItem>
 #include <QList>
 #include <QVariant>
 #include <QWidgetAction>
@@ -1876,6 +1883,28 @@ void MainWindow::buildMenuBar()
     helpMenu->addAction("Check for Updates...", this, [this]() {
         m_updateChecker->checkNow();
     });
+    auto* autoUpdateAct = helpMenu->addAction("Check for Updates Automatically");
+    autoUpdateAct->setCheckable(true);
+    if (const QString store = UpdateChecker::storeName(); !store.isEmpty()) {
+        // The store owns updates here, so the background check never runs.
+        const QString reason =
+            QStringLiteral("Updates for this copy come from the %1.").arg(store);
+        autoUpdateAct->setChecked(false);
+        autoUpdateAct->setEnabled(false);
+        autoUpdateAct->setStatusTip(reason);
+        autoUpdateAct->setToolTip(reason);
+    } else {
+        autoUpdateAct->setChecked(UpdateSettings::checkOnStartup());
+        autoUpdateAct->setStatusTip(QStringLiteral(
+            "Check for a newer release at startup, at most once a day, and show "
+            "UPDATE in the title bar when there is one"));
+        connect(autoUpdateAct, &QAction::toggled, this, [this](bool on) {
+            UpdateSettings::setCheckOnStartup(on);
+            if (on) {
+                m_updateChecker->checkAutomaticallyIfDue();
+            }
+        });
+    }
     helpMenu->addSeparator();
     helpMenu->addAction("About AetherSDR", this, [this]{
         // Styled to the AetherSDR style guide: an ambient ground, the gradient
@@ -2248,6 +2277,96 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
     // Keep edits live while the menu is open, but commit the document once.
     if (m_splitQsySettings.toJson() != initialQsySettings) {
         m_splitQsySettings.save();
+    }
+}
+
+
+namespace {
+// Long enough that the update check does not compete with radio discovery
+// and the first connect for the network at launch.
+constexpr int kAutomaticUpdateCheckDelayMs = 15000;
+} // namespace
+
+void MainWindow::wireUpdateChecker()
+{
+    m_updateChecker = new UpdateChecker(this);
+    connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
+            [this](const QString& ver, UpdateChecker::Trigger trigger) {
+        m_latestRelease = ver;
+        const bool skipped = UpdateSettings::isSkipped(ver);
+        if (skipped) {
+            qCInfo(lcUpdater) << "newest release is the one the operator skipped";
+        }
+        if (m_titleBar) {
+            m_titleBar->setUpdateAvailable(skipped ? QString() : ver);
+        }
+        if (trigger == UpdateChecker::Trigger::Manual) {
+            showUpdateAvailableDialog();
+        }
+    });
+    connect(m_updateChecker, &UpdateChecker::upToDate, this,
+            [this](const QString& ver, UpdateChecker::Trigger trigger) {
+        m_latestRelease.clear();
+        if (m_titleBar) {
+            m_titleBar->setUpdateAvailable({});
+        }
+        if (trigger == UpdateChecker::Trigger::Manual) {
+            FramelessMessageBox::information(this, "Check for Updates",
+                QString("AetherSDR is up to date (v%1).").arg(ver));
+        }
+    });
+    connect(m_updateChecker, &UpdateChecker::checkFailed, this,
+            [this](UpdateChecker::Trigger trigger) {
+        if (trigger == UpdateChecker::Trigger::Manual) {
+            FramelessMessageBox::warning(this, "Check for Updates",
+                "Could not reach GitHub. Check your connection and try again.");
+        }
+    });
+
+    QTimer::singleShot(kAutomaticUpdateCheckDelayMs, m_updateChecker, [checker = m_updateChecker] {
+        checker->checkAutomaticallyIfDue();
+    });
+}
+
+void MainWindow::showUpdateAvailableDialog()
+{
+    if (m_latestRelease.isEmpty()) {
+        return;
+    }
+    const QString ver = m_latestRelease;
+    const QString current = QCoreApplication::applicationVersion();
+    FramelessMessageBox box(this);
+    box.setWindowTitle("AetherSDR Update Available");
+    box.setIcon(QMessageBox::Information);
+    setUpdateAvailableText(box, current, ver);
+    if (const QString store = UpdateChecker::storeName(); !store.isEmpty()) {
+        box.setInformativeText(
+            QStringLiteral("You are running v%1. The %2 installs updates for this copy.")
+                .arg(current, store));
+    }
+    QPushButton* viewBtn = box.addButton("View Latest Release", QMessageBox::ActionRole);
+    viewBtn->setAutoDefault(false);
+    QPushButton* skipBtn = box.addButton("Skip This Version", QMessageBox::ActionRole);
+    skipBtn->setAutoDefault(false);
+    skipBtn->setAccessibleDescription(QStringLiteral(
+        "Stop showing UPDATE in the title bar for this release. "
+        "Help, Check for Updates still reports it."));
+    QPushButton* closeBtn = box.addButton(QMessageBox::Close);
+    closeBtn->setAutoDefault(false);
+    // Force minimum width via layout spacer — setMinimumWidth() is ignored by QMessageBox
+    if (auto* grid = qobject_cast<QGridLayout*>(box.layout())) {
+        grid->addItem(new QSpacerItem(480, 0, QSizePolicy::Minimum, QSizePolicy::Fixed),
+                      grid->rowCount(), 0, 1, grid->columnCount());
+    }
+    box.exec();
+    if (box.clickedButton() == viewBtn) {
+        QDesktopServices::openUrl(QUrl(UpdateChecker::kReleasesPageUrl));
+    } else if (box.clickedButton() == skipBtn) {
+        UpdateSettings::setSkippedVersion(ver);
+        qCInfo(lcUpdater) << "operator skipped the newest release";
+        if (m_titleBar) {
+            m_titleBar->setUpdateAvailable({});
+        }
     }
 }
 

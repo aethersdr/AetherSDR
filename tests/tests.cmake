@@ -4647,6 +4647,13 @@ target_include_directories(waterfall_time_marker_settings_test PRIVATE src)
 target_link_libraries(waterfall_time_marker_settings_test PRIVATE aethercore Qt6::Core)
 add_test(NAME waterfall_time_marker_settings_test COMMAND waterfall_time_marker_settings_test)
 
+# Updates settings document (RFC #5304): defaults, daily throttle, skip
+# matching, stored shape. No network.
+add_executable(update_settings_test tests/update_settings_test.cpp)
+target_include_directories(update_settings_test PRIVATE src)
+target_link_libraries(update_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME update_settings_test COMMAND update_settings_test)
+
 add_executable(extended_tnf_settings_test tests/extended_tnf_settings_test.cpp)
 target_include_directories(extended_tnf_settings_test PRIVATE src)
 target_link_libraries(extended_tnf_settings_test PRIVATE aethercore Qt6::Core)
@@ -9727,6 +9734,7 @@ set(AETHER_SETTINGS_CONSUMERS
     slice_lifecycle_routing_test
     waterfall_time_marker_settings_test
     extended_tnf_settings_test
+    update_settings_test
     client_display_settings_test
     client_display_pan_settings_test
     spectrum_overlay_fft_fps_bounds_test

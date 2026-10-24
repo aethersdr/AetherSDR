@@ -115,7 +115,6 @@
 #include "AntennaGeniusApplet.h"
 #include "ShackSwitchApplet.h"
 #include "RadioSetupDialog.h"
-#include "ReleaseTagText.h"
 #include "AgcCalibrationDialog.h"
 #include "AudioDeviceChangeDialog.h"
 #include "NetworkDiagnosticsDialog.h"
@@ -224,7 +223,6 @@
 #include <QSplitter>
 #include <QMenuBar>
 #include <QDialog>
-#include <QGridLayout>
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QMenu>
@@ -247,8 +245,6 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include "core/VersionNumber.h"
-#include "core/UpdateChecker.h"
-#include <QDesktopServices>
 #include <QPointer>
 #include <QTextEdit>
 #include <QPlainTextEdit>
@@ -1398,34 +1394,8 @@ MainWindow::MainWindow(QWidget* parent)
     m_kiwiSdrManager = new KiwiSdrManager(this);
     m_kiwiSdrManager->setOperatorCallsign(m_radioModel.callsign());
 
-    // UpdateChecker — must be created before buildMenuBar() which references it
-    m_updateChecker = new UpdateChecker(this);
-    connect(m_updateChecker, &UpdateChecker::updateAvailable, this, [this](const QString& ver) {
-        const QString current = QCoreApplication::applicationVersion();
-        FramelessMessageBox box(this);
-        box.setWindowTitle("AetherSDR Update Available");
-        box.setIcon(QMessageBox::Information);
-        setUpdateAvailableText(box, current, ver);
-        QPushButton* viewBtn = box.addButton("View Latest Release", QMessageBox::ActionRole);
-        viewBtn->setAutoDefault(false);
-        QPushButton* closeBtn = box.addButton(QMessageBox::Close);
-        closeBtn->setAutoDefault(false);
-        // Force minimum width via layout spacer — setMinimumWidth() is ignored by QMessageBox
-        if (auto* grid = qobject_cast<QGridLayout*>(box.layout()))
-            grid->addItem(new QSpacerItem(480, 0, QSizePolicy::Minimum, QSizePolicy::Fixed),
-                          grid->rowCount(), 0, 1, grid->columnCount());
-        box.exec();
-        if (box.clickedButton() == viewBtn)
-            QDesktopServices::openUrl(QUrl(UpdateChecker::kReleasesPageUrl));
-    });
-    connect(m_updateChecker, &UpdateChecker::upToDate, this, [this](const QString& ver) {
-        FramelessMessageBox::information(this, "Check for Updates",
-            QString("AetherSDR is up to date (v%1).").arg(ver));
-    });
-    connect(m_updateChecker, &UpdateChecker::checkFailed, this, [this]() {
-        FramelessMessageBox::warning(this, "Check for Updates",
-            "Could not reach GitHub. Check your connection and try again.");
-    });
+    // Before buildMenuBar(): Help → Check for Updates references the checker.
+    wireUpdateChecker();
 
     buildMenuBar();
     buildUI();
@@ -5480,6 +5450,8 @@ void MainWindow::buildUI()
             this, &MainWindow::updatePcAudioTooltip, Qt::QueuedConnection);
     connect(m_titleBar, &TitleBar::multiFlexClicked,
             this, &MainWindow::showMultiFlexDialog);
+    connect(m_titleBar, &TitleBar::updateBadgeClicked,
+            this, &MainWindow::showUpdateAvailableDialog);
     connect(m_titleBar, &TitleBar::minimalModeRequested,
             this, &MainWindow::toggleMinimalModeFromAction);
     connect(m_titleBar, &TitleBar::minimalModeWindowedExitRequested, this, [this]() {

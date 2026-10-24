@@ -141,7 +141,8 @@ The Minimize and Full Screen keys can be rebound in **Settings → Configure Sho
 | **Contributing to AetherSDR...** | See [Contributing Guide](./contributing-guide.md). |
 | **Support & Diagnostics...** | Logging categories and support bundles. See [Support and Logging](./support-and-logging.md). |
 | **Slice Troubleshooting...** | A diagnostics window for slice, audio and display state. |
-| **Check for Updates...** | Checks for a newer release now. |
+| **Check for Updates...** | Checks for a newer release now and always reports the result, including a release you skipped. See [Updates](#updates). |
+| **Check for Updates Automatically** | On by default. Checks for a newer release at startup, at most once a day, and shows **UPDATE** in the title bar when there is one. Dimmed on Microsoft Store and Flathub installs, which update themselves. |
 | **About AetherSDR** | The About window (below). |
 
 ## The Title Bar
@@ -152,6 +153,7 @@ The main window has one 52 px title bar. From left to right:
 |------|-----------|
 | **☰** | The application menu (Windows and Linux only). |
 | **AetherSDR** brand mark | Drag the bar here to move the window. |
+| **UPDATE** badge | Shown when a newer AetherSDR release is available; hover names it, click opens the update window. See [Updates](#updates). |
 | **Radio tabs** | One tab per known radio (LAN, SmartLink or routed). See below. |
 | **EXPERIMENTAL** badge | Shown when the connected radio family's support is experimental. |
 | **multiFLEX** | Appears when other clients share the radio; hover lists them, click opens the dashboard. |
@@ -162,6 +164,18 @@ The main window has one 52 px title bar. From left to right:
 | **Headphone + slider** | Headphone mute and level. Dimmed, with the reason, on radios that have no headphone output. |
 | **Dock left / Dock right / Pop out** | Move the applet panel to the left or right of the panadapters (click the active side again to hide it), or float it in its own window. **Ctrl+Shift+S** also pops it out. |
 | **Window controls** | Minimize, maximize and close (see "Per platform"). |
+
+### Updates
+
+AetherSDR checks GitHub for a newer release about 15 seconds after it starts, no more than once a day. The check never downloads or installs anything. When a newer release exists, the **UPDATE** badge appears after the **AetherSDR** brand mark; nothing pops up, and a check that finds nothing or cannot reach GitHub stays silent. Turn it off with **Help → Check for Updates Automatically**.
+
+Click **UPDATE**, or use **Help → Check for Updates...**, for the update window:
+
+- **View Latest Release** opens the release page in your browser, where you download the installer for your platform.
+- **Skip This Version** hides the badge for that release. **Help → Check for Updates...** still reports it, and the next release shows the badge again.
+- **Close** leaves the badge in place.
+
+On a Microsoft Store or Flathub install the store updates AetherSDR, so there is no automatic check and no badge; **Help → Check for Updates...** still works and says where the update comes from.
 
 ### Radio tabs
 

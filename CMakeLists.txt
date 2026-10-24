@@ -1142,6 +1142,7 @@ set(CORE_SOURCES
     src/core/FirmwareStager.cpp
     src/core/MsiFirmwareMetadata.cpp
     src/core/UpdateChecker.cpp
+    src/core/UpdateSettings.cpp
     src/core/NetworkDiagnostics.cpp
     src/core/WindowsFirewall.cpp
     src/core/OleCompoundFile.cpp

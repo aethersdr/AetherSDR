@@ -201,6 +201,24 @@ TitleBar::TitleBar(QWidget* parent)
     markDragHandle(m_brand);
     m_hbox->addWidget(m_brand);
 
+    // Hidden until UpdateChecker finds a newer release (RFC #5304).
+    m_updateBadge = new QPushButton(QStringLiteral("UPDATE"), this);
+    m_updateBadge->setObjectName(QStringLiteral("updateAvailableBadge"));
+    m_updateBadge->setFlat(true);
+    m_updateBadge->setFixedHeight(20);
+    m_updateBadge->setCursor(Qt::PointingHandCursor);
+    ThemeManager::instance().applyStyleSheet(
+        m_updateBadge,
+        QStringLiteral(
+            "QPushButton { color: {{color.accent}}; border: 1px solid {{color.accent}};"
+            " border-radius: 3px; background: transparent; font-size: 9px;"
+            " font-weight: bold; padding: 0px 5px; }"
+            "QPushButton:hover { background: {{color.titlebar.tab.active.background}}; }"));
+    m_updateBadge->setAccessibleName(QStringLiteral("AetherSDR update available"));
+    m_updateBadge->hide();
+    connect(m_updateBadge, &QPushButton::clicked, this, &TitleBar::updateBadgeClicked);
+    m_hbox->addWidget(m_updateBadge);
+
     // The menu bar (Linux/Windows only — macOS puts it in the system bar) is
     // inserted here by setMenuBar(), between the brand and the radio tabs.
     m_menuBarSlot = m_hbox->count();
@@ -760,6 +778,11 @@ QVariantMap TitleBar::barState() const
                   ? QVariantList{m_brand->x(), m_brand->y(), m_brand->width(), m_brand->height()}
                   : QVariantList{}},
          }},
+        {QStringLiteral("update"),
+         QVariantMap{
+             {QStringLiteral("version"), m_updateVersion},
+             {QStringLiteral("visible"), m_updateBadge && m_updateBadge->isVisible()},
+         }},
         {QStringLiteral("appMenu"),
          QVariantMap{
              {QStringLiteral("present"), m_appMenuBtn != nullptr},
@@ -1317,6 +1340,30 @@ void TitleBar::setExperimentalRadioFamily(const QString& familyName)
     m_experimentalRadioLabel->setVisible(experimental);
 }
 
+void TitleBar::setUpdateAvailable(const QString& latestVersion)
+{
+    // The release tag is network text, so only the parsed digits reach the
+    // tooltip (which Qt may render as rich text).
+    const VersionNumber parsed = VersionNumber::parse(latestVersion);
+    m_updateVersion = parsed.isNull() ? QString() : parsed.toString();
+    if (m_updateBadge) {
+        const QString tip = m_updateVersion.isEmpty()
+            ? QString()
+            : QStringLiteral("AetherSDR v%1 is available. Click for details.")
+                  .arg(m_updateVersion);
+        m_updateBadge->setToolTip(tip);
+        m_updateBadge->setAccessibleDescription(tip);
+    }
+    refreshUpdateBadge();
+}
+
+void TitleBar::refreshUpdateBadge()
+{
+    if (m_updateBadge) {
+        m_updateBadge->setVisible(!m_updateVersion.isEmpty() && !m_minimalMode);
+    }
+}
+
 QString TitleBar::formatTxElapsed(qint64 ms) const
 {
     const qint64 totalSec = ms / 1000;
@@ -1688,6 +1735,7 @@ void TitleBar::setMinimalMode(bool on)
     if (m_appMenuBtn) m_appMenuBtn->setVisible(!on);
     else if (m_menuBar) m_menuBar->setVisible(!on);
     if (m_brand) m_brand->setVisible(!on);
+    refreshUpdateBadge();
     // The radio strip stays, compacted to the active tab: its dot is the
     // radio-link indicator now, and minimal mode is exactly when an operator
     // has nothing else on screen that would show them a dropped link.
