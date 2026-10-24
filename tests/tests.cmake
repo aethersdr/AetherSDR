@@ -2365,9 +2365,9 @@ add_test(NAME canon_message_box_test COMMAND canon_message_box_test)
 set_tests_properties(canon_message_box_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# Reset Settings' CanonMessageBox prompts (RFC #6226): Return, Escape and the
-# corner button cancel the destructive confirmation; only Yes confirms.
-# Socket-free; nothing is removed.
+# Reset Settings' prompts (RFC #6226): Return, Escape and the corner button
+# cancel the destructive confirmation; only Yes confirms. Socket-free; nothing
+# is removed.
 add_executable(reset_settings_prompts_test
     tests/reset_settings_prompts_test.cpp
     src/gui/ResetSettingsPrompts.cpp
