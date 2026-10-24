@@ -25,9 +25,9 @@ struct AmpPortInfo;
 //  Docked (compact): PWR / SWR / Id gauges; temperature, drain and mains
 //  readouts beside the fan-mode pull-down and OPERATE/STANDBY.
 //  Expanded (popped out / canvas), laid out like the amp's front panel: taller
-//  gauges; a status strip per RF port (PTT, band,
-//  bias, source radio), collapsed to a STANDBY banner in standby; fan and
-//  standby keys; temperatures/drain/mains along the bottom.
+//  gauges; a status strip per RF port (PTT, band, bias, source radio),
+//  collapsed to a STANDBY banner in standby; fan and standby keys;
+//  temperatures/drain/mains along the bottom.
 // Per-port data comes only from the 9008 socket (the relayed "amplifier"
 // object has model, serial, ip, state and antenna map); without it the strips
 // show only which port is keyed and where TX is routed.

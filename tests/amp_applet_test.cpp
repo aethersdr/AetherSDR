@@ -538,21 +538,23 @@ void testExpandedSwrTrackMatchesPower()
         report("expanded SWR track matches PWR", false, QStringLiteral("gauge not found"));
         return;
     }
-    // Same size, so a sample lands at the same place on both bars.
-    swr->resize(400, swr->height());
-    pwr->resize(400, swr->height());
     const QImage swrImg = swr->grab().toImage();
     const QImage pwrImg = pwr->grab().toImage();
-    bool same = true;
-    QString detail;
-    for (int x : {40, 200, 360}) {
+    // Sample fractions of the laid-out width: QImage::pixel() returns 0 off
+    // the image, so a sample past the edge would match on both gauges.
+    bool same = swrImg.size() == pwrImg.size() && swrImg.width() >= 40;
+    QString detail = same ? QString()
+                          : QStringLiteral("size swr=%1x%2 pwr=%3x%4")
+                                .arg(swrImg.width()).arg(swrImg.height())
+                                .arg(pwrImg.width()).arg(pwrImg.height());
+    for (int x : {swrImg.width() / 10, swrImg.width() / 2, swrImg.width() * 9 / 10}) {
+        if (swrImg.size() != pwrImg.size()) break;
         const QPoint at(x, swrImg.height() - 6);
         if (swrImg.pixel(at) != pwrImg.pixel(at)) {
             same = false;
-            detail = QStringLiteral("x=%1 swr=%2 pwr=%3").arg(x)
-                         .arg(QColor(swrImg.pixel(at)).name(),
-                              QColor(pwrImg.pixel(at)).name());
-            break;
+            detail += QStringLiteral(" x=%1 swr=%2 pwr=%3").arg(x)
+                          .arg(QColor(swrImg.pixel(at)).name(),
+                               QColor(pwrImg.pixel(at)).name());
         }
     }
     report("expanded SWR track matches PWR", same, detail);

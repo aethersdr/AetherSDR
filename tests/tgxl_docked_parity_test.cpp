@@ -497,11 +497,14 @@ int main(int argc, char** argv)
         if (swr && pwr) {
             for (bool floating : {false, true}) {
                 applet.setFloating(floating);
-                swr->resize(400, swr->height());
-                pwr->resize(400, swr->height());
                 const QImage swrImg = swr->grab().toImage();
                 const QImage pwrImg = pwr->grab().toImage();
-                for (int x : {40, 200, 360}) {
+                // Sample fractions of the laid-out width: QImage::pixel()
+                // returns 0 off the image, so a sample past the edge would
+                // match on both gauges.
+                CHECK(swrImg.size() == pwrImg.size() && swrImg.width() >= 40);
+                for (int x : {swrImg.width() / 10, swrImg.width() / 2,
+                              swrImg.width() * 9 / 10}) {
                     const QPoint at(x, swrImg.height() - 6);
                     CHECK(swrImg.pixel(at) == pwrImg.pixel(at));
                 }
