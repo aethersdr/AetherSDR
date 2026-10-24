@@ -1648,11 +1648,9 @@ QString TciProtocol::cmdKeyer(const QStringList& args)
     // Same fail-closed exemption as cmdTune: an unparseable state must mean
     // KEY UP, never "ignore and leave the key down" (Constitution VI).
     const bool down = (args[1].trimmed().toLower() == QLatin1String("true"));
-    int trx = 0;
-    (void)argToInt(args, 0, trx);
     // TciServer applies it with this client's TX producer, so a key-up can
     // only release a key this client pressed (#5873).
-    m_keyerRequest = KeyerRequest{trx, down};
+    m_keyerRequest = KeyerRequest{down};
     return {};
 }
 

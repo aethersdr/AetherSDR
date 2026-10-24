@@ -277,7 +277,6 @@ private:
     void broadcastActualTxState(bool transmitting);
     void handleTuneRequest(TciClient* client, const TciProtocol::TuneRequest& request);
     void handleKeyerRequest(TciClient* client, const TciProtocol::KeyerRequest& request);
-    void releaseTciKeyer(TciClient* client);
     void scheduleTuneBroadcast();
     void broadcastTuneState();
     void stopTciOwnedTune();
@@ -287,6 +286,7 @@ private:
     void noteClientTextTx(TciClient* socket, const QString& message);
     void sendClientText(TciClient* socket, const QString& message);
     void noteClientSocketError(TciClient* socket, int error);
+    void releaseTciKeyer(ClientState& state);
     QJsonObject disconnectSnapshot(const ClientState& client,
                                    const TciClient* socket) const;
 

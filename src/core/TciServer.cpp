@@ -680,7 +680,7 @@ void TciServer::stopIo()
     m_routeTransitionInFlight = false;
     ++m_routeTransitionGeneration;
     for (ClientState& client : m_clients) {
-        releaseTciKeyer(client.socket);
+        releaseTciKeyer(client);
         client.txProducer.invalidate();
         if (client.socket) {
             client.socket->lifetime->live.store(false, std::memory_order_release);
@@ -1022,7 +1022,7 @@ void TciServer::onClientDisconnected()
         if (m_clients[i].socket == ws) {
             // A key this client holds is released with its own request while
             // that request is still valid (#5873).
-            releaseTciKeyer(ws);
+            releaseTciKeyer(m_clients[i]);
             // Invalidate at disconnect, before cleanup can reenter and before
             // deleteLater destroys the socket; queued media must stop now.
             m_clients[i].txProducer.invalidate();
@@ -3538,38 +3538,50 @@ void TciServer::handleTuneRequest(TciClient* client, const TciProtocol::TuneRequ
 // the operator's or another client's (#5873).
 void TciServer::handleKeyerRequest(TciClient* client, const TciProtocol::KeyerRequest& request)
 {
-    if (!m_model) {
+    if (!m_model || !client) {
         return;
     }
-    QMetaObject::invokeMethod(this, [this, client = QPointer<TciClient>(client), request]() {
-        if (!m_model || !client) {
-            return;
-        }
-        if (!request.down) {
-            releaseTciKeyer(client);
-            return;
-        }
+    // Captured here, at the input boundary, before the queued hop: the request
+    // the I/O worker took for this key-down (ingressRequest is cleared once the
+    // text has been handled), so a release that revoked it refuses it.
+    TxCoordinator::Request input;
+    if (request.down) {
         ClientState* state = clientStateFor(client);
         if (!state || !client->live() || state->keyerRequest.valid()) {
             return;
         }
-        state->keyerRequest = client->ingressRequest ? *client->ingressRequest
-                                                     : state->txProducer.request();
-        if (!m_model->sendProducerCwKey(state->keyerRequest, true)) {
+        input = client->ingressRequest ? *client->ingressRequest : state->txProducer.request();
+    }
+    QMetaObject::invokeMethod(this, [this, client = QPointer<TciClient>(client), request, input]() {
+        if (!m_model || !client) {
+            return;
+        }
+        ClientState* state = clientStateFor(client);
+        if (!state) {
+            return;
+        }
+        if (!request.down) {
+            releaseTciKeyer(*state);
+            return;
+        }
+        if (!client->live() || state->keyerRequest.valid()) {
+            return;
+        }
+        state->keyerRequest = input;
+        if (!m_model->requestProducerCw(input, true, false, true, {}, QStringLiteral("tci-keyer"))) {
             state->keyerRequest = {};
         }
     }, Qt::QueuedConnection);
 }
 
-void TciServer::releaseTciKeyer(TciClient* client)
+void TciServer::releaseTciKeyer(ClientState& state)
 {
-    ClientState* state = clientStateFor(client);
-    if (!state || !state->keyerRequest.valid()) {
+    if (!state.keyerRequest.valid()) {
         return;
     }
-    const TxCoordinator::Request request = std::exchange(state->keyerRequest, {});
+    const TxCoordinator::Request request = std::exchange(state.keyerRequest, {});
     if (m_model) {
-        (void)m_model->sendProducerCwKey(request, false);
+        (void)m_model->requestProducerCw(request, false, false, true, {}, QStringLiteral("tci-keyer"));
     }
 }
 

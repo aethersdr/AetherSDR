@@ -5374,11 +5374,6 @@ void RadioModel::sendCwKey(bool down, const QString& debugSource,
     (void)sendCwInput(down, false, true, debugSource, debugTraceId, debugSourceMs, {});
 }
 
-bool RadioModel::sendProducerCwKey(const TxCoordinator::Request& request, bool down)
-{
-    return sendCwInput(down, false, true, QStringLiteral("tci-keyer"), 0, 0, {}, &request);
-}
-
 void RadioModel::sendCwPaddle(bool dit, bool dah, const QString& debugSource,
                               quint64 debugTraceId, quint64 debugSourceMs)
 {

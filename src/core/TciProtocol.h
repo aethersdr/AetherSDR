@@ -46,9 +46,10 @@ public:
         bool tune { false };
     };
 
+    // keyer: keys the TX slice's CW, as it did before it was arbitrated; its
+    // trx and duration arguments are not used.
     struct KeyerRequest
     {
-        int trx { 0 };
         bool down { false };
     };
 
