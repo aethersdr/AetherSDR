@@ -565,6 +565,12 @@ signals:
     // phoneStateChanged for slot work that should NOT run on every
     // VOX/CW/dexp/mic-boost/etc. status update (e.g. #4423 KiwiSDR BFO sync).
     void cwPitchChanged(int hz);
+    // Fires on every applied delta that carries the CW pitch (a radio report,
+    // or a host-DSP backend's restored state), changed or not, before that
+    // delta's cwPitchChanged: the first report after a connect often repeats
+    // the value already held, so cwPitchChanged stays silent there. The local
+    // setter never emits it.
+    void cwPitchReported(int hz);
     void cwSpeedChanged(int wpm);
     // Compatibility CW-intent notifications for test observers; radio
     // observations never emit them. Backend dispatch uses controlRequested.

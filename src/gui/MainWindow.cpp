@@ -1657,6 +1657,22 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel.transmitModel(), &TransmitModel::phoneStateChanged,
             this, [this]() { refreshCwDecodeState(); });
 
+    // The receive decoder's pitch range follows the CW pitch: a range that
+    // contains the pitch is kept, one that misses it is re-centred on it
+    // (CwDecodeSettings::pitchRangeFor). cwPitchReported also carries a
+    // reported pitch the model already held, which cwPitchChanged skips.
+    // The pitch itself is only read here, never stored or sent.
+    const auto followCwPitch = [this](int hz) {
+        if (const auto range = CwDecodeSettings::pitchRangeFor(hz, CwDecodeSettings::pitchRange())) {
+            CwDecodeSettings::setPitchRange(range->low, range->high);
+            if (m_cwDecoderApplet) {
+                m_cwDecoderApplet->restoreCwRanges();
+            }
+        }
+    };
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchReported, this, followCwPitch);
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchChanged, this, followCwPitch);
+
     // RTTY decoder audio feed is wired in wireRxDemodAudioSinks() above,
     // gated on the decoder being running.
 
