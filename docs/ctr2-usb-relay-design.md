@@ -417,8 +417,10 @@ own business.
 
 A device answers SWITCH and BOOTLOADER with STATUS before it leaves the bus.
 AetherSDR also counts the request done if the device leaves while the answer
-is outstanding, so a restart that beats its answer, or an answer naming the
-wrong op, is not reported as a lost device.
+is outstanding, once the port has written the request, so a restart that beats
+its answer, or an answer naming the wrong op, is not reported as a lost
+device. A port that fails before writing it (a write error) still reports the
+device lost.
 
 **Host implementation.** `Ctr2FirmwareUpdater` runs the session and checks
 the image before sending anything: an ESP32-S3 application image with an

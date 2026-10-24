@@ -22,6 +22,7 @@ extern "C" {
 #include <QThread>
 #include <QTimer>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -75,6 +76,7 @@ struct Device {
     QString restartedInto;         // "other" or "bootloader" after a restart request
     std::uint8_t restartStatusOp{0}; // not 0: the op its restart STATUS names instead
     bool restartsSilently{false};  // leaves for a restart without answering it
+    bool failsFirmwareWrite{false}; // the write of a FIRMWARE message fails (EIO)
     int dropsOnOpen{0};            // this open (1 = the first) fails before it negotiates
 };
 
@@ -120,11 +122,34 @@ public:
     bool isOpen() const override { return m_open; }
     void send(const std::vector<Report>& reports) override
     {
+        if (!m_open) {
+            return;
+        }
+        // As the USB worker does: a write that fails closes the port before
+        // the device sees the reports, and nothing is counted as sent.
+        const bool firmware = std::any_of(reports.begin(), reports.end(), [](const Report& r) {
+            return r.data()[0] == 0xFF && r.data()[3] == std::uint8_t(MessageType::Firmware);
+        });
+        if (firmware && m_dev->failsFirmwareWrite) {
+            m_open = false;
+            QTimer::singleShot(0, this, [this] {
+                emit failed(QStringLiteral("CTR2 USB write failed: injected EIO"));
+            });
+            return;
+        }
         for (const Report& r : reports) {
             if (m_open) {
                 onReport(r.data());
             }
         }
+        // Written reports are acknowledged before anything that follows.
+        const int count = int(reports.size());
+        QPointer<SimPort> self(this);
+        QTimer::singleShot(0, this, [self, count] {
+            if (self) {
+                emit self->reportsSent(count);
+            }
+        });
     }
     void discardQueued() override {}
     void shutdown(const std::vector<Report>& finalReports) override
@@ -599,6 +624,15 @@ void testRestartRequests()
     run = restart(silent, R::Bootloader);
     check(run.ok && run.message.contains(QStringLiteral("download mode")),
           "a device that leaves for download mode without answering has restarted");
+
+    // A port that fails writing the request has not sent it: no restart.
+    Device unwritten;
+    unwritten.failsFirmwareWrite = true;
+    run = restart(unwritten, R::OtherFirmware);
+    check(!run.ok && unwritten.restartedInto.isEmpty()
+              && run.message.contains(QStringLiteral("write failed"))
+              && run.message.contains(QStringLiteral("keeps the firmware")),
+          "a restart request whose write fails is reported as lost, not as a restart");
 }
 
 // AetherSDR quitting mid-update destroys the updater: the device must still

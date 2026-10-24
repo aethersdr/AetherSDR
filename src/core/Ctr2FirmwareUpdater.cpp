@@ -202,7 +202,11 @@ bool Ctr2FirmwareUpdater::openPort(QString* error)
     port->setParent(nullptr);
     m_reassembler.reset();
     m_reassembler.setExtensions(capabilityBit(MessageType::Firmware));
+    m_reportsQueued = 0;
+    m_reportsWritten = 0;
+    m_restartQueuedTo = 0;
     connect(port, &Ctr2HidPort::extensionsNegotiated, this, &Ctr2FirmwareUpdater::onExtensions);
+    connect(port, &Ctr2HidPort::reportsSent, this, [this](int count) { m_reportsWritten += count; });
     connect(port, &Ctr2HidPort::reportsReceived, this, &Ctr2FirmwareUpdater::onReports);
     connect(port, &Ctr2HidPort::failed, this, &Ctr2FirmwareUpdater::onPortFailed);
     return true;
@@ -270,6 +274,7 @@ void Ctr2FirmwareUpdater::sendHello()
     std::vector<Report> out;
     m_encoder.reset();
     m_encoder.encodeControl(MessageType::Hello, &out);
+    m_reportsQueued += qint64(out.size());
     m_port->send(out);
 }
 
@@ -277,6 +282,7 @@ void Ctr2FirmwareUpdater::sendExtension(const QByteArray& payload)
 {
     std::vector<Report> out;
     if (m_port && m_encoder.encodeExtension(MessageType::Firmware, payload, &out)) {
+        m_reportsQueued += qint64(out.size());
         m_port->send(out);
     }
 }
@@ -317,6 +323,7 @@ void Ctr2FirmwareUpdater::onMessage(const Message& message)
             setPhase(Phase::Commanding, loader ? tr("Restarting into download mode")
                                                : tr("Restarting into the other firmware"));
             sendExtension(loader ? firmware::encodeBootloader() : firmware::encodeSwitch());
+            m_restartQueuedTo = m_reportsQueued;
             armTimeout(m_timing.answerTimeoutMs);
         } else if (m_phase == Phase::Calling) {
             m_retry->stop();
@@ -459,9 +466,14 @@ void Ctr2FirmwareUpdater::onPortFailed(const QString& message)
         break;
     case Phase::Commanding:
         // Leaving the bus is what the request asks for. A device that does it
-        // before its STATUS arrives, or whose STATUS names another op, has
-        // still restarted.
-        restarted();
+        // after the request was written, before its STATUS arrives or with a
+        // STATUS naming another op, has still restarted. A port that failed
+        // before writing it (a write error) has not.
+        if (m_reportsWritten >= m_restartQueuedTo) {
+            restarted();
+            break;
+        }
+        fail(tr("Lost the device: %1.").arg(message) + kKeepsFirmware);
         break;
     default:
         fail(tr("Lost the device: %1.").arg(message) + kKeepsFirmware);
