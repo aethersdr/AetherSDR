@@ -623,11 +623,13 @@ int main(int argc, char* argv[])
     static_cast<void>(AetherSDR::Nr2SettingsModel::instance());
     AetherSDR::AppSettings::instance().initializeGuiClientIdentity();
     {
-        // Retired keys nothing reads any more. AboutDialogGeometry went when
-        // About moved to CanonWindow, which opens centred (RFC #6226).
+        // Retired keys nothing reads any more. AboutDialogGeometry and
+        // UlanziDialMapperGeom went when About and the Ulanzi Dial mapper
+        // moved to CanonWindow, where they open centred (RFC #6226).
         auto& s = AetherSDR::AppSettings::instance();
         bool removed = false;
-        for (const char* key : {"SHistorySoftEdgeDb", "AboutDialogGeometry"}) {
+        for (const char* key : {"SHistorySoftEdgeDb", "AboutDialogGeometry",
+                                "UlanziDialMapperGeom"}) {
             if (s.contains(key)) {
                 s.remove(key);
                 removed = true;

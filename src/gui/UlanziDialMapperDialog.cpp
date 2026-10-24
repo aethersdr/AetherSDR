@@ -123,15 +123,17 @@ struct PillSpec {
 // operator never bound into MOX or TUNE — on Windows, which cannot grab the
 // dial, while the key also still reaches the OS. Transmit actions are only
 // ever the operator's own binding. ulanzi_mapping_migration_test pins this.
+// The labels are marked for translation here and translated where they are
+// read (the pills' accessible names).
 constexpr PillSpec kPillSpecs[] = {
-    {"top_left",   "Top Left",   "KEY_PREVIOUSSONG",  "None",                  0.21, 0.06, 0},
-    {"top_middle", "Top Middle", "KEY_PLAYPAUSE",     "shortcut:rit_toggle",   0.50, 0.06, 0},
-    {"top_right",  "Top Right",  "KEY_NEXTSONG",      "None",                  0.79, 0.06, 0},
-    {"side_lt",    "Left Top",   "Ctrl+V",            "None",                  0.04, 0.52, 3},
-    {"side_lb",    "Left Bottom","Ctrl+C",            "None",                  0.04, 0.68, 3},
-    {"side_rt",    "Right Top",  "Ctrl+Y",            "shortcut:next_slice",   0.96, 0.52, 1},
-    {"side_rb",    "Right Bot",  "Ctrl+Z",            "None",                  0.96, 0.68, 1},
-    {"dial_press", "Dial Press", "KEY_MUTE",          "shortcut:mute_toggle",  0.50, 0.73, 2},
+    {"top_left",   QT_TRANSLATE_NOOP("AetherSDR::UlanziDialMapperDialog", "Top Left"),   "KEY_PREVIOUSSONG",  "None",                  0.21, 0.06, 0},
+    {"top_middle", QT_TRANSLATE_NOOP("AetherSDR::UlanziDialMapperDialog", "Top Middle"), "KEY_PLAYPAUSE",     "shortcut:rit_toggle",   0.50, 0.06, 0},
+    {"top_right",  QT_TRANSLATE_NOOP("AetherSDR::UlanziDialMapperDialog", "Top Right"),  "KEY_NEXTSONG",      "None",                  0.79, 0.06, 0},
+    {"side_lt",    QT_TRANSLATE_NOOP("AetherSDR::UlanziDialMapperDialog", "Left Top"),   "Ctrl+V",            "None",                  0.04, 0.52, 3},
+    {"side_lb",    QT_TRANSLATE_NOOP("AetherSDR::UlanziDialMapperDialog", "Left Bottom"),"Ctrl+C",            "None",                  0.04, 0.68, 3},
+    {"side_rt",    QT_TRANSLATE_NOOP("AetherSDR::UlanziDialMapperDialog", "Right Top"),  "Ctrl+Y",            "shortcut:next_slice",   0.96, 0.52, 1},
+    {"side_rb",    QT_TRANSLATE_NOOP("AetherSDR::UlanziDialMapperDialog", "Right Bot"),  "Ctrl+Z",            "None",                  0.96, 0.68, 1},
+    {"dial_press", QT_TRANSLATE_NOOP("AetherSDR::UlanziDialMapperDialog", "Dial Press"), "KEY_MUTE",          "shortcut:mute_toggle",  0.50, 0.73, 2},
 };
 constexpr int kPillCount = sizeof(kPillSpecs) / sizeof(kPillSpecs[0]);
 
@@ -237,6 +239,7 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
 
     m_statusLabel = new QLabel(tr("Disconnected"));
     m_statusLabel->setObjectName(QStringLiteral("UlanziStatus"));
+    m_statusLabel->setAccessibleName(tr("Ulanzi Dial connection status"));
     setStatusState(QStringLiteral("off"));
     bottomRow->addWidget(m_statusLabel);
 
@@ -256,6 +259,7 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
 
     m_lastEventLabel = new QLabel(tr("Last event: —"));
     m_lastEventLabel->setObjectName(QStringLiteral("UlanziLastEvent"));
+    m_lastEventLabel->setAccessibleName(tr("Last Ulanzi Dial event"));
     bottomRow->addWidget(m_lastEventLabel);
 
     bottomRow->addStretch(1);
@@ -388,7 +392,7 @@ void UlanziDialMapperDialog::buildPills()
     for (int i = 0; i < kPillCount; ++i) {
         Pill p;
         p.id            = QString::fromLatin1(kPillSpecs[i].id);
-        p.defaultLabel  = QString::fromLatin1(kPillSpecs[i].label);
+        p.defaultLabel  = tr(kPillSpecs[i].label);
         p.signature     = QString::fromLatin1(kPillSpecs[i].signature);
         p.defaultAction = QString::fromLatin1(kPillSpecs[i].defaultAction);
         p.anchor        = normalizedAnchor(kPillSpecs[i].nx, kPillSpecs[i].ny);
