@@ -109,11 +109,12 @@ public:
             m_timer->stop();
         }
         m_outbox.clear();
-        for (qsizetype off = 0; m_open && off + ctr2hid::kReportBytes <= finalReports.size();
-             off += ctr2hid::kReportBytes) {
-            if (!writeReport(finalReports.constData() + off)) {
+        for (qsizetype off = 0; m_open && off + ctr2hid::kReportBytes <= finalReports.size();) {
+            const int n = writeReports(finalReports, off);
+            if (n <= 0) {
                 break;
             }
+            off += qsizetype(n) * ctr2hid::kReportBytes;
         }
         closeDevice();
         QThread::currentThread()->quit();
@@ -161,17 +162,58 @@ private:
                 }
             }
         }
+        m_wide = enabled & ctr2hid::kWideReportsBit;
         QMetaObject::invokeMethod(m_port, [port = m_port, enabled, info, offered] {
             port->deliverExtensions(enabled, info, offered);
         }, Qt::QueuedConnection);
     }
 
-    bool writeReport(const char* report)
+    // Writes the reports at `off` in `reports`: one in report 0x01, or with
+    // wide reports up to kReportsPerWideReport bundled in report 0x04.
+    // Returns how many were written, or -1 on error.
+    int writeReports(const QByteArray& reports, qsizetype off)
     {
-        std::array<unsigned char, 1 + ctr2hid::kReportBytes> out{};
-        out[0] = ctr2hid::kReportId;
-        std::copy(report, report + ctr2hid::kReportBytes, out.begin() + 1);
-        return m_io.write(out.data(), static_cast<int>(out.size())) >= 0;
+        const int available = static_cast<int>((reports.size() - off) / ctr2hid::kReportBytes);
+        const char* first = reports.constData() + off;
+        if (!m_wide) {
+            std::array<unsigned char, 1 + ctr2hid::kReportBytes> out{};
+            out[0] = ctr2hid::kReportId;
+            std::copy(first, first + ctr2hid::kReportBytes, out.begin() + 1);
+            return m_io.write(out.data(), static_cast<int>(out.size())) >= 0 ? 1 : -1;
+        }
+        const int n = std::min(available, ctr2hid::kReportsPerWideReport);
+        std::array<unsigned char, 1 + ctr2hid::kWideReportBytes> out{};
+        out[0] = ctr2hid::kWideReportId;
+        out[1] = static_cast<unsigned char>(n);
+        std::copy(first, first + n * ctr2hid::kReportBytes, out.begin() + 2);
+        return m_io.write(out.data(), static_cast<int>(out.size())) >= 0 ? n : -1;
+    }
+
+    // One read: the 8-byte reports it carries, appended to *received.
+    bool unpack(const unsigned char* buf, int n, QByteArray* received)
+    {
+        // Numbered reports arrive with the report ID first on hidraw,
+        // IOHIDManager and Windows; tolerate a backend that strips it.
+        // Windows pads every report to the device's largest, so report 0x01
+        // may arrive longer than 9 bytes from a device with report 0x04.
+        if (n >= 1 + ctr2hid::kReportBytes && buf[0] == ctr2hid::kReportId) {
+            received->append(reinterpret_cast<const char*>(buf + 1), ctr2hid::kReportBytes);
+            return true;
+        }
+        if (n == ctr2hid::kReportBytes) {
+            received->append(reinterpret_cast<const char*>(buf), ctr2hid::kReportBytes);
+            return true;
+        }
+        if (m_wide && n >= 2 && buf[0] == ctr2hid::kWideReportId) {
+            const int count = buf[1];
+            if (count < 1 || count > ctr2hid::kReportsPerWideReport
+                || n < 2 + count * ctr2hid::kReportBytes) {
+                return false;
+            }
+            received->append(reinterpret_cast<const char*>(buf + 2), count * ctr2hid::kReportBytes);
+            return true;
+        }
+        return false;
     }
 
     void poll()
@@ -190,13 +232,7 @@ private:
                 fail(QStringLiteral("CTR2 USB read failed: %1").arg(errorText()));
                 return;
             }
-            // Numbered reports arrive with the report ID first on hidraw,
-            // IOHIDManager and Windows; tolerate a backend that strips it.
-            if (n == 1 + ctr2hid::kReportBytes && buf[0] == ctr2hid::kReportId) {
-                received.append(reinterpret_cast<const char*>(buf.data() + 1), ctr2hid::kReportBytes);
-            } else if (n == ctr2hid::kReportBytes) {
-                received.append(reinterpret_cast<const char*>(buf.data()), ctr2hid::kReportBytes);
-            } else {
+            if (!unpack(buf.data(), n, &received)) {
                 fail(QStringLiteral("Unexpected %1-byte HID report from the CTR2").arg(n));
                 return;
             }
@@ -209,17 +245,19 @@ private:
 
         int sent = 0;
         const quint64 generation = m_generation;
-        while (sent < kMaxWritesPerTick && m_outbox.size() >= ctr2hid::kReportBytes) {
+        for (int writes = 0; writes < kMaxWritesPerTick && m_outbox.size() >= ctr2hid::kReportBytes;
+             ++writes) {
             // A fence or shutdown requested mid-batch stops before the next write.
             if (m_cancelled->load() || m_sharedGeneration->load() != generation) {
                 break;
             }
-            if (!writeReport(m_outbox.constData())) {
+            const int n = writeReports(m_outbox, 0);
+            if (n < 0) {
                 fail(QStringLiteral("CTR2 USB write failed: %1").arg(errorText()));
                 return;
             }
-            m_outbox.remove(0, ctr2hid::kReportBytes);
-            ++sent;
+            m_outbox.remove(0, qsizetype(n) * ctr2hid::kReportBytes);
+            sent += n;
         }
         if (sent > 0) {
             QMetaObject::invokeMethod(m_port, [port = m_port, sent, generation] {
@@ -273,6 +311,7 @@ private:
     quint64 m_generation;
     QTimer* m_timer{nullptr};
     QByteArray m_outbox;
+    bool m_wide{false};          // wide reports negotiated: report 0x04 bundles
     bool m_open{true};
     std::promise<void> m_release;
     bool m_released{false};

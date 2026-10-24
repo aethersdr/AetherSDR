@@ -73,7 +73,9 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
         [this] { return m_usbDevices ? m_usbDevices() : QList<Ctr2HidPort::DeviceInfo>(); },
         [this](const Ctr2HidPort::DeviceInfo& device, QString* error) -> Ctr2HidPort* {
             return m_firmwareOpener
-                ? m_firmwareOpener(device, ctr2hid::capabilityBit(ctr2hid::MessageType::Firmware),
+                ? m_firmwareOpener(device,
+                                   ctr2hid::capabilityBit(ctr2hid::MessageType::Firmware)
+                                       | ctr2hid::kWideReportsBit,
                                    error)
                 : nullptr;
         },
