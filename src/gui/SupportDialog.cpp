@@ -1,7 +1,7 @@
 #include "SupportDialog.h"
 #include "DocsLinks.h"
 #include "FramelessMessageBox.h"
-#include "ResetSettingsDialog.h"
+#include "ResetSettingsPrompts.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/SettingsPaths.h"
@@ -266,7 +266,7 @@ void SupportDialog::resetSettings(QWidget* parent)
             promptPaths << path;
     }
 
-    if (!ResetSettingsDialog::confirm(parent, AetherSDR::SettingsPaths::backupsDir(),
+    if (!ResetSettingsPrompts::confirm(parent, AetherSDR::SettingsPaths::backupsDir(),
                                       promptPaths)) {
         return;
     }
@@ -319,7 +319,7 @@ void SupportDialog::resetSettings(QWidget* parent)
         return;
     }
 
-    ResetSettingsDialog::showFailures(parent, removed, failed);
+    ResetSettingsPrompts::showFailures(parent, removed, failed);
     QApplication::quit();
 }
 

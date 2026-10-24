@@ -235,7 +235,7 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 A window built on `CanonWindow` (`src/gui/CanonWindow.{h,cpp}`, RFC #6226)
 deliberately opts out of frameless chrome integration, and by default of
 geometry persistence too. About AetherSDR, Remote Access (Tailscale),
-Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, Radio Setup, Connect to Radio (`ConnectionPanel`), AGC-T Calibration, the AetherRX / AetherTX Settings (profile library) dialogs and the Reset Settings confirmation and failure notice (`ResetSettingsDialog`) are built on it.
+Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, Radio Setup, Connect to Radio (`ConnectionPanel`), AGC-T Calibration and the AetherRX / AetherTX Settings (profile library) dialogs are built on it.
 
 | Concern | `CanonWindow` | Why |
 |---|---|---|
@@ -281,7 +281,8 @@ A question or notice from a canon window uses `CanonMessageBox`
 with the title as a canon header, the text, optional further text, and the
 buttons at the bottom right. `clickedButton()` names the button clicked and is
 null when the box is closed any other way; the default button is outlined in
-cyan and a destructive one is drawn in gold. The CTR2 window's questions use it.
+cyan and a destructive one is drawn in gold. The CTR2 window's questions and
+Reset Settings' confirmation and failure notice (`ResetSettingsPrompts`) use it.
 
 ## Common pitfalls
 
