@@ -193,14 +193,16 @@ private:
     bool unpack(const unsigned char* buf, int n, QByteArray* received)
     {
         // Numbered reports arrive with the report ID first on hidraw,
-        // IOHIDManager and Windows; tolerate a backend that strips it.
-        // Windows pads every report to the device's largest, so report 0x01
-        // may arrive longer than 9 bytes from a device with report 0x04.
+        // IOHIDManager and Windows; on a plain link, tolerate a backend that
+        // strips it. Windows pads every report to the device's largest, so
+        // report 0x01 may arrive longer than 9 bytes from a device with report
+        // 0x04. With wide reports every read must carry its ID: a short read
+        // starting 0x04 would otherwise pass as link data.
         if (n >= 1 + ctr2hid::kReportBytes && buf[0] == ctr2hid::kReportId) {
             received->append(reinterpret_cast<const char*>(buf + 1), ctr2hid::kReportBytes);
             return true;
         }
-        if (n == ctr2hid::kReportBytes) {
+        if (!m_wide && n == ctr2hid::kReportBytes) {
             received->append(reinterpret_cast<const char*>(buf), ctr2hid::kReportBytes);
             return true;
         }

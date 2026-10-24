@@ -425,6 +425,56 @@ void testWideReports()
     }
     check(waitUntil([&] { return got.size() == 24; }) && got == "ABCDEFGHIJKLMNOPQRSTUVWX",
           "bundled reports, and a report 0x01 padded to 64 bytes, arrive in order");
+    // A short read carrying report 0x04 is not an 8-byte report with its ID
+    // stripped. A DATA message left open mid-way: the read's first byte, 0x04,
+    // is a valid counter for its next report, so only the port can refuse it.
+    {
+        std::vector<Report> open, skipped;
+        FrameEncoder enc;
+        for (int i = 0; i < 3; ++i) {
+            enc.encodeControl(MessageType::Closed, &skipped);   // counters 0..2
+        }
+        enc.encodeControl(MessageType::Ready, &open);           // counter 3
+        check(enc.counter() == 4, "the DATA message gets counter 4, the stray read's first byte");
+        enc.encodeData(QByteArray(7, 'x'), &open);   // header and one data report
+        open.pop_back();                              // the data report never comes
+        QByteArray two(1 + kWideReportBytes, '\0');
+        two[0] = char(kWideReportId);
+        two[1] = 2;
+        for (int i = 0; i < 2; ++i) {
+            two.replace(2 + i * kReportBytes, kReportBytes,
+                        QByteArray(reinterpret_cast<const char*>(open[i].data()), kReportBytes));
+        }
+        got.clear();
+        std::lock_guard<std::mutex> g(dev->lock);
+        dev->reads.push_back(two);
+    }
+    check(waitUntil([&] { return got.size() == 16; }), "READY and a DATA header arrive");
+    {
+        std::lock_guard<std::mutex> g(dev->lock);
+        dev->reads.push_back(QByteArray("\x04\x00\x00\x00\x00\x00\x00\x00", 8));
+    }
+    check(waitUntil([&] { return !failure.isEmpty(); }) && got.size() == 16,
+          "a truncated report 0x04 fails the port instead of passing as data");
+    {
+        FrameReassembler rx;
+        std::vector<Message> msgs;
+        for (int off = 0; off < got.size(); off += kReportBytes) {
+            rx.feed(reinterpret_cast<const std::uint8_t*>(got.constData() + off), kReportBytes, &msgs);
+        }
+        check(msgs.size() == 1 && msgs[0].type == MessageType::Ready && rx.isMidMessage(),
+              "nothing of the DATA message is released");
+    }
+    port->shutdown({});
+    waitUntil([&] { return dev->closed.load(); });
+
+    // A bundle claiming no reports fails the port too.
+    dev = std::make_shared<FakeDevice>();
+    dev->featureReply = featureReport(capabilities::encode(kWideReportsBit));
+    port = new Ctr2HidThreadPort(dev->io(), QStringLiteral("fake"));
+    failure.clear();
+    QObject::connect(port, &Ctr2HidPort::failed, port, [&](const QString& m) { failure = m; });
+    check(waitUntil([&] { return port->extensions() == kWideReportsBit; }), "wide again");
     QByteArray empty = bundle;
     empty[1] = 0;
     {

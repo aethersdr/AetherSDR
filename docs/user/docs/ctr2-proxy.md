@@ -138,6 +138,13 @@ AetherKnob.
     become spaces. DeepFist's decode is not sent yet.
 
   A CTR2 never receives either.
+- **A faster link.** Controller firmware that supports it (AetherCTR2 builds
+  with wide reports) and AetherSDR agree by themselves on a USB link about
+  seven times faster; AetherCTR2 uses it for the panadapter's zoom and
+  reference levels. Lynovation's firmware and older AetherCTR2 releases keep
+  the plain link and work as before. **On Windows, update AetherSDR first:**
+  AetherSDR releases from before the faster link cannot relay firmware that
+  supports it there.
 - Other controller firmware that speaks the same USB link can name itself:
   a `303A:1001` device whose USB product name starts with **Aether** (that
   exact case) and continues with at least one more character appears in the
