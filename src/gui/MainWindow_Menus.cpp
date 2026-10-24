@@ -40,6 +40,7 @@
 #include "SpectrumWidget.h"
 #include "SupportDialog.h"
 #include "TitleBar.h"
+#include "UpdatesWindow.h"
 #include "MidiMappingDialog.h"
 #include "ProfileImportExportDialog.h"
 #include "ProfileManagerDialog.h"
@@ -54,8 +55,6 @@
 #include "WhatsNewDialog.h"
 #include "WindowShowState.h"
 #include "core/UpdateChecker.h"
-#include "FramelessMessageBox.h"
-#include "ReleaseTagText.h"
 #include "core/AppSettings.h"
 #include "core/SpotModeResolver.h"
 #include "core/ThemeManager.h"
@@ -89,9 +88,8 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QAction>
-#include <QMessageBox>
+#include <QSignalBlocker>
 #include <QSizePolicy>
-#include <QSpacerItem>
 #include <QList>
 #include <QVariant>
 #include <QWidgetAction>
@@ -332,6 +330,12 @@ void MainWindow::buildMenuBar()
         m_waveformsDialog->raise();
         m_waveformsDialog->activateWindow();
     });
+
+    auto* updateAct = fileMenu->addAction("Update...");
+    updateAct->setMenuRole(QAction::NoRole);
+    updateAct->setStatusTip(QStringLiteral(
+        "See whether a newer AetherSDR is available, what is in it, and get it"));
+    connect(updateAct, &QAction::triggered, this, [this] { showUpdatesWindow(false); });
 
     fileMenu->addSeparator();
     auto* quitAct = fileMenu->addAction("&Quit");
@@ -1880,9 +1884,10 @@ void MainWindow::buildMenuBar()
         dlg->activateWindow();
     });
     helpMenu->addAction("Check for Updates...", this, [this]() {
-        m_updateChecker->checkNow();
+        showUpdatesWindow(true);
     });
     auto* autoUpdateAct = helpMenu->addAction("Check for Updates Automatically");
+    m_autoUpdateAction = autoUpdateAct;
     autoUpdateAct->setCheckable(true);
     if (const QString store = UpdateChecker::storeName(); !store.isEmpty()) {
         // The store owns updates here, so the background check never runs.
@@ -1897,18 +1902,7 @@ void MainWindow::buildMenuBar()
         autoUpdateAct->setStatusTip(QStringLiteral(
             "Check for a newer release at startup, at most once a day, and show "
             "UPDATE in the title bar when there is one"));
-        // The toggle governs the badge too: off retires it, and on brings a
-        // known update back at once when the daily wait skips the request.
-        connect(autoUpdateAct, &QAction::toggled, this, [this](bool on) {
-            UpdateChecker::setCheckOnStartup(on);
-            if (!on) {
-                if (m_titleBar) {
-                    m_titleBar->setUpdateAvailable({});
-                }
-            } else if (!m_updateChecker->checkAutomaticallyIfDue()) {
-                restoreKnownUpdate();
-            }
-        });
+        connect(autoUpdateAct, &QAction::toggled, this, &MainWindow::setAutomaticUpdateCheck);
     }
     helpMenu->addSeparator();
     helpMenu->addAction("About AetherSDR", this, [this]{
@@ -2296,34 +2290,19 @@ void MainWindow::wireUpdateChecker()
 {
     m_updateChecker = new UpdateChecker(this);
     connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
-            [this](const QString& ver, UpdateChecker::Trigger trigger) {
-        m_latestRelease = ver;
+            [this](const QString& ver) {
         if (m_titleBar) {
             m_titleBar->setUpdateAvailable(
                 UpdateChecker::badgeVersion(ver, QCoreApplication::applicationVersion()));
         }
-        if (trigger == UpdateChecker::Trigger::Manual) {
-            showUpdateAvailableDialog();
-        }
     });
     connect(m_updateChecker, &UpdateChecker::upToDate, this,
-            [this](const QString& ver, UpdateChecker::Trigger trigger) {
-        m_latestRelease.clear();
+            [this] {
         if (m_titleBar) {
             m_titleBar->setUpdateAvailable({});
         }
-        if (trigger == UpdateChecker::Trigger::Manual) {
-            FramelessMessageBox::information(this, "Check for Updates",
-                QString("AetherSDR is up to date (v%1).").arg(ver));
-        }
     });
-    connect(m_updateChecker, &UpdateChecker::checkFailed, this,
-            [this](UpdateChecker::Trigger trigger) {
-        if (trigger == UpdateChecker::Trigger::Manual) {
-            FramelessMessageBox::warning(this, "Check for Updates",
-                "Could not reach GitHub. Check your connection and try again.");
-        }
-    });
+    // Results and failures are shown in the Updates window, not in prompts.
 
     QTimer::singleShot(kAutomaticUpdateCheckDelayMs, m_updateChecker, [checker = m_updateChecker] {
         checker->checkAutomaticallyIfDue();
@@ -2338,54 +2317,50 @@ void MainWindow::restoreKnownUpdate()
     if (known.isEmpty() || !m_titleBar) {
         return;
     }
-    m_latestRelease = known;
     m_titleBar->setUpdateAvailable(known);
 }
 
-void MainWindow::showUpdateAvailableDialog()
+void MainWindow::showUpdatesWindow(bool checkNow)
 {
-    if (m_latestRelease.isEmpty()) {
-        return;
+    // A CanonWindow (style guide, RFC #6226): created or raised directly.
+    if (!m_updatesWindow) {
+        auto* w = new UpdatesWindow(m_updateChecker, this);
+        connect(w, &UpdatesWindow::badgeChanged, this, [this](const QString& version) {
+            if (m_titleBar) {
+                m_titleBar->setUpdateAvailable(version);
+            }
+        });
+        connect(w, &UpdatesWindow::automaticCheckToggled, this, &MainWindow::setAutomaticUpdateCheck);
+        m_updatesWindow = w;
     }
-    const QString ver = m_latestRelease;
-    const QString current = QCoreApplication::applicationVersion();
-    FramelessMessageBox box(this);
-    box.setWindowTitle("AetherSDR Update Available");
-    box.setIcon(QMessageBox::Information);
-    setUpdateAvailableText(box, current, ver);
-    const QString store = UpdateChecker::storeName();
-    if (!store.isEmpty()) {
-        box.setInformativeText(
-            QStringLiteral("You are running v%1. Updates for this copy come from %2.")
-                .arg(current, store));
+    if (checkNow) {
+        m_updateChecker->checkNow(UpdateChecker::Trigger::Manual);
     }
-    QPushButton* viewBtn = box.addButton("View Latest Release", QMessageBox::ActionRole);
-    viewBtn->setAutoDefault(false);
-    // A store install never shows the badge, so there is nothing to skip.
-    QPushButton* skipBtn = nullptr;
-    if (store.isEmpty()) {
-        skipBtn = box.addButton("Skip This Version", QMessageBox::ActionRole);
-        skipBtn->setAutoDefault(false);
-        skipBtn->setAccessibleDescription(QStringLiteral(
-            "Stop showing UPDATE in the title bar for this release. "
-            "Help, Check for Updates still reports it."));
+    m_updatesWindow->show();
+    m_updatesWindow->raise();
+    m_updatesWindow->activateWindow();
+}
+
+void MainWindow::setAutomaticUpdateCheck(bool on)
+{
+    // One handler for the Help toggle and the window's Check daily box, so
+    // the two never disagree. The toggle governs the badge too: off retires
+    // it, and on brings a known update back at once when the daily wait
+    // skips the request.
+    UpdateChecker::setCheckOnStartup(on);
+    if (m_autoUpdateAction) {
+        const QSignalBlocker block(m_autoUpdateAction);
+        m_autoUpdateAction->setChecked(on);
     }
-    QPushButton* closeBtn = box.addButton(QMessageBox::Close);
-    closeBtn->setAutoDefault(false);
-    // Force minimum width via layout spacer — setMinimumWidth() is ignored by QMessageBox
-    if (auto* grid = qobject_cast<QGridLayout*>(box.layout())) {
-        grid->addItem(new QSpacerItem(480, 0, QSizePolicy::Minimum, QSizePolicy::Fixed),
-                      grid->rowCount(), 0, 1, grid->columnCount());
+    if (m_updatesWindow) {
+        m_updatesWindow->setAutomaticCheck(on);
     }
-    box.exec();
-    if (box.clickedButton() == viewBtn) {
-        QDesktopServices::openUrl(QUrl(UpdateChecker::kReleasesPageUrl));
-    } else if (skipBtn && box.clickedButton() == skipBtn) {
-        UpdateChecker::skipVersion(ver);
+    if (!on) {
         if (m_titleBar) {
             m_titleBar->setUpdateAvailable({});
         }
+    } else if (!m_updateChecker->checkAutomaticallyIfDue()) {
+        restoreKnownUpdate();
     }
 }
-
 } // namespace AetherSDR

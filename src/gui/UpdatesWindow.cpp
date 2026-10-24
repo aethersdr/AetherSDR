@@ -1,0 +1,505 @@
+#include "gui/UpdatesWindow.h"
+
+#include "core/ThemeManager.h"
+#include "core/UpdateChecker.h"
+#include "gui/CanonIndicators.h"
+#include "gui/FlowLayout.h"
+#include "gui/UpdateStage.h"
+
+#include <QCheckBox>
+#include <QCoreApplication>
+#include <QDesktopServices>
+#include <QFrame>
+#include <QGridLayout>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QLocale>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPushButton>
+#include <QScrollArea>
+#include <QSignalBlocker>
+#include <QStyle>
+#include <QVBoxLayout>
+
+namespace AetherSDR {
+
+namespace {
+
+// The order chapter dots and card edges take the category colours in.
+const char* const kCategoryTokens[] = {
+    "color.canon.category.cyan",  "color.canon.category.aqua", "color.canon.category.blue",
+    "color.canon.category.amber", "color.canon.category.violet", "color.canon.category.rose",
+    "color.canon.category.teal",
+};
+constexpr int kCategoryCount = sizeof(kCategoryTokens) / sizeof(kCategoryTokens[0]);
+
+// The big version numerals: the brand gradient for a new release, canon ink
+// otherwise. Painted, so the gradient can fill the glyphs; the accessible
+// name carries the same text.
+class VersionNumerals final : public QWidget {
+public:
+    explicit VersionNumerals(QWidget* parent) : QWidget(parent)
+    {
+        // Its own font: a window-wide stylesheet font would otherwise win.
+        m_font = font();
+        m_font.setPixelSize(60);
+        m_font.setWeight(QFont::ExtraBold);
+        m_font.setLetterSpacing(QFont::PercentageSpacing, 96);
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_TranslucentBackground);
+    }
+    void setVersion(const QString& version, bool gradient)
+    {
+        m_text = version;
+        m_gradient = gradient;
+        setAccessibleName(version.isEmpty() ? QString() : QStringLiteral("Version %1").arg(version));
+        updateGeometry();
+        update();
+    }
+    QSize sizeHint() const override
+    {
+        const QFontMetrics fm(m_font);
+        return {fm.horizontalAdvance(m_text) + 4, fm.height()};
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        QPainterPath path;
+        const QFontMetrics fm(m_font);
+        path.addText(0, fm.ascent(), m_font, m_text);
+        auto& tm = ThemeManager::instance();
+        p.fillPath(path, m_gradient
+                             ? tm.brush(QStringLiteral("color.brand.gradient"), path.boundingRect().toRect())
+                             : QBrush(tm.color(this, QStringLiteral("color.canon.ink"))));
+    }
+
+private:
+    QString m_text;
+    QFont m_font;
+    bool m_gradient{false};
+};
+
+QLabel* plainLabel(const QString& role, QWidget* parent = nullptr)
+{
+    auto* l = new QLabel(parent);
+    l->setTextFormat(Qt::PlainText);   // release text is network text
+    l->setProperty("role", role);
+    return l;
+}
+
+QString sheet()
+{
+    return QStringLiteral(
+               "QLabel { background: transparent; color: {{color.canon.inkSoft}}; }"
+               // Plain containers stay see-through over the canon ground.
+               "QWidget#updatesVersion, QWidget#updatesChapters, QWidget#updatesHighlights,"
+               " QWidget#updatesContent, QScrollArea#updatesScroll,"
+               " QScrollArea#updatesScroll > QWidget > QWidget { background: transparent; border: none; }"
+               "QLabel[role=\"eyebrow\"] { color: {{color.canon.cyan}}; font-size: 11px; font-weight: 700;"
+               " letter-spacing: 1.5px; }"
+               "QLabel[role=\"eyebrow\"][tone=\"current\"] { color: {{color.canon.aqua}}; }"
+               "QLabel[role=\"eyebrow\"][tone=\"muted\"] { color: {{color.canon.muted}}; }"
+               "QLabel[role=\"product\"] { color: {{color.canon.ink}}; font-size: 26px; font-weight: 700; }"
+               "QLabel[role=\"tagline\"] { color: {{color.canon.inkSoft}}; font-size: 15px; }"
+               "QLabel[role=\"section\"] { color: {{color.canon.muted}}; font-size: 11px; font-weight: 700;"
+               " letter-spacing: 1.5px; }"
+               "QLabel[role=\"note\"], QLabel[role=\"footnote\"] { color: {{color.canon.muted}}; font-size: 12px; }"
+               "QLabel[role=\"chip\"] { color: {{color.canon.inkSoft}}; font-size: 12px; }"
+               "QFrame#updatesChip { background: {{color.canon.raised}}; border: 1px solid {{color.canon.lineHi}};"
+               " border-radius: 12px; }"
+               "QFrame#updatesCard { background: {{color.canon.raised}}; border: 1px solid {{color.canon.line}};"
+               " border-radius: 12px; }"
+               "QLabel[role=\"cardTitle\"] { color: {{color.canon.ink}}; font-size: 14px; font-weight: 650; }"
+               "QLabel[role=\"cardDetail\"] { color: {{color.canon.muted}}; font-size: 12px; }"
+               "QPushButton#updatesGet { background: {{color.brand.gradient}}; color: {{color.canon.onAccent}};"
+               " font-size: 15px; font-weight: 700; border: 1px solid transparent; border-radius: 12px;"
+               " padding: 11px 22px; }"
+               "QPushButton#updatesGet:hover { border-color: {{color.canon.aqua}}; }"
+               "QPushButton#updatesGet:focus { border: 2px solid {{color.canon.aqua}}; padding: 10px 21px; }"
+               "QPushButton#updatesSecondary { background: {{color.canon.control}}; color: {{color.canon.cyan}};"
+               " border: 1px solid {{color.canon.lineHi}}; border-radius: 10px; padding: 9px 14px;"
+               " font-weight: 600; }"
+               "QPushButton#updatesSecondary:hover { background: {{color.canon.nested}};"
+               " color: {{color.canon.aqua}}; }"
+               "QPushButton#updatesSecondary:focus { border-color: {{color.canon.aqua}}; }"
+               "QPushButton#updatesGhost { background: transparent; color: {{color.canon.muted}}; border: none;"
+               " padding: 9px 6px; font-weight: 600; }"
+               "QPushButton#updatesGhost:hover { color: {{color.canon.inkSoft}}; }"
+               "QPushButton#updatesGhost:focus { color: {{color.canon.ink}}; }"
+               "QPushButton:disabled { color: {{color.canon.muted}}; }"
+               "QCheckBox { color: {{color.canon.inkSoft}}; background: transparent; }"
+               "QScrollBar:vertical { background: transparent; width: 8px; margin: 2px; }"
+               "QScrollBar::handle:vertical { background: {{color.canon.lineHi}}; border-radius: 3px;"
+               " min-height: 24px; }"
+               "QScrollBar::handle:vertical:hover { background: {{color.canon.cyan}}; }"
+               "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+               "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }")
+        + canonIndicatorRules();
+}
+
+} // namespace
+
+UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
+    : CanonWindow(tr("Updates"), parent, Kind::Workspace)
+    , m_checker(checker)
+{
+    setObjectName(QStringLiteral("updatesWindow"));
+    setAttribute(Qt::WA_DeleteOnClose);
+    setGeometryKey(QStringLiteral("UpdatesWindowGeometry"));
+    setLaunchSize(QSize(760, 860));
+    applyCanonSheet(bodyWidget(), sheet);
+
+    auto* root = new QVBoxLayout(bodyWidget());
+    root->setContentsMargins(0, 0, 0, 22);
+    root->setSpacing(0);
+
+    // The stage, with the release's name laid over it.
+    m_stage = new UpdateStage(bodyWidget());
+    m_stage->setObjectName(QStringLiteral("updatesStage"));
+    auto* over = new QVBoxLayout(m_stage);
+    over->setContentsMargins(28, 24, 60, 0);
+    over->setSpacing(6);
+    m_eyebrow = plainLabel(QStringLiteral("eyebrow"));
+    m_eyebrow->setObjectName(QStringLiteral("updatesEyebrow"));
+    over->addWidget(m_eyebrow);
+    auto* nameRow = new QHBoxLayout;
+    nameRow->setSpacing(14);
+    auto* product = plainLabel(QStringLiteral("product"));
+    product->setText(QStringLiteral("AetherSDR"));
+    nameRow->addWidget(product, 0, Qt::AlignBottom);
+    auto* numerals = new VersionNumerals(m_stage);
+    numerals->setObjectName(QStringLiteral("updatesVersion"));
+    m_version = numerals;
+    nameRow->addWidget(numerals, 0, Qt::AlignBottom);
+    nameRow->addStretch(1);
+    over->addLayout(nameRow);
+    m_tagline = plainLabel(QStringLiteral("tagline"));
+    m_tagline->setObjectName(QStringLiteral("updatesTagline"));
+    m_tagline->setWordWrap(true);
+    m_tagline->setMaximumWidth(470);
+    over->addWidget(m_tagline);
+    over->addStretch(1);
+    root->addWidget(m_stage);
+
+    // Everything under the stage scrolls, so a long release never makes the
+    // window taller than the screen.
+    auto* scroll = new QScrollArea;
+    scroll->setObjectName(QStringLiteral("updatesScroll"));
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* contentWidget = new QWidget;
+    contentWidget->setObjectName(QStringLiteral("updatesContent"));
+    auto* content = new QVBoxLayout(contentWidget);
+    content->setContentsMargins(28, 16, 28, 4);
+    content->setSpacing(12);
+    scroll->setWidget(contentWidget);
+    root->addWidget(scroll, 1);
+
+    m_note = plainLabel(QStringLiteral("note"));
+    m_note->setObjectName(QStringLiteral("updatesNote"));
+    m_note->setWordWrap(true);
+    content->addWidget(m_note);
+
+    m_chaptersTitle = plainLabel(QStringLiteral("section"));
+    content->addWidget(m_chaptersTitle);
+    m_chips = new QWidget;
+    m_chips->setObjectName(QStringLiteral("updatesChapters"));
+    QSizePolicy chipsPolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    chipsPolicy.setHeightForWidth(true);
+    m_chips->setSizePolicy(chipsPolicy);
+    m_chipsLayout = new FlowLayout(0, 6, 6);
+    m_chips->setLayout(m_chipsLayout);
+    content->addWidget(m_chips);
+
+    m_highlightsTitle = plainLabel(QStringLiteral("section"));
+    content->addWidget(m_highlightsTitle);
+    m_cards = new QWidget;
+    m_cards->setObjectName(QStringLiteral("updatesHighlights"));
+    auto* cardsLayout = new QHBoxLayout(m_cards);
+    cardsLayout->setContentsMargins(0, 0, 0, 0);
+    cardsLayout->setSpacing(8);
+    content->addWidget(m_cards);
+
+    auto* actions = new QHBoxLayout;
+    actions->setSpacing(10);
+    m_get = new QPushButton;
+    m_get->setObjectName(QStringLiteral("updatesGet"));
+    m_get->setCursor(Qt::PointingHandCursor);
+    actions->addWidget(m_get);
+    m_notes = new QPushButton(tr("Full release notes"));
+    m_notes->setObjectName(QStringLiteral("updatesSecondary"));
+    m_notes->setCursor(Qt::PointingHandCursor);
+    m_notes->setAccessibleDescription(tr("Opens the release page on GitHub in your browser."));
+    actions->addWidget(m_notes);
+    m_checkNow = new QPushButton(tr("Check Now"));
+    m_checkNow->setObjectName(QStringLiteral("updatesSecondary"));
+    m_checkNow->setCursor(Qt::PointingHandCursor);
+    actions->addWidget(m_checkNow);
+    m_skip = new QPushButton(tr("Skip this version"));
+    m_skip->setObjectName(QStringLiteral("updatesGhost"));
+    m_skip->setCursor(Qt::PointingHandCursor);
+    m_skip->setAccessibleDescription(
+        tr("Stop showing UPDATE in the title bar for this release. The next release shows it again."));
+    actions->addWidget(m_skip);
+    actions->addStretch(1);
+    content->addLayout(actions);
+
+    auto* footer = new QHBoxLayout;
+    m_footnote = plainLabel(QStringLiteral("footnote"));
+    m_footnote->setObjectName(QStringLiteral("updatesFootnote"));
+    m_footnote->setWordWrap(true);
+    footer->addWidget(m_footnote, 1);
+    m_autoCheck = new QCheckBox(tr("Check daily"));
+    m_autoCheck->setObjectName(QStringLiteral("updatesCheckDaily"));
+    m_autoCheck->setAccessibleDescription(
+        tr("Check for a newer release at startup, at most once a day, and show UPDATE in the title bar."));
+    footer->addWidget(m_autoCheck, 0, Qt::AlignRight);
+    content->addLayout(footer);
+    content->addStretch(1);
+
+    const QString store = UpdateChecker::storeName();
+    m_autoCheck->setChecked(store.isEmpty() && UpdateChecker::checkOnStartup());
+    m_autoCheck->setEnabled(store.isEmpty());
+    if (!store.isEmpty()) {
+        m_autoCheck->setToolTip(tr("Updates for this copy come from %1.").arg(store));
+        m_autoCheck->setAccessibleDescription(m_autoCheck->toolTip());
+    }
+
+    connect(m_get, &QPushButton::clicked, this, &UpdatesWindow::openDownload);
+    connect(m_notes, &QPushButton::clicked, this, [this] {
+        const QString version = m_checker ? m_checker->latestRelease().version : QString();
+        QDesktopServices::openUrl(UpdateChecker::releasePageUrl(version));
+    });
+    connect(m_checkNow, &QPushButton::clicked, this, [this] {
+        if (m_checker) {
+            m_failed = false;
+            m_checker->checkNow(UpdateChecker::Trigger::Manual);
+            refresh();
+        }
+    });
+    connect(m_skip, &QPushButton::clicked, this, [this] {
+        if (!m_checker) {
+            return;
+        }
+        UpdateChecker::skipVersion(m_checker->latestRelease().version);
+        emit badgeChanged(QString());
+        refresh();
+    });
+    connect(m_autoCheck, &QCheckBox::toggled, this, &UpdatesWindow::automaticCheckToggled);
+
+    if (m_checker) {
+        connect(m_checker, &UpdateChecker::releaseInfoChanged, this, [this] {
+            m_failed = false;
+            refresh();
+        });
+        connect(m_checker, &UpdateChecker::checkFailed, this, [this] {
+            m_failed = true;
+            refresh();
+        });
+        if (!m_checker->latestRelease().isValid() && !m_checker->isChecking()) {
+            m_checker->checkNow(UpdateChecker::Trigger::Manual);
+        }
+    }
+    refresh();
+}
+
+void UpdatesWindow::setAutomaticCheck(bool on)
+{
+    const QSignalBlocker block(m_autoCheck);
+    m_autoCheck->setChecked(on && UpdateChecker::storeName().isEmpty());
+}
+
+UpdatesWindow::View UpdatesWindow::currentView() const
+{
+    const bool known = m_checker && m_checker->latestRelease().isValid();
+    if (!known) {
+        return (m_checker && m_checker->isChecking()) || !m_failed ? View::Checking : View::Failed;
+    }
+    const QString running = QCoreApplication::applicationVersion();
+    return UpdateChecker::isNewer(m_checker->latestRelease().version, running) ? View::Available
+                                                                               : View::Current;
+}
+
+void UpdatesWindow::refresh()
+{
+    const View view = currentView();
+    const QString running = QCoreApplication::applicationVersion();
+    const QString store = UpdateChecker::storeName();
+    const bool known = m_checker && m_checker->latestRelease().isValid();
+    const ReleaseInfo release = known ? m_checker->latestRelease() : ReleaseInfo{};
+    auto* numerals = static_cast<VersionNumerals*>(m_version);
+
+    if (known && m_builtFor != release.version) {
+        rebuildRelease();
+    }
+
+    m_stage->setMood(view == View::Available ? UpdateStage::Mood::Vivid : UpdateStage::Mood::Calm);
+    m_stage->setTimeline(running, view == View::Available ? release.version : QString());
+
+    QString eyebrow;
+    QString tone;
+    QString note;
+    switch (view) {
+    case View::Available: {
+        eyebrow = tr("NEW RELEASE");
+        if (release.published.isValid()) {
+            eyebrow += QStringLiteral(" · ")
+                       + QLocale::c().toString(release.published.date(), QStringLiteral("MMM d, yyyy")).toUpper();
+        }
+        numerals->setVersion(release.version, true);
+        m_tagline->setText(release.tagline);
+        if (!store.isEmpty()) {
+            note = tr("Updates for this copy come from %1.").arg(store);
+        } else if (UpdateChecker::isSkipped(release.version)) {
+            note = tr("You skipped this release, so UPDATE is not shown in the title bar.");
+        }
+        break;
+    }
+    case View::Current:
+        eyebrow = QStringLiteral("✓ ") + tr("UP TO DATE");
+        tone = QStringLiteral("current");
+        numerals->setVersion(running, false);
+        m_tagline->setText(UpdateChecker::isNewer(running, release.version)
+                               ? tr("You're running a newer build than the latest release, v%1.")
+                                     .arg(release.version)
+                               : tr("You're on the newest release."));
+        break;
+    case View::Checking:
+        eyebrow = tr("CHECKING FOR UPDATES…");
+        tone = QStringLiteral("muted");
+        numerals->setVersion(running, false);
+        m_tagline->setText(tr("Asking GitHub for the newest release."));
+        break;
+    case View::Failed:
+        eyebrow = tr("COULDN'T REACH GITHUB");
+        tone = QStringLiteral("muted");
+        numerals->setVersion(running, false);
+        m_tagline->setText(tr("Check your connection, then try again."));
+        break;
+    }
+    m_eyebrow->setText(eyebrow);
+    m_eyebrow->setProperty("tone", tone);
+    m_eyebrow->style()->unpolish(m_eyebrow);
+    m_eyebrow->style()->polish(m_eyebrow);
+    m_note->setText(note);
+    m_note->setVisible(!note.isEmpty());
+
+    const bool showRelease = known && (view == View::Available || view == View::Current);
+    m_chaptersTitle->setVisible(showRelease && !release.chapters.isEmpty());
+    m_chips->setVisible(showRelease && !release.chapters.isEmpty());
+    m_highlightsTitle->setVisible(showRelease && !release.highlights.isEmpty());
+    m_cards->setVisible(showRelease && !release.highlights.isEmpty());
+    m_highlightsTitle->setText(view == View::Available ? tr("HIGHLIGHTS") : tr("NEW IN YOUR VERSION"));
+
+    const ReleaseAsset asset = UpdateChecker::assetForThisComputer(release);
+    const bool canDownload = view == View::Available && store.isEmpty();
+    m_get->setVisible(canDownload);
+    m_get->setText(tr("Get AetherSDR %1  →").arg(release.version));
+    m_get->setAccessibleName(tr("Get AetherSDR %1").arg(release.version));
+    m_get->setAccessibleDescription(asset.url.isValid()
+                                        ? tr("Downloads %1 in your browser.").arg(asset.name)
+                                        : tr("Opens the release page to choose a download."));
+    m_notes->setVisible(known);
+    m_checkNow->setVisible(view != View::Available);
+    m_checkNow->setEnabled(!(m_checker && m_checker->isChecking()));
+    m_skip->setVisible(canDownload);
+    const bool skipped = UpdateChecker::isSkipped(release.version);
+    m_skip->setEnabled(!skipped);
+    m_skip->setText(skipped ? tr("Skipped") : tr("Skip this version"));
+
+    if (canDownload) {
+        m_footnote->setText(asset.url.isValid()
+                                ? tr("Downloads %1, the file built for this computer.").arg(asset.name)
+                                : tr("Opens the release page, where you choose the download for this computer."));
+    } else if (view == View::Current) {
+        const QDateTime last = UpdateChecker::lastCheckUtc();
+        m_footnote->setText(last.isValid()
+                                ? tr("Last checked %1.").arg(QLocale().toString(last.toLocalTime(), QLocale::ShortFormat))
+                                : QString());
+    } else {
+        m_footnote->clear();
+    }
+
+    m_stage->setAccessibleName(tr("Updates"));
+    m_stage->setAccessibleDescription(view == View::Available
+                                          ? tr("Installed v%1; v%2 is available.").arg(running, release.version)
+                                          : tr("Installed v%1.").arg(running));
+}
+
+void UpdatesWindow::rebuildRelease()
+{
+    const ReleaseInfo& release = m_checker->latestRelease();
+    m_builtFor = release.version;
+
+    while (QLayoutItem* item = m_chipsLayout->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+    m_chaptersTitle->setText(release.chapters.size() == 1
+                                 ? tr("WHAT'S INSIDE · 1 CHAPTER")
+                                 : tr("WHAT'S INSIDE · %1 CHAPTERS").arg(release.chapters.size()));
+    auto& tm = ThemeManager::instance();
+    for (int i = 0; i < release.chapters.size(); ++i) {
+        auto* chip = new QFrame(m_chips);
+        chip->setObjectName(QStringLiteral("updatesChip"));
+        auto* row = new QHBoxLayout(chip);
+        row->setContentsMargins(10, 4, 12, 4);
+        row->setSpacing(7);
+        auto* dot = new QFrame(chip);
+        dot->setFixedSize(7, 7);
+        tm.applyStyleSheet(dot, QStringLiteral("QFrame { background: {{%1}}; border-radius: 3px; }")
+                                    .arg(QString::fromLatin1(kCategoryTokens[i % kCategoryCount])));
+        row->addWidget(dot);
+        auto* text = plainLabel(QStringLiteral("chip"), chip);
+        text->setText(release.chapters[i]);
+        row->addWidget(text);
+        m_chipsLayout->addWidget(chip);
+    }
+
+    auto* cards = static_cast<QHBoxLayout*>(m_cards->layout());
+    while (QLayoutItem* item = cards->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+    for (int i = 0; i < release.highlights.size(); ++i) {
+        auto* card = new QFrame(m_cards);
+        card->setObjectName(QStringLiteral("updatesCard"));
+        // The left edge takes the colour of the chapter the highlight leads.
+        tm.applyStyleSheet(card, QStringLiteral("QFrame#updatesCard { border-left: 3px solid {{%1}}; }")
+                                     .arg(QString::fromLatin1(kCategoryTokens[i % kCategoryCount])));
+        auto* col = new QVBoxLayout(card);
+        col->setContentsMargins(14, 12, 14, 12);
+        col->setSpacing(4);
+        auto* title = plainLabel(QStringLiteral("cardTitle"), card);
+        title->setText(release.highlights[i].title);
+        title->setWordWrap(true);
+        col->addWidget(title);
+        auto* detail = plainLabel(QStringLiteral("cardDetail"), card);
+        detail->setText(release.highlights[i].detail);
+        detail->setWordWrap(true);
+        col->addWidget(detail);
+        col->addStretch(1);
+        card->setAccessibleName(release.highlights[i].title);
+        card->setAccessibleDescription(release.highlights[i].detail);
+        cards->addWidget(card, 1);
+    }
+}
+
+void UpdatesWindow::openDownload()
+{
+    if (!m_checker) {
+        return;
+    }
+    const ReleaseInfo& release = m_checker->latestRelease();
+    const ReleaseAsset asset = UpdateChecker::assetForThisComputer(release);
+    // assetForThisComputer() only returns URLs that passed the allowlist.
+    QDesktopServices::openUrl(asset.url.isValid() ? asset.url : UpdateChecker::releasePageUrl(release.version));
+}
+
+} // namespace AetherSDR

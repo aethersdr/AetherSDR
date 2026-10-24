@@ -5451,7 +5451,7 @@ void MainWindow::buildUI()
     connect(m_titleBar, &TitleBar::multiFlexClicked,
             this, &MainWindow::showMultiFlexDialog);
     connect(m_titleBar, &TitleBar::updateBadgeClicked,
-            this, &MainWindow::showUpdateAvailableDialog);
+            this, [this] { showUpdatesWindow(false); });
     restoreKnownUpdate();
     connect(m_titleBar, &TitleBar::minimalModeRequested,
             this, &MainWindow::toggleMinimalModeFromAction);

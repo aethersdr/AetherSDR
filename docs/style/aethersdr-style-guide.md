@@ -63,6 +63,7 @@ live in the `color.canon.*` token group of
 | Blooms | `color.canon.bloom.blue` / `bloom.teal` | blue 16 % top-right, teal 10 % top-left |
 | Grid | `color.canon.grid` | 64 px grid at 3.5 %, fading out |
 | Brand gradient | `color.brand.gradient` | `#3aa7ff → #5de3ff → #8ef7e6` at 100° |
+| Categories (marks only: chip dots, card edges) | `color.canon.category.{cyan,aqua,blue,amber,violet,rose,teal}` | aethersdr.com's category palette; 3:1 on the ground and raised cards in both themes |
 
 The theme JSON writes alpha colours in Qt's `#AARRGGBB` order
 (`#1f78a5d2` is the hairline above).
@@ -112,7 +113,7 @@ windows" lists what it keeps (the `FramelessMoveHelper` drag, Escape and
 ⌘W, `WA_DeleteOnClose` plus a `QPointer` so a second open raises it).
 Which windows the canon covers: short-lived, informational windows (About,
 Remote Access, and the candidates listed on #6239, once the maintainer picks
-them), and the tool windows the maintainer has moved to it (Waveforms,
+them), and the tool windows the maintainer has moved to it (Updates, Waveforms,
 Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, Radio Setup, Connect to Radio, AGC-T Calibration). Other tool and workspace dialogs keep
 `PersistentDialog` and `FramelessWindowTitleBar` as `docs/agents/gui.md`
 describes. For windows the canon covers,
@@ -162,6 +163,16 @@ border, once every 7 s for the brand (cyan) and every 3 s for recognition
 exposed, and **hold still when the OS asks for reduced motion**
 (`QAccessibilityHints::motionPreference`). Do not add other animation
 without an RFC.
+
+**The one exception: the Updates window** (File → Update..., RFC #5304,
+`gui/UpdateStage`), whose job is to make a new release worth installing.
+Besides the spark, its stage's core glow breathes over 4.5 s and its traces
+drift a few pixels over 6 s. Both run through the same `SparkWidget` timer,
+so they stop when the window is hidden, slow when it is not exposed, and hold
+still under reduced motion. The maintainer ruled this for that window only;
+it is not a pattern for other surfaces. Its primary action, **Get AetherSDR
+x**, uses the brand gradient under the same accepted light-theme exception as
+About's OK (#6239).
 
 ## Migrating a surface
 

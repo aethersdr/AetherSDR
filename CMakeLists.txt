@@ -1143,6 +1143,7 @@ set(CORE_SOURCES
     src/core/MsiFirmwareMetadata.cpp
     src/core/UpdateChecker.cpp
     src/core/UpdateSettings.cpp
+    src/core/UpdateReleaseNotes.cpp
     src/core/NetworkDiagnostics.cpp
     src/core/WindowsFirewall.cpp
     src/core/OleCompoundFile.cpp
@@ -1385,6 +1386,8 @@ set(GUI_SOURCES
     src/gui/ModeFilterPresets.cpp
     src/gui/ModemChrome.cpp
     src/gui/NrGainStrip.cpp
+    src/gui/UpdateStage.cpp
+    src/gui/UpdatesWindow.cpp
     src/gui/WaveformsDialog.cpp
     src/gui/TailnetShimDialog.cpp
     src/gui/ClientRxDspApplet.cpp

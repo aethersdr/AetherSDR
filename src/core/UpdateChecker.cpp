@@ -89,6 +89,22 @@ void UpdateChecker::skipVersion(const QString& version)
     qCInfo(lcUpdater).noquote() << "operator skipped v" + parsed.toString();
 }
 
+bool UpdateChecker::isSkipped(const QString& version)
+{
+    return UpdateSettings::isSkipped(version);
+}
+
+QDateTime UpdateChecker::lastCheckUtc()
+{
+    return UpdateSettings::lastCheckUtc();
+}
+
+bool UpdateChecker::isNewer(const QString& a, const QString& b)
+{
+    const VersionNumber va = VersionNumber::parse(a);
+    return !va.isNull() && va > VersionNumber::parse(b);
+}
+
 QString UpdateChecker::badgeVersion(const QString& latestVersion, const QString& runningVersion)
 {
     const VersionNumber latest = VersionNumber::parse(latestVersion);
@@ -191,7 +207,8 @@ bool UpdateChecker::checkNow(Trigger trigger)
             return;
         }
 
-        const auto doc = QJsonDocument::fromJson(reply->readAll());
+        const QByteArray body = reply->readAll();
+        const auto doc = QJsonDocument::fromJson(body);
         if (doc.isNull()) {
             fail(QStringLiteral("response is not JSON"));
             return;
@@ -215,6 +232,8 @@ bool UpdateChecker::checkNow(Trigger trigger)
         // From here on only the parsed digits travel: the tag is network text.
         const QString latestText = latest.toString();
         UpdateSettings::recordAnswer(QDateTime::currentDateTimeUtc(), latestText);
+        m_latest = parseRelease(body);
+        emit releaseInfoChanged();
         if (latest > running) {
             qCInfo(lcUpdater).nospace().noquote() << triggerName(m_trigger) << " check: v"
                 << latestText << " is newer than running v" << current;

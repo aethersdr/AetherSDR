@@ -4663,6 +4663,33 @@ target_include_directories(update_checker_test PRIVATE src)
 target_link_libraries(update_checker_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME update_checker_test COMMAND update_checker_test)
 
+# UpdateChecker's release reading: the real v26.10.3 release JSON into the
+# Updates window's tagline, chapters and highlights; the installer picked per
+# platform; the download-URL allowlist. Pure, no network.
+add_executable(update_release_notes_test tests/update_release_notes_test.cpp)
+target_include_directories(update_release_notes_test PRIVATE src)
+target_link_libraries(update_release_notes_test PRIVATE aethercore Qt6::Core Qt6::Network)
+target_compile_definitions(update_release_notes_test PRIVATE
+    UPDATE_RELEASE_FIXTURE="${CMAKE_SOURCE_DIR}/tests/fixtures/release/v26.10.3.json")
+add_test(NAME update_release_notes_test COMMAND update_release_notes_test)
+
+# The Updates window over the in-memory transport and the real v26.10.3
+# release JSON: each view, plain-text release text, Skip, the mirrored
+# toggle, reduced motion. No sockets.
+add_executable(updates_window_test
+    tests/updates_window_test.cpp
+    src/gui/UpdatesWindow.cpp
+    src/gui/UpdateStage.cpp
+    src/gui/CanonWindow.cpp
+)
+target_include_directories(updates_window_test PRIVATE src tests)
+target_link_libraries(updates_window_test PRIVATE
+    aetherdesktop_support aethercore Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test)
+target_compile_definitions(updates_window_test PRIVATE
+    UPDATE_RELEASE_FIXTURE="${CMAKE_SOURCE_DIR}/tests/fixtures/release/v26.10.3.json")
+set_target_properties(updates_window_test PROPERTIES AUTOMOC ON)
+add_test(NAME updates_window_test COMMAND updates_window_test)
+
 add_executable(extended_tnf_settings_test tests/extended_tnf_settings_test.cpp)
 target_include_directories(extended_tnf_settings_test PRIVATE src)
 target_link_libraries(extended_tnf_settings_test PRIVATE aethercore Qt6::Core)
@@ -9745,6 +9772,7 @@ set(AETHER_SETTINGS_CONSUMERS
     extended_tnf_settings_test
     update_settings_test
     update_checker_test
+    updates_window_test
     client_display_settings_test
     client_display_pan_settings_test
     spectrum_overlay_fft_fps_bounds_test

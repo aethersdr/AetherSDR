@@ -181,6 +181,7 @@ struct NetEntry;
 struct MemoryEntry;
 class PropDashboardDialog;
 class UpdateChecker;
+class UpdatesWindow;
 class TxBandDialog;
 class BandscopeDialog;
 class AetherRxDialog;
@@ -447,7 +448,8 @@ private:
     void buildUI();
     void buildMenuBar();
     void wireUpdateChecker();          // MainWindow_Menus.cpp
-    void showUpdateAvailableDialog();  // MainWindow_Menus.cpp
+    void showUpdatesWindow(bool checkNow);  // MainWindow_Menus.cpp
+    void setAutomaticUpdateCheck(bool on);  // MainWindow_Menus.cpp
     void restoreKnownUpdate();         // MainWindow_Menus.cpp
     void minimizeActiveApplicationWindow();
     void toggleActiveApplicationWindowFullScreen();
@@ -2187,7 +2189,8 @@ private:
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
     UpdateChecker* m_updateChecker{nullptr};
-    QString m_latestRelease;  // newest release a check found; empty until one does
+    QPointer<UpdatesWindow> m_updatesWindow;
+    QAction* m_autoUpdateAction{nullptr};
 
 // CTR2 TCP proxy prototype (MainWindow_Controllers.cpp); never persisted, off at launch
     Ctr2ProxyModel* m_ctr2ProxyModel{nullptr};

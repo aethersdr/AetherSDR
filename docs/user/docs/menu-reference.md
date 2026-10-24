@@ -21,6 +21,7 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 |------|-------------|
 | **Connect to Radio...** | Opens the connection panel (LAN radios, SmartLink, manual IP). See [First Connection](./first-connection.md) and [Manual Connection](./manual-connection.md). |
 | **Disconnect** | Ends the radio session without closing AetherSDR. |
+| **Update...** | The Updates window: the newest AetherSDR release, what is in it, and the download for this computer. See [Updates](./updates.md). |
 | **Quit** | Closes the application. |
 
 ## Settings
@@ -141,8 +142,8 @@ The Minimize and Full Screen keys can be rebound in **Settings → Configure Sho
 | **Contributing to AetherSDR...** | See [Contributing Guide](./contributing-guide.md). |
 | **Support & Diagnostics...** | Logging categories and support bundles. See [Support and Logging](./support-and-logging.md). |
 | **Slice Troubleshooting...** | A diagnostics window for slice, audio and display state. |
-| **Check for Updates...** | Checks for a newer release now and always reports the result, including a release you skipped. See [Updates](#updates). |
-| **Check for Updates Automatically** | On by default. Checks for a newer release at startup, at most once a day, and shows **UPDATE** in the title bar when there is one. Turning it off also removes the badge. Dimmed on store-managed installs (the Microsoft Store, or a Flatpak build), which update themselves. |
+| **Check for Updates...** | Opens the Updates window and checks again now. See [Updates](./updates.md). |
+| **Check for Updates Automatically** | On by default. Checks for a newer release at startup, at most once a day, and shows **UPDATE** in the title bar when there is one. The same setting as **Check daily** in the Updates window; turning it off also removes the badge. Dimmed on store-managed installs (the Microsoft Store, or a Flatpak build), which update themselves. |
 | **About AetherSDR** | The About window (below). |
 
 ## The Title Bar
@@ -153,7 +154,7 @@ The main window has one 52 px title bar. From left to right:
 |------|-----------|
 | **☰** | The application menu (Windows and Linux only). |
 | **AetherSDR** brand mark | Drag the bar here to move the window. |
-| **UPDATE** badge | Shown when a newer AetherSDR release is available; hover names it, click opens the update window. See [Updates](#updates). |
+| **UPDATE** badge | Shown when a newer AetherSDR release is available; hover names it, click opens the Updates window. See [Updates](./updates.md). |
 | **Radio tabs** | One tab per known radio (LAN, SmartLink or routed). See below. |
 | **EXPERIMENTAL** badge | Shown when the connected radio family's support is experimental. |
 | **multiFLEX** | Appears when other clients share the radio; hover lists them, click opens the dashboard. |
@@ -167,15 +168,7 @@ The main window has one 52 px title bar. From left to right:
 
 ### Updates
 
-AetherSDR checks GitHub for a newer release about 15 seconds after it starts, no more than once a day, counting a check that could not reach GitHub. The check never downloads or installs anything. When a newer release exists, the **UPDATE** badge appears after the **AetherSDR** brand mark; nothing pops up, and a check that finds nothing or cannot reach GitHub stays silent. The badge stays on across restarts until you update or skip that release, even on a day the check does not run. **Help → Check for Updates Automatically** turns off both the check and the badge; turning it back on brings the badge back for a release AetherSDR already knows about.
-
-Click **UPDATE**, or use **Help → Check for Updates...**, for the update window:
-
-- **View Latest Release** opens the release page in your browser, where you download the installer for your platform.
-- **Skip This Version** hides the badge for that release. **Help → Check for Updates...** still reports it, and the next release shows the badge again.
-- **Close** leaves the badge in place.
-
-On a store-managed install (the Microsoft Store, or a Flatpak build), the store updates AetherSDR, so there is no automatic check and no badge, even after a manual check. **Help → Check for Updates...** still works: its window says where the update comes from and offers no **Skip This Version**.
+The **UPDATE** badge appears when a newer AetherSDR release is available; click it for the Updates window. See [Updates](./updates.md).
 
 ### Radio tabs
 

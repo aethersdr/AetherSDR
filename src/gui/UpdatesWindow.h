@@ -1,0 +1,72 @@
+#pragma once
+
+#include "gui/CanonWindow.h"
+
+#include <QPointer>
+#include <QString>
+
+class QCheckBox;
+class QFrame;
+class QLabel;
+class QPushButton;
+class QVBoxLayout;
+
+namespace AetherSDR {
+
+class FlowLayout;
+class UpdateChecker;
+class UpdateStage;
+
+// File → Update...: what AetherSDR release is newest, what is in it, and the
+// download built for this computer (RFC #5304). Made to make an update worth
+// installing, after aethersdr.com/experience; the stage's extra motion is the
+// style guide's one exception. Everything it shows comes from UpdateChecker:
+// the parsed version, and the release's tagline, chapters and highlights as
+// plain text. Opening it with nothing known starts a check.
+class UpdatesWindow : public CanonWindow {
+    Q_OBJECT
+
+public:
+    explicit UpdatesWindow(UpdateChecker* checker, QWidget* parent = nullptr);
+
+    // Mirrors Help → Check for Updates Automatically.
+    void setAutomaticCheck(bool on);
+
+signals:
+    // The badge the title bar should show now (empty clears it).
+    void badgeChanged(const QString& version);
+    // The window's Check daily box changed; MainWindow keeps the Help menu
+    // toggle and the settings in step.
+    void automaticCheckToggled(bool on);
+
+private:
+    enum class View { Checking, Available, Current, Failed };
+
+    void refresh();
+    View currentView() const;
+    void rebuildRelease();
+    void openDownload();
+
+    QPointer<UpdateChecker> m_checker;
+    bool m_failed{false};
+
+    UpdateStage* m_stage{nullptr};
+    QLabel*      m_eyebrow{nullptr};
+    QWidget*     m_version{nullptr};
+    QLabel*      m_tagline{nullptr};
+    QLabel*      m_note{nullptr};
+    QLabel*      m_chaptersTitle{nullptr};
+    QWidget*     m_chips{nullptr};
+    FlowLayout*  m_chipsLayout{nullptr};
+    QLabel*      m_highlightsTitle{nullptr};
+    QWidget*     m_cards{nullptr};
+    QPushButton* m_get{nullptr};
+    QPushButton* m_notes{nullptr};
+    QPushButton* m_skip{nullptr};
+    QPushButton* m_checkNow{nullptr};
+    QLabel*      m_footnote{nullptr};
+    QCheckBox*   m_autoCheck{nullptr};
+    QString      m_builtFor;   // the release the chips and cards were built from
+};
+
+} // namespace AetherSDR
