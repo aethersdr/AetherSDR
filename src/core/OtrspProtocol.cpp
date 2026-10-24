@@ -5,6 +5,7 @@
 #include "models/TransmitModel.h"
 
 #include <utility>
+#include <initializer_list>
 
 namespace AetherSDR {
 
@@ -12,7 +13,25 @@ OtrspProtocol::OtrspProtocol(RadioModel* model, int radio1Slice, int radio2Slice
     : m_model(model)
     , m_radio1Slice(radio1Slice)
     , m_radio2Slice(radio2Slice)
-{}
+{
+    m_txDeadline.setSingleShot(true);
+    m_txDeadline.setTimerType(Qt::PreciseTimer);
+    m_txDeadline.setInterval(250);
+    connect(&m_txDeadline, &QTimer::timeout, this, [this] {
+        qCWarning(lcCat) << "OTRSP: TX focus confirmation timed out";
+        finishTx(m_txRevision);
+    });
+    if (model) {
+        connect(model, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+            if (!connected) { cancelPending(); }
+        });
+        connect(model, &RadioModel::backendRebuilt, this, &OtrspProtocol::cancelPending);
+        connect(model, &RadioModel::sliceRemoved, this, [this](int id) {
+            if (id == m_radio1Slice || id == m_radio2Slice) { cancelPending(); }
+        });
+        connect(model, &QObject::destroyed, this, &OtrspProtocol::cancelPending);
+    }
+}
 
 QByteArray OtrspProtocol::processData(const QByteArray& data)
 {
@@ -25,7 +44,15 @@ QByteArray OtrspProtocol::processData(const QByteArray& data)
             const QByteArray command = std::exchange(m_buffer, {});
             const bool discarding = std::exchange(m_discarding, false);
             if (!discarding && !command.isEmpty()) {
-                response += processCommand(command);
+                if (m_queuedBytes + command.size() > 4096) {
+                    qCWarning(lcCat) << "OTRSP: closing session with excessive pending commands";
+                    close();
+                    emit transportClosed();
+                    break;
+                }
+                m_commands.enqueue(command);
+                m_queuedBytes += command.size();
+                response += drainCommands();
             }
         } else if (ch == '\n' && m_buffer.isEmpty() && !m_discarding) {
             // Accept CRLF clients without treating LF as another command.
@@ -48,6 +75,61 @@ void OtrspProtocol::close()
 {
     m_closed = true;
     m_buffer.clear();
+    m_commands.clear();
+    m_queuedBytes = 0;
+    m_waitingForTx = false;
+    m_txDeadline.stop();
+    for (const auto& connection : std::exchange(m_txConnections, {})) {
+        disconnect(connection);
+    }
+    m_txTarget.clear();
+}
+
+QByteArray OtrspProtocol::drainCommands()
+{
+    if (m_processing) { return {}; }
+    m_processing = true;
+    QByteArray response;
+    while (!m_closed && !m_waitingForTx && !m_commands.isEmpty()) {
+        const QByteArray command = m_commands.dequeue();
+        m_queuedBytes -= command.size();
+        response += processCommand(command);
+    }
+    m_processing = false;
+    return response;
+}
+
+void OtrspProtocol::finishTx(quint64 revision)
+{
+    // Queued setters may stop the transport and release its last protocol owner.
+    const auto keepAlive = weak_from_this().lock();
+    if (!m_waitingForTx || revision != m_txRevision) { return; }
+    m_waitingForTx = false;
+    m_txDeadline.stop();
+    for (const auto& connection : std::exchange(m_txConnections, {})) {
+        disconnect(connection);
+    }
+    m_txTarget.clear();
+    if (!m_processing) {
+        const QByteArray response = drainCommands();
+        if (!response.isEmpty()) { emit responseReady(response); }
+    }
+}
+
+void OtrspProtocol::observeTx()
+{
+    if (m_waitingForTx && m_txTarget && m_txTarget == radioSlice(m_txNumber)
+        && transmitFocus() == QByteArray("TX") + char('0' + m_txNumber) + '\r') {
+        finishTx(m_txRevision);
+    }
+}
+
+void OtrspProtocol::cancelPending()
+{
+    if (!m_waitingForTx) { return; }
+    qCWarning(lcCat) << "OTRSP: cancelling pending commands after radio/slice change";
+    close();
+    emit transportClosed();
 }
 
 SliceModel* OtrspProtocol::radioSlice(int number) const
@@ -116,7 +198,7 @@ QByteArray OtrspProtocol::processCommand(const QByteArray& command)
             return response;
         }
         if (command == "?RX" || command == "?TX") {
-            qCWarning(lcCat) << "OTRSP: focus unavailable for query" << command;
+            qCDebug(lcCat) << "OTRSP: focus unavailable for query" << command;
         }
         // Unknown queries (including the bare '?' ping) are echoed by OTRSP.
         return command + '\r';
@@ -143,7 +225,38 @@ QByteArray OtrspProtocol::processCommand(const QByteArray& command)
             qCWarning(lcCat) << "OTRSP: refusing TX focus change while transmitting";
             return {};
         }
-        target->setTxSlice(true);
+        m_txTarget = target;
+        m_txNumber = number;
+        m_waitingForTx = true;
+        const quint64 revision = ++m_txRevision;
+        for (int radio : {1, 2}) {
+            if (SliceModel* slice = radioSlice(radio)) {
+                m_txConnections.append(connect(slice, &SliceModel::txSliceChanged,
+                                               this, &OtrspProtocol::observeTx));
+                m_txConnections.append(connect(slice, &QObject::destroyed,
+                                               this, &OtrspProtocol::cancelPending));
+            }
+        }
+        m_txDeadline.start();
+        // Use the typed request's dispatch/reply result; never claim the requested
+        // focus before the radio reports it. Later commands remain in wire order.
+        const ReceiveDispatch result = m_model->requestTxSlice(target, true, this,
+            [this, revision](const RadioControlReply& reply) {
+                if (revision != m_txRevision || !m_waitingForTx) { return; }
+                if (reply.kind == RadioControlReply::Kind::Cancelled) {
+                    cancelPending();
+                } else if (reply.kind != RadioControlReply::Kind::Accepted) {
+                    qCWarning(lcCat) << "OTRSP: TX focus request failed:" << reply.message;
+                    finishTx(revision);
+                } else {
+                    observeTx();
+                }
+            });
+        if (result == ReceiveDispatch::Unsupported) {
+            finishTx(revision);
+        } else {
+            observeTx();
+        }
         return {};
     }
 

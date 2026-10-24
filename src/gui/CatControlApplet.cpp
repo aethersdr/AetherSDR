@@ -363,7 +363,7 @@ void CatControlApplet::buildTableRows()
         // Port edit
         row.portEdit = new QLineEdit;
         row.portEdit->setObjectName(QStringLiteral("catPort%1Port").arg(i));
-        row.portEdit->setAccessibleName(tr("CAT TCP port"));
+        row.portEdit->setAccessibleName(tr("CAT port %1 TCP port").arg(QChar('A' + i)));
         ThemeManager::instance().applyStyleSheet(row.portEdit, kPortEdit);
         row.portEdit->setFixedWidth(50);
         row.portEdit->setAlignment(Qt::AlignCenter);
@@ -384,13 +384,13 @@ void CatControlApplet::buildTableRows()
         row.dialectCombo->addItem("TS-2000",  static_cast<int>(CatDialect::TS2000));
         row.dialectCombo->addItem("Flex",     static_cast<int>(CatDialect::FlexCAT));
         row.dialectCombo->addItem("OTRSP",    static_cast<int>(CatDialect::OTRSP));
-        row.dialectCombo->setAccessibleName(tr("CAT dialect"));
+        row.dialectCombo->setAccessibleName(tr("CAT port %1 dialect").arg(QChar('A' + i)));
         {
             QString d = settings.value(prefix + "Dialect", "Rigctld").toString();
-            int idx = (d == "TS2000") ? 1 : (d == "FlexCAT") ? 2 : (d == "OTRSP") ? 3 : 0;
+            const int idx = row.dialectCombo->findData(static_cast<int>(dialectFromKey(d)));
             QSignalBlocker b(row.dialectCombo);
             row.dialectCombo->setCurrentIndex(idx);
-            if (d == "OTRSP" && !settings.contains(prefix + "Port")) {
+            if (d == "OTRSP" && row.portEdit->text().isEmpty()) {
                 row.portEdit->setText(QString::number(CatPort::kOtrspDefaultPort));
             }
         }
@@ -462,18 +462,19 @@ void CatControlApplet::buildTableRows()
 
         // Clients label
         row.clientLabel = new QLabel("—");
+        row.clientLabel->setObjectName(QStringLiteral("catPort%1Status").arg(i));
+        row.clientLabel->setAccessibleName(tr("CAT port %1 status").arg(QChar('A' + i)));
         ThemeManager::instance().applyStyleSheet(row.clientLabel, kDimLabel);
         row.clientLabel->setFixedWidth(48);
         row.clientLabel->setAlignment(Qt::AlignCenter);
         if (m_ports[i]) {
             auto updateClients = [this, i]() {
                 if (i >= m_rows.size()) return;
-                int n = m_ports[i]->clientCount();
-                m_rows[i].clientLabel->setText(
-                    m_ports[i]->isRunning() ? QString::number(n) : "—");
+                updateRowLocked(i);
             };
             updateClients();  // initialize — signal alone won't fire until first connect/disconnect
             connect(m_ports[i], &CatPort::clientCountChanged, this, updateClients);
+            connect(m_ports[i], &CatPort::stateChanged, this, updateClients);
         }
 
         // Grid layout — data rows start at 1 (row 0 is the header)
@@ -513,22 +514,22 @@ void CatControlApplet::buildTableRows()
                         r.portEdit->setText(QString::number(CatPort::kOtrspDefaultPort));
                     }
                     restoreVfoBForDialect(capturedI);  // switch to dual-VFO → restore saved VFO B
-                    updateRowLocked(capturedI);        // single-VFO → force "—" + disable selectors
                     applyRowToSettings(capturedI);
+                    updateRowLocked(capturedI);
                     emit configChanged();
                 });
 
         connect(row.vfoACombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this, capturedI](int) {
-                    updateRowLocked(capturedI);
                     applyRowToSettings(capturedI);
+                    updateRowLocked(capturedI);
                     emit configChanged();
                 });
 
         connect(row.vfoBCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this, capturedI](int) {
-                    updateRowLocked(capturedI);
                     applyRowToSettings(capturedI);
+                    updateRowLocked(capturedI);
                     emit configChanged();
                 });
 
@@ -572,22 +573,23 @@ void CatControlApplet::updateRowLocked(int row)
 
     r.enableCheck->setEnabled(hasPort || !r.enableCheck->isChecked());
     const bool otrsp = dialect == CatDialect::OTRSP;
-    const bool validMapping = r.vfoACombo->currentData().toInt() >= 0
-        && r.vfoBCombo->currentData().toInt() >= 0
-        && r.vfoACombo->currentData() != r.vfoBCombo->currentData();
+    const QString prefix = QString("CatPort_%1_").arg(row);
+    const auto& settings = AppSettings::instance();
+    const bool validMapping = validOtrspMapping(settings.value(prefix + "VfoA", "0").toInt(),
+        settings.value(prefix + "VfoB", "-1").toInt(), m_maxSlices);
     const QString enableDescription = otrsp && !validMapping
-        ? tr("OTRSP requires two distinct slices: VFO A is Radio 1 and VFO B is Radio 2.")
+        ? tr("OTRSP requires two distinct available slices: VFO A is Radio 1 and VFO B is Radio 2. Saved assignments are preserved.")
         : tr("Enable this CAT port");
     if (otrsp && !validMapping && !r.enableCheck->isChecked()) {
         r.enableCheck->setEnabled(false);
     }
     r.enableCheck->setToolTip(enableDescription);
-    r.enableCheck->setAccessibleName(tr("Enable CAT port"));
+    r.enableCheck->setAccessibleName(tr("Enable CAT port %1").arg(QChar('A' + row)));
     r.enableCheck->setAccessibleDescription(enableDescription);
     r.vfoACombo->setToolTip(otrsp ? tr("OTRSP Radio 1 slice") : tr("VFO A slice"));
     r.vfoBCombo->setToolTip(otrsp ? tr("OTRSP Radio 2 slice") : tr("VFO B slice"));
-    r.vfoACombo->setAccessibleName(r.vfoACombo->toolTip());
-    r.vfoBCombo->setAccessibleName(r.vfoBCombo->toolTip());
+    r.vfoACombo->setAccessibleName(tr("CAT port %1: %2").arg(QChar('A' + row)).arg(r.vfoACombo->toolTip()));
+    r.vfoBCombo->setAccessibleName(tr("CAT port %1: %2").arg(QChar('A' + row)).arg(r.vfoBCombo->toolTip()));
     const QString lockedReason = tr("Disable this CAT port before changing its slice assignment.");
     r.vfoACombo->setAccessibleDescription(locked ? lockedReason : r.vfoACombo->toolTip());
     r.vfoBCombo->setAccessibleDescription(!supportsVfoB
@@ -597,6 +599,14 @@ void CatControlApplet::updateRowLocked(int row)
     r.dialectCombo->setEnabled(!locked);
     r.vfoACombo->setEnabled(!locked);
     r.vfoBCombo->setEnabled(!locked && supportsVfoB);
+    const QString error = m_ports[row] ? m_ports[row]->errorString() : QString();
+    const QString status = !error.isEmpty() ? error
+        : otrsp && !validMapping && r.enableCheck->isChecked() ? enableDescription : QString();
+    r.clientLabel->setText(!status.isEmpty() ? tr("Error")
+        : m_ports[row] && m_ports[row]->isRunning() ? QString::number(m_ports[row]->clientCount())
+                                                 : QStringLiteral("—"));
+    r.clientLabel->setToolTip(status);
+    r.clientLabel->setAccessibleDescription(status);
 }
 
 // Restore the row's VFO B selector to the saved value when the (new) dialect
@@ -633,11 +643,7 @@ void CatControlApplet::applyRowToSettings(int row)
     s.setValue(prefix + "Port",    r.portEdit->text());
 
     const auto dialect = static_cast<CatDialect>(r.dialectCombo->currentData().toInt());
-    const QString dialectKey = (dialect == CatDialect::TS2000)  ? "TS2000"
-                             : (dialect == CatDialect::FlexCAT) ? "FlexCAT"
-                             : (dialect == CatDialect::OTRSP)   ? "OTRSP"
-                             :                                    "Rigctld";
-    s.setValue(prefix + "Dialect", dialectKey);
+    s.setValue(prefix + "Dialect", dialectKey(dialect));
     // VFO A always applies; persistVfo preserves a saved slice the combo can't
     // currently display (smaller radio) instead of clobbering it.
     persistVfo(s, prefix + "VfoA", r.vfoACombo, 0);

@@ -8,6 +8,7 @@
 #include <QCoreApplication>
 #include <QSignalSpy>
 #include <QStringList>
+#include <QTest>
 
 #include <cstdio>
 #include <memory>
@@ -42,6 +43,7 @@ struct Fixture {
     QStringList commands;
     RadioModel radio;
     ConnectedBackend* backend;
+    RadioSetupCompletion txReply;
 
     Fixture()
     {
@@ -49,8 +51,9 @@ struct Fixture {
         backend = owned.get();
         backend->setCommandSink([this](const QString& command) { commands.append(command); });
         backend->setSliceCommandSink([this](const QString& command) { commands.append(command); });
-        backend->setSetupCommandSink([this](const QString& command, const RadioSetupCompletion&) {
+        backend->setSetupCommandSink([this](const QString& command, const RadioSetupCompletion& reply) {
             commands.append(command);
+            txReply = reply;
             return true;
         });
         radio.setBackendForTest(std::move(owned), QStringLiteral("otrsp-test"));
@@ -189,6 +192,87 @@ void framingAndQueries()
     check(first.processData("?RX\r") == "?RX\r", "unrepresentable audio state is not invented");
 }
 
+void orderedTransmitQueries()
+{
+    Fixture f;
+    OtrspProtocol protocol(&f.radio, 2, 5);
+    QSignalSpy replies(&protocol, &OtrspProtocol::responseReady);
+    check(protocol.processData("?NAME\rTX2\r?TX\r?\rTX1\r?TX\r") == "NAMEAetherSDR\r",
+          "responses before a TX request remain immediate");
+    check(f.commands == QStringList{"slice set 5 tx=1"} && replies.isEmpty(),
+          "pipelined commands stop behind unconfirmed TX selection");
+    check(protocol.processData("?NAME\r").isEmpty(),
+          "later input cannot overtake a pending query");
+    OtrspProtocol otherClient(&f.radio, 2, 5);
+    check(otherClient.processData("?NAME\r?TX\r") == "NAMEAetherSDR\rTX1\r",
+          "a pending request does not block unrelated clients");
+    f.txReply({RadioControlReply::Kind::Accepted});
+    check(replies.isEmpty(), "command acknowledgement is not observed focus");
+    f.observeTx(5);
+    check(replies.size() == 1 && replies.first().first().toByteArray() == "TX2\r?\r",
+          "observed TX2 releases ordered replies but waits behind the next TX request");
+    check(f.commands == QStringList{"slice set 5 tx=1", "slice set 2 tx=1"},
+          "next pipelined TX setter waits for the first observation");
+    f.observeTx(2);
+    check(replies.size() == 2 && replies.last().first().toByteArray() == "TX1\rNAMEAetherSDR\r",
+          "remaining queries reply from confirmed state in original wire order");
+    check(!f.radio.transmitModel().isTransmitting(), "ordered TX queries never key RF");
+
+    Fixture timeout;
+    OtrspProtocol expires(&timeout.radio, 2, 5);
+    QSignalSpy expired(&expires, &OtrspProtocol::responseReady);
+    check(expires.processData("TX2\r?TX\r?\r").isEmpty(), "held status produces no premature reply");
+    check(expired.wait(1000), "pending focus wait is bounded by a timer");
+    check(expired.size() == 1 && expired.first().first().toByteArray() == "TX1\r?\r",
+          "timeout reports observed old focus, never requested focus");
+
+    Fixture failed;
+    OtrspProtocol rejected(&failed.radio, 2, 5);
+    QSignalSpy failures(&rejected, &OtrspProtocol::responseReady);
+    rejected.processData("TX2\r?TX\r?NAME\r");
+    failed.txReply({RadioControlReply::Kind::Refused, 1, QStringLiteral("test refusal")});
+    check(failures.size() == 1
+              && failures.first().first().toByteArray() == "TX1\rNAMEAetherSDR\r",
+          "failed dispatch releases queries using observed state without waiting for timeout");
+
+    Fixture unsupported;
+    unsupported.backend->setSetupCommandSink(
+        [](const QString&, const RadioSetupCompletion&) { return false; });
+    OtrspProtocol refused(&unsupported.radio, 2, 5);
+    check(refused.processData("TX2\r?TX\r?NAME\r") == "TX1\rNAMEAetherSDR\r",
+          "synchronous dispatch refusal does not leave queries pending");
+}
+
+void cancelledTransmitQueries()
+{
+    for (int cause = 0; cause < 5; ++cause) {
+        Fixture f;
+        OtrspProtocol protocol(&f.radio, 2, 5);
+        QSignalSpy replies(&protocol, &OtrspProtocol::responseReady);
+        QSignalSpy closed(&protocol, &OtrspProtocol::transportClosed);
+        protocol.processData("TX2\r?TX\rTX1\r?NAME\r");
+        if (cause == 0) {
+            protocol.close();
+        } else if (cause == 1) {
+            emit f.backend->sliceRemoved(5);
+        } else if (cause == 2) {
+            f.backend->connected = false;
+            emit f.radio.connectionStateChanged(false);
+        } else if (cause == 3) {
+            emit f.radio.backendRebuilt();
+        } else {
+            protocol.processData(QByteArray(4100, '?').replace("?", "?\r"));
+        }
+        f.txReply({RadioControlReply::Kind::Failed, 1, QStringLiteral("late reply")});
+        QTest::qWait(300);
+        check(replies.isEmpty() && protocol.processData("?NAME\r").isEmpty(),
+              "close/removal/disconnect/session change/overflow cancels all pending work");
+        check(f.commands == QStringList{"slice set 5 tx=1"},
+              "cancelled queues never send remaining TX setters");
+        check(closed.size() == (cause == 0 ? 0 : 1), "transport is notified when pending work is cancelled");
+    }
+}
+
 void invalidInput()
 {
     Fixture f;
@@ -255,6 +339,8 @@ int main(int argc, char** argv)
     receiveModes();
     transmitSelection();
     framingAndQueries();
+    orderedTransmitQueries();
+    cancelledTransmitQueries();
     invalidInput();
     sliceRemovedDuringDispatch();
     std::printf("OTRSP protocol: %d failures\n", failures);

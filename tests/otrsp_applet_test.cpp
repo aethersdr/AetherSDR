@@ -7,6 +7,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QLineEdit>
+#include <QLabel>
 #include <QTest>
 
 using namespace AetherSDR;
@@ -15,6 +16,71 @@ class OtrspAppletTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase()
+    {
+        AppSettings::instance().load();
+    }
+
+    void validatesSavedMappingsAndReportsFailures()
+    {
+        AppSettings& settings = AppSettings::instance();
+        settings.setValue("CatEnabled", "False");
+        settings.setValue("CatPort_0_Port", "");
+        settings.setValue("CatPort_0_Dialect", "OTRSP");
+        settings.setValue("CatPort_0_VfoA", "2");
+        settings.setValue("CatPort_0_VfoB", "1");
+        settings.setValue("CatPort_0_Enabled", "False");
+        settings.save();
+        CatPort port(nullptr);
+        CatPort second(nullptr);
+        CatPort* ports[] = {&port, &second};
+        CatControlApplet applet;
+        applet.setPorts(ports, 2);
+        applet.setMaxSlices(2);
+        applet.setFloating(true);
+        auto* enabled = applet.findChild<QCheckBox*>("catPort0Enabled");
+        auto* first = applet.findChild<QComboBox*>("catPort0VfoA");
+        auto* other = applet.findChild<QComboBox*>("catPort0VfoB");
+        auto* number = applet.findChild<QLineEdit*>("catPort0Port");
+        auto* status = applet.findChild<QLabel*>("catPort0Status");
+        QVERIFY(enabled && first && other && number && status);
+        QCOMPARE(number->text(), QStringLiteral("60000"));
+        QCOMPARE(first->currentData().toInt(), 0);
+        QCOMPARE(other->currentData().toInt(), 1);
+        QVERIFY(!enabled->isEnabled());
+        QVERIFY(enabled->accessibleDescription().contains("available"));
+        QCOMPARE(settings.value("CatPort_0_VfoA").toInt(), 2);
+        applet.setMaxSlices(8);
+        QVERIFY(enabled->isEnabled());
+        enabled->setChecked(true);
+        QVERIFY(first->isEnabled()); // master is off; configuration remains editable
+        other->setCurrentIndex(other->findData(CatPort::kVfoNone));
+        QCOMPARE(status->text(), QStringLiteral("Error"));
+        QVERIFY(status->accessibleDescription().contains("two distinct"));
+        QVERIFY(enabled->isEnabled());
+        enabled->setChecked(false);
+        other->setCurrentIndex(other->findData(1));
+
+        port.setDialect(CatDialect::OTRSP);
+        port.setVfoA(0);
+        port.setVfoB(0);
+        QVERIFY(!port.start(0)); // rejected before opening any socket
+        QCOMPARE(status->text(), QStringLiteral("Error"));
+        QCOMPARE(status->accessibleDescription(), port.errorString());
+        port.stop();
+        QVERIFY(status->accessibleDescription().isEmpty());
+        for (const QString& suffix : {QStringLiteral("Enabled"), QStringLiteral("Port"),
+                                     QStringLiteral("Dialect"), QStringLiteral("VfoA"),
+                                     QStringLiteral("VfoB")}) {
+            QWidget* a = applet.findChild<QWidget*>("catPort0" + suffix);
+            QWidget* b = applet.findChild<QWidget*>("catPort1" + suffix);
+            QVERIFY(a && b);
+            QVERIFY(a->accessibleName().contains("port A"));
+            QVERIFY(b->accessibleName().contains("port B"));
+            QVERIFY(a->accessibleName() != b->accessibleName());
+        }
+    }
+
     void restoresMappingsAfterReceiverCountChanges()
     {
         AppSettings& settings = AppSettings::instance();
@@ -25,6 +91,7 @@ private slots:
         settings.setValue("CatPort_0_VfoB", "5");
         settings.setValue("CatPort_0_Enabled", "False");
         settings.save();
+        settings.load();
         CatPort port(nullptr);
         CatPort* ports[] = {&port};
         CatControlApplet applet;
@@ -101,8 +168,8 @@ private slots:
             QVERIFY(!enabled->isEnabled());
             vfoB->setCurrentIndex(vfoB->findData(5));
             QVERIFY(enabled->isEnabled());
-            QCOMPARE(vfoA->accessibleName(), QStringLiteral("OTRSP Radio 1 slice"));
-            QCOMPARE(vfoB->accessibleName(), QStringLiteral("OTRSP Radio 2 slice"));
+            QCOMPARE(vfoA->accessibleName(), QStringLiteral("CAT port A: OTRSP Radio 1 slice"));
+            QCOMPARE(vfoB->accessibleName(), QStringLiteral("CAT port A: OTRSP Radio 2 slice"));
             number->setText("60001");
             QVERIFY(QMetaObject::invokeMethod(number, "editingFinished", Qt::DirectConnection));
             QCOMPARE(settings.value("CatPort_0_Port").toInt(), 60001);

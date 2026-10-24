@@ -6,8 +6,10 @@
 #include "models/TransmitModel.h"
 
 #include <QCoreApplication>
+#include <QPointer>
 #include <QSignalSpy>
 #include <QTcpSocket>
+#include <QTcpServer>
 #include <QTest>
 
 #include <memory>
@@ -35,6 +37,41 @@ private:
     bool m_bindSkipped = false;
 
 private slots:
+    void dialectKeys()
+    {
+        for (CatDialect dialect : {CatDialect::Rigctld, CatDialect::TS2000,
+                                   CatDialect::FlexCAT, CatDialect::OTRSP}) {
+            QCOMPARE(dialectFromKey(dialectKey(dialect)), dialect);
+        }
+        QCOMPARE(dialectFromKey(QStringLiteral("unknown")), CatDialect::Rigctld);
+    }
+
+    void bindFailureReported()
+    {
+        QTcpServer occupied;
+        if (!occupied.listen(QHostAddress::Any, 0)) {
+            m_bindSkipped = true;
+            QSKIP("Cannot bind ephemeral TCP port");
+        }
+        CatPort port(nullptr);
+        port.setDialect(CatDialect::OTRSP);
+        port.setVfoA(0);
+        port.setVfoB(1);
+        QSignalSpy state(&port, &CatPort::stateChanged);
+        QVERIFY(!port.start(occupied.serverPort()));
+        QVERIFY(!port.errorString().isEmpty());
+        QVERIFY(!port.isRunning());
+        QCOMPARE(state.size(), 1);
+        occupied.close();
+        if (!port.start(0)) {
+            m_bindSkipped = true;
+            QSKIP("Cannot bind ephemeral TCP port after releasing occupied listener");
+        }
+        QVERIFY(port.errorString().isEmpty());
+        QVERIFY(port.isRunning());
+        port.stop();
+    }
+
     void connectionLifecycle()
     {
         CatPort port(nullptr);
@@ -95,10 +132,21 @@ private slots:
         port.setVfoB(0);
         QVERIFY(!port.start(0));
         QVERIFY(!port.isRunning());
+        port.setVfoB(8);
+        QVERIFY(!port.start(0));
+        QVERIFY(!port.errorString().isEmpty());
+    }
+
+    void focusDispatch_data()
+    {
+        QTest::addColumn<bool>("disconnectFirst");
+        QTest::newRow("stop-during-dispatch") << false;
+        QTest::newRow("disconnect-then-stop-during-dispatch") << true;
     }
 
     void focusDispatch()
     {
+        QFETCH(bool, disconnectFirst);
         QStringList commands;
         RadioModel radio;
         auto owned = std::make_unique<ConnectedOtrspBackend>();
@@ -133,7 +181,7 @@ private slots:
         QTcpSocket client;
         client.connectToHost(QHostAddress::LocalHost, port.port());
         QTRY_COMPARE_WITH_TIMEOUT(port.clientCount(), 1, 2000);
-        client.write("RX2R\rTX1\r");
+        client.write("RX2R\rTX1\r?TX\r?NAME\r");
         QTRY_VERIFY_WITH_TIMEOUT(commands.contains("slice set 6 tx=1"), 2000);
         QVERIFY(commands.contains("slice set 6 audio_pan=100"));
         QVERIFY(commands.contains("slice set 3 audio_pan=0"));
@@ -141,14 +189,32 @@ private slots:
         QVERIFY(commands.contains("slice set 3 audio_mute=0"));
         QVERIFY(commands.contains("slice set 3 active=1"));
         QCOMPARE(commands.size(), 6);
+        QCOMPARE(client.bytesAvailable(), 0);
+        SliceDelta oldTx;
+        oldTx.txSlice = false;
+        emit backend->sliceChanged(3, oldTx);
+        QCOMPARE(client.bytesAvailable(), 0);
+        SliceDelta newTx;
+        newTx.txSlice = true;
+        emit backend->sliceChanged(6, newTx);
+        QTRY_COMPARE_WITH_TIMEOUT(client.bytesAvailable(), 18, 2000);
+        QCOMPARE(client.readAll(), QByteArray("TX1\rNAMEAetherSDR\r"));
         QVERIFY(!radio.transmitModel().isTransmitting());
         commands.clear();
-        QObject::connect(radio.slice(6), &SliceModel::audioPanChanged, &port,
-                         [&](int) { port.stop(); });
+        const QPointer<QTcpSocket> serverSocket = port.findChild<QTcpSocket*>();
+        QVERIFY(serverSocket);
+        bool socketSurvivedStop = false;
+        QObject::connect(radio.slice(6), &SliceModel::audioPanChanged, &port, [&](int) {
+            if (disconnectFirst) { serverSocket->abort(); }
+            port.stop();
+            socketSurvivedStop = serverSocket && !serverSocket->parent();
+        });
         client.write("RX1S\rTX2\r");
         QTRY_VERIFY_WITH_TIMEOUT(!port.isRunning(), 2000);
         QCOMPARE(commands, QStringList{"slice set 6 audio_pan=0"});
         QCOMPARE(port.clientCount(), 0);
+        QVERIFY(socketSurvivedStop);
+        QTRY_VERIFY_WITH_TIMEOUT(serverSocket.isNull(), 2000);
         QTRY_COMPARE_WITH_TIMEOUT(client.state(), QAbstractSocket::UnconnectedState, 2000);
     }
 };

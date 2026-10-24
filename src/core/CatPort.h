@@ -31,6 +31,31 @@ enum class CatDialect {
 // Single definition so the config UI — and any future config surface — agrees.
 inline bool dialectSupportsVfoB(CatDialect d) { return d != CatDialect::Rigctld; }
 
+inline CatDialect dialectFromKey(const QString& key)
+{
+    if (key == "TS2000") { return CatDialect::TS2000; }
+    if (key == "FlexCAT") { return CatDialect::FlexCAT; }
+    if (key == "OTRSP") { return CatDialect::OTRSP; }
+    return CatDialect::Rigctld;
+}
+
+inline QString dialectKey(CatDialect dialect)
+{
+    switch (dialect) {
+    case CatDialect::TS2000: return QStringLiteral("TS2000");
+    case CatDialect::FlexCAT: return QStringLiteral("FlexCAT");
+    case CatDialect::OTRSP: return QStringLiteral("OTRSP");
+    case CatDialect::Rigctld: return QStringLiteral("Rigctld");
+    }
+    return QStringLiteral("Rigctld");
+}
+
+inline bool validOtrspMapping(int first, int second, int receiverCount)
+{
+    return first >= 0 && second >= 0 && first != second
+        && first < receiverCount && second < receiverCount;
+}
+
 // Unified CAT port: one TCP server + one PTY (non-Windows), any dialect.
 // Replaces the separate RigctlServer / SmartCatServer / RigctlPty hierarchy.
 //
@@ -53,6 +78,7 @@ public:
     quint16 port() const;
     int     clientCount() const;
     QString ptyPath() const;  // empty on Windows or if PTY not running
+    QString errorString() const { return m_error; }
 
     // Config (effective only when stopped)
     void       setDialect(CatDialect d) { m_dialect = d; }
@@ -71,6 +97,7 @@ public:
 signals:
     void clientCountChanged(int count);
     void ptyPathChanged(const QString& path);
+    void stateChanged();
 
 private slots:
     void onNewConnection();
@@ -88,6 +115,8 @@ private slots:
 private:
     void startPty();
     void stopPty();
+    static void writeOtrspResponse(QTcpSocket* socket, const QByteArray& response);
+    void writeOtrspPtyResponse(const QByteArray& response);
 
     // Rigctld client state (inline, mirrors former RigctlServer)
     struct RigctlClient {
@@ -105,6 +134,7 @@ private:
     int                     m_vfoA{0};
     int                     m_vfoB{kVfoNone};
     QString                 m_symlinkPath;
+    QString                 m_error;
 
     QTcpServer*             m_tcpServer{nullptr};
     QList<RigctlClient>     m_rigctlClients;

@@ -26,9 +26,11 @@ CAT has its own **CAT Control** applet (applet-tray button **CAT**, Integration 
 | **VFO A** | The slice this port controls as VFO A; OTRSP Radio 1. |
 | **VFO B** | The slice used as VFO B; OTRSP Radio 2 (dual-VFO dialects only; see [Choosing a dialect](#choosing-a-dialect)). |
 | **PTY** | The virtual serial port path (Linux and macOS only). Right-click → **Copy PTY Name**. |
-| **Clients** | Number of programs connected to the port, or "—" when it is stopped. |
+| **Clients** | Number of programs connected to the port, or "—" when it is stopped. **Error** means the port could not start or its saved OTRSP assignments are unavailable; the tooltip and screen-reader description give the reason. |
 
 While a port is running, its port number, dialect and VFO selectors are locked. Untick the port to change them.
+
+If **Clients** shows **Error**, untick the row, correct its assignments or choose a TCP port that is not already in use, then tick it again. A ticked row does not guarantee that its listener started successfully.
 
 The VFO selectors list one letter per receiver the connected radio offers, up to **A–H**. Saved VFO A and VFO B assignments are restored after restarting AetherSDR and connecting to a radio. If you connect to a smaller radio, a slice choice it cannot show is kept and comes back when that slice exists again.
 
@@ -78,6 +80,10 @@ The slice assignments are configurable: Radio 1 does not have to be slice A, and
 `TX1` and `TX2` select the mapped transmitting slice. **They do not key the transmitter or generate RF.** PTT and CW keying remain separate, using your existing transmit mechanism. A TX-focus change is refused while the radio is transmitting.
 
 `?NAME` returns `NAMEAetherSDR`, `?RX` reads the current audio/focus mode, and `?TX` reads the current TX focus. Every response ends with `\r`. Queries use live model state, including changes made outside OTRSP, rather than the last command a client sent. If the mapped slices are unavailable or the live state cannot be represented by OTRSP, the query is echoed rather than reporting a fabricated focus.
+
+Commands remain in order on each connection. After a TX-focus request, subsequent commands and queries wait for the radio to confirm that focus, for a refusal, or for a 250 ms confirmation timeout. A `TX2\r?TX\r` burst therefore waits for confirmation before replying; on refusal or timeout the reply describes the observed focus, not the requested one. Closing the connection or losing a mapped slice or radio session cancels pending work. Excessive queued input closes the connection rather than growing memory without bound.
+
+If a virtual serial connection exceeds its output-queue limit, the whole CAT port stops instead of leaving TCP active with a missing PTY. Untick and re-enable that row after fixing the client that stopped reading.
 
 Unknown queries (including the bare `?` ping) are echoed, as specified by OTRSP. AUX outputs, relay switching, events, microphone routing, PTT commands and CW routing are not implemented. Unsupported non-query commands are ignored. Slice gains and unmapped slices are left unchanged; disconnecting a client or stopping the port does not restore older mute/pan or focus values.
 
