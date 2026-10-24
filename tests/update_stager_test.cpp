@@ -265,6 +265,14 @@ private slots:
                 p[QStringLiteral("full")] = f;
             });
         })));   // another release's download
+        QVERIFY(!parses(with([&](QJsonObject& o) {
+            payload0(o, [](QJsonObject& p) {
+                QJsonObject f = p[QStringLiteral("full")].toObject();
+                f[QStringLiteral("url")] = QStringLiteral(
+                    "https://github.com/aethersdr/AetherSDR/releases/download/v26.10.3/..%2F..%2Fx.zip");
+                p[QStringLiteral("full")] = f;
+            });
+        })));   // an encoded traversal: refused by the app's one download allowlist
         QVERIFY(!parses(with([&](QJsonObject& o) { op(o, 2, "window_log", 32); })));
         QVERIFY(!parses(with([&](QJsonObject& o) { op(o, 2, "path", QStringLiteral("../AetherSDR.exe")); })));
         QVERIFY(!parses(with([&](QJsonObject& o) { op(o, 2, "path", QStringLiteral("/etc/passwd")); })));
@@ -412,6 +420,74 @@ private slots:
         QVERIFY(problem.contains(QLatin1String("link")));
         QVERIFY(QDir(outside).isEmpty());
 #endif
+    }
+
+    void onlyFoldersTheRemovalsEmptiedAreRemoved()
+    {
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        QDir().mkpath(install + QStringLiteral("/logs"));   // empty in the install, not the update's
+        const UpdateManifest m = parsed(fixtureManifest());
+        const QString stage = tmp.filePath(QStringLiteral("s1"));
+        QString problem;
+        QVERIFY2(UpdateStager::applyPatch(install, bundleBytes(), m.payloads[0].patches[0],
+                                          m.payloads[0].files, stage, &problem),
+                 qPrintable(problem));
+        QVERIFY(QFileInfo(stage + QStringLiteral("/logs")).isDir());
+
+        // A patch of removals only still prunes what it emptied.
+        UpdateManifest::Patch removals;
+        removals.ops = {m.payloads[0].patches[0].ops[1]};   // remove plugins/old/x.dll
+        const QString stage2 = tmp.filePath(QStringLiteral("s2"));
+        QVERIFY2(UpdateStager::applyPatch(install, bundleBytes(), removals, {}, stage2, &problem),
+                 qPrintable(problem));
+        QVERIFY(!QFileInfo::exists(stage2 + QStringLiteral("/plugins/old")));
+        QVERIFY(!QFileInfo::exists(stage2 + QStringLiteral("/plugins")));
+        QVERIFY(QFileInfo(stage2 + QStringLiteral("/logs")).isDir());
+    }
+
+    void theExecutableBitIsChecked()
+    {
+#ifndef Q_OS_WIN
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        UpdateManifest m = parsed(fixtureManifest());
+        for (UpdateManifest::File& f : m.payloads[0].files) {
+            if (f.path == QLatin1String("Qt6Core.dll")) {
+                f.executable = true;   // untouched by the patch, so only the copy can carry it
+            }
+        }
+        QString problem;
+        QVERIFY(!UpdateStager::applyPatch(install, bundleBytes(), m.payloads[0].patches[0],
+                                          m.payloads[0].files, tmp.filePath(QStringLiteral("s")), &problem));
+        QVERIFY(problem.contains(QLatin1String("executable")));
+#endif
+    }
+
+    void aMissingBundleOffersTheFullDownload()
+    {
+        // The manifest is trusted; only its bundle cannot be fetched. That is
+        // not "the update failed": the full download may still work.
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        const QByteArray manifest = readFile(kFixture + QStringLiteral("/release/manifest.json"));
+        const QString site = tmp.filePath(QStringLiteral("site"));
+        writeFile(site + QStringLiteral("/latest/manifest.json"), manifest);
+        writeFile(site + QStringLiteral("/latest/manifest.json.sig"), m_key.sign(manifest));
+        UpdateStager::setDownloadBaseForTesting(QUrl::fromLocalFile(tmp.filePath(QStringLiteral("empty"))));
+        UpdateSettings::setAcceptedManifestUtc({});
+        UpdateStager::Request r = request();
+        r.installRoot = install;
+        r.stagingRoot = tmp.filePath(QStringLiteral("staging"));
+        r.manifestUrl = QUrl::fromLocalFile(site + QStringLiteral("/latest/manifest.json"));
+        UpdateStager stager;
+        QSignalSpy full(&stager, &UpdateStager::fullDownloadNeeded);
+        QSignalSpy failed(&stager, &UpdateStager::failed);
+        stager.stage(r);
+        QTRY_COMPARE_WITH_TIMEOUT(full.size() + failed.size(), 1, 20000);
+        QCOMPARE(failed.size(), 0);
+        QCOMPARE(full.first().at(2).toString(), QStringLiteral("26.10.3"));
+        QVERIFY(!stager.isBusy());
     }
 
     void aLinkInTheInstallIsNeverFollowedByANewFile()

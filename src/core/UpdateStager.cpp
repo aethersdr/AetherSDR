@@ -2,6 +2,7 @@
 
 #include "CappedDownload.h"
 #include "LogManager.h"
+#include "UpdateChecker.h"
 #include "UpdateSettings.h"
 #include "VersionNumber.h"
 
@@ -124,7 +125,8 @@ bool readAsset(const QJsonObject& o, const QString& tag, UpdateManifest::Asset* 
     a->sha256 = o.value(QLatin1String("sha256")).toString();
     a->size = o.value(QLatin1String("size")).toInteger(-1);
     const QString url = a->url.toString();
-    return a->url.isValid() && url.startsWith(kDownloadBase + tag + QLatin1Char('/'))
+    return a->url.isValid() && UpdateChecker::isTrustedDownloadUrl(a->url)
+           && url.startsWith(kDownloadBase + tag + QLatin1Char('/'))
            && !url.mid(kDownloadBase.size() + tag.size() + 1).contains(QLatin1Char('/'))
            && !a->url.hasQuery() && !a->url.hasFragment() && hexSha().match(a->sha256).hasMatch()
            && a->size >= 0;
@@ -237,23 +239,21 @@ bool decode(const QByteArray& frame, const uchar* prefix, size_t prefixSize, int
     return true;
 }
 
-// After the removals, every directory left empty goes, deepest first.
-void pruneEmptyDirs(const fs::path& root)
+// After the removals, the folders they left empty go, deepest first, each
+// parent after its children. A folder that was already empty in the install
+// is not the removals' and is left alone.
+void pruneEmptiedDirs(const fs::path& root, std::vector<fs::path> touched)
 {
-    std::vector<fs::path> dirs;
-    std::error_code ec;
-    for (auto it = fs::recursive_directory_iterator(root, ec); !ec && it != fs::recursive_directory_iterator();
-         it.increment(ec)) {
-        if (it->is_directory(ec) && !it->is_symlink(ec)) {
-            dirs.push_back(it->path());
-        }
-    }
-    std::sort(dirs.begin(), dirs.end(), [](const fs::path& a, const fs::path& b) {
+    std::sort(touched.begin(), touched.end(), [](const fs::path& a, const fs::path& b) {
         return std::distance(a.begin(), a.end()) > std::distance(b.begin(), b.end());
     });
-    for (const fs::path& d : dirs) {
-        if (fs::is_empty(d, ec)) {
+    std::error_code ec;
+    for (fs::path d : touched) {
+        // Walk up from each removed entry's folder while the folders empty.
+        while (d != root && d.has_relative_path() && fs::is_directory(fs::symlink_status(d, ec))
+               && fs::is_empty(d, ec)) {
             fs::remove(d, ec);
+            d = d.parent_path();
         }
     }
 }
@@ -262,8 +262,13 @@ bool applyOps(const fs::path& stage, const QHash<QString, QByteArray>& members,
               const UpdateManifest::Patch& patch, const std::atomic_bool* cancelled, QString* problem)
 {
     bool pruned = false;
+    std::vector<fs::path> emptied;
     std::error_code ec;
     for (const UpdateManifest::Op& op : patch.ops) {
+        if (op.kind != UpdateManifest::Op::Kind::Remove && !pruned) {
+            pruneEmptiedDirs(stage, emptied);
+            pruned = true;
+        }
         if (cancelled && cancelled->load()) {
             *problem = QStringLiteral("cancelled");
             return false;
@@ -278,11 +283,8 @@ bool applyOps(const fs::path& stage, const QHash<QString, QByteArray>& members,
                 *problem = QStringLiteral("%1: not in the install, or cannot be removed").arg(op.path);
                 return false;
             }
+            emptied.push_back(target.parent_path());
             continue;
-        }
-        if (!pruned) {
-            pruneEmptyDirs(stage);
-            pruned = true;
         }
         fs::create_directories(target.parent_path(), ec);
         if (op.kind == UpdateManifest::Op::Kind::Symlink) {
@@ -296,11 +298,12 @@ bool applyOps(const fs::path& stage, const QHash<QString, QByteArray>& members,
             }
             continue;
         }
-        const QByteArray frame = members.value(op.member);
-        if (!members.contains(op.member)) {
+        const auto member = members.constFind(op.member);
+        if (member == members.cend()) {
             *problem = QStringLiteral("%1: its patch data is missing from the bundle").arg(op.path);
             return false;
         }
+        const QByteArray& frame = *member;
         // The new bytes go to a file created here, exclusively and under a
         // random name, never to a predictable one: an unlisted link copied
         // from the install could otherwise be followed out of staging.
@@ -352,6 +355,9 @@ bool applyOps(const fs::path& stage, const QHash<QString, QByteArray>& members,
         }
         setExecutable(target, op.executable);
     }
+    if (!pruned) {
+        pruneEmptiedDirs(stage, emptied);   // a patch of removals only
+    }
     return true;
 }
 
@@ -377,6 +383,13 @@ bool checkTree(const fs::path& stage, const QList<UpdateManifest::File>& files, 
             *problem = QStringLiteral("%1: does not match the new release").arg(f.path);
             return false;
         }
+#ifndef Q_OS_WIN
+        const bool executable = (st.permissions() & fs::perms::owner_exec) != fs::perms::none;
+        if (executable != f.executable) {
+            *problem = QStringLiteral("%1: its executable bit does not match the new release").arg(f.path);
+            return false;
+        }
+#endif
     }
     return true;
 }
@@ -522,7 +535,17 @@ UpdateStager::UpdateStager(QObject* parent)
     , m_download(new CappedDownload(this))
 {
     connect(m_download, &CappedDownload::finished, this, &UpdateStager::onDownloaded);
-    connect(m_download, &CappedDownload::failed, this, &UpdateStager::fail);
+    connect(m_download, &CappedDownload::failed, this, [this](const QString& reason) {
+        // The manifest was trusted; only its bundle could not be had (gone,
+        // stalled, larger than signed). The full download may still work.
+        if (m_stage == Stage::Bundle && m_payload) {
+            m_stage = Stage::Idle;
+            qCWarning(lcUpdater).noquote() << "update bundle not downloaded:" << reason;
+            emit fullDownloadNeeded(reason, m_payload->full, m_manifest.version);
+            return;
+        }
+        fail(reason);
+    });
     connect(m_download, &CappedDownload::progress, this, [this](qint64 done, qint64 total) {
         if (m_stage == Stage::Bundle) {
             emit progress(tr("Downloading the update"), done, total);
@@ -635,7 +658,8 @@ bool UpdateStager::readBundle(const QByteArray& bundle, QHash<QString, QByteArra
         if (!ok || size < 0 || size > bundle.size() - at) {
             return broken(QStringLiteral("cut short"));
         }
-        members->insert(name, bundle.mid(at, size));
+        // A view into the bundle, not a copy: the bundle outlives the apply.
+        members->insert(name, QByteArray::fromRawData(bundle.constData() + at, static_cast<qsizetype>(size)));
         at += (size + kTarBlock - 1) / kTarBlock * kTarBlock;
     }
     return broken(QStringLiteral("cut short"));

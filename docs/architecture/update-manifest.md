@@ -176,6 +176,12 @@ A file in `files` with no op is unchanged from the `from` release.
    the installer's own `unins000.*` on Windows.
 8. Swap on quit, keeping the previous tree for rollback.
 
+The staging root holds at most the one staged release waiting to be
+swapped in (`<stagingRoot>/<version>`); each attempt works in its own
+`.work-*` folder, removed on failure or cancel. Sweeping a staged release
+that is never swapped in, and older releases' leftovers, is the swap's
+job (Phase 3), which owns that folder's lifetime.
+
 The release workflow applies every bundle to the real earlier release, by
 this contract, before anything is signed, so a bundle that does not rebuild
 its release never ships. The tests add a reference applier written from this

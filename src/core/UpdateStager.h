@@ -131,7 +131,8 @@ public:
                            const QDateTime& acceptedUtc, const UpdateManifest::Payload** payload,
                            const UpdateManifest::Patch** patch);
 
-    // The members of a bundle: a ustar of flat NNNNNN.zst files.
+    // The members of a bundle: a ustar of flat NNNNNN.zst files. The members
+    // are views into bundle, which must outlive them.
     static bool readBundle(const QByteArray& bundle, QHash<QString, QByteArray>* members,
                            QString* problem);
 
