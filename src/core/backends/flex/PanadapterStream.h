@@ -43,6 +43,7 @@ class PanadapterStream : public QObject {
     friend class VitaDscpStreamTestAccess;
     friend class WanUdpKeepaliveTestAccess;
     friend class WanUdpKeepaliveSocketTestAccess;
+    friend class LanUdpKeepaliveTestAccess;
     // Inject the terminal transport in socket-free queue/cancellation tests.
     std::function<void(const QByteArray&)> m_packetSinkForTest;
 
@@ -230,6 +231,8 @@ signals:
 private slots:
     void onDatagramReady();
     void sendWanUdpRegister();
+    void startLanKeepalive();
+    void sendLanKeepalive();
 
 private:
     friend class PcmCompatibilityTestAccess;
@@ -485,11 +488,13 @@ private:
     // Inject only the terminal WAN bind/write in socket-free lifecycle tests.
     std::function<bool()> m_wanBindForTest;
     std::function<qint64(const QByteArray&, const QHostAddress&, quint16)> m_wanWriteForTest;
+    std::function<qint64(const QByteArray&, const QHostAddress&, quint16)> m_lanWriteForTest;
     bool m_wanBoundForTest{false};
 
     // WAN UDP registration and keepalive
     QTimer*  m_wanRegisterTimer{nullptr};   // udp_register: 50 ms until VITA, then 5 s
     QTimer*  m_routedPrimeTimer{nullptr};   // 250ms: non-WAN UDP prime retry until first packet
+    QTimer*  m_lanKeepaliveTimer{nullptr};  // 5 s: non-WAN keepalive for the whole session
     bool     m_isWanMode{false};
     bool     m_wanRegistered{false};
     quint32  m_wanClientHandle{0};
