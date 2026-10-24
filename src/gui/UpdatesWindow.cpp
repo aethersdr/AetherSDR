@@ -215,7 +215,7 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget*
 {
     setObjectName(QStringLiteral("updatesWindow"));
     setGeometryKey(QStringLiteral("UpdatesWindowGeometry"));
-    setLaunchSize(QSize(760, 480));
+    setLaunchSize(QSize(760, 780));   // room for YOUR RADIO under the release
     applyCanonSheet(bodyWidget(), sheet);
 
     auto* root = new QVBoxLayout(bodyWidget());
