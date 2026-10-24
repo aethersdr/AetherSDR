@@ -15,6 +15,7 @@
 #include <QLabel>
 #include <QMenu>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QSignalSpy>
 #include <QSlider>
 #include <QTest>
@@ -139,6 +140,28 @@ void mappingFieldsRoundTrip()
               && spy.first().at(1).toString() == QStringLiteral("VolumeUp"),
           "choosing an action announces the changed field");
 }
+// MainWindow opens the window with WA_DeleteOnClose. Every way out destroys
+// it, Esc included (QDialog::done() closes, it does not only hide), as the
+// PersistentDialog did, so the activity log starts empty on the next open.
+void everyCloseDestroysTheWindow()
+{
+    for (int path = 0; path < 3; ++path) {
+        QPointer<RC28MappingDialog> dialog = new RC28MappingDialog(nullptr);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->show();
+        const bool exposed = QTest::qWaitForWindowExposed(dialog);
+        if (path == 0) QTest::keyClick(dialog, Qt::Key_Escape);
+        if (path == 1) QTest::keySequence(dialog, QKeySequence::Close);
+        if (path == 2) dialog->close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        check(exposed && dialog.isNull(),
+              path == 0 ? "Esc destroys the window"
+              : path == 1 ? "Ctrl+W / Cmd+W destroys the window"
+                          : "the corner close button destroys the window");
+        delete dialog.data();
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -154,5 +177,6 @@ int main(int argc, char** argv)
     logMenuIsOpaque();
     sensitivityValueFits();
     mappingFieldsRoundTrip();
+    everyCloseDestroysTheWindow();
     return failures == 0 ? 0 : 1;
 }
