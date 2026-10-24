@@ -984,6 +984,9 @@ public:
     int networkMtuSetting() const;
     void sendCwKey(bool down, const QString& debugSource = {},
                    quint64 debugTraceId = 0, quint64 debugSourceMs = 0); // straight key via netcw stream
+    // Straight key for a producer (TCI keyer:): keyed in that producer's own
+    // lane, and a key-up releases only the intent its request holds.
+    bool sendProducerCwKey(const TxCoordinator::Request& request, bool down);
     void sendCwPaddle(bool dit, bool dah, const QString& debugSource = {},
                       quint64 debugTraceId = 0, quint64 debugSourceMs = 0); // iambic paddle via netcw stream
     // Lower-level pieces used by the local iambic keyer: PTT and key

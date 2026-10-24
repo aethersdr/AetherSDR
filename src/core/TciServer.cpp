@@ -680,6 +680,7 @@ void TciServer::stopIo()
     m_routeTransitionInFlight = false;
     ++m_routeTransitionGeneration;
     for (ClientState& client : m_clients) {
+        releaseTciKeyer(client.socket);
         client.txProducer.invalidate();
         if (client.socket) {
             client.socket->lifetime->live.store(false, std::memory_order_release);
@@ -1019,6 +1020,9 @@ void TciServer::onClientDisconnected()
 
     for (int i = 0; i < m_clients.size(); ++i) {
         if (m_clients[i].socket == ws) {
+            // A key this client holds is released with its own request while
+            // that request is still valid (#5873).
+            releaseTciKeyer(ws);
             // Invalidate at disconnect, before cleanup can reenter and before
             // deleteLater destroys the socket; queued media must stop now.
             m_clients[i].txProducer.invalidate();
@@ -1645,6 +1649,9 @@ void TciServer::onTextMessage(const QString& msg)
         }
         if (const auto request = client.protocol->takeTuneRequest()) {
             handleTuneRequest(ws, *request);
+        }
+        if (const auto request = client.protocol->takeKeyerRequest()) {
+            handleKeyerRequest(ws, *request);
         }
 
         // If the command changed radio state, broadcast to all other clients
@@ -3524,6 +3531,46 @@ void TciServer::handleTuneRequest(TciClient* client, const TciProtocol::TuneRequ
         m_tuneRequesters.append({client, request.trx});
         scheduleTuneBroadcast();
     }, Qt::QueuedConnection);
+}
+
+// keyer: keys through this client's TX producer. The key-up reuses the
+// key-down's request, so it can only release a key this client pressed, never
+// the operator's or another client's (#5873).
+void TciServer::handleKeyerRequest(TciClient* client, const TciProtocol::KeyerRequest& request)
+{
+    if (!m_model) {
+        return;
+    }
+    QMetaObject::invokeMethod(this, [this, client = QPointer<TciClient>(client), request]() {
+        if (!m_model || !client) {
+            return;
+        }
+        if (!request.down) {
+            releaseTciKeyer(client);
+            return;
+        }
+        ClientState* state = clientStateFor(client);
+        if (!state || !client->live() || state->keyerRequest.valid()) {
+            return;
+        }
+        state->keyerRequest = client->ingressRequest ? *client->ingressRequest
+                                                     : state->txProducer.request();
+        if (!m_model->sendProducerCwKey(state->keyerRequest, true)) {
+            state->keyerRequest = {};
+        }
+    }, Qt::QueuedConnection);
+}
+
+void TciServer::releaseTciKeyer(TciClient* client)
+{
+    ClientState* state = clientStateFor(client);
+    if (!state || !state->keyerRequest.valid()) {
+        return;
+    }
+    const TxCoordinator::Request request = std::exchange(state->keyerRequest, {});
+    if (m_model) {
+        (void)m_model->sendProducerCwKey(request, false);
+    }
 }
 
 // A TCI-started tune has no TxCoordinator producer, so nothing else ends it

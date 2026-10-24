@@ -618,6 +618,13 @@ std::optional<TciProtocol::TuneRequest> TciProtocol::takeTuneRequest()
     return request;
 }
 
+std::optional<TciProtocol::KeyerRequest> TciProtocol::takeKeyerRequest()
+{
+    std::optional<KeyerRequest> request = std::move(m_keyerRequest);
+    m_keyerRequest.reset();
+    return request;
+}
+
 // ── Command implementations ────────────────────────────────────────────────
 
 QString TciProtocol::cmdStart()
@@ -1641,9 +1648,11 @@ QString TciProtocol::cmdKeyer(const QStringList& args)
     // Same fail-closed exemption as cmdTune: an unparseable state must mean
     // KEY UP, never "ignore and leave the key down" (Constitution VI).
     const bool down = (args[1].trimmed().toLower() == QLatin1String("true"));
-    QMetaObject::invokeMethod(m_model, [model = m_model, down]() {
-        model->sendCwKey(down);
-    }, Qt::QueuedConnection);
+    int trx = 0;
+    (void)argToInt(args, 0, trx);
+    // TciServer applies it with this client's TX producer, so a key-up can
+    // only release a key this client pressed (#5873).
+    m_keyerRequest = KeyerRequest{trx, down};
     return {};
 }
 

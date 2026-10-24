@@ -276,6 +276,8 @@ private:
     void onRadioTransmitConfirmed(bool transmitting);
     void broadcastActualTxState(bool transmitting);
     void handleTuneRequest(TciClient* client, const TciProtocol::TuneRequest& request);
+    void handleKeyerRequest(TciClient* client, const TciProtocol::KeyerRequest& request);
+    void releaseTciKeyer(TciClient* client);
     void scheduleTuneBroadcast();
     void broadcastTuneState();
     void stopTciOwnedTune();
@@ -296,6 +298,8 @@ private:
     struct ClientState {
         TxCoordinator::Producer txProducer;
         TxCoordinator::Request pttRequest;
+        // The key-down's request, held until its key-up: keyer: (#5873).
+        TxCoordinator::Request keyerRequest;
         QPointer<TciClient> socket;
         TciProtocol* protocol{nullptr};
         QString      processName;        // #5087 — see TciClientInfo
