@@ -63,6 +63,7 @@ UpdateChecker::UpdateChecker(QObject* parent, QNetworkAccessManager* network)
     const VersionNumber saved = VersionNumber::parse(UpdateSettings::latestVersion());
     if (!saved.isNull()) {
         m_latest.version = saved.toString();
+        m_latest.fromSettings = true;
     }
 }
 

@@ -305,7 +305,8 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
         });
         // Nothing known, or only a version saved by an earlier answer: fetch
         // the release's details.
-        if (!m_checker->latestRelease().hasDetails() && !m_checker->isChecking()) {
+        if ((!m_checker->latestRelease().isValid() || m_checker->latestRelease().fromSettings)
+            && !m_checker->isChecking()) {
             m_checker->checkNow(UpdateChecker::Trigger::Manual);
         }
     }
@@ -330,13 +331,19 @@ void UpdatesWindow::setAutomaticCheck(bool on)
 
 UpdatesWindow::View UpdatesWindow::currentView() const
 {
-    const bool known = m_checker && m_checker->latestRelease().isValid();
-    if (!known) {
+    const ReleaseInfo release = m_checker ? m_checker->latestRelease() : ReleaseInfo{};
+    const auto pending = [this] {
         return (m_checker && m_checker->isChecking()) || !m_failed ? View::Checking : View::Failed;
+    };
+    if (!release.isValid()) {
+        return pending();
     }
-    const QString running = QCoreApplication::applicationVersion();
-    return UpdateChecker::isNewer(m_checker->latestRelease().version, running) ? View::Available
-                                                                               : View::Current;
+    if (UpdateChecker::isNewer(release.version, QCoreApplication::applicationVersion())) {
+        return View::Available;   // a saved newer release stays actionable offline
+    }
+    // A saved version that is not newer says nothing about GitHub now: only a
+    // real answer may report "up to date".
+    return release.fromSettings ? pending() : View::Current;
 }
 
 void UpdatesWindow::refresh()
@@ -369,7 +376,7 @@ void UpdatesWindow::refresh()
         m_tagline->setText(release.tagline);
         if (!store.isEmpty()) {
             note = tr("Updates for this copy come from %1.").arg(store);
-        } else if (m_failed && !release.hasDetails()) {
+        } else if (m_failed && release.fromSettings) {
             note = tr("Couldn't reach GitHub for this release's details. Check your connection, then try again.");
         } else if (UpdateChecker::isSkipped(release.version)) {
             note = tr("You skipped this release, so UPDATE is not shown in the title bar.");
@@ -423,7 +430,7 @@ void UpdatesWindow::refresh()
     m_notes->setVisible(known);
     // Offered whenever there is something to retry: always outside a new
     // release, and inside one whose details did not arrive.
-    m_checkNow->setVisible(view != View::Available || (m_failed && !release.hasDetails()));
+    m_checkNow->setVisible(view != View::Available || (m_failed && release.fromSettings));
     m_checkNow->setEnabled(!(m_checker && m_checker->isChecking()));
     m_skip->setVisible(canDownload);
     const bool skipped = UpdateChecker::isSkipped(release.version);

@@ -31,9 +31,10 @@ struct ReleaseInfo {
     QStringList chapters;               // the body's ### headings, boilerplate dropped
     QList<ReleaseHighlight> highlights; // first bold lead of the first chapters, at most 3
     QList<ReleaseAsset> assets;         // only download URLs that pass isTrustedDownloadUrl()
+    // Only the version an earlier answer saved, not an answer from this run:
+    // no details, and no claim about what GitHub says now.
+    bool fromSettings = false;
     bool isValid() const { return !version.isEmpty(); }
-    // A release known only by version (seeded from settings) has none yet.
-    bool hasDetails() const { return !chapters.isEmpty() || !assets.isEmpty(); }
 };
 
 // Checks the GitHub releases API for a newer AetherSDR version, and is the

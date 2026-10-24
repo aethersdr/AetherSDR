@@ -29,7 +29,9 @@ namespace {
 QByteArray releaseJson(const QString& tagline)
 {
     QFile f(QStringLiteral(UPDATE_RELEASE_FIXTURE));
-    f.open(QIODevice::ReadOnly);
+    if (!f.open(QIODevice::ReadOnly)) {
+        return {};
+    }
     QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
     o[QStringLiteral("name")] = QStringLiteral("AetherSDR v26.10.3 — ") + tagline;
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
@@ -171,7 +173,7 @@ int main(int argc, char** argv)
         HeldNetwork network;
         UpdateChecker checker(nullptr, &network);
         check(checker.latestRelease().version == QLatin1String("26.10.3")
-                  && !checker.latestRelease().hasDetails(),
+                  && checker.latestRelease().fromSettings,
               "the checker starts on the saved release, without details");
         UpdatesWindow w(&checker, nullptr);
         w.show();
@@ -217,6 +219,27 @@ int main(int argc, char** argv)
         w.checkNow();
         check(text(w, "updatesEyebrow").startsWith(QLatin1String("CHECKING")),
               "an outside retry shows as checking at once");
+    }
+
+    {
+        // A saved release that is NOT newer says nothing about GitHub now: it
+        // must never turn a failed or pending check into "up to date".
+        for (const char* saved : {"26.10.3", "26.10.2"}) {
+            QCoreApplication::setApplicationVersion(QStringLiteral("26.10.3"));
+            UpdateSettings::setSkippedVersion(QString());
+            UpdateSettings::recordAnswer(QDateTime::currentDateTimeUtc().addDays(-9),
+                                         QString::fromLatin1(saved));
+            HeldNetwork network;
+            UpdateChecker checker(nullptr, &network);
+            UpdatesWindow w(&checker, nullptr);
+            w.show();
+            check(text(w, "updatesEyebrow").startsWith(QLatin1String("CHECKING")),
+                  "a saved release that is not newer shows as checking, not up to date");
+            network.last->finishWithError(QNetworkReply::HostNotFoundError);
+            app.processEvents();
+            check(text(w, "updatesEyebrow") == QLatin1String("COULDN'T REACH GITHUB"),
+                  "offline, a saved release that is not newer reports the failure");
+        }
     }
 
     return failures ? 1 : 0;
