@@ -30,8 +30,8 @@ namespace AetherSDR {
 namespace {
 
 // The canon dialog sheet, with what this window adds: popups (the combos'
-// lists) get their panel back from the sheet's transparent ground, and the
-// table sits on a nested card.
+// lists, the Filter field's right-click menu) get their panel back from the
+// sheet's transparent ground, and the table sits on a nested card.
 QString shortcutDialogStyleSheet()
 {
     return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
@@ -59,9 +59,20 @@ QMenu {
     background: {{color.canon.raised}};
     border: 1px solid {{color.canon.lineHi}};
 }
+QMenu::item {
+    padding: 4px 18px;
+}
 QMenu::item:selected {
     color: {{color.canon.onAccent}};
     background: {{color.canon.cyan}};
+}
+QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
 }
 QScrollBar:horizontal {
     background: transparent;

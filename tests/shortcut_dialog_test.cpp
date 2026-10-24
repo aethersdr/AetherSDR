@@ -13,7 +13,9 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QLabel>
+#include <QImage>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QTableWidget>
 #include <QPushButton>
@@ -59,7 +61,7 @@ void answerNextBox(Answer& seen, std::function<void(CanonMessageBox&)> act)
             }
             return;
         }
-        QTest::qWaitForWindowExposed(box);
+        EXPECT_TRUE(QTest::qWaitForWindowExposed(box));
         seen.opened = true;
         seen.title = box->windowTitle();
         for (QPushButton* b : box->findChildren<QPushButton*>()) {
@@ -123,7 +125,7 @@ int main(int argc, char** argv)
 
     ShortcutDialog dlg(&mgr);
     dlg.show();
-    QTest::qWaitForWindowExposed(&dlg);
+    EXPECT_TRUE(QTest::qWaitForWindowExposed(&dlg));
 
     // ---- a canon dialog in its own scope, with the canon header ----
     {
@@ -258,6 +260,53 @@ int main(int argc, char** argv)
         QCoreApplication::sendEvent(map, &hit);
         EXPECT_TRUE(hit.isAccepted());
         EXPECT_TRUE(map->selectedKey() == Qt::Key_Escape);
+    }
+
+    // ---- the Filter field's right-click menu keeps a canon panel, and an
+    // unavailable item (Undo, on an untouched field) reads in the canon
+    // unavailable ink rather than Qt's own disabled grey ----
+    {
+        QLineEdit* filter = nullptr;
+        for (auto* edit : dlg.findChildren<QLineEdit*>()) {
+            if (edit->placeholderText() == QStringLiteral("Search actions..."))
+                filter = edit;
+        }
+        EXPECT_TRUE(filter != nullptr);
+        if (filter) {
+            QMenu* menu = filter->createStandardContextMenu();
+            EXPECT_TRUE(menu->parentWidget() == filter);
+            QAction* undo = menu->actions().value(0);
+            EXPECT_TRUE(undo && !undo->isEnabled());
+            menu->popup(dlg.mapToGlobal(QPoint(40, 40)));
+            QTest::qWait(100);
+            const QImage image = menu->grab().toImage();
+            EXPECT_TRUE(!image.isNull()
+                        && qAlpha(image.pixel(image.width() / 2, image.height() / 2)) == 255);
+            // The glyph core is the row's pixel furthest from the panel; its
+            // colour is the ink the item was drawn in, free of antialiasing.
+            const QColor want = ThemeManager::instance().color(
+                &dlg, QStringLiteral("color.control.unavailable"));
+            const QColor panel = ThemeManager::instance().color(
+                &dlg, QStringLiteral("color.canon.raised"));
+            auto distance = [](const QColor& a, const QColor& b) {
+                return qAbs(a.red() - b.red()) + qAbs(a.green() - b.green())
+                     + qAbs(a.blue() - b.blue());
+            };
+            QColor core = panel;
+            const QRect row = undo ? menu->actionGeometry(undo) & image.rect() : QRect();
+            for (int y = row.top(); y <= row.bottom(); ++y) {
+                for (int x = row.left(); x <= row.right(); ++x) {
+                    const QColor c = image.pixelColor(x, y);
+                    if (distance(c, panel) > distance(core, panel))
+                        core = c;
+                }
+            }
+            std::printf("  Undo text core %s, want color.control.unavailable %s\n",
+                        qPrintable(core.name()), qPrintable(want.name()));
+            EXPECT_TRUE(distance(core, want) <= 12);
+            menu->close();
+            delete menu;
+        }
     }
 
     if (g_failures == 0) {
