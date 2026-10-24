@@ -108,6 +108,10 @@ public:
             QCoreApplication::processEvents();
         }
     }
+    static TxCoordinator::Request tciProducerRequest(TciServer& server, TciClient& socket)
+    {
+        return server.clientStateFor(&socket)->txProducer.request();
+    }
     static void tciRequest(TciServer& server, TciClient& socket, bool on, int receiver = 0)
     {
         server.handleTrxRequest(&socket, {receiver, on, QStringLiteral("tci")});
@@ -2757,10 +2761,33 @@ void tciKeyerReleasesOnlyItsOwnKey()
     TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,junk;"));
     check(f.commands.contains("cw:off"), "an unparseable state still means key up (fail closed)");
 
+    // Captured at the input boundary, as trx: is: a key-down whose request is
+    // revoked before the model applies it never keys.
+    f.commands.clear();
+    remote.ingressRequest = TxOperationIntegrationTestAccess::tciProducerRequest(server, remote);
+    emit remote.textMessageReceived(QStringLiteral("keyer:0,true;"));
+    remote.ingressRequest.reset();
+    TxOperationIntegrationTestAccess::discardTciInputs(server, remote);
+    for (int i = 0; i < 5; ++i) {
+        QCoreApplication::processEvents();
+    }
+    check(!f.commands.contains("cw:on"), "a key-down revoked before the model applies it never keys");
+
     f.commands.clear();
     TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,true;"));
+    check(f.commands.contains("cw:on"), "fixture: the client's key is down");
     f.commands.clear();
-    emit remote.disconnected();
+    f.radio.sendCwKey(false, QStringLiteral("operator"));
+    check(f.commands.contains("cw:off"), "the operator's own key-up still takes the key up");
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,false;"));
+
+    // On the heap: onClientDisconnected ends in deleteLater().
+    auto* leaving = new TciClient;
+    TxOperationIntegrationTestAccess::addTciTextClient(server, *leaving, f.radio);
+    TxOperationIntegrationTestAccess::tciText(*leaving, QStringLiteral("keyer:0,true;"));
+    check(f.commands.contains("cw:on"), "fixture: the leaving client's key is down");
+    f.commands.clear();
+    emit leaving->disconnected();
     for (int i = 0; i < 5; ++i) {
         QCoreApplication::processEvents();
     }
