@@ -3435,22 +3435,28 @@ void MainWindow::toggleAetherRxDialog()
 #ifdef HAVE_MQTT
 void MainWindow::showMqttSettingsDialog()
 {
-    const bool wasFresh = !m_mqttSettingsDialog;
-    showOrRaisePersistent(m_mqttSettingsDialog);
-    if (!wasFresh || !m_mqttSettingsDialog)
-        return;
+    // A canon dialog, so not showOrRaisePersistent(): that applies View →
+    // Frameless Window, which a CanonWindow does not follow.
+    if (!m_mqttSettingsDialog) {
+        auto* dlg = new MqttSettingsDialog(this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_mqttSettingsDialog = dlg;
 
-    connect(m_mqttSettingsDialog, &MqttSettingsDialog::settingsSaved,
-            this, [this](const QString& password) {
-        if (!m_appletPanel || !m_appletPanel->mqttApplet())
-            return;
-        auto* mqttApplet = m_appletPanel->mqttApplet();
-        mqttApplet->setCachedPassword(password);
-        mqttApplet->refreshSettings();
-        if (m_mqttClient) {
-            m_mqttClient->setSubscriptions(mqttSubscriptionTopics(mqttApplet->topicConfig()));
-        }
-    });
+        connect(dlg, &MqttSettingsDialog::settingsSaved,
+                this, [this](const QString& password) {
+            if (!m_appletPanel || !m_appletPanel->mqttApplet())
+                return;
+            auto* mqttApplet = m_appletPanel->mqttApplet();
+            mqttApplet->setCachedPassword(password);
+            mqttApplet->refreshSettings();
+            if (m_mqttClient) {
+                m_mqttClient->setSubscriptions(mqttSubscriptionTopics(mqttApplet->topicConfig()));
+            }
+        });
+    }
+    m_mqttSettingsDialog->show();
+    m_mqttSettingsDialog->raise();
+    m_mqttSettingsDialog->activateWindow();
 }
 
 void MainWindow::publishCwDecodeMqtt(const QString& text, float cost, bool rx)
