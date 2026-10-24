@@ -122,6 +122,7 @@ void AgcTCalibrator::onAudioLevel(float rms)
     if (!std::isfinite(rms)) {
         return;
     }
+    ++m_levelCount;
     rms = std::max(0.0f, rms);
     if (!m_haveRms) {
         m_rmsEma = rms;
@@ -216,6 +217,7 @@ void AgcTCalibrator::startAutoSweep()
     m_sweepUp = strategy() == Strategy::TargetLevel;
     m_sweepValue = m_sweepUp ? 0 : 100;
 
+    m_levelCountAtApply = m_levelCount;
     applyValue(m_sweepValue);
     if (!m_running || !canWrite()) {
         cancelWithoutRestore();
@@ -240,6 +242,22 @@ void AgcTCalibrator::onSweepStep()
         cancelWithoutRestore();
         return;
     }
+    // No level since this value was applied: AudioEngine is not playing (PC
+    // Audio off), so every point would record the same stale RMS, the AGC-off
+    // pass would never reach its target and would climb to 100, and the target
+    // solve would then apply the first point.
+    if (m_levelCount == m_levelCountAtApply) {
+        qCWarning(lcAgcCal) << "auto sweep stopped: no audio level at" << m_sweepValue;
+        stop(); // restores the original value, emits finished(false)
+        // stop() clears m_auto before it restores, so the restore re-enters
+        // onValueChanged as a manual edit and would record the stale reading
+        // this guard just rejected. Drop it, and the part curve with it.
+        m_manualTimer.stop();
+        m_curve.clear();
+        // After finished(false), which stop() has already emitted.
+        emit noAudio();
+        return;
+    }
     // Sample the value currently applied (already settled).
     recordPoint(m_sweepValue);
 
@@ -259,6 +277,7 @@ void AgcTCalibrator::onSweepStep()
     }
     m_sweepValue = m_sweepUp ? std::min(100, m_sweepValue + kSweepStep)
                              : std::max(0, m_sweepValue - kSweepStep);
+    m_levelCountAtApply = m_levelCount;
     applyValue(m_sweepValue);
     m_stepTimer.start(m_settleMs);
 }
