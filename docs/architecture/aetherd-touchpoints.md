@@ -95,7 +95,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/MacMicPermission.h` | 1 | ui-support — macOS mic permission dialog at app startup; OS permission plumbing, no radio state — belongs in the client app | unconverted |
 | `core/MaidenheadLocator.h` | 4 | ui-support — Header-only Maidenhead grid/lat-lon/distance/bearing math; stateless shared utility, not a protocol surface | unconverted |
 | `core/MemoryCsvCompat.h` | 1 | vendor(flex) — SmartSDR memory-CSV import/export codec (exact 22-col format); Flex ecosystem interchange, not core protocol. | unconverted |
-| `core/MemoryFieldValues.h` | 1 | mixed(flex) — Canonical memory-channel value lists + sanitizers; concepts universal, wire forms mirror FlexLib protocol | unconverted |
+| `core/MemoryFieldValues.h` | 2 | mixed(flex) — Canonical memory-channel value lists + sanitizers; concepts universal, wire forms mirror FlexLib protocol | unconverted |
 | `core/MidiControlManager.h` | 3 | ui-support — RtMidi input-device manager (ports, bindings, MIDI Learn) driving client setters; control-surface plumbing | unconverted |
 | `core/MidiSettings.h` | 3 | ui-support — MIDI controller binding/profile persistence (XML files) — client input-device config, not radio state. | unconverted |
 | `core/MiniPanSettings.h` | 1 | ui-support — Client-side persistence for the mini-pan applet span; UI configuration, not radio-owned state or a daemon protocol resource. | unconverted |
