@@ -49,7 +49,7 @@ QTableWidget::item:selected {
 }
 QComboBox QAbstractItemView {
     color: {{color.canon.inkSoft}};
-    background: {{color.canon.raised}};
+    background: {{color.canon.nested}};
     border: 1px solid {{color.canon.lineHi}};
     selection-background-color: {{color.canon.cyan}};
     selection-color: {{color.canon.onAccent}};

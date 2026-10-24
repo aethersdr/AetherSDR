@@ -13,6 +13,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QLabel>
+#include <QAbstractItemView>
 #include <QImage>
 #include <QLineEdit>
 #include <QMenu>
@@ -306,6 +307,34 @@ int main(int argc, char** argv)
             EXPECT_TRUE(distance(core, want) <= 12);
             menu->close();
             delete menu;
+        }
+    }
+
+    // ---- a combo's drop-down list sits on canon.nested, as the other canon
+    // windows' lists do; the right-click menu above is on canon.raised ----
+    {
+        QComboBox* combo = nullptr;
+        for (auto* c : dlg.findChildren<QComboBox*>()) {
+            if (c->isVisible() && c->count() >= 2)
+                combo = c;
+        }
+        EXPECT_TRUE(combo != nullptr);
+        if (combo) {
+            combo->showPopup();
+            QTest::qWait(150);
+            QWidget* viewport = combo->view()->viewport();
+            const QImage list = viewport->grab().toImage();
+            const int rowH = combo->view()->sizeHintForRow(0);
+            // The right end of the second row: unselected, past its text.
+            const QColor ground = list.isNull()
+                ? QColor()
+                : list.pixelColor(QPoint(list.width() - 4, int(rowH * 1.5 * list.devicePixelRatio())));
+            const QColor want = ThemeManager::instance().color(
+                &dlg, QStringLiteral("color.canon.nested"));
+            std::printf("  drop-down list ground %s, want color.canon.nested %s\n",
+                        qPrintable(ground.name()), qPrintable(want.name()));
+            EXPECT_TRUE(ground == want);
+            combo->hidePopup();
         }
     }
 
