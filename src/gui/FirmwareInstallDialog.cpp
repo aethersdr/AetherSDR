@@ -28,6 +28,12 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <memory>
+
+#ifdef Q_OS_LINUX
+#include <cerrno>
+#include <unistd.h>
+#endif
 
 namespace AetherSDR {
 
@@ -663,8 +669,44 @@ void FirmwareInstallDialog::sync()
     m_bar->setVisible(running && !m_fw->waitingForDownloadMode());
 }
 
-void FirmwareInstallDialog::runJob(const QString& doneText, std::function<bool(QString*)> job)
+bool FirmwareInstallDialog::offerAccessFirst(std::function<void()> again)
 {
+#ifdef Q_OS_LINUX
+    using Device = FirmwareInstallModel::Device;
+    const FirmwareInstallModel::Target target = m_fw->target();
+    if (!m_relay || (target.device != Device::LinkFirmware && target.device != Device::Stock)
+        || target.hidPath.isEmpty())
+        return false;
+    const QByteArray path = target.hidPath.toLocal8Bit();
+    if (::access(path.constData(), R_OK | W_OK) == 0 || errno != EACCES)
+        return false;
+    m_relay->offerAccessRule(Ctr2ProxyPanel::RuleUse::Firmware, [this, again] {
+        // What the action can do (restart on request, or the buttons) depends
+        // on the firmware's version and commands, which the relay reads once
+        // it can open the device: rescan, and wait for them (up to ~5 s).
+        if (m_model)
+            m_model->refreshDevices();
+        auto wait = std::make_shared<std::function<void(int)>>();
+        *wait = [this, again, wait](int tries) {
+            if (tries > 0 && m_fw->linkVersion().isEmpty()) {
+                QTimer::singleShot(250, this, [wait, tries] { (*wait)(tries - 1); });
+                return;
+            }
+            again();
+        };
+        (*wait)(20);
+    });
+    return true;
+#else
+    Q_UNUSED(again);
+    return false;
+#endif
+}
+
+void FirmwareInstallDialog::runJob(const QString& doneText, std::function<bool(QString*)> job,
+                                   bool accessRetry)
+{
+    m_accessRetried = accessRetry;
     m_lastJob = job;
     m_lastJobDone = doneText;
     m_jobDone = doneText;
@@ -733,6 +775,8 @@ void FirmwareInstallDialog::confirmRestore(const QString& path)
 
 void FirmwareInstallDialog::onInstall()
 {
+    if (offerAccessFirst([this] { onInstall(); }))
+        return;
     // The device is the one shown now; the model refuses if it changes
     // while the questions below are open.
     FirmwareInstallModel::Target target = m_fw->target();
@@ -822,6 +866,8 @@ void FirmwareInstallDialog::onOpenFile()
 
 void FirmwareInstallDialog::installStockFirmware()
 {
+    if (offerAccessFirst([this] { installStockFirmware(); }))
+        return;
     using Device = FirmwareInstallModel::Device;
     FirmwareInstallModel::Target target = m_fw->target();
     const QString backup = selectedBackup(m_fileList);
@@ -869,6 +915,8 @@ void FirmwareInstallDialog::restartInto(int which)
 {
     using Firmware = FirmwareInstallModel::Firmware;
     const auto firmware = static_cast<Firmware>(which);
+    if (offerAccessFirst([this, which] { restartInto(which); }))
+        return;
     FirmwareInstallModel::Target target = m_fw->target();
     // Firmware that cannot restart into download mode takes the unit's buttons: the
     // alert is all there is to it, and Status follows when it gets there.
@@ -911,13 +959,24 @@ void FirmwareInstallDialog::onFinished(bool ok, const QString& message)
     // then run the same action again. Queued, so the question does not open
     // inside the job's own finished signal.
     if (!ok && message.contains(QStringLiteral("Permission")) && m_lastJob && m_relay) {
-        QTimer::singleShot(0, this, [this] {
-            m_relay->offerDownloadModeAccess([this] {
+        const auto again = [this] {
+            if (!m_lastJob || m_fw->busy())
+                return;
+            m_step->setText(tr("Access granted. Trying again…"));
+            runJob(m_lastJobDone, m_lastJob);
+        };
+        // With the rule in place, a port that has only just appeared may not
+        // have its ACL yet: try once more before saying anything.
+        if (Ctr2ProxyPanel::accessRuleInstalled() && !m_accessRetried) {
+            QTimer::singleShot(1000, this, [this] {
                 if (!m_lastJob || m_fw->busy())
                     return;
-                m_step->setText(tr("Access granted. Trying again…"));
-                runJob(m_lastJobDone, m_lastJob);
+                runJob(m_lastJobDone, m_lastJob, true);
             });
+            return;
+        }
+        QTimer::singleShot(0, this, [this, again] {
+            m_relay->offerAccessRule(Ctr2ProxyPanel::RuleUse::DownloadMode, again);
         });
     }
 #endif

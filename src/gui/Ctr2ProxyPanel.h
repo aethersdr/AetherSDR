@@ -30,10 +30,16 @@ public:
     void setModel(Ctr2ProxyModel* model);
 
 #ifdef Q_OS_LINUX
-    // A firmware install found the CTR2-Max's download-mode port closed to
-    // this login: offer the access rule (it covers that port too), and call
-    // afterInstalled once it is in place.
-    void offerDownloadModeAccess(std::function<void()> afterInstalled);
+    // What the CTR2 access rule is wanted for: the relay's Start, a firmware
+    // action on a CTR2 running its firmware (HID), or one on a CTR2-Max in
+    // download mode (its serial port). One rule covers all three; the
+    // questions differ.
+    enum class RuleUse { Relay, Firmware, DownloadMode };
+    // Whether this build's rule is already installed, locally or packaged.
+    static bool accessRuleInstalled();
+    // A CTR2 window action found the device closed to this login: offer the
+    // rule, and call afterInstalled once it is in place.
+    void offerAccessRule(RuleUse use, std::function<void()> afterInstalled);
 #endif
 
 private:
@@ -44,9 +50,6 @@ private:
     void syncStats();
     void onStartClicked();
 #ifdef Q_OS_LINUX
-    // What the rule is wanted for: the relay's Start, or a firmware install
-    // in download mode. One rule covers both; the questions differ.
-    enum class RuleUse { Relay, DownloadMode };
     void offerUsbAccessRule(RuleUse use = RuleUse::Relay);
     void showManualRuleInstructions(const QString& why);
     void installUsbAccessRule(RuleUse use);
@@ -80,7 +83,7 @@ private:
     QLabel* m_problemLabel{nullptr};
     QLabel* m_errorLabel{nullptr};
     bool m_installingRule{false};  // pkexec rule install in flight
-    std::function<void()> m_afterDownloadModeRule;   // RuleUse::DownloadMode's next step
+    std::function<void()> m_afterRule;   // a CTR2 window action's next step
 };
 
 } // namespace AetherSDR

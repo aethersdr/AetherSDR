@@ -293,20 +293,26 @@ bool ruleAlreadyInstalled(const QString& rule)
 // Linux opens USB devices like the CTR2 to root only until a udev rule grants
 // the logged-in user access. Offer to install it rather than leave the
 // operator with a permissions error.
-void Ctr2ProxyPanel::offerDownloadModeAccess(std::function<void()> afterInstalled)
+bool Ctr2ProxyPanel::accessRuleInstalled()
+{
+    return ruleAlreadyInstalled(loadRule());
+}
+
+void Ctr2ProxyPanel::offerAccessRule(RuleUse use, std::function<void()> afterInstalled)
 {
     if (m_installingRule) {
         return;
     }
-    m_afterDownloadModeRule = std::move(afterInstalled);
-    offerUsbAccessRule(RuleUse::DownloadMode);
+    m_afterRule = std::move(afterInstalled);
+    offerUsbAccessRule(use);
 }
 
 void Ctr2ProxyPanel::offerUsbAccessRule(RuleUse use)
 {
     const bool firmware = use == RuleUse::DownloadMode;
+    const bool relay = use == RuleUse::Relay;
     if (ruleAlreadyInstalled(loadRule())) {
-        m_afterDownloadModeRule = nullptr;
+        m_afterRule = nullptr;
         ScopedChildWidget<CanonMessageBox> box(
             tr("CTR2 USB access"),
             firmware ? tr("The CTR2 access rule is already installed, but this login still "
@@ -316,15 +322,17 @@ void Ctr2ProxyPanel::offerUsbAccessRule(RuleUse use)
         box.get()->setInformativeText(
             firmware ? tr("The rule only opens it to whoever is logged in at this computer's "
                           "own screen, so a remote or background session cannot use it.")
-                     : tr("Unplug the CTR2, plug it back in, then press Start. The rule only "
-                          "opens the CTR2 to whoever is logged in at this computer's own "
-                          "screen, so a remote or background session cannot use it."));
+                     : (relay ? tr("Unplug the CTR2, plug it back in, then press Start. ")
+                              : tr("Unplug the CTR2, plug it back in, then try again. "))
+                           + tr("The rule only opens the CTR2 to whoever is logged in at this "
+                                "computer's own screen, so a remote or background session "
+                                "cannot use it."));
         box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
         box.get()->exec();
         return;
     }
     if (QStandardPaths::findExecutable(QStringLiteral("pkexec")).isEmpty()) {
-        m_afterDownloadModeRule = nullptr;
+        m_afterRule = nullptr;
         showManualRuleInstructions(tr("pkexec is not installed"));
         return;
     }
@@ -350,7 +358,7 @@ void Ctr2ProxyPanel::offerUsbAccessRule(RuleUse use)
     if (box && box.get()->clickedButton() == install) {
         installUsbAccessRule(use);
     } else {
-        m_afterDownloadModeRule = nullptr;
+        m_afterRule = nullptr;
     }
 }
 
@@ -398,7 +406,7 @@ void Ctr2ProxyPanel::installUsbAccessRule(RuleUse use)
 
     auto fail = [this](const QString& detail) {
         m_installingRule = false;
-        m_afterDownloadModeRule = nullptr;
+        m_afterRule = nullptr;
         syncConfiguration();
         ScopedChildWidget<CanonMessageBox> box(
             tr("CTR2 USB access"),
@@ -441,11 +449,11 @@ void Ctr2ProxyPanel::installUsbAccessRule(RuleUse use)
     connect(proc, &QProcess::finished, this, [this, proc, fail, use](int code, QProcess::ExitStatus) {
         const QString err = QString::fromLocal8Bit(proc->readAllStandardError()).trimmed();
         proc->deleteLater();
-        if (code == 0 && use == RuleUse::DownloadMode) {
-            // settle has applied the ACL to the port: carry on with the install.
+        if (code == 0 && use != RuleUse::Relay) {
+            // settle has applied the ACL: carry on with the CTR2 window's action.
             m_installingRule = false;
             syncConfiguration();
-            if (auto next = std::exchange(m_afterDownloadModeRule, nullptr))
+            if (auto next = std::exchange(m_afterRule, nullptr))
                 next();
             return;
         }
@@ -454,7 +462,7 @@ void Ctr2ProxyPanel::installUsbAccessRule(RuleUse use)
             return;
         }
         qCWarning(lcDevices) << "CTR2: udev rule install failed, code" << code << err;
-        m_afterDownloadModeRule = nullptr;
+        m_afterRule = nullptr;
         if (code == 126) {  // the operator dismissed the polkit dialog
             m_installingRule = false;
             syncConfiguration();
