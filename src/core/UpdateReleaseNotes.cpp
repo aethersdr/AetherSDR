@@ -103,10 +103,12 @@ ReleaseInfo UpdateChecker::parseRelease(const QByteArray& json)
     for (QString line : lines) {
         line = line.trimmed();
         if (line.startsWith(QLatin1String("### "))) {
-            const QString heading = plainText(line.mid(4), kMaxChapterChars);
             chapterHasHighlight = true;
-            if (heading.isEmpty() || isBoilerplateHeading(heading)
-                || info.chapters.size() >= kMaxChapters) {
+            if (info.chapters.size() >= kMaxChapters) {
+                continue;   // the cap bounds the work, not only the list
+            }
+            const QString heading = plainText(line.mid(4), kMaxChapterChars);
+            if (heading.isEmpty() || isBoilerplateHeading(heading)) {
                 continue;
             }
             info.chapters.append(heading);

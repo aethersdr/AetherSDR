@@ -59,7 +59,12 @@ QString probeStoreName()
 UpdateChecker::UpdateChecker(QObject* parent, QNetworkAccessManager* network)
     : QObject(parent)
     , m_nam(network ? network : new QNetworkAccessManager(this))
-{}
+{
+    const VersionNumber saved = VersionNumber::parse(UpdateSettings::latestVersion());
+    if (!saved.isNull()) {
+        m_latest.version = saved.toString();
+    }
+}
 
 QString UpdateChecker::storeName()
 {

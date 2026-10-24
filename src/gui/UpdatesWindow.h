@@ -22,12 +22,15 @@ class UpdateStage;
 // installing, after aethersdr.com/experience; the stage's extra motion is the
 // style guide's one exception. Everything it shows comes from UpdateChecker:
 // the parsed version, and the release's tagline, chapters and highlights as
-// plain text. Opening it with nothing known starts a check.
+// plain text. Opening it without the release's details starts a check.
 class UpdatesWindow : public CanonWindow {
     Q_OBJECT
 
 public:
     explicit UpdatesWindow(UpdateChecker* checker, QWidget* parent = nullptr);
+
+    // Ask GitHub again now (Check Now, and Help → Check for Updates...).
+    void checkNow();
 
     // Mirrors Help → Check for Updates Automatically.
     void setAutomaticCheck(bool on);

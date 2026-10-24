@@ -32,6 +32,8 @@ struct ReleaseInfo {
     QList<ReleaseHighlight> highlights; // first bold lead of the first chapters, at most 3
     QList<ReleaseAsset> assets;         // only download URLs that pass isTrustedDownloadUrl()
     bool isValid() const { return !version.isEmpty(); }
+    // A release known only by version (seeded from settings) has none yet.
+    bool hasDetails() const { return !chapters.isEmpty() || !assets.isEmpty(); }
 };
 
 // Checks the GitHub releases API for a newer AetherSDR version, and is the
@@ -91,7 +93,9 @@ public:
     // badgeVersion() for the release the last successful check recorded.
     static QString knownBadgeVersion();
 
-    // The release the last successful check described; invalid before one.
+    // The release the last successful check described. Until this run's
+    // check lands it is the version a previous answer saved (no details), so
+    // a badge restored at startup can be acted on without a request.
     // Held in memory only: settings keep just the parsed version.
     const ReleaseInfo& latestRelease() const { return m_latest; }
     bool isChecking() const { return m_inFlight; }

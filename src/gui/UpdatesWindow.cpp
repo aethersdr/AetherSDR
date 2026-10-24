@@ -283,13 +283,7 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
         const QString version = m_checker ? m_checker->latestRelease().version : QString();
         QDesktopServices::openUrl(UpdateChecker::releasePageUrl(version));
     });
-    connect(m_checkNow, &QPushButton::clicked, this, [this] {
-        if (m_checker) {
-            m_failed = false;
-            m_checker->checkNow(UpdateChecker::Trigger::Manual);
-            refresh();
-        }
-    });
+    connect(m_checkNow, &QPushButton::clicked, this, &UpdatesWindow::checkNow);
     connect(m_skip, &QPushButton::clicked, this, [this] {
         if (!m_checker) {
             return;
@@ -309,10 +303,22 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
             m_failed = true;
             refresh();
         });
-        if (!m_checker->latestRelease().isValid() && !m_checker->isChecking()) {
+        // Nothing known, or only a version saved by an earlier answer: fetch
+        // the release's details.
+        if (!m_checker->latestRelease().hasDetails() && !m_checker->isChecking()) {
             m_checker->checkNow(UpdateChecker::Trigger::Manual);
         }
     }
+    refresh();
+}
+
+void UpdatesWindow::checkNow()
+{
+    if (!m_checker) {
+        return;
+    }
+    m_failed = false;
+    m_checker->checkNow(UpdateChecker::Trigger::Manual);
     refresh();
 }
 
@@ -363,6 +369,8 @@ void UpdatesWindow::refresh()
         m_tagline->setText(release.tagline);
         if (!store.isEmpty()) {
             note = tr("Updates for this copy come from %1.").arg(store);
+        } else if (m_failed && !release.hasDetails()) {
+            note = tr("Couldn't reach GitHub for this release's details. Check your connection, then try again.");
         } else if (UpdateChecker::isSkipped(release.version)) {
             note = tr("You skipped this release, so UPDATE is not shown in the title bar.");
         }
@@ -413,7 +421,9 @@ void UpdatesWindow::refresh()
                                         ? tr("Downloads %1 in your browser.").arg(asset.name)
                                         : tr("Opens the release page to choose a download."));
     m_notes->setVisible(known);
-    m_checkNow->setVisible(view != View::Available);
+    // Offered whenever there is something to retry: always outside a new
+    // release, and inside one whose details did not arrive.
+    m_checkNow->setVisible(view != View::Available || (m_failed && !release.hasDetails()));
     m_checkNow->setEnabled(!(m_checker && m_checker->isChecking()));
     m_skip->setVisible(canDownload);
     const bool skipped = UpdateChecker::isSkipped(release.version);

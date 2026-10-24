@@ -95,7 +95,7 @@ void UpdateStage::setTimeline(const QString& installed, const QString& latest)
 qreal UpdateStage::phase(qreal periodMs) const
 {
     if (!isAnimating()) {
-        return 0.25;   // a resting pose: glow at full, traces centred
+        return 0.25;   // a resting pose: glow at full, traces at the top of their drift
     }
     return std::fmod(static_cast<qreal>(m_clock.elapsed()), periodMs) / periodMs;
 }

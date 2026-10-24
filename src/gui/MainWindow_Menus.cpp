@@ -2334,7 +2334,8 @@ void MainWindow::showUpdatesWindow(bool checkNow)
         m_updatesWindow = w;
     }
     if (checkNow) {
-        m_updateChecker->checkNow(UpdateChecker::Trigger::Manual);
+        // Through the window, so an open one shows the check starting.
+        m_updatesWindow->checkNow();
     }
     m_updatesWindow->show();
     m_updatesWindow->raise();

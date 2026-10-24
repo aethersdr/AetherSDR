@@ -2,6 +2,7 @@
 #include "UpdateTestNetwork.h"
 #include "core/AppSettings.h"
 #include "core/UpdateChecker.h"
+#include "core/UpdateSettings.h"
 #include "gui/UpdateStage.h"
 #include "gui/UpdatesWindow.h"
 
@@ -146,7 +147,9 @@ int main(int argc, char** argv)
     }
 
     {
-        // A failed check.
+        // A failed check, with nothing saved from an earlier answer.
+        AppSettings::instance().remove(QStringLiteral("Updates"));
+        AppSettings::instance().save();
         HeldNetwork network;
         UpdateChecker checker(nullptr, &network);
         UpdatesWindow w(&checker);
@@ -156,6 +159,64 @@ int main(int argc, char** argv)
         check(text(w, "updatesEyebrow") == QLatin1String("COULDN'T REACH GITHUB"), "failed view");
         const QPushButton* again = button(w, QStringLiteral("Check Now"));
         check(again && again->isVisible() && again->isEnabled(), "Check Now offered after a failure");
+    }
+
+    {
+        // A release saved by an earlier answer, GitHub unreachable now: the
+        // badge restored at startup must stay actionable (Skip) without a
+        // successful request (#5304 Phase 1 ruling).
+        QCoreApplication::setApplicationVersion(QStringLiteral("26.10.2"));
+        UpdateSettings::setSkippedVersion(QString());
+        UpdateSettings::recordAnswer(QDateTime::currentDateTimeUtc(), QStringLiteral("26.10.3"));
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        check(checker.latestRelease().version == QLatin1String("26.10.3")
+                  && !checker.latestRelease().hasDetails(),
+              "the checker starts on the saved release, without details");
+        UpdatesWindow w(&checker, nullptr);
+        w.show();
+        check(network.requests == 1, "opening fetches the release's details");
+        network.last->finishWithError(QNetworkReply::HostNotFoundError);
+        app.processEvents();
+        check(text(w, "updatesEyebrow").startsWith(QLatin1String("NEW RELEASE")),
+              "offline, the saved release is still shown as new");
+        const QWidget* numerals = w.findChild<QWidget*>(QStringLiteral("updatesVersion"));
+        check(numerals && numerals->accessibleName() == QLatin1String("Version 26.10.3"),
+              "offline, the release is named");
+        check(text(w, "updatesNote").contains(QLatin1String("Couldn't reach GitHub")),
+              "offline, a note says the details are missing");
+        const QPushButton* retry = button(w, QStringLiteral("Check Now"));
+        check(retry && retry->isVisible() && retry->isEnabled(), "offline, Check Now is offered to retry");
+        QSignalSpy badge(&w, &UpdatesWindow::badgeChanged);
+        auto* skip = const_cast<QPushButton*>(button(w, QStringLiteral("Skip this version")));
+        check(skip && skip->isVisible() && skip->isEnabled(), "offline, Skip is offered");
+        if (skip) {
+            skip->click();
+        }
+        check(badge.size() == 1 && UpdateChecker::isSkipped(QStringLiteral("26.10.3")),
+              "offline, Skip clears the badge and is stored");
+
+        // A check started from outside the window (Help → Check for Updates)
+        // shows as checking at once.
+        w.checkNow();
+        check(network.requests == 2, "checkNow asks GitHub again");
+    }
+
+    {
+        // A failed window turns to "checking" as soon as a check starts.
+        QCoreApplication::setApplicationVersion(QStringLiteral("26.10.2"));
+        AppSettings::instance().remove(QStringLiteral("Updates"));
+        AppSettings::instance().save();
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow w(&checker, nullptr);
+        w.show();
+        network.last->finishWithError(QNetworkReply::HostNotFoundError);
+        app.processEvents();
+        check(text(w, "updatesEyebrow") == QLatin1String("COULDN'T REACH GITHUB"), "failed before the retry");
+        w.checkNow();
+        check(text(w, "updatesEyebrow").startsWith(QLatin1String("CHECKING")),
+              "an outside retry shows as checking at once");
     }
 
     return failures ? 1 : 0;
