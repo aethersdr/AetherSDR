@@ -1,0 +1,105 @@
+#include "UpdateInstaller.h"
+
+#include "LogManager.h"
+#include "UpdateSettings.h"
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QProcess>
+#include <QSaveFile>
+#include <QStandardPaths>
+
+namespace AetherSDR {
+
+namespace {
+const QString kHelper = QStringLiteral("AetherSDRUpdater.exe");
+constexpr int kProtocol = 1;   // src/updater/UpdateSwap.h kProtocol
+} // namespace
+
+QString UpdateInstaller::stateDir()
+{
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
+        .filePath(QStringLiteral("update"));
+}
+
+QStringList UpdateInstaller::helperArguments(qint64 pid, const QString& installDir,
+                                             const QString& stagedDir, const QString& stateDir,
+                                             const QString& version, bool restart)
+{
+    QStringList args{QStringLiteral("--protocol"), QString::number(kProtocol),
+                     QStringLiteral("--wait-pid"), QString::number(pid),
+                     QStringLiteral("--install"), QDir::toNativeSeparators(installDir),
+                     QStringLiteral("--staged"), QDir::toNativeSeparators(stagedDir),
+                     QStringLiteral("--state-dir"), QDir::toNativeSeparators(stateDir),
+                     QStringLiteral("--version"), version};
+    if (restart) {
+        args << QStringLiteral("--restart");
+    }
+    return args;
+}
+
+bool UpdateInstaller::launchHelper(const QString& stagedDir, const QString& version, bool restart,
+                                   QString* problem)
+{
+#ifdef Q_OS_WIN
+    const QString install = QCoreApplication::applicationDirPath();
+    const QString state = stateDir();
+    QDir().mkpath(state);
+    const QString source = QDir(install).filePath(kHelper);
+    const QString copy = QDir(state).filePath(kHelper);
+    QFile::remove(copy);
+    if (!QFile::copy(source, copy)) {
+        *problem = QStringLiteral("The updater could not be copied out of the install.");
+        return false;
+    }
+    const QStringList args = helperArguments(QCoreApplication::applicationPid(), install, stagedDir,
+                                             state, version, restart);
+    if (!QProcess::startDetached(copy, args, state)) {
+        *problem = QStringLiteral("The updater could not be started.");
+        return false;
+    }
+    qCInfo(lcUpdater).noquote() << "updater started for v" + version
+                                       + (restart ? " (restart)" : " (on quit)");
+    return true;
+#else
+    Q_UNUSED(stagedDir);
+    Q_UNUSED(version);
+    Q_UNUSED(restart);
+    *problem = QStringLiteral("Installing updates in place is Windows-only for now.");
+    return false;
+#endif
+}
+
+UpdateInstaller::SwapResult UpdateInstaller::takeSwapResult(const QString& stateDir)
+{
+    const QString path = QDir(stateDir).filePath(QStringLiteral("swap-result.txt"));
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    const QStringList parts = QString::fromUtf8(f.readAll()).trimmed().split(QLatin1Char(' '));
+    f.close();
+    QFile::remove(path);
+    if (parts.size() != 2) {
+        return {};
+    }
+    SwapResult r{parts[0], parts[1]};
+    qCInfo(lcUpdater).noquote() << "last update:" << r.outcome << "v" + r.version;
+    if (r.outcome == QLatin1String("RolledBack")) {
+        UpdateSettings::setRolledBackVersion(r.version);
+    }
+    return r;
+}
+
+bool UpdateInstaller::writeSelfTestMarker(const QString& marker, const QString& version)
+{
+    QSaveFile f(marker);
+    if (!f.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    f.write(version.toUtf8());
+    return f.commit();
+}
+
+} // namespace AetherSDR

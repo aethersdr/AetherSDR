@@ -4670,6 +4670,23 @@ add_test(NAME update_checker_test COMMAND update_checker_test)
 # UpdateChecker's release reading: the real v26.10.3 release JSON into the
 # Updates window's tagline and chapters; the installer picked per platform;
 # the download-URL allowlist. Pure, no network.
+# UpdateInstaller (RFC #5304 Phase 3): the app's side of AetherSDRUpdater:
+# its command line, the swap result read once, the rollback memory, the
+# self-test marker. No processes started.
+add_executable(update_installer_test tests/update_installer_test.cpp)
+target_include_directories(update_installer_test PRIVATE src tests)
+target_link_libraries(update_installer_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(update_installer_test PROPERTIES AUTOMOC ON)
+add_test(NAME update_installer_test COMMAND update_installer_test)
+
+# AetherSDRUpdater's folder swap (RFC #5304 Phase 3): UpdateSwap's state
+# machine on a simulated clock with injected processes and rename failures,
+# on every platform; the Win32 entry point is a thin shell over it. No Qt.
+add_executable(update_swap_test tests/update_swap_test.cpp src/updater/UpdateSwap.cpp)
+target_include_directories(update_swap_test PRIVATE src)
+set_target_properties(update_swap_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+add_test(NAME update_swap_test COMMAND update_swap_test)
+
 # UpdateStager (RFC #5304 Phase 2): the signed manifest's checks, choice,
 # and a patch bundle built by tools/build_update_manifest.py applied into a
 # staging copy of a fixture install, with every negative case of
@@ -9708,6 +9725,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    update_installer_test
     update_stager_test
     flex_readonly_metadata_test
     dsp_parameter_reset_test

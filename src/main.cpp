@@ -2,6 +2,7 @@
 #include "gui/ConnectionPanel.h"
 #include "gui/FramelessMessageBox.h"
 #include "gui/SliceColorManager.h"
+#include "core/UpdateInstaller.h"
 #include "core/AppSettings.h"
 #include "core/SystemInfo.h"
 #include "core/SettingsBootstrap.h"
@@ -391,6 +392,17 @@ int main(int argc, char* argv[])
 #endif
     QApplication app(argc, argv);
 
+    // The self-test AetherSDRUpdater.exe runs after swapping a new release in
+    // (RFC #5304 Phase 3): reaching here means Qt, its platform plugin and
+    // this build's libraries loaded. Report the version and stop, before any
+    // window, settings write, log or radio.
+    if (argc >= 3 && qstrcmp(argv[1], "--update-selftest") == 0) {
+        return AetherSDR::UpdateInstaller::writeSelfTestMarker(QString::fromLocal8Bit(argv[2]),
+                                                               QStringLiteral(AETHERSDR_VERSION))
+                   ? EXIT_SUCCESS
+                   : EXIT_FAILURE;
+    }
+
     // Name the GUI thread. Qt names the threads it starts, propagating
     // QThread::objectName() in QThreadPrivate::start(), but the main thread was
     // never started that way — so it is the one thread with no name, in the
@@ -600,6 +612,9 @@ int main(int argc, char* argv[])
     // to LogManager. SHistorySoftEdgeDb migration moved here for the same
     // reason.
     AetherSDR::AppSettings::instance().load();
+    // What AetherSDRUpdater did last time, read once; a rolled-back release
+    // is remembered so it is not offered again (RFC #5304 Phase 3).
+    AetherSDR::UpdateInstaller::takeSwapResult();
     // Construct the NR2 feature-owned settings model on the main thread after
     // AppSettings is loaded. This also performs its one-time flat-key migration.
     static_cast<void>(AetherSDR::Nr2SettingsModel::instance());

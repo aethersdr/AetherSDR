@@ -48,6 +48,12 @@ public:
     static QDateTime acceptedManifestUtc();
     static void setAcceptedManifestUtc(const QDateTime& generatedAt);
 
+    // A release the updater installed and then rolled back because it failed
+    // its self-test (RFC #5304 Phase 3). Install update does not offer it
+    // again, so a broken release is never re-staged in a loop. Empty: none.
+    static QString rolledBackVersion();
+    static void setRolledBackVersion(const QString& version);
+
     // Whether an automatic check may run at nowUtc: enabled, and the last
     // answer is missing, older than the interval, or in the future (the
     // clock moved backward).

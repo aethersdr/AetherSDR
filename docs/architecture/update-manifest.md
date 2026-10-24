@@ -191,6 +191,43 @@ fails its `sha256` or exceeds its `size`, a `latest/` that disagrees with
 GitHub, and paths or symlink targets that escape the install (absolute, `..`,
 a write through a link, or a link pointing outside it).
 
+## Swapping it in (Windows, Phase 3)
+
+`AetherSDRUpdater.exe` (`src/updater/`) does the swap after AetherSDR
+exits. It is built with the static MSVC runtime and no Qt, and the app
+copies it into the state folder before starting it
+(`UpdateInstaller::launchHelper`), because it renames the folder it was
+installed in. Its command line is versioned (`--protocol 1`), and anything
+else is refused.
+
+1. It waits for AetherSDR to exit, up to five minutes, and never kills it.
+2. It checks first: the install and the staged release each hold
+   `AetherSDR.exe`, the install's parent folder is writable, and no
+   `<install>.new` it did not create is in the way.
+3. It moves the staged release to `<install>.new`. Across volumes it copies
+   instead, so the swap is a same-volume rename.
+4. It renames `<install>` to `<install>.previous`, then `.new` to `<install>`.
+   A brief lock is retried for up to 30 s; one that persists is undone.
+   Only one `.previous` is kept.
+5. It runs `AetherSDR.exe --update-selftest <marker>` from the new tree.
+   The new version starts Qt, writes its version to the marker and exits,
+   with no window, no settings and no radio. A missing or wrong marker, or
+   no exit within 60 s, restores `.previous` and keeps the failed release as
+   `<install>.failed`.
+6. Restart to update then starts the app; a swap on quit does not.
+
+A journal (`swap-journal.txt`) records each step before it is taken, so a
+helper that dies mid-swap is repaired by the next run. The install is
+restored from `.previous`, and a release whose self-test never finished is
+rolled back. Windows has no atomic folder swap; between step 4's two
+renames nothing runnable is at `<install>` for a moment, and the journal
+covers that. The outcome goes to `swap-result.txt`, which the app reads once
+at its next start. A rolled-back release is remembered as
+`Updates.rolledBackVersion` and is not offered again.
+
+If a rollback rename itself fails, the helper shows a message naming the
+three folders and the log (`updater.log`), rather than failing silently.
+
 ## Bundle naming
 
 `AetherSDR-<tag>-<label>-from-<from tag>.update.tar`, where `<label>` is

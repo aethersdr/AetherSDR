@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 272 touchpoint headers (221 core, 51 models) — 272/272 tagged, 0/272 converted.
+**Totals:** 273 touchpoint headers (222 core, 51 models) — 273/273 tagged, 0/273 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -177,6 +177,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/UlanziDialMacOSManager.h` | 1 | ui-support — macOS IOKit implementation of the Ulanzi Dial client input surface. Desktop hardware plumbing, not radio state. | unconverted |
 | `core/UlanziDialMappings.h` | 3 | ui-support — Owner of the Ulanzi Dial's pill→action bindings in one feature-owned document (Principle V). A control surface's own configuration — it belongs to the peripheral, not to any radio — same home decision as the FlexControl USB knob. | unconverted |
 | `core/UpdateChecker.h` | 3 | ui-support — App self-update checker polling GitHub releases API; pure client plumbing, no radio state — belongs in gui shell. | unconverted |
+| `core/UpdateInstaller.h` | 1 | ui-support — App self-update: hands a staged release to AetherSDRUpdater.exe and reads its result at start; pure client plumbing, no radio state. | unconverted |
 | `core/VersionNumber.h` | 3 | ui-support — Semver parse/compare utility used by update checker and What's New dialog; app plumbing, not radio state. | unconverted |
 | `core/VirtualAudioBridge.h` | 3 | mixed(flex) — POSIX-shm virtual audio device bridge feeding digi-mode apps; routing is generic, semantics are Flex DAX | unconverted |
 | `core/VkampConnection.h` | 3 | peripheral(vkamp) — Direct TCP control/status (port 5005) plus UDP telemetry (port 5010) client for the VK3AMP / Helios DX amplifier line (TCI_VKAMP firmware family) — a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h and core/SpeConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/vkamp-amplifier-design.md. | unconverted |

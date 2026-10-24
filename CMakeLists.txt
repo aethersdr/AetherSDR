@@ -1145,6 +1145,7 @@ set(CORE_SOURCES
     src/core/UpdateSettings.cpp
     src/core/UpdateReleaseNotes.cpp
     src/core/UpdateStager.cpp
+    src/core/UpdateInstaller.cpp
     src/core/NetworkDiagnostics.cpp
     src/core/WindowsFirewall.cpp
     src/core/OleCompoundFile.cpp
@@ -2543,6 +2544,25 @@ if((UNIX OR WIN32) AND ENABLE_DSTAR)
     endif()
 
     add_dependencies(AetherSDR aether-dv-waveform)
+endif()
+
+# AetherSDRUpdater.exe (RFC #5304 Phase 3): swaps a staged release into place
+# after AetherSDR exits and rolls back when its self-test fails. It runs while
+# the install folder it came from is being renamed, so it may load nothing
+# from there: no Qt, and the static MSVC runtime (vcruntime140.dll lives in
+# the install). Built with AetherSDR, so every Windows build compiles it.
+if(WIN32)
+    add_executable(AetherSDRUpdater WIN32
+        src/updater/main_win.cpp
+        src/updater/UpdateSwap.cpp
+    )
+    target_include_directories(AetherSDRUpdater PRIVATE src/updater)
+    target_compile_definitions(AetherSDRUpdater PRIVATE UNICODE _UNICODE NOMINMAX)
+    target_link_libraries(AetherSDRUpdater PRIVATE shell32 user32)
+    set_target_properties(AetherSDRUpdater PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    add_dependencies(AetherSDR AetherSDRUpdater)
 endif()
 
 # Windows: GUI app (no console window) + icon resource
