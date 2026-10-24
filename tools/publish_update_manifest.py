@@ -44,6 +44,9 @@ from build_update_manifest import DOWNLOAD_BASE, SCHEMA, version_key  # noqa: E4
 BUCKET = "aethersdr-updates"
 PUBLIC_BASE = "https://updates.aethersdr.com/"
 RELEASE_CACHE = "public, max-age=300"   # short, so a repaired release is seen
+# Cloudflare answers Python's default "Python-urllib/x.y" User-Agent with 403
+# (bot protection), so the publication check names itself.
+USER_AGENT = "AetherSDR-update-publisher/1 (+https://github.com/aethersdr/AetherSDR)"
 LATEST_CACHE = "no-cache"
 
 
@@ -57,7 +60,8 @@ class PublicStore:
     """Reads what clients read. Cannot write."""
 
     def get(self, key: str) -> bytes | None:
-        req = urllib.request.Request(PUBLIC_BASE + key, headers={"Cache-Control": "no-cache"})
+        req = urllib.request.Request(PUBLIC_BASE + key,
+                                     headers={"Cache-Control": "no-cache", "User-Agent": USER_AGENT})
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 return r.read()

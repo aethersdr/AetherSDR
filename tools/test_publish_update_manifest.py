@@ -138,6 +138,30 @@ class Validation(Base):
             pub.validate_manifest(b"not json", "v26.10.4")
 
 
+class PublicRead(Base):
+    def test_the_public_check_names_itself(self) -> None:
+        """Cloudflare refuses Python's default User-Agent with 403; the
+        first real publish's check failed on exactly that."""
+        seen = []
+
+        class Response:
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+            def read(self):
+                return b"x"
+
+        real = pub.urllib.request.urlopen
+        pub.urllib.request.urlopen = lambda req, timeout=None: (seen.append(req), Response())[1]
+        try:
+            self.assertEqual(pub.PublicStore().get("latest/manifest.json"), b"x")
+        finally:
+            pub.urllib.request.urlopen = real
+        ua = seen[0].get_header("User-agent")
+        self.assertTrue(ua and ua.startswith("AetherSDR-"), ua)
+
+
 class LatestPromotion(Base):
     def test_older_run_resuming_after_a_newer_one_does_not_roll_latest_back(self) -> None:
         """The review's interleaving: the v26.10.4 run saw itself as GitHub's
