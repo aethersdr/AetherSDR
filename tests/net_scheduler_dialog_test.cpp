@@ -9,7 +9,9 @@
 
 #include <QAbstractSpinBox>
 #include <QApplication>
+#include <QImage>
 #include <QLineEdit>
+#include <QMenu>
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QPushButton>
@@ -240,6 +242,77 @@ private slots:
 
         QVERIFY(checked >= 6);
         QVERIFY2(flush.isEmpty(), qPrintable(flush.join(QStringLiteral(", "))));
+    }
+
+    // A field's standard right-click menu is a child of the field, so the
+    // canon sheet's transparent-everything rule reaches it unless QMenu gets
+    // its panel back.
+    void editorFieldMenuIsOpaque()
+    {
+        NetSchedulerDialog dlg(twoNets(), [] { return MemoryEntry{}; });
+        dlg.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&dlg));
+
+        bool sawField = false;
+        bool parentedInside = false;
+        int alpha = -1;
+        onNextModal([&](QWidget* modal) {
+            auto* canon = qobject_cast<CanonWindow*>(modal);
+            const QList<QLineEdit*> edits = canon
+                ? canon->bodyWidget()->findChildren<QLineEdit*>()
+                : QList<QLineEdit*>{};
+            if (!edits.isEmpty()) {
+                sawField = true;
+                QMenu* menu = edits.first()->createStandardContextMenu();
+                parentedInside = menu->parentWidget() == edits.first();
+                menu->popup(modal->mapToGlobal(QPoint(40, 40)));
+                QTest::qWait(100);
+                const QImage image = menu->grab().toImage();
+                if (!image.isNull())
+                    alpha = qAlpha(image.pixel(image.width() / 2, image.height() / 2));
+                menu->close();
+                delete menu;
+            }
+            qobject_cast<QDialog*>(modal)->reject();
+        });
+        QPushButton* add = buttonByText(dlg, QStringLiteral("Add…"));
+        QVERIFY(add);
+        add->click();
+
+        QVERIFY(sawField);
+        QVERIFY(parentedInside);
+        QCOMPARE(alpha, 255);
+    }
+
+    // MainWindow opens the window with WA_DeleteOnClose. Every way out
+    // destroys it, Esc included (QDialog::done() closes, it does not only
+    // hide), so the next open starts from the schedule MainWindow passes in.
+    void everyCloseDestroysTheWindow_data()
+    {
+        QTest::addColumn<int>("path");
+        QTest::newRow("Esc") << 0;
+        QTest::newRow("Ctrl+W / Cmd+W") << 1;
+        QTest::newRow("corner close button") << 2;
+    }
+
+    void everyCloseDestroysTheWindow()
+    {
+        QFETCH(int, path);
+        QPointer<NetSchedulerDialog> dlg =
+            new NetSchedulerDialog(twoNets(), [] { return MemoryEntry{}; });
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->show();
+        QVERIFY(QTest::qWaitForWindowExposed(dlg));
+        if (path == 0)
+            QTest::keyClick(dlg, Qt::Key_Escape);
+        else if (path == 1)
+            QTest::keySequence(dlg, QKeySequence::Close);
+        else
+            dlg->close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        const bool destroyed = dlg.isNull();
+        delete dlg.data();
+        QVERIFY(destroyed);
     }
 };
 

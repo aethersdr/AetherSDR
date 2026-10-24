@@ -69,7 +69,8 @@ QString formatNext(const NetEntry& entry)
 // widgets this window has that they do not: the other spin boxes (as the
 // sheet's QSpinBox), the intro and next-firing lines, the hairline between the
 // schedule and the tuning preset, and the popups (a combo's list, the date's
-// calendar), which would otherwise take the sheet's transparent ground.
+// calendar, a field's right-click menu), which would otherwise take the
+// sheet's transparent ground.
 QString netSchedulerSheet()
 {
     return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
@@ -90,7 +91,15 @@ QString netSchedulerSheet()
             "QCalendarWidget QWidget { color: {{color.canon.inkSoft}};"
             " background: {{color.canon.nested}}; }"
             "QCalendarWidget QAbstractItemView { selection-background-color: {{color.canon.cyan}};"
-            " selection-color: {{color.canon.onAccent}}; }");
+            " selection-color: {{color.canon.onAccent}}; }"
+            "QMenu { color: {{color.canon.inkSoft}}; background: {{color.canon.raised}};"
+            " border: 1px solid {{color.canon.lineHi}}; }"
+            "QMenu::item { padding: 4px 18px; }"
+            "QMenu::item:selected { color: {{color.canon.onAccent}};"
+            " background: {{color.canon.cyan}}; }"
+            "QMenu::item:disabled { color: {{color.control.unavailable}}; }"
+            "QMenu::separator { height: 1px; margin: 4px 8px;"
+            " background: {{color.canon.line}}; }");
 }
 
 // The sheet's left padding never reaches a spin box's editor (it sits on the
