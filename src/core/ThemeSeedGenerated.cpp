@@ -41,16 +41,6 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.accessory.key.meffa.standby.foreground", QString("#008040"));
     m_tokens.insert("color.accessory.key.standby.background", QString("#5a3a0a"));
     m_tokens.insert("color.accessory.key.standby.foreground", QString("#ffb84d"));
-    {
-        ThemeGradient g;
-        g.type = ThemeGradient::Linear;
-        g.angle = 90.0;
-        g.stops.append({0.0, QColor("#1a5c30")});
-        g.stops.append({0.35, QColor("#4a5520")});
-        g.stops.append({0.65, QColor("#6a4520")});
-        g.stops.append({1.0, QColor("#6e1f1f")});
-        m_tokens.insert("color.accessory.swrScale", QVariant::fromValue(g));
-    }
     m_tokens.insert("color.background.0", QString("#0f0f1a"));
     m_tokens.insert("color.background.1", QString("#1a2a3a"));
     m_tokens.insert("color.background.2", QString("#304050"));

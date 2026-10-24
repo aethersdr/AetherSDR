@@ -525,6 +525,39 @@ float gaugeValue(const AmpApplet& applet, const QString& accessibleName)
     return std::numeric_limits<float>::quiet_NaN();
 }
 
+// Expanded, the idle SWR bar draws the same flat track as PWR. A track painted
+// with the SWR scale reads as a pegged bar at rest.
+void testExpandedSwrTrackMatchesPower()
+{
+    resetSettings();
+    AmpApplet applet;
+    applet.setFloating(true);
+    HGauge* swr = gaugeNamed(applet, QStringLiteral("SWR"));
+    HGauge* pwr = gaugeNamed(applet, QStringLiteral("Forward power"));
+    if (!swr || !pwr) {
+        report("expanded SWR track matches PWR", false, QStringLiteral("gauge not found"));
+        return;
+    }
+    // Same size, so a sample lands at the same place on both bars.
+    swr->resize(400, swr->height());
+    pwr->resize(400, swr->height());
+    const QImage swrImg = swr->grab().toImage();
+    const QImage pwrImg = pwr->grab().toImage();
+    bool same = true;
+    QString detail;
+    for (int x : {40, 200, 360}) {
+        const QPoint at(x, swrImg.height() - 6);
+        if (swrImg.pixel(at) != pwrImg.pixel(at)) {
+            same = false;
+            detail = QStringLiteral("x=%1 swr=%2 pwr=%3").arg(x)
+                         .arg(QColor(swrImg.pixel(at)).name(),
+                              QColor(pwrImg.pixel(at)).name());
+            break;
+        }
+    }
+    report("expanded SWR track matches PWR", same, detail);
+}
+
 // The drive row shows the amplifier's measured exciter power. It is the other
 // half of the gain reading: PWR alone cannot say whether an amplifier that is
 // making little power is being driven with little power.
@@ -1061,6 +1094,7 @@ int main(int argc, char** argv)
     testPreferenceReload();
     testFanModePulldown();
     testReadoutWidthIsStable();
+    testExpandedSwrTrackMatchesPower();
     testDriveRowShowsMeasuredDrive();
     testRelayedMetersWinOverTheDeviceWhileFresh();
     testRadioVitalsWinOverTheDeviceWhileFresh();
