@@ -732,6 +732,43 @@ void testAutoStartWaitsForRestart()
     relay.setAutoStart(false);
 }
 
+// A firmware switch keeps the hidraw path on Linux, and the idle probe can
+// run while the new firmware is still starting and reads no offer. Read
+// again, the offer is there: a stale "no commands" must not stick.
+void testReprobeReadsTheOfferAgain()
+{
+    Ctr2HidPort::DeviceInfo info;
+    info.path = QStringLiteral("/sim/stock");
+    info.vendorId = 0x303A;
+    info.productId = 0x1001;
+    info.product = QStringLiteral("ESP32S3_DEV");
+    Device dev;
+    dev.reportsVersion = false;
+    dev.offersFirmware = false;   // still starting: no offer yet
+    Ctr2ProxyModel relay;
+    relay.setUsbBackend(
+        [info] { return QList<Ctr2HidPort::DeviceInfo>{info}; },
+        [](const Ctr2HidPort::DeviceInfo&, QString*) -> Ctr2HidPort* { return nullptr; },
+        [&dev](const Ctr2HidPort::DeviceInfo&, quint32 caps, QString*) -> Ctr2HidPort* {
+            return new SimPort(&dev, caps);
+        });
+    relay.setTransport(Ctr2ProxyModel::Transport::Usb);
+    relay.setUsbDevicePath(info.path);
+    check(waitUntil([&dev] { return dev.opens > 0; }), "the idle probe reads the device");
+    waitUntil([] { return false; }, 100);
+    check(!relay.usbFirmwareCommands(), "and finds no offer while the firmware starts");
+
+    dev.offersFirmware = true;   // started
+    const int opens = dev.opens;
+    relay.refreshDevices();
+    waitUntil([] { return false; }, 100);
+    check(dev.opens == opens && !relay.usbFirmwareCommands(),
+          "an unchanged device list does not read it again");
+    relay.reprobeFirmware();
+    check(waitUntil([&relay] { return relay.usbFirmwareCommands(); }),
+          "reading it again finds the restart commands");
+}
+
 void testStockFirmwareCommands()
 {
     using Firmware = FirmwareInstallModel::Firmware;
@@ -893,6 +930,7 @@ int main(int argc, char** argv)
     testDestroyedMidUpdate();
     testRestartRequests();
     testAutoStartWaitsForRestart();
+    testReprobeReadsTheOfferAgain();
     testStockFirmwareCommands();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

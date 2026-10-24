@@ -68,6 +68,11 @@ public:
     // Rescans local IPv4 addresses and CTR2-class USB HID devices, now, on
     // this thread. The periodic rescan does the same work off the GUI thread.
     void refreshDevices();
+    // Forgets what the idle probe last read from the selected device and
+    // reads it again (its version and FIRMWARE offer, usbFirmwareVersion() and
+    // usbFirmwareCommands()). A probe taken while the firmware was still
+    // starting can read nothing; a firmware switch keeps the same path.
+    void reprobeFirmware();
 
     // Setters refuse (return false) while running.
     Transport transport() const { return m_transport; }

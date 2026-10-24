@@ -290,6 +290,12 @@ void Ctr2ProxyModel::applyDeviceScan(DeviceScan scan)
 // (Feature report 0x03, read when a port opens), accepting no link
 // extensions so the device's state is untouched. Never while the relay or an
 // update holds the device.
+void Ctr2ProxyModel::reprobeFirmware()
+{
+    m_probedPath.clear();
+    probeFirmwareVersion();
+}
+
 void Ctr2ProxyModel::probeFirmwareVersion()
 {
     if (!m_firmwareOpener || m_probe || isRunning() || m_firmware->isRunning()
@@ -485,6 +491,9 @@ void Ctr2ProxyModel::onUsbStateChanged()
     }
     // Connecting means the CTR2 answered; Stopped and Error end the run.
     m_usbAnswered = s != State::Stopped && s != State::Error;
+    // What the relay knew of the firmware goes with it: read it again idle.
+    if (!m_usbAnswered)
+        QTimer::singleShot(0, this, &Ctr2ProxyModel::reprobeFirmware);
     m_noAnswerTimer->stop();
     if (m_noAnswer) {
         m_noAnswer = false;
