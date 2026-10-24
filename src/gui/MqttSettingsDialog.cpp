@@ -18,7 +18,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
-#include <QRegularExpression>
 #include <QSpinBox>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -37,6 +36,12 @@ namespace AetherSDR {
 namespace {
 
 constexpr int kMaxPublishButtons = 12;
+
+// Text-field padding, and the 1 px border the ModemChrome sheet draws round
+// every field. The port field's editor takes their sum as its text inset.
+constexpr int kFieldPadV = 5;
+constexpr int kFieldPadH = 10;
+constexpr int kFieldBorder = 1;
 
 // What the shared canon dialog sheet (ModemChrome, as the AetherRX and AetherTX
 // Settings dialogs wear it) leaves out: tabs and group boxes as SpotHub's;
@@ -81,7 +86,7 @@ QGroupBox::title {
 }
 QLineEdit,
 QSpinBox {
-    padding: 5px 10px;
+    padding: %1px %2px;
 }
 QPushButton {
     padding: 6px 14px;
@@ -95,23 +100,6 @@ QTableWidget QLineEdit {
     padding: 0px 6px;
 }
 )";
-
-// The Display column's check is a table item, not a QCheckBox, so the canon
-// check images reach it only through QTableWidget::indicator: the same four
-// rules, retargeted. Empty when the images could not be written.
-QString tableCheckRules()
-{
-    static const QRegularExpression checkRule(
-        QStringLiteral(R"(QCheckBox::indicator:[^{]*\{[^}]*\})"));
-    QString rules;
-    for (const QRegularExpressionMatch& m : checkRule.globalMatch(canonIndicatorRules())) {
-        rules += m.captured(0).replace(QLatin1String("QCheckBox"), QLatin1String("QTableWidget"));
-    }
-    if (rules.isEmpty()) {
-        return {};
-    }
-    return QStringLiteral("QTableWidget::indicator { width: 18px; height: 18px; }") + rules;
-}
 
 QTableWidgetItem* textItem(const QString& text = {})
 {
@@ -153,8 +141,9 @@ MqttSettingsDialog::MqttSettingsDialog(QWidget* parent)
     FramelessResizer::install(this);
     applyCanonSheet(bodyWidget(), [] {
         return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
-             + QString::fromLatin1(kMqttCanonRules) + canonSpinArrowRules()
-             + tableCheckRules();
+             + QString::fromLatin1(kMqttCanonRules).arg(kFieldPadV).arg(kFieldPadH)
+             + canonSpinArrowRules()
+             + canonItemCheckRules(QStringLiteral("QTableWidget"));
     });
     buildUi();
     loadSettings();
@@ -188,7 +177,7 @@ void MqttSettingsDialog::buildUi()
     // The sheet's left padding never reaches a spin box's editor (it sits on
     // the frame's inner edge), so its text gets the text fields' inset here.
     if (auto* editor = m_portSpin->findChild<QLineEdit*>()) {
-        editor->setTextMargins(11, 0, 0, 0);
+        editor->setTextMargins(kFieldPadH + kFieldBorder, 0, 0, 0);
     }
     form->addRow(tr("Port:"), m_portSpin);
 

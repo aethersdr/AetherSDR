@@ -2,8 +2,9 @@
 
 // Canon check boxes and radio buttons for stylesheets (style guide, RFC
 // #6226): canonIndicatorRules() returns QCheckBox / QRadioButton indicator
-// rules whose images are painted here in color.canon.* colours, and
-// canonSpinArrowRules() the spin box steppers to go with them.
+// rules whose images are painted here in color.canon.* colours,
+// canonItemCheckRules() the same check boxes for an item view's check column,
+// and canonSpinArrowRules() the spin box steppers to go with them.
 //
 // Painted, not drawn with stylesheet borders: a QSS border cannot carry a tick
 // or a dot, and a translucent canon hairline drawn as a rounded QSS border
@@ -28,6 +29,7 @@
 #include <QWidget>
 
 #include <functional>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -54,11 +56,16 @@ inline QColor canonColour(const char* token)
     return ThemeManager::instance().color(QStringLiteral("color.canon.") + QLatin1String(token));
 }
 
-} // namespace detail
+// The eight indicator images, check boxes then radio buttons, each off, on,
+// off disabled and on disabled.
+struct CanonIndicatorImages {
+    QString checkOff, checkOn, checkOffDis, checkOnDis;
+    QString radioOff, radioOn, radioOffDis, radioOnDis;
+};
 
-inline QString canonIndicatorRules()
+// All eight, or none if any could not be written.
+inline std::optional<CanonIndicatorImages> canonIndicatorImages()
 {
-    using detail::canonColour;
     const QColor control = canonColour("control");
     const QColor lineHi  = canonColour("lineHi");
     const QColor line    = canonColour("line");
@@ -103,7 +110,6 @@ inline QString canonIndicatorRules()
         };
     };
 
-    using detail::canonIndicatorPath;
     const QString checkOff = canonIndicatorPath(QStringLiteral("check_off"), key,
                                                 checkBox(control, lineHi, nullptr));
     const QString checkOn = canonIndicatorPath(QStringLiteral("check_on"), key,
@@ -124,10 +130,21 @@ inline QString canonIndicatorRules()
     for (const QString* p : {&checkOff, &checkOn, &checkOffDis, &checkOnDis,
                              &radioOff, &radioOn, &radioOffDis, &radioOnDis}) {
         if (p->isEmpty()) {
-            return {};   // Qt's own indicators rather than blank ones
+            return std::nullopt;   // Qt's own indicators rather than blank ones
         }
     }
+    return CanonIndicatorImages{checkOff, checkOn, checkOffDis, checkOnDis,
+                                radioOff, radioOn, radioOffDis, radioOnDis};
+}
 
+} // namespace detail
+
+inline QString canonIndicatorRules()
+{
+    const std::optional<detail::CanonIndicatorImages> img = detail::canonIndicatorImages();
+    if (!img) {
+        return {};
+    }
     // Quoted: a cache path can hold spaces (a Windows profile name).
     return QStringLiteral(
         "QCheckBox::indicator, QRadioButton::indicator {"
@@ -140,8 +157,27 @@ inline QString canonIndicatorRules()
         "QRadioButton::indicator:checked { image: url(\"%6\"); }"
         "QRadioButton::indicator:unchecked:disabled { image: url(\"%7\"); }"
         "QRadioButton::indicator:checked:disabled { image: url(\"%8\"); }")
-        .arg(checkOff, checkOn, checkOffDis, checkOnDis,
-             radioOff, radioOn, radioOffDis, radioOnDis);
+        .arg(img->checkOff, img->checkOn, img->checkOffDis, img->checkOnDis,
+             img->radioOff, img->radioOn, img->radioOffDis, img->radioOnDis);
+}
+
+// The canon check images for an item view's checkable items (a table's check
+// column), which a QCheckBox rule does not reach: `view` is the view's class
+// name, as the selector takes it (QTableWidget). Empty, like
+// canonIndicatorRules(), when the images could not be written.
+inline QString canonItemCheckRules(const QString& view)
+{
+    const std::optional<detail::CanonIndicatorImages> img = detail::canonIndicatorImages();
+    if (!img) {
+        return {};
+    }
+    return QStringLiteral(
+        "%1::indicator { width: 18px; height: 18px; }"
+        "%1::indicator:unchecked { image: url(\"%2\"); }"
+        "%1::indicator:checked { image: url(\"%3\"); }"
+        "%1::indicator:unchecked:disabled { image: url(\"%4\"); }"
+        "%1::indicator:checked:disabled { image: url(\"%5\"); }")
+        .arg(view, img->checkOff, img->checkOn, img->checkOffDis, img->checkOnDis);
 }
 
 // A spin box with a styled frame draws its steppers from the sheet or not at
