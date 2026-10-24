@@ -13,6 +13,7 @@
 #include "gui/FramelessResizer.h"
 #include "gui/FreeDvReporterDialog.h"
 
+#include <QAbstractButton>
 #include <QApplication>
 #include <QDialog>
 #include <QFile>
@@ -282,10 +283,9 @@ void testMessageMenuIsOpaque()
     delete menu;
 }
 
-// A band clicked off must not keep the focus border, which matches the
-// checked border; keyboard users still reach the buttons with Tab.
 // The explicit minimum must not let the window shrink below what the band
-// row needs, or the Track / Band labels clip.
+// row needs, or the Track / Band labels clip. Checked on the shown window at
+// its minimum size, after the canon sheet has polished every control.
 void testMinimumFitsBandRow()
 {
     resetSettings();
@@ -294,7 +294,25 @@ void testMinimumFitsBandRow()
     report("minimum width fits the layout",
            dlg.minimumWidth() >= dlg.minimumSizeHint().width(),
            QStringLiteral("min %1 hint %2").arg(dlg.minimumWidth()).arg(dlg.minimumSizeHint().width()));
+
+    dlg.resize(dlg.minimumSize());
+    dlg.show();
+    report("the window is exposed", QTest::qWaitForWindowExposed(&dlg));
+    QTest::qWait(50);
+    QStringList clipped;
+    for (QAbstractButton* b : dlg.findChildren<QAbstractButton*>()) {
+        if (!b->isVisible() || b->text().isEmpty())
+            continue;
+        if (b->width() < b->minimumSizeHint().width())
+            clipped << QStringLiteral("%1 %2<%3").arg(b->text()).arg(b->width())
+                                                     .arg(b->minimumSizeHint().width());
+    }
+    report("at minimum size no labelled control is narrower than it needs",
+           clipped.isEmpty(), clipped.join(QStringLiteral(", ")));
 }
+
+// A band clicked off must not keep the focus border, which matches the
+// checked border; keyboard users still reach the buttons with Tab.
 
 void testBandButtonsTakeTabFocusOnly()
 {

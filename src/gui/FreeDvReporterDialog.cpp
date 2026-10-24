@@ -170,6 +170,9 @@ QPushButton:checked {
     border-color: {{color.canon.aqua}};
 }
 QPushButton:disabled {
+    /* Send stays legible while full-participant reporting is off: the muted
+       ink keeps it reading as greyed-out, not absent, which is how the row
+       explains its own gating (#4231). */
     color: {{color.canon.muted}};
     border-color: {{color.canon.line}};
     background: transparent;
