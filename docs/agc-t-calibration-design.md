@@ -270,6 +270,12 @@ calibrate AGC-T against the noise floor") and show a one-time discovery hint.
 - **Multi-slice / multi-client:** calibrate the active/owned slice only; gate on
   slice ownership like the rest of the app.
 - **NR/AF interference:** freeze or bypass for the sweep so only AGC-T varies.
+- **No audio on this computer:** with PC Audio off, `AudioEngine` stops and
+  `levelChanged` never fires, so every point would record the same stale RMS.
+  The AGC-off pass then never reaches its target, climbs to 100 (120 dB on an
+  ANAN-G2's line out) and applies its first point. An auto-sweep step that
+  settles with no new level stops the sweep and restores the original value
+  (`AgcTCalibrator::noAudio`).
 
 ---
 
