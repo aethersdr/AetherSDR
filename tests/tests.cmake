@@ -8165,6 +8165,36 @@ add_test(NAME connection_panel_source_pick_test COMMAND connection_panel_source_
 set_tests_properties(connection_panel_source_pick_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" SKIP_RETURN_CODE 77)
 
+# The title bar's tabs are the three radios connected to most recently; the
+# rest wait in the drawer. Pure list logic: no widgets, sockets or settings.
+add_executable(radio_tab_recents_test
+    tests/radio_tab_recents_test.cpp
+    src/gui/RadioTabRecents.cpp
+)
+target_include_directories(radio_tab_recents_test PRIVATE src)
+target_link_libraries(radio_tab_recents_test PRIVATE Qt6::Core Qt6::Widgets)
+add_test(NAME radio_tab_recents_test COMMAND radio_tab_recents_test)
+
+# The title bar's saved-radio tabs come from the Connect window's saved manual
+# profiles: which become tabs, their ids, the stored model, and the tab's
+# Connect manually hand-off. Socket-free; nothing is probed or connected.
+add_executable(connection_panel_saved_radios_test
+    tests/connection_panel_saved_radios_test.cpp
+    src/gui/ConnectionPanel.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(connection_panel_saved_radios_test PRIVATE src tests)
+target_link_libraries(connection_panel_saved_radios_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets
+)
+set_target_properties(connection_panel_saved_radios_test PROPERTIES AUTOMOC ON)
+add_test(NAME connection_panel_saved_radios_test COMMAND connection_panel_saved_radios_test)
+set_tests_properties(connection_panel_saved_radios_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Leaving minimal mode after a launch in it must not draw the spectrum's first
 # QRhi frame inside the exit's resize cascade (#5915; #4363, #4990). Plain
 # widgets, offscreen, no GPU; the MainWindow ordering is read from the source,

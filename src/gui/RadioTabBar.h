@@ -21,11 +21,14 @@ namespace AetherSDR {
 enum class RadioTabStatus {
     Available,   // discovered, idle — slate
     Connected,   // this client owns the session — green, slow pulse
-    InUse        // another station has it — amber
+    InUse,       // another station has it — amber
+    Saved        // a saved manual connection (an Icom or a routed Flex) that
+                 // discovery cannot see, so its reachability is unknown — slate,
+                 // like Available; the word carries the difference
 };
 
 // The machine-readable status token the automation bridge publishes:
-// "connected" / "available" / "in use", lower-case and untranslated. Drivers
+// "connected" / "available" / "in use" / "saved", lower-case and untranslated. Drivers
 // match on these, so they are a contract — see docs/automation-bridge.md.
 QString radioTabStatusText(RadioTabStatus status);
 
@@ -144,6 +147,7 @@ public:
     // Rows offered by the "+" popover — discovery's current view, which is a
     // superset of the tab strip while a radio is still unconfigured.
     void setDiscoveredRadios(const QList<RadioTabEntry>& radios);
+    const QList<RadioTabEntry>& discoveredRadios() const { return m_discovered; }
 
     // Animated glow on the active tab's dot.  Follows the operator's existing
     // "Blink status indicator" preference so one switch governs every

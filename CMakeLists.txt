@@ -1551,6 +1551,7 @@ set(GUI_SOURCES
     src/gui/RadioTabBar.cpp
     src/gui/WindowCaptionButtons.cpp
     src/gui/SupportDialog.cpp
+    src/gui/RadioTabRecents.cpp
     src/gui/SliceTroubleshootingDialog.cpp
     src/gui/RadioHealthDialog.cpp
     src/gui/KeyboardMapWidget.cpp

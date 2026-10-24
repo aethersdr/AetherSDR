@@ -155,7 +155,7 @@ The main window has one 52 px title bar. From left to right:
 | **☰** | The application menu (Windows and Linux only). |
 | **AetherSDR** brand mark | Drag the bar here to move the window. |
 | **UPDATE** badge | Shown when a newer AetherSDR release is available; hover names it, click opens the Updates window. See [Updates](./updates.md). |
-| **Radio tabs** | One tab per known radio (LAN, SmartLink or routed). See below. |
+| **Radio tabs** | Your three most recently connected radios; every other radio is in the radio list (**⌄⌄**). See below. |
 | **EXPERIMENTAL** badge | Shown when the connected radio family's support is experimental. |
 | **multiFLEX** | Appears when other clients share the radio; hover lists them, click opens the dashboard. |
 | **TX** *station* | Red badge when another client is transmitting. |
@@ -174,12 +174,14 @@ The **UPDATE** badge appears when a newer AetherSDR release is available; click 
 
 <img src="/img/screens/radio-list-popup.png" width="380" alt="Discovered radios popup with a Search name, address, or status field. Three rows, each with an Actions button: FLX8600, connected; Hermes-Lite 2, available; and Simulator (not on the air), 127.0.0.1, available, with the first two addresses blacked out. Connect manually... and Rescan radios sit at the bottom." />
 
-*The radio list, opened from the plus button beside the radio tabs. Addresses are blacked out.*
+*The radio list, opened from the **⌄⌄** button beside the radio tabs. Addresses are blacked out.*
 
 - Line one is the radio's name; line two is its state in words (for example "Link lost"), so color is never the only signal.
+- The tabs are your **three most recently connected radios**, newest first. Connecting to a fourth moves the oldest into the radio list. The connected radio always has a tab.
+- A radio that isn't seen right now reads **Saved**: AetherSDR knows it but can't tell whether it is on. That covers a radio you reached by address with **Connect by IP** (an Icom, or a FlexRadio or Hermes-Lite 2 on a routed or VPN address), which AetherSDR may not discover, and a recent radio that is switched off. Selecting a Saved radio reached by address opens **Connect manually** with the address and radio type filled in; click **Connect by IP** to connect. An address saved by an older AetherSDR version appears after its next successful connection. A FlexRadio that is also discovered on your network shows once, under its discovered entry.
 - The dot on the active tab is the **radio-link indicator**. It pulses once per discovery heartbeat, turns amber while discovering and red after three missed heartbeats (blinking, or solid if **View → Blink Status Indicator** is off). The alarm stays on the radio that dropped until you disconnect on purpose, start a new session or remove the tab. A deliberate disconnect never raises it. Right-click the tabs to toggle blinking.
 - When the tabs no longer fit, scroll them with the mouse wheel or drag them sideways.
-- **"+"** opens the radio list: search by name, model, address or status; a per-radio **Actions** menu (Disconnect, Rename…, Radio setup…, Remove from tabs / Add to tabs); **Connect manually…**; **Rescan radios**. Removing a tab only hides it; it does not forget the radio or its credentials. Selecting a radio opens the connection panel on it; nothing connects without your confirmation.
+- **⌄⌄** opens the radio list, every radio AetherSDR knows about: search by name, model, address or status; a per-radio **Actions** menu (Disconnect, Rename…, Radio setup…, Remove from tabs / Add to tabs); **Connect manually…**; **Rescan radios**. **Add to tabs** makes a radio one of the three tabs (the oldest tab moves to the list); **Remove from tabs** moves a tab back to the list, where it stays while AetherSDR can find the radio (on the network, through SmartLink, or as a saved manual connection). Neither forgets the radio or its credentials. Selecting a radio opens the connection panel on it; nothing connects without your confirmation.
 
 ### Transmit timer
 

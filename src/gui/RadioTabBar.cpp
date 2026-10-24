@@ -103,6 +103,7 @@ QString statusToken(RadioTabStatus status)
         case RadioTabStatus::InUse:
             return QStringLiteral("color.titlebar.status.inUse");
         case RadioTabStatus::Available:
+        case RadioTabStatus::Saved:
         default:
             return QStringLiteral("color.titlebar.status.available");
     }
@@ -115,6 +116,7 @@ QString radioTabStatusText(RadioTabStatus status)
     switch (status) {
         case RadioTabStatus::Connected: return QStringLiteral("connected");
         case RadioTabStatus::InUse:     return QStringLiteral("in use");
+        case RadioTabStatus::Saved:     return QStringLiteral("saved");
         case RadioTabStatus::Available:
         default:                        return QStringLiteral("available");
     }
@@ -131,6 +133,8 @@ QString radioTabStatusLabel(RadioTabStatus status)
             return QCoreApplication::translate("RadioTab", "Connected");
         case RadioTabStatus::InUse:
             return QCoreApplication::translate("RadioTab", "In use");
+        case RadioTabStatus::Saved:
+            return QCoreApplication::translate("RadioTab", "Saved");
         case RadioTabStatus::Available:
         default:
             return QCoreApplication::translate("RadioTab", "Available");
@@ -428,7 +432,37 @@ void RadioTab::paintEvent(QPaintEvent* ev)
 
 namespace {
 
-// Panel shown by the "+" button.  Qt::Popup so it closes on outside click and
+// The drawer button: two stacked down-chevrons, painted rather than typed so
+// the glyph does not depend on the UI font. The style sheet still draws the
+// hover background and the keyboard focus ring; the chevrons take the same
+// text tokens the button's text used.
+class RadioDrawerButton : public QToolButton {
+public:
+    using QToolButton::QToolButton;
+
+protected:
+    void paintEvent(QPaintEvent* ev) override
+    {
+        QToolButton::paintEvent(ev);
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const QColor ink = ThemeManager::instance().color(
+            this, underMouse() ? QStringLiteral("color.text.primary")
+                               : QStringLiteral("color.text.secondary"));
+        p.setPen(QPen(ink, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        const QPointF c = QRectF(rect()).center();
+        constexpr qreal kHalfWidth = 5.0;
+        constexpr qreal kDepth = 3.0;
+        constexpr qreal kGap = 4.0;
+        for (const qreal top : {c.y() - kGap + 0.5 - kDepth / 2, c.y() + 0.5 - kDepth / 2}) {
+            p.drawPolyline(QPolygonF({QPointF(c.x() - kHalfWidth, top),
+                                      QPointF(c.x(), top + kDepth),
+                                      QPointF(c.x() + kHalfWidth, top)}));
+        }
+    }
+};
+
+// Panel shown by the drawer button.  Qt::Popup so it closes on outside click and
 // on Esc without any bookkeeping here, and grabs the keyboard so arrow keys
 // walk the rows.
 class DiscoveryPopover : public QWidget {
@@ -537,16 +571,17 @@ RadioTabBar::RadioTabBar(QWidget* parent)
     m_tabHost->installEventFilter(this);   // drag between tabs
     m_layout->addWidget(m_scrollArea, 1);
 
-    m_addButton = new QToolButton(this);
+    // The drawer: every radio that is not one of the recent tabs. The object
+    // name predates the drawer; automation and tests address it by name.
+    m_addButton = new RadioDrawerButton(this);
     m_addButton->setObjectName(QStringLiteral("radioTabAddButton"));
-    m_addButton->setText(QStringLiteral("+"));
     m_addButton->setFixedSize(kAddButtonSize, kTabHeight);
     m_addButton->setCursor(Qt::PointingHandCursor);
     m_addButton->setFocusPolicy(Qt::StrongFocus);
-    m_addButton->setAccessibleName(tr("Add radio"));
+    m_addButton->setAccessibleName(tr("Radio list"));
     m_addButton->setAccessibleDescription(
-        tr("Open the list of discovered radios"));
-    m_addButton->setToolTip(tr("Discovered radios"));
+        tr("Open the list of every radio, including those without a tab"));
+    m_addButton->setToolTip(tr("All radios"));
     ThemeManager::instance().applyStyleSheet(
         m_addButton,
         QStringLiteral(
@@ -787,11 +822,21 @@ RadioTab* RadioTabBar::linkCarrierTab() const
     // is not the link's radio, so applyLinkVisuals() never paints the alarm
     // on it.
     if (m_activeId.isEmpty()) {
+        // Prefer a radio discovery can see: on a Saved tab the searching dot
+        // would sit beside a radio nothing is looking for.
+        RadioTab* firstVisible = nullptr;
         for (RadioTab* tab : m_tabs) {
-            if (tab->entry().visibleInTabs) {
+            if (!tab->entry().visibleInTabs) {
+                continue;
+            }
+            if (tab->entry().status != RadioTabStatus::Saved) {
                 return tab;
             }
+            if (!firstVisible) {
+                firstVisible = tab;
+            }
         }
+        return firstVisible;
     }
     return nullptr;
 }
@@ -1054,11 +1099,13 @@ void RadioTabBar::showDiscoveryPopover()
         ThemeManager::instance().applyStyleSheet(row, rowStyleTemplate());
         rowLayout->addWidget(row, 1);
         const QString id = entry.id;
+        // Selecting a row only opens the connection panel on that radio. The
+        // tabs are the radios connected to most recently, so a radio becomes
+        // a tab by connecting, or by Add to tabs; never by being looked at.
         connect(row, &QPushButton::clicked, this, [this, id]() {
             if (m_popover) {
                 m_popover->close();
             }
-            emit radioActionRequested(id, QStringLiteral("restore"));
             emit radioActivated(id);
         });
 
@@ -1089,7 +1136,7 @@ void RadioTabBar::showDiscoveryPopover()
             item->setObjectName(QStringLiteral("radioSwitcher_") + action + '_' + id);
             item->setEnabled(enabled);
             if (action == QStringLiteral("remove")) {
-                item->setToolTip(tr("Hide this tab without deleting radio settings. Find it here again to restore it."));
+                item->setToolTip(tr("Take this radio off the tabs without deleting its settings. It stays in this list while AetherSDR can find it."));
             }
             connect(item, &QAction::triggered, this, [this, id, action]() {
                 if (m_popover) {

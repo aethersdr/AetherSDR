@@ -3244,13 +3244,17 @@ the dot's pixels. `radios.discovered[].canRename` says whether the switcher
 offers Rename… for that radio (client-owned nickname) or routes to Radio
 Setup instead.
 `radios.overflowing` reports whether the bounded tab viewport is
-currently clipping configured radios. `radios.tabs[].visibleInTabs` is the
-retained tab preference and `visible` is current widget visibility (which can
-also change in minimal mode). `radios.tabs[].linkCarrier` identifies
+currently clipping configured radios. `radios.tabs[].visibleInTabs` is true
+for the three most recently connected radios (and the connected one); every
+other radio is in the radio list only. `visible` is current widget visibility
+(which can also change in minimal mode). `radios.tabs[].linkCarrier` identifies
 the one tab carrying discovery/heartbeat state. `radios.tabs[].status` is one of `connected` / `available` /
-`in use` — a lower-case, untranslated token, and the field to match on.
+`in use` / `saved` — a lower-case, untranslated token, and the field to match on.
+`saved` is a radio AetherSDR knows but cannot see right now (a saved manual
+connection, which discovery never sees, or a recent radio that is off), so
+whether it is reachable is unknown.
 The text the tab *renders* is sentence case and translated (`Connected`,
-`Available`, `In use`, and `Link lost` while the link alarm is up), so
+`Available`, `In use`, `Saved`, and `Link lost` while the link alarm is up), so
 `statusLine` and `accessibleName` deliberately disagree with `status` on
 casing; assert the token, not the prose. `statusLine` is the second line the tab actually renders —
 `[model ·] status [· detail]`, with the model shown only when a nickname hides
@@ -3289,7 +3293,7 @@ requests discovery without connecting. Inspect enabled states before invoking.
 | Action | Effect |
 |---|---|
 | `selectRadio <id>` | Clicks the radio tab whose `id` matches; errors if there is no such tab. |
-| `showDiscovery` | Opens the "Discovered radios" popover the `+` button owns. |
+| `showDiscovery` | Opens the radio list (the drawer) that the ⌄⌄ button beside the tabs owns. |
 | `minimize` / `maximize` / `close` | Activates the matching caption control. |
 
 Every action is validated synchronously — an unknown action or a missing tab
