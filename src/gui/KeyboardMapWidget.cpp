@@ -12,13 +12,15 @@ namespace AetherSDR {
 
 // ─── Category colors ────────────────────────────────────────────────────────
 
-inline QColor kUnboundFill() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
-inline QColor kUnboundBorder() { return AetherSDR::ThemeManager::instance().color("color.background.2"); }
+// Tokens resolve through the widget, so the map follows the theme scope of
+// the window it sits in (canon/shortcuts in the shortcut editor).
+inline QColor kUnboundFill(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.1"); }
+inline QColor kUnboundBorder(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.2"); }
 QColor KeyboardMapWidget::categoryColor(const QString& cat) const
 {
-    if (cat == "Frequency") return AetherSDR::ThemeManager::instance().color("color.accent.dim");
+    if (cat == "Frequency") return AetherSDR::ThemeManager::instance().color(this, "color.accent.dim");
     if (cat == "TX")        return QColor(0x80, 0x00, 0x20);
-    if (cat == "Audio")     return AetherSDR::ThemeManager::instance().color("color.accent.success");
+    if (cat == "Audio")     return AetherSDR::ThemeManager::instance().color(this, "color.accent.success");
     if (cat == "Display")   return QColor(0x60, 0x60, 0x00);
     if (cat == "Slice")     return QColor(0x40, 0x00, 0x80);
     if (cat == "Mode")      return QColor(0x40, 0x00, 0x80);
@@ -26,9 +28,9 @@ QColor KeyboardMapWidget::categoryColor(const QString& cat) const
     if (cat == "Tuning")    return QColor(0x00, 0x60, 0x60);
     if (cat == "AGC")       return QColor(0x00, 0x40, 0x80);
     if (cat == "Filter")    return QColor(0x00, 0x40, 0x80);
-    if (cat == "Band")      return AetherSDR::ThemeManager::instance().color("color.accent.dim");
+    if (cat == "Band")      return AetherSDR::ThemeManager::instance().color(this, "color.accent.dim");
     if (cat == "RIT/XIT")   return QColor(0x00, 0x60, 0x60);
-    return kUnboundFill();
+    return kUnboundFill(this);
 }
 
 // ─── Construction ───────────────────────────────────────────────────────────
@@ -225,7 +227,11 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    p.fillRect(rect(), AetherSDR::ThemeManager::instance().color("color.background.0"));
+    // A rounded card, so the map sits on a canon window's ground as its
+    // other panels do.
+    p.setPen(QPen(AetherSDR::ThemeManager::instance().color(this, "color.border.subtle"), 1));
+    p.setBrush(AetherSDR::ThemeManager::instance().color(this, "color.background.0"));
+    p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
 
     // Compute key unit size to fit the layout (23 key units wide for main + numpad)
     constexpr float totalKeysW = 23.5f;
@@ -256,8 +262,8 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
         const auto* act = m_mgr->actionForKey(seq);
 
         // Determine colors
-        QColor fill = kUnboundFill();
-        QColor border = kUnboundBorder();
+        QColor fill = kUnboundFill(this);
+        QColor border = kUnboundBorder(this);
         if (act) {
             fill = categoryColor(act->category);
             border = fill.lighter(140);
@@ -271,7 +277,7 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
 
         // Selected highlight
         if (i == m_selectedIdx) {
-            border = AetherSDR::ThemeManager::instance().color("color.accent");
+            border = AetherSDR::ThemeManager::instance().color(this, "color.accent");
             fill = fill.lighter(150);
         }
 
@@ -288,7 +294,7 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
         // Extra label (shift character, top-left)
         if (!k.extraLabel.isEmpty()) {
             p.setFont(actionFont);
-            p.setPen(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
+            p.setPen(AetherSDR::ThemeManager::instance().color(this, "color.text.secondary"));
             QRectF extraR = r.adjusted(3, 2, -3, -r.height() * 0.6);
             p.drawText(extraR, Qt::AlignLeft | Qt::AlignTop, k.extraLabel);
         }

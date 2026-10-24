@@ -28,8 +28,10 @@ With shortcuts on, AetherSDR still backs off while you type in a text field, doe
 **Settings → Configure Shortcuts...** opens the editor:
 
 1. Click a key on the on-screen keyboard map.
-2. Pick the action for that key. If the key is already in use, AetherSDR asks before reassigning it.
-3. **Clear** removes the selected key's action; **Reset to Default** restores one shortcut; **Reset All to Defaults** starts over.
+2. Pick the action for that key. If the key is already in use, AetherSDR asks before reassigning it; **Reassign** moves the key, **Cancel** keeps it where it was.
+3. **Clear** removes the selected key's action; **Reset to Default** restores one shortcut; **Reset All to Defaults** starts over after you confirm with **Reset All** (Return and Esc cancel).
+
+Close the editor with **Close**, the round button in its top-right corner, Esc, or Ctrl+W (Cmd+W on macOS). Drag any empty part of it to move it, or an edge to resize it.
 
 The editor works one key at a time, so it is easiest for single-key bindings. Cleared bindings stay cleared after a restart.
 
