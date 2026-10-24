@@ -828,6 +828,15 @@ struct RadioCapabilities {
         QString requiredLicenseFeature;
     };
     std::optional<AutoAgcThresholdControl> autoAgcThresholdControl;
+    // The gain the AGC-T knob (0..100) sets: offsetDb + dbPerStep * knob, both
+    // as the AGC's maximum gain and, with AGC off, as its fixed gain. The AGC-T
+    // tooltips show it. Absent: no mapping declared, and the tooltips show the
+    // knob position as before.
+    struct AgcGainScale {
+        double offsetDb = 0.0;
+        double dbPerStep = 1.0;
+    };
+    std::optional<AgcGainScale> agcGainScale;
     // Modes the implemented selector can honor. A native OFF time-constant
     // editor is a different contract from selecting a fast/medium/slow bank.
     QStringList agcModes{QStringLiteral("off"), QStringLiteral("slow"),

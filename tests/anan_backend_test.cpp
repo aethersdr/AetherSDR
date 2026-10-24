@@ -110,6 +110,10 @@ int main(int argc, char** argv)
               "the dial survives a process boundary");
         check(backend.restoredModeForTest() == QStringLiteral("DIGU"),
               "the mode survives a process boundary too");
+        check(backend.agcModeForTest() == 2
+                  && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(40)
+                  && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(35),
+              "the AGC mode, AGC-T and AGC-off level survive a process boundary");
         return g_failures == 0 ? 0 : 1;
     }
 
@@ -221,9 +225,19 @@ int main(int argc, char** argv)
         check(c.clientSettingsDomains
                   == (RadioCapabilities::ClientSettingsDomain::RfGain
                       | RadioCapabilities::ClientSettingsDomain::Tuning
-                      | RadioCapabilities::ClientSettingsDomain::ReceiveOutputLevel),
-              "RF gain, tuning AND radio output level restore are declared -- "
+                      | RadioCapabilities::ClientSettingsDomain::ReceiveOutputLevel
+                      | RadioCapabilities::ClientSettingsDomain::Agc),
+              "RF gain, tuning, radio output level AND AGC restore are declared -- "
               "this radio reports none of them, so the client is its only memory");
+        bool scaleMatches = c.agcGainScale.has_value();
+        for (const int knob : {0, 71, 100}) {
+            scaleMatches = scaleMatches
+                && qAbs(c.agcGainScale->offsetDb + c.agcGainScale->dbPerStep * knob
+                        - AnanBackend::agcKnobDb(knob)) < 1e-9;
+        }
+        check(scaleMatches,
+              "the declared AGC gain scale is agcKnobDb()'s, so the AGC-T "
+              "tooltips print the gain the DSP is given");
         check(c.sampleRatesHz.size() == 6, "six DDC rates advertised");
         check(c.hasHostNoiseBlanker,
               "hasHostNoiseBlanker true -- WDSP ANB runs in AnanRxDsp, so the "
@@ -301,12 +315,15 @@ int main(int argc, char** argv)
         std::optional<SliceDelta> last;
         QObject::connect(&backend, &IRadioBackend::sliceChanged,
                          [&last](int, const SliceDelta& d) { last = d; });
+        // The Agc domain's capture: nothing else tells the engine the AGC moved.
+        QSignalSpy captures(&backend, &IRadioBackend::operatingStateChanged);
         check(backend.agcModeForTest() == 3
                   && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcThreshold)
                   && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcOffLevel),
               "AGC starts at medium with the default gain and AGC-off gain");
 
         backend.setSliceAgc(0, QStringLiteral("fast"), 50);
+        check(captures.count() == 1, "an AGC change announces itself for capture");
         check(backend.agcModeForTest() == 4, "\"fast\" maps to WDSP AGC mode 4");
         check(backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(50),
               "the threshold sets the AGC gain through the knob scale");
@@ -330,6 +347,14 @@ int main(int argc, char** argv)
               "an AGC-off level edit leaves the mode and threshold alone");
         check(last.has_value() && last->agcOffLevel.value_or(-1) == 40,
               "an AGC-off level edit is published");
+        check(captures.count() == 3,
+              "a mode change and an AGC-off level edit each announce themselves for capture");
+        backend.setSliceAgc(0, QStringLiteral("off"), 100);
+        backend.requestSliceAgc(0, {SliceAgcRequest::Field::OffLevel, QStringLiteral("off"),
+                                    100, 40, SliceAgcRequest::Origin::Operator});
+        check(captures.count() == 3,
+              "the SAME AGC again announces nothing -- it arrives per step while "
+              "the operator drags the knob");
 
         backend.requestSliceAgc(0, {SliceAgcRequest::Field::Threshold, QStringLiteral("slow"),
                                     30, 40, SliceAgcRequest::Origin::Operator});
@@ -555,6 +580,16 @@ int main(int argc, char** argv)
         check(backend.currentOperatingState().rfFrequencyHz == 7'074'000.0
                   && backend.currentOperatingState().mode == QStringLiteral("DIGU"),
               "capture reports the LIVE dial, not the restored one");
+        // The AGC, also before the store, so the child reads it off disk too.
+        backend.setSliceAgc(0, QStringLiteral("slow"), 40);
+        backend.requestSliceAgc(0, {SliceAgcRequest::Field::OffLevel, QStringLiteral("slow"),
+                                    40, 35, SliceAgcRequest::Origin::Operator});
+        {
+            const RestoredRadioState live = backend.currentOperatingState();
+            check(live.agcMode == QStringLiteral("slow") && live.agcThreshold == 40
+                      && live.agcOffLevels == QList<int>{35},
+                  "capture reports the live AGC mode, AGC-T and AGC-off level");
+        }
         // The level and its signal: nothing else tells the engine it moved.
         QSignalSpy levelChanges(&backend, &IRadioBackend::operatingStateChanged);
         backend.setLineoutGain(35);
@@ -582,8 +617,13 @@ int main(int argc, char** argv)
         check(backend.lineoutGainPercentForTest() == 50,
               "a radio with no document starts at the default output level, "
               "not at the previous radio's");
+        check(backend.agcModeForTest() == 3
+                  && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcThreshold)
+                  && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcOffLevel),
+              "a radio with no document starts at the default AGC, not at the previous radio's");
         backend.setPanRfGain(QStringLiteral("anan-0"), -5);
         backend.setLineoutGain(20);
+        backend.setSliceAgc(0, QStringLiteral("fast"), 60);
         check(RadioStateMemory::store(radioB, caps, backend.currentOperatingState()),
               "radio B gets its own operating-state document");
         backend.applyRestoredState(RadioStateMemory::load(radioA, caps));
@@ -595,6 +635,10 @@ int main(int argc, char** argv)
         check(backend.lineoutGainPercentForTest() == 35,
               "radio A's output level comes back as 35 after radio B stored 20 -- "
               "each radio keeps its own");
+        check(backend.agcModeForTest() == 2
+                  && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(40)
+                  && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(35),
+              "radio A's AGC comes back after radio B stored its own");
         check(!AppSettings::instance().contains(QStringLiteral("Anan")),
               "live attenuation never writes the global connect-options document");
         QProcess child;
@@ -637,6 +681,20 @@ int main(int argc, char** argv)
             backend.applyRestoredState(cased);
             check(backend.restoredModeForTest() == QStringLiteral("DIGU"),
                   "an accepted mode is normalised to the spelling the rest of the backend uses");
+        }
+        // The AGC is refused too, not clamped to an end of the knob.
+        {
+            backend.setSliceAgc(0, QStringLiteral("slow"), 40);
+            RestoredRadioState bad;
+            bad.agcMode = QStringLiteral("long");
+            bad.agcThreshold = 140;
+            bad.agcOffLevels = {101};
+            backend.applyRestoredState(bad);
+            check(backend.agcModeForTest() == 3
+                      && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcThreshold)
+                      && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcOffLevel),
+                  "an AGC-T or AGC-off level outside 0..100 restores the default, and a "
+                  "mode this backend never sets restores medium");
         }
         state.extension = QJsonObject{{QStringLiteral("rfGain"), QJsonObject{
             {QStringLiteral("adc0AttenuationDb"), QStringLiteral("bad")},
