@@ -125,14 +125,12 @@ public:
         return Range{low, low + width};
     }
 
-    // The range to apply when the radio reports CW pitch `pitchHz`, or nothing
-    // to keep `current`.  The radio's pitch wins: the first report of a session
-    // (previousHz 0) keeps a range that already contains it, any later change
-    // re-centres on it, and a repeated value changes nothing.
-    static constexpr std::optional<Range> pitchRangeForReport(int pitchHz, int previousHz, Range current)
+    // The range to apply for CW pitch `pitchHz`, or nothing to keep `current`:
+    // a range that already contains the pitch is kept (it may be the operator's),
+    // one that misses it is re-centred on the pitch.
+    static constexpr std::optional<Range> pitchRangeFor(int pitchHz, Range current)
     {
-        if (pitchHz == previousHz) return std::nullopt;
-        if (previousHz == 0 && current.low <= pitchHz && pitchHz <= current.high) return std::nullopt;
+        if (current.low <= pitchHz && pitchHz <= current.high) return std::nullopt;
         return pitchRangeAround(pitchHz);
     }
 

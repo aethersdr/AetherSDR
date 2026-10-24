@@ -200,8 +200,8 @@ bool sameRange(std::optional<CwDecodeSettings::Range> got, int low, int high)
     return got && sameRange(*got, low, high);
 }
 
-// The pitch range follows the radio's CW pitch: re-centred on a change, kept on
-// the first report of a session only when it already contains the pitch.
+// The pitch range follows the radio's CW pitch: kept when it contains the
+// pitch, re-centred on the pitch when it misses it.
 bool pitchRangeFollowsTheRadioPitch()
 {
     using S = CwDecodeSettings;
@@ -215,16 +215,18 @@ bool pitchRangeFollowsTheRadioPitch()
     const S::Range fixedDefault = S::kPitchDefault;
     // MEASURED (#6158, reporter's support bundle 2026-10-04: `transmit … pitch=710`,
     // no saved range) — the radio's pitch sits outside the 500-700 default.
-    if (!require(sameRange(S::pitchRangeForReport(710, 0, fixedDefault), 560, 860),
-                 "A first report outside the saved range did not re-centre on it")) { return false; }
-    // CONSTRUCTED values from here: the first-report and repeat rules only.
-    if (!require(!S::pitchRangeForReport(600, 0, fixedDefault)
-                 && !S::pitchRangeForReport(700, 0, fixedDefault),
-                 "A first report inside the saved range replaced it")) { return false; }
-    if (!require(!S::pitchRangeForReport(600, 600, S::Range{900, 1200}),
-                 "A repeated pitch report changed the range")) { return false; }
-    return require(sameRange(S::pitchRangeForReport(650, 600, fixedDefault), 500, 800),
-                   "A pitch change inside the range did not re-centre on it");
+    if (!require(sameRange(S::pitchRangeFor(710, fixedDefault), 560, 860),
+                 "A pitch outside the range did not re-centre on it")) { return false; }
+    // MEASURED (#6650 review, NF0T, FLEX-8400 fw 4.3.16, 2026-10-23): range set by
+    // hand to 545-700, then CW pitch 600 -> 610 — the hand-set range must stay.
+    if (!require(!S::pitchRangeFor(610, S::Range{545, 700}),
+                 "A pitch change inside a hand-set range replaced it")) { return false; }
+    // CONSTRUCTED values from here: the range edges only.
+    if (!require(!S::pitchRangeFor(500, fixedDefault) && !S::pitchRangeFor(700, fixedDefault),
+                 "A pitch on the range edge replaced it")) { return false; }
+    return require(sameRange(S::pitchRangeFor(499, fixedDefault), 349, 649)
+                   && sameRange(S::pitchRangeFor(701, fixedDefault), 551, 851),
+                   "A pitch just outside the range did not re-centre on it");
 }
 } // namespace
 
