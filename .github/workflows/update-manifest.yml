@@ -239,16 +239,22 @@ jobs:
       # GitHub calls latest, so re-running an older tag never rolls it back.
       - name: Publish to updates.aethersdr.com
         id: r2
+        # R2's S3 API with a token scoped to this one bucket (its id is the
+        # access key, the SHA-256 of its value the secret), signed by curl
+        # itself: no third-party uploader holds the credentials.
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.UPDATES_R2_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.UPDATES_R2_ACCOUNT_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.UPDATES_R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.UPDATES_R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.UPDATES_R2_SECRET_ACCESS_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.build.outputs.tag }}
         run: |
           put() {
-            npx --yes wrangler@4.147.0 r2 object put "aethersdr-updates/$1" --file "$2" \
-              --content-type "$3" --cache-control "$4" --remote
+            curl -fsS --retry 3 --aws-sigv4 "aws:amz:auto:s3" \
+              --user "$R2_ACCESS_KEY_ID:$R2_SECRET_ACCESS_KEY" -X PUT \
+              -H "Content-Type: $3" -H "Cache-Control: $4" --data-binary "@$2" \
+              "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com/aethersdr-updates/$1"
           }
           dirs="releases/$TAG"
           if [ "$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" = "$TAG" ]; then
