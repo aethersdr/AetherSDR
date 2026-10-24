@@ -73,6 +73,8 @@ struct Device {
     bool hasOtherFirmware{true};   // SWITCH has somewhere to go
     bool hasBootloaderOp{true};    // firmware that answers BOOTLOADER
     QString restartedInto;         // "other" or "bootloader" after a restart request
+    std::uint8_t restartStatusOp{0}; // not 0: the op its restart STATUS names instead
+    bool restartsSilently{false};  // leaves for a restart without answering it
     int dropsOnOpen{0};            // this open (1 = the first) fails before it negotiates
 };
 
@@ -272,7 +274,8 @@ private:
                 status(d[0], CTR2_FW_BAD_STATE);
                 break;
             }
-            status(d[0], CTR2_FW_OK);
+            if (!m_dev->restartsSilently)
+                status(m_dev->restartStatusOp ? m_dev->restartStatusOp : d[0], CTR2_FW_OK);
             m_dev->restartedInto = loader ? QStringLiteral("bootloader") : QStringLiteral("other");
             m_dev->gone = true;
             QTimer::singleShot(5, this, [this] {
@@ -581,6 +584,21 @@ void testRestartRequests()
     run = restart(alone, R::OtherFirmware);
     check(!run.ok && alone.restartedInto.isEmpty(), "SWITCH with no other firmware fails");
     check(alone.closes == 1, "and the session is closed");
+
+    // Lynovation's v1.02.00 betas named the op as a character ('5', 0x35)
+    // and left the bus two seconds later.
+    Device misnamed;
+    misnamed.restartStatusOp = 0x30 | CTR2_FW_SWITCH;
+    run = restart(misnamed, R::OtherFirmware);
+    check(run.ok && misnamed.restartedInto == QStringLiteral("other")
+              && run.message.contains(QStringLiteral("restarting")),
+          "a device that leaves after a STATUS naming another op has restarted");
+
+    Device silent;
+    silent.restartsSilently = true;
+    run = restart(silent, R::Bootloader);
+    check(run.ok && run.message.contains(QStringLiteral("download mode")),
+          "a device that leaves for download mode without answering has restarted");
 }
 
 // AetherSDR quitting mid-update destroys the updater: the device must still

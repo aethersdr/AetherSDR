@@ -110,6 +110,8 @@ private:
     void lookForDevice();
     void fail(const QString& message);
     void succeed(const QString& version);
+    // A restart request done: the device is leaving the bus for its target.
+    void restarted();
     void armTimeout(int ms);
 
     DeviceSource m_devices;

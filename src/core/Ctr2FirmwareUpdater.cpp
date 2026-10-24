@@ -358,13 +358,8 @@ void Ctr2FirmwareUpdater::onStatus(const firmware::Reply& reply)
                         : tr("The device has no other firmware to start."));
             return;
         }
-        m_timeout->stop();
         closePort();   // it is leaving the bus
-        m_phase = Phase::Idle;
-        m_restart.reset();
-        emit finished(true, loader ? tr("The device is restarting into download mode.")
-                                   : tr("The device is restarting into its other firmware."),
-                      QString());
+        restarted();
         return;
     }
     if (reply.status != firmware::Status::Ok) {
@@ -462,10 +457,27 @@ void Ctr2FirmwareUpdater::onPortFailed(const QString& message)
         fail(tr("The device left during the final check (%1). Reconnect it: it runs "
                 "either the new firmware or the old one.").arg(message));
         break;
+    case Phase::Commanding:
+        // Leaving the bus is what the request asks for. A device that does it
+        // before its STATUS arrives, or whose STATUS names another op, has
+        // still restarted.
+        restarted();
+        break;
     default:
         fail(tr("Lost the device: %1.").arg(message) + kKeepsFirmware);
         break;
     }
+}
+
+void Ctr2FirmwareUpdater::restarted()
+{
+    const bool loader = m_restart && *m_restart == Restart::Bootloader;
+    m_timeout->stop();
+    m_phase = Phase::Idle;
+    m_restart.reset();
+    emit finished(true, loader ? tr("The device is restarting into download mode.")
+                               : tr("The device is restarting into its other firmware."),
+                  QString());
 }
 
 void Ctr2FirmwareUpdater::onTimeout()
