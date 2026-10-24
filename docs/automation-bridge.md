@@ -1095,6 +1095,26 @@ used by the stacked trace renderer.
    "kiwiBins":{"count":768,"finiteCount":768}}]}
 ```
 
+**The bins themselves** (#5806). With `property` `bins` and one pan as the
+selector, the reply carries that pan's trace bins instead of statistics:
+
+```json
+→ {"cmd":"get","model":"tracedebug","selector":"0","property":"bins"}
+← {"ok":true,"model":"tracedebug","property":"bins","pan":{
+   "panIndex":0,"name":"SpectrumWidget","kiwiWaterfallActive":false,
+   "count":1024,"finiteCount":1024,"fftFrameSequence":5120,
+   "centerHz":3775000,"spanHz":384000,"lowHz":3583000,"binHz":375,
+   "bins":[-121.4,-121.9,...]}}
+```
+
+- `bins` is the last frame as the widget decoded it, before display smoothing,
+  in drawing order from `lowHz` in steps of `binHz` (`spanHz` / `count`). During
+  a Flex dBm range release it may hold rebased bins. A non-finite bin is `null`.
+- The values are in the units the backend delivered; nothing here calibrates
+  them. `fftFrameSequence` tells two reads of the same frame apart.
+- A selector is required: `bins` without one is an error, and so is a selector
+  that matches no pan.
+
 `selector` filters by pan index (`get tracedebug 0`) or objectName. Key fields:
 
 - `kiwiWaterfallActive` — whether this pan is displaying Kiwi spectrum/waterfall

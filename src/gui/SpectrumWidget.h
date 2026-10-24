@@ -217,6 +217,8 @@ public:
     Q_INVOKABLE QVariantMap automationDssSetScrollback(bool live,
                                                        int offsetRows);
     Q_INVOKABLE QVariantMap traceDebugSnapshot();
+    // The trace's bins themselves, for `get tracedebug <pan> bins` (#5806).
+    Q_INVOKABLE QVariantMap traceBinsSnapshot() const;
     // Every value the Display panel owns, as one flat map keyed by the panel's
     // own control names. Exists so "Clone to all Pans" (and any future
     // display-preference change) is provable field-by-field over the automation
