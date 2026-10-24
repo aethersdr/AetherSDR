@@ -13,7 +13,6 @@
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
-#include <QGradient>
 #include <QPainter>
 #include <QPoint>
 #include <QStringList>
@@ -253,20 +252,6 @@ public:
     // in the natural direction.
     void setFillFromRight(bool on) { m_fillFromRight = on; update(); }
 
-    // Paint the empty track as a left-to-right gradient instead of a flat
-    // ground, so the bar carries its own scale colouring even at rest — how
-    // the Tuner Genius XL's front panel draws its SWR scale, which
-    // TunerApplet reproduces in its expanded presentation.
-    //
-    // Stops are passed in rather than resolved here: this header is included
-    // by ~20 applets, and a themed default would couple every one of them to
-    // ThemeManager for a mode only one of them turns on. Empty restores the
-    // flat track.
-    void setTrackGradient(const QGradientStops& stops) {
-        m_trackStops = stops;
-        update();
-    }
-
     // Colour of the middle (caution) zone and its tick labels; default olive.
     void setCautionColor(const QColor& color) {
         m_cautionColor = color;
@@ -412,13 +397,7 @@ protected:
         const int barW = w;
 
         // Background
-        if (m_trackStops.isEmpty()) {
-            p.fillRect(barX, barY, barW, barH, QColor(0x0a, 0x0a, 0x18));
-        } else {
-            QLinearGradient track(barX, 0, barX + barW, 0);
-            track.setStops(m_trackStops);
-            p.fillRect(barX, barY, barW, barH, track);
-        }
+        p.fillRect(barX, barY, barW, barH, QColor(0x0a, 0x0a, 0x18));
         p.setPen(QColor(0x20, 0x30, 0x40));
         p.drawRect(barX, barY, barW - 1, barH - 1);
 
@@ -737,7 +716,6 @@ private:
     bool  m_peakEnabled{false};
     bool  m_reversed{false};
     bool  m_fillFromRight{false};
-    QGradientStops m_trackStops;   // empty = flat track (the default)
     qreal m_metricScale{1.0};      // 1.0 = the original fixed metrics
     QString m_label, m_unit;
     QVector<Tick> m_ticks;
