@@ -11,6 +11,8 @@ class QLabel;
 class QProgressBar;
 class QPushButton;
 
+#include <functional>
+
 namespace AetherSDR {
 
 class Ctr2ProxyModel;
@@ -55,6 +57,17 @@ private:
     // out of this one).
     void restartInto(int which);
     void onFinished(bool ok, const QString& message);
+    // Starts an action on the device (job returns false with the reason when
+    // it cannot start), keeping it so it can run again once Linux grants
+    // access to the download-mode port.
+    // accessRetry: this run is the one retry after a permission failure.
+    void runJob(const QString& doneText, std::function<bool(QString*)> job,
+                bool accessRetry = false);
+    // Linux: when the CTR2 running its firmware is closed to this login, offers
+    // the access rule and returns true; `again` repeats the action once it is
+    // installed. The firmware's version and commands are read over that
+    // device, so nothing else can be decided until then.
+    bool offerAccessFirst(std::function<void()> again);
     // Starting an action: its result, or the reason it did not start.
     void started(bool ok, const QString& problem, const QString& doneText);
     // When buttons are needed, asks the operator to enter download mode.
@@ -88,6 +101,9 @@ private:
     bool m_installAfterDownload{false};   // Install pressed on a release to download
 
     QString m_jobDone;       // the success message for the running action
+    std::function<bool(QString*)> m_lastJob;   // the last action started, and
+    QString m_lastJobDone;                     // its success message
+    bool m_accessRetried{false};   // the last action was already retried once for access
 };
 
 } // namespace AetherSDR

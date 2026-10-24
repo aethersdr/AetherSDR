@@ -207,10 +207,18 @@ void testUdevRuleMatchesKnownCtr2s()
     };
     static const QRegularExpression attr(QStringLiteral(R"re(ATTRS\{(idVendor|idProduct|product)\}=="([^"]*)")re"));
     QSet<QString> granted;
+    QStringList ttyLines;
     for (const QString& line : QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'))) {
         if (line.trimmed().isEmpty() || line.trimmed().startsWith(QLatin1Char('#'))) {
             continue;
         }
+        // The download-mode serial port is not a CTR2 HID device: checked below.
+        if (line.contains(QLatin1String("SUBSYSTEM==\"tty\""))) {
+            ttyLines << line;
+            continue;
+        }
+        check(line.contains(QLatin1String("SUBSYSTEM==\"hidraw\"")),
+              "every other rule line is for hidraw");
         QString vid, pid, products;
         for (auto it = attr.globalMatch(line); it.hasNext();) {
             const auto m = it.next();
@@ -234,6 +242,17 @@ void testUdevRuleMatchesKnownCtr2s()
         std::fprintf(stderr, "  granted but not recognised: %s\n", qPrintable(k));
     }
     check(granted == known, "the udev rule lists exactly the recognized CTR2 product patterns");
+
+    // One tty line: the ESP32-S3 ROM's USB serial port, which is what the
+    // CTR2-Max is in download mode, opened to the seat's user only.
+    check(ttyLines.size() == 1, "the rule has one tty line, for download mode");
+    const QString tty = ttyLines.value(0);
+    check(tty.contains(QLatin1String("ATTRS{idVendor}==\"303a\""))
+              && tty.contains(QLatin1String("ATTRS{idProduct}==\"1001\""))
+              && tty.contains(QLatin1String("ATTRS{product}==\"USB JTAG/serial debug unit\""))
+              && tty.contains(QLatin1String("TAG+=\"uaccess\""))
+              && !tty.contains(QLatin1String("MODE")) && !tty.contains(QLatin1String("GROUP")),
+          "the tty line pins the ROM's USB serial identity and grants only the seat's user");
 
     // Every name the app recognizes must be one the rule's glob grants, or a
     // self-named device would loop on the install prompt.

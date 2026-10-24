@@ -24,9 +24,16 @@
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QStyle>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <memory>
+
+#ifdef Q_OS_LINUX
+#include <cerrno>
+#include <unistd.h>
+#endif
 
 namespace AetherSDR {
 
@@ -662,6 +669,52 @@ void FirmwareInstallDialog::sync()
     m_bar->setVisible(running && !m_fw->waitingForDownloadMode());
 }
 
+bool FirmwareInstallDialog::offerAccessFirst(std::function<void()> again)
+{
+#ifdef Q_OS_LINUX
+    using Device = FirmwareInstallModel::Device;
+    const FirmwareInstallModel::Target target = m_fw->target();
+    if (!m_relay || (target.device != Device::LinkFirmware && target.device != Device::Stock)
+        || target.hidPath.isEmpty())
+        return false;
+    const QByteArray path = target.hidPath.toLocal8Bit();
+    if (::access(path.constData(), R_OK | W_OK) == 0 || errno != EACCES)
+        return false;
+    m_relay->offerAccessRule(Ctr2ProxyPanel::RuleUse::Firmware, [this, again] {
+        // What the action can do (restart on request, or the buttons) depends
+        // on the firmware's version and commands, which the relay reads once
+        // it can open the device: rescan, and wait for them (up to ~5 s).
+        if (m_model)
+            m_model->refreshDevices();
+        auto wait = std::make_shared<std::function<void(int)>>();
+        *wait = [this, again, wait](int tries) {
+            if (tries > 0 && m_fw->linkVersion().isEmpty()) {
+                QTimer::singleShot(250, this, [wait, tries] { (*wait)(tries - 1); });
+                return;
+            }
+            again();
+        };
+        (*wait)(20);
+    });
+    return true;
+#else
+    Q_UNUSED(again);
+    return false;
+#endif
+}
+
+void FirmwareInstallDialog::runJob(const QString& doneText, std::function<bool(QString*)> job,
+                                   bool accessRetry)
+{
+    m_accessRetried = accessRetry;
+    m_lastJob = job;
+    m_lastJobDone = doneText;
+    m_jobDone = doneText;
+    QString problem;
+    const bool ok = job(&problem);
+    started(ok, problem, doneText);
+}
+
 void FirmwareInstallDialog::started(bool ok, const QString& problem, const QString& doneText)
 {
     if (!ok) {
@@ -715,14 +768,15 @@ void FirmwareInstallDialog::confirmRestore(const QString& path)
     target = afterAlert(*m_fw, target);
     const QString done = tr("The backup is restored and the CTR2-Max is restarting.");
     m_step->setText(tr("Connecting…"));
-    m_jobDone = done;
-    QString problem;
-    const bool ok = m_fw->restoreBackup(target, path, &problem);
-    started(ok, problem, done);
+    runJob(done, [this, target, path](QString* problem) {
+        return m_fw->restoreBackup(target, path, problem);
+    });
 }
 
 void FirmwareInstallDialog::onInstall()
 {
+    if (offerAccessFirst([this] { onInstall(); }))
+        return;
     // The device is the one shown now; the model refuses if it changes
     // while the questions below are open.
     FirmwareInstallModel::Target target = m_fw->target();
@@ -757,10 +811,7 @@ void FirmwareInstallDialog::onInstall()
     const QString done =
         tr("%1 %2 is installed and starting. The backup is in %3.").arg(product, version, folder);
     m_step->setText(tr("Connecting…"));
-    m_jobDone = done;
-    QString problem;
-    const bool ok = m_fw->installRelease(target, &problem);
-    started(ok, problem, done);
+    runJob(done, [this, target](QString* problem) { return m_fw->installRelease(target, problem); });
 }
 
 void FirmwareInstallDialog::installOverLink()
@@ -789,9 +840,7 @@ void FirmwareInstallDialog::installOverLink()
         return;
     const QString done = tr("%1 %2 is installed and running.").arg(product, version);
     m_step->setText(tr("Starting the update…"));
-    m_jobDone = done;
-    const bool ok = m_fw->installOverLink(target, &problem);
-    started(ok, problem, done);
+    runJob(done, [this, target](QString* why) { return m_fw->installOverLink(target, why); });
 }
 
 void FirmwareInstallDialog::onOpenFile()
@@ -817,6 +866,8 @@ void FirmwareInstallDialog::onOpenFile()
 
 void FirmwareInstallDialog::installStockFirmware()
 {
+    if (offerAccessFirst([this] { installStockFirmware(); }))
+        return;
     using Device = FirmwareInstallModel::Device;
     FirmwareInstallModel::Target target = m_fw->target();
     const QString backup = selectedBackup(m_fileList);
@@ -855,16 +906,17 @@ void FirmwareInstallDialog::installStockFirmware()
     const QString done =
         tr("%1 is installed and starting. The backup is in %2.").arg(name, folder);
     m_step->setText(tr("Connecting…"));
-    m_jobDone = done;
-    QString problem;
-    const bool ok = m_fw->installStockFirmware(target, &problem);
-    started(ok, problem, done);
+    runJob(done, [this, target](QString* problem) {
+        return m_fw->installStockFirmware(target, problem);
+    });
 }
 
 void FirmwareInstallDialog::restartInto(int which)
 {
     using Firmware = FirmwareInstallModel::Firmware;
     const auto firmware = static_cast<Firmware>(which);
+    if (offerAccessFirst([this, which] { restartInto(which); }))
+        return;
     FirmwareInstallModel::Target target = m_fw->target();
     // Firmware that cannot restart into download mode takes the unit's buttons: the
     // alert is all there is to it, and Status follows when it gets there.
@@ -887,10 +939,9 @@ void FirmwareInstallDialog::restartInto(int which)
                              ? tr("The CTR2-Max is restarting into its stock firmware.")
                              : tr("The CTR2-Max is restarting into download mode.");
     m_step->setText(tr("Asking the CTR2-Max to restart…"));
-    m_jobDone = done;
-    QString problem;
-    const bool ok = m_fw->restartInto(target, firmware, &problem);
-    started(ok, problem, done);
+    runJob(done, [this, target, firmware](QString* problem) {
+        return m_fw->restartInto(target, firmware, problem);
+    });
 }
 
 void FirmwareInstallDialog::onFinished(bool ok, const QString& message)
@@ -901,14 +952,34 @@ void FirmwareInstallDialog::onFinished(bool ok, const QString& message)
         text += QLatin1Char(' ')
                 + tr("It did not restart by itself (%1): press RESET on the CTR2-Max.").arg(message);
     m_jobDone.clear();
-#ifdef Q_OS_LINUX
-    if (!ok && message.contains(QStringLiteral("Permission")))
-        text += QLatin1Char(' ')
-                + tr("Add yourself to the group that owns the port (dialout or uucp, depending on "
-                     "the distribution) and log in again.");
-#endif
     m_step->setText(text);
     syncLists();   // a new backup, or one fewer
+#ifdef Q_OS_LINUX
+    // The download-mode port is closed to this login: offer the access rule,
+    // then run the same action again. Queued, so the question does not open
+    // inside the job's own finished signal.
+    if (!ok && message.contains(QStringLiteral("Permission")) && m_lastJob && m_relay) {
+        const auto again = [this] {
+            if (!m_lastJob || m_fw->busy())
+                return;
+            m_step->setText(tr("Access granted. Trying again…"));
+            runJob(m_lastJobDone, m_lastJob);
+        };
+        // With the rule in place, a port that has only just appeared may not
+        // have its ACL yet: try once more before saying anything.
+        if (Ctr2ProxyPanel::accessRuleInstalled() && !m_accessRetried) {
+            QTimer::singleShot(1000, this, [this] {
+                if (!m_lastJob || m_fw->busy())
+                    return;
+                runJob(m_lastJobDone, m_lastJob, true);
+            });
+            return;
+        }
+        QTimer::singleShot(0, this, [this, again] {
+            m_relay->offerAccessRule(Ctr2ProxyPanel::RuleUse::DownloadMode, again);
+        });
+    }
+#endif
 }
 
 } // namespace AetherSDR
