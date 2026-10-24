@@ -1046,6 +1046,7 @@ set(CORE_SOURCES
     src/core/Ctr2UsbRelay.cpp
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
+    src/core/OtrspProtocol.cpp
     src/core/CatPort.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/KiwiSdrRedirectPolicy.cpp
