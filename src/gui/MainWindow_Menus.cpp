@@ -592,9 +592,12 @@ void MainWindow::buildMenuBar()
 #ifdef HAVE_HIDAPI
     auto* rc28Action = controllersMenu->addAction("Icom RC-28 Remote Encoder...");
     connect(rc28Action, &QAction::triggered, this, [this] {
-        const bool fresh = !m_rc28MappingDialog;
-        showOrRaisePersistent(m_rc28MappingDialog, m_hidEncoder);
-        if (fresh && m_rc28MappingDialog)
+        // A canon dialog, so not showOrRaisePersistent(): that applies View →
+        // Frameless Window, which a CanonWindow does not follow.
+        if (!m_rc28MappingDialog) {
+            auto* dlg = new RC28MappingDialog(m_hidEncoder, this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            m_rc28MappingDialog = dlg;
             connect(m_rc28MappingDialog, &RC28MappingDialog::mappingFieldChanged,
                     this, [this](const QString& field, const QString& value) {
                 if (field == "f1Hold" || field == "f2Hold") {
@@ -611,6 +614,10 @@ void MainWindow::buildMenuBar()
                         m_hidSnapTimer->stop();
                 }
             });
+        }
+        m_rc28MappingDialog->show();
+        m_rc28MappingDialog->raise();
+        m_rc28MappingDialog->activateWindow();
     });
 #endif
     auto* ulanziAction = controllersMenu->addAction("Ulanzi Dial Mapping...");
