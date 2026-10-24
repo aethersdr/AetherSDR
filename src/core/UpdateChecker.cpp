@@ -59,11 +59,7 @@ QString probeStoreName()
 UpdateChecker::UpdateChecker(QObject* parent, QNetworkAccessManager* network)
     : QObject(parent)
     , m_nam(network ? network : new QNetworkAccessManager(this))
-{
-    // One fixed endpoint, read only for tag_name: a redirect is never a
-    // legitimate answer here, so it fails the check instead of being followed.
-    m_nam->setRedirectPolicy(QNetworkRequest::ManualRedirectPolicy);
-}
+{}
 
 QString UpdateChecker::storeName()
 {
@@ -162,6 +158,11 @@ bool UpdateChecker::checkNow(Trigger trigger)
     req.setRawHeader("User-Agent",
         QByteArrayLiteral("AetherSDR/") + QCoreApplication::applicationVersion().toUtf8());
     req.setTransferTimeout(15000);
+    // One fixed endpoint, read only for tag_name: a redirect is never a
+    // legitimate answer here. Set per request, so a supplied manager is left
+    // as its owner configured it; the 3xx is refused when the reply finishes.
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                     QNetworkRequest::ManualRedirectPolicy);
 
     auto* reply = m_nam->get(req);
     NetworkDiagnostics::watch(reply, "update check");
@@ -182,6 +183,11 @@ bool UpdateChecker::checkNow(Trigger trigger)
         }
         if (reply->error() != QNetworkReply::NoError) {
             fail(reply->errorString());
+            return;
+        }
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (status >= 300 && status < 400) {
+            fail(QStringLiteral("endpoint answered with redirect %1").arg(status));
             return;
         }
 

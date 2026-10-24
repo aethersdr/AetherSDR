@@ -142,7 +142,7 @@ The Minimize and Full Screen keys can be rebound in **Settings → Configure Sho
 | **Support & Diagnostics...** | Logging categories and support bundles. See [Support and Logging](./support-and-logging.md). |
 | **Slice Troubleshooting...** | A diagnostics window for slice, audio and display state. |
 | **Check for Updates...** | Checks for a newer release now and always reports the result, including a release you skipped. See [Updates](#updates). |
-| **Check for Updates Automatically** | On by default. Checks for a newer release at startup, at most once a day, and shows **UPDATE** in the title bar when there is one. Turning it off also removes the badge. Dimmed on Microsoft Store installs, which update themselves. |
+| **Check for Updates Automatically** | On by default. Checks for a newer release at startup, at most once a day, and shows **UPDATE** in the title bar when there is one. Turning it off also removes the badge. Dimmed on store-managed installs (the Microsoft Store, or a Flatpak build), which update themselves. |
 | **About AetherSDR** | The About window (below). |
 
 ## The Title Bar
@@ -175,7 +175,7 @@ Click **UPDATE**, or use **Help → Check for Updates...**, for the update windo
 - **Skip This Version** hides the badge for that release. **Help → Check for Updates...** still reports it, and the next release shows the badge again.
 - **Close** leaves the badge in place.
 
-On a Microsoft Store install, the Store updates AetherSDR, so there is no automatic check and no badge, even after a manual check. **Help → Check for Updates...** still works: its window says where the update comes from and offers no **Skip This Version**.
+On a store-managed install (the Microsoft Store, or a Flatpak build), the store updates AetherSDR, so there is no automatic check and no badge, even after a manual check. **Help → Check for Updates...** still works: its window says where the update comes from and offers no **Skip This Version**.
 
 ### Radio tabs
 

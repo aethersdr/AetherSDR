@@ -23,6 +23,7 @@ public:
     Q_ENUM(Trigger)
 
     // `network` lets a test supply an in-memory transport; null makes one.
+    // A supplied manager is not adopted: the caller keeps it alive.
     explicit UpdateChecker(QObject* parent = nullptr, QNetworkAccessManager* network = nullptr);
 
     // Starts a check; false when one is already in flight. A manual request
