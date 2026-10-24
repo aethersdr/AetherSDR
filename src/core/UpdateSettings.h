@@ -41,6 +41,13 @@ public:
     // One write for a successful answer: its time and the release it named.
     static void recordAnswer(const QDateTime& when, const QString& latestVersion);
 
+    // The generated_at of the newest signed update manifest accepted
+    // (docs/architecture/update-manifest.md): an older one is a replay and
+    // is refused. Compared only with itself, never with the clock. Invalid
+    // before the first.
+    static QDateTime acceptedManifestUtc();
+    static void setAcceptedManifestUtc(const QDateTime& generatedAt);
+
     // Whether an automatic check may run at nowUtc: enabled, and the last
     // answer is missing, older than the interval, or in the future (the
     // clock moved backward).

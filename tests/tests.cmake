@@ -4661,8 +4661,21 @@ target_link_libraries(update_checker_test PRIVATE aethercore Qt6::Core Qt6::Netw
 add_test(NAME update_checker_test COMMAND update_checker_test)
 
 # UpdateChecker's release reading: the real v26.10.3 release JSON into the
-# Updates window's tagline, chapters and highlights; the installer picked per
-# platform; the download-URL allowlist. Pure, no network.
+# Updates window's tagline and chapters; the installer picked per platform;
+# the download-URL allowlist. Pure, no network.
+# UpdateStager (RFC #5304 Phase 2): the signed manifest's checks, choice,
+# and a patch bundle built by tools/build_update_manifest.py applied into a
+# staging copy of a fixture install, with every negative case of
+# docs/architecture/update-manifest.md. file:// downloads, no sockets.
+add_executable(update_stager_test tests/update_stager_test.cpp)
+target_include_directories(update_stager_test PRIVATE src tests)
+target_link_libraries(update_stager_test PRIVATE aethercore aether_monocypher Qt6::Core Qt6::Network Qt6::Test)
+target_compile_definitions(update_stager_test PRIVATE
+    UPDATE_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures/update"
+    UPDATE_SIGNING_PUB="${CMAKE_SOURCE_DIR}/packaging/update-signing.pub")
+set_target_properties(update_stager_test PROPERTIES AUTOMOC ON)
+add_test(NAME update_stager_test COMMAND update_stager_test)
+
 add_executable(update_release_notes_test tests/update_release_notes_test.cpp)
 target_include_directories(update_release_notes_test PRIVATE src)
 target_link_libraries(update_release_notes_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -9688,6 +9701,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    update_stager_test
     flex_readonly_metadata_test
     dsp_parameter_reset_test
     cw_rx_model_test
