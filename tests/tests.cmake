@@ -8120,7 +8120,8 @@ set_target_properties(docs_links_test PROPERTIES AUTOMOC ON)
 add_test(NAME docs_links_test COMMAND docs_links_test)
 set_tests_properties(docs_links_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 
-# FreeDV Reporter status-message row (#4231). Guarded like the dialog
+# FreeDV Reporter status-message row (#4231) and its canon window: the
+# resizer, legacy geometry, an opaque field menu. Guarded like the dialog
 # itself — FreeDvReporterDialog only exists when WebSockets are available.
 # Dialog-side only: the test never reaches qso.freedv.org.
 if(Qt6WebSockets_FOUND)
@@ -8131,9 +8132,9 @@ if(Qt6WebSockets_FOUND)
         tests/freedv_reporter_message_test.cpp
         src/gui/FreeDvReporterDialog.cpp
         src/gui/FreeDvReporterModel.cpp
-        src/gui/PersistentDialog.cpp
+        src/gui/CanonWindow.cpp
         src/gui/FramelessResizer.cpp
-        src/gui/FramelessWindowTitleBar.cpp
+        ${THEME_TEST_RESOURCES}
     )
     target_include_directories(freedv_reporter_message_test PRIVATE src)
     target_link_libraries(freedv_reporter_message_test PRIVATE
