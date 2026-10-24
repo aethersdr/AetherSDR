@@ -200,7 +200,7 @@ FirmwareUpdateCard::FirmwareUpdateCard(RadioModel* model, QWidget* parent)
         showReleases(published);
     });
     // The release-list check owns the pill only: it never writes the
-    // install's status line, progress or stage ring, so a radio's reconnect
+    // install's status line or progress bar, so a radio's reconnect
     // after an install cannot overwrite the install's outcome.
     connect(m_stager, &FirmwareStager::updateCheckFailed, this, [this](const QString& error) {
         m_pill->setText(tr("Releases unavailable"));
@@ -215,7 +215,6 @@ FirmwareUpdateCard::FirmwareUpdateCard(RadioModel* model, QWidget* parent)
         }
         m_progress->setValue(percent);
         setStatus(status, QString());
-        emit progressChanged(percent / 2);   // preparing is the first half of the install
     });
     connect(m_stager, &FirmwareStager::stageComplete, this, [this](const QString& path, const QString&) {
         m_staging = false;
@@ -266,9 +265,6 @@ void FirmwareUpdateCard::setBusy(bool busy)
     m_lanes->setEnabled(!busy);
     refreshAvailability();
     emit busyChanged(busy);
-    if (!busy) {
-        emit progressChanged(-1);
-    }
 }
 
 void FirmwareUpdateCard::refreshAvailability()
@@ -558,7 +554,6 @@ void FirmwareUpdateCard::ensureUploader()
     connect(m_uploader, &FirmwareUploader::progressChanged, this, [this](int percent, const QString& status) {
         m_progress->setValue(percent);
         setStatus(status, QString());
-        emit progressChanged(50 + percent / 2);
         if (m_uploader->phase() == FirmwareUploader::Phase::AwaitingConfirmation) {
             setStep(Step::Confirm);
         }

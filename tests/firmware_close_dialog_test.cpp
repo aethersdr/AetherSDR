@@ -4,7 +4,6 @@
 #include "UpdateTestNetwork.h"
 #include "core/UpdateChecker.h"
 #include "gui/FirmwareUpdateCard.h"
-#include "gui/UpdateStage.h"
 #include "gui/UpdatesWindow.h"
 #include "models/RadioModel.h"
 
@@ -12,6 +11,7 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QPointer>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QTimer>
@@ -248,16 +248,17 @@ private slots:
         UpdateChecker checker(nullptr, &network);
         UpdatesWindow window(&checker, &model);
         window.show();
-        QSignalSpy progress(window.findChild<FirmwareUpdateCard*>(), &FirmwareUpdateCard::progressChanged);
-        emit UpdatesWindowTestAccess::stager(window)->stageProgress(0, QStringLiteral("Checking for updates..."));
-        QCOMPARE(progress.size(), 0);
+        auto* progress = window.findChild<QProgressBar*>(QStringLiteral("firmwareProgress"));
+        QVERIFY(progress);
+        emit UpdatesWindowTestAccess::stager(window)->stageProgress(37, QStringLiteral("Checking for updates..."));
+        QVERIFY(progress->value() != 37);
         QVERIFY(UpdatesWindowTestAccess::status(window)->isHidden());
     }
     void indexCheckLeavesTheOutcome()
     {
         // After an install the radio reboots and reconnects, which re-runs
         // the release-list check; its start, answer or failure must leave
-        // the install's outcome and the stage alone.
+        // the install's outcome and progress bar alone.
         RadioModel model;
         HeldNetwork network;
         UpdateChecker checker(nullptr, &network);
@@ -266,13 +267,13 @@ private slots:
         const QString outcome = QStringLiteral("The radio confirmed the update.");
         UpdatesWindowTestAccess::showOutcome(window, outcome);
         FirmwareStager* stager = UpdatesWindowTestAccess::stager(window);
-        emit stager->stageProgress(0, QStringLiteral("Checking for updates..."));
+        emit stager->stageProgress(37, QStringLiteral("Checking for updates..."));
         emit stager->updateCheckComplete(QStringLiteral("4.3.16"), true, {QStringLiteral("4.3.16")});
         emit stager->updateCheckFailed(QStringLiteral("index unavailable"));
         QCOMPARE(UpdatesWindowTestAccess::status(window)->text(), outcome);
-        auto* stage = window.findChild<UpdateStage*>(QStringLiteral("updatesStage"));
-        QVERIFY(stage);
-        QCOMPARE(stage->progress(), -1);
+        auto* progress = window.findChild<QProgressBar*>(QStringLiteral("firmwareProgress"));
+        QVERIFY(progress);
+        QVERIFY(progress->value() != 37);
     }
     void unverifiedDownloadAsksAgain()
     {

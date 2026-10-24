@@ -53,8 +53,6 @@ public:
 
 signals:
     void busyChanged(bool busy);
-    // 0–100 while working; -1 when idle.
-    void progressChanged(int percent);
 
 private:
     friend class UpdatesWindowTestAccess;

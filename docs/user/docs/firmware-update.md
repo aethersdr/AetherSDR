@@ -37,7 +37,7 @@ The section lists every SmartSDR release FlexRadio publishes (AetherSDR fetches 
 
 1. Click **Install** *version*.
 2. A confirmation names the release and the radio, and warns that the radio reboots after the update. Do not disconnect during the update.
-3. AetherSDR downloads the SmartSDR installer from FlexRadio, checks it against FlexRadio's MD5, extracts the firmware for your radio's model family, and uploads it. If FlexRadio's MD5 can't be downloaded, AetherSDR stops before the upload and asks again, saying that the firmware's integrity was not checked. The steps **Prepare firmware**, **Upload to radio** and **Radio confirms** light in turn, the progress ring fills, and the status line says what is happening.
+3. AetherSDR downloads the SmartSDR installer from FlexRadio, checks it against FlexRadio's MD5, extracts the firmware for your radio's model family, and uploads it. If FlexRadio's MD5 can't be downloaded, AetherSDR stops before the upload and asks again, saying that the firmware's integrity was not checked. The steps **Prepare firmware**, **Upload to radio** and **Radio confirms** light in turn, the progress bar fills, and the status line says what is happening.
 
 ### Install from a file
 
