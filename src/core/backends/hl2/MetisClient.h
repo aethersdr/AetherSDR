@@ -270,6 +270,11 @@ public:
     // read data and neither is allowed; on an echo address it would leave the six-bit
     // address as the only match.
     Q_INVOKABLE bool requestRegister(int addr, quint32 data, bool subsystemRead = false);
+    // Read the IO board's status registers over RQST/ACK (kIoBoardStatusReadData).
+    // The only request that reaches 0x3d, and a read, so the allow-list above
+    // stays shut. Answered exactly once, by ioBoardStatusReady or
+    // ioBoardStatusFailed, never by the controlReply* signals.
+    Q_INVOKABLE void requestIoBoardStatus();
 
     // I/O-THREAD ONLY, like linkCounters(). Returned by reference because the
     // machine holds no implicitly-shared members; GUI-thread consumers read the
@@ -467,6 +472,10 @@ signals:
     // machine is in quarantine, so the next requestRegister() will refuse for
     // a while. Consumers must not retry immediately in this handler.
     void controlRequestFailed(int addr, bool refused);
+    // requestIoBoardStatus()'s answer: registers 6..9 as read (decodeIoBoardStatus),
+    // or why there is no reading.
+    void ioBoardStatusReady(quint32 registers);
+    void ioBoardStatusFailed(const QString& reason);
 
 private slots:
     // The sampling period elapsed: start one arming cycle if the interlocks allow.
@@ -607,6 +616,8 @@ private:
     [[nodiscard]] qint64 controlNowMs() const noexcept;
     // Emit whatever verdict the machine has settled, if any.
     void publishControlVerdict();
+    // A request that ends without an answer, on the signal its caller listens to.
+    void publishControlFailure(int addr, bool refused);
     // Confirm that the packet buildNextControlPacket() just produced reached the
     // socket, and start the RQST deadline if it carried the request bank. Takes
     // the socket's return value, so a write the kernel refused leaves the

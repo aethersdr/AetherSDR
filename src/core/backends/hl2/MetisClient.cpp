@@ -575,7 +575,7 @@ void MetisClient::dropControlRequest()
     const auto st = m_ccRequest.state();
     if (st == Hl2ControlRequest::State::Queued
         || st == Hl2ControlRequest::State::Awaiting) {
-        emit controlRequestFailed(m_ccRequest.outstanding().addr, /*refused=*/false);
+        publishControlFailure(m_ccRequest.outstanding().addr, /*refused=*/false);
     }
     m_ccRequest.reset();
     // A bank already built but not yet confirmed has nowhere to land now.
@@ -1176,17 +1176,47 @@ bool MetisClient::requestRegister(int addr, quint32 data, bool subsystemRead)
     return m_ccRequest.arm(r);
 }
 
+void MetisClient::requestIoBoardStatus()
+{
+    // Same stream gate as requestRegister(): the reply can only ride EP6.
+    if (!m_running || !m_linkUp) {
+        emit ioBoardStatusFailed(QStringLiteral("the radio is not streaming"));
+        return;
+    }
+    Hl2ControlRequest::Request r;
+    r.addr = kC0I2c2 >> 1;
+    r.data = kIoBoardStatusReadData;
+    r.echo = Hl2ControlRequest::Echo::SubsystemRead;
+    if (!m_ccRequest.arm(r)) {
+        emit ioBoardStatusFailed(
+            QStringLiteral("another control request is outstanding or quarantined"));
+    }
+}
+
 void MetisClient::publishControlVerdict()
 {
     const auto reply = m_ccRequest.takeReply();
     if (!reply)
         return;
-    if (reply->outcome == Hl2ControlRequest::Outcome::Answered) {
-        emit controlReplyReady(reply->addr, reply->data);
+    if (reply->outcome != Hl2ControlRequest::Outcome::Answered) {
+        publishControlFailure(reply->addr,
+                              reply->outcome == Hl2ControlRequest::Outcome::Refused);
+    } else if (reply->addr == (kC0I2c2 >> 1)) {
+        emit ioBoardStatusReady(reply->data);
     } else {
-        emit controlRequestFailed(
-            reply->addr, reply->outcome == Hl2ControlRequest::Outcome::Refused);
+        emit controlReplyReady(reply->addr, reply->data);
     }
+}
+
+void MetisClient::publishControlFailure(int addr, bool refused)
+{
+    // Only requestIoBoardStatus() arms 0x3d; requestRegister() refuses it.
+    if (addr == (kC0I2c2 >> 1)) {
+        emit ioBoardStatusFailed(refused ? QStringLiteral("the radio's I2C bus was busy")
+                                         : QStringLiteral("the radio did not answer"));
+        return;
+    }
+    emit controlRequestFailed(addr, refused);
 }
 
 qint64 MetisClient::controlNowMs() const noexcept

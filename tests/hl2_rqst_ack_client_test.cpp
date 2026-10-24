@@ -16,6 +16,8 @@
 #include "TxTestAuthority.h"
 
 #include <QCoreApplication>
+#include <QObject>
+#include <QString>
 
 #include <array>
 #include <cstdio>
@@ -404,6 +406,133 @@ static void testStopClearsTheOutstandingRequest()
               "no stale RQST survives a stop");
 }
 
+// The IO board status read: the one request that reaches 0x3d, and a READ.
+// Every call is answered exactly once, by ioBoardStatusReady or
+// ioBoardStatusFailed, and never through the generic control signals.
+struct IoBoardStatusSpy {
+    int ready = 0, failed = 0, generic = 0;
+    std::uint32_t lastData = 0;
+    QString lastReason;
+    explicit IoBoardStatusSpy(MetisClient& c)
+    {
+        QObject::connect(&c, &MetisClient::ioBoardStatusReady,
+                         [this](quint32 d) { ++ready; lastData = d; });
+        QObject::connect(&c, &MetisClient::ioBoardStatusFailed,
+                         [this](const QString& r) { ++failed; lastReason = r; });
+        QObject::connect(&c, &MetisClient::controlReplyReady,
+                         [this](int, quint32) { ++generic; });
+        QObject::connect(&c, &MetisClient::controlRequestFailed,
+                         [this](int, bool) { ++generic; });
+    }
+    int answers() const { return ready + failed; }
+};
+
+static void testIoBoardStatusRefusedBeforeThereIsAStream()
+{
+    MetisClient c;
+    IoBoardStatusSpy spy(c);
+    c.requestIoBoardStatus();
+    check(spy.failed == 1 && spy.ready == 0,
+          "an IO board read before the stream is up is answered with a failure");
+    check(!spy.lastReason.isEmpty(), "that says why");
+    check(c.controlRequest().state() == Hl2ControlRequest::State::Idle, "and arms nothing");
+    for (int i = 0; i < 16; ++i) {
+        check(!anyFrameRequests(sendPacket(c)), "no RQST bit reaches the wire");
+    }
+}
+
+static void testIoBoardStatusIsOneReadOnTheWire()
+{
+    MetisClient c;
+    MetisClientTestAccess::setStreaming(c);
+    IoBoardStatusSpy spy(c);
+    c.requestIoBoardStatus();
+    check(spy.answers() == 0, "an accepted read is not answered before the radio replies");
+
+    int seen = 0;
+    Packet requestPacket{};
+    for (int i = 0; i < 64; ++i) {
+        const auto pkt = sendPacket(c);
+        if (anyFrameRequests(pkt)) { ++seen; requestPacket = pkt; }
+        check(!anyFrameKeyed(pkt), "an IO board read never keys");
+    }
+    check(seen == 1, "the read appears on the wire EXACTLY once");
+    const std::uint8_t rc0 = c0(requestPacket, kFrameB);
+    check((rc0 & ~kC0RespRqstBit) == kC0I2c2, "at 0x3d, the external I2C bus, with MOX clear");
+    check(dataOf(requestPacket, kFrameB) == kIoBoardStatusReadData,
+          "carrying the read cookie, the IO board chip and REG_INPUT_PINS");
+    check(c.controlRequest().outstanding().echo == Hl2ControlRequest::Echo::SubsystemRead,
+          "and matched as a subsystem read, since the reply is the value read");
+}
+
+static void testIoBoardStatusAnswersExactlyOnce()
+{
+    MetisClient c;
+    MetisClientTestAccess::setStreaming(c);
+    IoBoardStatusSpy spy(c);
+
+    // --- answered, with the read value rather than the bytes we sent ---
+    c.requestIoBoardStatus();
+    while (c.controlRequest().state() == Hl2ControlRequest::State::Queued) {
+        (void)sendPacket(c);
+    }
+    MetisClientTestAccess::feedResponse(c, ack(kC0I2c2 >> 1, 0x07'00'00'2Bu));
+    check(spy.ready == 1 && spy.lastData == 0x07'00'00'2Bu, "the reply carries the registers read");
+    check(spy.generic == 0, "and is not reported as a generic control reply");
+
+    // --- a second read while one is outstanding ---
+    c.requestIoBoardStatus();
+    c.requestIoBoardStatus();
+    check(spy.failed == 1, "a read while one is outstanding is refused, and says so");
+    while (c.controlRequest().state() == Hl2ControlRequest::State::Queued) {
+        (void)sendPacket(c);
+    }
+
+    // --- refused by the radio (bus 2 busy) ---
+    MetisClientTestAccess::feedResponse(c, ack(kRespAddrError, 0));
+    check(spy.failed == 2 && spy.ready == 1, "a 0x3F reply is a failure, not a reading");
+
+    // --- unanswered. A refusal leaves nothing owed, so this read is armed at once ---
+    c.requestIoBoardStatus();
+    check(spy.failed == 2 && c.controlRequest().state() == Hl2ControlRequest::State::Queued,
+          "a read straight after a refusal is accepted: only a timeout quarantines");
+    while (c.controlRequest().state() == Hl2ControlRequest::State::Queued) {
+        (void)sendPacket(c);
+    }
+    for (int i = 0; i < Hl2ControlRequest::kDefaultDeadlineFrames; ++i) {
+        MetisClientTestAccess::feedFrame(c, g_nowMs);
+    }
+    g_nowMs += Hl2ControlRequest::kDefaultFloorMs;
+    MetisClientTestAccess::feedFrame(c, g_nowMs);
+    check(spy.failed == 3, "a deadline with no reply is a failure, not silence");
+    c.requestIoBoardStatus();
+    check(spy.failed == 4, "a read during the quarantine is refused, not left waiting");
+
+    // --- the link goes down under an outstanding read ---
+    for (int i = 0; i < Hl2ControlRequest::kDefaultQuarantineFrames; ++i) {
+        MetisClientTestAccess::feedFrame(c, g_nowMs);
+    }
+    g_nowMs += Hl2ControlRequest::kDefaultFloorMs;
+    MetisClientTestAccess::feedFrame(c, g_nowMs);
+    c.requestIoBoardStatus();
+    check(spy.failed == 4, "accepted again once the quarantine has elapsed");
+    c.stop();
+    check(spy.failed == 5 && spy.ready == 1, "a stop answers the outstanding read");
+    check(spy.generic == 0, "and no IO board outcome ever used the generic signals");
+}
+
+static void testIoBoardStatusLeavesTheAllowListShut()
+{
+    // The read is its own entry point. requestRegister() still refuses 0x3d
+    // with the read cookie, so this change opens no write path to the board.
+    MetisClient c;
+    MetisClientTestAccess::setStreaming(c);
+    check(!c.requestRegister(kC0I2c2 >> 1, kIoBoardStatusReadData, true),
+          "requestRegister still refuses 0x3d, even as a subsystem read");
+    check(!c.requestRegister(kC0I2c2 >> 1, kIoBoardStatusReadData),
+          "and as a plain write");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -417,6 +546,10 @@ int main(int argc, char** argv)
     testStopClearsTheOutstandingRequest();
     testAFailedSendDoesNotBurnTheRequest();
     testLinkDownDropsTheRequestAndSaysSo();
+    testIoBoardStatusRefusedBeforeThereIsAStream();
+    testIoBoardStatusIsOneReadOnTheWire();
+    testIoBoardStatusAnswersExactlyOnce();
+    testIoBoardStatusLeavesTheAllowListShut();
 
     if (g_failures == 0)
         std::printf("hl2_rqst_ack_client_test: OK\n");

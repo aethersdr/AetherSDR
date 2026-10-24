@@ -7103,6 +7103,13 @@ target_include_directories(hl2_rqst_ack_client_test PRIVATE src tests)
 target_link_libraries(hl2_rqst_ack_client_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_rqst_ack_client_test COMMAND hl2_rqst_ack_client_test)
 
+# HL2 `ioboard.status` verb — socket-free, from Hl2Backend through its own
+# MetisClient's request and response path and back to extensionResult.
+add_executable(hl2_io_board_status_test tests/hl2_io_board_status_test.cpp)
+target_include_directories(hl2_io_board_status_test PRIVATE src tests)
+target_link_libraries(hl2_io_board_status_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_io_board_status_test COMMAND hl2_io_board_status_test)
+
 # HL2 band filter / EP2 frame composition — socket-free, on MetisClient's own
 # packet builder. A band change must not leave two disagreeing config banks in
 # one frame (#4579).
