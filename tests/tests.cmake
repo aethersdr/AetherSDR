@@ -2344,6 +2344,29 @@ add_test(NAME canon_window_test COMMAND canon_window_test)
 set_tests_properties(canon_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Callsign Lookup on CanonWindow (RFC #6226), built like AetherRX and AetherTX:
+# a frameless workspace window in the canon scope that restores the old
+# dialog's geometry. Socket-free: no lookup is started.
+add_executable(callsign_lookup_dialog_test
+    tests/callsign_lookup_dialog_test.cpp
+    src/gui/CallsignLookupDialog.cpp
+    src/gui/CallsignCard.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(callsign_lookup_dialog_test PRIVATE src tests)
+target_link_libraries(callsign_lookup_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(callsign_lookup_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME callsign_lookup_dialog_test COMMAND callsign_lookup_dialog_test)
+set_tests_properties(callsign_lookup_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
 # CanonMessageBox (RFC #6226): the canon question box reports the button
 # clicked, and none when it is closed instead.
 add_executable(canon_message_box_test
@@ -9897,6 +9920,7 @@ set(AETHER_SETTINGS_CONSUMERS
     aether_rx_profiles_test
     theme_manager_test
     canon_window_test
+    callsign_lookup_dialog_test
     canon_message_box_test
     canon_surface_test
     kpa500_applet_test
