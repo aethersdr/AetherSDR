@@ -471,24 +471,31 @@ public:
         m_resetFftSmoothingOnNextFrame = true;
     }
 
-    // Enable/disable the "S"/"B" (segment/band zoom) buttons and explain why
-    // when disabled. Both send FlexLib wire text (band_zoom=/segment_zoom=,
-    // see togglePanZoomModeForPan()) that only a Flex radio's command plane
-    // ever answers -- on every other backend the click was a silent no-op,
-    // with nothing on screen saying so. Called per-radio model, same as
-    // setBandwidthLimits() above.
-    void setBandSegmentZoomAvailable(bool available)
+    // Flex uses radio-owned zoom flags; a radio declaring a native scope span
+    // (Icom today) zooms by setting that span. Keyed on the declaration, not
+    // the family, so the text stays right for the next backend that declares it.
+    void setBandSegmentZoomAvailable(bool available, bool nativeSpan = false)
     {
-        const QString tip = available
-            ? QString()
-            : tr("Band/segment zoom is available on FlexRadio only.");
+        const QString tip = !available
+            ? (nativeSpan ? tr("Waiting for the radio's scope geometry.")
+                          : tr("Band/segment zoom needs a radio that declares it."))
+            : nativeSpan
+                ? tr("Zoom using the radio's scope span; the tuned frequency stays unchanged.")
+                : QString();
+        // Called on every scope sweep: skip the work when nothing changed.
+        if (m_zoomBandBtn && m_zoomBandBtn->isEnabled() == available
+            && m_zoomBandBtn->toolTip() == tip) {
+            return;
+        }
         if (m_zoomBandBtn) {
             m_zoomBandBtn->setEnabled(available);
             m_zoomBandBtn->setToolTip(tip);
+            m_zoomBandBtn->setAccessibleDescription(tip);
         }
         if (m_zoomSegBtn) {
             m_zoomSegBtn->setEnabled(available);
             m_zoomSegBtn->setToolTip(tip);
+            m_zoomSegBtn->setAccessibleDescription(tip);
         }
     }
 
@@ -1038,7 +1045,7 @@ signals:
     void frequencyRangeChanged(double centerMhz, double bandwidthMhz);
     // Emitted when the user drags the frequency scale bar to change bandwidth.
     void bandwidthChangeRequested(double newBandwidthMhz);
-    // Band/segment zoom: radio handles center/bandwidth (SmartSDR pcap: "band_zoom=1" / "segment_zoom=1")
+    // Band/segment zoom: the connected backend handles radio flags or native span.
     void bandZoomRequested();
     void segmentZoomRequested();
     // Emitted when the user drags the waterfall to pan the center frequency.

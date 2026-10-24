@@ -5564,10 +5564,7 @@ void MainWindow::buildUI()
         if (!applet || !applet->spectrumWidget()) {
             return;
         }
-        applet->spectrumWidget()->setBandSegmentZoomAvailable(
-            bandSegmentZoomAvailable(
-                m_radioModel.isConnected(),
-                m_radioModel.backendCapabilities().panZoomModes.has_value()));
+        refreshPanZoomControls();
         // The two capability switches onConnectionStateChanged() applies for
         // the same reason: a pan created after connect would otherwise keep
         // the widget defaults (no edge crop, client EMA on) until the next
@@ -6664,6 +6661,27 @@ void MainWindow::applyDarkTheme()
 
 // ─── Radio/model event handlers ───────────────────────────────────────────────
 
+void MainWindow::refreshPanZoomControls()
+{
+    if (!m_panStack) {
+        return;
+    }
+    const auto zoom = m_radioModel.backendCapabilities().panZoomModes;
+    const bool nativeSpan = zoom && zoom->control
+        == RadioCapabilities::PanZoomModes::Control::NativeScopeSpan;
+    for (auto* applet : m_panStack->allApplets()) {
+        if (!applet || !applet->spectrumWidget()) {
+            continue;
+        }
+        const auto* pan = m_radioModel.panadapter(applet->panId());
+        const bool available = AetherSDR::bandSegmentZoomAvailable(
+            m_radioModel.isConnected(), zoom.has_value())
+            && (!nativeSpan || (pan && pan->bandwidthLimitsKnown()
+                                && pan->centerKnown()));
+        applet->spectrumWidget()->setBandSegmentZoomAvailable(available, nativeSpan);
+    }
+}
+
 void MainWindow::onConnectionStateChanged(bool connected)
 {
     if (m_shuttingDown) {
@@ -6682,24 +6700,16 @@ void MainWindow::onConnectionStateChanged(bool connected)
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
 
-    // Band/segment zoom reads the declared RadioCapabilities::panZoomModes
-    // (FlexBackend engages it; others set nullopt), not a family check or
-    // hasCommandPlane() (the sim owns a RadioConnection but has no
-    // band_zoom=/segment_zoom=). Re-evaluated on every connect and disconnect,
-    // since backendCapabilities() reflects only the current radio.
+    // Band/segment zoom reads the backend's declared control contract. Native
+    // span zoom also waits for radio-reported pan limits before enabling.
     if (m_panStack) {
-        // One predicate with the command paths in MainWindow_Shortcuts.cpp, so
-        // "the button is grey" and "the keystroke is refused" cannot drift
-        // apart on the capability (PanZoomModeGate.h).
-        const bool zoomAvailable = AetherSDR::bandSegmentZoomAvailable(
-            connected, m_radioModel.backendCapabilities().panZoomModes.has_value());
+        refreshPanZoomControls();
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         const bool backendAverages =
             m_radioModel.backendCapabilities().backendPanAveraging.has_value();
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
-                applet->spectrumWidget()->setBandSegmentZoomAvailable(zoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
                 applet->spectrumWidget()->setClientFftSmoothingEnabled(
                     AetherSDR::clientFftSmoothingEnabled(connected, backendAverages));

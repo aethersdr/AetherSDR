@@ -1047,6 +1047,10 @@ void MainWindow::wireRadioModel()
     // set its visibility.
     connect(&m_radioModel, &RadioModel::capabilitiesChanged,
             this, &MainWindow::applyCapabilitiesToUi);
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged,
+            this, [this] { refreshPanZoomControls(); });
+    connect(&m_radioModel, &RadioModel::panadapterInfoChanged,
+            this, [this] { refreshPanZoomControls(); });
     // Icom's connected edge precedes its verified CI-V model identity. Re-run
     // only when the canonical capability picture changes so the family-wide
     // experimental treatment can settle model-specifically without exposing a
