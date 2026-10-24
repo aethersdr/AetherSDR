@@ -2117,7 +2117,7 @@
         "target": "MqttSettingsDialog"
       },
       "caption": "The MQTT Settings window with the default broker fields.",
-      "alt": "MQTT Settings window with tabs Broker, Subscriptions and Publish Buttons, on Broker. Host is localhost, Port 1883, User and Password are empty, TLS has a Use TLS option and CA cert is optional, blank = system CA bundle with a Browse… button. OK, Cancel and Apply buttons sit at the bottom."
+      "alt": "MQTT Settings window with its title in the canon header and a round close button in the top-right corner, and tabs Broker, Subscriptions and Publish Buttons, on Broker. Host is localhost, Port 1883, User and Password are empty, TLS has a Use TLS option and CA cert is optional, blank = system CA bundle with a Browse… button. OK, Cancel and Apply buttons sit at the bottom."
     },
     {
       "id": "callsign-lookup-prefix",

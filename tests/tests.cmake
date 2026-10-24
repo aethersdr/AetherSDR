@@ -2344,6 +2344,25 @@ add_test(NAME canon_window_test COMMAND canon_window_test)
 set_tests_properties(canon_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# MQTT Settings on CanonWindow: the fields' right-click menus keep a canon
+# panel. Socket-free; the dialog is never accepted, so no broker connection.
+add_executable(mqtt_settings_dialog_test
+    tests/mqtt_settings_dialog_test.cpp
+    src/gui/MqttSettingsDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(mqtt_settings_dialog_test PRIVATE src tests)
+target_link_libraries(mqtt_settings_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(mqtt_settings_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME mqtt_settings_dialog_test COMMAND mqtt_settings_dialog_test)
+set_tests_properties(mqtt_settings_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # CanonMessageBox (RFC #6226): the canon question box reports the button
 # clicked, and none when it is closed instead.
 add_executable(canon_message_box_test
@@ -9763,6 +9782,7 @@ endif()
 set(AETHER_SETTINGS_CONSUMERS
     update_installer_test
     update_stager_test
+    mqtt_settings_dialog_test
     flex_readonly_metadata_test
     dsp_parameter_reset_test
     cw_rx_model_test

@@ -46,8 +46,10 @@ constexpr int kFieldBorder = 1;
 // What the shared canon dialog sheet (ModemChrome, as the AetherRX and AetherTX
 // Settings dialogs wear it) leaves out: tabs and group boxes as SpotHub's;
 // fields and buttons sized for a form of several rows; the port field's font,
-// to match the text fields beside it; and the table's cell editor, which would
-// otherwise take the field padding and clip its own text.
+// to match the text fields beside it; the table's cell editor, which would
+// otherwise take the field padding and clip its own text; and the fields'
+// right-click menus, children of the fields that the sheet's transparent
+// rule would otherwise leave with no panel.
 constexpr const char* kMqttCanonRules = R"(
 QTabWidget::pane {
     background: {{color.canon.raised}};
@@ -98,6 +100,26 @@ QSpinBox {
 QTableWidget QLineEdit {
     border-radius: 0px;
     padding: 0px 6px;
+}
+QMenu {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
+}
+QMenu::item {
+    padding: 4px 18px;
+}
+QMenu::item:selected {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+}
+QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
 }
 )";
 
