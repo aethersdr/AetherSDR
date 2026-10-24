@@ -162,6 +162,8 @@ int runPanPixelsAtRetinaScale()
     pan.resize(1921, 600);
     check(panXpixelsFor(&pan) == 3840, "pan pixels: a 1921-point pan (3842 unclamped) is capped at 3840");
     pan.resize(2047, 600);
+    // The safety bound, from the measured stall: unlike the 3840 checks, which
+    // follow the chosen cap, this one must not be relaxed if the cap changes.
     check(panXpixelsFor(&pan) <= 4092,
           "pan pixels: a 2047-point pan (4094 unclamped, a stalling width) requests at most 4092");
     pan.resize(2100, 600);
