@@ -278,13 +278,15 @@ void Ctr2FirmwareUpdater::sendHello()
     m_port->send(out);
 }
 
-void Ctr2FirmwareUpdater::sendExtension(const QByteArray& payload)
+bool Ctr2FirmwareUpdater::sendExtension(const QByteArray& payload)
 {
     std::vector<Report> out;
-    if (m_port && m_encoder.encodeExtension(MessageType::Firmware, payload, &out)) {
-        m_reportsQueued += qint64(out.size());
-        m_port->send(out);
+    if (!m_port || !m_encoder.encodeExtension(MessageType::Firmware, payload, &out)) {
+        return false;
     }
+    m_reportsQueued += qint64(out.size());
+    m_port->send(out);
+    return true;
 }
 
 void Ctr2FirmwareUpdater::onReports(const QByteArray& reports)
@@ -322,7 +324,10 @@ void Ctr2FirmwareUpdater::onMessage(const Message& message)
             const bool loader = *m_restart == Restart::Bootloader;
             setPhase(Phase::Commanding, loader ? tr("Restarting into download mode")
                                                : tr("Restarting into the other firmware"));
-            sendExtension(loader ? firmware::encodeBootloader() : firmware::encodeSwitch());
+            if (!sendExtension(loader ? firmware::encodeBootloader() : firmware::encodeSwitch())) {
+                fail(tr("The restart request could not be sent."));
+                return;
+            }
             m_restartQueuedTo = m_reportsQueued;
             armTimeout(m_timing.answerTimeoutMs);
         } else if (m_phase == Phase::Calling) {

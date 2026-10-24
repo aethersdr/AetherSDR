@@ -12,6 +12,7 @@
 #include <QPushButton>
 #include <QTest>
 #include <QTimer>
+#include <QToolButton>
 #include <cstdio>
 #include <functional>
 
@@ -97,7 +98,13 @@ int main(int argc, char** argv)
     // ---- the corner close button closes it with no button clicked ----
     {
         Box b;
-        const int result = b.run([](CanonMessageBox& box) { box.close(); });
+        const int result = b.run([](CanonMessageBox& box) {
+            // The corner button is the window's only QToolButton.
+            if (auto* close = box.findChild<QToolButton*>())
+                close->click();
+            else
+                box.done(-1);
+        });
         EXPECT_TRUE(result == QDialog::Rejected);
         EXPECT_TRUE(b.box.clickedButton() == nullptr);
     }
@@ -116,14 +123,35 @@ int main(int argc, char** argv)
         EXPECT_TRUE(b.install->isDefault() && !b.cancel->isDefault());
     }
 
+    // ---- Return on a focused button clicks that button, not the default ----
+    // Buttons are auto-default for this. A platform theme whose button-press
+    // keys include Return (as here, offscreen) gives the same result without
+    // it; one that leaves Return out would click the default instead.
+    {
+        Box b;
+        bool cancelFocused = false;
+        const int result = b.run([&b, &cancelFocused](CanonMessageBox& box) {
+            b.cancel->setFocus();
+            cancelFocused = QApplication::focusWidget() == b.cancel;
+            pressKey(box, Qt::Key_Return);
+        });
+        EXPECT_TRUE(cancelFocused);
+        EXPECT_TRUE(result == QDialog::Rejected);
+        EXPECT_TRUE(b.box.clickedButton() == b.cancel);
+    }
+
     // ---- the further text shows only when there is some; a destructive
     //      button accepts and is marked for the warning color ----
     {
         CanonMessageBox box(QStringLiteral("Restore the backup?"), QStringLiteral("Restore it?"));
         auto* info = box.findChild<QLabel*>(QStringLiteral("canonMessageInfo"));
         EXPECT_TRUE(info && info->isHidden());
+        EXPECT_TRUE(box.accessibleDescription() == QStringLiteral("Restore it?"));
         box.setInformativeText(QStringLiteral("Only onto the CTR2-Max it came from."));
         EXPECT_TRUE(info && !info->isHidden());
+        // A screen reader reads both texts when the box opens.
+        EXPECT_TRUE(box.accessibleDescription()
+                    == QStringLiteral("Restore it?\nOnly onto the CTR2-Max it came from."));
         QPushButton* restore =
             box.addButton(QStringLiteral("Restore"), CanonMessageBox::Role::Destructive);
         EXPECT_TRUE(restore->property("role").toString() == QStringLiteral("destructive"));

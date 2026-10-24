@@ -105,7 +105,8 @@ private:
     void onPortFailed(const QString& message);
     void onTimeout();
     void sendHello();
-    void sendExtension(const QByteArray& payload);
+    // False when nothing could be queued (no port, or the payload would not encode).
+    bool sendExtension(const QByteArray& payload);
     void sendChunks();
     void lookForDevice();
     void fail(const QString& message);

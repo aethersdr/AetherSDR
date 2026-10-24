@@ -3,6 +3,7 @@
 #include "CanonIndicators.h"
 #include "ModemChrome.h"
 
+#include <QAccessible>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
@@ -12,7 +13,10 @@ namespace AetherSDR {
 
 namespace {
 
+// The texts wrap at the narrower width; one long unbreakable token (a path in
+// a command to copy) widens the box up to the wider one rather than clipping.
 constexpr int kTextWidth = 420;
+constexpr int kMaxTextWidth = 720;
 
 } // namespace
 
@@ -20,7 +24,6 @@ CanonMessageBox::CanonMessageBox(const QString& title, const QString& text, QWid
     : CanonWindow(title, parent)
 {
     setObjectName(QStringLiteral("canonMessageBox"));
-    setModal(true);
     applyCanonSheet(bodyWidget(), [] {
         return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
                + QStringLiteral(
@@ -36,16 +39,21 @@ CanonMessageBox::CanonMessageBox(const QString& title, const QString& text, QWid
     root->setSpacing(12);
     root->addWidget(makeCanonHeader(title));
 
+    // A screen reader announces a QMessageBox's text when it opens; this
+    // dialog is told the same through its description.
+    setAccessibleDescription(text);
     m_text = new QLabel(text);
     m_text->setObjectName(QStringLiteral("canonMessageText"));
     m_text->setWordWrap(true);
-    m_text->setFixedWidth(kTextWidth);
+    m_text->setMinimumWidth(kTextWidth);
+    m_text->setMaximumWidth(kMaxTextWidth);
     root->addWidget(m_text);
 
     m_info = new QLabel;
     m_info->setObjectName(QStringLiteral("canonMessageInfo"));
     m_info->setWordWrap(true);
-    m_info->setFixedWidth(kTextWidth);
+    m_info->setMinimumWidth(kTextWidth);
+    m_info->setMaximumWidth(kMaxTextWidth);
     m_info->hide();
     root->addWidget(m_info);
 
@@ -60,6 +68,8 @@ void CanonMessageBox::setInformativeText(const QString& text)
 {
     m_info->setText(text);
     m_info->setVisible(!text.isEmpty());
+    setAccessibleDescription(text.isEmpty() ? m_text->text()
+                                            : m_text->text() + QLatin1Char('\n') + text);
 }
 
 void CanonMessageBox::setTextSelectable(bool on)
@@ -71,8 +81,10 @@ void CanonMessageBox::setTextSelectable(bool on)
 
 QPushButton* CanonMessageBox::addButton(const QString& text, Role role)
 {
+    // Auto-default, as in QMessageBox: a focused button takes Return itself,
+    // and the default button takes it only while no other button has focus.
     auto* button = new QPushButton(text);
-    button->setAutoDefault(false);
+    button->setAutoDefault(true);
     if (role == Role::Destructive) {
         button->setProperty("role", QStringLiteral("destructive"));
     }
@@ -103,6 +115,9 @@ void CanonMessageBox::showEvent(QShowEvent* event)
     if (m_default) {
         m_default->setFocus();
     }
+    // As QMessageBox does, so a screen reader reads the texts as it opens.
+    QAccessibleEvent alert(this, QAccessible::Alert);
+    QAccessible::updateAccessibility(&alert);
 }
 
 } // namespace AetherSDR
