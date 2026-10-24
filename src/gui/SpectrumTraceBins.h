@@ -13,8 +13,9 @@
 
 namespace AetherSDR::SpectrumTraceBins {
 
-// bins: the trace before display smoothing, in the order the widget draws them
-// across centerMhz ± bandwidthMhz/2. A non-finite bin is reported as null.
+// bins: the decoded frame before display smoothing and before any pan-edge
+// crop, spread evenly across centerMhz ± bandwidthMhz/2. A non-finite bin is
+// reported as null.
 inline QVariantMap snapshot(const QVector<float>& bins, double centerMhz,
                             double bandwidthMhz, quint64 fftFrameSequence)
 {
