@@ -310,13 +310,13 @@ def verify_patch_set(old_root: Path, bundle: Path, patch: dict, files: list[dict
             target.unlink()
             continue
         if not pruned:
-            for d in sorted((Path(dp) for dp, dn, fn in os.walk(dest) if not dn and not fn),
-                            key=lambda d: len(d.parts), reverse=True):
-                if d != dest and not (old_root / d.relative_to(dest)).is_symlink():
-                    try:
-                        d.rmdir()
-                    except OSError:
-                        pass
+            # After the removals, drop every directory left empty. Bottom-up,
+            # so a parent emptied by pruning its children goes too
+            # (plugins/sub/x.dll removed before plugins becomes a file).
+            for dp, _, _ in os.walk(dest, topdown=False):
+                d = Path(dp)
+                if d != dest and not any(d.iterdir()):
+                    d.rmdir()
             pruned = True
         if op["op"] == "symlink":
             if target.is_symlink() or target.exists():

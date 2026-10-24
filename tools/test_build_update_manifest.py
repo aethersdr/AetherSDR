@@ -237,6 +237,10 @@ class TypeTransitions(Base):
         self.round_trip(lambda r: write(r / "plugins/old.dll", b"was a dir"),
                         lambda r: write(r / "plugins", b"now a file"))
 
+    def test_nested_directory_becomes_file(self) -> None:
+        self.round_trip(lambda r: write(r / "plugins/sub/old.dll", b"was a nested dir"),
+                        lambda r: write(r / "plugins", b"now a file"))
+
     def test_directory_becomes_symlink(self) -> None:
         def new(r: Path) -> None:
             write(r / "real/x.dll", b"x")
