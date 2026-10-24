@@ -19,6 +19,7 @@
 #include <QPushButton>
 #include <QStyle>
 #include <QStyleOptionFrame>
+#include <QPointer>
 #include <QTest>
 #include <cstdio>
 
@@ -153,6 +154,28 @@ void geometryCarriesOver()
           "hiding the window saves its size under the same key");
 }
 
+// MainWindow opens the window with WA_DeleteOnClose. Every way out destroys
+// it, Esc included (QDialog::done() closes, it does not only hide), so the
+// next open is a fresh window with an empty field.
+void everyCloseDestroysTheWindow()
+{
+    for (int path = 0; path < 3; ++path) {
+        QPointer<CallsignLookupDialog> dialog = new CallsignLookupDialog;
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->show();
+        const bool exposed = QTest::qWaitForWindowExposed(dialog);
+        if (path == 0) QTest::keyClick(dialog, Qt::Key_Escape);
+        if (path == 1) QTest::keySequence(dialog, QKeySequence::Close);
+        if (path == 2) dialog->close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        check(exposed && dialog.isNull(),
+              path == 0 ? "Esc destroys the window"
+              : path == 1 ? "Ctrl+W / Cmd+W destroys the window"
+                          : "the corner close button destroys the window");
+        delete dialog.data();
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -167,6 +190,7 @@ int main(int argc, char** argv)
     cardFollowsTheCanonScope();
     fieldFitsItsPlaceholderAtMinimumSize();
     rightClickMenuIsOpaque();
+    everyCloseDestroysTheWindow();
     geometryCarriesOver();
 
     return g_failures ? 1 : 0;
