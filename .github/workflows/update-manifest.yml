@@ -56,7 +56,8 @@ jobs:
       publish: ${{ steps.plan.outputs.publish }}
     steps:
       # The tag reaches scripts only through the environment, and only once it
-      # has the shape of a release tag (stable releases only: no suffix).
+      # has the shape of a stable release tag: vYY.M.patch with an optional
+      # hotfix (v26.7.4.1), and no pre-release suffix.
       - name: Determine tag
         id: tag
         env:
@@ -69,7 +70,7 @@ jobs:
           else
             tag="$RUN_HEAD_BRANCH"
           fi
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
             echo "::error::Not a release tag; no update manifest is built."
             exit 1
           fi
@@ -101,28 +102,41 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           mkdir -p "$RUNNER_TEMP/tool"
-          for f in tools/build_update_manifest.py packaging/update-signing.pub; do
+          for f in tools/build_update_manifest.py tools/publish_update_manifest.py \
+                   packaging/update-signing.pub; do
             gh api "repos/$GH_REPO/contents/$f?ref=$WORKFLOW_SHA" -H 'Accept: application/vnd.github.raw' \
               > "$RUNNER_TEMP/tool/$(basename "$f")" || rm -f "$RUNNER_TEMP/tool/$(basename "$f")"
           done
           test -s "$RUNNER_TEMP/tool/build_update_manifest.py"
+          test -s "$RUNNER_TEMP/tool/publish_update_manifest.py"
 
       # A second run for the same tag (both builds trigger this) stops here
-      # once the first has published. A dispatch always builds.
+      # once the first has COMPLETELY published: the release's manifest and
+      # signature served and verifying, and latest/ too when this is the
+      # latest release. Anything less is rebuilt and published again, which
+      # repairs it. A dispatch always builds.
       - name: Decide whether to publish
         id: plan
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_PUBLISH: ${{ inputs.publish }}
           TAG: ${{ steps.tag.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "publish=$INPUT_PUBLISH" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          code=$(curl -s -o /dev/null -w '%{http_code}' "https://updates.aethersdr.com/releases/$TAG/manifest.json" || true)
-          if [ "$code" = "200" ]; then
-            echo "The manifest for $TAG is already published."
+          if [ ! -s "$RUNNER_TEMP/tool/update-signing.pub" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+          state=$(python3 "$RUNNER_TEMP/tool/publish_update_manifest.py" check --tag "$TAG" \
+            --latest-tag "$latest" --public-key "$RUNNER_TEMP/tool/update-signing.pub")
+          echo "Publication of $TAG: $state"
+          if [ "$state" = complete ]; then
             echo "publish=already" >> "$GITHUB_OUTPUT"
           else
             echo "publish=true" >> "$GITHUB_OUTPUT"
@@ -164,9 +178,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
+          # --fetch-from-github requires every payload: a download that still
+          # fails after retries stops the run rather than leaving a platform out.
           python3 "$RUNNER_TEMP/tool/build_update_manifest.py" --tag "$TAG" --out update-out \
             --fetch-from-github --depth 4 --work "$RUNNER_TEMP/update-work" \
             --public-key "$RUNNER_TEMP/tool/update-signing.pub"
+          cp "$RUNNER_TEMP/tool/publish_update_manifest.py" "$RUNNER_TEMP/tool/build_update_manifest.py" update-out/
           ls -l update-out
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -185,6 +202,11 @@ jobs:
     environment: update-signing
     permissions:
       contents: write
+    # One publish at a time across ALL tags, so an older release's run can
+    # never interleave with a newer one's promotion of latest/.
+    concurrency:
+      group: update-manifest-publish
+      cancel-in-progress: false
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
@@ -234,14 +256,14 @@ jobs:
             gh release upload "$TAG" "${bundles[@]}" --clobber
           fi
 
-      # The per-release copy first, then latest/, so latest/ never names a
-      # release whose own copy is missing. latest/ moves only for the release
-      # GitHub calls latest, so re-running an older tag never rolls it back.
+      # tools/publish_update_manifest.py writes the release's pair, reads it
+      # back and verifies it, then promotes latest/ only when this is GitHub's
+      # latest release AND latest/ does not already name a newer one (re-read
+      # just before the write; this job's concurrency group closes the rest).
+      # R2's S3 API with a token scoped to this one bucket (its id is the
+      # access key, the SHA-256 of its value the secret), signed by curl
+      # itself: no third-party uploader holds the credentials.
       - name: Publish to updates.aethersdr.com
-        id: r2
-        # R2's S3 API with a token scoped to this one bucket (its id is the
-        # access key, the SHA-256 of its value the secret), signed by curl
-        # itself: no third-party uploader holds the credentials.
         env:
           R2_ACCOUNT_ID: ${{ secrets.UPDATES_R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.UPDATES_R2_ACCESS_KEY_ID }}
@@ -250,34 +272,19 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.build.outputs.tag }}
         run: |
-          put() {
-            curl -fsS --retry 3 --aws-sigv4 "aws:amz:auto:s3" \
-              --user "$R2_ACCESS_KEY_ID:$R2_SECRET_ACCESS_KEY" -X PUT \
-              -H "Content-Type: $3" -H "Cache-Control: $4" --data-binary "@$2" \
-              "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com/aethersdr-updates/$1"
-          }
-          dirs="releases/$TAG"
-          if [ "$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" = "$TAG" ]; then
-            dirs="$dirs latest"
-          else
-            echo "$TAG is not the latest release; latest/ is left as it is."
-          fi
-          echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
-          for dir in $dirs; do
-            cache='public, max-age=31536000, immutable'
-            [ "$dir" = latest ] && cache='no-cache'
-            put "$dir/manifest.json" update-out/manifest.json application/json "$cache"
-            put "$dir/manifest.json.sig" update-out/manifest.json.sig application/octet-stream "$cache"
-          done
+          latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+          python3 update-out/publish_update_manifest.py publish --tag "$TAG" --latest-tag "$latest" \
+            --public-key "$RUNNER_TEMP/update-signing.pub" --dir update-out
 
-      - name: Check what was published
+      # What clients see, through the public site: complete, or this fails.
+      - name: Check the publication is complete
         env:
-          DIRS: ${{ steps.r2.outputs.dirs }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.tag }}
         run: |
-          for dir in $DIRS; do
-            curl -fsS "https://updates.aethersdr.com/$dir/manifest.json" -o served.json
-            curl -fsS "https://updates.aethersdr.com/$dir/manifest.json.sig" -o served.sig
-            cmp served.json update-out/manifest.json
-            openssl pkeyutl -verify -rawin -pubin -inkey "$RUNNER_TEMP/update-signing.pub" \
-              -in served.json -sigfile served.sig
-          done
+          latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+          state=$(python3 update-out/publish_update_manifest.py check --tag "$TAG" \
+            --latest-tag "$latest" --public-key "$RUNNER_TEMP/update-signing.pub")
+          echo "Publication of $TAG: $state"
+          test "$state" = complete

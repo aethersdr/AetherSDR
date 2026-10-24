@@ -454,6 +454,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/test_build_update_manifest.py
 
+      # Its publisher: a partial upload is not a publication, and latest/
+      # never moves to an older release (in-memory store, ephemeral key).
+      - name: Update manifest publisher
+        if: ${{ !cancelled() }}
+        run: python tools/test_publish_update_manifest.py
+
       # ── Hardcoded-colour ratchet (#4569, RFC #3076). Counts may not rise
       # above the PR's base. The gate is a DELTA rather than a stored constant:
       # main gains colours from unrelated UI merges, so a frozen baseline goes

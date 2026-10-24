@@ -58,7 +58,8 @@ from pathlib import Path, PurePosixPath
 SCHEMA = 1
 REPO = "aethersdr/AetherSDR"
 DOWNLOAD_BASE = f"https://github.com/{REPO}/releases/download/"
-TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+# A stable release: vYY.M.patch, with an optional hotfix (v26.7.4.1).
+TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
 
 # zstd's --patch-from needs a window that covers the reference file. Recorded
 # per patch so the applier can raise ZSTD_d_windowLogMax to exactly that.
@@ -88,11 +89,12 @@ PAYLOADS = (
 )
 
 
-def version_key(tag: str) -> tuple[int, int, int]:
+def version_key(tag: str) -> tuple[int, int, int, int]:
+    """Comparable parts of a release tag; an absent hotfix counts as 0."""
     m = TAG_RE.match(tag)
     if not m:
         raise ValueError(f"not a release tag: {tag!r}")
-    return tuple(int(g) for g in m.groups())  # type: ignore[return-value]
+    return tuple(int(g or 0) for g in m.groups())  # type: ignore[return-value]
 
 
 def sha256_file(path: Path) -> str:
@@ -221,8 +223,12 @@ def deterministic_tar(members: list[tuple[str, Path]], out: Path) -> None:
 def build_patch_set(old_root: Path, old: dict[str, Entry], new_root: Path,
                     new: dict[str, Entry], bundle: Path, work: Path) -> dict | None:
     """The ops that turn the `old` tree into the `new` one, packed into
-    `bundle`. None when the trees are identical (no bundle is written)."""
-    ops: list[dict] = []
+    `bundle`. None when the trees are identical (no bundle is written).
+
+    Removals come first, so a path that changes between file, directory and
+    symlink is cleared before its replacement is written (the applier prunes
+    directories the removals leave empty)."""
+    ops: list[dict] = [{"op": "remove", "path": path} for path in sorted(set(old) - set(new))]
     members: list[tuple[str, Path]] = []
     work.mkdir(parents=True, exist_ok=True)
     unchanged = 0
@@ -259,9 +265,6 @@ def build_patch_set(old_root: Path, old: dict[str, Entry], new_root: Path,
         ops.append(op)
         members.append((member, tmp))
 
-    for path in sorted(set(old) - set(new)):
-        ops.append({"op": "remove", "path": path})
-
     if not ops:
         return None
     deterministic_tar(members, bundle)
@@ -290,13 +293,20 @@ def earlier_releases(tag: str, depth: int) -> list[str]:
     return sorted(set(tags), key=version_key, reverse=True)[:depth]
 
 
-def fetch_asset(tag: str, name: str, dest: Path) -> Path | None:
+def fetch_asset(tag: str, name: str, dest: Path, attempts: int = 3) -> Path | None:
+    """Download one release asset, retrying a failed transfer. None when it
+    still fails; the caller decides whether that is fatal."""
     dest.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(["gh", "release", "download", tag, "--repo", REPO,
-                             "--pattern", name, "--dir", str(dest), "--clobber"],
-                            capture_output=True, text=True)
     path = dest / name
-    return path if result.returncode == 0 and path.exists() else None
+    for attempt in range(1, attempts + 1):
+        result = subprocess.run(["gh", "release", "download", tag, "--repo", REPO,
+                                 "--pattern", name, "--dir", str(dest), "--clobber"],
+                                capture_output=True, text=True)
+        if result.returncode == 0 and path.exists():
+            return path
+        print(f"{tag}/{name}: download attempt {attempt} failed: {result.stderr.strip()}",
+              file=sys.stderr)
+    return None
 
 
 def local_asset(dirs: dict[str, Path], tag: str, name: str) -> Path | None:
@@ -331,10 +341,19 @@ def files_list(tree: dict[str, Entry]) -> list[dict]:
     return out
 
 
+class MissingPayload(RuntimeError):
+    """A payload the release must carry could not be had."""
+
+
 def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
-          public_key: Path | None, work_root: Path, discard_assets: bool = False) -> dict:
+          public_key: Path | None, work_root: Path, discard_assets: bool = False,
+          require_all: bool = False) -> dict:
     """discard_assets: delete each downloaded asset once used (CI disk);
-    never set for assets the caller supplied."""
+    never set for assets the caller supplied.
+
+    require_all: every payload in PAYLOADS must be present in `tag`, or the
+    build fails (MissingPayload) instead of writing a manifest that silently
+    leaves a platform out. A missing EARLIER release only loses that patch."""
     out.mkdir(parents=True, exist_ok=True)
     manifest = {
         "schema": SCHEMA,
@@ -348,6 +367,8 @@ def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
     for kind in PAYLOADS:
         asset = get_asset(tag, kind.asset_name(tag))
         if asset is None:
+            if require_all:
+                raise MissingPayload(f"{kind.asset_name(tag)}: could not be fetched from {tag}")
             print(f"{kind.asset_name(tag)}: missing from {tag}; payload left out", file=sys.stderr)
             continue
         work = work_root / kind.label
@@ -404,6 +425,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--assets", action="append", default=[], metavar="TAG=DIR",
                     help="a directory already holding a release's assets")
     ap.add_argument("--work", type=Path, help="scratch directory (default: a temp dir)")
+    ap.add_argument("--require-all", action="store_true",
+                    help="fail unless every payload is present (implied by --fetch-from-github)")
     args = ap.parse_args(argv)
 
     version_key(args.tag)
@@ -425,8 +448,13 @@ def main(argv: list[str] | None = None) -> int:
         get_asset = lambda t, n: local_asset(dirs, t, n)  # noqa: E731
 
     work = args.work or Path(tempfile.mkdtemp(prefix="update-work-"))
-    manifest = build(args.tag, args.out, args.depth, get_asset, earlier,
-                     args.public_key, work, discard_assets=args.fetch_from_github)
+    try:
+        manifest = build(args.tag, args.out, args.depth, get_asset, earlier, args.public_key, work,
+                         discard_assets=args.fetch_from_github,
+                         require_all=args.require_all or args.fetch_from_github)
+    except MissingPayload as e:
+        print(f"error: {e}; no manifest written", file=sys.stderr)
+        return 1
     if not manifest["payloads"]:
         print("no payloads found", file=sys.stderr)
         return 1

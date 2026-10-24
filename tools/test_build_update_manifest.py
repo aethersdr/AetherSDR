@@ -37,17 +37,26 @@ def write(path: Path, data: bytes, executable: bool = False) -> None:
 
 def apply_patch_set(old_root: Path, bundle: Path, patch: dict, files: list[dict],
                     dest: Path) -> None:
-    """A reference applier, from the schema: copy the old tree, apply each op,
+    """A reference applier, from the schema: copy the old tree, apply the
+    removals, prune directories they left empty, apply the rest in order,
     then check every listed file. Raises on any mismatch."""
     shutil.copytree(old_root, dest, symlinks=True)
     members = Path(tempfile.mkdtemp())
     with tarfile.open(bundle) as tar:
         tar.extractall(members, filter="data")
+    emptied: set[Path] = set()
     for op in patch["ops"]:
         target = dest / op["path"]
         if op["op"] == "remove":
             target.unlink()
+            emptied.update(target.parents)
             continue
+        if emptied:
+            for d in sorted((d for d in emptied if d != dest and dest in d.parents),
+                            key=lambda d: len(d.parts), reverse=True):
+                if d.is_dir() and not d.is_symlink() and not any(d.iterdir()):
+                    d.rmdir()
+            emptied.clear()
         if op["op"] == "symlink":
             if target.is_symlink() or target.exists():
                 target.unlink()
@@ -160,6 +169,103 @@ class PatchSet(Base):
                                 self.tmp / f"work{i}")
             sums.append(bum.sha256_file(bundle))
         self.assertEqual(sums[0], sums[1])
+
+
+class TypeTransitions(Base):
+    """A path that changes kind between releases: removals clear it first."""
+
+    def round_trip(self, setup_old, setup_new) -> None:
+        old, new = self.tmp / "old", self.tmp / "new"
+        old.mkdir()
+        new.mkdir()
+        write(old / "keep.txt", b"k")
+        write(new / "keep.txt", b"k")
+        setup_old(old)
+        setup_new(new)
+        new_tree = bum.scan_tree(new)
+        bundle = self.tmp / "b.update.tar"
+        patch = bum.build_patch_set(old, bum.scan_tree(old), new, new_tree, bundle, self.tmp / "w")
+        kinds = [o["op"] for o in patch["ops"]]
+        self.assertEqual(kinds[: kinds.count("remove")], ["remove"] * kinds.count("remove"),
+                         "every removal comes before any write")
+        apply_patch_set(old, bundle, patch, bum.files_list(new_tree), self.tmp / "applied")
+
+    def test_file_becomes_directory(self) -> None:
+        self.round_trip(lambda r: write(r / "plugins", b"was a file"),
+                        lambda r: write(r / "plugins/new.dll", b"now a dir"))
+
+    def test_directory_becomes_file(self) -> None:
+        self.round_trip(lambda r: write(r / "plugins/old.dll", b"was a dir"),
+                        lambda r: write(r / "plugins", b"now a file"))
+
+    def test_directory_becomes_symlink(self) -> None:
+        def new(r: Path) -> None:
+            write(r / "real/x.dll", b"x")
+            os.symlink("real", r / "plugins")
+        self.round_trip(lambda r: write(r / "plugins/old.dll", b"was a dir"), new)
+
+
+class Versions(Base):
+    def test_hotfix_tags_order_and_parse(self) -> None:
+        self.assertEqual(bum.version_key("v26.10.3"), (26, 10, 3, 0))
+        self.assertEqual(bum.version_key("v26.7.4.1"), (26, 7, 4, 1))
+        self.assertLess(bum.version_key("v26.7.4"), bum.version_key("v26.7.4.1"))
+        self.assertLess(bum.version_key("v26.7.4.1"), bum.version_key("v26.7.5"))
+        for bad in ("v26.10", "v26.10.3-rc1", "lynovation-test-2026-10-16", "v26.10.3.1.2"):
+            with self.assertRaises(ValueError):
+                bum.version_key(bad)
+
+    def test_earlier_releases_include_hotfixes(self) -> None:
+        listing = [
+            {"tag": "v26.10.3.1", "draft": False, "prerelease": False},
+            {"tag": "v26.10.3", "draft": False, "prerelease": False},
+            {"tag": "lynovation-test-2026-10-16", "draft": False, "prerelease": True},
+            {"tag": "v26.10.2", "draft": False, "prerelease": False},
+            {"tag": "v26.10.1", "draft": True, "prerelease": False},
+            {"tag": "v26.7.4.1", "draft": False, "prerelease": False},
+            {"tag": "v26.7.4", "draft": False, "prerelease": False},
+            {"tag": "v26.11.1", "draft": False, "prerelease": False},
+        ]
+        real = bum.gh
+        bum.gh = lambda *a: "\n".join(json.dumps(r) for r in listing) + "\n"
+        try:
+            self.assertEqual(bum.earlier_releases("v26.10.4", 4),
+                             ["v26.10.3.1", "v26.10.3", "v26.10.2", "v26.7.4.1"])
+            self.assertEqual(bum.earlier_releases("v26.10.3.1", 2), ["v26.10.3", "v26.10.2"])
+        finally:
+            bum.gh = real
+
+
+class RequiredPayloads(Base):
+    def test_a_failed_download_fails_the_release_build(self) -> None:
+        """CI mode: a payload that cannot be fetched stops the build; no
+        manifest is written for the release with a platform missing."""
+        win = self.tmp / "src"
+        write(win / "AetherSDR.exe", b"x" * 100)
+        good = self.tmp / "AetherSDR-v26.10.3-Windows-x64-portable.zip"
+        with zipfile.ZipFile(good, "w") as z:
+            z.write(win / "AetherSDR.exe", "AetherSDR.exe")
+        real_fetch, real_earlier = bum.fetch_asset, bum.earlier_releases
+        bum.fetch_asset = lambda t, n, d, attempts=3: good if n == good.name else None
+        bum.earlier_releases = lambda t, depth: []
+        try:
+            out = self.tmp / "out"
+            rc = bum.main(["--tag", "v26.10.3", "--out", str(out), "--fetch-from-github",
+                           "--work", str(self.tmp / "w")])
+        finally:
+            bum.fetch_asset, bum.earlier_releases = real_fetch, real_earlier
+        self.assertEqual(rc, 1)
+        self.assertFalse((out / "manifest.json").exists())
+
+    def test_local_partial_is_still_allowed(self) -> None:
+        d = self.tmp / "dl"
+        write(d / "x", b"")
+        with zipfile.ZipFile(d / "AetherSDR-v26.10.3-Windows-x64-portable.zip", "w") as z:
+            z.writestr("a.dll", b"a")
+        self.assertEqual(bum.main(["--tag", "v26.10.3", "--out", str(self.tmp / "o"),
+                                   "--assets", f"v26.10.3={d}", "--work", str(self.tmp / "w")]), 0)
+        self.assertEqual(bum.main(["--tag", "v26.10.3", "--out", str(self.tmp / "o2"), "--require-all",
+                                   "--assets", f"v26.10.3={d}", "--work", str(self.tmp / "w2")]), 1)
 
 
 class Containers(Base):

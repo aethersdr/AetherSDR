@@ -18,7 +18,17 @@ writes it and `.github/workflows/update-manifest.yml` signs and publishes it.
 | Patch bundles, full payloads | GitHub release assets of the new release |
 
 The R2 bucket behind `updates.aethersdr.com` is written only by the release
-workflow's `publish` job, with a token scoped to that bucket. Bundles and full
+workflow's `publish` job (`tools/publish_update_manifest.py`), with a token
+scoped to that bucket.
+
+A release counts as **published** only when everything a client reads is
+served and verifies: `releases/<tag>/` holds the manifest and a signature that
+checks against the committed key, and, when the tag is GitHub's latest
+release, `latest/` holds a verifying pair naming that release or a newer one.
+A run that finds anything less publishes again, which repairs a partial
+upload. `latest/` is promoted only over an older release, re-read just before
+the write, and the publish job runs one at a time across tags, so an older
+release's run can never roll it back. Bundles and full
 payloads stay on GitHub Releases, so every URL the manifest names is under
 `https://github.com/aethersdr/AetherSDR/releases/download/`, which is the
 prefix the app's download allowlist already enforces
@@ -54,7 +64,9 @@ manifest it has already accepted.
 }
 ```
 
-A client refuses any `schema` it does not know.
+A client refuses any `schema` it does not know. Versions compare as four
+numbers, `YY.M.patch.hotfix`, with an absent hotfix counting as 0 (a hotfix
+release is `"version": "26.7.4.1"`).
 
 ## Payload
 
@@ -105,6 +117,11 @@ A client refuses any `schema` it does not know.
 The bundle is a plain tar of zstd frames, one per `patch` or `add` op, named
 by `member`. Its bytes depend only on its contents.
 
+Ops are applied **in order**. Every `remove` comes first; after the removals,
+remove each directory they left empty (deepest first). That is what lets a
+path change kind between releases: a file that becomes a directory, a
+directory that becomes a file, a directory that becomes a symlink.
+
 - `patch`: decompress `member` with the current file as the zstd dictionary
   (`--patch-from`), with the decoder's window limit raised to `window_log`.
 - `add`: decompress `member` on its own, with the same window limit. A changed
@@ -129,6 +146,13 @@ A file in `files` with no op is unchanged from the `from` release.
 6. Files in the install that are not in `files` are left alone. That covers
    the installer's own `unins000.*` on Windows.
 7. Swap on quit, keeping the previous tree for rollback.
+
+The CI side tests only the positive round trip (a reference applier written
+from this document rebuilds the new tree). The client PR owns the negative
+cases and must test each: a bad signature, a replayed older manifest, a source
+file that fails `from_sha256`, a corrupted bundle or member, a result that
+fails its `sha256`, and paths or symlink targets that escape the install
+(absolute, `..`, or a link pointing outside it).
 
 ## Bundle naming
 
