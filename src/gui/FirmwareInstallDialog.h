@@ -11,6 +11,8 @@ class QLabel;
 class QProgressBar;
 class QPushButton;
 
+#include <functional>
+
 namespace AetherSDR {
 
 class Ctr2ProxyModel;
@@ -55,6 +57,10 @@ private:
     // out of this one).
     void restartInto(int which);
     void onFinished(bool ok, const QString& message);
+    // Starts an action on the device (job returns false with the reason when
+    // it cannot start), keeping it so it can run again once Linux grants
+    // access to the download-mode port.
+    void runJob(const QString& doneText, std::function<bool(QString*)> job);
     // Starting an action: its result, or the reason it did not start.
     void started(bool ok, const QString& problem, const QString& doneText);
     // When buttons are needed, asks the operator to enter download mode.
@@ -88,6 +94,8 @@ private:
     bool m_installAfterDownload{false};   // Install pressed on a release to download
 
     QString m_jobDone;       // the success message for the running action
+    std::function<bool(QString*)> m_lastJob;   // the last action started, and
+    QString m_lastJobDone;                     // its success message
 };
 
 } // namespace AetherSDR

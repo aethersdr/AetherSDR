@@ -3,6 +3,8 @@
 #include <QPointer>
 #include <QWidget>
 
+#include <functional>
+
 class QCheckBox;
 class QLabel;
 class QLineEdit;
@@ -27,6 +29,13 @@ public:
 
     void setModel(Ctr2ProxyModel* model);
 
+#ifdef Q_OS_LINUX
+    // A firmware install found the CTR2-Max's download-mode port closed to
+    // this login: offer the access rule (it covers that port too), and call
+    // afterInstalled once it is in place.
+    void offerDownloadModeAccess(std::function<void()> afterInstalled);
+#endif
+
 private:
     void buildUi();
     void syncAddresses();
@@ -35,9 +44,12 @@ private:
     void syncStats();
     void onStartClicked();
 #ifdef Q_OS_LINUX
-    void offerUsbAccessRule();
+    // What the rule is wanted for: the relay's Start, or a firmware install
+    // in download mode. One rule covers both; the questions differ.
+    enum class RuleUse { Relay, DownloadMode };
+    void offerUsbAccessRule(RuleUse use = RuleUse::Relay);
     void showManualRuleInstructions(const QString& why);
-    void installUsbAccessRule();
+    void installUsbAccessRule(RuleUse use);
     void startAfterRuleInstalled(int attemptsLeft);
 #endif
 
@@ -68,6 +80,7 @@ private:
     QLabel* m_problemLabel{nullptr};
     QLabel* m_errorLabel{nullptr};
     bool m_installingRule{false};  // pkexec rule install in flight
+    std::function<void()> m_afterDownloadModeRule;   // RuleUse::DownloadMode's next step
 };
 
 } // namespace AetherSDR
