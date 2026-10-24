@@ -1,0 +1,139 @@
+# In-App Update Manifest — Schema 1
+
+**Status:** CI side (RFC #5304 Phase 2). The app-side `UpdateStager` that
+reads this is a later PR and implements against this document.
+
+Each release publishes one signed manifest that names, for each updatable
+payload, every file of the new tree and the patch bundles that turn each of
+the last four releases' trees into it. `tools/build_update_manifest.py`
+writes it and `.github/workflows/update-manifest.yml` signs and publishes it.
+
+## Where it lives
+
+| Object | Location |
+|---|---|
+| Manifest, newest release | `https://updates.aethersdr.com/latest/manifest.json` |
+| Its signature | `https://updates.aethersdr.com/latest/manifest.json.sig` |
+| Manifest, any release | `https://updates.aethersdr.com/releases/<tag>/manifest.json` (and `.sig`) |
+| Patch bundles, full payloads | GitHub release assets of the new release |
+
+The R2 bucket behind `updates.aethersdr.com` is written only by the release
+workflow's `publish` job, with a token scoped to that bucket. Bundles and full
+payloads stay on GitHub Releases, so every URL the manifest names is under
+`https://github.com/aethersdr/AetherSDR/releases/download/`, which is the
+prefix the app's download allowlist already enforces
+(`UpdateChecker::isTrustedDownloadUrl`).
+
+## Signature
+
+`manifest.json.sig` is the raw 64-byte Ed25519 signature over the exact bytes
+of `manifest.json` (no canonicalisation: verify the bytes as downloaded,
+then parse). The app embeds the public key from
+`packaging/update-signing.pub` and refuses a manifest that does not verify.
+`key_id` is the first 16 hex digits of the SHA-256 of the raw 32-byte public
+key; it lets a client tell a rotated key apart, never chooses which key to
+trust.
+
+A valid signature proves the manifest came from the release workflow. It
+does not prove it is the newest one: a mirror could replay an older signed
+manifest. The client must refuse a manifest whose `version` is not newer than
+the running build, and one whose `generated_at` is older than the newest
+manifest it has already accepted.
+
+## Top level
+
+```json
+{
+ "schema": 1,
+ "product": "AetherSDR",
+ "tag": "v26.10.4",
+ "version": "26.10.4",
+ "generated_at": "2026-11-01T18:04:11Z",
+ "key_id": "3fa1c2…",
+ "payloads": [ … ]
+}
+```
+
+A client refuses any `schema` it does not know.
+
+## Payload
+
+```json
+{
+ "platform": "windows",
+ "arch": "x86_64",
+ "full": {"asset": "AetherSDR-v26.10.4-Windows-x64-portable.zip",
+          "url": "https://github.com/…/v26.10.4/AetherSDR-v26.10.4-Windows-x64-portable.zip",
+          "sha256": "…", "size": 157145703},
+ "files": [ {"path": "AetherSDR.exe", "type": "file", "size": 151234567,
+             "sha256": "…", "executable": false},
+            {"path": "AppRun", "type": "symlink", "target": "usr/bin/AetherSDR"} ],
+ "patches": [ … ]
+}
+```
+
+- `platform` / `arch`: `windows` or `linux`; `x86_64` or `arm64`, as
+  `QSysInfo::buildCpuArchitecture()` names them. macOS updates through Sparkle
+  (Phase 4) and is not listed.
+- **Windows** is the tree inside the portable zip, which is the `deploy\` tree
+  `setup.exe` installs. **Linux** is the tree inside the AppImage's squashfs,
+  which the Phase 5 tarball channel installs.
+- `full`: the whole payload, the fallback when no patch applies or anything
+  fails to verify.
+- `files`: the complete new tree. Paths use `/`, are relative and never contain
+  `..`. Directories are implied.
+
+## Patch
+
+```json
+{
+ "from": "26.10.3",
+ "bundle": {"asset": "AetherSDR-v26.10.4-Windows-x64-from-v26.10.3.update.tar",
+            "url": "…", "sha256": "…", "size": 5755368},
+ "unchanged": 1206,
+ "ops": [
+  {"op": "patch", "path": "AetherSDR.exe", "from_sha256": "…", "member": "000000.zst",
+   "window_log": 28, "sha256": "…", "size": 151234567, "executable": false},
+  {"op": "add", "path": "plugins/new.dll", "member": "000001.zst",
+   "window_log": 13, "sha256": "…", "size": 5000, "executable": false},
+  {"op": "remove", "path": "old.dll"},
+  {"op": "symlink", "path": "AppRun", "target": "usr/bin/AetherSDR"}
+ ]
+}
+```
+
+The bundle is a plain tar of zstd frames, one per `patch` or `add` op, named
+by `member`. Its bytes depend only on its contents.
+
+- `patch`: decompress `member` with the current file as the zstd dictionary
+  (`--patch-from`), with the decoder's window limit raised to `window_log`.
+- `add`: decompress `member` on its own, with the same window limit. A changed
+  file is shipped this way when that is smaller than its delta.
+- `remove`: delete the file.
+- `symlink`: create or replace the link.
+
+A file in `files` with no op is unchanged from the `from` release.
+
+## Applying (the contract the app-side PR implements)
+
+1. Verify the signature, then `schema`, `version` and `generated_at`, as above.
+2. Pick the payload for this build's platform and arch, and the patch whose
+   `from` is the running version. With none, use `full`.
+3. Download the bundle, check its `sha256` and `size`, and unpack it into a
+   staging copy of the install. Never patch the running install in place
+   (Principle XIV).
+4. For each `patch` op, check the current file against `from_sha256` before
+   using it. A mismatch is a hard fail, not a best effort (Principle VII).
+5. After all ops, check every entry in `files` against the staged tree. Any
+   mismatch abandons the staged tree and falls back to `full`.
+6. Files in the install that are not in `files` are left alone. That covers
+   the installer's own `unins000.*` on Windows.
+7. Swap on quit, keeping the previous tree for rollback.
+
+## Bundle naming
+
+`AetherSDR-<tag>-<label>-from-<from tag>.update.tar`, where `<label>` is
+`Windows-x64`, `x86_64` or `aarch64`. The `.update.tar` suffix keeps bundles
+out of `sign-release.yml`'s download patterns, so they are not in
+`SHA256SUMS.txt`. The signed manifest, not `SHA256SUMS.txt`, is what covers
+them.
