@@ -156,6 +156,40 @@ private slots:
         QCOMPARE(UpdateStager::builtInKey(), der.right(32));
     }
 
+    void thePublishedManifestVerifiesWithTheBuiltInKey()
+    {
+        // The v26.10.3 manifest and signature exactly as the release
+        // workflow published them on updates.aethersdr.com (2026-10-24):
+        // CI's signing key is the one the app trusts, and a real manifest
+        // parses and offers v26.10.2 its patch.
+        const QString dir = kFixture + QStringLiteral("/v26.10.3-published/");
+        const QByteArray json = readFile(dir + QStringLiteral("manifest.json"));
+        const QByteArray sig = readFile(dir + QStringLiteral("manifest.json.sig"));
+        UpdateStager::setTrustedKeysForTesting({UpdateStager::builtInKey()});
+        const bool trusted = UpdateStager::verify(json, sig);
+        QByteArray tampered = json;
+        tampered.replace("26.10.3", "26.10.9");
+        const bool tamperedTrusted = UpdateStager::verify(tampered, sig);
+        UpdateStager::setTrustedKeysForTesting({m_key.publicKey()});
+        QVERIFY(trusted);
+        QVERIFY(!tamperedTrusted);
+        UpdateManifest m;
+        QString problem;
+        QVERIFY2(UpdateManifest::parse(json, &m, &problem), qPrintable(problem));
+        QCOMPARE(m.keyId, QStringLiteral("788fb6e31f7ecba4"));
+        QCOMPARE(m.payloads.size(), 3);
+        const UpdateManifest::Payload* p = nullptr;
+        const UpdateManifest::Patch* q = nullptr;
+        for (const char* arch : {"x86_64", "arm64"}) {
+            UpdateStager::Request r = request();
+            r.platform = QString::fromLatin1(arch) == QLatin1String("x86_64") ? QStringLiteral("windows")
+                                                                              : QStringLiteral("linux");
+            r.arch = QString::fromLatin1(arch);
+            QCOMPARE(UpdateStager::choose(m, r, {}, &p, &q), UpdateStager::Decision::Patch);
+            QCOMPARE(q->from, QStringLiteral("26.10.2"));
+        }
+    }
+
     // ── Signature ───────────────────────────────────────────────────────
 
     void signatureIsCheckedOnExactBytes()
