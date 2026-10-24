@@ -5768,6 +5768,33 @@ add_test(NAME tgxl_docked_parity_test COMMAND tgxl_docked_parity_test)
 set_tests_properties(tgxl_docked_parity_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# TGXL antenna names: socket-free parse and TunerApplet wiring.
+# Injects antenna R-frames via the processLine() test seam; covers the happy
+# path, missing keys, length cap, ampersand escaping, and disconnect reset.
+add_executable(tgxl_antenna_names_test
+    tests/tgxl_antenna_names_test.cpp
+    src/gui/TunerApplet.cpp
+    src/gui/AccessoryPanelWidgets.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/TunerModel.cpp
+    src/models/MeterModel.cpp
+    src/models/BandSettings.cpp
+    src/core/TgxlConnection.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
+)
+target_include_directories(tgxl_antenna_names_test PRIVATE src)
+target_link_libraries(tgxl_antenna_names_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network
+)
+set_target_properties(tgxl_antenna_names_test PROPERTIES AUTOMOC ON)
+add_test(NAME tgxl_antenna_names_test COMMAND tgxl_antenna_names_test)
+set_tests_properties(tgxl_antenna_names_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # TGXL applet port strips and STANDBY ordering: the relay path claims no
 # trigger mode it cannot know ("RF SENSE"), and BYPASS -> STANDBY commands
 # operate first so the radio's in-between status already reads STANDBY.
@@ -9798,6 +9825,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tgxl_panel_widgets_test
     tgxl_direct_protocol_test
     tgxl_docked_parity_test
+    tgxl_antenna_names_test
     tgxl_applet_ports_test
     pgxl_direct_protocol_test
     pgxl_panel_test

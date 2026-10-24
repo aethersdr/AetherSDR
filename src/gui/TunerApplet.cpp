@@ -1114,9 +1114,18 @@ void TunerApplet::setTunerModel(TunerModel* model)
     // Custom antenna names from the TGXL 3-way model (v1.2.41+)
     connect(m_model, &TunerModel::antennaNamesChanged, this,
             [this](const QString& n1, const QString& n2, const QString& n3) {
-                if (m_ant1Btn) m_ant1Btn->setText(n1.isEmpty() ? tr("ANT 1") : n1);
-                if (m_ant2Btn) m_ant2Btn->setText(n2.isEmpty() ? tr("ANT 2") : n2);
-                if (m_ant3Btn) m_ant3Btn->setText(n3.isEmpty() ? tr("ANT 3") : n3);
+                // QPushButton renders '&' as a mnemonic (Alt-accelerator). A device-
+                // supplied label like "A&B Dipole" would bind Alt+B to setAntennaA,
+                // collide with menu shortcuts, or both. Double the ampersand so it
+                // draws as a literal '&' with no accelerator side-effect.
+                auto label = [](const QString& n, const QString& fallback) {
+                    return n.isEmpty() ? fallback
+                                       : QString(n).replace(QLatin1Char('&'),
+                                                            QStringLiteral("&&"));
+                };
+                if (m_ant1Btn) m_ant1Btn->setText(label(n1, tr("ANT 1")));
+                if (m_ant2Btn) m_ant2Btn->setText(label(n2, tr("ANT 2")));
+                if (m_ant3Btn) m_ant3Btn->setText(label(n3, tr("ANT 3")));
             });
 
     connect(m_model, &TunerModel::alertChanged, this, &TunerApplet::setAlertText);
