@@ -2,6 +2,7 @@
 #include "RC28MappingDialog.h"
 
 #include "CanonIndicators.h"
+#include "FramelessResizer.h"
 #include "GuardedSlider.h"   // GuardedComboBox lives here
 #include "core/AppSettings.h"
 #include "core/HidEncoderManager.h"
@@ -65,7 +66,8 @@ static const ActionEntry kHoldActions[] = {
 // The style guide's canon vocabulary (RFC #6226), as Radio Setup uses it:
 // transparent over CanonWindow's ground, each section a raised card with its
 // cyan title above it, key labels muted, fields and buttons on control, and
-// the activity log nested.
+// the activity log nested. The log's right-click menu is a child of the log,
+// so the transparent rule reaches it too; QMenu gets its panel back.
 constexpr const char* kRc28Style = R"(
 QWidget {
     color: {{color.canon.inkSoft}};
@@ -73,6 +75,26 @@ QWidget {
 }
 QLabel {
     background: transparent;
+}
+QMenu {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
+}
+QMenu::item {
+    padding: 4px 18px;
+}
+QMenu::item:selected {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+}
+QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
 }
 QLabel[rc28Role='key'] {
     color: {{color.canon.muted}};
@@ -184,6 +206,10 @@ RC28MappingDialog::RC28MappingDialog(HidEncoderManager* encoder,
     setObjectName(QStringLiteral("rc28MappingDialog"));
     theme::setContainer(this, QStringLiteral("canon/rc28Mapping"));
     setMinimumWidth(460);
+    // A tool window kept open while pressing buttons: it resizes, and it
+    // reopens where it was, claiming the rectangle PersistentDialog saved.
+    setGeometryKey(QStringLiteral("RC28MappingDialogGeometry"));
+    FramelessResizer::install(this);
     applyCanonSheet(bodyWidget(), [] {
         return QString::fromLatin1(kRc28Style) + canonIndicatorRules();
     });

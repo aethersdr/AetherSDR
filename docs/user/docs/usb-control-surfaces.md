@@ -74,7 +74,7 @@ The RC-28 is a weighted tuning knob with **F1**, **F2** and a **TX** bar. A comm
 1. Tick **Enable HID encoders / StreamDeck+** (see [Setup](#setup)).
 2. Open **Settings → Controllers → Icom RC-28 Remote Encoder...** ("Icom RC-28 Button Mapping").
 
-The window opens centered on the main window; close it with the corner ✕, **Close**, Esc or Ctrl+W (⌘W on macOS). Changes take effect as you make them. It has:
+The window reopens where you left it (centered on the main window the first time), and you can resize it by dragging any edge. Close it with the corner ✕, **Close**, Esc or Ctrl+W (⌘W on macOS). Changes take effect as you make them. It has:
 
 | Group | Controls |
 |-------|----------|

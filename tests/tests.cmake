@@ -4224,6 +4224,24 @@ add_test(NAME tune_output_dialog_test COMMAND tune_output_dialog_test)
 set_tests_properties(tune_output_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
+# Icom RC-28 Button Mapping on the production window: canon chrome with the
+# resizer and saved geometry of a tool window, an opaque log menu, and the
+# mapping fields it reads and writes. No encoder or device; no socket.
+if(HIDAPI_FOUND)
+    add_executable(rc28_mapping_dialog_test
+        tests/rc28_mapping_dialog_test.cpp
+        src/gui/CanonWindow.cpp
+        src/gui/RC28MappingDialog.cpp
+        src/gui/FramelessResizer.cpp
+        ${THEME_TEST_RESOURCES}
+    )
+    target_include_directories(rc28_mapping_dialog_test PRIVATE src tests)
+    target_link_libraries(rc28_mapping_dialog_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+    add_test(NAME rc28_mapping_dialog_test COMMAND rc28_mapping_dialog_test)
+    set_tests_properties(rc28_mapping_dialog_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+endif()
+
 # Radio Setup's Show TX in Waterfall button on the production dialog: a click
 # sets the model where the backend declares the client owns the flag (HL2) and
 # sends the wire text everywhere else. Real backends, never connected; no socket.
@@ -9748,6 +9766,7 @@ set(AETHER_SETTINGS_CONSUMERS
     nrs_level_range_test
     tune_output_control_test
     tune_output_dialog_test
+    rc28_mapping_dialog_test
     pan_display_drop_notice_test
     backend_capability_revision_test
     icom_panadapter_capacity_test
