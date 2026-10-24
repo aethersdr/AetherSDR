@@ -1,6 +1,8 @@
 #include <QtGlobal>
 
 #include "UlanziDialMapperDialog.h"
+#include "CanonIndicators.h"
+#include "ModemChrome.h"
 #include "core/AppSettings.h"
 #include "core/ShortcutManager.h"
 #include "core/ThemeManager.h"
@@ -21,10 +23,11 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QStyle>
 #include <QVBoxLayout>
 #ifdef Q_OS_LINUX
+#include "CanonMessageBox.h"
 #include "core/LogManager.h"
-#include <QMessageBox>
 #include "ScopedChildWidget.h"
 #include <QMetaObject>
 #include <QProcess>
@@ -68,11 +71,17 @@ public:
     explicit UlanziDialCanvas(UlanziDialMapperDialog* owner)
         : QWidget(owner->bodyWidget()), m_owner(owner)
     {
-        // Stop the global QSS from painting an opaque background here.
+        // Stop the global QSS from painting an opaque background here. Scoped
+        // to the canvas: an unscoped rule would beat the body's canon sheet on
+        // every pill inside it, and their popup lists.
+        setObjectName(QStringLiteral("UlanziDialCanvas"));
         setAttribute(Qt::WA_StyledBackground, false);
         setAutoFillBackground(false);
-        setStyleSheet(QStringLiteral("background: transparent;"));
+        setStyleSheet(QStringLiteral("QWidget#UlanziDialCanvas { background: transparent; }"));
         setFixedSize(620, 590);
+        // The fallback body paints from canon tokens.
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                this, qOverload<>(&QWidget::update));
     }
 
 protected:
@@ -126,35 +135,72 @@ constexpr PillSpec kPillSpecs[] = {
 };
 constexpr int kPillCount = sizeof(kPillSpecs) / sizeof(kPillSpecs[0]);
 
-QString pillComboStyle()
-{
-    return QStringLiteral(
-        "QComboBox {"
-        " background: #1a2a3a;"
-        " color: #00b4d8;"
-        " border: 1px solid #304050;"
-        " border-radius: 11px;"
-        " padding: 2px 10px 2px 10px;"
-        " font-size: 11px;"
-        "}"
-        "QComboBox:hover { border-color: #00b4d8; }"
-        "QComboBox::drop-down {"
-        " border: none;"
-        " width: 0;"
-        "}"
-        "QComboBox::down-arrow {"
-        " image: none;"
-        " width: 0;"
-        " height: 0;"
-        "}"
-        "QComboBox QAbstractItemView {"
-        " background: #1a2a3a;"
-        " color: #c8d8e8;"
-        " selection-background-color: #0070c0;"
-        " border: 1px solid #304050;"
-        " font-size: 11px;"
-        "}");
+// The 620 x 590 canvas with the canon header above it and the status row
+// below, inside the body margins and the window's hairline inset.
+constexpr QSize kDialogSize(642, 722);
+
+// The style guide's canon vocabulary (RFC #6226) over the AetherRX / AetherTX
+// Settings sheet: each control's action is a round pill on control in cyan,
+// the Tuning and Single tap keys in ink, and the status line coloured by its
+// ulanziState (connected green, disconnected or failed red, a permission
+// warning amber, turned off muted).
+constexpr const char* kUlanziDialStyle = R"(
+QComboBox#UlanziPill {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 11px;
+    padding: 2px 10px;
+    font-size: 11px;
 }
+QComboBox#UlanziPill:hover,
+QComboBox#UlanziPill:focus {
+    border-color: {{color.canon.aqua}};
+}
+QComboBox#UlanziPill::drop-down {
+    border: none;
+    width: 0;
+}
+QComboBox#UlanziPill::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+}
+QComboBox#UlanziPill QAbstractItemView {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.lineHi}};
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+    font-size: 11px;
+}
+QLabel#UlanziKey {
+    color: {{color.canon.ink}};
+    font-size: 11px;
+    font-weight: bold;
+}
+QLabel#UlanziLastEvent {
+    color: {{color.canon.muted}};
+    font-size: 12px;
+}
+QLabel#UlanziStatus {
+    font-size: 12px;
+    font-weight: 600;
+}
+QLabel#UlanziStatus[ulanziState='connected'] {
+    color: {{color.accent.success}};
+}
+QLabel#UlanziStatus[ulanziState='disconnected'],
+QLabel#UlanziStatus[ulanziState='error'] {
+    color: {{color.accent.danger}};
+}
+QLabel#UlanziStatus[ulanziState='warning'] {
+    color: {{color.accent.warning}};
+}
+QLabel#UlanziStatus[ulanziState='off'] {
+    color: {{color.canon.muted}};
+}
+)";
 
 } // namespace
 
@@ -162,29 +208,36 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
                                                ShortcutManager*     shortcuts,
                                                MidiControlManager*  midi,
                                                QWidget*             parent)
-    : PersistentDialog(tr("Ulanzi Dial — Control Mapping"),
-                       QStringLiteral("UlanziDialMapperGeom"),
-                       parent)
+    : CanonWindow(tr("Ulanzi Dial — Control Mapping"), parent)
     , m_manager(manager)
     , m_shortcuts(shortcuts)
     , m_midi(midi)
 {
-    setFixedSize(640, 675);
-
+    setObjectName(QStringLiteral("UlanziDialMapperDialog"));
+    theme::setContainer(this, QStringLiteral("canon/ulanziDial"));
+    setFixedSize(kDialogSize);
+    // A page of pills, not a form: Return in a pill must not press Reset.
+    setReturnClicksDefault(false);
+    applyCanonSheet(bodyWidget(), [] {
+        return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
+             + QString::fromLatin1(kUlanziDialStyle);
+    });
 
     auto* outer = new QVBoxLayout(bodyWidget());
-    outer->setContentsMargins(0, 0, 0, 8);
-    outer->setSpacing(0);
+    outer->setContentsMargins(10, 12, 10, 12);
+    outer->setSpacing(4);
+    outer->addWidget(makeCanonHeader(tr("Ulanzi Dial — Control Mapping")));
 
     m_canvas = new UlanziDialCanvas(this);
     outer->addWidget(m_canvas, 1, Qt::AlignCenter);
 
     auto* bottomRow = new QHBoxLayout;
-    bottomRow->setContentsMargins(12, 0, 12, 0);
+    bottomRow->setContentsMargins(2, 0, 2, 0);
     bottomRow->setSpacing(10);
 
     m_statusLabel = new QLabel(tr("Disconnected"));
-    setStatusStyle("QLabel { color: #8ea8c0; }");
+    m_statusLabel->setObjectName(QStringLiteral("UlanziStatus"));
+    setStatusState(QStringLiteral("off"));
     bottomRow->addWidget(m_statusLabel);
 
 #ifdef Q_OS_LINUX
@@ -202,7 +255,7 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
     bottomRow->addStretch(1);
 
     m_lastEventLabel = new QLabel(tr("Last event: —"));
-    m_lastEventLabel->setStyleSheet("QLabel { color: #8ea8c0; }");
+    m_lastEventLabel->setObjectName(QStringLiteral("UlanziLastEvent"));
     bottomRow->addWidget(m_lastEventLabel);
 
     bottomRow->addStretch(1);
@@ -265,7 +318,7 @@ QRect UlanziDialMapperDialog::dialBodyRect() const
     // Fixed geometry inside the upper region (620 × 555) of the canvas
     // (620 × 590). Body honours the trimmed image aspect (512:562 ≈ 0.911)
     // at 320×352, centered in the upper region to leave vertical space for
-    // the bottom rotary and single-tap combo controls at y >= 525.
+    // the bottom rotary and single-tap combo controls at y >= 488.
     const int bw = 320;
     const int bh = 352;
     const int bx = (620 - bw) / 2;       // 150
@@ -285,16 +338,14 @@ void UlanziDialMapperDialog::buildPills()
     m_pills.clear();
 
     if (!m_rotaryCombo) {
-        m_rotaryLabel = new QLabel(tr("Tuning:"), this);
-        ThemeManager::instance().applyStyleSheet(m_rotaryLabel,
-            QStringLiteral("QLabel { color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }"));
+        m_rotaryLabel = new QLabel(tr("Tuning:"), m_canvas);
+        m_rotaryLabel->setObjectName(QStringLiteral("UlanziKey"));
         m_rotaryLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        m_rotaryLabel->raise();
 
-        m_rotaryCombo = new QComboBox(this);
-        ThemeManager::instance().applyStyleSheet(m_rotaryCombo, pillComboStyle());
+        m_rotaryCombo = new QComboBox(m_canvas);
+        m_rotaryCombo->setObjectName(QStringLiteral("UlanziPill"));
+        m_rotaryCombo->setAccessibleName(tr("Tuning action"));
         m_rotaryCombo->setFixedWidth(180);
-        m_rotaryCombo->raise();
 
         struct RotaryOption {
             const char* label;
@@ -329,11 +380,9 @@ void UlanziDialMapperDialog::buildPills()
             UlanziDialMappings::setRotaryAction(actionId);
         });
 
-        m_singleTapLabel = new QLabel(tr("Single tap:"), this);
-        ThemeManager::instance().applyStyleSheet(m_singleTapLabel,
-            QStringLiteral("QLabel { color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }"));
+        m_singleTapLabel = new QLabel(tr("Single tap:"), m_canvas);
+        m_singleTapLabel->setObjectName(QStringLiteral("UlanziKey"));
         m_singleTapLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        m_singleTapLabel->raise();
     }
 
     for (int i = 0; i < kPillCount; ++i) {
@@ -343,20 +392,13 @@ void UlanziDialMapperDialog::buildPills()
         p.signature     = QString::fromLatin1(kPillSpecs[i].signature);
         p.defaultAction = QString::fromLatin1(kPillSpecs[i].defaultAction);
         p.anchor        = normalizedAnchor(kPillSpecs[i].nx, kPillSpecs[i].ny);
-        // Pills with hardcoded dialog-coord positions (all three top
-        // pills + dial press) are parented to the dialog so move() is
-        // in dialog coords.  The side_* pills stay as canvas children.
-        const QString pillId = QString::fromLatin1(kPillSpecs[i].id);
-        const bool dialogParented =
-            (pillId == QLatin1String("top_left")   ||
-             pillId == QLatin1String("top_middle") ||
-             pillId == QLatin1String("top_right")  ||
-             pillId == QLatin1String("dial_press"));
-        p.combo = new QComboBox(dialogParented ? static_cast<QWidget*>(this)
-                                               : static_cast<QWidget*>(m_canvas));
-        p.combo->setStyleSheet(pillComboStyle());
-        p.combo->setFixedWidth(pillId == QLatin1String("dial_press") ? 180 : 120);
-        if (dialogParented) p.combo->raise();
+        // Every pill is a canvas child, placed in canvas coordinates.
+        p.combo = new QComboBox(m_canvas);
+        p.combo->setObjectName(QStringLiteral("UlanziPill"));
+        p.combo->setAccessibleName(p.id == QLatin1String("dial_press")
+                                       ? tr("Single tap action")
+                                       : tr("%1 key action").arg(p.defaultLabel));
+        p.combo->setFixedWidth(p.id == QLatin1String("dial_press") ? 180 : 120);
 
         // (unassigned) — always first.
         p.combo->addItem(tr("(unassigned)"), QStringLiteral("None"));
@@ -406,12 +448,12 @@ void UlanziDialMapperDialog::layoutPills()
 
     if (m_rotaryLabel && m_rotaryCombo && m_singleTapLabel) {
         m_rotaryLabel->resize(75, 24);
-        m_rotaryLabel->move(185, 525);
+        m_rotaryLabel->move(175, 488);
         m_rotaryCombo->resize(180, 24);
-        m_rotaryCombo->move(265, 525);
+        m_rotaryCombo->move(255, 488);
 
         m_singleTapLabel->resize(75, 24);
-        m_singleTapLabel->move(185, 557);
+        m_singleTapLabel->move(175, 520);
     }
 
     // No connector lines: pills sit "almost touching" the body edge at
@@ -423,27 +465,20 @@ void UlanziDialMapperDialog::layoutPills()
         const int touchGap = 4;       // tiny visible breathing room
         QPoint center;
         if (p.id == QLatin1String("top_left")) {
-            // Dialog-parented — hardcoded dialog coords.
             p.combo->resize(120, p.combo->sizeHint().height());
-            p.combo->move(120, 100);
-            p.combo->raise();
-            p.pillCenter = QPoint(120 + 60, 100 + p.combo->height() / 2);
+            p.combo->move(110, 63);
+            p.pillCenter = QPoint(110 + 60, 63 + p.combo->height() / 2);
             return;
         } else if (p.id == QLatin1String("top_middle")) {
-            // Pill is a dialog child — hardcode dialog coords.
-            // Window 640 wide, combo 120 wide → x = 260.
-            // Hardcoded y above the dial body within the dialog.
+            // Centred over the dial: canvas 620 wide, combo 120 wide.
             p.combo->resize(120, p.combo->sizeHint().height());
-            p.combo->move(260, 100);
-            p.combo->raise();
-            p.pillCenter = QPoint(320, 100 + p.combo->height() / 2);
+            p.combo->move(250, 63);
+            p.pillCenter = QPoint(310, 63 + p.combo->height() / 2);
             return;
         } else if (p.id == QLatin1String("top_right")) {
-            // Dialog-parented — hardcoded dialog coords.
             p.combo->resize(120, p.combo->sizeHint().height());
-            p.combo->move(400, 100);
-            p.combo->raise();
-            p.pillCenter = QPoint(400 + 60, 100 + p.combo->height() / 2);
+            p.combo->move(390, 63);
+            p.pillCenter = QPoint(390 + 60, 63 + p.combo->height() / 2);
             return;
         } else if (p.id == QLatin1String("side_lt")) {
             center = QPoint(body.left()  - sz.width() / 2 - touchGap + 138,
@@ -459,9 +494,8 @@ void UlanziDialMapperDialog::layoutPills()
                             body.top()   + body.height() * 68 / 100 - 15);
         } else if (p.id == QLatin1String("dial_press")) {
             p.combo->resize(180, p.combo->sizeHint().height());
-            p.combo->move(265, 557);
-            p.combo->raise();
-            p.pillCenter = QPoint(355, 557 + p.combo->height() / 2);
+            p.combo->move(255, 520);
+            p.pillCenter = QPoint(345, 520 + p.combo->height() / 2);
             return;
         }
 
@@ -489,9 +523,7 @@ void UlanziDialCanvas::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
 
-    // Background — match the surrounding dialog.
-    p.fillRect(rect(), QColor("#0f0f1a"));
-
+    // Nothing behind the dial: the canon ground shows through.
     const QRect body = m_owner->dialBodyRect();
 
     const QPixmap& dialImage = ulanziDialPixmap();
@@ -504,24 +536,28 @@ void UlanziDialCanvas::paintEvent(QPaintEvent*)
     } else {
         // Fallback: painted stylized representation matching the product
         // shape so layout still looks correct without the asset.
+        const ThemeManager& tm = ThemeManager::instance();
+        const auto canon = [&](const char* name) {
+            return tm.color(this, QStringLiteral("color.canon.") + QLatin1String(name));
+        };
         QPainterPath bodyPath;
         bodyPath.addRoundedRect(body, 22, 22);
-        p.fillPath(bodyPath, QColor("#1a2a3a"));
-        p.setPen(QPen(QColor("#304050"), 1));
+        p.fillPath(bodyPath, canon("raised"));
+        p.setPen(QPen(canon("lineHi"), 1));
         p.drawPath(bodyPath);
 
         const int btnW = 56, btnH = 28;
         const int btnY = body.top() + 14;
         const int gapX = (body.width() - btnW * 3) / 4;
-        p.setPen(QPen(QColor("#3a4a5a"), 1));
-        p.setBrush(QColor("#0f0f1a"));
+        p.setPen(QPen(canon("line"), 1));
+        p.setBrush(canon("nested"));
         for (int i = 0; i < 3; ++i) {
             const int btnX = body.left() + gapX + i * (btnW + gapX);
             p.drawRoundedRect(QRect(btnX, btnY, btnW, btnH), 5, 5);
         }
 
         const int tabW = 10, tabH = 24;
-        p.setBrush(QColor("#1a2a3a"));
+        p.setBrush(canon("raised"));
         for (double yFrac : { 0.45, 0.65 }) {
             const int ty = body.top() + int(body.height() * yFrac) - tabH / 2;
             p.drawRoundedRect(QRect(body.left() - tabW + 2, ty, tabW, tabH), 3, 3);
@@ -530,11 +566,11 @@ void UlanziDialCanvas::paintEvent(QPaintEvent*)
 
         const int knobR = body.width() / 4;
         const QPoint knobCenter(body.center().x(), body.top() + body.height() / 2 + 10);
-        p.setBrush(QColor("#0f0f1a"));
-        p.setPen(QPen(QColor("#506070"), 2));
+        p.setBrush(canon("nested"));
+        p.setPen(QPen(canon("lineHi"), 2));
         p.drawEllipse(knobCenter, knobR, knobR);
-        p.setBrush(QColor("#1a2a3a"));
-        p.setPen(QPen(QColor("#3a4a5a"), 1));
+        p.setBrush(canon("control"));
+        p.setPen(QPen(canon("line"), 1));
         p.drawEllipse(knobCenter, 12, 12);
     }
 
@@ -646,17 +682,9 @@ void UlanziDialMapperDialog::onButtonEvent(const QString& signature, int action)
 
 void UlanziDialMapperDialog::showEvent(QShowEvent* event)
 {
-    PersistentDialog::showEvent(event);
-    // The first layoutPills happens from buildPills (constructor),
-    // before Qt has positioned m_canvas inside the dialog.  After the
-    // dialog is shown, m_canvas->mapFrom(this, ...) returns the right
-    // values, so re-run the layout to put the dialog-centred pills
-    // (top_middle, dial_press) at their proper x.
-    layoutPills();
-    if (m_canvas) m_canvas->update();
-
-    // The dialog is persistent and usually opened long after launch, when the
-    // backend's scan has already reported. Re-read the state that decides what
+    CanonWindow::showEvent(event);
+    // The dialog is usually opened long after launch, when the backend's
+    // scan has already reported. Re-read the state that decides what
     // the status line should say rather than waiting for an edge.
     refreshStatus();
 }
@@ -675,14 +703,11 @@ void UlanziDialMapperDialog::refreshStatus()
     }
 }
 
-void UlanziDialMapperDialog::setStatusStyle(const QString& css)
+void UlanziDialMapperDialog::setStatusState(const QString& state)
 {
-    // The disabled line is themed through ThemeManager, which re-applies its
-    // template on every theme change. Drop that tracking first, or a later
-    // theme change would repaint a connected or permission line in the
-    // disabled colour.
-    ThemeManager::instance().clearWidgetTracking(m_statusLabel);
-    m_statusLabel->setStyleSheet(css);
+    m_statusLabel->setProperty("ulanziState", state);
+    m_statusLabel->style()->unpolish(m_statusLabel);
+    m_statusLabel->style()->polish(m_statusLabel);
 }
 
 void UlanziDialMapperDialog::showDisabledStatus()
@@ -690,8 +715,7 @@ void UlanziDialMapperDialog::showDisabledStatus()
     if (!m_statusLabel) return;
     m_statusLabel->setText(
         tr("Turned off in Radio Setup → Serial & Controllers"));
-    ThemeManager::instance().applyStyleSheet(
-        m_statusLabel, QStringLiteral("QLabel { color: {{color.text.secondary}}; }"));
+    setStatusState(QStringLiteral("off"));
 #ifdef Q_OS_LINUX
     if (m_grantAccessBtn)
         m_grantAccessBtn->setVisible(false);
@@ -721,9 +745,8 @@ void UlanziDialMapperDialog::onConnectionChanged(bool connected, const QString& 
     m_statusLabel->setText(connected
         ? tr("Connected — %1").arg(display)
         : tr("Disconnected"));
-    setStatusStyle(connected
-        ? "QLabel { color: #4dd87a; }"
-        : "QLabel { color: #cc3333; }");
+    setStatusState(connected ? QStringLiteral("connected")
+                             : QStringLiteral("disconnected"));
 #ifdef Q_OS_LINUX
     // Once connected, the access problem is resolved — hide the offer.
     if (connected && m_grantAccessBtn)
@@ -739,7 +762,7 @@ void UlanziDialMapperDialog::onAccessRequired(const QString& deviceName)
     if (display.endsWith(QStringLiteral(" Keyboard"), Qt::CaseInsensitive))
         display.chop(QStringLiteral(" Keyboard").size());
     m_statusLabel->setText(tr("%1 detected — needs permission").arg(display));
-    setStatusStyle("QLabel { color: #e0a030; }");
+    setStatusState(QStringLiteral("warning"));
     if (m_grantAccessBtn) {
         m_grantAccessBtn->setVisible(true);
         m_grantAccessBtn->setEnabled(true);
@@ -750,11 +773,12 @@ void UlanziDialMapperDialog::onGrantAccessClicked()
 {
     const QString pkexec = QStandardPaths::findExecutable(QStringLiteral("pkexec"));
     if (pkexec.isEmpty()) {
-        ScopedChildWidget<QMessageBox> boxOwner(
-            QMessageBox::Warning, tr("Grant access"),
+        ScopedChildWidget<CanonMessageBox> box(
+            tr("Grant access"),
             tr("pkexec was not found. Install polkit, or add this user to the "
-               "'input' group manually."), QMessageBox::Ok, this);
-        boxOwner.get()->exec();
+               "'input' group manually."), this);
+        box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
+        box.get()->exec();
         return;
     }
 
@@ -790,7 +814,7 @@ void UlanziDialMapperDialog::onGrantAccessClicked()
         }
         if (m_statusLabel) {
             m_statusLabel->setText(tr("Access install failed"));
-            setStatusStyle("QLabel { color: #cc3333; }");
+            setStatusState(QStringLiteral("error"));
         }
     });
     connect(proc, &QProcess::finished, this,
@@ -801,7 +825,7 @@ void UlanziDialMapperDialog::onGrantAccessClicked()
         if (code == 0) {
             if (m_statusLabel) {
                 m_statusLabel->setText(tr("Access granted — connecting…"));
-                setStatusStyle("QLabel { color: #4dd87a; }");
+                setStatusState(QStringLiteral("connected"));
             }
             // The udev trigger applies the ACL asynchronously; give logind a
             // moment, then ask the backend to rescan. If that misses, the user
@@ -820,7 +844,7 @@ void UlanziDialMapperDialog::onGrantAccessClicked()
                 m_statusLabel->setText(code == 126 || code == 127
                     ? tr("Authorization cancelled")
                     : tr("Access install failed"));
-                setStatusStyle("QLabel { color: #cc3333; }");
+                setStatusState(QStringLiteral("error"));
             }
         }
     });
