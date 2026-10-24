@@ -348,7 +348,7 @@ int main()
     // is that delegation is byte-identical -- a drift there would silently
     // change the packets the bench-validated DDC0 path already sends.
     {
-        const std::array<DdcConfig, 1> justDdc0{DdcConfig{48, 0}};
+        const std::array<DdcConfig, 1> justDdc0{DdcConfig{.ddc = 0, .rateKsps = 48, .adcIndex = 0}};
         check(buildDdcSpecific(justDdc0) == buildDdcSpecific(48),
               "buildDdcSpecific: 1-element list is byte-identical to the single-DDC overload");
 
@@ -362,7 +362,10 @@ int main()
         // Four DDCs, deliberately all different so a row landing on the wrong
         // offset (or every row reading DDC0's values) cannot pass.
         const std::array<DdcConfig, 4> ddcs{
-            DdcConfig{48, 0}, DdcConfig{192, 1}, DdcConfig{768, 0}, DdcConfig{1536, 1}};
+            DdcConfig{.ddc = 0, .rateKsps = 48, .adcIndex = 0},
+            DdcConfig{.ddc = 1, .rateKsps = 192, .adcIndex = 1},
+            DdcConfig{.ddc = 2, .rateKsps = 768, .adcIndex = 0},
+            DdcConfig{.ddc = 3, .rateKsps = 1536, .adcIndex = 1}};
         const auto d = buildDdcSpecific(ddcs);
 
         check(d[7] == 0x0F, "byte7 bits 0-3 set: DDC0-3 all enabled");
@@ -419,6 +422,45 @@ int main()
               "multi-DDC High Priority still never sets the PTT bits (byte4 bits 1-4)");
     }
 
+    // ---- Rows land at their DDC's slot, not at their place in the list ----
+    // A session can run DDC2 alone, with DDC0 and DDC1 off, so a lone entry
+    // must fill DDC2's row and set enable bit 2 and nothing else.
+    {
+        const std::array<DdcConfig, 1> lone{
+            DdcConfig{.ddc = 2, .rateKsps = 192, .adcIndex = 1}};
+        const auto d = buildDdcSpecific(lone);
+        check(d[7] == 0x04, "a lone DDC2 entry enables DDC2 only (byte7 = 0x04)");
+        check(d[29] == 1 && (static_cast<int>(d[30]) << 8 | d[31]) == 192 && d[34] == 24,
+              "DDC2's row (bytes 29-34) carries the entry's ADC, rate and sample size");
+        bool lowRowsZero = true;
+        for (std::size_t i = 17; i < 29; ++i)
+            if (d[i] != 0) { lowRowsZero = false; break; }
+        check(lowRowsZero, "DDC0's and DDC1's rows (bytes 17-28) stay zero");
+
+        const std::array<DdcConfig, 2> reversed{
+            DdcConfig{.ddc = 3, .rateKsps = 1536, .adcIndex = 1},
+            DdcConfig{.ddc = 2, .rateKsps = 48, .adcIndex = 0}};
+        const auto r = buildDdcSpecific(reversed);
+        check(r[7] == 0x0C
+                  && r[29] == 0 && (static_cast<int>(r[30]) << 8 | r[31]) == 48
+                  && r[35] == 1 && (static_cast<int>(r[36]) << 8 | r[37]) == 1536,
+              "rows are placed by DDC number, not by list position");
+
+        const std::array<DdcConfig, 4> rejected{
+            DdcConfig{.ddc = -1, .rateKsps = 48, .adcIndex = 0},
+            DdcConfig{.ddc = kMaxDdcs, .rateKsps = 48, .adcIndex = 1},
+            DdcConfig{.ddc = 2, .rateKsps = 96, .adcIndex = 0},
+            DdcConfig{.ddc = 2, .rateKsps = 768, .adcIndex = 1}};
+        const auto x = buildDdcSpecific(rejected);
+        check(x[7] == 0x04, "a DDC outside 0..kMaxDdcs-1 enables nothing");
+        const std::size_t pastRow = 17 + 6 * static_cast<std::size_t>(kMaxDdcs);
+        check(x[pastRow] == 0 && x[pastRow + 1] == 0 && x[pastRow + 2] == 0
+                  && x[pastRow + 5] == 0,
+              "...and writes no row past the last DDC");
+        check(x[29] == 0 && (static_cast<int>(x[30]) << 8 | x[31]) == 96,
+              "a repeated DDC keeps its first entry's row");
+    }
+
     // ---- Sender-port demux (the ONLY thing separating DDC streams) ----
     {
         // Base + n, verified against p2app's generalpacket.c and its
@@ -446,9 +488,10 @@ int main()
         check(ddcIndexForSenderPort(1038, 4).has_value(),
               "the last active DDC's port IS accepted (boundary, not off-by-one)");
 
-        // A single-DDC session must reject DDC1's port -- this is the case
-        // that keeps a leftover stream from a previous multi-DDC session
-        // from being fed to DDC0.
+        // The helper's own bound with a count of one. P2Client passes
+        // kMaxDdcs; a session drops the ports of DDCs it did not enable in
+        // handleDatagram() (isEnabledDdc()), which anan_link_telemetry_test
+        // covers.
         check(ddcIndexForSenderPort(1035, 1).has_value(),
               "single-DDC session accepts DDC0's port");
         check(!ddcIndexForSenderPort(1036, 1).has_value(),
@@ -481,10 +524,13 @@ int main()
         // Over the cap: extras are ignored rather than encoded or truncating
         // the packet. kMaxDdcs is the codec's own bound (Principle VII).
         const std::array<DdcConfig, 5> tooMany{
-            DdcConfig{48, 0}, DdcConfig{48, 0}, DdcConfig{48, 0},
-            DdcConfig{48, 0}, DdcConfig{1536, 1}};
+            DdcConfig{.ddc = 0, .rateKsps = 48, .adcIndex = 0},
+            DdcConfig{.ddc = 1, .rateKsps = 48, .adcIndex = 0},
+            DdcConfig{.ddc = 2, .rateKsps = 48, .adcIndex = 0},
+            DdcConfig{.ddc = 3, .rateKsps = 48, .adcIndex = 0},
+            DdcConfig{.ddc = 4, .rateKsps = 1536, .adcIndex = 1}};
         const auto capped = buildDdcSpecific(tooMany);
-        check(capped[7] == 0x0F, "more DDCs than kMaxDdcs: only the first 4 are enabled");
+        check(capped[7] == 0x0F, "more DDCs than kMaxDdcs: only DDC0-3 are enabled");
         const std::size_t fifthRow = 17 + 6 * 4;
         check(capped[fifthRow] == 0 && capped[fifthRow + 1] == 0
               && capped[fifthRow + 2] == 0 && capped[fifthRow + 5] == 0,

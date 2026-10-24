@@ -24,7 +24,7 @@ namespace AetherSDR::anan {
 // IRadioBackend for the ANAN-G2 (openHPSDR Protocol 2). Owns one P2Client and
 // one AnanRxDsp on a dedicated I/O thread, like Hl2Backend with MetisClient +
 // Hl2RxDsp. Scope: one DDC, RX only.
-//   - No NCO/WDSP-shift split: DDC0 retunes on every setSliceFrequency()/
+//   - No NCO/WDSP-shift split: RX1's DDC retunes on every setSliceFrequency()/
 //     setPanCenter(), so "the shift is ALWAYS exactly -cwBfoHz(mode), because
 //     the NCO IS the slice frequency".
 //   - capabilities()' identity strings are fixed; gateware, DDC count and board
@@ -142,7 +142,7 @@ public:
     // distance), not linear -- see the definition comment for why linear
     // distance is provably wrong for these octave-spaced rates
     // (HERMES.md §15.1; mirrors Hl2Backend::nearestIqSampleRateHz()).
-    // There is no continuous zoom here -- DDC0 runs at exactly one of six
+    // There is no continuous zoom here -- the DDC runs at exactly one of six
     // fixed rates.
     [[nodiscard]] static int nearestDdc0RateKsps(int requestedKsps) noexcept;
 
@@ -361,7 +361,7 @@ private:
 
     // scheduleTuneApply()'s leading+trailing throttle state. Lives on this
     // object's own thread (the GUI thread), not m_ioThread.
-    static constexpr int kTuneThrottleMs = 33;   // ~30 Hz ceiling on real DDC0 retunes
+    static constexpr int kTuneThrottleMs = 33;   // ~30 Hz ceiling on real DDC retunes
     QTimer* m_tuneThrottleTimer = nullptr;
     // Active ADC attenuation, mirrored in m_pendingParams for session restarts.
     // Captured/restored only through RadioStateMemory's rfGain extension.
@@ -473,7 +473,7 @@ private:
     QString applyDroopTables(const QMap<int, DroopCorrectionTable>& tables);
 
 
-    // The DDC0 rate actually running, captured at the top of
+    // RX1's rate actually running, captured at the top of
     // beginRateChange() before the pending fields are overwritten, so
     // finishRateChange()'s failure path can put them back. 0 until the first
     // rate change. See beginRateChange()'s own comment.
