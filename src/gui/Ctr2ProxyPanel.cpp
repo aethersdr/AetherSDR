@@ -1,6 +1,7 @@
 #include "Ctr2ProxyPanel.h"
 
 #include "CanonMessageBox.h"
+#include "Ctr2AccessRule.h"
 #include "GuardedSlider.h"
 #include "ScopedChildWidget.h"
 #include "models/Ctr2ProxyModel.h"
@@ -273,19 +274,12 @@ QString loadRule()
     return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
 }
 
-// True when this build's rule is already in place, locally or as packaged.
+// True when this build's rule is the one udev uses, locally or as packaged.
 // Then a password prompt cannot help: the ACL is missing for another reason.
+// An older copy in /etc masks a current packaged one, and is not installed.
 bool ruleAlreadyInstalled(const QString& rule)
 {
-    for (const QString& dir : {QStringLiteral("/etc/udev/rules.d"),
-                               QStringLiteral("/usr/lib/udev/rules.d"),
-                               QStringLiteral("/lib/udev/rules.d")}) {
-        QFile file(dir + QStringLiteral("/70-aethersdr-ctr2.rules"));
-        if (file.open(QIODevice::ReadOnly) && QString::fromUtf8(file.readAll()) == rule) {
-            return true;
-        }
-    }
-    return false;
+    return udevRuleInEffect(udevRuleDirs(), QStringLiteral("70-aethersdr-ctr2.rules"), rule);
 }
 
 } // namespace
@@ -320,8 +314,10 @@ void Ctr2ProxyPanel::offerUsbAccessRule(RuleUse use)
                      : tr("The CTR2 access rule is already installed, but this login still "
                           "cannot open the CTR2."), this);
         box.get()->setInformativeText(
-            firmware ? tr("The rule only opens it to whoever is logged in at this computer's "
-                          "own screen, so a remote or background session cannot use it.")
+            firmware ? tr("Press Install again in a moment, or unplug the CTR2-Max and put it "
+                          "back in download mode. The rule only opens it to whoever is logged "
+                          "in at this computer's own screen, so a remote or background "
+                          "session cannot use it.")
                      : (relay ? tr("Unplug the CTR2, plug it back in, then press Start. ")
                               : tr("Unplug the CTR2, plug it back in, then try again. "))
                            + tr("The rule only opens the CTR2 to whoever is logged in at this "
@@ -392,7 +388,8 @@ void Ctr2ProxyPanel::showManualRuleInstructions(const QString& why)
     box.get()->setInformativeText(
         QStringLiteral("sudo cp '%1' '%2'\n"
                        "sudo udevadm control --reload-rules\n"
-                       "sudo udevadm trigger --subsystem-match=hidraw --subsystem-match=tty")
+                       "sudo udevadm trigger --subsystem-match=hidraw --subsystem-match=tty "
+                       "--property-match=ID_VENDOR_ID=303a --property-match=ID_VENDOR_ID=2886")
             .arg(saved, kRuleTarget));
     box.get()->setTextSelectable(true);
     box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
@@ -431,7 +428,8 @@ void Ctr2ProxyPanel::installUsbAccessRule(RuleUse use)
         "set -e; "
         "printf '%s' \"$1\" > \"$2\"; "
         "udevadm control --reload-rules; "
-        "udevadm trigger --subsystem-match=hidraw --subsystem-match=tty; "
+        "udevadm trigger --subsystem-match=hidraw --subsystem-match=tty "
+        "--property-match=ID_VENDOR_ID=303a --property-match=ID_VENDOR_ID=2886; "
         "udevadm settle --timeout=5 || true");
 
     auto* proc = new QProcess(this);
@@ -450,7 +448,9 @@ void Ctr2ProxyPanel::installUsbAccessRule(RuleUse use)
         const QString err = QString::fromLocal8Bit(proc->readAllStandardError()).trimmed();
         proc->deleteLater();
         if (code == 0 && use != RuleUse::Relay) {
-            // settle has applied the ACL: carry on with the CTR2 window's action.
+            // Carry on with the CTR2 window's action. On the hardware run the
+            // ACL was in place by then; if a port is still denied, the window
+            // retries once more before saying anything.
             m_installingRule = false;
             syncConfiguration();
             if (auto next = std::exchange(m_afterRule, nullptr))

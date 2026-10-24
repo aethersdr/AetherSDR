@@ -92,7 +92,7 @@ void testConfirmedDevice()
     QTemporaryDir dir;
 
     FirmwareInstallModel model(nullptr);
-    model.setJobTargetOpener([onPort, log](const QString&, QString*) {
+    model.setJobTargetOpener([onPort, log](const QString&, QString*, bool*) {
         ++log->opens;
         return std::unique_ptr<EspFlashTarget>(new MemFlash(*onPort, log));
     });
@@ -214,12 +214,45 @@ void testUnknownMac()
 
 } // namespace
 
+// The CTR2 window offers the Linux access rule only when the OS refused the
+// port: a typed flag from the opener, never the wording of the message.
+void testAccessDenied()
+{
+    using Loader = FirmwareInstallModel::Loader;
+    const QString a = QStringLiteral("AA:AA:AA:AA:AA:AA");
+    auto denied = std::make_shared<bool>(true);
+    QTemporaryDir dir;
+    FirmwareInstallModel model(nullptr);
+    model.setJobTargetOpener([denied](const QString& port, QString* problem, bool* accessDenied) {
+        // Same words either way: only the flag may tell them apart.
+        *problem = QStringLiteral("Permission to open %1 was denied.").arg(port);
+        *accessDenied = *denied;
+        return std::unique_ptr<EspFlashTarget>();
+    });
+    model.setDeviceSources([a] { return QList<Loader>{{QStringLiteral("ttyACM0"), a}}; },
+                           [] { return QList<Ctr2HidPort::DeviceInfo>(); });
+    QString problem;
+    bool ok = true;
+    QString message;
+    check(model.backup(model.target(), dir.filePath(QStringLiteral("a.bin")), &problem),
+          "a backup starts");
+    check(waitFinished(model, &ok, &message) && !ok && model.lastFailureAccessDenied(),
+          "a port the OS refused is reported as access denied");
+    *denied = false;
+    check(model.backup(model.target(), dir.filePath(QStringLiteral("b.bin")), &problem),
+          "another backup starts");
+    ok = true;
+    check(waitFinished(model, &ok, &message) && !ok && !model.lastFailureAccessDenied(),
+          "any other failure is not, whatever its message says");
+}
+
 int main(int argc, char** argv)
 {
     // The relay model reads its saved setup: never the operator's.
     TestSettingsProfile profile(QStringLiteral("firmware_install_model_test"));
     QCoreApplication app(argc, argv);
     testConfirmedDevice();
+    testAccessDenied();
     testFollowsRelaySelection();
     testCtr2MaxOnly();
     testUnknownMac();

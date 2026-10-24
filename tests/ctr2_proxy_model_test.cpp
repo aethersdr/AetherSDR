@@ -10,10 +10,12 @@
 #include "core/Ctr2HidPort.h"
 #include "core/Ctr2UsbRelay.h"
 #include "models/Ctr2ProxyModel.h"
+#include "gui/Ctr2AccessRule.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QThread>
+#include <QDir>
 #include <QFile>
 #include <QHostAddress>
 #include <QMutex>
@@ -274,6 +276,36 @@ void testUdevRuleMatchesKnownCtr2s()
 
 // Firmware that names itself: a 303A:1001 product string starting "Aether" is
 // shown as the model if it is a short printable name; otherwise it is unknown.
+// udev uses the first copy of a rule file in precedence order; a copy in
+// /etc masks the packaged one. "Already installed" must mean the copy in
+// effect, or an operator with an older rule in /etc is never offered the new one.
+void testUdevRuleInEffect()
+{
+    QTemporaryDir root;
+    const QString etc = root.filePath(QStringLiteral("etc"));
+    const QString lib = root.filePath(QStringLiteral("lib"));
+    QDir().mkpath(etc);
+    QDir().mkpath(lib);
+    const QStringList dirs{etc, lib};
+    const QString name = QStringLiteral("70-aethersdr-ctr2.rules");
+    const QString current = QStringLiteral("current rule\n");
+    const auto put = [&name](const QString& dir, const QString& text) {
+        QFile f(dir + QLatin1Char('/') + name);
+        f.open(QIODevice::WriteOnly);
+        f.write(text.toUtf8());
+    };
+    check(!AetherSDR::udevRuleInEffect(dirs, name, current), "no copy: not installed");
+    put(lib, current);
+    check(AetherSDR::udevRuleInEffect(dirs, name, current), "only the packaged copy: installed");
+    put(etc, QStringLiteral("older rule\n"));
+    check(!AetherSDR::udevRuleInEffect(dirs, name, current),
+          "an older copy in /etc masks the current packaged one: not installed");
+    put(etc, current);
+    check(AetherSDR::udevRuleInEffect(dirs, name, current), "the current copy in /etc: installed");
+    check(AetherSDR::udevRuleDirs().first() == QStringLiteral("/etc/udev/rules.d"),
+          "/etc is udev's highest precedence");
+}
+
 void testSelfNamedDevices()
 {
     const auto named = [](const QString& product, quint16 vid = 0x303A) {
@@ -983,6 +1015,7 @@ int main(int argc, char** argv)
     testUsbDefaults();
     testProbeFollowsSelection();
     testUdevRuleMatchesKnownCtr2s();
+    testUdevRuleInEffect();
     testSelfNamedDevices();
     testAutoStart(QStringLiteral("AetherCTR2"));   // names itself
     testAutoStart(QStringLiteral("AETHER_KNOB"));  // the fixed AetherKnob identity

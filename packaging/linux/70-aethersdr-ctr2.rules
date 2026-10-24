@@ -7,8 +7,10 @@
 # ctr2_proxy_model_test enforces it.
 #
 # The tty line is the CTR2-Max in download mode, for firmware installs from
-# the CTR2 window: the ESP32-S3 ROM's USB serial port. Every ESP32 board in
-# download mode has this identity, so it cannot be narrowed to a CTR2.
+# the CTR2 window: the ESP32-S3's built-in USB serial/JTAG port. Any ESP32-S3
+# class board shows the same identity, in download mode and also under
+# firmware that leaves USB to it, so the line opens that port on any such
+# board to the seat's user. It cannot be narrowed to a CTR2.
 #
 # Installed by the build on Linux hidapi builds, and also installed on demand
 # by the CTR2 window (via pkexec) for builds that did not ship it.

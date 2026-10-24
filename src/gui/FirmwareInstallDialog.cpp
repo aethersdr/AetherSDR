@@ -958,20 +958,24 @@ void FirmwareInstallDialog::onFinished(bool ok, const QString& message)
     // The download-mode port is closed to this login: offer the access rule,
     // then run the same action again. Queued, so the question does not open
     // inside the job's own finished signal.
-    if (!ok && message.contains(QStringLiteral("Permission")) && m_lastJob && m_relay) {
-        const auto again = [this] {
-            if (!m_lastJob || m_fw->busy())
+    if (!ok && m_fw->lastFailureAccessDenied() && m_lastJob && m_relay) {
+        // The action that failed, not whichever runs last by the time the
+        // operator has answered the password prompt.
+        const auto job = m_lastJob;
+        const QString done = m_lastJobDone;
+        const auto again = [this, job, done] {
+            if (m_fw->busy())
                 return;
             m_step->setText(tr("Access granted. Trying again…"));
-            runJob(m_lastJobDone, m_lastJob);
+            runJob(done, job);
         };
         // With the rule in place, a port that has only just appeared may not
         // have its ACL yet: try once more before saying anything.
         if (Ctr2ProxyPanel::accessRuleInstalled() && !m_accessRetried) {
-            QTimer::singleShot(1000, this, [this] {
-                if (!m_lastJob || m_fw->busy())
+            QTimer::singleShot(1000, this, [this, job, done] {
+                if (m_fw->busy())
                     return;
-                runJob(m_lastJobDone, m_lastJob, true);
+                runJob(done, job, true);
             });
             return;
         }

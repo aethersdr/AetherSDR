@@ -893,6 +893,7 @@ void FirmwareInstallModel::cancel()
 
 void FirmwareInstallModel::onJobFinished(bool ok, const QString& message)
 {
+    m_accessDenied = !ok && m_job->accessDenied();
     if (m_installRunning) {
         m_installRunning = false;
         if (ok)
