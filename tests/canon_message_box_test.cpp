@@ -1,0 +1,141 @@
+// CanonMessageBox (RFC #6226): the canon window's question box. The caller
+// acts on clickedButton(), so it must name the button the operator clicked
+// (or Return clicked for them), and be null when the box is closed instead.
+
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
+#include "core/ThemeManager.h"
+#include "gui/CanonMessageBox.h"
+
+#include <QApplication>
+#include <QLabel>
+#include <QPushButton>
+#include <QTest>
+#include <QTimer>
+#include <cstdio>
+#include <functional>
+
+using namespace AetherSDR;
+
+static int g_failures = 0;
+
+#define EXPECT_TRUE(cond) do { \
+    if (!(cond)) { \
+        std::fprintf(stderr, "FAIL %s:%d  expected (%s) to be true\n", \
+                     __FILE__, __LINE__, #cond); \
+        ++g_failures; \
+    } \
+} while (0)
+
+namespace {
+
+struct Box {
+    CanonMessageBox box{QStringLiteral("Install AetherCTR2?"),
+                        QStringLiteral("Install AetherCTR2 0.9.6 over the USB cable?")};
+    QPushButton* cancel{box.addButton(QStringLiteral("Cancel"), CanonMessageBox::Role::Reject)};
+    QPushButton* install{box.addButton(QStringLiteral("Install"), CanonMessageBox::Role::Accept)};
+
+    Box() { box.setDefaultButton(install); }
+
+    // Runs the box modally, doing `act` once it is showing.
+    int run(std::function<void(CanonMessageBox&)> act)
+    {
+        QTimer::singleShot(0, &box, [this, act] {
+            QTest::qWaitForWindowExposed(&box);
+            act(box);
+        });
+        return box.exec();
+    }
+};
+
+void pressKey(CanonMessageBox& box, Qt::Key key)
+{
+    QWidget* target = QApplication::focusWidget() ? QApplication::focusWidget() : &box;
+    QTest::keyClick(target, key);
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-canon-message-box-test"));
+    if (!settingsProfile.isValid()) {
+        std::fprintf(stderr, "FAIL could not create isolated settings profile\n");
+        return 1;
+    }
+    if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
+        qputenv("QT_QPA_PLATFORM", "offscreen");
+    }
+    QApplication app(argc, argv);
+    AppSettings::instance().load();
+    ThemeManager::instance();
+
+    // ---- a click on an accepting button names it ----
+    {
+        Box b;
+        const int result = b.run([&b](CanonMessageBox&) { b.install->click(); });
+        EXPECT_TRUE(result == QDialog::Accepted);
+        EXPECT_TRUE(b.box.clickedButton() == b.install);
+    }
+
+    // ---- a click on a rejecting button names it, and rejects ----
+    {
+        Box b;
+        const int result = b.run([&b](CanonMessageBox&) { b.cancel->click(); });
+        EXPECT_TRUE(result == QDialog::Rejected);
+        EXPECT_TRUE(b.box.clickedButton() == b.cancel);
+    }
+
+    // ---- Escape closes it with no button clicked ----
+    {
+        Box b;
+        const int result = b.run([](CanonMessageBox& box) { pressKey(box, Qt::Key_Escape); });
+        EXPECT_TRUE(result == QDialog::Rejected);
+        EXPECT_TRUE(b.box.clickedButton() == nullptr);
+    }
+
+    // ---- the corner close button closes it with no button clicked ----
+    {
+        Box b;
+        const int result = b.run([](CanonMessageBox& box) { box.close(); });
+        EXPECT_TRUE(result == QDialog::Rejected);
+        EXPECT_TRUE(b.box.clickedButton() == nullptr);
+    }
+
+    // ---- Return clicks the default button, which opens with the focus ----
+    {
+        Box b;
+        bool focused = false;
+        const int result = b.run([&b, &focused](CanonMessageBox& box) {
+            focused = b.install->hasFocus();
+            pressKey(box, Qt::Key_Return);
+        });
+        EXPECT_TRUE(focused);
+        EXPECT_TRUE(result == QDialog::Accepted);
+        EXPECT_TRUE(b.box.clickedButton() == b.install);
+        EXPECT_TRUE(b.install->isDefault() && !b.cancel->isDefault());
+    }
+
+    // ---- the further text shows only when there is some; a destructive
+    //      button accepts and is marked for the warning color ----
+    {
+        CanonMessageBox box(QStringLiteral("Restore the backup?"), QStringLiteral("Restore it?"));
+        auto* info = box.findChild<QLabel*>(QStringLiteral("canonMessageInfo"));
+        EXPECT_TRUE(info && info->isHidden());
+        box.setInformativeText(QStringLiteral("Only onto the CTR2-Max it came from."));
+        EXPECT_TRUE(info && !info->isHidden());
+        QPushButton* restore =
+            box.addButton(QStringLiteral("Restore"), CanonMessageBox::Role::Destructive);
+        EXPECT_TRUE(restore->property("role").toString() == QStringLiteral("destructive"));
+        QTimer::singleShot(0, &box, [restore] { restore->click(); });
+        EXPECT_TRUE(box.exec() == QDialog::Accepted);
+        EXPECT_TRUE(box.clickedButton() == restore);
+    }
+
+    if (g_failures == 0) {
+        std::printf("canon_message_box_test: all checks passed\n");
+        return 0;
+    }
+    std::fprintf(stderr, "canon_message_box_test: %d failure(s)\n", g_failures);
+    return 1;
+}

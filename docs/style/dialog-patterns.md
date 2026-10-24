@@ -269,6 +269,13 @@ What it keeps:
   is set. They animate only while visible and tick slowly while the window is
   not exposed.
 
+A question or notice from a canon window uses `CanonMessageBox`
+(`src/gui/CanonMessageBox.{h,cpp}`) in place of `QMessageBox`: a canon dialog
+with the title as a canon header, the text, optional further text, and the
+buttons at the bottom right. `clickedButton()` names the button clicked and is
+null when the box is closed any other way; the default button is outlined in
+cyan and a destructive one is drawn in gold. The CTR2 window's questions use it.
+
 It is translucent, so the rounded corners need a compositor; an X11 session
 without one shows square black corners. Use `CanonWindow` only for windows the
 style guide covers: short-lived windows, and the tool windows the maintainer
