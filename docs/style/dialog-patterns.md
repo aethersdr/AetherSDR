@@ -281,7 +281,10 @@ A question or notice from a canon window uses `CanonMessageBox`
 with the title as a canon header, the text, optional further text, and the
 buttons at the bottom right. `clickedButton()` names the button clicked and is
 null when the box is closed any other way; the default button is outlined in
-cyan and a destructive one is drawn in gold. The CTR2 window's questions use it.
+cyan and a destructive one is drawn in gold. The CTR2 window's questions and
+Reset Settings' failure notice use it. Reset Settings' confirmation lists the
+files it will remove in a nested list, which the box has no place for, so it is
+its own `CanonWindow` dialog (`ResetSettingsPrompts`) with the same buttons.
 
 ## Common pitfalls
 
