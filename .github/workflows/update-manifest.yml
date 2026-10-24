@@ -6,8 +6,8 @@ name: Update Manifest
 # build    reads only: waits for the release's payload assets, extracts each
 #          payload, and writes manifest.json plus one patch bundle per payload
 #          and per earlier release (tools/build_update_manifest.py).
-# publish  runs in the update-signing environment (v* tags only, maintainer
-#          approval): signs the manifest with the Ed25519 update key, verifies
+# publish  runs in the update-signing environment (main and v* tags only,
+#          maintainer approval): signs the manifest with the Ed25519 update key, verifies
 #          the signature against packaging/update-signing.pub, attaches the
 #          bundles to the release and puts the manifest on
 #          updates.aethersdr.com (an R2 bucket written by this job alone).
@@ -226,18 +226,18 @@ jobs:
       # Sign, then verify against the committed public key before anything
       # is uploaded: a wrong or rotated secret fails here, loudly, instead of
       # publishing a manifest no client can verify.
+      # The key signs only a schema-1 manifest for THIS tag, with a key_id,
+      # whose every URL is one of this release's downloads; checked before
+      # the key is written to disk.
       - name: Sign and verify the manifest
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          TAG: ${{ needs.build.outputs.tag }}
         run: |
+          python3 update-out/publish_update_manifest.py validate --tag "$TAG" --dir update-out
           key="$RUNNER_TEMP/update-signing.pem"
           trap 'rm -f "$key"' EXIT
           ( umask 077; printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key" )
-          if ! python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["key_id"] else 1)' \
-              update-out/manifest.json; then
-            echo "::error::manifest.json has no key_id: packaging/update-signing.pub was missing at build time."
-            exit 1
-          fi
           openssl pkeyutl -sign -rawin -inkey "$key" -in update-out/manifest.json \
             -out update-out/manifest.json.sig
           openssl pkeyutl -verify -rawin -pubin -inkey "$RUNNER_TEMP/update-signing.pub" \

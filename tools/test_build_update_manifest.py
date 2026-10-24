@@ -171,6 +171,44 @@ class PatchSet(Base):
         self.assertEqual(sums[0], sums[1])
 
 
+class Symlinks(Base):
+    def test_only_links_that_stay_inside_are_accepted(self) -> None:
+        ok = [("AppRun", "usr/bin/AetherSDR"), ("usr/lib/libQt6Core.so.6", "libQt6Core.so.6.12.0"),
+              ("usr/lib/a/b", "../c"), ("x/y", "./z")]
+        bad = [("AppRun", "/usr/bin/AetherSDR"), ("usr/lib/a", "../../../etc"), ("a", ".."),
+               ("a", ""), ("a", "..\\..\\x")]
+        for rel, target in ok:
+            self.assertTrue(bum.symlink_stays_inside(rel, target), (rel, target))
+        for rel, target in bad:
+            self.assertFalse(bum.symlink_stays_inside(rel, target), (rel, target))
+
+    def test_scan_refuses_an_escaping_link(self) -> None:
+        write(self.tmp / "a.txt", b"a")
+        os.symlink("/etc/passwd", self.tmp / "evil")
+        with self.assertRaises(ValueError):
+            bum.scan_tree(self.tmp)
+
+
+class BuildTimeVerification(Base):
+    def test_a_corrupted_bundle_fails_verification(self) -> None:
+        old, new = self.tmp / "old", self.tmp / "new"
+        big = os.urandom(50_000)
+        write(old / "app.exe", big)
+        write(new / "app.exe", big[:25_000] + b"X" + big[25_000:])
+        new_tree = bum.scan_tree(new)
+        bundle = self.tmp / "b.update.tar"
+        patch = bum.build_patch_set(old, bum.scan_tree(old), new, new_tree, bundle, self.tmp / "w")
+        files = bum.files_list(new_tree)
+        bum.verify_patch_set(old, bundle, patch, files, self.tmp / "v1")   # the good bundle passes
+        patch["ops"][0]["sha256"] = "0" * 64
+        with self.assertRaises(ValueError):
+            bum.verify_patch_set(old, bundle, patch, files, self.tmp / "v2")
+        write(old / "app.exe", big + b"user-modified")   # the install drifted
+        patch["ops"][0]["sha256"] = new_tree["app.exe"].sha256
+        with self.assertRaises(ValueError):
+            bum.verify_patch_set(old, bundle, patch, files, self.tmp / "v3")
+
+
 class TypeTransitions(Base):
     """A path that changes kind between releases: removals clear it first."""
 
@@ -189,6 +227,7 @@ class TypeTransitions(Base):
         self.assertEqual(kinds[: kinds.count("remove")], ["remove"] * kinds.count("remove"),
                          "every removal comes before any write")
         apply_patch_set(old, bundle, patch, bum.files_list(new_tree), self.tmp / "applied")
+        bum.verify_patch_set(old, bundle, patch, bum.files_list(new_tree), self.tmp / "verify")
 
     def test_file_becomes_directory(self) -> None:
         self.round_trip(lambda r: write(r / "plugins", b"was a file"),

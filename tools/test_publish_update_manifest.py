@@ -45,8 +45,18 @@ class Base(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    @staticmethod
+    def body(release: str, **override) -> dict:
+        base = pub.DOWNLOAD_BASE + release + "/"
+        m = {"schema": 1, "tag": release, "version": release[1:], "key_id": "788fb6e31f7ecba4",
+             "payloads": [{"platform": "windows", "arch": "x86_64",
+                           "full": {"url": base + "AetherSDR-x.zip"},
+                           "patches": [{"bundle": {"url": base + "AetherSDR-x.update.tar"}}]}]}
+        m.update(override)
+        return m
+
     def signed(self, tag: str, key: Path | None = None) -> tuple[bytes, bytes]:
-        manifest = json.dumps({"schema": 1, "tag": tag, "version": tag[1:]}).encode()
+        manifest = json.dumps(self.body(tag)).encode()
         m = self.tmp / "m.json"
         m.write_bytes(manifest)
         sig = self.tmp / "m.sig"
@@ -106,6 +116,26 @@ class Completeness(Base):
         with self.assertRaises(pub.PublishError):
             pub.publish(self.store, "v26.10.4", "v26.10.4", m, s, self.pub)
         self.assertEqual(self.store.objects, {})
+
+
+class Validation(Base):
+    def test_only_a_manifest_for_this_release_may_be_signed(self) -> None:
+        pub.validate_manifest(json.dumps(self.body("v26.10.4")).encode(), "v26.10.4")
+        bad = [
+            self.body("v26.10.4", tag="v26.10.3"),       # another release's tag, this release's URLs
+            self.body("v26.10.4", schema=2),
+            self.body("v26.10.4", key_id=""),
+            self.body("v26.10.4", payloads=[]),
+        ]
+        foreign = self.body("v26.10.4")
+        foreign["payloads"][0]["patches"][0]["bundle"]["url"] = "https://evil.example/x.update.tar"
+        older = self.body("v26.10.4")
+        older["payloads"][0]["full"]["url"] = pub.DOWNLOAD_BASE + "v26.10.3/AetherSDR-x.zip"
+        for m in bad + [foreign, older]:
+            with self.assertRaises(pub.PublishError):
+                pub.validate_manifest(json.dumps(m).encode(), "v26.10.4")
+        with self.assertRaises(pub.PublishError):
+            pub.validate_manifest(b"not json", "v26.10.4")
 
 
 class LatestPromotion(Base):

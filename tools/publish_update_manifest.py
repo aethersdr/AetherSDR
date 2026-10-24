@@ -15,6 +15,9 @@ re-read immediately before the write. The workflow also runs this job one
 at a time across tags (its `update-manifest-publish` concurrency group), so
 no older run can interleave between that read and its write.
 
+    publish_update_manifest.py validate --tag T --dir D
+        refuses a manifest that is not schema 1 for T with a key_id and only
+        release-download URLs (run before signing)
     publish_update_manifest.py check   --tag T --latest-tag L --public-key P
         prints "complete" or "incomplete" (reads the public site)
     publish_update_manifest.py publish --tag T --latest-tag L --public-key P --dir D
@@ -36,7 +39,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from build_update_manifest import version_key  # noqa: E402
+from build_update_manifest import DOWNLOAD_BASE, SCHEMA, version_key  # noqa: E402
 
 BUCKET = "aethersdr-updates"
 PUBLIC_BASE = "https://updates.aethersdr.com/"
@@ -147,6 +150,27 @@ def is_complete(store, tag: str, latest_tag: str, public_key: Path) -> bool:
 
 # ── Publish ─────────────────────────────────────────────────────────────────
 
+def validate_manifest(manifest: bytes, tag: str) -> None:
+    """What the key may sign: a schema-1 manifest for `tag`, with a key_id,
+    whose every URL is a release download on this repository."""
+    try:
+        m = json.loads(manifest)
+    except ValueError:
+        raise PublishError("manifest.json is not JSON") from None
+    if m.get("schema") != SCHEMA:
+        raise PublishError(f"schema {m.get('schema')!r}, expected {SCHEMA}")
+    if m.get("tag") != tag:
+        raise PublishError(f"the manifest is for {m.get('tag')!r}, not {tag}")
+    if not m.get("key_id"):
+        raise PublishError("no key_id: packaging/update-signing.pub was missing at build time")
+    payloads = m.get("payloads") or []
+    if not payloads:
+        raise PublishError("no payloads")
+    for p in payloads:
+        for a in [p["full"], *(q["bundle"] for q in p.get("patches", []))]:
+            if not a["url"].startswith(DOWNLOAD_BASE + tag + "/"):
+                raise PublishError(f"{a['url']} is not a {tag} release download")
+
 def put_pair(store, prefix: str, manifest: bytes, sig: bytes, cache: str, public_key: Path) -> None:
     store.put(f"{prefix}/manifest.json", manifest, "application/json", cache)
     store.put(f"{prefix}/manifest.json.sig", sig, "application/octet-stream", cache)
@@ -159,10 +183,9 @@ def publish(store, tag: str, latest_tag: str, manifest: bytes, sig: bytes,
             public_key: Path) -> list[str]:
     """Write the release's pair, then promote latest/ if this is the latest
     release and nothing newer is there. Returns the prefixes written."""
+    validate_manifest(manifest, tag)
     if not verifies(manifest, sig, public_key):
         raise PublishError("the signature does not verify against the public key")
-    if json.loads(manifest).get("tag") != tag:
-        raise PublishError(f"the manifest is not for {tag}")
     written = [f"releases/{tag}"]
     put_pair(store, written[0], manifest, sig, RELEASE_CACHE, public_key)
     if latest_tag != tag:
@@ -181,15 +204,23 @@ def publish(store, tag: str, latest_tag: str, manifest: bytes, sig: bytes,
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("action", choices=["check", "publish"])
+    ap.add_argument("action", choices=["validate", "check", "publish"])
     ap.add_argument("--tag", required=True)
-    ap.add_argument("--latest-tag", required=True, help="GitHub's latest release tag")
-    ap.add_argument("--public-key", required=True, type=Path)
+    ap.add_argument("--latest-tag", help="GitHub's latest release tag")
+    ap.add_argument("--public-key", type=Path)
     ap.add_argument("--dir", type=Path, help="holds manifest.json and manifest.json.sig")
     args = ap.parse_args(argv)
     version_key(args.tag)
 
+    if args.action != "validate" and (args.latest_tag is None or args.public_key is None):
+        ap.error(f"{args.action} needs --latest-tag and --public-key")
     try:
+        if args.action == "validate":
+            if args.dir is None:
+                ap.error("validate needs --dir")
+            validate_manifest((args.dir / "manifest.json").read_bytes(), args.tag)
+            print(f"manifest.json is a valid schema-{SCHEMA} manifest for {args.tag}")
+            return 0
         if args.action == "check":
             print("complete" if is_complete(PublicStore(), args.tag, args.latest_tag,
                                             args.public_key) else "incomplete")

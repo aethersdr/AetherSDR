@@ -56,7 +56,9 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 SCHEMA = 1
-REPO = "aethersdr/AetherSDR"
+# The repository whose releases are read and named (a fork's dry run reads
+# its own); the app's allowlist accepts only aethersdr/AetherSDR's.
+REPO = os.environ.get("GITHUB_REPOSITORY", "aethersdr/AetherSDR")
 DOWNLOAD_BASE = f"https://github.com/{REPO}/releases/download/"
 # A stable release: vYY.M.patch, with an optional hotfix (v26.7.4.1).
 TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
@@ -139,13 +141,29 @@ def scan_tree(root: Path) -> dict[str, Entry]:
             rel = p.relative_to(root).as_posix()
             st = p.lstat()
             if stat.S_ISLNK(st.st_mode):
-                out[rel] = Entry("symlink", target=os.readlink(p))
+                target = os.readlink(p)
+                if not symlink_stays_inside(rel, target):
+                    raise ValueError(f"{rel}: symlink target {target!r} leaves the payload")
+                out[rel] = Entry("symlink", target=target)
             elif stat.S_ISREG(st.st_mode):
                 out[rel] = Entry("file", st.st_size, sha256_file(p),
                                  bool(st.st_mode & 0o111))
             else:
                 raise ValueError(f"{rel}: not a regular file or symlink")
     return out
+
+
+def symlink_stays_inside(rel: str, target: str) -> bool:
+    """A link the manifest may carry: relative, and resolving (lexically,
+    from the link's own directory) to a path inside the payload."""
+    if not target or PurePosixPath(target).is_absolute() or "\\" in target:
+        return False
+    depth = len(PurePosixPath(rel).parts) - 1
+    for part in PurePosixPath(target).parts:
+        depth += -1 if part == ".." else (0 if part == "." else 1)
+        if depth < 0:
+            return False
+    return True
 
 
 def appimage_squashfs_offset(path: Path) -> int:
@@ -273,6 +291,65 @@ def build_patch_set(old_root: Path, old: dict[str, Entry], new_root: Path,
     return {"ops": ops, "unchanged": unchanged}
 
 
+def verify_patch_set(old_root: Path, bundle: Path, patch: dict, files: list[dict],
+                     work: Path) -> None:
+    """Apply `bundle` to a copy of the old tree, by the documented contract,
+    and check every file of the new one. Run on the real release pair before
+    anything is published; raises on any mismatch."""
+    dest = work / "applied"
+    members = work / "members"
+    shutil.rmtree(work, ignore_errors=True)
+    shutil.copytree(old_root, dest, symlinks=True)
+    members.mkdir(parents=True)
+    with tarfile.open(bundle) as tar:
+        tar.extractall(members, filter="data")
+    pruned = False
+    for op in patch["ops"]:
+        target = dest / op["path"]
+        if op["op"] == "remove":
+            target.unlink()
+            continue
+        if not pruned:
+            for d in sorted((Path(dp) for dp, dn, fn in os.walk(dest) if not dn and not fn),
+                            key=lambda d: len(d.parts), reverse=True):
+                if d != dest and not (old_root / d.relative_to(dest)).is_symlink():
+                    try:
+                        d.rmdir()
+                    except OSError:
+                        pass
+            pruned = True
+        if op["op"] == "symlink":
+            if target.is_symlink() or target.exists():
+                target.unlink()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(op["target"], target)
+            continue
+        out = members / (op["member"] + ".out")
+        cmd = ["zstd", "-q", "-d", "-f", f"--long={op['window_log']}"]
+        if op["op"] == "patch":
+            if sha256_file(target) != op["from_sha256"]:
+                raise ValueError(f"{op['path']}: source does not match from_sha256")
+            cmd.append(f"--patch-from={target}")
+        subprocess.run(cmd + [str(members / op["member"]), "-o", str(out)], check=True)
+        if sha256_file(out) != op["sha256"] or out.stat().st_size != op["size"]:
+            raise ValueError(f"{op['path']}: result does not match its sha256/size")
+        if target.is_symlink():
+            target.unlink()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        out.replace(target)
+    applied = scan_tree(dest)
+    want = {f["path"]: f for f in files}
+    if set(applied) != set(want):
+        raise ValueError(f"applied tree differs in paths: {sorted(set(applied) ^ set(want))[:5]}")
+    for path, e in applied.items():
+        f = want[path]
+        same = (e.type == f["type"] and (e.target == f["target"] if e.type == "symlink"
+                                         else e.sha256 == f["sha256"]))
+        if not same:
+            raise ValueError(f"{path}: applied file does not match the manifest")
+    shutil.rmtree(work, ignore_errors=True)
+
+
 # ── Releases ────────────────────────────────────────────────────────────────
 
 def gh(*args: str) -> str:
@@ -392,6 +469,11 @@ def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
             bundle_name = f"AetherSDR-{tag}-{kind.label}-from-{old_tag}.update.tar"
             ops = build_patch_set(old_root, scan_tree(old_root), new_root, new_tree,
                                   out / bundle_name, work / "patches")
+            if ops is not None:
+                # The real pair, by the documented contract, before anything
+                # is signed: a bundle that does not rebuild the release fails
+                # the build here.
+                verify_patch_set(old_root, out / bundle_name, ops, entry["files"], work / "verify")
             shutil.rmtree(work / "old", ignore_errors=True)
             if discard_assets:
                 old_asset.unlink(missing_ok=True)
