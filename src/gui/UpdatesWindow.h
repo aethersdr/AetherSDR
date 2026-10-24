@@ -4,6 +4,7 @@
 
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 
 class QCheckBox;
 class QFrame;
@@ -65,7 +66,7 @@ private:
     QPushButton* m_checkNow{nullptr};
     QLabel*      m_footnote{nullptr};
     QCheckBox*   m_autoCheck{nullptr};
-    QString      m_builtFor;   // the release the chips and cards were built from
+    QStringList  m_builtChapters;   // the chapters the chips were built from
 };
 
 } // namespace AetherSDR

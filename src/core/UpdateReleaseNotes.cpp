@@ -169,7 +169,10 @@ ReleaseAsset UpdateChecker::assetForThisComputer(const ReleaseInfo& release)
     const QString os;
     const bool portable = false;
 #endif
-    const int i = pickAsset(release.assets, os, QSysInfo::currentCpuArchitecture(), portable);
+    const int i = pickAsset(release.assets, os,
+                            // The build's architecture, not the host's: an x64 build
+                            // emulated on ARM is replaced by the x64 installer.
+                            QSysInfo::buildCpuArchitecture(), portable);
     return i >= 0 ? release.assets[i] : ReleaseAsset{};
 }
 

@@ -23,6 +23,7 @@ struct ReleaseInfo {
     QString version;                    // parsed digits, "26.10.3"; empty if unusable
     QString tagline;                    // the release name after "AetherSDR vX — "
     QDateTime published;                // UTC; invalid when absent
+    QDateTime answered;                 // UTC, when this answer arrived; invalid from settings
     QStringList chapters;               // the body's ### headings, boilerplate dropped
     QList<ReleaseAsset> assets;         // only download URLs that pass isTrustedDownloadUrl()
     // Only the version an earlier answer saved, not an answer from this run:
@@ -73,9 +74,6 @@ public:
     static void skipVersion(const QString& version);
     static bool isSkipped(const QString& version);
 
-    // When the last check got an answer or, automatically, failed.
-    static QDateTime lastCheckUtc();
-
     // Whether parsed version `a` is newer than `b`; false if `a` is unusable.
     static bool isNewer(const QString& a, const QString& b);
 
@@ -103,7 +101,7 @@ public:
     static bool isTrustedDownloadUrl(const QUrl& url);
 
     // The installer for an OS ("windows", "macos", "linux"), a CPU
-    // architecture as QSysInfo::currentCpuArchitecture() names it, and
+    // architecture as QSysInfo names it, and
     // whether a Windows copy is the portable zip. Index into `assets`, or -1.
     static int pickAsset(const QList<ReleaseAsset>& assets, const QString& os,
                          const QString& cpuArch, bool portable);
@@ -116,6 +114,8 @@ public:
     static QUrl releasePageUrl(const QString& version);
 
 signals:
+    // A request went out; isChecking() is now true.
+    void checkStarted();
     // A check finished with a usable answer; latestRelease() now holds it.
     void releaseInfoChanged();
     void updateAvailable(const QString& latestVersion, AetherSDR::UpdateChecker::Trigger trigger);

@@ -251,5 +251,65 @@ int main(int argc, char** argv)
         }
     }
 
+    {
+        // After a real answer: a check in flight says so, a failed re-check
+        // says the window shows the last answer, the footer names when
+        // GitHub answered, and edited release notes rebuild the chips.
+        QCoreApplication::setApplicationVersion(QStringLiteral("26.10.3"));
+        UpdateSettings::setSkippedVersion(QString());
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow w(&checker, nullptr);
+        w.show();
+        network.last->finishWithBody(releaseJson(QStringLiteral("tagline")));
+        app.processEvents();
+        check(text(w, "updatesFootnote").startsWith(QLatin1String("GitHub answered")),
+              "the footer names when GitHub answered");
+        check(text(w, "updatesNote").isEmpty(), "no note after a good answer");
+
+        checker.checkNow(UpdateChecker::Trigger::Automatic);   // started outside the window
+        const QPushButton* retry = button(w, QStringLiteral("Checking"));
+        check(retry && retry->isVisible() && !retry->isEnabled(), "a check in flight shows Checking…");
+        network.last->finishWithError(QNetworkReply::HostNotFoundError);
+        app.processEvents();
+        check(text(w, "updatesEyebrow").contains(QLatin1String("UP TO DATE")), "the last answer stays shown");
+        check(text(w, "updatesNote").contains(QLatin1String("Couldn't reach GitHub just now")),
+              "a failed re-check after an answer says so");
+        check(button(w, QStringLiteral("Check Now")) && button(w, QStringLiteral("Check Now"))->isEnabled(),
+              "Check Now returns when the check ends");
+
+        QFile f(QStringLiteral(UPDATE_RELEASE_FIXTURE));
+        QJsonObject o;
+        if (f.open(QIODevice::ReadOnly)) {
+            o = QJsonDocument::fromJson(f.readAll()).object();
+        }
+        o[QStringLiteral("body")] = QStringLiteral("### Only chapter\n- x");
+        w.checkNow();
+        network.last->finishWithBody(QJsonDocument(o).toJson(QJsonDocument::Compact));
+        app.processEvents();
+        check(text(w, "updatesChaptersTitle") == QStringLiteral("WHAT'S INSIDE · 1 CHAPTER"),
+              "release notes edited under the same version rebuild the chips");
+        check(text(w, "updatesNote").isEmpty(), "a good answer clears the failure note");
+    }
+
+    {
+        // A new release from a real answer, then a failed re-check: still
+        // actionable, and the note says the release is GitHub's last answer.
+        QCoreApplication::setApplicationVersion(QStringLiteral("26.10.2"));
+        UpdateSettings::setSkippedVersion(QString());
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow w(&checker, nullptr);
+        w.show();
+        network.last->finishWithBody(releaseJson(QStringLiteral("tagline")));
+        app.processEvents();
+        w.checkNow();
+        network.last->finishWithError(QNetworkReply::HostNotFoundError);
+        app.processEvents();
+        check(text(w, "updatesEyebrow").startsWith(QLatin1String("NEW RELEASE")), "the new release stays shown");
+        check(text(w, "updatesNote").contains(QLatin1String("Couldn't reach GitHub just now")),
+              "a failed re-check over a new release says so");
+    }
+
     return failures ? 1 : 0;
 }

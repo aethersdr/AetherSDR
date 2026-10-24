@@ -27,8 +27,9 @@ public:
     static void setSkippedVersion(const QString& version);
     static bool isSkipped(const QString& version);
 
-    // When the last check (either trigger) got an answer from the server.
-    // Invalid when there has never been one.
+    // When the last check (either trigger) got an answer from the server, or
+    // an automatic check failed (which still starts the daily wait). Invalid
+    // when there has been neither.
     static QDateTime lastCheckUtc();
     static void setLastCheckUtc(const QDateTime& when);
 

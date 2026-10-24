@@ -313,6 +313,8 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
     connect(m_autoCheck, &QCheckBox::toggled, this, &UpdatesWindow::automaticCheckToggled);
 
     if (m_checker) {
+        // A check started anywhere (the daily check, Help) shows at once.
+        connect(m_checker, &UpdateChecker::checkStarted, this, &UpdatesWindow::refresh);
         connect(m_checker, &UpdateChecker::releaseInfoChanged, this, [this] {
             m_failed = false;
             refresh();
@@ -349,7 +351,8 @@ void UpdatesWindow::setAutomaticCheck(bool on)
 
 UpdatesWindow::View UpdatesWindow::currentView() const
 {
-    const ReleaseInfo release = m_checker ? m_checker->latestRelease() : ReleaseInfo{};
+    static const ReleaseInfo kNone;
+    const ReleaseInfo& release = m_checker ? m_checker->latestRelease() : kNone;
     const auto pending = [this] {
         return (m_checker && m_checker->isChecking()) || !m_failed ? View::Checking : View::Failed;
     };
@@ -369,13 +372,15 @@ void UpdatesWindow::refresh()
     const View view = currentView();
     const QString running = QCoreApplication::applicationVersion();
     const QString store = UpdateChecker::storeName();
+    static const ReleaseInfo kNone;
     const bool known = m_checker && m_checker->latestRelease().isValid();
-    const ReleaseInfo release = known ? m_checker->latestRelease() : ReleaseInfo{};
+    const ReleaseInfo& release = known ? m_checker->latestRelease() : kNone;
     auto* numerals = static_cast<VersionNumerals*>(m_version);
 
     // A version saved by an earlier answer carries no details: build only
-    // from a real answer, or that answer would find the version already built.
-    if (known && !release.fromSettings && m_builtFor != release.version) {
+    // from a real answer. Keyed on the chapters, not the version, so release
+    // notes edited after publication are rebuilt too.
+    if (known && !release.fromSettings && m_builtChapters != release.chapters) {
         rebuildRelease();
     }
 
@@ -395,6 +400,8 @@ void UpdatesWindow::refresh()
             note = tr("Updates for this copy come from %1.").arg(store);
         } else if (m_failed && release.fromSettings) {
             note = tr("Couldn't reach GitHub for this release's details. Check your connection, then try again.");
+        } else if (m_failed) {
+            note = tr("Couldn't reach GitHub just now. This is its last answer.");
         } else if (UpdateChecker::isSkipped(release.version)) {
             note = tr("You skipped this release, so UPDATE is not shown in the title bar.");
         }
@@ -408,6 +415,9 @@ void UpdatesWindow::refresh()
                                ? tr("You're running a newer build than the latest release, v%1.")
                                      .arg(release.version)
                                : tr("You're on the newest release."));
+        if (m_failed) {
+            note = tr("Couldn't reach GitHub just now. This is its last answer.");
+        }
         break;
     case View::Checking:
         eyebrow = tr("CHECKING FOR UPDATES…");
@@ -445,7 +455,9 @@ void UpdatesWindow::refresh()
     // Offered whenever there is something to retry: always outside a new
     // release, and inside one whose details did not arrive.
     m_checkNow->setVisible(view != View::Available || (m_failed && release.fromSettings));
-    m_checkNow->setEnabled(!(m_checker && m_checker->isChecking()));
+    const bool checking = m_checker && m_checker->isChecking();
+    m_checkNow->setEnabled(!checking);
+    m_checkNow->setText(checking ? tr("Checking…") : tr("Check Now"));
     m_skip->setVisible(canDownload);
     const bool skipped = UpdateChecker::isSkipped(release.version);
     m_skip->setEnabled(!skipped);
@@ -456,9 +468,12 @@ void UpdatesWindow::refresh()
                                 ? tr("Downloads %1, the file built for this computer.").arg(asset.name)
                                 : tr("Opens the release page, where you choose the download for this computer."));
     } else if (view == View::Current) {
-        const QDateTime last = UpdateChecker::lastCheckUtc();
-        m_footnote->setText(last.isValid()
-                                ? tr("Last checked %1.").arg(QLocale().toString(last.toLocalTime(), QLocale::ShortFormat))
+        // When GitHub last answered, not the last attempt: a failed daily
+        // check also starts the daily wait.
+        const QDateTime answered = release.answered;
+        m_footnote->setText(answered.isValid()
+                                ? tr("GitHub answered %1.").arg(QLocale().toString(answered.toLocalTime(),
+                                                                                  QLocale::ShortFormat))
                                 : QString());
     } else {
         m_footnote->clear();
@@ -473,7 +488,7 @@ void UpdatesWindow::refresh()
 void UpdatesWindow::rebuildRelease()
 {
     const ReleaseInfo& release = m_checker->latestRelease();
-    m_builtFor = release.version;
+    m_builtChapters = release.chapters;
 
     while (QLayoutItem* item = m_chipsLayout->takeAt(0)) {
         delete item->widget();
