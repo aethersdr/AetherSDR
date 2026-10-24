@@ -33,6 +33,7 @@ public:
 
     QPushButton* addButton(const QString& text, Role role);
     // The button Return clicks; also takes the focus when the box opens.
+    // Every box sets one; without it nothing decides where the focus starts.
     void setDefaultButton(QPushButton* button);
     QPushButton* clickedButton() const { return m_clicked; }
 

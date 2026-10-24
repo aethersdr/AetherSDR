@@ -37,13 +37,19 @@ CanonMessageBox::CanonMessageBox(const QString& title, const QString& text, QWid
     auto* root = new QVBoxLayout(bodyWidget());
     root->setContentsMargins(18, 14, 18, 16);
     root->setSpacing(12);
-    root->addWidget(makeCanonHeader(title));
+    // Texts carry manifest and device strings (a product name, a version, a
+    // path): never render them as rich text, the title included.
+    QWidget* header = makeCanonHeader(title);
+    if (auto* heading = header->findChild<QLabel*>(QStringLiteral("canonHeaderTitle")))
+        heading->setTextFormat(Qt::PlainText);
+    root->addWidget(header);
 
     // A screen reader announces a QMessageBox's text when it opens; this
     // dialog is told the same through its description.
     setAccessibleDescription(text);
     m_text = new QLabel(text);
     m_text->setObjectName(QStringLiteral("canonMessageText"));
+    m_text->setTextFormat(Qt::PlainText);
     m_text->setWordWrap(true);
     m_text->setMinimumWidth(kTextWidth);
     m_text->setMaximumWidth(kMaxTextWidth);
@@ -51,6 +57,7 @@ CanonMessageBox::CanonMessageBox(const QString& title, const QString& text, QWid
 
     m_info = new QLabel;
     m_info->setObjectName(QStringLiteral("canonMessageInfo"));
+    m_info->setTextFormat(Qt::PlainText);
     m_info->setWordWrap(true);
     m_info->setMinimumWidth(kTextWidth);
     m_info->setMaximumWidth(kMaxTextWidth);
@@ -112,6 +119,7 @@ void CanonMessageBox::setDefaultButton(QPushButton* button)
 void CanonMessageBox::showEvent(QShowEvent* event)
 {
     CanonWindow::showEvent(event);
+    m_clicked = nullptr;   // this showing's answer, not a previous one's
     if (m_default) {
         m_default->setFocus();
     }

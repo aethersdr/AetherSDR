@@ -123,6 +123,28 @@ int main(int argc, char** argv)
         EXPECT_TRUE(b.install->isDefault() && !b.cancel->isDefault());
     }
 
+    // ---- a box shown again forgets the previous answer ----
+    {
+        Box b;
+        b.run([&b](CanonMessageBox&) { b.install->click(); });
+        const int result = b.run([](CanonMessageBox& box) { pressKey(box, Qt::Key_Escape); });
+        EXPECT_TRUE(result == QDialog::Rejected);
+        EXPECT_TRUE(b.box.clickedButton() == nullptr);
+    }
+
+    // ---- markup in a manifest string is shown as text, never rendered ----
+    {
+        CanonMessageBox box(QStringLiteral("Install <b>X</b>?"),
+                            QStringLiteral("Install <i>X</i> 1.0?"));
+        box.setInformativeText(QStringLiteral("<a href=\"x\">y</a>"));
+        int plain = 0;
+        for (QLabel* l : box.findChildren<QLabel*>()) {
+            if (l->text().contains(QLatin1Char('<')))
+                plain += l->textFormat() == Qt::PlainText ? 1 : -100;
+        }
+        EXPECT_TRUE(plain == 3);   // title, text and further text
+    }
+
     // ---- Return on a focused button clicks that button, not the default ----
     // Buttons are auto-default for this. A platform theme whose button-press
     // keys include Return (as here, offscreen) gives the same result without
