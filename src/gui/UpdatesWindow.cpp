@@ -4,7 +4,6 @@
 #include "core/UpdateChecker.h"
 #include "gui/CanonIndicators.h"
 #include "gui/FlowLayout.h"
-#include "gui/UpdateStage.h"
 
 #include <QCheckBox>
 #include <QCoreApplication>
@@ -97,7 +96,7 @@ QString sheet()
     return QStringLiteral(
                "QLabel { background: transparent; color: {{color.canon.inkSoft}}; }"
                // Plain containers stay see-through over the canon ground.
-               "QWidget#updatesVersion, QWidget#updatesChapters, QWidget#updatesHighlights,"
+               "QWidget#updatesHeader, QWidget#updatesVersion, QWidget#updatesChapters, QWidget#updatesHighlights,"
                " QWidget#updatesContent, QScrollArea#updatesScroll,"
                " QScrollArea#updatesScroll > QWidget > QWidget { background: transparent; border: none; }"
                "QLabel[role=\"eyebrow\"] { color: {{color.canon.cyan}}; font-size: 11px; font-weight: 700;"
@@ -158,18 +157,18 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
     setObjectName(QStringLiteral("updatesWindow"));
     setAttribute(Qt::WA_DeleteOnClose);
     setGeometryKey(QStringLiteral("UpdatesWindowGeometry"));
-    setLaunchSize(QSize(760, 860));
+    setLaunchSize(QSize(760, 660));
     applyCanonSheet(bodyWidget(), sheet);
 
     auto* root = new QVBoxLayout(bodyWidget());
     root->setContentsMargins(0, 0, 0, 22);
     root->setSpacing(0);
 
-    // The stage, with the release's name laid over it.
-    m_stage = new UpdateStage(bodyWidget());
-    m_stage->setObjectName(QStringLiteral("updatesStage"));
-    auto* over = new QVBoxLayout(m_stage);
-    over->setContentsMargins(28, 24, 60, 0);
+    // The header: what the window is about and the release's name.
+    m_header = new QWidget(bodyWidget());
+    m_header->setObjectName(QStringLiteral("updatesHeader"));
+    auto* over = new QVBoxLayout(m_header);
+    over->setContentsMargins(28, 22, 28, 18);
     over->setSpacing(6);
     m_eyebrow = plainLabel(QStringLiteral("eyebrow"));
     m_eyebrow->setObjectName(QStringLiteral("updatesEyebrow"));
@@ -179,7 +178,7 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
     auto* product = plainLabel(QStringLiteral("product"));
     product->setText(QStringLiteral("AetherSDR"));
     nameRow->addWidget(product, 0, Qt::AlignBottom);
-    auto* numerals = new VersionNumerals(m_stage);
+    auto* numerals = new VersionNumerals(m_header);
     numerals->setObjectName(QStringLiteral("updatesVersion"));
     m_version = numerals;
     nameRow->addWidget(numerals, 0, Qt::AlignBottom);
@@ -188,12 +187,10 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
     m_tagline = plainLabel(QStringLiteral("tagline"));
     m_tagline->setObjectName(QStringLiteral("updatesTagline"));
     m_tagline->setWordWrap(true);
-    m_tagline->setMaximumWidth(470);
     over->addWidget(m_tagline);
-    over->addStretch(1);
-    root->addWidget(m_stage);
+    root->addWidget(m_header);
 
-    // Everything under the stage scrolls, so a long release never makes the
+    // Everything under the header scrolls, so a long release never makes the
     // window taller than the screen.
     auto* scroll = new QScrollArea;
     scroll->setObjectName(QStringLiteral("updatesScroll"));
@@ -359,9 +356,6 @@ void UpdatesWindow::refresh()
         rebuildRelease();
     }
 
-    m_stage->setMood(view == View::Available ? UpdateStage::Mood::Vivid : UpdateStage::Mood::Calm);
-    m_stage->setTimeline(running, view == View::Available ? release.version : QString());
-
     QString eyebrow;
     QString tone;
     QString note;
@@ -450,10 +444,10 @@ void UpdatesWindow::refresh()
         m_footnote->clear();
     }
 
-    m_stage->setAccessibleName(tr("Updates"));
-    m_stage->setAccessibleDescription(view == View::Available
-                                          ? tr("Installed v%1; v%2 is available.").arg(running, release.version)
-                                          : tr("Installed v%1.").arg(running));
+    m_header->setAccessibleName(tr("Updates"));
+    m_header->setAccessibleDescription(view == View::Available
+                                           ? tr("Installed v%1; v%2 is available.").arg(running, release.version)
+                                           : tr("Installed v%1.").arg(running));
 }
 
 void UpdatesWindow::rebuildRelease()

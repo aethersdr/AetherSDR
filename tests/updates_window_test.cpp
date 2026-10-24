@@ -3,7 +3,6 @@
 #include "core/AppSettings.h"
 #include "core/UpdateChecker.h"
 #include "core/UpdateSettings.h"
-#include "gui/UpdateStage.h"
 #include "gui/UpdatesWindow.h"
 
 #include <QApplication>
@@ -19,8 +18,7 @@
 
 // The Updates window over an in-memory transport (no sockets) and the real
 // v26.10.3 release JSON: which view each answer produces, that release text
-// is never shown as markup, Skip, the mirrored toggle, and that the stage's
-// motion stops for reduced motion.
+// is never shown as markup, Skip, and the mirrored toggle.
 
 using namespace AetherSDR;
 
@@ -123,14 +121,6 @@ int main(int argc, char** argv)
             daily->click();
         }
         check(toggled.size() == 1 && toggled.first().first().toBool(), "the box reports the operator's change");
-
-        // Motion: the stage animates while shown and stops for reduced motion.
-        auto* stage = w->findChild<UpdateStage*>(QStringLiteral("updatesStage"));
-        check(stage && stage->isAnimating(), "the stage animates while visible");
-        if (stage) {
-            stage->setMotionPreference(Qt::MotionPreference::ReducedMotion);
-        }
-        check(stage && !stage->isAnimating(), "reduced motion holds the stage still");
         delete w;
     }
 

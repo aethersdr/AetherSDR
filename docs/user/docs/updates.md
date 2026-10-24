@@ -39,8 +39,6 @@ When you have the newest release, the window says **UP TO DATE** and shows what 
 
 On a store-managed install (the Microsoft Store, or a Flatpak build), the store updates AetherSDR: there is no automatic check, no badge and no download button, **Check daily** is dimmed, and the window says where updates come from.
 
-The window's animation stops when your system asks for reduced motion.
-
 ## Troubleshooting
 
 ### The window says COULDN'T REACH GITHUB

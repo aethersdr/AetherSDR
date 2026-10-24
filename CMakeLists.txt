@@ -1386,7 +1386,6 @@ set(GUI_SOURCES
     src/gui/ModeFilterPresets.cpp
     src/gui/ModemChrome.cpp
     src/gui/NrGainStrip.cpp
-    src/gui/UpdateStage.cpp
     src/gui/UpdatesWindow.cpp
     src/gui/WaveformsDialog.cpp
     src/gui/TailnetShimDialog.cpp

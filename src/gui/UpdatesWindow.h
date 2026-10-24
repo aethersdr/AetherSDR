@@ -15,14 +15,12 @@ namespace AetherSDR {
 
 class FlowLayout;
 class UpdateChecker;
-class UpdateStage;
 
 // File → Update...: what AetherSDR release is newest, what is in it, and the
 // download built for this computer (RFC #5304). Made to make an update worth
-// installing, after aethersdr.com/experience; the stage's extra motion is the
-// style guide's one exception. Everything it shows comes from UpdateChecker:
-// the parsed version, and the release's tagline, chapters and highlights as
-// plain text. Opening it without the release's details starts a check.
+// installing, after aethersdr.com/experience. Everything it shows comes from
+// UpdateChecker: the parsed version, and the release's tagline, chapters and
+// highlights as plain text. Opening it without the release's details starts a check.
 class UpdatesWindow : public CanonWindow {
     Q_OBJECT
 
@@ -53,7 +51,7 @@ private:
     QPointer<UpdateChecker> m_checker;
     bool m_failed{false};
 
-    UpdateStage* m_stage{nullptr};
+    QWidget*     m_header{nullptr};
     QLabel*      m_eyebrow{nullptr};
     QWidget*     m_version{nullptr};
     QLabel*      m_tagline{nullptr};

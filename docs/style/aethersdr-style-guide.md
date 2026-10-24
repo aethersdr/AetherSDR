@@ -164,15 +164,9 @@ exposed, and **hold still when the OS asks for reduced motion**
 (`QAccessibilityHints::motionPreference`). Do not add other animation
 without an RFC.
 
-**The one exception: the Updates window** (File → Update..., RFC #5304,
-`gui/UpdateStage`), whose job is to make a new release worth installing.
-Besides the spark, its stage's core glow breathes over 4.5 s and its traces
-drift a few pixels over 6 s. Both run through the same `SparkWidget` timer,
-so they stop when the window is hidden, slow when it is not exposed, and hold
-still under reduced motion. The maintainer ruled this for that window only;
-it is not a pattern for other surfaces. Its primary action, **Get AetherSDR
-x**, uses the brand gradient under the same accepted light-theme exception as
-About's OK (#6239).
+**The Updates window's** primary action (File → Update..., RFC #5304),
+**Get AetherSDR x**, uses the brand gradient under the same accepted
+light-theme exception as About's OK (#6239).
 
 ## Migrating a surface
 

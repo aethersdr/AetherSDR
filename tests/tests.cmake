@@ -4675,11 +4675,10 @@ add_test(NAME update_release_notes_test COMMAND update_release_notes_test)
 
 # The Updates window over the in-memory transport and the real v26.10.3
 # release JSON: each view, plain-text release text, Skip, the mirrored
-# toggle, reduced motion. No sockets.
+# toggle. No sockets.
 add_executable(updates_window_test
     tests/updates_window_test.cpp
     src/gui/UpdatesWindow.cpp
-    src/gui/UpdateStage.cpp
     src/gui/CanonWindow.cpp
 )
 target_include_directories(updates_window_test PRIVATE src tests)
