@@ -56,6 +56,39 @@ RadioSetupCompletion RadioModel::fencedSetupCompletion(
     return reply;
 }
 
+namespace {
+QString setupOperationLabel(const RadioSetupRequest& request)
+{
+    using Field = RadioSetupRequest::Field;
+    switch (request.field) {
+    case Field::LineoutGain:
+        return QStringLiteral("line output gain %1").arg(std::get<int>(request.value));
+    case Field::LineoutMute:
+        return QStringLiteral("line output mute %1").arg(int(std::get<bool>(request.value)));
+    case Field::HeadphoneGain:
+        return QStringLiteral("headphone gain %1").arg(std::get<int>(request.value));
+    case Field::HeadphoneMute:
+        return QStringLiteral("headphone mute %1").arg(int(std::get<bool>(request.value)));
+    case Field::FrontSpeakerMute:
+        return QStringLiteral("front speaker mute %1").arg(int(std::get<bool>(request.value)));
+    case Field::ShowTxInWaterfall:
+        return QStringLiteral("show TX in waterfall %1").arg(int(std::get<bool>(request.value)));
+    case Field::Callsign: case Field::ClientStation: case Field::PrivateIpPolicy:
+    case Field::NetworkMtu: case Field::Dhcp: case Field::StaticNetwork:
+    case Field::AccTxDelayMs: case Field::TxDelayMs: case Field::Tx1DelayMs:
+    case Field::Tx2DelayMs: case Field::Tx3DelayMs: case Field::TimeoutMs:
+    case Field::MaximumPowerPercent: case Field::MeterDuringReceive:
+    case Field::SyncCwx: case Field::RttyMarkDefaultHz:
+    case Field::CalibrationFrequencyMhz: case Field::FrequencyCorrectionPpb:
+    case Field::ReferenceSource: case Field::MuteLocalWhenRemote:
+    case Field::BinauralReceive: case Field::SharpnessLevel: case Field::SharpnessAuto:
+    case Field::LowLatencyDigital: case Field::StartFrequencyCalibration: case Field::Count:
+        return QStringLiteral("radio setup");
+    }
+    return QStringLiteral("radio setup");
+}
+}
+
 ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
                                              QObject* replyContext,
                                              const RadioSetupCompletion& completion)
@@ -90,7 +123,7 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
     };
     const auto refuse = [&](bool announce = true) {
         if (reply) { reply({RadioSetupReply::Kind::Refused, -1, QStringLiteral("configuration not dispatched")}); }
-        if (alive && announce) { reportReceiveDispatch(ReceiveDispatch::Unsupported, QStringLiteral("radio setup")); }
+        if (alive && announce) { reportReceiveDispatch(ReceiveDispatch::Unsupported, setupOperationLabel(request)); }
         return ReceiveDispatch::Unsupported;
     };
     if (!request.valid()) { return refuse(false); }

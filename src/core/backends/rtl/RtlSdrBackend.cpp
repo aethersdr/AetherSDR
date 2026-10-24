@@ -242,6 +242,10 @@ RadioCapabilities RtlSdrBackend::capabilities() const
         tr("Spectrum averaging time: 10 ms per step; 0 is off and 100 is one second. Higher values smooth changes but blur short signals. The decay time stays the same when FPS changes."),
         tr("Off averages signal power. On averages dB levels for a smoother trace, but varying signals and noise read lower. Both modes use the FFT AVG time setting.")};
     c.family = QStringLiteral("rtl");
+    c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
+        PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage},
+        {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove
     c.model  = m_modelName;
     c.manufacturer = m_vendor.isEmpty() ? QStringLiteral("Realtek") : m_vendor;
 

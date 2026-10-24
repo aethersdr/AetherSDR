@@ -829,6 +829,56 @@ int main(int argc, char** argv)
     }
 #endif
 
+    // ── Live midi.settings store: atomic write reports outcome (#5160) ────────
+
+    {
+        // 1. Initial write with saveBindings() returns true and loads back
+        ok &= expect(settings.saveBindings(saved),
+                     "midi.settings: a successful saveBindings returns true");
+        const auto loaded = settings.loadBindings();
+        ok &= expect(loaded.size() == saved.size(),
+                     "midi.settings: saved bindings load back cleanly");
+
+        // 2. save() with device properties returns true
+        settings.setLastDevice("TestController");
+        settings.setAutoConnect(true);
+        ok &= expect(settings.save(),
+                     "midi.settings: save() returns true");
+
+        // 3. A directory at the destination must refuse the save
+        const QString settingsPath = configRoot + "/AetherSDR/midi.settings";
+        // A directory target cannot be replaced by a settings document.
+        QFile::remove(settingsPath);
+        QDir().mkdir(settingsPath);
+        ok &= expect(!settings.saveBindings(saved),
+                     "midi.settings: saveBindings to an unwritable path returns false");
+        ok &= expect(!settings.save(),
+                     "midi.settings: save to an unwritable path returns false");
+        QDir().rmdir(settingsPath);
+
+        // 4. Failed write leaves previous midi.settings intact
+        ok &= expect(settings.saveBindings(saved),
+                     "midi.settings: rewrite valid settings");
+#ifndef Q_OS_WIN
+        if (::geteuid() != 0) {
+            // Make config dir read-only so QSaveFile temp file creation or rename fails
+            QFile::setPermissions(configRoot + "/AetherSDR",
+                                  QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+            QVector<MidiBinding> bigger = saved;
+            bigger.append(saved.first());
+            const bool failedWrite = !settings.saveBindings(bigger);
+            QFile::setPermissions(configRoot + "/AetherSDR",
+                                  QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+            ok &= expect(failedWrite,
+                         "midi.settings: write into read-only directory returns false");
+            ok &= expect(settings.loadBindings().size() == saved.size(),
+                         "midi.settings: failed write left previous file intact");
+        } else {
+            std::cout << "[SKIP] midi.settings: read-only directory arm (running as root)\n";
+        }
+#endif
+    }
+
     QFile::remove(configRoot + "/AetherSDR/midi.settings");
     QDir(configRoot + "/AetherSDR").removeRecursively();
 

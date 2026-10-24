@@ -99,6 +99,7 @@
 #include "models/Kat500Model.h"
 #include "models/Kxpa100Model.h"
 #include "core/Kpa1500Connection.h"
+#include "core/RfkitConnection.h"
 #include "core/DxccColorProvider.h"
 
 #include <QMainWindow>
@@ -180,6 +181,7 @@ struct NetEntry;
 struct MemoryEntry;
 class PropDashboardDialog;
 class UpdateChecker;
+class UpdatesWindow;
 class TxBandDialog;
 class BandscopeDialog;
 class AetherRxDialog;
@@ -445,6 +447,10 @@ private:
 
     void buildUI();
     void buildMenuBar();
+    void wireUpdateChecker();          // MainWindow_Menus.cpp
+    void showUpdatesWindow(bool checkNow);  // MainWindow_Menus.cpp
+    void setAutomaticUpdateCheck(bool on);  // MainWindow_Menus.cpp
+    void restoreKnownUpdate();         // MainWindow_Menus.cpp
     void minimizeActiveApplicationWindow();
     void toggleActiveApplicationWindowFullScreen();
     void applyDarkTheme();
@@ -577,6 +583,12 @@ private:
     // docked one) and dim it with the reason on the others; otherwise every
     // pane keeps its own live pair. PanSpanControlGate.h.
     void syncPanSpanControlPlacement();
+    // The connected backend declares pan display controls without span, so no
+    // zoom route can change it (the Demo). Absent declarations are not fixed.
+    bool panSpanFixedByBackend() const;
+    // Set while syncKiwiSdrPanadapterUiStates() walks every pane, so the span
+    // pair is re-derived once after the walk rather than once per pane.
+    bool m_kiwiSpanSyncDeferred{false};
     void updateSplitState();
     void disableSplit();
     // The split pair, derived from model truth (#3726) rather than from the
@@ -1344,6 +1356,7 @@ private:
     class Kxpa100RadioAssociation* m_kxpa100Association = nullptr;
     QPointer<class AtuPreTuneDialog> m_kat500PreTuneDialog;
     Kpa500Connection  m_kpa500Conn;      // Elecraft KPA500 amplifier, serial or raw TCP
+    RfkitConnection   m_rfkitConn;       // RF-KIT amplifier, REST/JSON over HTTP (default port 8080)
     Kpa1500Connection m_kpa1500Conn;     // Elecraft KPA1500 amplifier, TCP control/status on port 1500 (#4097)
     BandPlanManager*  m_bandPlanMgr{nullptr};
 #ifdef HAVE_CW_RX_BACKENDS
@@ -1615,6 +1628,7 @@ private:
     WorkspaceController* m_workspaceController{nullptr};
     QAction*             m_workspaceCanvasAction{nullptr};
     quint64              m_canvasPanLayoutGeneration{0};
+    quint64              m_panLayoutRequestGeneration{0};
     QString              m_pendingCanvasPanLayoutId;
     int                  m_pendingCanvasPanLayoutTarget{-1};
     // Additional canvas windows (phase 7), keyed by surface id.  A hidden
@@ -1848,7 +1862,7 @@ private:
     void applyFirmwareCurrencyToVersionLabel();
     // The version row's StatusIndicator action: opens the release notes of the
     // radio's own line while the firmware is out of date, otherwise nothing.
-    void openFirmwareReleaseNotes();
+    void openFirmwareUpdate();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
     QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)
@@ -2175,6 +2189,8 @@ private:
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
     UpdateChecker* m_updateChecker{nullptr};
+    QPointer<UpdatesWindow> m_updatesWindow;
+    QAction* m_autoUpdateAction{nullptr};
 
 // CTR2 TCP proxy prototype (MainWindow_Controllers.cpp); never persisted, off at launch
     Ctr2ProxyModel* m_ctr2ProxyModel{nullptr};

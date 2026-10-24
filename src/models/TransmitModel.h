@@ -215,6 +215,18 @@ public:
     bool    apdEnabled()        const { return m_apdEnabled; }
     bool    apdConfigurable()   const { return m_apdConfigurable; }
     bool    apdEqualizerActive()const { return m_apdEqActive; }
+    // Unset until the radio reports a lifecycle state (SmartSDR 4.3+).
+    std::optional<ApdLifecycleState> apdLifecycleState() const { return m_apdLifecycle; }
+    static QString apdLifecycleStateName(ApdLifecycleState state);
+
+    // The transmit slice an equalizer status is matched against. RadioModel
+    // supplies it; without one, scoped equalizer statuses never apply.
+    struct ApdTxSlice {
+        QString txAntenna;
+        double  frequencyMhz{0.0};
+    };
+    using ApdTxSliceResolver = std::function<std::optional<ApdTxSlice>()>;
+    void setApdTxSliceResolver(ApdTxSliceResolver resolver) { m_apdTxSliceResolver = std::move(resolver); }
 
     // External APD per-TX-antenna sampler-port assignment (SmartSDR 4.2.18+).
     struct ApdSampler {
@@ -237,6 +249,9 @@ public:
     QString     activeProfile()     const { return m_activeProfile; }
     QStringList micProfileList()    const { return m_micProfileList; }
     QString     activeMicProfile()  const { return m_activeMicProfile; }
+    QStringList cwProfileList()     const { return m_cwProfileList; }
+    QString     activeCwProfile()   const { return m_activeCwProfile; }
+    bool        cwProfileUnsaved()  const { return m_cwProfileUnsaved; }
     QStringList micInputList()      const { return m_micInputList; }
 
     // Apply a normalized, typed transmit delta from the backend
@@ -248,6 +263,9 @@ public:
     void setActiveProfile(const QString& profile);
     void setMicProfileList(const QStringList& profiles);
     void setActiveMicProfile(const QString& profile);
+    void setCwProfileList(const QStringList& profiles);
+    void setActiveCwProfile(const QString& profile);
+    void setCwProfileUnsaved(bool unsaved);
     void setMicInputList(const QStringList& inputs);
 
     // PTT request coordinator (#2262) — single entry point for "user
@@ -510,6 +528,10 @@ signals:
     void profileListChanged();
     void micStateChanged();
     void micProfileListChanged();
+    // CW profile list or active name changed.
+    void cwProfilesChanged();
+    // The radio's unsaved-changes flag for the active CW profile changed.
+    void cwProfileUnsavedChanged(bool unsaved);
     void micInputListChanged();
     void phoneStateChanged();       // VOX or CW property changed
     // Fires only when txFilterLow / txFilterHigh actually change.  Use this
@@ -638,6 +660,9 @@ private:
     bool m_apdEnabled{false};
     bool m_apdConfigurable{false};
     bool m_apdEqActive{false};
+    std::optional<ApdLifecycleState> m_apdLifecycle;
+    ApdTxSliceResolver m_apdTxSliceResolver;
+    bool apdStatusMatchesTxSlice(const TransmitDelta& d) const;
     QHash<QString, ApdSampler> m_apdSamplers;  // keyed by ANT1/ANT2/XVTA/XVTB
 
     // Transmit state
@@ -739,6 +764,11 @@ private:
     QStringList m_micProfileList;
     QString     m_activeMicProfile;
     QStringList m_micInputList;
+
+    // CW profiles (SmartSDR 4.3.16+)
+    QStringList m_cwProfileList;
+    QString     m_activeCwProfile;
+    bool        m_cwProfileUnsaved{false};
 };
 
 } // namespace AetherSDR

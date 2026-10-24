@@ -87,6 +87,18 @@ an explicitly enabled entitlement. The RX applet consumes the same admission
 reason through its control availability registry; absent data leaves it dimmed.
 This desktop capability adds no daemon method or persistence ownership.
 
+### Panadapter noise floor range
+
+`noiseFloorRangeControl` declares `PanControlField::NoiseFloorRange` on the
+existing `requestPanControl` verb, and the license the radio must report.
+Flex declares it only for a fully parsed SmartSDR version of 4.3.16 or later on
+a BigBend (FLEX-8000/Aurora) platform, with `requiredLicenseFeature=noise_floor`.
+Other backends leave it absent, and `RadioModel::requestPanControl` refuses the
+field. `RadioModel::panNoiseFloorRangeUnavailableReason()` is the one admission
+rule: the Display panel's **NF Range** slider dims with that reason, and also
+while the pan has not reported `noise_floor_range`. The radio owns the value;
+nothing is persisted on the client.
+
 ### Broadcast FM receiver controls
 
 | Record | Flex | HL2 | Sim | Icom | ANAN | RTL-SDR | Consumers |
@@ -116,6 +128,31 @@ range contracts, TX-idle restrictions and remaining no-op/coupling limitations
 are in [local receive control](../aetherd-local-receive-control.md#qualified-backend-surface).
 `control_receive_test` pins declarations and action-time admission; the optional
 RTL declaration check runs only when the RTL backend is built.
+
+### Pan display and lifecycle requests
+
+`panDisplayControl` lists the `PanDisplayField`s a backend implements, plus which
+geometry components (center, span) it can change. `panLifecycleControl` lists the
+pan actions it implements and whether creation is `Native` (published before the
+call returns) or `Answered` (the reply names the ID; publication follows). Both are
+desktop request records: `RadioModel::requestPanDisplay()`, `requestPanCreation()`,
+`removePanadapter()`, `resyncDisplayInventory()` and the RF gain range query refuse
+anything undeclared. They do not widen the daemon capability catalogue.
+
+| Backend | `panDisplayControl` fields | Span | `panLifecycleControl` |
+|---|---|---|---|
+| Flex | geometry, band, level range, pixels, average, FPS, weighted average, RF gain, WNB + level, loops A/B, noise-floor position + enable, waterfall rate/color gain/black level/auto-black/defaults | ✅ | Answered: create, remove, inventory refresh, RF gain info |
+| HL2 | geometry, RF gain, FPS, average, weighted average | ✅ | Native: create, remove |
+| ANAN | geometry, RF gain, FPS, average, weighted average, spectrum points | ✅ | absent |
+| RTL | geometry, RF gain, FPS, average, weighted average | ✅ | absent |
+| Icom | geometry, RF gain | ✅ | absent |
+| Demo | geometry | ❌ center only | Answered: create, remove |
+
+A declared record without span (`!PanDisplayControl::declaresSpan()`, today the
+Demo) dims every pane's −/+ pair with its reason, and the other zoom routes send
+no span request (`MainWindow::panSpanFixedByBackend()`, `PanSpanControlGate.h`).
+An absent record dims nothing. `pan_dimension_routing_test` builds each family's
+real record; `pan_control_routing_test` pins the Flex encoder and fences.
 
 ### Native receive audio export
 
@@ -290,6 +327,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `nrsLevelControl` | engaged | — | — | `RadioModel::publishCapabilities` and slice creation/reclaim → `SliceModel::setNrsLevel`, `VfoWidget::setDspLevelTarget` | Existing desktop NRS request bound: 0..50 for fully identified firmware 4.3.16+, otherwise 0..100. Absence and disconnect preserve 0..100. Firmware/range updates leave radio readback unchanged and send no request; the Flex encoder also enforces the bound. No new daemon method. |
 | `hasExtendedDsp` | from table | ❌ | ❌ | `RadioModel::hasExtendedDspFilters()` | NRS / RNN / NRF buttons |
 | `hasProfiles` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PROF applet, Profiles menu, Profile Manager, Import/Export |
+| `cwProfileControl` | engaged on firmware 4.3.16+ | absent | absent | `RadioModel::requestProfile`, `RadioModel::refreshCwProfilesIfSupported`, `ProfileManagerDialog` via `ControlAvailabilityRegistry` | Optional record (#6668): the radio stores named CW profiles (`profile cw info/load/create/delete/reset`). Gates `ProfileRequest::Kind::Cw` and the Profile Manager CW tab; requires `hasProfiles` |
 | `hasDaxStreams` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | DAX + DAX-IQ applets, Autostart DAX |
 | `daxIqSampleRates` | model table | empty | empty | `RadioModel` → `DaxIqModel`, `DaxIqApplet`, `TciServer` | Discrete supported DAX IQ rates in Hz. Flex publishes 24/48/96 kHz, plus 192 kHz where its model table permits; an unidentified model has an empty list. Empty prevents IQ creation and rate commands. Saved 192 kHz intent uses 96 kHz on limited models without replacing the saved preference. TCI retains valid pre-identification negotiation and reconciles it when capabilities arrive. Icom, ANAN and RTL also leave this list empty. |
 | `hasRadioSideDsp` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideDsp()` | NR/NB/ANF/NRL/ANFL/ANFT, the APD row, the WNB row |
@@ -330,7 +368,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `hasPaTemperatureTelemetry` | ✅ | ✅ | ❌ | `MainWindow::applyCapabilitiesToUi` | PA-temperature gauge and °C/°F selector in Radio Vitals. Icom: ❌ until a model profile declares and implements a PA-temperature meter; the IC-9700 has no such declared telemetry |
 | `hasPaCurrentTelemetry` | ❌ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Calibrated PA drain-current face in Radio Vitals, used only when PA-temperature telemetry is unavailable. Icom: ✅ only for the IC-9700 profile's documented 0–20 A Id calibration. Flex remains ❌ because its PACURRENT meter is known to clip below real full-power draw |
 | `paTelemetryAudit` (record) | — (absent) | — (absent) | — (absent) | `MainWindow::applyCapabilitiesToUi` | A PROTOCOL audit of the PA telemetry the wire format can carry at all, as opposed to what a session has so far RECEIVED. ENGAGED with `temperatureAbsent` means the payload was read field by field and there is no temperature in it, so the status bar WITHDRAWS its PA temperature row instead of leaving it on `PA --°C` forever. ABSENT (the default) means NOT AUDITED and every consumer keeps its historical presentation — which is what holds Flex, HL2, Icom, Sim and RTL at today's behaviour rather than reclassifying a default `false` above as "proven absent". ANAN: engaged, because Protocol 2's whole analog payload is six fields and none is a temperature. A record and not a bool per #5262 M2, whose boolean count is frozen and shrink-only; the audit can also grow a current/supply field without a second ratchet argument |
-| `adcFrontEnd` (record) | — (absent) | — (absent) | — (absent) | `RadioSetupDialog` (ANAN Front End page) | ENGAGED means the radio's session takes its receive front-end options (sample rate, ADC, dither, randomization, filter-bank bypass, the radio-speaker stream) from the settings the ANAN Front End page edits, so the page applies to it; ABSENT (the default) means no such page for that radio. No fields: the page offers all of its controls or none, so a per-control field would be a claim nothing reads (#5554); a field arrives with the consumer that leaves a control out. ANAN: engaged. A record and not a bool per #5262 M2 (the boolean count is frozen and shrink-only). NOTE the page is shown with NOTHING CONNECTED as well — its options take effect only at the start of a session, so a page that required a connection could never configure a first connect; the capability is what gates it once a radio IS attached |
+| `adcFrontEnd` (record) | — (absent) | — (absent) | — (absent) | `RadioSetupDialog` (ANAN Front End page) | ENGAGED means the radio's session takes its receive front-end options (sample rate, ADC, dither, randomization, filter-bank bypass, the radio-speaker stream, the band-pass selection and the speaker-amp mute) from the settings the ANAN Front End page edits, so the page applies to it; the last two also apply live through the `anan`/`frontend.set` extension verb; ABSENT (the default) means no such page for that radio. No fields: the page offers all of its controls or none, so a per-control field would be a claim nothing reads (#5554); a field arrives with the consumer that leaves a control out. ANAN: engaged. A record and not a bool per #5262 M2 (the boolean count is frozen and shrink-only). NOTE the page is shown with NOTHING CONNECTED as well — most of its options take effect only at the start of a session, so a page that required a connection could never configure a first connect; the capability is what gates it once a radio IS attached |
 | `hasMainFanTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Main Fan gauge in Radio Vitals. All current Icom models are ❌ because the backend does not publish fan-speed telemetry |
 | `hostFrequencyCalibration` | ❌ | ✅ | ❌ | `RadioSetupDialog` (Calibration page), `AutomationServer::doFreqCal` | Shows the Calibration page and enables the `freqcal` bridge verb. Means "**the client** owns the frequency-error correction", not "this radio has an error" — every radio does. Flex is ❌ because it calibrates itself (`radio set cal_freq` / `pll_start`), and that surface stays in the Frequency Offset group on the Receive page. HL2 is ✅ because its 76.8 MHz NCO scale is a `localparam` in the bitstream (`radio.v` M2) and no register in the HPSDR map accepts a correction — see `docs/architecture/hl2-frequency-calibration.md` |
 | `hostDroopCalibration` | ❌ | ❌ | ❌ | `RadioSetupDialog` (Droop Correction page), `AutomationServer::doDroopCal` | Shows the Droop Correction page and enables the `droopcal` bridge verb. Means "the client has measured and can correct a real DDC edge droop on this radio", not "this radio has no droop" — HL2's own DDC decimation chain looks architecturally similar and has never been characterised, so its ❌ is "not yet measured", not "known absent". ANAN: ✅ — the Saturn FPGA's DDC0 CIC/decimation chain has a real, bench-measured sin(x)/x droop near the edges of the displayed span (`AnanDroopCorrection.h`), corrected in-app via `AnanDroopCalibrator` |

@@ -929,7 +929,7 @@ void MainWindow::activateStatusIndicator(QObject* obj)
     }
 #endif
     if (obj == m_radioVersionLabel) {
-        openFirmwareReleaseNotes();   // no-op unless the row shows out-of-date firmware
+        openFirmwareUpdate();   // no-op unless the row shows out-of-date firmware
         return;
     }
     if (obj == m_cwxIndicator) {
@@ -1302,7 +1302,7 @@ void MainWindow::registerShortcutActions()
             if (!m_radioModel.isConnected()) return;
             auto& tx = m_radioModel.transmitModel();
             tx.setVoxEnable(!tx.voxEnable());
-        });
+        }, /*autoRepeat=*/false, /*keysTx=*/true);
     m_shortcutManager.registerAction("speech_proc_toggle", "Speech Processor Toggle", "TX",
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
@@ -1768,19 +1768,24 @@ int MainWindow::fireShortcutAction(const QString& id, bool allowTx,
     if (a->keysTx && !allowTx) {
         return ShortcutFireTxBlocked;
     }
-    if (!a->handler) {
+    if (!a->handler && !a->txHandler) {
         return ShortcutFireNoDirectHandler;
     }
     if (a->keysTx) {
-        if (!controller || !controller->valid() || !controller->belongsTo(&m_radioModel)
-            || !a->txHandler) {
-            return ShortcutFireTxBlocked;
-        }
-        if (m_radioModel.isConnected()) {
-            // Copy before invoking: nested configuration may rebuild actions.
-            const auto handler = a->txHandler;
-            const TxController::Input input = controller->capture(a->txActivity);
-            handler(input);
+        if (a->txHandler) {
+            if (!controller || !controller->valid() || !controller->belongsTo(&m_radioModel)) {
+                return ShortcutFireTxBlocked;
+            }
+            if (m_radioModel.isConnected()) {
+                // Copy before invoking: nested configuration may rebuild actions.
+                const auto handler = a->txHandler;
+                const TxController::Input input = controller->capture(a->txActivity);
+                handler(input);
+            }
+        } else if (a->handler) {
+            if (m_radioModel.isConnected()) {
+                a->handler();
+            }
         }
         return ShortcutFireTxOk;
     }
@@ -1896,6 +1901,11 @@ void MainWindow::zoomActivePanadapter(double factor)
 
     auto* sw = spectrumForSlice(s);
     if (!sw) {
+        return;
+    }
+    // A fixed span cannot zoom; skip the local preview too. A Kiwi pane's
+    // zoom is that local view change, so it keeps working.
+    if (panSpanFixedByBackend() && !kiwiSdrPanDisplaysKiwi(s->panId())) {
         return;
     }
 

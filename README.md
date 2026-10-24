@@ -81,7 +81,7 @@ power amplifier and TGXL (Tuner Genius XL) antenna tuner, and — outside the
 radio seam entirely — ACOM S-series and SPE Expert (original 1K-FA / 1.3K-FA / 1.5K-FA / 2K-FA)
 amplifiers over serial or ser2net TCP, and VK3AMP (600 W / 1000 W / 2000 W)
 amplifiers over TCP control with UDP telemetry, and the Elecraft KPA1500 over
-TCP (not yet validated on hardware), plus KPA500, KAT500 and KXPA100/KXAT100
+TCP (not yet validated on hardware), the RF-KIT over its HTTP REST API (tested on an RF2K-S; other RF-KIT models untested), plus KPA500, KAT500 and KXPA100/KXAT100
 over local serial or raw TCP, with Full/Mini applets and Advanced maintenance. Direct TGXL, PGXL and Antenna Genius
 connections authenticate with the device's access code.
 

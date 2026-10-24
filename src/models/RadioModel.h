@@ -277,6 +277,8 @@ public:
     bool licenseFeatureEnabled(const QString& name) const;
     QString licenseFeatureReason(const QString& name) const;
     QString autoAgcThresholdUnavailableReason(const SliceModel* slice) const;
+    // Empty when the radio can take a noise floor range for its panadapters.
+    QString panNoiseFloorRangeUnavailableReason() const;
 
     QString ip()          const { return m_ip; }
     QString netmask()     const { return m_netmask; }
@@ -1021,8 +1023,14 @@ public:
     ReceiveDispatch requestFullDuplex(bool enabled, QObject* replyContext = nullptr,
                                       const RadioControlCompletion& completion = {});
     ReceiveDispatch requestSliceInventoryRefresh(std::optional<RadioControlSession> expectedSession = {});
-    void createPanadapter();   // Create a new independent panadapter
-    void removePanadapter(const QString& panId);
+    using PanCreationCompletion = std::function<void(const RadioControlReply&, PanadapterModel*)>;
+    ReceiveDispatch requestPanCreation(QObject* context, const PanCreationCompletion& completion,
+                                       bool initializeDisplay = true);
+    bool createPanadapter();
+    bool removePanadapter(const QString& panId, PanCloseIntent intent = PanCloseIntent::Ordinary);
+    ReceiveDispatch requestPanDisplay(PanadapterModel* pan, const PanDisplayRequest& request,
+        const RadioControlCompletion& completion = {}, bool announce = true);
+    ReceiveDispatch requestPanDimensions(PanadapterModel* pan, int width, int height, int localPoints);
     void setPanBandwidth(double bandwidthMhz);
     void setPanCenter(double centerMhz);
     void setPanDbmRange(float minDbm, float maxDbm);
@@ -1091,10 +1099,6 @@ public:
                       std::optional<RadioControlSession> expectedSession = {});
     ReceiveDispatch recallMemory(int index, int sliceId);
     quint64 memorySlotRevision(int index) const { return m_memorySlotRevisions.value(index); }
-    // Panel width in spectrum points for a backend that shapes its own
-    // spectrum: straight down to that backend. Returns false on Flex, where
-    // the caller sends the xpixels= wire command itself.
-    bool requestLocalPanPixelWidth(const QString& panId, int points);
     // Operator FFT FPS / waterfall rate intent: wire text on Flex; applied to
     // the pan model on self-shaping backends. Returns true if applied or sent.
     // `wfRate` is the 1..100 rate control, not milliseconds despite the Flex
@@ -1140,6 +1144,9 @@ public:
     // wire-text fallback.
     void setPanPreampFor(const QString& panId, int step);
     void setPanAttenuatorFor(const QString& panId, int step);
+    // The radio's own scope mode — `index` addresses
+    // PanadapterModel::scopeModeLabels. Seam-only, like the two above.
+    void setPanScopeModeFor(const QString& panId, int index);
 
     // Display controls — FFT (display pan set)
     void setPanAverage(int frames);
@@ -1178,6 +1185,7 @@ signals:
     void infoChanged();
     void licenseFeaturesChanged();
     void autoAgcThresholdAvailabilityChanged();
+    void panNoiseFloorRangeAvailabilityChanged();
     void connectionStateChanged(bool connected);
     void tuneOutputControlChanged();
     // Per-pan transmit permission changed. Consumers use the pan id to update
@@ -1555,6 +1563,14 @@ private slots:
                                 const SpectrumCoverage& coverage);
 
 private:
+    struct PendingPanCreation;
+    QMap<quint64, std::shared_ptr<PendingPanCreation>> m_pendingPanCreations;
+    quint64 m_nextPanCreation{0};
+    QHash<QString, quint64> m_displayRetirements;
+    quint64 m_displayHistoryEpoch{0};
+    void settlePanCreations();
+    void retireDisplayResource(const QString& id);
+    void requestPanRfGainInfo(PanadapterModel* pan);
     friend struct RadioModelWakeTestAccess;
     void handleRadioStatus(const QMap<QString, QString>& kvs);
     void adoptSoftwareVersion(const QString& version);
@@ -1568,6 +1584,10 @@ private:
     void resetGpsState(bool receiveMessages = true);
     void wireGpsSessionReceivers(bool receiveMessages = true);
     void handleMessageReceived(const ParsedMessage& msg, quint64 gpsSessionGeneration);
+    // Asks for the CW profile list once per session, whenever the backend's CW
+    // capability is (or later becomes) engaged.
+    void refreshCwProfilesIfSupported();
+    void refreshCwProfilesOnCapabilityChange();
     void applyMemoryChanges(const MemoryDelta& delta);
     void reportMemoryImportFailure(const QString& reason);
     void applyProfileChanges(const ProfileDelta& delta);
@@ -2442,6 +2462,7 @@ private:
     QString     m_activeGlobalProfile;
     bool        m_profileDatabaseImporting{false};
     bool        m_profileDatabaseExporting{false};
+    bool        m_cwProfilesRequested{false};   // this session asked for "profile cw info"
     RadioStatusOwnership::RemoteAudioRxTracking m_rxAudio;
     struct DaxStreamDebugState {
         QString type;

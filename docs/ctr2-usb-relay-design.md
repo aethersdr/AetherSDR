@@ -315,6 +315,35 @@ counts radio bytes only. Each AUDIO_SPECTRUM frame of 32 bars is 7 reports
 | `0x42` AUDIO_SPECTRUM_LINEAR | 2 | host → device | (69 bytes) The same payload as AUDIO_SPECTRUM, `[bars N][low Hz hi][low Hz lo][span Hz hi][span Hz lo][N levels]`, but the bars always split low..span evenly, bar *i* covering low + (span − low)·i/N to low + (span − low)·(i+1)/N, whatever low is. A device that negotiates it gets it in place of AUDIO_SPECTRUM for windows that do not start at 0. AetherSDR sends it while receiving CW: a window centered on the CW pitch covering the passband (pitch + filter low to pitch + filter high) with half its width to spare on each side, kept within 0 Hz and Nyquist, so a controller can show how far a signal is from zero beat. Requires AUDIO_SPECTRUM. |
 | `0x43` CW_TEXT | 3 | host → device | (2–33 bytes) `[confidence 0..3][1..32 bytes of text]`: CW decoded by AetherSDR's CW decoder from the active slice (while it runs: the slice in CW and RX decoding on), as it arrives, about a character at a time with word gaps as spaces. Filtered by the CW panel's sensitivity threshold; newlines become spaces and only printable ASCII is sent. Confidence 0 is the most certain (decoder cost < 0.15), then 1 (< 0.35), 2 (< 0.60) and 3, the bands the CW panel colors. |
 | `0x44` FIRMWARE | 4 | both | (1–517 bytes) `[op][...]`: replaces the device's application over the link. Never negotiated by the relay; only AetherSDR's firmware updater uses it, on a session of its own. See *Firmware updates* below. |
+| (none) WIDE_REPORTS | 5 | both | No message: type `0x45` is never sent. Bundles the link's reports in HID report `0x04`, up to seven to a USB transfer, about 49 KB/s each way. See *Wide reports* below. |
+
+**Wide reports.** A device that offers bit 5 declares a second report beside
+report `0x01`: report ID `0x04`, 63 bytes, Input and Output. Once the host
+accepts the bit, both directions stop using report `0x01` and carry the same
+8-byte reports bundled in report `0x04`:
+
+```text
+[count 1..7][count reports of 8 bytes, back to back][zero padding to 63 bytes]
+```
+
+Nothing else changes: the messages, counters and rules above apply report by
+report, so a receiver unpacks a bundle and feeds its reports in order. A
+bundle claiming 0 or more than 7 reports, or a report `0x04` on a link that
+did not accept the bit, is a framing error. Seven reports a millisecond carry
+49 payload bytes, against 7 with report `0x01` alone. The device drops back
+to report `0x01` whenever the host reads Feature report `0x02` (each new host
+session does, before anything else), until the Set that follows accepts the
+bit again, so a session that does not take wide reports never receives
+them. AetherSDR's relay and firmware updater both accept it.
+
+Declaring report `0x04` changes what Windows does for the whole interface:
+it pads every report read from the device to the longest one, 64 bytes with
+the report ID, and pads every report written to it the same way. A host
+therefore takes report `0x01` from any read of 9 bytes or more, and a device
+takes it from any write of 8 bytes or more after the ID. AetherSDR releases
+before this change accept only exactly 9 bytes, so on Windows they cannot
+relay a device that declares report `0x04`: ship such firmware only once an
+AetherSDR release that reads padded reports has been out for a while.
 
 The reference implementation in `tools/ctr2-firmware-reference` covers the
 Feature report layout (`ctr2_caps_encode` / `ctr2_caps_decode`), sending
@@ -607,6 +636,7 @@ USB a complete replacement for Wi-Fi.
 | Piece | File |
 | --- | --- |
 | Opaque byte pump, both directions, bounded | `src/core/ByteRelay.{h,cpp}` |
+| Wide reports: bundling in report `0x04`, padded report `0x01` reads | `src/core/Ctr2HidThreadPort.cpp` |
 | Link codec (v0) | `src/core/Ctr2HidFraming.{h,cpp}` |
 | HID device access on its own I/O thread (hidapi) | `src/core/Ctr2HidPort.{h,cpp}` |
 | Link state machine, radio TCP connection and per-link UDP socket | `src/core/Ctr2UsbRelay.{h,cpp}` |

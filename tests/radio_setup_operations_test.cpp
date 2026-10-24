@@ -261,8 +261,9 @@ private slots:
         emit editors[0]->editingFinished();
         QCOMPARE(editors[0]->text(), QStringLiteral("37"));
         QVERIFY(backend->commands.isEmpty());
+        // Eight bandset toggles, then the row's RCA-suppression toggle (#6524).
         const QList<QCheckBox*> toggles = dialog.findChildren<QCheckBox*>();
-        QCOMPARE(toggles.size(), 8);
+        QCOMPARE(toggles.size(), 9);
         toggles[0]->setChecked(true);
         QCOMPARE(backend->commands, QStringList{"transmit bandset 9 inhibit=1"});
         backend = installRadioSetupBackend(radio);

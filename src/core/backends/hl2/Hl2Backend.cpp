@@ -1840,6 +1840,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.txPowerBands = {};
     c.declaredBandRanges = {};
     c.family = QStringLiteral("hl2");
+    c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
+        PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage},
+        {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    c.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Native,
+        {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
     // setTune() is the built-in test tone at ZERO offset — a single carrier
     // exactly on the TX NCO. Nothing here can produce a second tone.
     c.twoToneGenerator = std::nullopt;

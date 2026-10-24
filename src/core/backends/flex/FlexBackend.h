@@ -120,6 +120,11 @@ public:
     ReceiveDispatch requestSpot(const SpotRequest& request, const QString& panId = {}) override;
     ReceiveDispatch requestPanControl(const QString& panId, const PanControlRequest& request) override;
     ReceiveDispatch requestSlicePreset(int sliceId, const SlicePresetRequest& request) override;
+    ReceiveDispatch requestPanDisplay(const QString& panId, const QString& waterfallId,
+        const PanDisplayRequest& request, const RadioControlCompletion& completion = {},
+        const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestPanLifecycle(const PanLifecycleRequest& request,
+        const PanLifecycleCompletion& completion = {}, const RadioControlFence& current = {}) override;
     ReceiveDispatch requestProfile(const ProfileRequest& request,
                                    const RadioControlCompletion& completion = {},
                                    const RadioControlFence& current = {}) override;
@@ -279,6 +284,7 @@ private:
     bool firmwareAtLeast(const QVersionNumber& minimum) const;
     int nrsLevelMaximum() const;
     int m_announcedNrsLevelMaximum = 100;
+    bool m_announcedCwProfiles = false;
     std::function<QString()> m_firmwareVersionProvider;
     std::function<bool()> m_autoAgcThresholdLicenseProvider;
     std::function<std::optional<bool>()> m_dspResetLicenseProvider;

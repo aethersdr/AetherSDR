@@ -11551,6 +11551,25 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                 }
             }
         }
+        // Fall back to the segment's usage note, when the plan carries one.
+        // Segments without `usage` keep the previous behaviour (no tooltip). (#4667)
+        if (m_bandPlanFontSize > 0 && m_bandPlanMgr) {
+            const double cursorMhz = xToMhz(mx2);
+            for (const auto& seg : m_bandPlanMgr->segments()) {
+                if (seg.usage.isEmpty() || cursorMhz < seg.lowMhz || cursorMhz >= seg.highMhz) {
+                    continue;
+                }
+                const int x1 = mhzToX(seg.lowMhz);
+                const int x2 = mhzToX(seg.highMhz);
+                const QString tip = QString("<b>%1–%2 MHz — %3</b><br>%4")
+                    .arg(seg.lowMhz, 0, 'f', 3)
+                    .arg(seg.highMhz, 0, 'f', 3)
+                    .arg(seg.label.toHtmlEscaped(), seg.usage.toHtmlEscaped());
+                QToolTip::showText(ev->globalPosition().toPoint() + QPoint(0, 20),
+                    tip, this, QRect(x1, bandBarTop, std::max(1, x2 - x1), specH2 - bandBarTop));
+                return;
+            }
+        }
         QToolTip::hideText();
     }
 }

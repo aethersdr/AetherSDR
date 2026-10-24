@@ -115,7 +115,6 @@
 #include "AntennaGeniusApplet.h"
 #include "ShackSwitchApplet.h"
 #include "RadioSetupDialog.h"
-#include "ReleaseTagText.h"
 #include "AgcCalibrationDialog.h"
 #include "AudioDeviceChangeDialog.h"
 #include "NetworkDiagnosticsDialog.h"
@@ -224,7 +223,6 @@
 #include <QSplitter>
 #include <QMenuBar>
 #include <QDialog>
-#include <QGridLayout>
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QMenu>
@@ -247,8 +245,6 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include "core/VersionNumber.h"
-#include "core/UpdateChecker.h"
-#include <QDesktopServices>
 #include <QPointer>
 #include <QTextEdit>
 #include <QPlainTextEdit>
@@ -1398,34 +1394,8 @@ MainWindow::MainWindow(QWidget* parent)
     m_kiwiSdrManager = new KiwiSdrManager(this);
     m_kiwiSdrManager->setOperatorCallsign(m_radioModel.callsign());
 
-    // UpdateChecker — must be created before buildMenuBar() which references it
-    m_updateChecker = new UpdateChecker(this);
-    connect(m_updateChecker, &UpdateChecker::updateAvailable, this, [this](const QString& ver) {
-        const QString current = QCoreApplication::applicationVersion();
-        FramelessMessageBox box(this);
-        box.setWindowTitle("AetherSDR Update Available");
-        box.setIcon(QMessageBox::Information);
-        setUpdateAvailableText(box, current, ver);
-        QPushButton* viewBtn = box.addButton("View Latest Release", QMessageBox::ActionRole);
-        viewBtn->setAutoDefault(false);
-        QPushButton* closeBtn = box.addButton(QMessageBox::Close);
-        closeBtn->setAutoDefault(false);
-        // Force minimum width via layout spacer — setMinimumWidth() is ignored by QMessageBox
-        if (auto* grid = qobject_cast<QGridLayout*>(box.layout()))
-            grid->addItem(new QSpacerItem(480, 0, QSizePolicy::Minimum, QSizePolicy::Fixed),
-                          grid->rowCount(), 0, 1, grid->columnCount());
-        box.exec();
-        if (box.clickedButton() == viewBtn)
-            QDesktopServices::openUrl(QUrl(UpdateChecker::kReleasesPageUrl));
-    });
-    connect(m_updateChecker, &UpdateChecker::upToDate, this, [this](const QString& ver) {
-        FramelessMessageBox::information(this, "Check for Updates",
-            QString("AetherSDR is up to date (v%1).").arg(ver));
-    });
-    connect(m_updateChecker, &UpdateChecker::checkFailed, this, [this]() {
-        FramelessMessageBox::warning(this, "Check for Updates",
-            "Could not reach GitHub. Check your connection and try again.");
-    });
+    // Before buildMenuBar(): Help → Check for Updates references the checker.
+    wireUpdateChecker();
 
     buildMenuBar();
     buildUI();
@@ -3584,7 +3554,7 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
                                          &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
                                          m_kiwiSdrManager, &m_acomConn, &m_speConn,
                                          &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn, &m_kpa500Conn,
-                                         this, &m_kat500Model, &m_kxpa100Model);
+                                         this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         m_radioSetupDialog = dlg;
     }
@@ -4180,6 +4150,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // destructor-path unkey somewhere to run while the event loop is still
     // live, rather than during member destruction (#4097).
     m_kpa1500Conn.disconnect();
+    // The RF-KIT likewise has zero radio awareness. Closing it here also aborts
+    // any request still in flight while the event loop is live, rather than
+    // leaving that to member destruction.
+    m_rfkitConn.disconnect();
     // The LP-100A is likewise independent of the radio lifecycle and may be
     // connected through a shared ser2net proxy. Close it explicitly while
     // the event loop is still live instead of relying on member destruction.
@@ -5476,6 +5450,9 @@ void MainWindow::buildUI()
             this, &MainWindow::updatePcAudioTooltip, Qt::QueuedConnection);
     connect(m_titleBar, &TitleBar::multiFlexClicked,
             this, &MainWindow::showMultiFlexDialog);
+    connect(m_titleBar, &TitleBar::updateBadgeClicked,
+            this, [this] { showUpdatesWindow(false); });
+    restoreKnownUpdate();
     connect(m_titleBar, &TitleBar::minimalModeRequested,
             this, &MainWindow::toggleMinimalModeFromAction);
     connect(m_titleBar, &TitleBar::minimalModeWindowedExitRequested, this, [this]() {
@@ -5696,15 +5673,15 @@ void MainWindow::buildUI()
         // AGC (outside KiwiSDR replacement), NB and NR through the SliceModel
         // setters, so they reach every backend, not only a command plane.
         m_radioModel.recallBandStackReceiveDsp(slice, e);
-        // WNB (panadapter-level, not slice)
+        // Stored WNB values are optional replay, not individual control actions.
         if (auto* pan = m_radioModel.activePanadapter()) {
             if (e.wnbOn != pan->wnbActive()) {
-                m_radioModel.sendCommand(
-                    QString("display pan set %1 wnb=%2").arg(pan->panId()).arg(e.wnbOn ? 1 : 0));
+                m_radioModel.requestPanDisplay(pan, {PanDisplayField::Wnb, e.wnbOn},
+                    {}, /*announce=*/false);
             }
             if (e.wnbLevel != pan->wnbLevel()) {
-                m_radioModel.sendCommand(
-                    QString("display pan set %1 wnb_level=%2").arg(pan->panId()).arg(e.wnbLevel));
+                m_radioModel.requestPanDisplay(pan, {PanDisplayField::WnbLevel, e.wnbLevel},
+                    {}, /*announce=*/false);
             }
         }
     });
@@ -6133,7 +6110,7 @@ void MainWindow::buildUI()
     applyStatusBarCompactLabelStyle(m_radioVersionLabel, QStringLiteral("{{color.text.secondary}}"));
     m_radioVersionLabel->setAlignment(Qt::AlignCenter);
     // Only out-of-date firmware is actionable, but the row is wired once here
-    // rather than as the verdict changes: openFirmwareReleaseNotes() checks
+    // rather than as the verdict changes: openFirmwareUpdate() checks
     // m_radioFirmwareCurrency and does nothing otherwise, and
     // applyFirmwareCurrencyToVersionLabel() drops the tab stop it does not need.
     m_radioVersionLabel->installEventFilter(this);
@@ -8746,6 +8723,9 @@ void MainWindow::applyPanRangeRequest(const QString& panId, double centerMhz,
     }
 
     auto* pan = m_radioModel.panadapter(panId);
+    // A fixed span takes the center only, silently: no zoom route can change
+    // it, and the dimmed -/+ pair already says why.
+    const bool spanFixed = panSpanFixedByBackend();
 
     if (pan) {
         // Effective (pending-else-model) geometry: during the profile-load
@@ -8753,8 +8733,9 @@ void MainWindow::applyPanRangeRequest(const QString& panId, double centerMhz,
         // against it would treat the user's pending zoom as "already there"
         // — or re-issue it forever (#4142).
         if (qFuzzyCompare(m_radioModel.effectivePanCenterMhz(panId), centerMhz)
-            && qFuzzyCompare(m_radioModel.effectivePanBandwidthMhz(panId),
-                             bandwidthMhz)) {
+            && (spanFixed
+                || qFuzzyCompare(m_radioModel.effectivePanBandwidthMhz(panId),
+                                 bandwidthMhz))) {
             return;
         }
     }
@@ -8767,12 +8748,13 @@ void MainWindow::applyPanRangeRequest(const QString& panId, double centerMhz,
     // during a profile load — zoom and drag, not just typed frequency entry.
     // requestPanCenter() defers and replays it, and only advances the local
     // model when the command actually reaches the wire.
-    const bool sent = m_radioModel.requestPanCenter(panId, centerMhz, bandwidthMhz);
+    const bool sent = m_radioModel.requestPanCenter(
+        panId, centerMhz, spanFixed ? -1.0 : bandwidthMhz);
 
     qDebug() << "Pan range request:" << source
              << "center" << centerMhz
-             << "bandwidth" << bandwidthMhz
-             << (sent ? "" : "(deferred: profile load)");
+             << "bandwidth" << (spanFixed ? QStringLiteral("fixed") : QString::number(bandwidthMhz))
+             << (sent ? "" : "(not sent: deferred for profile load or refused)");
 }
 
 void MainWindow::setActiveSlice(int sliceId)
@@ -9468,6 +9450,9 @@ void MainWindow::routeCwDecoderOutput()
 
     // Connect to new applet
     if (m_cwDecoderApplet) {
+        // Each pan builds its own range sliders; the decoder's ranges are one
+        // shared setting, so the target shows the saved ones before they are pushed.
+        m_cwDecoderApplet->restoreCwRanges();
         connect(&m_cwDecoder, &CwRxModel::textDecoded,
                 m_cwDecoderApplet, &PanadapterApplet::appendCwText);
         // TX-side decoded text routes to a separate slot so the panel
@@ -11160,6 +11145,7 @@ void MainWindow::showMnrSettings()
 void MainWindow::applyPanLayout(const QString& layoutId)
 {
     if (!m_radioModel.isConnected()) return;
+    ++m_panLayoutRequestGeneration;
 
     const int needed = panCountForLayoutId(layoutId);
     const bool canvasLayout = m_workspaceController
@@ -11305,124 +11291,6 @@ void MainWindow::settleCanvasPanLayout(const QString& layoutId,
     });
 }
 
-void MainWindow::createPansSequentially(const QString& layoutId, int total,
-                                        std::shared_ptr<QStringList> panIds, int created)
-{
-    if (created >= total) {
-        // All new pans created — wait for radio status to establish PanadapterModels
-        qDebug() << "applyPanLayout: all" << total << "new pans created:" << *panIds;
-        QTimer::singleShot(800, this, [this, panIds, layoutId]() {
-            // The new pans were added to the stack via panadapterAdded handler.
-            // Wire any that aren't already wired.
-            for (auto* applet : m_panStack->allApplets()) {
-                const QString pid = applet->panId();
-                auto* pan = m_radioModel.panadapter(pid);
-                if (pan) {
-                    // Push current state to the spectrum widget
-                    applet->spectrumWidget()->setDbmRange(pan->minDbm(), pan->maxDbm());
-                    applet->spectrumWidget()->observeFrequencyRange(
-                        pan->centerMhz(), pan->bandwidthMhz());
-                }
-            }
-
-            // Rearrange splitter structure for the selected layout
-            if (!m_workspaceController || !m_workspaceController->isEnabled()) {
-                m_panStack->rearrangeLayout(layoutId);
-            }
-            startCanvasPanLayoutSettle(layoutId, panCountForLayoutId(layoutId));
-
-            m_panApplet = m_panStack->activeApplet();
-
-            qDebug() << "applyPanLayout: layout" << layoutId
-                     << "complete, total pans:" << m_panStack->count();
-        });
-        return;
-    }
-
-    // Backends that own their receivers create pans at the SEAM: the Flex
-    // wire command below has no completion callback there, and the
-    // recursion runs from that callback. The seam create is synchronous; the
-    // new pan is found by diffing, since the backend numbers its own pans and
-    // skips retired numbers.
-    if (!m_radioModel.usesFlexCommandPlane()) {
-        auto before = std::make_shared<QSet<QString>>();
-        for (auto* p : m_panStack->allApplets())
-            before->insert(p->panId());
-        for (auto* p : m_radioModel.panadapters())
-            if (p) before->insert(p->panId());
-
-        m_radioModel.createPanadapter();
-
-        // The seam create is NOT synchronous for every backend (red-team
-        // M4): HL2's is, but the demo mints its pan over the synthetic wire
-        // — two queued thread hops — so an immediate diff found nothing,
-        // declared "capacity full", and aborted the recursion while the pan
-        // materialised a moment later.  Diff after the create has settled;
-        // 300 ms covers both wire hops with margin and is indistinguishable
-        // from the existing 200 ms inter-create pacing for a synchronous
-        // backend.
-        QTimer::singleShot(300, this,
-                           [this, layoutId, total, panIds, created, before]() {
-            if (m_shuttingDown || !m_panStack) {
-                return;
-            }
-            QString createdId;
-            for (auto* p : m_radioModel.panadapters()) {
-                if (p && !before->contains(p->panId())) {
-                    createdId = p->panId();
-                    break;
-                }
-            }
-            if (createdId.isEmpty()) {
-                // The backend refused — receiver count, or the link budget
-                // at this span. It has already logged which; surface it and
-                // stop rather than recursing against a limit that will
-                // refuse every remaining pan.
-                qWarning() << "applyPanLayout: backend declined pan"
-                           << (created + 1) << "of" << total;
-                showPanadapterSliceCapacityMessage();
-                return;
-            }
-            panIds->append(createdId);
-            qDebug() << "applyPanLayout: created pan" << (created + 1)
-                     << "of" << total << "id:" << createdId;
-            // Same inter-create pacing rationale as the Flex path: adding a
-            // receiver restarts the EP6 stream, so creates stay spaced.
-            QTimer::singleShot(200, this,
-                               [this, layoutId, total, panIds, created]() {
-                createPansSequentially(layoutId, total, panIds, created + 1);
-            });
-        });
-        return;
-    }
-
-    m_radioModel.sendCmdPublic(
-        "display panafall create x=100 y=100",
-        [this, panIds, layoutId, total, created](int code, const QString& body) {
-            if (code != 0) {
-                qWarning() << "applyPanLayout: panafall create failed, code"
-                           << Qt::hex << code << body;
-                showPanadapterSliceCapacityMessage();
-                return;
-            }
-            const QString panId = RadioStatusOwnership::parsePanafallCreatePanId(body);
-
-            qDebug() << "applyPanLayout: created pan" << (created + 1) << "of" << total
-                     << "id:" << panId;
-
-            if (!panId.isEmpty()) {
-                panIds->append(panId);
-                // Configure the pan
-                m_radioModel.sendCommand(
-                    QString("display pan set %1 xpixels=1024 ypixels=700").arg(panId));
-            }
-
-            // Create next pan after a brief delay
-            QTimer::singleShot(200, this, [this, layoutId, total, panIds, created]() {
-                createPansSequentially(layoutId, total, panIds, created + 1);
-            });
-        });
-}
 
 void MainWindow::showPanadapterSliceCapacityMessage()
 {
@@ -11490,13 +11358,13 @@ void MainWindow::restoreBandState(const BandSnapshot& snap)
         // Don't push center or bandwidth — slice tune recenters the pan and
         // the radio determines bandwidth. Pushing stale saved values causes
         // FFT/waterfall misalignment during the transition (#279, #291).
-        // Only restore dBm scale (client-side display preference).
-        m_radioModel.sendCommand(
-            QString("display pan set %1 min_dbm=%2 max_dbm=%3").arg(pan->panId())
-                .arg(static_cast<double>(snap.minDbm), 0, 'f', 2)
-                .arg(static_cast<double>(snap.maxDbm), 0, 'f', 2));
+        // Replay optional display fields without unsupported-control notices.
+        m_radioModel.requestPanDisplay(pan,
+            {PanDisplayField::LevelRange, PanLevelRange{snap.minDbm, snap.maxDbm}},
+            {}, /*announce=*/false);
+        m_radioModel.requestPanDisplay(pan,
+            {PanDisplayField::RfGain, snap.rfGain}, {}, /*announce=*/false);
     }
-    m_radioModel.setPanRfGain(snap.rfGain);
     m_radioModel.setPanWnb(snap.wnbOn);
     if (auto* sw = spectrum()) {
         sw->setSpectrumFrac(snap.spectrumFrac);
