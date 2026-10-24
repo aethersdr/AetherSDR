@@ -15,12 +15,15 @@
 #include <QPointer>
 #include <QRegularExpression>
 #include <QSet>
+#include <QTemporaryFile>
+#include <QUuid>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include "monocypher-ed25519.h"
 #include "zstd.h"
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <memory>
 #include <system_error>
@@ -180,7 +183,7 @@ void setExecutable(const fs::path& p, bool executable)
 // with the window limited to windowLog and the output to exactly size bytes
 // hashing to sha256.
 bool decode(const QByteArray& frame, const uchar* prefix, size_t prefixSize, int windowLog,
-            qint64 size, const QString& sha256, const QString& outPath, QString* problem)
+            qint64 size, const QString& sha256, QFileDevice& out, QString* problem)
 {
     std::unique_ptr<ZSTD_DCtx, size_t (*)(ZSTD_DCtx*)> dctx(ZSTD_createDCtx(), ZSTD_freeDCtx);
     if (!dctx || ZSTD_isError(ZSTD_DCtx_setParameter(dctx.get(), ZSTD_d_windowLogMax, windowLog))) {
@@ -189,11 +192,6 @@ bool decode(const QByteArray& frame, const uchar* prefix, size_t prefixSize, int
     }
     if (prefix && ZSTD_isError(ZSTD_DCtx_refPrefix(dctx.get(), prefix, prefixSize))) {
         *problem = QStringLiteral("zstd refused the base file");
-        return false;
-    }
-    QFile out(outPath);
-    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        *problem = QStringLiteral("cannot write %1").arg(outPath);
         return false;
     }
     QCryptographicHash hash(QCryptographicHash::Sha256);
@@ -216,7 +214,7 @@ bool decode(const QByteArray& frame, const uchar* prefix, size_t prefixSize, int
         }
         hash.addData(QByteArrayView(buf.constData(), static_cast<qsizetype>(o.pos)));
         if (out.write(buf.constData(), static_cast<qint64>(o.pos)) != static_cast<qint64>(o.pos)) {
-            *problem = QStringLiteral("cannot write %1").arg(outPath);
+            *problem = QStringLiteral("cannot write the new file");
             return false;
         }
         if (ret != 0 && o.pos == 0 && in.pos == inBefore && in.pos == in.size) {
@@ -228,7 +226,10 @@ bool decode(const QByteArray& frame, const uchar* prefix, size_t prefixSize, int
         *problem = QStringLiteral("patch data has trailing bytes");
         return false;
     }
-    out.close();
+    if (!out.flush()) {
+        *problem = QStringLiteral("cannot write the new file");
+        return false;
+    }
     if (written != size || QString::fromLatin1(hash.result().toHex()) != sha256) {
         *problem = QStringLiteral("patched file does not match its hash");
         return false;
@@ -258,11 +259,15 @@ void pruneEmptyDirs(const fs::path& root)
 }
 
 bool applyOps(const fs::path& stage, const QHash<QString, QByteArray>& members,
-              const UpdateManifest::Patch& patch, QString* problem)
+              const UpdateManifest::Patch& patch, const std::atomic_bool* cancelled, QString* problem)
 {
     bool pruned = false;
     std::error_code ec;
     for (const UpdateManifest::Op& op : patch.ops) {
+        if (cancelled && cancelled->load()) {
+            *problem = QStringLiteral("cancelled");
+            return false;
+        }
         const fs::path target = stage / toPath(op.path);
         if (!noLinkOnTheWay(stage, op.path)) {
             *problem = QStringLiteral("%1: a parent folder is a link").arg(op.path);
@@ -296,7 +301,14 @@ bool applyOps(const fs::path& stage, const QHash<QString, QByteArray>& members,
             *problem = QStringLiteral("%1: its patch data is missing from the bundle").arg(op.path);
             return false;
         }
-        const QString out = native(target) + QStringLiteral(".update-new");
+        // The new bytes go to a file created here, exclusively and under a
+        // random name, never to a predictable one: an unlisted link copied
+        // from the install could otherwise be followed out of staging.
+        QTemporaryFile out(native(target.parent_path()) + QStringLiteral("/.update-XXXXXX"));
+        if (!out.open()) {
+            *problem = QStringLiteral("%1: cannot write the new file").arg(op.path);
+            return false;
+        }
         QString why;
         if (op.kind == UpdateManifest::Op::Kind::Patch) {
             if (fs::is_symlink(fs::symlink_status(target, ec)) || !fs::is_regular_file(target, ec)
@@ -319,19 +331,21 @@ bool applyOps(const fs::path& stage, const QHash<QString, QByteArray>& members,
                                    op.size, op.sha256, out, &why);
             base.close();
             if (!ok) {
-                QFile::remove(out);
                 *problem = op.path + QStringLiteral(": ") + why;
                 return false;
             }
         } else if (!decode(frame, nullptr, 0, op.windowLog, op.size, op.sha256, out, &why)) {
-            QFile::remove(out);
             *problem = op.path + QStringLiteral(": ") + why;
             return false;
         }
+        out.close();
         if (fs::is_symlink(fs::symlink_status(target, ec))) {
             fs::remove(target, ec);
         }
-        fs::rename(toPath(out), target, ec);
+        fs::rename(toPath(out.fileName()), target, ec);
+        if (!ec) {
+            out.setAutoRemove(false);   // it is the target now
+        }
         if (ec) {
             *problem = QStringLiteral("%1: cannot be replaced").arg(op.path);
             return false;
@@ -630,7 +644,7 @@ bool UpdateStager::readBundle(const QByteArray& bundle, QHash<QString, QByteArra
 bool UpdateStager::applyPatch(const QString& installRoot, const QByteArray& bundle,
                               const UpdateManifest::Patch& patch,
                               const QList<UpdateManifest::File>& files, const QString& stagingDir,
-                              QString* problem)
+                              QString* problem, const std::atomic_bool* cancelled)
 {
     std::error_code ec;
     const fs::path install = fs::weakly_canonical(toPath(installRoot), ec);
@@ -667,7 +681,10 @@ bool UpdateStager::applyPatch(const QString& installRoot, const QByteArray& bund
                         .arg(QString::fromStdString(ec.message())));
     }
     QString why;
-    if (!applyOps(stage, members, patch, &why)) {
+    if (cancelled && cancelled->load()) {
+        return fail(QStringLiteral("cancelled"));
+    }
+    if (!applyOps(stage, members, patch, cancelled, &why)) {
         return fail(QStringLiteral("The update could not be applied: %1.").arg(why));
     }
     if (!checkTree(stage, files, &why)) {
@@ -681,15 +698,25 @@ bool UpdateStager::isBusy() const
     return m_stage != Stage::Idle;
 }
 
+UpdateStager::~UpdateStager()
+{
+    cancel();
+}
+
 void UpdateStager::cancel()
 {
     m_download->cancel();
+    if (m_cancelled) {
+        m_cancelled->store(true);   // a running worker stops at its next step
+    }
+    ++m_generation;
     m_stage = Stage::Idle;
 }
 
 void UpdateStager::stage(const Request& request)
 {
     cancel();
+    m_cancelled = std::make_shared<std::atomic_bool>(false);
     m_request = request;
     if (m_request.manifestUrl.isEmpty()) {
         m_request.manifestUrl = QUrl(QString::fromLatin1(kManifestUrl));
@@ -768,21 +795,39 @@ void UpdateStager::onDownloaded(const QUrl&, const QByteArray& body)
             return;
         }
         emit progress(tr("Applying the update"), 0, 0);
-        const QString staging = QDir(m_request.stagingRoot).filePath(m_manifest.version);
+        // Each request applies into a folder of its own, so a worker that is
+        // still finishing after a cancel never shares files with the next;
+        // only the current request's result becomes <stagingRoot>/<version>.
+        const QString root = m_request.stagingRoot;
+        const QString work = QDir(root).filePath(
+            QStringLiteral(".work-") + QUuid::createUuid().toString(QUuid::WithoutBraces));
+        const QString staging = QDir(root).filePath(m_manifest.version);
         const QString install = m_request.installRoot;
         const UpdateManifest::Patch patch = *m_patch;
         const QList<UpdateManifest::File> files = m_payload->files;
         const UpdateManifest::Asset full = m_payload->full;
         const QString version = m_manifest.version;
+        const quint64 generation = m_generation;
+        const std::shared_ptr<std::atomic_bool> cancelled = m_cancelled;
         auto* watcher = new QFutureWatcher<QString>(this);
         connect(watcher, &QFutureWatcher<QString>::finished, this,
-                [this, watcher, staging, full, version] {
-            const QString problem = watcher->result();
+                [this, watcher, work, staging, full, version, generation] {
+            QString problem = watcher->result();
             watcher->deleteLater();
-            if (m_stage != Stage::Bundle) {
-                return;   // cancelled meanwhile
+            std::error_code ec;
+            if (generation != m_generation) {
+                fs::remove_all(toPath(work), ec);   // a cancelled request's result
+                return;
             }
             m_stage = Stage::Idle;
+            if (problem.isEmpty()) {
+                fs::remove_all(toPath(staging), ec);
+                fs::rename(toPath(work), toPath(staging), ec);
+                if (ec) {
+                    fs::remove_all(toPath(work), ec);
+                    problem = QStringLiteral("The staged update could not be put in place.");
+                }
+            }
             if (problem.isEmpty()) {
                 qCInfo(lcUpdater).noquote() << "update to v" + version + " staged in" << staging;
                 emit staged(staging, version);
@@ -791,9 +836,10 @@ void UpdateStager::onDownloaded(const QUrl&, const QByteArray& body)
                 emit fullDownloadNeeded(problem, full, version);
             }
         });
-        watcher->setFuture(QtConcurrent::run([install, body, patch, files, staging] {
+        watcher->setFuture(QtConcurrent::run([install, body, patch, files, work, cancelled] {
             QString problem;
-            return applyPatch(install, body, patch, files, staging, &problem) ? QString() : problem;
+            return applyPatch(install, body, patch, files, work, &problem, cancelled.get()) ? QString()
+                                                                                          : problem;
         }));
         return;
     }

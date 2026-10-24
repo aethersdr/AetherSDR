@@ -10,7 +10,10 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSignalSpy>
+#include <QSemaphore>
 #include <QTemporaryDir>
+#include <QThreadPool>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QtTest>
 
 #include "monocypher-ed25519.h"
@@ -409,6 +412,90 @@ private slots:
         QVERIFY(problem.contains(QLatin1String("link")));
         QVERIFY(QDir(outside).isEmpty());
 #endif
+    }
+
+    void aLinkInTheInstallIsNeverFollowedByANewFile()
+    {
+#ifndef Q_OS_WIN
+        // Review of #6747: a link left in the install at the name a new
+        // file is first written under used to be followed out of staging
+        // and overwrite the install. New files are now created
+        // exclusively under random names.
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        const QByteArray before = readFile(install + QStringLiteral("/Qt6Core.dll"));
+        fs::create_symlink(fs::path((install + QStringLiteral("/Qt6Core.dll")).toStdString()),
+                           fs::path((install + QStringLiteral("/AetherSDR.exe.update-new")).toStdString()));
+        fs::create_symlink(fs::path((install + QStringLiteral("/Qt6Core.dll")).toStdString()),
+                           fs::path((install + QStringLiteral("/plugins/new.dll.update-new")).toStdString()));
+        const UpdateManifest m = parsed(fixtureManifest());
+        QString problem;
+        QVERIFY2(UpdateStager::applyPatch(install, bundleBytes(), m.payloads[0].patches[0],
+                                          m.payloads[0].files, tmp.filePath(QStringLiteral("staging")),
+                                          &problem),
+                 qPrintable(problem));
+        QCOMPARE(readFile(install + QStringLiteral("/Qt6Core.dll")), before);
+        QCOMPARE(readFile(install + QStringLiteral("/AetherSDR.exe")),
+                 readFile(kFixture + QStringLiteral("/install-v26.10.2/AetherSDR.exe")));
+#endif
+    }
+
+    void aCancelledWorkerNeverReportsForTheNextRequest()
+    {
+        // Review of #6747: cancel A while its apply is queued, start B; only
+        // B's result may come back, and A's work must not be left behind.
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        const QByteArray manifest = readFile(kFixture + QStringLiteral("/release/manifest.json"));
+        const QString site = tmp.filePath(QStringLiteral("site"));
+        writeFile(site + QStringLiteral("/latest/manifest.json"), manifest);
+        writeFile(site + QStringLiteral("/latest/manifest.json.sig"), m_key.sign(manifest));
+        QDir().mkpath(tmp.filePath(QStringLiteral("dl/v26.10.3")));
+        QFile::copy(kFixture + QStringLiteral("/release/AetherSDR-v26.10.3-Windows-x64-from-v26.10.2.update.tar"),
+                    tmp.filePath(QStringLiteral("dl/v26.10.3/AetherSDR-v26.10.3-Windows-x64-from-v26.10.2.update.tar")));
+        UpdateStager::setDownloadBaseForTesting(QUrl::fromLocalFile(tmp.filePath(QStringLiteral("dl"))));
+        UpdateSettings::setAcceptedManifestUtc({});
+
+        // Hold the pool so both applies queue behind one blocker.
+        QThreadPool* pool = QThreadPool::globalInstance();
+        const int threads = pool->maxThreadCount();
+        pool->setMaxThreadCount(1);
+        QSemaphore release;
+        auto blocker = QtConcurrent::run([&release] { release.acquire(); });
+
+        UpdateStager stager;
+        QSignalSpy staged(&stager, &UpdateStager::staged);
+        QSignalSpy progress(&stager, &UpdateStager::progress);
+        UpdateStager::Request a = request();
+        a.installRoot = install;
+        a.manifestUrl = QUrl::fromLocalFile(site + QStringLiteral("/latest/manifest.json"));
+        a.stagingRoot = tmp.filePath(QStringLiteral("first"));
+        UpdateStager::Request b = a;
+        b.stagingRoot = tmp.filePath(QStringLiteral("second"));
+
+        stager.stage(a);
+        QTRY_VERIFY_WITH_TIMEOUT(!progress.isEmpty()
+                                     && progress.last().first().toString().contains(QLatin1String("Applying")),
+                                 20000);
+        stager.cancel();
+        UpdateSettings::setAcceptedManifestUtc({});
+        progress.clear();
+        stager.stage(b);
+        QTRY_VERIFY_WITH_TIMEOUT(!progress.isEmpty()
+                                     && progress.last().first().toString().contains(QLatin1String("Applying")),
+                                 20000);
+        release.release();
+        blocker.waitForFinished();
+        QTRY_COMPARE_WITH_TIMEOUT(staged.size(), 1, 20000);
+        QTest::qWait(200);   // A's worker has finished too; nothing more arrives
+        pool->setMaxThreadCount(threads);
+        QCOMPARE(staged.size(), 1);
+        QCOMPARE(staged.first().first().toString(), tmp.filePath(QStringLiteral("second/26.10.3")));
+        QVERIFY(QFileInfo(tmp.filePath(QStringLiteral("second/26.10.3/plugins/new.dll"))).isFile());
+        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(tmp.filePath(QStringLiteral("first")))
+                                     || QDir(tmp.filePath(QStringLiteral("first"))).isEmpty(),
+                                 5000);
+        QVERIFY(!stager.isBusy());
     }
 
     void stagingNeverOverlapsTheInstall()

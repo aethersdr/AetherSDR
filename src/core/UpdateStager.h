@@ -8,6 +8,9 @@
 #include <QString>
 #include <QUrl>
 
+#include <atomic>
+#include <memory>
+
 namespace AetherSDR {
 
 class CappedDownload;
@@ -103,6 +106,7 @@ public:
     static constexpr int kMaxBundleMembers = 4096;
 
     explicit UpdateStager(QObject* parent = nullptr);
+    ~UpdateStager() override;
 
     void stage(const Request& request);
     void cancel();
@@ -132,11 +136,12 @@ public:
                            QString* problem);
 
     // Copies installRoot into stagingDir, applies patch's ops there in order
-    // and checks every entry of files. On any failure stagingDir is removed.
+    // and checks every entry of files. On any failure, or once cancelled is
+    // set (checked between steps), stagingDir is removed.
     static bool applyPatch(const QString& installRoot, const QByteArray& bundle,
                            const UpdateManifest::Patch& patch,
                            const QList<UpdateManifest::File>& files, const QString& stagingDir,
-                           QString* problem);
+                           QString* problem, const std::atomic_bool* cancelled = nullptr);
 
 signals:
     void progress(const QString& step, qint64 done, qint64 total);
@@ -158,6 +163,10 @@ private:
 
     CappedDownload* m_download;
     Stage m_stage{Stage::Idle};
+    // Every stage() and cancel() starts a new generation: a worker's result
+    // is used only if its generation is still the current one.
+    quint64 m_generation{0};
+    std::shared_ptr<std::atomic_bool> m_cancelled;
     Request m_request;
     QByteArray m_manifestBytes;
     UpdateManifest m_manifest;
