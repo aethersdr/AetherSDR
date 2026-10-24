@@ -95,6 +95,9 @@ struct Ops {
     // Renames a folder; empty means std::filesystem::rename. Tests inject
     // the failures a real system produces (a locked folder, another volume).
     std::function<void(const fs::path& from, const fs::path& to, std::error_code& ec)> rename;
+    // Writes the journal; empty means a write-then-rename to the real file.
+    // Tests inject a failed write at a chosen step.
+    std::function<bool(const fs::path& path, const std::string& text)> writeJournal;
 };
 
 struct Paths {

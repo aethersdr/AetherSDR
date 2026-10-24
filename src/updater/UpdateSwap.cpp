@@ -142,10 +142,27 @@ bool parentWritable(const fs::path& install)
     return true;
 }
 
+// Records the step about to be taken. The step is taken only if this
+// succeeds, so the journal on disk always describes a state the tree can be
+// in.
+bool journal(const Ops& ops, const Paths& paths, const std::string& step)
+{
+    const bool ok = ops.writeJournal ? ops.writeJournal(paths.journal, step) : writeText(paths.journal, step);
+    if (!ok) {
+        ops.log("could not write the swap journal (" + step + ")");
+    }
+    return ok;
+}
+
 Outcome finish(const Plan& plan, const Ops& ops, const Paths& paths, Outcome outcome, bool restart)
 {
-    std::error_code ec;
-    fs::remove(paths.journal, ec);
+    // The journal is what a later run repairs from: it stays while the
+    // swap is unfinished (Broken) or never started its repair because the
+    // app was still running (OldStillRunning).
+    if (outcome != Outcome::Broken && outcome != Outcome::OldStillRunning) {
+        std::error_code ec;
+        fs::remove(paths.journal, ec);
+    }
     writeText(paths.result, std::string(outcomeName(outcome)) + " " + plan.version + "\n");
     ops.log(std::string("outcome: ") + outcomeName(outcome) + " " + plan.version);
     if (restart && plan.relaunch) {
@@ -224,8 +241,11 @@ bool recover(const Plan& plan, const Ops& ops)
     // A helper that died during the self-test or the rollback left a new
     // release whose health is unknown: the version that ran before is known
     // to work, so it goes back.
-    if ((step.rfind("selftest", 0) == 0 || step.rfind("rollback", 0) == 0) && isFolder(install)
-        && isFolder(paths.previous)) {
+    // swap-2 too: the journal says swap-2 until the self-test starts, so a
+    // helper that died just after .new became the install left it untested.
+    if ((step.rfind("swap-2", 0) == 0 || step.rfind("selftest", 0) == 0
+         || step.rfind("rollback", 0) == 0)
+        && isFolder(install) && isFolder(paths.previous)) {
         removeAll(paths.failed);
         if (!renameRetry(install, paths.failed, plan.renameTimeout, ops)) {
             return false;
@@ -258,12 +278,14 @@ Outcome run(const Plan& plan, const Ops& ops)
     const Paths paths = pathsFor(plan);
     const fs::path install = normalised(plan.install);
 
-    if (!recover(plan, ops)) {
-        return finish(plan, ops, paths, Outcome::Broken, false);
-    }
+    // Nothing is touched, not even a repair, while AetherSDR runs: a
+    // journal left by an earlier helper waits for the next exit too.
     if (!ops.waitForOldExit(plan.exitTimeout)) {
         // Never kill it: the next quit tries again.
         return finish(plan, ops, paths, Outcome::OldStillRunning, false);
+    }
+    if (!recover(plan, ops)) {
+        return finish(plan, ops, paths, Outcome::Broken, false);
     }
 
     // Checks before anything changes.
@@ -273,42 +295,64 @@ Outcome run(const Plan& plan, const Ops& ops)
         return finish(plan, ops, paths, Outcome::NotPossible, true);
     }
 
-    writeText(paths.journal, "placing " + plan.version);
+    // Each step is taken only once the journal records it. When a write
+    // fails, the step is not taken and what was done so far is undone, so
+    // the last journal that did reach the disk still matches the tree.
+    if (!journal(ops, paths, "placing " + plan.version)) {
+        return finish(plan, ops, paths, Outcome::NotPossible, true);
+    }
     if (!place(plan.staged, paths.next, ops)) {
         return finish(plan, ops, paths, Outcome::NotPossible, true);
     }
 
     // Only one previous version is kept.
     removeAll(paths.previous);
-    writeText(paths.journal, "swap-1 " + plan.version);
+    if (!journal(ops, paths, "swap-1 " + plan.version)) {
+        removeAll(paths.next);   // the install is untouched
+        return finish(plan, ops, paths, Outcome::NotPossible, true);
+    }
     if (!renameRetry(install, paths.previous, plan.renameTimeout, ops)) {
         removeAll(paths.next);
         return finish(plan, ops, paths, Outcome::SwapUndone, true);
     }
-    writeText(paths.journal, "swap-2 " + plan.version);
-    if (!renameRetry(paths.next, install, plan.renameTimeout, ops)) {
+
+    // From here on, undoing means putting .previous back.
+    const auto undo = [&]() {
         if (!renameRetry(paths.previous, install, plan.renameTimeout, ops)) {
             return finish(plan, ops, paths, Outcome::Broken, false);
         }
         removeAll(paths.next);
         return finish(plan, ops, paths, Outcome::SwapUndone, true);
+    };
+    if (!journal(ops, paths, "swap-2 " + plan.version)) {
+        return undo();
+    }
+    if (!renameRetry(paths.next, install, plan.renameTimeout, ops)) {
+        return undo();
     }
 
-    writeText(paths.journal, "selftest " + plan.version);
+    // The new tree is in place, untested. Both failures below end the same
+    // way, by restoring .previous.
+    const auto rollBack = [&](Outcome outcome) {
+        // Taken even if this journal write fails: the one already on disk
+        // (swap-2 or selftest) makes recover() roll back the same way.
+        journal(ops, paths, "rollback " + plan.version);
+        removeAll(paths.failed);
+        if (!renameRetry(install, paths.failed, plan.renameTimeout, ops)
+            || !renameRetry(paths.previous, install, plan.renameTimeout, ops)) {
+            return finish(plan, ops, paths, Outcome::Broken, false);
+        }
+        return finish(plan, ops, paths, outcome, true);
+    };
+    if (!journal(ops, paths, "selftest " + plan.version)) {
+        return rollBack(Outcome::SwapUndone);   // never tested, so never kept
+    }
     if (selfTestPasses(plan, ops, paths)) {
         std::error_code ec;
         fs::remove(paths.marker, ec);
         return finish(plan, ops, paths, Outcome::Updated, true);
     }
-
-    // Roll back: the failed release aside (one kept), the previous one back.
-    writeText(paths.journal, "rollback " + plan.version);
-    removeAll(paths.failed);
-    if (!renameRetry(install, paths.failed, plan.renameTimeout, ops)
-        || !renameRetry(paths.previous, install, plan.renameTimeout, ops)) {
-        return finish(plan, ops, paths, Outcome::Broken, false);
-    }
-    return finish(plan, ops, paths, Outcome::RolledBack, true);
+    return rollBack(Outcome::RolledBack);
 }
 
 } // namespace AetherSDR::updater

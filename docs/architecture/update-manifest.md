@@ -216,10 +216,15 @@ else is refused.
    `<install>.failed`.
 6. Restart to update then starts the app; a swap on quit does not.
 
-A journal (`swap-journal.txt`) records each step before it is taken, so a
-helper that dies mid-swap is repaired by the next run. The install is
-restored from `.previous`, and a release whose self-test never finished is
-rolled back. Windows has no atomic folder swap; between step 4's two
+A journal (`swap-journal.txt`) records each step before it is taken, and
+a step is taken only once its record reached the disk. If a record can't
+be written, the step is skipped and the swap undone, so the last record on
+disk always matches the folders. A helper that dies mid-swap is repaired by
+the next run, but only after AetherSDR has exited, never while it runs. The
+install is restored from `.previous`, and a release that was in place but
+never passed its self-test (the journal at `swap-2`, `selftest` or
+`rollback`) is rolled back. The journal is kept while a repair is still
+owed: after a failed rollback, or when the app never exited. Windows has no atomic folder swap; between step 4's two
 renames nothing runnable is at `<install>` for a moment, and the journal
 covers that. The outcome goes to `swap-result.txt`, which the app reads once
 at its next start. A rolled-back release is remembered as

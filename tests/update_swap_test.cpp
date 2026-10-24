@@ -62,6 +62,7 @@ struct Harness {
     std::vector<std::pair<fs::path, std::vector<fs::path>>> launches;
     std::vector<std::shared_ptr<FakeProc>> procs;
     std::map<std::string, int> renameFailures;   // "<from name>" -> how many times to fail
+    std::string journalFailsAt;                  // a step ("swap-1") whose journal write fails
     std::vector<std::string> logLines;
 
     explicit Harness(const std::string& name)
@@ -116,6 +117,13 @@ struct Harness {
         };
         ops.now = [this] { return clock; };
         ops.log = [this](const std::string& s) { logLines.push_back(s); };
+        ops.writeJournal = [this](const fs::path& path, const std::string& text) {
+            if (!journalFailsAt.empty() && text.rfind(journalFailsAt, 0) == 0) {
+                return false;
+            }
+            put(path, text);
+            return true;
+        };
         ops.rename = [this](const fs::path& from, const fs::path& to, std::error_code& ec) {
             auto it = renameFailures.find(from.filename().string());
             if (it != renameFailures.end() && it->second != 0) {
@@ -267,6 +275,52 @@ void aFailedRollbackIsReportedNotHidden()
     h.renameFailures["AetherSDR.previous"] = -1;   // previous -> install never succeeds
     CHECK(run(h.plan, h.ops) == Outcome::Broken);
     CHECK(h.result() == "Broken 26.10.4\n");
+    // The journal survives, so once the lock clears the next run repairs it.
+    CHECK(fs::exists(h.paths().journal));
+    CHECK(!fs::exists(h.plan.install));
+    h.renameFailures.clear();
+    CHECK(recover(h.plan, h.ops));
+    CHECK(h.installed() == "good 26.10.3");
+    CHECK(!fs::exists(h.paths().journal));
+}
+
+void aJournalThatCannotBeWrittenStopsTheStep()
+{
+    for (const char* step : {"placing", "swap-1", "swap-2", "selftest"}) {
+        Harness h(std::string("journal-") + step);
+        h.journalFailsAt = step;
+        const Outcome o = run(h.plan, h.ops);
+        CHECK(o == Outcome::NotPossible || o == Outcome::SwapUndone);
+        CHECK(h.installed() == "good 26.10.3");   // the old version, whole
+        CHECK(!fs::exists(h.paths().next));
+        CHECK(!fs::exists(h.paths().journal));
+        // Nothing untested was ever left in place: no self-test ran.
+        CHECK(h.launches.empty());
+    }
+}
+
+void aPendingRepairWaitsForTheAppToExit()
+{
+    // A journal from a helper that died mid-self-test, and an app that is
+    // running again: nothing is renamed until it exits.
+    Harness h("pending-repair");
+    fs::rename(h.plan.install, h.paths().previous);
+    fs::rename(h.plan.staged, h.plan.install);
+    put(h.paths().journal, "selftest 26.10.4");
+    h.oldExits = false;
+    std::vector<std::string> renamed;
+    auto inner = h.ops.rename;
+    h.ops.rename = [&](const fs::path& f, const fs::path& t, std::error_code& ec) {
+        renamed.push_back(f.filename().string());
+        inner(f, t, ec);
+    };
+    CHECK(run(h.plan, h.ops) == Outcome::OldStillRunning);
+    CHECK(renamed.empty());
+    CHECK(h.installed() == "good 26.10.4");   // untouched
+    CHECK(fs::exists(h.paths().journal));     // still pending
+    h.oldExits = true;
+    run(h.plan, h.ops);   // the next run repairs, then updates as usual
+    CHECK(!fs::exists(h.paths().journal));
 }
 
 void aHelperThatDiedMidSwapIsRecovered()
@@ -281,6 +335,18 @@ void aHelperThatDiedMidSwapIsRecovered()
         CHECK(h.installed() == "good 26.10.3");
         CHECK(!fs::exists(h.paths().next));
         CHECK(!fs::exists(h.paths().journal));
+    }
+    {
+        // Died just after .new became the install, before the self-test was
+        // journaled: untested, so the previous version goes back.
+        Harness h("died-after-swap-2");
+        put(h.plan.staged / "AetherSDR.exe", "broken");
+        fs::rename(h.plan.install, h.paths().previous);
+        fs::rename(h.plan.staged, h.plan.install);
+        put(h.paths().journal, "swap-2 26.10.4");
+        CHECK(recover(h.plan, h.ops));
+        CHECK(h.installed() == "good 26.10.3");
+        CHECK(slurp(h.paths().failed / "AetherSDR.exe") == "broken");
     }
     {
         // Died during the self-test: the new release's health is unknown,
@@ -317,6 +383,8 @@ int main()
     aBriefLockIsWaitedOut();
     aLockThatNeverClearsIsUndone();
     aFailedRollbackIsReportedNotHidden();
+    aJournalThatCannotBeWrittenStopsTheStep();
+    aPendingRepairWaitsForTheAppToExit();
     aHelperThatDiedMidSwapIsRecovered();
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
