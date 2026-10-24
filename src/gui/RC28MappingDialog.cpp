@@ -1,9 +1,11 @@
 #ifdef HAVE_HIDAPI
 #include "RC28MappingDialog.h"
 
+#include "CanonIndicators.h"
+#include "GuardedSlider.h"   // GuardedComboBox lives here
 #include "core/AppSettings.h"
 #include "core/HidEncoderManager.h"
-#include "GuardedSlider.h"   // GuardedComboBox lives here
+#include "core/ThemeManager.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -16,6 +18,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QStyle>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
@@ -59,44 +62,136 @@ static const ActionEntry kHoldActions[] = {
     {"ToggleXit",   "XIT"},
 };
 
-static constexpr const char* kGroupStyle =
-    "QGroupBox {"
-    "  color: #c8d8e8;"
-    "  border: 1px solid #203040;"
-    "  border-radius: 4px;"
-    "  margin-top: 8px;"
-    "  padding-top: 6px;"
-    "  font-size: 11px;"
-    "}"
-    "QGroupBox::title {"
-    "  subcontrol-origin: margin;"
-    "  left: 8px;"
-    "  padding: 0 4px;"
-    "}";
-
-static constexpr const char* kLabelStyle = "color: #c8d8e8; font-size: 11px;";
-static constexpr const char* kDimStyle   = "color: #6080a0; font-size: 11px;";
-static constexpr const char* kComboStyle =
-    "QComboBox {"
-    "  background: #101828; color: #c8d8e8;"
-    "  border: 1px solid #203040; border-radius: 3px;"
-    "  padding: 2px 6px; font-size: 11px;"
-    "}"
-    "QComboBox::drop-down { border: none; }"
-    "QComboBox QAbstractItemView { background: #101828; color: #c8d8e8; }";
+// The style guide's canon vocabulary (RFC #6226), as Radio Setup uses it:
+// transparent over CanonWindow's ground, each section a raised card with its
+// cyan title above it, key labels muted, fields and buttons on control, and
+// the activity log nested.
+constexpr const char* kRc28Style = R"(
+QWidget {
+    color: {{color.canon.inkSoft}};
+    background: transparent;
+}
+QLabel {
+    background: transparent;
+}
+QLabel[rc28Role='key'] {
+    color: {{color.canon.muted}};
+}
+QLabel[rc28Role='dot'] {
+    color: {{color.canon.muted}};
+    font-size: 14px;
+}
+QLabel[rc28Role='status'] {
+    color: {{color.canon.muted}};
+}
+QLabel[rc28Role='dot'][rc28State='connected'] {
+    color: {{color.accent.success}};
+}
+QLabel[rc28Role='status'][rc28State='connected'] {
+    color: {{color.canon.ink}};
+    font-weight: 600;
+}
+QLabel[rc28Role='dot'][rc28State='warning'],
+QLabel[rc28Role='status'][rc28State='warning'] {
+    color: {{color.accent.warning}};
+}
+QGroupBox {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 8px;
+    margin-top: 24px;
+    padding-top: 0px;
+    font-weight: 700;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 1px;
+    top: 0px;
+    padding: 0;
+}
+QPushButton {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: {{color.canon.nested}};
+    color: {{color.canon.aqua}};
+}
+QPushButton:focus {
+    border-color: {{color.canon.aqua}};
+}
+QComboBox {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 3px 6px;
+}
+QComboBox:focus {
+    border-color: {{color.canon.aqua}};
+}
+QComboBox QAbstractItemView {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.lineHi}};
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QCheckBox,
+QRadioButton {
+    background: transparent;
+    color: {{color.canon.inkSoft}};
+    spacing: 8px;
+}
+QSlider::groove:horizontal {
+    background: {{color.canon.control}};
+    height: 6px;
+    border-radius: 3px;
+}
+QSlider::sub-page:horizontal {
+    background: {{color.canon.cyan}};
+    border-radius: 3px;
+}
+QSlider::handle:horizontal {
+    background: {{color.canon.ink}};
+    width: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+}
+QPlainTextEdit {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 6px;
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+)";
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
 RC28MappingDialog::RC28MappingDialog(HidEncoderManager* encoder,
                                      QWidget* parent)
-    : PersistentDialog("Icom RC-28 Button Mapping", "RC28MappingDialogGeometry", parent)
+    : CanonWindow(QStringLiteral("Icom RC-28 Button Mapping"), parent)
     , m_encoder(encoder)
 {
-    setMinimumWidth(420);
+    setObjectName(QStringLiteral("rc28MappingDialog"));
+    theme::setContainer(this, QStringLiteral("canon/rc28Mapping"));
+    setMinimumWidth(460);
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kRc28Style) + canonIndicatorRules();
+    });
 
     auto* root = new QVBoxLayout(bodyWidget());
-    root->setContentsMargins(10, 10, 10, 10);
+    root->setContentsMargins(14, 12, 14, 14);
     root->setSpacing(8);
+    root->addWidget(makeCanonHeader(QStringLiteral("Icom RC-28 Button Mapping")));
 
     buildDeviceSection();
     buildTxBarSection();
@@ -105,11 +200,8 @@ RC28MappingDialog::RC28MappingDialog(HidEncoderManager* encoder,
     buildLogSection();
 
     auto* closeBtn = new QPushButton("Close");
+    closeBtn->setObjectName(QStringLiteral("rc28MappingClose"));
     closeBtn->setAutoDefault(false);
-    closeBtn->setStyleSheet(
-        "QPushButton { background:#203040; color:#c8d8e8; border:1px solid #304050;"
-        "  border-radius:3px; padding:4px 16px; font-size:11px; }"
-        "QPushButton:hover { background:#2a3f55; }");
     auto* btnRow = new QHBoxLayout;
     btnRow->addStretch();
     btnRow->addWidget(closeBtn);
@@ -131,7 +223,6 @@ RC28MappingDialog::RC28MappingDialog(HidEncoderManager* encoder,
 void RC28MappingDialog::buildDeviceSection()
 {
     auto* group = new QGroupBox("Device");
-    group->setStyleSheet(kGroupStyle);
 
     auto* form = new QFormLayout(group);
     form->setSpacing(4);
@@ -139,9 +230,10 @@ void RC28MappingDialog::buildDeviceSection()
 
     auto* statusRow = new QHBoxLayout;
     m_statusDot   = new QLabel("●");
-    m_statusDot->setStyleSheet("color: #4060a0; font-size: 14px;");
+    m_statusDot->setProperty("rc28Role", QStringLiteral("dot"));
     m_statusLabel = new QLabel("Not connected");
-    m_statusLabel->setStyleSheet(kDimStyle);
+    m_statusLabel->setProperty("rc28Role", QStringLiteral("status"));
+    m_statusLabel->setAccessibleName("RC-28 connection status");
     statusRow->addWidget(m_statusDot);
     statusRow->addWidget(m_statusLabel);
     statusRow->addStretch();
@@ -151,15 +243,13 @@ void RC28MappingDialog::buildDeviceSection()
     m_pathLabel    = new QLabel("–");
     m_serialLabel  = new QLabel("–");
     m_firmwareLabel = new QLabel("–");
-    for (QLabel* l : {m_vidPidLabel, m_pathLabel, m_serialLabel, m_firmwareLabel})
-        l->setStyleSheet(kLabelStyle);
 
     auto* vidPidKey  = new QLabel("VID:PID");
     auto* pathKey    = new QLabel("Path");
     auto* serialKey  = new QLabel("Serial");
     auto* firmwareKey = new QLabel("Firmware");
     for (QLabel* l : {vidPidKey, pathKey, serialKey, firmwareKey})
-        l->setStyleSheet(kDimStyle);
+        l->setProperty("rc28Role", QStringLiteral("key"));
 
     form->addRow(vidPidKey,   m_vidPidLabel);
     form->addRow(pathKey,     m_pathLabel);
@@ -172,15 +262,12 @@ void RC28MappingDialog::buildDeviceSection()
 void RC28MappingDialog::buildTxBarSection()
 {
     auto* group = new QGroupBox("Transmit (PTT) Button");
-    group->setStyleSheet(kGroupStyle);
     auto* vbox = new QVBoxLayout(group);
     vbox->setSpacing(4);
     vbox->setContentsMargins(8, 6, 8, 8);
 
     m_momentaryBtn = new QRadioButton("Momentary  —  hold to transmit, release to stop");
     m_latchedBtn   = new QRadioButton("Latched  —  press to start transmitting, press again to stop");
-    m_momentaryBtn->setStyleSheet(kLabelStyle);
-    m_latchedBtn->setStyleSheet(kLabelStyle);
 
     const bool latched =
         HidEncoderManager::rc28MappingField("pttMode", "Momentary") == "Latched";
@@ -205,7 +292,6 @@ void RC28MappingDialog::buildTxBarSection()
 void RC28MappingDialog::buildAssignSection()
 {
     auto* group = new QGroupBox("Button Assignments");
-    group->setStyleSheet(kGroupStyle);
     auto* form = new QFormLayout(group);
     form->setSpacing(5);
     form->setContentsMargins(8, 6, 8, 8);
@@ -215,23 +301,15 @@ void RC28MappingDialog::buildAssignSection()
     m_f2PressCombo = new GuardedComboBox;
     m_f2HoldCombo  = new GuardedComboBox;
 
-    for (QComboBox* c : {m_f1PressCombo, m_f1HoldCombo, m_f2PressCombo, m_f2HoldCombo})
-        c->setStyleSheet(kComboStyle);
-
     populateActionCombo(m_f1PressCombo, "f1Press", "StepUp");
     populateActionCombo(m_f1HoldCombo,  "f1Hold",  "TuneFast", true);
     populateActionCombo(m_f2PressCombo, "f2Press", "StepDown");
     populateActionCombo(m_f2HoldCombo,  "f2Hold",  "ModeCycle", true);
 
-    auto makeLabel = [](const char* text) {
-        auto* l = new QLabel(text);
-        l->setStyleSheet("color:#c8d8e8; font-size:11px;");
-        return l;
-    };
-    form->addRow(makeLabel("F1  —  short press:"), m_f1PressCombo);
-    form->addRow(makeLabel("F1  —  long press:"), m_f1HoldCombo);
-    form->addRow(makeLabel("F2  —  short press:"), m_f2PressCombo);
-    form->addRow(makeLabel("F2  —  long press:"), m_f2HoldCombo);
+    form->addRow("F1  —  short press:", m_f1PressCombo);
+    form->addRow("F1  —  long press:", m_f1HoldCombo);
+    form->addRow("F2  —  short press:", m_f2PressCombo);
+    form->addRow("F2  —  long press:", m_f2HoldCombo);
 
     static_cast<QVBoxLayout*>(bodyWidget()->layout())->addWidget(group);
 }
@@ -239,13 +317,11 @@ void RC28MappingDialog::buildAssignSection()
 void RC28MappingDialog::buildEncoderSection()
 {
     auto* group = new QGroupBox("Encoder");
-    group->setStyleSheet(kGroupStyle);
     auto* vbox = new QVBoxLayout(group);
     vbox->setSpacing(4);
     vbox->setContentsMargins(8, 6, 8, 8);
 
     auto* invertCheck = new QCheckBox("Invert encoder direction");
-    invertCheck->setStyleSheet(kLabelStyle);
     invertCheck->setChecked(
         AppSettings::instance().value("HidEncoderInvertDir", "False").toString() == "True");
     connect(invertCheck, &QCheckBox::toggled, this, [this](bool on) {
@@ -262,15 +338,18 @@ void RC28MappingDialog::buildEncoderSection()
     // frequency step.  1 = normal (every pulse fires), 10 = most reduced. (#3841)
     auto* sensRow = new QHBoxLayout;
     auto* sensKey = new QLabel("Pulses per step:");
-    sensKey->setStyleSheet(kDimStyle);
+    sensKey->setProperty("rc28Role", QStringLiteral("key"));
     m_sensitivitySlider = new QSlider(Qt::Horizontal);
     m_sensitivitySlider->setRange(1, 10);
     m_sensitivitySlider->setTickPosition(QSlider::TicksBelow);
     m_sensitivitySlider->setTickInterval(1);
     const int savedSens = HidEncoderManager::rc28MappingField("sensitivity", "1").toInt();
     m_sensitivitySlider->setValue(savedSens >= 1 && savedSens <= 10 ? savedSens : 1);
+    m_sensitivitySlider->setAccessibleName("Pulses per step");
+    m_sensitivitySlider->setAccessibleDescription(
+        "1 to 10 encoder pulses per frequency step; higher is less sensitive");
+    sensKey->setBuddy(m_sensitivitySlider);
     m_sensitivityValueLabel = new QLabel(QString::number(m_sensitivitySlider->value()));
-    m_sensitivityValueLabel->setStyleSheet(kLabelStyle);
     m_sensitivityValueLabel->setFixedWidth(18);
     m_sensitivityValueLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     sensRow->addWidget(sensKey);
@@ -281,12 +360,10 @@ void RC28MappingDialog::buildEncoderSection()
         HidEncoderManager::setRc28MappingField("sensitivity", QString::number(v));
         emit mappingFieldChanged("sensitivity", QString::number(v));
     });
-    vbox->addLayout(sensRow);
 
     // Auto-snap: after the knob stops for 600 ms, snap to the nearest 1 kHz
     // without recentering the spectrum display. (#3841)
     m_autoSnapCheck = new QCheckBox("Auto-snap to nearest 1 kHz after rotation stops");
-    m_autoSnapCheck->setStyleSheet(kLabelStyle);
     m_autoSnapCheck->setChecked(
         HidEncoderManager::rc28MappingField("autoSnap", "False") == "True");
     connect(m_autoSnapCheck, &QCheckBox::toggled, this, [this](bool on) {
@@ -294,6 +371,7 @@ void RC28MappingDialog::buildEncoderSection()
         emit mappingFieldChanged("autoSnap", on ? "True" : "False");
     });
     vbox->addWidget(m_autoSnapCheck);
+    vbox->addLayout(sensRow);
 
     static_cast<QVBoxLayout*>(bodyWidget()->layout())->addWidget(group);
 }
@@ -301,31 +379,21 @@ void RC28MappingDialog::buildEncoderSection()
 void RC28MappingDialog::buildLogSection()
 {
     auto* group = new QGroupBox("Activity");
-    group->setStyleSheet(kGroupStyle);
     auto* vbox = new QVBoxLayout(group);
     vbox->setContentsMargins(8, 6, 8, 8);
     vbox->setSpacing(4);
 
     m_log = new QPlainTextEdit;
     m_log->setReadOnly(true);
+    m_log->setAccessibleName("RC-28 activity log");
     m_log->setMaximumBlockCount(50);
     m_log->setFixedHeight(100);
-    m_log->setStyleSheet(
-        "QPlainTextEdit {"
-        "  background:#080f18; color:#6080a0;"
-        "  border:1px solid #203040; border-radius:3px;"
-        "  font-family: monospace; font-size:10px;"
-        "}");
     m_log->setPlaceholderText("Button events appear here while the dialog is open…");
     vbox->addWidget(m_log);
 
     auto* clearBtn = new QPushButton("Clear");
     clearBtn->setAutoDefault(false);
-    clearBtn->setFixedWidth(60);
-    clearBtn->setStyleSheet(
-        "QPushButton { background:#203040; color:#c8d8e8; border:1px solid #304050;"
-        "  border-radius:3px; padding:2px 8px; font-size:10px; }"
-        "QPushButton:hover { background:#2a3f55; }");
+    clearBtn->setAccessibleName("Clear activity log");
     connect(clearBtn, &QPushButton::clicked, m_log, &QPlainTextEdit::clear);
 
     auto* row = new QHBoxLayout;
@@ -361,6 +429,15 @@ void RC28MappingDialog::populateActionCombo(QComboBox* combo,
     });
 }
 
+void RC28MappingDialog::setStatusState(const QString& state)
+{
+    for (QLabel* l : {m_statusDot, m_statusLabel}) {
+        l->setProperty("rc28State", state);
+        l->style()->unpolish(l);
+        l->style()->polish(l);
+    }
+}
+
 void RC28MappingDialog::refreshDeviceInfo()
 {
     if (!m_encoder) return;
@@ -379,14 +456,10 @@ void RC28MappingDialog::refreshDeviceInfo()
         }
     }
 
-    m_statusDot->setStyleSheet(
-        connected ? "color:#00c070; font-size:14px;"
-                  : "color:#4060a0; font-size:14px;");
     if (connected)
         m_knownDeviceName = m_encoder->deviceName();
     m_statusLabel->setText(connected ? m_knownDeviceName : "Not connected");
-    m_statusLabel->setStyleSheet(
-        connected ? "color:#c8d8e8; font-size:11px;" : kDimStyle);
+    setStatusState(connected ? QStringLiteral("connected") : QStringLiteral("idle"));
 
     if (connected) {
         m_vidPidLabel->setText(
@@ -422,11 +495,10 @@ void RC28MappingDialog::onConnectionChanged(bool connected,
 
 void RC28MappingDialog::onMultipleDevicesDetected(const QString& deviceName)
 {
-    m_statusDot->setStyleSheet("color:#ffaa00; font-size:14px;");
     m_statusLabel->setText(
         QString("Multiple %1s detected on this system. "
                 "Only one encoder is supported at a time.").arg(deviceName));
-    m_statusLabel->setStyleSheet("color:#ffaa00; font-size:11px;");
+    setStatusState(QStringLiteral("warning"));
     for (QLabel* l : {m_vidPidLabel, m_pathLabel, m_serialLabel, m_firmwareLabel})
         l->setText("–");
 }
