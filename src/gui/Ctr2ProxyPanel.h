@@ -38,8 +38,10 @@ public:
     // Whether this build's rule is already installed, locally or packaged.
     static bool accessRuleInstalled();
     // A CTR2 window action found the device closed to this login: offer the
-    // rule, and call afterInstalled once it is in place.
-    void offerAccessRule(RuleUse use, std::function<void()> afterInstalled);
+    // rule, and call afterInstalled once it is in place. False when no install
+    // started (declined, already installed, no pkexec, one already running):
+    // the caller carries on as it would without the rule.
+    bool offerAccessRule(RuleUse use, std::function<void()> afterInstalled);
 #endif
 
 private:
@@ -50,7 +52,8 @@ private:
     void syncStats();
     void onStartClicked();
 #ifdef Q_OS_LINUX
-    void offerUsbAccessRule(RuleUse use = RuleUse::Relay);
+    // True when the install started.
+    bool offerUsbAccessRule(RuleUse use = RuleUse::Relay);
     void showManualRuleInstructions(const QString& why);
     void installUsbAccessRule(RuleUse use);
     void startAfterRuleInstalled(int attemptsLeft);

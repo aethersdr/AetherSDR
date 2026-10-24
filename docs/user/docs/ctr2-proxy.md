@@ -108,8 +108,9 @@ AetherKnob.
   cannot be opened, **Start** offers to install the rule
   (`/etc/udev/rules.d/70-aethersdr-ctr2.rules`) through `pkexec`, asking for
   your administrator password once. The rule opens CTR2 controllers, the
-  AetherKnob, and ESP32 boards in download mode (for firmware installs) to
-  whoever is logged in at the computer, and to no one else.
+  AetherKnob, and the USB serial port of ESP32-S3 boards (which the CTR2-Max
+  uses in download mode, for firmware installs) to whoever is logged in at the
+  computer, and to no one else.
 - **AetherKnob** (an AetherSDR controller on the Elecrow CrowPanel 2.1"
   rotary display) uses USB mode the same way. It appears in the list as
   **AetherKnob**. While it is relaying, AetherSDR also sends it a 32-bar

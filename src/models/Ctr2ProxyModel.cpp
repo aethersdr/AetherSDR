@@ -193,9 +193,6 @@ void Ctr2ProxyModel::refreshDevices()
     ++m_scanGeneration;   // a background scan already under way is stale
     applyDeviceScan({m_listenAddresses ? m_listenAddresses() : QStringList(),
                      m_usbDevices ? m_usbDevices() : QList<Ctr2HidPort::DeviceInfo>()});
-    // A device that was closed to this login (no Linux access rule yet) was
-    // never probed: an explicit rescan tries again.
-    probeFirmwareVersion();
 }
 
 // Enumerating interfaces and HID devices can block for a long time, on

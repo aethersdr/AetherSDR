@@ -292,16 +292,16 @@ bool Ctr2ProxyPanel::accessRuleInstalled()
     return ruleAlreadyInstalled(loadRule());
 }
 
-void Ctr2ProxyPanel::offerAccessRule(RuleUse use, std::function<void()> afterInstalled)
+bool Ctr2ProxyPanel::offerAccessRule(RuleUse use, std::function<void()> afterInstalled)
 {
     if (m_installingRule) {
-        return;
+        return false;
     }
     m_afterRule = std::move(afterInstalled);
-    offerUsbAccessRule(use);
+    return offerUsbAccessRule(use);
 }
 
-void Ctr2ProxyPanel::offerUsbAccessRule(RuleUse use)
+bool Ctr2ProxyPanel::offerUsbAccessRule(RuleUse use)
 {
     const bool firmware = use == RuleUse::DownloadMode;
     const bool relay = use == RuleUse::Relay;
@@ -325,12 +325,12 @@ void Ctr2ProxyPanel::offerUsbAccessRule(RuleUse use)
                                 "cannot use it."));
         box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
         box.get()->exec();
-        return;
+        return false;
     }
     if (QStandardPaths::findExecutable(QStringLiteral("pkexec")).isEmpty()) {
         m_afterRule = nullptr;
         showManualRuleInstructions(tr("pkexec is not installed"));
-        return;
+        return false;
     }
 
     ScopedChildWidget<CanonMessageBox> box(
@@ -343,9 +343,10 @@ void Ctr2ProxyPanel::offerUsbAccessRule(RuleUse use)
         this);
     box.get()->setInformativeText(
         tr("AetherSDR can install a small system rule that lets whoever is logged in "
-           "at this computer open CTR2 controllers, and ESP32 boards in download mode "
-           "for firmware installs. You will be asked for your administrator password "
-           "once; after that it works every time.\n\nThe rule is written to %1.")
+           "at this computer open CTR2 controllers, and the USB serial port of ESP32-S3 "
+           "boards, which the CTR2-Max uses in download mode for firmware installs. You "
+           "will be asked for your administrator password once; after that it works "
+           "every time.\n\nThe rule is written to %1.")
             .arg(kRuleTarget));
     box.get()->addButton(tr("Not now"), CanonMessageBox::Role::Reject);
     QPushButton* install = box.get()->addButton(tr("Install rule"), CanonMessageBox::Role::Accept);
@@ -353,9 +354,10 @@ void Ctr2ProxyPanel::offerUsbAccessRule(RuleUse use)
     box.get()->exec();
     if (box && box.get()->clickedButton() == install) {
         installUsbAccessRule(use);
-    } else {
-        m_afterRule = nullptr;
+        return true;
     }
+    m_afterRule = nullptr;
+    return false;
 }
 
 // No usable polkit: save the rule where the operator can copy it by hand.
@@ -388,7 +390,8 @@ void Ctr2ProxyPanel::showManualRuleInstructions(const QString& why)
     box.get()->setInformativeText(
         QStringLiteral("sudo cp '%1' '%2'\n"
                        "sudo udevadm control --reload-rules\n"
-                       "sudo udevadm trigger --subsystem-match=hidraw --subsystem-match=tty "
+                       "sudo udevadm trigger --subsystem-match=hidraw\n"
+                       "sudo udevadm trigger --subsystem-match=tty "
                        "--property-match=ID_VENDOR_ID=303a --property-match=ID_VENDOR_ID=2886")
             .arg(saved, kRuleTarget));
     box.get()->setTextSelectable(true);
@@ -428,7 +431,10 @@ void Ctr2ProxyPanel::installUsbAccessRule(RuleUse use)
         "set -e; "
         "printf '%s' \"$1\" > \"$2\"; "
         "udevadm control --reload-rules; "
-        "udevadm trigger --subsystem-match=hidraw --subsystem-match=tty "
+        // hidraw nodes carry no ID_VENDOR_ID before systemd 256, so they are
+        // all retriggered; ttys only for Espressif and Seeed devices.
+        "udevadm trigger --subsystem-match=hidraw; "
+        "udevadm trigger --subsystem-match=tty "
         "--property-match=ID_VENDOR_ID=303a --property-match=ID_VENDOR_ID=2886; "
         "udevadm settle --timeout=5 || true");
 

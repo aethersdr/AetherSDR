@@ -28,7 +28,6 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
-#include <memory>
 
 #ifdef Q_OS_LINUX
 #include <cerrno>
@@ -83,6 +82,26 @@ FirmwareInstallModel::Target afterAlert(FirmwareInstallModel& fw,
     return now.device == FirmwareInstallModel::Device::Bootloader && fw.loaderCount() == 1
                ? now
                : target;
+}
+
+// For a run after an access grant: the unit as it is now, if it is the one
+// the operator chose (same MAC, or the only one in download mode when the
+// choice had none); else false with the reason.
+bool retarget(FirmwareInstallModel& fw, const FirmwareInstallModel::Target& chosen,
+              FirmwareInstallModel::Target* now, QString* problem)
+{
+    fw.lookAgain();
+    const FirmwareInstallModel::Target current = fw.target();
+    const bool same = chosen.mac.isEmpty()
+        ? current.device == FirmwareInstallModel::Device::Bootloader && fw.loaderCount() == 1
+        : current.mac.compare(chosen.mac, Qt::CaseInsensitive) == 0;
+    if (!same) {
+        *problem = FirmwareInstallDialog::tr("The CTR2-Max changed while access was being "
+                                             "granted. Press the button again.");
+        return false;
+    }
+    *now = current;
+    return true;
 }
 
 QListWidgetItem* note(QListWidget* list, const QString& text)
@@ -352,6 +371,7 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
             [this] { restartInto(int(FirmwareInstallModel::Firmware::Bootloader)); });
     connect(m_cancel, &QPushButton::clicked, this, [this] {
         // Before cancel(): a wait ends at once, and says so.
+        m_actions.invalidate();   // no access retry resumes what was stopped
         m_step->setText(tr("Stopping…"));
         m_fw->cancel();
     });
@@ -680,38 +700,48 @@ bool FirmwareInstallDialog::offerAccessFirst(std::function<void()> again)
     const QByteArray path = target.hidPath.toLocal8Bit();
     if (::access(path.constData(), R_OK | W_OK) == 0 || errno != EACCES)
         return false;
-    m_relay->offerAccessRule(Ctr2ProxyPanel::RuleUse::Firmware, [this, again] {
+    // A ticket for this press: another action or Cancel meanwhile drops it.
+    const Ctr2ActionRetry::Ticket ticket = m_actions.mark();
+    // Declined, or no install could start: the action goes ahead as before.
+    return m_relay->offerAccessRule(Ctr2ProxyPanel::RuleUse::Firmware, [this, ticket, again] {
         // What the action can do (restart on request, or the buttons) depends
         // on the firmware's version and commands, which the relay reads once
         // it can open the device: rescan, and wait for them (up to ~5 s).
         if (m_model)
             m_model->refreshDevices();
-        auto wait = std::make_shared<std::function<void(int)>>();
-        *wait = [this, again, wait](int tries) {
-            if (tries > 0 && m_fw->linkVersion().isEmpty()) {
-                QTimer::singleShot(250, this, [wait, tries] { (*wait)(tries - 1); });
-                return;
-            }
-            again();
-        };
-        (*wait)(20);
+        waitForFirmwareInfo(20, ticket, again);
     });
-    return true;
 #else
     Q_UNUSED(again);
     return false;
 #endif
 }
 
-void FirmwareInstallDialog::runJob(const QString& doneText, std::function<bool(QString*)> job,
-                                   bool accessRetry)
+void FirmwareInstallDialog::waitForFirmwareInfo(int tries, Ctr2ActionRetry::Ticket ticket,
+                                                std::function<void()> again)
 {
-    m_accessRetried = accessRetry;
-    m_lastJob = job;
-    m_lastJobDone = doneText;
+    if (!m_actions.current(ticket))
+        return;
+    // Known once the relay has read the device: a version (AetherCTR2), or
+    // the restart commands (stock firmware that offers them). Stock firmware
+    // without them stays unknown, and gets the buttons after the wait.
+    if (tries > 0 && m_fw->linkVersion().isEmpty() && !m_fw->takesCommands(m_fw->target())) {
+        QTimer::singleShot(250, this, [this, tries, ticket, again] {
+            waitForFirmwareInfo(tries - 1, ticket, again);
+        });
+        return;
+    }
+    again();
+}
+
+
+void FirmwareInstallDialog::runJob(const QString& doneText, Ctr2ActionRetry::Job job,
+                                   bool retarget, bool retryUsed)
+{
+    m_actions.started(job, doneText, retryUsed);
     m_jobDone = doneText;
     QString problem;
-    const bool ok = job(&problem);
+    const bool ok = job(retarget, &problem);
     started(ok, problem, doneText);
 }
 
@@ -768,8 +798,9 @@ void FirmwareInstallDialog::confirmRestore(const QString& path)
     target = afterAlert(*m_fw, target);
     const QString done = tr("The backup is restored and the CTR2-Max is restarting.");
     m_step->setText(tr("Connecting…"));
-    runJob(done, [this, target, path](QString* problem) {
-        return m_fw->restoreBackup(target, path, problem);
+    runJob(done, [this, target, path](bool again, QString* problem) {
+        FirmwareInstallModel::Target t = target;
+        return (!again || retarget(*m_fw, target, &t, problem)) && m_fw->restoreBackup(t, path, problem);
     });
 }
 
@@ -811,7 +842,10 @@ void FirmwareInstallDialog::onInstall()
     const QString done =
         tr("%1 %2 is installed and starting. The backup is in %3.").arg(product, version, folder);
     m_step->setText(tr("Connecting…"));
-    runJob(done, [this, target](QString* problem) { return m_fw->installRelease(target, problem); });
+    runJob(done, [this, target](bool again, QString* problem) {
+        FirmwareInstallModel::Target t = target;
+        return (!again || retarget(*m_fw, target, &t, problem)) && m_fw->installRelease(t, problem);
+    });
 }
 
 void FirmwareInstallDialog::installOverLink()
@@ -840,7 +874,7 @@ void FirmwareInstallDialog::installOverLink()
         return;
     const QString done = tr("%1 %2 is installed and running.").arg(product, version);
     m_step->setText(tr("Starting the update…"));
-    runJob(done, [this, target](QString* why) { return m_fw->installOverLink(target, why); });
+    runJob(done, [this, target](bool, QString* why) { return m_fw->installOverLink(target, why); });
 }
 
 void FirmwareInstallDialog::onOpenFile()
@@ -906,8 +940,9 @@ void FirmwareInstallDialog::installStockFirmware()
     const QString done =
         tr("%1 is installed and starting. The backup is in %2.").arg(name, folder);
     m_step->setText(tr("Connecting…"));
-    runJob(done, [this, target](QString* problem) {
-        return m_fw->installStockFirmware(target, problem);
+    runJob(done, [this, target](bool again, QString* problem) {
+        FirmwareInstallModel::Target t = target;
+        return (!again || retarget(*m_fw, target, &t, problem)) && m_fw->installStockFirmware(t, problem);
     });
 }
 
@@ -939,8 +974,10 @@ void FirmwareInstallDialog::restartInto(int which)
                              ? tr("The CTR2-Max is restarting into its stock firmware.")
                              : tr("The CTR2-Max is restarting into download mode.");
     m_step->setText(tr("Asking the CTR2-Max to restart…"));
-    runJob(done, [this, target, firmware](QString* problem) {
-        return m_fw->restartInto(target, firmware, problem);
+    runJob(done, [this, target, firmware](bool again, QString* problem) {
+        FirmwareInstallModel::Target t = target;
+        return (!again || retarget(*m_fw, target, &t, problem))
+               && m_fw->restartInto(t, firmware, problem);
     });
 }
 
@@ -958,24 +995,23 @@ void FirmwareInstallDialog::onFinished(bool ok, const QString& message)
     // The download-mode port is closed to this login: offer the access rule,
     // then run the same action again. Queued, so the question does not open
     // inside the job's own finished signal.
-    if (!ok && m_fw->lastFailureAccessDenied() && m_lastJob && m_relay) {
-        // The action that failed, not whichever runs last by the time the
-        // operator has answered the password prompt.
-        const auto job = m_lastJob;
-        const QString done = m_lastJobDone;
-        const auto again = [this, job, done] {
-            if (m_fw->busy())
+    if (!ok && m_fw->lastFailureAccessDenied() && m_actions.hasJob() && m_relay) {
+        // The action that failed, and only while it is still the operator's
+        // latest: another action or Cancel in the meantime drops the retry.
+        const Ctr2ActionRetry::Ticket ticket = m_actions.ticket();
+        const auto again = [this, ticket] {
+            if (!m_actions.current(ticket) || m_fw->busy())
                 return;
             m_step->setText(tr("Access granted. Trying again…"));
-            runJob(done, job);
+            runJob(ticket.doneText, ticket.job, true);
         };
         // With the rule in place, a port that has only just appeared may not
         // have its ACL yet: try once more before saying anything.
-        if (Ctr2ProxyPanel::accessRuleInstalled() && !m_accessRetried) {
-            QTimer::singleShot(1000, this, [this, job, done] {
-                if (m_fw->busy())
+        if (Ctr2ProxyPanel::accessRuleInstalled() && !m_actions.retried()) {
+            QTimer::singleShot(1000, this, [this, ticket] {
+                if (!m_actions.current(ticket) || m_fw->busy())
                     return;
-                runJob(done, job, true);
+                runJob(ticket.doneText, ticket.job, true, true);
             });
             return;
         }

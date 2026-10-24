@@ -11,6 +11,7 @@
 #include "core/Ctr2UsbRelay.h"
 #include "models/Ctr2ProxyModel.h"
 #include "gui/Ctr2AccessRule.h"
+#include "gui/Ctr2ActionRetry.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -274,8 +275,6 @@ void testUdevRuleMatchesKnownCtr2s()
     }
 }
 
-// Firmware that names itself: a 303A:1001 product string starting "Aether" is
-// shown as the model if it is a short printable name; otherwise it is unknown.
 // udev uses the first copy of a rule file in precedence order; a copy in
 // /etc masks the packaged one. "Already installed" must mean the copy in
 // effect, or an operator with an older rule in /etc is never offered the new one.
@@ -304,8 +303,41 @@ void testUdevRuleInEffect()
     check(AetherSDR::udevRuleInEffect(dirs, name, current), "the current copy in /etc: installed");
     check(AetherSDR::udevRuleDirs().first() == QStringLiteral("/etc/udev/rules.d"),
           "/etc is udev's highest precedence");
+    // An administrator's mask: never offered, so never written through.
+    QFile::remove(etc + QLatin1Char('/') + name);
+    check(QFile::link(QStringLiteral("/dev/null"), etc + QLatin1Char('/') + name)
+              && AetherSDR::udevRuleInEffect(dirs, name, current),
+          "a /dev/null mask in /etc counts as settled");
 }
 
+// A retry armed for one CTR2 window action runs only while that action is
+// still the operator's latest: another action or Cancel drops it.
+void testActionRetryTickets()
+{
+    AetherSDR::Ctr2ActionRetry actions;
+    int runs = 0;
+    const AetherSDR::Ctr2ActionRetry::Job first = [&runs](bool, QString*) { ++runs; return false; };
+    actions.started(first, QStringLiteral("first done"));
+    const auto ticket = actions.ticket();
+    check(actions.current(ticket) && !actions.retried(), "the failed action's ticket is current");
+    check(ticket.doneText == QStringLiteral("first done") && ticket.job, "and carries that action");
+    actions.started([](bool, QString*) { return true; }, QStringLiteral("second done"));
+    check(!actions.current(ticket), "a newer action makes the old ticket stale");
+
+    actions.started(first, QStringLiteral("first done"));
+    const auto again = actions.ticket();
+    actions.invalidate();
+    check(!actions.current(again), "Cancel makes it stale");
+
+    const auto pressed = actions.mark();
+    check(actions.current(pressed), "a press waiting on the access question is current");
+    actions.started(first, QStringLiteral("first done"), true);
+    check(!actions.current(pressed) && actions.retried(),
+          "until an action starts; a retry is marked as the one retry");
+}
+
+// Firmware that names itself: a 303A:1001 product string starting "Aether" is
+// shown as the model if it is a short printable name; otherwise it is unknown.
 void testSelfNamedDevices()
 {
     const auto named = [](const QString& product, quint16 vid = 0x303A) {
@@ -1016,6 +1048,7 @@ int main(int argc, char** argv)
     testProbeFollowsSelection();
     testUdevRuleMatchesKnownCtr2s();
     testUdevRuleInEffect();
+    testActionRetryTickets();
     testSelfNamedDevices();
     testAutoStart(QStringLiteral("AetherCTR2"));   // names itself
     testAutoStart(QStringLiteral("AETHER_KNOB"));  // the fixed AetherKnob identity

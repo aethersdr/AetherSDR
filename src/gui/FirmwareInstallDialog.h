@@ -11,6 +11,8 @@ class QLabel;
 class QProgressBar;
 class QPushButton;
 
+#include "Ctr2ActionRetry.h"
+
 #include <functional>
 
 namespace AetherSDR {
@@ -60,14 +62,19 @@ private:
     // Starts an action on the device (job returns false with the reason when
     // it cannot start), keeping it so it can run again once Linux grants
     // access to the download-mode port.
-    // accessRetry: this run is the one retry after a permission failure.
-    void runJob(const QString& doneText, std::function<bool(QString*)> job,
-                bool accessRetry = false);
+    // retarget: the run follows an access grant (see Ctr2ActionRetry::Job);
+    // retryUsed: it is the one quiet retry after a permission failure.
+    void runJob(const QString& doneText, Ctr2ActionRetry::Job job, bool retarget = false,
+                bool retryUsed = false);
     // Linux: when the CTR2 running its firmware is closed to this login, offers
     // the access rule and returns true; `again` repeats the action once it is
     // installed. The firmware's version and commands are read over that
     // device, so nothing else can be decided until then.
     bool offerAccessFirst(std::function<void()> again);
+    // After the rule is installed: waits (up to tries × 250 ms) for the
+    // relay to read the firmware's version, then runs `again` if `ticket` is
+    // still the current action.
+    void waitForFirmwareInfo(int tries, Ctr2ActionRetry::Ticket ticket, std::function<void()> again);
     // Starting an action: its result, or the reason it did not start.
     void started(bool ok, const QString& problem, const QString& doneText);
     // When buttons are needed, asks the operator to enter download mode.
@@ -101,9 +108,7 @@ private:
     bool m_installAfterDownload{false};   // Install pressed on a release to download
 
     QString m_jobDone;       // the success message for the running action
-    std::function<bool(QString*)> m_lastJob;   // the last action started, and
-    QString m_lastJobDone;                     // its success message
-    bool m_accessRetried{false};   // the last action was already retried once for access
+    Ctr2ActionRetry m_actions;   // the last action started, for a retry after access is granted
 };
 
 } // namespace AetherSDR
