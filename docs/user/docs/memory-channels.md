@@ -57,7 +57,17 @@ SmartSDR and AetherSDR, use **Profiles → Import/Export Profiles...**; see
 
 The **Memory** button in the panadapter's overlay menu opens a compact list
 (Frequency, Name) for recall without the full dialog. Its **Add Memory**
-button always stores the **active** slice.
+button always stores the **active** slice. The panel fits the panadapter height
+when you open it or resize the window. In a short panadapter, use the mouse
+wheel or the list's vertical scrollbar to reach every memory; **Add Memory**
+stays above the scrolling list.
+
+Select the **Search memories** magnifying-glass icon beside **Add Memory** to
+show a name filter directly below it. Results update as you type, ignoring
+letter case. Typing or pressing Enter in the filter does not recall a memory;
+select a result to recall it. Clear the field to restore the full list, or
+select the search icon again to hide the field and clear its filter. The query
+is not saved between application sessions.
 
 When SpotHub's **Memories** toggle is on, every memory also appears as a
 marker on the panadapter at its frequency. See [SpotHub](./spothub.md).
