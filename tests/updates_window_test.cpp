@@ -175,6 +175,7 @@ int main(int argc, char** argv)
         const QWidget* numerals = w.findChild<QWidget*>(QStringLiteral("updatesVersion"));
         check(numerals && numerals->accessibleName() == QLatin1String("Version 26.10.3"),
               "offline, the release is named");
+        check(text(w, "updatesChaptersTitle").isEmpty(), "offline, no chapters are built from the saved version");
         check(text(w, "updatesNote").contains(QLatin1String("Couldn't reach GitHub")),
               "offline, a note says the details are missing");
         const QPushButton* retry = button(w, QStringLiteral("Check Now"));
@@ -229,6 +230,27 @@ int main(int argc, char** argv)
             app.processEvents();
             check(text(w, "updatesEyebrow") == QLatin1String("COULDN'T REACH GITHUB"),
                   "offline, a saved release that is not newer reports the failure");
+        }
+    }
+
+    {
+        // Opened on a saved version, then GitHub answers for that same
+        // version: the answer's chapters and highlights must be built.
+        for (const char* running : {"26.10.3", "26.10.2"}) {
+            QCoreApplication::setApplicationVersion(QString::fromLatin1(running));
+            UpdateSettings::setSkippedVersion(QString());
+            UpdateSettings::recordAnswer(QDateTime::currentDateTimeUtc(), QStringLiteral("26.10.3"));
+            HeldNetwork network;
+            UpdateChecker checker(nullptr, &network);
+            UpdatesWindow w(&checker, nullptr);
+            w.show();
+            network.last->finishWithBody(releaseJson(QStringLiteral("tagline")));
+            app.processEvents();
+            check(text(w, "updatesChaptersTitle") == QStringLiteral("WHAT'S INSIDE · 10 CHAPTERS"),
+                  "the answer's chapters replace the saved version's");
+            const QWidget* chips = w.findChild<QWidget*>(QStringLiteral("updatesChapters"));
+            check(chips && chips->findChildren<QFrame*>(QStringLiteral("updatesChip")).size() == 10,
+                  "one chip per chapter after the answer");
         }
     }
 

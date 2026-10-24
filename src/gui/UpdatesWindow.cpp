@@ -49,9 +49,12 @@ public:
         setAttribute(Qt::WA_TransparentForMouseEvents);
         setAttribute(Qt::WA_TranslucentBackground);
     }
+    // The label the numerals sit beside: their baseline is drawn level with
+    // its baseline when both are bottom-aligned in a row.
+    void setBaselinePartner(const QLabel* partner) { m_partner = partner; }
     void setVersion(const QString& version, bool gradient)
     {
-        m_text = version;
+        m_text = version.isEmpty() ? QString() : QStringLiteral("v") + version;
         m_gradient = gradient;
         setAccessibleName(version.isEmpty() ? QString() : QStringLiteral("Version %1").arg(version));
         updateGeometry();
@@ -60,7 +63,7 @@ public:
     QSize sizeHint() const override
     {
         const QFontMetrics fm(m_font);
-        return {fm.horizontalAdvance(m_text) + 4, fm.height()};
+        return {fm.horizontalAdvance(m_text) + 4, fm.ascent() + belowBaseline()};
     }
 
 protected:
@@ -78,6 +81,17 @@ protected:
     }
 
 private:
+    // How far the partner's baseline sits above its bottom edge.
+    int belowBaseline() const
+    {
+        if (!m_partner) {
+            return QFontMetrics(m_font).descent();
+        }
+        return QFontMetrics(m_partner->font()).descent() + m_partner->contentsMargins().bottom()
+               + m_partner->margin();
+    }
+
+    QPointer<const QLabel> m_partner;
     QString m_text;
     QFont m_font;
     bool m_gradient{false};
@@ -180,6 +194,7 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
     nameRow->addWidget(product, 0, Qt::AlignBottom);
     auto* numerals = new VersionNumerals(m_header);
     numerals->setObjectName(QStringLiteral("updatesVersion"));
+    numerals->setBaselinePartner(product);
     m_version = numerals;
     nameRow->addWidget(numerals, 0, Qt::AlignBottom);
     nameRow->addStretch(1);
@@ -211,6 +226,7 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
     content->addWidget(m_note);
 
     m_chaptersTitle = plainLabel(QStringLiteral("section"));
+    m_chaptersTitle->setObjectName(QStringLiteral("updatesChaptersTitle"));
     content->addWidget(m_chaptersTitle);
     m_chips = new QWidget;
     m_chips->setObjectName(QStringLiteral("updatesChapters"));
@@ -352,7 +368,9 @@ void UpdatesWindow::refresh()
     const ReleaseInfo release = known ? m_checker->latestRelease() : ReleaseInfo{};
     auto* numerals = static_cast<VersionNumerals*>(m_version);
 
-    if (known && m_builtFor != release.version) {
+    // A version saved by an earlier answer carries no details: build only
+    // from a real answer, or that answer would find the version already built.
+    if (known && !release.fromSettings && m_builtFor != release.version) {
         rebuildRelease();
     }
 
