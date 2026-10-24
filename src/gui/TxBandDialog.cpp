@@ -1,6 +1,8 @@
 #include "TxBandDialog.h"
 
+#include "CanonIndicators.h"
 #include "ControlAvailabilityRegistry.h"
+#include "FramelessResizer.h"
 
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
@@ -19,23 +21,122 @@
 namespace AetherSDR {
 using BandField = TxBandRequest::Field;
 
+namespace {
+
+// The table is a grid of cells over a hairline-coloured ground: the 1 px
+// spacing between cells draws the rules. The body and everything in it start
+// transparent over the canon ground; the cell rules are scoped under #canonBody
+// so they outrank that, and popups (a field's right-click menu) are
+// descendants too, so they get their panel back.
+constexpr const char* kTxBandStyle = R"(
+QWidget#canonBody, QWidget#canonBody QWidget {
+    background: transparent;
+}
+QWidget#canonBody QMenu {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
+}
+QWidget#canonBody QMenu::item {
+    padding: 4px 18px;
+}
+QWidget#canonBody QMenu::item:selected {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+}
+QWidget#canonBody QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QWidget#canonBody QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
+}
+QWidget#canonBody {
+    color: {{color.canon.inkSoft}};
+}
+QWidget#canonBody QWidget#txBandGrid {
+    background: {{color.canon.line}};
+}
+QWidget#canonBody QLabel[txBandCell="header"] {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.raised}};
+    font-size: 10px;
+    font-weight: 700;
+    padding: 3px 5px;
+}
+QWidget#canonBody QLabel[txBandCell="band"] {
+    color: {{color.canon.ink}};
+    background: {{color.canon.nested}};
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 6px;
+}
+QWidget#canonBody QWidget[txBandCell="value"] {
+    background: {{color.canon.nested}};
+}
+QWidget#canonBody QLineEdit {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 2px;
+    font-size: 11px;
+}
+QWidget#canonBody QLineEdit:focus {
+    border-color: {{color.canon.aqua}};
+}
+QWidget#canonBody QCheckBox {
+    spacing: 0px;
+}
+QWidget#canonBody QLabel[txBandCell="note"] {
+    color: {{color.canon.muted}};
+    font-size: 11px;
+}
+)";
+
+// A cell that centres one widget, painted as a table cell.
+QWidget* valueCell(QWidget* content)
+{
+    auto* cell = new QWidget;
+    cell->setProperty("txBandCell", QStringLiteral("value"));
+    auto* layout = new QHBoxLayout(cell);
+    layout->setContentsMargins(2, 2, 2, 2);
+    layout->setAlignment(Qt::AlignCenter);
+    layout->addWidget(content);
+    return cell;
+}
+
+} // namespace
+
 TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
-    : PersistentDialog(
+    : CanonWindow(
         QStringLiteral("TX Band Settings (Current TX Profile: %1)")
             .arg(model ? model->transmitModel().activeProfile() : QString()),
-        QStringLiteral("TxBandDialogGeometry"),
-        parent),
+        parent, Kind::Workspace),
       m_model(model)
 {
-    theme::setContainer(this, QStringLiteral("dialog/txBand"));
+    theme::setContainer(this, QStringLiteral("canon/txBand"));
+    // Size and position persist under TxBandDialogGeometry, the key earlier
+    // releases wrote, so a saved rectangle still restores; it resizes from
+    // every edge.
+    setGeometryKey(QStringLiteral("TxBandDialogGeometry"));
     setMinimumSize(700, 450);
-    setStyleSheet(QStringLiteral("QDialog { background: #0f0f1a; }"));
+    FramelessResizer::install(this);
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kTxBandStyle) + canonIndicatorRules();
+    });
 
     auto* vb = new QVBoxLayout(bodyWidget());
-    vb->setSpacing(9);
+    vb->setContentsMargins(14, 12, 14, 14);
+    vb->setSpacing(10);
+    vb->addWidget(makeCanonHeader(windowTitle()));
 
-    auto* gridContainer = new QWidget;
-    gridContainer->setStyleSheet(QStringLiteral("background: #506070;"));
+    // Parented now so each header label is polished by the body's sheet before
+    // it is measured: its minimum is the sheet's bold 10 px text, not the
+    // default font's.
+    auto* gridContainer = new QWidget(bodyWidget());
+    gridContainer->setObjectName(QStringLiteral("txBandGrid"));
     auto* headerGrid = new QGridLayout(gridContainer);
     headerGrid->setContentsMargins(1, 1, 1, 1);
     headerGrid->setSpacing(1);
@@ -45,13 +146,11 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
                                   "RCA off/TUNE"};
     for (int c = 0; c < headers.size(); ++c) {
         auto* lbl = new QLabel(headers[c]);
-        lbl->setStyleSheet(QStringLiteral(
-            "QLabel { color: #8aa8c0; font-size: 10px; "
-            "font-weight: bold; background: #1a2a3a; "
-            "padding: 2px 4px; }"));
+        lbl->setProperty("txBandCell", QStringLiteral("header"));
         lbl->setAlignment(Qt::AlignCenter);
-        lbl->setMinimumSize(lbl->sizeHint());
         headerGrid->addWidget(lbl, 0, c);
+        lbl->ensurePolished();
+        lbl->setMinimumSize(lbl->sizeHint());
     }
 
     if (!m_model) {
@@ -68,27 +167,16 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
     QList<int> sortedIds = bands.keys();
     std::sort(sortedIds.begin(), sortedIds.end());
 
-    static const QString kEditStyle = QStringLiteral(
-        "QLineEdit { background: #0a0a18; color: #c8d8e8; border: 1px solid #304050; "
-        "padding: 2px; font-size: 11px; }");
-    static const QString kCbStyle = QStringLiteral(
-        "QCheckBox { spacing: 0px; }"
-        "QCheckBox::indicator { width: 14px; height: 14px; }");
-
     int row = 1;
     for (int id : sortedIds) {
         const auto& b = bands[id];
         int col = 0;
 
         auto* nameLbl = new QLabel(b.bandName);
-        nameLbl->setStyleSheet(QStringLiteral(
-            "QLabel { color: #c8d8e8; font-size: 11px; "
-            "font-weight: bold; background: #0f0f1a; "
-            "border: 1px solid #203040; padding: 2px 4px; }"));
+        nameLbl->setProperty("txBandCell", QStringLiteral("band"));
         headerGrid->addWidget(nameLbl, row, col++);
 
         auto* rfEdit = new QLineEdit(QString::number(b.rfPower));
-        rfEdit->setStyleSheet(kEditStyle);
         rfEdit->setFixedWidth(50);
         rfEdit->setAlignment(Qt::AlignCenter);
         int bandId = id;
@@ -100,10 +188,9 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
             rfEdit->setText(QString::number(percent));
             m_model->requestTxBand({bandId, BandField::RfPowerPercent, percent}, session);
         });
-        headerGrid->addWidget(rfEdit, row, col++);
+        headerGrid->addWidget(valueCell(rfEdit), row, col++);
 
         auto* tuneEdit = new QLineEdit(QString::number(b.tunePower));
-        tuneEdit->setStyleSheet(kEditStyle);
         tuneEdit->setFixedWidth(50);
         tuneEdit->setAlignment(Qt::AlignCenter);
         connect(tuneEdit, &QLineEdit::editingFinished, this, [this, tuneEdit, bandId, session] {
@@ -114,7 +201,7 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
             tuneEdit->setText(QString::number(percent));
             m_model->requestTxBand({bandId, BandField::TunePowerPercent, percent}, session);
         });
-        headerGrid->addWidget(tuneEdit, row, col++);
+        headerGrid->addWidget(valueCell(tuneEdit), row, col++);
 
         struct CbDef { bool val; BandField field; };
         CbDef cbs[] = {
@@ -131,31 +218,16 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
         for (const auto& cb : cbs) {
             auto* chk = new QCheckBox;
             chk->setChecked(cb.val);
-            chk->setStyleSheet(kCbStyle);
-            auto* w = new QWidget;
-            w->setStyleSheet(QStringLiteral("background: #0f0f1a;"));
-            auto* hb = new QHBoxLayout(w);
-            hb->setContentsMargins(0, 0, 0, 0);
-            hb->setAlignment(Qt::AlignCenter);
-            hb->addWidget(chk);
             const BandField field = cb.field;
             connect(chk, &QCheckBox::toggled, this, [this, bandId, field, session](bool on) {
                 m_model->requestTxBand({bandId, field, on}, session);
             });
-            headerGrid->addWidget(w, row, col++);
+            headerGrid->addWidget(valueCell(chk), row, col++);
         }
         auto* suppression = new QCheckBox;
         suppression->setObjectName(QStringLiteral("tuneOutputSuppressionBand%1").arg(bandId));
         suppression->setAccessibleName(tr("Suppress RCA during TUNE, band %1").arg(b.bandName));
-        ThemeManager::instance().applyStyleSheet(suppression, kCbStyle);
-        auto* suppressionCell = new QWidget;
-        ThemeManager::instance().applyStyleSheet(suppressionCell,
-            QStringLiteral("background: {{color.background.0}};"));
-        auto* suppressionLayout = new QHBoxLayout(suppressionCell);
-        suppressionLayout->setContentsMargins(0, 0, 0, 0);
-        suppressionLayout->setAlignment(Qt::AlignCenter);
-        suppressionLayout->addWidget(suppression);
-        headerGrid->addWidget(suppressionCell, row, col);
+        headerGrid->addWidget(valueCell(suppression), row, col);
         availability->registerWidget(suppression,
             tr("Requires SmartSDR 4.3 or later and this band's radio readback."),
             [this, bandId](bool connected, const RadioCapabilities& caps) {
@@ -190,6 +262,7 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
     vb->addWidget(gridContainer);
     auto* explanation = new QLabel(tr("RCA off/TUNE: suppress TX1/TX2/TX3 keying outputs during TUNE "
                                      "on SmartSDR 4.3 or later. ACC TX remains under Inhibit during TUNE."));
+    explanation->setProperty("txBandCell", QStringLiteral("note"));
     explanation->setWordWrap(true);
     vb->addWidget(explanation);
     vb->addStretch();

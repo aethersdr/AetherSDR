@@ -1,13 +1,20 @@
 // Socket-free production TX Band Settings controls with injected command replies.
 #include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "gui/CanonWindow.h"
 #include "gui/TxBandDialog.h"
 #include "models/RadioModel.h"
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QDialog>
 #include <QGridLayout>
 #include <QLabel>
+#include <QMenu>
+#include <QLineEdit>
+#include <QImage>
+#include <QTest>
 
 #include <cstdio>
 #include <functional>
@@ -92,7 +99,9 @@ void supportedDialog()
 {
     Fixture f(QStringLiteral("4.3.16.42034"));
     TxBandDialog dialog(&f.radio);
-    dialog.resize(700, 450);
+    // The smallest the window can be: a restored rectangle below the minimum
+    // is clamped up to it, so this is the worst case for clipping.
+    dialog.resize(dialog.minimumSize());
     dialog.show();
     QApplication::processEvents();
     QCheckBox* forty = bandBox(dialog, 5);
@@ -109,7 +118,7 @@ void supportedDialog()
             check(dialog.rect().contains(headerBounds)
                       && label->width() >= label->sizeHint().width()
                       && label->height() >= label->sizeHint().height(),
-                  "restoring a small window cannot clip the header text");
+                  "the window at its minimum size cannot clip the header text");
         }
     }
     check(newHeaders == 1, "one added column has the approved concise label");
@@ -189,6 +198,76 @@ void firmwareIdentityAfterReadback()
               && f.commands.isEmpty(),
           "late firmware identity enables the existing table with each earlier confirmed value");
 }
+// A field's standard right-click menu is a child of the field, so the canon
+// body's transparent-everything rule reaches it; the sheet gives popups their
+// panel back. Without that the menu draws no background at all.
+void rightClickMenuIsOpaque()
+{
+    Fixture f(QStringLiteral("4.3.16.42034"));
+    TxBandDialog dialog(&f.radio);
+    dialog.show();
+    QTest::qWaitForWindowExposed(&dialog);
+    const QList<QLineEdit*> edits = dialog.findChildren<QLineEdit*>();
+    check(!edits.isEmpty(), "the table exposes a power field");
+    if (edits.isEmpty()) {
+        return;
+    }
+    QMenu* menu = edits.first()->createStandardContextMenu();
+    check(menu->parentWidget() == edits.first(),
+          "control: the field's menu is parented inside the canon body");
+    menu->popup(dialog.mapToGlobal(QPoint(40, 40)));
+    QTest::qWait(100);
+    const QImage image = menu->grab().toImage();
+    check(!image.isNull()
+              && qAlpha(image.pixel(image.width() / 2, image.height() / 2)) == 255,
+          "a field's right-click menu has an opaque background");
+    menu->close();
+    delete menu;
+    check(f.commands.isEmpty(), "opening the menu sends no commands");
+}
+
+// TX Band Settings is a canon workspace (#6239) that restores geometry saved
+// under TxBandDialogGeometry, including the base64 rectangles earlier
+// releases wrote.
+void canonWorkspace()
+{
+    static const QString kKey = QStringLiteral("TxBandDialogGeometry");
+    Fixture f(QStringLiteral("4.3.16.42034"));
+    auto& settings = AppSettings::instance();
+    settings.remove(kKey);
+    {
+        TxBandDialog dialog(&f.radio);
+        check(qobject_cast<CanonWindow*>(&dialog) != nullptr, "TX Band Settings is a CanonWindow");
+        check(dialog.windowType() == Qt::Window
+                  && dialog.windowFlags().testFlag(Qt::FramelessWindowHint),
+              "it is a frameless workspace window, not a dialog on its parent");
+    }
+
+    // A rectangle saved before the migration: QWidget::saveGeometry() in base64.
+    // Compared by height: the offscreen screen is 800 px wide, narrower than
+    // the table's minimum, so a restored width is clamped to the minimum.
+    TxBandDialog restored(&f.radio);
+    const QSize chosen(restored.minimumWidth(), restored.minimumHeight() + 110);
+    QDialog legacy;
+    legacy.resize(chosen);
+    settings.setValue(kKey, QString::fromLatin1(legacy.saveGeometry().toBase64()));
+    check(restored.height() != chosen.height(), "control: a fresh window is not born at the saved height");
+    restored.show();
+    check(QTest::qWaitForWindowExposed(&restored), "the window is exposed");
+    for (int i = 0; i < 50 && restored.height() != chosen.height(); ++i) {
+        QTest::qWait(20);
+    }
+    check(restored.height() == chosen.height(), "geometry saved by the old dialog restores under its key");
+
+    const QSize resized = chosen + QSize(40, 20);
+    restored.resize(resized);
+    QCoreApplication::processEvents();
+    restored.hide();
+    const QString saved = settings.value(kKey).toString();
+    check(saved.endsWith(QStringLiteral(",%1,%2").arg(resized.width()).arg(resized.height())),
+          "hiding the window saves its size under the same key");
+    check(f.commands.isEmpty(), "opening, resizing and hiding the window sends no commands");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -198,8 +277,12 @@ int main(int argc, char** argv)
         return 1;
     }
     QApplication app(argc, argv);
+    app.setQuitOnLastWindowClosed(false);
+    AppSettings::instance().load();
     supportedDialog();
     unavailableDialog();
     firmwareIdentityAfterReadback();
+    canonWorkspace();
+    rightClickMenuIsOpaque();
     return failures == 0 ? 0 : 1;
 }
