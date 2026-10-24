@@ -335,11 +335,15 @@ void GreenHeronApplet::buildUI()
                 .arg(GreenHeron::kDefaultPort));
         m_portSpin->setRange(1, 65535);
         m_portSpin->setValue(GreenHeron::kDefaultPort);
-        m_portSpin->setButtonSymbols(QAbstractSpinBox::NoButtons);
         m_portSpin->setFixedWidth(52);
         m_portSpin->setAlignment(Qt::AlignRight);
+        // NoButtons collapses the styled editor on Qt 6.12; hide the stepper
+        // subcontrols instead so the port remains visible and editable.
         ThemeManager::instance().applyStyleSheet(
-            m_portSpin, QStringLiteral("QSpinBox { %1 }").arg(kFieldStyle));
+            m_portSpin, QStringLiteral(
+                "QSpinBox { %1 }"
+                "QSpinBox::up-button, QSpinBox::down-button { width: 0; }")
+                .arg(kFieldStyle));
         row->addWidget(m_portSpin);
 
         outer->addLayout(row);

@@ -3,6 +3,7 @@
 #include "core/ThemeManager.h"
 #include "core/UpdateChecker.h"
 #include "gui/CanonIndicators.h"
+#include "gui/FirmwareUpdateCard.h"
 #include "gui/FlowLayout.h"
 
 #include <QCheckBox>
@@ -165,7 +166,38 @@ QString sheet()
                "QPushButton#updatesGet:disabled { color: {{color.canon.muted}};"
                " background: {{color.canon.nested}}; border-color: {{color.canon.line}}; }"
                "QPushButton#updatesGhost:disabled { color: {{color.canon.muted}}; }"
+               "QPushButton#firmwareRelease:disabled { color: {{color.canon.muted}}; }"
                "QCheckBox { color: {{color.canon.inkSoft}}; background: transparent; }"
+               "QFrame#updatesFirmwareCard { background: {{color.canon.raised}}; border: 1px solid {{color.canon.line}};"
+               " border-radius: 14px; }"
+               "QLabel[role=\"radioName\"] { color: {{color.canon.ink}}; font-size: 15px; font-weight: 650; }"
+               "QLabel[role=\"radioDetail\"], QLabel[role=\"lane\"] { color: {{color.canon.muted}}; font-size: 12px; }"
+               "QLabel[role=\"pill\"] { color: {{color.canon.muted}}; border: 1px solid {{color.canon.muted}};"
+               " border-radius: 10px; padding: 2px 10px; font-size: 12px; font-weight: 650; }"
+               "QLabel[role=\"pill\"][tone=\"warning\"] { color: {{color.accent.warning}}; border-color: {{color.accent.warning}}; }"
+               "QLabel[role=\"pill\"][tone=\"current\"] { color: {{color.canon.aqua}}; border-color: {{color.canon.aqua}}; }"
+               "QFrame#updatesFirmwareCard QLabel[role=\"eyebrow\"] { color: {{color.accent.warning}}; }"
+               "QPushButton#firmwareRelease { background: {{color.canon.nested}}; color: {{color.canon.inkSoft}};"
+               " border: 1px solid {{color.canon.line}}; border-radius: 10px; padding: 4px 10px;"
+               " font-family: \"SF Mono\", Menlo, Consolas, monospace; font-size: 12px; }"
+               "QPushButton#firmwareRelease[kind=\"installed\"] { border: 2px solid {{color.canon.inkSoft}}; }"
+               "QPushButton#firmwareRelease[kind=\"newest\"] { color: {{color.accent.warning}};"
+               " border-color: {{color.accent.warning}}; }"
+               "QPushButton#firmwareRelease:checked { background: {{color.canon.control}}; color: {{color.canon.cyan}};"
+               " border-color: {{color.canon.cyan}}; }"
+               "QPushButton#firmwareRelease:focus { border-color: {{color.canon.aqua}}; }"
+               "QLabel[role=\"step\"] { color: {{color.canon.muted}}; background: {{color.canon.nested}};"
+               " border: 1px solid {{color.canon.line}}; border-radius: 10px; padding: 8px; font-size: 12px; }"
+               "QLabel[role=\"step\"][state=\"done\"] { color: {{color.canon.category.teal}}; }"
+               "QLabel[role=\"step\"][state=\"now\"] { color: {{color.canon.ink}}; border-color: {{color.canon.cyan}}; }"
+               "QLabel[role=\"status\"] { color: {{color.canon.inkSoft}}; font-size: 12px; }"
+               "QLabel[role=\"status\"][tone=\"warning\"] { color: {{color.accent.warning}}; }"
+               "QLabel[role=\"status\"][tone=\"danger\"] { color: {{color.accent.danger}}; }"
+               "QLabel[role=\"status\"][tone=\"current\"] { color: {{color.canon.aqua}}; }"
+               "QLabel[role=\"caution\"] { color: {{color.accent.warning}}; font-size: 12px; }"
+               "QProgressBar#firmwareProgress { background: {{color.canon.nested}}; border: 1px solid {{color.canon.line}};"
+               " border-radius: 4px; }"
+               "QProgressBar#firmwareProgress::chunk { background: {{color.brand.gradient}}; border-radius: 3px; }"
                "QScrollBar:vertical { background: transparent; width: 8px; margin: 2px; }"
                "QScrollBar::handle:vertical { background: {{color.canon.lineHi}}; border-radius: 3px;"
                " min-height: 24px; }"
@@ -177,14 +209,13 @@ QString sheet()
 
 } // namespace
 
-UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
+UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget* parent)
     : CanonWindow(tr("Updates"), parent, Kind::Workspace)
     , m_checker(checker)
 {
     setObjectName(QStringLiteral("updatesWindow"));
-    setAttribute(Qt::WA_DeleteOnClose);
     setGeometryKey(QStringLiteral("UpdatesWindowGeometry"));
-    setLaunchSize(QSize(760, 480));
+    setLaunchSize(QSize(760, 780));   // room for YOUR RADIO under the release
     applyCanonSheet(bodyWidget(), sheet);
 
     auto* root = new QVBoxLayout(bodyWidget());
@@ -221,6 +252,7 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
     // Everything under the header scrolls, so a long release never makes the
     // window taller than the screen.
     auto* scroll = new QScrollArea;
+    m_scroll = scroll;
     scroll->setObjectName(QStringLiteral("updatesScroll"));
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
@@ -286,6 +318,16 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, QWidget* parent)
         tr("Check for a newer release at startup, at most once a day, and show UPDATE in the title bar."));
     footer->addWidget(m_autoCheck, 0, Qt::AlignRight);
     content->addLayout(footer);
+
+    if (radio) {
+        content->addSpacing(10);
+        m_firmware = new FirmwareUpdateCard(radio, contentWidget);
+        content->addWidget(m_firmware);
+        connect(m_firmware, &FirmwareUpdateCard::busyChanged, this, [this](bool busy) {
+            m_firmwareBusy = busy;
+            refresh();
+        });
+    }
     content->addStretch(1);
 
     const QString store = UpdateChecker::storeName();
@@ -456,12 +498,29 @@ void UpdatesWindow::refresh()
     // release, and inside one whose details did not arrive.
     m_checkNow->setVisible(view != View::Available || (m_failed && release.fromSettings));
     const bool checking = m_checker && m_checker->isChecking();
-    m_checkNow->setEnabled(!checking);
+    m_checkNow->setEnabled(!checking && !m_firmwareBusy);
     m_checkNow->setText(checking ? tr("Checking…") : tr("Check Now"));
     m_skip->setVisible(canDownload);
     const bool skipped = UpdateChecker::isSkipped(release.version);
-    m_skip->setEnabled(!skipped);
+    m_skip->setEnabled(!skipped && !m_firmwareBusy);
     m_skip->setText(skipped ? tr("Skipped") : tr("Skip this version"));
+    // One job at a time: nothing else starts while radio firmware is going in.
+    const QString waiting = tr("Waits until the radio firmware install finishes.");
+    for (QWidget* w : {static_cast<QWidget*>(m_get), static_cast<QWidget*>(m_checkNow),
+                       static_cast<QWidget*>(m_autoCheck)}) {
+        if (m_firmwareBusy) {
+            w->setEnabled(false);
+            w->setToolTip(waiting);
+            w->setAccessibleDescription(waiting);
+        } else if (w->toolTip() == waiting) {
+            w->setToolTip(QString());
+            w->setAccessibleDescription(QString());
+        }
+    }
+    if (!m_firmwareBusy) {
+        m_get->setEnabled(true);
+        m_autoCheck->setEnabled(UpdateChecker::storeName().isEmpty());
+    }
 
     if (canDownload) {
         m_footnote->setText(asset.url.isValid()
@@ -483,6 +542,22 @@ void UpdatesWindow::refresh()
     m_header->setAccessibleDescription(view == View::Available
                                            ? tr("Installed v%1; v%2 is available.").arg(running, release.version)
                                            : tr("Installed v%1.").arg(running));
+}
+
+void UpdatesWindow::showFirmware()
+{
+    if (m_firmware && m_scroll) {
+        m_scroll->ensureWidgetVisible(m_firmware, 0, 24);
+    }
+}
+
+// Every close path (the corner button, Escape, ⌘W, reject(), accept()) ends
+// here: QDialog's own closeEvent goes through reject().
+void UpdatesWindow::done(int result)
+{
+    if (!m_firmware || m_firmware->confirmStop(this)) {
+        CanonWindow::done(result);
+    }
 }
 
 void UpdatesWindow::rebuildRelease()

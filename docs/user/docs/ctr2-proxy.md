@@ -263,7 +263,9 @@ date, including any saved with **Back Up…** in earlier versions of AetherSDR
 it. Installing one restores it: the whole flash goes back exactly as it
 was, both firmwares, the settings and the registration included, and anything
 since is lost. A backup restores only onto the unit it came from (matched by
-its MAC address), and only if the file is unchanged since it was made.
+its MAC address), and only if the file is unchanged since it was made. The
+question before a restore has **Cancel** as its default, so pressing Return
+keeps what is on the unit; restoring takes a click on **Restore**.
 
 ### Cancelling
 

@@ -1862,7 +1862,7 @@ private:
     void applyFirmwareCurrencyToVersionLabel();
     // The version row's StatusIndicator action: opens the release notes of the
     // radio's own line while the firmware is out of date, otherwise nothing.
-    void openFirmwareReleaseNotes();
+    void openFirmwareUpdate();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
     QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)

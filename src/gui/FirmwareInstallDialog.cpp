@@ -1,6 +1,7 @@
 #include "FirmwareInstallDialog.h"
 
 #include "CanonIndicators.h"
+#include "CanonMessageBox.h"
 #include "ComboStyle.h"
 #include "Ctr2ProxyPanel.h"
 #include "ModemChrome.h"
@@ -19,7 +20,6 @@
 #include <QFileDialog>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QStandardPaths>
@@ -686,29 +686,31 @@ bool FirmwareInstallDialog::askDownloadMode(bool buttons)
     if (!buttons) {
         return true;
     }
-    ScopedChildWidget<QMessageBox> ask(QMessageBox::Information,
-                                       tr("Put the CTR2-Max in download mode"),
-                                       tr("Put the CTR2-Max in download mode now."),
-                                       QMessageBox::Ok | QMessageBox::Cancel, this);
+    ScopedChildWidget<CanonMessageBox> ask(tr("Put the CTR2-Max in download mode"),
+                                           tr("Put the CTR2-Max in download mode now."), this);
     ask.get()->setInformativeText(
         tr("Hold BOOT (through the hole in the back), press and release RESET, then release "
            "BOOT. Its screen goes dark; that is normal. AetherSDR carries on by itself once it "
            "finds it there."));
-    ask.get()->setDefaultButton(QMessageBox::Ok);
-    return ask.get()->exec() == QMessageBox::Ok;
+    ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject);
+    QPushButton* ok = ask.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept);
+    ask.get()->setDefaultButton(ok);
+    ask.get()->exec();
+    return ask && ask.get()->clickedButton() == ok;
 }
 
 void FirmwareInstallDialog::confirmRestore(const QString& path)
 {
     FirmwareInstallModel::Target target = m_fw->target();
-    ScopedChildWidget<QMessageBox> ask(QMessageBox::Warning, tr("Restore the backup?"),
-                                       backupText(path), QMessageBox::Cancel, this);
+    ScopedChildWidget<CanonMessageBox> ask(tr("Restore the backup?"), backupText(path), this);
     ask.get()->setInformativeText(
         tr("A backup goes back only onto the CTR2-Max it came from, and only if the file is "
            "unchanged since it was made."));
-    QPushButton* go = ask.get()->addButton(tr("Restore"), QMessageBox::DestructiveRole);
+    // Return keeps what is on the device; restoring takes a click.
+    ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
+    QPushButton* go = ask.get()->addButton(tr("Restore"), CanonMessageBox::Role::Destructive);
     ask.get()->exec();
-    if (ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
+    if (!ask || ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
         return;
     target = afterAlert(*m_fw, target);
     const QString done = tr("The backup is restored and the CTR2-Max is restarting.");
@@ -737,18 +739,19 @@ void FirmwareInstallDialog::onInstall()
     const QString product = m_fw->releaseProduct();
     const QString version = m_fw->releaseVersion();
     const QString folder = QDir::toNativeSeparators(FirmwareInstallModel::backupFolder());
-    ScopedChildWidget<QMessageBox> ask(QMessageBox::Question, tr("Install %1?").arg(product),
-                                       tr("Install %1 %2 on this CTR2-Max?").arg(product, version),
-                                       QMessageBox::Cancel, this);
+    ScopedChildWidget<CanonMessageBox> ask(tr("Install %1?").arg(product),
+                                           tr("Install %1 %2 on this CTR2-Max?").arg(product, version),
+                                           this);
     ask.get()->setInformativeText(
         tr("Its whole flash is backed up first, to %1; that takes about a minute. The install "
            "writes only what the firmware's manifest lists: the stock firmware, its settings and "
            "its registration are kept.")
             .arg(folder));
-    QPushButton* go = ask.get()->addButton(tr("Install"), QMessageBox::AcceptRole);
+    ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject);
+    QPushButton* go = ask.get()->addButton(tr("Install"), CanonMessageBox::Role::Accept);
     ask.get()->setDefaultButton(go);
     ask.get()->exec();
-    if (ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
+    if (!ask || ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
         return;
     target = afterAlert(*m_fw, target);
     const QString done =
@@ -770,18 +773,19 @@ void FirmwareInstallDialog::installOverLink()
     }
     const QString product = m_fw->releaseProduct();
     const QString version = m_fw->releaseVersion();
-    ScopedChildWidget<QMessageBox> ask(
-        QMessageBox::Question, tr("Install %1?").arg(product),
+    ScopedChildWidget<CanonMessageBox> ask(
+        tr("Install %1?").arg(product),
         tr("Install %1 %2 over the USB cable? The device runs %3 now.")
             .arg(product, version, m_fw->linkVersion()),
-        QMessageBox::Cancel, this);
+        this);
     ask.get()->setInformativeText(
         tr("It takes about three minutes. The device checks the firmware's signature, and keeps "
            "the firmware it has if anything goes wrong."));
-    QPushButton* go = ask.get()->addButton(tr("Install"), QMessageBox::AcceptRole);
+    ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject);
+    QPushButton* go = ask.get()->addButton(tr("Install"), CanonMessageBox::Role::Accept);
     ask.get()->setDefaultButton(go);
     ask.get()->exec();
-    if (ask.get()->clickedButton() != go)
+    if (!ask || ask.get()->clickedButton() != go)
         return;
     const QString done = tr("%1 %2 is installed and running.").arg(product, version);
     m_step->setText(tr("Starting the update…"));
@@ -830,9 +834,8 @@ void FirmwareInstallDialog::installStockFirmware()
     }
     const QString name = m_fw->stockFirmwareName();
     const QString folder = QDir::toNativeSeparators(FirmwareInstallModel::backupFolder());
-    ScopedChildWidget<QMessageBox> ask(QMessageBox::Question, tr("Update the CTR2-Max?"),
-                                       tr("Install %1 on this CTR2-Max?").arg(name),
-                                       QMessageBox::Cancel, this);
+    ScopedChildWidget<CanonMessageBox> ask(tr("Update the CTR2-Max?"),
+                                           tr("Install %1 on this CTR2-Max?").arg(name), this);
     QString info = tr("Only the firmware itself is written: the CTR2-Max keeps its settings, its "
                       "registration and AetherCTR2. Its whole flash is backed up first, to %1; "
                       "that takes about a minute.")
@@ -842,10 +845,11 @@ void FirmwareInstallDialog::installStockFirmware()
                 + tr("AetherCTR2 restarts into download mode for the update; the relay stops "
                      "while it runs.");
     ask.get()->setInformativeText(info);
-    QPushButton* go = ask.get()->addButton(tr("Update"), QMessageBox::AcceptRole);
+    ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject);
+    QPushButton* go = ask.get()->addButton(tr("Update"), CanonMessageBox::Role::Accept);
     ask.get()->setDefaultButton(go);
     ask.get()->exec();
-    if (ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
+    if (!ask || ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
         return;
     target = afterAlert(*m_fw, target);
     const QString done =

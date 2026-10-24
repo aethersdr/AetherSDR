@@ -276,6 +276,13 @@ has moved to it (Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem
 installs `FramelessResizer`, since `CanonWindow` itself only moves. Other tool
 and workspace dialogs keep the persistent pattern above.
 
+A question or notice from a canon window uses `CanonMessageBox`
+(`src/gui/CanonMessageBox.{h,cpp}`) in place of `QMessageBox`: a canon dialog
+with the title as a canon header, the text, optional further text, and the
+buttons at the bottom right. `clickedButton()` names the button clicked and is
+null when the box is closed any other way; the default button is outlined in
+cyan and a destructive one is drawn in gold. The CTR2 window's questions use it.
+
 ## Common pitfalls
 
 These are the issues that have hit real PRs in the project's history.

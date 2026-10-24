@@ -1355,7 +1355,8 @@ set(GUI_SOURCES
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
     src/gui/MeterViewController.cpp
-    src/gui/FirmwareReleasesDialog.cpp
+    src/gui/FirmwareUpdateCard.cpp
+    src/gui/CanonPrompt.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
@@ -1425,6 +1426,7 @@ set(GUI_SOURCES
     src/gui/HealthApplet.cpp
     src/gui/PersistentDialog.cpp
     src/gui/CanonWindow.cpp
+    src/gui/CanonMessageBox.cpp
     src/gui/CanonSurface.cpp
     src/gui/PanadapterHeader.cpp
     src/gui/FramelessMessageBox.cpp

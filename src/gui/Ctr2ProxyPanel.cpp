@@ -1,5 +1,6 @@
 #include "Ctr2ProxyPanel.h"
 
+#include "CanonMessageBox.h"
 #include "GuardedSlider.h"
 #include "ScopedChildWidget.h"
 #include "models/Ctr2ProxyModel.h"
@@ -12,7 +13,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QStandardPaths>
@@ -294,15 +294,15 @@ bool ruleAlreadyInstalled(const QString& rule)
 void Ctr2ProxyPanel::offerUsbAccessRule()
 {
     if (ruleAlreadyInstalled(loadRule())) {
-        ScopedChildWidget<QMessageBox> box(
-            QMessageBox::Information, tr("CTR2 USB access"),
+        ScopedChildWidget<CanonMessageBox> box(
+            tr("CTR2 USB access"),
             tr("The CTR2 access rule is already installed, but this login still cannot "
-               "open the CTR2."),
-            QMessageBox::Ok, this);
+               "open the CTR2."), this);
         box.get()->setInformativeText(
             tr("Unplug the CTR2, plug it back in, then press Start. The rule only opens "
                "the CTR2 to whoever is logged in at this computer's own screen, so a "
                "remote or background session cannot use it."));
+        box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
         box.get()->exec();
         return;
     }
@@ -311,18 +311,18 @@ void Ctr2ProxyPanel::offerUsbAccessRule()
         return;
     }
 
-    ScopedChildWidget<QMessageBox> box(
-        QMessageBox::Question, tr("Allow AetherSDR to use the CTR2?"),
+    ScopedChildWidget<CanonMessageBox> box(
+        tr("Allow AetherSDR to use the CTR2?"),
         tr("Linux only lets the administrator open USB devices such as the CTR2, so "
            "AetherSDR cannot talk to it yet."),
-        QMessageBox::NoButton, this);
+        this);
     box.get()->setInformativeText(
         tr("AetherSDR can install a small system rule that lets whoever is logged in "
            "at this computer open CTR2 controllers, and only CTR2 controllers. You "
            "will be asked for your administrator password once; after that the CTR2 "
            "works every time.\n\nThe rule is written to %1.").arg(kRuleTarget));
-    QPushButton* install = box.get()->addButton(tr("Install rule"), QMessageBox::AcceptRole);
-    box.get()->addButton(tr("Not now"), QMessageBox::RejectRole);
+    box.get()->addButton(tr("Not now"), CanonMessageBox::Role::Reject);
+    QPushButton* install = box.get()->addButton(tr("Install rule"), CanonMessageBox::Role::Accept);
     box.get()->setDefaultButton(install);
     box.get()->exec();
     if (box && box.get()->clickedButton() == install) {
@@ -342,28 +342,28 @@ void Ctr2ProxyPanel::showManualRuleInstructions(const QString& why)
     out.close();
     if (!wrote) {
         qCWarning(lcDevices) << "CTR2: could not save the udev rule to" << saved;
-        ScopedChildWidget<QMessageBox> box(
-            QMessageBox::Warning, tr("CTR2 USB access"),
+        ScopedChildWidget<CanonMessageBox> box(
+            tr("CTR2 USB access"),
             tr("Linux only lets the administrator open USB devices such as the CTR2. "
                "AetherSDR could not ask for permission (%1), and could not save the "
-               "access rule to %2 for you to install by hand.").arg(why, saved),
-            QMessageBox::Ok, this);
+               "access rule to %2 for you to install by hand.").arg(why, saved), this);
+        box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
         box.get()->exec();
         return;
     }
-    ScopedChildWidget<QMessageBox> box(
-        QMessageBox::Warning, tr("CTR2 USB access"),
+    ScopedChildWidget<CanonMessageBox> box(
+        tr("CTR2 USB access"),
         tr("Linux only lets the administrator open USB devices such as the CTR2, "
            "and AetherSDR could not ask for permission: %1.\n\n"
            "To allow it, run these commands in a terminal, then unplug and "
-           "replug the CTR2:").arg(why),
-        QMessageBox::Ok, this);
+           "replug the CTR2:").arg(why), this);
     box.get()->setInformativeText(
         QStringLiteral("sudo cp '%1' '%2'\n"
                        "sudo udevadm control --reload-rules\n"
                        "sudo udevadm trigger --subsystem-match=hidraw")
             .arg(saved, kRuleTarget));
-    box.get()->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    box.get()->setTextSelectable(true);
+    box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
     box.get()->exec();
 }
 
@@ -375,12 +375,13 @@ void Ctr2ProxyPanel::installUsbAccessRule()
     auto fail = [this](const QString& detail) {
         m_installingRule = false;
         syncConfiguration();
-        ScopedChildWidget<QMessageBox> box(
-            QMessageBox::Warning, tr("CTR2 USB access"),
-            tr("The CTR2 access rule could not be installed."), QMessageBox::Ok, this);
+        ScopedChildWidget<CanonMessageBox> box(
+            tr("CTR2 USB access"),
+            tr("The CTR2 access rule could not be installed."), this);
         if (!detail.isEmpty()) {
             box.get()->setInformativeText(detail);
         }
+        box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
         box.get()->exec();
     };
 
@@ -458,11 +459,11 @@ void Ctr2ProxyPanel::startAfterRuleInstalled(int attemptsLeft)
         return;  // the Start was for USB; never start another transport from here
     }
     if (m_model->usbDeviceNeedsAccessRule()) {
-        ScopedChildWidget<QMessageBox> box(
-            QMessageBox::Information, tr("CTR2 USB access"),
+        ScopedChildWidget<CanonMessageBox> box(
+            tr("CTR2 USB access"),
             tr("The access rule is installed. Unplug the CTR2, plug it back in, "
-               "then press Start."),
-            QMessageBox::Ok, this);
+               "then press Start."), this);
+        box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
         box.get()->exec();
         return;
     }

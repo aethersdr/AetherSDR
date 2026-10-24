@@ -202,7 +202,11 @@ bool Ctr2FirmwareUpdater::openPort(QString* error)
     port->setParent(nullptr);
     m_reassembler.reset();
     m_reassembler.setExtensions(capabilityBit(MessageType::Firmware));
+    m_reportsQueued = 0;
+    m_reportsWritten = 0;
+    m_restartQueuedTo = 0;
     connect(port, &Ctr2HidPort::extensionsNegotiated, this, &Ctr2FirmwareUpdater::onExtensions);
+    connect(port, &Ctr2HidPort::reportsSent, this, [this](int count) { m_reportsWritten += count; });
     connect(port, &Ctr2HidPort::reportsReceived, this, &Ctr2FirmwareUpdater::onReports);
     connect(port, &Ctr2HidPort::failed, this, &Ctr2FirmwareUpdater::onPortFailed);
     return true;
@@ -270,15 +274,19 @@ void Ctr2FirmwareUpdater::sendHello()
     std::vector<Report> out;
     m_encoder.reset();
     m_encoder.encodeControl(MessageType::Hello, &out);
+    m_reportsQueued += qint64(out.size());
     m_port->send(out);
 }
 
-void Ctr2FirmwareUpdater::sendExtension(const QByteArray& payload)
+bool Ctr2FirmwareUpdater::sendExtension(const QByteArray& payload)
 {
     std::vector<Report> out;
-    if (m_port && m_encoder.encodeExtension(MessageType::Firmware, payload, &out)) {
-        m_port->send(out);
+    if (!m_port || !m_encoder.encodeExtension(MessageType::Firmware, payload, &out)) {
+        return false;
     }
+    m_reportsQueued += qint64(out.size());
+    m_port->send(out);
+    return true;
 }
 
 void Ctr2FirmwareUpdater::onReports(const QByteArray& reports)
@@ -316,7 +324,11 @@ void Ctr2FirmwareUpdater::onMessage(const Message& message)
             const bool loader = *m_restart == Restart::Bootloader;
             setPhase(Phase::Commanding, loader ? tr("Restarting into download mode")
                                                : tr("Restarting into the other firmware"));
-            sendExtension(loader ? firmware::encodeBootloader() : firmware::encodeSwitch());
+            if (!sendExtension(loader ? firmware::encodeBootloader() : firmware::encodeSwitch())) {
+                fail(tr("The restart request could not be sent."));
+                return;
+            }
+            m_restartQueuedTo = m_reportsQueued;
             armTimeout(m_timing.answerTimeoutMs);
         } else if (m_phase == Phase::Calling) {
             m_retry->stop();
@@ -358,13 +370,8 @@ void Ctr2FirmwareUpdater::onStatus(const firmware::Reply& reply)
                         : tr("The device has no other firmware to start."));
             return;
         }
-        m_timeout->stop();
         closePort();   // it is leaving the bus
-        m_phase = Phase::Idle;
-        m_restart.reset();
-        emit finished(true, loader ? tr("The device is restarting into download mode.")
-                                   : tr("The device is restarting into its other firmware."),
-                      QString());
+        restarted();
         return;
     }
     if (reply.status != firmware::Status::Ok) {
@@ -462,10 +469,32 @@ void Ctr2FirmwareUpdater::onPortFailed(const QString& message)
         fail(tr("The device left during the final check (%1). Reconnect it: it runs "
                 "either the new firmware or the old one.").arg(message));
         break;
+    case Phase::Commanding:
+        // Leaving the bus is what the request asks for. A device that does it
+        // after the request was written, before its STATUS arrives or with a
+        // STATUS naming another op, has still restarted. A port that failed
+        // before writing it (a write error) has not.
+        if (m_reportsWritten >= m_restartQueuedTo) {
+            restarted();
+            break;
+        }
+        fail(tr("Lost the device: %1.").arg(message) + kKeepsFirmware);
+        break;
     default:
         fail(tr("Lost the device: %1.").arg(message) + kKeepsFirmware);
         break;
     }
+}
+
+void Ctr2FirmwareUpdater::restarted()
+{
+    const bool loader = m_restart && *m_restart == Restart::Bootloader;
+    m_timeout->stop();
+    m_phase = Phase::Idle;
+    m_restart.reset();
+    emit finished(true, loader ? tr("The device is restarting into download mode.")
+                               : tr("The device is restarting into its other firmware."),
+                  QString());
 }
 
 void Ctr2FirmwareUpdater::onTimeout()

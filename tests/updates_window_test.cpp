@@ -3,7 +3,9 @@
 #include "core/AppSettings.h"
 #include "core/UpdateChecker.h"
 #include "core/UpdateSettings.h"
+#include "gui/FirmwareUpdateCard.h"
 #include "gui/UpdatesWindow.h"
+#include "models/RadioModel.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -71,7 +73,7 @@ int main(int argc, char** argv)
     {
         HeldNetwork network;
         UpdateChecker checker(nullptr, &network);
-        auto* w = new UpdatesWindow(&checker);
+        auto* w = new UpdatesWindow(&checker, nullptr);
         w->show();
         app.processEvents();
         check(network.requests == 1, "opening with nothing known starts a check");
@@ -126,7 +128,7 @@ int main(int argc, char** argv)
         QCoreApplication::setApplicationVersion(QStringLiteral("26.10.3"));
         HeldNetwork network;
         UpdateChecker checker(nullptr, &network);
-        UpdatesWindow w(&checker);
+        UpdatesWindow w(&checker, nullptr);
         w.show();
         network.last->finishWithBody(releaseJson(QStringLiteral("tagline")));
         app.processEvents();
@@ -141,7 +143,7 @@ int main(int argc, char** argv)
         AppSettings::instance().save();
         HeldNetwork network;
         UpdateChecker checker(nullptr, &network);
-        UpdatesWindow w(&checker);
+        UpdatesWindow w(&checker, nullptr);
         w.show();
         network.last->finishWithError(QNetworkReply::HostNotFoundError);
         app.processEvents();
@@ -309,6 +311,50 @@ int main(int argc, char** argv)
         check(text(w, "updatesEyebrow").startsWith(QLatin1String("NEW RELEASE")), "the new release stays shown");
         check(text(w, "updatesNote").contains(QLatin1String("Couldn't reach GitHub just now")),
               "a failed re-check over a new release says so");
+    }
+
+    {
+        // The radio section with no radio connected: it says so, and its
+        // install controls are dimmed with that reason for a screen reader.
+        RadioModel model;   // cold; never connects
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow w(&checker, &model);
+        w.show();
+        app.processEvents();
+        const QLabel* name = nullptr;
+        for (const QLabel* l : w.findChildren<QLabel*>()) {
+            if (l->property("role").toString() == QLatin1String("radioName")) {
+                name = l;
+            }
+        }
+        check(name && name->text() == QLatin1String("No radio connected"), "radio section names the absence");
+        const QPushButton* install = button(w, QStringLiteral("Install"));
+        const QPushButton* open = button(w, QStringLiteral("Open Installer"));
+        check(install && !install->isEnabled() && !install->accessibleDescription().isEmpty(),
+              "Install is dimmed with a stated reason");
+        check(open && !open->isEnabled() && !open->accessibleDescription().isEmpty(),
+              "Open Installer is dimmed with a stated reason");
+    }
+
+    {
+        // Firmware lanes from a published list (newest first, as FlexRadio's
+        // index gives it), and the release Install starts on.
+        const QStringList published = {"4.3.16", "4.2.20", "4.2.18", "4.1.5", "3.10.15", "2.10.1"};
+        const auto lanes = FirmwareUpdateCard::firmwareLanes(published);
+        check(lanes.size() == 3 && lanes[0].first == 4 && lanes[1].first == 3 && lanes[2].first == 2,
+              "one lane per major line, newest line first");
+        check(lanes.value(0).second == QStringList({"4.1.5", "4.2.18", "4.2.20", "4.3.16"}),
+              "a lane runs oldest to newest");
+        check(FirmwareUpdateCard::preselectedRelease(published, QStringLiteral("4.2.20.41343"))
+                  == QLatin1String("4.3.16"),
+              "a radio behind its line starts on the newest in that line (build number ignored)");
+        check(FirmwareUpdateCard::preselectedRelease(published, QStringLiteral("4.3.16.42034")).isEmpty(),
+              "a current radio starts on nothing");
+        check(FirmwareUpdateCard::preselectedRelease(published, QStringLiteral("3.9.0")) == QLatin1String("3.10.15"),
+              "a v3 radio is offered v3, not v4");
+        check(FirmwareUpdateCard::preselectedRelease(published, QString()).isEmpty(),
+              "no installed version, no preselection");
     }
 
     return failures ? 1 : 0;
