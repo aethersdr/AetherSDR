@@ -271,8 +271,10 @@ What it keeps:
 It is translucent, so the rounded corners need a compositor; an X11 session
 without one shows square black corners. Use `CanonWindow` only for windows the
 style guide covers: short-lived windows, and the tool windows the maintainer
-has moved to it (Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, the multiFLEX Dashboard, Icom RC-28 Button Mapping, Radio Setup, TX Band Settings). A tool window on it also
-installs `FramelessResizer`, since `CanonWindow` itself only moves. Other tool
+has moved to it (Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, the multiFLEX Dashboard, Icom RC-28 Button Mapping, Radio Setup, TX Band Settings, FFTW Wisdom). A tool window on it also
+installs `FramelessResizer`, since `CanonWindow` itself only moves; a
+short-lived one such as FFTW Wisdom needs neither the resizer nor saved
+geometry. Other tool
 and workspace dialogs keep the persistent pattern above.
 
 A question or notice from a canon window uses `CanonMessageBox`

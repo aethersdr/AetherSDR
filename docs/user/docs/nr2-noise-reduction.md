@@ -53,7 +53,7 @@ The first time you enable NR2, AetherSDR optimizes the FFT plans it uses (FFTW "
 - It shows progress, a **Working** activity indicator and an **Elapsed** time counter. Planning can take several minutes on some systems; if the progress pauses, the window says it is still working.
 - The window is modeless — keep operating while it runs. On macOS it stays visible when AetherSDR is not the frontmost app.
 - Clicking NR2 again while it runs brings the same window forward instead of starting a second run.
-- **Cancel** (or the ✕ in the corner, or Esc) stops after the FFT plan currently being computed. NR2 is then not enabled, and your audio is left unchanged.
+- **Cancel** (or the ✕ in the corner, **Esc** or **Ctrl+W**, **⌘W** on macOS) stops after the FFT plan currently being computed. NR2 is then not enabled, and your audio is left unchanged.
 - NR2 switches on when planning finishes, and the window closes itself.
 
 The result is saved **as soon as planning finishes**, so a crash or force-quit afterwards does not lose it, and later launches skip the wait. The same cache also speeds up the WDSP receive setup on the [Hermes-Lite 2](./hermes-lite-2.md).

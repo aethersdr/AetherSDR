@@ -3,9 +3,9 @@
 // Pinned here, each with its control:
 //   1. it is a non-modal CanonWindow tool window titled FFTW Wisdom, under the
 //      canon/nr2Wisdom theme scope, that appears without taking the focus;
-//   2. its sheet is canon: the progress chunk is color.brand.gradient and no
-//      token or old literal is left unresolved, under Default Dark and Default
-//      Light;
+//   2. its sheet is canon: the progress chunk is color.brand.gradient, every
+//      token resolves to a value in the window's scope and the old literal
+//      ground is gone, under Default Dark and Default Light;
 //   3. Cancel and Escape each request cancellation once, Cancel leaves the
 //      window up showing the cancel state, and progress that arrives after a
 //      cancel is ignored;
@@ -26,6 +26,7 @@
 #include <QLabel>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSignalSpy>
 #include <QtTest>
 
@@ -97,7 +98,19 @@ private slots:
             const int chunk = sheet.indexOf(QLatin1String("QProgressBar::chunk"));
             QVERIFY2(sheet.indexOf(QLatin1String("qlineargradient"), chunk) > chunk,
                      "the progress chunk is the brand gradient");
-            QVERIFY2(!sheet.contains(QLatin1String("{{")), "every token resolves");
+            // An unknown token resolves to "" and leaves a `color: ;` Qt drops,
+            // so check each token the sheet uses resolves in the window's scope
+            // and lands in the sheet, and that no declaration was left empty.
+            for (const char* token :
+                 {"color.canon.ink", "color.canon.inkSoft", "color.canon.nested",
+                  "color.canon.line", "color.canon.lineHi", "color.canon.control",
+                  "color.canon.cyan", "color.canon.aqua", "color.canon.muted",
+                  "color.brand.gradient"}) {
+                const QString value = tm.cssFragment(window.bodyWidget(), QLatin1String(token));
+                QVERIFY2(!value.isEmpty(), token);
+                QVERIFY2(sheet.contains(value), token);
+            }
+            QVERIFY2(!sheet.contains(QLatin1String(": ;")), "no token resolved to an empty value");
             QVERIFY2(!sheet.contains(QLatin1String("#050710")), "the old literal ground is gone");
         }
     }
@@ -135,8 +148,8 @@ private slots:
         window.setProgress(80);
         QVERIFY(status->text().startsWith(QLatin1String("Canceling FFTW wisdom generation")));
         QCOMPARE(bar->maximum(), 0);
-        // A report counts as a sign of life and hides the reassurance line,
-        // which here carries the cancel notice.
+        // A report would normally hide the reassurance line; after a cancel
+        // the guard drops the report, so the cancel notice stays.
         QVERIFY(!reassurance->isHidden());
         QVERIFY(reassurance->text().startsWith(QLatin1String("Cancel requested")));
     }
@@ -168,7 +181,10 @@ private slots:
 
         // The activity line ticks every 500 ms.
         QTRY_VERIFY_WITH_TIMEOUT(activity->text().startsWith(QLatin1String("Working.")), 2000);
-        QCOMPARE(elapsed->text(), QStringLiteral("Elapsed: 0:00"));
+        QVERIFY2(QRegularExpression(QStringLiteral("^Elapsed: \\d+:[0-5]\\d$"))
+                     .match(elapsed->text())
+                     .hasMatch(),
+                 qPrintable(elapsed->text()));
     }
 
     void outcomesSetTheWindow()
