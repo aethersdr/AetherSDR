@@ -11,7 +11,7 @@ on:
         default: false
         type: boolean
       dev_overrides:
-        description: 'Testing only: honor the AETHER_UPDATE_* updater overrides (BUILD-OPTIONS.md). Refused on a tag.'
+        description: 'Testing only: honor the AETHER_UPDATE_* updater overrides (BUILD-OPTIONS.md). Refused on a tag or with the Store flight.'
         required: false
         default: false
         type: boolean
@@ -254,6 +254,7 @@ jobs:
         env:
           # Empty except on a manual dispatch that asked for it.
           DEV_OVERRIDES: ${{ inputs.dev_overrides }}
+          REQUEST_FLIGHT: ${{ inputs.publish_store_flight }}
         run: |
           # RelWithDebInfo (not Release): MSVC's Release config omits /Zi and
           # /DEBUG, so build/AetherSDR.pdb never gets produced and the
@@ -299,11 +300,16 @@ jobs:
           # the reason the bash legs need `set -o pipefail` and this one does
           # not.
           # A dev-overrides build trusts test update keys and manifests from
-          # its environment, so it is never built from a tag.
+          # its environment, so it is never built from a tag and never goes
+          # to the Store flight: it stays a downloadable test artifact.
           $devOverrides = @()
           if ($env:DEV_OVERRIDES -eq 'true') {
             if ($env:GITHUB_REF -like 'refs/tags/*') {
               Write-Host "ERROR: dev_overrides is for branch test builds, never a tag."
+              exit 1
+            }
+            if ($env:REQUEST_FLIGHT -eq 'true') {
+              Write-Host "ERROR: dev_overrides never goes to the Microsoft Store flight."
               exit 1
             }
             Write-Host "Building with AETHER_UPDATE_DEV_OVERRIDES=ON (testing only)"

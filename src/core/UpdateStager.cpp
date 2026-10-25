@@ -828,6 +828,9 @@ bool UpdateStager::applyFull(const QString& installRoot, const QByteArray& zip,
         }
         const fs::path target = stage / toPath(it.key());
         fs::create_directories(target.parent_path(), ec);
+        if (!noLinkOnTheWay(stage, it.key())) {
+            return fail(QStringLiteral("%1: a parent folder is a link").arg(it.key()));
+        }
         QFile out(native(target));
         if (!out.open(QIODevice::WriteOnly | QIODevice::NewOnly) || out.write(it.value()) != it.value().size()
             || !out.flush()) {
@@ -838,15 +841,20 @@ bool UpdateStager::applyFull(const QString& installRoot, const QByteArray& zip,
     }
     // setup.exe's uninstaller and its record stay with the install: the
     // release's own files never include them.
-    for (const fs::directory_entry& e : fs::directory_iterator(install, ec)) {
-        const QString name = native(e.path().filename());
+    // Every step takes an error code: this runs on a worker, where a
+    // throwing increment would end the app.
+    fs::directory_iterator it(install, ec);
+    for (const fs::directory_iterator end; !ec && it != end; it.increment(ec)) {
+        const fs::path entry = it->path();
+        const QString name = native(entry.filename());
         if (!name.startsWith(QLatin1String("unins"), Qt::CaseInsensitive) || wanted.contains(name)) {
             continue;
         }
-        if (!e.is_regular_file(ec) || e.is_symlink(ec)) {
-            continue;
+        std::error_code probe;
+        if (!fs::is_regular_file(fs::symlink_status(entry, probe))) {
+            continue;   // a link or a folder is not the installer's file
         }
-        fs::copy_file(e.path(), stage / e.path().filename(), ec);
+        fs::copy_file(entry, stage / entry.filename(), ec);
         if (ec) {
             return fail(QStringLiteral("%1: the installer's file could not be kept.").arg(name));
         }
@@ -862,8 +870,12 @@ bool UpdateStager::applyFull(const QString& installRoot, const QByteArray& zip,
 
 namespace {
 
+// An empty path is no install, never the working directory.
 bool sameInstall(const QString& a, const QString& b)
 {
+    if (a.isEmpty() || b.isEmpty()) {
+        return false;
+    }
 #ifdef Q_OS_WIN
     const Qt::CaseSensitivity cs = Qt::CaseInsensitive;
 #else
@@ -902,6 +914,9 @@ UpdateStager::StagedRelease UpdateStager::stagedRelease(const QString& stagingRo
                             && VersionNumber::parse(version) > running
                             && r.value(QLatin1String("from")).toString() == runningVersion
                             && sameInstall(r.value(QLatin1String("install")).toString(), installRoot)
+                            // The record is unsigned: its tag must be the version's
+                            // own, which revalidate() binds to the signed manifest.
+                            && tag == QLatin1Char('v') + version
                             && (githubLatestTag.isEmpty() || tag == githubLatestTag)
                             && version != rolledBackVersion && QFileInfo(root.filePath(version)).isDir()
                             && QFileInfo::exists(root.filePath(version + QLatin1String(".manifest.json")))
@@ -910,8 +925,10 @@ UpdateStager::StagedRelease UpdateStager::stagedRelease(const QString& stagingRo
             chosen = {version, root.filePath(version), runningVersion};
         }
     }
-    // Everything else here is stale: other versions, half-written records,
-    // work folders a crashed run left.
+    // Everything else staging wrote is stale: other versions, half-written
+    // records, work folders a crashed run left. The folder is shared with
+    // the swap helper (UpdateInstaller::stateDir()): its journal, result,
+    // repair plan, log and copy are never staging's to remove.
     std::error_code ec;
     const QStringList keep = chosen.version.isEmpty()
                                  ? QStringList()
@@ -919,8 +936,11 @@ UpdateStager::StagedRelease UpdateStager::stagedRelease(const QString& stagingRo
                                                chosen.version + QLatin1String(".manifest.json"),
                                                chosen.version + QLatin1String(".manifest.json.sig")};
     const QDir::Filters all = QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot;
+    static const QRegularExpression owned(
+        QStringLiteral("^[0-9]+(\\.[0-9]+){2,3}(\\.json|\\.manifest\\.json(\\.sig)?)?$"));
     for (const QString& name : root.entryList(all)) {
-        if (!keep.contains(name)) {
+        const bool ours = name.startsWith(QLatin1String(".work-")) || owned.match(name).hasMatch();
+        if (ours && !keep.contains(name)) {
             qCInfo(lcUpdater).noquote() << "discarding stale staged update" << name;
             fs::remove_all(toPath(root.filePath(name)), ec);
         }

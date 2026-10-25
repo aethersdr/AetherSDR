@@ -195,6 +195,11 @@ That needs `full` to be a `.zip` of at most 512 MiB, so it is Windows only.
 
 If the full release fails too, the browser fallback is offered, once.
 
+The full release is unpacked in memory: the download and its unpacked
+files are held at once, on a worker thread. For v26.10.3 that measured
+548 MiB peak (a 157 MB zip, 344 MB of files). The caps above are hard
+ceilings, so this is footprint, not safety.
+
 ### What stays staged
 
 The staging root holds at most the one staged release waiting to be
@@ -213,17 +218,27 @@ folder, removed on failure or cancel.
 At startup `UpdateStager::stagedRelease` keeps the staged release only if
 it is still the one to install: staged for the running version and this
 install, GitHub's latest (when that is known yet), and not the release
-that was rolled back. Everything else in the staging root is removed:
-other versions, half-written records, and work folders a crashed run left.
+that was rolled back. The record is unsigned, so its `tag` must also be
+its own version's (`v<version>`), which `revalidate` binds to the signed
+manifest. Everything else staging wrote is removed: other versions,
+half-written records, and work folders a crashed run left. The staging
+root is the helper's state folder too, so only staging's own names are
+swept (`.work-*`, `<version>`, and its three record files); the helper's
+journal, result, repair plan, log and copy are left alone.
+
 Before the swap, `revalidate` checks the stored signature with the
-built-in key and every file against the stored manifest, so a tree changed
-on disk since it was staged is never swapped in.
+built-in key and every file in `files` against the stored manifest, so a
+release file changed or removed on disk since it was staged is never
+swapped in. A file added since is not caught: the patch path keeps the
+install's own files (`unins*`, anything a portable user put there), so the
+tree is never exactly `files`. Both trees are the user's own, at the same
+level, so no boundary is crossed.
 
 ### Testing an update before there is a release
 
 A build configured with `AETHER_UPDATE_DEV_OVERRIDES` (`BUILD-OPTIONS.md`;
 `windows-installer.yml`'s `dev_overrides` dispatch input builds one, never
-on a tag) honors four environment variables, each logged when used:
+on a tag and never for the Store flight) honors four environment variables, each logged when used:
 
 | Variable | Effect |
 |---|---|

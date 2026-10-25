@@ -818,6 +818,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(full.size(), 1, 20000);
         QTest::qWait(100);
         QCOMPARE(staged.size(), 1);
+        QCOMPARE(full.size(), 1);   // once, not at least once
         QCOMPARE(full.first().first().toString(), QStringLiteral("The downloaded update does not match its signed hash."));
         QVERIFY(!stager.isBusy());
     }
@@ -903,6 +904,29 @@ private slots:
         QVERIFY(stageOnce());
         QVERIFY(discarded(QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.3"), QStringLiteral("26.10.3")));
         QVERIFY(stageOnce());
+        // Review of #6771: the record is unsigned. A tag edited to the new
+        // latest cannot pass a superseded (but signed) release for it.
+        {
+            const QString rec = root + QStringLiteral("/26.10.3.json");
+            QJsonObject o = QJsonDocument::fromJson(readFile(rec)).object();
+            o[QStringLiteral("tag")] = QStringLiteral("v26.10.4");
+            writeFile(rec, QJsonDocument(o).toJson());
+        }
+        QVERIFY(discarded(QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.4"), {}));
+        QVERIFY(stageOnce());
+        // An empty install in the record is no install, never the working directory.
+        {
+            const QString rec = root + QStringLiteral("/26.10.3.json");
+            QJsonObject o = QJsonDocument::fromJson(readFile(rec)).object();
+            o[QStringLiteral("install")] = QString();
+            writeFile(rec, QJsonDocument(o).toJson());
+        }
+        const QString cwd = QDir::currentPath();
+        QDir::setCurrent(install);
+        const bool emptyDiscarded = discarded(QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.3"), {});
+        QDir::setCurrent(cwd);
+        QVERIFY(emptyDiscarded);
+        QVERIFY(stageOnce());
         QFile::remove(root + QStringLiteral("/26.10.3.manifest.json.sig"));   // a record half written
         QVERIFY(discarded(QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.3"), {}));
 
@@ -915,6 +939,22 @@ private slots:
             UpdateStager::stagedRelease(root, QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.3"), {});
         QCOMPARE(s.version, QStringLiteral("26.10.3"));
         QCOMPARE(QDir(root).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden).size(), 4);
+        // Review of #6771: the folder is the helper's state folder too; the
+        // sweep removes only what staging wrote.
+        writeFile(root + QStringLiteral("/swap-journal.txt"), "selftest 26.10.3");
+        writeFile(root + QStringLiteral("/swap-result.txt"), "RolledBack 26.10.3\n");
+        writeFile(root + QStringLiteral("/repair-plan.txt"), "C:/AetherSDR\n26.10.3\n");
+        writeFile(root + QStringLiteral("/updater.log"), "log");
+        writeFile(root + QStringLiteral("/AetherSDRUpdater.exe"), "helper");
+        writeFile(root + QStringLiteral("/selftest-26.10.3.txt"), "26.10.3");
+        UpdateStager::stagedRelease(root, QStringLiteral("26.10.3"), install, QStringLiteral("v26.10.3"), {});
+        for (const char* name : {"swap-journal.txt", "swap-result.txt", "repair-plan.txt", "updater.log",
+                                 "AetherSDRUpdater.exe", "selftest-26.10.3.txt"}) {
+            QVERIFY2(QFile::exists(root + QLatin1Char('/') + QLatin1String(name)), name);
+        }
+        QVERIFY(!QFileInfo::exists(root + QStringLiteral("/26.10.3")));   // staging's own, discarded
+        QVERIFY(!QFileInfo::exists(root + QStringLiteral("/26.10.3.json")));
+
         QVERIFY(UpdateStager::stagedRelease(tmp.filePath(QStringLiteral("none")), QStringLiteral("26.10.2"), install,
                                             {}, {})
                     .version.isEmpty());
