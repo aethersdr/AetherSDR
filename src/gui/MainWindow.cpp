@@ -6574,48 +6574,6 @@ int MainWindow::catPortTargetCount() const
     return ReceiverSlotCount::forCeiling(m_radioModel.maxSlices(), m_radioModel.slices());
 }
 
-void MainWindow::applyCatPortCount()
-{
-    auto& s = AppSettings::instance();
-    const bool masterOn = s.value("CatEnabled", "False").toString() == "True";
-
-    for (int i = 0; i < kCatPorts; ++i) {
-        if (!catPort(i)) continue;
-
-        const QString prefix = QString("CatPort_%1_").arg(i);
-        const bool portEnabled = s.value(prefix + "Enabled", "False").toString() == "True";
-        const int  portNum     = s.value(prefix + "Port", "").toInt();
-        // A CAT port is a control channel, not a 1:1 mapping to a slice — don't
-        // cap how many configured ports start by the radio's receiver count
-        // (#3693). Receiver capacity bounds the VFO-letter choices per port
-        // (ReceiverSlotCount::catLetters() feeds the applet), not whether a
-        // port runs.
-        const bool shouldRun   = masterOn && portEnabled && (portNum >= 1024);
-
-        if (shouldRun && !catPort(i)->isRunning()) {
-            // Re-apply config in case dialect/VFO was changed while stopped
-            QString d = s.value(prefix + "Dialect", "Rigctld").toString();
-            CatDialect dial = (d == "FlexCAT") ? CatDialect::FlexCAT
-                            : (d == "TS2000")  ? CatDialect::TS2000
-                            : CatDialect::Rigctld;
-            catPort(i)->setDialect(dial);
-            catPort(i)->setVfoA(s.value(prefix + "VfoA", "0").toInt());
-            catPort(i)->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
-            catPort(i)->start(static_cast<quint16>(portNum));
-        } else if (!shouldRun && catPort(i)->isRunning()) {
-            catPort(i)->stop();
-        }
-    }
-
-    auto* applet = m_appletPanel ? m_appletPanel->catControlApplet() : nullptr;
-    if (applet) {
-        applet->setCatEnabled(masterOn);
-        // The radio's own count while connected (one letter on a one-receiver
-        // radio), every letter when none is (#5776).
-        applet->setMaxSlices(ReceiverSlotCount::catLetters(&m_radioModel));
-    }
-}
-
 void MainWindow::migrateCatSettings()
 {
     auto& s = AppSettings::instance();

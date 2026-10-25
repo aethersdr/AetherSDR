@@ -4,7 +4,7 @@ slug: "/cat-control"
 description: "AetherSDR has a built-in CAT server, so logging and digital-mode programs can read and set frequency, mode, split and PTT without an external rigctld or a SmartSDR CAT install."
 ---
 
-AetherSDR has a built-in CAT server, so logging and digital-mode programs can read and set frequency, mode, split and PTT without an external rigctld or a SmartSDR CAT install. It offers up to **eight CAT ports**. Each port speaks one of three dialects: Hamlib **Rigctld** (NET rigctl), Kenwood **TS-2000**, or **Flex** (FlexCAT, the SmartSDR CAT command set). On Linux and macOS every port can also appear as a virtual serial port.
+AetherSDR has a built-in CAT server, so logging and digital-mode programs can read and set frequency, mode, split and PTT without an external rigctld or a SmartSDR CAT install. It offers up to **eight CAT ports**. Each port speaks one of four dialects: Hamlib **Rigctld** (NET rigctl), Kenwood **TS-2000**, **Flex** (FlexCAT, the SmartSDR CAT command set), or **OTRSP** for two-slice contesting focus. On Linux and macOS every port can also appear as a virtual serial port.
 
 CAT works with WSJT-X, JTDX, fldigi, JS8Call, Winlink/VARA, N1MM+, DXLog and most other Hamlib- or Kenwood-aware programs. For audio, pair it with [DAX Virtual Audio](./dax-virtual-audio.md), or use the [TCI Server](./tci-server.md), which carries CAT and audio over one connection.
 
@@ -22,15 +22,17 @@ CAT has its own **CAT Control** applet (applet-tray button **CAT**, Integration 
 |---|---|
 | **Enabled** | Starts this port. A port runs only when the master switch is on, this box is ticked and a port number is set. |
 | **Port** | TCP port, 1024–65535. |
-| **Dialect** | **Rigctld**, **TS-2000** or **Flex**. |
-| **VFO A** | The slice this port controls as VFO A. |
-| **VFO B** | The slice used as VFO B (dual-VFO dialects only; see [Choosing a dialect](#choosing-a-dialect)). |
+| **Dialect** | **Rigctld**, **TS-2000**, **Flex** or **OTRSP**. |
+| **VFO A** | The slice this port controls as VFO A; OTRSP Radio 1. |
+| **VFO B** | The slice used as VFO B; OTRSP Radio 2 (dual-VFO dialects only; see [Choosing a dialect](#choosing-a-dialect)). |
 | **PTY** | The virtual serial port path (Linux and macOS only). Right-click → **Copy PTY Name**. |
-| **Clients** | Number of programs connected to the port, or "—" when it is stopped. |
+| **Clients** | Number of programs connected to the port, or "—" when it is stopped. **Error** means the port could not start or its saved OTRSP assignments are unavailable; the tooltip and screen-reader description give the reason. |
 
 While a port is running, its port number, dialect and VFO selectors are locked. Untick the port to change them.
 
-The VFO selectors list one letter per receiver the connected radio offers, up to **A–H**. If you connect to a smaller radio, a slice choice it cannot show is kept and comes back when that slice exists again.
+If **Clients** shows **Error**, untick the row, correct its assignments or choose a TCP port that is not already in use, then tick it again. A ticked row does not guarantee that its listener started successfully.
+
+The VFO selectors list one letter per receiver the connected radio offers, up to **A–H**. Saved VFO A and VFO B assignments are restored after restarting AetherSDR and connecting to a radio. If you connect to a smaller radio, a slice choice it cannot show is kept and comes back when that slice exists again.
 
 ### Turning CAT on
 
@@ -48,10 +50,42 @@ The VFO selectors list one letter per receiver the connected radio offers, up to
 | **Rigctld** | Hamlib "NET rigctl" clients: WSJT-X, JTDX, fldigi, JS8Call, VARA/Winlink | Not used. Split is created on demand when the program asks for it. |
 | **TS-2000** | Programs that only offer a Kenwood rig | Yes |
 | **Flex** | Programs with a SmartSDR CAT / FlexRadio profile (Kenwood commands plus the `ZZ` extensions) | Yes |
+| **OTRSP** | Contest programs controlling RX audio/focus and TX-slice selection on one FlexRadio | Required; must differ from VFO A |
 
 Switching a port between a single-VFO and a dual-VFO dialect keeps your VFO B choice; it reappears when you switch back.
 
 The rigctld dialect follows the Hamlib NET rigctl command set: frequency, mode and passband, VFO, split, PTT, levels, functions, CTCSS/FM tones, `dump_state` and the long `\` forms. See the [Hamlib documentation](https://hamlib.github.io/) for the commands themselves.
+
+### OTRSP for two-slice contesting
+
+OTRSP maps two virtual radios to two slices on **one physical FlexRadio**. It does not coordinate separate physical radios.
+
+1. Create the two slices you want to use.
+2. In the floating **CAT Control** applet, choose an unused row and select **OTRSP** in **Dialect**. An empty **Port** defaults to **60000**; you can change it.
+3. Set **VFO A** to the slice for Radio 1 and **VFO B** to a different slice for Radio 2. The row cannot be enabled until two distinct slices are assigned.
+4. Enable the row and the master CAT switch.
+5. Connect your contest program's OTRSP TCP connection to AetherSDR's host and this port. Commands end with a carriage return (`\r`).
+
+The slice assignments are configurable: Radio 1 does not have to be slice A, and Radio 2 does not have to be slice B. The **Clients** column shows the connected program count. Existing slice highlighting, audio mute/pan controls and TX indicators follow radio-confirmed changes.
+
+| Command | Headphone routing | Selected slice |
+|---|---|---|
+| `RX1` | Radio 1 in both ears; Radio 2 muted | Radio 1 |
+| `RX2` | Radio 2 in both ears; Radio 1 muted | Radio 2 |
+| `RX1S` | Radio 1 left, Radio 2 right; both unmuted | Radio 1 |
+| `RX2S` | Radio 1 left, Radio 2 right; both unmuted | Radio 2 |
+| `RX1R` | Radio 1 right, Radio 2 left; both unmuted | Radio 1 |
+| `RX2R` | Radio 1 right, Radio 2 left; both unmuted | Radio 2 |
+
+`TX1` and `TX2` select the mapped transmitting slice. **They do not key the transmitter or generate RF.** PTT and CW keying remain separate, using your existing transmit mechanism. A TX-focus change is refused while the radio is transmitting.
+
+`?NAME` returns `NAMEAetherSDR`, `?RX` reads the current audio/focus mode, and `?TX` reads the current TX focus. Every response ends with `\r`. Queries use live model state, including changes made outside OTRSP, rather than the last command a client sent. If the mapped slices are unavailable or the live state cannot be represented by OTRSP, the query is echoed rather than reporting a fabricated focus.
+
+Commands remain in order on each connection. After a TX-focus request, subsequent commands and queries wait for the radio to confirm that focus, for a refusal, or for a 250 ms confirmation timeout. A `TX2\r?TX\r` burst therefore waits for confirmation before replying; on refusal or timeout the reply describes the observed focus, not the requested one. Closing the connection or losing a mapped slice or radio session cancels pending work. Excessive queued input closes the connection rather than growing memory without bound.
+
+If a virtual serial connection exceeds its output-queue limit, the whole CAT port stops instead of leaving TCP active with a missing PTY. Untick and re-enable that row after fixing the client that stopped reading.
+
+Unknown queries (including the bare `?` ping) are echoed, as specified by OTRSP. AUX outputs, relay switching, events, microphone routing, PTT commands and CW routing are not implemented. Unsupported non-query commands are ignored. Slice gains and unmapped slices are left unchanged; disconnecting a client or stopping the port does not restore older mute/pan or focus values.
 
 ### Testing a rigctld port
 
@@ -123,6 +157,13 @@ The port's **VFO A** points at a different slice.
 1. Pop out the CAT applet.
 2. Untick the port, set its **VFO A** letter to the slice you want, and tick it again.
 
+### OTRSP connects but focus does not change
+
+1. Check that **VFO A** and **VFO B** name two distinct, existing slices on the connected radio. OTRSP does not create a missing slice or substitute a different one.
+2. Make sure the logger sends carriage-return-terminated OTRSP commands, not semicolon-terminated Kenwood CAT.
+3. Release PTT before changing TX focus.
+4. Enable **TCI / CAT / rigctld** logging to see refused commands or unavailable mappings.
+
 ### A serial-port program can't open `/tmp/AetherSDR-CAT-A`
 
 The virtual serial ports moved to per-user paths.
@@ -138,3 +179,4 @@ The virtual serial ports moved to per-user paths.
 - [Split Operation](./split-operation.md)
 - [Support and Logging](./support-and-logging.md)
 - [Hamlib documentation](https://hamlib.github.io/)
+- [OTRSP specification](https://www.k1xm.org/OTRSP/)
