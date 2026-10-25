@@ -345,6 +345,13 @@ void testSweepStopsWithoutAudio()
     check(thresholds == std::vector<int>{100, 47},
           "so the knee sweep stops at 100 and puts AGC-T back");
     check(nothingRecordedOnceSettled(), "recording nothing once AGC-T settles");
+
+    // The stop has already said finished. A session change that leaves the
+    // calibrator unable to write cancels it, and must not say so again: the
+    // dialog would replace the no-audio line with "Calibration stopped."
+    finished.clear();
+    s.invalidateFrequencyObservation();
+    check(finished.isEmpty(), "and a later session change does not end it a second time");
 }
 
 }  // namespace
