@@ -16,6 +16,10 @@
 #include <QHelpEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QContextMenuEvent>
+#include <QScroller>
+#include <QAbstractScrollArea>
+#include <QAbstractItemView>
 
 #include "MainWindowHelpers.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
@@ -666,6 +670,82 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
             // A controller toggle has no release to lose and is left alone.
             if (m_splitMonitorKeyHeld)
                 endSplitMonitor();
+        }
+    }
+
+    // Enable kinetic touch-scroll on every scroll area app-wide (band stack,
+    // memory/profile lists, the radio-setup menus, any QScrollArea/item view),
+    // once, the first time each is shown. With QScroller grabbed a touch drag
+    // flick-scrolls instead of rubber-band selecting, while a stationary tap
+    // still falls through as a click. Widgets whose drag means something else
+    // (AppletPanel's applet drag-and-drop) opt out via _aetherNoTouchScroll.
+    if (event->type() == QEvent::Show) {
+        if (auto* area = qobject_cast<QAbstractScrollArea*>(obj)) {
+            if (!area->property("_aetherTouchScroll").toBool()
+                && !area->property("_aetherNoTouchScroll").toBool()) {
+                area->setProperty("_aetherTouchScroll", true);
+                QScroller::grabGesture(area->viewport(), QScroller::TouchGesture);
+                if (auto* view = qobject_cast<QAbstractItemView*>(area)) {
+                    view->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+                    view->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+                }
+            }
+        }
+    }
+
+    // Touch tap-and-hold -> right-click. On a touchscreen Qt synthesizes a LEFT
+    // click from a tap; watch those synthesized mouse events and, when a press is
+    // held in place long enough, inject a right-button click (plus a context-menu
+    // event) at that point so press-and-hold acts like the right mouse button
+    // with no physical mouse. Real (non-synthesized) mouse input is untouched.
+    if (event->type() == QEvent::MouseButtonPress
+        || event->type() == QEvent::MouseButtonRelease
+        || event->type() == QEvent::MouseMove) {
+        auto* me = static_cast<QMouseEvent*>(event);
+        const bool synthesized =
+            me->source() == Qt::MouseEventSynthesizedByQt
+            || me->source() == Qt::MouseEventSynthesizedBySystem;
+        if (event->type() == QEvent::MouseButtonPress
+            && me->button() == Qt::LeftButton && synthesized) {
+            if (!m_touchHoldTimer) {
+                m_touchHoldTimer = new QTimer(this);
+                m_touchHoldTimer->setSingleShot(true);
+                connect(m_touchHoldTimer, &QTimer::timeout, this, [this]() {
+                    QWidget* w = m_touchHoldWidget
+                        ? m_touchHoldWidget.data()
+                        : QApplication::widgetAt(m_touchHoldGlobalPos);
+                    if (!w) { return; }
+                    const QPointF global(m_touchHoldGlobalPos);
+                    const QPointF local = w->mapFromGlobal(m_touchHoldGlobalPos);
+                    // Right-button click: SpectrumWidget and other inline handlers
+                    // open their menu straight from mousePressEvent().
+                    QMouseEvent press(QEvent::MouseButtonPress, local, global,
+                                      Qt::RightButton, Qt::RightButton,
+                                      Qt::NoModifier);
+                    QApplication::sendEvent(w, &press);
+                    QMouseEvent release(QEvent::MouseButtonRelease, local, global,
+                                        Qt::RightButton, Qt::NoButton,
+                                        Qt::NoModifier);
+                    QApplication::sendEvent(w, &release);
+                    // Widgets that use contextMenuEvent() instead of an inline
+                    // right-button check still get their menu this way.
+                    QContextMenuEvent cme(QContextMenuEvent::Mouse, local.toPoint(),
+                                          m_touchHoldGlobalPos);
+                    QApplication::sendEvent(w, &cme);
+                });
+            }
+            m_touchHoldGlobalPos = me->globalPosition().toPoint();
+            m_touchHoldWidget = QApplication::widgetAt(m_touchHoldGlobalPos);
+            m_touchHoldTimer->start(600);
+        } else if (event->type() == QEvent::MouseMove && m_touchHoldTimer
+                   && m_touchHoldTimer->isActive()) {
+            if ((me->globalPosition().toPoint() - m_touchHoldGlobalPos)
+                    .manhattanLength() > 12) {
+                m_touchHoldTimer->stop();  // moved -> it's a drag/scroll, not a hold
+            }
+        } else if (event->type() == QEvent::MouseButtonRelease
+                   && me->button() == Qt::LeftButton && m_touchHoldTimer) {
+            m_touchHoldTimer->stop();
         }
     }
 
