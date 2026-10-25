@@ -15,7 +15,8 @@ namespace AetherSDR {
 class UpdateInstaller {
 public:
     // Per-user app data, outside the install: the staged release, the
-    // helper's copy, its journal, log and result. UpdateStager stages here.
+    // helper's copy, its journal, log and result. The Updates window stages
+    // here (next PR).
     static QString stateDir();
 
     // AetherSDRUpdater's command line (protocol 1, src/updater/main_win.cpp).

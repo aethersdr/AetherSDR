@@ -2558,7 +2558,7 @@ if(WIN32)
     )
     target_include_directories(AetherSDRUpdater PRIVATE src/updater)
     target_compile_definitions(AetherSDRUpdater PRIVATE UNICODE _UNICODE NOMINMAX)
-    target_link_libraries(AetherSDRUpdater PRIVATE shell32 user32)
+    target_link_libraries(AetherSDRUpdater PRIVATE shell32 user32 advapi32)   # advapi32: the RunOnce repair
     set_target_properties(AetherSDRUpdater PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

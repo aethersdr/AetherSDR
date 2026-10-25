@@ -18,7 +18,10 @@
 // Windows has no atomic directory swap: between the install's rename and
 // .new's, nothing runnable is at <install> for a moment. A journal in the
 // state folder records each step before it is taken, so recover() can put
-// the install back if the helper dies there.
+// the install back if the helper dies there. Because a missing install
+// cannot start the app that would start the helper, the helper also arms a
+// repair (on Windows a RunOnce entry: repair() at the next logon) before
+// the first rename, and disarms it once nothing is owed.
 //
 // After the swap the new AetherSDR runs a self-test (--update-selftest
 // <marker>): it starts Qt, loads its plugins and libraries, writes the
@@ -98,6 +101,11 @@ struct Ops {
     // Writes the journal; empty means a write-then-rename to the real file.
     // Tests inject a failed write at a chosen step.
     std::function<bool(const fs::path& path, const std::string& text)> writeJournal;
+    // Arms a repair that runs repair() even if nothing starts the app (the
+    // next logon); true once it is in place. Disarmed when no repair is
+    // owed. Both empty: no repair is armed (tests that don't look).
+    std::function<bool()> armRepair;
+    std::function<void()> disarmRepair;
 };
 
 struct Paths {
@@ -119,5 +127,12 @@ bool recover(const Plan& plan, const Ops& ops);
 // The whole update: wait for the old process, check, swap, start, watch,
 // and roll back when the new version does not come up.
 Outcome run(const Plan& plan, const Ops& ops);
+
+// The armed repair: recover() alone, with no swap and no old process to
+// wait for (plan.staged is unused). A repair that put the install back
+// records SwapUndone, never RolledBack, since the release was never tested.
+// False while the install is still broken: the repair stays armed and the
+// journal kept.
+bool repair(const Plan& plan, const Ops& ops);
 
 } // namespace AetherSDR::updater

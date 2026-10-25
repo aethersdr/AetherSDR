@@ -11,6 +11,12 @@
 //   AetherSDRUpdater.exe --protocol 1 --wait-pid <pid> --install <dir>
 //                        --staged <dir> --state-dir <dir> --version <x.y.z>
 //                        [--restart]
+//   AetherSDRUpdater.exe --protocol 1 --repair
+//
+// --repair is what the RunOnce entry armed before the first rename runs at
+// the next logon: repair() from the plan the swap left in the helper's own
+// folder (the state folder), for when the swap died with no install left to
+// start AetherSDR from.
 
 #include "UpdateSwap.h"
 
@@ -53,6 +59,113 @@ std::wstring quoted(const std::wstring& arg)
     return out;
 }
 
+// The journal, durably: written and flushed to the disk (not just to the
+// OS), then moved over the old one with the move itself written through, so
+// a power cut leaves either record whole.
+bool writeDurably(const fs::path& path, const std::string& text)
+{
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    fs::path tmp = path;
+    tmp += L".tmp";
+    HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    DWORD written = 0;
+    const bool ok = WriteFile(h, text.data(), static_cast<DWORD>(text.size()), &written, nullptr)
+                    && written == text.size() && FlushFileBuffers(h);
+    CloseHandle(h);
+    return ok && MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+}
+
+const wchar_t* const kRunOnceKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
+const wchar_t* const kRunOnceValue = L"AetherSDRUpdateRepair";
+const wchar_t* const kRepairPlan = L"repair-plan.txt";
+
+fs::path selfPath()
+{
+    std::wstring buf(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD n = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+        if (n == 0) {
+            return {};
+        }
+        if (n < buf.size()) {
+            buf.resize(n);
+            return fs::path(buf);
+        }
+        buf.resize(buf.size() * 2);
+    }
+}
+
+std::string utf8(const fs::path& p)
+{
+    const auto u8 = p.u8string();
+    return std::string(u8.begin(), u8.end());
+}
+
+// The repair's plan beside the helper, then the RunOnce entry that starts
+// it; only both together are an armed repair.
+bool armRepair(const Plan& plan)
+{
+    const fs::path self = selfPath();
+    const std::string record = utf8(plan.install) + "\n" + plan.version + "\n";
+    if (self.empty() || !writeDurably(plan.stateDir / kRepairPlan, record)) {
+        return false;
+    }
+    const std::wstring command =
+        quoted(self.wstring()) + L" --protocol " + std::to_wstring(kProtocol) + L" --repair";
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRunOnceKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key,
+                        nullptr) != ERROR_SUCCESS) {
+        return false;
+    }
+    const LONG r = RegSetValueExW(key, kRunOnceValue, 0, REG_SZ,
+                                  reinterpret_cast<const BYTE*>(command.c_str()),
+                                  static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)));
+    RegCloseKey(key);
+    return r == ERROR_SUCCESS;
+}
+
+void disarmRepair(const Plan& plan)
+{
+    RegDeleteKeyValueW(HKEY_CURRENT_USER, kRunOnceKey, kRunOnceValue);
+    std::error_code ec;
+    fs::remove(plan.stateDir / kRepairPlan, ec);
+}
+
+// The plan armRepair() left: the install's path and the version, UTF-8.
+bool readRepairPlan(Plan* plan)
+{
+    std::ifstream in(plan->stateDir / kRepairPlan, std::ios::binary);
+    std::string install;
+    std::string version;
+    if (!std::getline(in, install) || !std::getline(in, version) || install.empty()
+        || version.empty()) {
+        return false;
+    }
+    plan->install = fs::u8path(install);
+    plan->version = version;
+    return true;
+}
+
+void showBroken(const Plan& plan)
+{
+    // Nothing runnable is in place and the helper could not fix it: say
+    // where everything is rather than fail silently.
+    const Paths paths = pathsFor(plan);
+    const std::wstring text =
+        L"AetherSDR could not finish updating and could not restore the previous version.\n\n"
+        L"Install folder: " + plan.install.wstring() + L"\n"
+        L"Previous version: " + paths.previous.wstring() + L"\n"
+        L"New version: " + paths.next.wstring() + L"\n\n"
+        L"Rename the previous version's folder back to the install folder's name, "
+        L"or reinstall AetherSDR. Details: " + (plan.stateDir / "updater.log").wstring();
+    MessageBoxW(nullptr, text.c_str(), L"AetherSDR update", MB_OK | MB_ICONERROR);
+}
+
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
@@ -61,10 +174,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     std::map<std::wstring, std::wstring> args;
     bool restart = false;
+    bool repairOnly = false;
     for (int i = 1; i < argc; ++i) {
         const std::wstring a = argv[i];
         if (a == L"--restart") {
             restart = true;
+        } else if (a == L"--repair") {
+            repairOnly = true;
         } else if (i + 1 < argc && a.rfind(L"--", 0) == 0) {
             args[a] = argv[++i];
         }
@@ -72,7 +188,40 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     LocalFree(argv);
 
     // The contract first: an app of another protocol is refused, not guessed at.
-    if (args[L"--protocol"] != std::to_wstring(kProtocol) || args[L"--wait-pid"].empty()
+    if (args[L"--protocol"] != std::to_wstring(kProtocol)) {
+        return 2;
+    }
+    if (repairOnly) {
+        Plan plan;
+        plan.stateDir = selfPath().parent_path();
+        plan.exeName = L"AetherSDR.exe";
+        std::ofstream logFile(plan.stateDir / "updater.log", std::ios::app);
+        Ops ops;
+        ops.log = [&logFile](const std::string& line) { logFile << line << '\n' << std::flush; };
+        ops.now = [] { return Clock::now(); };
+        ops.sleep = [](Duration d) { Sleep(static_cast<DWORD>(d.count())); };
+        ops.writeJournal = writeDurably;
+        if (!readRepairPlan(&plan)) {
+            ops.log("AetherSDRUpdater: no repair plan; nothing to repair");
+            RegDeleteKeyValueW(HKEY_CURRENT_USER, kRunOnceKey, kRunOnceValue);
+            return 0;
+        }
+        ops.armRepair = [&plan] { return armRepair(plan); };
+        ops.disarmRepair = [&plan] { disarmRepair(plan); };
+        ops.log("AetherSDRUpdater: repairing the install after an interrupted update to " + plan.version);
+        bool repaired = false;
+        try {
+            repaired = repair(plan, ops);
+        } catch (const std::exception& e) {
+            ops.log(std::string("the repair stopped on an error: ") + e.what());
+            armRepair(plan);
+        }
+        if (!repaired) {
+            showBroken(plan);
+        }
+        return repaired ? 0 : 1;
+    }
+    if (args[L"--wait-pid"].empty()
         || args[L"--install"].empty() || args[L"--staged"].empty() || args[L"--state-dir"].empty()
         || args[L"--version"].empty()) {
         return 2;
@@ -126,22 +275,36 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
         TerminateProcess(static_cast<HANDLE>(p.handle.get()), 1);
         WaitForSingleObject(static_cast<HANDLE>(p.handle.get()), 5000);
     };
+    ops.writeJournal = writeDurably;
+    ops.armRepair = [&plan] { return armRepair(plan); };
+    ops.disarmRepair = [&plan] { disarmRepair(plan); };
 
     ops.log("AetherSDRUpdater: installing " + plan.version);
-    const Outcome outcome = run(plan, ops);
+    Outcome outcome = Outcome::Broken;
+    try {
+        outcome = run(plan, ops);
+    } catch (const std::exception& e) {
+        // Never a silent crash: the journal on disk still says how far it
+        // got, and the next run repairs from it.
+        ops.log(std::string("the swap stopped on an error: ") + e.what());
+        // Put the known-good install back the way a later run would, and
+        // say so; only an install that is still missing is Broken.
+        try {
+            const bool restored = recover(plan, ops);
+            std::error_code ec;
+            if (restored && fs::exists(plan.install / plan.exeName, ec)) {
+                outcome = Outcome::SwapUndone;
+            }
+            std::ofstream(pathsFor(plan).result, std::ios::trunc)
+                << outcomeName(outcome) << ' ' << plan.version << '\n';
+            ops.log(std::string("outcome: ") + outcomeName(outcome) + " " + plan.version);
+        } catch (const std::exception& again) {
+            ops.log(std::string("the repair stopped on an error too: ") + again.what());
+        }
+    }
 
     if (outcome == Outcome::Broken) {
-        // Nothing runnable is in place and the helper could not fix it:
-        // say where everything is rather than fail silently.
-        const Paths paths = pathsFor(plan);
-        const std::wstring text =
-            L"AetherSDR could not finish updating and could not restore the previous version.\n\n"
-            L"Install folder: " + plan.install.wstring() + L"\n"
-            L"Previous version: " + paths.previous.wstring() + L"\n"
-            L"New version: " + paths.next.wstring() + L"\n\n"
-            L"Rename the previous version's folder back to the install folder's name, "
-            L"or reinstall AetherSDR. Details: " + (plan.stateDir / "updater.log").wstring();
-        MessageBoxW(nullptr, text.c_str(), L"AetherSDR update", MB_OK | MB_ICONERROR);
+        showBroken(plan);
     }
     return outcome == Outcome::Updated ? 0 : 1;
 }
