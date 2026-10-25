@@ -244,7 +244,7 @@ option(AETHER_HL2_TX_TXA
 option(AETHER_FIRMWARE_DEV_OVERRIDES
        "Honor the AETHER_FIRMWARE_CATALOG and AETHER_FIRMWARE_TRUST_KEYS environment overrides (testing only)"
        OFF)
-# Lets AETHER_UPDATE_MANIFEST_URL, AETHER_UPDATE_TRUST_KEY,
+# Lets AETHER_UPDATE_MANIFEST_URL, AETHER_UPDATE_TRUST_KEYS,
 # AETHER_UPDATE_DOWNLOAD_BASE and AETHER_UPDATE_PRETEND_VERSION point the
 # in-app updater at a test release, for trying an update end to end before
 # there is a release to update to. Off by default and never for release.

@@ -164,7 +164,8 @@ public:
     // staged for runningVersion, from installRoot, it is GitHub's latest
     // (githubLatestTag) and not the release that was rolled back. Anything
     // else is discarded (removed) and an empty StagedRelease returned, as are
-    // work folders a crashed run left, so call it before this run stages.
+    // work folders a crashed run left: never call it while a stager isBusy(),
+    // whose work folder it would remove.
     // An empty githubLatestTag (not known yet) discards nothing on that
     // ground. Cheap: reads the record only. revalidate() checks every file.
     static StagedRelease stagedRelease(const QString& stagingRoot, const QString& runningVersion,

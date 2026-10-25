@@ -765,6 +765,27 @@ private slots:
         QVERIFY(!stager.isBusy());
     }
 
+    void aBundleThatCannotBeDownloadedFallsBackToTheFullRelease()
+    {
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        const QString manifest = publishFull(tmp, portableZip(releaseTree(tmp)), true);
+        QFile::remove(tmp.filePath(QStringLiteral("dl/v26.10.3/AetherSDR-v26.10.3-Windows-x64-from-v26.10.2.update.tar")));
+        UpdateStager::Request r = request();
+        r.installRoot = install;
+        r.stagingRoot = tmp.filePath(QStringLiteral("staging"));
+        r.manifestUrl = QUrl::fromLocalFile(manifest);
+        r.fullFallback = true;
+        UpdateStager stager;
+        QSignalSpy staged(&stager, &UpdateStager::staged);
+        QSignalSpy full(&stager, &UpdateStager::fullDownloadNeeded);
+        stager.stage(r);
+        QTRY_COMPARE_WITH_TIMEOUT(full.size() + staged.size(), 1, 20000);
+        QCOMPARE(staged.size(), 1);
+        QVERIFY(!QFile::exists(staged.first().at(0).toString() + QStringLiteral("/gone.dll")));
+        QVERIFY(!stager.isBusy());
+    }
+
     void aBrokenPatchFallsBackToTheFullRelease()
     {
         QTemporaryDir tmp;

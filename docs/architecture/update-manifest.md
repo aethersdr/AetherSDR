@@ -228,7 +228,7 @@ on a tag) honors four environment variables, each logged when used:
 | Variable | Effect |
 |---|---|
 | `AETHER_UPDATE_MANIFEST_URL` | Fetch the manifest (and `.sig`) from here |
-| `AETHER_UPDATE_TRUST_KEY` | Also trust this Ed25519 key (64 hex digits) |
+| `AETHER_UPDATE_TRUST_KEYS` | Also trust these Ed25519 keys (64 hex digits each, comma-separated) |
 | `AETHER_UPDATE_DOWNLOAD_BASE` | Fetch release files from `<base>/<tag>/<asset>`. The URLs the manifest names are still checked as signed. |
 | `AETHER_UPDATE_PRETEND_VERSION` | Run as this version, so the build's own release is an update. It is removed from the environment at startup, so the self-test and a restarted app are the real version. |
 

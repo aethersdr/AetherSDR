@@ -602,11 +602,11 @@ QList<QByteArray> UpdateStager::trustedKeys()
     }
     QList<QByteArray> keys{builtInKey()};
 #if AETHER_UPDATE_DEV_OVERRIDES
-    const QByteArray env = qgetenv("AETHER_UPDATE_TRUST_KEY");
-    if (!env.isEmpty()) {
-        const QByteArray key = QByteArray::fromHex(env.trimmed());
+    for (const QByteArray& hex : qgetenv("AETHER_UPDATE_TRUST_KEYS").split(',')) {
+        const QByteArray key = QByteArray::fromHex(hex.trimmed());
         if (key.size() == 32) {
-            qCWarning(lcUpdater) << "AETHER_UPDATE_TRUST_KEY: also trusting a test update key";
+            qCWarning(lcUpdater).noquote() << "AETHER_UPDATE_TRUST_KEYS: also trusting update key"
+                                           << QString::fromLatin1(key.toHex());
             keys << key;
         }
     }
