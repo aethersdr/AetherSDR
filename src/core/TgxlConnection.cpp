@@ -3,6 +3,7 @@
 #include "TgxlConnection.h"
 #include "PeripheralAuthCode.h"
 #include "LogManager.h"
+#include <QRegularExpression>
 
 namespace AetherSDR {
 
@@ -413,7 +414,15 @@ void TgxlConnection::processLine(const QString& line)
                     if (eq > 0) kvs.insert(part.left(eq), part.mid(eq + 1));
                 }
                 auto decode = [](const QString& s) {
-                    return QString(s).replace(QLatin1Char('_'), QLatin1Char(' ')).trimmed();
+                    QString out = s;
+                    out.replace(QLatin1Char('_'), QLatin1Char(' '));
+                    // Device free text: strip C0 controls and Unicode bidi/format
+                    // characters before they reach the rest of the app (Principle VII).
+                    // TGXL firmware caps names at 8 characters; enforce the same
+                    // limit client-side so a misbehaving device cannot overflow the button.
+                    out.remove(QRegularExpression(QStringLiteral(
+                        "[\\x{0000}-\\x{001F}\\x{007F}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}]")));
+                    return out.trimmed().left(8);
                 };
                 emit antennaNamesChanged(decode(kvs.value(QStringLiteral("name1"))),
                                          decode(kvs.value(QStringLiteral("name2"))),
