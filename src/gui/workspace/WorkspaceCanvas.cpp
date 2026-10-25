@@ -609,9 +609,9 @@ void WorkspaceCanvas::updateGripInset()
 {
     // A native child view (the macOS Metal spectrum) wins the platform's hit
     // test over the alien frame, so grips drawn on top of it take no presses.
-    // While such an item is selected its contents step in by the band,
-    // leaving the grips over plain Qt widgets. Checked once per selection:
-    // updateFrame() also runs on every gesture move.
+    // While such an item is selected its contents step in by the band. The
+    // check runs once per selection and holds until the selection changes,
+    // since updateFrame() also runs on every gesture move.
     if (m_selectedId == m_gripInsetCheckedId) {
         return;
     }
