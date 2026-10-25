@@ -4718,6 +4718,17 @@ target_compile_definitions(update_stager_test PRIVATE
 set_target_properties(update_stager_test PROPERTIES AUTOMOC ON)
 add_test(NAME update_stager_test COMMAND update_stager_test)
 
+# UpdateController (RFC #5304 Phase 3): Install update, Cancel, what stays
+# staged across launches, Skip, Restart to update and the install on quit,
+# against the same fixture with file:// downloads and a fake helper.
+add_executable(update_controller_test tests/update_controller_test.cpp)
+target_include_directories(update_controller_test PRIVATE src tests)
+target_link_libraries(update_controller_test PRIVATE aethercore aether_monocypher Qt6::Core Qt6::Network Qt6::Test)
+target_compile_definitions(update_controller_test PRIVATE
+    UPDATE_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures/update")
+set_target_properties(update_controller_test PROPERTIES AUTOMOC ON)
+add_test(NAME update_controller_test COMMAND update_controller_test)
+
 add_executable(update_release_notes_test tests/update_release_notes_test.cpp)
 target_include_directories(update_release_notes_test PRIVATE src)
 target_link_libraries(update_release_notes_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -4727,7 +4738,8 @@ add_test(NAME update_release_notes_test COMMAND update_release_notes_test)
 
 # The Updates window over the in-memory transport and the real v26.10.3
 # release JSON: each view, plain-text release text, Skip, the mirrored
-# toggle. No sockets.
+# toggle, and Install update in place over tests/fixtures/update with
+# file:// downloads and a fake helper. No sockets.
 add_executable(updates_window_test
     tests/updates_window_test.cpp
     src/gui/UpdatesWindow.cpp
@@ -4737,9 +4749,10 @@ add_executable(updates_window_test
 )
 target_include_directories(updates_window_test PRIVATE src tests)
 target_link_libraries(updates_window_test PRIVATE
-    aetherdesktop_support aethercore Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test)
+    aetherdesktop_support aethercore aether_monocypher Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test)
 target_compile_definitions(updates_window_test PRIVATE
-    UPDATE_RELEASE_FIXTURE="${CMAKE_SOURCE_DIR}/tests/fixtures/release/v26.10.3.json")
+    UPDATE_RELEASE_FIXTURE="${CMAKE_SOURCE_DIR}/tests/fixtures/release/v26.10.3.json"
+    UPDATE_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures/update")
 set_target_properties(updates_window_test PROPERTIES AUTOMOC ON)
 add_test(NAME updates_window_test COMMAND updates_window_test)
 
@@ -9761,6 +9774,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    update_controller_test
     update_installer_test
     update_stager_test
     flex_readonly_metadata_test

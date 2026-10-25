@@ -181,6 +181,7 @@ struct NetEntry;
 struct MemoryEntry;
 class PropDashboardDialog;
 class UpdateChecker;
+class UpdateController;
 class UpdatesWindow;
 class TxBandDialog;
 class BandscopeDialog;
@@ -452,6 +453,8 @@ private:
     void showUpdatesWindow(bool checkNow);  // MainWindow_Menus.cpp
     void setAutomaticUpdateCheck(bool on);  // MainWindow_Menus.cpp
     void restoreKnownUpdate();         // MainWindow_Menus.cpp
+    void restartToUpdate();            // MainWindow_Menus.cpp
+    void reportLastUpdate();           // MainWindow_Menus.cpp
     void minimizeActiveApplicationWindow();
     void toggleActiveApplicationWindowFullScreen();
     void applyDarkTheme();
@@ -2200,6 +2203,9 @@ private:
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
     UpdateChecker* m_updateChecker{nullptr};
+    // Install update in place (RFC #5304): outlives the Updates window, so
+    // a staged release installs on quit (closeEvent).
+    UpdateController* m_updateController{nullptr};
     QPointer<UpdatesWindow> m_updatesWindow;
     QAction* m_autoUpdateAction{nullptr};
 

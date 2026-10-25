@@ -32,6 +32,8 @@
 #include "ClientDisconnectDialog.h"
 #include "ConnectedStationsDialog.h"
 #include "TitleBar.h"
+#include "UpdatesWindow.h"
+#include "core/UpdateController.h"
 #include "WindowCaptionButtons.h"
 #include "WindowChrome.h"
 #ifdef Q_OS_MACOS
@@ -4477,6 +4479,13 @@ void MainWindow::closeEvent(QCloseEvent* event)
 #ifdef HAVE_WEBSOCKETS
         m_freedvClient = nullptr;
 #endif
+    }
+
+    // A staged update installs as AetherSDR quits (RFC #5304): the helper
+    // waits for this process to exit. Not while radio firmware is being
+    // written, and not twice after Restart to update handed it over.
+    if (m_updateController && !(m_updatesWindow && m_updatesWindow->firmwareBusy())) {
+        m_updateController->installOnQuit();
     }
 
     QMainWindow::closeEvent(event);

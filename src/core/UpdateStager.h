@@ -175,6 +175,9 @@ public:
                                        const QString& rolledBackVersion);
     // Before the swap: the staged tree's signed manifest still verifies and
     // every file still matches it.
+    // Removes a staged release and its record: skipped, or its files no
+    // longer match. Nothing else in stagingRoot is touched.
+    static void discard(const QString& stagingRoot, const QString& version);
     static bool revalidate(const QString& stagingRoot, const StagedRelease& staged,
                            const QString& platform, const QString& arch, QString* problem);
 
