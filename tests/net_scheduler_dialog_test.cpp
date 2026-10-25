@@ -1,6 +1,7 @@
 #include "TestSettingsProfile.h"
 
 #include "core/AppSettings.h"
+#include "core/NetScheduleStore.h"
 #include "core/ThemeManager.h"
 #include "gui/CanonMessageBox.h"
 #include "gui/CanonWindow.h"
@@ -13,10 +14,14 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QElapsedTimer>
+#include <QFile>
+#include <QFileDialog>
 #include <QPointer>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QTableWidget>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QtTest>
 
@@ -111,12 +116,53 @@ private slots:
         QCOMPARE(dlg.size(), QSize(780, 520));
     }
 
-    // Every button keeps its whole label at the window's minimum size.
-    void buttonsFitAtMinimumSize()
+    // A legacy rectangle smaller than the window's minimum opens at the minimum.
+    void legacyGeometryBelowMinimumIsWidened()
     {
+        QWidget legacy;
+        legacy.setGeometry(10, 20, 640, 380);
+        AppSettings::instance().setValue(kGeometryKey,
+                                         QString::fromLatin1(legacy.saveGeometry().toBase64()));
+
         NetSchedulerDialog dlg(twoNets(), [] { return MemoryEntry{}; });
         dlg.show();
         QVERIFY(QTest::qWaitForWindowExposed(&dlg));
+        QVERIFY2(dlg.width() >= dlg.minimumWidth() && dlg.height() >= dlg.minimumHeight(),
+                 qPrintable(QStringLiteral("%1x%2 under the %3x%4 minimum")
+                                .arg(dlg.width()).arg(dlg.height())
+                                .arg(dlg.minimumWidth()).arg(dlg.minimumHeight())));
+        QVERIFY(dlg.width() >= 760 && dlg.height() >= 420);
+    }
+
+    // The pinned minimum never undercuts what the layout needs, whatever the
+    // font: a wider one (letter-spaced here, as a stand-in for another
+    // platform's metrics) grows the minimum instead of clipping a label.
+    void minimumFitsTheLayout_data()
+    {
+        QTest::addColumn<int>("spacingPercent");
+        QTest::newRow("application font") << 100;
+        QTest::newRow("wide font") << 160;
+    }
+
+    void minimumFitsTheLayout()
+    {
+        QFETCH(int, spacingPercent);
+        const QFont saved = QApplication::font();
+        const auto restoreFont = qScopeGuard([&saved] { QApplication::setFont(saved); });
+        QFont wide = saved;
+        wide.setLetterSpacing(QFont::PercentageSpacing, spacingPercent);
+        QApplication::setFont(wide);
+
+        NetSchedulerDialog dlg(twoNets(), [] { return MemoryEntry{}; });
+        dlg.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&dlg));
+        const QSize needs = dlg.minimumSizeHint();
+        QVERIFY2(dlg.minimumWidth() >= needs.width() && dlg.minimumHeight() >= needs.height(),
+                 qPrintable(QStringLiteral("minimum %1x%2, layout needs %3x%4")
+                                .arg(dlg.minimumWidth()).arg(dlg.minimumHeight())
+                                .arg(needs.width()).arg(needs.height())));
+        QVERIFY(dlg.minimumWidth() >= 760 && dlg.minimumHeight() >= 420);
+
         dlg.resize(dlg.minimumSize());
         QTRY_COMPARE(dlg.size(), dlg.minimumSize());
         for (QPushButton* button : dlg.findChildren<QPushButton*>()) {
@@ -178,6 +224,59 @@ private slots:
         QCOMPARE(dlg.entries().size(), 1);
         QCOMPARE(dlg.entries().constFirst().id, QStringLiteral("net-off"));
         QCOMPARE(changed.count(), 1);
+    }
+
+    // Return in the Import box takes Skip existing: a net already in the
+    // schedule keeps its fields, and only the new one is added.
+    void importDefaultsToSkipExisting()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QList<NetEntry> incoming = twoNets();
+        incoming[0].name = QStringLiteral("Renamed by the import");
+        incoming[1].id = QStringLiteral("net-new");
+        const QString path = dir.filePath(QStringLiteral("nets.json"));
+        {
+            QFile file(path);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(NetScheduleStore::serialize({incoming[0], incoming[1]}));
+        }
+
+        NetSchedulerDialog dlg(twoNets(), [] { return MemoryEntry{}; });
+        dlg.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&dlg));
+
+        bool sawPicker = false;
+        QString defaultText;
+        onNextModal([&](QWidget* modal) {
+            auto* picker = qobject_cast<QFileDialog*>(modal);
+            QVERIFY(picker);
+            sawPicker = true;
+            onNextModal([&defaultText](QWidget* next) {
+                auto* box = qobject_cast<CanonMessageBox*>(next);
+                QVERIFY(box);
+                for (QPushButton* b : box->findChildren<QPushButton*>()) {
+                    if (b->isDefault())
+                        defaultText = b->text();
+                }
+                QTest::keyClick(box, Qt::Key_Return);
+            });
+            // The picker reads its answer from the file-name field; selectFile()
+            // can lose to the directory model still loading on macOS.
+            auto* nameField = picker->findChild<QLineEdit*>(QStringLiteral("fileNameEdit"));
+            QVERIFY(nameField);
+            nameField->setText(path);
+            static_cast<QDialog*>(picker)->accept();
+        });
+        QPushButton* import = buttonByText(dlg, QStringLiteral("Import…"));
+        QVERIFY(import);
+        import->click();
+
+        QVERIFY(sawPicker);
+        QCOMPARE(defaultText, QStringLiteral("Skip existing"));
+        QCOMPARE(dlg.entries().size(), 3);
+        QCOMPARE(dlg.entries().at(0).name, QStringLiteral("Tuesday 20 m Net"));
+        QCOMPARE(dlg.entries().at(2).id, QStringLiteral("net-new"));
     }
 
     // A disabled net's muted ink follows a theme change.
@@ -303,6 +402,15 @@ private slots:
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->show();
         QVERIFY(QTest::qWaitForWindowExposed(dlg));
+        // The close shortcut is window-scoped, so it needs the window active.
+        // A desktop session can refuse the activation; offscreen (ctest) never does.
+        if (path == 1) {
+            dlg->activateWindow();
+            if (!QTest::qWaitForWindowActive(dlg)) {
+                delete dlg.data();
+                QSKIP("the window system did not activate the window");
+            }
+        }
         if (path == 0)
             QTest::keyClick(dlg, Qt::Key_Escape);
         else if (path == 1)
@@ -322,6 +430,9 @@ int main(int argc, char** argv)
     if (!profile.isValid()) {
         return 1;
     }
+    // The Import case drives Qt's own file picker; a native one runs outside
+    // the event loop the test can reach.
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
     AppSettings::instance().load();

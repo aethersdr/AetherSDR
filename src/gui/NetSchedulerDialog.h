@@ -45,6 +45,7 @@ Q_SIGNALS:
 
 private:
     void populateTable();
+    void updateMinimumSize();
     void updateButtons();
     int selectedRow() const;
     void commit();

@@ -567,10 +567,8 @@ NetSchedulerDialog::NetSchedulerDialog(QList<NetEntry> entries, CaptureFn captur
     // A workspace tool on the style guide's CanonWindow, like AetherRX and
     // AetherTX: it keeps its position under the key it used as a
     // PersistentDialog (the saved geometry carries over), and resizes from
-    // every edge. The minimum fits the canon header, the seven canon buttons
-    // on one row, and the canon table's monospace text.
+    // every edge. Its minimum is set once the layout is built.
     setGeometryKey(QStringLiteral("NetSchedulerDialogGeometry"));
-    setMinimumSize(760, 420);
     FramelessResizer::install(this);
     applyCanonSheet(bodyWidget(), netSchedulerSheet);
 
@@ -644,10 +642,20 @@ NetSchedulerDialog::NetSchedulerDialog(QList<NetEntry> entries, CaptureFn captur
         populateTable();
         if (row >= 0)
             m_table->setCurrentCell(row, 1);
+        updateMinimumSize();
     });
 
     populateTable();
     updateButtons();
+    updateMinimumSize();
+}
+
+// 760x420 fits the canon header, the seven canon buttons on one row and the
+// monospace table on macOS. A font with wider metrics grows the minimum to
+// what the layout needs, so no button label is clipped at the minimum.
+void NetSchedulerDialog::updateMinimumSize()
+{
+    setMinimumSize(QSize(760, 420).expandedTo(minimumSizeHint()));
 }
 
 int NetSchedulerDialog::selectedRow() const
@@ -657,6 +665,7 @@ int NetSchedulerDialog::selectedRow() const
 
 void NetSchedulerDialog::populateTable()
 {
+    const QColor muted = ModemChrome::colour("{{color.canon.muted}}", this);
     m_table->setRowCount(m_entries.size());
     for (int row = 0; row < m_entries.size(); ++row) {
         const NetEntry& e = m_entries.at(row);
@@ -676,7 +685,6 @@ void NetSchedulerDialog::populateTable()
         m_table->setItem(row, 5, new QTableWidgetItem(e.preset.mode));
 
         if (!e.enabled) {
-            const QColor muted = ModemChrome::colour("{{color.canon.muted}}", this);
             for (int col = 0; col < m_table->columnCount(); ++col) {
                 if (auto* it = m_table->item(row, col))
                     it->setForeground(muted);
