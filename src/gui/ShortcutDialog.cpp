@@ -18,7 +18,6 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHeaderView>
-#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -485,6 +484,7 @@ void ShortcutDialog::assignAction(const QString& actionId)
                          QString("Key [%1] is currently bound to '%2'.\nReassign it?")
                              .arg(seq.toString(), conflict),
                          QStringLiteral("Reassign"), CanonMessageBox::Role::Accept)) {
+                updateSelectedKeyInfo();   // the combo goes back to the key's own action
                 return;
             }
         }
@@ -542,15 +542,6 @@ void ShortcutDialog::updateSelectedKeyInfo()
         m_actionCombo->setCurrentIndex(0);
         m_categoryLabel->clear();
     }
-}
-
-void ShortcutDialog::keyPressEvent(QKeyEvent* ev)
-{
-    // Don't let Escape close the dialog if we're just deselecting
-    if (ev->key() == Qt::Key_Escape && m_keyboardMap->selectedKeyIndex() >= 0) {
-        // Could use this for key capture mode in the future
-    }
-    CanonWindow::keyPressEvent(ev);
 }
 
 } // namespace AetherSDR

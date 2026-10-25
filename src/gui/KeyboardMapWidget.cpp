@@ -220,11 +220,10 @@ void KeyboardMapWidget::buildLayout()
 
 QRectF KeyboardMapWidget::keyRect(const KeyCap& k) const
 {
-    constexpr float gap = 0.08f;  // gap between keys in key units
-    float x = m_originX + k.x * (m_keyUnit + gap * m_keyUnit);
-    float y = m_originY + k.y * (m_keyUnit + gap * m_keyUnit);
-    float w = k.w * m_keyUnit + (k.w - 1) * gap * m_keyUnit;
-    float h = k.h * m_keyUnit + (k.h - 1) * gap * m_keyUnit;
+    float x = m_originX + k.x * (m_keyUnit + kKeyGap * m_keyUnit);
+    float y = m_originY + k.y * (m_keyUnit + kKeyGap * m_keyUnit);
+    float w = k.w * m_keyUnit + (k.w - 1) * kKeyGap * m_keyUnit;
+    float h = k.h * m_keyUnit + (k.h - 1) * kKeyGap * m_keyUnit;
     return {x, y, w, h};
 }
 

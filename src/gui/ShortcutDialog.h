@@ -19,9 +19,6 @@ class ShortcutDialog : public CanonWindow {
 public:
     explicit ShortcutDialog(ShortcutManager* mgr, QWidget* parent = nullptr);
 
-protected:
-    void keyPressEvent(QKeyEvent* ev) override;
-
 private:
     void buildUI();
     void populateTable(const QString& filter = {}, const QString& category = {});

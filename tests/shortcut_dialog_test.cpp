@@ -22,6 +22,7 @@
 #include <QPushButton>
 #include <QTest>
 #include <QTimer>
+#include <cmath>
 #include <cstdio>
 #include <functional>
 
@@ -183,12 +184,16 @@ int main(int argc, char** argv)
                 cancel->click();
             }
         });
+        combo->setCurrentIndex(muteIdx);   // what a user's pick in the list does
         emit combo->activated(muteIdx);
         EXPECT_TRUE(seen.opened);
         EXPECT_TRUE(seen.title == QStringLiteral("Key Conflict"));
         EXPECT_TRUE(seen.defaultText == QStringLiteral("Reassign"));
         EXPECT_TRUE(mgr.action(kPtt)->currentKey == QKeySequence(Qt::Key_Escape));
         EXPECT_TRUE(mgr.action(kMute)->currentKey.isEmpty());
+        // ...and the Action field reads the key's own action again, not the
+        // one just refused.
+        EXPECT_TRUE(combo->currentData().toString() == kPtt);
 
         Answer again;
         answerNextBox(again, [](CanonMessageBox& box) {
@@ -236,9 +241,19 @@ int main(int argc, char** argv)
         QTest::qWait(50);
     }
 
-    // ---- the layout fits within the minimum, which fits a 768 px screen ----
-    EXPECT_TRUE(dlg.minimumHeight() <= 700);
-    EXPECT_TRUE(dlg.bodyWidget()->minimumSizeHint().height() <= dlg.minimumHeight());
+    // ---- the layout fits within the minimum, which fits a 768 px screen.
+    //      An explicit minimum overrides the layout's own, so a body wider or
+    //      taller than it would clip silently; the body sits inside the
+    //      window's hairline inset on each side ----
+    {
+        EXPECT_TRUE(dlg.minimumHeight() <= 700);
+        const QSize body = dlg.bodyWidget()->minimumSizeHint()
+                         + QSize(2 * CanonWindow::kInset, 2 * CanonWindow::kInset);
+        std::printf("  body minimum %dx%d with its inset, window minimum %dx%d\n",
+                    body.width(), body.height(), dlg.minimumWidth(), dlg.minimumHeight());
+        EXPECT_TRUE(body.height() <= dlg.minimumHeight());
+        EXPECT_TRUE(body.width() <= dlg.minimumWidth());
+    }
 
     // ---- a press on a key is the map's; one between keys is the window's ----
     if (map) {
@@ -283,8 +298,9 @@ int main(int argc, char** argv)
             const QImage image = menu->grab().toImage();
             EXPECT_TRUE(!image.isNull()
                         && qAlpha(image.pixel(image.width() / 2, image.height() / 2)) == 255);
-            // The glyph core is the row's pixel furthest from the panel; its
-            // colour is the ink the item was drawn in, free of antialiasing.
+            // The glyph core is the row's pixel furthest from the panel. An
+            // antialiased pixel is a blend of ink and panel, so however light
+            // the hinting, it lies on the line from the panel to the ink.
             const QColor want = ThemeManager::instance().color(
                 &dlg, QStringLiteral("color.control.unavailable"));
             const QColor panel = ThemeManager::instance().color(
@@ -302,9 +318,25 @@ int main(int argc, char** argv)
                         core = c;
                 }
             }
-            std::printf("  Undo text core %s, want color.control.unavailable %s\n",
-                        qPrintable(core.name()), qPrintable(want.name()));
-            EXPECT_TRUE(distance(core, want) <= 12);
+            // How far along that line the core sits (0 = panel, 1 = ink), and
+            // how far off it, in 8-bit channel units.
+            const double dr = want.red() - panel.red();
+            const double dg = want.green() - panel.green();
+            const double db = want.blue() - panel.blue();
+            const double cr = core.red() - panel.red();
+            const double cg = core.green() - panel.green();
+            const double cb = core.blue() - panel.blue();
+            const double len2 = dr * dr + dg * dg + db * db;
+            const double along = len2 > 0 ? (cr * dr + cg * dg + cb * db) / len2 : 0;
+            const double offR = cr - along * dr;
+            const double offG = cg - along * dg;
+            const double offB = cb - along * db;
+            const double off = std::sqrt(offR * offR + offG * offG + offB * offB);
+            std::printf("  Undo text core %s, want color.control.unavailable %s "
+                        "(%.2f of the way from the panel, %.1f off the line)\n",
+                        qPrintable(core.name()), qPrintable(want.name()), along, off);
+            EXPECT_TRUE(along >= 0.5 && along <= 1.1);
+            EXPECT_TRUE(off <= 8);
             menu->close();
             delete menu;
         }

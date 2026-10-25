@@ -99,6 +99,8 @@ void CanonMessageBox::setInformativeText(const QString& text)
                                             : m_text->text() + QLatin1Char('\n') + text);
 }
 
+// The details stay out of the accessible description, which is read aloud
+// when the box opens; the panel carries its own accessible name instead.
 void CanonMessageBox::setDetailedText(const QString& text)
 {
     m_details->setPlainText(text);
