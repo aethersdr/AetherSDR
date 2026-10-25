@@ -1,5 +1,6 @@
 #include "MainWindowHelpers.h"
 
+#include "SpectrumPreviewLogic.h"
 #include "SpectrumWidget.h"
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/RadioDiscovery.h"
@@ -464,12 +465,6 @@ constexpr int kDefaultPanXpixels = 1024;
 constexpr int kDefaultPanYpixels = 700;
 constexpr int kMinPanXpixels = 100;
 constexpr int kMinPanYpixels = 20;
-// FLEX radios cap panadapter FFT frames at a 4096-bin boundary: at or past it
-// the right edge is malformed on firmware 4.2.18/4.2.20, and on a FLEX-8600
-// running 4.3.16 xpixels of 4093 or more stops FFT and waterfall data for
-// every connected client until the radio reboots (4092 works). 3840 leaves
-// margin for models and firmware not yet measured.
-constexpr int kMaxRadioPanXPixels = 3840;
 constexpr int kMaxRadioPanYPixels = 8192;
 // A sanity bound on a device-pixel width, not a backend limit: each backend
 // clamps to the point count it can produce.
@@ -477,11 +472,9 @@ constexpr int kMaxLocalPanPixels = 16384;
 
 int radioPixelsFor(const SpectrumWidget* spectrum, int logicalPixels, int maximumPixels)
 {
-    const double ratio = spectrum ? spectrum->devicePixelRatioF() : 1.0;
-    const double dpr = std::isfinite(ratio) && ratio > 0.0 ? ratio : 1.0;
-    return std::clamp(static_cast<int>(std::lround(logicalPixels * dpr)),
-                      1,
-                      maximumPixels);
+    return panDevicePixels(logicalPixels,
+                           spectrum ? spectrum->devicePixelRatioF() : 1.0,
+                           maximumPixels);
 }
 } // namespace
 
@@ -490,7 +483,7 @@ int panXpixelsFor(const SpectrumWidget* spectrum)
     if (!spectrum || spectrum->width() < kMinPanXpixels) {
         return kDefaultPanXpixels;
     }
-    return radioPixelsFor(spectrum, spectrum->width(), kMaxRadioPanXPixels);
+    return panRadioXpixels(spectrum->width(), spectrum->devicePixelRatioF());
 }
 
 int panLocalSpectrumPointsFor(const SpectrumWidget* spectrum)
