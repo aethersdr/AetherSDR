@@ -533,6 +533,65 @@ static int followDoesNotRetryAdmittedIntent()
     CHECK(peer.wire.count("F 14076;F;") == 2);
     return 0;
 }
+// Follow admission under nonzero VFWD is client policy, not a firmware RF test.
+static int followWithNonzeroForwardAdc(bool rf, bool confirm)
+{
+    Peer peer;
+    peer.rf = rf;
+    peer.idleAdc = 2;
+    peer.model.query("TP;"); peer.step();
+    peer.model.query("VFWD;"); peer.step();
+    CHECK(peer.model.status().tuning == false);
+    CHECK(peer.model.status().forwardAdc == (rf ? 1 : 2));
+    CHECK(peer.model.fieldAgeMs(QStringLiteral("TP")) < 1000);
+    CHECK(peer.model.fieldAgeMs(QStringLiteral("VFWD")) < 1000);
+
+    const auto transport = peer.model.m_write;
+    peer.model.m_write = [&](const QByteArray& bytes) {
+        if (bytes.startsWith("F ") || bytes == "F;") {
+            peer.wire.append(bytes);
+            peer.model.receiveBytes(confirm ? "F 14074;" : "F 14000;");
+            return true;
+        }
+        return transport(bytes);
+    };
+    QSignalSpy finished(&peer.model, &Kat500Model::operationFinished);
+    QSignalSpy failed(&peer.model, &Kat500Model::operationFailed);
+    peer.model.setFollowTxFrequency(true);
+    QObject::connect(&peer.model, &Kat500Model::availabilityChanged, &peer.model, [&] {
+        if (peer.model.unavailableReason(true).isEmpty()) {
+            peer.model.setEffectiveTxFrequencyHz(14074000);
+        }
+    });
+    peer.model.setEffectiveTxFrequencyHz(14074000);
+    CHECK(peer.model.operationBusy());
+    peer.step();
+    CHECK(peer.wire.count("F 14074;F;") == 1);
+    if (!confirm) {
+        CHECK(finished.isEmpty() && failed.isEmpty());
+        CHECK(peer.model.status().frequencyKhz == 14000);
+    }
+    peer.complete();
+    CHECK(!peer.model.operationBusy());
+    CHECK(finished.size() == (confirm ? 1 : 0));
+    CHECK(failed.size() == (confirm ? 0 : 1));
+    CHECK(peer.model.status().frequencyKhz == (confirm ? 14074 : 14000));
+    if (!confirm) {
+        CHECK(failed.front().front().toString().contains(QStringLiteral("not confirmed")));
+        CHECK(failed.front().front().toString().contains(QStringLiteral("no write retry")));
+    }
+    // Fresh polls, repeated frequency notifications and unkey cannot replay SET.
+    for (int i = 0; i < 100; ++i) {
+        if (i == 50) { peer.rf = false; peer.idleAdc = 0; }
+        peer.step();
+        peer.model.setEffectiveTxFrequencyHz(14074000);
+    }
+    CHECK(peer.model.status().forwardAdc == 0);
+    CHECK(peer.wire.count("F 14074;F;") == 1);
+    CHECK(finished.size() == (confirm ? 1 : 0));
+    CHECK(failed.size() == (confirm ? 0 : 1));
+    return 0;
+}
 static int lateEepromRepliesStopRestore(bool readback)
 {
     Peer peer;
@@ -932,7 +991,7 @@ static int run()
     CHECK(next() == ";"); CHECK(!sent.contains("MDM;MD;"));
     model.transportClosed();
     const int failures = unconfirmedSearchRecovers(true, true, true) | unconfirmedSearchRecovers(false, true, true) | unconfirmedSearchRecovers(true, false) | unconfirmedSearchRecovers(false, false) | unconfirmedSearchRecovers(true, true) | unconfirmedSearchRecovers(false, true) | carrierControllerKeepsItsOwnDeadline() | watchdogDoesNotInventRecovery() | cancellationIntentConsumedOnce() | searchDeadline(true) | searchDeadline(false) | cancellationRetainsSafetyAndCanRetry() |
-        searchIntentIsSessionScoped() | boundedMaintenancePreflight(false) | boundedMaintenancePreflight(true) | keyBlockReadback() | rejectUnsupportedMemoryFrequency() | followDoesNotRetryAdmittedIntent() | lateEepromRepliesStopRestore(false) | lateEepromRepliesStopRestore(true) |
+        searchIntentIsSessionScoped() | boundedMaintenancePreflight(false) | boundedMaintenancePreflight(true) | keyBlockReadback() | rejectUnsupportedMemoryFrequency() | followDoesNotRetryAdmittedIntent() | followWithNonzeroForwardAdc(false, false) | followWithNonzeroForwardAdc(false, true) | followWithNonzeroForwardAdc(true, false) | followWithNonzeroForwardAdc(true, true) | lateEepromRepliesStopRestore(false) | lateEepromRepliesStopRestore(true) |
         lateMemoryTerminatorCannotPublish() | antennaPermissionsLoadWhilePolling() | ordinaryPollLatencyKeepsSafetyFresh() | settlingReadback() | rejectNewUnsafeReadback() | doNotExposeFailedBackup() |
         cancelResetDuringDiagnostic() | canceledMemoryDrainsWithoutTelemetry() | smallIdleOffsetRecovers() |
         hardwareRefusalDoesNotRetry() | maintenanceKeepsZeroRfFence() | maintenanceRejectsNewRfReadback();
