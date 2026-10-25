@@ -14,9 +14,11 @@ UpdateController::Environment UpdateController::forThisApp()
 {
     Environment env;
     env.request.runningVersion = QCoreApplication::applicationVersion();
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN)
     env.request.platform = QStringLiteral("windows");
-#else
+#elif defined(Q_OS_MACOS)
+    env.request.platform = QStringLiteral("macos");
+#elif defined(Q_OS_LINUX)
     env.request.platform = QStringLiteral("linux");
 #endif
     env.request.arch = QSysInfo::buildCpuArchitecture();
@@ -64,7 +66,8 @@ UpdateController::UpdateController(Environment env, QObject* parent)
             });
     connect(m_stager, &UpdateStager::upToDate, this, [this] {
         setState(State::Idle, {});
-        emit failed(tr("This is already the newest release."));
+        // The signed manifest lags GitHub's latest until it is published.
+        emit failed(tr("The update for this release isn't published yet. Try again later, or download it."));
     });
     connect(m_stager, &UpdateStager::failed, this, [this](const QString& reason) {
         setState(State::Idle, {});
@@ -159,8 +162,10 @@ void UpdateController::discard(const QString& version)
     }
 }
 
-bool UpdateController::handOver(bool restart, QString* problem)
+bool UpdateController::handOver(bool restart, QString* problemOut)
 {
+    QString scratch;
+    QString* problem = problemOut ? problemOut : &scratch;
     if (m_state != State::Staged || m_staged.version.isEmpty()) {
         *problem = tr("No update is ready to install.");
         return false;

@@ -292,6 +292,11 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget*
     m_get->setObjectName(QStringLiteral("updatesGet"));
     m_get->setCursor(Qt::PointingHandCursor);
     actions->addWidget(m_get);
+    m_download = new QPushButton(tr("Download installer"));
+    m_download->setObjectName(QStringLiteral("updatesGhost"));
+    m_download->setCursor(Qt::PointingHandCursor);
+    m_download->setAccessibleName(tr("Download installer"));
+    actions->addWidget(m_download);
     m_notes = new QPushButton(tr("Full release notes"));
     m_notes->setObjectName(QStringLiteral("updatesSecondary"));
     m_notes->setCursor(Qt::PointingHandCursor);
@@ -370,6 +375,7 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget*
     }
 
     connect(m_get, &QPushButton::clicked, this, &UpdatesWindow::primaryClicked);
+    connect(m_download, &QPushButton::clicked, this, &UpdatesWindow::openDownload);
     connect(m_cancel, &QPushButton::clicked, this, [this] {
         if (m_controller) {
             m_controller->cancel();
@@ -462,6 +468,7 @@ void UpdatesWindow::setController(UpdateController* controller)
         });
         connect(controller, &UpdateController::failed, this, [this](const QString& reason) {
             m_installProblem = reason;
+            m_problemVersion = m_checker ? m_checker->latestRelease().version : QString();
             refresh();
         });
     }
@@ -471,6 +478,7 @@ void UpdatesWindow::setController(UpdateController* controller)
 void UpdatesWindow::showInstallProblem(const QString& problem)
 {
     m_installProblem = problem;
+    m_problemVersion = m_checker ? m_checker->latestRelease().version : QString();
     refresh();
 }
 
@@ -561,7 +569,7 @@ void UpdatesWindow::refresh()
             note = tr("You skipped this release, so UPDATE is not shown in the title bar.");
         } else if (m_browserVersion == release.version && !m_browserReason.isEmpty()) {
             note = tr("The update couldn't be prepared here: %1 Download it instead.").arg(m_browserReason);
-        } else if (!m_installProblem.isEmpty()) {
+        } else if (!m_installProblem.isEmpty() && m_problemVersion == release.version) {
             note = m_installProblem;
         }
         break;
@@ -610,10 +618,17 @@ void UpdatesWindow::refresh()
     const bool inPlace = canDownload && installsInPlace(release.version);
     const State installState = m_controller ? m_controller->state() : State::Idle;
     const bool forThis = m_controller && m_controller->version() == release.version;
-    const bool staging = inPlace && forThis && installState == State::Staging;
+    // Whatever release it is staging: a newer latest heard meanwhile waits
+    // until it finishes (the controller then discards it).
+    const bool staging = inPlace && installState == State::Staging;
     const bool staged = inPlace && forThis && (installState == State::Staged || installState == State::Handed);
     m_get->setVisible(canDownload && !staging);
     m_progressRow->setVisible(staging);
+    // The browser route stays beside Install update (Phase 3 ruling).
+    m_download->setVisible(inPlace && !staging);
+    m_download->setAccessibleDescription(asset.url.isValid()
+                                             ? tr("Downloads %1 in your browser instead.").arg(asset.name)
+                                             : tr("Opens the release page to choose a download instead."));
     if (staged) {
         m_get->setText(tr("Restart to update"));
         m_get->setAccessibleName(tr("Restart to update to AetherSDR %1").arg(release.version));

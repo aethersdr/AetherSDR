@@ -356,7 +356,8 @@ helper has it and waits for AetherSDR to exit).
   says so: Windows, not a store install, no split elevated token,
   `AetherSDRUpdater.exe` beside the app, and the install's parent writable.
   Otherwise, or once a release falls back from the full download, the
-  window keeps **Get AetherSDR** in the browser.
+  window keeps **Get AetherSDR** in the browser. Beside Install update, a
+  **Download installer** link keeps the browser route (Phase 3 ruling).
 - Staging requests `fullFallback`, with GitHub's latest as the freeze
   check's tag. Closing the window while it stages cancels it (a maintainer
   ruling); a staged release stays.

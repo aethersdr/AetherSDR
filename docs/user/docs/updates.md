@@ -26,7 +26,7 @@ When a newer release exists, the window shows:
 
 - **NEW RELEASE** with its date, the version, and the release's one-line summary.
 - **WHAT'S INSIDE**: one chip for each chapter of the release notes.
-- **Install update** (Windows): see [Installing an update on Windows](#installing-an-update-on-windows).
+- **Install update** (Windows): see [Installing an update on Windows](#installing-an-update-on-windows). **Download installer** beside it opens the download in your browser instead, if you'd rather install it yourself.
 - **Get AetherSDR** *version* (macOS, Linux, and Windows when it can't install in place): opens the download in your browser. The line under it names the file: the Windows installer, the Windows portable zip if you run the portable copy, the macOS Apple silicon disk image, or the Linux AppImage for your processor. When there is no build for your computer, it opens the release page instead.
 - **Full release notes**: opens the release page on GitHub.
 - **Skip this version**: hides the **UPDATE** badge for this release. The window still shows it, and the next release shows the badge again. Skipping a release you already downloaded with **Install update** removes the download, so it doesn't install.

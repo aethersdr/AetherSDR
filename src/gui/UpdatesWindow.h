@@ -92,6 +92,7 @@ private:
     QString m_browserReason;
     QString m_browserVersion;
     QString m_installProblem;   // the last attempt's failure, shown as the note
+    QString m_problemVersion;   // ...for this release only
     bool m_canInPlace{false};   // the controller's answer, asked once
     bool m_failed{false};
     bool m_firmwareBusy{false};
@@ -107,6 +108,7 @@ private:
     QWidget*     m_chips{nullptr};
     FlowLayout*  m_chipsLayout{nullptr};
     QPushButton* m_get{nullptr};
+    QPushButton* m_download{nullptr};   // "Download installer": the browser route beside Install update
     QWidget*     m_progressRow{nullptr};
     QLabel*      m_progressLabel{nullptr};
     QProgressBar* m_progress{nullptr};
