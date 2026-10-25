@@ -75,7 +75,19 @@ enum class Outcome {
     Broken,            // a rollback rename failed: no runnable tree; the user must act
 };
 
-const char* outcomeName(Outcome o);
+// The names swap-result.txt uses (UpdateInstaller reads them back).
+inline const char* outcomeName(Outcome o)
+{
+    switch (o) {
+    case Outcome::Updated:         return "Updated";
+    case Outcome::RolledBack:      return "RolledBack";
+    case Outcome::OldStillRunning: return "OldStillRunning";
+    case Outcome::NotPossible:     return "NotPossible";
+    case Outcome::SwapUndone:      return "SwapUndone";
+    case Outcome::Broken:          return "Broken";
+    }
+    return "Unknown";
+}
 
 // A started process, opaque to the core.
 struct Process {
@@ -106,6 +118,12 @@ struct Ops {
     // owed. Both empty: no repair is armed (tests that don't look).
     std::function<bool()> armRepair;
     std::function<void()> disarmRepair;
+    // A file's identity, kept across renames and new for a file written
+    // again (on Windows the volume serial and NTFS file ID); empty when
+    // unknown. The journal records the new release's AetherSDR.exe, so a
+    // repair never rolls back a tree it did not leave (a reinstall).
+    // Empty function: no identity check.
+    std::function<std::string(const fs::path&)> fileId;
 };
 
 struct Paths {
@@ -119,20 +137,26 @@ struct Paths {
 
 Paths pathsFor(const Plan& plan);
 
+// A path as UTF-8, whatever the code page, for the log and the plan file.
+std::string utf8(const fs::path& p);
+
 // Puts the install back if a previous helper died mid-swap (the journal
 // says so). Returns false only when it found a broken state it could not
-// repair. Safe to call when there is no journal.
-bool recover(const Plan& plan, const Ops& ops);
+// repair. Safe to call when there is no journal. moved (if given) says
+// whether any folder was renamed.
+bool recover(const Plan& plan, const Ops& ops, bool* moved = nullptr);
 
 // The whole update: wait for the old process, check, swap, start, watch,
 // and roll back when the new version does not come up.
 Outcome run(const Plan& plan, const Ops& ops);
 
-// The armed repair: recover() alone, with no swap and no old process to
-// wait for (plan.staged is unused). A repair that put the install back
-// records SwapUndone, never RolledBack, since the release was never tested.
-// False while the install is still broken: the repair stays armed and the
-// journal kept.
+// The armed repair: recover() alone, with no swap (plan.staged is unused).
+// It re-arms itself first, since Windows deletes a RunOnce value before
+// running it and an interrupted repair must run again. While AetherSDR runs
+// from the install (ops.waitForOldExit) nothing is renamed and it waits for
+// the next logon. A repair that moved the install back records SwapUndone,
+// never RolledBack, since the release was never tested. False while the
+// install is still broken: the repair stays armed and the journal kept.
 bool repair(const Plan& plan, const Ops& ops);
 
 } // namespace AetherSDR::updater

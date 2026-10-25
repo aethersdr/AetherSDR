@@ -11,12 +11,6 @@ namespace {
 constexpr Duration kRetryStep{250};
 constexpr Duration kPollStep{100};
 
-// A path for the log, as UTF-8 whatever the code page.
-std::string logText(const fs::path& p)
-{
-    const auto u8 = p.u8string();
-    return std::string(u8.begin(), u8.end());
-}
 
 fs::path normalised(const fs::path& p)
 {
@@ -111,7 +105,7 @@ bool renameRetry(const fs::path& from, const fs::path& to, Duration timeout, con
             return true;
         }
         if (ops.now() >= deadline) {
-            ops.log("rename " + logText(from) + " -> " + logText(to) + " failed: " + ec.message());
+            ops.log("rename " + utf8(from) + " -> " + utf8(to) + " failed: " + ec.message());
             return false;
         }
         ops.sleep(kRetryStep);
@@ -229,17 +223,10 @@ bool selfTestPasses(const Plan& plan, const Ops& ops, const Paths& paths)
 
 } // namespace
 
-const char* outcomeName(Outcome o)
+std::string utf8(const fs::path& p)
 {
-    switch (o) {
-    case Outcome::Updated:         return "Updated";
-    case Outcome::RolledBack:      return "RolledBack";
-    case Outcome::OldStillRunning: return "OldStillRunning";
-    case Outcome::NotPossible:     return "NotPossible";
-    case Outcome::SwapUndone:      return "SwapUndone";
-    case Outcome::Broken:          return "Broken";
-    }
-    return "Unknown";
+    const auto u8 = p.u8string();
+    return std::string(u8.begin(), u8.end());
 }
 
 Paths pathsFor(const Plan& plan)
@@ -254,8 +241,12 @@ Paths pathsFor(const Plan& plan)
     return p;
 }
 
-bool recover(const Plan& plan, const Ops& ops)
+bool recover(const Plan& plan, const Ops& ops, bool* moved)
 {
+    bool movedAny = false;
+    if (moved) {
+        *moved = false;
+    }
     const Paths paths = pathsFor(plan);
     if (!present(paths.journal)) {
         return true;
@@ -263,18 +254,29 @@ bool recover(const Plan& plan, const Ops& ops)
     const fs::path install = normalised(plan.install);
     const std::string step = readText(paths.journal);
     ops.log("found a swap journal (" + step + "); recovering");
+    // The new release's AetherSDR.exe, as the swap recorded it: an install
+    // holding any other file is not the tree it left (a reinstall since).
+    const size_t idAt = step.find(" id=");
+    const std::string leftId = idAt == std::string::npos ? std::string() : step.substr(idAt + 4);
+    const bool notOurs = !leftId.empty() && ops.fileId && isFolder(install)
+                         && ops.fileId(install / plan.exeName) != leftId;
     // A helper that died during the self-test or the rollback left a new
     // release whose health is unknown: the version that ran before is known
     // to work, so it goes back.
     // swap-2 too: the journal says swap-2 until the self-test starts, so a
     // helper that died just after .new became the install left it untested.
-    if ((step.rfind("swap-2", 0) == 0 || step.rfind("selftest", 0) == 0
-         || step.rfind("rollback", 0) == 0)
-        && isFolder(install) && isFolder(paths.previous)) {
+    const bool untested = (step.rfind("swap-2", 0) == 0 || step.rfind("selftest", 0) == 0
+                           || step.rfind("rollback", 0) == 0)
+                          && isFolder(install) && isFolder(paths.previous);
+    if (untested && notOurs) {
+        ops.log("the install is not the tree this swap left (reinstalled?); it is kept");
+    }
+    if (untested && !notOurs) {
         removeAll(paths.failed);
         if (!renameRetry(install, paths.failed, plan.renameTimeout, ops)) {
             return false;
         }
+        movedAny = true;
     }
     // Whatever step a previous helper died in, the install must exist. The
     // version that was running before is preferred: it is known to work.
@@ -283,10 +285,12 @@ bool recover(const Plan& plan, const Ops& ops)
             if (!renameRetry(paths.previous, install, plan.renameTimeout, ops)) {
                 return false;
             }
+            movedAny = true;
         } else if (isFolder(paths.next)) {
             if (!renameRetry(paths.next, install, plan.renameTimeout, ops)) {
                 return false;
             }
+            movedAny = true;
         } else {
             ops.log("no install and nothing to restore it from");
             return false;
@@ -295,6 +299,9 @@ bool recover(const Plan& plan, const Ops& ops)
     removeAll(paths.next);   // a half-placed tree is never trusted
     std::error_code ec;
     fs::remove(paths.journal, ec);
+    if (moved) {
+        *moved = movedAny;
+    }
     return true;
 }
 
@@ -307,15 +314,31 @@ bool repair(const Plan& plan, const Ops& ops)
         }
         return true;
     }
-    if (!recover(plan, ops)) {
-        ops.log("the repair could not restore the install; it runs again at the next logon");
-        if (ops.armRepair) {
-            ops.armRepair();
+    // Armed again before anything else: if this repair is cut short, the
+    // next logon still runs it.
+    if (ops.armRepair) {
+        ops.armRepair();
+    }
+    const auto appRunning = [&] { return ops.waitForOldExit && !ops.waitForOldExit(plan.exitTimeout); };
+    if (appRunning()) {
+        ops.log("AetherSDR is running from the install; the repair waits for the next logon");
+        return true;   // runnable: it is running
+    }
+    bool moved = false;
+    if (!recover(plan, ops, &moved)) {
+        if (ops.waitForOldExit && !ops.waitForOldExit(Duration::zero())) {
+            ops.log("AetherSDR started during the repair; it waits for the next logon");
+            return true;
         }
+        ops.log("the repair could not restore the install; it runs again at the next logon");
         return false;
     }
-    writeText(paths.result, std::string(outcomeName(Outcome::SwapUndone)) + " " + plan.version + "\n");
-    ops.log(std::string("outcome: ") + outcomeName(Outcome::SwapUndone) + " " + plan.version + " (repaired)");
+    if (moved) {
+        writeText(paths.result, std::string(outcomeName(Outcome::SwapUndone)) + " " + plan.version + "\n");
+        ops.log(std::string("outcome: ") + outcomeName(Outcome::SwapUndone) + " " + plan.version + " (repaired)");
+    } else {
+        ops.log("nothing needed moving; the install is as the swap left it");
+    }
     if (ops.disarmRepair) {
         ops.disarmRepair();
     }
@@ -361,7 +384,10 @@ Outcome run(const Plan& plan, const Ops& ops)
         removeAll(paths.next);
         return finish(plan, ops, paths, Outcome::NotPossible, true);
     }
-    if (!journal(ops, paths, "swap-1 " + plan.version)) {
+    // Which file the swap leaves at <install>: recover() rolls back only that.
+    const std::string leftId = ops.fileId ? ops.fileId(paths.next / plan.exeName) : std::string();
+    const std::string tag = plan.version + (leftId.empty() ? std::string() : " id=" + leftId);
+    if (!journal(ops, paths, "swap-1 " + tag)) {
         removeAll(paths.next);   // the install is untouched
         return finish(plan, ops, paths, Outcome::NotPossible, true);
     }
@@ -381,7 +407,7 @@ Outcome run(const Plan& plan, const Ops& ops)
         removeAll(paths.next);
         return finish(plan, ops, paths, Outcome::SwapUndone, true);
     };
-    if (!journal(ops, paths, "swap-2 " + plan.version)) {
+    if (!journal(ops, paths, "swap-2 " + tag)) {
         return undo();
     }
     if (!renameRetry(paths.next, install, plan.renameTimeout, ops)) {
@@ -393,7 +419,7 @@ Outcome run(const Plan& plan, const Ops& ops)
     const auto rollBack = [&](Outcome outcome) {
         // Taken even if this journal write fails: the one already on disk
         // (swap-2 or selftest) makes recover() roll back the same way.
-        journal(ops, paths, "rollback " + plan.version);
+        journal(ops, paths, "rollback " + tag);
         removeAll(paths.failed);
         if (!renameRetry(install, paths.failed, plan.renameTimeout, ops)
             || !renameRetry(paths.previous, install, plan.renameTimeout, ops)) {
@@ -401,7 +427,7 @@ Outcome run(const Plan& plan, const Ops& ops)
         }
         return finish(plan, ops, paths, outcome, true);
     };
-    if (!journal(ops, paths, "selftest " + plan.version)) {
+    if (!journal(ops, paths, "selftest " + tag)) {
         return rollBack(Outcome::SwapUndone);   // never tested, so never kept
     }
     if (selfTestPasses(plan, ops, paths)) {

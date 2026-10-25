@@ -137,6 +137,17 @@ struct Harness {
             return true;
         };
         ops.disarmRepair = [this] { armed = false; };
+        // A rename keeps a file's size and time; a file written again gets
+        // a new time (reinstalled() below sets one).
+        ops.fileId = [](const fs::path& p) {
+            std::error_code ec;
+            const auto t = fs::last_write_time(p, ec);
+            if (ec) {
+                return std::string();
+            }
+            return std::to_string(fs::file_size(p, ec)) + "-"
+                   + std::to_string(t.time_since_epoch().count());
+        };
         ops.rename = [this](const fs::path& from, const fs::path& to, std::error_code& ec) {
             auto it = renameFailures.find(from.filename().string());
             if (it != renameFailures.end() && it->second != 0) {
@@ -276,7 +287,9 @@ void pathsOutsideTheCodePageAreSwapped()
 {
     // The Windows run of #6767: a path under 漢字 crashed the helper,
     // which joined paths through the ANSI code page.
-    Harness h("漢字 Ünïcødé");
+    // Escaped, so the name is these characters whatever the compiler's
+    // source code page.
+    Harness h(u8"\u6f22\u5b57 \u00dcn\u00efc\u00f8d\u00e9");
     h.plan.relaunch = true;
     CHECK(run(h.plan, h.ops) == Outcome::Updated);
     CHECK(h.installed() == "good 26.10.4");
@@ -505,6 +518,103 @@ void theArmedRepairRestoresAnInstallNothingCanStart()
     }
 }
 
+// The state a helper that died mid-self-test leaves: the new release at
+// <install> (renamed, so the same file), the old one at .previous, and the
+// journal naming the file it left.
+void diedInSelfTest(Harness& h)
+{
+    const std::string id = h.ops.fileId(h.plan.staged / "AetherSDR.exe");
+    fs::rename(h.plan.install, h.paths().previous);
+    fs::rename(h.plan.staged, h.plan.install);
+    put(h.paths().journal, "selftest 26.10.4 id=" + id);
+}
+
+void aReinstallIsNeverRolledBack()
+{
+    {
+        // The tree the swap left, untested: rolled back.
+        Harness h("ours-rolled-back");
+        diedInSelfTest(h);
+        CHECK(repair(h.plan, h.ops));
+        CHECK(h.installed() == "good 26.10.3");
+        CHECK(h.result() == "SwapUndone 26.10.4\n");
+    }
+    {
+        // Review of #6767: the user reinstalled after the Broken message.
+        // The logon repair keeps the fresh install and moves nothing.
+        Harness h("reinstalled");
+        diedInSelfTest(h);
+        const fs::path exe = h.plan.install / "AetherSDR.exe";
+        fs::remove(exe);
+        put(exe, "good 26.10.4");
+        fs::last_write_time(exe, fs::last_write_time(exe) + std::chrono::hours(1));
+        CHECK(repair(h.plan, h.ops));
+        CHECK(h.installed() == "good 26.10.4");
+        CHECK(!fs::exists(h.paths().failed));
+        CHECK(!fs::exists(h.paths().journal));
+        CHECK(h.result().empty());   // nothing was undone
+        CHECK(!h.armed);
+    }
+    {
+        // A journal written by a real swap carries the id.
+        Harness h("journal-id");
+        std::vector<std::string> steps;
+        h.ops.writeJournal = [&](const fs::path& path, const std::string& text) {
+            steps.push_back(text);
+            put(path, text);
+            return true;
+        };
+        CHECK(run(h.plan, h.ops) == Outcome::Updated);
+        bool tagged = false;
+        for (const std::string& st : steps) {
+            tagged = tagged || (st.rfind("selftest 26.10.4 id=", 0) == 0 && st.size() > 20);
+        }
+        CHECK(tagged);
+    }
+}
+
+void theRepairRearmsWaitsAndOnlyReportsWhatItMoved()
+{
+    {
+        // Re-armed first: a repair cut short runs again.
+        Harness h("repair-rearm");
+        diedInSelfTest(h);
+        bool armedBeforeRename = false;
+        auto inner = h.ops.rename;
+        h.ops.rename = [&](const fs::path& f, const fs::path& t, std::error_code& ec) {
+            armedBeforeRename = armedBeforeRename || h.armed;
+            inner(f, t, ec);
+        };
+        CHECK(repair(h.plan, h.ops));
+        CHECK(armedBeforeRename);
+        CHECK(!h.armed);
+    }
+    {
+        // AetherSDR already running from the install at logon: nothing is
+        // renamed, nothing is reported broken, and it stays armed.
+        Harness h("repair-app-running");
+        diedInSelfTest(h);
+        h.oldExits = false;
+        CHECK(repair(h.plan, h.ops));
+        CHECK(h.installed() == "good 26.10.4");
+        CHECK(fs::exists(h.paths().journal));
+        CHECK(h.armed);
+        CHECK(h.result().empty());
+    }
+    {
+        // Died after swap-1 was journaled but before the rename: the
+        // install is whole, so only the stray .new goes and nothing is
+        // reported undone.
+        Harness h("repair-nothing-moved");
+        fs::rename(h.plan.staged, h.paths().next);
+        put(h.paths().journal, "swap-1 26.10.4 id=x");
+        CHECK(repair(h.plan, h.ops));
+        CHECK(h.installed() == "good 26.10.3");
+        CHECK(!fs::exists(h.paths().next));
+        CHECK(h.result().empty());
+    }
+}
+
 int main()
 {
     cleanUpdate();
@@ -526,6 +636,8 @@ int main()
     aHelperThatDiedMidSwapIsRecovered();
     aRepairIsArmedForTheSwapAndClearedAfter();
     theArmedRepairRestoresAnInstallNothingCanStart();
+    aReinstallIsNeverRolledBack();
+    theRepairRearmsWaitsAndOnlyReportsWhatItMoved();
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
