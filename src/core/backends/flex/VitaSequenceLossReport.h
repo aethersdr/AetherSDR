@@ -26,16 +26,16 @@ public:
         return m_lastReportMs < 0 || nowMs - m_lastReportMs >= kIntervalMs;
     }
 
-    // Count one sequence error. Returns true when a line is due and
-    // `mayReport` allows it; the line's values are then reportErrors() and
-    // reportWindowMs(). When `mayReport` is false the error is held like any
-    // other, so it reaches the next line that is logged.
-    bool recordError(qint64 nowMs, bool mayReport = true)
+    // Count `count` sequence errors found by one packet. Returns true when a
+    // line is due and `mayReport` allows it; the line's values are then
+    // reportErrors() and reportWindowMs(). When `mayReport` is false the
+    // errors are held like any others, so they reach the next line logged.
+    bool recordError(qint64 nowMs, bool mayReport = true, int count = 1)
     {
         if (m_windowStartMs < 0) {
             m_windowStartMs = nowMs;
         }
-        ++m_pending;
+        m_pending += count;
         if (!due(nowMs) || !mayReport) {
             return false;
         }
@@ -112,11 +112,12 @@ inline QString formatVitaSequenceLossSuppressed(int errors)
         .arg(VitaSequenceLossBudget::kIntervalMs / 1000);
 }
 
-// The log line the docs Log Analyzer matches on its fixed prefix. A sequence
-// error is a gap in the 4-bit VITA-49 packet count, so it counts packets that
-// were lost and packets that arrived out of order alike, and one gap is one
-// error however many packets it skipped: the counts are errors, and the packet
-// count is the packets received.
+// The log line the docs Log Analyzer matches on its fixed prefix. On FFT,
+// waterfall and meter streams a sequence error is a packet lost, net of
+// reordering (VitaSequenceTracker): a gap of N counts N, a late packet that
+// fills a gap counts nothing. On audio and DAX streams it is a break in the
+// 4-bit VITA-49 packet count, lost and out-of-order packets alike, one per
+// break. The packet count is the packets received.
 inline QString formatVitaSequenceLoss(const QString& category, quint32 streamId,
                                       int errors, qint64 windowMs,
                                       int totalErrors, int totalPackets)

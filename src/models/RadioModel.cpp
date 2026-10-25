@@ -8749,7 +8749,10 @@ void RadioModel::evaluateNetworkQuality()
     int currentErrors = 0;
     int currentPackets = 0;
     if (m_panStream) {
-        currentErrors = m_panStream->packetErrorCount();
+        // Breaks, not packets lost: the thresholds below were tuned against
+        // one count per gap, and a reordering-tolerant per-packet count would
+        // move every Flex user's throttle (#6051).
+        currentErrors = m_panStream->packetBreakCount();
         currentPackets = m_panStream->packetTotalCount();
     } else if (m_linkStats.reported) {
         currentErrors = saturatingInt(m_linkStats.rxPacketsLost);
@@ -8792,7 +8795,7 @@ void RadioModel::evaluateNetworkQuality()
 void RadioModel::resetNetworkHealthSamples()
 {
     if (m_panStream) {
-        m_lastErrorCount = m_panStream->packetErrorCount();
+        m_lastErrorCount = m_panStream->packetBreakCount();
         m_lastPacketCount = m_panStream->packetTotalCount();
     } else if (m_linkStats.reported) {
         m_lastErrorCount = saturatingInt(m_linkStats.rxPacketsLost);

@@ -7,6 +7,7 @@
 #include "core/PacketLossConcealment.h"
 #include "core/VitaBinCoverage.h"
 #include "core/backends/flex/VitaSequenceLossReport.h"
+#include "core/backends/flex/VitaSequenceTracker.h"
 #include "VitaDscpMarker.h"
 
 #include <QObject>
@@ -335,7 +336,10 @@ private:
     void restartAllStreamSequences();
     struct StreamStats {
         int  lastSeq{-1};
-        int  errorCount{0};
+        // FFT, waterfall and meter streams: losses net of reordering.
+        VitaSequenceTracker reorderTracker;
+        int  errorCount{0};       // packets lost (FFT/waterfall/meter) or breaks (audio, DAX)
+        int  breakCount{0};       // breaks in the count, one per gap: the network-quality input
         int  totalCount{0};
         bool started{false};       // this instance has seen its first packet
         int  startErrorCount{0};   // errorCount when this instance started
@@ -435,8 +439,14 @@ private:
     static int audioPayloadFrames(quint16 pcc, int payloadBytes);
 
 public:
-    // Packet error/total counts across all owned streams (for network quality monitor).
+    // Packets lost across all owned streams (FFT, waterfall and meter count
+    // each lost packet net of reordering; audio and DAX each break): what
+    // Network Diagnostics shows as drops.
     int packetErrorCount() const;
+    // Breaks in the packet count across all owned streams, one per gap
+    // however many packets it held: the network quality monitor's input, so
+    // its thresholds keep the per-break counting they were tuned against.
+    int packetBreakCount() const;
     int packetTotalCount() const;
     qint64 totalRxBytes() const { return m_totalRxBytes.load(); }
     qint64 totalTxBytes() const { return m_totalTxBytes.load(); }
