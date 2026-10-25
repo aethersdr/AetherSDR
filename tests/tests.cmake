@@ -6022,6 +6022,11 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME bridge_docs_check
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_bridge_docs.py --check)
+    # The Generated Reference pages read names out of C++ string tables;
+    # literal() must read a translation-marked entry as its text.
+    add_test(NAME gen_reference_literal_test
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_gen_reference_literal.py)
     # The generated seam-probe table (tests/SeamSignalProbeTable.inc) vs
     # IRadioBackend.h. static-checks.yml runs the same --check on every PR;
     # this is the local copy, so `ctest` says so before a push does.
