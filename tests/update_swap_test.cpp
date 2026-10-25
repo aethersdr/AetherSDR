@@ -62,12 +62,16 @@ struct Harness {
     std::vector<std::pair<fs::path, std::vector<fs::path>>> launches;
     std::vector<std::shared_ptr<FakeProc>> procs;
     std::map<std::string, int> renameFailures;   // "<from name>" -> how many times to fail
+    std::errc renameError = std::errc::permission_denied;   // what a failing rename reports
     std::string journalFailsAt;                  // a step ("swap-1") whose journal write fails
     std::vector<std::string> logLines;
+    bool armed = false;      // the RunOnce repair
+    bool armFails = false;
+    int arms = 0;
 
     explicit Harness(const std::string& name)
     {
-        root = fs::temp_directory_path() / ("update-swap-test-" + name);
+        root = fs::temp_directory_path() / fs::u8path("update-swap-test-" + name);
         fs::remove_all(root);
         plan.install = root / "apps" / "AetherSDR";
         plan.staged = root / "data" / "update" / "26.10.4";
@@ -124,13 +128,22 @@ struct Harness {
             put(path, text);
             return true;
         };
+        ops.armRepair = [this] {
+            if (armFails) {
+                return false;
+            }
+            armed = true;
+            ++arms;
+            return true;
+        };
+        ops.disarmRepair = [this] { armed = false; };
         ops.rename = [this](const fs::path& from, const fs::path& to, std::error_code& ec) {
             auto it = renameFailures.find(from.filename().string());
             if (it != renameFailures.end() && it->second != 0) {
                 if (it->second > 0) {
                     --it->second;
                 }
-                ec = std::make_error_code(std::errc::permission_denied);
+                ec = std::make_error_code(renameError);
                 return;
             }
             fs::rename(from, to, ec);
@@ -237,9 +250,38 @@ void anotherVolumeIsCopiedBesideTheInstall()
 {
     Harness h("cross-volume");
     h.renameFailures["26.10.4"] = 1;   // staged -> .new fails, as across volumes
+    h.renameError = std::errc::cross_device_link;
     CHECK(run(h.plan, h.ops) == Outcome::Updated);
     CHECK(h.installed() == "good 26.10.4");
     CHECK(!fs::exists(h.plan.staged));   // the copy's source is cleaned up
+}
+
+void aLockedStagedTreeIsNotCopied()
+{
+    // Review of #6767: only another volume is a reason to copy.
+    Harness h("staged-locked");
+    h.renameFailures["26.10.4"] = 1;
+    CHECK(run(h.plan, h.ops) == Outcome::NotPossible);
+    CHECK(h.installed() == "good 26.10.3");
+    CHECK(fs::exists(h.plan.staged / "AetherSDR.exe"));
+    CHECK(!fs::exists(h.paths().next));
+    bool copied = false;
+    for (const std::string& line : h.logLines) {
+        copied = copied || line.find("another volume") != std::string::npos;
+    }
+    CHECK(!copied);
+}
+
+void pathsOutsideTheCodePageAreSwapped()
+{
+    // The Windows run of #6767: a path under 漢字 crashed the helper,
+    // which joined paths through the ANSI code page.
+    Harness h("漢字 Ünïcødé");
+    h.plan.relaunch = true;
+    CHECK(run(h.plan, h.ops) == Outcome::Updated);
+    CHECK(h.installed() == "good 26.10.4");
+    CHECK(slurp(h.paths().previous / "AetherSDR.exe") == "good 26.10.3");
+    CHECK(h.paths().next.filename().u8string() == u8"AetherSDR.new");
 }
 
 void aBriefLockIsWaitedOut()
@@ -297,6 +339,12 @@ void aJournalThatCannotBeWrittenStopsTheStep()
         // Nothing untested was ever left in place: no self-test ran.
         CHECK(h.launches.empty());
     }
+    // The older previous version goes only once swap-1 is recorded.
+    Harness h("journal-keeps-previous");
+    put(h.paths().previous / "AetherSDR.exe", "good 26.10.2");
+    h.journalFailsAt = "swap-1";
+    CHECK(run(h.plan, h.ops) == Outcome::NotPossible);
+    CHECK(slurp(h.paths().previous / "AetherSDR.exe") == "good 26.10.2");
 }
 
 void aPendingRepairWaitsForTheAppToExit()
@@ -319,7 +367,9 @@ void aPendingRepairWaitsForTheAppToExit()
     CHECK(h.installed() == "good 26.10.4");   // untouched
     CHECK(fs::exists(h.paths().journal));     // still pending
     h.oldExits = true;
-    run(h.plan, h.ops);   // the next run repairs, then updates as usual
+    // The next run repairs; the staged tree was consumed by the first
+    // attempt, so there is nothing more to install.
+    CHECK(run(h.plan, h.ops) == Outcome::NotPossible);
     CHECK(!fs::exists(h.paths().journal));
 }
 
@@ -369,6 +419,92 @@ void aHelperThatDiedMidSwapIsRecovered()
 
 } // namespace
 
+
+void aRepairIsArmedForTheSwapAndClearedAfter()
+{
+    {
+        Harness h("arm-updated");
+        CHECK(run(h.plan, h.ops) == Outcome::Updated);
+        CHECK(h.arms == 1);
+        CHECK(!h.armed);
+    }
+    {
+        // Armed before anything is renamed: no rename precedes it.
+        Harness h("arm-first");
+        bool renamedBeforeArm = false;
+        auto inner = h.ops.rename;
+        h.ops.rename = [&](const fs::path& f, const fs::path& t, std::error_code& ec) {
+            if (!h.armed && f.filename() == "AetherSDR") {
+                renamedBeforeArm = true;
+            }
+            inner(f, t, ec);
+        };
+        CHECK(run(h.plan, h.ops) == Outcome::Updated);
+        CHECK(!renamedBeforeArm);
+    }
+    {
+        // A repair that cannot be armed means no swap at all.
+        Harness h("arm-fails");
+        h.armFails = true;
+        CHECK(run(h.plan, h.ops) == Outcome::NotPossible);
+        CHECK(h.installed() == "good 26.10.3");
+        CHECK(!fs::exists(h.paths().previous));
+        CHECK(!fs::exists(h.paths().next));
+        CHECK(h.launches.empty());
+    }
+    {
+        // Still armed while a repair is owed.
+        Harness h("arm-broken");
+        h.renameFailures["AetherSDR.previous"] = -1;
+        put(h.plan.staged / "AetherSDR.exe", "broken");
+        CHECK(run(h.plan, h.ops) == Outcome::Broken);
+        CHECK(h.armed);
+    }
+}
+
+void theArmedRepairRestoresAnInstallNothingCanStart()
+{
+    {
+        // Blocker 2 of the #6767 review: died between the two renames, so
+        // there is no AetherSDR.exe to start. The logon repair puts the
+        // previous version back.
+        Harness h("repair-between");
+        fs::rename(h.plan.install, h.paths().previous);
+        fs::rename(h.plan.staged, h.paths().next);
+        put(h.paths().journal, "swap-1 26.10.4");
+        h.armed = true;
+        CHECK(repair(h.plan, h.ops));
+        CHECK(h.installed() == "good 26.10.3");
+        CHECK(!fs::exists(h.paths().next));
+        CHECK(!fs::exists(h.paths().journal));
+        CHECK(h.result() == "SwapUndone 26.10.4\n");   // never RolledBack: it was never tested
+        CHECK(!h.armed);
+    }
+    {
+        // Nothing owed: it only disarms.
+        Harness h("repair-nothing");
+        h.armed = true;
+        CHECK(repair(h.plan, h.ops));
+        CHECK(!h.armed);
+        CHECK(h.result().empty());
+        CHECK(h.installed() == "good 26.10.3");
+    }
+    {
+        // A repair that cannot finish stays armed for the next logon.
+        Harness h("repair-locked");
+        fs::rename(h.plan.install, h.paths().previous);
+        put(h.paths().journal, "swap-1 26.10.4");
+        h.renameFailures["AetherSDR.previous"] = -1;
+        CHECK(!repair(h.plan, h.ops));
+        CHECK(h.armed);
+        CHECK(fs::exists(h.paths().journal));
+        h.renameFailures.clear();
+        CHECK(repair(h.plan, h.ops));
+        CHECK(h.installed() == "good 26.10.3");
+        CHECK(!h.armed);
+    }
+}
+
 int main()
 {
     cleanUpdate();
@@ -380,12 +516,16 @@ int main()
     aRunningAppIsNeverTouched();
     preFlightFailuresChangeNothing();
     anotherVolumeIsCopiedBesideTheInstall();
+    aLockedStagedTreeIsNotCopied();
+    pathsOutsideTheCodePageAreSwapped();
     aBriefLockIsWaitedOut();
     aLockThatNeverClearsIsUndone();
     aFailedRollbackIsReportedNotHidden();
     aJournalThatCannotBeWrittenStopsTheStep();
     aPendingRepairWaitsForTheAppToExit();
     aHelperThatDiedMidSwapIsRecovered();
+    aRepairIsArmedForTheSwapAndClearedAfter();
+    theArmedRepairRestoresAnInstallNothingCanStart();
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

@@ -2,19 +2,54 @@
 
 #include "LogManager.h"
 #include "UpdateSettings.h"
+#include "updater/UpdateSwap.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QStandardPaths>
+
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace AetherSDR {
 
 namespace {
 const QString kHelper = QStringLiteral("AetherSDRUpdater.exe");
-constexpr int kProtocol = 1;   // src/updater/UpdateSwap.h kProtocol
+using updater::kProtocol;   // one number for the app and the helper
+
+// The outcomes UpdateSwap writes (outcomeName).
+bool knownOutcome(const QString& o)
+{
+    for (const char* name : {"Updated", "RolledBack", "OldStillRunning", "NotPossible", "SwapUndone",
+                             "Broken"}) {
+        if (o == QLatin1String(name)) {
+            return true;
+        }
+    }
+    return false;
+}
+#ifdef Q_OS_WIN
+bool processElevated()
+{
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        return true;   // unknown: never assume it is safe
+    }
+    TOKEN_ELEVATION elevation{};
+    DWORD size = 0;
+    const bool ok = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size);
+    CloseHandle(token);
+    return !ok || elevation.TokenIsElevated != 0;
+}
+#endif
 } // namespace
 
 QString UpdateInstaller::stateDir()
@@ -43,6 +78,14 @@ bool UpdateInstaller::launchHelper(const QString& stagedDir, const QString& vers
                                    QString* problem)
 {
 #ifdef Q_OS_WIN
+    // In place is per-user only. Elevated, the helper would run from a
+    // user-writable folder at the elevated level, and a swapped-in tree
+    // would keep that folder's permissions inside Program Files.
+    if (processElevated()) {
+        *problem = QStringLiteral("AetherSDR is running as administrator. "
+                                  "Run the installer to update a system-wide install.");
+        return false;
+    }
     const QString install = QCoreApplication::applicationDirPath();
     const QString state = stateDir();
     QDir().mkpath(state);
@@ -81,7 +124,11 @@ UpdateInstaller::SwapResult UpdateInstaller::takeSwapResult(const QString& state
     const QStringList parts = QString::fromUtf8(f.readAll()).trimmed().split(QLatin1Char(' '));
     f.close();
     QFile::remove(path);
-    if (parts.size() != 2) {
+    // Checked before anything of it is logged or kept: the file is outside
+    // the install, and only the helper's own words are believed.
+    static const QRegularExpression version(QStringLiteral("^[0-9]{1,4}(\\.[0-9]{1,6}){2,3}$"));
+    if (parts.size() != 2 || !knownOutcome(parts[0]) || !version.match(parts[1]).hasMatch()) {
+        qCWarning(lcUpdater) << "ignoring an unreadable swap result";
         return {};
     }
     SwapResult r{parts[0], parts[1]};

@@ -248,9 +248,16 @@ a write through a link, or a link pointing outside it).
 `AetherSDRUpdater.exe` (`src/updater/`) does the swap after AetherSDR
 exits. It is built with the static MSVC runtime and no Qt, and the app
 copies it into the state folder before starting it
-(`UpdateInstaller::launchHelper`), because it renames the folder it was
-installed in. Its command line is versioned (`--protocol 1`), and anything
-else is refused.
+(`UpdateInstaller::launchHelper`, which the Updates window calls from the
+next PR on), because it renames the folder it was installed in. Its
+command line is versioned (`--protocol 1`), and anything else is refused.
+
+In-place updates are per-user. `launchHelper` refuses while AetherSDR runs
+elevated: the helper would run from a user-writable folder at the
+elevated level, and a swapped-in tree would keep that folder's permissions
+inside Program Files. A per-machine install run normally fails the
+helper's writable-parent check and is left alone (`NotPossible`); either
+way the answer is to run the installer.
 
 1. It waits for AetherSDR to exit, up to five minutes, and never kills it.
 2. It checks first: the install and the staged release each hold
@@ -269,18 +276,41 @@ else is refused.
 6. Restart to update then starts the app; a swap on quit does not.
 
 A journal (`swap-journal.txt`) records each step before it is taken, and
-a step is taken only once its record reached the disk. If a record can't
+a step is taken only once its record reached the disk: it is flushed
+(`FlushFileBuffers`) and moved into place with `MOVEFILE_WRITE_THROUGH`, so
+a power cut leaves the old record or the new one whole. If a record can't
 be written, the step is skipped and the swap undone, so the last record on
 disk always matches the folders. A helper that dies mid-swap is repaired by
 the next run, but only after AetherSDR has exited, never while it runs. The
 install is restored from `.previous`, and a release that was in place but
 never passed its self-test (the journal at `swap-2`, `selftest` or
 `rollback`) is rolled back. The journal is kept while a repair is still
-owed: after a failed rollback, or when the app never exited. Windows has no atomic folder swap; between step 4's two
-renames nothing runnable is at `<install>` for a moment, and the journal
-covers that. The outcome goes to `swap-result.txt`, which the app reads once
-at its next start. A rolled-back release is remembered as
-`Updates.rolledBackVersion` and is not offered again.
+owed: after a failed rollback, or when the app never exited. Windows has
+no atomic folder swap; between step 4's two renames nothing runnable is at
+`<install>` for a moment, so nothing could start AetherSDR to start the
+helper again. Before the first rename the helper therefore arms a repair:
+`repair-plan.txt` beside it (the install and the version) and an
+`HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce` entry that runs
+`AetherSDRUpdater.exe --protocol 1 --repair` at the next logon. If the
+repair cannot be armed, nothing is renamed. The repair runs `recover()`
+alone and records `SwapUndone`, never `RolledBack`, since the release was
+never tested. A repair that cannot finish arms itself again; one with
+nothing owed only disarms. The helper disarms it whenever it removes the
+journal. The outcome goes to `swap-result.txt`, which the app reads once
+at its next start and checks before believing (a known outcome and a
+plain version, or nothing is logged or kept). A rolled-back release is
+remembered as `Updates.rolledBackVersion`, which the next PR's Updates
+window uses to never offer it again.
+
+### The self-test is a permanent contract
+
+The helper that runs is the old install's, and it tests every later
+release. So `AetherSDR.exe --update-selftest <marker>` is frozen: one
+marker path argument, read from the Unicode command line, and a marker
+holding exactly the version (`26.10.4`, no newline), written before any
+window, settings write or radio. A release may add a new self-test beside
+it, never rename, drop or change this one: an old helper would otherwise
+start the full app, stop it after 60 s and roll back a good release.
 
 If a rollback rename itself fails, the helper shows a message naming the
 three folders and the log (`updater.log`), rather than failing silently.

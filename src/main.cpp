@@ -396,9 +396,12 @@ int main(int argc, char* argv[])
     // (RFC #5304 Phase 3): reaching here means Qt, its platform plugin and
     // this build's libraries loaded. Report the version and stop, before any
     // window, settings write, log or radio.
-    if (argc >= 3 && qstrcmp(argv[1], "--update-selftest") == 0) {
-        return AetherSDR::UpdateInstaller::writeSelfTestMarker(QString::fromLocal8Bit(argv[2]),
-                                                               QStringLiteral(AETHERSDR_VERSION))
+    // The marker path from Qt's arguments, which on Windows come from the
+    // Unicode command line: argv is the ANSI code page, which cannot hold
+    // every profile folder's name (漢字 on code page 1252).
+    if (const QStringList args = app.arguments();
+        args.size() >= 3 && args.at(1) == QLatin1String("--update-selftest")) {
+        return AetherSDR::UpdateInstaller::writeSelfTestMarker(args.at(2), QStringLiteral(AETHERSDR_VERSION))
                    ? EXIT_SUCCESS
                    : EXIT_FAILURE;
     }

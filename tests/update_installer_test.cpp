@@ -85,6 +85,17 @@ private slots:
         UpdateSettings::setRolledBackVersion(QString());
         QVERIFY(UpdateInstaller::takeSwapResult(dir.path()).outcome.isEmpty());
         QVERIFY(UpdateSettings::rolledBackVersion().isEmpty());
+        // Review of #6767: a forged result is neither logged nor kept.
+        for (const QByteArray& forged :
+             {QByteArray("RolledBack 26.10.4\x1b[2Jinjected"), QByteArray("Owned 26.10.4"),
+              QByteArray("RolledBack 26.10"), QByteArray("RolledBack v26.10.4")}) {
+            QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            f.write(forged);
+            f.close();
+            QVERIFY(UpdateInstaller::takeSwapResult(dir.path()).outcome.isEmpty());
+            QVERIFY(UpdateSettings::rolledBackVersion().isEmpty());
+            QVERIFY(!f.exists());   // read once, even when refused
+        }
         UpdateSettings::setRolledBackVersion(QStringLiteral("not a version"));
         QVERIFY(UpdateSettings::rolledBackVersion().isEmpty());   // only parsed digits are kept
     }

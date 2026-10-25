@@ -11,6 +11,13 @@ namespace {
 constexpr Duration kRetryStep{250};
 constexpr Duration kPollStep{100};
 
+// A path for the log, as UTF-8 whatever the code page.
+std::string logText(const fs::path& p)
+{
+    const auto u8 = p.u8string();
+    return std::string(u8.begin(), u8.end());
+}
+
 fs::path normalised(const fs::path& p)
 {
     fs::path n = p.lexically_normal();
@@ -20,17 +27,23 @@ fs::path normalised(const fs::path& p)
     return n;
 }
 
+// Paths are joined as paths, never through std::string: on Windows that is
+// the ANSI code page, and a name it cannot hold (漢字 on code page 1252)
+// throws.
 fs::path sibling(const fs::path& install, const char* suffix)
 {
     const fs::path n = normalised(install);
-    return n.parent_path() / (n.filename().string() + suffix);
+    fs::path name = n.filename();
+    name += suffix;
+    return n.parent_path() / name;
 }
 
 bool writeText(const fs::path& path, const std::string& text)
 {
     std::error_code ec;
     fs::create_directories(path.parent_path(), ec);
-    const fs::path tmp = path.string() + ".tmp";
+    fs::path tmp = path;
+    tmp += ".tmp";
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
         if (!out) {
@@ -98,7 +111,7 @@ bool renameRetry(const fs::path& from, const fs::path& to, Duration timeout, con
             return true;
         }
         if (ops.now() >= deadline) {
-            ops.log("rename " + from.string() + " -> " + to.string() + " failed: " + ec.message());
+            ops.log("rename " + logText(from) + " -> " + logText(to) + " failed: " + ec.message());
             return false;
         }
         ops.sleep(kRetryStep);
@@ -114,6 +127,15 @@ bool place(const fs::path& staged, const fs::path& next, const Ops& ops)
     doRename(ops, staged, next, ec);
     if (!ec) {
         return true;
+    }
+    // Only another volume is a reason to copy; a lock or a refusal is not.
+    bool otherVolume = ec == std::errc::cross_device_link;
+#ifdef _WIN32
+    otherVolume = otherVolume || ec.value() == 17;   // ERROR_NOT_SAME_DEVICE
+#endif
+    if (!otherVolume) {
+        ops.log("the staged tree could not be moved beside the install: " + ec.message());
+        return false;
     }
     ops.log("staged tree is on another volume (" + ec.message() + "); copying it beside the install");
     removeAll(next);
@@ -162,6 +184,9 @@ Outcome finish(const Plan& plan, const Ops& ops, const Paths& paths, Outcome out
     if (outcome != Outcome::Broken && outcome != Outcome::OldStillRunning) {
         std::error_code ec;
         fs::remove(paths.journal, ec);
+        if (ops.disarmRepair && !present(paths.journal)) {
+            ops.disarmRepair();
+        }
     }
     writeText(paths.result, std::string(outcomeName(outcome)) + " " + plan.version + "\n");
     ops.log(std::string("outcome: ") + outcomeName(outcome) + " " + plan.version);
@@ -273,6 +298,30 @@ bool recover(const Plan& plan, const Ops& ops)
     return true;
 }
 
+bool repair(const Plan& plan, const Ops& ops)
+{
+    const Paths paths = pathsFor(plan);
+    if (!present(paths.journal)) {
+        if (ops.disarmRepair) {
+            ops.disarmRepair();   // nothing owed
+        }
+        return true;
+    }
+    if (!recover(plan, ops)) {
+        ops.log("the repair could not restore the install; it runs again at the next logon");
+        if (ops.armRepair) {
+            ops.armRepair();
+        }
+        return false;
+    }
+    writeText(paths.result, std::string(outcomeName(Outcome::SwapUndone)) + " " + plan.version + "\n");
+    ops.log(std::string("outcome: ") + outcomeName(Outcome::SwapUndone) + " " + plan.version + " (repaired)");
+    if (ops.disarmRepair) {
+        ops.disarmRepair();
+    }
+    return true;
+}
+
 Outcome run(const Plan& plan, const Ops& ops)
 {
     const Paths paths = pathsFor(plan);
@@ -305,12 +354,20 @@ Outcome run(const Plan& plan, const Ops& ops)
         return finish(plan, ops, paths, Outcome::NotPossible, true);
     }
 
-    // Only one previous version is kept.
-    removeAll(paths.previous);
+    // From the first rename on, a helper that dies may leave no install to
+    // start: the repair is armed first, or nothing is renamed.
+    if (ops.armRepair && !ops.armRepair()) {
+        ops.log("could not arm the repair; nothing was changed");
+        removeAll(paths.next);
+        return finish(plan, ops, paths, Outcome::NotPossible, true);
+    }
     if (!journal(ops, paths, "swap-1 " + plan.version)) {
         removeAll(paths.next);   // the install is untouched
         return finish(plan, ops, paths, Outcome::NotPossible, true);
     }
+    // Only one previous version is kept, and the older one goes only now
+    // the swap is recorded.
+    removeAll(paths.previous);
     if (!renameRetry(install, paths.previous, plan.renameTimeout, ops)) {
         removeAll(paths.next);
         return finish(plan, ops, paths, Outcome::SwapUndone, true);
