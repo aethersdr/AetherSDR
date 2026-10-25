@@ -757,10 +757,19 @@ void MainWindow::showMultiFlexDialog()
         return;
     }
 
-    MultiFlexDialog dlg(&m_radioModel, this);
-    connect(&dlg, &MultiFlexDialog::disconnectClientRequested,
-            this, &MainWindow::handleMultiFlexClientDisconnect);
-    dlg.exec();
+    // A canon dialog that stays open beside the main window: raised if it is
+    // already open, otherwise created. Closing it (Escape, Ctrl+W, the corner
+    // button) destroys it, so each open starts fresh.
+    if (!m_multiFlexDialog) {
+        auto* dlg = new MultiFlexDialog(&m_radioModel, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        connect(dlg, &MultiFlexDialog::disconnectClientRequested,
+                this, &MainWindow::handleMultiFlexClientDisconnect);
+        m_multiFlexDialog = dlg;
+    }
+    m_multiFlexDialog->show();
+    m_multiFlexDialog->raise();
+    m_multiFlexDialog->activateWindow();
 }
 
 void MainWindow::handleMultiFlexClientDisconnect(quint32 handle, const QString& displayName)
@@ -8252,6 +8261,11 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     }
     if (m_multiFlexAction) {
         m_multiFlexAction->setVisible(!connected || caps.hasMultiClientSessions);
+    }
+    // The dashboard stays open beside the main window, so a radio without
+    // multi-client sessions closes it rather than leaving it to drive one.
+    if (connected && !caps.hasMultiClientSessions && m_multiFlexDialog) {
+        m_multiFlexDialog->close();  // QPointer, guarded above
     }
     updateToolsMenuState();
     // Both entries open the SAME host serial knob (m_aetherControlAction is

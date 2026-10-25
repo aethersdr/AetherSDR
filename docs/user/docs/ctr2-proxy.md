@@ -253,7 +253,15 @@ starts.
 The CTR2 window notices the switch by itself: the device list and **Status**
 follow within a couple of seconds, with no **Rescan** needed. With **Start
 automatically** ticked, the relay starts again once the CTR2-Max is back in
-AetherCTR2.
+AetherCTR2. After a restart asked for from the CTR2 window, it waits for the
+unit to leave and come back rather than reopening it on its way out; if
+AetherSDR misses that, it tries again after 20 seconds. Another controller is
+not kept waiting.
+
+Before **Restart into**, **Install** or a stock-firmware install, the window
+may show **Reading the CTR2-Max's firmware…** for a moment while it checks
+whether the running firmware can restart on request, so it asks for the BOOT
+and RESET buttons only when the firmware really needs them.
 
 ### Backups
 

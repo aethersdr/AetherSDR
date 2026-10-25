@@ -132,6 +132,7 @@
 #include "core/ThemeManager.h"
 #include "RadioSetupDialogCommon.h"
 #include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
 #include "FramelessResizer.h"
 #include "ThemedImageCache.h"
 
@@ -1177,36 +1178,6 @@ QSplitter::handle {
     background: transparent;
     border: none;
 }
-QScrollBar:vertical {
-    background: transparent;
-    width: 12px;
-    margin: 8px 2px 8px 2px;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-height: 34px;
-}
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-QScrollBar:horizontal {
-    background: transparent;
-    height: 12px;
-    margin: 2px 8px 2px 8px;
-    border-radius: 6px;
-}
-QScrollBar::handle:horizontal {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-width: 34px;
-}
-QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
-    width: 0px;
-}
 )";
 
 // A spin box with a styled frame draws its steppers from the sheet or not at
@@ -1290,7 +1261,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     FramelessResizer::install(this);
     bodyWidget()->setObjectName(QStringLiteral("radioSetupBody"));
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kRadioSetupStyle) + spinArrowRules() + canonIndicatorRules();
+        return QString::fromLatin1(kRadioSetupStyle) + canonScrollBarRules() + spinArrowRules() + canonIndicatorRules();
     });
 
     auto* layout = new QVBoxLayout(bodyWidget());

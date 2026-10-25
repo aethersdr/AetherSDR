@@ -74,14 +74,14 @@ The RC-28 is a weighted tuning knob with **F1**, **F2** and a **TX** bar. A comm
 1. Tick **Enable HID encoders / StreamDeck+** (see [Setup](#setup)).
 2. Open **Settings → Controllers → Icom RC-28 Remote Encoder...** ("Icom RC-28 Button Mapping").
 
-The dialog has:
+The window reopens where you left it (centered on the main window the first time), and you can resize it by dragging any edge. Close it with the corner ✕, **Close**, Esc or Ctrl+W (⌘W on macOS). Changes take effect as you make them. It has:
 
 | Group | Controls |
 |-------|----------|
 | **Device** | Connection status, VID:PID, path, serial and firmware |
 | **Transmit (PTT) Button** | **Momentary** (hold to transmit, release to stop) or **Latched** (press to start, press again to stop) |
 | **Button Assignments** | **F1/F2 — short press** and **F1/F2 — long press** |
-| **Encoder** | **Invert encoder direction**; **Pulses per step** (1–10, higher is less sensitive); **Auto-snap to nearest 1 kHz after rotation stops** |
+| **Encoder** | **Invert encoder direction**; **Auto-snap to nearest 1 kHz after rotation stops**; **Pulses per step** (1–10, higher is less sensitive) |
 | **Activity** | A log of recent button and encoder events |
 
 Defaults: F1 short = Step Up, F1 long = Fast Tuning; F2 short = Step Down, F2 long = Mode.

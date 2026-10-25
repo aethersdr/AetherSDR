@@ -4214,15 +4214,15 @@ add_test(NAME radio_nickname_test COMMAND radio_nickname_test)
 set_tests_properties(radio_nickname_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
-# Production TX Band Settings column with injected replies/status; no sockets.
+# Production TX Band Settings column with injected replies/status, the
+# window's canon workspace shape and geometry key, and the open table following
+# the radio's band values and TX profile; no sockets.
 add_executable(tune_output_dialog_test
     tests/tune_output_dialog_test.cpp
     src/gui/CanonWindow.cpp
     src/gui/TxBandDialog.cpp
     src/gui/ControlAvailabilityRegistry.cpp
-    src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
     ${THEME_TEST_RESOURCES}
 )
 target_include_directories(tune_output_dialog_test PRIVATE src tests)
@@ -4230,6 +4230,24 @@ target_link_libraries(tune_output_dialog_test PRIVATE aetherdesktop_support Qt6:
 add_test(NAME tune_output_dialog_test COMMAND tune_output_dialog_test)
 set_tests_properties(tune_output_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# Icom RC-28 Button Mapping on the production window: canon chrome with the
+# resizer and saved geometry of a tool window, an opaque log menu, and the
+# mapping fields it reads and writes. No encoder or device; no socket.
+if(HIDAPI_FOUND)
+    add_executable(rc28_mapping_dialog_test
+        tests/rc28_mapping_dialog_test.cpp
+        src/gui/CanonWindow.cpp
+        src/gui/RC28MappingDialog.cpp
+        src/gui/FramelessResizer.cpp
+        ${THEME_TEST_RESOURCES}
+    )
+    target_include_directories(rc28_mapping_dialog_test PRIVATE src tests)
+    target_link_libraries(rc28_mapping_dialog_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+    add_test(NAME rc28_mapping_dialog_test COMMAND rc28_mapping_dialog_test)
+    set_tests_properties(rc28_mapping_dialog_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+endif()
 
 # Radio Setup's Show TX in Waterfall button on the production dialog: a click
 # sets the model where the backend declares the client owns the flag (HL2) and
@@ -8184,6 +8202,24 @@ add_test(NAME aethercontrol_window_test COMMAND aethercontrol_window_test)
 set_tests_properties(aethercontrol_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The multiFLEX Dashboard is a canon dialog: chrome, geometry carried over
+# from PersistentDialog, and the Enabled / Disabled colors in both themes.
+add_executable(multiflex_dashboard_window_test
+    tests/multiflex_dashboard_window_test.cpp
+    src/gui/MultiFlexDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(multiflex_dashboard_window_test PRIVATE src tests)
+target_link_libraries(multiflex_dashboard_window_test PRIVATE
+    aethercore Qt6::Gui Qt6::Widgets Qt6::Test
+)
+set_target_properties(multiflex_dashboard_window_test PROPERTIES AUTOMOC ON)
+add_test(NAME multiflex_dashboard_window_test COMMAND multiflex_dashboard_window_test)
+set_tests_properties(multiflex_dashboard_window_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(connection_panel_size_test
     tests/connection_panel_size_test.cpp
     src/gui/ConnectionPanel.cpp
@@ -9787,6 +9823,7 @@ set(AETHER_SETTINGS_CONSUMERS
     nrs_level_range_test
     tune_output_control_test
     tune_output_dialog_test
+    rc28_mapping_dialog_test
     pan_display_drop_notice_test
     backend_capability_revision_test
     icom_panadapter_capacity_test
@@ -9919,6 +9956,7 @@ set(AETHER_SETTINGS_CONSUMERS
     help_dialog_test
     flex_control_dialog_size_test
     aethercontrol_window_test
+    multiflex_dashboard_window_test
     pan_layout_dialog_size_test
     transmit_model_test
     container_widget_test

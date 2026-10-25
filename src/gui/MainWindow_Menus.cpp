@@ -592,9 +592,12 @@ void MainWindow::buildMenuBar()
 #ifdef HAVE_HIDAPI
     auto* rc28Action = controllersMenu->addAction("Icom RC-28 Remote Encoder...");
     connect(rc28Action, &QAction::triggered, this, [this] {
-        const bool fresh = !m_rc28MappingDialog;
-        showOrRaisePersistent(m_rc28MappingDialog, m_hidEncoder);
-        if (fresh && m_rc28MappingDialog)
+        // A canon dialog, so not showOrRaisePersistent(): that applies View →
+        // Frameless Window, which a CanonWindow does not follow.
+        if (!m_rc28MappingDialog) {
+            auto* dlg = new RC28MappingDialog(m_hidEncoder, this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            m_rc28MappingDialog = dlg;
             connect(m_rc28MappingDialog, &RC28MappingDialog::mappingFieldChanged,
                     this, [this](const QString& field, const QString& value) {
                 if (field == "f1Hold" || field == "f2Hold") {
@@ -611,6 +614,10 @@ void MainWindow::buildMenuBar()
                         m_hidSnapTimer->stop();
                 }
             });
+        }
+        m_rc28MappingDialog->show();
+        m_rc28MappingDialog->raise();
+        m_rc28MappingDialog->activateWindow();
     });
 #endif
     auto* ulanziAction = controllersMenu->addAction("Ulanzi Dial Mapping...");
@@ -853,7 +860,16 @@ void MainWindow::buildMenuBar()
             statusBar()->showMessage("Not connected to radio", 3000);
             return;
         }
-        showOrRaisePersistent(m_txBandDialog, &m_radioModel);
+        // A canon workspace window: created directly rather than through
+        // showOrRaisePersistent(), which would apply View → Frameless Window.
+        if (!m_txBandDialog) {
+            auto* dialog = new TxBandDialog(&m_radioModel, this);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            m_txBandDialog = dialog;
+        }
+        m_txBandDialog->show();
+        m_txBandDialog->raise();
+        m_txBandDialog->activateWindow();
     });
 
     // Inhibit during TUNE submenu — user selects which TX outputs to suppress.

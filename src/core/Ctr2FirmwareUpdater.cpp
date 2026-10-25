@@ -142,6 +142,7 @@ bool Ctr2FirmwareUpdater::beginSession(const Ctr2HidPort::DeviceInfo& device, co
         return false;
     }
     m_restart = restart;
+    m_restartUnanswered = false;
     m_device = device;
     m_image = image;
     m_sha256 = QCryptographicHash::hash(image.bytes, QCryptographicHash::Sha256);
@@ -520,6 +521,7 @@ void Ctr2FirmwareUpdater::onTimeout()
                                                             : m_previousVersion));
         break;
     case Phase::Commanding:
+        m_restartUnanswered = m_restartQueuedTo > 0 && m_reportsWritten >= m_restartQueuedTo;
         fail(tr("The device did not answer the restart request."));
         break;
     case Phase::Idle:

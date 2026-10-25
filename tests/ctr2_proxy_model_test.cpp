@@ -334,6 +334,12 @@ void testActionRetryTickets()
     actions.started(first, QStringLiteral("first done"), true);
     check(!actions.current(pressed) && actions.retried(),
           "until an action starts; a retry is marked as the one retry");
+
+    // A press waiting on a read of the device belongs to that device.
+    const auto forA = actions.mark(QStringLiteral("/sim/A|AA"));
+    check(actions.current(forA, QStringLiteral("/sim/A|AA")), "a press for A is current while A is selected");
+    check(!actions.current(forA, QStringLiteral("/sim/B|BB")),
+          "and not once another unit is selected");
 }
 
 // Firmware that names itself: a 303A:1001 product string starting "Aether" is

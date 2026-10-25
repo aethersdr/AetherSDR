@@ -28,6 +28,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <utility>
 
 #ifdef Q_OS_LINUX
 #include <cerrno>
@@ -82,6 +83,13 @@ FirmwareInstallModel::Target afterAlert(FirmwareInstallModel& fw,
     return now.device == FirmwareInstallModel::Device::Bootloader && fw.loaderCount() == 1
                ? now
                : target;
+}
+
+// The selected unit, for a press that waits (on the access question or a
+// fresh read of its offer) before acting: a change of selection drops it.
+QString unitKey(const FirmwareInstallModel::Target& target)
+{
+    return target.hidPath + QLatin1Char('|') + target.mac.toUpper();
 }
 
 // For a run after an access grant: the unit as it is now, if it is the one
@@ -701,7 +709,7 @@ bool FirmwareInstallDialog::offerAccessFirst(std::function<void()> again)
     if (::access(path.constData(), R_OK | W_OK) == 0 || errno != EACCES)
         return false;
     // A ticket for this press: another action or Cancel meanwhile drops it.
-    const Ctr2ActionRetry::Ticket ticket = m_actions.mark();
+    const Ctr2ActionRetry::Ticket ticket = m_actions.mark(unitKey(target));
     // Declined, or no install could start: the action goes ahead as before.
     return m_relay->offerAccessRule(Ctr2ProxyPanel::RuleUse::Firmware, [this, ticket, again] {
         // What the action can do (restart on request, or the buttons) depends
@@ -717,11 +725,35 @@ bool FirmwareInstallDialog::offerAccessFirst(std::function<void()> again)
 #endif
 }
 
+bool FirmwareInstallDialog::refreshOfferFirst(std::function<void()> again)
+{
+    using Device = FirmwareInstallModel::Device;
+    if (std::exchange(m_offerRefreshed, false))
+        return false;   // the repeat after the read
+    const FirmwareInstallModel::Target target = m_fw->target();
+    if (!m_model || m_model->isRunning()
+        || (target.device != Device::LinkFirmware && target.device != Device::Stock)
+        || m_fw->takesCommands(target))
+        return false;
+    const Ctr2ActionRetry::Ticket ticket = m_actions.mark(unitKey(target));
+    m_step->setText(tr("Reading the CTR2-Max's firmware…"));
+    m_model->reprobeFirmware();
+    waitForFirmwareInfo(8, ticket, [this, again] {
+        m_step->clear();
+        m_offerRefreshed = true;
+        again();
+    });
+    return true;
+}
+
 void FirmwareInstallDialog::waitForFirmwareInfo(int tries, Ctr2ActionRetry::Ticket ticket,
                                                 std::function<void()> again)
 {
-    if (!m_actions.current(ticket))
+    // Another action, Cancel, or another unit selected meanwhile: drop it.
+    if (!m_actions.current(ticket, unitKey(m_fw->target()))) {
+        m_step->clear();
         return;
+    }
     // Known once the relay has read the device: a version (AetherCTR2), or
     // the restart commands (stock firmware that offers them). Stock firmware
     // without them stays unknown, and gets the buttons after the wait.
@@ -739,6 +771,7 @@ void FirmwareInstallDialog::runJob(const QString& doneText, Ctr2ActionRetry::Job
                                    bool retarget, bool retryUsed)
 {
     m_actions.started(job, doneText, retryUsed);
+    m_offerRefreshed = false;
     m_jobDone = doneText;
     QString problem;
     const bool ok = job(retarget, &problem);
@@ -807,6 +840,8 @@ void FirmwareInstallDialog::confirmRestore(const QString& path)
 void FirmwareInstallDialog::onInstall()
 {
     if (offerAccessFirst([this] { onInstall(); }))
+        return;
+    if (refreshOfferFirst([this] { onInstall(); }))
         return;
     // The device is the one shown now; the model refuses if it changes
     // while the questions below are open.
@@ -902,6 +937,8 @@ void FirmwareInstallDialog::installStockFirmware()
 {
     if (offerAccessFirst([this] { installStockFirmware(); }))
         return;
+    if (refreshOfferFirst([this] { installStockFirmware(); }))
+        return;
     using Device = FirmwareInstallModel::Device;
     FirmwareInstallModel::Target target = m_fw->target();
     const QString backup = selectedBackup(m_fileList);
@@ -951,6 +988,8 @@ void FirmwareInstallDialog::restartInto(int which)
     using Firmware = FirmwareInstallModel::Firmware;
     const auto firmware = static_cast<Firmware>(which);
     if (offerAccessFirst([this, which] { restartInto(which); }))
+        return;
+    if (refreshOfferFirst([this, which] { restartInto(which); }))
         return;
     FirmwareInstallModel::Target target = m_fw->target();
     // Firmware that cannot restart into download mode takes the unit's buttons: the
