@@ -171,16 +171,84 @@ A file in `files` with no op is unchanged from the `from` release.
 5. For each `patch` op, check the current file against `from_sha256` before
    using it. A mismatch is a hard fail, not a best effort (Principle VII).
 6. After all ops, check every entry in `files` against the staged tree. Any
-   mismatch abandons the staged tree and falls back to `full`.
+   mismatch abandons the staged tree and falls back to `full` (below).
 7. Files in the install that are not in `files` are left alone. That covers
    the installer's own `unins000.*` on Windows.
 8. Swap on quit, keeping the previous tree for rollback.
 
+### The full release in-app (Windows)
+
+When no patch applies, or the patch fails anywhere (download, hash, a
+drifted install, a result that does not match), a request with
+`fullFallback` stages `full` instead of sending the user to the browser.
+That needs `full` to be a `.zip` of at most 512 MiB, so it is Windows only.
+
+- Its `sha256` and `size` are checked like a bundle's.
+- The zip must hold exactly the files in `files`: no others, none missing,
+  and no more bytes in all than `files` adds up to. Entry names written
+  with `\` (as `Compress-Archive` writes them) are read as `/`. Folder
+  entries are allowed; a link is not, since a zip cannot carry one.
+- The staged tree is those files plus the installer's own top-level
+  `unins*` files, copied from the install, so `setup.exe`'s uninstaller
+  still works after the swap. Nothing else comes from the install.
+- Every file is then checked against `files`, as in step 6.
+
+If the full release fails too, the browser fallback is offered, once.
+
+The full release is unpacked in memory: the download and its unpacked
+files are held at once, on a worker thread. For v26.10.3 that measured
+548 MiB peak (a 157 MB zip, 344 MB of files). The caps above are hard
+ceilings, so this is footprint, not safety.
+
+### What stays staged
+
 The staging root holds at most the one staged release waiting to be
-swapped in (`<stagingRoot>/<version>`); each attempt works in its own
-`.work-*` folder, removed on failure or cancel. Sweeping a staged release
-that is never swapped in, and older releases' leftovers, is the swap's
-job (Phase 3), which owns that folder's lifetime.
+swapped in (`<stagingRoot>/<version>`), with its record beside it, never
+in it:
+
+| File | What |
+|---|---|
+| `<version>.json` | `version`, the `from` version it was staged for, and the `install` it was staged from. No tag: the release's tag is `v<version>`, which the signed manifest binds |
+| `<version>.manifest.json`, `.sig` | The signed manifest and signature that vouch for every file |
+
+The record is written after the tree is in place, so a tree without a
+complete record is never used. Each attempt works in its own `.work-*`
+folder, removed on failure or cancel.
+
+At startup `UpdateStager::stagedRelease` keeps the staged release only if
+it is still the one to install: staged for the running version and this
+install, GitHub's latest (when that is known yet), and not the release
+that was rolled back. GitHub's latest is compared with `v<version>`: the
+record is unsigned and keeps no tag of its own, and `revalidate` binds the
+version to the signed manifest. Everything else staging wrote is removed: other versions,
+half-written records, and work folders a crashed run left. The staging
+root is the helper's state folder too, so only staging's own names are
+swept (`.work-*`, `<version>`, its three record files, and a record
+`QSaveFile` left half written as `<record>.XXXXXX`); the helper's
+journal, result, repair plan, log and copy are left alone.
+
+Before the swap, `revalidate` checks the stored signature with the
+built-in key and every file in `files` against the stored manifest, so a
+release file changed or removed on disk since it was staged is never
+swapped in. A file added since is not caught: the patch path keeps the
+install's own files (`unins*`, anything a portable user put there), so the
+tree is never exactly `files`. Both trees are the user's own, at the same
+level, so no boundary is crossed.
+
+### Testing an update before there is a release
+
+A build configured with `AETHER_UPDATE_DEV_OVERRIDES` (`BUILD-OPTIONS.md`;
+`windows-installer.yml`'s `dev_overrides` dispatch input builds one, never
+on a tag and never for the Store flight) honors four environment variables, each logged when used:
+
+| Variable | Effect |
+|---|---|
+| `AETHER_UPDATE_MANIFEST_URL` | Fetch the manifest (and `.sig`) from here |
+| `AETHER_UPDATE_TRUST_KEYS` | Also trust these Ed25519 keys (64 hex digits each, comma-separated) |
+| `AETHER_UPDATE_DOWNLOAD_BASE` | Fetch release files from `<base>/<tag>/<asset>`. The URLs the manifest names are still checked as signed. |
+| `AETHER_UPDATE_PRETEND_VERSION` | Run as this version, so the build's own release is an update. It is removed from the environment at startup, so the self-test and a restarted app are the real version. |
+
+The freeze and replay checks are unchanged.
 
 The release workflow applies every bundle to the real earlier release, by
 this contract, before anything is signed, so a bundle that does not rebuild
