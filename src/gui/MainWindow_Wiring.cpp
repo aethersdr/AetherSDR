@@ -7726,7 +7726,7 @@ void MainWindow::wireMeters()
         const bool integratedAmp = m_radioModel.amplifier().present()
             && m_radioModel.amplifier().operate();
         m_appletPanel->txApplet()->setPowerScale(radioMaxWatts, integratedAmp);
-        m_appletPanel->tunerApplet()->setPowerScale(radioMaxWatts, integratedAmp);
+        m_appletPanel->tunerApplet()->setPowerScale(selection.maxWatts, selection.highPowerAmplifier);
         m_appletPanel->healthApplet()->setPowerScale(radioMaxWatts, integratedAmp);
         m_appletPanel->setMeterPowerScale(selection.maxWatts, selection.highPowerAmplifier);
     };

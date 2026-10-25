@@ -3197,6 +3197,7 @@ the radio tabs, the audio cluster, and the window controls on every platform.
 ← {"ok":true,"model":"titlebar","present":true,"height":52,"expectedHeight":52,
    "offsetInWindow":0,"screenRect":[103,40,1402,52],"minimalMode":false,
    "brand":{"wordmark":"AetherSDR","logoLoaded":true,"visible":true},
+   "update":{"version":"","visible":false},
    "radios":{"activeId":"DEMO-0001","width":291,"maximumWidth":16777215,
              "contentWidth":257,"overflowing":false,
              "popoverVisible":false,"pulseEnabled":true,
@@ -3226,6 +3227,9 @@ shared fallback caption widgets report `visible:false`. The fallback style
 is `shared`; Linux uses it when custom chrome is enabled. `qtVersion` is the
 actual runtime version, not the build-machine SDK version.
 `brand.rect` is `[x, y, width, height]` in title-bar coordinates.
+`update.version` is the newer release the UPDATE badge announces (empty when
+none, or when the operator skipped it); `update.visible` is false in minimal
+mode even when a version is set.
 On macOS, `chrome.nativeCaptionRect` is the union of visible native caption
 buttons in window-content coordinates (empty outside Cocoa or in fullscreen).
 With expanded chrome, check that the brand begins 16 logical pixels after the

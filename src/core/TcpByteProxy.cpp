@@ -2,6 +2,7 @@
 
 #include "LogManager.h"
 #include "TcpSocketEndpoint.h"
+#include "UnicastEndpoint.h"
 
 #include <QAbstractSocket>
 #include <QNetworkInterface>
@@ -16,19 +17,9 @@ namespace AetherSDR {
 
 namespace {
 
-QString endpointText(const QHostAddress& address, quint16 port)
-{
-    return QStringLiteral("%1:%2").arg(address.toString()).arg(port);
-}
-
 bool isUsableUnicastIpv4(const QHostAddress& address)
 {
-    bool ok = false;
-    const quint32 v4 = address.toIPv4Address(&ok);
-    if (!ok) {
-        return false;
-    }
-    return v4 != 0 && v4 != 0xFFFFFFFFu && !address.isMulticast();
+    return usableUnicastAddress(address).protocol() == QAbstractSocket::IPv4Protocol;
 }
 
 QString endReasonText(ByteRelay::EndReason reason)
@@ -288,21 +279,19 @@ QString TcpByteProxy::validate(const Config& config)
     if (!isUsableUnicastIpv4(config.listenAddress)) {
         return QStringLiteral("Select a specific local IPv4 listen address");
     }
-    if (!isUsableUnicastIpv4(config.upstreamAddress)) {
-        return QStringLiteral("Enter the radio's IPv4 address");
+    const QHostAddress up = usableUnicastAddress(config.upstreamAddress);
+    if (up.isNull()) {
+        return QStringLiteral("Enter the radio's address");
     }
     if (config.upstreamPort == 0) {
         return QStringLiteral("Radio port must be 1-65535");
     }
     if (config.listenPort != 0 && config.upstreamPort == config.listenPort) {
-        const QHostAddress up(config.upstreamAddress.toIPv4Address());
         bool local = up.isLoopback()
-            || up == QHostAddress(config.listenAddress.toIPv4Address());
+            || up == usableUnicastAddress(config.listenAddress);
         if (!local) {
             for (const QHostAddress& a : QNetworkInterface::allAddresses()) {
-                bool ok = false;
-                const quint32 v4 = a.toIPv4Address(&ok);
-                if (ok && v4 == up.toIPv4Address()) {
+                if (usableUnicastAddress(a) == up) {
                     local = true;
                     break;
                 }
@@ -330,8 +319,8 @@ bool TcpByteProxy::start(const Config& config)
     }
 
     m_config = config;
-    m_config.listenAddress = QHostAddress(config.listenAddress.toIPv4Address());
-    m_config.upstreamAddress = QHostAddress(config.upstreamAddress.toIPv4Address());
+    m_config.listenAddress = usableUnicastAddress(config.listenAddress);
+    m_config.upstreamAddress = usableUnicastAddress(config.upstreamAddress);
     m_lastSessionStats = {};
     m_rejectedClients = 0;
     m_peerDescription.clear();
@@ -418,7 +407,7 @@ void TcpByteProxy::onNewConnection()
 
         ++m_generation;
         m_lastSessionStats = {};
-        m_peerDescription = endpointText(QHostAddress(socket->peerAddress().toIPv4Address()),
+        m_peerDescription = endpointText(usableUnicastAddress(socket->peerAddress()),
                                          socket->peerPort());
         QTcpSocket* upstream = m_socketFactory();
         m_session = new Session(this, m_generation, socket, upstream, m_tuning);

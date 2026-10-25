@@ -19,6 +19,7 @@
 #include "core/aprs/AprsStationList.h"
 #include "gui/AprsMessagesDialog.h"
 #include "gui/CanonIndicators.h"
+#include "gui/CanonScrollBarStyle.h"
 #include "gui/FramelessResizer.h"
 #include "gui/AprsRateGraph.h"
 #include "gui/AprsSymbolIcons.h"
@@ -307,36 +308,6 @@ QTextEdit {
     selection-color: {{color.canon.onAccent}};
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: 13px;
-}
-QScrollBar:vertical {
-    background: transparent;
-    width: 12px;
-    margin: 8px 2px 8px 2px;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-height: 34px;
-}
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-QScrollBar:horizontal {
-    background: transparent;
-    height: 12px;
-    margin: 2px 8px 2px 8px;
-    border-radius: 6px;
-}
-QScrollBar::handle:horizontal {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-width: 34px;
-}
-QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
-    width: 0px;
 }
 QLabel#ExperimentalBanner {
     background: {{color.background.warning}};
@@ -957,7 +928,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_txPaceTimer = new QTimer(this);
     m_txPaceTimer->setInterval(kTxChunkMs);
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kAetherModemStyle) + canonIndicatorRules();
+        return QString::fromLatin1(kAetherModemStyle) + canonScrollBarRules() + canonIndicatorRules();
     });
 
     auto* root = new QVBoxLayout(bodyWidget());

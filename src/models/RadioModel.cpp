@@ -39,6 +39,7 @@
 #include "core/PerfTelemetry.h"
 #include "core/StreamStatus.h"
 #include "core/UdpRegistrationPolicy.h"
+#include "core/UnicastEndpoint.h"
 #include "core/WaterfallRate.h"
 #include "core/ClientDisplaySettings.h"  // per-radio client display state
 #include "ProfileLoadCommand.h"
@@ -716,8 +717,7 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
     // The probe's winning local address is transport metadata, not a family
     // parameter. Keep it neutral so each backend can use the route without
     // adding a family-string branch above the backend seam.
-    if (sessionBindAddress.protocol() == QAbstractSocket::IPv4Protocol)
-        req.localBindAddress = sessionBindAddress;
+    req.localBindAddress = usableUnicastAddress(sessionBindAddress);
 
     // The DDC0 rate and the front-end options are preferences the operator sets
     // in Radio Setup's "ANAN Front End" page. READ FROM AnanSettings, NOT FROM
@@ -7771,7 +7771,8 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                                       << "udpSeen=" << firstUdpPacketSeen();
                 emit connectionError(
                     tr("No spectrum data received from %1. Source mode: %2. TCP: %3. UDP: %4. "
-                       "UDP traffic from the radio may be blocked, or the wrong source path may be selected.")
+                       "UDP traffic from the radio may be blocked by a firewall on this computer "
+                       "or on the network path, or the wrong source path may be selected.")
                         .arg(targetRadioIp(), selectedSourceMode(),
                              localTcpEndpoint(), localUdpEndpoint()));
             }
@@ -9114,7 +9115,8 @@ QString RadioModel::selectedSourcePath() const
     QHostAddress resolved = m_lastInfo.sessionBindAddress;
     if (resolved.isNull() && m_connection)
         resolved = m_connection->localAddress();
-    if (!resolved.isNull() && resolved.protocol() == QAbstractSocket::IPv4Protocol)
+    resolved = usableUnicastAddress(resolved);
+    if (!resolved.isNull())
         return QStringLiteral("Auto (%1)").arg(resolved.toString());
     return QStringLiteral("Auto");
 }
@@ -9136,7 +9138,7 @@ QString RadioModel::localTcpEndpoint() const
     const quint16 localPort = m_connection->localTcpPort();
     if (localAddr.isNull() || localPort == 0)
         return QStringLiteral("Not connected");
-    return QStringLiteral("%1:%2").arg(localAddr.toString()).arg(localPort);
+    return endpointText(localAddr, localPort);
 }
 
 QString RadioModel::localUdpEndpoint() const
@@ -9150,7 +9152,7 @@ QString RadioModel::localUdpEndpoint() const
     const quint16 localPort = m_panStream->localPort();
     if (localAddr.isNull() || localPort == 0)
         return QStringLiteral("Not bound");
-    return QStringLiteral("%1:%2").arg(localAddr.toString()).arg(localPort);
+    return endpointText(localAddr, localPort);
 }
 
 bool RadioModel::firstUdpPacketSeen() const

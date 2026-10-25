@@ -68,6 +68,11 @@ public:
     // Rescans local IPv4 addresses and CTR2-class USB HID devices, now, on
     // this thread. The periodic rescan does the same work off the GUI thread.
     void refreshDevices();
+    // Forgets what the idle probe last read from the selected device and
+    // reads it again (its version and FIRMWARE offer, usbFirmwareVersion() and
+    // usbFirmwareCommands()). A probe taken while the firmware was still
+    // starting can read nothing; a firmware switch keeps the same path.
+    void reprobeFirmware();
 
     // Setters refuse (return false) while running.
     Transport transport() const { return m_transport; }
@@ -123,6 +128,9 @@ public:
     // controller that switched firmware (and so changed its USB identity)
     // appears without pressing Rescan.
     static constexpr int kDeviceRescanMs = 2000;
+    // After a restart request, the longest auto-start waits for the device to
+    // leave the bus and come back before trying anyway.
+    static constexpr int kRestartHoldMs = 20000;
     // Shown while a USB relay that has run this long has never had an answer
     // from the CTR2, as firmware without USB mode never answers; empty
     // otherwise.
@@ -269,6 +277,16 @@ private:
     // expires, rather than opening the device on this thread every
     // kAutoStartRetryMs. Expired (the default) means no hold.
     QDeadlineTimer m_noAnswerHold;
+    // A restart request (restartUsbDevice) answered: the device leaves the bus
+    // a moment later (Lynovation's firmware after about two seconds), and is
+    // still listed until then. Auto-start leaves m_restartedPath alone until a
+    // scan has seen it gone and back, or m_restartedHold expires.
+    QString m_restartedPath;
+    Ctr2HidPort::DeviceInfo m_restartedDevice;   // as listed when restarted
+    bool m_restartedSeenGone{false};
+    QDeadlineTimer m_restartedHold;
+    // The restarted device is the one selected and still held.
+    bool restartHeld();
     int m_noAnswerRetryMs{kNoAnswerRetryMs};
 };
 

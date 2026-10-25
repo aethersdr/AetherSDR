@@ -789,7 +789,8 @@ QWidget* makeEmptyWaveformsState(QWidget* parent = nullptr)
     subtext->setAlignment(Qt::AlignCenter);
     subtext->setWordWrap(true);
     subtext->setAccessibleName(QObject::tr("Install radio waveforms hint"));
-    layout->addWidget(subtext, 0, Qt::AlignHCenter);
+    // Keep the wrapping width consistent with the layout's height-for-width calculation.
+    layout->addWidget(subtext);
 
     return state;
 }

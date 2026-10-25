@@ -1,13 +1,10 @@
-// The two prompts that show a GitHub release tag (#6405): the "Outdated
-// Version" body, which is rich text, and the "Update Available" box, which is
-// plain text. No network, no sockets: the tag is passed in.
+// The "Outdated Version" prompt shows a GitHub release tag in rich text
+// (#6405); the tag is escaped. No network, no sockets: the tag is passed in.
 
 #include "core/VersionNumber.h"
 #include "gui/ReleaseTagText.h"
 
 #include <QApplication>
-#include <QLabel>
-#include <QMessageBox>
 #include <QString>
 #include <QTextDocument>
 
@@ -15,7 +12,6 @@
 
 using AetherSDR::VersionNumber;
 using AetherSDR::outdatedVersionPromptHtml;
-using AetherSDR::setUpdateAvailableText;
 
 namespace {
 
@@ -73,50 +69,6 @@ void testOutdatedVersionBody()
            plain.contains(QStringLiteral("but <b>v26.10.3</b> is available.")), plain);
 }
 
-QString formatName(Qt::TextFormat format)
-{
-    return QStringLiteral("textFormat=%1").arg(static_cast<int>(format));
-}
-
-void testUpdateAvailableBox()
-{
-    QMessageBox box;
-    setUpdateAvailableText(box, kCurrent, kCraftedTag);
-
-    // Control: left to Qt::AutoText, this text would be rendered as markup.
-    report("update: the crafted text would be rich under AutoText",
-           Qt::mightBeRichText(box.text()), box.text());
-    report("update: the box is plain text", box.textFormat() == Qt::PlainText,
-           formatName(box.textFormat()));
-    const QLabel* label = box.findChild<QLabel*>(QStringLiteral("qt_msgbox_label"));
-    report("update: the label that draws the text is plain text",
-           label && label->textFormat() == Qt::PlainText,
-           label ? formatName(label->textFormat()) : QStringLiteral("no qt_msgbox_label"));
-    report("update: the tag is shown verbatim",
-           box.text() == QStringLiteral("AetherSDR v%1 is available.").arg(kCraftedTag),
-           box.text());
-    report("update: the running version is the informative text",
-           box.informativeText() == QStringLiteral("You are running v26.10.2."),
-           box.informativeText());
-
-    QMessageBox plainBox;
-    setUpdateAvailableText(plainBox, kCurrent, kPlainTag);
-    report("update: a plain tag is shown unchanged",
-           plainBox.text() == QStringLiteral("AetherSDR v26.10.3 is available."),
-           plainBox.text());
-}
-
-// Why the box is plain text instead of escaped: an escaped tag without "&lt;"
-// is not detected as rich text, so its entities would be shown literally.
-void testEscapingIsNotEnoughUnderAutoText()
-{
-    const QString escaped = QStringLiteral("AetherSDR v%1 is available.")
-        .arg(QStringLiteral("99.0.0&x").toHtmlEscaped());
-    report("update: an escaped '&' tag stays plain under AutoText",
-           escaped.contains(QStringLiteral("&amp;")) && !Qt::mightBeRichText(escaped),
-           escaped);
-}
-
 } // namespace
 
 int main(int argc, char** argv)
@@ -128,8 +80,6 @@ int main(int argc, char** argv)
 
     testGateAcceptsMarkup();
     testOutdatedVersionBody();
-    testUpdateAvailableBox();
-    testEscapingIsNotEnoughUnderAutoText();
 
     std::printf("\n%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES PRESENT");
     return g_failed == 0 ? 0 : 1;

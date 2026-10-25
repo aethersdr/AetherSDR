@@ -1249,44 +1249,6 @@
       "alt": "Radio Setup with latency typed in the search box. The left tree now shows only RECEIVE & TRANSMIT with the Audio page under it, while the right side still shows the Radio page, with the serial number, radio ID and station name blacked out."
     },
     {
-      "id": "firmware-update-group",
-      "page": "firmware-update",
-      "anchor_heading": "Setup",
-      "steps": [
-        {
-          "cmd": "invoke",
-          "target": "Radio Setup...",
-          "action": "trigger"
-        },
-        {
-          "wait_visible": "RadioSetupDialog"
-        },
-        {
-          "cmd": "resize",
-          "target": "RadioSetupDialog",
-          "value": "960 680"
-        },
-        {
-          "cmd": "invoke",
-          "target": "radioSetupNavigation",
-          "action": "setCurrentText",
-          "value": "Radio",
-          "_sleep": 1.5
-        }
-      ],
-      "grab": {
-        "target": "RadioSetupDialog"
-      },
-      "crop": {
-        "union": [
-          "group:FW Version:"
-        ],
-        "pad": 6
-      },
-      "caption": "The Firmware Update group on the Radio page.",
-      "alt": "Firmware Update group showing FW Version: 4.2.20.41343 with a copy button, and three buttons: Check for Update, Select Installer... and a dimmed Upload Firmware."
-    },
-    {
       "id": "radio-setup-network-advanced",
       "page": "automation-bridge-and-mcp",
       "anchor_heading": "Setup",
@@ -2277,7 +2239,7 @@
         "target": "MultiFlexDialog"
       },
       "caption": "The multiFLEX Dashboard: every station sharing the radio.",
-      "alt": "multiFLEX Dashboard window headed multiFLEX Stations with a green Enabled indicator. A table with columns Local PTT, Station, TX Ant and TX Freq (MHz) lists one row: a tick, AetherSDR, ANT1 and 14.250. A Close button sits at the bottom right."
+      "alt": "multiFLEX Dashboard window with a round close button in its top-right corner and a green Enabled button under its header. A table with columns Local PTT, Station, TX Ant and TX Freq (MHz) lists one row: a tick, AetherSDR, ANT1 and 14.250."
     },
     {
       "id": "profile-manager",
@@ -3811,7 +3773,7 @@
         }
       ],
       "caption": "The FFTW Wisdom window, shown the first time NR2 starts on a computer.",
-      "alt": "AetherSDR FFTW Wisdom window. It reads Computing COMPLEX FORWARD FFT size 2048... and This window will automatically close when wisdom generation is complete, above a progress bar at 38%, Working..., an elapsed time of 0:09 and a Cancel button."
+      "alt": "FFTW Wisdom window. It reads Computing COMPLEX FORWARD FFT size 2048... and This window will automatically close when wisdom generation is complete, above a progress bar at 38%, Working..., an elapsed time of 0:09 and a Cancel button."
     },
     {
       "id": "psk-reporter-sidebar",

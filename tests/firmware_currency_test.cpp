@@ -228,7 +228,7 @@ void checkTooltipsMatchTheState()
     check(tooltip(Status::Current) == QStringLiteral("Firmware up-to-date"),
           "the current-firmware tooltip reads as specified");
     check(tooltip(Status::Outdated)
-              == QStringLiteral("Firmware is out of date, click to see release notes."),
+              == QStringLiteral("Firmware is out of date, click to update."),
           "the out-of-date tooltip reads as specified, including the invitation to click");
     check(tooltip(Status::Unknown).isEmpty(),
           "an unjudged radio clears the tooltip rather than keeping a stale one");

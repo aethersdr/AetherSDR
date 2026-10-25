@@ -1415,6 +1415,8 @@ int main(int argc, char** argv)
             "ground", "raised", "nested", "control", "ink", "inkSoft", "muted",
             "line", "lineHi", "cyan", "aqua", "onAccent", "sparkHot", "sparkGold",
             "sparkGoldHot", "bloom.blue", "bloom.teal", "grid",
+            "category.cyan", "category.aqua", "category.blue", "category.amber",
+            "category.violet", "category.rose", "category.teal",
         };
         auto contrast = [](const QColor& a, const QColor& b) {
             auto lum = [](const QColor& c) {
@@ -1446,6 +1448,15 @@ int main(int argc, char** argv)
                 {"inkSoft", "nested", 4.5},   // build-card values
                 {"muted", "ground", 4.5},     // version line, close button
                 {"sparkGold", "control", 3.0},  // Logbook button focus ring
+                // Updates window: chapter dots and highlight-card edges are
+                // non-text marks on the ground and the raised card (3:1).
+                {"category.cyan", "ground", 3.0},   {"category.cyan", "raised", 3.0},
+                {"category.aqua", "ground", 3.0},   {"category.aqua", "raised", 3.0},
+                {"category.blue", "ground", 3.0},   {"category.blue", "raised", 3.0},
+                {"category.amber", "ground", 3.0},  {"category.amber", "raised", 3.0},
+                {"category.violet", "ground", 3.0}, {"category.violet", "raised", 3.0},
+                {"category.rose", "ground", 3.0},   {"category.rose", "raised", 3.0},
+                {"category.teal", "ground", 3.0},   {"category.teal", "raised", 3.0},
             };
             for (const auto& pr : pairs) {
                 const double r = contrast(canon(pr.fg), canon(pr.bg));

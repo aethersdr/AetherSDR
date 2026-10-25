@@ -797,6 +797,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/UpdateInstaller.h": {
+  "tag": "ui-support",
+  "note": "App self-update: hands a staged release to AetherSDRUpdater.exe and reads its result at start; pure client plumbing, no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/VersionNumber.h": {
   "tag": "ui-support",
   "note": "Semver parse/compare utility used by update checker and What's New dialog; app plumbing, not radio state.",

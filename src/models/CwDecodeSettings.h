@@ -5,8 +5,11 @@
 
 #include <QByteArray>
 #include <QJsonDocument>
+#include <QJsonValue>
 #include <QJsonObject>
 #include <QString>
+
+#include <algorithm>
 
 namespace AetherSDR {
 
@@ -96,6 +99,21 @@ public:
         write(o);
     }
 
+    // Decoder pitch (Hz) and speed (WPM) search ranges, shared by every pan
+    // and kept across restarts.  Reads clamp to the panel sliders' spans and
+    // fall back to the default when a value is missing, non-numeric or
+    // inverted, so a stale or hand-edited blob never reaches the decoder.
+    struct Range { int low; int high; };
+    static constexpr Range kPitchSpan{300, 1200};
+    static constexpr Range kPitchDefault{500, 700};
+    static constexpr Range kSpeedSpan{5, 60};
+    static constexpr Range kSpeedDefault{15, 40};
+
+    static Range pitchRange() { return readRange("pitchLow", "pitchHigh", kPitchSpan, kPitchDefault); }
+    static Range speedRange() { return readRange("speedLow", "speedHigh", kSpeedSpan, kSpeedDefault); }
+    static void setPitchRange(int low, int high) { writeRange("pitchLow", "pitchHigh", low, high); }
+    static void setSpeedRange(int low, int high) { writeRange("speedLow", "speedHigh", low, high); }
+
     // One-shot migration from the legacy "CwDecodeOverlay" flat key.  Run
     // at startup before any caller reads the new blob.  Safe to call
     // repeatedly: returns immediately if the new blob already exists.
@@ -118,6 +136,28 @@ private:
     {
         if (!o.contains("rx")) o["rx"] = QStringLiteral("True");
         if (!o.contains("tx")) o["tx"] = QStringLiteral("False");
+    }
+    static Range readRange(const char* lowKey, const char* highKey, Range span, Range fallback)
+    {
+        const QJsonObject o = readObj();
+        const QJsonValue low = o.value(QLatin1String(lowKey));
+        const QJsonValue high = o.value(QLatin1String(highKey));
+        if (!low.isDouble() || !high.isDouble()) return fallback;
+        const int lo = std::clamp(low.toInt(), span.low, span.high);
+        const int hi = std::clamp(high.toInt(), span.low, span.high);
+        return lo <= hi ? Range{lo, hi} : fallback;
+    }
+    static void writeRange(const char* lowKey, const char* highKey, int low, int high)
+    {
+        QJsonObject o = readObj();
+        if (o.value(QLatin1String(lowKey)).toInt(-1) == low
+            && o.value(QLatin1String(highKey)).toInt(-1) == high) {
+            return;
+        }
+        o[QLatin1String(lowKey)] = low;
+        o[QLatin1String(highKey)] = high;
+        ensureToggles(o);
+        write(o);
     }
     static QJsonObject readObj()
     {

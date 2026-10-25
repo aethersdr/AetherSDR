@@ -3,6 +3,7 @@
 #include "core/Ctr2HidFraming.h"
 #include "core/Ctr2UsbRelay.h"
 #include "core/LogManager.h"
+#include "core/UnicastEndpoint.h"
 #ifdef HAVE_HIDAPI
 #include "core/Ctr2HidapiPort.h"
 #endif
@@ -12,6 +13,8 @@
 #include <QRegularExpression>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
+
+#include <algorithm>
 
 #include <utility>
 
@@ -72,7 +75,9 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
         [this] { return m_usbDevices ? m_usbDevices() : QList<Ctr2HidPort::DeviceInfo>(); },
         [this](const Ctr2HidPort::DeviceInfo& device, QString* error) -> Ctr2HidPort* {
             return m_firmwareOpener
-                ? m_firmwareOpener(device, ctr2hid::capabilityBit(ctr2hid::MessageType::Firmware),
+                ? m_firmwareOpener(device,
+                                   ctr2hid::capabilityBit(ctr2hid::MessageType::Firmware)
+                                       | ctr2hid::kWideReportsBit,
                                    error)
                 : nullptr;
         },
@@ -81,6 +86,10 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     connect(m_firmware, &Ctr2FirmwareUpdater::stepChanged, this, &Ctr2ProxyModel::firmwareUpdateStep);
     connect(m_firmware, &Ctr2FirmwareUpdater::finished, this,
             [this](bool ok, const QString& message, const QString&) {
+        // A refused restart: the device stays. One written but never answered
+        // may still be on its way off the bus, so it stays held.
+        if (!ok && !m_firmware->restartUnanswered())
+            m_restartedPath.clear();
         refreshDevices();   // the device re-enumerated, perhaps at a new path
         m_probedPath.clear();
         if (m_restartAfterFirmware) {
@@ -236,6 +245,17 @@ void Ctr2ProxyModel::applyDeviceScan(DeviceScan scan)
     for (int i = 0; !usbChanged && i < usb.size(); ++i) {
         usbChanged = !same(usb[i], m_usbChoices[i]);
     }
+    if (!m_restartedPath.isEmpty()) {
+        const auto at = std::find_if(usb.begin(), usb.end(), [this](const auto& d) {
+            return d.path == m_restartedPath;
+        });
+        if (at == usb.end())
+            m_restartedSeenGone = true;
+        // Back: seen gone and listed again, or another firmware at the same
+        // path (a Linux switch that re-enumerates between two scans).
+        else if (m_restartedSeenGone || !same(*at, m_restartedDevice))
+            m_restartedPath.clear();
+    }
     if (choices == m_listenChoices && !usbChanged) {
         return;
     }
@@ -274,10 +294,27 @@ void Ctr2ProxyModel::applyDeviceScan(DeviceScan scan)
 // (Feature report 0x03, read when a port opens), accepting no link
 // extensions so the device's state is untouched. Never while the relay or an
 // update holds the device.
+bool Ctr2ProxyModel::restartHeld()
+{
+    if (m_restartedPath.isEmpty())
+        return false;
+    if (m_restartedHold.hasExpired()) {
+        m_restartedPath.clear();
+        return false;
+    }
+    return m_transport == Transport::Usb && m_usbDevicePath == m_restartedPath;
+}
+
+void Ctr2ProxyModel::reprobeFirmware()
+{
+    m_probedPath.clear();
+    probeFirmwareVersion();
+}
+
 void Ctr2ProxyModel::probeFirmwareVersion()
 {
     if (!m_firmwareOpener || m_probe || isRunning() || m_firmware->isRunning()
-        || m_transport != Transport::Usb) {
+        || m_transport != Transport::Usb || restartHeld()) {
         return;
     }
     const Ctr2HidPort::DeviceInfo* device = selectedUsbDevice();
@@ -374,18 +411,13 @@ bool Ctr2ProxyModel::setUsbDevicePath(const QString& path)
 void Ctr2ProxyModel::setAetherRadio(const QHostAddress& address, quint16 port,
                                     const QString& label, const QString& unavailableReason)
 {
-    QHostAddress ipv4;
-    bool ok = false;
-    const quint32 v4 = address.toIPv4Address(&ok);
-    if (ok && v4 != 0 && port != 0) {
-        ipv4 = QHostAddress(v4);
-    }
-    const QString reason = ipv4.isNull() && unavailableReason.isEmpty()
+    const QHostAddress radio = port != 0 ? usableUnicastAddress(address) : QHostAddress();
+    const QString reason = radio.isNull() && unavailableReason.isEmpty()
         ? tr("Connect AetherSDR to a radio first") : unavailableReason;
-    if (isRunning() && (ipv4 != m_runningRadioAddress || port != m_runningRadioPort)) {
+    if (isRunning() && (radio != m_runningRadioAddress || port != m_runningRadioPort)) {
         const QString was = m_runningRadioLabel.isEmpty() ? m_runningRadioAddress.toString()
                                                           : m_runningRadioLabel;
-        const QString why = ipv4.isNull()
+        const QString why = radio.isNull()
             ? tr("Stopped: AetherSDR is no longer connected to %1").arg(was)
             : tr("Stopped: AetherSDR switched from %1 to another radio").arg(was);
         qCInfo(lcDevices) << "CTR2 relay:" << why;
@@ -393,16 +425,16 @@ void Ctr2ProxyModel::setAetherRadio(const QHostAddress& address, quint16 port,
         m_stopReason = why;
         emit lastErrorChanged();
     }
-    if (ipv4 == m_aetherRadioAddress && port == m_aetherRadioPort
+    if (radio == m_aetherRadioAddress && port == m_aetherRadioPort
         && label == m_aetherRadioLabel && reason == m_aetherRadioReason) {
         return;
     }
-    const bool newRadio = !ipv4.isNull()
-        && (ipv4 != m_aetherRadioAddress || port != m_aetherRadioPort);
-    m_aetherRadioAddress = ipv4;
+    const bool newRadio = !radio.isNull()
+        && (radio != m_aetherRadioAddress || port != m_aetherRadioPort);
+    m_aetherRadioAddress = radio;
     m_aetherRadioPort = port;
     m_aetherRadioLabel = label;
-    m_aetherRadioReason = ipv4.isNull() ? reason : QString();
+    m_aetherRadioReason = radio.isNull() ? reason : QString();
     emit configurationChanged();
     if (newRadio) {
         m_autoStartHeld = false;   // a new connection: start again
@@ -433,6 +465,10 @@ void Ctr2ProxyModel::tryAutoStart()
         || m_firmware->isRunning() || m_aetherRadioAddress.isNull()) {
         return;
     }
+    // Restarted on request and not back yet: opening it now would catch it
+    // on its way off the bus. Another device, or Wi-Fi, is not held.
+    if (restartHeld())
+        return;
     // The device list is the one the periodic rescan keeps current, so a
     // controller plugged in since shows up within kDeviceRescanMs.
     if (!configurationProblem().isEmpty())
@@ -469,6 +505,9 @@ void Ctr2ProxyModel::onUsbStateChanged()
     }
     // Connecting means the CTR2 answered; Stopped and Error end the run.
     m_usbAnswered = s != State::Stopped && s != State::Error;
+    // What the relay knew of the firmware goes with it: read it again idle.
+    if (!m_usbAnswered)
+        QTimer::singleShot(0, this, &Ctr2ProxyModel::reprobeFirmware);
     m_noAnswerTimer->stop();
     if (m_noAnswer) {
         m_noAnswer = false;
@@ -819,6 +858,10 @@ bool Ctr2ProxyModel::restartUsbDevice(Ctr2FirmwareUpdater::Restart target, QStri
     }
     const Ctr2HidPort::DeviceInfo d = *device;
     m_restartAfterFirmware = false;   // the device leaves the bus
+    m_restartedPath = d.path;
+    m_restartedDevice = d;
+    m_restartedSeenGone = false;
+    m_restartedHold = QDeadlineTimer(kRestartHoldMs);
     if (isRunning()) {
         stop();
     }
