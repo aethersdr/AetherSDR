@@ -7182,6 +7182,13 @@ target_include_directories(hl2_rqst_ack_client_test PRIVATE src tests)
 target_link_libraries(hl2_rqst_ack_client_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_rqst_ack_client_test COMMAND hl2_rqst_ack_client_test)
 
+# HL2 `ioboard.status` verb — socket-free, from Hl2Backend through its own
+# MetisClient's request and response path and back to extensionResult.
+add_executable(hl2_io_board_status_test tests/hl2_io_board_status_test.cpp)
+target_include_directories(hl2_io_board_status_test PRIVATE src tests)
+target_link_libraries(hl2_io_board_status_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_io_board_status_test COMMAND hl2_io_board_status_test)
+
 # HL2 band filter / EP2 frame composition — socket-free, on MetisClient's own
 # packet builder. A band change must not leave two disagreeing config banks in
 # one frame (#4579).
@@ -8219,6 +8226,23 @@ target_link_libraries(multiflex_dashboard_window_test PRIVATE
 set_target_properties(multiflex_dashboard_window_test PROPERTIES AUTOMOC ON)
 add_test(NAME multiflex_dashboard_window_test COMMAND multiflex_dashboard_window_test)
 set_tests_properties(multiflex_dashboard_window_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# NR2's FFTW Wisdom window is a canon tool window: chrome, sheet, cancel,
+# planner reports and outcomes. No planner runs; no socket.
+add_executable(nr2_wisdom_window_test
+    tests/nr2_wisdom_window_test.cpp
+    src/gui/Nr2WisdomDialog.cpp
+    src/gui/CanonWindow.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(nr2_wisdom_window_test PRIVATE src tests)
+target_link_libraries(nr2_wisdom_window_test PRIVATE
+    aethercore Qt6::Gui Qt6::Widgets Qt6::Test
+)
+set_target_properties(nr2_wisdom_window_test PROPERTIES AUTOMOC ON)
+add_test(NAME nr2_wisdom_window_test COMMAND nr2_wisdom_window_test)
+set_tests_properties(nr2_wisdom_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(connection_panel_size_test
@@ -9958,6 +9982,7 @@ set(AETHER_SETTINGS_CONSUMERS
     flex_control_dialog_size_test
     aethercontrol_window_test
     multiflex_dashboard_window_test
+    nr2_wisdom_window_test
     pan_layout_dialog_size_test
     transmit_model_test
     container_widget_test

@@ -435,6 +435,17 @@ int main(int argc, char* argv[])
 
     app.setApplicationName("AetherSDR");
     app.setApplicationVersion(AETHERSDR_VERSION);
+#if AETHER_UPDATE_DEV_OVERRIDES
+    // Run as an older release, so an update to this build's own release can
+    // be tried. Taken out of the environment, so the updater's self-test and
+    // the restarted app are this build's real version.
+    if (const QString pretend = qEnvironmentVariable("AETHER_UPDATE_PRETEND_VERSION"); !pretend.isEmpty()) {
+        qunsetenv("AETHER_UPDATE_PRETEND_VERSION");
+        qCWarning(AetherSDR::lcUpdater).noquote()
+            << "AETHER_UPDATE_PRETEND_VERSION: running as" << pretend << "instead of" << AETHERSDR_VERSION;
+        app.setApplicationVersion(pretend);
+    }
+#endif
     app.setOrganizationName("AetherSDR");
     app.setDesktopFileName("AetherSDR");  // matches .desktop file for taskbar icon
 
