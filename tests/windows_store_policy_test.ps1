@@ -50,7 +50,16 @@ try {
             }
         }
     }
-    $inputs.EventName = 'workflow_dispatch'; $inputs.Ref = 'refs/tags/v26.9.1'
+    # dev_overrides: a branch dispatch builds, a tag or the flight is refused.
+    $inputs.EventName = 'workflow_dispatch'; $inputs.Ref = 'refs/heads/main'
+    $plan = & $planScript @inputs -DevOverrides $true
+    Assert-True (-not $plan.publishFlight -and -not $plan.releaseArtifacts) 'Dev overrides: a test artifact only'
+    Assert-Throws { & $planScript @inputs -DevOverrides $true -RequestFlight $true } 'never go to the Store flight'
+    $inputs.Ref = 'refs/tags/v26.9.1'
+    Assert-Throws { & $planScript @inputs -DevOverrides $true } 'never a tag'
+    $inputs.EventName = 'push'
+    Assert-Throws { & $planScript @inputs -DevOverrides $true } 'never a tag'
+    $inputs.EventName = 'workflow_dispatch'
     foreach ($blank in @('', ' ')) {
         $inputs.FlightId = $blank
         Assert-Throws { & $planScript @inputs -RequestFlight $true } 'FLIGHT_ID is required'

@@ -9,6 +9,7 @@
 #include <QUrl>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 
 namespace AetherSDR {
@@ -70,9 +71,11 @@ struct UpdateManifest {
 
 // Takes AetherSDR from the running release to a newer one by applying a
 // signed manifest's per-file patches into a staging copy of the install.
-// Engine only (RFC #5304 Phase 2): it never starts on its own, never touches
-// the running install, and swapping the staged tree in is the platform
-// phases' job.
+// Engine only (RFC #5304): it never starts on its own, never touches the
+// running install, and swapping the staged tree in is the platform phases'
+// job. With Request::fullFallback it stages the full release when no patch
+// applies, and every staged release keeps a record beside it
+// (stagedRelease(), revalidate()).
 //
 // stage() fetches the manifest and its signature, verifies the signature
 // against the embedded update key before reading a byte of the JSON, refuses
@@ -93,6 +96,18 @@ public:
         QString installRoot;       // the tree the running build was installed as
         QString stagingRoot;       // per-user app data, outside the install
         QUrl manifestUrl;          // kManifestUrl unless a test says otherwise
+        // When no patch applies (or one fails), stage the full release
+        // instead: the signed portable zip's files plus the installer's own
+        // (unins*). Windows: its full download is that tree. Otherwise
+        // fullDownloadNeeded() is emitted, as before.
+        bool fullFallback = false;
+    };
+
+    // An update staged by an earlier run (or this one), waiting for the swap.
+    struct StagedRelease {
+        QString version;   // empty: nothing usable is staged
+        QString dir;       // <stagingRoot>/<version>
+        QString from;      // the version it was staged for
     };
 
     // What choose() decided for a verified manifest.
@@ -102,6 +117,7 @@ public:
     // Hard ceilings, whatever a manifest claims.
     static constexpr qint64 kMaxManifestBytes = 4 * 1024 * 1024;
     static constexpr qint64 kMaxBundleBytes = 256LL * 1024 * 1024;
+    static constexpr qint64 kMaxFullBytes = 512LL * 1024 * 1024;
     static constexpr int kMaxWindowLog = 31;
     static constexpr int kMaxBundleMembers = 4096;
 
@@ -136,6 +152,32 @@ public:
     static bool readBundle(const QByteArray& bundle, QHash<QString, QByteArray>* members,
                            QString* problem);
 
+    // The full release from its portable zip into stagingDir: exactly the
+    // files manifest lists, plus the installer's own files (unins*) copied
+    // from installRoot, then every file checked. On any failure, or once
+    // cancelled is set, stagingDir is removed.
+    static bool applyFull(const QString& installRoot, const QByteArray& zip,
+                          const QList<UpdateManifest::File>& files, const QString& stagingDir,
+                          QString* problem, const std::atomic_bool* cancelled = nullptr);
+
+    // The release staged in stagingRoot, if it is still the one to install:
+    // staged for runningVersion, from installRoot, it is GitHub's latest
+    // (githubLatestTag) and not the release that was rolled back. Otherwise
+    // an empty StagedRelease. Whatever else staging wrote there is removed
+    // (other versions' trees and records, half-written records, the work
+    // folders a crashed run left); nothing else in the folder is touched,
+    // since it is the swap helper's state folder too. Never call it while a
+    // stager isBusy(), whose work folder it would remove.
+    // An empty githubLatestTag (not known yet) discards nothing on that
+    // ground. Cheap: reads the record only. revalidate() checks every file.
+    static StagedRelease stagedRelease(const QString& stagingRoot, const QString& runningVersion,
+                                       const QString& installRoot, const QString& githubLatestTag,
+                                       const QString& rolledBackVersion);
+    // Before the swap: the staged tree's signed manifest still verifies and
+    // every file still matches it.
+    static bool revalidate(const QString& stagingRoot, const StagedRelease& staged,
+                           const QString& platform, const QString& arch, QString* problem);
+
     // Copies installRoot into stagingDir, applies patch's ops there in order
     // and checks every entry of files. On any failure, or once cancelled is
     // set (checked between steps), stagingDir is removed.
@@ -157,7 +199,14 @@ signals:
     void failed(const QString& reason);
 
 private:
-    enum class Stage { Idle, Manifest, Signature, Bundle };
+    enum class Stage { Idle, Manifest, Signature, Bundle, Full };
+
+    // Applies (on a worker thread) and, if this request is still current,
+    // puts the result in <stagingRoot>/<version> beside its record.
+    void runWorker(std::function<QString(const QString& work)> apply);
+    // No patch applies or it failed: the full release when the request
+    // allows it, otherwise fullDownloadNeeded().
+    void fallBack(const QString& reason);
 
     void onDownloaded(const QUrl& url, const QByteArray& body);
     void fail(const QString& reason);
@@ -170,6 +219,7 @@ private:
     std::shared_ptr<std::atomic_bool> m_cancelled;
     Request m_request;
     QByteArray m_manifestBytes;
+    QByteArray m_signature;
     UpdateManifest m_manifest;
     const UpdateManifest::Payload* m_payload{nullptr};
     const UpdateManifest::Patch* m_patch{nullptr};

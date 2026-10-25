@@ -10,6 +10,11 @@ on:
         required: false
         default: false
         type: boolean
+      dev_overrides:
+        description: 'Testing only: honor the AETHER_UPDATE_* updater overrides (BUILD-OPTIONS.md). Refused on a tag or with the Store flight.'
+        required: false
+        default: false
+        type: boolean
 
 # Each job grants itself what it needs. Only package-windows can mint the
 # Azure token that signs as the AetherSDR publisher (#6288), and it runs no
@@ -64,6 +69,7 @@ jobs:
         id: store-plan
         env:
           STORE_REQUESTED_FLIGHT: ${{ inputs.publish_store_flight }}
+          STORE_DEV_OVERRIDES: ${{ inputs.dev_overrides }}
           STORE_EVENT: ${{ github.event_name }}
           STORE_REF: ${{ github.ref }}
           STORE_REPOSITORY: ${{ github.repository }}
@@ -75,6 +81,7 @@ jobs:
             -EventName $env:STORE_EVENT -Ref $env:STORE_REF `
             -Repository $env:STORE_REPOSITORY -RunNumber $env:STORE_RUN_NUMBER `
             -RequestFlight ($env:STORE_REQUESTED_FLIGHT -eq 'true') `
+            -DevOverrides ($env:STORE_DEV_OVERRIDES -eq 'true') `
             -ProductId $env:AETHERSDR_STORE_PRODUCT_ID -FlightId $env:AETHERSDR_STORE_FLIGHT_ID
           foreach ($name in @('releaseArtifacts', 'productionDraft', 'publishFlight', 'storeEligible')) {
             "$name=$($plan.$name.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
@@ -246,6 +253,9 @@ jobs:
         run: pwsh scripts/setup/setup-vulkan-sdk.ps1
 
       - name: Configure
+        env:
+          # Empty except on a manual dispatch that asked for it.
+          DEV_OVERRIDES: ${{ inputs.dev_overrides }}
         run: |
           # RelWithDebInfo (not Release): MSVC's Release config omits /Zi and
           # /DEBUG, so build/AetherSDR.pdb never gets produced and the
@@ -290,7 +300,16 @@ jobs:
           # native command), so a configure failure still fails this step —
           # the reason the bash legs need `set -o pipefail` and this one does
           # not.
-          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_RTL=ON -DREQUIRE_RTL=ON -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON -DAETHER_GPU_SPECTRUM=ON -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK" -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET" | Tee-Object -FilePath configure.log
+          # A dev-overrides build trusts test update keys and manifests from
+          # its environment. "Plan Store build" has already refused it on a
+          # tag or with the Store flight (get-store-build-plan.ps1), so it is
+          # only ever a downloadable test artifact.
+          $devOverrides = @()
+          if ($env:DEV_OVERRIDES -eq 'true') {
+            Write-Host "Building with AETHER_UPDATE_DEV_OVERRIDES=ON (testing only)"
+            $devOverrides = @('-DAETHER_UPDATE_DEV_OVERRIDES=ON')
+          }
+          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_RTL=ON -DREQUIRE_RTL=ON -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON -DAETHER_GPU_SPECTRUM=ON -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK" -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET" @devOverrides | Tee-Object -FilePath configure.log
 
       # AETHER_GPU_SPECTRUM=ON is a request, not a guarantee: CMake flips it
       # back OFF without failing when Qt6GuiPrivate can't be located, and
