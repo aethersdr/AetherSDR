@@ -251,8 +251,15 @@ void AgcTCalibrator::onSweepStep()
         stop(); // restores the original value, emits finished(false)
         // stop() clears m_auto before it restores, so the restore re-enters
         // onValueChanged as a manual edit and would record the stale reading
-        // this guard just rejected. Drop it, and the part curve with it.
+        // this guard just rejected. Drop it, and the part curve with it. Drop
+        // the pending value too, or a later cancel counts it as a calibration
+        // and emits a second finished(false).
+        // This assumes the restore echoes at once, as it does on every backend
+        // but RTL-SDR (ReceiveControlPolicy::Confirmed). There the echo comes
+        // later and records one point, which cannot reach a recommendation:
+        // recompute() needs three.
         m_manualTimer.stop();
+        m_pendingManualValue = -1;
         m_curve.clear();
         // After finished(false), which stop() has already emitted.
         emit noAudio();
