@@ -193,6 +193,7 @@ class LiveCwContactsDialog;
 class Ax25HfPacketDecodeDialog;
 class PskReporterMapDialog;
 class GpsLocationDialog;
+class MultiFlexDialog;
 #ifdef AETHER_ASR_ENABLED
 class CopyAssistController;
 #endif
@@ -1747,6 +1748,7 @@ private:
 #endif
     QPointer<PskReporterMapDialog> m_pskReporterMapDialog;
     QPointer<GpsLocationDialog> m_gpsLocationDialog;
+    QPointer<MultiFlexDialog> m_multiFlexDialog;
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<CanonWindow> m_aboutWindow;

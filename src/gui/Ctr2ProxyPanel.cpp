@@ -1,6 +1,7 @@
 #include "Ctr2ProxyPanel.h"
 
 #include "CanonMessageBox.h"
+#include "Ctr2AccessRule.h"
 #include "GuardedSlider.h"
 #include "ScopedChildWidget.h"
 #include "models/Ctr2ProxyModel.h"
@@ -26,6 +27,8 @@
 #include <QProcess>
 #include <QStandardPaths>
 #include <QTimer>
+
+#include <utility>
 #endif
 
 namespace AetherSDR {
@@ -271,19 +274,12 @@ QString loadRule()
     return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
 }
 
-// True when this build's rule is already in place, locally or as packaged.
+// True when this build's rule is the one udev uses, locally or as packaged.
 // Then a password prompt cannot help: the ACL is missing for another reason.
+// An older copy in /etc masks a current packaged one, and is not installed.
 bool ruleAlreadyInstalled(const QString& rule)
 {
-    for (const QString& dir : {QStringLiteral("/etc/udev/rules.d"),
-                               QStringLiteral("/usr/lib/udev/rules.d"),
-                               QStringLiteral("/lib/udev/rules.d")}) {
-        QFile file(dir + QStringLiteral("/70-aethersdr-ctr2.rules"));
-        if (file.open(QIODevice::ReadOnly) && QString::fromUtf8(file.readAll()) == rule) {
-            return true;
-        }
-    }
-    return false;
+    return udevRuleInEffect(udevRuleDirs(), QStringLiteral("70-aethersdr-ctr2.rules"), rule);
 }
 
 } // namespace
@@ -291,43 +287,77 @@ bool ruleAlreadyInstalled(const QString& rule)
 // Linux opens USB devices like the CTR2 to root only until a udev rule grants
 // the logged-in user access. Offer to install it rather than leave the
 // operator with a permissions error.
-void Ctr2ProxyPanel::offerUsbAccessRule()
+bool Ctr2ProxyPanel::accessRuleInstalled()
 {
+    return ruleAlreadyInstalled(loadRule());
+}
+
+bool Ctr2ProxyPanel::offerAccessRule(RuleUse use, std::function<void()> afterInstalled)
+{
+    if (m_installingRule) {
+        return false;
+    }
+    m_afterRule = std::move(afterInstalled);
+    return offerUsbAccessRule(use);
+}
+
+bool Ctr2ProxyPanel::offerUsbAccessRule(RuleUse use)
+{
+    const bool firmware = use == RuleUse::DownloadMode;
+    const bool relay = use == RuleUse::Relay;
     if (ruleAlreadyInstalled(loadRule())) {
+        m_afterRule = nullptr;
         ScopedChildWidget<CanonMessageBox> box(
             tr("CTR2 USB access"),
-            tr("The CTR2 access rule is already installed, but this login still cannot "
-               "open the CTR2."), this);
+            firmware ? tr("The CTR2 access rule is already installed, but this login still "
+                          "cannot open the CTR2-Max in download mode.")
+                     : tr("The CTR2 access rule is already installed, but this login still "
+                          "cannot open the CTR2."), this);
         box.get()->setInformativeText(
-            tr("Unplug the CTR2, plug it back in, then press Start. The rule only opens "
-               "the CTR2 to whoever is logged in at this computer's own screen, so a "
-               "remote or background session cannot use it."));
+            firmware ? tr("Press Install again in a moment, or unplug the CTR2-Max and put it "
+                          "back in download mode. The rule only opens it to whoever is logged "
+                          "in at this computer's own screen, so a remote or background "
+                          "session cannot use it.")
+                     : (relay ? tr("Unplug the CTR2, plug it back in, then press Start. ")
+                              : tr("Unplug the CTR2, plug it back in, then try again. "))
+                           + tr("The rule only opens the CTR2 to whoever is logged in at this "
+                                "computer's own screen, so a remote or background session "
+                                "cannot use it."));
         box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
         box.get()->exec();
-        return;
+        return false;
     }
     if (QStandardPaths::findExecutable(QStringLiteral("pkexec")).isEmpty()) {
+        m_afterRule = nullptr;
         showManualRuleInstructions(tr("pkexec is not installed"));
-        return;
+        return false;
     }
 
     ScopedChildWidget<CanonMessageBox> box(
-        tr("Allow AetherSDR to use the CTR2?"),
-        tr("Linux only lets the administrator open USB devices such as the CTR2, so "
-           "AetherSDR cannot talk to it yet."),
+        firmware ? tr("Allow AetherSDR to install firmware on the CTR2-Max?")
+                 : tr("Allow AetherSDR to use the CTR2?"),
+        firmware ? tr("Linux only lets the administrator open the CTR2-Max's port in "
+                      "download mode, so AetherSDR cannot install firmware on it yet.")
+                 : tr("Linux only lets the administrator open USB devices such as the CTR2, "
+                      "so AetherSDR cannot talk to it yet."),
         this);
     box.get()->setInformativeText(
         tr("AetherSDR can install a small system rule that lets whoever is logged in "
-           "at this computer open CTR2 controllers, and only CTR2 controllers. You "
-           "will be asked for your administrator password once; after that the CTR2 "
-           "works every time.\n\nThe rule is written to %1.").arg(kRuleTarget));
+           "at this computer open CTR2 controllers, and the USB serial port of ESP32-S3 "
+           "boards, which the CTR2-Max uses in download mode for firmware installs. You "
+           "will be asked for your administrator password once; after that it works "
+           "every time.\n\nThe rule is written to %1.")
+            .arg(kRuleTarget));
     box.get()->addButton(tr("Not now"), CanonMessageBox::Role::Reject);
     QPushButton* install = box.get()->addButton(tr("Install rule"), CanonMessageBox::Role::Accept);
     box.get()->setDefaultButton(install);
     box.get()->exec();
     if (box && box.get()->clickedButton() == install) {
-        installUsbAccessRule();
+        installUsbAccessRule(use);
+        return true;
     }
+    m_afterRule = nullptr;
+    return false;
 }
 
 // No usable polkit: save the rule where the operator can copy it by hand.
@@ -360,20 +390,23 @@ void Ctr2ProxyPanel::showManualRuleInstructions(const QString& why)
     box.get()->setInformativeText(
         QStringLiteral("sudo cp '%1' '%2'\n"
                        "sudo udevadm control --reload-rules\n"
-                       "sudo udevadm trigger --subsystem-match=hidraw")
+                       "sudo udevadm trigger --subsystem-match=hidraw\n"
+                       "sudo udevadm trigger --subsystem-match=tty "
+                       "--property-match=ID_VENDOR_ID=303a --property-match=ID_VENDOR_ID=2886")
             .arg(saved, kRuleTarget));
     box.get()->setTextSelectable(true);
     box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
     box.get()->exec();
 }
 
-void Ctr2ProxyPanel::installUsbAccessRule()
+void Ctr2ProxyPanel::installUsbAccessRule(RuleUse use)
 {
     m_installingRule = true;
     syncConfiguration();
 
     auto fail = [this](const QString& detail) {
         m_installingRule = false;
+        m_afterRule = nullptr;
         syncConfiguration();
         ScopedChildWidget<CanonMessageBox> box(
             tr("CTR2 USB access"),
@@ -398,7 +431,11 @@ void Ctr2ProxyPanel::installUsbAccessRule()
         "set -e; "
         "printf '%s' \"$1\" > \"$2\"; "
         "udevadm control --reload-rules; "
+        // hidraw nodes carry no ID_VENDOR_ID before systemd 256, so they are
+        // all retriggered; ttys only for Espressif and Seeed devices.
         "udevadm trigger --subsystem-match=hidraw; "
+        "udevadm trigger --subsystem-match=tty "
+        "--property-match=ID_VENDOR_ID=303a --property-match=ID_VENDOR_ID=2886; "
         "udevadm settle --timeout=5 || true");
 
     auto* proc = new QProcess(this);
@@ -413,14 +450,25 @@ void Ctr2ProxyPanel::installUsbAccessRule()
         proc->deleteLater();
         fail(why);
     });
-    connect(proc, &QProcess::finished, this, [this, proc, fail](int code, QProcess::ExitStatus) {
+    connect(proc, &QProcess::finished, this, [this, proc, fail, use](int code, QProcess::ExitStatus) {
         const QString err = QString::fromLocal8Bit(proc->readAllStandardError()).trimmed();
         proc->deleteLater();
+        if (code == 0 && use != RuleUse::Relay) {
+            // Carry on with the CTR2 window's action. On the hardware run the
+            // ACL was in place by then; if a port is still denied, the window
+            // retries once more before saying anything.
+            m_installingRule = false;
+            syncConfiguration();
+            if (auto next = std::exchange(m_afterRule, nullptr))
+                next();
+            return;
+        }
         if (code == 0) {
             startAfterRuleInstalled(12);
             return;
         }
         qCWarning(lcDevices) << "CTR2: udev rule install failed, code" << code << err;
+        m_afterRule = nullptr;
         if (code == 126) {  // the operator dismissed the polkit dialog
             m_installingRule = false;
             syncConfiguration();

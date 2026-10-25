@@ -5,6 +5,8 @@
 // restart after End, and a new image that keeps itself only once it answers
 // HELLO. No hidapi, no sockets, no device.
 
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "core/Ctr2FirmwareUpdater.h"
 #include "models/Ctr2ProxyModel.h"
 #include "models/FirmwareInstallModel.h"
@@ -76,6 +78,7 @@ struct Device {
     QString restartedInto;         // "other" or "bootloader" after a restart request
     std::uint8_t restartStatusOp{0}; // not 0: the op its restart STATUS names instead
     bool restartsSilently{false};  // leaves for a restart without answering it
+    bool ignoresRestart{false};    // takes a restart request, answers nothing, stays
     bool failsFirmwareWrite{false}; // the write of a FIRMWARE message fails (EIO)
     int dropsOnOpen{0};            // this open (1 = the first) fails before it negotiates
 };
@@ -299,6 +302,8 @@ private:
                 status(d[0], CTR2_FW_BAD_STATE);
                 break;
             }
+            if (m_dev->ignoresRestart)
+                break;
             if (!m_dev->restartsSilently)
                 status(m_dev->restartStatusOp ? m_dev->restartStatusOp : d[0], CTR2_FW_OK);
             m_dev->restartedInto = loader ? QStringLiteral("bootloader") : QStringLiteral("other");
@@ -674,6 +679,199 @@ void testDestroyedMidUpdate()
 // restarts it into AetherCTR2 on request, as AetherCTR2 itself, with no
 // download mode and no buttons. Firmware without the commands still waits
 // for the buttons.
+// A restart on request is answered before the device leaves the bus
+// (Lynovation's firmware waits about two seconds), so it is still listed for
+// a moment. Auto-start must not open it then: it would catch the device on
+// its way off the bus and leave the relay in Error. It starts once the device
+// has gone and come back.
+void testAutoStartWaitsForRestart()
+{
+    Ctr2HidPort::DeviceInfo info;
+    info.path = QStringLiteral("/sim/aether");
+    info.vendorId = 0x303A;
+    info.productId = 0x1001;
+    info.product = QStringLiteral("AetherCTR2");
+    info.serial = QStringLiteral("B81F3FC45888");
+    auto listed = std::make_shared<QList<Ctr2HidPort::DeviceInfo>>(
+        QList<Ctr2HidPort::DeviceInfo>{info});
+    Device dev;
+    int relayOpens = 0;
+    Ctr2ProxyModel relay;
+    relay.setUsbBackend(
+        [listed] { return *listed; },
+        [&relayOpens](const Ctr2HidPort::DeviceInfo&, QString* error) -> Ctr2HidPort* {
+            ++relayOpens;
+            *error = QStringLiteral("sim: the relay's port");
+            return nullptr;
+        },
+        [&dev](const Ctr2HidPort::DeviceInfo&, quint32 caps, QString*) -> Ctr2HidPort* {
+            return new SimPort(&dev, caps);
+        });
+    relay.setTransport(Ctr2ProxyModel::Transport::Usb);
+    relay.setUsbDevicePath(info.path);
+    relay.firmwareUpdater()->setTiming(fastTiming());
+    waitUntil([&dev] { return dev.opens > 0; });   // the version probe
+    waitUntil([] { return false; }, 100);
+
+    QString problem;
+    check(relay.restartUsbDevice(Ctr2FirmwareUpdater::Restart::Bootloader, &problem),
+          "a restart into download mode starts");
+    check(waitUntil([&] { return !dev.restartedInto.isEmpty() && !relay.firmwareUpdateRunning(); }),
+          "and is answered");
+
+    // Still listed: it has not left the bus yet.
+    relay.setAetherRadio(QHostAddress(QStringLiteral("192.0.2.10")), 4992, QStringLiteral("FLEX"),
+                         {});
+    relay.setAutoStart(true);
+    waitUntil([] { return false; }, 300);
+    check(relayOpens == 0, "auto-start leaves a device restarting on request alone while it is listed");
+
+    listed->clear();
+    relay.refreshDevices();   // gone
+    listed->append(info);
+    relay.refreshDevices();   // back
+    check(waitUntil([&] { return relayOpens > 0; }, Ctr2ProxyModel::kAutoStartRetryMs + 2000),
+          "and opens it once it has left the bus and come back");
+    relay.setAutoStart(false);
+}
+
+// A firmware switch keeps the hidraw path on Linux, and the idle probe can
+// run while the new firmware is still starting and reads no offer. Read
+// again, the offer is there: a stale "no commands" must not stick.
+void testReprobeReadsTheOfferAgain()
+{
+    Ctr2HidPort::DeviceInfo info;
+    info.path = QStringLiteral("/sim/stock");
+    info.vendorId = 0x303A;
+    info.productId = 0x1001;
+    info.product = QStringLiteral("ESP32S3_DEV");
+    Device dev;
+    dev.reportsVersion = false;
+    dev.offersFirmware = false;   // still starting: no offer yet
+    Ctr2ProxyModel relay;
+    relay.setUsbBackend(
+        [info] { return QList<Ctr2HidPort::DeviceInfo>{info}; },
+        [](const Ctr2HidPort::DeviceInfo&, QString*) -> Ctr2HidPort* { return nullptr; },
+        [&dev](const Ctr2HidPort::DeviceInfo&, quint32 caps, QString*) -> Ctr2HidPort* {
+            return new SimPort(&dev, caps);
+        });
+    relay.setTransport(Ctr2ProxyModel::Transport::Usb);
+    relay.setUsbDevicePath(info.path);
+    check(waitUntil([&dev] { return dev.opens > 0; }), "the idle probe reads the device");
+    waitUntil([] { return false; }, 100);
+    check(!relay.usbFirmwareCommands(), "and finds no offer while the firmware starts");
+
+    dev.offersFirmware = true;   // started
+    const int opens = dev.opens;
+    relay.refreshDevices();
+    waitUntil([] { return false; }, 100);
+    check(dev.opens == opens && !relay.usbFirmwareCommands(),
+          "an unchanged device list does not read it again");
+    relay.reprobeFirmware();
+    check(waitUntil([&relay] { return relay.usbFirmwareCommands(); }),
+          "reading it again finds the restart commands");
+}
+
+// The hold covers the restarted controller only: another controller, or
+// Wi-Fi, auto-starts as usual, and the restarted one is still held if it is
+// selected again before it is back. A restart written but never answered
+// keeps its hold (the device may still be leaving); a firmware switch that
+// comes back at the same path between two scans counts as back.
+void testRestartHoldScope()
+{
+    const auto aether = [](const QString& path, const QString& serial) {
+        Ctr2HidPort::DeviceInfo d;
+        d.path = path;
+        d.vendorId = 0x303A;
+        d.productId = 0x1001;
+        d.product = QStringLiteral("AetherCTR2");
+        d.serial = serial;
+        return d;
+    };
+    const Ctr2HidPort::DeviceInfo a = aether(QStringLiteral("/sim/A"), QStringLiteral("AAAAAAAAAAAA"));
+    const Ctr2HidPort::DeviceInfo b = aether(QStringLiteral("/sim/B"), QStringLiteral("BBBBBBBBBBBB"));
+    const QHostAddress radio(QStringLiteral("192.0.2.10"));
+    struct Rig {
+        std::shared_ptr<QList<Ctr2HidPort::DeviceInfo>> listed;
+        Device dev;
+        QStringList opened;   // relay opens, by path
+        Ctr2ProxyModel relay;
+    };
+    const auto rig = [&](Rig& r, QList<Ctr2HidPort::DeviceInfo> devices) {
+        r.listed = std::make_shared<QList<Ctr2HidPort::DeviceInfo>>(devices);
+        auto listed = r.listed;
+        r.relay.setUsbBackend(
+            [listed] { return *listed; },
+            [&r](const Ctr2HidPort::DeviceInfo& d, QString* error) -> Ctr2HidPort* {
+                r.opened << d.path;
+                *error = QStringLiteral("sim: the relay's port");
+                return nullptr;
+            },
+            [&r](const Ctr2HidPort::DeviceInfo&, quint32 caps, QString*) -> Ctr2HidPort* {
+                return new SimPort(&r.dev, caps);
+            });
+        r.relay.setTransport(Ctr2ProxyModel::Transport::Usb);
+        r.relay.setUsbDevicePath(devices.first().path);
+        r.relay.firmwareUpdater()->setTiming(fastTiming());
+        waitUntil([&r] { return r.dev.opens > 0; });
+        waitUntil([] { return false; }, 100);
+    };
+    const auto restart = [](Rig& r) {
+        QString problem;
+        return r.relay.restartUsbDevice(Ctr2FirmwareUpdater::Restart::Bootloader, &problem)
+               && waitUntil([&r] { return !r.relay.firmwareUpdateRunning(); });
+    };
+    const int retry = Ctr2ProxyModel::kAutoStartRetryMs + 2000;
+
+    {   // Another controller is not held; A is, selected again.
+        Rig r;
+        rig(r, {a, b});
+        check(restart(r) && !r.dev.restartedInto.isEmpty(), "A restarts into download mode");
+        r.relay.setUsbDevicePath(b.path);
+        r.relay.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
+        r.relay.setAutoStart(true);
+        check(waitUntil([&r, &b] { return r.opened.contains(b.path); }, retry),
+              "auto-start opens B, another controller, while A restarts");
+        r.relay.setAutoStart(false);
+        r.relay.stop();
+        r.opened.clear();
+        r.relay.setUsbDevicePath(a.path);
+        r.relay.setAutoStart(true);
+        waitUntil([] { return false; }, 300);
+        check(!r.opened.contains(a.path), "and still holds A, selected again before it is back");
+        r.relay.setAutoStart(false);
+    }
+    {   // Written, never answered: still held.
+        Rig r;
+        r.dev.ignoresRestart = true;
+        rig(r, {a});
+        check(restart(r) && r.relay.firmwareUpdater()->restartUnanswered(),
+              "a restart request written and never answered times out");
+        r.relay.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
+        r.relay.setAutoStart(true);
+        waitUntil([] { return false; }, 300);
+        check(r.opened.isEmpty(), "and keeps its hold: the device may still be leaving");
+        r.relay.setAutoStart(false);
+    }
+    {   // Another firmware at the same path: back.
+        Rig r;
+        rig(r, {a});
+        check(restart(r), "a restart into the other firmware is answered");
+        Ctr2HidPort::DeviceInfo stock = a;
+        stock.product = QStringLiteral("ESP32S3_DEV");
+        stock.serial.clear();
+        *r.listed = {stock};
+        r.relay.refreshDevices();
+        *r.listed = {a};   // and back as AetherCTR2 at the same path, unseen in between
+        r.relay.refreshDevices();
+        r.relay.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
+        r.relay.setAutoStart(true);
+        check(waitUntil([&r, &a] { return r.opened.contains(a.path); }, retry),
+              "another firmware listed at the same path counts as back");
+        r.relay.setAutoStart(false);
+    }
+}
+
 void testStockFirmwareCommands()
 {
     using Firmware = FirmwareInstallModel::Firmware;
@@ -818,7 +1016,10 @@ void testStockFirmwareCommands()
 
 int main(int argc, char** argv)
 {
+    // Before the app: the relay model reads and saves its setup.
+    TestSettingsProfile profile(QStringLiteral("ctr2_firmware_updater_test"));
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
     testReadImage();
     testSuccess();
     testDeviceComesBackLater();
@@ -831,6 +1032,9 @@ int main(int argc, char** argv)
     testCancel();
     testDestroyedMidUpdate();
     testRestartRequests();
+    testAutoStartWaitsForRestart();
+    testReprobeReadsTheOfferAgain();
+    testRestartHoldScope();
     testStockFirmwareCommands();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

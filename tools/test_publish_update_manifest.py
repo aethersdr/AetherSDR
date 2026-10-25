@@ -4,13 +4,19 @@ and a real (ephemeral) Ed25519 key. No network, no R2 credentials."""
 
 from __future__ import annotations
 
+import contextlib
+import http.client
+import io
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -138,6 +144,100 @@ class Validation(Base):
             pub.validate_manifest(b"not json", "v26.10.4")
 
 
+class PublicRead(Base):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"x"
+
+    def test_the_public_check_names_itself(self) -> None:
+        """Cloudflare refused Python's default User-Agent with 403; the first
+        real publish's check failed on exactly that."""
+        seen = []
+        with mock.patch.object(pub.urllib.request, "urlopen",
+                               lambda req, timeout=None: (seen.append(req), self.Response())[1]):
+            self.assertEqual(pub.PublicStore().get("latest/manifest.json"), b"x")
+        ua = seen[0].get_header("User-agent")
+        self.assertTrue(ua and ua.startswith("AetherSDR-"), ua)
+        self.assertEqual(seen[0].get_header("Cache-control"), "no-cache")
+
+    def test_a_refusal_is_an_error_not_absence(self) -> None:
+        """Only 404 means "not published"; anything else is a PublishError
+        with a message, never a traceback, never "absent"."""
+        cases = [
+            (urllib.error.HTTPError("u", 404, "Not Found", {}, None), None),
+            (urllib.error.HTTPError("u", 403, "Forbidden", {}, None), "HTTP 403"),
+            (urllib.error.HTTPError("u", 503, "Unavailable", {}, None), "HTTP 503"),
+            (urllib.error.URLError("no route"), "no route"),
+            (TimeoutError("timed out"), "TimeoutError"),
+            (http.client.RemoteDisconnected("closed"), "RemoteDisconnected"),
+            (http.client.IncompleteRead(b"x", 5), "IncompleteRead"),
+        ]
+        for err, expect in cases:
+            with self.subTest(err=type(err).__name__), \
+                    mock.patch.object(pub.urllib.request, "urlopen", side_effect=err):
+                if expect is None:
+                    self.assertIsNone(pub.PublicStore().get("latest/manifest.json"))
+                else:
+                    with self.assertRaises(pub.PublishError) as ctx:
+                        pub.PublicStore().get("latest/manifest.json")
+                    self.assertIn(expect, str(ctx.exception))
+
+    def test_check_reports_a_failed_read_as_incomplete(self) -> None:
+        """Before publishing, a failed read means "publish" (which repairs),
+        not a dead job; after publishing, "incomplete" fails the check."""
+        out = io.StringIO()
+        with mock.patch.object(pub.urllib.request, "urlopen", side_effect=TimeoutError("slow edge")), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()) as err:
+            rc = pub.main(["check", "--tag", "v26.10.4", "--latest-tag", "v26.10.4",
+                           "--public-key", str(self.pub)])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.getvalue().strip(), "incomplete")
+        self.assertIn("slow edge", err.getvalue())
+
+
+class S3Credentials(Base):
+    ENV = {"R2_ACCOUNT_ID": "acct", "R2_ACCESS_KEY_ID": "keyid", "R2_SECRET_ACCESS_KEY": "s3cr3t"}
+
+    def run_get(self, env: dict) -> list:
+        """S3Store().get with curl replaced: what curl was given."""
+        calls = []
+
+        def run(argv, **kw):
+            config = Path(argv[argv.index("-K") + 1])
+            calls.append({"argv": list(argv), "config": config,
+                          "text": config.read_text(), "mode": config.stat().st_mode & 0o777})
+            return mock.Mock(returncode=0, stdout="404", stderr="")
+
+        with mock.patch.dict(os.environ, env), mock.patch.object(pub.subprocess, "run", run):
+            self.assertIsNone(pub.S3Store().get("latest/manifest.json"))
+        return calls
+
+    def test_the_secret_never_reaches_curls_command_line(self) -> None:
+        (call,) = self.run_get(self.ENV)
+        self.assertEqual(call["argv"][:2], ["curl", "-q"], "no ~/.curlrc: -q comes first")
+        self.assertFalse(any("s3cr3t" in a for a in call["argv"]), call["argv"])
+        self.assertIn('user = "keyid:s3cr3t"', call["text"])
+        self.assertEqual(call["mode"], 0o600)
+        self.assertFalse(call["config"].exists(), "the config is deleted after the call")
+
+    def test_quotes_and_backslashes_are_escaped(self) -> None:
+        (call,) = self.run_get({**self.ENV, "R2_SECRET_ACCESS_KEY": 'a"b\\c'})
+        self.assertIn('user = "keyid:a\\"b\\\\c"', call["text"])
+
+    def test_control_characters_are_refused(self) -> None:
+        for bad in ("a\nb", "a\rb", "a\tb", "a\x7fb"):   # an env var cannot hold NUL
+            with self.subTest(bad=repr(bad)), mock.patch.dict(os.environ, {**self.ENV,
+                                                                       "R2_SECRET_ACCESS_KEY": bad}):
+                with self.assertRaises(pub.PublishError):
+                    pub.S3Store()
+
+
 class LatestPromotion(Base):
     def test_older_run_resuming_after_a_newer_one_does_not_roll_latest_back(self) -> None:
         """The review's interleaving: the v26.10.4 run saw itself as GitHub's
@@ -150,6 +250,17 @@ class LatestPromotion(Base):
         self.assertEqual(self.latest_tag(), "v26.10.5")
         self.assertTrue(pub.is_complete(self.store, "v26.10.4", "v26.10.4", self.pub),
                         "a newer latest/ completes an older release")
+
+    def test_a_torn_latest_is_repaired_when_this_is_githubs_latest(self) -> None:
+        """A newer run killed between latest/'s two writes leaves a manifest
+        no signature verifies, and that release may since have been pulled.
+        Only a verified newer latest/ blocks promotion: a release GitHub calls
+        latest repairs a torn pair, so latest/ never stays broken."""
+        newer, _ = self.signed("v26.10.5")
+        self.store.objects["latest/manifest.json"] = newer   # its .sig never written
+        pub.publish(self.store, "v26.10.4", "v26.10.4", *self.signed("v26.10.4"), self.pub)
+        self.assertEqual(self.latest_tag(), "v26.10.4")
+        self.assertTrue(pub.is_complete(self.store, "v26.10.4", "v26.10.4", self.pub))
 
     def test_hotfix_promotes_over_its_base(self) -> None:
         pub.publish(self.store, "v26.10.4", "v26.10.4", *self.signed("v26.10.4"), self.pub)

@@ -1144,6 +1144,7 @@ set(CORE_SOURCES
     src/core/UpdateChecker.cpp
     src/core/UpdateSettings.cpp
     src/core/UpdateReleaseNotes.cpp
+    src/core/UpdateStager.cpp
     src/core/NetworkDiagnostics.cpp
     src/core/WindowsFirewall.cpp
     src/core/OleCompoundFile.cpp
@@ -1697,6 +1698,26 @@ else()
     target_compile_options(aether_monocypher PRIVATE -w)
 endif()
 
+# Bundled zstd 1.5.7 (BSD), decompressor only: applies the in-app update's
+# per-file --patch-from deltas (RFC #5304, docs/architecture/update-manifest.md)
+# on every platform alike. Symbols are hidden so this copy can never interpose
+# on the system libzstd the AppImage carries for Qt (AETHER_SHARED_CORE).
+file(GLOB AETHER_ZSTD_SOURCES
+    ${CMAKE_SOURCE_DIR}/third_party/zstd/lib/common/*.c
+    ${CMAKE_SOURCE_DIR}/third_party/zstd/lib/decompress/*.c)
+add_library(aether_zstd STATIC ${AETHER_ZSTD_SOURCES})
+target_include_directories(aether_zstd PUBLIC ${CMAKE_SOURCE_DIR}/third_party/zstd/lib)
+target_compile_definitions(aether_zstd
+    PUBLIC ZSTDLIB_VISIBLE= ZSTDLIB_HIDDEN= ZSTDERRORLIB_VISIBLE= ZSTDERRORLIB_HIDDEN=
+    PRIVATE ZSTD_DISABLE_ASM=1 ZSTD_LEGACY_SUPPORT=0 ZSTD_TRACE=0 XXH_NAMESPACE=ZSTD_)
+set_target_properties(aether_zstd PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON C_VISIBILITY_PRESET hidden)
+if(MSVC)
+    target_compile_options(aether_zstd PRIVATE /w)
+else()
+    target_compile_options(aether_zstd PRIVATE -w)
+endif()
+
 # CTR2-Max registration check: the stock firmware's LittleFS volume, read
 # with littlefs (BSD-3-Clause) built read-only (LFS_READONLY: no write path is
 # compiled). src/core/ctr2max_reg.c is shared with the AetherCTR2 firmware.
@@ -1833,7 +1854,8 @@ add_library(aethercore ${_aether_core_library_type}
     ${SPECBLEACH_SOURCES}
 )
 target_link_libraries(aethercore PRIVATE aether::wdsp)
-target_link_libraries(aethercore PRIVATE aether_monocypher)   # core: EspFirmwareCatalog
+target_link_libraries(aethercore PRIVATE aether_monocypher)   # core: EspFirmwareCatalog, UpdateStager
+target_link_libraries(aethercore PRIVATE aether_zstd)         # core: UpdateStager
 target_compile_definitions(aethercore PRIVATE
     AETHER_FIRMWARE_DEV_OVERRIDES=$<BOOL:${AETHER_FIRMWARE_DEV_OVERRIDES}>)
 target_link_libraries(aethercore PRIVATE aether_ctr2max_reg)  # core: Ctr2MaxRegistration

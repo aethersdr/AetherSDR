@@ -29,6 +29,7 @@ no older run can interleave between that read and its write.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import subprocess
@@ -44,6 +45,9 @@ from build_update_manifest import DOWNLOAD_BASE, SCHEMA, version_key  # noqa: E4
 BUCKET = "aethersdr-updates"
 PUBLIC_BASE = "https://updates.aethersdr.com/"
 RELEASE_CACHE = "public, max-age=300"   # short, so a repaired release is seen
+# Cloudflare answers Python's default "Python-urllib/x.y" User-Agent with 403
+# (bot protection), so the publication check names itself.
+USER_AGENT = "AetherSDR-update-publisher/1 (+https://github.com/aethersdr/AetherSDR)"
 LATEST_CACHE = "no-cache"
 
 
@@ -57,14 +61,22 @@ class PublicStore:
     """Reads what clients read. Cannot write."""
 
     def get(self, key: str) -> bytes | None:
-        req = urllib.request.Request(PUBLIC_BASE + key, headers={"Cache-Control": "no-cache"})
+        req = urllib.request.Request(PUBLIC_BASE + key,
+                                     headers={"Cache-Control": "no-cache", "User-Agent": USER_AGENT})
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 return r.read()
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None
-            raise
+            raise PublishError(f"GET {PUBLIC_BASE}{key}: HTTP {e.code}") from None
+        except urllib.error.URLError as e:
+            raise PublishError(f"GET {PUBLIC_BASE}{key}: {e.reason}") from None
+        except (OSError, http.client.HTTPException) as e:
+            # A timeout or a dropped connection after the request was sent
+            # surfaces unwrapped (TimeoutError, RemoteDisconnected,
+            # IncompleteRead).
+            raise PublishError(f"GET {PUBLIC_BASE}{key}: {type(e).__name__}: {e}") from None
 
     def put(self, key: str, data: bytes, content_type: str, cache_control: str) -> None:
         raise PublishError("the public store is read-only")
@@ -80,12 +92,22 @@ class S3Store:
             self.user = os.environ["R2_ACCESS_KEY_ID"] + ":" + os.environ["R2_SECRET_ACCESS_KEY"]
         except KeyError as e:
             raise PublishError(f"missing {e.args[0]}") from None
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in self.user):
+            raise PublishError("the R2 credentials hold a control character")
 
     def _curl(self, key: str, *args: str) -> tuple[int, bytes]:
-        with tempfile.NamedTemporaryFile() as body:
+        # The credentials go to curl through a config file only this user can
+        # read (NamedTemporaryFile is 0600), never on its command line, where
+        # any process could read them for the life of the request.
+        with tempfile.NamedTemporaryFile() as body, \
+                tempfile.NamedTemporaryFile("w", suffix=".curlrc") as config:
+            quoted = self.user.replace("\\", "\\\\").replace('"', '\\"')
+            config.write(f'user = "{quoted}"\n')
+            config.flush()
             out = subprocess.run(
-                ["curl", "-sS", "--retry", "3", "--aws-sigv4", "aws:amz:auto:s3",
-                 "--user", self.user, "-o", body.name, "-w", "%{http_code}", *args,
+                # -q first: no ~/.curlrc is read, only this config.
+                ["curl", "-q", "-sS", "--retry", "3", "--aws-sigv4", "aws:amz:auto:s3",
+                 "-K", config.name, "-o", body.name, "-w", "%{http_code}", *args,
                  f"https://{self.account}.r2.cloudflarestorage.com/{BUCKET}/{key}"],
                 capture_output=True, text=True)
             if out.returncode != 0:
@@ -222,8 +244,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"manifest.json is a valid schema-{SCHEMA} manifest for {args.tag}")
             return 0
         if args.action == "check":
-            print("complete" if is_complete(PublicStore(), args.tag, args.latest_tag,
-                                            args.public_key) else "incomplete")
+            # A read that fails is not proof of publication: "incomplete", so
+            # the run before publishing goes on to publish (which repairs),
+            # and the check after it fails the job.
+            try:
+                complete = is_complete(PublicStore(), args.tag, args.latest_tag, args.public_key)
+            except PublishError as e:
+                print(f"warning: {e}", file=sys.stderr)
+                complete = False
+            print("complete" if complete else "incomplete")
             return 0
         if args.dir is None:
             ap.error("publish needs --dir")

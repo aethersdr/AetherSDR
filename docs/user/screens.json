@@ -2239,7 +2239,7 @@
         "target": "MultiFlexDialog"
       },
       "caption": "The multiFLEX Dashboard: every station sharing the radio.",
-      "alt": "multiFLEX Dashboard window headed multiFLEX Stations with a green Enabled indicator. A table with columns Local PTT, Station, TX Ant and TX Freq (MHz) lists one row: a tick, AetherSDR, ANT1 and 14.250. A Close button sits at the bottom right."
+      "alt": "multiFLEX Dashboard window with a round close button in its top-right corner and a green Enabled button under its header. A table with columns Local PTT, Station, TX Ant and TX Freq (MHz) lists one row: a tick, AetherSDR, ANT1 and 14.250."
     },
     {
       "id": "profile-manager",

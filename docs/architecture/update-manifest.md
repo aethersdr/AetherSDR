@@ -1,7 +1,8 @@
 # In-App Update Manifest — Schema 1
 
-**Status:** CI side (RFC #5304 Phase 2). The app-side `UpdateStager` that
-reads this is a later PR and implements against this document.
+**Status:** RFC #5304 Phase 2. The CI side writes and publishes this; the
+app's `UpdateStager` (`src/core/UpdateStager.{h,cpp}`) reads and applies it
+into a staging copy. Swapping the staged tree in is the platform phases'.
 
 Each release publishes one signed manifest that names, for each updatable
 payload, every file of the new tree and the patch bundles that turn each of
@@ -163,8 +164,10 @@ A file in `files` with no op is unchanged from the `from` release.
    place (Principle XIV). Resolve every write against the staging root as a
    boundary.
 4. Decompress each member with the decoder's output capped at the op's
-   `size`, and its window limit at `window_log` (at most 31). A member that
-   would exceed either is a hard fail.
+   `size`, and its window limit at `window_log` (at most 31). Output beyond
+   `size` is a hard fail. The window limit bounds the decoder's memory when
+   it streams; a frame small enough to decode in one pass allocates no window
+   at all, so the output cap is the check that always applies.
 5. For each `patch` op, check the current file against `from_sha256` before
    using it. A mismatch is a hard fail, not a best effort (Principle VII).
 6. After all ops, check every entry in `files` against the staged tree. Any
@@ -172,6 +175,12 @@ A file in `files` with no op is unchanged from the `from` release.
 7. Files in the install that are not in `files` are left alone. That covers
    the installer's own `unins000.*` on Windows.
 8. Swap on quit, keeping the previous tree for rollback.
+
+The staging root holds at most the one staged release waiting to be
+swapped in (`<stagingRoot>/<version>`); each attempt works in its own
+`.work-*` folder, removed on failure or cancel. Sweeping a staged release
+that is never swapped in, and older releases' leftovers, is the swap's
+job (Phase 3), which owns that folder's lifetime.
 
 The release workflow applies every bundle to the real earlier release, by
 this contract, before anything is signed, so a bundle that does not rebuild

@@ -28,6 +28,11 @@ constexpr int kAudioSampleRate = AudioEngine::DEFAULT_SAMPLE_RATE;
 constexpr int kOpusFramesPerPacket = 240;
 constexpr int kWanRegisterIntervalMs = 50;
 constexpr int kWanKeepaliveIntervalMs = 5000;
+constexpr int kLanKeepaliveIntervalMs = 5000;
+// The radio sends LAN VITA from this port (measured, fw 4.3.16: FLEX-8600 IPv4 and
+// IPv6, FLEX-8400 with concurrent multiFLEX clients). Sending to it keeps a
+// stateful host firewall's return path open.
+constexpr quint16 kLanVitaSourcePort = 4993;
 
 QString streamCategoryName(PanadapterStream::StreamCategory cat)
 {
@@ -100,6 +105,9 @@ void PanadapterStream::init()
     if (!m_routedPrimeTimer) {
         m_routedPrimeTimer = new QTimer(this);
     }
+    if (!m_lanKeepaliveTimer) {
+        m_lanKeepaliveTimer = new QTimer(this);
+    }
 
     // Pick up the persisted PLC toggle. Default true — strictly better in
     // the failure mode and a no-op when no packets are lost. (#2731)
@@ -128,18 +136,23 @@ void PanadapterStream::init()
             return;
         }
         const QByteArray reg(1, '\x00');
-        const qint64 sent = m_socket->writeDatagram(reg, m_radioAddress, 4992);
+        const qint64 sent = writeLanDatagram(reg, m_radioAddress, 4992);
         if (sent > 0)
             m_totalTxBytes.fetch_add(sent);
     });
+
+    m_lanKeepaliveTimer->setInterval(kLanKeepaliveIntervalMs);
+    connect(m_lanKeepaliveTimer, &QTimer::timeout,
+            this, &PanadapterStream::sendLanKeepalive, Qt::UniqueConnection);
 }
 
 bool PanadapterStream::isRunning() const
 {
     // Truthful for the demo too: a demo stream binds no socket and runs no timer
     // (SimBackend produces the demo's audio and spectrum), so it is not running.
-    return m_wanBindForTest ? m_wanBoundForTest
-                            : (m_socket && m_socket->state() == QAbstractSocket::BoundState);
+    if (m_wanBindForTest || m_lanBindForTest)
+        return m_wanBoundForTest || m_lanBoundForTest;
+    return m_socket && m_socket->state() == QAbstractSocket::BoundState;
 }
 
 void PanadapterStream::applyReceiveBufferSize()
@@ -212,7 +225,9 @@ bool PanadapterStream::start(RadioConnection* conn)
     const QHostAddress bindAddr = chooseLanBindAddress(conn, &chosenReason, &chosenAddress, &bindMode);
     const QString bindReason = chosenReason.isEmpty() ? QStringLiteral("auto") : chosenReason;
 
-    const bool bound = m_socket->bind(bindAddr, 0, kLanVitaBindMode);
+    const bool bound = m_lanBindForTest ? m_lanBindForTest()
+                                        : m_socket->bind(bindAddr, 0, kLanVitaBindMode);
+    m_lanBoundForTest = m_lanBindForTest && bound;
     if (bound)
         qCInfo(lcVita49).noquote()
             << "PanadapterStream: LAN VITA UDP bind"
@@ -229,21 +244,23 @@ bool PanadapterStream::start(RadioConnection* conn)
         return false;
     }
 
-    applyReceiveBufferSize();   // #3810 — absorb VITA-49 bursts so they don't drop
-    applyDscpEf(conn ? conn->radioAddress() : QHostAddress(), {4991, 4992});
+    if (!m_lanBindForTest) {
+        applyReceiveBufferSize();   // #3810 — absorb VITA-49 bursts so they don't drop
+        applyDscpEf(conn ? conn->radioAddress() : QHostAddress(), {4991, 4992});
+    }
     m_localAddress = m_socket->localAddress();
     m_localPort = m_socket->localPort();
     qCDebug(lcVita49) << "PanadapterStream: local UDP endpoint"
                       << m_localAddress.toString() << ":" << m_localPort;
 
-    // Send a one-byte UDP registration datagram to the radio's VITA-49 port.
+    // Send a one-byte UDP registration datagram to the radio's command port (4992).
     // The radio learns our IP:port from the source address of this datagram.
     // This is required on firmware v1.4.0.0 where the TCP "client udpport"
     // command may return 0x50001000 ("command not supported").
     const QHostAddress radioAddr = conn->radioAddress();
     if (!radioAddr.isNull()) {
         const QByteArray reg(1, '\x00');
-        const qint64 sent = m_socket->writeDatagram(reg, radioAddr, 4992);
+        const qint64 sent = writeLanDatagram(reg, radioAddr, 4992);
         if (sent == 1) {
             m_totalTxBytes.fetch_add(sent);
             qCDebug(lcVita49) << "PanadapterStream: sent UDP registration to"
@@ -263,6 +280,7 @@ bool PanadapterStream::start(RadioConnection* conn)
     m_radioPort = 4991;
 
     m_conn = conn;
+    startLanKeepalive();
     return true;
 }
 
@@ -284,6 +302,8 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
 
     if (m_routedPrimeTimer)
         m_routedPrimeTimer->stop();
+    if (m_lanKeepaliveTimer)
+        m_lanKeepaliveTimer->stop();
 
     m_dscpMarker.reset();
     if (m_socket->state() != QAbstractSocket::UnconnectedState)
@@ -299,7 +319,9 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
     const QHostAddress bindAddr = chooseLanBindAddress(conn, &chosenReason, &chosenAddress, &bindMode);
     const QString bindReason = chosenReason.isEmpty() ? QStringLiteral("auto") : chosenReason;
 
-    const bool bound = m_socket->bind(bindAddr, 0, kLanVitaBindMode);
+    const bool bound = m_lanBindForTest ? m_lanBindForTest()
+                                        : m_socket->bind(bindAddr, 0, kLanVitaBindMode);
+    m_lanBoundForTest = m_lanBindForTest && bound;
     if (!bound) {
         qCWarning(lcVita49) << "PanadapterStream: failed to rebind UDP socket after port collision:"
                             << m_socket->errorString()
@@ -309,8 +331,10 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
         return false;
     }
 
-    applyReceiveBufferSize();   // #3810 — absorb VITA-49 bursts so they don't drop
-    applyDscpEf(conn ? conn->radioAddress() : QHostAddress(), {4991, 4992});
+    if (!m_lanBindForTest) {
+        applyReceiveBufferSize();   // #3810 — absorb VITA-49 bursts so they don't drop
+        applyDscpEf(conn ? conn->radioAddress() : QHostAddress(), {4991, 4992});
+    }
     m_localAddress = m_socket->localAddress();
     m_localPort = m_socket->localPort();
     m_radioAddress = conn ? conn->radioAddress() : QHostAddress();
@@ -326,7 +350,7 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
 
     if (!m_radioAddress.isNull()) {
         const QByteArray reg(1, '\x00');
-        const qint64 sent = m_socket->writeDatagram(reg, m_radioAddress, 4992);
+        const qint64 sent = writeLanDatagram(reg, m_radioAddress, 4992);
         if (sent == 1) {
             m_totalTxBytes.fetch_add(sent);
             qCDebug(lcVita49) << "PanadapterStream: sent UDP registration to"
@@ -341,7 +365,45 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
         qCWarning(lcVita49) << "PanadapterStream: radio address unknown - skipping UDP registration after rebind";
     }
 
+    startLanKeepalive();
     return true;
+}
+
+qint64 PanadapterStream::writeLanDatagram(const QByteArray& data, const QHostAddress& to,
+                                          quint16 port)
+{
+    return m_lanWriteForTest ? m_lanWriteForTest(data, to, port)
+                             : m_socket->writeDatagram(data, to, port);
+}
+
+void PanadapterStream::startLanKeepalive()
+{
+    if (m_isWanMode || m_radioAddress.isNull())
+        return;
+    m_lanKeepaliveFailed = false;
+    qCDebug(lcVita49) << "PanadapterStream: LAN keepalive to"
+                      << m_radioAddress.toString() << ":" << kLanVitaSourcePort;
+    sendLanKeepalive();
+    m_lanKeepaliveTimer->start();
+}
+
+// Without this, a host firewall that drops unsolicited UDP (UFW, firewalld)
+// sees radio VITA as a new inbound flow and drops it while TCP stays up.
+void PanadapterStream::sendLanKeepalive()
+{
+    if (m_isWanMode || m_radioAddress.isNull())
+        return;
+    const QByteArray ping(1, '\x00');
+    const qint64 sent = writeLanDatagram(ping, m_radioAddress, kLanVitaSourcePort);
+    if (sent > 0) {
+        m_totalTxBytes.fetch_add(sent);
+        m_lanKeepaliveFailed = false;
+    } else if (!m_lanKeepaliveFailed) {
+        m_lanKeepaliveFailed = true;
+        qCWarning(lcVita49) << "PanadapterStream: LAN keepalive send to"
+                            << m_radioAddress.toString() << ":" << kLanVitaSourcePort
+                            << "failed:" << m_socket->errorString();
+    }
 }
 
 bool PanadapterStream::startWan(const QHostAddress& radioAddr, quint16 radioUdpPort)
@@ -463,7 +525,11 @@ void PanadapterStream::stop()
     if (m_routedPrimeTimer) {
         m_routedPrimeTimer->stop();
     }
+    if (m_lanKeepaliveTimer) {
+        m_lanKeepaliveTimer->stop();
+    }
     m_wanBoundForTest = false;
+    m_lanBoundForTest = false;
     m_isWanMode = false;
     m_wanRegistered = false;
     m_wanClientHandle = 0;
@@ -673,27 +739,9 @@ void PanadapterStream::onDatagramReady()
     while (m_socket && m_socket->hasPendingDatagrams()) {
         const QNetworkDatagram dg = m_socket->receiveDatagram();
         if (!dg.isNull()) {
-            const QByteArray payload = dg.data();
-            const int payloadBytes = payload.size();
             batchDatagrams++;
-            batchBytes += payloadBytes;
-            if (!m_hasReceivedPacket) {
-                m_hasReceivedPacket = true;
-                if (m_routedPrimeTimer) {
-                    m_routedPrimeTimer->stop();
-                }
-                const qint64 afterMs = m_routedPrimeElapsed.isValid()
-                    ? m_routedPrimeElapsed.elapsed()
-                    : -1;
-                qCInfo(lcVita49).noquote()
-                    << "PanadapterStream: first UDP packet received"
-                    << QStringLiteral("after_ms=%1").arg(afterMs)
-                    << QStringLiteral("local_port=%1").arg(m_localPort)
-                    << QStringLiteral("from=%1:%2").arg(dg.senderAddress().toString()).arg(dg.senderPort());
-            }
-            confirmWanRegistration(payload);
-            m_totalRxBytes.fetch_add(payloadBytes);
-            processDatagram(payload);
+            batchBytes += dg.data().size();
+            handleReceivedDatagram(dg);
         }
     }
 
@@ -701,6 +749,28 @@ void PanadapterStream::onDatagramReady()
         perf.recordUdpBatch(batchDatagrams, batchBytes,
                             static_cast<double>(PerfTelemetry::nowNs() - batchStartNs) / 1000000.0);
     }
+}
+
+void PanadapterStream::handleReceivedDatagram(const QNetworkDatagram& dg)
+{
+    const QByteArray payload = dg.data();
+    if (!m_hasReceivedPacket) {
+        m_hasReceivedPacket = true;
+        if (m_routedPrimeTimer) {
+            m_routedPrimeTimer->stop();
+        }
+        const qint64 afterMs = m_routedPrimeElapsed.isValid()
+            ? m_routedPrimeElapsed.elapsed()
+            : -1;
+        qCInfo(lcVita49).noquote()
+            << "PanadapterStream: first UDP packet received"
+            << QStringLiteral("after_ms=%1").arg(afterMs)
+            << QStringLiteral("local_port=%1").arg(m_localPort)
+            << QStringLiteral("from=%1:%2").arg(dg.senderAddress().toString()).arg(dg.senderPort());
+    }
+    confirmWanRegistration(payload);
+    m_totalRxBytes.fetch_add(payload.size());
+    processDatagram(payload);
 }
 
 void PanadapterStream::processDatagram(const QByteArray& data)

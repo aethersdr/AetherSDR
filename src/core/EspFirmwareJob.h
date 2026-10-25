@@ -69,13 +69,17 @@ public:
 
     // Opens the device on a port; by default an EspFlasher (tests: a flash
     // in memory). Called on the job's thread.
-    using TargetOpener =
-        std::function<std::unique_ptr<EspFlashTarget>(const QString& portName, QString* problem)>;
+    // accessDenied: set when the OS refused to open the port (Linux: no
+    // access to the serial device), as opposed to any other failure.
+    using TargetOpener = std::function<std::unique_ptr<EspFlashTarget>(
+        const QString& portName, QString* problem, bool* accessDenied)>;
     void setTargetOpener(TargetOpener opener) { m_opener = std::move(opener); }
     // The device is left as the current step leaves it; a restore or install
     // stopped part way leaves its region incomplete.
     void cancel();
     bool isRunning() const { return m_thread != nullptr; }
+    // The last job failed because the OS refused to open the port.
+    bool accessDenied() const { return m_accessDenied; }
 
 signals:
     void connected(const QString& chip, const QByteArray& mac, quint32 flashSize);
@@ -89,6 +93,7 @@ private:
     QThread* m_thread{nullptr};
     std::atomic<bool> m_cancel{false};
     bool m_ok{false};        // written by the job's thread before it finishes
+    bool m_accessDenied{false};
     QString m_message;
 };
 
