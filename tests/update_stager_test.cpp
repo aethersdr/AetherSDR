@@ -2,6 +2,7 @@
 #include "core/AppSettings.h"
 #include "core/UpdateSettings.h"
 #include "core/UpdateStager.h"
+#include "core/ZipArchive.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -18,6 +19,7 @@
 
 #include "monocypher-ed25519.h"
 
+#include <algorithm>
 #include <filesystem>
 
 // UpdateStager against tests/fixtures/update: a v26.10.2 install and the
@@ -104,6 +106,51 @@ QByteArray bundleBytes()
 {
     return readFile(kFixture
                     + QStringLiteral("/release/AetherSDR-v26.10.3-Windows-x64-from-v26.10.2.update.tar"));
+}
+
+// The v26.10.3 release tree, made by applying the fixture's patch: what the
+// release's portable zip holds.
+QHash<QString, QByteArray> releaseTree(const QTemporaryDir& tmp)
+{
+    const QString install = copyInstall(tmp, QStringLiteral("for-zip"));
+    UpdateManifest m;
+    QString problem;
+    UpdateManifest::parse(readFile(kFixture + QStringLiteral("/release/manifest.json")), &m, &problem);
+    const QString tree = tmp.filePath(QStringLiteral("v26.10.3-tree"));
+    UpdateStager::applyPatch(install, bundleBytes(), m.payloads[0].patches[0], m.payloads[0].files, tree,
+                             &problem);
+    QHash<QString, QByteArray> files;
+    for (const UpdateManifest::File& f : m.payloads[0].files) {
+        files.insert(f.path, readFile(tree + QLatin1Char('/') + f.path));
+    }
+    return files;
+}
+
+// A portable zip the way Compress-Archive writes one: '\' separators and
+// folder entries. extra adds (or, with an empty value, drops) entries.
+// reversed: the same files in the other order, so the same size and other
+// bytes.
+QByteArray portableZip(const QHash<QString, QByteArray>& tree, const QList<ZipEntryData>& extra = {},
+                       const QStringList& drop = {}, bool reversed = false)
+{
+    QList<ZipEntryData> entries{{QStringLiteral("plugins\\"), {}}};
+    QStringList names = tree.keys();
+    std::sort(names.begin(), names.end());
+    if (reversed) {
+        std::reverse(names.begin(), names.end());
+    }
+    for (const QString& name : names) {
+        if (!drop.contains(name)) {
+            entries.append({QString(name).replace(QLatin1Char('/'), QLatin1Char('\\')), tree.value(name)});
+        }
+    }
+    entries.append(extra);
+    return writeDeflatedZip(entries);
+}
+
+QString sha256Hex(const QByteArray& b)
+{
+    return QString::fromLatin1(QCryptographicHash::hash(b, QCryptographicHash::Sha256).toHex());
 }
 
 } // namespace
@@ -587,6 +634,346 @@ private slots:
         QVERIFY(QFile::exists(install + QStringLiteral("/AetherSDR.exe")));
         QVERIFY(!UpdateStager::applyPatch(QString(), bundleBytes(), m.payloads[0].patches[0],
                                           m.payloads[0].files, tmp.filePath(QStringLiteral("s")), &problem));
+    }
+
+    // ── The full release (no patch applies) ─────────────────────────────
+
+    void theFullReleaseUnpacksExactlyItsFilesAndKeepsTheUninstaller()
+    {
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        writeFile(install + QStringLiteral("/unins000.exe"), "uninstaller");
+        writeFile(install + QStringLiteral("/unins000.dat"), "its record");
+        writeFile(install + QStringLiteral("/settings.ini"), "not the release's");
+        const UpdateManifest m = parsed(fixtureManifest());
+        const QString staging = tmp.filePath(QStringLiteral("staging"));
+        QString problem;
+        QVERIFY2(UpdateStager::applyFull(install, portableZip(releaseTree(tmp)), m.payloads[0].files, staging,
+                                         &problem),
+                 qPrintable(problem));
+        QCOMPARE(readFile(staging + QStringLiteral("/plugins/new.dll")).size(), 4000);
+        QCOMPARE(readFile(staging + QStringLiteral("/unins000.exe")), QByteArray("uninstaller"));
+        QCOMPARE(readFile(staging + QStringLiteral("/unins000.dat")), QByteArray("its record"));
+        QVERIFY(!QFile::exists(staging + QStringLiteral("/settings.ini")));
+        QVERIFY(!QFile::exists(staging + QStringLiteral("/gone.dll")));
+        QCOMPARE(QDir(staging).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).size(), 5);
+        QVERIFY(QFile::exists(install + QStringLiteral("/gone.dll")));   // the install untouched
+    }
+
+    void aFullReleaseThatIsNotExactlyTheManifestIsRefused()
+    {
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        const UpdateManifest m = parsed(fixtureManifest());
+        const QHash<QString, QByteArray> tree = releaseTree(tmp);
+        const QString staging = tmp.filePath(QStringLiteral("staging"));
+        const auto refused = [&](const QByteArray& zip) {
+            QString problem;
+            const bool ok = UpdateStager::applyFull(install, zip, m.payloads[0].files, staging, &problem);
+            return !ok && !QFileInfo::exists(staging) && !problem.isEmpty();
+        };
+        QVERIFY(refused(portableZip(tree, {{QStringLiteral("extra.dll"), "x"}})));
+        QVERIFY(refused(portableZip(tree, {{QStringLiteral("..\\evil.dll"), "x"}})));
+        QVERIFY(refused(portableZip(tree, {{QStringLiteral("../plugins\\"), {}}})));
+        QVERIFY(refused(portableZip(tree, {}, {QStringLiteral("plugins/new.dll")})));
+        // One file swapped for one outside the tree: nothing is written there.
+        QVERIFY(refused(portableZip(tree, {{QStringLiteral("..\\evil.dll"), "x"}}, {QStringLiteral("plugins/old")})));
+        QVERIFY(!QFileInfo::exists(tmp.filePath(QStringLiteral("evil.dll"))));
+        QHash<QString, QByteArray> changed = tree;
+        changed[QStringLiteral("Qt6Core.dll")][0] = 'X';
+        QVERIFY(refused(portableZip(changed)));
+        changed = tree;
+        changed[QStringLiteral("plugins/old")] += "longer than signed";
+        QVERIFY(refused(portableZip(changed)));
+        QVERIFY(refused(QByteArray("not a zip")));
+        // A link cannot come from a zip.
+        UpdateManifest::File link;
+        link.path = QStringLiteral("lib.so");
+        link.symlink = true;
+        link.target = QStringLiteral("Qt6Core.dll");
+        QString problem;
+        QVERIFY(!UpdateStager::applyFull(install, portableZip(tree), m.payloads[0].files + QList{link}, staging,
+                                         &problem));
+        // Overlapping folders, and a cancel.
+        QVERIFY(!UpdateStager::applyFull(install, portableZip(tree), m.payloads[0].files,
+                                         install + QStringLiteral("/staging"), &problem));
+        std::atomic_bool cancelled{true};
+        QVERIFY(!UpdateStager::applyFull(install, portableZip(tree), m.payloads[0].files, staging, &problem,
+                                         &cancelled));
+        QVERIFY(!QFileInfo::exists(staging));
+    }
+
+    // The fixture manifest with a full download that is the zip in dl/, and
+    // (unless keepPatch) no patch, signed by the test key and published in
+    // site/latest/.
+    QString publishFull(const QTemporaryDir& tmp, const QByteArray& zip, bool keepPatch,
+                        const QByteArray& bundle = bundleBytes())
+    {
+        QJsonObject o = fixtureManifest();
+        QJsonArray payloads = o.value(QLatin1String("payloads")).toArray();
+        QJsonObject p = payloads.first().toObject();
+        QJsonObject full = p.value(QLatin1String("full")).toObject();
+        full[QStringLiteral("sha256")] = sha256Hex(zip);
+        full[QStringLiteral("size")] = zip.size();
+        p[QStringLiteral("full")] = full;
+        if (!keepPatch) {
+            p[QStringLiteral("patches")] = QJsonArray();
+        }
+        payloads[0] = p;
+        o[QStringLiteral("payloads")] = payloads;
+        const QByteArray manifest = bytes(o);
+        const QString site = tmp.filePath(QStringLiteral("site"));
+        writeFile(site + QStringLiteral("/latest/manifest.json"), manifest);
+        writeFile(site + QStringLiteral("/latest/manifest.json.sig"), m_key.sign(manifest));
+        writeFile(tmp.filePath(QStringLiteral("dl/v26.10.3/AetherSDR-v26.10.3-Windows-x64-portable.zip")), zip);
+        writeFile(tmp.filePath(QStringLiteral("dl/v26.10.3/AetherSDR-v26.10.3-Windows-x64-from-v26.10.2.update.tar")),
+                  bundle);
+        UpdateStager::setDownloadBaseForTesting(QUrl::fromLocalFile(tmp.filePath(QStringLiteral("dl"))));
+        UpdateSettings::setAcceptedManifestUtc({});
+        return site + QStringLiteral("/latest/manifest.json");
+    }
+
+    void withNoPatchTheFullReleaseIsStagedOnlyWhenAsked()
+    {
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        writeFile(install + QStringLiteral("/unins000.exe"), "uninstaller");
+        const QString manifest = publishFull(tmp, portableZip(releaseTree(tmp)), false);
+        UpdateStager::Request r = request();
+        r.installRoot = install;
+        r.stagingRoot = tmp.filePath(QStringLiteral("staging"));
+        r.manifestUrl = QUrl::fromLocalFile(manifest);
+        UpdateStager stager;
+        QSignalSpy staged(&stager, &UpdateStager::staged);
+        QSignalSpy full(&stager, &UpdateStager::fullDownloadNeeded);
+        QSignalSpy failed(&stager, &UpdateStager::failed);
+
+        stager.stage(r);   // fullFallback off: the old answer
+        QTRY_COMPARE_WITH_TIMEOUT(full.size() + staged.size() + failed.size(), 1, 20000);
+        QCOMPARE(full.size(), 1);
+        QVERIFY(!QFileInfo::exists(r.stagingRoot + QStringLiteral("/26.10.3")));
+
+        UpdateSettings::setAcceptedManifestUtc({});
+        r.fullFallback = true;
+        stager.stage(r);
+        QTRY_COMPARE_WITH_TIMEOUT(full.size() + staged.size() + failed.size(), 2, 20000);
+        QCOMPARE(staged.size(), 1);
+        QCOMPARE(staged.first().at(1).toString(), QStringLiteral("26.10.3"));
+        const QString dir = staged.first().at(0).toString();
+        QCOMPARE(readFile(dir + QStringLiteral("/unins000.exe")), QByteArray("uninstaller"));
+        QVERIFY(!QFile::exists(dir + QStringLiteral("/gone.dll")));
+        QVERIFY(!stager.isBusy());
+    }
+
+    void aBundleThatCannotBeDownloadedFallsBackToTheFullRelease()
+    {
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        const QString manifest = publishFull(tmp, portableZip(releaseTree(tmp)), true);
+        QFile::remove(tmp.filePath(QStringLiteral("dl/v26.10.3/AetherSDR-v26.10.3-Windows-x64-from-v26.10.2.update.tar")));
+        UpdateStager::Request r = request();
+        r.installRoot = install;
+        r.stagingRoot = tmp.filePath(QStringLiteral("staging"));
+        r.manifestUrl = QUrl::fromLocalFile(manifest);
+        r.fullFallback = true;
+        UpdateStager stager;
+        QSignalSpy staged(&stager, &UpdateStager::staged);
+        QSignalSpy full(&stager, &UpdateStager::fullDownloadNeeded);
+        stager.stage(r);
+        QTRY_COMPARE_WITH_TIMEOUT(full.size() + staged.size(), 1, 20000);
+        QCOMPARE(staged.size(), 1);
+        QVERIFY(!QFile::exists(staged.first().at(0).toString() + QStringLiteral("/gone.dll")));
+        QVERIFY(!stager.isBusy());
+    }
+
+    void aBrokenPatchFallsBackToTheFullRelease()
+    {
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        QByteArray bundle = bundleBytes();
+        bundle[bundle.size() / 2] = bundle[bundle.size() / 2] ^ 1;   // fails its signed hash
+        const QString manifest = publishFull(tmp, portableZip(releaseTree(tmp)), true, bundle);
+        UpdateStager::Request r = request();
+        r.installRoot = install;
+        r.stagingRoot = tmp.filePath(QStringLiteral("staging"));
+        r.manifestUrl = QUrl::fromLocalFile(manifest);
+        r.fullFallback = true;
+        UpdateStager stager;
+        QSignalSpy staged(&stager, &UpdateStager::staged);
+        QSignalSpy full(&stager, &UpdateStager::fullDownloadNeeded);
+        stager.stage(r);
+        QTRY_COMPARE_WITH_TIMEOUT(full.size() + staged.size(), 1, 20000);
+        QCOMPARE(staged.size(), 1);
+        QVERIFY(!QFile::exists(staged.first().at(0).toString() + QStringLiteral("/gone.dll")));
+
+        // A full release that fails its hash too, though it is a good zip of
+        // the same files: the browser, once.
+        const QHash<QString, QByteArray> tree = releaseTree(tmp);
+        const QByteArray other = portableZip(tree, {}, {}, true);
+        QCOMPARE(other.size(), portableZip(tree).size());
+        QVERIFY(other != portableZip(tree));
+        writeFile(tmp.filePath(QStringLiteral("dl/v26.10.3/AetherSDR-v26.10.3-Windows-x64-portable.zip")), other);
+        UpdateSettings::setAcceptedManifestUtc({});
+        stager.stage(r);
+        QTRY_COMPARE_WITH_TIMEOUT(full.size(), 1, 20000);
+        QTest::qWait(100);
+        QCOMPARE(staged.size(), 1);
+        QCOMPARE(full.size(), 1);   // once, not at least once
+        QCOMPARE(full.first().first().toString(), QStringLiteral("The downloaded update does not match its signed hash."));
+        QVERIFY(!stager.isBusy());
+    }
+
+    // ── What stays staged between runs ──────────────────────────────────
+
+    void aStagedReleaseIsRecordedAndRevalidated()
+    {
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        const QString manifest = publishFull(tmp, portableZip(releaseTree(tmp)), true);
+        UpdateStager::Request r = request();
+        r.installRoot = install;
+        r.stagingRoot = tmp.filePath(QStringLiteral("staging"));
+        r.manifestUrl = QUrl::fromLocalFile(manifest);
+        {
+            UpdateStager stager;
+            QSignalSpy staged(&stager, &UpdateStager::staged);
+            stager.stage(r);
+            QTRY_COMPARE_WITH_TIMEOUT(staged.size(), 1, 20000);
+        }
+        const QString root = r.stagingRoot;
+        QCOMPARE(QDir(root).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden),
+                 (QStringList{QStringLiteral("26.10.3"), QStringLiteral("26.10.3.json"),
+                              QStringLiteral("26.10.3.manifest.json"), QStringLiteral("26.10.3.manifest.json.sig")}));
+
+        // The next run finds it, for this install and version only.
+        UpdateStager::StagedRelease s =
+            UpdateStager::stagedRelease(root, QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.3"), {});
+        QCOMPARE(s.version, QStringLiteral("26.10.3"));
+        QCOMPARE(s.dir, root + QStringLiteral("/26.10.3"));
+        QCOMPARE(s.from, QStringLiteral("26.10.2"));
+        QCOMPARE(UpdateStager::stagedRelease(root, QStringLiteral("26.10.2"), install, QString(), {}).version,
+                 QStringLiteral("26.10.3"));   // latest not known yet
+        QString problem;
+        QVERIFY2(UpdateStager::revalidate(root, s, QStringLiteral("windows"), QStringLiteral("x86_64"), &problem),
+                 qPrintable(problem));
+        QVERIFY(!UpdateStager::revalidate(root, s, QStringLiteral("linux"), QStringLiteral("x86_64"), &problem));
+
+        // A file changed after staging, or the stored manifest, fails it.
+        writeFile(s.dir + QStringLiteral("/plugins/old"), "tampered!!!!");
+        QVERIFY(!UpdateStager::revalidate(root, s, QStringLiteral("windows"), QStringLiteral("x86_64"), &problem));
+        QVERIFY(problem.contains(QLatin1String("plugins/old")));
+        const QByteArray stored = readFile(root + QStringLiteral("/26.10.3.manifest.json"));
+        writeFile(root + QStringLiteral("/26.10.3.manifest.json"), QByteArray(stored).replace("26.10.2", "26.10.1"));
+        QVERIFY(!UpdateStager::revalidate(root, s, QStringLiteral("windows"), QStringLiteral("x86_64"), &problem));
+        QVERIFY(problem.contains(QLatin1String("not signed")));
+        QVERIFY(!UpdateStager::revalidate(root, UpdateStager::StagedRelease{}, QStringLiteral("windows"),
+                                          QStringLiteral("x86_64"), &problem));
+    }
+
+    void aStagedReleaseThatIsNoLongerTheOneToInstallIsDiscarded()
+    {
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        const QString manifest = publishFull(tmp, portableZip(releaseTree(tmp)), true);
+        UpdateStager::Request r = request();
+        r.installRoot = install;
+        r.stagingRoot = tmp.filePath(QStringLiteral("staging"));
+        r.manifestUrl = QUrl::fromLocalFile(manifest);
+        const QString root = r.stagingRoot;
+        const auto stageOnce = [&] {
+            UpdateSettings::setAcceptedManifestUtc({});
+            UpdateStager stager;
+            QSignalSpy staged(&stager, &UpdateStager::staged);
+            stager.stage(r);
+            return QTest::qWaitFor([&] { return staged.size() == 1; }, 20000);
+        };
+        const auto discarded = [&](const QString& running, const QString& installRoot, const QString& latest,
+                                   const QString& rolledBack) {
+            const UpdateStager::StagedRelease s =
+                UpdateStager::stagedRelease(root, running, installRoot, latest, rolledBack);
+            return s.version.isEmpty() && QDir(root).isEmpty();
+        };
+        QVERIFY(stageOnce());
+        QVERIFY(discarded(QStringLiteral("26.10.3"), install, QStringLiteral("v26.10.3"), {}));   // updated already
+        QVERIFY(stageOnce());
+        QVERIFY(discarded(QStringLiteral("26.10.1"), install, QStringLiteral("v26.10.3"), {}));   // staged for another
+        QVERIFY(stageOnce());
+        QVERIFY(discarded(QStringLiteral("26.10.2"), tmp.filePath(QStringLiteral("other")), QStringLiteral("v26.10.3"), {}));
+        QVERIFY(stageOnce());
+        QVERIFY(discarded(QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.4"), {}));   // superseded
+        QVERIFY(stageOnce());
+        QVERIFY(discarded(QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.3"), QStringLiteral("26.10.3")));
+        QVERIFY(stageOnce());
+        // Review of #6771: the record is unsigned and keeps no tag; one
+        // written into it (a "v26.10.4" naming the new latest) is never read,
+        // so a superseded (but signed) release cannot pass for it.
+        {
+            const QString rec = root + QStringLiteral("/26.10.3.json");
+            QJsonObject o = QJsonDocument::fromJson(readFile(rec)).object();
+            QVERIFY(!o.contains(QStringLiteral("tag")));
+            o[QStringLiteral("tag")] = QStringLiteral("v26.10.4");
+            writeFile(rec, QJsonDocument(o).toJson());
+        }
+        QVERIFY(discarded(QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.4"), {}));
+        QVERIFY(stageOnce());
+        // An empty install in the record is no install, never the working directory.
+        {
+            const QString rec = root + QStringLiteral("/26.10.3.json");
+            QJsonObject o = QJsonDocument::fromJson(readFile(rec)).object();
+            o[QStringLiteral("install")] = QString();
+            writeFile(rec, QJsonDocument(o).toJson());
+        }
+        bool emptyDiscarded = false;
+        {
+            // The working directory is the process's: always put back.
+            struct Cwd {
+                QString was = QDir::currentPath();
+                ~Cwd() { QDir::setCurrent(was); }
+            } restore;
+            QDir::setCurrent(install);
+            emptyDiscarded = discarded(QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.3"), {});
+        }
+        QVERIFY(emptyDiscarded);
+        QVERIFY(stageOnce());
+        QFile::remove(root + QStringLiteral("/26.10.3.manifest.json.sig"));   // a record half written
+        QVERIFY(discarded(QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.3"), {}));
+
+        // What a crashed run left goes; the staged release stays.
+        QVERIFY(stageOnce());
+        QDir().mkpath(root + QStringLiteral("/.work-crashed/plugins"));
+        QDir().mkpath(root + QStringLiteral("/26.10.1"));
+        writeFile(root + QStringLiteral("/26.10.1.json"), "{}");
+        const UpdateStager::StagedRelease s =
+            UpdateStager::stagedRelease(root, QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.3"), {});
+        QCOMPARE(s.version, QStringLiteral("26.10.3"));
+        QCOMPARE(QDir(root).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden).size(), 4);
+        // Review of #6771: the folder is the helper's state folder too; the
+        // sweep removes only what staging wrote.
+        writeFile(root + QStringLiteral("/swap-journal.txt"), "selftest 26.10.3");
+        writeFile(root + QStringLiteral("/swap-result.txt"), "RolledBack 26.10.3\n");
+        writeFile(root + QStringLiteral("/repair-plan.txt"), "C:/AetherSDR\n26.10.3\n");
+        writeFile(root + QStringLiteral("/updater.log"), "log");
+        writeFile(root + QStringLiteral("/AetherSDRUpdater.exe"), "helper");
+        writeFile(root + QStringLiteral("/selftest-26.10.3.txt"), "26.10.3");
+        // Staging's own leftovers beside them do go: a crashed work folder
+        // and records QSaveFile left half written.
+        QDir().mkpath(root + QStringLiteral("/.work-crashed"));
+        writeFile(root + QStringLiteral("/26.10.3.json.a1B2c3"), "{");
+        writeFile(root + QStringLiteral("/26.10.3.manifest.json.sig.Zz9Yy8"), "x");
+        UpdateStager::stagedRelease(root, QStringLiteral("26.10.3"), install, QStringLiteral("v26.10.3"), {});
+        for (const char* name : {".work-crashed", "26.10.3.json.a1B2c3", "26.10.3.manifest.json.sig.Zz9Yy8"}) {
+            QVERIFY2(!QFileInfo::exists(root + QLatin1Char('/') + QLatin1String(name)), name);
+        }
+        for (const char* name : {"swap-journal.txt", "swap-result.txt", "repair-plan.txt", "updater.log",
+                                 "AetherSDRUpdater.exe", "selftest-26.10.3.txt"}) {
+            QVERIFY2(QFile::exists(root + QLatin1Char('/') + QLatin1String(name)), name);
+        }
+        QVERIFY(!QFileInfo::exists(root + QStringLiteral("/26.10.3")));   // staging's own, discarded
+        QVERIFY(!QFileInfo::exists(root + QStringLiteral("/26.10.3.json")));
+
+        QVERIFY(UpdateStager::stagedRelease(tmp.filePath(QStringLiteral("none")), QStringLiteral("26.10.2"), install,
+                                            {}, {})
+                    .version.isEmpty());
     }
 
     // ── The whole stage(), over file:// URLs ────────────────────────────

@@ -244,6 +244,13 @@ option(AETHER_HL2_TX_TXA
 option(AETHER_FIRMWARE_DEV_OVERRIDES
        "Honor the AETHER_FIRMWARE_CATALOG and AETHER_FIRMWARE_TRUST_KEYS environment overrides (testing only)"
        OFF)
+# Lets AETHER_UPDATE_MANIFEST_URL, AETHER_UPDATE_TRUST_KEYS,
+# AETHER_UPDATE_DOWNLOAD_BASE and AETHER_UPDATE_PRETEND_VERSION point the
+# in-app updater at a test release, for trying an update end to end before
+# there is a release to update to. Off by default and never for release.
+option(AETHER_UPDATE_DEV_OVERRIDES
+       "Honor the AETHER_UPDATE_* environment overrides of the in-app updater (testing only)"
+       OFF)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 if(WIN32)
@@ -1559,6 +1566,7 @@ set(GUI_SOURCES
     src/gui/KeyboardMapWidget.cpp
     src/gui/ShortcutDialog.cpp
     src/gui/MultiFlexDialog.cpp
+    src/gui/Nr2WisdomDialog.cpp
     src/gui/HelpDialog.cpp
     src/gui/WhatsNewDialog.cpp
     src/gui/ThemeEditorDialog.cpp
@@ -1858,7 +1866,8 @@ target_link_libraries(aethercore PRIVATE aether::wdsp)
 target_link_libraries(aethercore PRIVATE aether_monocypher)   # core: EspFirmwareCatalog, UpdateStager
 target_link_libraries(aethercore PRIVATE aether_zstd)         # core: UpdateStager
 target_compile_definitions(aethercore PRIVATE
-    AETHER_FIRMWARE_DEV_OVERRIDES=$<BOOL:${AETHER_FIRMWARE_DEV_OVERRIDES}>)
+    AETHER_FIRMWARE_DEV_OVERRIDES=$<BOOL:${AETHER_FIRMWARE_DEV_OVERRIDES}>
+    AETHER_UPDATE_DEV_OVERRIDES=$<BOOL:${AETHER_UPDATE_DEV_OVERRIDES}>)
 target_link_libraries(aethercore PRIVATE aether_ctr2max_reg)  # core: Ctr2MaxRegistration
 
 # Desktop-only implementations kept out of libaethercore. Their public headers
@@ -2394,6 +2403,10 @@ endforeach()
 if(DEFINED ENV{SOURCE_DATE_EPOCH})
     message(STATUS "Reproducible build: honoring SOURCE_DATE_EPOCH=$ENV{SOURCE_DATE_EPOCH}")
 endif()
+
+# main.cpp: AETHER_UPDATE_PRETEND_VERSION.
+target_compile_definitions(AetherSDR PRIVATE
+    AETHER_UPDATE_DEV_OVERRIDES=$<BOOL:${AETHER_UPDATE_DEV_OVERRIDES}>)
 
 if((UNIX OR WIN32) AND ENABLE_DSTAR)
     target_compile_definitions(AetherSDR PRIVATE AETHER_ENABLE_DIGITAL_VOICE_HELPER)
