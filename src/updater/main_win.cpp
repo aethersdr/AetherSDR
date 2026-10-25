@@ -11,18 +11,18 @@
 //   AetherSDRUpdater.exe --protocol 1 --wait-pid <pid> --install <dir>
 //                        --staged <dir> --state-dir <dir> --version <x.y.z>
 //                        [--restart]
-//   AetherSDRUpdater.exe --protocol 1 --repair
+//   AetherSDRUpdater.exe --protocol 1 --repair --state-dir <dir>
 //
 // --repair is what the RunOnce entry armed before the first rename runs at
-// the next logon: repair() from the plan the swap left in the helper's own
-// folder (the state folder), for when the swap died with no install left to
-// start AetherSDR from.
+// the next logon: repair() from the plan the swap left in the state folder,
+// for when the swap died with no install left to start AetherSDR from.
 
 #include "UpdateSwap.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
+#include <tlhelp32.h>
 
 #include <fstream>
 #include <map>
@@ -100,10 +100,58 @@ fs::path selfPath()
     }
 }
 
-std::string utf8(const fs::path& p)
+// The volume serial and NTFS file ID: kept by a rename, new for a file
+// written again.
+std::string fileId(const fs::path& p)
 {
-    const auto u8 = p.u8string();
-    return std::string(u8.begin(), u8.end());
+    const DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    HANDLE h = CreateFileW(p.c_str(), FILE_READ_ATTRIBUTES, share, nullptr, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        return {};
+    }
+    BY_HANDLE_FILE_INFORMATION info{};
+    const bool ok = GetFileInformationByHandle(h, &info);
+    CloseHandle(h);
+    if (!ok) {
+        return {};
+    }
+    wchar_t buf[64];
+    swprintf(buf, 64, L"%08lx-%08lx%08lx", info.dwVolumeSerialNumber, info.nFileIndexHigh,
+             info.nFileIndexLow);
+    return utf8(fs::path(buf));
+}
+
+// Whether an AetherSDR.exe is running from the install (the repair has no
+// process id to wait on).
+bool runningFrom(const fs::path& install)
+{
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    const std::wstring dir = install.lexically_normal().wstring();
+    bool found = false;
+    PROCESSENTRY32W e{};
+    e.dwSize = sizeof(e);
+    for (BOOL more = Process32FirstW(snap, &e); more && !found; more = Process32NextW(snap, &e)) {
+        if (_wcsicmp(e.szExeFile, L"AetherSDR.exe") != 0) {
+            continue;
+        }
+        HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, e.th32ProcessID);
+        if (!p) {
+            continue;
+        }
+        wchar_t image[32768];
+        DWORD size = static_cast<DWORD>(std::size(image));
+        if (QueryFullProcessImageNameW(p, 0, image, &size)) {
+            const std::wstring parent = fs::path(image).parent_path().lexically_normal().wstring();
+            found = _wcsicmp(parent.c_str(), dir.c_str()) == 0;
+        }
+        CloseHandle(p);
+    }
+    CloseHandle(snap);
+    return found;
 }
 
 // The repair's plan beside the helper, then the RunOnce entry that starts
@@ -115,8 +163,11 @@ bool armRepair(const Plan& plan)
     if (self.empty() || !writeDurably(plan.stateDir / kRepairPlan, record)) {
         return false;
     }
-    const std::wstring command =
-        quoted(self.wstring()) + L" --protocol " + std::to_wstring(kProtocol) + L" --repair";
+    const std::wstring command = quoted(self.wstring()) + L" --protocol " + std::to_wstring(kProtocol)
+                                 + L" --repair --state-dir " + quoted(plan.stateDir.wstring());
+    if (command.size() >= MAX_PATH) {
+        return false;   // RunOnce runs no longer command line; nothing is swapped then
+    }
     HKEY key = nullptr;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, kRunOnceKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key,
                         nullptr) != ERROR_SUCCESS) {
@@ -166,6 +217,20 @@ void showBroken(const Plan& plan)
     MessageBoxW(nullptr, text.c_str(), L"AetherSDR update", MB_OK | MB_ICONERROR);
 }
 
+// What a swap and a repair share. plan must outlive the result.
+Ops baseOps(const Plan& plan, std::ofstream& logFile)
+{
+    Ops ops;
+    ops.log = [&logFile](const std::string& line) { logFile << line << '\n' << std::flush; };
+    ops.now = [] { return Clock::now(); };
+    ops.sleep = [](Duration d) { Sleep(static_cast<DWORD>(d.count())); };
+    ops.writeJournal = writeDurably;
+    ops.armRepair = [&plan] { return armRepair(plan); };
+    ops.disarmRepair = [&plan] { disarmRepair(plan); };
+    ops.fileId = fileId;
+    return ops;
+}
+
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
@@ -193,21 +258,28 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     }
     if (repairOnly) {
         Plan plan;
-        plan.stateDir = selfPath().parent_path();
+        plan.stateDir = args[L"--state-dir"].empty() ? selfPath().parent_path()
+                                                      : fs::path(args[L"--state-dir"]);
         plan.exeName = L"AetherSDR.exe";
         std::ofstream logFile(plan.stateDir / "updater.log", std::ios::app);
-        Ops ops;
-        ops.log = [&logFile](const std::string& line) { logFile << line << '\n' << std::flush; };
-        ops.now = [] { return Clock::now(); };
-        ops.sleep = [](Duration d) { Sleep(static_cast<DWORD>(d.count())); };
-        ops.writeJournal = writeDurably;
+        Ops ops = baseOps(plan, logFile);
         if (!readRepairPlan(&plan)) {
             ops.log("AetherSDRUpdater: no repair plan; nothing to repair");
             RegDeleteKeyValueW(HKEY_CURRENT_USER, kRunOnceKey, kRunOnceValue);
             return 0;
         }
-        ops.armRepair = [&plan] { return armRepair(plan); };
-        ops.disarmRepair = [&plan] { disarmRepair(plan); };
+        // No process id to wait on: the app counts as running while any
+        // AetherSDR.exe runs from the install.
+        ops.waitForOldExit = [&ops, &plan](Duration timeout) {
+            const auto deadline = Clock::now() + timeout;
+            while (runningFrom(plan.install)) {
+                if (Clock::now() >= deadline) {
+                    return false;
+                }
+                ops.sleep(Duration(1000));
+            }
+            return true;
+        };
         ops.log("AetherSDRUpdater: repairing the install after an interrupted update to " + plan.version);
         bool repaired = false;
         try {
@@ -239,10 +311,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     const DWORD pid = static_cast<DWORD>(std::wcstoul(args[L"--wait-pid"].c_str(), nullptr, 10));
 
     std::ofstream logFile(plan.stateDir / "updater.log", std::ios::app);
-    Ops ops;
-    ops.log = [&logFile](const std::string& line) { logFile << line << '\n' << std::flush; };
-    ops.now = [] { return Clock::now(); };
-    ops.sleep = [](Duration d) { Sleep(static_cast<DWORD>(d.count())); };
+    Ops ops = baseOps(plan, logFile);
     ops.waitForOldExit = [pid](Duration timeout) {
         HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, pid);
         if (!h) {
@@ -275,29 +344,37 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
         TerminateProcess(static_cast<HANDLE>(p.handle.get()), 1);
         WaitForSingleObject(static_cast<HANDLE>(p.handle.get()), 5000);
     };
-    ops.writeJournal = writeDurably;
-    ops.armRepair = [&plan] { return armRepair(plan); };
-    ops.disarmRepair = [&plan] { disarmRepair(plan); };
 
     ops.log("AetherSDRUpdater: installing " + plan.version);
     Outcome outcome = Outcome::Broken;
     try {
         outcome = run(plan, ops);
     } catch (const std::exception& e) {
-        // Never a silent crash: the journal on disk still says how far it
-        // got, and the next run repairs from it.
+        // Never a silent crash: put the known-good install back the way a
+        // later run would, and say so. Only an install still missing is
+        // Broken; a swap that had already finished is left as it reported.
         ops.log(std::string("the swap stopped on an error: ") + e.what());
-        // Put the known-good install back the way a later run would, and
-        // say so; only an install that is still missing is Broken.
         try {
-            const bool restored = recover(plan, ops);
+            const Paths paths = pathsFor(plan);
             std::error_code ec;
-            if (restored && fs::exists(plan.install / plan.exeName, ec)) {
-                outcome = Outcome::SwapUndone;
+            if (!fs::exists(paths.journal, ec) && fs::exists(paths.result, ec)) {
+                ops.log("the swap had already finished; its result stands");
+                outcome = Outcome::NotPossible;   // not Broken: no message
+            } else {
+                const bool owed = fs::exists(paths.journal, ec);
+                const bool restored = recover(plan, ops);
+                const bool runnable = restored && fs::exists(plan.install / plan.exeName, ec);
+                outcome = !runnable ? Outcome::Broken : owed ? Outcome::SwapUndone : Outcome::NotPossible;
+                std::ofstream(paths.result, std::ios::trunc)
+                    << outcomeName(outcome) << ' ' << plan.version << '\n';
+                ops.log(std::string("outcome: ") + outcomeName(outcome) + " " + plan.version);
+                if (runnable) {
+                    disarmRepair(plan);
+                    if (plan.relaunch) {
+                        ops.launch(plan.install / plan.exeName, {});
+                    }
+                }
             }
-            std::ofstream(pathsFor(plan).result, std::ios::trunc)
-                << outcomeName(outcome) << ' ' << plan.version << '\n';
-            ops.log(std::string("outcome: ") + outcomeName(outcome) + " " + plan.version);
         } catch (const std::exception& again) {
             ops.log(std::string("the repair stopped on an error too: ") + again.what());
         }

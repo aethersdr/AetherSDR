@@ -2574,6 +2574,9 @@ if(WIN32)
     set_target_properties(AetherSDRUpdater PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    if(MSVC)
+        target_compile_options(AetherSDRUpdater PRIVATE /utf-8)   # like the first-party targets
+    endif()
     add_dependencies(AetherSDR AetherSDRUpdater)
 endif()
 

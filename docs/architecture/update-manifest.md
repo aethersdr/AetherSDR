@@ -253,9 +253,11 @@ next PR on), because it renames the folder it was installed in. Its
 command line is versioned (`--protocol 1`), and anything else is refused.
 
 In-place updates are per-user. `launchHelper` refuses while AetherSDR runs
-elevated: the helper would run from a user-writable folder at the
-elevated level, and a swapped-in tree would keep that folder's permissions
-inside Program Files. A per-machine install run normally fails the
+elevated across a UAC boundary (the split token's full half): the helper
+would run from a user-writable folder at the elevated level, and a
+swapped-in tree would keep that folder's permissions inside Program
+Files. With UAC off, or as the built-in Administrator, there is no lower
+level to escape from, and it runs. A per-machine install run normally fails the
 helper's writable-parent check and is left alone (`NotPossible`); either
 way the answer is to run the installer.
 
@@ -289,14 +291,25 @@ owed: after a failed rollback, or when the app never exited. Windows has
 no atomic folder swap; between step 4's two renames nothing runnable is at
 `<install>` for a moment, so nothing could start AetherSDR to start the
 helper again. Before the first rename the helper therefore arms a repair:
-`repair-plan.txt` beside it (the install and the version) and an
+`repair-plan.txt` in the state folder (the install and the version) and an
 `HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce` entry that runs
-`AetherSDRUpdater.exe --protocol 1 --repair` at the next logon. If the
-repair cannot be armed, nothing is renamed. The repair runs `recover()`
-alone and records `SwapUndone`, never `RolledBack`, since the release was
-never tested. A repair that cannot finish arms itself again; one with
-nothing owed only disarms. The helper disarms it whenever it removes the
-journal. The outcome goes to `swap-result.txt`, which the app reads once
+`AetherSDRUpdater.exe --protocol 1 --repair --state-dir <dir>` at the next
+logon. If the repair cannot be armed (or its command line would pass
+RunOnce's 260 characters), nothing is renamed.
+
+The repair runs `recover()` alone. Windows deletes a RunOnce value before
+running it, so the repair arms itself again first, and one cut short runs
+at the following logon. While an `AetherSDR.exe` runs from the install it
+renames nothing and waits for the next logon. It records `SwapUndone`,
+never `RolledBack`, since the release was never tested, and only when it
+moved a folder. One with nothing owed only disarms. The helper disarms it
+whenever it removes the journal.
+
+The journal names the file the swap left at `<install>`: the volume serial
+and NTFS file ID of the new release's `AetherSDR.exe`, which a rename keeps
+and a file written again does not. `recover()` rolls back only that tree,
+so a release reinstalled after the Broken message (below) is never
+replaced by the stale `.previous`. The outcome goes to `swap-result.txt`, which the app reads once
 at its next start and checks before believing (a known outcome and a
 plain version, or nothing is logged or kept). A rolled-back release is
 remembered as `Updates.rolledBackVersion`, which the next PR's Updates

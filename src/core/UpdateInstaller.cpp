@@ -25,29 +25,32 @@ namespace {
 const QString kHelper = QStringLiteral("AetherSDRUpdater.exe");
 using updater::kProtocol;   // one number for the app and the helper
 
-// The outcomes UpdateSwap writes (outcomeName).
+// The outcomes UpdateSwap writes, by its own names.
 bool knownOutcome(const QString& o)
 {
-    for (const char* name : {"Updated", "RolledBack", "OldStillRunning", "NotPossible", "SwapUndone",
-                             "Broken"}) {
-        if (o == QLatin1String(name)) {
+    using updater::Outcome;
+    for (Outcome x : {Outcome::Updated, Outcome::RolledBack, Outcome::OldStillRunning, Outcome::NotPossible,
+                      Outcome::SwapUndone, Outcome::Broken}) {
+        if (o == QLatin1String(updater::outcomeName(x))) {
             return true;
         }
     }
     return false;
 }
 #ifdef Q_OS_WIN
+// Elevated past a UAC boundary: the split token's full half. With UAC off,
+// or as the built-in Administrator, there is no lower level to escape from.
 bool processElevated()
 {
     HANDLE token = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
         return true;   // unknown: never assume it is safe
     }
-    TOKEN_ELEVATION elevation{};
+    TOKEN_ELEVATION_TYPE type = TokenElevationTypeDefault;
     DWORD size = 0;
-    const bool ok = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size);
+    const bool ok = GetTokenInformation(token, TokenElevationType, &type, sizeof(type), &size);
     CloseHandle(token);
-    return !ok || elevation.TokenIsElevated != 0;
+    return !ok || type == TokenElevationTypeFull;
 }
 #endif
 } // namespace
