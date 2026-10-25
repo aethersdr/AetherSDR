@@ -146,7 +146,7 @@ struct Harness {
                 return std::string();
             }
             return std::to_string(fs::file_size(p, ec)) + "-"
-                   + std::to_string(t.time_since_epoch().count());
+                   + std::to_string(static_cast<long long>(t.time_since_epoch().count()));   // libc++: __int128
         };
         ops.rename = [this](const fs::path& from, const fs::path& to, std::error_code& ec) {
             auto it = renameFailures.find(from.filename().string());
