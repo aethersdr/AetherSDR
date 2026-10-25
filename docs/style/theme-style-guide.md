@@ -43,8 +43,8 @@ checked-toggle accent red where the root theme has it blue — scope
 paths are slash-joined, and a widget opts in by carrying the path in
 its `themeContainer` property). The `canon` scope does the same for
 whole windows: AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, the multiFLEX Dashboard, Radio Setup,
-TX Band Settings, Connect to Radio, AGC-T Calibration and Icom RC-28 Button Mapping sit under `canon/aetherRx`, `canon/aetherTx`, `canon/aetherModem`,
-`canon/aetherMap`, `canon/aetherGps`, `canon/spotHub`, `canon/aetherControl`, `canon/multiFlex`, `canon/radioSetup`, `canon/txBand`, `canon/connection`, `canon/agcCalibration` and `canon/rc28Mapping`, and it maps the base tokens onto the canon palette
+TX Band Settings, Connect to Radio, AGC-T Calibration, Icom RC-28 Button Mapping and FFTW Wisdom sit under `canon/aetherRx`, `canon/aetherTx`, `canon/aetherModem`,
+`canon/aetherMap`, `canon/aetherGps`, `canon/spotHub`, `canon/aetherControl`, `canon/multiFlex`, `canon/radioSetup`, `canon/txBand`, `canon/connection`, `canon/agcCalibration`, `canon/rc28Mapping` and `canon/nr2Wisdom`, and it maps the base tokens onto the canon palette
 there (see [`aethersdr-style-guide.md`](aethersdr-style-guide.md)). The
 widget-aware accessors below resolve scope automatically — prefer them
 inside applets and anything painted inside a scoped window.

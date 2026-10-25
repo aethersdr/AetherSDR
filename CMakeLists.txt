@@ -1559,6 +1559,7 @@ set(GUI_SOURCES
     src/gui/KeyboardMapWidget.cpp
     src/gui/ShortcutDialog.cpp
     src/gui/MultiFlexDialog.cpp
+    src/gui/Nr2WisdomDialog.cpp
     src/gui/HelpDialog.cpp
     src/gui/WhatsNewDialog.cpp
     src/gui/ThemeEditorDialog.cpp

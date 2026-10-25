@@ -166,6 +166,7 @@ class MemoryHistoryRing;
 class CpuHistoryRing;
 class UiTickLagMeter;
 class WhatsNewDialog;
+class Nr2WisdomDialog;
 class ProfileManagerDialog;
 class SettingsBrowserDialog;
 class ProfileImportExportDialog;
@@ -1762,7 +1763,7 @@ private:
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<CanonWindow> m_aboutWindow;
     QPointer<AetherRxDialog> m_rxDialog;
-    QPointer<QDialog> m_nr2WisdomDialog;
+    QPointer<Nr2WisdomDialog> m_nr2WisdomDialog;
     // The running NR2 wisdom worker and its cancel flag, so shutdown can stop
     // it before AudioEngine teardown needs the FFTW planner lock (#6287).
     QPointer<QThread> m_nr2WisdomThread;

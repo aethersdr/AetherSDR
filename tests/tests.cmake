@@ -8220,6 +8220,23 @@ add_test(NAME multiflex_dashboard_window_test COMMAND multiflex_dashboard_window
 set_tests_properties(multiflex_dashboard_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# NR2's FFTW Wisdom window is a canon tool window: chrome, sheet, cancel,
+# planner reports and outcomes. No planner runs; no socket.
+add_executable(nr2_wisdom_window_test
+    tests/nr2_wisdom_window_test.cpp
+    src/gui/Nr2WisdomDialog.cpp
+    src/gui/CanonWindow.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(nr2_wisdom_window_test PRIVATE src tests)
+target_link_libraries(nr2_wisdom_window_test PRIVATE
+    aethercore Qt6::Gui Qt6::Widgets Qt6::Test
+)
+set_target_properties(nr2_wisdom_window_test PROPERTIES AUTOMOC ON)
+add_test(NAME nr2_wisdom_window_test COMMAND nr2_wisdom_window_test)
+set_tests_properties(nr2_wisdom_window_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(connection_panel_size_test
     tests/connection_panel_size_test.cpp
     src/gui/ConnectionPanel.cpp
@@ -9957,6 +9974,7 @@ set(AETHER_SETTINGS_CONSUMERS
     flex_control_dialog_size_test
     aethercontrol_window_test
     multiflex_dashboard_window_test
+    nr2_wisdom_window_test
     pan_layout_dialog_size_test
     transmit_model_test
     container_widget_test
