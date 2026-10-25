@@ -2206,6 +2206,9 @@ private:
     // Install update in place (RFC #5304): outlives the Updates window, so
     // a staged release installs on quit (closeEvent).
     UpdateController* m_updateController{nullptr};
+    // applyUiScale() starts a new instance before quitting: the swap would
+    // find the install in use, so a staged update waits for the next quit.
+    bool m_relaunchingApp{false};
     QPointer<UpdatesWindow> m_updatesWindow;
     QAction* m_autoUpdateAction{nullptr};
 

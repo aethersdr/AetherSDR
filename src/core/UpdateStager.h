@@ -167,7 +167,9 @@ public:
     // (other versions' trees and records, half-written records, the work
     // folders a crashed run left); nothing else in the folder is touched,
     // since it is the swap helper's state folder too. Never call it while a
-    // stager isBusy(), whose work folder it would remove.
+    // stager isBusy(), whose work folder it would remove. Just after
+    // cancel() is fine: isBusy() is false then, and a worker still finishing
+    // only removes its own work folder, which may already be gone.
     // An empty githubLatestTag (not known yet) discards nothing on that
     // ground. Cheap: reads the record only. revalidate() checks every file.
     static StagedRelease stagedRelease(const QString& stagingRoot, const QString& runningVersion,

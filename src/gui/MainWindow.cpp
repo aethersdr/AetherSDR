@@ -4483,8 +4483,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
     // A staged update installs as AetherSDR quits (RFC #5304): the helper
     // waits for this process to exit. Not while radio firmware is being
-    // written, and not twice after Restart to update handed it over.
-    if (m_updateController && !(m_updatesWindow && m_updatesWindow->firmwareBusy())) {
+    // written, not when a new instance is already starting from the install
+    // (a UI-scale restart), and not twice after Restart to update handed it
+    // over. Every quit, close() or QApplication::quit(), arrives here.
+    if (m_updateController && !m_relaunchingApp && !(m_updatesWindow && m_updatesWindow->firmwareBusy())) {
         m_updateController->installOnQuit();
     }
 
@@ -9970,6 +9972,7 @@ void MainWindow::applyUiScale(int pct)
         QString("UI scale changed to %1%. Restart AetherSDR now to apply?").arg(pct),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer == QMessageBox::Yes) {
+        m_relaunchingApp = true;
 #ifdef Q_OS_MACOS
         // On macOS, relaunch via 'open -n' so the .app bundle is activated through
         // Launch Services — direct binary exec bypasses the bundle, causing dock
