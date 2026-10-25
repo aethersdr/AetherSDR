@@ -193,6 +193,7 @@ class LiveCwContactsDialog;
 class Ax25HfPacketDecodeDialog;
 class PskReporterMapDialog;
 class GpsLocationDialog;
+class MultiFlexDialog;
 #ifdef AETHER_ASR_ENABLED
 class CopyAssistController;
 #endif
@@ -1747,6 +1748,7 @@ private:
 #endif
     QPointer<PskReporterMapDialog> m_pskReporterMapDialog;
     QPointer<GpsLocationDialog> m_gpsLocationDialog;
+    QPointer<MultiFlexDialog> m_multiFlexDialog;
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<CanonWindow> m_aboutWindow;
@@ -1862,7 +1864,7 @@ private:
     void applyFirmwareCurrencyToVersionLabel();
     // The version row's StatusIndicator action: opens the release notes of the
     // radio's own line while the firmware is out of date, otherwise nothing.
-    void openFirmwareReleaseNotes();
+    void openFirmwareUpdate();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
     QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)

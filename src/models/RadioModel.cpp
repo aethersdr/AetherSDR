@@ -7771,7 +7771,8 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                                       << "udpSeen=" << firstUdpPacketSeen();
                 emit connectionError(
                     tr("No spectrum data received from %1. Source mode: %2. TCP: %3. UDP: %4. "
-                       "UDP traffic from the radio may be blocked, or the wrong source path may be selected.")
+                       "UDP traffic from the radio may be blocked by a firewall on this computer "
+                       "or on the network path, or the wrong source path may be selected.")
                         .arg(targetRadioIp(), selectedSourceMode(),
                              localTcpEndpoint(), localUdpEndpoint()));
             }

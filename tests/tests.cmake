@@ -2344,6 +2344,27 @@ add_test(NAME canon_window_test COMMAND canon_window_test)
 set_tests_properties(canon_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# CanonMessageBox (RFC #6226): the canon question box reports the button
+# clicked, and none when it is closed instead.
+add_executable(canon_message_box_test
+    tests/canon_message_box_test.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(canon_message_box_test PRIVATE src)
+target_link_libraries(canon_message_box_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(canon_message_box_test PROPERTIES AUTOMOC ON)
+add_test(NAME canon_message_box_test COMMAND canon_message_box_test)
+set_tests_properties(canon_message_box_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # CanonApplet, CanonPan and CanonCanvas (RFC #6226): the canon ground with
 # square corners inside the main window; the close button only requests.
 add_executable(canon_surface_test
@@ -3318,6 +3339,13 @@ target_link_libraries(wan_udp_keepalive_test PRIVATE aethercore Qt6::Core)
 add_test(NAME wan_udp_keepalive_test COMMAND wan_udp_keepalive_test)
 set_tests_properties(wan_udp_keepalive_test PROPERTIES TIMEOUT 25)
 
+# Socket-free: injected LAN bind/write; drives start(), rebind, receive and the keepalive timer.
+add_executable(lan_udp_keepalive_test tests/lan_udp_keepalive_test.cpp)
+target_include_directories(lan_udp_keepalive_test PRIVATE src tests)
+target_link_libraries(lan_udp_keepalive_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME lan_udp_keepalive_test COMMAND lan_udp_keepalive_test)
+set_tests_properties(lan_udp_keepalive_test PROPERTIES TIMEOUT 25)
+
 # SOCKETS: manual check of the production ephemeral IPv4 VITA socket and two
 # own loopback UDP sinks. No firmware peer or RF. Build/run explicitly.
 # not registered: opt-in real socket wiring; default coverage above is socket-free.
@@ -3811,26 +3839,15 @@ set_tests_properties(client_chain_audio_path_test PROPERTIES
 # Local Qt dialog + injected uploader callbacks; no radio connection or peer.
 add_executable(firmware_close_dialog_test
     tests/firmware_close_dialog_test.cpp
-    src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
-    src/gui/RadioSetupDialog.cpp
+    src/gui/UpdatesWindow.cpp
+    src/gui/FirmwareUpdateCard.cpp
+    src/gui/CanonPrompt.cpp
     src/gui/CanonWindow.cpp
-    src/gui/RtlReceiverSettingsWidget.cpp
-    src/gui/ControlAvailabilityRegistry.cpp
-    src/gui/RadioSetupDialog_Peripherals.cpp
-    src/gui/Kxpa100AdvancedWidget.cpp
-    src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
-    src/gui/Kpa500AdvancedWidget.cpp
-    src/gui/PersistentDialog.cpp
-    src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
-    src/gui/SliceColorManager.cpp
-    src/gui/KiwiPublicReceiverPicker.cpp
-    src/gui/GuardedSlider.h
 )
 target_include_directories(firmware_close_dialog_test PRIVATE src tests)
 target_link_libraries(firmware_close_dialog_test PRIVATE
-    aetherdesktop_support Qt6::Widgets Qt6::Test)
+    aetherdesktop_support aethercore Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(firmware_close_dialog_test PROPERTIES AUTOMOC ON)
 add_test(NAME firmware_close_dialog_test COMMAND firmware_close_dialog_test)
 set_tests_properties(firmware_close_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
@@ -3840,7 +3857,6 @@ set_tests_properties(firmware_close_dialog_test PROPERTIES
 add_executable(flex_control_visibility_test
     tests/flex_control_visibility_test.cpp
     src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
@@ -3867,7 +3883,6 @@ set_tests_properties(flex_control_visibility_test PROPERTIES
 add_executable(radio_setup_no_transient_window_test
     tests/radio_setup_no_transient_window_test.cpp
     src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
@@ -3906,7 +3921,6 @@ set_tests_properties(radio_setup_no_transient_window_test PROPERTIES
 add_executable(radio_setup_region_field_test
     tests/radio_setup_region_field_test.cpp
     src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
@@ -3933,7 +3947,6 @@ set_tests_properties(radio_setup_region_field_test PROPERTIES
 add_executable(radio_setup_operations_test
     tests/radio_setup_operations_test.cpp
     src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/TxBandDialog.cpp
     src/gui/CanonWindow.cpp
@@ -3967,7 +3980,6 @@ set_tests_properties(radio_setup_operations_test PROPERTIES
 add_executable(radio_setup_label_theme_token_test
     tests/radio_setup_label_theme_token_test.cpp
     src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
@@ -3994,7 +4006,6 @@ set_tests_properties(radio_setup_label_theme_token_test PROPERTIES
 add_executable(radio_setup_window_size_test
     tests/radio_setup_window_size_test.cpp
     src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
@@ -4021,7 +4032,6 @@ set_tests_properties(radio_setup_window_size_test PROPERTIES
 add_executable(radio_setup_pair_grid_test
     tests/radio_setup_pair_grid_test.cpp
     src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
@@ -4054,7 +4064,6 @@ set_tests_properties(radio_setup_pair_grid_test PROPERTIES
 add_executable(radio_setup_max_power_field_test
     tests/radio_setup_max_power_field_test.cpp
     src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
@@ -4084,7 +4093,6 @@ set_tests_properties(radio_setup_max_power_field_test PROPERTIES
 add_executable(radio_setup_tx_timing_fields_test
     tests/radio_setup_tx_timing_fields_test.cpp
     src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
@@ -4115,7 +4123,6 @@ set_tests_properties(radio_setup_tx_timing_fields_test PROPERTIES
 add_executable(radio_setup_recording_mode_dim_test
     tests/radio_setup_recording_mode_dim_test.cpp
     src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
@@ -4147,7 +4154,6 @@ set_tests_properties(radio_setup_recording_mode_dim_test PROPERTIES
 add_executable(radio_setup_headphone_output_gate_test
     tests/radio_setup_headphone_output_gate_test.cpp
     src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
@@ -4183,7 +4189,6 @@ add_executable(radio_nickname_test
     tests/radio_nickname_test.cpp
     src/gui/CanonWindow.cpp
     src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
@@ -4233,7 +4238,6 @@ add_executable(radio_setup_show_tx_waterfall_test
     tests/radio_setup_show_tx_waterfall_test.cpp
     src/gui/CanonWindow.cpp
     src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/ControlAvailabilityRegistry.cpp
@@ -4664,8 +4668,21 @@ target_link_libraries(update_checker_test PRIVATE aethercore Qt6::Core Qt6::Netw
 add_test(NAME update_checker_test COMMAND update_checker_test)
 
 # UpdateChecker's release reading: the real v26.10.3 release JSON into the
-# Updates window's tagline, chapters and highlights; the installer picked per
-# platform; the download-URL allowlist. Pure, no network.
+# Updates window's tagline and chapters; the installer picked per platform;
+# the download-URL allowlist. Pure, no network.
+# UpdateStager (RFC #5304 Phase 2): the signed manifest's checks, choice,
+# and a patch bundle built by tools/build_update_manifest.py applied into a
+# staging copy of a fixture install, with every negative case of
+# docs/architecture/update-manifest.md. file:// downloads, no sockets.
+add_executable(update_stager_test tests/update_stager_test.cpp)
+target_include_directories(update_stager_test PRIVATE src tests)
+target_link_libraries(update_stager_test PRIVATE aethercore aether_monocypher Qt6::Core Qt6::Network Qt6::Test)
+target_compile_definitions(update_stager_test PRIVATE
+    UPDATE_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures/update"
+    UPDATE_SIGNING_PUB="${CMAKE_SOURCE_DIR}/packaging/update-signing.pub")
+set_target_properties(update_stager_test PROPERTIES AUTOMOC ON)
+add_test(NAME update_stager_test COMMAND update_stager_test)
+
 add_executable(update_release_notes_test tests/update_release_notes_test.cpp)
 target_include_directories(update_release_notes_test PRIVATE src)
 target_link_libraries(update_release_notes_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -4679,6 +4696,8 @@ add_test(NAME update_release_notes_test COMMAND update_release_notes_test)
 add_executable(updates_window_test
     tests/updates_window_test.cpp
     src/gui/UpdatesWindow.cpp
+    src/gui/FirmwareUpdateCard.cpp
+    src/gui/CanonPrompt.cpp
     src/gui/CanonWindow.cpp
 )
 target_include_directories(updates_window_test PRIVATE src tests)
@@ -5705,7 +5724,6 @@ add_executable(peripheral_auth_dialog_test
     tests/peripheral_auth_dialog_test.cpp
     tests/fakes/PeripheralAuthStoreFake.cpp
     src/gui/DragValuePopup.cpp
-    src/gui/FirmwareReleasesDialog.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
@@ -8149,6 +8167,24 @@ add_test(NAME aethercontrol_window_test COMMAND aethercontrol_window_test)
 set_tests_properties(aethercontrol_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The multiFLEX Dashboard is a canon dialog: chrome, geometry carried over
+# from PersistentDialog, and the Enabled / Disabled colors in both themes.
+add_executable(multiflex_dashboard_window_test
+    tests/multiflex_dashboard_window_test.cpp
+    src/gui/MultiFlexDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(multiflex_dashboard_window_test PRIVATE src tests)
+target_link_libraries(multiflex_dashboard_window_test PRIVATE
+    aethercore Qt6::Gui Qt6::Widgets Qt6::Test
+)
+set_target_properties(multiflex_dashboard_window_test PROPERTIES AUTOMOC ON)
+add_test(NAME multiflex_dashboard_window_test COMMAND multiflex_dashboard_window_test)
+set_tests_properties(multiflex_dashboard_window_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(connection_panel_size_test
     tests/connection_panel_size_test.cpp
     src/gui/ConnectionPanel.cpp
@@ -9690,6 +9726,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    update_stager_test
     flex_readonly_metadata_test
     dsp_parameter_reset_test
     cw_rx_model_test
@@ -9823,6 +9860,7 @@ set(AETHER_SETTINGS_CONSUMERS
     aether_rx_profiles_test
     theme_manager_test
     canon_window_test
+    canon_message_box_test
     canon_surface_test
     kpa500_applet_test
     kxpa100_applet_test
@@ -9881,6 +9919,7 @@ set(AETHER_SETTINGS_CONSUMERS
     help_dialog_test
     flex_control_dialog_size_test
     aethercontrol_window_test
+    multiflex_dashboard_window_test
     pan_layout_dialog_size_test
     transmit_model_test
     container_widget_test

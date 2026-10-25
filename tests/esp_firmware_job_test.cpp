@@ -75,7 +75,7 @@ struct Outcome {
 Outcome run(EspFirmwareJob::Request request, const QByteArray& deviceMac, std::shared_ptr<Log> log)
 {
     EspFirmwareJob job;
-    job.setTargetOpener([deviceMac, log](const QString&, QString*) {
+    job.setTargetOpener([deviceMac, log](const QString&, QString*, bool*) {
         return std::unique_ptr<EspFlashTarget>(new MemFlash(deviceMac, log));
     });
     Outcome o;
