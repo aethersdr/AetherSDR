@@ -691,6 +691,38 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
             emit extensionError(id, reason);
     });
 
+    // `ioboard.status`'s two answers, consuming the outstanding id like
+    // bandscope.frame's above.
+    connect(m_metis, &MetisClient::ioBoardStatusReady, this, [this](quint32 registers) {
+        const quint64 id = std::exchange(m_ioBoardStatusRequest, 0);
+        if (id == 0) {
+            return;
+        }
+        const AetherSDR::hl2::IoBoardStatus s = AetherSDR::hl2::decodeIoBoardStatus(registers);
+        if (!s.fromBoard()) {
+            emit extensionError(id, QStringLiteral("No IO board answered."));
+            return;
+        }
+        emit extensionResult(id, QVariantMap{
+            {QStringLiteral("inputPins"), s.inputPins},
+            {QStringLiteral("receiving"), s.receiving()},
+            {QStringLiteral("in1"), s.input(1)},
+            {QStringLiteral("in2"), s.input(2)},
+            {QStringLiteral("in3"), s.input(3)},
+            {QStringLiteral("in4"), s.input(4)},
+            {QStringLiteral("in5"), s.input(5)},
+            {QStringLiteral("antennaTuner"), s.antennaTuner},
+            {QStringLiteral("fault"), s.fault},
+            {QStringLiteral("firmwareMajor"), s.firmwareMajor},
+        });
+    });
+    connect(m_metis, &MetisClient::ioBoardStatusFailed, this, [this](const QString& reason) {
+        const quint64 id = std::exchange(m_ioBoardStatusRequest, 0);
+        if (id != 0) {
+            emit extensionError(id, reason);
+        }
+    });
+
     m_linkStatsTimer = new QTimer(this);
     m_linkStatsTimer->setInterval(kLinkStatsIntervalMs);
     connect(m_linkStatsTimer, &QTimer::timeout, this, &Hl2Backend::publishLinkStats);
@@ -5939,6 +5971,28 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
             }
             m_bandscopeFrameRequest = requestId;
             QMetaObject::invokeMethod(m_metis, "requestBandscopeFrame",
+                                      Qt::QueuedConnection);
+            return;
+        }
+        // The IO board's input pins, ATU state, fault code and firmware major,
+        // read from the board over I2C2. A device round trip, like
+        // bandscope.frame; MetisClient answers every request.
+        if (verb == QLatin1String("ioboard.status")) {
+            if (requestId == 0) {
+                return;
+            }
+            if (!m_connected) {
+                emit extensionError(requestId,
+                                    QStringLiteral("Not connected to a radio."));
+                return;
+            }
+            if (m_ioBoardStatusRequest != 0) {
+                emit extensionError(
+                    requestId, QStringLiteral("An IO board read is already pending."));
+                return;
+            }
+            m_ioBoardStatusRequest = requestId;
+            QMetaObject::invokeMethod(m_metis, "requestIoBoardStatus",
                                       Qt::QueuedConnection);
             return;
         }

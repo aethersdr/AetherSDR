@@ -167,6 +167,7 @@ FavoritesPickerDialog::FavoritesPickerDialog(const QList<Entry>& allEntries,
     m_activeList->setDragDropMode(QAbstractItemView::DragDrop);
     m_activeList->setDefaultDropAction(Qt::MoveAction);
     m_activeList->setDragDropOverwriteMode(false);
+    m_activeList->setProperty("_aetherNoTouchScroll", true);  // drag reorders, not scrolls
     m_activeList->setItemDelegate(
         new FavoritesDividerDelegate(favoriteSplit - 1, m_activeList));
     ThemeManager::instance().applyStyleSheet(m_activeList, kListStyleTemplate);
@@ -202,6 +203,7 @@ FavoritesPickerDialog::FavoritesPickerDialog(const QList<Entry>& allEntries,
     m_hiddenList->setDragDropMode(QAbstractItemView::DragDrop);
     m_hiddenList->setDefaultDropAction(Qt::MoveAction);
     m_hiddenList->setDragDropOverwriteMode(false);
+    m_hiddenList->setProperty("_aetherNoTouchScroll", true);  // drag reorders, not scrolls
     ThemeManager::instance().applyStyleSheet(m_hiddenList, kListStyleTemplate);
     hiddenCol->addWidget(m_hiddenList, 1);
     listsRow->addLayout(hiddenCol, 1);
