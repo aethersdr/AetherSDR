@@ -757,8 +757,9 @@ void MainWindow::showMultiFlexDialog()
         return;
     }
 
-    // A canon dialog that stays open beside the main window: created once,
-    // raised if it is already open.
+    // A canon dialog that stays open beside the main window: raised if it is
+    // already open, otherwise created. Closing it (Escape, Ctrl+W, the corner
+    // button) destroys it, so each open starts fresh.
     if (!m_multiFlexDialog) {
         auto* dlg = new MultiFlexDialog(&m_radioModel, this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);

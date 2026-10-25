@@ -6,7 +6,8 @@
 //      button of its own (the corner close button and Escape close it);
 //   2. the size and place the operator gives it persist under the key it used
 //      as a PersistentDialog (MultiFlexDialogGeometry), so geometry saved
-//      before the migration carries over, and a second window restores it;
+//      before the migration (PersistentDialog's base64 saveGeometry()) carries
+//      over, and a second window restores the size it saves;
 //   3. the Enabled / Disabled button is drawn in color.toggle.success when
 //      multiFLEX is on and color.accent.danger when it is off, under Default
 //      Dark and Default Light;
@@ -34,6 +35,7 @@
 #include "models/RadioModel.h"
 
 #include <QApplication>
+#include <QDialog>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QTableWidget>
@@ -168,6 +170,35 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&again));
         QTRY_COMPARE(again.size(), chosen);
         again.hide();
+    }
+
+    void geometrySavedByThePersistentDialogCarriesOver()
+    {
+        // PersistentDialog saved saveGeometry() as base64 under the same key;
+        // that is what an existing install holds on its first canon open.
+        const QSize legacy(720, 360);   // inside the 800x600 offscreen screen
+        QByteArray blob;
+        {
+            QDialog old;
+            old.resize(legacy);
+            old.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&old));
+            QCOMPARE(old.size(), legacy);
+            blob = old.saveGeometry().toBase64();
+            old.hide();
+        }
+        auto& settings = AppSettings::instance();
+        settings.setValue(QLatin1String(kGeometryKey), QString::fromLatin1(blob));
+
+        RadioModel model;
+        MultiFlexDialog window(&model);
+        // CONTROL: the window is not born at the legacy size.
+        QVERIFY(window.size() != legacy);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QTRY_COMPARE(window.size(), legacy);
+        window.hide();
+        settings.remove(QLatin1String(kGeometryKey));
     }
 
     void enableButtonIsGreenOnAndRedOff()
