@@ -1,5 +1,6 @@
 #include "DxClusterDialog.h"
 #include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
 #include "CanonTableStyle.h"
 #include "FramelessResizer.h"
 #include "ScopedChildWidget.h"
@@ -497,36 +498,6 @@ QScrollArea {
     background: transparent;
     border: none;
 }
-QScrollBar:vertical {
-    background: transparent;
-    width: 12px;
-    margin: 8px 2px 8px 2px;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-height: 34px;
-}
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-QScrollBar:horizontal {
-    background: transparent;
-    height: 12px;
-    margin: 2px 8px 2px 8px;
-    border-radius: 6px;
-}
-QScrollBar::handle:horizontal {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-width: 34px;
-}
-QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
-    width: 0px;
-}
 )";
 
 DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
@@ -566,7 +537,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     applyCanonSheet(bodyWidget(), [] {
         return QString::fromLatin1(kSpotHubStyle) + canonTableRules()
              + QString::fromLatin1(kSpotHubTableStyle)
-             + QString::fromLatin1(kSpotHubTailStyle) + canonIndicatorRules();
+             + QString::fromLatin1(kSpotHubTailStyle) + canonScrollBarRules() + canonIndicatorRules();
     });
 
     // Capture source log paths up front so the per-tab Clear handlers (built

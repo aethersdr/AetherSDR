@@ -4,6 +4,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/HidEncoderManager.h"
+#include "core/ThemeManager.h"
 #include "gui/CanonWindow.h"
 #include "gui/FramelessResizer.h"
 #include "gui/RC28MappingDialog.h"
@@ -16,9 +17,12 @@
 #include <QMenu>
 #include <QPlainTextEdit>
 #include <QPointer>
+#include <QPushButton>
+#include <QScreen>
 #include <QSignalSpy>
 #include <QSlider>
 #include <QTest>
+#include <QToolButton>
 
 #include <cstdio>
 
@@ -49,7 +53,12 @@ void canonToolWindow()
 
     // A rectangle saved before the migration: QWidget::saveGeometry() in base64.
     RC28MappingDialog restored(nullptr);
-    const QSize chosen(restored.minimumWidth() + 60, restored.minimumSizeHint().height() + 80);
+    // restoreGeometry() fits the window and its frame to the screen, so ask for
+    // a height well inside it; the offscreen screen is 800 px tall.
+    const int minHeight = restored.minimumSizeHint().height();
+    const int screenHeight = restored.screen()->availableGeometry().height();
+    const QSize chosen(restored.minimumWidth() + 60,
+                       qMax(minHeight, qMin(minHeight + 80, screenHeight - 100)));
     QDialog legacy;
     legacy.resize(chosen);
     settings.setValue(kKey, QString::fromLatin1(legacy.saveGeometry().toBase64()));
@@ -91,6 +100,49 @@ void logMenuIsOpaque()
           "the log's right-click menu has an opaque background");
     menu->close();
     delete menu;
+}
+
+// The window fits a 1366x768 screen, which leaves about 730 px for it.
+void fitsASmallScreen()
+{
+    RC28MappingDialog dialog(nullptr);
+    const int height = dialog.minimumSizeHint().height();
+    std::printf("minimum height %d\n", height);
+    check(height <= 700, "the window's minimum height fits a 768-px screen");
+}
+
+// The status line's accessible name carries the state, and the multiple-
+// devices warning restyles the dot and the line in color.accent.warning.
+void statusLineCarriesItsState()
+{
+    RC28MappingDialog dialog(nullptr);
+    dialog.show();
+    check(QTest::qWaitForWindowExposed(&dialog), "the window is exposed");
+    QLabel* status = nullptr;
+    QLabel* dot = nullptr;
+    for (QLabel* l : dialog.findChildren<QLabel*>()) {
+        if (l->property("rc28Role").toString() == QStringLiteral("status")) status = l;
+        if (l->property("rc28Role").toString() == QStringLiteral("dot")) dot = l;
+    }
+    check(status && dot, "the window has the status dot and line");
+    if (!status || !dot) {
+        return;
+    }
+    check(status->accessibleName() == QStringLiteral("RC-28 connection status: Not connected"),
+          "the status line's accessible name says Not connected");
+
+    const QColor warning = ThemeManager::instance().color(status, QStringLiteral("color.accent.warning"));
+    // CONTROL: before the warning the line is not drawn in the warning color.
+    check(status->palette().color(QPalette::WindowText) != warning,
+          "control: the idle status line is not in the warning color");
+    QMetaObject::invokeMethod(&dialog, "onMultipleDevicesDetected",
+                              Q_ARG(QString, QStringLiteral("RC-28")));
+    check(status->accessibleName().startsWith(
+              QStringLiteral("RC-28 connection status: Multiple RC-28s detected")),
+          "the status line's accessible name follows the warning");
+    check(status->palette().color(QPalette::WindowText) == warning
+              && dot->palette().color(QPalette::WindowText) == warning,
+          "the warning draws the dot and the line in color.accent.warning");
 }
 
 // The value beside the Pulses per step slider fits its widest value.
@@ -145,19 +197,32 @@ void mappingFieldsRoundTrip()
 // PersistentDialog did, so the activity log starts empty on the next open.
 void everyCloseDestroysTheWindow()
 {
-    for (int path = 0; path < 3; ++path) {
+    for (int path = 0; path < 4; ++path) {
         QPointer<RC28MappingDialog> dialog = new RC28MappingDialog(nullptr);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         dialog->show();
         const bool exposed = QTest::qWaitForWindowExposed(dialog);
         if (path == 0) QTest::keyClick(dialog, Qt::Key_Escape);
         if (path == 1) QTest::keySequence(dialog, QKeySequence::Close);
-        if (path == 2) dialog->close();
+        if (path == 2) {
+            for (QToolButton* b : dialog->findChildren<QToolButton*>()) {
+                if (b->accessibleName() == QStringLiteral("Close")) {
+                    QTest::mouseClick(b, Qt::LeftButton);
+                    break;
+                }
+            }
+        }
+        if (path == 3) {
+            if (auto* b = dialog->findChild<QPushButton*>(QStringLiteral("rc28MappingClose"))) {
+                QTest::mouseClick(b, Qt::LeftButton);
+            }
+        }
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         check(exposed && dialog.isNull(),
               path == 0 ? "Esc destroys the window"
               : path == 1 ? "Ctrl+W / Cmd+W destroys the window"
-                          : "the corner close button destroys the window");
+              : path == 2 ? "the corner close button destroys the window"
+                          : "the Close button destroys the window");
         delete dialog.data();
     }
 }
@@ -175,6 +240,8 @@ int main(int argc, char** argv)
     AppSettings::instance().load();
     canonToolWindow();
     logMenuIsOpaque();
+    fitsASmallScreen();
+    statusLineCarriesItsState();
     sensitivityValueFits();
     mappingFieldsRoundTrip();
     everyCloseDestroysTheWindow();

@@ -68,6 +68,12 @@ window that colors items (the dashboard's PTT tick and its own station) keeps
 those colors on a selected row through a delegate, and a window that wants
 plain ink there adds it, as SpotHub does.
 
+Its scroll bars take `canonScrollBarRules()` (`CanonScrollBarStyle.h`): a
+12 px transparent track and a `color.canon.lineHi` handle with no step
+arrows, both orientations. AetherModem, AetherGPS, AetherMap, SpotHub,
+Network Diagnostics, Radio Setup and Icom RC-28 Button Mapping append it to
+their sheets.
+
 ### Consuming tokens
 
 ```cpp

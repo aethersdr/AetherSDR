@@ -2,6 +2,7 @@
 #include "RC28MappingDialog.h"
 
 #include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
 #include "FramelessResizer.h"
 #include "GuardedSlider.h"   // GuardedComboBox lives here
 #include "core/AppSettings.h"
@@ -73,9 +74,6 @@ QWidget {
     color: {{color.canon.inkSoft}};
     background: transparent;
 }
-QLabel {
-    background: transparent;
-}
 QMenu {
     color: {{color.canon.inkSoft}};
     background: {{color.canon.raised}};
@@ -122,7 +120,7 @@ QGroupBox {
     background: {{color.canon.raised}};
     border: 1px solid {{color.canon.line}};
     border-radius: 8px;
-    margin-top: 24px;
+    margin-top: 18px;
     padding-top: 0px;
     font-weight: 700;
 }
@@ -167,8 +165,6 @@ QComboBox QAbstractItemView {
 }
 QCheckBox,
 QRadioButton {
-    background: transparent;
-    color: {{color.canon.inkSoft}};
     spacing: 8px;
 }
 QSlider::groove:horizontal {
@@ -211,12 +207,12 @@ RC28MappingDialog::RC28MappingDialog(HidEncoderManager* encoder,
     setGeometryKey(QStringLiteral("RC28MappingDialogGeometry"));
     FramelessResizer::install(this);
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kRc28Style) + canonIndicatorRules();
+        return QString::fromLatin1(kRc28Style) + canonScrollBarRules() + canonIndicatorRules();
     });
 
     auto* root = new QVBoxLayout(bodyWidget());
     root->setContentsMargins(14, 12, 14, 14);
-    root->setSpacing(8);
+    root->setSpacing(6);
     root->addWidget(makeCanonHeader(QStringLiteral("Icom RC-28 Button Mapping")));
 
     buildDeviceSection();
@@ -252,17 +248,17 @@ void RC28MappingDialog::buildDeviceSection()
 
     auto* form = new QFormLayout(group);
     form->setSpacing(4);
-    form->setContentsMargins(8, 6, 8, 8);
+    form->setContentsMargins(8, 2, 8, 4);
 
     auto* statusRow = new QHBoxLayout;
     m_statusDot   = new QLabel("●");
     m_statusDot->setProperty("rc28Role", QStringLiteral("dot"));
     m_statusLabel = new QLabel("Not connected");
     m_statusLabel->setProperty("rc28Role", QStringLiteral("status"));
-    m_statusLabel->setAccessibleName("RC-28 connection status");
     statusRow->addWidget(m_statusDot);
     statusRow->addWidget(m_statusLabel);
     statusRow->addStretch();
+    setStatusState(QStringLiteral("idle"));
     form->addRow(statusRow);
 
     m_vidPidLabel  = new QLabel("–");
@@ -290,7 +286,7 @@ void RC28MappingDialog::buildTxBarSection()
     auto* group = new QGroupBox("Transmit (PTT) Button");
     auto* vbox = new QVBoxLayout(group);
     vbox->setSpacing(4);
-    vbox->setContentsMargins(8, 6, 8, 8);
+    vbox->setContentsMargins(8, 2, 8, 4);
 
     m_momentaryBtn = new QRadioButton("Momentary  —  hold to transmit, release to stop");
     m_latchedBtn   = new QRadioButton("Latched  —  press to start transmitting, press again to stop");
@@ -320,7 +316,7 @@ void RC28MappingDialog::buildAssignSection()
     auto* group = new QGroupBox("Button Assignments");
     auto* form = new QFormLayout(group);
     form->setSpacing(5);
-    form->setContentsMargins(8, 6, 8, 8);
+    form->setContentsMargins(8, 2, 8, 4);
 
     m_f1PressCombo = new GuardedComboBox;
     m_f1HoldCombo  = new GuardedComboBox;
@@ -345,7 +341,7 @@ void RC28MappingDialog::buildEncoderSection()
     auto* group = new QGroupBox("Encoder");
     auto* vbox = new QVBoxLayout(group);
     vbox->setSpacing(4);
-    vbox->setContentsMargins(8, 6, 8, 8);
+    vbox->setContentsMargins(8, 2, 8, 4);
 
     auto* invertCheck = new QCheckBox("Invert encoder direction");
     invertCheck->setChecked(
@@ -367,8 +363,6 @@ void RC28MappingDialog::buildEncoderSection()
     sensKey->setProperty("rc28Role", QStringLiteral("key"));
     m_sensitivitySlider = new QSlider(Qt::Horizontal);
     m_sensitivitySlider->setRange(1, 10);
-    m_sensitivitySlider->setTickPosition(QSlider::TicksBelow);
-    m_sensitivitySlider->setTickInterval(1);
     const int savedSens = HidEncoderManager::rc28MappingField("sensitivity", "1").toInt();
     m_sensitivitySlider->setValue(savedSens >= 1 && savedSens <= 10 ? savedSens : 1);
     m_sensitivitySlider->setAccessibleName("Pulses per step");
@@ -406,14 +400,14 @@ void RC28MappingDialog::buildLogSection()
 {
     auto* group = new QGroupBox("Activity");
     auto* vbox = new QVBoxLayout(group);
-    vbox->setContentsMargins(8, 6, 8, 8);
+    vbox->setContentsMargins(8, 2, 8, 4);
     vbox->setSpacing(4);
 
     m_log = new QPlainTextEdit;
     m_log->setReadOnly(true);
     m_log->setAccessibleName("RC-28 activity log");
     m_log->setMaximumBlockCount(50);
-    m_log->setFixedHeight(100);
+    m_log->setMinimumHeight(48);
     m_log->setPlaceholderText("Button events appear here while the dialog is open…");
     vbox->addWidget(m_log);
 
@@ -462,6 +456,11 @@ void RC28MappingDialog::setStatusState(const QString& state)
         l->style()->unpolish(l);
         l->style()->polish(l);
     }
+    // The label's text is the status, so the name carries it: a fixed name
+    // would hide the state from a screen reader. setAccessibleName() sends
+    // NameChanged itself, and only when the name differs.
+    m_statusLabel->setAccessibleName(
+        QStringLiteral("RC-28 connection status: %1").arg(m_statusLabel->text()));
 }
 
 void RC28MappingDialog::refreshDeviceInfo()
