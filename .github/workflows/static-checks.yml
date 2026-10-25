@@ -445,6 +445,21 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/test_check_build_options.py
 
+      # The release workflow's update-manifest builder (RFC #5304), tested
+      # here because a release is its only other run. A reference applier
+      # written from docs/architecture/update-manifest.md must rebuild the new
+      # tree from the old one and each bundle. Needs zstd, which the runner
+      # image ships.
+      - name: Update manifest builder
+        if: ${{ !cancelled() }}
+        run: python tools/test_build_update_manifest.py
+
+      # Its publisher: a partial upload is not a publication, and latest/
+      # never moves to an older release (in-memory store, ephemeral key).
+      - name: Update manifest publisher
+        if: ${{ !cancelled() }}
+        run: python tools/test_publish_update_manifest.py
+
       # ── Hardcoded-colour ratchet (#4569, RFC #3076). Counts may not rise
       # above the PR's base. The gate is a DELTA rather than a stored constant:
       # main gains colours from unrelated UI merges, so a frozen baseline goes

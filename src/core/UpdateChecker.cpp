@@ -59,7 +59,13 @@ QString probeStoreName()
 UpdateChecker::UpdateChecker(QObject* parent, QNetworkAccessManager* network)
     : QObject(parent)
     , m_nam(network ? network : new QNetworkAccessManager(this))
-{}
+{
+    const VersionNumber saved = VersionNumber::parse(UpdateSettings::latestVersion());
+    if (!saved.isNull()) {
+        m_latest.version = saved.toString();
+        m_latest.fromSettings = true;
+    }
+}
 
 QString UpdateChecker::storeName()
 {
@@ -89,11 +95,21 @@ void UpdateChecker::skipVersion(const QString& version)
     qCInfo(lcUpdater).noquote() << "operator skipped v" + parsed.toString();
 }
 
+bool UpdateChecker::isSkipped(const QString& version)
+{
+    return UpdateSettings::isSkipped(version);
+}
+
+bool UpdateChecker::isNewer(const QString& a, const QString& b)
+{
+    const VersionNumber va = VersionNumber::parse(a);
+    return !va.isNull() && va > VersionNumber::parse(b);
+}
+
 QString UpdateChecker::badgeVersion(const QString& latestVersion, const QString& runningVersion)
 {
     const VersionNumber latest = VersionNumber::parse(latestVersion);
-    if (latest.isNull() || !(latest > VersionNumber::parse(runningVersion))
-        || !UpdateSettings::checkOnStartup()
+    if (!isNewer(latestVersion, runningVersion) || !UpdateSettings::checkOnStartup()
         || UpdateSettings::isSkipped(latestVersion) || !storeName().isEmpty()) {
         return {};
     }
@@ -151,6 +167,7 @@ bool UpdateChecker::checkNow(Trigger trigger)
     m_startedAutomatically = trigger == Trigger::Automatic;
     m_trigger = trigger;
     qCInfo(lcUpdater) << triggerName(trigger) << "check started";
+    emit checkStarted();
 
     QNetworkRequest req{QUrl{QString(kReleasesApiUrl)}};
     req.setRawHeader("Accept", "application/vnd.github+json");
@@ -191,7 +208,8 @@ bool UpdateChecker::checkNow(Trigger trigger)
             return;
         }
 
-        const auto doc = QJsonDocument::fromJson(reply->readAll());
+        const QByteArray body = reply->readAll();
+        const auto doc = QJsonDocument::fromJson(body);
         if (doc.isNull()) {
             fail(QStringLiteral("response is not JSON"));
             return;
@@ -215,6 +233,9 @@ bool UpdateChecker::checkNow(Trigger trigger)
         // From here on only the parsed digits travel: the tag is network text.
         const QString latestText = latest.toString();
         UpdateSettings::recordAnswer(QDateTime::currentDateTimeUtc(), latestText);
+        m_latest = parseRelease(body);
+        m_latest.answered = QDateTime::currentDateTimeUtc();
+        emit releaseInfoChanged();
         if (latest > running) {
             qCInfo(lcUpdater).nospace().noquote() << triggerName(m_trigger) << " check: v"
                 << latestText << " is newer than running v" << current;

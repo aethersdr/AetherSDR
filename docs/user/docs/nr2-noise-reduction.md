@@ -44,16 +44,16 @@ NR2 is less effective against impulse noise (clicks, pops, lightning crashes); u
 
 ### FFTW wisdom (first use)
 
-The first time you enable NR2, AetherSDR optimizes the FFT plans it uses (FFTW "wisdom"). An **AetherSDR — FFTW Wisdom** window appears while this runs:
+The first time you enable NR2, AetherSDR optimizes the FFT plans it uses (FFTW "wisdom"). An **FFTW Wisdom** window appears while this runs:
 
-<img src="/img/screens/fftw-wisdom-window.png" width="500" alt="AetherSDR FFTW Wisdom window. It reads Computing COMPLEX FORWARD FFT size 2048... and This window will automatically close when wisdom generation is complete, above a progress bar at 38%, Working..., an elapsed time of 0:09 and a Cancel button." />
+<img src="/img/screens/fftw-wisdom-window.png" width="500" alt="FFTW Wisdom window. It reads Computing COMPLEX FORWARD FFT size 2048... and This window will automatically close when wisdom generation is complete, above a progress bar at 38%, Working..., an elapsed time of 0:09 and a Cancel button." />
 
 *The FFTW Wisdom window, shown the first time NR2 starts on a computer.*
 
 - It shows progress, a **Working** activity indicator and an **Elapsed** time counter. Planning can take several minutes on some systems; if the progress pauses, the window says it is still working.
 - The window is modeless — keep operating while it runs. On macOS it stays visible when AetherSDR is not the frontmost app.
 - Clicking NR2 again while it runs brings the same window forward instead of starting a second run.
-- **Cancel** stops after the FFT plan currently being computed. NR2 is then not enabled, and your audio is left unchanged.
+- **Cancel** (or the ✕ in the corner, **Esc** or **Ctrl+W**, **⌘W** on macOS) stops after the FFT plan currently being computed. NR2 is then not enabled, and your audio is left unchanged.
 - NR2 switches on when planning finishes, and the window closes itself.
 
 The result is saved **as soon as planning finishes**, so a crash or force-quit afterwards does not lose it, and later launches skip the wait. The same cache also speeds up the WDSP receive setup on the [Hermes-Lite 2](./hermes-lite-2.md).

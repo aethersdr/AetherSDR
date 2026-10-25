@@ -63,11 +63,11 @@
 #include "core/ThemeManager.h"
 #include "SpectrumWidget.h"
 #include "TitleBar.h"
+#include "UpdatesWindow.h"
 #include "core/AppSettings.h"
 #include "core/AutomationBridgeSettings.h"
 #include "core/AutomationServer.h"
 
-#include <QDesktopServices>
 #include <QDialogButtonBox>
 #include <QLabel>
 #include <QLineEdit>
@@ -3412,23 +3412,16 @@ void MainWindow::applyFirmwareCurrencyToVersionLabel()
 }
 
 // The version row's action (click, Return/Enter, or the accessible Press):
-// open the release notes, but ONLY while it shows an out-of-date version,
-// which is the state the tooltip invites a click in. Otherwise it does nothing.
-void MainWindow::openFirmwareReleaseNotes()
+// open the Updates window at the radio's firmware, but ONLY while it shows an
+// out-of-date version, which is the state the tooltip invites a click in.
+// Otherwise it does nothing.
+void MainWindow::openFirmwareUpdate()
 {
     if (m_radioFirmwareCurrency != AetherSDR::FirmwareCurrency::Status::Outdated)
         return;
-    const auto& source = m_radioModel.backendCapabilities().firmwareUpdateSource;
-    if (!source.has_value())
-        return;
-    // The newest release OF THE RADIO'S OWN LINE, never the newest overall: an
-    // operator on v3 must not be handed v4's notes.
-    const QString url = AetherSDR::FirmwareCurrency::releaseNotesUrl(
-        source->releaseNotesUrlTemplate,
-        AetherSDR::FirmwareCurrency::upgradeTargetFor(
-            source->publishedReleases, m_radioVersionLabel->text()));
-    if (!url.isEmpty())
-        QDesktopServices::openUrl(QUrl(url));
+    showUpdatesWindow(false);
+    if (m_updatesWindow)
+        m_updatesWindow->showFirmware();
 }
 
 void MainWindow::createPansSequentially(const QString& layoutId, int total,

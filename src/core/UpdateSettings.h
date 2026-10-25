@@ -27,8 +27,9 @@ public:
     static void setSkippedVersion(const QString& version);
     static bool isSkipped(const QString& version);
 
-    // When the last check (either trigger) got an answer from the server.
-    // Invalid when there has never been one.
+    // When the last check (either trigger) got an answer from the server, or
+    // an automatic check failed (which still starts the daily wait). Invalid
+    // when there has been neither.
     static QDateTime lastCheckUtc();
     static void setLastCheckUtc(const QDateTime& when);
 
@@ -39,6 +40,19 @@ public:
 
     // One write for a successful answer: its time and the release it named.
     static void recordAnswer(const QDateTime& when, const QString& latestVersion);
+
+    // The generated_at of the newest signed update manifest accepted
+    // (docs/architecture/update-manifest.md): an older one is a replay and
+    // is refused. Compared only with itself, never with the clock. Invalid
+    // before the first.
+    static QDateTime acceptedManifestUtc();
+    static void setAcceptedManifestUtc(const QDateTime& generatedAt);
+
+    // A release the updater installed and then rolled back because it failed
+    // its self-test (RFC #5304 Phase 3). Install update does not offer it
+    // again, so a broken release is never re-staged in a loop. Empty: none.
+    static QString rolledBackVersion();
+    static void setRolledBackVersion(const QString& version);
 
     // Whether an automatic check may run at nowUtc: enabled, and the last
     // answer is missing, older than the interval, or in the future (the

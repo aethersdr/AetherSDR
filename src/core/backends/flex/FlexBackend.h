@@ -116,7 +116,8 @@ public:
     ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
                                       const RadioSetupCompletion& completion = {},
                                       const RadioControlFence& current = {}) override;
-    ReceiveDispatch requestTxBand(const TxBandRequest& request) override;
+    ReceiveDispatch requestTxBand(const TxBandRequest& request,
+                                  const RadioSetupCompletion& completion = {}) override;
     ReceiveDispatch requestSpot(const SpotRequest& request, const QString& panId = {}) override;
     ReceiveDispatch requestPanControl(const QString& panId, const PanControlRequest& request) override;
     ReceiveDispatch requestSlicePreset(int sliceId, const SlicePresetRequest& request) override;

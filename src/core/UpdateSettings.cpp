@@ -15,6 +15,8 @@ const QString kCheckOnStartupField = QStringLiteral("checkOnStartup");
 const QString kSkippedVersionField = QStringLiteral("skippedVersion");
 const QString kLastCheckUtcField = QStringLiteral("lastCheckUtc");
 const QString kLatestVersionField = QStringLiteral("latestVersion");
+const QString kAcceptedManifestField = QStringLiteral("acceptedManifestUtc");
+const QString kRolledBackVersionField = QStringLiteral("rolledBackVersion");
 } // namespace
 
 QJsonObject UpdateSettings::readObj()
@@ -92,6 +94,32 @@ void UpdateSettings::recordAnswer(const QDateTime& when, const QString& latestVe
     QJsonObject o = readObj();
     o[kLastCheckUtcField] = when.toUTC().toString(Qt::ISODate);
     o[kLatestVersionField] = latestVersion;
+    write(o);
+}
+
+QDateTime UpdateSettings::acceptedManifestUtc()
+{
+    return QDateTime::fromString(readObj().value(kAcceptedManifestField).toString(), Qt::ISODate);
+}
+
+void UpdateSettings::setAcceptedManifestUtc(const QDateTime& generatedAt)
+{
+    QJsonObject o = readObj();
+    o[kAcceptedManifestField] = generatedAt.toUTC().toString(Qt::ISODate);
+    write(o);
+}
+
+QString UpdateSettings::rolledBackVersion()
+{
+    return readObj().value(kRolledBackVersionField).toString();
+}
+
+void UpdateSettings::setRolledBackVersion(const QString& version)
+{
+    QJsonObject o = readObj();
+    o[kRolledBackVersionField] = VersionNumber::parse(version).isNull()
+                                     ? QString()
+                                     : VersionNumber::parse(version).toString();
     write(o);
 }
 

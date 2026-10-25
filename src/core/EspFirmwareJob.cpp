@@ -97,18 +97,21 @@ void EspFirmwareJob::run(const Request& request)
     };
     QString problem;
     std::unique_ptr<EspFlashTarget> target;
+    bool denied = false;
+    m_accessDenied = false;
     if (m_opener) {
-        target = m_opener(request.portName, &problem);
+        target = m_opener(request.portName, &problem, &denied);
     } else {
 #ifdef HAVE_SERIALPORT
         auto flasher = std::make_unique<EspFlasher>();
-        if (flasher->open(request.portName, &problem))
+        if (flasher->open(request.portName, &problem, &denied))
             target = std::move(flasher);
 #else
         problem = tr("This build of AetherSDR has no serial port support.");
 #endif
     }
     if (!target) {
+        m_accessDenied = denied;
         finish(false, problem);
         return;
     }

@@ -10,10 +10,13 @@
 #include "core/Ctr2HidPort.h"
 #include "core/Ctr2UsbRelay.h"
 #include "models/Ctr2ProxyModel.h"
+#include "gui/Ctr2AccessRule.h"
+#include "gui/Ctr2ActionRetry.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QThread>
+#include <QDir>
 #include <QFile>
 #include <QHostAddress>
 #include <QMutex>
@@ -207,10 +210,18 @@ void testUdevRuleMatchesKnownCtr2s()
     };
     static const QRegularExpression attr(QStringLiteral(R"re(ATTRS\{(idVendor|idProduct|product)\}=="([^"]*)")re"));
     QSet<QString> granted;
+    QStringList ttyLines;
     for (const QString& line : QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'))) {
         if (line.trimmed().isEmpty() || line.trimmed().startsWith(QLatin1Char('#'))) {
             continue;
         }
+        // The download-mode serial port is not a CTR2 HID device: checked below.
+        if (line.contains(QLatin1String("SUBSYSTEM==\"tty\""))) {
+            ttyLines << line;
+            continue;
+        }
+        check(line.contains(QLatin1String("SUBSYSTEM==\"hidraw\"")),
+              "every other rule line is for hidraw");
         QString vid, pid, products;
         for (auto it = attr.globalMatch(line); it.hasNext();) {
             const auto m = it.next();
@@ -235,6 +246,17 @@ void testUdevRuleMatchesKnownCtr2s()
     }
     check(granted == known, "the udev rule lists exactly the recognized CTR2 product patterns");
 
+    // One tty line: the ESP32-S3 ROM's USB serial port, which is what the
+    // CTR2-Max is in download mode, opened to the seat's user only.
+    check(ttyLines.size() == 1, "the rule has one tty line, for download mode");
+    const QString tty = ttyLines.value(0);
+    check(tty.contains(QLatin1String("ATTRS{idVendor}==\"303a\""))
+              && tty.contains(QLatin1String("ATTRS{idProduct}==\"1001\""))
+              && tty.contains(QLatin1String("ATTRS{product}==\"USB JTAG/serial debug unit\""))
+              && tty.contains(QLatin1String("TAG+=\"uaccess\""))
+              && !tty.contains(QLatin1String("MODE")) && !tty.contains(QLatin1String("GROUP")),
+          "the tty line pins the ROM's USB serial identity and grants only the seat's user");
+
     // Every name the app recognizes must be one the rule's glob grants, or a
     // self-named device would loop on the install prompt.
     const QStringList probes{QStringLiteral("AetherX"), QStringLiteral("AetherDial"), QStringLiteral("Aether ~"),
@@ -251,6 +273,73 @@ void testUdevRuleMatchesKnownCtr2s()
         check(!info.ctr2Model().isEmpty(), "a self-named probe is recognized");
         check(covered, "a recognized self-named product is granted by the rule's glob");
     }
+}
+
+// udev uses the first copy of a rule file in precedence order; a copy in
+// /etc masks the packaged one. "Already installed" must mean the copy in
+// effect, or an operator with an older rule in /etc is never offered the new one.
+void testUdevRuleInEffect()
+{
+    QTemporaryDir root;
+    const QString etc = root.filePath(QStringLiteral("etc"));
+    const QString lib = root.filePath(QStringLiteral("lib"));
+    QDir().mkpath(etc);
+    QDir().mkpath(lib);
+    const QStringList dirs{etc, lib};
+    const QString name = QStringLiteral("70-aethersdr-ctr2.rules");
+    const QString current = QStringLiteral("current rule\n");
+    const auto put = [&name](const QString& dir, const QString& text) {
+        QFile f(dir + QLatin1Char('/') + name);
+        f.open(QIODevice::WriteOnly);
+        f.write(text.toUtf8());
+    };
+    check(!AetherSDR::udevRuleInEffect(dirs, name, current), "no copy: not installed");
+    put(lib, current);
+    check(AetherSDR::udevRuleInEffect(dirs, name, current), "only the packaged copy: installed");
+    put(etc, QStringLiteral("older rule\n"));
+    check(!AetherSDR::udevRuleInEffect(dirs, name, current),
+          "an older copy in /etc masks the current packaged one: not installed");
+    put(etc, current);
+    check(AetherSDR::udevRuleInEffect(dirs, name, current), "the current copy in /etc: installed");
+    check(AetherSDR::udevRuleDirs().first() == QStringLiteral("/etc/udev/rules.d"),
+          "/etc is udev's highest precedence");
+    // An administrator's mask: never offered, so never written through.
+    QFile::remove(etc + QLatin1Char('/') + name);
+    check(QFile::link(QStringLiteral("/dev/null"), etc + QLatin1Char('/') + name)
+              && AetherSDR::udevRuleInEffect(dirs, name, current),
+          "a /dev/null mask in /etc counts as settled");
+}
+
+// A retry armed for one CTR2 window action runs only while that action is
+// still the operator's latest: another action or Cancel drops it.
+void testActionRetryTickets()
+{
+    AetherSDR::Ctr2ActionRetry actions;
+    int runs = 0;
+    const AetherSDR::Ctr2ActionRetry::Job first = [&runs](bool, QString*) { ++runs; return false; };
+    actions.started(first, QStringLiteral("first done"));
+    const auto ticket = actions.ticket();
+    check(actions.current(ticket) && !actions.retried(), "the failed action's ticket is current");
+    check(ticket.doneText == QStringLiteral("first done") && ticket.job, "and carries that action");
+    actions.started([](bool, QString*) { return true; }, QStringLiteral("second done"));
+    check(!actions.current(ticket), "a newer action makes the old ticket stale");
+
+    actions.started(first, QStringLiteral("first done"));
+    const auto again = actions.ticket();
+    actions.invalidate();
+    check(!actions.current(again), "Cancel makes it stale");
+
+    const auto pressed = actions.mark();
+    check(actions.current(pressed), "a press waiting on the access question is current");
+    actions.started(first, QStringLiteral("first done"), true);
+    check(!actions.current(pressed) && actions.retried(),
+          "until an action starts; a retry is marked as the one retry");
+
+    // A press waiting on a read of the device belongs to that device.
+    const auto forA = actions.mark(QStringLiteral("/sim/A|AA"));
+    check(actions.current(forA, QStringLiteral("/sim/A|AA")), "a press for A is current while A is selected");
+    check(!actions.current(forA, QStringLiteral("/sim/B|BB")),
+          "and not once another unit is selected");
 }
 
 // Firmware that names itself: a 303A:1001 product string starting "Aether" is
@@ -964,6 +1053,8 @@ int main(int argc, char** argv)
     testUsbDefaults();
     testProbeFollowsSelection();
     testUdevRuleMatchesKnownCtr2s();
+    testUdevRuleInEffect();
+    testActionRetryTickets();
     testSelfNamedDevices();
     testAutoStart(QStringLiteral("AetherCTR2"));   // names itself
     testAutoStart(QStringLiteral("AETHER_KNOB"));  // the fixed AetherKnob identity
