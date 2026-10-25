@@ -441,8 +441,8 @@ int main(int argc, char* argv[])
     // the restarted app are this build's real version.
     if (const QString pretend = qEnvironmentVariable("AETHER_UPDATE_PRETEND_VERSION"); !pretend.isEmpty()) {
         qunsetenv("AETHER_UPDATE_PRETEND_VERSION");
-        qCWarning(lcUpdater).noquote() << "AETHER_UPDATE_PRETEND_VERSION: running as" << pretend
-                                       << "instead of" << AETHERSDR_VERSION;
+        qCWarning(AetherSDR::lcUpdater).noquote()
+            << "AETHER_UPDATE_PRETEND_VERSION: running as" << pretend << "instead of" << AETHERSDR_VERSION;
         app.setApplicationVersion(pretend);
     }
 #endif

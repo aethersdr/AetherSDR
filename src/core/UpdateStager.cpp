@@ -76,6 +76,14 @@ const QRegularExpression& hexSha()
     return re;
 }
 
+// A release version, "26.10.3" or "26.10.3.1": the tag without its "v", the
+// name of a staged tree, and the stem of its records.
+const QRegularExpression& releaseVersion()
+{
+    static const QRegularExpression re(QStringLiteral("^[0-9]+\\.[0-9]+\\.[0-9]+(\\.[0-9]+)?$"));
+    return re;
+}
+
 const QRegularExpression& memberName()
 {
     static const QRegularExpression re(QStringLiteral("^[0-9]{6}\\.zst$"));
@@ -449,8 +457,8 @@ bool UpdateManifest::parse(const QByteArray& json, UpdateManifest* out, QString*
     }
     m.tag = root.value(QLatin1String("tag")).toString();
     m.version = root.value(QLatin1String("version")).toString();
-    static const QRegularExpression tagRe(QStringLiteral("^v[0-9]+\\.[0-9]+\\.[0-9]+(\\.[0-9]+)?$"));
-    if (!tagRe.match(m.tag).hasMatch() || m.version != m.tag.mid(1)) {
+    if (!m.tag.startsWith(QLatin1Char('v')) || !releaseVersion().match(m.tag.mid(1)).hasMatch()
+        || m.version != m.tag.mid(1)) {
         return bad(QStringLiteral("tag and version"));
     }
     m.generatedAt = QDateTime::fromString(root.value(QLatin1String("generated_at")).toString(), Qt::ISODate);
@@ -827,10 +835,10 @@ bool UpdateStager::applyFull(const QString& installRoot, const QByteArray& zip,
             return fail(QStringLiteral("cancelled"));
         }
         const fs::path target = stage / toPath(it.key());
-        fs::create_directories(target.parent_path(), ec);
         if (!noLinkOnTheWay(stage, it.key())) {
             return fail(QStringLiteral("%1: a parent folder is a link").arg(it.key()));
         }
+        fs::create_directories(target.parent_path(), ec);
         QFile out(native(target));
         if (!out.open(QIODevice::WriteOnly | QIODevice::NewOnly) || out.write(it.value()) != it.value().size()
             || !out.flush()) {
@@ -841,13 +849,27 @@ bool UpdateStager::applyFull(const QString& installRoot, const QByteArray& zip,
     }
     // setup.exe's uninstaller and its record stay with the install: the
     // release's own files never include them.
+    // A release file of that name, in any case on Windows, where the
+    // install's unins000.dat and the release's Unins000.dat are one file.
+    const auto isReleaseFile = [&wanted](const QString& name) {
+#ifdef Q_OS_WIN
+        for (auto w = wanted.cbegin(); w != wanted.cend(); ++w) {
+            if (w.key().compare(name, Qt::CaseInsensitive) == 0) {
+                return true;
+            }
+        }
+        return false;
+#else
+        return wanted.contains(name);
+#endif
+    };
     // Every step takes an error code: this runs on a worker, where a
     // throwing increment would end the app.
     fs::directory_iterator it(install, ec);
     for (const fs::directory_iterator end; !ec && it != end; it.increment(ec)) {
         const fs::path entry = it->path();
         const QString name = native(entry.filename());
-        if (!name.startsWith(QLatin1String("unins"), Qt::CaseInsensitive) || wanted.contains(name)) {
+        if (!name.startsWith(QLatin1String("unins"), Qt::CaseInsensitive) || isReleaseFile(name)) {
             continue;
         }
         std::error_code probe;
@@ -908,16 +930,15 @@ UpdateStager::StagedRelease UpdateStager::stagedRelease(const QString& stagingRo
                                   ? QJsonDocument::fromJson(f.readAll()).object()
                                   : QJsonObject();
         const QString version = r.value(QLatin1String("version")).toString();
-        const QString tag = r.value(QLatin1String("tag")).toString();
         const bool usable = chosen.version.isEmpty() && name == version + QLatin1String(".json")
-                            && safePath(version) && !version.contains(QLatin1Char('/'))
+                            && releaseVersion().match(version).hasMatch()
                             && VersionNumber::parse(version) > running
                             && r.value(QLatin1String("from")).toString() == runningVersion
                             && sameInstall(r.value(QLatin1String("install")).toString(), installRoot)
-                            // The record is unsigned: its tag must be the version's
-                            // own, which revalidate() binds to the signed manifest.
-                            && tag == QLatin1Char('v') + version
-                            && (githubLatestTag.isEmpty() || tag == githubLatestTag)
+                            // The tag is the version's own: the record keeps none of
+                            // its own to edit, and revalidate() binds the version to
+                            // the signed manifest.
+                            && (githubLatestTag.isEmpty() || githubLatestTag == QLatin1Char('v') + version)
                             && version != rolledBackVersion && QFileInfo(root.filePath(version)).isDir()
                             && QFileInfo::exists(root.filePath(version + QLatin1String(".manifest.json")))
                             && QFileInfo::exists(root.filePath(version + QLatin1String(".manifest.json.sig")));
@@ -936,10 +957,16 @@ UpdateStager::StagedRelease UpdateStager::stagedRelease(const QString& stagingRo
                                                chosen.version + QLatin1String(".manifest.json"),
                                                chosen.version + QLatin1String(".manifest.json.sig")};
     const QDir::Filters all = QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot;
-    static const QRegularExpression owned(
-        QStringLiteral("^[0-9]+(\\.[0-9]+){2,3}(\\.json|\\.manifest\\.json(\\.sig)?)?$"));
+    // A tree, a record, or a record QSaveFile left half written
+    // ("<record>.XXXXXX", where it uses a named temporary file).
+    static const QRegularExpression record(
+        QStringLiteral("^(.+?)\\.(json|manifest\\.json|manifest\\.json\\.sig)(\\.[A-Za-z0-9]{6})?$"));
+    const auto owned = [](const QString& name) {
+        const QRegularExpressionMatch m = record.match(name);
+        return releaseVersion().match(m.hasMatch() ? m.captured(1) : name).hasMatch();
+    };
     for (const QString& name : root.entryList(all)) {
-        const bool ours = name.startsWith(QLatin1String(".work-")) || owned.match(name).hasMatch();
+        const bool ours = name.startsWith(QLatin1String(".work-")) || owned(name);
         if (ours && !keep.contains(name)) {
             qCInfo(lcUpdater).noquote() << "discarding stale staged update" << name;
             fs::remove_all(toPath(root.filePath(name)), ec);
@@ -1117,8 +1144,7 @@ void UpdateStager::runWorker(std::function<QString(const QString& work)> apply)
         // and the signed manifest that vouches for every file.
         QJsonObject record{{QStringLiteral("version"), version},
                            {QStringLiteral("from"), m_request.runningVersion},
-                           {QStringLiteral("install"), QDir(m_request.installRoot).absolutePath()},
-                           {QStringLiteral("tag"), m_manifest.tag}};
+                           {QStringLiteral("install"), QDir(m_request.installRoot).absolutePath()}};
         QSaveFile r(recordPath(root, version, QStringLiteral(".json")));
         QSaveFile m(recordPath(root, version, QStringLiteral(".manifest.json")));
         QSaveFile s(recordPath(root, version, QStringLiteral(".manifest.json.sig")));

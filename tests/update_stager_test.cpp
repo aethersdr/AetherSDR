@@ -904,11 +904,13 @@ private slots:
         QVERIFY(stageOnce());
         QVERIFY(discarded(QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.3"), QStringLiteral("26.10.3")));
         QVERIFY(stageOnce());
-        // Review of #6771: the record is unsigned. A tag edited to the new
-        // latest cannot pass a superseded (but signed) release for it.
+        // Review of #6771: the record is unsigned and keeps no tag; one
+        // written into it (a "v26.10.4" naming the new latest) is never read,
+        // so a superseded (but signed) release cannot pass for it.
         {
             const QString rec = root + QStringLiteral("/26.10.3.json");
             QJsonObject o = QJsonDocument::fromJson(readFile(rec)).object();
+            QVERIFY(!o.contains(QStringLiteral("tag")));
             o[QStringLiteral("tag")] = QStringLiteral("v26.10.4");
             writeFile(rec, QJsonDocument(o).toJson());
         }
@@ -921,10 +923,16 @@ private slots:
             o[QStringLiteral("install")] = QString();
             writeFile(rec, QJsonDocument(o).toJson());
         }
-        const QString cwd = QDir::currentPath();
-        QDir::setCurrent(install);
-        const bool emptyDiscarded = discarded(QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.3"), {});
-        QDir::setCurrent(cwd);
+        bool emptyDiscarded = false;
+        {
+            // The working directory is the process's: always put back.
+            struct Cwd {
+                QString was = QDir::currentPath();
+                ~Cwd() { QDir::setCurrent(was); }
+            } restore;
+            QDir::setCurrent(install);
+            emptyDiscarded = discarded(QStringLiteral("26.10.2"), install, QStringLiteral("v26.10.3"), {});
+        }
         QVERIFY(emptyDiscarded);
         QVERIFY(stageOnce());
         QFile::remove(root + QStringLiteral("/26.10.3.manifest.json.sig"));   // a record half written
@@ -947,7 +955,15 @@ private slots:
         writeFile(root + QStringLiteral("/updater.log"), "log");
         writeFile(root + QStringLiteral("/AetherSDRUpdater.exe"), "helper");
         writeFile(root + QStringLiteral("/selftest-26.10.3.txt"), "26.10.3");
+        // Staging's own leftovers beside them do go: a crashed work folder
+        // and records QSaveFile left half written.
+        QDir().mkpath(root + QStringLiteral("/.work-crashed"));
+        writeFile(root + QStringLiteral("/26.10.3.json.a1B2c3"), "{");
+        writeFile(root + QStringLiteral("/26.10.3.manifest.json.sig.Zz9Yy8"), "x");
         UpdateStager::stagedRelease(root, QStringLiteral("26.10.3"), install, QStringLiteral("v26.10.3"), {});
+        for (const char* name : {".work-crashed", "26.10.3.json.a1B2c3", "26.10.3.manifest.json.sig.Zz9Yy8"}) {
+            QVERIFY2(!QFileInfo::exists(root + QLatin1Char('/') + QLatin1String(name)), name);
+        }
         for (const char* name : {"swap-journal.txt", "swap-result.txt", "repair-plan.txt", "updater.log",
                                  "AetherSDRUpdater.exe", "selftest-26.10.3.txt"}) {
             QVERIFY2(QFile::exists(root + QLatin1Char('/') + QLatin1String(name)), name);

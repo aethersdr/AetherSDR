@@ -69,6 +69,7 @@ jobs:
         id: store-plan
         env:
           STORE_REQUESTED_FLIGHT: ${{ inputs.publish_store_flight }}
+          STORE_DEV_OVERRIDES: ${{ inputs.dev_overrides }}
           STORE_EVENT: ${{ github.event_name }}
           STORE_REF: ${{ github.ref }}
           STORE_REPOSITORY: ${{ github.repository }}
@@ -80,6 +81,7 @@ jobs:
             -EventName $env:STORE_EVENT -Ref $env:STORE_REF `
             -Repository $env:STORE_REPOSITORY -RunNumber $env:STORE_RUN_NUMBER `
             -RequestFlight ($env:STORE_REQUESTED_FLIGHT -eq 'true') `
+            -DevOverrides ($env:STORE_DEV_OVERRIDES -eq 'true') `
             -ProductId $env:AETHERSDR_STORE_PRODUCT_ID -FlightId $env:AETHERSDR_STORE_FLIGHT_ID
           foreach ($name in @('releaseArtifacts', 'productionDraft', 'publishFlight', 'storeEligible')) {
             "$name=$($plan.$name.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
@@ -254,7 +256,6 @@ jobs:
         env:
           # Empty except on a manual dispatch that asked for it.
           DEV_OVERRIDES: ${{ inputs.dev_overrides }}
-          REQUEST_FLIGHT: ${{ inputs.publish_store_flight }}
         run: |
           # RelWithDebInfo (not Release): MSVC's Release config omits /Zi and
           # /DEBUG, so build/AetherSDR.pdb never gets produced and the
@@ -300,18 +301,11 @@ jobs:
           # the reason the bash legs need `set -o pipefail` and this one does
           # not.
           # A dev-overrides build trusts test update keys and manifests from
-          # its environment, so it is never built from a tag and never goes
-          # to the Store flight: it stays a downloadable test artifact.
+          # its environment. "Plan Store build" has already refused it on a
+          # tag or with the Store flight (get-store-build-plan.ps1), so it is
+          # only ever a downloadable test artifact.
           $devOverrides = @()
           if ($env:DEV_OVERRIDES -eq 'true') {
-            if ($env:GITHUB_REF -like 'refs/tags/*') {
-              Write-Host "ERROR: dev_overrides is for branch test builds, never a tag."
-              exit 1
-            }
-            if ($env:REQUEST_FLIGHT -eq 'true') {
-              Write-Host "ERROR: dev_overrides never goes to the Microsoft Store flight."
-              exit 1
-            }
             Write-Host "Building with AETHER_UPDATE_DEV_OVERRIDES=ON (testing only)"
             $devOverrides = @('-DAETHER_UPDATE_DEV_OVERRIDES=ON')
           }

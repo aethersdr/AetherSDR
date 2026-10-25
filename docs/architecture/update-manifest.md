@@ -208,7 +208,7 @@ in it:
 
 | File | What |
 |---|---|
-| `<version>.json` | `version`, the `from` version it was staged for, the `install` it was staged from, and the release `tag` |
+| `<version>.json` | `version`, the `from` version it was staged for, and the `install` it was staged from. No tag: the release's tag is `v<version>`, which the signed manifest binds |
 | `<version>.manifest.json`, `.sig` | The signed manifest and signature that vouch for every file |
 
 The record is written after the tree is in place, so a tree without a
@@ -218,12 +218,13 @@ folder, removed on failure or cancel.
 At startup `UpdateStager::stagedRelease` keeps the staged release only if
 it is still the one to install: staged for the running version and this
 install, GitHub's latest (when that is known yet), and not the release
-that was rolled back. The record is unsigned, so its `tag` must also be
-its own version's (`v<version>`), which `revalidate` binds to the signed
-manifest. Everything else staging wrote is removed: other versions,
+that was rolled back. GitHub's latest is compared with `v<version>`: the
+record is unsigned and keeps no tag of its own, and `revalidate` binds the
+version to the signed manifest. Everything else staging wrote is removed: other versions,
 half-written records, and work folders a crashed run left. The staging
 root is the helper's state folder too, so only staging's own names are
-swept (`.work-*`, `<version>`, and its three record files); the helper's
+swept (`.work-*`, `<version>`, its three record files, and a record
+`QSaveFile` left half written as `<record>.XXXXXX`); the helper's
 journal, result, repair plan, log and copy are left alone.
 
 Before the swap, `revalidate` checks the stored signature with the
