@@ -1532,6 +1532,7 @@ private:
     QTimer*           m_touchHoldTimer{nullptr};
     QPoint            m_touchHoldGlobalPos;
     QPointer<QWidget> m_touchHoldWidget;
+    bool              m_touchHoldSwallowRelease{false};  // a fired hold owns the click
     // Contour shuttle ring (#5928): the ring only reports when it moves, so
     // this timer integrates the held position into steps while deflected.
     QTimer*               m_shuttleTimer{nullptr};

@@ -30,6 +30,20 @@ The panadapter is the main display: the FFT spectrum on top and the scrolling wa
 - If the wheel tunes the wrong way for your mouse or trackball, turn on **Radio Setup → Appearance & Behavior → Reverse mouse-wheel tuning direction**.
 - Dragging any slider shows its value in a small popup.
 
+### Touch controls
+
+On a touchscreen the panadapter and the rest of the app are fully operable by touch:
+
+| Gesture | Does |
+|--------|------|
+| **Tap** | Same as a click — double-tap to tune (or single-tap with **Single-Click to Tune** on) |
+| **Drag** on the spectrum / waterfall | Pan the display |
+| **Two-finger pinch** | Zoom the span, anchored under your fingers |
+| **Press and hold** (about ⅔ of a second) | Acts as a right-click — opens the context menu |
+| **Drag** in a list or menu | Flick-scroll it, with momentum; a tap still selects the item |
+
+Touch-scroll works in every scrollable list and menu. The exception is the drag-to-rearrange lists — the applet panel down the left edge and the favorites picker — where a drag moves items instead of scrolling.
+
 ### The header
 
 A thin header runs across the top of each panadapter, drawn over the spectrum so the trace and grid show through it.

@@ -17,6 +17,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QContextMenuEvent>
+#include <QTouchEvent>
 #include <QScroller>
 #include <QAbstractScrollArea>
 #include <QAbstractItemView>
@@ -663,6 +664,8 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     if (obj == qApp && event->type() == QEvent::ApplicationStateChange) {
         auto* stateEvent = static_cast<QApplicationStateChangeEvent*>(event);
         if (stateEvent->applicationState() != Qt::ApplicationActive) {
+            if (m_touchHoldTimer) { m_touchHoldTimer->stop(); }
+            m_touchHoldSwallowRelease = false;
             failSafeMomentaryKeyingToRx("app-deactivate");
             // A Monitor TX hold whose KeyRelease went to another application
             // would otherwise leave the split's audio rearranged with no key
@@ -695,9 +698,14 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 
     // Touch tap-and-hold -> right-click. On a touchscreen Qt synthesizes a LEFT
     // click from a tap; watch those synthesized mouse events and, when a press is
-    // held in place long enough, inject a right-button click (plus a context-menu
-    // event) at that point so press-and-hold acts like the right mouse button
-    // with no physical mouse. Real (non-synthesized) mouse input is untouched.
+    // held in place long enough, turn it into a right-button click (plus a
+    // context-menu event) so press-and-hold acts like the right mouse button with
+    // no physical mouse. The press the touch already armed on the widget is
+    // cancelled and its release swallowed, so a fired hold performs exactly one
+    // action (the context menu), never also the normal click. Real
+    // (non-synthesized) mouse input is untouched.
+    static constexpr int kTouchHoldMs = 600;     // hold this long -> right-click
+    static constexpr int kTouchHoldSlopPx = 12;  // move more than this -> it's a drag
     if (event->type() == QEvent::MouseButtonPress
         || event->type() == QEvent::MouseButtonRelease
         || event->type() == QEvent::MouseMove) {
@@ -717,6 +725,17 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
                     if (!w) { return; }
                     const QPointF global(m_touchHoldGlobalPos);
                     const QPointF local = w->mapFromGlobal(m_touchHoldGlobalPos);
+                    // Cancel the left press the synthesized touch already armed on
+                    // this widget, WITHOUT activating it: a release delivered
+                    // outside the widget un-arms a QAbstractButton (and ends a
+                    // pan-drag) without emitting clicked()/tuning. Then swallow the
+                    // real release on finger-lift (below), so the hold never also
+                    // performs the click.
+                    QMouseEvent cancel(QEvent::MouseButtonRelease, QPointF(-1, -1),
+                                       w->mapToGlobal(QPoint(-1, -1)),
+                                       Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                    QApplication::sendEvent(w, &cancel);
+                    m_touchHoldSwallowRelease = true;
                     // Right-button click: SpectrumWidget and other inline handlers
                     // open their menu straight from mousePressEvent().
                     QMouseEvent press(QEvent::MouseButtonPress, local, global,
@@ -728,24 +747,49 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
                                         Qt::NoModifier);
                     QApplication::sendEvent(w, &release);
                     // Widgets that use contextMenuEvent() instead of an inline
-                    // right-button check still get their menu this way.
-                    QContextMenuEvent cme(QContextMenuEvent::Mouse, local.toPoint(),
-                                          m_touchHoldGlobalPos);
-                    QApplication::sendEvent(w, &cme);
+                    // right-button check get their menu this way -- but only if the
+                    // press was not already consumed, so a widget that opened its
+                    // menu from the press does not get a second, propagated one.
+                    if (!press.isAccepted()) {
+                        QContextMenuEvent cme(QContextMenuEvent::Mouse, local.toPoint(),
+                                              m_touchHoldGlobalPos);
+                        QApplication::sendEvent(w, &cme);
+                    }
                 });
             }
             m_touchHoldGlobalPos = me->globalPosition().toPoint();
             m_touchHoldWidget = QApplication::widgetAt(m_touchHoldGlobalPos);
-            m_touchHoldTimer->start(600);
+            m_touchHoldSwallowRelease = false;
+            m_touchHoldTimer->start(kTouchHoldMs);
         } else if (event->type() == QEvent::MouseMove && m_touchHoldTimer
                    && m_touchHoldTimer->isActive()) {
             if ((me->globalPosition().toPoint() - m_touchHoldGlobalPos)
-                    .manhattanLength() > 12) {
+                    .manhattanLength() > kTouchHoldSlopPx) {
                 m_touchHoldTimer->stop();  // moved -> it's a drag/scroll, not a hold
             }
         } else if (event->type() == QEvent::MouseButtonRelease
-                   && me->button() == Qt::LeftButton && m_touchHoldTimer) {
+                   && me->button() == Qt::LeftButton) {
+            if (m_touchHoldTimer) { m_touchHoldTimer->stop(); }
+            if (m_touchHoldSwallowRelease) {
+                m_touchHoldSwallowRelease = false;
+                return true;   // the hold acted; drop the click this release would do
+            }
+        }
+    }
+    // A touch flick inside a QScroller-grabbed viewport is owned by the scroller,
+    // so the synthesized MouseMove/Release above may never arrive. Cancel a
+    // pending hold on touch movement past the slop or a touch cancel too.
+    if (m_touchHoldTimer && m_touchHoldTimer->isActive()) {
+        if (event->type() == QEvent::TouchCancel) {
             m_touchHoldTimer->stop();
+        } else if (event->type() == QEvent::TouchUpdate) {
+            for (const QEventPoint& pt : static_cast<QTouchEvent*>(event)->points()) {
+                if ((pt.globalPosition().toPoint() - m_touchHoldGlobalPos)
+                        .manhattanLength() > kTouchHoldSlopPx) {
+                    m_touchHoldTimer->stop();
+                    break;
+                }
+            }
         }
     }
 

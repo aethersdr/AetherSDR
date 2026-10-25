@@ -12022,8 +12022,15 @@ bool SpectrumWidget::event(QEvent* ev)
             // > 1 = fingers apart = zoom in = narrower BW, so the bandwidth
             // multiplier is its reciprocal. centerPoint() is in global/screen
             // coordinates, matching frequencyCanvasFractionAtGlobal().
+            // Only act on Started/Updated with a real scale change: Qt's
+            // recognizer re-delivers the last incremental scaleFactor() on the
+            // terminal GestureFinished/Canceled event, which would otherwise
+            // apply the final pinch step a second time on finger-lift.
             const qreal scale = pinch->scaleFactor();
-            if (scale > 0.0 && !qFuzzyCompare(scale, qreal(1.0))) {
+            if ((pinch->state() == Qt::GestureStarted
+                 || pinch->state() == Qt::GestureUpdated)
+                && pinch->changeFlags().testFlag(QPinchGesture::ScaleFactorChanged)
+                && scale > 0.0 && !qFuzzyCompare(scale, qreal(1.0))) {
                 applyAnchoredZoom(1.0 / static_cast<double>(scale),
                                   pinch->centerPoint());
             }
