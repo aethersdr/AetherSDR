@@ -166,6 +166,7 @@ class MemoryHistoryRing;
 class CpuHistoryRing;
 class UiTickLagMeter;
 class WhatsNewDialog;
+class Nr2WisdomDialog;
 class ProfileManagerDialog;
 class SettingsBrowserDialog;
 class ProfileImportExportDialog;
@@ -1525,6 +1526,15 @@ private:
     int     m_hidSensitivity{1};    // RC-28 pulses required per frequency step (1 = off)
     bool    m_hidAutoSnap{false};   // snap to nearest 1 kHz after rotation stops
     QTimer* m_hidSnapTimer{nullptr};
+    // Touch tap-and-hold -> synthesized right-click / context menu. On a
+    // touchscreen Qt synthesizes a LEFT click from a tap; a press held in place
+    // long enough is turned into a right-click here, so press-and-hold acts like
+    // the right mouse button (context menus) with no physical mouse. Driven from
+    // the qApp eventFilter watching Qt's synthesized mouse events.
+    QTimer*           m_touchHoldTimer{nullptr};
+    QPoint            m_touchHoldGlobalPos;
+    QPointer<QWidget> m_touchHoldWidget;
+    bool              m_touchHoldSwallowRelease{false};  // a fired hold owns the click
     // Contour shuttle ring (#5928): the ring only reports when it moves, so
     // this timer integrates the held position into steps while deflected.
     QTimer*               m_shuttleTimer{nullptr};
@@ -1753,7 +1763,7 @@ private:
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<CanonWindow> m_aboutWindow;
     QPointer<AetherRxDialog> m_rxDialog;
-    QPointer<QDialog> m_nr2WisdomDialog;
+    QPointer<Nr2WisdomDialog> m_nr2WisdomDialog;
     // The running NR2 wisdom worker and its cancel flag, so shutdown can stop
     // it before AudioEngine teardown needs the FFTW planner lock (#6287).
     QPointer<QThread> m_nr2WisdomThread;

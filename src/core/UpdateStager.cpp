@@ -5,16 +5,19 @@
 #include "UpdateChecker.h"
 #include "UpdateSettings.h"
 #include "VersionNumber.h"
+#include "ZipArchive.h"
 
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QFutureWatcher>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPointer>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QSet>
 #include <QTemporaryFile>
 #include <QUuid>
@@ -70,6 +73,14 @@ constexpr qint64 kChunk = 1 << 20;
 const QRegularExpression& hexSha()
 {
     static const QRegularExpression re(QStringLiteral("^[0-9a-f]{64}$"));
+    return re;
+}
+
+// A release version, "26.10.3" or "26.10.3.1": the tag without its "v", the
+// name of a staged tree, and the stem of its records.
+const QRegularExpression& releaseVersion()
+{
+    static const QRegularExpression re(QStringLiteral("^[0-9]+\\.[0-9]+\\.[0-9]+(\\.[0-9]+)?$"));
     return re;
 }
 
@@ -361,6 +372,35 @@ bool applyOps(const fs::path& stage, const QHash<QString, QByteArray>& members,
     return true;
 }
 
+QString recordPath(const QString& stagingRoot, const QString& version, const QString& suffix)
+{
+    return QDir(stagingRoot).filePath(version + suffix);
+}
+
+// The install exists, and it and the staging folder do not overlap: staging
+// inside the install would copy into itself; the install inside staging
+// would be wiped by a failure.
+bool checkRoots(const QString& installRoot, const QString& stagingDir, fs::path* install,
+                fs::path* stage, QString* problem)
+{
+    std::error_code ec;
+    *install = fs::weakly_canonical(toPath(installRoot), ec);
+    *stage = fs::weakly_canonical(toPath(stagingDir), ec);
+    if (installRoot.isEmpty() || !fs::is_directory(*install, ec)) {
+        *problem = QStringLiteral("There is no install folder to update.");
+        return false;
+    }
+    const auto inside = [](const fs::path& a, const fs::path& b) {
+        const auto m = std::mismatch(b.begin(), b.end(), a.begin(), a.end());
+        return m.first == b.end();
+    };
+    if (inside(*stage, *install) || inside(*install, *stage)) {
+        *problem = QStringLiteral("The staging folder and the install overlap.");
+        return false;
+    }
+    return true;
+}
+
 bool checkTree(const fs::path& stage, const QList<UpdateManifest::File>& files, QString* problem)
 {
     std::error_code ec;
@@ -417,8 +457,8 @@ bool UpdateManifest::parse(const QByteArray& json, UpdateManifest* out, QString*
     }
     m.tag = root.value(QLatin1String("tag")).toString();
     m.version = root.value(QLatin1String("version")).toString();
-    static const QRegularExpression tagRe(QStringLiteral("^v[0-9]+\\.[0-9]+\\.[0-9]+(\\.[0-9]+)?$"));
-    if (!tagRe.match(m.tag).hasMatch() || m.version != m.tag.mid(1)) {
+    if (!m.tag.startsWith(QLatin1Char('v')) || !releaseVersion().match(m.tag.mid(1)).hasMatch()
+        || m.version != m.tag.mid(1)) {
         return bad(QStringLiteral("tag and version"));
     }
     m.generatedAt = QDateTime::fromString(root.value(QLatin1String("generated_at")).toString(), Qt::ISODate);
@@ -536,18 +576,23 @@ UpdateStager::UpdateStager(QObject* parent)
 {
     connect(m_download, &CappedDownload::finished, this, &UpdateStager::onDownloaded);
     connect(m_download, &CappedDownload::failed, this, [this](const QString& reason) {
-        // The manifest was trusted; only its bundle could not be had (gone,
-        // stalled, larger than signed). The full download may still work.
+        // The manifest was trusted; only a release file could not be had
+        // (gone, stalled, larger than signed). The full release may still work.
         if (m_stage == Stage::Bundle && m_payload) {
-            m_stage = Stage::Idle;
             qCWarning(lcUpdater).noquote() << "update bundle not downloaded:" << reason;
+            fallBack(reason);
+            return;
+        }
+        if (m_stage == Stage::Full && m_payload) {
+            qCWarning(lcUpdater).noquote() << "full update not downloaded:" << reason;
+            m_stage = Stage::Idle;
             emit fullDownloadNeeded(reason, m_payload->full, m_manifest.version);
             return;
         }
         fail(reason);
     });
     connect(m_download, &CappedDownload::progress, this, [this](qint64 done, qint64 total) {
-        if (m_stage == Stage::Bundle) {
+        if (m_stage == Stage::Bundle || m_stage == Stage::Full) {
             emit progress(tr("Downloading the update"), done, total);
         }
     });
@@ -560,7 +605,21 @@ QByteArray UpdateStager::builtInKey()
 
 QList<QByteArray> UpdateStager::trustedKeys()
 {
-    return testKeysSet() ? testKeys() : QList<QByteArray>{builtInKey()};
+    if (testKeysSet()) {
+        return testKeys();
+    }
+    QList<QByteArray> keys{builtInKey()};
+#if AETHER_UPDATE_DEV_OVERRIDES
+    for (const QByteArray& hex : qgetenv("AETHER_UPDATE_TRUST_KEYS").split(',')) {
+        const QByteArray key = QByteArray::fromHex(hex.trimmed());
+        if (key.size() == 32) {
+            qCWarning(lcUpdater).noquote() << "AETHER_UPDATE_TRUST_KEYS: also trusting update key"
+                                           << QString::fromLatin1(key.toHex());
+            keys << key;
+        }
+    }
+#endif
+    return keys;
 }
 
 void UpdateStager::setTrustedKeysForTesting(const QList<QByteArray>& keys)
@@ -671,28 +730,17 @@ bool UpdateStager::applyPatch(const QString& installRoot, const QByteArray& bund
                               QString* problem, const std::atomic_bool* cancelled)
 {
     std::error_code ec;
-    const fs::path install = fs::weakly_canonical(toPath(installRoot), ec);
-    const fs::path stage = fs::weakly_canonical(toPath(stagingDir), ec);
+    fs::path install;
+    fs::path stage;
+    if (!checkRoots(installRoot, stagingDir, &install, &stage, problem)) {
+        return false;
+    }
     const auto fail = [&](const QString& why) {
         *problem = why;
         std::error_code ignore;
         fs::remove_all(stage, ignore);
         return false;
     };
-    if (installRoot.isEmpty() || !fs::is_directory(install, ec)) {
-        *problem = QStringLiteral("There is no install folder to update.");
-        return false;
-    }
-    // Staging inside the install would copy into itself; the install inside
-    // staging would be wiped by a failure.
-    const auto inside = [](const fs::path& a, const fs::path& b) {
-        const auto m = std::mismatch(b.begin(), b.end(), a.begin(), a.end());
-        return m.first == b.end();
-    };
-    if (inside(stage, install) || inside(install, stage)) {
-        *problem = QStringLiteral("The staging folder and the install overlap.");
-        return false;
-    }
     QHash<QString, QByteArray> members;
     if (!readBundle(bundle, &members, problem)) {
         return false;
@@ -715,6 +763,256 @@ bool UpdateStager::applyPatch(const QString& installRoot, const QByteArray& bund
         return fail(QStringLiteral("The updated files do not match the release: %1.").arg(why));
     }
     return true;
+}
+
+bool UpdateStager::applyFull(const QString& installRoot, const QByteArray& zip,
+                             const QList<UpdateManifest::File>& files, const QString& stagingDir,
+                             QString* problem, const std::atomic_bool* cancelled)
+{
+    std::error_code ec;
+    fs::path install;
+    fs::path stage;
+    if (!checkRoots(installRoot, stagingDir, &install, &stage, problem)) {
+        return false;
+    }
+    const auto fail = [&](const QString& why) {
+        *problem = why;
+        std::error_code ignore;
+        fs::remove_all(stage, ignore);
+        return false;
+    };
+    // The zip may hold exactly the release's files: no more, no fewer, and
+    // nothing larger in all than the manifest says.
+    QHash<QString, const UpdateManifest::File*> wanted;
+    ZipReadLimits limits;
+    limits.maxEntries = 2 * files.size() + 16;   // and the folders' own entries
+    limits.maxEntryUncompressedBytes = 0;
+    limits.maxTotalUncompressedBytes = 0;
+    for (const UpdateManifest::File& f : files) {
+        if (f.symlink) {
+            *problem = QStringLiteral("The full release has a link, which its zip cannot carry.");
+            return false;
+        }
+        wanted.insert(f.path, &f);
+        limits.maxEntryUncompressedBytes = std::max(limits.maxEntryUncompressedBytes, quint64(f.size));
+        limits.maxTotalUncompressedBytes += quint64(f.size);
+    }
+    QString why;
+    const QMap<QString, QByteArray> entries = readZipEntries(zip, &why, limits);
+    if (entries.isEmpty()) {
+        *problem = QStringLiteral("The full release is damaged: %1").arg(why);
+        return false;
+    }
+    QHash<QString, QByteArray> contents;
+    for (auto it = entries.cbegin(); it != entries.cend(); ++it) {
+        // Compress-Archive writes '\'.
+        QString name = it.key();
+        name.replace(QLatin1Char('\\'), QLatin1Char('/'));
+        if (name.endsWith(QLatin1Char('/'))) {
+            name.chop(1);
+            if (!safePath(name) || !it.value().isEmpty()) {
+                return fail(QStringLiteral("The full release has an unexpected entry %1.").arg(it.key()));
+            }
+            continue;   // a folder; its files create it
+        }
+        if (!wanted.contains(name) || contents.contains(name)) {
+            *problem = QStringLiteral("The full release has an unexpected file %1.").arg(it.key());
+            return false;
+        }
+        contents.insert(name, it.value());
+    }
+    if (contents.size() != wanted.size()) {
+        *problem = QStringLiteral("The full release is missing files.");
+        return false;
+    }
+    fs::remove_all(stage, ec);
+    fs::create_directories(stage, ec);
+    if (ec) {
+        return fail(QStringLiteral("The staging folder could not be made."));
+    }
+    for (auto it = contents.cbegin(); it != contents.cend(); ++it) {
+        if (cancelled && cancelled->load()) {
+            return fail(QStringLiteral("cancelled"));
+        }
+        const fs::path target = stage / toPath(it.key());
+        if (!noLinkOnTheWay(stage, it.key())) {
+            return fail(QStringLiteral("%1: a parent folder is a link").arg(it.key()));
+        }
+        fs::create_directories(target.parent_path(), ec);
+        QFile out(native(target));
+        if (!out.open(QIODevice::WriteOnly | QIODevice::NewOnly) || out.write(it.value()) != it.value().size()
+            || !out.flush()) {
+            return fail(QStringLiteral("%1: cannot write the new file.").arg(it.key()));
+        }
+        out.close();
+        setExecutable(target, wanted.value(it.key())->executable);
+    }
+    // setup.exe's uninstaller and its record stay with the install: the
+    // release's own files never include them.
+    // A release file of that name, in any case on Windows, where the
+    // install's unins000.dat and the release's Unins000.dat are one file.
+    const auto isReleaseFile = [&wanted](const QString& name) {
+#ifdef Q_OS_WIN
+        for (auto w = wanted.cbegin(); w != wanted.cend(); ++w) {
+            if (w.key().compare(name, Qt::CaseInsensitive) == 0) {
+                return true;
+            }
+        }
+        return false;
+#else
+        return wanted.contains(name);
+#endif
+    };
+    // Every step takes an error code: this runs on a worker, where a
+    // throwing increment would end the app.
+    fs::directory_iterator it(install, ec);
+    for (const fs::directory_iterator end; !ec && it != end; it.increment(ec)) {
+        const fs::path entry = it->path();
+        const QString name = native(entry.filename());
+        if (!name.startsWith(QLatin1String("unins"), Qt::CaseInsensitive) || isReleaseFile(name)) {
+            continue;
+        }
+        std::error_code probe;
+        if (!fs::is_regular_file(fs::symlink_status(entry, probe))) {
+            continue;   // a link or a folder is not the installer's file
+        }
+        fs::copy_file(entry, stage / entry.filename(), ec);
+        if (ec) {
+            return fail(QStringLiteral("%1: the installer's file could not be kept.").arg(name));
+        }
+    }
+    if (ec) {
+        return fail(QStringLiteral("The install could not be read."));
+    }
+    if (!checkTree(stage, files, &why)) {
+        return fail(QStringLiteral("The unpacked files do not match the release: %1.").arg(why));
+    }
+    return true;
+}
+
+namespace {
+
+// An empty path is no install, never the working directory.
+bool sameInstall(const QString& a, const QString& b)
+{
+    if (a.isEmpty() || b.isEmpty()) {
+        return false;
+    }
+#ifdef Q_OS_WIN
+    const Qt::CaseSensitivity cs = Qt::CaseInsensitive;
+#else
+    const Qt::CaseSensitivity cs = Qt::CaseSensitive;
+#endif
+    return QDir::cleanPath(QDir(a).absolutePath()).compare(QDir::cleanPath(QDir(b).absolutePath()), cs) == 0;
+}
+
+} // namespace
+
+UpdateStager::StagedRelease UpdateStager::stagedRelease(const QString& stagingRoot,
+                                                        const QString& runningVersion,
+                                                        const QString& installRoot,
+                                                        const QString& githubLatestTag,
+                                                        const QString& rolledBackVersion)
+{
+    StagedRelease chosen;
+    QDir root(stagingRoot);
+    if (stagingRoot.isEmpty() || !root.exists()) {
+        return chosen;
+    }
+    const VersionNumber running = VersionNumber::parse(runningVersion);
+    const QStringList records = root.entryList({QStringLiteral("*.json")}, QDir::Files);
+    for (const QString& name : records) {
+        if (name.endsWith(QLatin1String(".manifest.json"))) {
+            continue;
+        }
+        QFile f(root.filePath(name));
+        const QJsonObject r = f.size() <= 64 * 1024 && f.open(QIODevice::ReadOnly)
+                                  ? QJsonDocument::fromJson(f.readAll()).object()
+                                  : QJsonObject();
+        const QString version = r.value(QLatin1String("version")).toString();
+        const bool usable = chosen.version.isEmpty() && name == version + QLatin1String(".json")
+                            && releaseVersion().match(version).hasMatch()
+                            && VersionNumber::parse(version) > running
+                            && r.value(QLatin1String("from")).toString() == runningVersion
+                            && sameInstall(r.value(QLatin1String("install")).toString(), installRoot)
+                            // The tag is the version's own: the record keeps none of
+                            // its own to edit, and revalidate() binds the version to
+                            // the signed manifest.
+                            && (githubLatestTag.isEmpty() || githubLatestTag == QLatin1Char('v') + version)
+                            && version != rolledBackVersion && QFileInfo(root.filePath(version)).isDir()
+                            && QFileInfo::exists(root.filePath(version + QLatin1String(".manifest.json")))
+                            && QFileInfo::exists(root.filePath(version + QLatin1String(".manifest.json.sig")));
+        if (usable) {
+            chosen = {version, root.filePath(version), runningVersion};
+        }
+    }
+    // Everything else staging wrote is stale: other versions, half-written
+    // records, work folders a crashed run left. The folder is shared with
+    // the swap helper (UpdateInstaller::stateDir()): its journal, result,
+    // repair plan, log and copy are never staging's to remove.
+    std::error_code ec;
+    const QStringList keep = chosen.version.isEmpty()
+                                 ? QStringList()
+                                 : QStringList{chosen.version, chosen.version + QLatin1String(".json"),
+                                               chosen.version + QLatin1String(".manifest.json"),
+                                               chosen.version + QLatin1String(".manifest.json.sig")};
+    const QDir::Filters all = QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot;
+    // A tree, a record, or a record QSaveFile left half written
+    // ("<record>.XXXXXX", where it uses a named temporary file).
+    static const QRegularExpression record(
+        QStringLiteral("^(.+?)\\.(json|manifest\\.json|manifest\\.json\\.sig)(\\.[A-Za-z0-9]{6})?$"));
+    const auto owned = [](const QString& name) {
+        const QRegularExpressionMatch m = record.match(name);
+        return releaseVersion().match(m.hasMatch() ? m.captured(1) : name).hasMatch();
+    };
+    for (const QString& name : root.entryList(all)) {
+        const bool ours = name.startsWith(QLatin1String(".work-")) || owned(name);
+        if (ours && !keep.contains(name)) {
+            qCInfo(lcUpdater).noquote() << "discarding stale staged update" << name;
+            fs::remove_all(toPath(root.filePath(name)), ec);
+        }
+    }
+    return chosen;
+}
+
+bool UpdateStager::revalidate(const QString& stagingRoot, const StagedRelease& staged,
+                              const QString& platform, const QString& arch, QString* problem)
+{
+    if (staged.version.isEmpty()) {
+        *problem = QStringLiteral("No update is staged.");
+        return false;
+    }
+    QFile m(recordPath(stagingRoot, staged.version, QStringLiteral(".manifest.json")));
+    QFile s(recordPath(stagingRoot, staged.version, QStringLiteral(".manifest.json.sig")));
+    if (m.size() > kMaxManifestBytes || !m.open(QIODevice::ReadOnly) || !s.open(QIODevice::ReadOnly)) {
+        *problem = QStringLiteral("The staged update's manifest is missing.");
+        return false;
+    }
+    const QByteArray manifest = m.readAll();
+    if (!verify(manifest, s.read(65))) {
+        *problem = QStringLiteral("The staged update's manifest is not signed by AetherSDR's update key.");
+        return false;
+    }
+    UpdateManifest parsed;
+    if (!UpdateManifest::parse(manifest, &parsed, problem)) {
+        return false;
+    }
+    if (parsed.version != staged.version) {
+        *problem = QStringLiteral("The staged update's manifest is for another release.");
+        return false;
+    }
+    for (const UpdateManifest::Payload& p : parsed.payloads) {
+        if (p.platform == platform && p.arch == arch) {
+            QString why;
+            if (!checkTree(toPath(staged.dir), p.files, &why)) {
+                *problem = QStringLiteral("The staged update has changed: %1.").arg(why);
+                return false;
+            }
+            return true;
+        }
+    }
+    *problem = QStringLiteral("The staged update's manifest has nothing for this computer.");
+    return false;
 }
 
 bool UpdateStager::isBusy() const
@@ -744,9 +1042,128 @@ void UpdateStager::stage(const Request& request)
     m_request = request;
     if (m_request.manifestUrl.isEmpty()) {
         m_request.manifestUrl = QUrl(QString::fromLatin1(kManifestUrl));
+#if AETHER_UPDATE_DEV_OVERRIDES
+        const QByteArray env = qgetenv("AETHER_UPDATE_MANIFEST_URL");
+        if (!env.isEmpty()) {
+            m_request.manifestUrl = QUrl::fromUserInput(QString::fromUtf8(env));
+            qCWarning(lcUpdater) << "AETHER_UPDATE_MANIFEST_URL: using the manifest at"
+                                 << m_request.manifestUrl.toString() << "instead of" << kManifestUrl;
+        }
+#endif
     }
     m_stage = Stage::Manifest;
     m_download->get(m_request.manifestUrl, kMaxManifestBytes, tr("The update manifest is too large."));
+}
+
+namespace {
+
+// Where a signed release file is fetched from: its signed URL, unless a test
+// (or a dev-overrides build) serves "<base>/<tag>/<asset>" instead. The URL
+// the manifest names is still checked as signed.
+QUrl fetchUrl(const UpdateManifest::Asset& asset, const QString& tag)
+{
+    QUrl base = testDownloadBase();
+#if AETHER_UPDATE_DEV_OVERRIDES
+    if (!base.isValid()) {
+        const QByteArray env = qgetenv("AETHER_UPDATE_DOWNLOAD_BASE");
+        if (!env.isEmpty()) {
+            base = QUrl::fromUserInput(QString::fromUtf8(env));
+            qCWarning(lcUpdater) << "AETHER_UPDATE_DOWNLOAD_BASE: fetching" << asset.name << "from"
+                                 << base.toString();
+        }
+    }
+#endif
+    if (!base.isValid()) {
+        return asset.url;
+    }
+    QString b = base.toString();
+    while (b.endsWith(QLatin1Char('/'))) {
+        b.chop(1);
+    }
+    return QUrl(b + QLatin1Char('/') + tag + QLatin1Char('/') + asset.name);
+}
+
+} // namespace
+
+void UpdateStager::fallBack(const QString& reason)
+{
+    const UpdateManifest::Asset& full = m_payload->full;
+    if (m_request.fullFallback && m_stage != Stage::Full
+        && full.name.endsWith(QLatin1String(".zip"), Qt::CaseInsensitive) && full.size <= kMaxFullBytes) {
+        qCInfo(lcUpdater).noquote() << "no patch applied (" + reason + "); staging the full release";
+        m_stage = Stage::Full;
+        m_download->get(fetchUrl(full, m_manifest.tag), full.size, tr("The update is larger than it said."));
+        return;
+    }
+    m_stage = Stage::Idle;
+    emit fullDownloadNeeded(reason, full, m_manifest.version);
+}
+
+void UpdateStager::runWorker(std::function<QString(const QString& work)> apply)
+{
+    emit progress(tr("Applying the update"), 0, 0);
+    // Each request applies into a folder of its own, so a worker that is
+    // still finishing after a cancel never shares files with the next; only
+    // the current request's result becomes <stagingRoot>/<version>.
+    const QString root = m_request.stagingRoot;
+    const QString work = QDir(root).filePath(
+        QStringLiteral(".work-") + QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const quint64 generation = m_generation;
+    const bool isFull = m_stage == Stage::Full;
+    auto* watcher = new QFutureWatcher<QString>(this);
+    connect(watcher, &QFutureWatcher<QString>::finished, this, [this, watcher, root, work, generation,
+                                                                isFull] {
+        QString problem = watcher->result();
+        watcher->deleteLater();
+        std::error_code ec;
+        if (generation != m_generation) {
+            fs::remove_all(toPath(work), ec);   // a cancelled request's result
+            return;
+        }
+        const QString version = m_manifest.version;
+        const QString staging = QDir(root).filePath(version);
+        if (problem.isEmpty()) {
+            fs::remove_all(toPath(staging), ec);
+            fs::rename(toPath(work), toPath(staging), ec);
+            if (ec) {
+                fs::remove_all(toPath(work), ec);
+                problem = QStringLiteral("The staged update could not be put in place.");
+            }
+        }
+        if (!problem.isEmpty()) {
+            qCWarning(lcUpdater).noquote() << "update to v" + version + " not staged:" << problem;
+            if (isFull) {
+                m_stage = Stage::Idle;
+                emit fullDownloadNeeded(problem, m_payload->full, version);
+            } else {
+                fallBack(problem);
+            }
+            return;
+        }
+        // The record beside the tree, never in it: what it was staged for,
+        // and the signed manifest that vouches for every file.
+        QJsonObject record{{QStringLiteral("version"), version},
+                           {QStringLiteral("from"), m_request.runningVersion},
+                           {QStringLiteral("install"), QDir(m_request.installRoot).absolutePath()}};
+        QSaveFile r(recordPath(root, version, QStringLiteral(".json")));
+        QSaveFile m(recordPath(root, version, QStringLiteral(".manifest.json")));
+        QSaveFile s(recordPath(root, version, QStringLiteral(".manifest.json.sig")));
+        const bool saved = r.open(QIODevice::WriteOnly) && r.write(QJsonDocument(record).toJson()) >= 0
+                           && r.commit() && m.open(QIODevice::WriteOnly) && m.write(m_manifestBytes) >= 0
+                           && m.commit() && s.open(QIODevice::WriteOnly) && s.write(m_signature) >= 0
+                           && s.commit();
+        m_stage = Stage::Idle;
+        if (!saved) {
+            fs::remove_all(toPath(staging), ec);
+            emit fullDownloadNeeded(tr("The staged update's record could not be saved."), m_payload->full,
+                                    version);
+            return;
+        }
+        qCInfo(lcUpdater).noquote() << "update to v" + version + (isFull ? " (full)" : "") + " staged in"
+                                    << staging;
+        emit staged(staging, version);
+    });
+    watcher->setFuture(QtConcurrent::run([apply, work] { return apply(work); }));
 }
 
 void UpdateStager::onDownloaded(const QUrl&, const QByteArray& body)
@@ -768,6 +1185,7 @@ void UpdateStager::onDownloaded(const QUrl&, const QByteArray& body)
             fail(tr("The update manifest is not signed by AetherSDR's update key."));
             return;
         }
+        m_signature = body;
         QString problem;
         if (!UpdateManifest::parse(m_manifestBytes, &m_manifest, &problem)) {
             fail(problem);
@@ -795,76 +1213,48 @@ void UpdateStager::onDownloaded(const QUrl&, const QByteArray& body)
         }
         UpdateSettings::setAcceptedManifestUtc(m_manifest.generatedAt);
         if (d == Decision::FullDownload || m_patch->bundle.size > kMaxBundleBytes) {
-            m_stage = Stage::Idle;
-            emit fullDownloadNeeded(tr("No update applies to this version."), m_payload->full,
-                                    m_manifest.version);
+            fallBack(tr("No update applies to this version."));
             return;
         }
         m_stage = Stage::Bundle;
-        QUrl url = m_patch->bundle.url;
-        if (testDownloadBase().isValid()) {
-            url = QUrl(testDownloadBase().toString() + QLatin1Char('/') + m_manifest.tag
-                       + QLatin1Char('/') + m_patch->bundle.name);
-        }
-        m_download->get(url, m_patch->bundle.size, tr("The update is larger than it said."));
+        m_download->get(fetchUrl(m_patch->bundle, m_manifest.tag), m_patch->bundle.size,
+                        tr("The update is larger than it said."));
         return;
     }
     case Stage::Bundle: {
         if (body.size() != m_patch->bundle.size
             || QString::fromLatin1(QCryptographicHash::hash(body, QCryptographicHash::Sha256).toHex())
                    != m_patch->bundle.sha256) {
+            fallBack(tr("The downloaded update does not match its signed hash."));
+            return;
+        }
+        const QString install = m_request.installRoot;
+        const UpdateManifest::Patch patch = *m_patch;
+        const QList<UpdateManifest::File> files = m_payload->files;
+        const std::shared_ptr<std::atomic_bool> cancelled = m_cancelled;
+        runWorker([install, body, patch, files, cancelled](const QString& work) {
+            QString problem;
+            return applyPatch(install, body, patch, files, work, &problem, cancelled.get()) ? QString()
+                                                                                          : problem;
+        });
+        return;
+    }
+    case Stage::Full: {
+        if (body.size() != m_payload->full.size
+            || QString::fromLatin1(QCryptographicHash::hash(body, QCryptographicHash::Sha256).toHex())
+                   != m_payload->full.sha256) {
             m_stage = Stage::Idle;
             emit fullDownloadNeeded(tr("The downloaded update does not match its signed hash."),
                                     m_payload->full, m_manifest.version);
             return;
         }
-        emit progress(tr("Applying the update"), 0, 0);
-        // Each request applies into a folder of its own, so a worker that is
-        // still finishing after a cancel never shares files with the next;
-        // only the current request's result becomes <stagingRoot>/<version>.
-        const QString root = m_request.stagingRoot;
-        const QString work = QDir(root).filePath(
-            QStringLiteral(".work-") + QUuid::createUuid().toString(QUuid::WithoutBraces));
-        const QString staging = QDir(root).filePath(m_manifest.version);
         const QString install = m_request.installRoot;
-        const UpdateManifest::Patch patch = *m_patch;
         const QList<UpdateManifest::File> files = m_payload->files;
-        const UpdateManifest::Asset full = m_payload->full;
-        const QString version = m_manifest.version;
-        const quint64 generation = m_generation;
         const std::shared_ptr<std::atomic_bool> cancelled = m_cancelled;
-        auto* watcher = new QFutureWatcher<QString>(this);
-        connect(watcher, &QFutureWatcher<QString>::finished, this,
-                [this, watcher, work, staging, full, version, generation] {
-            QString problem = watcher->result();
-            watcher->deleteLater();
-            std::error_code ec;
-            if (generation != m_generation) {
-                fs::remove_all(toPath(work), ec);   // a cancelled request's result
-                return;
-            }
-            m_stage = Stage::Idle;
-            if (problem.isEmpty()) {
-                fs::remove_all(toPath(staging), ec);
-                fs::rename(toPath(work), toPath(staging), ec);
-                if (ec) {
-                    fs::remove_all(toPath(work), ec);
-                    problem = QStringLiteral("The staged update could not be put in place.");
-                }
-            }
-            if (problem.isEmpty()) {
-                qCInfo(lcUpdater).noquote() << "update to v" + version + " staged in" << staging;
-                emit staged(staging, version);
-            } else {
-                qCWarning(lcUpdater).noquote() << "update to v" + version + " not staged:" << problem;
-                emit fullDownloadNeeded(problem, full, version);
-            }
-        });
-        watcher->setFuture(QtConcurrent::run([install, body, patch, files, work, cancelled] {
+        runWorker([install, body, files, cancelled](const QString& work) {
             QString problem;
-            return applyPatch(install, body, patch, files, work, &problem, cancelled.get()) ? QString()
-                                                                                          : problem;
-        }));
+            return applyFull(install, body, files, work, &problem, cancelled.get()) ? QString() : problem;
+        });
         return;
     }
     }
