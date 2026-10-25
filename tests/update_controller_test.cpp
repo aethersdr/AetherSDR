@@ -228,6 +228,30 @@ private slots:
         QVERIFY(waitFor(again, UpdateController::State::Staged));
     }
 
+    void aFailureForASupersededReleaseIsNotReported()
+    {
+        // Ozy311's review of #6777: 26.10.4 is announced while 26.10.3
+        // downloads, and 26.10.3 then can't be had at all. Its fallback says
+        // nothing about 26.10.4, so nothing is reported.
+        Rig rig(m_key, false);
+        UpdateController c(rig.env());
+        QSignalSpy browser(&c, &UpdateController::browserNeeded);
+        QSignalSpy failed(&c, &UpdateController::failed);
+        c.install(QStringLiteral("26.10.3"));
+        c.refreshStaged(QStringLiteral("26.10.4"));
+        QVERIFY(QTest::qWaitFor([&] { return c.state() == UpdateController::State::Idle; }, 20000));
+        QTest::qWait(100);
+        QCOMPARE(browser.size(), 0);
+        QCOMPARE(failed.size(), 0);
+        // Without the newer release, the same fallback names its version.
+        UpdateSettings::setAcceptedManifestUtc({});
+        UpdateController again(rig.env());
+        QSignalSpy browser2(&again, &UpdateController::browserNeeded);
+        again.install(QStringLiteral("26.10.3"));
+        QTRY_COMPARE_WITH_TIMEOUT(browser2.size(), 1, 20000);
+        QCOMPARE(browser2.first().at(1).toString(), QStringLiteral("26.10.3"));
+    }
+
     void aRolledBackReleaseIsNeverStagedOrOffered()
     {
         Rig rig(m_key);

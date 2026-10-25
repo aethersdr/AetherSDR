@@ -510,6 +510,25 @@ int main(int argc, char** argv)
         check(controller.state() == UpdateController::State::Idle
                   && !QFileInfo::exists(rig.tmp.filePath(QStringLiteral("update/26.10.3"))),
               "Skip discards the staged release");
+
+        // Ozy311's review: Skip, then Install the skipped release anyway,
+        // then Skip again once it is ready. The download is discarded and
+        // nothing installs on quit.
+        UpdateSettings::setSkippedVersion(QStringLiteral("26.10.3"));
+        if (primary) {
+            primary->click();
+        }
+        QTest::qWaitFor([&] { return controller.state() == UpdateController::State::Staged; }, 20000);
+        app.processEvents();
+        skip = const_cast<QPushButton*>(button(*w, QStringLiteral("Skip this version")));
+        check(skip && skip->isEnabled(), "a skipped release installed anyway can be skipped again");
+        if (skip) {
+            skip->click();
+        }
+        app.processEvents();
+        check(controller.state() == UpdateController::State::Idle && !controller.installOnQuit()
+                  && rig.launches == 0,
+              "skipping it again discards the download; nothing installs on quit");
         UpdateSettings::setSkippedVersion(QString());
 
         // Closing the window while it stages cancels it.

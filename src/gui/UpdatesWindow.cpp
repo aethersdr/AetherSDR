@@ -461,14 +461,17 @@ void UpdatesWindow::setController(UpdateController* controller)
                     }
                     m_progress->setAccessibleDescription(m_progressLabel->text());
                 });
-        connect(controller, &UpdateController::browserNeeded, this, [this](const QString& reason) {
-            m_browserReason = reason;
-            m_browserVersion = m_checker ? m_checker->latestRelease().version : QString();
-            refresh();
-        });
-        connect(controller, &UpdateController::failed, this, [this](const QString& reason) {
+        // Each outcome is kept with the release it was about, not whatever
+        // the check shows now.
+        connect(controller, &UpdateController::browserNeeded, this,
+                [this](const QString& reason, const QString& version) {
+                    m_browserReason = reason;
+                    m_browserVersion = version;
+                    refresh();
+                });
+        connect(controller, &UpdateController::failed, this, [this](const QString& reason, const QString& version) {
             m_installProblem = reason;
-            m_problemVersion = m_checker ? m_checker->latestRelease().version : QString();
+            m_problemVersion = version;
             refresh();
         });
     }
@@ -657,8 +660,11 @@ void UpdatesWindow::refresh()
     m_checkNow->setText(checking ? tr("Checking…") : tr("Check Now"));
     m_skip->setVisible(canDownload);
     const bool skipped = UpdateChecker::isSkipped(release.version);
-    m_skip->setEnabled(!skipped && !m_firmwareBusy);
-    m_skip->setText(skipped ? tr("Skipped") : tr("Skip this version"));
+    // A release skipped earlier and installed since has a download pending:
+    // Skip discards it, so it stays offered.
+    const bool pending = forThis && (installState == State::Staging || installState == State::Staged);
+    m_skip->setEnabled((!skipped || pending) && !m_firmwareBusy);
+    m_skip->setText(skipped && !pending ? tr("Skipped") : tr("Skip this version"));
     // One job at a time: nothing else starts while radio firmware is going in.
     const QString waiting = tr("Waits until the radio firmware install finishes.");
     for (QWidget* w : {static_cast<QWidget*>(m_get), static_cast<QWidget*>(m_checkNow),

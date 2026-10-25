@@ -97,14 +97,18 @@ public:
 signals:
     void stateChanged();
     void progress(const QString& step, qint64 done, qint64 total);
-    // Staging could not be done in place; the download is in the browser.
-    void browserNeeded(const QString& reason);
+    // Staging version could not be done in place; the download is in the
+    // browser. Never for a release a newer latest superseded meanwhile.
+    void browserNeeded(const QString& reason, const QString& version);
     // The manifest could not be trusted or fetched, or GitHub's latest is
     // already running.
-    void failed(const QString& reason);
+    void failed(const QString& reason, const QString& version);
 
 private:
     bool handOver(bool restart, QString* problem);
+    // A staging attempt ended without a release: Idle, and reason to the
+    // window for the attempted version, unless a newer latest superseded it.
+    void endAttempt(const QString& reason, bool browser);
     void setState(State s, const QString& version);
 
     Environment m_env;

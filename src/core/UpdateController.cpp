@@ -61,18 +61,33 @@ UpdateController::UpdateController(Environment env, QObject* parent)
     });
     connect(m_stager, &UpdateStager::fullDownloadNeeded, this,
             [this](const QString& reason, const UpdateManifest::Asset&, const QString&) {
-                setState(State::Idle, {});
-                emit browserNeeded(reason);
+                endAttempt(reason, true);
             });
     connect(m_stager, &UpdateStager::upToDate, this, [this] {
-        setState(State::Idle, {});
         // The signed manifest lags GitHub's latest until it is published.
-        emit failed(tr("The update for this release isn't published yet. Try again later, or download it."));
+        endAttempt(tr("The update for this release isn't published yet. Try again later, or download it."),
+                   false);
     });
-    connect(m_stager, &UpdateStager::failed, this, [this](const QString& reason) {
-        setState(State::Idle, {});
-        emit failed(reason);
-    });
+    connect(m_stager, &UpdateStager::failed, this,
+            [this](const QString& reason) { endAttempt(reason, false); });
+}
+
+void UpdateController::endAttempt(const QString& reason, bool browser)
+{
+    const QString attempted = m_version;
+    setState(State::Idle, {});
+    // An outcome belongs to the release attempted; one a newer latest has
+    // superseded meanwhile says nothing about the release now offered.
+    if (!m_latest.isEmpty() && VersionNumber::parse(m_latest) > VersionNumber::parse(attempted)) {
+        qCInfo(lcUpdater).noquote() << "update to v" + attempted + " ended (" + reason + "); superseded by v"
+                                           + m_latest;
+        return;
+    }
+    if (browser) {
+        emit browserNeeded(reason, attempted);
+    } else {
+        emit failed(reason, attempted);
+    }
 }
 
 bool UpdateController::canInstallInPlace(QString* why) const
@@ -131,7 +146,8 @@ void UpdateController::install(const QString& latestVersion)
     }
     m_latest = latestVersion;
     if (isRolledBack(latestVersion)) {
-        emit failed(tr("This release was rolled back after it failed to start, so it isn't installed again."));
+        emit failed(tr("This release was rolled back after it failed to start, so it isn't installed again."),
+                    latestVersion);
         return;
     }
     UpdateStager::Request r = m_env.request;
