@@ -2321,8 +2321,11 @@ void MainWindow::wireUpdateChecker()
             [this](const QString& ver) {
         m_updateController->refreshStaged(ver);
         if (m_titleBar) {
+            // A release rolled back here is never announced again.
             m_titleBar->setUpdateAvailable(
-                UpdateChecker::badgeVersion(ver, QCoreApplication::applicationVersion()));
+                m_updateController->isRolledBack(ver)
+                    ? QString()
+                    : UpdateChecker::badgeVersion(ver, QCoreApplication::applicationVersion()));
         }
     });
     connect(m_updateChecker, &UpdateChecker::upToDate, this,
@@ -2350,7 +2353,7 @@ void MainWindow::restoreKnownUpdate()
     // The daily throttle may skip this launch's check, so the badge comes back
     // from the release the last answer recorded, under the same rules.
     const QString known = UpdateChecker::knownBadgeVersion();
-    if (known.isEmpty() || !m_titleBar) {
+    if (known.isEmpty() || !m_titleBar || (m_updateController && m_updateController->isRolledBack(known))) {
         return;
     }
     m_titleBar->setUpdateAvailable(known);

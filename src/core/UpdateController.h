@@ -62,6 +62,9 @@ public:
 
     // Whether Install update can be offered at all (why, when not).
     bool canInstallInPlace(QString* why = nullptr) const;
+    // A release the helper rolled back here: never staged, offered or
+    // badged again.
+    bool isRolledBack(const QString& version) const;
 
     State state() const { return m_state; }
     // The release staged, or being staged; empty when Idle.
@@ -70,7 +73,8 @@ public:
     // What is staged from an earlier run, for the running version and this
     // install. latestVersion is GitHub's latest ("26.10.4"; empty when it is
     // not known yet, at startup): a staged release that is no longer the
-    // latest is discarded. Never while Staging.
+    // latest is discarded. While Staging nothing is swept: the answer is
+    // kept, and a download it supersedes is discarded when it finishes.
     void refreshStaged(const QString& latestVersion);
 
     // Install update: stage latestVersion. A full fallback that cannot be
@@ -108,6 +112,7 @@ private:
     State m_state{State::Idle};
     QString m_version;
     UpdateStager::StagedRelease m_staged;
+    QString m_latest;   // GitHub's latest as last heard; empty: not known
 };
 
 } // namespace AetherSDR

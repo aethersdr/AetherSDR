@@ -56,9 +56,9 @@ Install update isn't offered when:
 - AetherSDR is running as administrator. Run the installer instead; a system-wide install updates that way.
 - The folder AetherSDR is installed in can't be changed by your user, for example under **Program Files**.
 - A store installs your updates.
-- Radio firmware is being installed. The button waits, and an update ready to install waits for the next quit.
+- The release was rolled back on this computer. The window says so, and offers **Get AetherSDR** if you want to try it by hand. The **UPDATE** badge doesn't show for it.
 
-In those cases the window offers **Get AetherSDR** instead.
+Windows copies that cannot install in place offer **Get AetherSDR**. Store-managed copies update through their store. During a radio firmware install, the update button waits until the job finishes, and an update ready to install waits for the next quit.
 
 ## Troubleshooting
 

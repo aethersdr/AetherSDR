@@ -3,6 +3,7 @@
 #include "LogManager.h"
 #include "UpdateInstaller.h"
 #include "UpdateSettings.h"
+#include "VersionNumber.h"
 
 #include <QCoreApplication>
 #include <QSysInfo>
@@ -45,6 +46,14 @@ UpdateController::UpdateController(Environment env, QObject* parent)
 {
     connect(m_stager, &UpdateStager::progress, this, &UpdateController::progress);
     connect(m_stager, &UpdateStager::staged, this, [this](const QString& dir, const QString& version) {
+        // A newer release was announced while this one downloaded: it is
+        // no longer the one to install.
+        if (!m_latest.isEmpty() && VersionNumber::parse(m_latest) > VersionNumber::parse(version)) {
+            qCInfo(lcUpdater).noquote() << "staged update to v" + version + " superseded by v" + m_latest;
+            UpdateStager::discard(m_env.request.stagingRoot, version);
+            setState(State::Idle, {});
+            return;
+        }
         m_staged = {version, dir, m_env.request.runningVersion};
         setState(State::Staged, version);
     });
@@ -68,6 +77,11 @@ bool UpdateController::canInstallInPlace(QString* why) const
     return m_env.canInstall && m_env.canInstall(why);
 }
 
+bool UpdateController::isRolledBack(const QString& version) const
+{
+    return !version.isEmpty() && m_env.rolledBackVersion && version == m_env.rolledBackVersion();
+}
+
 void UpdateController::setState(State s, const QString& version)
 {
     if (s == m_state && version == m_version) {
@@ -83,6 +97,9 @@ void UpdateController::setState(State s, const QString& version)
 
 void UpdateController::refreshStaged(const QString& latestVersion)
 {
+    if (!latestVersion.isEmpty()) {
+        m_latest = latestVersion;
+    }
     if (m_state == State::Staging || m_state == State::Handed) {
         return;   // the sweep would remove the work in progress
     }
@@ -109,7 +126,8 @@ void UpdateController::install(const QString& latestVersion)
     if (m_state == State::Staged && m_version == latestVersion) {
         return;   // already staged
     }
-    if (latestVersion == (m_env.rolledBackVersion ? m_env.rolledBackVersion() : QString())) {
+    m_latest = latestVersion;
+    if (isRolledBack(latestVersion)) {
         emit failed(tr("This release was rolled back after it failed to start, so it isn't installed again."));
         return;
     }

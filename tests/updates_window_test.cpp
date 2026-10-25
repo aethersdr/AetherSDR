@@ -74,6 +74,7 @@ struct InstallRig {
     int launches = 0;
     bool lastRestart = false;
     bool inPlace = true;
+    QString rolledBack;
 
     explicit InstallRig(bool withBundle = true)
     {
@@ -129,7 +130,7 @@ struct InstallRig {
             lastRestart = restart;
             return true;
         };
-        e.rolledBackVersion = [] { return QString(); };
+        e.rolledBackVersion = [this] { return rolledBack; };
         return e;
     }
 };
@@ -540,6 +541,27 @@ int main(int argc, char** argv)
         check(primary && primary->text().startsWith(QLatin1String("Get AetherSDR 26.10.3")),
               "a release that can't be prepared here falls back to the download");
         check(text(w, "updatesNote").contains(QLatin1String("Download it instead")), "the note says why");
+    }
+
+    {
+        // Review of #6777: a release rolled back here is not offered in
+        // place again; the window says why and offers the download.
+        UpdateSettings::setSkippedVersion(QString());
+        InstallRig rig;
+        rig.rolledBack = QStringLiteral("26.10.3");
+        UpdateController controller(rig.env());
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow w(&checker, nullptr);
+        w.setController(&controller);
+        w.show();
+        app.processEvents();
+        network.last->finishWithBody(releaseJson(QStringLiteral("Tagline")));
+        app.processEvents();
+        check(button(w, QStringLiteral("Install update")) == nullptr
+                  && button(w, QStringLiteral("Get AetherSDR 26.10.3")) != nullptr,
+              "a rolled-back release offers the download, not Install update");
+        check(text(w, "updatesNote").contains(QLatin1String("rolled back")), "the note says it was rolled back");
     }
 
     {

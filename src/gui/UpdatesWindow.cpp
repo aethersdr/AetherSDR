@@ -476,7 +476,8 @@ void UpdatesWindow::showInstallProblem(const QString& problem)
 
 bool UpdatesWindow::installsInPlace(const QString& version) const
 {
-    return m_controller && m_canInPlace && !(m_browserVersion == version && !m_browserReason.isEmpty());
+    return m_controller && m_canInPlace && !m_controller->isRolledBack(version)
+           && !(m_browserVersion == version && !m_browserReason.isEmpty());
 }
 
 void UpdatesWindow::primaryClicked()
@@ -553,6 +554,9 @@ void UpdatesWindow::refresh()
             note = tr("Couldn't reach GitHub for this release's details. Check your connection, then try again.");
         } else if (m_failed) {
             note = tr("Couldn't reach GitHub just now. This is its last answer.");
+        } else if (m_controller && m_controller->isRolledBack(release.version)) {
+            note = tr("This release didn't start on this computer, so it was rolled back and isn't installed "
+                      "here again.");
         } else if (UpdateChecker::isSkipped(release.version)) {
             note = tr("You skipped this release, so UPDATE is not shown in the title bar.");
         } else if (m_browserVersion == release.version && !m_browserReason.isEmpty()) {

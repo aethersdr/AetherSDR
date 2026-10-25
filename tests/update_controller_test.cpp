@@ -206,6 +206,28 @@ private slots:
         QVERIFY(!QFileInfo::exists(rig.staging + QStringLiteral("/26.10.3")));
     }
 
+    void aNewerReleaseAnnouncedDuringTheDownloadSupersedesIt()
+    {
+        // Review of #6777: the check answers 26.10.4 while 26.10.3 is
+        // still downloading. The finished download is discarded, never
+        // installed on the next quit.
+        Rig rig(m_key);
+        UpdateController c(rig.env());
+        c.install(QStringLiteral("26.10.3"));
+        c.refreshStaged(QStringLiteral("26.10.4"));
+        QCOMPARE(c.state(), UpdateController::State::Staging);   // the worker is not swept
+        QVERIFY(QTest::qWaitFor([&] { return c.state() == UpdateController::State::Idle; }, 20000));
+        QVERIFY(!c.installOnQuit());
+        QVERIFY(rig.launches.isEmpty());
+        QVERIFY(!QFileInfo::exists(rig.staging + QStringLiteral("/26.10.3")));
+        // The same latest heard during the download keeps it.
+        UpdateSettings::setAcceptedManifestUtc({});
+        UpdateController again(rig.env());
+        again.install(QStringLiteral("26.10.3"));
+        again.refreshStaged(QStringLiteral("26.10.3"));
+        QVERIFY(waitFor(again, UpdateController::State::Staged));
+    }
+
     void aRolledBackReleaseIsNeverStagedOrOffered()
     {
         Rig rig(m_key);
@@ -216,6 +238,9 @@ private slots:
         }
         rig.rolledBack = QStringLiteral("26.10.3");
         UpdateController c(rig.env());
+        QVERIFY(c.isRolledBack(QStringLiteral("26.10.3")));
+        QVERIFY(!c.isRolledBack(QStringLiteral("26.10.4")));
+        QVERIFY(!c.isRolledBack(QString()));
         c.refreshStaged(QString());
         QCOMPARE(c.state(), UpdateController::State::Idle);
         QSignalSpy failed(&c, &UpdateController::failed);
