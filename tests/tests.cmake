@@ -4209,8 +4209,9 @@ add_test(NAME radio_nickname_test COMMAND radio_nickname_test)
 set_tests_properties(radio_nickname_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
-# Production TX Band Settings column with injected replies/status, and the
-# window's canon workspace shape and geometry key; no sockets.
+# Production TX Band Settings column with injected replies/status, the
+# window's canon workspace shape and geometry key, and the open table following
+# the radio's band values and TX profile; no sockets.
 add_executable(tune_output_dialog_test
     tests/tune_output_dialog_test.cpp
     src/gui/CanonWindow.cpp
