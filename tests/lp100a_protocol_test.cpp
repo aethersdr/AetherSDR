@@ -10,6 +10,7 @@
 #include <functional>
 #include <limits>
 #include <set>
+#include <vector>
 
 using namespace AetherSDR::LpMeter;
 
@@ -77,6 +78,7 @@ struct MeterSim {
     qint64 foreignStartMs{0};
     qint64 foreignStopMs{std::numeric_limits<qint64>::max()};
     qint64 durationMs{60000};
+    std::vector<qint64> strayAt;             // one-off foreign records
 };
 
 struct SimResult {
@@ -97,6 +99,9 @@ SimResult runSim(const MeterSim& sim, qint64 markA = 0, qint64 markB = 0)
             && t < sim.foreignStopMs
             && (t - sim.foreignStartMs) % sim.foreignPeriodMs == 0) {
             due.insert(t + 15);
+        }
+        if (std::count(sim.strayAt.begin(), sim.strayAt.end(), t) > 0) {
+            due.insert(t);
         }
         while (!due.empty() && *due.begin() <= t) {
             due.erase(due.begin());
@@ -381,6 +386,15 @@ int main()
                !r.everRodeAlong && r.maxRecordGapMs < 300);
     }
     {
+        // Another program querying the meter once, a few times: a pair 1 s
+        // apart, then three 3 s apart. Neither is a poller to ride along with.
+        MeterSim sim;
+        sim.strayAt = {10050, 11050, 20050, 23050, 26050};
+        const SimResult r = runSim(sim);
+        report("one-off foreign records never suppress our polling",
+               !r.everRodeAlong && r.maxRecordGapMs < 300);
+    }
+    {
         // The meter ignoring a poll outright leaves one outstanding until it
         // expires; that must not suppress or starve anything.
         MeterSim sim;
@@ -469,8 +483,10 @@ int main()
         report("  ... and the threshold covers the jitter tail, not just the mean",
                g.quietThresholdMs() >= 2 * g.foreignIntervalMs()
                    || g.quietThresholdMs() == PollGate::kMaxQuietMs);
-        report("  ... after a bounded startup burst while it is unconfirmed",
-               early > 0 && early <= 20);
+        // Records at 0, 1000 and 2000: we poll every tick until the third
+        // confirms the poller, and none after.
+        report("  ... polling every tick until the third record confirms it",
+               early == 20);
     }
     {
         // Past the ceiling we deliberately supplement rather than let our own

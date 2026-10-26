@@ -184,9 +184,8 @@ double reflectedWattsFromSwr(double forwardW, double swr);
 //
 // Our own replies can arrive late and in pairs: captured on ser2net, the
 // wire went quiet ~200 ms every 8 s, then both queued polls were answered
-// 20 ms apart. Hence
-// classification by outstanding-poll count, and riding along only behind a
-// confirmed poller (#6794; design doc §6).
+// 20 ms apart. Hence classification by outstanding-poll count, and riding
+// along only behind a confirmed poller (#6794; design doc §6).
 class PollGate {
 public:
     // 10 Hz when we own the wire, which is also exactly the applet's label
@@ -195,18 +194,22 @@ public:
 
     // Suppression threshold bounds, applied to 2x the observed foreign
     // cadence. Floor is above the measured worst-case foreign gap (121 ms) so
-    // a fast foreign poller never leaks a spurious poll even before its
-    // cadence has been established. Ceiling is a STATED DECISION, not an artifact: we ride along with
+    // a confirmed fast poller's jitter never leaks a spurious poll; until it
+    // confirms (kConfirmRecords) we poll alongside it. Ceiling is a STATED
+    // DECISION, not an artifact: we ride along with
     // a foreign poller down to ~1.5 Hz, and past that we supplement rather
     // than let our own gauge fall below ~0.5 Hz. TelePost's own VCP offers up
     // to a 5 s interval, so a slow foreign client is a real configuration.
     static constexpr qint64 kMinQuietMs = 130;
     static constexpr qint64 kMaxQuietMs = 2000;
 
-    // A poll still unanswered after this long is presumed ignored by the
-    // meter, so it cannot swallow a real foreign record indefinitely. Also the
-    // ceiling on reply latency we classify correctly: 5x the measured ~200 ms
-    // stall, and well beyond a LAN/VPN round trip.
+    // Matching is by count, oldest first, so it bounds a number, not a
+    // latency: steady reply latency of any size classifies correctly, and at
+    // most kMaxOutstandingPolls of our own replies can be absorbed in one
+    // burst -- more than that after a stall are misclassified as foreign. A
+    // poll the meter ignores (or a failed write) leaves a slot that carries
+    // forward while we keep polling and can absorb one later foreign record;
+    // once we stop polling, slots older than kReplyExpiryMs are dropped.
     static constexpr qint64 kReplyExpiryMs = 1000;
     static constexpr int kMaxOutstandingPolls =
         static_cast<int>(kReplyExpiryMs / kSoloPollIntervalMs);
@@ -221,8 +224,8 @@ public:
     void reset();
 
     // Call for every decoded record, before shouldPoll() for the same tick. Our
-    // replies are matched against polls still outstanding (one record each, up
-    // to kReplyExpiryMs late); only a record with none outstanding is foreign.
+    // replies are matched against polls still outstanding (one record each,
+    // oldest first); only a record with none outstanding is foreign.
     // A foreign record arriving before our reply is miscounted once, and our
     // reply is then counted foreign in its place -- the totals still agree.
     void onRecord(qint64 nowMs);
