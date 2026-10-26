@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <optional>
 
@@ -180,6 +181,12 @@ double reflectedWattsFromSwr(double forwardW, double swr);
 // replies set the solo rate too (N=130 ms caps solo at 7.7 Hz; N=100 ms collides
 // 48.5% of the time against a 100 ms foreign cadence). Pure and clock-injected
 // for testing.
+//
+// Our own replies can arrive late and in pairs: captured on ser2net, the
+// wire went quiet ~200 ms every 8 s, then both queued polls were answered
+// 20 ms apart. Hence
+// classification by outstanding-poll count, and riding along only behind a
+// confirmed poller (#6794; design doc §6).
 class PollGate {
 public:
     // 10 Hz when we own the wire, which is also exactly the applet's label
@@ -196,12 +203,28 @@ public:
     static constexpr qint64 kMinQuietMs = 130;
     static constexpr qint64 kMaxQuietMs = 2000;
 
+    // A poll still unanswered after this long is presumed ignored by the
+    // meter, so it cannot swallow a real foreign record indefinitely. Also the
+    // ceiling on reply latency we classify correctly: 5x the measured ~200 ms
+    // stall, and well beyond a LAN/VPN round trip.
+    static constexpr qint64 kReplyExpiryMs = 1000;
+    static constexpr int kMaxOutstandingPolls =
+        static_cast<int>(kReplyExpiryMs / kSoloPollIntervalMs);
+
+    // Consecutive foreign records, each within kMaxQuietMs of the last,
+    // before we ride along. A real poller supplies them within a few of its
+    // own cadences; stray records seconds apart never qualify. A poller
+    // slower than kMaxQuietMs never confirms, which is the same supplement-
+    // don't-follow decision the ceiling above already makes.
+    static constexpr int kConfirmRecords = 3;
+
     void reset();
 
-    // Call for every decoded record, before shouldPoll() for the same tick. One reply
-    // per poll: the first record after an unanswered poll is ours regardless of
-    // latency (works for slow remote/VPN paths). A foreign record arriving first is
-    // miscounted once, and suppression still converges.
+    // Call for every decoded record, before shouldPoll() for the same tick. Our
+    // replies are matched against polls still outstanding (one record each, up
+    // to kReplyExpiryMs late); only a record with none outstanding is foreign.
+    // A foreign record arriving before our reply is miscounted once, and our
+    // reply is then counted foreign in its place -- the totals still agree.
     void onRecord(qint64 nowMs);
 
     // Call exactly once per poll tick. Returns true if a poll should be sent
@@ -215,13 +238,22 @@ public:
     bool isRidingAlong() const { return m_ridingAlong; }
 
     // Observed foreign cadence, or -1 before two foreign records have been
-    // seen. Also for the tooltip.
+    // seen, and again once the foreign poller has been silent longer than
+    // kMaxQuietMs (forgotten, not kept stale). Also for the tooltip.
     qint64 foreignIntervalMs() const { return m_foreignIntervalMs; }
+
+    // True once kConfirmRecords foreign records have arrived in one run.
+    bool foreignConfirmed() const { return m_foreignRun >= kConfirmRecords; }
 
     qint64 quietThresholdMs() const;
 
 private:
-    bool   m_ownReplyPending{false};
+    void expireOutstanding(qint64 nowMs);
+    void forgetForeign();
+
+    // Send times of polls not yet matched to a reply, oldest first.
+    std::deque<qint64> m_outstandingPolls;
+    int    m_foreignRun{0};
     // One timestamp, two jobs: shouldPoll() asks "how long since a foreign
     // record" and onRecord() asks "how long between the last two". An earlier
     // draft kept m_prevForeignMs alongside this, assigned the same value on
