@@ -40,7 +40,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **Broad hardware control** — rigctld and virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, Multi-Flex operation alongside SmartSDR/Maestro, a CTR2-Max relay over Wi-Fi or USB with negotiated spectrum and CW-text extensions for compatible controllers, and touch gestures (pinch-zoom, press-and-hold, kinetic scrolling) on touch screens
 - **Workspace canvas** — place pans and applets freely as resizable, layered items with edge and grid snapping, across several windows if you want them. Named workspaces recall which applets are open as well as where they sit, and bind to radio profiles. Off by default; the Classic shell is unchanged until you enable it
 - **A user guide at [docs.aethersdr.com](https://docs.aethersdr.com)** — Stable and Next versions, a printable PDF manual signed with each release, and a Log Analyzer that reads a log or support bundle in your browser without uploading it
-- **In-app updates** — a daily check that lights an UPDATE badge in the title bar, and an Updates window (File → Update...) with the download built for this computer and the radio's firmware releases
+- **In-app updates** — a check at launch, at most once a day, that lights an UPDATE badge in the title bar, and an Updates window (File → Update...) with the download built for this computer and the radio's firmware releases
 - **Built-in demo mode** — a synthetic backend generating its own RX audio and matching panadapter, with a fault-injection harness, so you can explore the full UI with no radio attached (it cannot transmit)
 
 ---
@@ -108,9 +108,10 @@ FlexRadio remains the supported target:
   on the IC-705 (receive, scope, transmit, FT8) and completed against a live
   IC-7300MK2 (controls, meters, ATU, WSPR, PC Audio routing and the CW decoder).
   The connect path asks the radio for its own CI-V address rather than assuming
-  one. The IC-7300MK2, IC-705 and IC-9700 panadapter runs in SCROLL-F, tuning in
-  place and scrolling at its margins as on a Flex, with Center and Fixed
-  selectable. Only the IC-705 and IC-7300MK2 are verified against their own CI-V guides
+  one. On the IC-7300MK2 and IC-705, and on the IC-9700, which is not yet
+  verified, the panadapter runs in SCROLL-F, tuning in place and scrolling at
+  its margins as on a Flex, with Center and Fixed selectable. Only the IC-705
+  and IC-7300MK2 are verified against their own CI-V guides
   — an unrecognised model gets no scope and no transmit rather than optimistic
   defaults. The **IC-7300MK2 over built-in Ethernet/RS-BA1 is supported** as of
   v26.9.5 ([RFC #5517](https://github.com/aethersdr/AetherSDR/issues/5517));

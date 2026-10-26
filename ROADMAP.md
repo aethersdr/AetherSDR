@@ -115,7 +115,7 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   −20…120 dB with a working AGC-off gain, published link telemetry and the
   supply voltage, and added WDSP's second noise blanker. v26.10.3 moved the seven
   front-end options to Radio Setup → Radio and added discovery per distinct
-  attached IPv4 subnet. v26.10.4 completed RFC #6209: the receive band-pass
+  attached IPv4 subnet. v26.10.4 delivered parts 2 and 3 of RFC #6209: the receive band-pass
   filters can follow the tuned frequency and the speaker amplifier mutes on its
   own, and discovery logs its bind and send failures. The codec is
   multi-DDC capable but `AnanBackend` still drives one; remaining is the
@@ -215,8 +215,8 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   Dashboard, TX Band Settings, Icom RC-28 Button Mapping, NR2's FFTW Wisdom
   window and the CTR2 window's message boxes. Remaining: the other surfaces,
   one PR at a time, then a single flip of the base tokens to canon values.
-- **In-app updates** ([RFC #5304](https://github.com/aethersdr/AetherSDR/issues/5304)) — v26.10.4 shipped the daily
-  update check with its UPDATE title-bar badge and Skip This Version, and the
+- **In-app updates** ([RFC #5304](https://github.com/aethersdr/AetherSDR/issues/5304)) — v26.10.4 shipped the
+  update check at launch with its UPDATE title-bar badge and Skip This Version, and the
   Updates window (File → Update...) with the download built for this computer
   and the radio's firmware lanes and install. Behind it, every release
   publishes a signed manifest and per-file patch bundles, `UpdateStager`
@@ -381,8 +381,8 @@ implementation**. An approved RFC moves up into the cycle above. Full list:
 Highlights from the current cycle (v26.10.x). Earlier releases and the
 complete list are in [`CHANGELOG.md`](CHANGELOG.md):
 
-- **The Updates window and an automatic update check** — a daily check that
-  only lights an UPDATE badge, Skip This Version, File → Update... with the
+- **The Updates window and an automatic update check** — a check at launch,
+  at most once a day, that only lights an UPDATE badge, Skip This Version, File → Update... with the
   download for this computer, and radio firmware installs in the same window.
   RFC #5304 (v26.10.4).
 - **SmartSDR 4.3 Noise Floor Range and CW profiles** — the radio-owned NF Range

@@ -1057,7 +1057,7 @@
       "source": [
         {
           "file": "docs/user/docs/troubleshooting.md",
-          "line": 91,
+          "line": 109,
           "text": "error while loading shared libraries: libOpenGL.so.0"
         }
       ]
@@ -1075,7 +1075,7 @@
       "source": [
         {
           "file": "docs/user/docs/troubleshooting.md",
-          "line": 101,
+          "line": 119,
           "text": "needs glibc 2.38 or newer"
         }
       ]
