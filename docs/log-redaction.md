@@ -83,8 +83,7 @@ It cannot help with:
    pass through `formatLine()`.
 4. **Files that are not the timestamped app log.** The SpotHub feed logs
    (`<config>/AetherSDR/spothub/…`) are written directly by
-   `DxClusterClient`, `N1MMSpotClient`, `SpotCollectorClient`, `WsjtxClient`
-   and `FreeDvClient`, and never pass through `AsyncLogWriter`. They are not
+   `DxClusterClient`, `N1MMSpotClient`, `WsjtxClient` and `FreeDvClient`, and never pass through `AsyncLogWriter`. They are not
    collected into a support bundle, which is why they are a documented
    limitation here rather than a redactor change.
 5. **Third-party library logging** that writes to stderr on its own.

@@ -59,7 +59,6 @@
 #include "core/MqttClient.h"
 #endif
 #include "core/WsjtxClient.h"
-#include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
 #include "core/EibiClient.h"
 #include "core/N1MMSpotClient.h"
@@ -1400,7 +1399,6 @@ private:
     QTimer            m_cwxTxEndTimer;
 #endif
     WsjtxClient*       m_wsjtxClient{nullptr};
-    SpotCollectorClient* m_spotCollectorClient{nullptr};
     PotaClient*          m_potaClient{nullptr};
     EibiClient*          m_eibiClient{nullptr};
     QHash<QString, int>  m_eibiSpotKeyToId;

@@ -1,5 +1,5 @@
 // MainWindow_Spots.cpp — wireSpotSubsystem(): DX Cluster / RBN / WSJT-X /
-// SpotCollector / POTA clients on the spot worker thread, the HF propagation
+// POTA clients on the spot worker thread, the HF propagation
 // client, and spot forwarding to the radio (dedup + batch queue + 1/s flush).
 // Runs once at construction.
 
@@ -70,7 +70,6 @@ void MainWindow::wireSpotSubsystem()
     m_rbnClient->setStartupCommandsKey("RbnStartupCommands");
     m_rbnClient->setGoClusterFeed(GoClusterSettings::kFeedRbn);
     m_wsjtxClient = new WsjtxClient;
-    m_spotCollectorClient = new SpotCollectorClient;
     m_potaClient = new PotaClient;
     m_eibiClient = new EibiClient;
     m_n1mmSpotClient = new N1MMSpotClient;
@@ -292,7 +291,6 @@ void MainWindow::wireSpotSubsystem()
     m_dxCluster->moveToThread(m_spotThread);
     m_rbnClient->moveToThread(m_spotThread);
     m_wsjtxClient->moveToThread(m_spotThread);
-    m_spotCollectorClient->moveToThread(m_spotThread);
     m_potaClient->moveToThread(m_spotThread);
     m_eibiClient->moveToThread(m_spotThread);
     m_n1mmSpotClient->moveToThread(m_spotThread);
@@ -363,8 +361,6 @@ void MainWindow::wireSpotSubsystem()
     QMetaObject::invokeMethod(m_rbnClient, &DxClusterClient::initialize,
                               Qt::QueuedConnection);
     QMetaObject::invokeMethod(m_wsjtxClient, &WsjtxClient::initialize,
-                              Qt::QueuedConnection);
-    QMetaObject::invokeMethod(m_spotCollectorClient, &SpotCollectorClient::initialize,
                               Qt::QueuedConnection);
     QMetaObject::invokeMethod(m_potaClient, &PotaClient::initialize,
                               Qt::QueuedConnection);
@@ -445,8 +441,6 @@ void MainWindow::wireSpotSubsystem()
                 spotColor = as.value("DxClusterSpotColor", "#D2B48C").toString();
             else if (source == "RBN")
                 spotColor = as.value("RbnSpotColor", "#4488FF").toString();
-            else if (source == "SpotCollector")
-                spotColor = as.value("SpotCollectorSpotColor", "#FFD700").toString();
             else if (source == "FreeDV")
                 spotColor = as.value("FreeDvSpotColor", "#FF8C00").toString();  // HAVE_WEBSOCKETS
         }
@@ -754,11 +748,6 @@ void MainWindow::wireSpotSubsystem()
         m_radioModel.queueSpot({SpotAction::Add, colored.dxCall, QStringLiteral("WSJT-X"),
                                 colored.spotterCall, colored.comment, colored.color,
                                 colored.freqMhz, spotLifetimeSeconds(colored, "WSJT-X")});
-    });
-
-    connect(m_spotCollectorClient, &SpotCollectorClient::spotReceived,
-            this, [queueSpotCmd](const DxSpot& spot) {
-        queueSpotCmd(spot, "SpotCollector");
     });
 
     connect(m_potaClient, &PotaClient::spotReceived,
