@@ -874,8 +874,12 @@ void RadioTabBar::applyLinkVisuals()
         tab->setBeatColor(isCarrier ? m_beatColor : QColor());
         tab->setPulse(isCarrier ? eased : 0.0);
         const bool ours = isCarrier && session;
-        tab->setLinkQuality(ours ? m_qualityColor : QColor(),
-                            ours ? m_qualityLabel : QString());
+        // The quality colour belongs to the throttle: it shows only beside the
+        // AT chip, so a recoloured dot is always explained by the chip next to
+        // it.  Without AT the dot keeps the plain "connected" green.
+        const bool showQuality = ours && m_throttleEnabled;
+        tab->setLinkQuality(showQuality ? m_qualityColor : QColor(),
+                            showQuality ? m_qualityLabel : QString());
         tab->setThrottleChip(ours && m_throttleEnabled, m_throttleCapColor, chipText);
     }
 }

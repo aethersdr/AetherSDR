@@ -3241,7 +3241,8 @@ missed beats) and `radios.linkOverrideColor` (the colour speaking over the
 active tab's status dot: amber while discovering, red on loss, empty when the
 link is healthy) are the heartbeat as data — assert on these rather than on
 the dot's pixels. `radios.linkQuality` / `radios.linkQualityColor` are the
-network grade the session's dot shows (empty when off or disconnected);
+network grade (empty when off or disconnected), which the session's dot shows
+only while the AT chip does;
 `radios.adaptiveThrottle` (enabled) and `radios.adaptiveFpsCap` (0 = no cap
 in force) drive the "AT" chip, and `radios.tabs[].throttleChip` says which
 tab shows it. `radios.discovered[].canRename` says whether the switcher

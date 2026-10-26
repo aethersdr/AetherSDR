@@ -991,12 +991,16 @@ int main(int argc, char** argv)
                 check(tabs->state().value(QStringLiteral("linkQuality")).toString()
                           == QLatin1String("Fair"),
                       "link quality is published to the bridge");
-                check(sessionTab->toolTip().contains(QLatin1String("Network Fair")),
-                      "the quality is spelled out, not colour-only");
-                check(!idleTab->toolTip().contains(QLatin1String("Network")),
-                      "another radio's tab does not claim this session's quality");
+                // Without AT the dot stays plain "connected": a colour change
+                // must always come with the AT chip that explains it.
+                check(!sessionTab->toolTip().contains(QLatin1String("Network")),
+                      "without AT the tab does not take the quality");
 
                 tabs->setAdaptiveThrottle(true, 0, QColor());
+                check(sessionTab->toolTip().contains(QLatin1String("Network Fair")),
+                      "with AT the quality is shown, spelled out not colour-only");
+                check(!idleTab->toolTip().contains(QLatin1String("Network")),
+                      "another radio's tab does not claim this session's quality");
                 check(sessionTab->isThrottleChipShown(), "an armed throttle shows the AT chip");
                 check(!idleTab->isThrottleChipShown(), "the AT chip rides the session's tab only");
                 check(sessionTab->sizeHint().width() > plainWidth,
@@ -1010,10 +1014,10 @@ int main(int argc, char** argv)
                            "the cap is published to the bridge");
 
                 tabs->setAdaptiveThrottle(false, 0, QColor());
-                tabs->setLinkQuality(QColor(), QStringLiteral("Off"));
                 check(!sessionTab->isThrottleChipShown(), "disabling the throttle removes the chip");
                 check(!sessionTab->toolTip().contains(QLatin1String("Network")),
-                      "a cleared quality leaves the tooltip");
+                      "disabling the throttle returns the dot to plain connected");
+                tabs->setLinkQuality(QColor(), QStringLiteral("Off"));
                 checkEqual(sessionTab->sizeHint().width(), plainWidth,
                            "the tab returns to its plain width");
             }

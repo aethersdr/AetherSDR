@@ -84,10 +84,10 @@ public:
     void setAlarmVisible(bool on);          // driven by the bar's blink phase
     void setBeatColor(const QColor& color); // throttle tint; invalid = dot colour
 
-    // Network link quality, as the status bar grades it.  On a connected
-    // radio the dot takes the quality colour (the old lamp's colour cue);
-    // the label goes into the tooltip and accessible name so the colour is
-    // never the only carrier.  Invalid colour = plain status colour.
+    // Network link quality, as the status bar grades it.  While the AT chip
+    // shows, a connected radio's dot takes the quality colour (the old lamp's
+    // cue); the label goes into the tooltip and accessible name so the colour
+    // is never the only carrier.  Invalid colour = plain status colour.
     void setLinkQuality(const QColor& color, const QString& label);
 
     // "AT" chip after the name while the adaptive frame-rate throttle is
@@ -179,7 +179,8 @@ public:
     void pulseLink(const QColor& beatColor = QColor());
 
     // Network quality ("Excellent" … "Poor") and its colour; an invalid
-    // colour clears it ("Off" / disconnected).  Shown on the link's own tab.
+    // colour clears it ("Off" / disconnected).  Shown on the link's own tab,
+    // and only while the adaptive throttle's AT chip is showing.
     void setLinkQuality(const QColor& color, const QString& label);
 
     // Adaptive frame-rate throttle: `enabled` shows the AT chip on the

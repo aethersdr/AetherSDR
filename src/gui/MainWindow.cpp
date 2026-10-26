@@ -2144,7 +2144,8 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel, &RadioModel::networkQualityChanged,
             this, [this](const QString& quality, int pingMs) {
         const QString color = networkQualityColor(quality);
-        // The active radio tab's dot carries the same grade ("Off" clears it).
+        // The active radio tab's dot carries the same grade beside its AT chip
+        // ("Off" clears it).
         if (m_titleBar) {
             m_titleBar->radioTabBar()->setLinkQuality(
                 quality == QStringLiteral("Off") ? QColor() : QColor(color), quality);
