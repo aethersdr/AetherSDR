@@ -859,9 +859,10 @@ void RadioTabBar::applyLinkVisuals()
     // Quality and the throttle describe *this client's* session, so only the
     // tab of the radio that session is on may show them.
     const bool session = ownsLink && !m_activeId.isEmpty();
-    const QString chipText = m_throttleFpsCap > 0
-        ? tr("Adaptive throttle: %1 fps cap").arg(m_throttleFpsCap)
-        : tr("Adaptive throttle on");
+    // Built only when a tab can show it: this runs on every pulse tick.
+    const QString chipText = !(session && m_throttleEnabled) ? QString()
+        : m_throttleFpsCap > 0 ? tr("Adaptive throttle: %1 fps cap").arg(m_throttleFpsCap)
+                               : tr("Adaptive throttle on");
 
     for (RadioTab* tab : std::as_const(m_tabs)) {
         // Only the carrier shows the link state — the others describe radios
@@ -880,7 +881,10 @@ void RadioTabBar::applyLinkVisuals()
         const bool showQuality = ours && m_throttleEnabled;
         tab->setLinkQuality(showQuality ? m_qualityColor : QColor(),
                             showQuality ? m_qualityLabel : QString());
-        tab->setThrottleChip(ours && m_throttleEnabled, m_throttleCapColor, chipText);
+        // Other tabs get empty state, so a cap change doesn't repaint them.
+        tab->setThrottleChip(ours && m_throttleEnabled,
+                             ours ? m_throttleCapColor : QColor(),
+                             ours ? chipText : QString());
     }
 }
 

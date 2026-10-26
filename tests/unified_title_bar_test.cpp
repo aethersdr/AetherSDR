@@ -986,6 +986,15 @@ int main(int argc, char** argv)
             RadioTab* idleTab = tabWithId(*bar, idle.id);
             check(sessionTab && idleTab, "quality test radios have tabs");
             if (sessionTab && idleTab) {
+                // The dot is a solid-filled ellipse at kTabPadX (14) with
+                // kDotDiameter 7, so its centre pixel is font-independent.
+                const auto dotPixel = [](RadioTab* tab) {
+                    const QImage img = tab->grab().toImage();
+                    const qreal dpr = img.devicePixelRatio();
+                    return img.pixelColor(int(17.5 * dpr), int(tab->height() / 2.0 * dpr)).rgb();
+                };
+                const QRgb fair = QColor(QStringLiteral("#cc9900")).rgb();
+                const QRgb plainDot = dotPixel(sessionTab);
                 const int plainWidth = sessionTab->sizeHint().width();
                 tabs->setLinkQuality(QColor(QStringLiteral("#cc9900")), QStringLiteral("Fair"));
                 check(tabs->state().value(QStringLiteral("linkQuality")).toString()
@@ -995,10 +1004,13 @@ int main(int argc, char** argv)
                 // must always come with the AT chip that explains it.
                 check(!sessionTab->toolTip().contains(QLatin1String("Network")),
                       "without AT the tab does not take the quality");
+                check(plainDot != fair && dotPixel(sessionTab) == plainDot,
+                      "without AT the dot keeps its plain connected colour");
 
                 tabs->setAdaptiveThrottle(true, 0, QColor());
                 check(sessionTab->toolTip().contains(QLatin1String("Network Fair")),
                       "with AT the quality is shown, spelled out not colour-only");
+                check(dotPixel(sessionTab) == fair, "with AT the dot takes the quality colour");
                 check(!idleTab->toolTip().contains(QLatin1String("Network")),
                       "another radio's tab does not claim this session's quality");
                 check(sessionTab->isThrottleChipShown(), "an armed throttle shows the AT chip");
@@ -1013,10 +1025,23 @@ int main(int argc, char** argv)
                 checkEqual(tabs->state().value(QStringLiteral("adaptiveFpsCap")).toInt(), 8,
                            "the cap is published to the bridge");
 
+                // With no session (disconnected), no tab may keep the chip or
+                // the quality, even while the throttle is still armed.
+                bar->setActiveRadio(QString());
+                app.processEvents();
+                check(!sessionTab->isThrottleChipShown(), "no session, no AT chip");
+                check(!sessionTab->toolTip().contains(QLatin1String("Network")),
+                      "no session, no quality on the tab");
+                bar->setActiveRadio(session.id);
+                app.processEvents();
+                check(sessionTab->isThrottleChipShown(), "the chip returns with the session");
+
                 tabs->setAdaptiveThrottle(false, 0, QColor());
                 check(!sessionTab->isThrottleChipShown(), "disabling the throttle removes the chip");
                 check(!sessionTab->toolTip().contains(QLatin1String("Network")),
                       "disabling the throttle returns the dot to plain connected");
+                check(dotPixel(sessionTab) == plainDot,
+                      "disabling the throttle repaints the plain connected dot");
                 tabs->setLinkQuality(QColor(), QStringLiteral("Off"));
                 checkEqual(sessionTab->sizeHint().width(), plainWidth,
                            "the tab returns to its plain width");

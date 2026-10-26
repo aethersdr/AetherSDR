@@ -728,8 +728,9 @@ void MainWindow::refreshAdaptiveThrottleChip()
     if (!m_titleBar) return;
     const bool enabled = AppSettings::instance()
         .value("AdaptiveThrottleEnabled", "False").toString() == "True";
-    // A cap can still be in force just after the box is unticked (it lifts at
-    // the next quality update), so the chip stays until the cap is gone too.
+    // Unticking the box doesn't lift a cap already in force:
+    // RadioModel::applyAdaptiveFrameRate() stops adjusting, so the cap stays
+    // until disconnect.  The chip stays with it, so the cap is never hidden.
     m_titleBar->radioTabBar()->setAdaptiveThrottle(
         enabled || m_adaptiveFpsCap > 0, m_adaptiveFpsCap,
         m_adaptiveFpsCap > 0 ? QColor(adaptiveFpsCapColor(m_adaptiveFpsCap)) : QColor());
