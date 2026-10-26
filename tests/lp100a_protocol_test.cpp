@@ -4,8 +4,12 @@
 #include <QList>
 #include <QString>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <functional>
+#include <limits>
+#include <set>
 
 using namespace AetherSDR::LpMeter;
 
@@ -60,6 +64,73 @@ QList<Reading> drain(const QByteArray& bytes)
     p.setReadingCallback([&](const Reading& r) { out.append(r); });
     p.feed(bytes);
     return out;
+}
+
+// Drives a PollGate against a modelled meter in 1 ms steps: records due at a
+// step are delivered before that step's poll tick, as LpMeterConnection does.
+struct MeterSim {
+    // When the reply to our poll sent at pollMs arrives, or -1 if the meter
+    // ignores it. Default: a 15 ms round trip.
+    std::function<qint64(qint64 pollMs)> ourReplyAt =
+        [](qint64 t) { return t + 15; };
+    qint64 foreignPeriodMs{0};               // 0 = no foreign poller
+    qint64 foreignStartMs{0};
+    qint64 foreignStopMs{std::numeric_limits<qint64>::max()};
+    qint64 durationMs{60000};
+};
+
+struct SimResult {
+    int    polls{0};
+    int    pollsFrom[2]{0, 0};               // polls sent at/after each mark
+    qint64 maxRecordGapMs{0};
+    bool   everRodeAlong{false};
+    PollGate gate;
+};
+
+SimResult runSim(const MeterSim& sim, qint64 markA = 0, qint64 markB = 0)
+{
+    SimResult res;
+    std::multiset<qint64> due;
+    qint64 lastRecord = -1;
+    for (qint64 t = 0; t <= sim.durationMs; ++t) {
+        if (sim.foreignPeriodMs > 0 && t >= sim.foreignStartMs
+            && t < sim.foreignStopMs
+            && (t - sim.foreignStartMs) % sim.foreignPeriodMs == 0) {
+            due.insert(t + 15);
+        }
+        while (!due.empty() && *due.begin() <= t) {
+            due.erase(due.begin());
+            res.gate.onRecord(t);
+            if (lastRecord >= 0) {
+                res.maxRecordGapMs = std::max(res.maxRecordGapMs, t - lastRecord);
+            }
+            lastRecord = t;
+        }
+        if (t % PollGate::kSoloPollIntervalMs == 0) {
+            if (res.gate.shouldPoll(t)) {
+                ++res.polls;
+                if (t >= markA) { ++res.pollsFrom[0]; }
+                if (t >= markB) { ++res.pollsFrom[1]; }
+                const qint64 at = sim.ourReplyAt(t);
+                if (at >= 0) { due.insert(at); }
+            }
+            res.everRodeAlong = res.everRodeAlong || res.gate.isRidingAlong();
+        }
+    }
+    return res;
+}
+
+// The stall measured on the reference station (#6794): every 8.0 s the meter
+// goes quiet for ~200 ms, then answers both polls queued during it 20 ms apart.
+std::function<qint64(qint64)> stallEvery(qint64 periodMs)
+{
+    return [periodMs](qint64 t) {
+        const qint64 phase = t % periodMs;
+        if (phase >= 50 && phase < 250) {
+            return (t - phase) + 250 + 20 * ((phase - 50) / 100);
+        }
+        return t + 15;
+    };
 }
 
 }  // namespace
@@ -288,27 +359,99 @@ int main()
                polls == 100 && !g.isRidingAlong());
     }
     {
-        // Foreign poller at the measured 100 ms cadence.
+        // #6794, replayed from the wire capture: solo on ser2net, the wire
+        // went quiet every 8 s, then both queued polls were answered 20 ms
+        // apart. Both are ours; riding along behind them would starve the
+        // gauge for 2 s.
+        MeterSim sim;
+        sim.ourReplyAt = stallEvery(8000);
+        const SimResult r = runSim(sim);
+        report("#6794 measured 8 s stall: never rides along with a phantom",
+               !r.everRodeAlong && r.gate.foreignIntervalMs() < 0);
+        report("  ... and the gauge never goes quiet beyond the stall itself",
+               r.maxRecordGapMs < 300);
+    }
+    {
+        // Same stall every 1.5 s: the extra records, had they been
+        // misclassified, would fall inside the confirmation window.
+        MeterSim sim;
+        sim.ourReplyAt = stallEvery(1500);
+        const SimResult r = runSim(sim);
+        report("stall every 1.5 s: still never rides along",
+               !r.everRodeAlong && r.maxRecordGapMs < 300);
+    }
+    {
+        // The meter ignoring a poll outright leaves one outstanding until it
+        // expires; that must not suppress or starve anything.
+        MeterSim sim;
+        sim.ourReplyAt = [](qint64 t) {
+            return (t % 8000 == 4000) ? qint64{-1} : t + 15;
+        };
+        const SimResult r = runSim(sim);
+        report("meter ignoring a poll every 8 s: never rides along",
+               !r.everRodeAlong && r.maxRecordGapMs <= 200);
+    }
+    {
+        // A slow remote link keeps several polls in flight at once.
+        MeterSim sim;
+        sim.ourReplyAt = [](qint64 t) { return t + 350; };
+        const SimResult r = runSim(sim);
+        report("constant 350 ms latency: never rides along",
+               !r.everRodeAlong && r.maxRecordGapMs <= 100);
+    }
+    {
+        // Foreign poller at the measured 100 ms cadence joins while we poll;
+        // the meter answers both of us.
+        MeterSim sim;
+        sim.foreignPeriodMs = 100;
+        sim.foreignStartMs = 1050;               // off our tick phase
+        sim.durationMs = 10000;
+        const SimResult r = runSim(sim, 1050, 1600);
+        report("foreign 100 ms cadence: rides along once confirmed",
+               r.gate.isRidingAlong() && r.gate.foreignConfirmed());
+        report("  ... after at most a confirmation's worth of extra polls",
+               r.pollsFrom[0] - r.pollsFrom[1] <= PollGate::kConfirmRecords + 1);
+        report("  ... and zero polls of our own from then on",
+               r.pollsFrom[1] == 0);
+    }
+    {
+        // ...and leaves. We take over within the ceiling, and its cadence is
+        // forgotten rather than kept to suppress us later.
+        MeterSim sim;
+        sim.foreignPeriodMs = 100;
+        sim.foreignStartMs = 1050;
+        sim.foreignStopMs = 5050;
+        sim.durationMs = 10000;
+        const SimResult r = runSim(sim);
+        report("foreign poller leaves: we take over before the watchdog could fire",
+               !r.gate.isRidingAlong()
+                   && r.maxRecordGapMs < PollGate::kMaxQuietMs + 200);
+        report("  ... and its cadence is forgotten",
+               r.gate.foreignIntervalMs() < 0 && !r.gate.foreignConfirmed());
+    }
+    {
+        // One jittery gap past the 2x threshold but inside the ceiling: we
+        // supplement for that gap, then resume riding on the poller's next
+        // record WITHOUT re-confirming (the SHARED pill must not flicker).
         PollGate g;
-        qint64 now = 100;
-        int polls = 0;
-        for (int i = 0; i < 100; ++i) {
-            g.onRecord(now - 50);                // foreign, off our tick phase
-            if (g.shouldPoll(now)) { ++polls; }
-            now += 100;
-        }
-        report("foreign 100 ms cadence: zero polls sent", polls == 0);
+        for (qint64 t = 0; t <= 400; t += 100) { g.onRecord(t); }
+        const bool confirmed = g.foreignConfirmed() && !g.shouldPoll(450);
+        const bool supplements = g.shouldPoll(650);   // 250 ms since last
+        g.onRecord(655);                              // our reply
+        g.onRecord(700);                              // the poller, late
+        report("a jittery gap within the ceiling keeps the confirmation",
+               confirmed && supplements && g.foreignConfirmed()
+                   && !g.shouldPoll(750));
     }
     {
         // A 1 s foreign cadence -- inside the band the ADAPTIVE threshold
         // buys over a fixed 130 ms constant, which would poll ~8x between
         // every pair of foreign records here.
         //
-        // Note the startup burst: the cadence is unknown until two foreign
-        // records have been seen, so the floor applies for the first ~1 s and
-        // a handful of polls escape. Bounded, once per connect, self-
-        // correcting -- the alternative (assume slow until proven fast) would
-        // stall real data at connect, which is worse.
+        // Note the startup burst: we keep polling until kConfirmRecords
+        // foreign records have arrived, ~2 s at this cadence. Bounded, once
+        // per connect, self-correcting -- and the price of never riding
+        // along behind stray records (#6794).
         PollGate g;
         qint64 now = 0;
         int early = 0;
@@ -326,8 +469,8 @@ int main()
         report("  ... and the threshold covers the jitter tail, not just the mean",
                g.quietThresholdMs() >= 2 * g.foreignIntervalMs()
                    || g.quietThresholdMs() == PollGate::kMaxQuietMs);
-        report("  ... after a bounded startup burst while it is still unknown",
-               early > 0 && early < 12);
+        report("  ... after a bounded startup burst while it is unconfirmed",
+               early > 0 && early <= 20);
     }
     {
         // Past the ceiling we deliberately supplement rather than let our own
@@ -351,36 +494,39 @@ int main()
             now += 100;
         }
         report("foreign 5 s cadence is NOT suppressed (2 s ceiling, by design)",
-               polls > 100);
+               polls > 100 && !g.foreignConfirmed());
     }
     {
         PollGate g;
         g.shouldPoll(1000);
         g.onRecord(1250);                        // delayed remote/VPN reply
         const bool ownNotForeign = (g.foreignIntervalMs() < 0);
-        report("the first reply after our poll is ours regardless of latency",
+        report("a reply within kReplyExpiryMs is ours however late",
                ownNotForeign);
     }
     {
         // If a foreign record wins the race after our poll, it consumes our
-        // pending slot. The delayed own reply becomes the first foreign
-        // sample and the next shared record still establishes the cadence.
+        // outstanding poll. The delayed own reply becomes the first foreign
+        // sample and the following shared records still confirm.
         PollGate g;
         g.shouldPoll(0);
         g.onRecord(50);                          // foreign, classified as ours
         g.onRecord(250);                         // our delayed reply, foreign #1
         g.onRecord(350);                         // foreign #2
+        g.onRecord(450);                         // foreign #3
         report("shared polling converges after a foreign record wins the race",
-               g.foreignIntervalMs() == 100 && !g.shouldPoll(400));
+               g.foreignIntervalMs() == 100 && !g.shouldPoll(500));
     }
     {
         PollGate g;
         g.onRecord(0);
         g.onRecord(100);
-        const bool riding = !g.shouldPoll(150);
+        g.onRecord(200);
+        const bool riding = !g.shouldPoll(250);
         g.reset();
         report("reset() clears suppression and the interval estimate",
-               riding && g.shouldPoll(160) && g.foreignIntervalMs() < 0);
+               riding && g.shouldPoll(260) && g.foreignIntervalMs() < 0
+                   && !g.foreignConfirmed());
     }
 
     // ---- RangeTracker ----------------------------------------------------
