@@ -1666,9 +1666,9 @@ void TitleBar::setDiscovering(bool active)
 
 QColor TitleBar::currentBeatColor() const
 {
-    return m_throttleFlashColor.isEmpty()
-        ? ThemeManager::instance().color(this, QStringLiteral("color.accent.success"))
-        : QColor(m_throttleFlashColor);
+    // Invalid = glow in the dot's own colour, which on a connected radio is
+    // now the link quality — a fixed green glow would contradict a red dot.
+    return m_throttleFlashColor.isEmpty() ? QColor() : QColor(m_throttleFlashColor);
 }
 
 void TitleBar::onHeartbeat()

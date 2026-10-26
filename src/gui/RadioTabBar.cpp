@@ -55,6 +55,11 @@ constexpr int  kStripSpacing  = 6;
 constexpr int  kStripMinWidth = 112;
 constexpr qreal kNameSizePx   = 12.5;
 constexpr qreal kStatusSizePx = 9.5;
+// The adaptive-throttle "AT" chip that follows the radio's name.
+constexpr qreal kChipSizePx   = 8.5;
+constexpr qreal kChipPadX     = 4.0;
+constexpr qreal kChipGap      = 6.0;
+constexpr qreal kChipRadius   = 3.0;
 // A heartbeat swells the dot's glow and lets it fall away over this long.  The
 // glow is data, not decoration: one swell per discovery packet, so a stalled
 // link simply stops breathing.  Long enough to read as a pulse rather than the
@@ -183,9 +188,18 @@ QString RadioTab::statusWord() const
 QString RadioTab::descriptionLine() const
 {
     // Screen readers and the tooltip get the name too: they are not reading
-    // the two lines together the way a sighted operator does.
-    return m_entry.name.isEmpty() ? statusLine()
-                                  : m_entry.name + middleDot() + statusLine();
+    // the two lines together the way a sighted operator does.  The link
+    // quality and the AT chip are colour/abbreviation on screen, so they are
+    // spelled out here.
+    QString line = m_entry.name.isEmpty() ? statusLine()
+                                          : m_entry.name + middleDot() + statusLine();
+    if (m_qualityColor.isValid() && !m_alarm) {
+        line += middleDot() + tr("Network %1").arg(m_qualityLabel);
+    }
+    if (m_chipShown) {
+        line += middleDot() + m_chipText;
+    }
+    return line;
 }
 
 QRect RadioTab::dotDirtyRect() const
@@ -273,21 +287,63 @@ void RadioTab::setBeatColor(const QColor& color)
     update(dotDirtyRect());
 }
 
+void RadioTab::setLinkQuality(const QColor& color, const QString& label)
+{
+    if (m_qualityColor == color && m_qualityLabel == label) {
+        return;
+    }
+    m_qualityColor = color;
+    m_qualityLabel = label;
+    refreshAccessibility();
+    update(dotDirtyRect());
+}
+
+void RadioTab::setThrottleChip(bool shown, const QColor& tint, const QString& text)
+{
+    if (m_chipShown == shown && m_chipTint == tint && m_chipText == text) {
+        return;
+    }
+    const bool geometryChanged = m_chipShown != shown;
+    m_chipShown = shown;
+    m_chipTint = tint;
+    m_chipText = text;
+    refreshAccessibility();
+    if (geometryChanged) {
+        updateGeometry();
+    }
+    update();
+}
+
 QColor RadioTab::dotColor() const
 {
     // Link state speaks over the radio's own status: an operator who has lost
-    // the link needs to see that before they need to see "connected".
+    // the link needs to see that before they need to see "connected".  A
+    // healthy connected link then shows its quality, as the old lamp did.
     if (m_overrideColor.isValid()) {
         return m_overrideColor;
     }
+    if (m_qualityColor.isValid() && m_entry.status == RadioTabStatus::Connected) {
+        return m_qualityColor;
+    }
     return ThemeManager::instance().color(this, statusToken(m_entry.status));
+}
+
+QSizeF RadioTab::chipSize() const
+{
+    if (!m_chipShown) {
+        return QSizeF();
+    }
+    const QFontMetricsF fm(uiFont(this, kChipSizePx, 700));
+    return QSizeF(fm.horizontalAdvance(QStringLiteral("AT")) + 2 * kChipPadX,
+                  fm.height());
 }
 
 QSize RadioTab::sizeHint() const
 {
     const QFontMetricsF nameFm(uiFont(this, kNameSizePx, 600));
     const QFontMetricsF statusFm(uiFont(this, kStatusSizePx, 400));
-    const qreal textWidth = qMax(nameFm.horizontalAdvance(m_entry.name),
+    const qreal chipW = m_chipShown ? chipSize().width() + kChipGap : 0.0;
+    const qreal textWidth = qMax(nameFm.horizontalAdvance(m_entry.name) + chipW,
                                  statusFm.horizontalAdvance(statusLine()));
     const int w = kTabPadX + kDotDiameter + kDotTextGap
                 + int(qCeil(textWidth)) + kTabPadX;
@@ -408,11 +464,34 @@ void RadioTab::paintEvent(QPaintEvent* ev)
     const qreal blockH = nameFm.height() + statusFm.height();
     qreal y = (height() - blockH) / 2.0;
 
+    // The AT chip rides the end of the name line; the name gives up width to
+    // it rather than the chip being elided away.
+    const QSizeF chip = chipSize();
+    const qreal nameW = m_chipShown ? qMax(0.0, textW - chip.width() - kChipGap) : textW;
+    const QString name = nameFm.elidedText(m_entry.name, Qt::ElideRight, nameW);
+
     p.setFont(nameFont);
     p.setPen(theme.color(this, QStringLiteral("color.text.primary")));
-    p.drawText(QRectF(textX, y, textW, nameFm.height()),
-               Qt::AlignLeft | Qt::AlignVCenter,
-               nameFm.elidedText(m_entry.name, Qt::ElideRight, textW));
+    p.drawText(QRectF(textX, y, nameW, nameFm.height()),
+               Qt::AlignLeft | Qt::AlignVCenter, name);
+
+    if (m_chipShown) {
+        // Outlined while the throttle is merely armed; filled in the cap's
+        // quality colour while it is holding the frame rate down.
+        const QColor ink = m_chipTint.isValid()
+            ? m_chipTint
+            : theme.color(this, QStringLiteral("color.text.secondary"));
+        const QRectF chipRect(textX + nameFm.horizontalAdvance(name) + kChipGap,
+                              y + (nameFm.height() - chip.height()) / 2.0,
+                              chip.width(), chip.height());
+        QColor fill = ink;
+        fill.setAlphaF(m_chipTint.isValid() ? 0.22 : 0.0);
+        p.setPen(QPen(ink, 1));
+        p.setBrush(fill);
+        p.drawRoundedRect(chipRect.adjusted(0.5, 0.5, -0.5, -0.5), kChipRadius, kChipRadius);
+        p.setFont(uiFont(this, kChipSizePx, 700));
+        p.drawText(chipRect, Qt::AlignCenter, QStringLiteral("AT"));
+    }
     y += nameFm.height();
 
     p.setFont(statusFont);
@@ -745,6 +824,24 @@ void RadioTabBar::pulseLink(const QColor& beatColor)
     applyLinkVisuals();
 }
 
+void RadioTabBar::setLinkQuality(const QColor& color, const QString& label)
+{
+    if (m_qualityColor == color && m_qualityLabel == label) {
+        return;
+    }
+    m_qualityColor = color;
+    m_qualityLabel = label;
+    applyLinkVisuals();
+}
+
+void RadioTabBar::setAdaptiveThrottle(bool enabled, int fpsCap, const QColor& capColor)
+{
+    m_throttleEnabled = enabled;
+    m_throttleFpsCap = enabled ? qMax(0, fpsCap) : 0;
+    m_throttleCapColor = m_throttleFpsCap > 0 ? capColor : QColor();
+    applyLinkVisuals();
+}
+
 QString RadioTabBar::linkRadioId() const
 {
     return m_activeId.isEmpty() ? m_carrierId : m_activeId;
@@ -759,6 +856,12 @@ void RadioTabBar::applyLinkVisuals()
     const bool ownsLink = carrier && carrier->entry().id == linkRadioId();
     const bool alarm = m_alarm && ownsLink;
     const QColor linkOverride = (m_alarm && !ownsLink) ? QColor() : m_linkOverride;
+    // Quality and the throttle describe *this client's* session, so only the
+    // tab of the radio that session is on may show them.
+    const bool session = ownsLink && !m_activeId.isEmpty();
+    const QString chipText = m_throttleFpsCap > 0
+        ? tr("Adaptive throttle: %1 fps cap").arg(m_throttleFpsCap)
+        : tr("Adaptive throttle on");
 
     for (RadioTab* tab : std::as_const(m_tabs)) {
         // Only the carrier shows the link state — the others describe radios
@@ -770,6 +873,10 @@ void RadioTabBar::applyLinkVisuals()
         tab->setAlarmVisible(m_alarmVisible);
         tab->setBeatColor(isCarrier ? m_beatColor : QColor());
         tab->setPulse(isCarrier ? eased : 0.0);
+        const bool ours = isCarrier && session;
+        tab->setLinkQuality(ours ? m_qualityColor : QColor(),
+                            ours ? m_qualityLabel : QString());
+        tab->setThrottleChip(ours && m_throttleEnabled, m_throttleCapColor, chipText);
     }
 }
 
@@ -1202,6 +1309,7 @@ QVariantMap RadioTabBar::state() const
             {QStringLiteral("visible"), tab->isVisible()},
             {QStringLiteral("visibleInTabs"), e.visibleInTabs},
             {QStringLiteral("linkCarrier"), tab->isLinkCarrier()},
+            {QStringLiteral("throttleChip"), tab->isThrottleChipShown()},
             {QStringLiteral("accessibleName"), tab->accessibleName()},
         });
     }
@@ -1240,6 +1348,11 @@ QVariantMap RadioTabBar::state() const
         {QStringLiteral("linkAlarm"), m_alarm},
         {QStringLiteral("linkOverrideColor"),
          m_linkOverride.isValid() ? m_linkOverride.name() : QString()},
+        {QStringLiteral("linkQuality"), m_qualityColor.isValid() ? m_qualityLabel : QString()},
+        {QStringLiteral("linkQualityColor"),
+         m_qualityColor.isValid() ? m_qualityColor.name() : QString()},
+        {QStringLiteral("adaptiveThrottle"), m_throttleEnabled},
+        {QStringLiteral("adaptiveFpsCap"), m_throttleFpsCap},
     };
 }
 

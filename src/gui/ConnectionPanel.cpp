@@ -1043,10 +1043,11 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         "Toggling while connected takes effect at the next quality update; "
         "reconnect to lift an already-applied cap immediately.");
     applyStyle(m_adaptiveThrottleCheck, lowBandwidthCheckStyle);
-    connect(m_adaptiveThrottleCheck, &QCheckBox::toggled, this, [](bool on) {
+    connect(m_adaptiveThrottleCheck, &QCheckBox::toggled, this, [this](bool on) {
         auto& s = AppSettings::instance();
         s.setValue("AdaptiveThrottleEnabled", on ? "True" : "False");
         s.save();
+        emit adaptiveThrottleEnabledChanged(on);
     });
     root->addWidget(m_adaptiveThrottleCheck);
 

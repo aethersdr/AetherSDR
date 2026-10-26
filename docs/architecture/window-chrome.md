@@ -154,7 +154,12 @@ heartbeat, turns amber while discovering and red after three missed beats
 disconnect stops the miss timer and clears the alarm; an unexpected loss
 raises it. While the alarm is up the tab says "Link lost" in words too, and the
 alarm stays on the radio that dropped (not on whichever tab comes first) until
-a different session starts. The strip takes the bar's free width and scrolls
+a different session starts. With the link healthy, the session's connected
+tab colours its dot by network quality (`networkQualityColor()`, the status
+bar's mapping) and names the grade in its tooltip and accessible description.
+While the adaptive frame-rate throttle is enabled, an "AT" chip follows that
+tab's name: it is outlined while armed and filled in `adaptiveFpsCapColor()` while
+a cap is in force. The strip takes the bar's free width and scrolls
 only once that runs out; then a vertical mouse wheel scrolls it, and dragging
 a tab sideways past the system drag distance pans it (that press is not a
 click; a still press still is).

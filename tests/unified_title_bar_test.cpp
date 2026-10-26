@@ -36,6 +36,7 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QColor>
 #include <QFocusEvent>
 #include <QFrame>
 #include <QImage>
@@ -966,6 +967,57 @@ int main(int argc, char** argv)
         bar->clearLinkAlarm();
         check(!tabs->state().value(QStringLiteral("linkAlarm")).toBool(),
               "an operator disconnect clears the link alarm");
+
+        // Link quality colours the session's dot, and the AT chip marks an
+        // armed adaptive throttle — both on that tab only, both in words.
+        {
+            RadioTabEntry session;
+            session.id = QStringLiteral("QUALITY-SESSION");
+            session.name = QStringLiteral("NW8S-Bam");
+            session.status = RadioTabStatus::Connected;
+            RadioTabEntry idle;
+            idle.id = QStringLiteral("QUALITY-IDLE");
+            idle.name = QStringLiteral("FLEX-8600");
+            idle.status = RadioTabStatus::Available;
+            bar->setRadioTabs({session, idle});
+            bar->setActiveRadio(session.id);
+            app.processEvents();
+            RadioTab* sessionTab = tabWithId(*bar, session.id);
+            RadioTab* idleTab = tabWithId(*bar, idle.id);
+            check(sessionTab && idleTab, "quality test radios have tabs");
+            if (sessionTab && idleTab) {
+                const int plainWidth = sessionTab->sizeHint().width();
+                tabs->setLinkQuality(QColor(QStringLiteral("#cc9900")), QStringLiteral("Fair"));
+                check(tabs->state().value(QStringLiteral("linkQuality")).toString()
+                          == QLatin1String("Fair"),
+                      "link quality is published to the bridge");
+                check(sessionTab->toolTip().contains(QLatin1String("Network Fair")),
+                      "the quality is spelled out, not colour-only");
+                check(!idleTab->toolTip().contains(QLatin1String("Network")),
+                      "another radio's tab does not claim this session's quality");
+
+                tabs->setAdaptiveThrottle(true, 0, QColor());
+                check(sessionTab->isThrottleChipShown(), "an armed throttle shows the AT chip");
+                check(!idleTab->isThrottleChipShown(), "the AT chip rides the session's tab only");
+                check(sessionTab->sizeHint().width() > plainWidth,
+                      "the tab widens to fit the AT chip");
+                check(sessionTab->toolTip().contains(QLatin1String("Adaptive throttle on")),
+                      "the AT chip is spelled out");
+                tabs->setAdaptiveThrottle(true, 8, QColor(QStringLiteral("#cc9900")));
+                check(sessionTab->toolTip().contains(QLatin1String("8 fps cap")),
+                      "an engaged cap names its frame rate");
+                checkEqual(tabs->state().value(QStringLiteral("adaptiveFpsCap")).toInt(), 8,
+                           "the cap is published to the bridge");
+
+                tabs->setAdaptiveThrottle(false, 0, QColor());
+                tabs->setLinkQuality(QColor(), QStringLiteral("Off"));
+                check(!sessionTab->isThrottleChipShown(), "disabling the throttle removes the chip");
+                check(!sessionTab->toolTip().contains(QLatin1String("Network")),
+                      "a cleared quality leaves the tooltip");
+                checkEqual(sessionTab->sizeHint().width(), plainWidth,
+                           "the tab returns to its plain width");
+            }
+        }
 
         // After an unexpected drop the alarm stays on the radio that dropped,
         // not on whichever tab comes first (LAN radios are listed first, so on

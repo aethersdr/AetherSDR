@@ -63,6 +63,9 @@ QString formatNetworkSeqErrors(int errors, int packets);
 // footer status label and the diagnostics tooltip so they never diverge.
 // "Off"/unknown maps to a neutral grey (disconnected is not a "good" state).
 QString networkQualityColor(const QString& quality);
+// The quality-level color matching an adaptive-throttle fps cap
+// (≤ 4 Poor, ≤ 8 Fair, else Good), for the throttle indicators.
+QString adaptiveFpsCapColor(int fpsCap);
 QString buildNetworkTooltip(const RadioModel& model,
                             int adaptiveFpsCap,
                             bool throttleRestorePending);

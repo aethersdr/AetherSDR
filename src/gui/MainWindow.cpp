@@ -723,6 +723,18 @@ bool MainWindow::sendWanRadioClientDisconnects(const QString& serial,
     return true;
 }
 
+void MainWindow::refreshAdaptiveThrottleChip()
+{
+    if (!m_titleBar) return;
+    const bool enabled = AppSettings::instance()
+        .value("AdaptiveThrottleEnabled", "False").toString() == "True";
+    // A cap can still be in force just after the box is unticked (it lifts at
+    // the next quality update), so the chip stays until the cap is gone too.
+    m_titleBar->radioTabBar()->setAdaptiveThrottle(
+        enabled || m_adaptiveFpsCap > 0, m_adaptiveFpsCap,
+        m_adaptiveFpsCap > 0 ? QColor(adaptiveFpsCapColor(m_adaptiveFpsCap)) : QColor());
+}
+
 void MainWindow::disconnectWanRadioClients(const WanRadioInfo& info)
 {
     const auto clients = buildDisconnectClients(info);
@@ -2129,16 +2141,14 @@ MainWindow::MainWindow(QWidget* parent)
     // Quality-level colors come from networkQualityColor() (MainWindowHelpers)
     // so the footer label and the diagnostics tooltip share one mapping and
     // never diverge (e.g. "Off" is neutral grey in both, not green here).
-    // Map an fps cap to the matching quality-level color for the throttle indicator.
-    auto fpsCapColor = [](int fpsCap) -> QString {
-        if (fpsCap <= 4) return QStringLiteral("#cc3333"); // Poor
-        if (fpsCap <= 8) return QStringLiteral("#cc9900"); // Fair
-        return QStringLiteral("#00b4d8");                  // Good
-    };
-
     connect(&m_radioModel, &RadioModel::networkQualityChanged,
             this, [this](const QString& quality, int pingMs) {
         const QString color = networkQualityColor(quality);
+        // The active radio tab's dot carries the same grade ("Off" clears it).
+        if (m_titleBar) {
+            m_titleBar->radioTabBar()->setLinkQuality(
+                quality == QStringLiteral("Off") ? QColor() : QColor(color), quality);
+        }
         // Append fps cap so users understand why moving the fps slider has no effect.
         // Show "(restoring)" during the min-dwell hold so testers can distinguish
         // stuck throttle from a deliberate stability wait.
@@ -2159,11 +2169,12 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     connect(&m_radioModel, &RadioModel::adaptiveThrottleChanged,
-            this, [this, fpsCapColor](bool active, int fpsCap) {
+            this, [this](bool active, int fpsCap) {
         m_adaptiveThrottleActive = active;
         m_adaptiveFpsCap = active ? fpsCap : 0;
         if (m_titleBar)
-            m_titleBar->setThrottleFlashColor(active ? fpsCapColor(fpsCap) : QString{});
+            m_titleBar->setThrottleFlashColor(active ? adaptiveFpsCapColor(fpsCap) : QString{});
+        refreshAdaptiveThrottleChip();
         if (!active) {
             // Throttle lifted — restore the radio values captured in each
             // SpectrumWidget before the transient cap status arrived. Live
@@ -2190,6 +2201,11 @@ MainWindow::MainWindow(QWidget* parent)
             }
         }
     });
+
+    // The AT chip follows the connect panel's checkbox, not just an engaged cap.
+    connect(m_connPanel, &ConnectionPanel::adaptiveThrottleEnabledChanged,
+            this, [this](bool) { refreshAdaptiveThrottleChip(); });
+    refreshAdaptiveThrottleChip();
 
     connect(&m_radioModel.meterModel(), &MeterModel::hwTelemetryChanged,
             this, [this](float paTemp, float supplyVolts) {
