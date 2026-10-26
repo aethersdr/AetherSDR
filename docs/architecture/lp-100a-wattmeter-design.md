@@ -236,11 +236,16 @@ Classification is "one reply per **outstanding** poll": each record is matched
 against the polls we have sent and not yet seen answered, oldest first, and
 only a record arriving with none outstanding is foreign. If a foreign record
 wins the race it consumes one of our polls; our later reply is then counted
-foreign in its place, so the totals still agree. The local station's own-reply
-latency was ≤15 ms, but a remote or VPN path needs more, so an outstanding poll
-is kept for `kReplyExpiryMs` (1 s) — the ceiling on reply latency the gate
-classifies correctly — and only then presumed ignored by the meter, so it
-cannot swallow a real foreign record for longer than that.
+foreign in its place, so the totals still agree. Because matching is by count,
+there is no wall-clock ceiling on reply latency: a remote or VPN path with
+steady latency of any size classifies correctly. What the gate bounds is a
+number. At most `kMaxOutstandingPolls` (10) polls are held, so a stall followed
+by a burst of more than ten of our own replies is misclassified, and a poll the
+meter ignores (or a failed write) leaves one slot that is carried forward while
+we keep polling and can absorb one later foreign record. Both err toward
+polling more, never less. Once we stop polling, slots older than
+`kReplyExpiryMs` (1 s) are dropped so they cannot hold back confirming a
+poller we are riding along with.
 
 **Why a count and not a flag (#6794).** The first version tracked a single
 pending reply. Captured with AetherSDR as the only poller: every 8.0 s the
@@ -258,15 +263,18 @@ never forgotten.
 **Ride along only behind a confirmed poller.** Suppression engages only after
 `kConfirmRecords` (3) consecutive foreign records, each within the 2 s ceiling
 of the last. A real poller supplies them within a few of its own cadences;
-stray records seconds apart never qualify. The cost is a burst of our own
-polls alongside a newly arrived poller until it confirms: ~1.6 s live against a
-100 ms poller on the reference station, longer than three of its cadences
-because, while the two pollers' phases nearly coincide, no surplus record
-arrives to count. A foreign poller silent past the ceiling is
+stray records seconds apart never qualify. The cost is our own 10 Hz polling
+alongside a newly arrived poller until its third record, two of its cadences
+after the first, so it grows with the poller's cadence: modelled, ~3 polls
+against a 100 ms poller and ~20 against a 1 s one (a bench simulator measured
+18 and 27 for 1 s and 1.5 s pollers). Live against a 100 ms poller on the
+reference station it took ~1.6 s, because while the two pollers' phases nearly
+coincide, no surplus record arrives to count. A foreign poller silent past the ceiling is
 treated as gone and its cadence **forgotten**, so it can never suppress us
 later; within the ceiling it is kept, so ordinary jitter past the threshold
-resumes riding along on the poller's next record without re-confirming (the
-`SHARED` pill does not flicker).
+resumes riding along on the poller's next record without re-confirming, rather
+than dropping out to `LIVE` for the ~1.6 s a fresh confirmation takes. (The pill
+still shows `LIVE` for any reading that answered a poll of our own.)
 
 The quiet threshold is **2×** the observed foreign cadence because the
 multiplier must cover the jitter *tail* (mean 100.5 ms, gaps to 121 ms) rather
@@ -276,7 +284,8 @@ than the mean.
 silent for up to the 2 s ceiling before our own poll goes out, so the
 link-up-but-quiet watchdog is `kMaxQuietMs + 1000` (3 s), enforced by a
 `static_assert`. They were equal until #6794, which made a real foreign poller
-slower than ~1 s trip it on every cycle.
+slower than the 2 s ceiling trip it on every cycle: the gate rode along to the
+ceiling, and the reply to our catch-up poll landed just after the watchdog.
 
 **Stated limits.** The threshold is clamped to 2 s, so a foreign poller slower
 than that is *not* suppressed — we supplement rather than let our own gauge
