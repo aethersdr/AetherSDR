@@ -337,10 +337,42 @@ backup and is never overwritten by Restore.
 > physical amplifier ([#4097](https://github.com/aethersdr/AetherSDR/issues/4097)).
 > Reports from owners are welcome.
 
+Add it with **Peripherals → Add → Elecraft KPA1500**, enter the amplifier's IP
+address (or host name) and port (default 1500), choose a **Transport**, and
+press **Connect**. If you don't know the address, press **Find**: AetherSDR
+asks every address on this computer's local networks for a KPA1500 serial
+number on that port, over UDP, and fills in the address of the amplifier that
+answers (a menu lets you pick when there are several). **Find** sends queries
+only and changes nothing on the amplifier.
+
+The amplifier serves the same commands over TCP and UDP on that one port:
+
+- **TCP** (default): a stream connection; meters refresh every 500 ms. The
+  amplifier accepts only one TCP client at a time, so Elecraft's KPA1500
+  Remote and AetherSDR cannot both use TCP.
+- **UDP**: one command per datagram, so a lost packet never stalls the
+  meters, which refresh every 250 ms. The link reads as connected once the
+  amplifier answers, and as disconnected after 3 seconds without a reply.
+  Every control is confirmed by reading the amplifier's state back and is
+  retried until it takes; if the amplifier never reports the requested state,
+  the applet shows, for example, `Operate not confirmed by the amplifier`.
+  **TUNE** is sent once and never repeated. The amplifier accepts any number
+  of UDP clients, so AetherSDR can run alongside Elecraft's KPA1500 Remote.
+
+The transport can be changed only while disconnected.
+
 The **Elecraft KPA1500** applet (button **KPA1500**):
 
-- A status pill, **PWR**, **REF** and **SWR** gauges.
-- An info grid with PA temperature, band and the ATU state.
+- A status pill, **PWR**, **REF** and **SWR** gauges. Hover over the pill for
+  the amplifier's firmware version and serial number.
+- An info grid with PA temperature, band and the ATU state; **DRIVE** (input
+  power from the radio, 0 in standby and while tuning); **PA** supply voltage
+  and current; **FAN** speed; and **FREQ**, the frequency the amplifier is set
+  to.
+- The amplifier's own tuner summary under the grid: antenna, side, inductance,
+  capacitance and stored SWR.
+- An `Attenuator in` warning naming the reason when the amplifier's overdrive
+  attenuator is engaged, for example `PA CURRENT` or `INPUT POWER`.
 - A fault banner showing the code in hex (for example `Fault B0`) and a
   **CLR FAULT** button.
 - **OPERATE / STANDBY**. The label changes only when the amplifier confirms.
@@ -351,8 +383,23 @@ The **Elecraft KPA1500** applet (button **KPA1500**):
 - **ANT** **1** / **2**, the amplifier's two antenna connectors. An `ANT n`
   label appears when an external antenna switch reports an antenna number
   from 3 to 32.
+- **POWER**, which puts the amplifier to sleep; it reads `ASLEEP` while the
+  amplifier sleeps, and pressing it then wakes the amplifier. While asleep,
+  every other control is dimmed.
+- **FAN MIN**, the lowest speed the fans run at, 0 (off) to 5 (full). The
+  amplifier raises the speed further as it heats up; **FAN** shows the speed
+  it is actually running.
+- **TRACK**, which sends the transmit slice's frequency to the amplifier so it
+  changes band and recalls its tuner setting without a transmission. It follows
+  whichever slice has the TX flag, including split, XIT and the FM repeater
+  offset, and coalesces fast tuning into a few updates a second. Band changes
+  wait until the radio stops transmitting, so the amplifier never switches
+  bands under RF. Slices outside 160–6 m are not tracked. **TRACK** is off by
+  default and is remembered; turn it off if the amplifier already gets
+  frequency from a radio cable.
 
-There is no network PTT and no lost-link TX inhibit.
+The amplifier is keyed by its KEY IN line from the radio (for a Flex, an RCA
+TX output). There is no network PTT and no lost-link TX inhibit.
 
 ## Using the RF-KIT
 
@@ -418,7 +465,7 @@ The **LP-100A Meter** applet is in the **Metering** category and is
 | SPE Expert Amplifier | Serial, or network through ser2net (raw or telnet) | 115200 8N1 (original 1K-FA: 9600 8N1); TCP 7000 |
 | VK3AMP Amplifier | Network only: TCP control, UDP telemetry | TCP 5005; UDP 5010 |
 | Elecraft KPA500 | Serial, or network through a raw TCP ser2net proxy | 4800 8N1; selectable locally, configured on the server for TCP; TCP 2000 |
-| Elecraft KPA1500 | Network only: TCP | TCP 1500 |
+| Elecraft KPA1500 | Network only: TCP or UDP | TCP or UDP 1500 |
 | LP-100A Meter | Serial, or network through a ser2net proxy in raw mode | 115200 8N1; TCP 2000 |
 
 ## Known issues
@@ -428,6 +475,36 @@ The **LP-100A Meter** applet is in the **Metering** category and is
 - An SPE amplifier set to connect at startup shows connected but no data until you disconnect and reconnect it ([#4893](https://github.com/aethersdr/AetherSDR/issues/4893)).
 
 ## Troubleshooting
+
+### The KPA1500 says "No reply from the amplifier on UDP port 1500"
+
+AetherSDR sent queries but nothing came back within 8 seconds.
+
+1. Check the address and port: the UDP server uses the same port as TCP,
+   which the KPA1500 Utility's **Network** tab shows.
+2. Make sure no firewall between the two blocks UDP on that port in either
+   direction; replies come back to the port AetherSDR sent from.
+3. If UDP still fails, set **Transport** to **TCP**.
+
+### Find does not locate the KPA1500
+
+1. Make sure the computer and the amplifier are on the same network. **Find**
+   searches the computer's own networks only (at most 1,022 addresses each)
+   and cannot cross a router or VPN.
+2. Check the **Port**: it must match the amplifier's, which the KPA1500
+   Utility's **Network** tab shows.
+3. Allow AetherSDR through the computer's firewall for UDP, or enter the
+   address by hand.
+
+### KPA1500 controls show "not confirmed by the amplifier" over UDP
+
+The amplifier did not report the requested state after five tries, about
+three seconds.
+
+1. Look at the amplifier's front panel: some changes are refused in certain
+   states, such as during a fault or a tune.
+2. For **ATU tune**, key the radio's TUNE so the amplifier has RF.
+3. If it happens often on a lossy link, set **Transport** to **TCP**.
 
 ### The SPE amplifier will not power on over the network
 

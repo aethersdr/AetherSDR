@@ -337,6 +337,60 @@ int main()
            atuModeLabel(AtuMode::Unknown) != "BYPASS"
                && atuModeLabel(AtuMode::Unknown) != "INLINE");
 
+    // ── Remote-control readouts and controls ─────────────────────────────
+    {
+        auto apply = [](const char* frame, Status& s) {
+            const auto m = parseMessage(QByteArray(frame));
+            return m && applyMessage(*m, s);
+        };
+        Status s;
+        report("^ON1; -> powerOn", apply("^ON1;", s) && s.powerOn == true);
+        report("^ON0; -> asleep", apply("^ON0;", s) && s.powerOn == false);
+        report("^ON2; rejected", !apply("^ON2;", s) && s.powerOn == false);
+        report("^PWI0045; -> 45 W drive", apply("^PWI0045;", s) && s.inputWatts == 45.0f);
+        report("^VI513 061; -> 51.3 V, 61 A",
+               apply("^VI513 061;", s) && s.paVolts && qFuzzyCompare(*s.paVolts, 51.3f)
+                   && s.paAmps == 61);
+        report("^VI513; (one field) rejected", !apply("^VI513;", s) && s.paAmps == 61);
+        report("^FC3; -> fan minimum 3", apply("^FC3;", s) && s.fanMinimum == 3);
+        report("^FC9; out of range rejected", !apply("^FC9;", s) && s.fanMinimum == 3);
+        report("^FS5; -> fan speed 5", apply("^FS5;", s) && s.fanSpeed == 5);
+        report("^AS20; -> attenuator code 0x20", apply("^AS20;", s) && s.attenuatorCode == 0x20);
+        report("attenuatorReason(0x20) == PA CURRENT", attenuatorReason(0x20) == "PA CURRENT");
+        report("attenuatorReason(0) is empty", attenuatorReason(0).isEmpty());
+        report("attenuatorReason(unknown) shows hex", attenuatorReason(0x42) == "42");
+        report("^FR14074; -> 14074 kHz", apply("^FR14074;", s) && s.frequencyKhz == 14074);
+        report("^FR00000; is not a frequency", !apply("^FR00000;", s) && s.frequencyKhz == 14074);
+        report("^DA long ATU summary decodes (beyond the old 64-char cap)",
+               apply("^DA18086 AN1 Side ANT 340 nH (L06) 0 pf (C00) SWR Bypass 3.0 extra text;", s)
+                   && s.atuSetting
+                   && s.atuSetting->startsWith(QStringLiteral("18086 AN1 Side ANT")));
+        report("^RV03.10; -> firmware", apply("^RV03.10;", s) && s.firmware == QStringLiteral("03.10"));
+        report("^SN00022; -> serial", apply("^SN00022;", s) && s.serialNumber == QStringLiteral("00022"));
+    }
+    report("buildSetPower(true) == ^ON1;", buildSetPower(true) == "^ON1;");
+    report("buildSetPower(false) == ^ON0;", buildSetPower(false) == "^ON0;");
+    report("buildSetFanMinimum(0) == ^FC0;", buildSetFanMinimum(0) == "^FC0;");
+    report("buildSetFanMinimum(5) == ^FC5;", buildSetFanMinimum(5) == "^FC5;");
+    report("buildSetFanMinimum out of range is empty",
+           buildSetFanMinimum(-1).isEmpty() && buildSetFanMinimum(6).isEmpty());
+    report("buildSetFrequency(14074) == ^FR14074;", buildSetFrequency(14074) == "^FR14074;");
+    report("buildSetFrequency(1840) zero-pads to ^FR01840;", buildSetFrequency(1840) == "^FR01840;");
+    report("buildSetFrequency outside 160-6 m coverage is empty",
+           buildSetFrequency(144200).isEmpty() && buildSetFrequency(500).isEmpty());
+
+    // ── Transport setting ────────────────────────────────────────────────
+    report("transportSettingValue round-trips TCP",
+           transportFromSettingValue(transportSettingValue(Transport::Tcp)) == Transport::Tcp);
+    report("transportSettingValue round-trips UDP",
+           transportFromSettingValue(transportSettingValue(Transport::Udp)) == Transport::Udp);
+    report("transport setting is case-insensitive",
+           transportFromSettingValue(QStringLiteral(" UDP ")) == Transport::Udp);
+    report("an unset transport setting keeps TCP",
+           transportFromSettingValue(QString()) == Transport::Tcp);
+    report("an unrecognized transport setting keeps TCP",
+           transportFromSettingValue(QStringLiteral("serial")) == Transport::Tcp);
+
     if (g_failed == 0) {
         std::printf("\nAll KPA1500 protocol tests passed.\n");
     } else {

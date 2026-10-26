@@ -2,6 +2,7 @@
 
 #include "core/Kpa1500Protocol.h"
 
+#include <QComboBox>
 #include <QPushButton>
 #include <QTimer>
 #include <QWidget>
@@ -34,6 +35,12 @@ public:
     // genuinely different states here.
     void setStatus(const Kpa1500::Status& status);
     void setConnected(bool connected);
+    // A control the amp never confirmed (UDP); shown for kNoticeMs.
+    void showControlUnconfirmed(const QString& control);
+
+    // TX frequency tracking is an operator preference kept by the applet
+    // (not amp state), so it is latched here and persisted.
+    bool followTx() const { return m_followTx; }
 
 signals:
     void operateToggled(bool operate);
@@ -42,6 +49,9 @@ signals:
     void atuInlineToggled(bool inLine);
     void antennaSelected(int port);  // 1 or 2
     void faultClearRequested();
+    void powerRequested(bool on);
+    void fanMinimumRequested(int level);  // 0-5
+    void followTxToggled(bool on);
 
 private:
     void updateValueLabels();
@@ -60,6 +70,9 @@ private:
     QLabel* m_bandLabel{nullptr};
     QLabel* m_atuLabel{nullptr};
     QLabel* m_faultLabel{nullptr};
+    QLabel* m_noticeLabel{nullptr};
+    QTimer m_noticeTimer;
+    static constexpr int kNoticeMs = 8000;
 
     QPushButton* m_operateBtn{nullptr};
     QPushButton* m_tuneBtn{nullptr};
@@ -68,6 +81,17 @@ private:
     QPushButton* m_ant2Btn{nullptr};
     QLabel* m_antNumberLabel{nullptr};  // antenna numbers 3-32, behind an external switch
     QPushButton* m_clearFaultBtn{nullptr};
+
+    QLabel* m_driveLabel{nullptr};
+    QLabel* m_supplyLabel{nullptr};
+    QLabel* m_fanLabel{nullptr};
+    QLabel* m_freqLabel{nullptr};
+    QLabel* m_attenLabel{nullptr};
+    QLabel* m_atuDetailLabel{nullptr};
+    QPushButton* m_powerBtn{nullptr};
+    QPushButton* m_trackBtn{nullptr};
+    QComboBox* m_fanCombo{nullptr};
+    bool m_followTx{false};
 
     QTimer m_labelTimer;
 

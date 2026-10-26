@@ -1,12 +1,16 @@
 #include "Kpa1500Applet.h"
 #include "HGauge.h"
 #include "MeterSmoother.h"
+#include "core/AppSettings.h"
 #include "core/ThemeManager.h"
 
 #include <QAccessible>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
+#include <QSignalBlocker>
 #include <QStyle>
 #include <QVBoxLayout>
 
@@ -94,6 +98,19 @@ QPushButton* makeSmallButton(const QString& text, QWidget* parent)
     return btn;
 }
 
+QJsonObject preferences()
+{
+    return QJsonDocument::fromJson(
+        AppSettings::instance().value("Kpa1500Applet").toString().toUtf8()).object();
+}
+
+// Enables or dims a control; a dimmed control states why in its tooltip.
+void setAvailable(QWidget* w, bool enabled, const QString& reason)
+{
+    w->setEnabled(enabled);
+    w->setToolTip(enabled ? QString() : reason);
+}
+
 const QString& telemetryLabelStyle()
 {
     static const QString kStyle =
@@ -176,13 +193,45 @@ Kpa1500Applet::Kpa1500Applet(QWidget* parent)
     m_atuLabel = new QLabel(QStringLiteral("ATU  —"), this);
     theme.applyStyleSheet(m_atuLabel, telemetryLabelStyle());
 
+    m_driveLabel = new QLabel(QStringLiteral("DRIVE  — W"), this);
+    m_driveLabel->setAccessibleName(tr("Drive power from the radio"));
+    m_supplyLabel = new QLabel(QStringLiteral("PA  — V  — A"), this);
+    m_supplyLabel->setAccessibleName(tr("PA supply voltage and current"));
+    m_fanLabel = new QLabel(QStringLiteral("FAN  —"), this);
+    m_fanLabel->setAccessibleName(tr("Fan speed"));
+    m_freqLabel = new QLabel(QStringLiteral("FREQ  — kHz"), this);
+    m_freqLabel->setAccessibleName(tr("Frequency the amplifier is set to"));
+    for (QLabel* l : {m_driveLabel, m_supplyLabel, m_fanLabel, m_freqLabel}) {
+        theme.applyStyleSheet(l, telemetryLabelStyle());
+    }
+
     auto* infoGrid = new QGridLayout;
     infoGrid->setHorizontalSpacing(12);
     infoGrid->setVerticalSpacing(2);
     infoGrid->addWidget(m_tempLabel, 0, 0);
     infoGrid->addWidget(m_bandLabel, 0, 1);
     infoGrid->addWidget(m_atuLabel,  0, 2);
+    infoGrid->addWidget(m_driveLabel, 1, 0);
+    infoGrid->addWidget(m_supplyLabel, 1, 1);
+    infoGrid->addWidget(m_fanLabel, 1, 2);
+    infoGrid->addWidget(m_freqLabel, 2, 0, 1, 3);
     vbox->addLayout(infoGrid);
+
+    // The amp's own one-line ATU summary (^DA): side, L and C, stored SWR.
+    m_atuDetailLabel = new QLabel(this);
+    m_atuDetailLabel->setWordWrap(true);
+    m_atuDetailLabel->setAccessibleName(tr("Tuner setting reported by the amplifier"));
+    theme.applyStyleSheet(m_atuDetailLabel,
+        "QLabel { color: {{color.text.label}}; font-size: 9px; }");
+    m_atuDetailLabel->hide();
+    vbox->addWidget(m_atuDetailLabel);
+
+    m_attenLabel = new QLabel(this);
+    m_attenLabel->setWordWrap(true);
+    theme.applyStyleSheet(m_attenLabel,
+        "QLabel { color: {{color.accent.warning}}; font-size: 10px; font-weight: bold; }");
+    m_attenLabel->hide();
+    vbox->addWidget(m_attenLabel);
 
     vbox->addSpacing(4);
 
@@ -193,6 +242,19 @@ Kpa1500Applet::Kpa1500Applet(QWidget* parent)
         "QLabel { color: {{color.accent.danger}}; font-size: 10px; font-weight: bold; }");
     m_faultLabel->hide();
     vbox->addWidget(m_faultLabel);
+
+    // A control the amp did not confirm over UDP. Transient: the amp's own
+    // readback, shown everywhere else, remains the authority on its state.
+    m_noticeLabel = new QLabel(this);
+    m_noticeLabel->setObjectName(QStringLiteral("kpa1500ControlNotice"));
+    m_noticeLabel->setWordWrap(true);
+    theme.applyStyleSheet(m_noticeLabel,
+        "QLabel { color: {{color.accent.warning}}; font-size: 10px; font-weight: bold; }");
+    m_noticeLabel->hide();
+    vbox->addWidget(m_noticeLabel);
+    m_noticeTimer.setSingleShot(true);
+    m_noticeTimer.setInterval(kNoticeMs);
+    connect(&m_noticeTimer, &QTimer::timeout, m_noticeLabel, &QLabel::hide);
 
     // ── OPERATE / TUNE / ATU IN row ──────────────────────────────────────
     m_operateBtn = makeSmallButton(QStringLiteral("STANDBY"), this);
@@ -291,6 +353,72 @@ Kpa1500Applet::Kpa1500Applet(QWidget* parent)
     antRow->addWidget(m_clearFaultBtn);
     vbox->addLayout(antRow);
 
+    // ── POWER / FAN / TRACK row ──────────────────────────────────────────
+    m_powerBtn = makeSmallButton(QStringLiteral("POWER"), this);
+    m_powerBtn->setAccessibleDescription(
+        tr("Wakes the amplifier or puts it to sleep. The label shows the current state."));
+    theme.applyStyleSheet(m_powerBtn, makeStateBtnStyle({
+        activeStateStyle(QStringLiteral("on"), QStringLiteral("{{color.background.1}}"),
+                         QStringLiteral("{{color.accent.success}}"),
+                         QStringLiteral("{{color.text.primary}}")),
+    }));
+    connect(m_powerBtn, &QPushButton::clicked, this, [this]() {
+        emit powerRequested(!m_status.powerOn.value_or(true));
+    });
+
+    auto* fanCaption = new QLabel(QStringLiteral("FAN MIN"), this);
+    theme.applyStyleSheet(fanCaption, telemetryLabelStyle());
+    m_fanCombo = new QComboBox(this);
+    m_fanCombo->setObjectName(QStringLiteral("kpa1500FanMinimum"));
+    m_fanCombo->setAccessibleName(tr("Minimum fan speed"));
+    m_fanCombo->setAccessibleDescription(
+        tr("Lowest speed the amplifier's fans run at, 0 (off) to 5 (full). The amplifier "
+           "raises the speed further as it heats up."));
+    for (int level = Kpa1500::kMinFan; level <= Kpa1500::kMaxFan; ++level) {
+        m_fanCombo->addItem(QString::number(level), level);
+    }
+    m_fanCombo->setCurrentIndex(-1);
+    connect(m_fanCombo, &QComboBox::activated, this, [this](int idx) {
+        emit fanMinimumRequested(m_fanCombo->itemData(idx).toInt());
+        refreshControls();  // the combo shows readback, not the click
+    });
+
+    m_followTx = preferences().value("FollowTx").toBool(false);
+    m_trackBtn = makeSmallButton(QStringLiteral("TRACK"), this);
+    m_trackBtn->setCheckable(true);
+    m_trackBtn->setChecked(m_followTx);
+    m_trackBtn->setAccessibleName(tr("Follow the TX slice frequency"));
+    m_trackBtn->setAccessibleDescription(
+        tr("Sends the transmit slice's frequency (split, XIT and FM offset included) to the "
+           "amplifier so it changes band and recalls its tuner setting without transmitting. "
+           "Changes wait until the radio stops transmitting."));
+    theme.applyStyleSheet(m_trackBtn, makeStateBtnStyle({
+        activeStateStyle(QStringLiteral("active"), QStringLiteral("{{color.background.1}}"),
+                         QStringLiteral("{{color.accent}}"),
+                         QStringLiteral("{{color.text.primary}}")),
+    }));
+    connect(m_trackBtn, &QPushButton::toggled, this, [this](bool on) {
+        m_followTx = on;
+        QJsonObject doc = preferences();
+        doc["FollowTx"] = on;
+        auto& settings = AppSettings::instance();
+        settings.setValue("Kpa1500Applet",
+                          QString::fromUtf8(QJsonDocument(doc).toJson(QJsonDocument::Compact)));
+        settings.save();
+        m_valuesDirty = true;
+        refreshControls();
+        emit followTxToggled(on);
+    });
+
+    auto* auxRow = new QHBoxLayout;
+    auxRow->setSpacing(6);
+    auxRow->addWidget(m_powerBtn);
+    auxRow->addWidget(fanCaption);
+    auxRow->addWidget(m_fanCombo);
+    auxRow->addStretch();
+    auxRow->addWidget(m_trackBtn);
+    vbox->addLayout(auxRow);
+
     m_labelTimer.setInterval(kMeterReadoutUpdateMs);
     connect(&m_labelTimer, &QTimer::timeout, this, &Kpa1500Applet::updateValueLabels);
     m_labelTimer.start();
@@ -330,6 +458,10 @@ void Kpa1500Applet::setStatus(const Kpa1500::Status& status)
 
 void Kpa1500Applet::refreshControls()
 {
+    // A lit [kpaState] variant outranks :disabled (see the operate note
+    // below), so every lit state is gated on the amp being reachable AND awake.
+    const bool asleep = m_status.powerOn == false;
+    const bool live = m_connected && !asleep;
     const bool operate = m_status.operate.value_or(false);
     m_operateBtn->setText(operate ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
     // The label is a STATE, not an action, so spell that out for an AT
@@ -344,18 +476,18 @@ void Kpa1500Applet::refreshControls()
     // is appended last, so source order would paint a DISCONNECTED amp in
     // full-brightness "OPERATE" green. Same trap VkampApplet documents on
     // its own bypass button.
-    setBtnState(m_operateBtn, operate && m_connected ? QStringLiteral("operate") : QString());
+    setBtnState(m_operateBtn, operate && live ? QStringLiteral("operate") : QString());
 
     const bool atuIn = m_status.atuInline.value_or(false);
     m_atuInlineBtn->setText(atuIn ? QStringLiteral("ATU IN") : QStringLiteral("ATU BYP"));
     m_atuInlineBtn->setAccessibleName(atuIn ? tr("Tuner in line") : tr("Tuner bypassed"));
-    setBtnState(m_atuInlineBtn, atuIn && m_connected ? QStringLiteral("active") : QString());
+    setBtnState(m_atuInlineBtn, atuIn && live ? QStringLiteral("active") : QString());
 
     // Read-only reflection of the live `^AN` readback, not a latch of the
     // last button clicked.
     const int ant = m_status.antenna.value_or(0);
-    setBtnState(m_ant1Btn, ant == 1 && m_connected ? QStringLiteral("active") : QString());
-    setBtnState(m_ant2Btn, ant == 2 && m_connected ? QStringLiteral("active") : QString());
+    setBtnState(m_ant1Btn, ant == 1 && live ? QStringLiteral("active") : QString());
+    setBtnState(m_ant2Btn, ant == 2 && live ? QStringLiteral("active") : QString());
     const bool external = m_connected && ant > Kpa1500::kMaxAntenna;
     m_antNumberLabel->setText(external ? QStringLiteral("ANT %1").arg(ant) : QString());
     m_antNumberLabel->setVisible(external);
@@ -370,15 +502,39 @@ void Kpa1500Applet::refreshControls()
             QAccessible::updateAccessibility(&event);
         }
     }
-    setBtnState(m_tuneBtn, tuning && m_connected ? QStringLiteral("active") : QString());
+    setBtnState(m_tuneBtn, tuning && live ? QStringLiteral("active") : QString());
+
+    // Asleep: only POWER (and TRACK, a local preference) can do anything.
+    const QString offline = tr("Not connected to the amplifier");
+    const QString sleeping = tr("The amplifier is asleep; press POWER to wake it");
+    const QString reason = !m_connected ? offline : sleeping;
+    for (QWidget* w : std::initializer_list<QWidget*>{m_operateBtn, m_tuneBtn, m_atuInlineBtn,
+                                                      m_ant1Btn, m_ant2Btn}) {
+        setAvailable(w, live, reason);
+    }
+    setAvailable(m_fanCombo, live && m_status.fanMinimum.has_value(),
+                 live ? tr("Waiting for the amplifier to report its fan setting") : reason);
+    {
+        const QSignalBlocker block(m_fanCombo);
+        m_fanCombo->setCurrentIndex(
+            m_status.fanMinimum ? m_fanCombo->findData(*m_status.fanMinimum) : -1);
+    }
+
+    setAvailable(m_powerBtn, m_connected && m_status.powerOn.has_value(),
+                 m_connected ? tr("Waiting for the amplifier to report its power state")
+                             : offline);
+    const bool on = m_status.powerOn.value_or(false);
+    m_powerBtn->setText(asleep ? QStringLiteral("ASLEEP") : QStringLiteral("POWER"));
+    m_powerBtn->setAccessibleName(asleep ? tr("Amplifier asleep, wake it")
+                                         : tr("Amplifier on, put it to sleep"));
+    setBtnState(m_powerBtn, on && m_connected ? QStringLiteral("on") : QString());
+
+    setBtnState(m_trackBtn, m_followTx ? QStringLiteral("active") : QString());
 }
 
 void Kpa1500Applet::setConnected(bool connected)
 {
     m_connected = connected;
-    for (auto* btn : {m_operateBtn, m_tuneBtn, m_atuInlineBtn, m_ant1Btn, m_ant2Btn}) {
-        btn->setEnabled(connected);
-    }
 
     m_statusPill->setText(connected ? QStringLiteral("CONNECTED") : QStringLiteral("—"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusPill, connected
@@ -396,6 +552,8 @@ void Kpa1500Applet::setConnected(bool connected)
         m_status = {};
         m_faultLabel->hide();
         m_faultLabel->clear();
+        m_noticeTimer.stop();
+        m_noticeLabel->hide();
         m_clearFaultBtn->hide();
         m_pwrGauge->setValueImmediate(0.0f);
         m_pwrGauge->clearPeak();
@@ -404,9 +562,17 @@ void Kpa1500Applet::setConnected(bool connected)
         // Force the repaint so the placeholders replace the last readings now
         // rather than on the next tick.
         m_valuesDirty = true;
-        refreshControls();
         updateValueLabels();
     }
+    refreshControls();
+}
+
+void Kpa1500Applet::showControlUnconfirmed(const QString& control)
+{
+    m_noticeLabel->setText(tr("%1 not confirmed by the amplifier").arg(control));
+    m_noticeLabel->setAccessibleName(m_noticeLabel->text());
+    m_noticeLabel->show();
+    m_noticeTimer.start();
 }
 
 void Kpa1500Applet::updateValueLabels()
@@ -437,6 +603,37 @@ void Kpa1500Applet::updateValueLabels()
 
     m_atuLabel->setText(QStringLiteral("ATU  %1")
         .arg(Kpa1500::atuModeLabel(m_status.atuMode.value_or(Kpa1500::AtuMode::Unknown))));
+
+    m_driveLabel->setText(m_status.inputWatts
+        ? QStringLiteral("DRIVE  %1 W").arg(static_cast<int>(*m_status.inputWatts))
+        : QStringLiteral("DRIVE  — W"));
+    m_supplyLabel->setText(m_status.paVolts && m_status.paAmps
+        ? QStringLiteral("PA  %1 V  %2 A").arg(*m_status.paVolts, 0, 'f', 1).arg(*m_status.paAmps)
+        : QStringLiteral("PA  — V  — A"));
+    m_fanLabel->setText(m_status.fanSpeed
+        ? QStringLiteral("FAN  %1").arg(*m_status.fanSpeed)
+        : QStringLiteral("FAN  —"));
+    m_freqLabel->setText(QStringLiteral("FREQ  %1 kHz%2")
+        .arg(m_status.frequencyKhz ? QString::number(*m_status.frequencyKhz) : QStringLiteral("—"),
+             m_followTx ? QStringLiteral("  · TRACKING TX") : QString()));
+
+    const QString atuDetail = m_status.atuSetting.value_or(QString());
+    m_atuDetailLabel->setText(atuDetail);
+    m_atuDetailLabel->setVisible(m_connected && !atuDetail.isEmpty());
+
+    const int atten = m_status.attenuatorCode.value_or(0);
+    m_attenLabel->setText(atten ? tr("Attenuator in: %1").arg(Kpa1500::attenuatorReason(atten))
+                                : QString());
+    m_attenLabel->setVisible(m_connected && atten != 0);
+
+    QStringList identity;
+    if (m_status.firmware) {
+        identity << tr("Firmware %1").arg(*m_status.firmware);
+    }
+    if (m_status.serialNumber) {
+        identity << tr("S/N %1").arg(*m_status.serialNumber);
+    }
+    m_statusPill->setToolTip(identity.join(QStringLiteral(" · ")));
 }
 
 }  // namespace AetherSDR

@@ -100,11 +100,52 @@ A TCP server on port 1500 accepts the command set; a UDP server on the same
 port accepts the identical set. The port is movable with `^CP`, so the
 Peripherals row exposes it as an editable spin box rather than a fixed label.
 
-**This implementation is TCP-only, on purpose.** Every control path here is a
-command whose delivery matters — OPERATE, tune, antenna select, and above all
-the keying refresh of §6 — and UDP provides no delivery signal at all. UDP
-would be a reasonable *addition* for pure telemetry later; it is not a
-reasonable substitute for the control channel.
+Both transports are implemented; the Peripherals row picks one
+(`Kpa1500/Transport`, `tcp` by default).
+
+**UDP needs its own delivery story,** because every control path here is a
+command whose delivery matters and UDP gives no delivery signal. So on UDP:
+
+- Each `^CMD;` goes in its own datagram, and each received datagram is parsed
+  on its own, so a lost datagram cannot splice two replies together.
+- The link is declared up on the first well-formed reply (8 s connect
+  timeout) and down after 3 s without one; auto-reconnect then applies.
+- Every control is **confirmed by readback**: the SET is followed by its
+  query (`^OS`, `^AI`, `^AN`, `^FL`, `^TP`) and resent every 600 ms until the
+  reply shows the requested state, at most five times, after which
+  `controlUnconfirmed()` reaches the applet. A newer request in the same
+  group replaces a pending one, so the operator's latest intent wins.
+- `^FT` (start tune) is **never resent** — a repeat could restart a running
+  tune. It is confirmed by `^TP1` or the amp's own `^FT;` completion echo.
+- **Network keying (§6) is refused on UDP**: a lost refresh would drop the
+  key mid-transmission and a lost `^RX` would leave release to the timeout.
+- Meters poll every 250 ms (500 ms on TCP).
+
+- The amp accepts **one TCP client but any number of UDP clients**, so UDP
+  lets AetherSDR coexist with Elecraft's KPA1500 Remote.
+
+**TX frequency tracking (`^FR`).** `Kpa1500Connection::setTxFrequency()` is
+fed from `MainWindow::refreshTunerPortFrequency()`, the same effective-TX
+frequency (TX-flagged slice, FM offset, XIT) the KAT500 and KPA500 follow.
+Fast tuning is coalesced to one `^FR` per 300 ms; nothing is sent while the
+radio transmits, and an unconfirmed `^FR` is dropped (not resent) when TX
+starts, then sent again after unkey, because a band change under RF would
+hot-switch the amp's relays. Off by default (applet **TRACK**), since an amp
+fed by a radio cable already has a frequency source.
+
+**Sleep.** `^ON`, `^RV` and `^SN` answer while the amp sleeps. When `^ON0` is
+read back, polling drops to `^ON` alone, which also keeps the UDP link alive.
+
+**Discovery.** The amp has no discovery protocol; `Kpa1500Discovery` sends
+`^SN;` over UDP to each local IPv4 subnet's broadcast address and every host
+(whole subnet up to /22, otherwise the /24 around the computer; 4096 cap),
+then `^RV;` to each responder. Queries only.
+
+Still open for hardware validation: whether the amp ever packs several
+replies into one datagram (handled either way), whether it answers to the
+sender's source port (assumed), whether its network servers stay reachable
+while asleep (POWER wake depends on it), and whether it answers the subnet
+broadcast (the per-host sweep covers it if not).
 
 ### 3.3 Command set used
 
@@ -113,7 +154,13 @@ reasonable substitute for the control channel.
 | Forward / reflected power | `^PWF`, `^PWR` |
 | SWR | `^SW` |
 | Temperature | `^TM` |
-| Band data | `^BN` |
+| Band data | `^BN` (read); `^FR` sets the TX frequency |
+| Drive, PA supply | `^PWI`, `^VI` |
+| Fan | `^FC` (minimum, settable), `^FS` (actual) |
+| Overdrive attenuator | `^AS` |
+| ATU summary | `^DA` |
+| Sleep / wake | `^ON` |
+| Identity | `^RV`, `^SN` |
 | Fault, and clearing it | `^FL` (two hex digits), `^FLC;` |
 | Operate / standby | `^OS` |
 | ATU mode / in-line | `^AM` (`I`/`B`), `^AI` |
