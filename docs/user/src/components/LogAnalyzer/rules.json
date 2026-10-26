@@ -996,7 +996,7 @@
       "match": {
         "substring": "the radio released the serial and audio streams"
       },
-      "docs": "/next/networked-icom#audio-and-radio-updates-stop-after-switching-applications",
+      "docs": "/networked-icom#audio-and-radio-updates-stop-after-switching-applications",
       "source": [
         {
           "file": "src/core/backends/icom/IcomSession.cpp",

@@ -179,9 +179,9 @@ midi.settings      — device preferences and active bindings
 midi/<name>.xml    — saved profiles
 ```
 
-## Known issues
-
-- A crash or a failed write while bindings are being saved can leave `midi.settings` partly written or empty, losing your live bindings without an error ([#5160](https://github.com/aethersdr/AetherSDR/issues/5160)). Export a profile as a backup.
+Saves to `midi.settings` replace the file atomically. If writing the new
+document fails, the previous file remains intact and AetherSDR logs a warning.
+Export a profile to keep a separate backup of your bindings.
 
 ## Troubleshooting
 
