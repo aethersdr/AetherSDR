@@ -62,6 +62,7 @@
 #include "SMeterWidget.h"
 #include "core/ThemeManager.h"
 #include "SpectrumWidget.h"
+#include "RadioTabRecents.h"
 #include "TitleBar.h"
 #include "UpdatesWindow.h"
 #include "core/AppSettings.h"
@@ -75,8 +76,10 @@
 #include <QVBoxLayout>
 #include <QStatusBar>
 #include <QUrl>
+#include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -190,6 +193,37 @@ void logXvtrWaterfallDecision(quint32 streamId,
         << " candidates=" << xvtrListSummary(xvtrs);
 }
 
+// The radio switcher's app-global state, one versioned JSON object.
+// Version 2: "recentRadios", the last radios connected to, newest first.
+void saveRadioSwitcher(QJsonObject document)
+{
+    document.insert(QStringLiteral("version"), 2);
+    auto& settings = AppSettings::instance();
+    settings.setValue("RadioSwitcher", QString::fromUtf8(
+        QJsonDocument(document).toJson(QJsonDocument::Compact)));
+    settings.save();
+}
+
+QJsonObject loadRadioSwitcher()
+{
+    QJsonObject document = QJsonDocument::fromJson(AppSettings::instance()
+        .value("RadioSwitcher", "{}").toString().toUtf8()).object();
+    // One-time: version 1 kept "hiddenRadios", tabs hidden from a strip that
+    // showed every known radio. The strip now holds only recent radios, so
+    // the list means nothing; drop it once and move to version 2, starting
+    // the recent list from the radio last connected so the strip isn't empty.
+    if (document.value(QStringLiteral("version")).toInt() < 2) {
+        document.remove(QStringLiteral("hiddenRadios"));
+        const QString last = AppSettings::instance().value("LastConnectedRadioSerial").toString();
+        if (!last.isEmpty() && !document.contains(QStringLiteral("recentRadios"))) {
+            document.insert(QStringLiteral("recentRadios"),
+                            radiotabs::recentRadiosToJson({{last, QString(), QString(), QString()}}));
+        }
+        saveRadioSwitcher(document);
+    }
+    return document;
+}
+
 } // namespace
 
 void MainWindow::scheduleRadioTabRefresh()
@@ -212,12 +246,13 @@ void MainWindow::refreshRadioTabs()
 
     const bool connected = m_radioModel.isConnected();
     const QString activeSerial = connected ? m_radioModel.serial() : QString();
-    const QJsonObject switcher = QJsonDocument::fromJson(AppSettings::instance()
-        .value("RadioSwitcher", "{}").toString().toUtf8()).object();
-    const QJsonArray hidden = switcher.value(QStringLiteral("hiddenRadios")).toArray();
+    QJsonObject switcher = loadRadioSwitcher();
+    QList<radiotabs::RecentRadio> recents = radiotabs::recentRadiosFromJson(
+        switcher.value(QStringLiteral("recentRadios")).toArray());
 
     QList<RadioTabEntry> tabs;
     QSet<QString> seen;
+    QSet<QString> seenAddresses;
 
     auto statusFor = [&](const QString& serial, bool inUse) {
         if (connected && serial == activeSerial) {
@@ -233,6 +268,9 @@ void MainWindow::refreshRadioTabs()
             continue;
         }
         seen.insert(info.serial);
+        if (!info.address.isNull()) {
+            seenAddresses.insert(info.address.toString());
+        }
         RadioTabEntry entry;
         entry.id = info.serial;
         entry.name = info.nickname.isEmpty() ? info.model : info.nickname;
@@ -271,11 +309,25 @@ void MainWindow::refreshRadioTabs()
         tabs.append(entry);
     }
 
+    // A radio reached by IP at an address discovery lists, or a recent radio
+    // was reached at, is that radio: it takes the connected status there, not
+    // a second tab.
+    const QString activeTabId = radiotabs::activeTabId(
+        tabs, recents, activeSerial,
+        connected ? m_radioModel.lastRadioInfo().address.toString() : QString());
+    if (activeTabId != activeSerial) {
+        for (RadioTabEntry& entry : tabs) {
+            if (entry.id == activeTabId) {
+                entry.status = RadioTabStatus::Connected;
+            }
+        }
+    }
+
     // A radio reached over a routed/VPN address never shows up in discovery, so
     // without this the operator would be connected with no tab to show for it.
-    if (connected && !activeSerial.isEmpty() && !seen.contains(activeSerial)) {
+    if (connected && !activeSerial.isEmpty() && !seen.contains(activeTabId)) {
         RadioTabEntry entry;
-        entry.id = activeSerial;
+        entry.id = activeTabId;
         entry.name = m_radioModel.nickname().isEmpty() ? m_radioModel.model()
                                                        : m_radioModel.nickname();
         entry.name = m_connPanel->radioDisplayName(m_radioModel.lastRadioInfo(), entry.name);
@@ -284,34 +336,68 @@ void MainWindow::refreshRadioTabs()
         entry.status = RadioTabStatus::Connected;
         tabs.prepend(entry);
     }
+    if (connected) {
+        const QHostAddress activeAddress = m_radioModel.lastRadioInfo().address;
+        if (!activeAddress.isNull()) {
+            seenAddresses.insert(activeAddress.toString());
+        }
+    }
 
+    // Saved manual connections (an Icom, a routed Flex) that discovery cannot
+    // see. A saved address already accounted for is skipped: a Flex reached by
+    // IP is usually also discovered on the LAN, or recent under its serial.
+    QList<RadioTabEntry> savedTabs;
+    for (const ConnectionPanel::SavedRadio& saved : m_connPanel->savedRadios()) {
+        RadioTabEntry entry;
+        entry.id = saved.id;
+        entry.name = saved.name;
+        entry.detail = saved.address;
+        entry.transport = saved.address;
+        entry.status = RadioTabStatus::Saved;
+        savedTabs.append(entry);
+    }
+    tabs = radiotabs::withSavedRadios(tabs, savedTabs, recents, seenAddresses);
+
+    // Each write below happens only when the list changes, since this runs on
+    // every discovery beat.
+    auto storeRecents = [&](const QList<radiotabs::RecentRadio>& updated) {
+        if (updated == recents) {
+            return;
+        }
+        recents = updated;
+        switcher.insert(QStringLiteral("recentRadios"), radiotabs::recentRadiosToJson(recents));
+        saveRadioSwitcher(switcher);
+    };
+    // The demo exists only while shown; hiding it takes it off the tabs.
+    storeRecents(radiotabs::withoutVanished(recents, tabs, {SimBackend::demoSerial()}));
     if (connected) {
         for (const RadioTabEntry& entry : std::as_const(tabs)) {
-            if (entry.id == activeSerial) {
-                m_lastSessionTab = entry;
+            if (entry.id == activeTabId) {
+                m_lastSessionTabId = entry.id;
+                // Connecting makes a radio the most recent; its address lets a
+                // later saved profile for the same radio be recognised.
+                const QHostAddress address = m_radioModel.lastRadioInfo().address;
+                storeRecents(radiotabs::withRecent(
+                    recents, {entry.id, entry.name, entry.model,
+                              address.isNull() ? QString() : address.toString()}));
                 break;
             }
         }
-    } else if (!m_lastSessionTab.id.isEmpty() && !seen.contains(m_lastSessionTab.id)) {
-        // Dropped and no longer discovered (or never was: a routed radio).
-        RadioTabEntry entry = m_lastSessionTab;
-        entry.status = RadioTabStatus::Available;
-        tabs.prepend(entry);
     }
 
+    // The last radios connected to are the tabs (a recent one nothing
+    // describes now reads Saved); every other radio waits in the drawer.
+    tabs = radiotabs::arrangeTabs(tabs, recents, activeTabId);
     for (RadioTabEntry& entry : tabs) {
         // The demo's name is its "not on the air" safety label — never offer
         // to replace it, not even through Radio Setup while connected.
         entry.canRename = entry.id != SimBackend::demoSerial()
             && (entry.status == RadioTabStatus::Connected
                 || m_connPanel->canRenameRadio(entry.id));
-        entry.visibleInTabs = entry.status == RadioTabStatus::Connected
-            || entry.id == m_lastSessionTab.id
-            || !hidden.contains(entry.id);
     }
     m_titleBar->setRadioTabs(tabs);
     m_titleBar->setDiscoveredRadios(tabs);
-    m_titleBar->setActiveRadio(activeSerial);
+    m_titleBar->setActiveRadio(activeTabId);
 }
 
 void MainWindow::wireDiscovery()
@@ -540,18 +626,70 @@ void MainWindow::wireDiscovery()
         if (!m_smartLink.isAuthenticated()) dropSmartLinkTabs();
     });
 
+    // A manual connection learns its model ("IC-9700") from the radio after
+    // connecting; keep it on the saved profile so the radio's saved tab can
+    // show it once the session ends. infoChanged fires often, so only a new
+    // radio or model goes to the profile.
+    connect(&m_radioModel, &RadioModel::infoChanged, this,
+            [this, remembered = QString()]() mutable {
+        if (!m_radioModel.isConnected()) {
+            return;
+        }
+        const QString key = m_radioModel.serial() + QLatin1Char('\n') + m_radioModel.model();
+        if (key == remembered) {
+            return;
+        }
+        if (m_connPanel->rememberSavedRadioModel(m_radioModel.lastRadioInfo(),
+                                                 m_radioModel.model())) {
+            remembered = key;   // an Icom's profile is written after it connects
+        }
+    });
+
     if (m_titleBar) {
+        // Whether `id` is the connected radio's tab. Worked out from the live
+        // serial and address, not stored, so it cannot lag a connect or
+        // disconnect: a radio reached by IP at a discovered address is that
+        // discovered radio's tab (refreshRadioTabs()).
+        const auto isActiveRadioTab = [this](const QString& id) {
+            if (!m_radioModel.isConnected() || id.isEmpty()) {
+                return false;
+            }
+            // The same inputs refreshRadioTabs() decides with: the radios a
+            // source lists now, and the recent list.
+            QList<RadioTabEntry> listed;
+            for (const RadioTabEntry& entry : m_titleBar->radioTabBar()->discoveredRadios()) {
+                if (entry.status != RadioTabStatus::Saved) {
+                    listed.append(entry);
+                }
+            }
+            const auto recents = radiotabs::recentRadiosFromJson(
+                loadRadioSwitcher().value(QStringLiteral("recentRadios")).toArray());
+            const QHostAddress address = m_radioModel.lastRadioInfo().address;
+            return id == radiotabs::activeTabId(listed, recents, m_radioModel.serial(),
+                                                address.isNull() ? QString() : address.toString())
+                || id == m_radioModel.serial();
+        };
         // Clicking a tab means "make that the radio I'm using".  Connecting to
         // a different radio while one is live would drop the current session
         // without asking, so route through the picker instead and let the
         // operator confirm — the tab is a selector, not a disconnect button.
         connect(m_titleBar, &TitleBar::radioTabActivated, this,
-                [this](const QString& radioId) {
-            if (m_radioModel.isConnected() && m_radioModel.serial() == radioId) {
+                [this, isActiveRadioTab](const QString& radioId) {
+            if (m_radioModel.isConnected()
+                && isActiveRadioTab(radioId)) {
                 return;   // already the active session — nothing to do
             }
             showConnectionDialog();
-            if (!m_connPanel->selectRadio(radioId)) {
+            // A recent radio's tab stands for the profile saved at its address
+            // too (refreshRadioTabs() lists one entry per address).
+            QString address;
+            for (const RadioTabEntry& entry : m_titleBar->radioTabBar()->discoveredRadios()) {
+                if (entry.id == radioId && !QHostAddress(entry.transport).isNull()) {
+                    address = entry.transport;
+                }
+            }
+            if (!m_connPanel->selectRadio(radioId)
+                && !m_connPanel->selectSavedRadio(radioId, address)) {
                 // The tab outlived the picker's row (a SmartLink radio after
                 // logging out, or one discovery has not re-announced yet).
                 // Say so instead of opening on whatever page was last used.
@@ -609,8 +747,11 @@ void MainWindow::wireDiscovery()
         connect(m_titleBar->radioTabBar(), &RadioTabBar::rescanRequested,
                 m_connPanel, &ConnectionPanel::retryDiscoveryRequested);
         connect(m_titleBar->radioTabBar(), &RadioTabBar::radioActionRequested,
-                this, [this](const QString& radioId, const QString& action) {
-            const bool active = m_radioModel.isConnected() && m_radioModel.serial() == radioId;
+                this, [this, isActiveRadioTab](const QString& radioId, const QString& action) {
+            // The tab of a radio reached by IP at a discovered address carries
+            // the discovered serial (refreshRadioTabs()).
+            const bool active = m_radioModel.isConnected()
+                && isActiveRadioTab(radioId);
             if (action == QStringLiteral("disconnect")) {
                 if (active) {
                     emit m_connPanel->disconnectRequested();
@@ -631,37 +772,37 @@ void MainWindow::wireDiscovery()
                 if (active && action == QStringLiteral("remove")) {
                     return;
                 }
-                auto& settings = AppSettings::instance();
-                QJsonObject document = QJsonDocument::fromJson(settings
-                    .value("RadioSwitcher", "{}").toString().toUtf8()).object();
-                QJsonArray hidden = document.value(QStringLiteral("hiddenRadios")).toArray();
-                QJsonArray updated;
-                for (const QJsonValue& serial : hidden) {
-                    if (serial.toString() != radioId) {
-                        updated.append(serial);
+                // The tabs are the recent radios: removing drops one into the
+                // drawer, adding puts one first and bumps the oldest out.
+                QJsonObject document = loadRadioSwitcher();
+                const auto recents = radiotabs::recentRadiosFromJson(
+                    document.value(QStringLiteral("recentRadios")).toArray());
+                auto updated = radiotabs::withoutRecent(recents, radioId);
+                if (action == QStringLiteral("restore")) {
+                    for (const RadioTabEntry& entry
+                         : m_titleBar->radioTabBar()->discoveredRadios()) {
+                        if (entry.id == radioId) {
+                            const QString address =
+                                QHostAddress(entry.transport).isNull() ? QString() : entry.transport;
+                            updated = radiotabs::withRecent(
+                                recents, {entry.id, entry.name, entry.model, address});
+                            break;
+                        }
                     }
-                }
-                if (action == QStringLiteral("remove")) {
-                    updated.append(radioId);
+                } else if (radioId == m_lastSessionTabId) {
                     // Removing the dropped radio's tab dismisses its alarm, as
                     // a deliberate disconnect would.
-                    if (radioId == m_lastSessionTab.id) {
-                        m_lastSessionTab = {};
-                        if (m_heartbeatMissTimer) m_heartbeatMissTimer->stop();
-                        if (m_titleBar) m_titleBar->clearLinkAlarm();
-                        scheduleRadioTabRefresh();   // it may already be hidden
-                    }
+                    m_lastSessionTabId.clear();
+                    if (m_heartbeatMissTimer) m_heartbeatMissTimer->stop();
+                    if (m_titleBar) m_titleBar->clearLinkAlarm();
+                    scheduleRadioTabRefresh();
                 }
-                if (updated == hidden) {
+                if (updated == recents) {
                     return;
                 }
-                document.insert(QStringLiteral("hiddenRadios"), updated);
-                // App-global UI state, one JSON object per feature; versioned so
-                // a later schema change can migrate instead of guessing.
-                document.insert(QStringLiteral("version"), 1);
-                settings.setValue("RadioSwitcher", QString::fromUtf8(
-                    QJsonDocument(document).toJson(QJsonDocument::Compact)));
-                settings.save();
+                document.insert(QStringLiteral("recentRadios"),
+                                radiotabs::recentRadiosToJson(updated));
+                saveRadioSwitcher(document);
                 scheduleRadioTabRefresh();
             }
         });

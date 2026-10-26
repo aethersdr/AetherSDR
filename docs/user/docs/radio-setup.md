@@ -179,7 +179,7 @@ previous session cannot change a reused band or transverter identifier.
 
 Radio connection is not part of Radio Setup.
 
-1. Use **File → Connect to Radio...**, or the **+** button on the title bar's radio tabs.
+1. Use **File → Connect to Radio...**, or the **⌄⌄** button beside the title bar's radio tabs.
 2. Tick **Connect to last radio on start up** in the connect panel if you want AetherSDR to connect automatically at launch.
 
 See [First Connection](./first-connection.md) and [Manual Connection](./manual-connection.md).

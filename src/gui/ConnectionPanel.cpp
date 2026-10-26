@@ -1,4 +1,5 @@
 #include "ConnectionPanel.h"
+#include "ExperimentalRadioSupport.h"   // an Icom's "model not identified yet"
 #include "core/AppSettings.h"
 #include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with MainWindow_Session
 #include "core/backends/anan/AnanDiscovery.h" // shared nickname + MAC->serial helpers
@@ -38,6 +39,7 @@
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QHash>
 #include <QSet>
 #include <QSpinBox>
 #include <QTcpSocket>
@@ -295,6 +297,16 @@ bool icomBasePortFromProfile(const QJsonObject& profile, quint16* basePort)
         *basePort = static_cast<quint16>(stored);
     }
     return true;
+}
+
+// An Icom has no discovery, MAC or reported serial, so its host (and a
+// non-default base port) is its identity: the restore/persist scope and the
+// title bar's saved tab both key off this.
+QString icomRadioId(const QString& address, quint16 basePort)
+{
+    return basePort == IcomSettings::defaultBasePort()
+        ? QStringLiteral("icom:%1").arg(address)
+        : QStringLiteral("icom:%1:%2").arg(address).arg(basePort);
 }
 
 QString staleSelectionText(const RadioBindSettings& settings)
@@ -1413,6 +1425,7 @@ void ConnectionPanel::clearPendingIcomCredentials()
     m_pendingIcomBasePort = 0;
     m_pendingIcomBindSettings = RadioBindSettings{};
     m_pendingIcomSessionBindAddress.clear();
+    m_pendingIcomRadio = RadioInfo{};
 }
 
 void ConnectionPanel::setConnected(bool connected)
@@ -1433,6 +1446,7 @@ void ConnectionPanel::setConnected(bool connected)
             saveManualProfile(m_pendingIcomHost,
                               m_pendingIcomBindSettings,
                               m_pendingIcomSessionBindAddress,
+                              m_pendingIcomRadio,
                               m_pendingIcomBasePort);
             if (m_pendingIcomResolvedHost != m_pendingIcomHost) {
                 // MainWindow retains the resolved address in LastRoutedRadioIp.
@@ -1441,6 +1455,7 @@ void ConnectionPanel::setConnected(bool connected)
                 saveManualProfile(m_pendingIcomResolvedHost,
                                   m_pendingIcomBindSettings,
                                   m_pendingIcomSessionBindAddress,
+                                  m_pendingIcomRadio,
                                   m_pendingIcomBasePort);
             }
         }
@@ -1500,6 +1515,104 @@ bool ConnectionPanel::selectRadio(const QString& serial)
 void ConnectionPanel::selectManualConnection()
 {
     setCurrentMode(ManualMode);
+}
+
+QList<ConnectionPanel::SavedRadio> ConnectionPanel::savedRadios() const
+{
+    // Read the identity each profile recorded when its connection succeeded.
+    // A profile from before that has none and appears once it connects again.
+    QList<SavedRadio> radios;
+    QHash<QString, qsizetype> seen;
+    const QJsonObject profiles = loadRoutedProfiles();
+    for (auto it = profiles.constBegin(); it != profiles.constEnd(); ++it) {
+        const QJsonObject profile = it.value().toObject();
+        const QJsonObject identity = profile.value("identity").toObject();
+        SavedRadio radio;
+        radio.id = identity.value("radio_id").toString();
+        if (radio.id.isEmpty()) {
+            continue;
+        }
+        radio.key = it.key();
+        radio.address = identity.value("address").toString();
+        if (radio.address.isEmpty()) {
+            radio.address = radio.key;
+        }
+        // A host name is saved again under its resolved address; both carry
+        // the same id, so the radio is offered once, under the host name the
+        // operator typed (it still resolves after the address changes).
+        if (const auto twin = seen.constFind(radio.id); twin != seen.constEnd()) {
+            SavedRadio& kept = radios[*twin];
+            if (kept.key == kept.address && radio.key != radio.address) {
+                kept.key = radio.key;
+            }
+            continue;
+        }
+        seen.insert(radio.id, radios.size());
+        QString model = profile.value("model").toString().trimmed();
+        if (experimentalRadioIdentityPending(familyFromProfile(profile), model)) {
+            model.clear();   // a stored "Unknown Icom" names nothing
+        }
+        radio.name = model.isEmpty() ? identity.value("name").toString() : model;
+        if (radio.name.isEmpty()) {
+            radio.name = radio.address;
+        }
+        radios.append(radio);
+    }
+    return radios;
+}
+
+bool ConnectionPanel::rememberSavedRadioModel(const RadioInfo& radio, const QString& model)
+{
+    const QString name = model.trimmed();
+    // radio.model is the placeholder the manual probe connected with ("Icom",
+    // "FLEX"); only a name the radio itself reported is worth keeping. An Icom
+    // reports "Unknown Icom" until CI-V identifies it, and for the whole
+    // session when identification fails.
+    if (!radio.isRouted || radio.serial.isEmpty() || name.isEmpty() || name == radio.model
+        || experimentalRadioIdentityPending(radio.family, name)) {
+        return false;
+    }
+    QJsonObject profiles = loadRoutedProfiles();
+    bool matched = false;
+    bool changed = false;
+    for (auto it = profiles.begin(); it != profiles.end(); ++it) {
+        QJsonObject profile = it.value().toObject();
+        if (profile.value("identity").toObject().value("radio_id").toString() != radio.serial) {
+            continue;
+        }
+        matched = true;
+        if (profile.value("model").toString() == name) {
+            continue;
+        }
+        profile["model"] = name;
+        *it = profile;
+        changed = true;
+    }
+    if (changed) {
+        saveRoutedProfiles(profiles);
+    }
+    return matched;
+}
+
+bool ConnectionPanel::selectSavedRadio(const QString& id, const QString& address)
+{
+    const QList<SavedRadio> radios = savedRadios();
+    auto match = std::find_if(radios.cbegin(), radios.cend(),
+                              [&id](const SavedRadio& saved) { return saved.id == id; });
+    if (match == radios.cend() && !address.isEmpty()) {
+        match = std::find_if(radios.cbegin(), radios.cend(),
+                             [&address](const SavedRadio& saved) { return saved.address == address; });
+    }
+    if (match == radios.cend()) {
+        return false;
+    }
+    m_startupProbe = false;
+    setCurrentMode(ManualMode);
+    m_manualIpCombo->setCurrentText(match->key);
+    m_manualIpEdit->setText(match->key);
+    // Chosen, not typed: restore the radio type this address was reached with.
+    applySavedSourceSelection(match->key, /*restoreFamily=*/true);
+    return true;
 }
 
 bool ConnectionPanel::canRenameRadio(const QString& serial) const
@@ -2596,6 +2709,7 @@ void ConnectionPanel::rememberManualIp(const QString& ip)
 void ConnectionPanel::saveManualProfile(const QString& targetIp,
                                         const RadioBindSettings& settings,
                                         const QHostAddress& lastSuccessfulLocalIp,
+                                        const RadioInfo& radio,
                                         quint16 icomBasePort)
 {
     if (targetIp.trimmed().isEmpty())
@@ -2608,6 +2722,9 @@ void ConnectionPanel::saveManualProfile(const QString& targetIp,
     QJsonObject identity;
     identity["target_address"] = targetIp;
     identity["family"] = currentManualFamily();
+    identity["radio_id"] = radio.serial;
+    identity["address"] = radio.address.isNull() ? targetIp : radio.address.toString();
+    identity["name"] = radio.nickname.isEmpty() ? radio.model : radio.nickname;
     profile["identity"] = identity;
 
     QJsonObject bind;
@@ -2625,6 +2742,18 @@ void ConnectionPanel::saveManualProfile(const QString& targetIp,
         icom["base_port"] = basePort;
         profile["icom"] = icom;
         profile["schema_version"] = 2;
+    }
+
+    // The identified model is learned after the connect that writes this
+    // profile (rememberSavedRadioModel()); a reconnect to the same radio must
+    // not erase it. A radio known only by its address (an Icom, a Flex by IP)
+    // can't be told from another at that address, so a new one there shows
+    // the old model until it identifies itself.
+    const QJsonObject previous = profiles.value(targetIp).toObject();
+    const QString model = previous.value("model").toString();
+    if (!model.isEmpty()
+        && previous.value("identity").toObject().value("radio_id").toString() == radio.serial) {
+        profile["model"] = model;
     }
 
     profiles[targetIp] = profile;
@@ -2927,12 +3056,7 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         info.port     = basePort;
         info.model    = QStringLiteral("Icom");
         info.name     = info.model;
-        // No discovery means no MAC and no reported serial, so the host is the
-        // only stable identity this radio has for us. It has to be SOMETHING:
-        // the restore/persist scope keys off it.
-        info.serial   = basePort == IcomSettings::defaultBasePort()
-            ? QStringLiteral("icom:%1").arg(resolved.toString())
-            : QStringLiteral("icom:%1:%2").arg(resolved.toString()).arg(basePort);
+        info.serial   = icomRadioId(resolved.toString(), basePort);
         info.nickname = info.model;
         // Manual Icom sessions use the same retention path as routed Flex and
         // HL2 sessions. Without this marker MainWindow removes
@@ -2941,6 +3065,7 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         info.isRouted           = true;
         info.bindSettings       = bindSettings;
         info.sessionBindAddress = m_pendingIcomSessionBindAddress;
+        m_pendingIcomRadio      = info;
         rememberManualIp(trimmedIp);
         resetManualConnectButton();
         finishManualProbe(info);
@@ -3268,7 +3393,7 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                     return Hl2ProbeResult::Answered;
                 }
 
-                saveManualProfile(ip, bindSettings, info.sessionBindAddress);
+                saveManualProfile(ip, bindSettings, info.sessionBindAddress, info);
                 rememberManualIp(ip);
                 // #4470: the low-bandwidth checkbox is what caps the HL2 panadapter
                 // span, and this page is the one place it is on screen. Save it
@@ -3415,7 +3540,7 @@ ConnectionPanel::AnanProbeResult ConnectionPanel::probeAnan(
                 return AnanProbeResult::Answered;
             }
 
-            saveManualProfile(ip, bindSettings, info.sessionBindAddress);
+            saveManualProfile(ip, bindSettings, info.sessionBindAddress, info);
             rememberManualIp(ip);
             setManualMessage(
                 QStringLiteral("Found an ANAN-G2 at %1 — connecting.").arg(ip), false);
@@ -3559,7 +3684,7 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
                 }
             }
 
-            saveManualProfile(trimmedIp, bindSettings, *localSrc);
+            saveManualProfile(trimmedIp, bindSettings, *localSrc, info);
             rememberManualIp(trimmedIp);
 
             m_manualConnectBtn->setText(QStringLiteral("Connect by IP"));

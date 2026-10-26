@@ -7061,7 +7061,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         if (m_userDisconnected) {
             if (m_heartbeatMissTimer) m_heartbeatMissTimer->stop();
             if (m_titleBar) m_titleBar->clearLinkAlarm();
-            m_lastSessionTab = {};
+            m_lastSessionTabId.clear();
             scheduleRadioTabRefresh();
         }
 

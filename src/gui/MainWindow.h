@@ -2007,7 +2007,7 @@ private:
     // visible tab after an unexpected drop, so the "Link lost" alarm always has
     // somewhere to show; cleared when the operator disconnects on purpose or
     // removes that tab.
-    RadioTabEntry m_lastSessionTab;
+    QString m_lastSessionTabId;
     static constexpr int kMaxAutoConnectAttempts = 3;
     QDialog* m_reconnectDlg{nullptr}; // shown on unexpected disconnect, dismissed on reconnect
     QString m_terminalConnectionError; // preserved until the next explicit connect

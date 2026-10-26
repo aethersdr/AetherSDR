@@ -19,8 +19,10 @@ Use **Connect by IP** for:
 
 *The Connect by IP card, with a documentation address typed in.*
 
-1. Open the **Connect to Radio** window: **File → Connect to Radio...**, or the **+** button beside the title bar's radio tabs → **Connect manually…**.
+1. Open the **Connect to Radio** window: **File → Connect to Radio...**, or the **⌄⌄** button beside the title bar's radio tabs → **Connect manually…**.
 2. Choose the **Connect by IP** card ("Best for VPN or routed station access when you already know the radio IP").
+
+After a successful connection, a radio reached this way stays in the radio list as **Saved** (and keeps a title bar tab while it is one of your three most recent radios), so you can come back to it without retyping the address. See [Menu Reference → Radio tabs](./menu-reference.md#radio-tabs).
 
 The **Radio IP address** group starts with two rows:
 
