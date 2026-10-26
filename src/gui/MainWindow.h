@@ -2080,6 +2080,10 @@ private:
     // Pans whose band changed while capped: the cap goes back on once the new
     // band has reported its own rates (see restorePreCapPanRates()).
     QSet<QString> m_recapPansAfterBandChange;
+    // Every cap (fps, and its waterfall rate) sent since the throttle engaged.
+    // A status echo of any of them is ours, not the operator's setting.
+    QSet<int> m_adaptiveFpsCapsSent;
+    QSet<int> m_adaptiveWfRatesSent;
     QTimer* m_layoutRestoreTimer{nullptr}; // debounced layout rearrange after pans added on connect
     qint64 m_layoutRestoreUntilMs{0};
     // WheelApf-while-off hint: wall-clock until which the notice is already

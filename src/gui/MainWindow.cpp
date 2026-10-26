@@ -2192,8 +2192,13 @@ MainWindow::MainWindow(QWidget* parent)
         m_adaptiveFpsCap = active ? fpsCap : 0;
         if (m_titleBar)
             m_titleBar->setThrottleFlashColor(active ? fpsCapColor(fpsCap) : QString{});
-        if (!active) {
+        if (active) {
+            m_adaptiveFpsCapsSent.insert(fpsCap);
+            m_adaptiveWfRatesSent.insert(m_radioModel.adaptiveWfRateForCap(fpsCap));
+        } else {
             m_recapPansAfterBandChange.clear();
+            m_adaptiveFpsCapsSent.clear();
+            m_adaptiveWfRatesSent.clear();
             restorePreCapPanRates();
         }
     });
@@ -7186,6 +7191,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_adaptiveThrottleActive = false;
         m_adaptiveFpsCap = 0;  // clear cap alongside throttle flag — see #2829 review
         m_recapPansAfterBandChange.clear();
+        m_adaptiveFpsCapsSent.clear();
+        m_adaptiveWfRatesSent.clear();
 
         // Clear spectrum/waterfall so the display doesn't look frozen
         if (m_panStack) {
