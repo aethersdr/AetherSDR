@@ -1297,6 +1297,9 @@ signals:
     // load deferral, so clients can order dependent radio commands around the
     // real `display pan set ... band=...` write.
     void panBandAboutToDispatch(const QString& panId);
+    // Emitted synchronously by removePanadapter() just before the remove
+    // command, while the pan can still be written to.
+    void panAboutToRemove(const QString& panId);
     void panBandDispatchFailed(const QString& panId);
     // Emitted when createPanadapter() is blocked because the radio's pan limit is reached.
     void panadapterLimitReached(int limit, const QString& model);

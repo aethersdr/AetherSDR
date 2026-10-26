@@ -2208,6 +2208,14 @@ MainWindow::MainWindow(QWidget* parent)
         restorePreCapPanRates(panId);
         m_recapPansAfterBandChange.insert(panId);
     });
+    // Closing a pan has the same effect: the radio keeps the closing pan's
+    // rates and gives them to the next pan it opens.
+    connect(&m_radioModel, &RadioModel::panAboutToRemove,
+            this, [this](const QString& panId) {
+        m_recapPansAfterBandChange.remove(panId);
+        if (m_adaptiveThrottleActive)
+            restorePreCapPanRates(panId);
+    });
 
     connect(&m_radioModel.meterModel(), &MeterModel::hwTelemetryChanged,
             this, [this](float paTemp, float supplyVolts) {

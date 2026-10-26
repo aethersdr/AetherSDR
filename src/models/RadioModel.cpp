@@ -5903,6 +5903,14 @@ bool RadioModel::removePanadapter(const QString& panId, PanCloseIntent intent)
         || !control->supports(PanLifecycleAction::Remove)
         || !original->ownedByClient(clientHandle())
         || (intent == PanCloseIntent::Ordinary && m_panadapters.size() <= 1)) { return false; }
+    // Before the fence below snapshots the pan's revision: a listener may
+    // still write to this pan (the adaptive-throttle restore does, so the
+    // radio doesn't keep the cap for the next pan it opens in this slot).
+    {
+        const QPointer<RadioModel> guard(this);
+        emit panAboutToRemove(panId);
+        if (!guard || !original || !controlSessionCurrent(session)) { return false; }
+    }
     const QString waterfallId = original->waterfallId();
     const quint64 revision = original->controlRevision();
     const quint64 retired = m_displayRetirements.value(panId);

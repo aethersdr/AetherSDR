@@ -62,7 +62,7 @@ AetherSDR exposes this as a manual choice because overlay networks such as ZeroT
 When enabled, AetherSDR automatically lowers the FFT and waterfall frame rate when network quality degrades, reducing the chance of a disconnect on a congested link. It applies to every connection type.
 
 - Toggling it while connected takes effect at the next quality update. To lift a cap that has already been applied, reconnect.
-- The cap is never saved as your setting. When you disconnect, close AetherSDR or change band while a cap is in force, AetherSDR first puts back your own FFT FPS and waterfall rate, so the radio keeps those. After a band change the cap goes back on.
+- The cap is never saved as your setting. When you disconnect, close AetherSDR, close a panadapter or change band while a cap is in force, AetherSDR first puts back your own FFT FPS and waterfall rate, so the radio keeps those. After a band change the cap goes back on.
 - If the connection drops while a cap is in force, AetherSDR can't put your rates back, so the radio may keep the capped rate for that band. Set **FFT FPS** again to fix it.
 - The **Stream Rates** page of **Tools → Network Diagnostics...** charts the frame-rate cap — see [Runtime Monitor](./runtime-monitor.md).
 
