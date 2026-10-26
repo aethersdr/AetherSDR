@@ -1170,6 +1170,10 @@ private:
     bool confirmClientSlotAvailability(const WanRadioInfo& info, QList<quint32>* disconnectHandles);
     bool sendWanRadioClientDisconnects(const QString& serial, const QList<quint32>& handles);
     void disconnectWanRadioClients(const WanRadioInfo& info);
+    // Lift the adaptive cap on one pan (or every pan) by sending its
+    // pre-cap FPS and waterfall rate. Used on throttle lift, and before a
+    // disconnect or band change while capped.
+    void restorePreCapPanRates(const QString& onlyPanId = {});
     void startWanRadioConnect(const WanRadioInfo& info, bool promptForClientSlots = true);
     void requestWanReconnect();
     void showForcedDisconnectDialog(bool wasWan, const RadioInfo& radioInfo, const WanRadioInfo& wanInfo);
@@ -2073,6 +2077,9 @@ private:
     QHash<QString, QVector<QMetaObject::Connection>> m_panDisplayStatusConnections;
     bool m_adaptiveThrottleActive{false}; // fps/wf status held as restore targets while true
     int  m_adaptiveFpsCap{0};             // current cap (> 0 when throttle active); shown in network label
+    // Pans whose band changed while capped: the cap goes back on once the new
+    // band has reported its own rates (see restorePreCapPanRates()).
+    QSet<QString> m_recapPansAfterBandChange;
     QTimer* m_layoutRestoreTimer{nullptr}; // debounced layout rearrange after pans added on connect
     qint64 m_layoutRestoreUntilMs{0};
     // WheelApf-while-off hint: wall-clock until which the notice is already

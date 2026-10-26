@@ -2592,8 +2592,8 @@ private:
     enum class NetState { Off, Excellent, VeryGood, Good, Fair, Poor };
     void applyAdaptiveFrameRate(NetState newState, NetState oldState);
     static int fpsCapForState(NetState s);  // single source of truth; see obs. 1 in PR review
-    // adaptiveWfRateForCap() moved to the public network-diagnostics section (#4261).
-    void sendAdaptiveCapToPan(const QString& panId, int fpsCap);
+    // adaptiveWfRateForCap() and sendAdaptiveCapToPan() are in the public
+    // network-diagnostics section (#4261).
     double networkQualityTargetScore(int pingMs) const;
     NetState networkStateForScore(double score, NetState currentState) const;
     bool usesRemoteNetworkThresholds() const;
@@ -2708,6 +2708,9 @@ public:
     // cap's own status echo while distinguishing it from a real radio/profile
     // update (#4261).
     int     adaptiveWfRateForCap(int fpsCap) const;
+    // Send one pan the adaptive cap's FPS and waterfall rate. Public so
+    // MainWindow can put the cap back on after a band change while capped.
+    void    sendAdaptiveCapToPan(const QString& panId, int fpsCap);
     QString networkQuality()   const;
     int     packetLossWindowSeconds() const { return NETWORK_LOSS_WINDOW_SAMPLES; }
     int     packetLossWindowDrops() const { return m_packetLossWindowErrors; }
