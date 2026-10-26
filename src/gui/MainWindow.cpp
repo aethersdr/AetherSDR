@@ -4362,7 +4362,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
             DxClusterClient* dxCluster = m_dxCluster;
             DxClusterClient* rbnClient = m_rbnClient;
             WsjtxClient* wsjtxClient = m_wsjtxClient;
-            SpotCollectorClient* spotCollectorClient = m_spotCollectorClient;
             PotaClient* potaClient = m_potaClient;
             EibiClient* eibiClient = m_eibiClient;
             N1MMSpotClient* n1mmSpotClient = m_n1mmSpotClient;
@@ -4390,15 +4389,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
                 QMetaObject::invokeMethod(wsjtxClient, [wsjtxClient] {
                     ShutdownTrace workerTrace("spots.wsjtx.stop.worker");
                     wsjtxClient->stopListening();
-                },
-                                          Qt::BlockingQueuedConnection);
-            }
-            {
-                ShutdownTrace trace("spots.collector.stop");
-                QMetaObject::invokeMethod(spotCollectorClient,
-                                          [spotCollectorClient] {
-                    ShutdownTrace workerTrace("spots.collector.stop.worker");
-                    spotCollectorClient->stopListening();
                 },
                                           Qt::BlockingQueuedConnection);
             }
@@ -4441,7 +4431,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
             dxCluster->deleteLater();
             rbnClient->deleteLater();
             wsjtxClient->deleteLater();
-            spotCollectorClient->deleteLater();
             potaClient->deleteLater();
             eibiClient->deleteLater();
             n1mmSpotClient->deleteLater();
@@ -4458,7 +4447,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
             delete m_dxCluster;
             delete m_rbnClient;
             delete m_wsjtxClient;
-            delete m_spotCollectorClient;
             delete m_potaClient;
             delete m_eibiClient;
             delete m_n1mmSpotClient;
@@ -4469,7 +4457,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
         m_dxCluster = nullptr;
         m_rbnClient = nullptr;
         m_wsjtxClient = nullptr;
-        m_spotCollectorClient = nullptr;
         m_potaClient = nullptr;
         m_eibiClient = nullptr;
         m_n1mmSpotClient = nullptr;
@@ -6938,12 +6925,6 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 if (!m_wsjtxClient->isListening())
                     QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->startListening(wAddr, wPort); });
             }
-            // Auto-start SpotCollector listener if enabled
-            if (cs.value("SpotCollectorAutoStart", "False").toString() == "True") {
-                quint16 scPort = static_cast<quint16>(cs.value("SpotCollectorPort", 9999).toInt());
-                if (!m_spotCollectorClient->isListening())
-                    QMetaObject::invokeMethod(m_spotCollectorClient, [=, this] { m_spotCollectorClient->startListening(scPort); });
-            }
             // Auto-start POTA polling if enabled
             if (cs.value("PotaAutoStart", "False").toString() == "True") {
                 int pInterval = cs.value("PotaPollInterval", 60).toInt();
@@ -7082,7 +7063,6 @@ void MainWindow::onConnectionStateChanged(bool connected)
         QMetaObject::invokeMethod(m_dxCluster, [=, this] { m_dxCluster->disconnect(); });
         QMetaObject::invokeMethod(m_rbnClient, [=, this] { m_rbnClient->disconnect(); });
         QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->stopListening(); });
-        QMetaObject::invokeMethod(m_spotCollectorClient, [=, this] { m_spotCollectorClient->stopListening(); });
         QMetaObject::invokeMethod(m_potaClient, [=, this] { m_potaClient->stopPolling(); });
 #ifdef HAVE_WEBSOCKETS
         QMetaObject::invokeMethod(m_freedvClient, [this] { m_freedvClient->stopConnection(); });

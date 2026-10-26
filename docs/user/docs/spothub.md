@@ -12,7 +12,7 @@ applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)", "Networked Icom (early
 
 :::
 
-SpotHub is AetherSDR's spot manager. It gathers spots from DX clusters, the Reverse Beacon Network, WSJT-X, DXLab SpotCollector, POTA, N1MM+/DXLog, the EiBi shortwave schedule and FreeDV Reporter, and draws them on the panadapter as color-coded callsign labels. It also has a sortable spot list with band filters, and a Display tab that controls how spots look. The **Kiwi DX** overlay and the panadapter-driven **Signal History** markers are switched on from the same Display tab.
+SpotHub is AetherSDR's spot manager. It gathers spots from DX clusters, the Reverse Beacon Network, WSJT-X, POTA, N1MM+/DXLog, the EiBi shortwave schedule and FreeDV Reporter, and draws them on the panadapter as color-coded callsign labels. It also has a sortable spot list with band filters, and a Display tab that controls how spots look. The **Kiwi DX** overlay and the panadapter-driven **Signal History** markers are switched on from the same Display tab.
 
 All spot sources run on a worker thread, and spots are forwarded to the radio in batches once a second.
 
@@ -28,7 +28,7 @@ The window has no title bar. Drag any empty part of it to move it, and drag an e
 
 SpotHub has ten tabs: **Cluster**, **RBN**, **WSJT-X**, **SpotCollector**, **POTA**, **EiBi**, **N1MM**, **FreeDV**, **Spot List** and **Display**. The FreeDV tab is only present in builds with Qt WebSockets.
 
-Every source tab has an **Auto-Start** (or **Auto-Connect**) toggle that starts it when the radio connects, a **Start / Stop** (or **Connect**) button, a status line and a console. Each console has a **Clear** button, which clears the console and deletes its stored log.
+Every source tab except **SpotCollector** has an **Auto-Start** (or **Auto-Connect**) toggle that starts it when the radio connects, a **Start / Stop** (or **Connect**) button, a status line and a console. Each console has a **Clear** button, which clears the console and deletes its stored log.
 
 ## Using the spot sources
 
@@ -79,10 +79,17 @@ Each spot is placed on the band of the WSJT-X instance that reported it, so seve
 
 ### SpotCollector
 
-Receives DX spots pushed by DXLab **SpotCollector** over UDP.
+The **SpotCollector** tab explains how to see DXLab **SpotCollector** spots in AetherSDR. It has no settings and nothing to start. This works with FlexRadio radios only.
 
-- **UDP Port** — default 9999. In SpotCollector, enable UDP broadcast to this port.
-- Alternatively, connect the Cluster tab to SpotCollector's telnet interface.
+SpotCollector doesn't send spots to other programs directly. Its companion program, DXLab **Commander**, adds SpotCollector's spots to the radio, and AetherSDR shows the radio's spots automatically.
+
+1. In Commander, select your FlexRadio Signature radio and connect Commander to it over the network. Commander must be able to reach the radio on TCP port 4992.
+2. In Commander's **Configuration** window, on the **Bandspread** tab, check **Display calls on panadaptor**.
+3. Keep SpotCollector running and connected to its spot sources.
+
+To see Commander's colors, turn **Override Colors** and **Override Background** off on the **Display** tab. A red callsign is one you need for an award you track, and the background shows LoTW and eQSL participation.
+
+Clicking one of these spots sends it to the radio as a spot trigger, the same as clicking it in SmartSDR, so the click settings on Commander's **Bandspread** tab apply. DXLab's own guide is [Displaying Active Callsigns on SmartSDR's Panadaptor](https://dxlabsuite.com/dxlabwiki/FlexSignatureDisplayCallsigns).
 
 ### POTA (Parks on the Air)
 
@@ -142,7 +149,7 @@ A sortable table of every spot from every source.
 | Comment | Mode, park reference, decoded message, … |
 | Spotter | Who spotted it |
 | Band | Band |
-| Source | Cluster, RBN, WSJT-X, SpotCollector, POTA, N1MM, FreeDV, … |
+| Source | Cluster, RBN, WSJT-X, POTA, N1MM, FreeDV, or the name another program gave a spot it added to the radio |
 
 - **Bands:** checkboxes filter the list by band; they are saved.
 - **Sorting:** click any column header. Click **Time** to go back to time order.
@@ -257,7 +264,7 @@ Spots drawn on the panadapter are deduplicated by callsign and frequency across 
 
 ### Where settings and logs are kept
 
-SpotHub settings are stored with the rest of AetherSDR's settings in `AetherSDR.db` (see [Settings and Backups](./settings-and-backups.md)). Source logs (`dxcluster.log`, `rbn.log`, `wsjtx.log`, `pota.log`, `freedv.log`, `spotcollector.log`) are in the `spothub` folder of AetherSDR's configuration directory (`~/.config/AetherSDR/spothub/` on Linux).
+SpotHub settings are stored with the rest of AetherSDR's settings in `AetherSDR.db` (see [Settings and Backups](./settings-and-backups.md)). Source logs (`dxcluster.log`, `rbn.log`, `wsjtx.log`, `pota.log`, `freedv.log`) are in the `spothub` folder of AetherSDR's configuration directory (`~/.config/AetherSDR/spothub/` on Linux).
 
 Some useful setting keys, for the **Settings Browser** (**Settings → Settings Browser...**):
 
@@ -268,7 +275,6 @@ Some useful setting keys, for the **Settings Browser** (**Settings → Settings 
 | `RbnRateLimit` | `10` | Max RBN spots per second to the radio |
 | `WsjtxAddress` / `WsjtxPort` | `224.0.0.1` / `2237` | WSJT-X listener |
 | `WsjtxSpotLifetime` | `120` | WSJT-X spot lifetime (s) |
-| `SpotCollectorPort` | `9999` | SpotCollector UDP port |
 | `PotaPollInterval` | `60` | POTA poll interval (s) |
 | `N1MMSpotPort` | `12060` | N1MM UDP port |
 | `N1MMSpotLifetimeSec` | `10800` | N1MM spot lifetime (s); 0 = never expire |
@@ -286,7 +292,6 @@ Some useful setting keys, for the **Settings Browser** (**Settings → Settings 
 ## Known issues
 
 - On ANAN-G2 and RTL-SDR, cluster, RBN, WSJT-X, POTA and manual spots never appear on the panadapter ([#6039](https://github.com/aethersdr/AetherSDR/issues/6039)).
-- The **SpotCollector** tab waits for UDP spots that DXLab SpotCollector does not send, so it receives nothing. Connect the **Cluster** tab to SpotCollector's telnet interface instead ([#5131](https://github.com/aethersdr/AetherSDR/issues/5131)).
 - Repeated spots of the same station on the same frequency can stack into a block of overlapping labels ([#5231](https://github.com/aethersdr/AetherSDR/issues/5231)).
 
 ## Troubleshooting
@@ -298,6 +303,15 @@ The spot overlay is off, or no source is running.
 1. On the **Display** tab, turn on **Spots**.
 2. On a source tab, press **Start** (or **Connect**) and watch its status line and console.
 3. If **Smart Spot Filtering** is on, voice spots with no signal nearby are dimmed. Turn it off under **View → Smart Spot Filtering** to check.
+
+### SpotCollector spots don't appear
+
+Commander isn't adding spots to the radio.
+
+1. In Commander, check that it is set up for your FlexRadio Signature radio and connected to it over the network. Set up as a generic radio, Commander can't put spots on the panadapter.
+2. In Commander's **Configuration** window, on the **Bandspread** tab, check **Display calls on panadaptor**.
+3. In SpotCollector, check that it is connected to its spot sources.
+4. On SpotHub's **Display** tab, turn on **Spots**.
 
 ### Kiwi DX markers don't appear
 
