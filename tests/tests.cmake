@@ -7094,6 +7094,12 @@ if(Qt6WebSockets_FOUND)
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
     add_test(NAME tci_rx_audio_test COMMAND tci_rx_audio_test)
 
+    add_executable(tci_host_iq_test tests/tci_host_iq_test.cpp)
+    target_include_directories(tci_host_iq_test PRIVATE src tests)
+    target_link_libraries(tci_host_iq_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_host_iq_test COMMAND tci_host_iq_test)
+
     add_executable(tci_trxmap_test tests/tci_trxmap_test.cpp)
     target_include_directories(tci_trxmap_test PRIVATE src)
     target_link_libraries(tci_trxmap_test PRIVATE aethercore Qt6::Core)
@@ -9910,6 +9916,7 @@ set(AETHER_SETTINGS_CONSUMERS
     noise_blanker_kind_model_test
     automation_nb2_capability_test
     tci_rx_audio_test
+    tci_host_iq_test
     bandscope_trace_render_test
     decoder_audio_routing_test
     ax25_receive_model_test

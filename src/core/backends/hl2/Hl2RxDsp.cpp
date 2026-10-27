@@ -780,6 +780,23 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
         m_spectrum->accumulate(m_conjugated);
     }
 
+    // The TCI IQ stream takes the spectrum's handedness: a client's FFT must
+    // put a signal above the NCO on the right, as the pan does.
+    if (m_iqTap.load(std::memory_order_relaxed)) {
+        if (m_iqTapOut.capacity() < 2 * kIqTapPairs)
+            m_iqTapOut.reserve(2 * kIqTapPairs + 2 * m_conjugated.size());
+        for (const auto& c : m_conjugated) {
+            m_iqTapOut.push_back(c.real());
+            m_iqTapOut.push_back(c.imag());
+        }
+        if (m_iqTapOut.size() >= 2 * kIqTapPairs) {
+            emit iqReady(m_iqTapOut);
+            m_iqTapOut.clear();
+        }
+    } else if (!m_iqTapOut.empty()) {
+        m_iqTapOut.clear();   // a later start must not begin with stale samples
+    }
+
     // Audio: the raw wire; see the handedness note above.
     m_iqBuffer.insert(m_iqBuffer.end(), iq.begin(), iq.end());
     const std::size_t block = static_cast<std::size_t>(m_config.dspBlockSize);

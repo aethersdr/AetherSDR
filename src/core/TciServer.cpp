@@ -223,7 +223,15 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // backend replacement. Flex supplies its separate typed DAX route.
         connect(m_model, &RadioModel::backendSliceAudioFrameReady,
                 this, &TciServer::onSlicePcmReady);
+        connect(m_model, &RadioModel::backendSliceIqFrameReady,
+                this, &TciServer::onSliceIqReady);
         connect(m_model, &RadioModel::backendRebuilt, this, &TciServer::retireAllRxRoutes);
+        // A new backend holds no taps; reconcileIqStreams() re-arms them when
+        // its slices arrive.
+        connect(m_model, &RadioModel::backendRebuilt, this, [this] {
+            m_hostIqSlices.clear();
+            m_hostIqRate = 0;
+        });
     }
 
     // Cache S-meter values for periodic broadcast (avoid flooding clients)
@@ -1484,6 +1492,12 @@ void TciServer::onTextMessage(const QString& msg)
             if (value.isEmpty()) {
                 replyText(ws, QStringLiteral("iq_samplerate:%1;")
                                   .arg(achievedIqSampleRate()));
+                continue;
+            }
+            // Host IQ runs at the radio's own rate, which is also its pan's
+            // span; TCI does not get to change that. Answer what is in force.
+            if (m_hostIqRate > 0) {
+                replyText(ws, QStringLiteral("iq_samplerate:%1;").arg(m_hostIqRate));
                 continue;
             }
             bool ok = false;
@@ -3907,9 +3921,11 @@ void TciServer::stopIqForClient(ClientState& client, int trx)
 bool TciServer::ensureIqStream(int trx)
 {
     if (!m_model || trx < 0 || trx >= DaxIqModel::NUM_CHANNELS
-        || !m_model->backendCapabilities().hasDaxStreams
         || !m_trxMap.trxHasLiveSlice(m_model, trx)) {
         return false;
+    }
+    if (!m_model->backendCapabilities().hasDaxStreams) {
+        return armHostIq(trx);
     }
 
     SliceModel* slice = sliceForTrx(trx);
@@ -3989,9 +4005,99 @@ bool TciServer::ensureIqStream(int trx)
     return true;
 }
 
+bool TciServer::armHostIq(int trx)
+{
+    SliceModel* slice = sliceForTrx(trx);
+    if (!slice || !m_model->setBackendSliceIqTap(slice->sliceId(), true)) {
+        return false;
+    }
+    m_hostIqSlices.insert(slice->sliceId());
+    // A receiver that moved slices leaves its old tap behind otherwise.
+    reconcileHostIqTaps(slice->sliceId());
+    return true;
+}
+
+void TciServer::reconcileHostIqTaps(int keepSliceId)
+{
+    if (!m_model) {
+        m_hostIqSlices.clear();
+        return;
+    }
+    QSet<int> wanted;
+    if (keepSliceId >= 0) {
+        wanted.insert(keepSliceId);
+    }
+    for (const ClientState& cs : std::as_const(m_clients)) {
+        for (int trx : cs.iqReceivers) {
+            if (SliceModel* slice = sliceForTrx(trx)) {
+                wanted.insert(slice->sliceId());
+            }
+        }
+    }
+    const QSet<int> held = m_hostIqSlices;
+    for (int sliceId : held) {
+        if (!wanted.contains(sliceId)) {
+            m_model->setBackendSliceIqTap(sliceId, false);
+            m_hostIqSlices.remove(sliceId);
+        }
+    }
+    if (m_hostIqSlices.isEmpty()) {
+        m_hostIqRate = 0;
+    }
+}
+
+void TciServer::onSliceIqReady(int sliceId, const QByteArray& iqFloat32, int sampleRate)
+{
+    if (!m_hostIqSlices.contains(sliceId) || sampleRate <= 0) {
+        return;
+    }
+    // The rate is the radio's, not a negotiated one: say so when it first
+    // shows or changes, so a client's FFT axis matches the frames.
+    if (sampleRate != m_hostIqRate) {
+        m_hostIqRate = sampleRate;
+        m_announcedIqSampleRate = sampleRate;
+        for (ClientState& cs : m_clients) {
+            if (cs.protocol) {
+                cs.protocol->setIqSampleRate(sampleRate);
+            }
+        }
+        broadcast(QStringLiteral("iq_samplerate:%1;").arg(sampleRate));
+    }
+
+    const auto* samples = reinterpret_cast<const float*>(iqFloat32.constData());
+    const int iqFrames = static_cast<int>(iqFloat32.size() / (2 * sizeof(float)));
+    if (iqFrames <= 0) {
+        return;
+    }
+    // Every receiver on this slice, each with its own index in the header.
+    // Sorted so the send order is reproducible, as in onIqDataReady().
+    QList<int> receivers;
+    for (const auto& cs : m_clients) {
+        for (int trx : cs.iqReceivers) {
+            SliceModel* slice = sliceForTrx(trx);
+            if (slice && slice->sliceId() == sliceId && !receivers.contains(trx)) {
+                receivers.append(trx);
+            }
+        }
+    }
+    std::sort(receivers.begin(), receivers.end());
+    for (int trx : std::as_const(receivers)) {
+        const QByteArray frame = buildAudioFrame(trx, 0 /*IQ*/, sampleRate, 2,
+                                                 samples, iqFrames);
+        for (auto& cs : m_clients) {
+            if (cs.iqReceivers.contains(trx))
+                cs.socket->sendBinaryMessage(frame);
+        }
+    }
+}
+
 void TciServer::releaseIqStreamIfUnused(int trx)
 {
     if (!m_model || trx < 0 || trx >= DaxIqModel::NUM_CHANNELS) {
+        return;
+    }
+    if (!m_hostIqSlices.isEmpty()) {
+        reconcileHostIqTaps();
         return;
     }
     const int channel = iqChannelForTrx(trx);
@@ -4053,6 +4159,11 @@ void TciServer::releaseAllIqStreams()
         resetIqStreamBookkeeping();
         return;
     }
+    for (int sliceId : std::as_const(m_hostIqSlices)) {
+        m_model->setBackendSliceIqTap(sliceId, false);
+    }
+    m_hostIqSlices.clear();
+    m_hostIqRate = 0;
     const QSet<int> owned = m_tciIqChannels;
     for (int channel : owned) {
         releaseIqChannel(channel);
@@ -4068,6 +4179,8 @@ void TciServer::releaseAllIqStreams()
 
 void TciServer::resetIqStreamBookkeeping()
 {
+    m_hostIqSlices.clear();
+    m_hostIqRate = 0;
     m_tciIqChannels.clear();
     m_iqCreateInFlight.clear();
     m_pendingIqRemovals.clear();
@@ -4076,6 +4189,10 @@ void TciServer::resetIqStreamBookkeeping()
 
 int TciServer::achievedIqSampleRate() const
 {
+    // Host IQ: the rate the radio's frames actually carry.
+    if (m_hostIqRate > 0) {
+        return m_hostIqRate;
+    }
     if (m_model) {
         QList<int> channels(m_tciIqChannels.cbegin(), m_tciIqChannels.cend());
         std::sort(channels.begin(), channels.end());

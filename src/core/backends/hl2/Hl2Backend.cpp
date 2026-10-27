@@ -965,6 +965,22 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
         mixReceiverAudio(ids->ddcIndex, pcm);
     });
 
+    connect(dsp, &Hl2RxDsp::iqReady, this,
+            [this, ui, producer = QPointer<Hl2RxDsp>(dsp)](const std::vector<float>& iq) {
+        const auto* ids = m_ids.byUi(ui);
+        const Receiver* receiver = ids ? rx(ids->ddcIndex) : nullptr;
+        if (!producer || !receiver || receiver->dsp != producer.data()
+            || !m_iqTapUis.contains(ui)) {
+            return;
+        }
+        // The rate this chain was built for: during a rebuild m_sampleRateHz
+        // is already the rate being attempted.
+        const int rate = receiver->configuredRateHz > 0 ? receiver->configuredRateHz
+                                                        : m_sampleRateHz;
+        emit sliceIqFrameReady(ui, floatBytes(iq), rate);
+    });
+    dsp->setIqTap(m_iqTapUis.contains(ui));
+
     connect(dsp, &Hl2RxDsp::meterUpdate, this,
             [this, ui, producer = QPointer<Hl2RxDsp>(dsp)](float dbfs) {
         const auto* ids = m_ids.byUi(ui);
@@ -3415,6 +3431,25 @@ ReceiveDispatch Hl2Backend::requestSliceSquelch(int sliceId, const SliceSquelchR
     }
     setSliceSquelch(sliceId, request.enabled, request.level);
     return ReceiveDispatch::Dispatched;
+}
+
+bool Hl2Backend::setSliceIqTap(int sliceId, bool on)
+{
+    const auto* ids = m_ids.byUi(sliceId);
+    Receiver* r = ids ? rx(ids->ddcIndex) : nullptr;
+    if (on && !r) {
+        return false;
+    }
+    if (on) {
+        m_iqTapUis.insert(sliceId);
+    } else {
+        m_iqTapUis.remove(sliceId);
+    }
+    // An atomic on the DSP, so no hop to the I/O thread is needed.
+    if (r && r->dsp) {
+        r->dsp->setIqTap(on);
+    }
+    return true;
 }
 
 ReceiveDispatch Hl2Backend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)

@@ -357,6 +357,10 @@ public:
     // Non-inline: IRadioBackend is only forward-declared here.
     RadioCapabilities backendCapabilities() const;
 
+    // Start or stop backendSliceIqFrameReady for one slice; false when the
+    // backend has no raw IQ of its own (IRadioBackend::setSliceIqTap).
+    bool setBackendSliceIqTap(int sliceId, bool on);
+
     // The connected backend's health/status registers, for the Radio Health
     // dialog. Empty when no backend is connected or the family reports none —
     // which the dialog renders as "this radio reports no health registers"
@@ -1260,6 +1264,8 @@ signals:
     // Only a backend that demodulates in this process emits it; Flex per-slice
     // audio arrives as DAX channels instead.
     void backendSliceAudioFrameReady(int sliceId, const AetherSDR::PcmFrame& pcm);
+    // ONE slice's raw IQ, relayed from IRadioBackend::sliceIqFrameReady.
+    void backendSliceIqFrameReady(int sliceId, const QByteArray& iqFloat32, int sampleRate);
 
     // Normalized demodulated-RX-audio bus: the audio the operator hears (24 kHz
     // stereo), whoever produced it. Exactly one producer is bound, chosen only

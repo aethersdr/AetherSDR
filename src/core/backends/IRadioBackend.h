@@ -392,6 +392,9 @@ public:
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSliceSquelch(int, const SliceSquelchRequest&)
     { return ReceiveDispatch::Unsupported; }
+    // Start or stop sliceIqFrameReady for one slice. False when this backend
+    // has no raw IQ of its own to hand out; Flex's IQ is a DAX stream instead.
+    virtual bool setSliceIqTap(int, bool) { return false; }
     virtual ReceiveDispatch requestSliceRxAntenna(int, const QString&)
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSliceLock(int, bool)
@@ -1269,6 +1272,11 @@ signals:
     // PRE-mute, PRE-gain and PRE-balance, like Flex DAX: muting a slice must not stop
     // a decoder on it. Flex does not emit this; its DAX channels are per-slice.
     void sliceAudioFrameReady(int sliceId, const AetherSDR::PcmFrame& pcm);
+    // ONE slice's raw IQ while setSliceIqTap() has it on: native float32 I,Q
+    // pairs centred on the slice's pan centre, a signal above the centre at
+    // positive frequency. For TCI IQ on a backend that demodulates in this
+    // process.
+    void sliceIqFrameReady(int sliceId, const QByteArray& iqFloat32, int sampleRate);
 
 
     // The pan's front end is WIDE: the hardware band filter cannot serve every
