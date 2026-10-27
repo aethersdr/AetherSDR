@@ -1,11 +1,13 @@
 #include "UpdateController.h"
 
+#include "LinuxInstall.h"
 #include "LogManager.h"
 #include "UpdateInstaller.h"
 #include "UpdateSettings.h"
 #include "VersionNumber.h"
 
 #include <QCoreApplication>
+#include <QFileInfo>
 #include <QSysInfo>
 
 namespace AetherSDR {
@@ -23,9 +25,18 @@ UpdateController::Environment UpdateController::forThisApp()
 #endif
     env.request.arch = QSysInfo::buildCpuArchitecture();
     env.request.installRoot = QCoreApplication::applicationDirPath();
+#if defined(Q_OS_LINUX)
+    // The release tree, whose root the manifest's paths start from (AppRun,
+    // usr/bin/AetherSDR), not the binary's own folder.
+    if (const QString tree = LinuxInstall::treeOf(LinuxInstall::binaryDir(), LinuxInstall::forThisUser().base);
+        !tree.isEmpty()) {
+        env.request.installRoot = tree;
+    }
+#endif
     env.request.stagingRoot = UpdateInstaller::stateDir();
-    // The portable zip is the tree setup.exe installs, so either install
-    // can take it when no patch applies.
+    // Windows: the portable zip is the tree setup.exe installs, so either
+    // install can take it when no patch applies. Linux: the tarball is the
+    // installed tree.
     env.request.fullFallback = true;
     env.canInstall = [](QString* why) { return UpdateInstaller::canInstallInPlace(why); };
     env.launchHelper = [](const QString& dir, const QString& version, bool restart, QString* problem) {
@@ -216,6 +227,12 @@ bool UpdateController::handOver(bool restart, QString* problemOut)
     }
     if (!m_env.launchHelper || !m_env.launchHelper(m_staged.dir, m_staged.version, restart, &why)) {
         *problem = why.isEmpty() ? tr("The updater could not be started.") : why;
+        // On Linux the hand-over is the switch itself: a release that failed
+        // its self-test there is gone, and nothing is staged any more.
+        if (!QFileInfo::exists(m_staged.dir)) {
+            UpdateStager::discard(r.stagingRoot, m_staged.version);
+            setState(State::Idle, {});
+        }
         return false;
     }
     const QString version = m_staged.version;

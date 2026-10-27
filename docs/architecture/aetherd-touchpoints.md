@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 274 touchpoint headers (223 core, 51 models) — 274/274 tagged, 0/274 converted.
+**Totals:** 275 touchpoint headers (224 core, 51 models) — 275/275 tagged, 0/275 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -88,6 +88,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/Kpa500FaultHistory.h` | 1 | peripheral(elecraft) — Pure decoder for the KPA500 peripheral stored fault ring; no radio-family transport. See docs/architecture/elecraft-kpa500-kat500-design.md. | unconverted |
 | `core/Kpa500Maintenance.h` | 1 | peripheral(elecraft) — Bounded KPA500 maintenance framing and configuration file codec; independent peripheral, no radio-family transport. See docs/architecture/elecraft-kpa500-kat500-design.md. | unconverted |
 | `core/Kpa500Protocol.h` | 1 | peripheral(elecraft) — Frame parser, status snapshot and command builders for the KPA500 '^CMD;' text protocol — the codec half of core/Kpa500Connection.h. A standalone accessory's own transport with no radio-family awareness, same precedent as core/AcomProtocol.h. Authority: KPA500 Programmer's Reference Rev. A2. | unconverted |
+| `core/LinuxInstall.h` | 1 | ui-support — App self-update on Linux: the install --install makes and the switch to a staged release after its self-test; pure client plumbing, no radio state. | unconverted |
 | `core/LocationAddressResolver.h` | 1 | ui-support — Reverse-geocoding helper backing the GPS location dialog. Network/OS plumbing; no radio state. | unconverted |
 | `core/LogManager.h` | 34 | ui-support — App-wide diagnostic logging: category registry, log file/retention, runtime toggles. Plumbing, not radio state. | unconverted |
 | `core/LpMeterConnection.h` | 3 | peripheral(lp100a) — Direct serial/ser2net client for the TelePost LP-100A digital vector RF wattmeter — a standalone RS-232 instrument with no FlexRadio awareness at all, same precedent as core/AcomConnection.h and core/SpeConnection.h. Poll-only (the meter never pushes), and the transport is commonly shared with other polling clients, so the poll loop is gated rather than free-running. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/lp-100a-wattmeter-design.md. | unconverted |

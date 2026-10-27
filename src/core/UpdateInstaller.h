@@ -5,13 +5,14 @@
 
 namespace AetherSDR {
 
-// The app's side of putting a staged update in place (RFC #5304 Phase 3,
-// Windows): it hands the staged release to AetherSDRUpdater.exe, which swaps
-// it in after AetherSDR exits (src/updater/UpdateSwap.h), and at the next
-// start reads what the helper did.
-//
-// The helper is copied out of the install before it runs, into stateDir():
-// it renames the install, so it must not be running from inside it.
+// The app's side of putting a staged update in place (RFC #5304). On
+// Windows (Phase 3) it hands the staged release to AetherSDRUpdater.exe,
+// which swaps it in after AetherSDR exits (src/updater/UpdateSwap.h). The
+// helper is copied out of the install before it runs, into stateDir(): it
+// renames the install, so it must not be running from inside it. On Linux
+// (Phase 5) there is no helper: the release goes in beside the running one
+// and becomes current (LinuxInstall). Either way the next start reads what
+// happened.
 class UpdateInstaller {
 public:
     // Per-user app data, outside the install: the staged release, the
@@ -19,11 +20,12 @@ public:
     // here.
     static QString stateDir();
 
-    // Whether this copy can update itself in place: Windows, not a store
+    // Whether this copy can update itself in place. Windows: not a store
     // install, not elevated across a UAC boundary, AetherSDRUpdater.exe
     // beside the app, and the install's parent writable (the swap renames
-    // the install there). Otherwise why says so, and the Updates window
-    // offers the download in the browser.
+    // the install there). Linux: an install AetherSDR --install made, its
+    // folder writable. Otherwise why says so, and the Updates window offers
+    // the download in the browser.
     static bool canInstallInPlace(QString* why = nullptr);
 
     // AetherSDRUpdater's command line (protocol 1, src/updater/main_win.cpp).
@@ -31,10 +33,13 @@ public:
                                        const QString& stagedDir, const QString& stateDir,
                                        const QString& version, bool restart);
 
-    // Copies the helper beside the state and starts it, waiting for this
-    // process to exit. restart: start the app again when done (Restart to
-    // update); otherwise the swap happens as AetherSDR quits. Windows only;
-    // false with problem set elsewhere or when the helper cannot start.
+    // Windows: copies the helper beside the state and starts it, waiting for
+    // this process to exit. Linux: switches to the staged release now,
+    // after its self-test (LinuxInstall::switchTo); a release that fails it
+    // is removed and remembered as rolled back. restart: start the app
+    // again once this one has exited (Restart to update); otherwise it
+    // takes effect as AetherSDR quits. False with problem set when nothing
+    // was handed over, and elsewhere.
     static bool launchHelper(const QString& stagedDir, const QString& version, bool restart,
                              QString* problem);
 

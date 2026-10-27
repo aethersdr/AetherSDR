@@ -4767,6 +4767,16 @@ target_link_libraries(update_installer_test PRIVATE aethercore Qt6::Core Qt6::Te
 set_target_properties(update_installer_test PROPERTIES AUTOMOC ON)
 add_test(NAME update_installer_test COMMAND update_installer_test)
 
+# LinuxInstall (RFC #5304 Phase 5): what --install makes (the release copied,
+# current, the menu entry, icon and command), the switch to a staged release
+# with its self-test and cleanup, and the relaunch after exit. Temporary
+# folders only. Skips on Windows.
+add_executable(linux_install_test tests/linux_install_test.cpp)
+target_include_directories(linux_install_test PRIVATE src tests)
+target_link_libraries(linux_install_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(linux_install_test PROPERTIES AUTOMOC ON)
+add_test(NAME linux_install_test COMMAND linux_install_test)
+
 # AetherSDRUpdater's folder swap (RFC #5304 Phase 3): UpdateSwap's state
 # machine on a simulated clock with injected processes and rename failures,
 # on every platform; the Win32 entry point is a thin shell over it. No Qt.

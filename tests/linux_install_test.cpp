@@ -1,0 +1,313 @@
+#include "core/LinuxInstall.h"
+
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QProcess>
+#include <QTemporaryDir>
+#include <QtTest>
+
+#include <filesystem>
+
+// LinuxInstall (RFC #5304 Phase 5): the install --install makes, the switch
+// to a staged release with its self-test and cleanup, and the relaunch after
+// exit. Every path is a temporary folder passed in; the user's own
+// ~/.local is never named.
+
+using namespace AetherSDR;
+namespace fs = std::filesystem;
+
+namespace {
+
+const QByteArray kDesktop = "[Desktop Entry]\nName=AetherSDR\nComment=Linux-native SDR client for FlexRadio\n"
+                            "Exec=AetherSDR\nIcon=aethersdr\nType=Application\nTerminal=false\n"
+                            "StartupWMClass=AetherSDR\n";
+
+void writeFile(const QString& path, const QByteArray& data, bool executable = false)
+{
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile f(path);
+    QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    f.write(data);
+    f.close();
+    if (executable) {
+        f.setPermissions(f.permissions() | QFile::ExeOwner | QFile::ExeUser);
+    }
+}
+
+QByteArray readFile(const QString& path)
+{
+    QFile f(path);
+    return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+}
+
+QString linkTarget(const QString& path)
+{
+    std::error_code ec;
+    return QString::fromStdString(fs::read_symlink(fs::path(path.toStdString()), ec).string());
+}
+
+// A release tree as the tarball holds it. Its binary is a script: run with
+// --update-selftest <marker>, it writes selfTestWrites there and exits with
+// exitCode, which is what the self-test reads.
+void makeTree(const QString& tree, const QByteArray& selfTestWrites, int exitCode = 0)
+{
+    writeFile(tree + QStringLiteral("/usr/bin/AetherSDR"),
+              "#!/bin/sh\n[ \"$1\" = --update-selftest ] && printf %s '" + selfTestWrites + "' > \"$2\"\nexit "
+                  + QByteArray::number(exitCode) + "\n",
+              true);
+    writeFile(tree + QStringLiteral("/usr/lib/libQt6Core.so.6"), "qt");
+    writeFile(tree + QStringLiteral("/usr/share/applications/AetherSDR.desktop"), kDesktop);
+    writeFile(tree + QStringLiteral("/usr/share/icons/hicolor/256x256/apps/aethersdr.png"), "png");
+    std::error_code ec;
+    fs::create_symlink("usr/bin/AetherSDR", fs::path((tree + QStringLiteral("/AppRun")).toStdString()), ec);
+    QVERIFY(!ec);
+}
+
+LinuxInstall::Paths pathsIn(const QString& root)
+{
+    return {root + QStringLiteral("/data/AetherSDR/install"), root + QStringLiteral("/bin"),
+            root + QStringLiteral("/data/applications"), root + QStringLiteral("/data/icons/hicolor")};
+}
+
+} // namespace
+
+class LinuxInstallTest : public QObject {
+    Q_OBJECT
+
+private slots:
+    void initTestCase()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("the Linux install");
+#endif
+    }
+
+    void theTreeIsAVersionFolderOfTheBase()
+    {
+        QTemporaryDir tmp;
+        const QString base = tmp.filePath(QStringLiteral("install"));
+        QDir().mkpath(base + QStringLiteral("/26.10.4/usr/bin"));
+        QDir().mkpath(base + QStringLiteral("/latest/usr/bin"));
+        QDir().mkpath(base + QStringLiteral("/26.10.4/bin"));
+        QDir().mkpath(tmp.filePath(QStringLiteral("elsewhere/26.10.4/usr/bin")));
+        const QString tree = QFileInfo(base + QStringLiteral("/26.10.4")).canonicalFilePath();
+        QCOMPARE(LinuxInstall::treeOf(base + QStringLiteral("/26.10.4/usr/bin"), base), tree);
+        QVERIFY(LinuxInstall::treeOf(base + QStringLiteral("/latest/usr/bin"), base).isEmpty());
+        QVERIFY(LinuxInstall::treeOf(base + QStringLiteral("/26.10.4/bin"), base).isEmpty());
+        QVERIFY(LinuxInstall::treeOf(tmp.filePath(QStringLiteral("elsewhere/26.10.4/usr/bin")), base).isEmpty());
+        QVERIFY(LinuxInstall::treeOf(base + QStringLiteral("/26.10.4/usr/bin"), QString()).isEmpty());
+        QVERIFY(LinuxInstall::treeOf(QString(), base).isEmpty());
+        // Reached through current, it is still that version's tree.
+        std::error_code ec;
+        fs::create_symlink("26.10.4", fs::path((base + QStringLiteral("/current")).toStdString()), ec);
+        QCOMPARE(LinuxInstall::treeOf(base + QStringLiteral("/current/usr/bin"), base), tree);
+    }
+
+    void installCopiesTheReleaseAndPointsTheMenuIconAndCommandAtCurrent()
+    {
+        QTemporaryDir tmp;
+        // A home with a space and a dollar in it: the menu entry must quote.
+        const QString root = tmp.filePath(QStringLiteral("Ham $Radio"));
+        const LinuxInstall::Paths paths = pathsIn(root);
+        const QString source = tmp.filePath(QStringLiteral("AetherSDR-v26.10.4-x86_64"));
+        makeTree(source, "26.10.4");
+        QString problem;
+        QString note;
+        QVERIFY2(LinuxInstall::install(source, QStringLiteral("26.10.4"), paths, &problem, &note), qPrintable(problem));
+        QVERIFY(note.isEmpty());
+        const QString dest = paths.base + QStringLiteral("/26.10.4");
+        QCOMPARE(readFile(dest + QStringLiteral("/usr/lib/libQt6Core.so.6")), QByteArray("qt"));
+        QCOMPARE(linkTarget(dest + QStringLiteral("/AppRun")), QStringLiteral("usr/bin/AetherSDR"));
+        QVERIFY(QFileInfo(dest + QStringLiteral("/usr/bin/AetherSDR")).isExecutable());
+        QCOMPARE(linkTarget(paths.base + QStringLiteral("/current")), QStringLiteral("26.10.4"));
+        QVERIFY(QFileInfo::exists(source + QStringLiteral("/usr/bin/AetherSDR")));   // the tarball's copy kept
+
+        const QString run = paths.base + QStringLiteral("/current/AppRun");
+        const QString desktop = QString::fromUtf8(readFile(paths.applications + QStringLiteral("/AetherSDR.desktop")));
+        QString quoted = run;
+        quoted.replace(QLatin1Char('$'), QStringLiteral("\\$"));
+        quoted = QLatin1Char('"') + quoted + QLatin1Char('"');
+        quoted.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+        QVERIFY2(desktop.contains(QStringLiteral("\nExec=") + quoted + QLatin1Char('\n')), qPrintable(desktop));
+        QVERIFY(desktop.contains(QStringLiteral("\nTryExec=") + run + QLatin1Char('\n')));
+        QVERIFY(desktop.contains(QStringLiteral("\nIcon=aethersdr\n")));
+        QVERIFY(desktop.contains(QStringLiteral("\nStartupWMClass=AetherSDR\n")));
+        QCOMPARE(desktop.count(QStringLiteral("Exec=")), 2);   // Exec and TryExec, once each
+
+        QCOMPARE(linkTarget(paths.icons + QStringLiteral("/256x256/apps/aethersdr.png")),
+                 paths.base + QStringLiteral("/current/usr/share/icons/hicolor/256x256/apps/aethersdr.png"));
+        QCOMPARE(readFile(paths.icons + QStringLiteral("/256x256/apps/aethersdr.png")), QByteArray("png"));
+        QCOMPARE(linkTarget(paths.bin + QStringLiteral("/aethersdr")), run);
+    }
+
+    void installLeavesTheUsersOwnCommandAndIconAlone()
+    {
+        QTemporaryDir tmp;
+        const LinuxInstall::Paths paths = pathsIn(tmp.path());
+        writeFile(paths.bin + QStringLiteral("/aethersdr"), "#!/bin/sh\necho mine\n", true);
+        writeFile(paths.icons + QStringLiteral("/256x256/apps/aethersdr.png"), "my own icon");
+        const QString source = tmp.filePath(QStringLiteral("tarball"));
+        makeTree(source, "26.10.4");
+        QString problem;
+        QString note;
+        QVERIFY2(LinuxInstall::install(source, QStringLiteral("26.10.4"), paths, &problem, &note), qPrintable(problem));
+        QVERIFY(note.contains(paths.bin + QStringLiteral("/aethersdr")));
+        QCOMPARE(readFile(paths.bin + QStringLiteral("/aethersdr")), QByteArray("#!/bin/sh\necho mine\n"));
+        QCOMPARE(readFile(paths.icons + QStringLiteral("/256x256/apps/aethersdr.png")), QByteArray("my own icon"));
+    }
+
+    void installAgainReplacesThatVersionOrOnlyRedoesTheLinks()
+    {
+        QTemporaryDir tmp;
+        const LinuxInstall::Paths paths = pathsIn(tmp.path());
+        const QString first = tmp.filePath(QStringLiteral("first"));
+        makeTree(first, "26.10.4");
+        QString problem;
+        QVERIFY2(LinuxInstall::install(first, QStringLiteral("26.10.4"), paths, &problem), qPrintable(problem));
+        const QString dest = paths.base + QStringLiteral("/26.10.4");
+        // From the installed tree itself: nothing is copied or removed.
+        QFile::remove(paths.applications + QStringLiteral("/AetherSDR.desktop"));
+        QVERIFY2(LinuxInstall::install(dest, QStringLiteral("26.10.4"), paths, &problem), qPrintable(problem));
+        QCOMPARE(readFile(dest + QStringLiteral("/usr/lib/libQt6Core.so.6")), QByteArray("qt"));
+        QVERIFY(QFileInfo::exists(paths.applications + QStringLiteral("/AetherSDR.desktop")));
+        // Another copy of the same version replaces it whole.
+        const QString second = tmp.filePath(QStringLiteral("second"));
+        makeTree(second, "26.10.4");
+        writeFile(second + QStringLiteral("/usr/lib/libQt6Core.so.6"), "qt, again");
+        writeFile(dest + QStringLiteral("/usr/lib/stale.so"), "from the first");
+        QVERIFY2(LinuxInstall::install(second, QStringLiteral("26.10.4"), paths, &problem), qPrintable(problem));
+        QCOMPARE(readFile(dest + QStringLiteral("/usr/lib/libQt6Core.so.6")), QByteArray("qt, again"));
+        QVERIFY(!QFileInfo::exists(dest + QStringLiteral("/usr/lib/stale.so")));
+        QCOMPARE(QDir(paths.base).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot),
+                 (QStringList{QStringLiteral("26.10.4"), QStringLiteral("current")}));
+    }
+
+    void installRefusesWhatIsNotARelease()
+    {
+        QTemporaryDir tmp;
+        const LinuxInstall::Paths paths = pathsIn(tmp.path());
+        const QString source = tmp.filePath(QStringLiteral("tarball"));
+        makeTree(source, "26.10.4");
+        QString problem;
+        QVERIFY(!LinuxInstall::install(source, QStringLiteral("latest"), paths, &problem));
+        QVERIFY(!LinuxInstall::install(source, QStringLiteral("../26.10.4"), paths, &problem));
+        QVERIFY(!LinuxInstall::install(tmp.filePath(QStringLiteral("nothing")), QStringLiteral("26.10.4"), paths,
+                                       &problem));
+        QFile::remove(source + QStringLiteral("/AppRun"));
+        QVERIFY(!LinuxInstall::install(source, QStringLiteral("26.10.4"), paths, &problem));
+        QVERIFY(!problem.isEmpty());
+        QVERIFY(!QFileInfo::exists(paths.base + QStringLiteral("/current")));
+        QVERIFY(!QFileInfo::exists(paths.applications));
+    }
+
+    void theSwitchMakesAPassingReleaseCurrentAndKeepsOnlyTheOneItReplaced()
+    {
+        QTemporaryDir tmp;
+        const LinuxInstall::Paths paths = pathsIn(tmp.path());
+        for (const char* v : {"26.10.2", "26.10.3"}) {
+            const QString t = tmp.filePath(QString::fromLatin1(v));
+            makeTree(t, v);
+            QString problem;
+            QVERIFY2(LinuxInstall::install(t, QString::fromLatin1(v), paths, &problem), qPrintable(problem));
+        }
+        QDir().mkpath(paths.base + QStringLiteral("/.partial-left-by-a-crash"));
+        writeFile(paths.base + QStringLiteral("/README"), "not a release");
+        const QString staged = tmp.filePath(QStringLiteral("state/update/26.10.4"));
+        makeTree(staged, "26.10.4");
+        QStringList tested;
+        const auto passes = [&tested](const QString& tree, const QString& version) {
+            tested << tree << version;
+            return true;
+        };
+        QString problem;
+        QVERIFY2(LinuxInstall::switchTo(paths.base, staged, QStringLiteral("26.10.4"), QStringLiteral("26.10.3"),
+                                        passes, &problem),
+                 qPrintable(problem));
+        // The test ran on the tree in its final place, before it became current.
+        QCOMPARE(tested, (QStringList{paths.base + QStringLiteral("/26.10.4"), QStringLiteral("26.10.4")}));
+        QCOMPARE(linkTarget(paths.base + QStringLiteral("/current")), QStringLiteral("26.10.4"));
+        QVERIFY(!QFileInfo::exists(staged));
+        QCOMPARE(QDir(paths.base).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot),
+                 (QStringList{QStringLiteral("26.10.3"), QStringLiteral("26.10.4"), QStringLiteral("current"),
+                              QStringLiteral("README")}));
+        // The menu entry and command follow current with no rewrite.
+        QCOMPARE(QFileInfo(paths.bin + QStringLiteral("/aethersdr")).canonicalFilePath(),
+                 QFileInfo(paths.base + QStringLiteral("/26.10.4/usr/bin/AetherSDR")).canonicalFilePath());
+    }
+
+    void aReleaseThatFailsItsSelfTestIsRemovedAndCurrentIsUntouched()
+    {
+        QTemporaryDir tmp;
+        const LinuxInstall::Paths paths = pathsIn(tmp.path());
+        const QString old = tmp.filePath(QStringLiteral("old"));
+        makeTree(old, "26.10.3");
+        QString problem;
+        QVERIFY(LinuxInstall::install(old, QStringLiteral("26.10.3"), paths, &problem));
+        const QString staged = tmp.filePath(QStringLiteral("state/update/26.10.4"));
+        makeTree(staged, "26.10.4");
+        QVERIFY(!LinuxInstall::switchTo(paths.base, staged, QStringLiteral("26.10.4"), QStringLiteral("26.10.3"),
+                                        [](const QString&, const QString&) { return false; }, &problem));
+        QVERIFY(problem.contains(QLatin1String("26.10.4")));
+        QCOMPARE(linkTarget(paths.base + QStringLiteral("/current")), QStringLiteral("26.10.3"));
+        QVERIFY(!QFileInfo::exists(paths.base + QStringLiteral("/26.10.4")));
+        QVERIFY(!QFileInfo::exists(staged));
+        QVERIFY(QFileInfo::exists(paths.base + QStringLiteral("/26.10.3/usr/bin/AetherSDR")));
+    }
+
+    void theSwitchRefusesTheCurrentReleaseAndTheRunningOne()
+    {
+        QTemporaryDir tmp;
+        const LinuxInstall::Paths paths = pathsIn(tmp.path());
+        const QString source = tmp.filePath(QStringLiteral("t"));
+        makeTree(source, "26.10.4");
+        QString problem;
+        QVERIFY(LinuxInstall::install(source, QStringLiteral("26.10.4"), paths, &problem));
+        const QString staged = tmp.filePath(QStringLiteral("state/update/26.10.4"));
+        makeTree(staged, "26.10.4");
+        const auto passes = [](const QString&, const QString&) { return true; };
+        QVERIFY(!LinuxInstall::switchTo(paths.base, staged, QStringLiteral("26.10.4"), QStringLiteral("26.10.3"),
+                                        passes, &problem));
+        QVERIFY(!LinuxInstall::switchTo(paths.base, staged, QStringLiteral("26.10.3"), QStringLiteral("26.10.3"),
+                                        passes, &problem));
+        QVERIFY(!LinuxInstall::switchTo(paths.base, staged, QStringLiteral("../x"), QStringLiteral("26.10.3"),
+                                        passes, &problem));
+        // Nothing moved: the installed tree and the staged one are as they were.
+        QVERIFY(QFileInfo::exists(staged + QStringLiteral("/usr/bin/AetherSDR")));
+        QVERIFY(QFileInfo::exists(paths.base + QStringLiteral("/26.10.4/usr/bin/AetherSDR")));
+        QCOMPARE(linkTarget(paths.base + QStringLiteral("/current")), QStringLiteral("26.10.4"));
+    }
+
+    void theSelfTestRunsAppRunAndReadsItsVersion()
+    {
+        QTemporaryDir tmp;
+        const QString good = tmp.filePath(QStringLiteral("good"));
+        makeTree(good, "26.10.4");
+        QVERIFY(LinuxInstall::selfTest(good, QStringLiteral("26.10.4")));
+        // The old binary left in place, a crash after writing, a missing AppRun.
+        QVERIFY(!LinuxInstall::selfTest(good, QStringLiteral("26.10.5")));
+        const QString crashes = tmp.filePath(QStringLiteral("crashes"));
+        makeTree(crashes, "26.10.4", 1);
+        QVERIFY(!LinuxInstall::selfTest(crashes, QStringLiteral("26.10.4")));
+        QVERIFY(!LinuxInstall::selfTest(tmp.filePath(QStringLiteral("none")), QStringLiteral("26.10.4")));
+    }
+
+    void theRelaunchWaitsForTheQuittingProcess()
+    {
+        QTemporaryDir tmp;
+        const QString started = tmp.filePath(QStringLiteral("started"));
+        const QString program = tmp.filePath(QStringLiteral("program"));
+        writeFile(program, "#!/bin/sh\ntouch '" + started.toUtf8() + "'\n", true);
+        QProcess quitting;
+        quitting.start(QStringLiteral("sleep"), {QStringLiteral("1")});
+        QVERIFY(quitting.waitForStarted());
+        QVERIFY(LinuxInstall::startAfterExit(quitting.processId(), program));
+        QTest::qWait(400);
+        QVERIFY(!QFileInfo::exists(started));
+        QVERIFY(quitting.waitForFinished(5000));
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(started), 5000);
+    }
+};
+
+QTEST_GUILESS_MAIN(LinuxInstallTest)
+#include "linux_install_test.moc"

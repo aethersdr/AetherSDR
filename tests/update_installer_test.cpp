@@ -6,6 +6,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -112,12 +113,22 @@ private slots:
                                                       QStringLiteral("26.10.4")));
     }
 
-    void launchingIsWindowsOnly()
+    void onlyAnInstalledCopyUpdatesInPlace()
     {
 #ifndef Q_OS_WIN
+        // This test binary is no installed release: it says why, and hands
+        // nothing over.
+        QString why;
+        QVERIFY(!UpdateInstaller::canInstallInPlace(&why));
         QString problem;
         QVERIFY(!UpdateInstaller::launchHelper(QStringLiteral("x"), QStringLiteral("26.10.4"), true, &problem));
-        QVERIFY(problem.contains(QLatin1String("Windows")));
+#ifdef Q_OS_LINUX
+        QVERIFY(why.contains(QLatin1String("--install")));
+        QVERIFY(problem.contains(QLatin1String("--install")));
+#else
+        QVERIFY(!why.isEmpty() && !problem.isEmpty());
+#endif
+        QVERIFY(!QFileInfo::exists(QDir(UpdateInstaller::stateDir()).filePath(QStringLiteral("swap-result.txt"))));
 #endif
     }
 };

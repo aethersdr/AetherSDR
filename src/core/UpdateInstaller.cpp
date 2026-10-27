@@ -1,8 +1,10 @@
 #include "UpdateInstaller.h"
 
+#include "LinuxInstall.h"
 #include "LogManager.h"
 #include "UpdateChecker.h"
 #include "UpdateSettings.h"
+#include "UpdateStager.h"
 #include "updater/UpdateSwap.h"
 
 #include <QCoreApplication>
@@ -101,8 +103,21 @@ bool UpdateInstaller::canInstallInPlace(QString* why)
             reason = QStringLiteral("The folder AetherSDR is installed in can't be changed by this user.");
         }
     }
+#elif defined(Q_OS_LINUX)
+    const LinuxInstall::Paths paths = LinuxInstall::forThisUser();
+    if (LinuxInstall::treeOf(LinuxInstall::binaryDir(), paths.base).isEmpty()) {
+        reason = qEnvironmentVariableIsSet("APPIMAGE")
+                     ? QStringLiteral("The AppImage updates by downloading the new one.")
+                     : QStringLiteral("This copy wasn't installed with AetherSDR --install.");
+    } else {
+        // The new release goes in beside this one: try what the switch will do.
+        QTemporaryFile probe(QDir(paths.base).filePath(QStringLiteral(".aethersdr-update-XXXXXX")));
+        if (!probe.open()) {
+            reason = QStringLiteral("The folder AetherSDR is installed in can't be changed by this user.");
+        }
+    }
 #else
-    reason = QStringLiteral("Installing updates in place is Windows-only for now.");
+    reason = QStringLiteral("Installing updates in place isn't available on this system.");
 #endif
     if (why) {
         *why = reason;
@@ -141,11 +156,55 @@ bool UpdateInstaller::launchHelper(const QString& stagedDir, const QString& vers
     qCInfo(lcUpdater).noquote() << "updater started for v" + version
                                        + (restart ? " (restart)" : " (on quit)");
     return true;
+#elif defined(Q_OS_LINUX)
+    // No helper on Linux: the new release goes in beside this one and becomes
+    // current now, which the running app never notices; the result is
+    // reported at the next start, as the helper's is.
+    const LinuxInstall::Paths paths = LinuxInstall::forThisUser();
+    const QString running = LinuxInstall::treeOf(LinuxInstall::binaryDir(), paths.base);
+    const QString state = stateDir();
+    const auto record = [&state, &version](updater::Outcome outcome) {
+        QDir().mkpath(state);
+        QSaveFile f(QDir(state).filePath(QStringLiteral("swap-result.txt")));
+        if (f.open(QIODevice::WriteOnly)) {
+            f.write(QByteArray(updater::outcomeName(outcome)) + ' ' + version.toUtf8() + '\n');
+            f.commit();
+        }
+    };
+    if (running.isEmpty()) {
+        *problem = QStringLiteral("This copy wasn't installed with AetherSDR --install.");
+        return false;
+    }
+    if (!LinuxInstall::switchTo(paths.base, stagedDir, version, QFileInfo(running).fileName(),
+                                LinuxInstall::selfTest, problem)) {
+        if (!QFileInfo::exists(stagedDir)) {
+            // It failed its self-test, never to be offered again; or the move
+            // failed, leaving nothing staged to retry. Restart to update
+            // shows that now; a quit leaves it for the next start to say.
+            UpdateSettings::setRolledBackVersion(version);
+            if (!restart) {
+                record(updater::Outcome::RolledBack);
+            }
+        }
+        qCWarning(lcUpdater).noquote() << "update to v" + version + " not installed:" << *problem;
+        return false;
+    }
+    record(updater::Outcome::Updated);
+    // The tree has moved into the install; its record goes with it.
+    UpdateStager::discard(state, version);
+    if (restart) {
+        const QString run = QDir(paths.base).filePath(QStringLiteral("current/AppRun"));
+        if (!LinuxInstall::startAfterExit(QCoreApplication::applicationPid(), run)) {
+            qCWarning(lcUpdater) << "the restart could not be arranged; AetherSDR quits without it";
+        }
+    }
+    qCInfo(lcUpdater).noquote() << "v" + version + " installed" + (restart ? " (restart)" : " (on quit)");
+    return true;
 #else
     Q_UNUSED(stagedDir);
     Q_UNUSED(version);
     Q_UNUSED(restart);
-    *problem = QStringLiteral("Installing updates in place is Windows-only for now.");
+    *problem = QStringLiteral("Installing updates in place isn't available on this system.");
     return false;
 #endif
 }

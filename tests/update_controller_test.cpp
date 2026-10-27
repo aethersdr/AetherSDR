@@ -79,6 +79,7 @@ struct Rig {
     QString staging;
     QList<Launch> launches;
     bool helperStarts = true;
+    bool selfTestFails = false;
     QString rolledBack;
     bool inPlace = true;
 
@@ -119,6 +120,13 @@ struct Rig {
         e.launchHelper = [this](const QString& dir, const QString& version, bool restart, QString* problem) {
             if (!helperStarts) {
                 *problem = QStringLiteral("no helper");
+                return false;
+            }
+            if (selfTestFails) {
+                // Linux's switch: the release moved out of staging and,
+                // failing its self-test, removed.
+                QDir(dir).removeRecursively();
+                *problem = QStringLiteral("failed its start-up check");
                 return false;
             }
             launches.append({dir, version, restart});
@@ -352,6 +360,25 @@ private slots:
         QVERIFY(!c.restartToUpdate(&problem));
         QCOMPARE(problem, QStringLiteral("no helper"));
         QCOMPARE(c.state(), UpdateController::State::Staged);
+    }
+
+    void aReleaseThatFailsTheSwitchLeavesNothingStaged()
+    {
+        Rig rig(m_key);
+        rig.selfTestFails = true;
+        UpdateController c(rig.env());
+        c.install(QStringLiteral("26.10.3"));
+        QVERIFY(waitFor(c, UpdateController::State::Staged));
+        QString problem;
+        QVERIFY(!c.restartToUpdate(&problem));
+        QCOMPARE(problem, QStringLiteral("failed its start-up check"));
+        // Not Restart to update for a tree that is gone, and no record left
+        // to find at the next launch.
+        QCOMPARE(c.state(), UpdateController::State::Idle);
+        QVERIFY(!c.installOnQuit());
+        QVERIFY(!QFileInfo::exists(rig.staging + QStringLiteral("/26.10.3.json")));
+        c.refreshStaged(QStringLiteral("26.10.3"));
+        QCOMPARE(c.state(), UpdateController::State::Idle);
     }
 
     void noPatchAndNoFullReleaseGoesToTheBrowser()
