@@ -10,7 +10,7 @@
 
 AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.10.3** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.10.4** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -37,9 +37,10 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
 - **AetherMap (PSK Reporter) overlays** — optional global precipitation (LibreWXR, with NOAA, ECCC and EUMETNET OPERA regional radar backups and a per-provider legend), NOAA/NWS weather radar with observation playback ([`docs`](docs/psk-reporter-weather-radar.md)) and a NASA/GSFC VIIRS night-lights layer that fades through civil twilight ([`docs`](docs/psk-reporter-city-lights.md)), on both the 2D map and 3D globe
 - **SmartLink remote, remote over CGNAT, and a TCI v2.0 server** — Auth0/TLS WAN operation; an in-radio Tailscale node that carries AetherSDR to a FLEX-8000 or Aurora radio behind CGNAT; and CAT + audio + IQ + CW + spots + tune and receiver events over a single TCI WebSocket
-- **Broad hardware control** — rigctld and virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, Multi-Flex operation alongside SmartSDR/Maestro, and a CTR2-Max relay over Wi-Fi, with negotiated spectrum and CW-text extensions for compatible USB controllers
+- **Broad hardware control** — rigctld and virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, Multi-Flex operation alongside SmartSDR/Maestro, a CTR2-Max relay over Wi-Fi or USB with negotiated spectrum and CW-text extensions for compatible controllers, and touch gestures (pinch-zoom, press-and-hold, kinetic scrolling) on touch screens
 - **Workspace canvas** — place pans and applets freely as resizable, layered items with edge and grid snapping, across several windows if you want them. Named workspaces recall which applets are open as well as where they sit, and bind to radio profiles. Off by default; the Classic shell is unchanged until you enable it
 - **A user guide at [docs.aethersdr.com](https://docs.aethersdr.com)** — Stable and Next versions, a printable PDF manual signed with each release, and a Log Analyzer that reads a log or support bundle in your browser without uploading it
+- **In-app updates** — a check at launch, at most once a day, that lights an UPDATE badge in the title bar, and an Updates window (File → Update...) with the download built for this computer and the radio's firmware releases
 - **Built-in demo mode** — a synthetic backend generating its own RX audio and matching panadapter, with a fault-injection harness, so you can explore the full UI with no radio attached (it cannot transmit)
 
 ---
@@ -102,12 +103,15 @@ FlexRadio remains the supported target:
   receiver, backend-side FFT averaging, the CL1 external 10 MHz reference and
   per-radio state restore (AGC mode and threshold, TUNE power per band, FFT
   averaging, FPS and dBm range, receivers B–D with their own setpoints, and
-  manual notches).
+  manual notches), and the N2ADR IO board's status registers.
 - **Networked Icom** — **early**. CI-V over the RS-BA1 UDP transport, brought up
   on the IC-705 (receive, scope, transmit, FT8) and completed against a live
   IC-7300MK2 (controls, meters, ATU, WSPR, PC Audio routing and the CW decoder).
   The connect path asks the radio for its own CI-V address rather than assuming
-  one. Only the IC-705 and IC-7300MK2 are verified against their own CI-V guides
+  one. On the IC-7300MK2 and IC-705, and on the IC-9700, which is not yet
+  verified, the panadapter runs in SCROLL-F, tuning in place and scrolling at
+  its margins as on a Flex, with Center and Fixed selectable. Only the IC-705
+  and IC-7300MK2 are verified against their own CI-V guides
   — an unrecognised model gets no scope and no transmit rather than optimistic
   defaults. The **IC-7300MK2 over built-in Ethernet/RS-BA1 is supported** as of
   v26.9.5 ([RFC #5517](https://github.com/aethersdr/AetherSDR/issues/5517));
@@ -122,8 +126,9 @@ FlexRadio remains the supported target:
   AGC-T spans −20 to 120 dB, NB2 interpolates over impulses, the status bar
   shows the supply voltage and link, and frequency, mode, step, output level
   and dBm range are remembered per radio. Front-end settings are under Radio
-  Setup → Radio; discovery probes each distinct attached IPv4 subnet. Transmit
-  is a future phase.
+  Setup → Radio, including receive band-pass filters that follow the tuned
+  frequency and a speaker-amplifier mute; discovery probes each distinct
+  attached IPv4 subnet. Transmit is a future phase.
 - **RTL-SDR** — **experimental, receive-only**, bundled in every official
   package. Discovers supported USB dongles through `librtlsdr` and provides one
   panadapter and, at a normal launch, one host-demodulated slice, publishing
@@ -262,7 +267,8 @@ Currently in flight:
   receive control, bounded telemetry and credential-bound transmit grants with
   Flex PTT handoff have landed, and the desktop's slice receive controls travel
   as typed backend requests. Radio Setup, TX Band, USB, profile and memory
-  controls now use that seam too; per-client propagation, transmit for the other
+  controls, slice lifecycle and split routing, and panadapter/waterfall control
+  now use that seam too; per-client propagation, transmit for the other
   families and a thin client to replace direct model access have not.
 - **Non-Flex backends** — Hermes-Lite 2 (experimental), networked Icom (early;
   the IC-7300MK2 over RS-BA1 is supported), and ANAN-G2 and RTL-SDR
@@ -270,11 +276,12 @@ Currently in flight:
   remaining work for each is under [Supported Hardware](#supported-hardware).
 - **Workspace canvas** — an experimental alternative shell; remaining work is
   live cross-window drag and field time against the Classic shell.
-- **CTR2 controller relay** — Wi-Fi operation, with negotiated spectrum/CW
-  text for compatible USB controllers and exclusive USB device ownership.
+- **In-app updates** (RFC #5304) — the check, badge and Updates window ship;
+  the Windows install and restart wiring, then the other platforms, remain.
 - **The visual canon** — the AetherSDR style guide (RFC #6226) is applied one
-  surface at a time; SpotHub, Radio Setup and AetherControl now join the earlier
-  windows, and a single base-token flip comes last.
+  surface at a time; the multiFLEX Dashboard, TX Band Settings, RC-28 mapping
+  and FFTW Wisdom windows now join the earlier ones, and a single base-token flip
+  comes last.
 - **AppSettings nested-JSON refactor** — storage is on SQLite with per-radio
   versioned feature documents; the legacy flat keys still need migrating.
 - **Flathub submission** — the AppStream metainfo and manpage are in; the

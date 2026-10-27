@@ -1,16 +1,19 @@
 #include "UpdateInstaller.h"
 
 #include "LogManager.h"
+#include "UpdateChecker.h"
 #include "UpdateSettings.h"
 #include "updater/UpdateSwap.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QStandardPaths>
+#include <QTemporaryFile>
 
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
@@ -77,6 +80,36 @@ QStringList UpdateInstaller::helperArguments(qint64 pid, const QString& installD
     return args;
 }
 
+bool UpdateInstaller::canInstallInPlace(QString* why)
+{
+    QString reason;
+#ifdef Q_OS_WIN
+    const QString install = QCoreApplication::applicationDirPath();
+    if (!UpdateChecker::storeName().isEmpty()) {
+        reason = QStringLiteral("Updates for this copy come from %1.").arg(UpdateChecker::storeName());
+    } else if (processElevated()) {
+        reason = QStringLiteral("AetherSDR is running as administrator. Run the installer to update a "
+                                "system-wide install.");
+    } else if (!QFileInfo::exists(QDir(install).filePath(kHelper))) {
+        reason = QStringLiteral("This copy has no updater.");
+    } else {
+        // The swap renames the install beside itself: try what it will do.
+        QDir parent(install);
+        parent.cdUp();
+        QTemporaryFile probe(parent.filePath(QStringLiteral(".aethersdr-update-XXXXXX")));
+        if (!probe.open()) {
+            reason = QStringLiteral("The folder AetherSDR is installed in can't be changed by this user.");
+        }
+    }
+#else
+    reason = QStringLiteral("Installing updates in place is Windows-only for now.");
+#endif
+    if (why) {
+        *why = reason;
+    }
+    return reason.isEmpty();
+}
+
 bool UpdateInstaller::launchHelper(const QString& stagedDir, const QString& version, bool restart,
                                    QString* problem)
 {
@@ -117,8 +150,22 @@ bool UpdateInstaller::launchHelper(const QString& stagedDir, const QString& vers
 #endif
 }
 
+namespace {
+UpdateInstaller::SwapResult& lastRead()
+{
+    static UpdateInstaller::SwapResult r;
+    return r;
+}
+} // namespace
+
+UpdateInstaller::SwapResult UpdateInstaller::lastSwapResult()
+{
+    return lastRead();
+}
+
 UpdateInstaller::SwapResult UpdateInstaller::takeSwapResult(const QString& stateDir)
 {
+    lastRead() = {};
     const QString path = QDir(stateDir).filePath(QStringLiteral("swap-result.txt"));
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
@@ -139,6 +186,7 @@ UpdateInstaller::SwapResult UpdateInstaller::takeSwapResult(const QString& state
     if (r.outcome == QLatin1String("RolledBack")) {
         UpdateSettings::setRolledBackVersion(r.version);
     }
+    lastRead() = r;
     return r;
 }
 

@@ -2344,6 +2344,29 @@ add_test(NAME canon_window_test COMMAND canon_window_test)
 set_tests_properties(canon_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Callsign Lookup on CanonWindow (RFC #6226), built like AetherRX and AetherTX:
+# a frameless workspace window in the canon scope that restores the old
+# dialog's geometry. Socket-free: no lookup is started.
+add_executable(callsign_lookup_dialog_test
+    tests/callsign_lookup_dialog_test.cpp
+    src/gui/CallsignLookupDialog.cpp
+    src/gui/CallsignCard.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(callsign_lookup_dialog_test PRIVATE src tests)
+target_link_libraries(callsign_lookup_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(callsign_lookup_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME callsign_lookup_dialog_test COMMAND callsign_lookup_dialog_test)
+set_tests_properties(callsign_lookup_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # MQTT Settings on CanonWindow: the fields' right-click menus keep a canon
 # panel. Socket-free; the dialog is never accepted, so no broker connection.
 add_executable(mqtt_settings_dialog_test
@@ -2383,6 +2406,29 @@ set_target_properties(canon_message_box_test PROPERTIES AUTOMOC ON)
 add_test(NAME canon_message_box_test COMMAND canon_message_box_test)
 set_tests_properties(canon_message_box_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Reset Settings' prompts (RFC #6226): Return, Escape and the corner button
+# cancel the destructive confirmation; only Yes confirms. Socket-free; nothing
+# is removed.
+add_executable(reset_settings_prompts_test
+    tests/reset_settings_prompts_test.cpp
+    src/gui/ResetSettingsPrompts.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(reset_settings_prompts_test PRIVATE src tests)
+target_link_libraries(reset_settings_prompts_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(reset_settings_prompts_test PROPERTIES AUTOMOC ON)
+add_test(NAME reset_settings_prompts_test COMMAND reset_settings_prompts_test)
+set_tests_properties(reset_settings_prompts_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 
 # CanonApplet, CanonPan and CanonCanvas (RFC #6226): the canon ground with
 # square corners inside the main window; the close button only requests.
@@ -2650,6 +2696,11 @@ if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
     add_test(NAME spectrum_confirmed_geometry_test COMMAND spectrum_confirmed_geometry_test)
     set_tests_properties(spectrum_confirmed_geometry_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
+    # Same binary at a Retina device pixel ratio: pins the Flex pan xpixels cap.
+    add_test(NAME spectrum_pan_pixels_retina_test
+        COMMAND spectrum_confirmed_geometry_test --pan-pixels-retina)
+    set_tests_properties(spectrum_pan_pixels_retina_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2;AETHER_AUTOMATION_NO_TX=1")
 endif()
 
 add_executable(pan_frame_guard_test tests/pan_frame_guard_test.cpp)
@@ -4737,6 +4788,17 @@ target_compile_definitions(update_stager_test PRIVATE
 set_target_properties(update_stager_test PROPERTIES AUTOMOC ON)
 add_test(NAME update_stager_test COMMAND update_stager_test)
 
+# UpdateController (RFC #5304 Phase 3): Install update, Cancel, what stays
+# staged across launches, Skip, Restart to update and the install on quit,
+# against the same fixture with file:// downloads and a fake helper.
+add_executable(update_controller_test tests/update_controller_test.cpp)
+target_include_directories(update_controller_test PRIVATE src tests)
+target_link_libraries(update_controller_test PRIVATE aethercore aether_monocypher Qt6::Core Qt6::Network Qt6::Test)
+target_compile_definitions(update_controller_test PRIVATE
+    UPDATE_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures/update")
+set_target_properties(update_controller_test PROPERTIES AUTOMOC ON)
+add_test(NAME update_controller_test COMMAND update_controller_test)
+
 add_executable(update_release_notes_test tests/update_release_notes_test.cpp)
 target_include_directories(update_release_notes_test PRIVATE src)
 target_link_libraries(update_release_notes_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -4746,7 +4808,8 @@ add_test(NAME update_release_notes_test COMMAND update_release_notes_test)
 
 # The Updates window over the in-memory transport and the real v26.10.3
 # release JSON: each view, plain-text release text, Skip, the mirrored
-# toggle. No sockets.
+# toggle, and Install update in place over tests/fixtures/update with
+# file:// downloads and a fake helper. No sockets.
 add_executable(updates_window_test
     tests/updates_window_test.cpp
     src/gui/UpdatesWindow.cpp
@@ -4756,9 +4819,10 @@ add_executable(updates_window_test
 )
 target_include_directories(updates_window_test PRIVATE src tests)
 target_link_libraries(updates_window_test PRIVATE
-    aetherdesktop_support aethercore Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test)
+    aetherdesktop_support aethercore aether_monocypher Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test)
 target_compile_definitions(updates_window_test PRIVATE
-    UPDATE_RELEASE_FIXTURE="${CMAKE_SOURCE_DIR}/tests/fixtures/release/v26.10.3.json")
+    UPDATE_RELEASE_FIXTURE="${CMAKE_SOURCE_DIR}/tests/fixtures/release/v26.10.3.json"
+    UPDATE_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures/update")
 set_target_properties(updates_window_test PROPERTIES AUTOMOC ON)
 add_test(NAME updates_window_test COMMAND updates_window_test)
 
@@ -9804,6 +9868,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    update_controller_test
     update_installer_test
     update_stager_test
     mqtt_settings_dialog_test
@@ -9941,7 +10006,9 @@ set(AETHER_SETTINGS_CONSUMERS
     aether_rx_profiles_test
     theme_manager_test
     canon_window_test
+    callsign_lookup_dialog_test
     canon_message_box_test
+    reset_settings_prompts_test
     canon_surface_test
     kpa500_applet_test
     kxpa100_applet_test
