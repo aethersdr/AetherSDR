@@ -17,6 +17,7 @@
 #include <QMenu>
 #include <QActionGroup>
 #include <algorithm>
+#include <cmath>
 #endif
 
 namespace AetherSDR {
@@ -92,16 +93,17 @@ void TciApplet::buildUI()
 
         m_rxMeter[i] = new MeterSlider;
         m_rxMeter[i]->setAccessibleName(tr("TCI RX %1 gain").arg(i + 1));
-        m_rxMeter[i]->setAccessibleDescription(tr("Receive gain from mute to +30 dB; meter shows output from -60 to 0 dBFS RMS"));
-        m_rxMeter[i]->setDecibelGainRange(30.0f);
+        m_rxMeter[i]->setAccessibleDescription(tr("Receive attenuation from 0 to 100 percent; meter shows output from -60 to 0 dBFS RMS"));
+        m_rxMeter[i]->setToolTip(tr("RX gain: 0-100% (100% is unity)\nMeter: -60 to 0 dBFS RMS"));
+        m_rxMeter[i]->setLogarithmicLevelEnabled(true);
         {
             auto key = QStringLiteral("TciRxGain%1").arg(i + 1);
             float saved = settings.value(key, "0.5").toString().toFloat();
-            m_rxMeter[i]->setGain(std::clamp(saved, 0.0f, TciServer::kMaxRxGain));
+            m_rxMeter[i]->setGain(std::isfinite(saved) ? std::clamp(saved, 0.0f, 1.0f) : 0.5f);
         }
         connect(m_rxMeter[i], &MeterSlider::gainChanged, this, [this, i](float g) {
             auto& ss = AppSettings::instance();
-            ss.setValue(QStringLiteral("TciRxGain%1").arg(i + 1), QString::number(g, 'g', 9));
+            ss.setValue(QStringLiteral("TciRxGain%1").arg(i + 1), QString::number(g, 'f', 2));
             ss.save();
             emit tciRxGainChanged(i + 1, g);
         });
@@ -440,8 +442,7 @@ void TciApplet::setTciRxLevel(int channel, float rms)
         return;
     }
     if (m_rxMeter[channel - 1]) {
-        const float dbfs = std::isfinite(rms) && rms > 0.0f ? 20.0f * std::log10(rms) : -60.0f;
-        m_rxMeter[channel - 1]->setLevel(std::clamp((dbfs + 60.0f) / 60.0f, 0.0f, 1.0f));
+        m_rxMeter[channel - 1]->setLevel(rms);
     }
 #else
     (void)channel;

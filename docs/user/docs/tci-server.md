@@ -34,7 +34,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 
 | Control | Meaning |
 |---|---|
-| **RX1 … RX8** | One row per receive channel: the slice it carries and a combined output level meter / receive gain slider, with up to +30 dB boost. Rows above the radio's slice capacity are hidden. |
+| **RX1 … RX8** | One row per receive channel: the slice it carries, a logarithmic output level meter and a 0-100% receive gain slider. Rows above the radio's slice capacity are hidden. |
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
@@ -156,15 +156,13 @@ audio_stream_sample_type:int16;
 audio_stream_channels:1;
 ```
 
-### Receive gain and recording levels
+### Receive gain and level metering
 
-Each **RX** slider adjusts the audio sent to every TCI client receiving that channel, including recording software such as DXLog. It ranges from mute through attenuation to **+30 dB** boost. The short reference mark is **0 dB** (unity gain): the source audio is unchanged there. Dragging shows the gain in dB; arrow keys adjust it by 1 dB. Gains are saved independently for each channel.
+Each **RX** slider attenuates the audio sent to every TCI client receiving that channel. **0%** mutes the stream; **100%** is unity gain and preserves the source audio level. The slider does not amplify audio above unity. Dragging shows the gain as a percentage; arrow keys adjust it by five percentage points. Gains are saved independently for each channel.
 
-The RX meter shows the **post-gain output**, on a logarithmic **-60 to 0 dBFS RMS** scale. Half the bar is -30 dBFS RMS. The thumb indicates gain, not the measured audio level. Speaker volume, speaker mute and DAX applet gain do not adjust TCI receive audio.
+The RX meter shows the **post-gain output** on a logarithmic **-60 to 0 dBFS RMS** scale. Half the bar is -30 dBFS RMS. The thumb indicates gain, not measured audio level. Moving the slider updates the meter immediately using the most recent source level. Speaker volume, speaker mute and DAX applet gain do not adjust TCI receive audio.
 
-For quiet recordings, start at **+12 dB** and increase only as needed. Check a recording of a strong station and aim for speech peaks around **-12 to -6 dBFS** in the recording software. The Aether meter measures RMS, not peaks, so leave headroom for speech transients. Excessive boost can distort recordings; PCM16 output saturates at full scale. Boost also raises background noise and affects digital-mode clients sharing that receive channel.
-
-> **Upgrading from an older version:** Saved receive gains keep the same loudness. The slider position and gain readout use a dB scale; the former 100% setting is **0 dB**, not the new maximum.
+The meter measures RMS, not peaks, so leave headroom for speech transients when adjusting recording levels in an external application. A larger logarithmic meter indication does not mean the stream has been amplified.
 
 ### TX overflow handling
 
@@ -272,13 +270,13 @@ Audio only flows after the client sends `audio_start`.
 1. Check that the client has audio streaming turned on. WSJT-X sends `audio_start` automatically.
 2. Test by hand with [wscat](#testing-with-wscat): send `audio_start:0;` and watch for binary frames.
 
-### Recordings are too quiet at 0 dB receive gain
+### Recordings are too quiet at 100% receive gain
 
-The source audio can be below the level needed by the recorder. Unity gain does not amplify it.
+At 100%, AetherSDR passes the source audio level without amplification.
 
-1. Raise the appropriate **RX** slider in the **TCI Server** applet above **0 dB**.
-2. Record a strong station and check the recording for adequate level without clipping.
-3. Reduce receive gain if strong signals sound distorted. Raising speaker volume or the **TX** slider does not increase TCI receive audio.
+1. Check that the appropriate **RX** slider in the **TCI Server** applet is at **100%** to remove client-side attenuation.
+2. If the recording remains too quiet, adjust recording gain or normalization in the recording application, if supported. Check strong signals for clipping.
+3. Do not raise speaker volume or the **TX** slider to adjust TCI receive audio; these control different paths.
 
 ### WSJT-X shows "TCI failed to set ptt"
 

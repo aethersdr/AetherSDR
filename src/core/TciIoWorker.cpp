@@ -456,7 +456,7 @@ void TciIoWorker::receivePcm(quint64 key, const PcmFrame& frame)
     if (recipients.isEmpty()) { return; }
     double sum = 0;
     for (float sample : input.samples()) { sum += double(sample) * sample; }
-    publishRxLevel(binding.gainChannel, float(std::sqrt(sum / input.samples().size()) * gain));
+    publishRxLevel(binding.gainChannel, float(std::sqrt(sum / input.samples().size())));
     if (!self || !input.current() || !binding.current()) { return; }
     for (const auto& [id, generation] : recipients) {
         auto client = m_rxClients.find(id);
