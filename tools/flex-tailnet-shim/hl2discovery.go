@@ -20,6 +20,7 @@ const (
 	hl2Port          = 1024
 	hl2SweepInterval = 5 * time.Second // AetherSDR's Hl2Discovery cadence
 	hl2BoardID       = 0x06            // Hermes-Lite / Hermes-Lite 2
+	hl2Kind          = "Hermes-Lite 2"
 )
 
 // hl2DiscoveryRequest is the 63-byte Protocol 1 discovery request.
@@ -46,8 +47,8 @@ func parseHL2Reply(b []byte, src netip.AddrPort) (Device, bool) {
 		return Device{}, false
 	}
 	return Device{
-		Kind:    "Hermes-Lite 2",
-		Name:    "Hermes-Lite 2",
+		Kind:    hl2Kind,
+		Name:    hl2Kind,
 		IP:      ip.String(),
 		Port:    hl2Port,
 		Serial:  fmt.Sprintf("%02X:%02X:%02X:%02X:%02X:%02X", b[3], b[4], b[5], b[6], b[7], b[8]),

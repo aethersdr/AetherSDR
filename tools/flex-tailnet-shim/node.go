@@ -117,6 +117,13 @@ type Node struct {
 
 	fwd     *Forwarder  // side channels, while the node runs
 	splices liveSplices // station-device splices in progress, for revocation
+
+	// Station-device UDP (udpsubnet.go). listenRoutedUDP claims a routed
+	// address inside tsnet, set while the node runs; dialDeviceUDP opens the
+	// LAN side (a real UDP socket when nil). Both are test seams too.
+	listenRoutedUDP func(netip.AddrPort) (net.Listener, error)
+	dialDeviceUDP   func(netip.AddrPort) (net.Conn, error)
+	udpRoutes       map[netip.AddrPort]*udpRoute
 }
 
 func (n *Node) cfgPath() string   { return filepath.Join(n.StateDir, "provision.json") }
@@ -426,6 +433,9 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 	n.check = n.checker(lc)
 	n.authorize = admitOnly(n.check)
 	n.advertised = nil
+	n.listenRoutedUDP = func(ap netip.AddrPort) (net.Listener, error) {
+		return srv.Listen("udp4", ap.String())
+	}
 	n.mu.Unlock()
 	n.RefreshRoutes()
 	go reportHealth(lc)
@@ -468,6 +478,9 @@ func (n *Node) RefreshRoutes() {
 	// "sharing on" could finish after one that withdrew the routes.
 	n.routeMu.Lock()
 	defer n.routeMu.Unlock()
+	// UDP follows discovery as well as the routes: an HL2 found inside a
+	// route that was already shared changes no route.
+	defer n.syncUDP()
 	n.mu.Lock()
 	lc, cfg, prev := n.lc, n.cfg, n.advertised
 	n.mu.Unlock()
@@ -585,6 +598,7 @@ func (n *Node) stop(logout bool) error {
 	n.telemetry.peers = nil
 	n.telemetry.mu.Unlock()
 	n.mu.Unlock()
+	n.closeUDP()
 	if relay != nil {
 		relay.CloseAll("tailnet node stopping")
 	}
