@@ -110,12 +110,26 @@ LpMeterConnection::LpMeterConnection(QObject* parent)
         // transport healthy is a real observed state, and tearing down the
         // socket would take the applet tile away at the exact moment the
         // operator needs to be told the meter stopped answering.
-        qCWarning(lcTuner) << "LpMeterConnection: link up but no valid record in"
-                           << kDataTimeoutMs / 1000.0
-                           << "s — meter may be wedged (it can stop answering with"
-                              " the serial link perfectly healthy) or the records"
+        //
+        // Says how long ago our last poll went out. The watchdog outlasts the
+        // poll gate's longest ride-along, so by now we should be polling: a
+        // last poll under kSoloPollIntervalMs ago means the meter is silent,
+        // a long one means we stopped asking (e.g. the main thread stalled).
+        // A support bundle cannot otherwise tell those apart.
+        const qint64 now = nowMs();
+        if (m_silenceSinceMs < 0) {
+            m_silenceSinceMs = (m_lastRecordMs >= 0) ? m_lastRecordMs : now - kDataTimeoutMs;
+        }
+        qCWarning(lcTuner).noquote()
+            << QStringLiteral("LpMeterConnection: link up but no valid record in %1 s"
+                              " (%2) — meter may be wedged (it can stop answering"
+                              " with the serial link perfectly healthy) or the records"
                               " may be unparseable. Power-cycling the meter clears"
-                              " the former.";
+                              " the former.")
+                   .arg(kDataTimeoutMs / 1000.0)
+                   .arg(m_lastPollMs >= 0
+                            ? QStringLiteral("our last poll %1 ms ago").arg(now - m_lastPollMs)
+                            : QStringLiteral("no poll of ours sent since connect"));
         setDataFlowing(false);
     });
 }
@@ -285,6 +299,7 @@ void LpMeterConnection::onTransportUp()
     m_ridingAlongReported = false;
     m_gateStateReported = false;
     m_lastRecordMs = -1;
+    m_lastPollMs = -1;
     m_firstBytesMs = -1;
     m_dataFlowing = false;
     m_dataFlowStateKnown = false;
@@ -379,6 +394,7 @@ void LpMeterConnection::pollTick()
     }
 
     if (!poll) { return; }
+    m_lastPollMs = now;
     m_device->write(QByteArray(1, LpMeter::kPollCommand));
 }
 
@@ -407,7 +423,18 @@ void LpMeterConnection::setDataFlowing(bool flowing)
     m_dataFlowing = flowing;
     m_dataFlowStateKnown = true;
     if (flowing) {
-        qCInfo(lcTuner) << "LpMeterConnection: records flowing again.";
+        // A recovery that closes a logged dim is logged at the dim's level, so
+        // a default (warning-level) support bundle shows both sides of every
+        // outage rather than a run of dims that never end.
+        if (m_silenceSinceMs >= 0) {
+            qCWarning(lcTuner).noquote()
+                << QStringLiteral("LpMeterConnection: records flowing again after %1 s"
+                                  " without one.")
+                       .arg((nowMs() - m_silenceSinceMs) / 1000.0, 0, 'f', 1);
+            m_silenceSinceMs = -1;
+        } else {
+            qCInfo(lcTuner) << "LpMeterConnection: records flowing again.";
+        }
     }
     emit dataFlowingChanged(flowing);
 }
