@@ -55,8 +55,8 @@ public:
     // Radio firmware is being written: nothing else may start, and the
     // update must not install on this quit.
     bool firmwareBusy() const { return m_firmwareBusy; }
-    // Restart to update could not hand the release over: say why.
-    void showInstallProblem(const QString& problem);
+    // Restart to update could not hand version over: say why.
+    void showInstallProblem(const QString& problem, const QString& version);
 
 signals:
     // The badge the title bar should show now (empty clears it).

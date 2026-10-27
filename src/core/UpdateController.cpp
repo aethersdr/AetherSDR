@@ -50,39 +50,56 @@ UpdateController::UpdateController(Environment env, QObject* parent)
     connect(m_stager, &UpdateStager::staged, this, [this](const QString& dir, const QString& version) {
         // A newer release was announced while this one downloaded: it is
         // no longer the one to install.
-        if (!m_latest.isEmpty() && VersionNumber::parse(m_latest) > VersionNumber::parse(version)) {
-            qCInfo(lcUpdater).noquote() << "staged update to v" + version + " superseded by v" + m_latest;
+        if (superseded(version)) {
             UpdateStager::discard(m_env.request.stagingRoot, version);
-            setState(State::Idle, {});
+            supersede(version);
             return;
         }
         m_staged = {version, dir, m_env.request.runningVersion};
         setState(State::Staged, version);
     });
     connect(m_stager, &UpdateStager::fullDownloadNeeded, this,
-            [this](const QString& reason, const UpdateManifest::Asset&, const QString&) {
-                endAttempt(reason, true);
+            [this](const QString& reason, const UpdateManifest::Asset&, const QString& version) {
+                // The stager names the release it tried.
+                endAttempt(version.isEmpty() ? m_version : version, reason, true);
             });
     connect(m_stager, &UpdateStager::upToDate, this, [this] {
         // The signed manifest lags GitHub's latest until it is published.
-        endAttempt(tr("The update for this release isn't published yet. Try again later, or download it."),
+        endAttempt(m_version,
+                   tr("The update for this release isn't published yet. Try again later, or download it."),
                    false);
     });
     connect(m_stager, &UpdateStager::failed, this,
-            [this](const QString& reason) { endAttempt(reason, false); });
+            [this](const QString& reason) { endAttempt(m_version, reason, false); });
 }
 
-void UpdateController::endAttempt(const QString& reason, bool browser)
+bool UpdateController::superseded(const QString& version) const
 {
-    const QString attempted = m_version;
+    return !m_latest.isEmpty() && VersionNumber::parse(m_latest) > VersionNumber::parse(version);
+}
+
+void UpdateController::supersede(const QString& attempted)
+{
+    qCInfo(lcUpdater).noquote() << "update to v" + attempted + " superseded by v" + m_latest;
     setState(State::Idle, {});
+    emit failed(tr("AetherSDR %1 came out while %2 was downloading. Install update gets the newer one.")
+                    .arg(m_latest, attempted),
+                m_latest);
+}
+
+void UpdateController::endAttempt(const QString& attempted, const QString& reason, bool browser)
+{
+    if (m_state != State::Staging || attempted.isEmpty()) {
+        return;   // cancelled or discarded meanwhile: nothing to report
+    }
     // An outcome belongs to the release attempted; one a newer latest has
     // superseded meanwhile says nothing about the release now offered.
-    if (!m_latest.isEmpty() && VersionNumber::parse(m_latest) > VersionNumber::parse(attempted)) {
-        qCInfo(lcUpdater).noquote() << "update to v" + attempted + " ended (" + reason + "); superseded by v"
-                                           + m_latest;
+    if (superseded(attempted)) {
+        qCInfo(lcUpdater).noquote() << "update to v" + attempted + " ended: " + reason;
+        supersede(attempted);
         return;
     }
+    setState(State::Idle, {});
     if (browser) {
         emit browserNeeded(reason, attempted);
     } else {

@@ -511,15 +511,24 @@ int main(int argc, char** argv)
                   && !QFileInfo::exists(rig.tmp.filePath(QStringLiteral("update/26.10.3"))),
               "Skip discards the staged release");
 
-        // Ozy311's review: Skip, then Install the skipped release anyway,
-        // then Skip again once it is ready. The download is discarded and
-        // nothing installs on quit.
+        // Ozy311's review: Skip, then Install the skipped release anyway
+        // (maintainer ruling: that clears the skip), then Skip again once it
+        // is ready. The download is discarded and nothing installs on quit.
         UpdateSettings::setSkippedVersion(QStringLiteral("26.10.3"));
+        w->checkNow();   // refresh as skipped
+        network.last->finishWithBody(releaseJson(QStringLiteral("Tagline")));
+        app.processEvents();
+        QSignalSpy unskipBadge(w, &UpdatesWindow::badgeChanged);
         if (primary) {
             primary->click();
         }
-        QTest::qWaitFor([&] { return controller.state() == UpdateController::State::Staged; }, 20000);
+        check(!UpdateChecker::isSkipped(QStringLiteral("26.10.3")) && unskipBadge.size() == 1
+                  && unskipBadge.first().first().toString() == QLatin1String("26.10.3"),
+              "installing a skipped release clears the skip and brings the badge back");
+        const bool ready =
+            QTest::qWaitFor([&] { return controller.state() == UpdateController::State::Staged; }, 20000);
         app.processEvents();
+        check(ready, "the release installed after a skip is staged");
         skip = const_cast<QPushButton*>(button(*w, QStringLiteral("Skip this version")));
         check(skip && skip->isEnabled(), "a skipped release installed anyway can be skipped again");
         if (skip) {

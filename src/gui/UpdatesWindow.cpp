@@ -478,10 +478,10 @@ void UpdatesWindow::setController(UpdateController* controller)
     refresh();
 }
 
-void UpdatesWindow::showInstallProblem(const QString& problem)
+void UpdatesWindow::showInstallProblem(const QString& problem, const QString& version)
 {
     m_installProblem = problem;
-    m_problemVersion = m_checker ? m_checker->latestRelease().version : QString();
+    m_problemVersion = version;
     refresh();
 }
 
@@ -508,6 +508,11 @@ void UpdatesWindow::primaryClicked()
     if (m_controller->state() != UpdateController::State::Staging
         && m_controller->state() != UpdateController::State::Handed) {
         m_installProblem.clear();
+        // Installing a skipped release means it is wanted after all.
+        if (UpdateChecker::isSkipped(version)) {
+            UpdateChecker::unskipVersion(version);
+            emit badgeChanged(version);
+        }
         m_controller->install(version);
     }
 }
@@ -568,12 +573,12 @@ void UpdatesWindow::refresh()
         } else if (m_controller && m_controller->isRolledBack(release.version)) {
             note = tr("This release didn't start on this computer, so it was rolled back and isn't installed "
                       "here again.");
-        } else if (UpdateChecker::isSkipped(release.version)) {
-            note = tr("You skipped this release, so UPDATE is not shown in the title bar.");
         } else if (m_browserVersion == release.version && !m_browserReason.isEmpty()) {
             note = tr("The update couldn't be prepared here: %1 Download it instead.").arg(m_browserReason);
         } else if (!m_installProblem.isEmpty() && m_problemVersion == release.version) {
             note = m_installProblem;
+        } else if (UpdateChecker::isSkipped(release.version)) {
+            note = tr("You skipped this release, so UPDATE is not shown in the title bar.");
         }
         break;
     }
@@ -660,11 +665,8 @@ void UpdatesWindow::refresh()
     m_checkNow->setText(checking ? tr("Checking…") : tr("Check Now"));
     m_skip->setVisible(canDownload);
     const bool skipped = UpdateChecker::isSkipped(release.version);
-    // A release skipped earlier and installed since has a download pending:
-    // Skip discards it, so it stays offered.
-    const bool pending = forThis && (installState == State::Staging || installState == State::Staged);
-    m_skip->setEnabled((!skipped || pending) && !m_firmwareBusy);
-    m_skip->setText(skipped && !pending ? tr("Skipped") : tr("Skip this version"));
+    m_skip->setEnabled(!skipped && !m_firmwareBusy);
+    m_skip->setText(skipped ? tr("Skipped") : tr("Skip this version"));
     // One job at a time: nothing else starts while radio firmware is going in.
     const QString waiting = tr("Waits until the radio firmware install finishes.");
     for (QWidget* w : {static_cast<QWidget*>(m_get), static_cast<QWidget*>(m_checkNow),

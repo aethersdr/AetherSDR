@@ -216,7 +216,10 @@ private slots:
         c.install(QStringLiteral("26.10.3"));
         c.refreshStaged(QStringLiteral("26.10.4"));
         QCOMPARE(c.state(), UpdateController::State::Staging);   // the worker is not swept
+        QSignalSpy replaced(&c, &UpdateController::failed);
         QVERIFY(QTest::qWaitFor([&] { return c.state() == UpdateController::State::Idle; }, 20000));
+        QCOMPARE(replaced.size(), 1);
+        QCOMPARE(replaced.first().at(1).toString(), QStringLiteral("26.10.4"));
         QVERIFY(!c.installOnQuit());
         QVERIFY(rig.launches.isEmpty());
         QVERIFY(!QFileInfo::exists(rig.staging + QStringLiteral("/26.10.3")));
@@ -228,21 +231,25 @@ private slots:
         QVERIFY(waitFor(again, UpdateController::State::Staged));
     }
 
-    void aFailureForASupersededReleaseIsNotReported()
+    void aSupersededAttemptReportsTheNewerRelease()
     {
         // Ozy311's review of #6777: 26.10.4 is announced while 26.10.3
-        // downloads, and 26.10.3 then can't be had at all. Its fallback says
-        // nothing about 26.10.4, so nothing is reported.
+        // downloads, and 26.10.3 then can't be had at all (this rig has
+        // neither the bundle nor the full zip, so it can't stage). Its
+        // fallback says nothing about 26.10.3's download being the problem:
+        // the window hears that 26.10.4 replaced it, attached to 26.10.4.
         Rig rig(m_key, false);
         UpdateController c(rig.env());
         QSignalSpy browser(&c, &UpdateController::browserNeeded);
         QSignalSpy failed(&c, &UpdateController::failed);
         c.install(QStringLiteral("26.10.3"));
         c.refreshStaged(QStringLiteral("26.10.4"));
-        QVERIFY(QTest::qWaitFor([&] { return c.state() == UpdateController::State::Idle; }, 20000));
-        QTest::qWait(100);
+        QTRY_COMPARE_WITH_TIMEOUT(failed.size(), 1, 20000);
+        QCOMPARE(c.state(), UpdateController::State::Idle);
         QCOMPARE(browser.size(), 0);
-        QCOMPARE(failed.size(), 0);
+        QCOMPARE(failed.first().at(1).toString(), QStringLiteral("26.10.4"));
+        QVERIFY(failed.first().at(0).toString().contains(QLatin1String("26.10.4")));
+        QVERIFY(!QFileInfo::exists(rig.staging + QStringLiteral("/26.10.3")));
         // Without the newer release, the same fallback names its version.
         UpdateSettings::setAcceptedManifestUtc({});
         UpdateController again(rig.env());

@@ -2389,9 +2389,10 @@ void MainWindow::restartToUpdate()
     // The helper waits for this process to exit, then swaps the release in
     // and starts it; the quit is the normal one, prompts and all.
     QString problem;
+    const QString version = m_updateController->version();   // before a refusal clears it
     if (!m_updateController->restartToUpdate(&problem)) {
         if (m_updatesWindow) {
-            m_updatesWindow->showInstallProblem(problem);
+            m_updatesWindow->showInstallProblem(problem, version);
         }
         return;
     }
