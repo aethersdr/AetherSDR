@@ -2077,8 +2077,8 @@ private:
     QHash<QString, QVector<QMetaObject::Connection>> m_panDisplayStatusConnections;
     bool m_adaptiveThrottleActive{false}; // fps/wf status held as restore targets while true
     int  m_adaptiveFpsCap{0};             // current cap (> 0 when throttle active); shown in network label
-    // Pans whose band changed while capped: the cap goes back on once the new
-    // band has reported its own rates (see restorePreCapPanRates()).
+    // Pans whose band changed while capped: the cap goes back on at the pan's
+    // next non-cap fps report (see the fpsReported handler in wirePanadapter).
     QSet<QString> m_recapPansAfterBandChange;
     // Every cap (fps, and its waterfall rate) sent since the throttle engaged.
     // A status echo of any of them is ours, not the operator's setting.

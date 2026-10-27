@@ -2205,8 +2205,10 @@ MainWindow::MainWindow(QWidget* parent)
 
     // A Flex saves each pan's FPS and waterfall rate in the band it leaves, so
     // a band change while capped would store the cap as that band's setting.
-    // Put the operator's values back first; once the new band has reported its
-    // own rates (the new restore target), the cap goes back on.
+    // Put the operator's values back first; the cap goes back on at the pan's
+    // next non-cap fps report, which lands after the band switch. Only band
+    // changes AetherSDR dispatches pass through here: one from CAT, another
+    // client or a pan dragged across a band edge does not (#6791).
     connect(&m_radioModel, &RadioModel::panBandAboutToDispatch,
             this, [this](const QString& panId) {
         if (!m_adaptiveThrottleActive) return;

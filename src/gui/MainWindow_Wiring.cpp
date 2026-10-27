@@ -3394,8 +3394,12 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
             if (applyThrottledDisplayReport(m_adaptiveThrottleActive,
                                             m_adaptiveFpsCapsSent, fps)) {
                 sw->setFftFps(fps);
-                // A band change while capped restored this pan first; now the
-                // new band's rate is the restore target, put the cap back on.
+                // A band change while capped restored this pan first. Put the
+                // cap back on at the first non-cap fps report after that. It is
+                // usually the echo of our own restore, not the new band's rate,
+                // but it is sent after band=, so the cap lands after the band
+                // switch either way; a later band report still updates the
+                // restore target through the gate above.
                 if (m_adaptiveThrottleActive && m_recapPansAfterBandChange.remove(panId)) {
                     m_radioModel.sendAdaptiveCapToPan(panId, m_adaptiveFpsCap);
                 }
@@ -4827,29 +4831,18 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
     });
     connect(menu, &SpectrumOverlayMenu::fftFpsChanged,
-            this, [this, applet](int v) {
-        // One operator choice for every open pan: an FFT FPS is how much
-        // display traffic the operator wants, not a per-pan property. This is
-        // a one-off request per pan (the slider's own signal, never a status
-        // echo); each radio still stores what it is sent, per band.
-        QList<PanadapterApplet*> targets = m_panStack ? m_panStack->allApplets()
-                                                      : QList<PanadapterApplet*>{};
-        if (!targets.contains(applet)) targets.append(applet);
-        for (auto* target : targets) {
-            auto* tsw = target ? target->spectrumWidget() : nullptr;
-            if (!tsw) continue;
-            tsw->setFftFps(v);  // always update restore target for when throttle lifts
-            // The operator's value, saved before the throttle test: the adaptive
-            // cap is transient and must not decide what is remembered.
-            scheduleClientFftFpsSave(tsw->panIndex(), v);
-            if (m_adaptiveThrottleActive)
-                continue;
-            // Through the model, not a raw sendCommand: on a backend that streams
-            // raw spectra this is the engine's own shaping target, and the Flex wire
-            // text it used to send reached nothing there — the slider moved the
-            // widget's render cap while frames kept arriving at the IQ sample rate.
-            m_radioModel.requestPanDisplayRates(target->panId(), v, /*wfMs=*/0);
-        }
+            this, [this, applet, sw](int v) {
+        sw->setFftFps(v);  // always update restore target for when throttle lifts
+        // The operator's value, saved before the throttle test: the adaptive
+        // cap is transient and must not decide what is remembered.
+        scheduleClientFftFpsSave(sw->panIndex(), v);
+        if (m_adaptiveThrottleActive)
+            return;
+        // Through the model, not a raw sendCommand: on a backend that streams
+        // raw spectra this is the engine's own shaping target, and the Flex wire
+        // text it used to send reached nothing there — the slider moved the
+        // widget's render cap while frames kept arriving at the IQ sample rate.
+        m_radioModel.requestPanDisplayRates(applet->panId(), v, /*wfMs=*/0);
     });
     connect(menu, &SpectrumOverlayMenu::fftWeightedAverageChanged,
             this, [this, applet, sw](bool on) {
