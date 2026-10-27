@@ -54,7 +54,7 @@ public:
     static bool install(const QString& tree, const QString& version, const Paths& paths,
                         QString* problem, QString* note = nullptr);
 
-    // Runs <tree>/AppRun --update-selftest and waits for it (30 s at most):
+    // Runs <tree>/AppRun --update-selftest and waits for it (60 s at most):
     // true when it wrote version as its marker.
     using SelfTest = std::function<bool(const QString& tree, const QString& version)>;
     static bool selfTest(const QString& tree, const QString& version);

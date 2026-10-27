@@ -397,7 +397,7 @@ because `~/.local/share/AetherSDR` already holds user data. `LinuxInstall`
 - **The switch** is what the helper's hand-over is on Windows, done by the
   app itself in `UpdateInstaller::launchHelper`: the staged tree is renamed
   into `install/<version>`, that folder's `AppRun --update-selftest` must
-  pass (the same frozen contract, 30 s), and only then is a new link renamed
+  pass (the same frozen contract, 60 s), and only then is a new link renamed
   over `current`. Every other version folder except the one running is then
   removed. A rename over a link is atomic, and the running tree is never
   touched, so there is no window with nothing runnable, no journal and no

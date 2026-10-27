@@ -848,6 +848,9 @@ private slots:
 
     void theFullTarballUnpacksExactlyItsFilesAndLinks()
     {
+#ifdef Q_OS_WIN
+        QSKIP("a Linux tarball's links need privileges on Windows");
+#endif
         QTemporaryDir tmp;
         const UpdateManifest m = parsed(fixtureManifest());
         QList<UpdateManifest::File> files = tarballFiles(m.payloads[0].files);
@@ -883,6 +886,9 @@ private slots:
 
     void aFullTarballThatIsNotExactlyTheManifestIsRefused()
     {
+#ifdef Q_OS_WIN
+        QSKIP("a Linux tarball's links need privileges on Windows");
+#endif
         QTemporaryDir tmp;
         const UpdateManifest m = parsed(fixtureManifest());
         const QList<UpdateManifest::File> files = tarballFiles(m.payloads[0].files);

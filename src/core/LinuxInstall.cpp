@@ -290,7 +290,9 @@ bool LinuxInstall::selfTest(const QString& tree, const QString& version)
         qCWarning(lcUpdater).noquote() << "self-test of v" + version + " could not be started";
         return false;
     }
-    if (!p.waitForFinished(30000)) {
+    // As long as the Windows helper waits: a cold tree on an SD card (a Pi)
+    // is slow to load the first time.
+    if (!p.waitForFinished(60000)) {
         p.kill();
         p.waitForFinished(5000);
         qCWarning(lcUpdater).noquote() << "self-test of v" + version + " did not finish";

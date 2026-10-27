@@ -262,10 +262,13 @@ static int runInstallCli(int argc, char* argv[])
         return EXIT_FAILURE;
     }
     const QString run = QDir(paths.base).filePath(QStringLiteral("current/AppRun"));
+    // The command by name only when ~/.local/bin is on PATH.
+    const bool onPath = qEnvironmentVariable("PATH").split(QLatin1Char(':')).contains(paths.bin);
     std::printf("AetherSDR %s is installed in %s.\n"
-                "Start it from your applications menu, or run aethersdr. "
+                "Start it from your applications menu, or run %s. "
                 "It updates itself from File > Update.\n",
-                qPrintable(version), qPrintable(QDir(paths.base).filePath(version)));
+                qPrintable(version), qPrintable(QDir(paths.base).filePath(version)),
+                onPath ? "aethersdr" : qPrintable(QDir(paths.bin).filePath(QStringLiteral("aethersdr"))));
     if (!note.isEmpty()) {
         std::printf("%s\n", qPrintable(note));
     }
