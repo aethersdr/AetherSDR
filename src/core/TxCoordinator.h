@@ -349,6 +349,7 @@ public:
     [[nodiscard]] bool owns(const Actor& actor, const Operation& operation) const;
     [[nodiscard]] bool recovering() const;
     [[nodiscard]] bool hasOwnership() const;
+    [[nodiscard]] bool hasUnconfirmedLocalCompletion() const;
     [[nodiscard]] bool hasInFlightDispatches() const;
 
 private:

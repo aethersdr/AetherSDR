@@ -63,6 +63,9 @@ On FlexRadio, a digital program's audio from **AetherSDR TX** uses this client's
 
 With MultiFlex, another client can select its own DAX TX stream. AetherSDR's label follows the radio's report, and deselection blocks its DAX transmit audio. Click **Selected** while idle to deselect AetherSDR's stream. These actions do not change the TX slice or global DAX input, key the radio, start audio, or restore a previous transmission. A later transmission needs a new operator action.
 
+After a transmission ends, the toggle becomes available when the radio reports
+a settled receive state and local transmit preparation and cleanup have finished.
+
 Selection requests are not saved or replayed on reconnect. The label follows current radio status and can already show **Selected** when the radio reports this client's stream as selected. If a request is refused or times out, the applet shows its reason; check the current status before making another request.
 
 ### Wiring WSJT-X (Linux and macOS)

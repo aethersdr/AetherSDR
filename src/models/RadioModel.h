@@ -700,6 +700,11 @@ public:
     // so a connect must never replay this client-persisted flag onto it.
     void notePcAudioEnabled(bool on);
     bool ensureDaxTxStream(DaxTxRequestReason reason);
+    // Await only allocation and radio selection of this input's absent stream.
+    // Existing deselected streams require an explicit stream-selection action.
+    bool prepareTciDaxTxStream(const TxCoordinator::Request& input,
+                               const DaxTxAudioPermit& captured,
+                               std::function<void(const DaxTxAudioPermit&)> completion);
     QJsonObject daxTxOwnershipSnapshot() const;
     QString daxTxOwnershipUnavailableReason(bool take) const;
     bool requestDaxTxOwnership(bool take);
@@ -2203,6 +2208,7 @@ private:
     bool        m_cwxDrainArmed{false}; // CWX drain-release latch, immune to interlock flicker (#3949)
     bool        m_txAudioGate{false}; // actual TX audio gate state
     bool        m_radioTransmitting{false}; // raw interlock TX state, any owner
+    bool        m_daxTxSelectionRxObserved{false};
     // Last interlock state= the radio reported, any owner; empty until one
     // arrives and on backends that report none. m_radioTransmitting is only
     // `state == TRANSMITTING`, so it is already false in PTT_REQUESTED and

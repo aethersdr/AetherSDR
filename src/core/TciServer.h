@@ -442,6 +442,7 @@ private:
         TxCoordinator::Request txRequest;
         bool wantsAudio{false};
         DaxTxAudioPermit daxPermit{DaxTxAudioPermit::blocked()};
+        bool waitingForDax{false};
     };
     std::optional<PendingTrxRequest> m_pendingTrxRequest;
     struct PendingRouteCommand

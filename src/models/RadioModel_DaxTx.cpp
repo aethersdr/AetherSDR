@@ -7,6 +7,7 @@
 #include <QTimer>
 #include <QDateTime>
 #include <algorithm>
+#include <utility>
 
 namespace AetherSDR {
 namespace {
@@ -42,6 +43,59 @@ bool RadioModel::daxTxStreamReady() const
         && !m_daxTxUncertain && m_daxTxAudioPermit.permitsStream(m_daxTxStreamId);
 }
 
+bool RadioModel::prepareTciDaxTxStream(const TxCoordinator::Request& input,
+                                      const DaxTxAudioPermit& captured,
+                                      std::function<void(const DaxTxAudioPermit&)> completion)
+{
+    if (!input.valid() || !m_txCoordinator.ownsRequest(input) || !completion
+        || !captured.allowsStreamCreation() || !captured.sameGrant(m_daxTxAudioPermit)
+        || !isConnected() || m_txSessionClosing || m_daxTxStreamId != 0
+        || m_daxTxUncertain || m_daxTxOwnershipIntent || m_wsprTxInput.originalSessionCurrent()
+        || profileLoadRadioStateWritesHeld()) {
+        return false;
+    }
+    const quint64 session = m_daxTxSession;
+    const quint64 ticket = m_daxTxCreatePending ? m_daxTxCreateTicket : m_daxTxCreateTicket + 1;
+    auto* timer = new QTimer(this);
+    timer->setSingleShot(true);
+    timer->setTimerType(Qt::PreciseTimer);
+    const QPointer<QTimer> waiter(timer);
+    const QPointer<RadioModel> self(this);
+    const std::shared_ptr<bool> finished = std::make_shared<bool>(false);
+    const auto finish = [self, waiter, finished, completion = std::move(completion)](
+                            const DaxTxAudioPermit& permit) {
+        if (!waiter || std::exchange(*finished, true)) { return; }
+        waiter->stop();
+        if (self) { QObject::disconnect(self, nullptr, waiter, nullptr); }
+        waiter->deleteLater();
+        completion(permit);
+    };
+    const auto inspect = [this, input, session, ticket, finish] {
+        if (!input.valid() || !isConnected() || m_txSessionClosing
+            || session != m_daxTxSession || ticket != m_daxTxCreateTicket
+            || m_daxTxUncertain || m_daxTxOwnershipIntent || m_wsprTxInput.originalSessionCurrent()
+            || profileLoadRadioStateWritesHeld() || (m_daxTxKnown && !m_daxTxActive)) {
+            finish(DaxTxAudioPermit::blocked());
+        } else if (!m_daxTxCreatePending) {
+            if (m_daxTxStreamId == 0) {
+                finish(DaxTxAudioPermit::blocked());
+            } else if (m_daxTxKnown) {
+                finish(daxTxStreamReady() ? m_daxTxAudioPermit : DaxTxAudioPermit::blocked());
+            }
+        }
+    };
+    connect(this, &RadioModel::daxTxOwnershipChanged, timer, inspect);
+    connect(this, &RadioModel::txAudioStreamReady, timer, inspect);
+    connect(timer, &QTimer::timeout, timer, [finish] { finish(DaxTxAudioPermit::blocked()); });
+    timer->start(kOwnershipTimeoutMs);
+    if (!ensureDaxTxStream(DaxTxRequestReason::TciTxAudio)) {
+        finish(DaxTxAudioPermit::blocked());
+    } else if (self) {
+        inspect();
+    }
+    return true;
+}
+
 QString RadioModel::daxTxOwnershipUnavailableReason(bool take) const
 {
     if (!isConnected() || m_txSessionClosing) {
@@ -58,7 +112,12 @@ QString RadioModel::daxTxOwnershipUnavailableReason(bool take) const
     }
     const bool preparingDax = std::any_of(m_daxTxInputs.cbegin(), m_daxTxInputs.cend(),
         [](const TxCoordinator::Request::Weak& input) { return input.lock().valid(); });
-    if (isRadioTransmitting() || transmitOwnershipPending() || preparingDax
+    // A locally completed over retains its TX actor until qualified stop
+    // evidence. Non-keying selection may use fresh RX without clearing it.
+    const bool locallyIdle = !transmitOwnershipPending()
+        || (m_txCoordinator.hasUnconfirmedLocalCompletion() && m_daxTxSelectionRxObserved
+            && m_pendingTxDeliveries == 0 && !m_txCoordinator.hasInFlightDispatches());
+    if (!radioReceivingForTransmitDax() || !locallyIdle || preparingDax || m_daxTxCreatePending
         || m_wsprTxInput.originalSessionCurrent()) {
         return tr("Finish the current transmission or transmit preparation before changing DAX TX stream selection.");
     }
@@ -141,7 +200,11 @@ void RadioModel::publishDaxTxOwnership()
     const bool ready = isConnected() && m_daxTxStreamId != 0 && m_daxTxClientHandle != 0
         && m_daxTxClientHandle == ourClientHandle() && m_daxTxKnown && m_daxTxActive
         && !m_daxTxUncertain && !releasing;
-    if (!ready || !m_daxTxAudioPermit.permitsStream(m_daxTxStreamId)) {
+    const bool unallocated = isConnected() && !m_txSessionClosing
+        && backendCapabilities().hasDaxStreams && ourClientHandle() != 0
+        && m_daxTxStreamId == 0 && !m_daxTxUncertain && !releasing && !m_daxTxOwnershipIntent;
+    if (!(ready && m_daxTxAudioPermit.permitsStream(m_daxTxStreamId))
+        && !(unallocated && m_daxTxAudioPermit.allowsStreamCreation())) {
         const bool hadGrant = !m_daxTxAudioPermit.sameGrant(DaxTxAudioPermit::blocked());
         m_daxTxAudioPermit.revoke();
         m_daxTxAudioPermit = DaxTxAudioPermit::blocked();
@@ -149,6 +212,7 @@ void RadioModel::publishDaxTxOwnership()
         if (!self || session != m_daxTxSession || incarnation != m_daxTxIncarnation
             || revision != m_daxTxObservationRevision) { return; }
         if (ready) { m_daxTxAudioPermit = DaxTxAudioPermit::confirmed(m_daxTxStreamId); }
+        else if (unallocated) { m_daxTxAudioPermit = DaxTxAudioPermit::unallocated(); }
     }
     emit daxTxAudioRouteChanged(ready ? m_daxTxStreamId : 0, m_daxTxAudioPermit);
     if (self) { emit daxTxOwnershipChanged(); }
@@ -217,6 +281,7 @@ void RadioModel::interruptDaxTxOwnership(const QString& reason)
 void RadioModel::resetDaxTxOwnership()
 {
     m_daxTxGuardTimer.stop();
+    m_daxTxSelectionRxObserved = false;
     retireDaxTxInputs();
     m_daxTxAudioPermit.revoke();
     ++m_daxTxSession;

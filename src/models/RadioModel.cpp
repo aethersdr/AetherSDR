@@ -2161,6 +2161,8 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_daxTxGuardTimer, &QTimer::timeout, this, &RadioModel::refreshDaxTxOwnershipGuards);
     connect(this, &RadioModel::profileLoadStarted, this, &RadioModel::refreshDaxTxOwnershipGuards);
     connect(this, &RadioModel::profileLoadCompleted, this, &RadioModel::refreshDaxTxOwnershipGuards);
+    connect(this, &RadioModel::connectionStateChanged, this, &RadioModel::publishDaxTxOwnership);
+    connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::publishDaxTxOwnership);
     connect(this, &RadioModel::radioTransmittingChanged, this, [this](bool transmitting) {
         if (transmitting) {
             interruptDaxTxOwnership(tr("Transmission interrupted DAX TX ownership. Waiting for fresh radio status."));
@@ -12226,6 +12228,7 @@ void RadioModel::onStatusReceived(const QString& object,
             const bool radioTx = (state == "TRANSMITTING");
             m_radioTransmitting = radioTx;
             m_interlockState = state;
+            m_daxTxSelectionRxObserved = radioReceivingForTransmitDax();
             emit radioTransmittingChanged(radioTx);
 
             // Hardware PTT (mic, ACC, RCA TXREQ) and VOX key the radio without

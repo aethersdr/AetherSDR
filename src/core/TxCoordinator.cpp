@@ -1136,6 +1136,11 @@ bool TxCoordinator::hasOwnership() const
     return onThread() && (m_active.m_state || m_unconfirmed.m_state || m_stopping.m_state);
 }
 
+bool TxCoordinator::hasUnconfirmedLocalCompletion() const
+{
+    return onThread() && m_unconfirmed.m_state && !m_active.m_state && !m_stopping.m_state;
+}
+
 bool TxCoordinator::acknowledgeStopped(const Operation& operation)
 {
     if (!onThread()) {

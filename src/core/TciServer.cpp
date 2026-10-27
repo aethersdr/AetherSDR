@@ -2372,6 +2372,7 @@ void TciServer::drainDeferredRoutingAndPtt()
     if (!m_pendingTrxRequest) {
         return;
     }
+    if (m_pendingTrxRequest->waitingForDax) { return; }
 
     const PendingTrxRequest pending = *m_pendingTrxRequest;
     m_pendingTrxRequest.reset();
@@ -2414,6 +2415,9 @@ void TciServer::retireTrxRequest(TciClient* client, const TxCoordinator::Request
         return;
     }
     const bool wantsAudio = state->pttWantsAudio;
+    if (m_pendingTrxRequest && m_pendingTrxRequest->txRequest.sameRequest(request)) {
+        m_pendingTrxRequest.reset();
+    }
     // Retire before replying: a fresh or reentrant input must not inherit
     // a refused request's source classification or DAX grant.
     state->pttRequest = {};
@@ -2472,8 +2476,41 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
             receiver->replyText(requester, QStringLiteral("trx:%1,false;").arg(trx));
         }
     };
+    if (request.transmitting && m_pendingTrxRequest && m_pendingTrxRequest->waitingForDax
+        && !m_pendingTrxRequest->txRequest.sameRequest(txRequest)) {
+        refuse();
+        return;
+    }
     if (request.transmitting && wantsAudio) {
         if (m_model->backendCapabilities().hasDaxStreams && !daxPermit.permits()) {
+            if (m_pendingTrxRequest && m_pendingTrxRequest->waitingForDax
+                && m_pendingTrxRequest->txRequest.sameRequest(txRequest)) {
+                return;
+            }
+            const QPointer<SliceModel> rxIdentity = sliceForTrxStrict(effectiveTrx(client, request.trx));
+            if (daxPermit.allowsStreamCreation() && txRequest.valid() && rxIdentity && !m_tciPttClient
+                && !m_pendingTrxRequest) {
+                m_pendingTrxRequest = PendingTrxRequest{
+                    client, request, txRequest, wantsAudio, daxPermit, true};
+                const bool preparing = m_model->prepareTciDaxTxStream(txRequest, daxPermit,
+                    [receiver, requester, txRequest, rxIdentity, trx = request.trx, refuse](
+                            const DaxTxAudioPermit& permit) {
+                        if (!receiver || !requester || !receiver->m_pendingTrxRequest
+                            || !receiver->m_pendingTrxRequest->txRequest.sameRequest(txRequest)) { return; }
+                        ClientState* state = receiver->clientStateFor(requester);
+                        if (!state || !state->pttRequest.sameRequest(txRequest)
+                            || !txRequest.valid() || !permit.permits() || !rxIdentity
+                            || receiver->sliceForTrxStrict(receiver->effectiveTrx(requester, trx)) != rxIdentity) {
+                            refuse();
+                            return;
+                        }
+                        state->pttDaxPermit = permit;
+                        receiver->m_pendingTrxRequest->daxPermit = permit;
+                        receiver->m_pendingTrxRequest->waitingForDax = false;
+                        receiver->drainDeferredRoutingAndPtt();
+                    });
+                if (preparing) { return; }
+            }
             refuse();
             return;
         }
