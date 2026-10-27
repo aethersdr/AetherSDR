@@ -930,7 +930,19 @@ private slots:
         // Not a whole tarball: not zstd, cut short, no end, data after the
         // end, a window larger than a release needs.
         const QByteArray good = releaseTarball(tree);
+        QString problem;
         QVERIFY(refused(QByteArray("not a tarball")));
+        // A whole, matching tarball but for one header whose checksum no
+        // longer matches it: a byte of the folder's mode changed after it
+        // was summed.
+        QList<TarEntry> entries{{"plugins/", '5', {}, {}, {}}, {"AppRun", '2', {}, "AetherSDR.exe", {}}};
+        for (auto it = tree.cbegin(); it != tree.cend(); ++it) {
+            entries.append({it.key().toUtf8(), '0', it.value(), {}, {}});
+        }
+        QByteArray stale = ustar(entries);
+        QVERIFY(UpdateStager::applyFullTar(zstdRaw(stale), files, staging, &problem));   // as built, it is good
+        stale[100] = '1';
+        QVERIFY(refused(zstdRaw(stale)));
         QVERIFY(refused(good.left(good.size() / 2)));
         QVERIFY(refused(good.left(good.size() - 1)));
         QVERIFY(refused(releaseTarball(tree, {}, {}, {})));
@@ -939,7 +951,6 @@ private slots:
         QVERIFY(!QFileInfo::exists(tmp.filePath(QStringLiteral("evil.so"))));
         QVERIFY(!QFileInfo::exists(tmp.filePath(QStringLiteral("work/evil.so"))));
         // The good one, and the same once cancelled.
-        QString problem;
         QVERIFY2(UpdateStager::applyFullTar(good, files, staging, &problem), qPrintable(problem));
         std::atomic_bool cancelled{true};
         QVERIFY(!UpdateStager::applyFullTar(good, files, staging, &problem, &cancelled));

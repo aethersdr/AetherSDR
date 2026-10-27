@@ -1,6 +1,7 @@
 #include "LinuxInstall.h"
 
 #include "LogManager.h"
+#include "VersionNumber.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -307,47 +308,64 @@ bool LinuxInstall::selfTest(const QString& tree, const QString& version)
     return ok;
 }
 
-bool LinuxInstall::switchTo(const QString& base, const QString& stagedDir, const QString& version,
-                            const QString& keep, const SelfTest& test, QString* problem)
+LinuxInstall::Switch LinuxInstall::switchTo(const QString& base, const QString& stagedDir, const QString& version,
+                                            const QString& keep, const SelfTest& test, bool retry, QString* problem)
 {
     if (!isVersion(version) || version == keep) {
         *problem = QStringLiteral("%1 is not a release to switch to.").arg(version);
-        return false;
+        return Switch::Refused;
     }
-    if (currentVersion(base) == version) {
-        *problem = QStringLiteral("AetherSDR %1 is already the current release.").arg(version);
-        return false;
+    std::error_code ec;
+    // Installed by hand meanwhile (--install, or current pointed at it):
+    // there is nothing left to do, and never a step back.
+    const QString was = currentVersion(base);
+    if (isVersion(was) && VersionNumber::parse(was) >= VersionNumber::parse(version)) {
+        fs::remove_all(toPath(stagedDir), ec);
+        qCInfo(lcUpdater).noquote() << "v" + was + " is already current; v" + version + " not switched to";
+        return Switch::Current;
     }
     const QString dest = QDir(base).filePath(version);
-    std::error_code ec;
     fs::remove_all(toPath(dest), ec);   // a leftover: current never names it
     if (!moveTree(stagedDir, dest, false, problem)) {
-        return false;
+        return Switch::Refused;
     }
+    // Back to staging, untouched, for the next try.
+    const auto putBack = [&]() {
+        std::error_code e;
+        fs::rename(toPath(dest), toPath(stagedDir), e);
+        if (e) {
+            fs::remove_all(toPath(dest), e);
+        }
+        return Switch::Kept;
+    };
     if (!test(dest, version)) {
+        if (retry) {
+            *problem = QStringLiteral("AetherSDR %1 didn't pass its start-up check this time; it is tried again "
+                                      "at the next quit.")
+                           .arg(version);
+            return putBack();
+        }
         fs::remove_all(toPath(dest), ec);
-        *problem = QStringLiteral("AetherSDR %1 failed its start-up check, so it wasn't installed.")
-                       .arg(version);
-        return false;
+        *problem = QStringLiteral("AetherSDR %1 failed its start-up check, so it wasn't installed.").arg(version);
+        return Switch::Failed;
     }
     if (!makeCurrent(base, version, problem)) {
-        fs::remove_all(toPath(dest), ec);
-        return false;
+        return putBack();
     }
-    // The new release and the one it replaced stay; older releases and
-    // anything a crashed switch left go.
+    // The new release, the one running and the one current named stay;
+    // older releases and anything a crashed switch left go.
     for (const QFileInfo& e : QDir(base).entryInfoList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot
                                                        | QDir::System)) {
         const QString name = e.fileName();
         const bool leftover = name.startsWith(QLatin1String(".partial-"))
                               || name.startsWith(QLatin1String(".current-"))
                               || name.startsWith(QLatin1String(".old-"));
-        if ((isVersion(name) && name != version && name != keep) || leftover) {
+        if ((isVersion(name) && name != version && name != keep && name != was) || leftover) {
             fs::remove_all(toPath(e.filePath()), ec);
         }
     }
     qCInfo(lcUpdater).noquote() << "v" + version + " is now the current release in" << base;
-    return true;
+    return Switch::Switched;
 }
 
 bool LinuxInstall::startAfterExit(qint64 pid, const QString& program)

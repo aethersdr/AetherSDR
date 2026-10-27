@@ -35,8 +35,9 @@ public:
 
     // Windows: copies the helper beside the state and starts it, waiting for
     // this process to exit. Linux: switches to the staged release now,
-    // after its self-test (LinuxInstall::switchTo); a release that fails it
-    // is removed and remembered as rolled back. restart: start the app
+    // after its self-test (LinuxInstall::switchTo). A release that fails it
+    // on Restart to update is removed and remembered as rolled back; as
+    // AetherSDR quits it stays staged, to try again. restart: start the app
     // again once this one has exited (Restart to update); otherwise it
     // takes effect as AetherSDR quits. False with problem set when nothing
     // was handed over, and elsewhere.

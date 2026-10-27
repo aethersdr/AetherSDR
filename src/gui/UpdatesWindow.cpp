@@ -292,10 +292,10 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget*
     m_get->setObjectName(QStringLiteral("updatesGet"));
     m_get->setCursor(Qt::PointingHandCursor);
     actions->addWidget(m_get);
-    m_download = new QPushButton(tr("Download installer"));
+    m_download = new QPushButton(tr("Download release"));
     m_download->setObjectName(QStringLiteral("updatesGhost"));
     m_download->setCursor(Qt::PointingHandCursor);
-    m_download->setAccessibleName(tr("Download installer"));
+    m_download->setAccessibleName(tr("Download release"));
     actions->addWidget(m_download);
     m_notes = new QPushButton(tr("Full release notes"));
     m_notes->setObjectName(QStringLiteral("updatesSecondary"));

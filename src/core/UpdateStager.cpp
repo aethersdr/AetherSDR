@@ -434,6 +434,20 @@ bool checkTree(const fs::path& stage, const QList<UpdateManifest::File>& files, 
     return true;
 }
 
+// A ustar header block: its checksum (the header's bytes summed, the checksum
+// field counted as spaces) and the ustar magic. Patch bundles and full
+// tarballs both read headers this way.
+bool ustarHeaderValid(const QByteArray& header)
+{
+    quint32 sum = 0;
+    for (int i = 0; i < kTarBlock; ++i) {
+        sum += (i >= 148 && i < 156) ? quint32(' ') : quint32(quint8(header[i]));
+    }
+    bool ok = false;
+    const quint32 stored = header.mid(148, 8).trimmed().replace('\0', "").toUInt(&ok, 8);
+    return ok && stored == sum && header.mid(257, 5).startsWith("ustar");
+}
+
 // The window a full release's .tar.zst may need: zstd -19 uses 2^23 and
 // --long 2^27. Its bytes are already checked against the signed SHA-256.
 constexpr int kMaxFullWindowLog = 27;
@@ -535,15 +549,10 @@ private:
             *problem = QStringLiteral("The full release is damaged: %1.").arg(why);
             return false;
         };
-        quint32 sum = 0;
-        for (int i = 0; i < kTarBlock; ++i) {
-            sum += (i >= 148 && i < 156) ? quint32(' ') : quint32(quint8(m_header[i]));
-        }
-        bool ok = false;
-        const quint32 stored = field(m_header, 148, 8).trimmed().toUInt(&ok, 8);
-        if (!ok || stored != sum || !m_header.mid(257, 5).startsWith("ustar")) {
+        if (!ustarHeaderValid(m_header)) {
             return damaged(QStringLiteral("bad header"));
         }
+        bool ok = false;
         const qint64 size = field(m_header, 124, 12).trimmed().toLongLong(&ok, 8);
         if (!ok || size < 0) {
             return damaged(QStringLiteral("bad header"));
@@ -893,15 +902,10 @@ bool UpdateStager::readBundle(const QByteArray& bundle, QHash<QString, QByteArra
         if (header.count('\0') == kTarBlock) {
             return true;
         }
-        quint32 sum = 0;
-        for (int i = 0; i < kTarBlock; ++i) {
-            sum += (i >= 148 && i < 156) ? quint32(' ') : quint32(quint8(header[i]));
-        }
-        bool ok = false;
-        const quint32 stored = header.mid(148, 8).trimmed().replace('\0', "").toUInt(&ok, 8);
-        if (!ok || stored != sum || !header.mid(257, 5).startsWith("ustar")) {
+        if (!ustarHeaderValid(header)) {
             return broken(QStringLiteral("bad header"));
         }
+        bool ok = false;
         const char type = header[156];
         const QString name = QString::fromLatin1(header.left(100).split('\0').first());
         if ((type != '0' && type != '\0') || header[345] != '\0' || !memberName().match(name).hasMatch()

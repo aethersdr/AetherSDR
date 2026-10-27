@@ -108,7 +108,7 @@ private:
     QWidget*     m_chips{nullptr};
     FlowLayout*  m_chipsLayout{nullptr};
     QPushButton* m_get{nullptr};
-    QPushButton* m_download{nullptr};   // "Download installer": the browser route beside Install update
+    QPushButton* m_download{nullptr};   // "Download release": the browser route beside Install update
     QWidget*     m_progressRow{nullptr};
     QLabel*      m_progressLabel{nullptr};
     QProgressBar* m_progress{nullptr};

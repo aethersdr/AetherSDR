@@ -402,10 +402,17 @@ because `~/.local/share/AetherSDR` already holds user data. `LinuxInstall`
   removed. A rename over a link is atomic, and the running tree is never
   touched, so there is no window with nothing runnable, no journal and no
   repair.
-- If the self-test fails, the new folder is removed and `current` is
-  unchanged; the release is remembered as rolled back, and on the quit path
-  `swap-result.txt` says `RolledBack <version>` for the next start, as the
-  helper's would. Success writes `Updated <version>`.
+- If the self-test fails on **Restart to update**, the new folder is
+  removed, `current` is unchanged and the release is remembered as rolled
+  back; the window says so at once. As AetherSDR **quits**, a failure may be
+  the session's rather than the release's (a logout takes the display away
+  first), so the tree goes back to staging and is tried again at the next
+  quit or Restart (a maintainer ruling). If `current` cannot be changed, the
+  tree goes back to staging too. Success writes `Updated <version>` to
+  `swap-result.txt` for the next start.
+- If `current` already names that release or a newer one (installed by hand
+  meanwhile), the staged tree is dropped and nothing is switched: never a
+  step back. Cleanup never removes the folder `current` named.
 - **Restart to update** then starts `current/AppRun` once this process has
   exited (a `/bin/sh` loop polling the pid, two minutes at most), so two
   instances never overlap.
@@ -429,7 +436,7 @@ helper has it and waits for AetherSDR to exit).
   Linux: an install `--install` made (see above).
   Otherwise, or once a release falls back from the full download, the
   window keeps **Get AetherSDR** in the browser. Beside Install update, a
-  **Download installer** link keeps the browser route (Phase 3 ruling).
+  **Download release** link keeps the browser route (a maintainer ruling).
 - Staging requests `fullFallback`, with GitHub's latest as the freeze
   check's tag. Closing the window while it stages cancels it (a maintainer
   ruling); a staged release stays.

@@ -162,35 +162,34 @@ bool UpdateInstaller::launchHelper(const QString& stagedDir, const QString& vers
     // reported at the next start, as the helper's is.
     const LinuxInstall::Paths paths = LinuxInstall::forThisUser();
     const QString running = LinuxInstall::treeOf(LinuxInstall::binaryDir(), paths.base);
-    const QString state = stateDir();
-    const auto record = [&state, &version](updater::Outcome outcome) {
-        QDir().mkpath(state);
-        QSaveFile f(QDir(state).filePath(QStringLiteral("swap-result.txt")));
-        if (f.open(QIODevice::WriteOnly)) {
-            f.write(QByteArray(updater::outcomeName(outcome)) + ' ' + version.toUtf8() + '\n');
-            f.commit();
-        }
-    };
     if (running.isEmpty()) {
         *problem = QStringLiteral("This copy wasn't installed with AetherSDR --install.");
         return false;
     }
-    if (!LinuxInstall::switchTo(paths.base, stagedDir, version, QFileInfo(running).fileName(),
-                                LinuxInstall::selfTest, problem)) {
-        if (!QFileInfo::exists(stagedDir)) {
-            // It failed its self-test, never to be offered again; or the move
-            // failed, leaving nothing staged to retry. Restart to update
-            // shows that now; a quit leaves it for the next start to say.
-            UpdateSettings::setRolledBackVersion(version);
-            if (!restart) {
-                record(updater::Outcome::RolledBack);
-            }
-        }
+    // Restart to update runs in a live session, so a failed self-test there
+    // is the release's fault. As AetherSDR quits it may be the session's
+    // (a logout takes the display away first): then it is kept, to try again.
+    using Switch = LinuxInstall::Switch;
+    const Switch result = LinuxInstall::switchTo(paths.base, stagedDir, version, QFileInfo(running).fileName(),
+                                                 LinuxInstall::selfTest, !restart, problem);
+    if (result == Switch::Failed) {
+        UpdateSettings::setRolledBackVersion(version);   // never offered again
+    }
+    if (result == Switch::Failed || result == Switch::Kept || result == Switch::Refused) {
         qCWarning(lcUpdater).noquote() << "update to v" + version + " not installed:" << *problem;
         return false;
     }
-    record(updater::Outcome::Updated);
-    // The tree has moved into the install; its record goes with it.
+    const QString state = stateDir();
+    if (result == Switch::Switched) {
+        QDir().mkpath(state);
+        QSaveFile f(QDir(state).filePath(QStringLiteral("swap-result.txt")));
+        if (f.open(QIODevice::WriteOnly)) {
+            f.write(QByteArray(updater::outcomeName(updater::Outcome::Updated)) + ' ' + version.toUtf8() + '\n');
+            f.commit();
+        }
+    }
+    // The tree has moved into the install (or was not needed): its record
+    // goes with it.
     UpdateStager::discard(state, version);
     if (restart) {
         const QString run = QDir(paths.base).filePath(QStringLiteral("current/AppRun"));

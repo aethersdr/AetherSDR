@@ -26,7 +26,7 @@ When a newer release exists, the window shows:
 
 - **NEW RELEASE** with its date, the version, and the release's one-line summary.
 - **WHAT'S INSIDE**: one chip for each chapter of the release notes.
-- **Install update** (Windows, and Linux installed for updates): see [Installing an update](#installing-an-update). **Download installer** beside it opens the download in your browser instead, if you'd rather install it yourself.
+- **Install update** (Windows, and Linux installed for updates): see [Installing an update](#installing-an-update). **Download release** beside it opens the download in your browser instead, if you'd rather install it yourself.
 - **Get AetherSDR** *version* (macOS, the Linux AppImage, and Windows or Linux when it can't install in place): opens the download in your browser. The line under it names the file: the Windows installer, the Windows portable zip if you run the portable copy, the macOS Apple silicon disk image, or the Linux AppImage for your processor. When there is no build for your computer, it opens the release page instead.
 - **Full release notes**: opens the release page on GitHub.
 - **Skip this version**: hides the **UPDATE** badge for this release. The window still shows it, and the next release shows the badge again. Skipping a release you already downloaded with **Install update** removes the download, so it doesn't install. Clicking **Install update** on a release you skipped un-skips it.
@@ -50,7 +50,7 @@ Most updates download only what changed since your version. When that isn't poss
 Before the new version goes in, it is started once with a quick check, without a window or the radio. If that check fails, your previous version stays, and that release is never offered again.
 
 - **Windows:** a small updater swaps the new version in after AetherSDR quits. If the check fails, your previous version is put back. The previous version is kept beside the new one (in a folder named like your install with `.previous` after it) until the next update.
-- **Linux:** the new version goes in its own folder beside yours, and only once it passes the check does it become the one your menu entry and the `aethersdr` command start. The version you were running is kept until the next update; see [Going back to the previous version on Linux](#going-back-to-the-previous-version-on-linux).
+- **Linux:** the new version goes in its own folder beside yours, and only once it passes the check does it become the one your menu entry and the `aethersdr` command start. If the check fails as AetherSDR quits, for example while you log out, the update stays ready and is tried again next time; only a failure after **Restart to update** stops it being offered. The version you were running is kept until the next update; see [Going back to the previous version on Linux](#going-back-to-the-previous-version-on-linux).
 
 The next time AetherSDR starts, the status bar says what happened: **Updated to AetherSDR** *version*, or that the update didn't start and your previous version was restored.
 

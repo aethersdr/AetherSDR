@@ -59,12 +59,23 @@ public:
     using SelfTest = std::function<bool(const QString& tree, const QString& version)>;
     static bool selfTest(const QString& tree, const QString& version);
 
+    // What the switch did.
+    enum class Switch {
+        Switched,   // version is current; stagedDir is gone
+        Current,    // current already ran version or a newer release; stagedDir removed
+        Kept,       // nothing changed and stagedDir is back where it was, to try again
+        Failed,     // it failed its self-test and was removed (only when !retry)
+        Refused,    // nothing was moved: not a release to switch to
+    };
     // The switch: moves stagedDir to <base>/<version>, runs test on it, and
-    // only if it passes makes it current. Every release folder except
-    // version and keep (the running release) is then removed. When the test
-    // fails, the new folder is removed and current is untouched.
-    static bool switchTo(const QString& base, const QString& stagedDir, const QString& version,
-                         const QString& keep, const SelfTest& test, QString* problem);
+    // only if it passes makes it current. Afterwards every release folder
+    // except version, keep (the running release) and what current named is
+    // removed. current is never changed otherwise: a failed test, or a
+    // failure to change it, leaves it as it was. retry: a failed test puts
+    // the tree back in stagedDir (Kept) rather than removing it (Failed), for
+    // a test that may have failed for want of a display, as AetherSDR quits.
+    static Switch switchTo(const QString& base, const QString& stagedDir, const QString& version,
+                           const QString& keep, const SelfTest& test, bool retry, QString* problem);
 
     // Starts program once process pid has exited, giving up after two
     // minutes: Restart to update's relaunch, without a second instance
