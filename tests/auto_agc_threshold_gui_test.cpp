@@ -23,6 +23,9 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
+#include <QFont>
+#include <QFontDatabase>
+#include <QFontMetrics>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -30,9 +33,14 @@
 #include <QJsonValue>
 #include <QLabel>
 #include <QPointer>
+#include <QPoint>
 #include <QPalette>
 #include <QPushButton>
+#include <QRect>
+#include <QScopeGuard>
 #include <QSlider>
+#include <QStyle>
+#include <QStyleOptionButton>
 #include <QStringList>
 #include <QVector>
 #include <QtTest>
@@ -323,6 +331,70 @@ private slots:
     {
         QVERIFY2(QFile::exists(QStringLiteral(":/themes/default-dark.json")),
             "Link THEME_TEST_RESOURCES so screenshots use the production theme resources");
+    }
+
+    void compactLayoutFitsDock_data()
+    {
+        QTest::addColumn<QString>("fontFamily");
+        // DejaVu Sans is the row that needs the compact preset padding (#6641);
+        // a host without it runs only rows that already fit.
+        QTest::newRow("system") << QString();
+        const QStringList families = QFontDatabase::families();
+        for (const QString& family : {QStringLiteral("DejaVu Sans"),
+                                      QStringLiteral("Liberation Sans")}) {
+            if (families.contains(family)) {
+                QTest::newRow(qPrintable(family)) << family;
+            }
+        }
+    }
+
+    void compactLayoutFitsDock()
+    {
+        QFETCH(QString, fontFamily);
+        const QFont defaultFont = QApplication::font();
+        const auto restoreFont = qScopeGuard([defaultFont] {
+            QApplication::setFont(defaultFont);
+        });
+        if (!fontFamily.isEmpty()) {
+            QFont font = defaultFont;
+            font.setFamily(fontFamily);
+            QApplication::setFont(font);
+        }
+
+        Fixture fixture;
+        QVERIFY(fixture.capture(QStringLiteral("compact-layout-")
+            + (fontFamily.isEmpty() ? QStringLiteral("system") : fontFamily)));
+        QCOMPARE(fixture.rx.width(), 248);
+        QVERIFY(fixture.rx.minimumSizeHint().width() <= 248);
+        QVERIFY(fixture.threshold());
+        QVERIFY(fixture.threshold()->width() >= 60);
+        for (QWidget* widget : fixture.rx.findChildren<QWidget*>()) {
+            if (widget->isVisibleTo(&fixture.rx) && !widget->isWindow()) {
+                const QRect bounds(widget->mapTo(&fixture.rx, QPoint()), widget->size());
+                QVERIFY2(fixture.rx.rect().contains(bounds),
+                    qPrintable(widget->accessibleName().isEmpty()
+                        ? QString::fromLatin1(widget->metaObject()->className())
+                        : widget->accessibleName()));
+            }
+        }
+
+        const QStringList presets{QStringLiteral("1.8K"), QStringLiteral("2.1K"),
+            QStringLiteral("2.4K"), QStringLiteral("2.7K"),
+            QStringLiteral("2.9K"), QStringLiteral("3.3K")};
+        int presetCount = 0;
+        for (QPushButton* button : fixture.rx.findChildren<QPushButton*>()) {
+            if (presets.contains(button->text())) {
+                ++presetCount;
+                QVERIFY(button->isVisibleTo(&fixture.rx));
+                QStyleOptionButton option;
+                option.initFrom(button);
+                const QRect contents = button->style()->subElementRect(
+                    QStyle::SE_PushButtonContents, &option, button);
+                QVERIFY(button->fontMetrics().horizontalAdvance(button->text())
+                    <= contents.width());
+            }
+        }
+        QCOMPARE(presetCount, 6);
     }
 
     void bridgeClickWaitsForConfirmedStatus()

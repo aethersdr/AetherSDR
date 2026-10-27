@@ -124,8 +124,8 @@ Decoded text is published to the MQTT topic `aethersdr/cw/decode`, one JSON mess
 | **Sens** | 0–100 (default 30). Hides low-confidence characters: 0 shows everything, higher values show only confident decodes. |
 | **🔒P** | Lock the decoder's pitch at the current value |
 | **🔒S** | Lock the decoder's speed at the current WPM |
-| **Pitch** | Pitch search range, 300–1200 Hz (default 500–700 Hz) |
-| **WPM** | Speed search range, 5–60 WPM (default 15–40 WPM) |
+| **Pitch** | Pitch search range, 300–1200 Hz (default 500–700 Hz), remembered and the same on every pan |
+| **WPM** | Speed search range, 5–60 WPM (default 15–40 WPM), remembered and the same on every pan |
 | **CPY ALL** / **CPY VIS** | Copy all decoded text, or just the visible text, to the clipboard |
 | **A− / A+** | Decoded-text size (8–32 px), remembered |
 | **CLR** | Clear the decoded text |
@@ -153,7 +153,6 @@ Colors are based on ggmorse's cost function:
 ## Known issues
 
 - The decoder shows no text on some FLEX-8600 setups ([#6158](https://github.com/aethersdr/AetherSDR/issues/6158)).
-- The pitch search range is not kept when a slice is reopened, even with both range locks engaged ([#5921](https://github.com/aethersdr/AetherSDR/issues/5921)).
 - The squelch threshold line can appear on the panadapter in CW, although squelch is unavailable there ([#6276](https://github.com/aethersdr/AetherSDR/issues/6276)).
 
 ## Troubleshooting

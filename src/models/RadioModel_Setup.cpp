@@ -56,6 +56,39 @@ RadioSetupCompletion RadioModel::fencedSetupCompletion(
     return reply;
 }
 
+namespace {
+QString setupOperationLabel(const RadioSetupRequest& request)
+{
+    using Field = RadioSetupRequest::Field;
+    switch (request.field) {
+    case Field::LineoutGain:
+        return QStringLiteral("line output gain %1").arg(std::get<int>(request.value));
+    case Field::LineoutMute:
+        return QStringLiteral("line output mute %1").arg(int(std::get<bool>(request.value)));
+    case Field::HeadphoneGain:
+        return QStringLiteral("headphone gain %1").arg(std::get<int>(request.value));
+    case Field::HeadphoneMute:
+        return QStringLiteral("headphone mute %1").arg(int(std::get<bool>(request.value)));
+    case Field::FrontSpeakerMute:
+        return QStringLiteral("front speaker mute %1").arg(int(std::get<bool>(request.value)));
+    case Field::ShowTxInWaterfall:
+        return QStringLiteral("show TX in waterfall %1").arg(int(std::get<bool>(request.value)));
+    case Field::Callsign: case Field::ClientStation: case Field::PrivateIpPolicy:
+    case Field::NetworkMtu: case Field::Dhcp: case Field::StaticNetwork:
+    case Field::AccTxDelayMs: case Field::TxDelayMs: case Field::Tx1DelayMs:
+    case Field::Tx2DelayMs: case Field::Tx3DelayMs: case Field::TimeoutMs:
+    case Field::MaximumPowerPercent: case Field::MeterDuringReceive:
+    case Field::SyncCwx: case Field::RttyMarkDefaultHz:
+    case Field::CalibrationFrequencyMhz: case Field::FrequencyCorrectionPpb:
+    case Field::ReferenceSource: case Field::MuteLocalWhenRemote:
+    case Field::BinauralReceive: case Field::SharpnessLevel: case Field::SharpnessAuto:
+    case Field::LowLatencyDigital: case Field::StartFrequencyCalibration: case Field::Count:
+        return QStringLiteral("radio setup");
+    }
+    return QStringLiteral("radio setup");
+}
+}
+
 ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
                                              QObject* replyContext,
                                              const RadioSetupCompletion& completion)
@@ -90,7 +123,7 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
     };
     const auto refuse = [&](bool announce = true) {
         if (reply) { reply({RadioSetupReply::Kind::Refused, -1, QStringLiteral("configuration not dispatched")}); }
-        if (alive && announce) { reportReceiveDispatch(ReceiveDispatch::Unsupported, QStringLiteral("radio setup")); }
+        if (alive && announce) { reportReceiveDispatch(ReceiveDispatch::Unsupported, setupOperationLabel(request)); }
         return ReceiveDispatch::Unsupported;
     };
     if (!request.valid()) { return refuse(false); }
@@ -156,17 +189,26 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
 }
 
 ReceiveDispatch RadioModel::requestTxBand(const TxBandRequest& request,
-                                         std::optional<RadioControlSession> expectedSession)
+                                         std::optional<RadioControlSession> expectedSession,
+                                         QObject* replyContext,
+                                         const RadioSetupCompletion& completion)
 {
     if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
     const QPointer<RadioModel> alive(this);
     const RadioControlSession session = controlSession();
-    if (expectedSession && *expectedSession != session) { return ReceiveDispatch::Unsupported; }
+    const RadioSetupCompletion reply = fencedSetupCompletion(replyContext, completion);
+    if (expectedSession && *expectedSession != session) {
+        if (reply) { reply({RadioSetupReply::Kind::Cancelled, -1, QStringLiteral("Original TX band editor session ended.")}); }
+        return ReceiveDispatch::Unsupported;
+    }
     const ReceiveDispatch result = m_backend && controlSessionCurrent(session)
         && request.valid() && m_txBandSettings.contains(request.bandId)
-        ? m_backend->requestTxBand(request) : ReceiveDispatch::Unsupported;
+        ? m_backend->requestTxBand(request, reply) : ReceiveDispatch::Unsupported;
     if (alive && session == controlSession()) {
-        reportReceiveDispatch(result, QStringLiteral("TX band setting"));
+        if (result == ReceiveDispatch::Unsupported && reply) {
+            reply({RadioSetupReply::Kind::Refused, -1, QStringLiteral("TX band setting not dispatched")});
+        }
+        if (alive) { reportReceiveDispatch(result, QStringLiteral("TX band setting")); }
     }
     return result;
 }

@@ -63,6 +63,14 @@ public:
         // continuous outbound stream (750 packets/s, ~260 kB/s).
         bool speakerAudioEnabled = false;
 
+        // Live, like the attenuators: setBandFiltersEnabled()/setSpeakerAmpMuted()
+        // change them mid-session, and these are what the session starts with.
+        // Select the receive band-pass filter for the tuned frequency on both ADCs
+        // instead of holding the banks bypassed (alexRxFilterFor()).
+        bool bandFiltersEnabled = false;
+        // Mute the radio's speaker amplifier (byte 1400 bit 1).
+        bool speakerAmpMuted = false;
+
         // Multi-DDC session. EMPTY (default) = single DDC0 built from ddc0RateKsps/
         // ddc0AdcIndex. Non-empty is authoritative and those two fields are ignored;
         // entry n configures DDC n, capped at kMaxDdcs by the packet builders.
@@ -90,6 +98,14 @@ public:
     // 100 ms, so a value held anywhere else would be overwritten by the next
     // tick. An out-of-range adcIndex is ignored.
     Q_INVOKABLE void setStepAttenuationDb(int adcIndex, int db);
+
+    // Select the band-pass filter for the tuned frequency on both ADCs (true),
+    // or leave the banks to the bypass flags (false). Same cadence contract as
+    // setStepAttenuationDb(): sent at once when running, then by every keepalive.
+    Q_INVOKABLE void setBandFiltersEnabled(bool on);
+
+    // Mute or unmute the radio's speaker amplifier. Same cadence contract.
+    Q_INVOKABLE void setSpeakerAmpMuted(bool on);
 
     // Hand over demodulated receiver audio for the radio's speaker: L,R,... int16 in
     // HOST order at kSpeakerSampleRateHz (buildSpeakerAudio() byte-swaps). One call
@@ -248,16 +264,22 @@ private:
 
     QHostAddress m_host;
     std::uint32_t m_ddc0FreqWord = 0;   // last value sent; the keepalive resends this
-    // Set once from Params at start(); every buildHighPriority() call for
-    // the rest of this session (the keepalive tick included) carries these
-    // same values, since there is no live setter for either (see Params'
-    // own comment on why these are connect-time-only).
+    // Set once from Params at start(), since there is no live setter for
+    // either (see Params' own comment on why these are connect-time-only).
+    // While m_bandFiltersEnabled is set, a run=1 packet's band filter
+    // replaces them (highPriorityOptions()); the stop packet always uses them.
     bool m_bypassAdc0Filters = true;
     bool m_bypassAdc1Filters = true;
     // Step attenuation per ADC, seeded from Params at start() and changed
     // live by setStepAttenuationDb(); every buildHighPriority() carries it.
     int m_adc0AttenuationDb = 0;
     int m_adc1AttenuationDb = 0;
+    // The two live options, seeded from Params at start() and changed by their
+    // setters. m_ddc0FreqHz moves with m_ddc0FreqWord: the filter is chosen in
+    // hertz, which the phase word cannot give back without the sample clock.
+    bool m_bandFiltersEnabled = false;
+    bool m_speakerAmpMuted = false;
+    double m_ddc0FreqHz = 0.0;
 
     // The session's resolved DDC list and the dither/random flags that went
     // with it, RETAINED (rather than consumed and dropped in start()) so
@@ -307,6 +329,15 @@ private:
         return std::vector<std::uint32_t>(
             static_cast<std::size_t>(m_activeDdcCount), m_ddc0FreqWord);
     }
+
+    // The live options every run=1 High Priority packet carries, built from the
+    // members above in one place so the four senders (start, retune,
+    // attenuator, keepalive) cannot disagree.
+    [[nodiscard]] HighPriorityOptions highPriorityOptions() const;
+
+    // Send one run=1 High Priority packet from the current members. Callers
+    // check m_running and m_socket.
+    void sendRunningHighPriority();
     // Sender ports already warned about, so a port mismatch -- which by
     // nature affects every packet -- logs once per distinct port rather than
     // per datagram. Session-scoped; cleared with the rest of the state.

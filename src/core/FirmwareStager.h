@@ -76,6 +76,9 @@ public:
     QString stagedFilePath() const { return m_stagedPath; }
     QString stagedVersion()  const { return m_stagedVersion; }
     bool    isStaged()       const { return !m_stagedPath.isEmpty(); }
+    // True only when the staged installer's MD5 matched FlexRadio's
+    // published hash; false when no hash was available or for a local file.
+    bool    stagedVerified() const { return m_stagedVerified; }
 
     // Map the FlexLib hardware platform to its installer payload name.
     // BigBend (8000/Aurora) uses "9600"; unverified platforms return empty.
@@ -142,6 +145,7 @@ private:
     QString         m_stagedPath;
     QString         m_stagedVersion;
     bool            m_cancelled{false};
+    bool            m_stagedVerified{false};
 
     // v4.1.x and earlier: InnoSetup self-extracting .exe.
     // v4.2+: WiX 6 MSI (OLE Compound File with embedded LZX-compressed CABs).

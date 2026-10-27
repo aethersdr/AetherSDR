@@ -8,6 +8,26 @@ namespace AetherSDR {
 
 namespace {
 
+int commonPrefixBits(const QHostAddress& a, const QHostAddress& b)
+{
+    if (a.protocol() != QAbstractSocket::IPv6Protocol || a.protocol() != b.protocol())
+        return 0;
+    const Q_IPV6ADDR x = a.toIPv6Address();
+    const Q_IPV6ADDR y = b.toIPv6Address();
+    int bits = 0;
+    for (int i = 0; i < 16; ++i) {
+        const quint8 diff = x[i] ^ y[i];
+        if (diff == 0) {
+            bits += 8;
+            continue;
+        }
+        for (int bit = 7; bit >= 0 && !(diff & (1 << bit)); --bit)
+            ++bits;
+        break;
+    }
+    return bits;
+}
+
 QString interfaceLabel(const QNetworkInterface& iface)
 {
     const QString human = iface.humanReadableName().trimmed();
@@ -20,7 +40,7 @@ QString interfaceLabel(const QNetworkInterface& iface)
 
 bool NetworkPathCandidate::isValid() const
 {
-    return NetworkPathResolver::isUsableIpv4(address);
+    return NetworkPathResolver::isUsableSourceAddress(address);
 }
 
 QString NetworkPathCandidate::label() const
@@ -35,6 +55,11 @@ QString NetworkPathCandidate::label() const
 
 QList<NetworkPathCandidate> NetworkPathResolver::enumerateIpv4Candidates()
 {
+    return enumerateCandidates(QAbstractSocket::IPv4Protocol);
+}
+
+QList<NetworkPathCandidate> NetworkPathResolver::enumerateCandidates(Family family)
+{
     QList<NetworkPathCandidate> out;
 
     const auto interfaces = QNetworkInterface::allInterfaces();
@@ -48,7 +73,7 @@ QList<NetworkPathCandidate> NetworkPathResolver::enumerateIpv4Candidates()
 
         for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
             const QHostAddress addr = entry.ip();
-            if (!isUsableIpv4(addr))
+            if (addr.protocol() != family || !isUsableSourceAddress(addr))
                 continue;
 
             NetworkPathCandidate candidate;
@@ -70,43 +95,76 @@ QList<NetworkPathCandidate> NetworkPathResolver::enumerateIpv4Candidates()
 
 NetworkPathCandidate NetworkPathResolver::resolveExplicitSelection(const QString& interfaceId,
                                                                    const QString& interfaceName,
-                                                                   const QHostAddress& lastSuccessfulAddress)
+                                                                   const QHostAddress& lastSuccessfulAddress,
+                                                                   Family family,
+                                                                   const QHostAddress& target)
 {
-    const auto candidates = enumerateIpv4Candidates();
+    const auto candidates = enumerateCandidates(family);
+    const qsizetype index = matchSelection(candidates, interfaceId, interfaceName,
+                                           lastSuccessfulAddress, target);
+    return index < 0 ? NetworkPathCandidate{} : candidates.at(index);
+}
 
-    auto findMatch = [&](auto&& predicate) -> NetworkPathCandidate {
-        for (const auto& candidate : candidates) {
-            if (predicate(candidate))
-                return candidate;
+qsizetype NetworkPathResolver::matchSelection(const QList<NetworkPathCandidate>& candidates,
+                                              const QString& interfaceId,
+                                              const QString& interfaceName,
+                                              const QHostAddress& lastSuccessfulAddress,
+                                              const QHostAddress& target)
+{
+    auto find = [&](auto&& predicate) -> qsizetype {
+        for (qsizetype i = 0; i < candidates.size(); ++i) {
+            if (candidates.at(i).isValid() && predicate(candidates.at(i)))
+                return i;
         }
-        return {};
+        return -1;
     };
+    // Among one interface's addresses, the one closest to the target.
+    auto best = [&](auto&& predicate) -> qsizetype {
+        qsizetype chosen = -1;
+        int chosenBits = -1;
+        for (qsizetype i = 0; i < candidates.size(); ++i) {
+            if (!candidates.at(i).isValid() || !predicate(candidates.at(i)))
+                continue;
+            const int bits = commonPrefixBits(candidates.at(i).address, target);
+            if (bits > chosenBits) {
+                chosen = i;
+                chosenBits = bits;
+            }
+        }
+        return chosen;
+    };
+    const bool hasId = !interfaceId.trimmed().isEmpty();
+    const bool hasName = !interfaceName.trimmed().isEmpty();
+    const bool hasAddress = isUsableSourceAddress(lastSuccessfulAddress);
 
-    if (!interfaceId.trimmed().isEmpty()) {
-        auto match = findMatch([&](const NetworkPathCandidate& candidate) {
-            return candidate.interfaceId == interfaceId;
+    if (hasAddress && (hasId || hasName)) {
+        const qsizetype exact = find([&](const NetworkPathCandidate& c) {
+            return c.address == lastSuccessfulAddress
+                && (hasId ? c.interfaceId == interfaceId : c.interfaceName == interfaceName);
         });
-        if (match.isValid())
-            return match;
+        if (exact >= 0)
+            return exact;
     }
-
-    if (!interfaceName.trimmed().isEmpty()) {
-        auto match = findMatch([&](const NetworkPathCandidate& candidate) {
-            return candidate.interfaceName == interfaceName;
+    if (hasId) {
+        const qsizetype byId = best([&](const NetworkPathCandidate& c) {
+            return c.interfaceId == interfaceId;
         });
-        if (match.isValid())
-            return match;
+        if (byId >= 0)
+            return byId;
     }
-
-    if (isUsableIpv4(lastSuccessfulAddress)) {
-        auto match = findMatch([&](const NetworkPathCandidate& candidate) {
-            return candidate.address == lastSuccessfulAddress;
+    if (hasName) {
+        const qsizetype byName = best([&](const NetworkPathCandidate& c) {
+            return c.interfaceName == interfaceName;
         });
-        if (match.isValid())
-            return match;
+        if (byName >= 0)
+            return byName;
     }
-
-    return {};
+    if (hasAddress) {
+        return find([&](const NetworkPathCandidate& c) {
+            return c.address == lastSuccessfulAddress;
+        });
+    }
+    return -1;
 }
 
 NetworkPathCandidate NetworkPathResolver::autoCandidate()
@@ -122,6 +180,25 @@ bool NetworkPathResolver::isUsableIpv4(const QHostAddress& address)
     return !address.isNull()
         && address.protocol() == QAbstractSocket::IPv4Protocol
         && !address.isLoopback();
+}
+
+bool NetworkPathResolver::isUsableSourceAddress(const QHostAddress& address)
+{
+    if (isUsableIpv4(address))
+        return true;
+    return address.protocol() == QAbstractSocket::IPv6Protocol
+        && !address.isLoopback() && !address.isLinkLocal() && !address.isMulticast()
+        && address != QHostAddress::AnyIPv6;
+}
+
+NetworkPathResolver::Family NetworkPathResolver::targetFamily(const QString& host)
+{
+    // An IPv4-mapped literal is an IPv4 radio, as usableUnicastAddress folds it.
+    const QHostAddress literal(host.trimmed());
+    bool mapped = false;
+    literal.toIPv4Address(&mapped);
+    return literal.protocol() == QAbstractSocket::IPv6Protocol && !mapped
+        ? QAbstractSocket::IPv6Protocol : QAbstractSocket::IPv4Protocol;
 }
 
 } // namespace AetherSDR

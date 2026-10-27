@@ -225,7 +225,6 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 
 - `src/gui/MemoryDialog.{h,cpp}`
 - `src/gui/AetherDspDialog.{h,cpp}`
-- `src/gui/MultiFlexDialog.{h,cpp}`
 - `src/gui/MidiMappingDialog.{h,cpp}`
 - `src/gui/PanLayoutDialog.{h,cpp}`
 - `src/gui/ProfileManagerDialog.{h,cpp}` — most complete reference; has the move/resize event saving
@@ -235,12 +234,12 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 A window built on `CanonWindow` (`src/gui/CanonWindow.{h,cpp}`, RFC #6226)
 deliberately opts out of frameless chrome integration, and by default of
 geometry persistence too. About AetherSDR, Remote Access (Tailscale),
-Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, Radio Setup, Connect to Radio (`ConnectionPanel`), AGC-T Calibration and the AetherRX / AetherTX Settings (profile library) dialogs are built on it.
+Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, the multiFLEX Dashboard, Radio Setup, TX Band Settings, Connect to Radio (`ConnectionPanel`), AGC-T Calibration, Icom RC-28 Button Mapping, NR2's FFTW Wisdom window and the AetherRX / AetherTX Settings (profile library) dialogs are built on it.
 
 | Concern | `CanonWindow` | Why |
 |---|---|---|
 | Frameless chrome integration | Always frameless; ignores `FramelessWindow` and is not tracked by `trackPersistentDialog()` | The style guide's rounded, title-bar-less window *is* the design; native chrome would put a title bar over it |
-| Geometry persistence | None by default: asks to open centered on its parent every time (Wayland compositors place top-level windows themselves and may ignore it). `setGeometryKey()` opts in: size and position are saved under that AppSettings key on move and resize (in memory) and whenever the window hides (flushed — Escape and ⌘W / Ctrl+W hide it without a close event), and restored in place of the centering. Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl and Radio Setup opt in. `setLaunchSize()` pins the size on every open while the position is still restored; AetherRX and AetherTX use it, for now | A short-lived window has nothing to restore; a workspace tool keeps the size its operator gave it |
+| Geometry persistence | None by default: asks to open centered on its parent every time (Wayland compositors place top-level windows themselves and may ignore it). `setGeometryKey()` opts in: size and position are saved under that AppSettings key on move and resize (in memory) and whenever the window hides (flushed — Escape and ⌘W / Ctrl+W hide it without a close event), and restored in place of the centering. Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, the multiFLEX Dashboard, Icom RC-28 Button Mapping, Radio Setup and TX Band Settings opt in. `setLaunchSize()` pins the size on every open while the position is still restored; AetherRX and AetherTX use it, for now | A short-lived window has nothing to restore; a workspace tool keeps the size its operator gave it |
 
 What it keeps:
 
@@ -253,7 +252,7 @@ What it keeps:
   (⌘W, Ctrl+W) all close it.
 - **Kind:** `CanonWindow::Kind::Dialog` (the default) is a parented
   `Qt::Dialog` that sits over its parent. `Kind::Workspace` (AetherRX,
-  AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, Radio Setup) is an independent `Qt::Window`, with its own taskbar entry, that
+  AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, Radio Setup, TX Band Settings) is an independent `Qt::Window`, with its own taskbar entry, that
   minimises on its own and does not keep the app alive (`WA_QuitOnClose`
   off). In a workspace, Return and Enter never click a default button:
   QDialog makes every push button an auto-default, so Return in a field would
@@ -272,9 +271,18 @@ What it keeps:
 It is translucent, so the rounded corners need a compositor; an X11 session
 without one shows square black corners. Use `CanonWindow` only for windows the
 style guide covers: short-lived windows, and the tool windows the maintainer
-has moved to it (Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, Radio Setup). A tool window on it also
-installs `FramelessResizer`, since `CanonWindow` itself only moves. Other tool
+has moved to it (Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, the multiFLEX Dashboard, Icom RC-28 Button Mapping, Radio Setup, TX Band Settings, FFTW Wisdom). A tool window on it also
+installs `FramelessResizer`, since `CanonWindow` itself only moves; a
+short-lived one such as FFTW Wisdom needs neither the resizer nor saved
+geometry. Other tool
 and workspace dialogs keep the persistent pattern above.
+
+A question or notice from a canon window uses `CanonMessageBox`
+(`src/gui/CanonMessageBox.{h,cpp}`) in place of `QMessageBox`: a canon dialog
+with the title as a canon header, the text, optional further text, and the
+buttons at the bottom right. `clickedButton()` names the button clicked and is
+null when the box is closed any other way; the default button is outlined in
+cyan and a destructive one is drawn in gold. The CTR2 window's questions use it.
 
 ## Common pitfalls
 

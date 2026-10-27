@@ -8,6 +8,7 @@ Operate a FLEX-8000 series or Aurora radio from anywhere: a small container
 installed **inside the radio** joins your private Tailscale network. It works
 behind carrier-grade NAT (CGNAT), Starlink, cellular home internet or any
 router whose ports you can't forward, and it needs no SmartLink account.
+The radio needs firmware **4.2.18 or later**.
 
 AetherSDR installs and sets up the container for you from the **Waveforms**
 window. After that you connect from anywhere with **Connect by IP**, as if the
@@ -27,9 +28,10 @@ radio were on your desk.
 > trial instead.
 
 > **Radios:** FLEX-8000 series and Aurora, which can run Docker waveform
-> containers. It was developed and measured on a FLEX-8600 (firmware 4.2.20);
-> the FLEX-8400 and Aurora have not been tested yet. FLEX-6000 series radios
-> can't run containers.
+> containers, on firmware **4.2.18 or later** (see
+> [Firmware Update](./firmware-update.md)). It was developed and measured
+> on a FLEX-8600 (firmware 4.2.20); the FLEX-8400 and Aurora have not been
+> tested yet. FLEX-6000 series radios can't run containers.
 
 ## What Tailscale is
 
@@ -62,7 +64,7 @@ Some things to know:
 |---|---|---|
 | Port forwarding at the station | Not needed; works behind CGNAT | Required (TCP 4994, UDP 4993) or UPnP |
 | Account | A **free** Tailscale Personal account | A FlexRadio SmartLink account |
-| Radios | FLEX-8000 series, Aurora | All FlexRadio models with SmartLink |
+| Radios | FLEX-8000 series, Aurora, firmware 4.2.18 or later | All FlexRadio models with SmartLink |
 | Station accessories (Antenna Genius, PGXL, TGXL) | Reachable remotely | Not reachable |
 | What the remote computer needs | The Tailscale app | Nothing extra |
 
@@ -115,6 +117,9 @@ local network.
 <img src="/img/screens/waveforms-dialog.png" width="980" alt="Waveforms window. A Connected Radio card reads FLEX-8600 FLX8600 with its serial blacked out, beside WFP Support Supported, WFP Power ON, WFP Ready READY and WFP IP (blacked out). Radio Waveform Processor explains legacy and Docker waveform packages. Installed Waveforms has an Install... button and one entry, flex-tailnet-shim 0.4.0, with Docker, Configure..., Restart and Remove buttons." />
 
 *The Waveforms window, listing the waveforms installed on the radio. The serial number and the waveform processor's address are blacked out.*
+
+When the installed list is empty, **No radio waveforms installed** appears
+with the hint **Use Install... to add waveforms to your radio.**
 
 1. Open **Tools → Waveforms...**.
 2. Click **Install...** and choose **Remote Access (Tailscale)**.
@@ -359,6 +364,8 @@ about a fifth of one core and around 34 MB of memory.
 
 ## Troubleshooting
 
+- **The container won't install or start**: check that the radio runs
+  firmware 4.2.18 or later (see [Firmware Update](./firmware-update.md)).
 - **Remote Access says "Unavailable"**: connect to the radio over its
   local network, not over the tailnet, to change settings.
 - **"Doesn't look like a Tailscale auth key"**: paste the whole key,

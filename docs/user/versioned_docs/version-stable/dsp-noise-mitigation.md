@@ -111,6 +111,8 @@ Narrow bandpass filter centered on the CW pitch frequency. Enhances CW signals b
 ### WNB — Wideband Noise Blanker
 Wideband impulse noise blanker. Controlled via the ANT sub-menu on the left sidebar. Has an adjustable level (0-100) and appears as a "WNB" indicator on the FFT display when active. WNB belongs to the radio: AetherSDR uses whatever state the radio reports on connect and does not replay a saved state of its own.
 
+When you recall a band-stack bookmark, saved WNB values are applied only if the radio supports them. Unsupported WNB values are skipped without a dropped-command notice.
+
 ## Using the client-side methods
 
 > **Important:** the seven client-side methods process audio **on your PC**, not on the radio. They only affect audio played through your computer's speakers or headphones. If you listen through the radio's physical outputs (line out, headphone jack or front speaker), you will **not** hear client-side processing — only the radio's built-in filters (NR, NRS, NRL, RNN and so on) apply there. To benefit from client-side processing, switch to PC audio.

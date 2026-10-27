@@ -37,6 +37,11 @@ panadapter.
 - Click the red **SPLIT** badge again to end the split. The transmit slice is
   removed.
 
+AetherSDR waits for the radio to identify and publish the new slice before
+assigning it as the split transmitter. Ending split while creation is pending
+cancels that setup. Cleanup applies only to the slice created for that split,
+not another client's receiver or a new receiver reusing its number.
+
 The two VFO panels of a split pair stay on opposite sides of the dual-VFO
 layout so they never cover each other. The SPLIT/SWAP badges follow each
 slice's actual role, so a diversity child slice is never mistaken for a split
@@ -144,7 +149,19 @@ with a notice instead of silently doing nothing.
 
 The connected radio can't do split, so AetherSDR refuses rather than doing nothing silently.
 
-1. Use split on a FlexRadio (or in Demo mode). Other radio families don't offer it.
+1. Use split on a FlexRadio with a free slice. Demo is receive-only and cannot
+   create a split transmitter. Other radio families do not offer independent
+   same-pan split creation through this control.
+
+### Split setup failed
+
+The radio refused the new slice, did not confirm it in time, or the original
+receiver changed before setup finished. AetherSDR leaves the split disabled
+when it cannot safely identify the new transmit slice.
+
+1. Check that the original receiver is still connected and a slice is free.
+2. Check the radio's current slices before retrying; an unconfirmed request
+   may still have created a slice.
 
 ### The split closed on its own after my logger changed frequency
 

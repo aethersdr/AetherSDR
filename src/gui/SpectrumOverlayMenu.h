@@ -20,6 +20,7 @@ class FrontEndOverloadIndicator;
 namespace AetherSDR { struct FrontEndOverload; }
 class QDoubleSpinBox;
 class QScrollArea;
+class QHBoxLayout;
 
 namespace AetherSDR {
 
@@ -176,6 +177,13 @@ public:
     void setPreampStep(int step);
     void setAttenuatorLabels(const QStringList& labels);
     void setAttenuatorStep(int step);
+    // The radio's own scope mode (Display panel, PANADAPTER group). Fewer than
+    // two labels: dimmed with a reason; index -1 lights none.
+    void setScopeModeLabels(const QStringList& labels);
+    void setScopeModeIndex(int index);
+    // The connected radio's family. The Scope row is shown for "icom" only, a
+    // deliberate family exception to dim-never-hide (maintainer ruling).
+    void setRadioFamily(const QString& family);
     void setLoopState(bool loopA, bool loopB);
     void syncNoiseFloorPosition(int pos);
     void syncDssFloorDepth(int dB);
@@ -288,6 +296,9 @@ signals:
     // Step index into the label list this menu was given, never a dB value.
     void preampStepChanged(int step);
     void attenuatorStepChanged(int step);
+    // Index into the scope-mode label list. A REQUEST: the buttons repaint
+    // from what the radio reports, not from the click.
+    void scopeModeChanged(int index);
     // customLowMhz/customHighMhz bound the sweep when the operator has ticked
     // "Limit range" (else both 0 = sweep the full band). The values are clamped
     // to the in-region band edges receiver-side, so they can only ever narrow
@@ -327,6 +338,7 @@ private:
     QPointer<PanadapterModel> m_panadapter;
     QMetaObject::Connection m_panRxAntennaConnection;
     QMetaObject::Connection m_panLoopConnection;
+    QMetaObject::Connection m_panNoiseFloorRangeConnection;
     SpectrumOverlayWheelGuard* m_wheelGuard{nullptr};
     void setKiwiWaterfallControlMode(bool kiwiMode);
     void toggle();
@@ -348,6 +360,8 @@ private:
     void syncAntPanel();
     void wirePanadapterRxAntenna();
     void refreshAntennaCombo();
+    void syncNoiseFloorRange();
+    void requestNoiseFloorRange();
     void setRxAntennaComboToken(const QString& token);
     QString currentRxAntennaToken() const;
     QString antennaComboLabel(const QString& token, const QStringList& options) const;
@@ -479,6 +493,15 @@ private:
     QPushButton* m_lineColorBtn{nullptr};
     QColor       m_lineColor{0x00, 0xe5, 0xff};  // default cyan (#4239)
     QPushButton* m_heatMapBtn{nullptr};
+    // Scope mode row — one exclusive button per published label.
+    QWidget*            m_scopeModeRow{nullptr};
+    QHBoxLayout*        m_scopeModeLayout{nullptr};
+    QList<QPushButton*> m_scopeModeBtns;
+    QStringList         m_scopeModeLabels;
+    int                 m_scopeModeIndex{-1};
+    QString             m_radioFamily;
+    void rebuildScopeModeButtons();
+    void refreshScopeModeButtons();
     QPushButton* m_showGridBtn{nullptr};
     QSlider*     m_lineWidthSlider{nullptr};
     QLabel*      m_lineWidthLabel{nullptr};
@@ -530,6 +553,8 @@ private:
     QSlider*     m_floorSlider{nullptr};
     QLabel*      m_floorLabel{nullptr};
     QPushButton* m_floorEnableBtn{nullptr};
+    QSlider*     m_floorRangeSlider{nullptr};   // half-dB steps
+    QLabel*      m_floorRangeLabel{nullptr};
     QPushButton* m_cloneToAllPansBtn{nullptr};
 
     QComboBox*   m_freqGridSpacingCmb{nullptr};

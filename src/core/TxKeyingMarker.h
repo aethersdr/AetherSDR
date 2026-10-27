@@ -27,7 +27,9 @@ struct TxKeyingAction {
     using Prepared = std::function<void()>;
     using Prepare = std::function<Prepared(const std::shared_ptr<TxController>&,
                                            const QString&, const QString&)>;
+    using PermissionPredicate = std::function<bool(const QString& action, const QString& value)>;
     Prepare prepare;
+    PermissionPredicate requiresPermission;
     // Receive controls may optionally establish an automatic-response program.
     // Without a TX controller their prepared action must remain receive-only.
     bool requiresTxPermission{true};
@@ -46,14 +48,17 @@ Q_DECLARE_METATYPE(std::shared_ptr<const AetherSDR::TxKeyingAction>)
 
 namespace AetherSDR {
 
-inline void registerTxKeyingAction(QObject* object, TxKeyingAction::Prepare prepare)
+inline void registerTxKeyingAction(QObject* object,
+                                   TxKeyingAction::Prepare prepare,
+                                   TxKeyingAction::PermissionPredicate requiresPermission = {})
 {
     if (!object) {
         return;
     }
     object->setProperty(kTxKeyingProperty, true);
     object->setProperty(kTxKeyingActionProperty,
-        QVariant::fromValue(std::make_shared<const TxKeyingAction>(TxKeyingAction{std::move(prepare)})));
+        QVariant::fromValue(std::make_shared<const TxKeyingAction>(
+            TxKeyingAction{std::move(prepare), std::move(requiresPermission), true})));
 }
 
 inline void registerReceiveControlAction(QObject* object, TxKeyingAction::Prepare prepare)
@@ -62,14 +67,22 @@ inline void registerReceiveControlAction(QObject* object, TxKeyingAction::Prepar
     object->setProperty(kTxKeyingProperty, true);
     object->setProperty(kTxKeyingActionProperty,
         QVariant::fromValue(std::make_shared<const TxKeyingAction>(
-            TxKeyingAction{std::move(prepare), false})));
+            TxKeyingAction{std::move(prepare), {}, false})));
 }
 
-inline bool txActionRequiresPermission(const QObject* object)
+inline bool txActionRequiresPermission(const QObject* object,
+                                       const QString& action = {},
+                                       const QString& value = {})
 {
     const auto endpoint = object ? object->property(kTxKeyingActionProperty)
         .value<std::shared_ptr<const TxKeyingAction>>() : nullptr;
-    return !endpoint || endpoint->requiresTxPermission;
+    if (!endpoint) {
+        return true;
+    }
+    if (endpoint->requiresPermission) {
+        return endpoint->requiresPermission(action, value);
+    }
+    return endpoint->requiresTxPermission;
 }
 
 inline TxKeyingAction::Prepared prepareTxKeyingAction(QObject* object,
@@ -80,7 +93,13 @@ inline TxKeyingAction::Prepared prepareTxKeyingAction(QObject* object,
     }
     const std::shared_ptr<const TxKeyingAction> endpoint =
         object->property(kTxKeyingActionProperty).value<std::shared_ptr<const TxKeyingAction>>();
-    if (!endpoint || !endpoint->prepare || (endpoint->requiresTxPermission && !controller)) {
+    if (!endpoint || !endpoint->prepare) {
+        return {};
+    }
+    const bool needPerm = endpoint->requiresPermission
+        ? endpoint->requiresPermission(action, value)
+        : endpoint->requiresTxPermission;
+    if (needPerm && !controller) {
         return {};
     }
     const QPointer<QObject> guard(object);

@@ -57,6 +57,8 @@ public:
     // wire — the SAME status-line shape the connect script claims pan 0
     // with — so there is one path that creates a demo pane, not two.
     bool createPanadapter() override;
+    ReceiveDispatch requestPanLifecycle(const PanLifecycleRequest& request,
+        const PanLifecycleCompletion& completion = {}, const RadioControlFence& current = {}) override;
     bool removePanadapter(const QString& panId) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void invokeExtension(const QString& ns, const QString& verb,
@@ -110,6 +112,7 @@ public:
     SimSignalSource*  signalSourceForTest() const { return m_signalSource; }
 
 private:
+    bool createPanadapterWithId(QString* createdId);
     friend struct SimReceiveContractTestAccess;
     // Emit the initial synthetic snapshot a freshly-connected radio would report:
     // the radio-global delta (model/nickname/slices) and one active slice on a

@@ -8,6 +8,78 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.10.4] — 2026-10-25
+
+### The Updates window and an automatic update check · SmartSDR 4.3 Noise Floor Range, CW profiles, APD and meter fixes · RF-KIT RF2K-S, the Icom SCROLL-F panadapter and ANAN-G2 band-pass filters · typed slice and panadapter lifecycle
+
+72 merged changes from 13 human contributors and one Dependabot update within that total. AetherSDR now checks for its own updates at launch, at most once every 24 hours, and shows the result as a title-bar badge, and File → Update... opens one window for the AetherSDR release and the radio's firmware. Underneath it, the signed update manifest, the patch stager and the Windows swap helper are built and tested, ready for the install button that follows. SmartSDR 4.3 support continues with the radio's Noise Floor Range, CW profiles, the APD state machine and unsigned amplifier and tuner meter handles. A wide Retina panadapter no longer stops a FLEX-8600's display output for every client. Station accessories gain the RF-KIT RF2K-S, the Icom panadapter scrolls instead of recentering, and the ANAN-G2 selects its receive band-pass filters. Upgraded Windows installs get HTTPS back, and touch screens get pinch-zoom and press-and-hold. Slice lifecycle, split routing and panadapter/waterfall control move behind typed backend requests.
+
+### In-app updates
+
+- **An automatic update check and an UPDATE badge (#6715).** The check runs 15 seconds after launch and at most once every 24 hours, and a failed attempt counts toward the wait. A newer release only lights the **UPDATE** pill beside the AetherSDR wordmark: nothing pops up, and "up to date" or a network failure stays silent. The badge survives a restart inside the wait, clears when you upgrade, and never shows for a release you skipped with the new **Skip This Version** button. Store-managed installs never show it. It is on by default. A manual check during the startup check keeps the daily wait, and redirects are refused (#6716).
+- **The Updates window, File → Update... (#6717).** A canon window that shows the release, its version and date, and a chip for each chapter of its notes. **Get AetherSDR** opens the download built for this computer: the Windows setup or portable ZIP, the macOS Apple Silicon DMG, or the Linux x86_64/aarch64 AppImage. When none fits, it opens the release page.
+- **Radio firmware moves into the Updates window (#6718).** The **YOUR RADIO** section lists FlexRadio's published SmartSDR releases, one lane per major line, with the installed release outlined and the newest release in the radio's own line preselected when the radio is behind. A v3 radio is offered v3, never v4. **Install** downloads the installer from FlexRadio, checks it against FlexRadio's MD5, extracts the firmware and uploads it after one confirmation; if the MD5 cannot be fetched, it stops and asks again, saying the integrity was not checked. Radio Setup keeps only the FW Version.
+- The update pipeline behind the next step. Every release now publishes a signed manifest and per-file patch bundles for the last four stable releases (#6737), with a publication check that reports each failed read and repairs a torn `latest/` (#6746). `UpdateStager` applies a signed update into a copy of the install, and falls back to the full signed portable ZIP when no patch applies; a staged release is kept across launches (#6747, #6771). On Windows, `AetherSDRUpdater` swaps a staged release in after AetherSDR exits, checks it and rolls back on failure (#6767). Nothing starts an install yet: the Install and Restart to update buttons come next.
+
+### SmartSDR 4.3 and FlexRadio
+
+- **Noise Floor Range (#6660).** SmartSDR 4.3.16 lets the radio's Auto FFT floor tolerate 0–10 dB of noise-floor movement before it repositions the panadapter, which reduces oscillation at high zoom. An **NF Range** slider under FFT Floor shows the pan's reported value and requests a new one on release, click or keystroke. It is dimmed, with its reason, until the radio is a FLEX-8000 or Aurora on 4.3.16 or later, the SmartSDR+ license is confirmed and the pan has reported a value. The radio owns the value; nothing is stored or re-sent by the client.
+- **CW profiles (#6668).** On 4.3.16 and later, the profile list, load, create, delete and reset verbs reach SmartSDR's new CW profile type, with its unsaved-changes flag, gated by a `cwProfileControl` capability record.
+- **A wide Retina pan no longer stops the radio's display (#6728).** A FLEX-8600 on 4.3.16 accepts a pan width of 4093 pixels or more and then sends no FFT or waterfall data to any client until it reboots. AetherSDR caps the request at 3840.
+- **One owner for the transmit DAX flag (#6593).** The radio's `transmit dax` bit is shared by every client. TCI no longer latches it on, so the next microphone transmission is modulated again, and RADE sets it on Windows, so DAX no longer has to be pressed and released around it.
+- SmartCAT and rigctld map SmartSDR 4.3's `FDVU`/`FDVL` FreeDV modes, so a logger no longer reads USB and switches the slice out of FreeDV (#6657). Amplifier and tuner meter handles at or above `0x80000000` parse as unsigned, so PGXL meters stay on the amplifier panel and TGXL meters stay off it (#6658). APD follows the radio's `state=` lifecycle and applies equalizer status only for the matching transmit slice, antenna, frequency and power (#6659).
+- CW key and PTT commands send the client handle as eight hex digits, as FlexLib does (#6612). The slice's processing chain and the radio's IARU region are retained read-only and exposed through the automation bridge and troubleshooting JSON (#6613).
+- A host firewall that drops unsolicited UDP no longer leaves a LAN connection with no spectrum, audio or meters: a keepalive to the radio's VITA source port 4993 holds the return path open, and the no-spectrum warning names the firewall as a likely cause (#6704).
+- A radio reached over IPv6 binds its LAN sockets in the right address family (#6700), and its CTR2 relay, VPN source path picker, VITA QoS marking and diagnostics work over IPv6 too (#6708). The Tailscale Remote Access guide states the 4.2.18 firmware minimum for the in-radio container (#6651).
+
+### Icom, ANAN-G2 and Hermes-Lite 2
+
+- **The Icom panadapter scrolls instead of recentering (#6688).** On the IC-7300MK2, IC-705 and IC-9700 the scope runs in SCROLL-F, so clicking, the wheel and slice-marker drags tune the VFO without moving the window, a pan drag scrolls without retuning, and the window follows only at its margins, as on a Flex. A new Icom-only **Scope** row in the Display panel selects Center, Scroll-F or Fixed.
+- The IC-705's preamp cycles OFF/P.AMP1 at and above 74.8 MHz instead of requesting the P.AMP2 stage the radio rejects (#6679). A networked Icom that releases the current audio and CI-V streams now disconnects and reconnects instead of staying falsely connected (#6682).
+- **ANAN-G2 band-pass filters and speaker mute (#6673).** RFC #6209 parts 2 and 3: **Filter bank: Follow the tuned frequency** selects the receive band-pass filter on both ADCs as DDC0 tunes (Bypassed remains the default), and **Mute the radio's speaker amplifier** mutes the G2's amplifier independently of the title-bar mute. ANAN discovery logs bind and send failures once per condition and keeps sweeping after a bind failure (#6666).
+- The Hermes-Lite 2 reads the N2ADR IO board's status registers — the input pins, ATU progress, fault code and firmware version — over the I2C read path as `ioboard.status`, with no new write path (#6703).
+
+### Station accessories and controllers
+
+- **RF-KIT RF2K-S amplifier (#6596).** A standalone peripheral over the amplifier's REST API: forward and reflected power, SWR, temperature, supply, current, band, frequency and tuner status, with OPERATE/STANDBY, internal antenna selection and a confirmed error reset. Tested on an RF2K-S at firmware G200C267; other RF-KIT models are untested. Clearing a peripheral's address in Radio Setup now also stops a reconnect loop aimed at it.
+- The TGXL power gauge follows the shared transmit meter selection, so it no longer pins at 200 W with a KPA500 in operate (#6707).
+- **The CTR2 relay over USB with Lynovation's firmware (#6698).** CTR2-Max firmware v1.02.00 and later relays over USB, and the relay starts it automatically. A USB relay with no answer for 10 seconds says which firmware it needs. **Wide reports** carry up to seven link reports per USB transfer, about 49 KB/s each way, for devices that offer them (#6713, #6714); on Windows, update AetherSDR before installing firmware that uses them.
+- On Linux, one click installs the udev rule that lets the logged-in user flash a CTR2-Max in download mode (#6741). The CTR2 window's questions use canon message boxes, and a restart on request no longer leaves the relay in Error or the firmware offer stale (#6736, #6766).
+- CTR2 device rescans enumerate only the known CTR2 VID:PIDs and run off the GUI thread, ending the periodic spectrum freezes on Windows (#6583, #6645), and HID discovery is serialized process-wide, so concurrent rescans no longer crash macOS (#6606).
+
+### Windows, display and operation
+
+- **Touch gestures (#6772).** Pinch-zoom on the panadapter, press-and-hold as a right-click, and kinetic scrolling in lists and menus, for the Maestro's panel and any Qt touch screen. Tap-to-tune, drag-to-pan and mouse and trackpad behavior are unchanged. RFC #6775.
+- **Upgraded Windows installs get HTTPS back (#6687).** An installer before May 2026 left a Qt 6.7 TLS plugin that cannot load under Qt 6.12, and it disabled every HTTPS and WSS connection: SmartLink, update checks, QRZ, FreeDV Reporter, propagation and model downloads. The installer now clears the Qt plugin folders on upgrade.
+- The multiFLEX Dashboard, TX Band Settings, Icom RC-28 Button Mapping and NR2's FFTW Wisdom window move to canon windows (#6768, #6735, #6745, #6776). The multiFLEX Dashboard stays open beside the main window, and TX Band Settings follows the radio's TX profile, band values and answers.
+- Band plans gain segment usage notes on hover, and the IARU Region 1 and SSA rows painted digi-only are all-modes again (#6573, RFC #4667).
+- DVK slots stay readable in a short window (#6611). The compact RX presets fit Linux's DejaVu Sans (#6643). The Waveforms empty-state hint no longer clips (#6689). The GHE Port field shows and edits its value (#6692). Radio Setup stays in front the first time a page is built on macOS (#6602). The FlexControl menu entry keeps its ampersand (#6569). Copy Assist keeps the reason an enable failed (#6694).
+- Band-state and bookmark replays no longer raise unsupported-control notices for controls the radio lacks, while explicit operator requests still do (#6672).
+- The ggmorse decoder keeps its pitch and WPM ranges across restarts and pans (#6633). Unlocking a stopped CW decoder leaves no dead pitch for Zero Beat, and ggmorse no longer writes decoded text to stdout (#6674); the vendored library's local changes are recorded (#6670).
+- `midi.settings` is written atomically, so a failed save keeps the previous bindings (#6630).
+
+### Typed backend controls (aetherd M4)
+
+- Spots, lineout/headphone/front-speaker controls, pan zoom and RX antenna, tuning step and net corrections move to typed requests, shrinking the raw Flex command count above the seam from 215 to 192 (#6619). Slice create/remove, split routing, TX-slice assignment, full duplex and slice refresh follow (#6621), then panadapter/waterfall lifecycle and every existing display control (#6628). Setup refusals name the requested setting in their diagnostics (#6665). These are scoped M4 increments, not completion of aetherd or a thin UI client.
+
+### Automation and bridge
+
+- The bridge's `vox_toggle` shortcut requires TX permission, and VOX can be disarmed without it (#6631).
+
+### Project and packaging
+
+- CI: signing, Store and Pages deploys run in environment-gated jobs (#6571); docs.aethersdr.com deploys when a release is published, from its tag (#6558); CodeQL compile coverage includes `deepcw_ctc_test` and `update_swap_test` (#6551, #6774); the full-suite tracking issue names the source PR and compares failures with the parent run (#6652, RFC #6435).
+- macOS development builds can opt in to ad-hoc signing for local-network discovery (#6662). Tests follow RTL native receive, the TX band RCA column and a live HL2 TCI session (#6637, #6642).
+- `actions/setup-python` moves to 7.1.0 (#6719).
+
+### Contributors
+
+Thanks to **@ten9876** (31 commits — maintainer; in-app updates, SmartSDR 4.3 support, IPv6 and firewall fixes, CTR2 USB relay and wide reports, touch gestures, canon dialogs and CI), **@rfoust** (9 commits — typed slice, utility and panadapter controls, HID discovery, NetCW handles, chain/IARU metadata, DVK and RX preset sizing, macOS development signing), **@NF0T** (8 commits — the transmit DAX flag, the Windows TLS upgrade fix, band-plan usage notes, setup diagnostics, the VOX bridge gate, atomic MIDI settings and release-time docs deploys), **@Ozy311** (6 commits — CTR2 VID:PID scanning, IC-705 preamp, Icom media reconnect, Copy Assist, Waveforms and GHE port fixes), **@w5jwp** (5 commits — the Retina pan cap, TX Band Settings and RC-28 canon windows, Radio Setup and FlexControl menu fixes), **@skerker** (4 commits — ggmorse ranges and decoder fixes, CodeQL coverage), **@tropo1234** (2 commits — ANAN-G2 band-pass filters, speaker mute and discovery logging), **@jensenpat** (1 commit — the Icom SCROLL-F panadapter), **@nreed97** (1 commit — SmartSDR 4.3 CW profiles), **@on8st** (1 commit — HL2 TCI test fixture), **@ve3nsv** (1 commit — RF-KIT RF2K-S support), **@W5TSU** (1 commit — HL2 IO board status) and **@WA8PAM** (1 commit — TGXL power gauge with a KPA500). Dependabot contributed one dependency update. Counts cover primary commit authors; co-author credit remains in the commit history.
+
+Welcome to first-time contributors **@ve3nsv**, **@W5TSU**!
+
+73, Jeremy KK7GWY & Claude (AI dev partner)
+
 ## [v26.10.3] — 2026-10-18
 
 ### SmartSDR 4.3 firmware support and the DeepCW AI CW decoder · Multi-slice Auto SQL fixes, local voice recordings and Elecraft station panels · Controller improvements and typed backend controls

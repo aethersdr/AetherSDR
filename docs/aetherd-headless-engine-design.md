@@ -650,6 +650,15 @@ batch-cancellation and speed-edit guards survive queued delivery. Native keyer
 adapters, radio-authoritative status and existing held-MOX behavior are preserved.
 This adds no daemon TX methods or backend support. Legacy CWX status decoding,
 NetCW startup and the separate TCI delay/ownership issues are not migrated here.
+Panadapter/waterfall creation, paired removal, inventory refresh and existing
+display controls now use typed desktop requests. Flex owns command encoding;
+native backends declare the controls they actually implement. Creation pairs an
+answer with the original session's newly published owned pan; optional waterfall
+status may arrive later. Unknown allocation outcomes retain a bounded reservation
+until resolved or the session ends, without automatic retry or orphan deletion.
+Delayed initialization and profile-load flushes cannot overwrite a replacement
+pan or newer operator intent. This batch does not add daemon protocol methods,
+DAX/IQ ownership or rendering features.
 The desktop adapter has not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX

@@ -87,6 +87,9 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     m_adc0AttenuationDb = params.adc0AttenuationDb;
     m_adc1AttenuationDb = params.adc1AttenuationDb;
     m_speakerAudioEnabled = params.speakerAudioEnabled;
+    m_bandFiltersEnabled = params.bandFiltersEnabled;
+    m_speakerAmpMuted = params.speakerAmpMuted;
+    m_ddc0FreqHz = 0.0;   // cleared with m_ddc0FreqWord: nothing is tuned yet
     m_speakerPending.clear();
     m_speakerPacer.reset();
     // Sequence restarts per session, like the DDC expectations below: p2app
@@ -146,12 +149,6 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     m_ditherEnabled = params.ditherEnabled;
     m_randomEnabled = params.randomEnabled;
 
-    // Every DDC gets the shared m_ddc0FreqWord: there is no per-DDC tuning setter
-    // yet (setDdc0FrequencyHz() moves DDC0 only). The keepalive and
-    // setDdc0FrequencyHz() send the same shared word for the same count, so the
-    // three High Priority senders cannot disagree (#5547).
-    std::vector<std::uint32_t> freqWords(ddcs.size(), m_ddc0FreqWord);
-
     // Destination ports below are NOT interchangeable with kRadioPort -- see
     // kDdcSpecificPort/kHighPriorityPort's comment. p2app tells these two
     // packet types apart by which port they arrive on.
@@ -159,10 +156,10 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
           buildDdcSpecific(ddcs, /*numAdcs=*/2,
                            params.ditherEnabled, params.randomEnabled),
           m_host, kDdcSpecificPort, m_txBytes);
-    sendTo(*m_socket,
-          buildHighPriority(true, freqWords, m_bypassAdc0Filters, m_bypassAdc1Filters,
-                            m_adc0AttenuationDb, m_adc1AttenuationDb),
-          m_host, kHighPriorityPort, m_txBytes);
+    // Every DDC gets the shared m_ddc0FreqWord (sharedFreqWords()): there is no
+    // per-DDC tuning setter yet. All run=1 senders build the packet the same
+    // way, so they cannot disagree (#5547).
+    sendRunningHighPriority();
 
     m_keepaliveTimer->start();
     m_linkCountersTimer->start();
@@ -196,7 +193,10 @@ void P2Client::stop()
     if (m_socket) {
         // The clean-stop packet, mirroring metisStop(): run=0 reaches the
         // radio before the socket that would carry any further keepalive
-        // goes away.
+        // goes away. Without highPriorityOptions(): p2app keeps the last
+        // byte 1400 and Alex words it was sent, and no client is left to
+        // change them, so a clean stop hands the radio back unmuted, with the
+        // bypass flags, not a band filter, deciding both banks.
         sendTo(*m_socket,
               buildHighPriority(false, 0, m_bypassAdc0Filters, m_bypassAdc1Filters,
                                 m_adc0AttenuationDb, m_adc1AttenuationDb),
@@ -373,12 +373,12 @@ void P2Client::onSpeakerDrainTick()
 void P2Client::setDdc0FrequencyHz(double hz)
 {
     m_ddc0FreqWord = phaseWord(hz);
-    if (m_running && m_socket)
-        sendTo(*m_socket,
-              buildHighPriority(true, sharedFreqWords(),
-                                m_bypassAdc0Filters, m_bypassAdc1Filters,
-                                m_adc0AttenuationDb, m_adc1AttenuationDb),
-              m_host, kHighPriorityPort, m_txBytes);
+    // Moves with m_ddc0FreqWord and nothing else: a stale value would energise
+    // the filter for a band the receiver has left.
+    m_ddc0FreqHz = hz;
+    if (m_running && m_socket) {
+        sendRunningHighPriority();
+    }
 }
 
 void P2Client::setStepAttenuationDb(int adcIndex, int db)
@@ -393,12 +393,54 @@ void P2Client::setStepAttenuationDb(int adcIndex, int db)
     // Now rather than on the next keepalive: the operator is moving a
     // control and should hear the change, not wait up to 100 ms for it.
     if (m_running && m_socket) {
-        sendTo(*m_socket,
-              buildHighPriority(true, sharedFreqWords(),
-                                m_bypassAdc0Filters, m_bypassAdc1Filters,
-                                m_adc0AttenuationDb, m_adc1AttenuationDb),
-              m_host, kHighPriorityPort, m_txBytes);
+        sendRunningHighPriority();
     }
+}
+
+void P2Client::setBandFiltersEnabled(bool on)
+{
+    m_bandFiltersEnabled = on;
+    if (m_running && m_socket) {
+        sendRunningHighPriority();
+    }
+}
+
+void P2Client::setSpeakerAmpMuted(bool on)
+{
+    m_speakerAmpMuted = on;
+    if (m_running && m_socket) {
+        sendRunningHighPriority();
+    }
+}
+
+HighPriorityOptions P2Client::highPriorityOptions() const
+{
+    HighPriorityOptions opts;
+    opts.muteSpeakerAmp = m_speakerAmpMuted;
+    if (m_bandFiltersEnabled) {
+        // Both banks follow DDC0's frequency, as deskHPSDR's do with one
+        // receiver: an unset bank would keep whatever the last session
+        // energised. The selection replaces the bypass flags; they are the
+        // same relay bit.
+        //
+        // The relays switch only when the tuned frequency crosses a band
+        // edge, and AnanBackend throttles retunes before they reach here
+        // (scheduleTuneApply()), so a drag across bands sends a few packets.
+        const AlexRxFilter filter = alexRxFilterFor(m_ddc0FreqHz);
+        opts.adc0Filter = filter;
+        opts.adc1Filter = filter;
+    }
+    return opts;
+}
+
+void P2Client::sendRunningHighPriority()
+{
+    sendTo(*m_socket,
+          buildHighPriority(true, sharedFreqWords(),
+                            m_bypassAdc0Filters, m_bypassAdc1Filters,
+                            m_adc0AttenuationDb, m_adc1AttenuationDb,
+                            highPriorityOptions()),
+          m_host, kHighPriorityPort, m_txBytes);
 }
 
 bool P2Client::setDdcRateLive(int ddcIndex, int rateKsps)
@@ -440,11 +482,7 @@ void P2Client::onKeepaliveTick()
         return;
     // This IS the "any C&C packet" the watchdog needs (p.8) -- no need to
     // also replay General/DDC-Specific on this cadence, same as the spike.
-    sendTo(*m_socket,
-          buildHighPriority(true, sharedFreqWords(),
-                            m_bypassAdc0Filters, m_bypassAdc1Filters,
-                            m_adc0AttenuationDb, m_adc1AttenuationDb),
-          m_host, kHighPriorityPort, m_txBytes);
+    sendRunningHighPriority();
 }
 
 void P2Client::onConnectTimeout()

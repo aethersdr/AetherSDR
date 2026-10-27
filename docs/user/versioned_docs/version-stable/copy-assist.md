@@ -198,6 +198,14 @@ The speech engine faulted while starting or while loading on the CPU, so local C
 2. Click **Try again next launch** and restart AetherSDR.
 3. In the meantime, a **Remote server…** still works.
 
+### Transcription turns off immediately
+
+Read the status below the transcript. If startup, model download, or model loading fails, the button returns to **Disabled** and the explanation stays visible. The same reason is written to the application log.
+
+1. For a missing custom model file or sherpa-onnx folder, select it again in **⚙ → Model**.
+2. For a download or load failure, use the displayed reason to check the network connection or model file, then click **Disabled** to retry.
+3. If local Copy Assist is off for the session after an earlier crash, follow the startup-fault steps above.
+
 ### The model will not download
 
 The computer has no internet access, for example in an air-gapped shack.

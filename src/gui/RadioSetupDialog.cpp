@@ -6,7 +6,6 @@
 // header rather than from the wire code.
 #include "core/backends/anan/AnanSettings.h"
 #include "RadioSetupDialog.h"
-#include "FirmwareReleasesDialog.h"
 #include "RtlReceiverSettingsWidget.h"
 #include "SerialPortCombo.h"
 #include "models/CwDecodeSettings.h"
@@ -46,14 +45,13 @@
 #include "core/FlexControlManager.h"
 #include <QSerialPortInfo>
 #endif
-#include "core/FirmwareUploader.h"
-#include "core/FirmwareStager.h"
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
 #include "core/AcomConnection.h"
 #include "core/LpMeterConnection.h"
 #include "core/SpeConnection.h"
 #include "core/VkampConnection.h"
+#include "core/RfkitConnection.h"
 #include "core/backends/flex/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
 #include "core/CallsignLookupService.h"
 #include "core/QrzLookupSettings.h"
@@ -134,6 +132,7 @@
 #include "core/ThemeManager.h"
 #include "RadioSetupDialogCommon.h"
 #include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
 #include "FramelessResizer.h"
 #include "ThemedImageCache.h"
 
@@ -1179,36 +1178,6 @@ QSplitter::handle {
     background: transparent;
     border: none;
 }
-QScrollBar:vertical {
-    background: transparent;
-    width: 12px;
-    margin: 8px 2px 8px 2px;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-height: 34px;
-}
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-QScrollBar:horizontal {
-    background: transparent;
-    height: 12px;
-    margin: 2px 8px 2px 8px;
-    border-radius: 6px;
-}
-QScrollBar::handle:horizontal {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-width: 34px;
-}
-QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
-    width: 0px;
-}
 )";
 
 // A spin box with a styled frame draws its steppers from the sheet or not at
@@ -1272,12 +1241,13 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    Kpa1500Connection* kpa1500,
                                    Kpa500Connection* kpa500,
                                    QWidget* parent,
-                                   Kat500Model* kat500, Kxpa100Model* kxpa100)
+                                   Kat500Model* kat500, Kxpa100Model* kxpa100,
+                                   RfkitConnection* rfkit)
     : CanonWindow(QStringLiteral("Radio Setup"), parent, Kind::Workspace),
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
       m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter),
-      m_kpa1500(kpa1500), m_kpa500(kpa500), m_kat500(kat500), m_kxpa100(kxpa100)
+      m_kpa1500(kpa1500), m_kpa500(kpa500), m_kat500(kat500), m_kxpa100(kxpa100), m_rfkit(rfkit)
 {
     theme::setContainer(this, QStringLiteral("canon/radioSetup"));
     // Size and position persist under the key it used as a PersistentDialog,
@@ -1291,7 +1261,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     FramelessResizer::install(this);
     bodyWidget()->setObjectName(QStringLiteral("radioSetupBody"));
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kRadioSetupStyle) + spinArrowRules() + canonIndicatorRules();
+        return QString::fromLatin1(kRadioSetupStyle) + canonScrollBarRules() + spinArrowRules() + canonIndicatorRules();
     });
 
     auto* layout = new QVBoxLayout(bodyWidget());
@@ -1734,14 +1704,6 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     if (m_licenseInfoGroup) {
         applyCapabilityClusterVisibility(m_licenseInfoGroup, connected, caps.hasLicenseInfo);
     }
-    if (m_firmwareUpdateGroup) {
-        applyCapabilityClusterVisibility(
-            m_firmwareUpdateGroup, connected, caps.canUpgradeFirmware);
-    }
-    if (m_firmwareDisclaimer) {
-        applyCapabilityClusterVisibility(
-            m_firmwareDisclaimer, connected, caps.canUpgradeFirmware);
-    }
     if (m_networkIdentityGroup) {
         applyCapabilityClusterVisibility(
             m_networkIdentityGroup, connected, caps.hasNetworkConfigurationReadback);
@@ -1843,101 +1805,12 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     }
 }
 
-void RadioSetupDialog::showFirmwareReleases(const QStringList& releases)
-{
-    if (releases.isEmpty())
-        return;
-
-    // The release-notes template comes from the backend's capability record,
-    // not from a family check here: a backend that publishes firmware says
-    // where its notes live, and one that does not leaves the rows unlinked.
-    QString notesTemplate;
-    if (const auto& source = m_model->backendCapabilities().firmwareUpdateSource)
-        notesTemplate = source->releaseNotesUrlTemplate;
-
-    // Rebuilt on every check rather than re-raised: the list and the radio's
-    // own release are baked in at construction, so an open dialog from an
-    // earlier check would otherwise keep showing that check's answer.
-    if (m_firmwareReleasesDialog)
-        m_firmwareReleasesDialog->close();
-    auto* dlg = new FirmwareReleasesDialog(
-        releases, m_model->softwareVersion(), notesTemplate, this);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    m_firmwareReleasesDialog = dlg;
-    m_firmwareReleasesDialog->show();
-    m_firmwareReleasesDialog->raise();
-    m_firmwareReleasesDialog->activateWindow();
-}
-
-bool RadioSetupDialog::confirmFirmwareClose()
-{
-    // A nested close/reject must not destroy the owner underneath this prompt.
-    if (m_firmwareClosePromptOpen) {
-        return false;
-    }
-    if (!m_uploader || !m_uploader->isUploading()) {
-        return true;
-    }
-    const QPointer<RadioSetupDialog> self(this);
-    const QPointer<FirmwareUploader> uploader(m_uploader);
-    ScopedChildWidget<QMessageBox> boxOwner(
-        QMessageBox::Warning, tr("Firmware Update In Progress"), QString(),
-        QMessageBox::Ok | QMessageBox::Cancel, this);
-    QMessageBox* box = boxOwner.get();
-    box->setDefaultButton(QMessageBox::Cancel);
-    box->setEscapeButton(QMessageBox::Cancel);
-    const auto refreshPrompt = [uploader, box] {
-        if (!uploader) {
-            return;
-        }
-        switch (uploader->phase()) {
-        case FirmwareUploader::Phase::Preparing:
-            box->setText(tr("The firmware upload is being prepared. No image bytes have been sent."
-                            "\n\nClose this window and cancel the attempt?"));
-            break;
-        case FirmwareUploader::Phase::Transferring:
-            box->setText(tr("A firmware upload is in progress. Closing this window stops the transfer "
-                            "and may leave the radio with an incomplete image. The update outcome "
-                            "will remain unknown; reconnect before retrying.\n\nClose anyway?"));
-            break;
-        case FirmwareUploader::Phase::AwaitingConfirmation:
-            box->setText(tr("Firmware bytes have left the local write buffer, but the radio has not "
-                            "confirmed installation. Closing this window stops waiting for confirmation; "
-                            "it does not undo the update.\n\nReconnect to check the firmware version "
-                            "before retrying. Close anyway?"));
-            break;
-        case FirmwareUploader::Phase::Idle:
-            box->setText(tr("The firmware upload attempt has ended. Close this window?"));
-            break;
-        }
-    };
-    refreshPrompt();
-    // The upload can advance or finish while exec() runs its nested event loop.
-    connect(uploader, &FirmwareUploader::progressChanged, box, refreshPrompt);
-    connect(uploader, &FirmwareUploader::finished, box, refreshPrompt);
-    m_firmwareClosePromptOpen = true;
-    const int reply = box->exec();
-    if (!self) {
-        return false;
-    }
-    m_firmwareClosePromptOpen = false;
-    if (!boxOwner || reply != QMessageBox::Ok) {
-        return false;
-    }
-    if (uploader) {
-        // Classify the CURRENT phase; it may have changed inside the prompt.
-        // cancel() is a no-op if a terminal radio result already arrived.
-        uploader->cancel();
-    }
-    return !self.isNull();
-}
-
 void RadioSetupDialog::done(int result)
 {
     // QDialog routes Escape, reject() and accept() through done(), bypassing
-    // closeEvent. Keep those paths behind the same confirmation without
-    // redirecting reject() to close() (which recurses during Qt's close path).
-    if (!m_peripheralRemovalPending && confirmFirmwareClose()) {
+    // closeEvent. Keep those paths behind the same guard without redirecting
+    // reject() to close() (which recurses during Qt's close path).
+    if (!m_peripheralRemovalPending) {
         // Escape is a close like the corner button: it keeps the
         // uncommitted Peripherals edits too.
         for (const auto& saver : m_peripheralRowSavers)
@@ -1948,7 +1821,7 @@ void RadioSetupDialog::done(int result)
 
 void RadioSetupDialog::closeEvent(QCloseEvent* event)
 {
-    if (m_peripheralRemovalPending || !confirmFirmwareClose()) {
+    if (m_peripheralRemovalPending) {
         event->ignore();
         return;
     }
@@ -2088,6 +1961,16 @@ QWidget* RadioSetupDialog::buildRadioTab()
         m_rebootInfoField = makeInfoField(QStringLiteral("Reboot:"), rebootBtn,
                                           kInfoLeftLabelWidth);
         grid->addWidget(m_rebootInfoField, 3, 0);
+
+        // The radio's firmware, as it reports it. Updating it lives in the
+        // Updates window (File → Update...).
+        auto* fwVersion = makeValueLabel(displayOrDash(m_model->softwareVersion()));
+        grid->addWidget(makeCopyableInfoField(QStringLiteral("FW Version"),
+                                              QStringLiteral("FW Version:"), fwVersion),
+                        4, 0);
+        connect(m_model, &RadioModel::infoChanged, fwVersion, [this, fwVersion] {
+            fwVersion->setText(displayOrDash(m_model->softwareVersion()));
+        });
 
         connect(m_model, &RadioModel::infoChanged, this, [this] {
             if (m_serialLabel) {
@@ -2312,240 +2195,6 @@ QWidget* RadioSetupDialog::buildRadioTab()
             if (!m_model->licenseMaxVersion().isEmpty())
                 m_licMaxVersionLabel->setText(m_model->licenseMaxVersion());
         });
-
-        vbox->addWidget(group);
-    }
-
-    // Firmware Update group
-    {
-        auto* group = new QGroupBox("Firmware Update");
-        m_firmwareUpdateGroup = group;
-        auto* vlay = new QVBoxLayout(group);
-        vlay->setSpacing(6);
-
-        // Current version row
-        // Laid out like the info fields above it, so its value lines up
-        // with theirs; half the group's width, as theirs are.
-        auto* infoRow = new QGridLayout;
-        infoRow->setSpacing(6);
-        infoRow->setColumnStretch(0, 1);
-        infoRow->setColumnStretch(1, 1);
-        auto* curFw = makeValueLabel(displayOrDash(m_model->softwareVersion()));
-        infoRow->addWidget(makeCopyableInfoField(QStringLiteral("FW Version"),
-                                                 QStringLiteral("FW Version:"), curFw), 0, 0);
-        vlay->addLayout(infoRow);
-
-        connect(m_model, &RadioModel::infoChanged, this, [this, curFw] {
-            curFw->setText(displayOrDash(m_model->softwareVersion()));
-        });
-
-        // Progress bar
-        m_fwProgress = new QProgressBar;
-        m_fwProgress->setRange(0, 100);
-        m_fwProgress->setValue(0);
-        m_fwProgress->setTextVisible(true);
-        m_fwProgress->setFixedHeight(20);
-        m_fwProgress->hide();
-        vlay->addWidget(m_fwProgress);
-
-        // Status label (multi-line)
-        m_fwStatusLabel = new QLabel("");
-        setTone(m_fwStatusLabel, Tone::Hint);
-        m_fwStatusLabel->setWordWrap(true);
-        // Hidden until there is something to say, so an idle group has no
-        // blank line between the version and the buttons.
-        m_fwStatusLabel->hide();
-        vlay->addWidget(m_fwStatusLabel);
-
-        // Button row
-        auto* btnRow = new QHBoxLayout;
-        auto* checkBtn = new QPushButton("Check for Update");
-        btnRow->addWidget(checkBtn);
-
-        auto* browseBtn = new QPushButton("Select Installer...");
-        btnRow->addWidget(browseBtn);
-
-        m_fwUploadBtn = new QPushButton("Upload Firmware");
-        m_fwUploadBtn->setEnabled(false);
-        setButtonRole(m_fwUploadBtn, ButtonRole::Success);
-        btnRow->addWidget(m_fwUploadBtn);
-        btnRow->addStretch(1);
-        vlay->addLayout(btnRow);
-
-        auto* disclaimer = new QLabel(
-            "⚠ CAUTION: Firmware update is currently a highly experimental feature. "
-            "Use at your own risk. At this time we still recommend updating "
-            "via the SmartSDR Windows application.");
-        disclaimer->setWordWrap(true);
-        m_firmwareDisclaimer = disclaimer;
-        setTone(disclaimer, Tone::Warn);
-        vlay->addWidget(disclaimer);
-
-        // ── Stager wiring ─────────────────────────────────────────────
-        m_stager = new FirmwareStager(this);
-
-        connect(checkBtn, &QPushButton::clicked, this, [this, checkBtn] {
-            checkBtn->setEnabled(false);
-            setTone(m_fwStatusLabel, Tone::Hint);
-            m_stager->checkForUpdate(m_model->softwareVersion());
-        });
-
-        connect(m_stager, &FirmwareStager::updateCheckComplete, this,
-            [this, checkBtn](const QString& latest, bool avail,
-                             const QStringList& published) {
-            checkBtn->setEnabled(true);
-            if (avail) {
-                setTone(m_fwStatusLabel, Tone::Warn);
-                setShownText(m_fwStatusLabel, QString(
-                    "Update available: v%1").arg(latest));
-            } else {
-                setTone(m_fwStatusLabel, Tone::Ok);
-                setShownText(m_fwStatusLabel, "Firmware is up to date (v" + latest + ").");
-            }
-            // The verdict is one line; the LIST is the answer. FlexRadio
-            // publishes several lines at once, so "newer firmware exists" on
-            // its own does not tell a v3 operator which release is theirs.
-            showFirmwareReleases(published);
-        });
-
-        connect(m_stager, &FirmwareStager::updateCheckFailed, this,
-            [this, checkBtn](const QString& err) {
-            checkBtn->setEnabled(true);
-            setTone(m_fwStatusLabel, Tone::Error);
-            setShownText(m_fwStatusLabel, err);
-        });
-
-        connect(m_stager, &FirmwareStager::stageProgress, this,
-            [this](int pct, const QString& status) {
-            m_fwProgress->setValue(pct);
-            setTone(m_fwStatusLabel, Tone::Hint);
-            setShownText(m_fwStatusLabel, status);
-        });
-
-        connect(m_stager, &FirmwareStager::stageComplete, this,
-            [this](const QString& path, const QString&) {
-            m_fwFilePath = path;
-            m_fwUploadBtn->setEnabled(true);
-            setTone(m_fwStatusLabel, Tone::Ok);
-        });
-
-        connect(m_stager, &FirmwareStager::stageFailed, this,
-            [this](const QString& err) {
-            m_fwProgress->hide();
-            setTone(m_fwStatusLabel, Tone::Error);
-            setShownText(m_fwStatusLabel, err);
-        });
-
-        // ── Browse / select installer manually ────────────────────────
-        // Accepts the SmartSDR installer the user has already downloaded
-        // from FlexRadio (.msi for v4.2+, .exe for older releases) or a
-        // pre-extracted .ssdr file. The stager auto-detects which.
-        connect(browseBtn, &QPushButton::clicked, this, [this] {
-            const QPointer<RadioSetupDialog> self(this);
-            const QPointer<RadioModel> model(m_model);
-            const QString path = QFileDialog::getOpenFileName(
-                this, "Select SmartSDR Installer or Firmware File", QString(),
-                "SmartSDR installer or firmware (*.msi *.exe *.ssdr);;"
-                "MSI installer (*.msi);;"
-                "EXE installer (*.exe);;"
-                "Extracted firmware (*.ssdr);;"
-                "All files (*)");
-            if (!self || !model || self->m_model != model.data() || path.isEmpty()) {
-                return;
-            }
-
-            m_fwFilePath.clear();
-            m_fwUploadBtn->setEnabled(false);
-            m_fwProgress->show();
-            m_fwProgress->setValue(0);
-            setTone(m_fwStatusLabel, Tone::Hint);
-            setShownText(m_fwStatusLabel, "Preparing firmware from " + QFileInfo(path).fileName() + "...");
-
-            // The stager emits stageProgress / stageComplete / stageFailed.
-            // Existing slots wire to those (set above) so we just kick it off.
-            m_stager->stageFromLocalFile(path,
-                FirmwareStager::modelToFamily(m_model->model()));
-        });
-
-        // ── Upload ────────────────────────────────────────────────────
-        connect(m_fwUploadBtn, &QPushButton::clicked, this, [this] {
-            if (m_fwFilePath.isEmpty()) return;
-
-            const QPointer<RadioSetupDialog> self(this);
-            const QPointer<RadioModel> model(m_model);
-            ScopedChildWidget<QMessageBox> boxOwner(
-                QMessageBox::Warning, QStringLiteral("Firmware Update"),
-                QString("Upload %1 to %2?\n\n"
-                        "The radio will reboot after the update.\n"
-                        "Do not disconnect during the upload.")
-                    .arg(QFileInfo(m_fwFilePath).fileName(), m_model->model()),
-                QMessageBox::Ok | QMessageBox::Cancel, this);
-            boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
-            const int reply = boxOwner.get()->exec();
-            if (!self || !boxOwner || !model || self->m_model != model.data()
-                || reply != QMessageBox::Ok) {
-                return;
-            }
-
-            // Wire the uploader once, at creation. These used to be connected
-            // inside this clicked handler, so every click added another copy.
-            if (!m_uploader) {
-                m_uploader = new FirmwareUploader(m_model, this);
-
-                connect(m_uploader, &FirmwareUploader::progressChanged, this,
-                    [this](int pct, const QString& status) {
-                        m_fwProgress->setValue(pct);
-                        setShownText(m_fwStatusLabel, status);
-                        m_fwStatusLabel->setAccessibleDescription(status);
-                    });
-                connect(m_uploader, &FirmwareUploader::finished, this,
-                    [this](FirmwareUploader::Outcome outcome, const QString& msg) {
-                        // Three outcomes, not two. A drained socket or a
-                        // post-upload disconnect confirms nothing either way, so
-                        // it must not be painted as either (#5572): only the
-                        // radio's own `file update failed=` settles it. The
-                        // message carries the distinction in words as well as in
-                        // colour — colour alone never states it (docs/a11y.md).
-                        setShownText(m_fwStatusLabel, msg);
-                        m_fwStatusLabel->setAccessibleDescription(msg);
-                        Tone tone = Tone::Hint;
-                        switch (outcome) {
-                        case FirmwareUploader::Outcome::Succeeded:
-                            m_fwProgress->setValue(100);
-                            tone = Tone::Ok;
-                            m_fwUploadBtn->setEnabled(false);
-                            break;
-                        case FirmwareUploader::Outcome::Unconfirmed:
-                            // Bytes left the host and the radio is probably
-                            // applying them. Keep the progress bar — hiding it
-                            // reads as "nothing happened" — and do not offer a
-                            // retry: the uploader refuses one until reconnect.
-                            m_fwProgress->setValue(100);
-                            tone = Tone::Warn;
-                            m_fwUploadBtn->setEnabled(false);
-                            break;
-                        case FirmwareUploader::Outcome::Failed:
-                            m_fwProgress->hide();
-                            tone = Tone::Error;
-                            m_fwUploadBtn->setEnabled(true);
-                            break;
-                        }
-                        setTone(m_fwStatusLabel, tone);
-                    });
-            }
-
-            m_fwProgress->show();
-            m_fwProgress->setValue(0);
-            m_fwUploadBtn->setEnabled(false);
-            setTone(m_fwStatusLabel, Tone::Hint);
-
-            m_uploader->upload(m_fwFilePath);
-        });
-
-        for (auto* lbl : group->findChildren<QLabel*>()) {
-            if (!hasTone(lbl))
-                applyLabelStyle(lbl);
-        }
 
         vbox->addWidget(group);
     }
@@ -5355,17 +5004,34 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
         QStringLiteral("QLabel { color: {{color.text.primary}}; font-size: 12px; }");
     static const QString kHint =
         QStringLiteral("QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    // The :disabled rule restates the dialog's own: this widget-level sheet
+    // would otherwise keep a disabled checkbox at full ink.
     static const QString kCheck =
-        QStringLiteral("QCheckBox { color: {{color.text.primary}}; font-size: 12px; }");
+        QStringLiteral("QCheckBox { color: {{color.text.primary}}; font-size: 12px; }"
+                       "QCheckBox:disabled { color: {{color.control.unavailable}}; }");
     static const QString kGroup =
         QStringLiteral("QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 4px; "
                        "margin-top: 8px; padding-top: 12px; font-weight: bold; "
                        "color: {{color.text.secondary}}; }"
                        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
 
+    // The live options reach a connected radio through the "anan"/"frontend.set"
+    // verb; the control that calls this has already written AnanSettings, which
+    // the next connect reads. A no-op with nothing connected. Gated on the
+    // declared namespace, not on a family name.
+    auto pushLive = [this](const QVariantMap& fields) {
+        if (!m_model || !m_model->backendDeclaresExtension(QStringLiteral("anan"))) {
+            return;
+        }
+        m_model->invokeBackendExtension(QStringLiteral("anan"),
+                                        QStringLiteral("frontend.set"), 0, fields);
+    };
+
     auto* intro = new QLabel(
-        "Receive front-end options for the ANAN-G2. Each is read when a session starts, "
-        "so a change here takes effect on the NEXT CONNECT. The panadapter's zoom can "
+        "Receive front-end options for the ANAN-G2. The sample rate, ADC, dither, "
+        "randomization and the bypass checkboxes are read when a session starts, so a "
+        "change to them takes effect on the NEXT CONNECT. The filter bank and the speaker "
+        "amplifier mute also apply at once to a connected G2. The panadapter's zoom can "
         "still change the sample rate during a session; this sets where a session begins.");
     themed(intro, kHint);
     intro->setWordWrap(true);
@@ -5471,12 +5137,40 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
     fvb->setSpacing(6);
 
     auto* feFilterIntro = new QLabel(
-        "Each ADC has a band-pass filter bank in series ahead of it, and this client never "
-        "selects one of its filters, so the bypass is that ADC's only signal path. Leave "
-        "both checked.");
+        "Each ADC has a band-pass filter bank in series ahead of it. With no filter selected "
+        "and the bank not bypassed, nothing reaches the ADC, so one of the two is always "
+        "set.");
     themed(feFilterIntro, kHint);
     feFilterIntro->setWordWrap(true);
     fvb->addWidget(feFilterIntro);
+
+    auto* feBankCombo = new QComboBox;
+    feBankCombo->setObjectName(QStringLiteral("ananFilterBank"));
+    AetherSDR::applyComboStyle(feBankCombo);
+    feBankCombo->addItem(QStringLiteral("Bypassed"), false);
+    feBankCombo->addItem(QStringLiteral("Follow the tuned frequency"), true);
+    feBankCombo->setAccessibleName(QStringLiteral("ANAN filter bank"));
+    feBankCombo->setAccessibleDescription(QStringLiteral(
+        "Bypassed holds both ADCs' band-pass banks out of circuit. Follow the tuned "
+        "frequency selects the band-pass filter covering the receiver's frequency on both "
+        "ADCs and changes it as you tune. A filter that does not cover the tuned frequency "
+        "leaves no signal, so check each band you use. Takes effect at once."));
+    feBankCombo->setToolTip(QStringLiteral(
+        "Bypassed: both band-pass banks are held out of circuit, and the\n"
+        "front end sees all of HF.\n\n"
+        "Follow the tuned frequency: the band-pass filter covering the receiver's\n"
+        "frequency is selected on both ADCs, and changes as you tune. Strong\n"
+        "signals outside the band are rejected before the ADC.\n\n"
+        "Takes effect at once. The bank is in series, so a filter that does not\n"
+        "cover the tuned frequency leaves no signal at all, not a weaker one.\n"
+        "Check each band you use, and go back to Bypassed if one goes quiet."));
+    auto* bankRow = new QHBoxLayout;
+    auto* bankLabel = new QLabel(QStringLiteral("Filter bank:"));
+    themed(bankLabel, kLabel);
+    bankRow->addWidget(bankLabel);
+    bankRow->addWidget(feBankCombo);
+    bankRow->addStretch(1);
+    fvb->addLayout(bankRow);
 
     auto* feBypass0Chk = new QCheckBox("Bypass ADC0's bank");
     feBypass0Chk->setObjectName(QStringLiteral("ananBypassAdc0"));
@@ -5485,16 +5179,21 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
     feBypass1Chk->setObjectName(QStringLiteral("ananBypassAdc1"));
     themed(feBypass1Chk, kCheck);
     const QString bypassHint = QStringLiteral(
-        "Routes this ADC's signal around its front-end filter bank. Leave it checked:\n"
-        "no band filter is ever selected, so unchecked means nothing reaches the ADC\n"
-        "at all — not just a less selective receiver.\n\n"
+        "Routes this ADC's signal around its front-end filter bank while the filter\n"
+        "bank is Bypassed. Leave it checked: with no band filter selected, unchecked\n"
+        "means nothing reaches the ADC at all, not just a less selective receiver.\n\n"
+        "Following the tuned frequency switches the same relay, so this is disabled\n"
+        "while it does.\n\n"
         "Takes effect on the next connect.");
     feBypass0Chk->setToolTip(bypassHint);
     feBypass1Chk->setToolTip(bypassHint);
+    // Disabled while the bank follows the tuned frequency, so the reason is in
+    // the accessible description as well as the tooltip.
     const QString bypassAccessible = QStringLiteral(
-        "Routes this ADC's signal around its front-end filter bank. Leave it checked: no "
-        "band filter is ever selected, so with it unchecked nothing reaches the ADC at all. "
-        "Takes effect on the next connect.");
+        "Routes this ADC's signal around its front-end filter bank while the filter bank "
+        "is Bypassed. Leave it checked: with no band filter selected, nothing reaches the "
+        "ADC with it unchecked. Disabled while the filter bank follows the tuned frequency, "
+        "which switches the same relay. Takes effect on the next connect.");
     feBypass0Chk->setAccessibleDescription(bypassAccessible);
     feBypass1Chk->setAccessibleDescription(bypassAccessible);
     fvb->addWidget(feBypass0Chk);
@@ -5503,6 +5202,23 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
             [](bool on) { AnanSettings::setBypassAdc0Filters(on); });
     connect(feBypass1Chk, &QCheckBox::toggled, this,
             [](bool on) { AnanSettings::setBypassAdc1Filters(on); });
+
+    // The bypass checkboxes switch the same relay bit as the selection, so
+    // they are disabled, not hidden, while it drives the banks.
+    auto syncBypassEnabled = [feBypass0Chk, feBypass1Chk](bool followTuned) {
+        feBypass0Chk->setEnabled(!followTuned);
+        feBypass1Chk->setEnabled(!followTuned);
+    };
+    connect(feBankCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [feBankCombo, pushLive, syncBypassEnabled](int index) {
+        if (index < 0) {
+            return;
+        }
+        const bool followTuned = feBankCombo->itemData(index).toBool();
+        AnanSettings::setBandFiltersEnabled(followTuned);
+        syncBypassEnabled(followTuned);
+        pushLive({{QStringLiteral("bandFiltersEnabled"), followTuned}});
+    });
 
     vbox->addWidget(feFilterGroup);
 
@@ -5530,6 +5246,30 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
     connect(speakerAudioChk, &QCheckBox::toggled, this,
             [](bool on) { AnanSettings::setSpeakerAudioEnabled(on); });
 
+    auto* ampMuteChk = new QCheckBox("Mute the radio's speaker amplifier");
+    ampMuteChk->setObjectName(QStringLiteral("ananSpeakerAmpMute"));
+    themed(ampMuteChk, kCheck);
+    ampMuteChk->setAccessibleDescription(QStringLiteral(
+        "Mutes the amplifier inside the radio. Sending the radio silence leaves its "
+        "amplifier running and hissing; this stops it. A clean disconnect hands the radio "
+        "back unmuted. Takes effect at once."));
+    ampMuteChk->setToolTip(QStringLiteral(
+        "Mute the amplifier inside the radio.\n\n"
+        "Sending the radio silence leaves its amplifier running and hissing;\n"
+        "this stops it.\n\n"
+        "Takes effect at once."));
+    avb->addWidget(ampMuteChk);
+    connect(ampMuteChk, &QCheckBox::toggled, this, [pushLive](bool on) {
+        AnanSettings::setSpeakerAmpMuted(on);
+        pushLive({{QStringLiteral("speakerAmpMuted"), on}});
+    });
+
+    auto* ampMuteHint = new QLabel(QStringLiteral(
+        "A clean disconnect hands the radio back unmuted."));
+    themed(ampMuteHint, kHint);
+    ampMuteHint->setWordWrap(true);
+    avb->addWidget(ampMuteHint);
+
     vbox->addWidget(audioGroup);
 
     // Re-read AnanSettings into every control. Needed on show as well as on a
@@ -5537,22 +5277,29 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
     // another surface (or another profile load) can have moved them while this
     // dialog sat hidden -- the same reason the audio-device and serial-port
     // combos have reseeds.
-    m_ananFrontEndReseed = [feRateCombo, feAdcCombo, feDitherChk, feRandomChk,
-                            feBypass0Chk, feBypass1Chk, speakerAudioChk] {
+    m_ananFrontEndReseed = [feRateCombo, feAdcCombo, feDitherChk, feRandomChk, feBankCombo,
+                            feBypass0Chk, feBypass1Chk, speakerAudioChk, ampMuteChk,
+                            syncBypassEnabled] {
         // Blocked while seeding: every one of these controls persists on change,
         // so an unblocked setCurrentIndex() would write back the value it just
-        // read.
+        // read and, for the live ones, push it to the radio.
         const QSignalBlocker b1(feRateCombo), b2(feAdcCombo), b3(feDitherChk), b4(feRandomChk),
-                             b5(feBypass0Chk), b6(feBypass1Chk), b7(speakerAudioChk);
+                             b5(feBankCombo), b6(feBypass0Chk), b7(feBypass1Chk),
+                             b8(speakerAudioChk), b9(ampMuteChk);
         const int rateIdx = feRateCombo->findData(AnanSettings::ddc0RateKsps());
         feRateCombo->setCurrentIndex(rateIdx >= 0 ? rateIdx : 0);
         const int adcIdx = feAdcCombo->findData(AnanSettings::ddc0AdcIndex());
         feAdcCombo->setCurrentIndex(adcIdx >= 0 ? adcIdx : 0);
         feDitherChk->setChecked(AnanSettings::ditherEnabled());
         feRandomChk->setChecked(AnanSettings::randomEnabled());
+        const bool followTuned = AnanSettings::bandFiltersEnabled();
+        const int bankIdx = feBankCombo->findData(followTuned);
+        feBankCombo->setCurrentIndex(bankIdx >= 0 ? bankIdx : 0);
         feBypass0Chk->setChecked(AnanSettings::bypassAdc0Filters());
         feBypass1Chk->setChecked(AnanSettings::bypassAdc1Filters());
+        syncBypassEnabled(followTuned);
         speakerAudioChk->setChecked(AnanSettings::speakerAudioEnabled());
+        ampMuteChk->setChecked(AnanSettings::speakerAmpMuted());
     };
     m_ananFrontEndReseed();
 

@@ -321,9 +321,29 @@ QString RigctlProtocol::smartsdrToHamlib(const QString& mode)
         {"FM",   "FM"},   {"NFM",  "FM"},
         {"DFM",  "FM"},   {"FDM",  "FM"},
         {"DIGU", "PKTUSB"}, {"DIGL", "PKTLSB"},
+        {"FDV",  "PKTUSB"}, {"FDVU", "PKTUSB"}, {"FDVL", "PKTLSB"},
         {"RTTY", "RTTY"},
     };
     return map.value(mode.toUpper(), "USB");
+}
+
+std::pair<int, int> RigctlProtocol::passbandEdges(const QString& m, int passband)
+{
+    if (m == "CW" || m == "CWL"
+        || m == "AM" || m == "SAM" || m == "DSB"
+        || m == "FM" || m == "NFM" || m == "DFM") {
+        // Symmetric around 0 — CW BFO offset and AM/FM carrier are at audio DC.
+        return {-passband / 2, passband / 2};
+    }
+    if (m == "LSB" || m == "DIGL" || m == "FDVL") {
+        // Lower sideband — same edge geometry as LSB (FlexLib v4.3.16
+        // Slice.cs:799 groups FDVL with LSB/DIGL). Offset-aware placement for
+        // narrow widths is handled in the GUI path; rigctld uses the
+        // wide-fallback geometry from VfoWidget::applyFilterPreset.
+        return {-passband, -95};
+    }
+    // USB, DIGU, RTTY, FDV, FDVU, etc. — high-side from 95 Hz
+    return {95, passband};
 }
 
 QString RigctlProtocol::hamlibToSmartSDR(const QString& mode)
@@ -887,6 +907,11 @@ QString RigctlProtocol::cmdSetMode(const QString& args)
     if (!slice) return rprt(-8);
 
     QString sdrMode = hamlibToSmartSDR(hamlibMode);
+    // A FreeDV slice reports as PKTUSB/PKTLSB; the same mode coming back must
+    // not switch the slice out of FreeDV.
+    if (slice->mode().startsWith(QLatin1String("FDV"))
+        && smartsdrToHamlib(slice->mode()) == hamlibMode)
+        sdrMode = slice->mode();
 
     QMetaObject::invokeMethod(slice, [slice, sdrMode]() {
         slice->setMode(sdrMode);
@@ -901,29 +926,7 @@ QString RigctlProtocol::cmdSetMode(const QString& args)
         int passband = parts[1].toInt(&ok);
         if (ok && passband > 0) {
             QMetaObject::invokeMethod(slice, [slice, passband]() {
-                const QString m = slice->mode();
-                int lo = 95;
-                int hi = passband;
-                if (m == "CW" || m == "CWL"
-                    || m == "AM" || m == "SAM" || m == "DSB"
-                    || m == "FM" || m == "NFM" || m == "DFM") {
-                    // Symmetric around 0 — CW BFO offset and AM/FM carrier
-                    // are at audio DC.
-                    lo = -passband / 2;
-                    hi =  passband / 2;
-                } else if (m == "LSB" || m == "DIGL") {
-                    // DIGL audio sits on the lower sideband — same edge
-                    // geometry as LSB. (Offset-aware placement for narrow
-                    // widths is handled in the GUI path; the rigctld path
-                    // uses the wide-fallback geometry from
-                    // VfoWidget::applyFilterPreset.)
-                    lo = -passband;
-                    hi = -95;
-                } else {
-                    // USB, DIGU, RTTY, FDV, etc. — high-side from 95 Hz
-                    lo = 95;
-                    hi = passband;
-                }
+                const auto [lo, hi] = passbandEdges(slice->mode(), passband);
                 slice->setFilterWidth(lo, hi);
             }, Qt::QueuedConnection);
         }

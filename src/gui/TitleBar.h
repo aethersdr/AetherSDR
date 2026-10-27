@@ -81,6 +81,9 @@ public:
     // status visible for the whole connected session, independent of whether
     // the operator dismissed the explanatory notice.
     void setExperimentalRadioFamily(const QString& familyName);
+    // A newer AetherSDR release, or empty to clear. Non-empty shows the
+    // UPDATE pill after the wordmark; clicking it emits updateBadgeClicked().
+    void setUpdateAvailable(const QString& latestVersion);
 
     // Status-bar transmit timer (left of the PC Audio button). Driven by
     // RadioModel::operatorTransmitChanged — runs only for operator MOX/PTT/VOX
@@ -139,6 +142,7 @@ signals:
     void minimalModeRequested();
     void minimalModeWindowedExitRequested();
     void multiFlexClicked();
+    void updateBadgeClicked();
     // Emitted when the blink setting changes (e.g. via right-click) so the
     // View menu checkbox can stay in sync.
     void blinkEnabledChanged(bool enabled);
@@ -198,6 +202,9 @@ private:
     BrandMark*   m_brand{nullptr};
     RadioTabBar* m_radioTabs{nullptr};
     QLabel*      m_experimentalRadioLabel{nullptr};
+    QPushButton* m_updateBadge{nullptr};
+    QString      m_updateVersion;
+    void refreshUpdateBadge();
     QLabel*      m_otherTxLabel{nullptr};
     QPushButton* m_mfBtn{nullptr};
     QPushButton* m_pcBtn{nullptr};

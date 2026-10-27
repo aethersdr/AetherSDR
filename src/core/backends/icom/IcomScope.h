@@ -40,13 +40,9 @@ struct ScopeGeometry {
 enum class ScopeMode : std::uint8_t {
     Centre = 0x00,
     Fixed  = 0x01,
-    // REAL, and confirmed tier-1 on the IC-7300MK2, whose CI-V guide lists all
-    // four values for 0x27 0x14. The IC-705's guide lists only 00 and 01, so
-    // the mode set is per-model rather than universal.
-    //
-    // Geometrically the scroll modes behave like Fixed — they report lower and
-    // upper edges directly rather than centre+span — which is why the decoder
-    // needs no separate branch for them. Only the label differs.
+    // Both scroll modes report lower and upper edges, like Fixed. All three
+    // supported radios accept them on current firmware (IC-705 >= 1.20,
+    // IC-9700 >= 1.30).
     ScrollC = 0x02,
     ScrollF = 0x03,
 };
@@ -54,6 +50,8 @@ enum class ScopeMode : std::uint8_t {
 // One fully-assembled sweep.
 struct ScopeFrame {
     ScopeMode mode = ScopeMode::Centre;
+    // 00 MAIN / 01 SUB on the IC-9700; always 00 on single-scope radios.
+    std::uint8_t selector = 0;
     // Edges, in Hz, ALREADY normalised out of whichever representation the
     // radio used — see the note on Centre mode in IcomScope.cpp.
     //
@@ -106,6 +104,29 @@ struct ScopeCalibration {
 // Convert one sweep to dBm using `cal`. Length matches frame.raw.
 [[nodiscard]] std::vector<float> toDbm(const ScopeFrame& frame, const ScopeGeometry& geom,
                                         const ScopeCalibration& cal);
+
+// Resample a trace over [srcStartHz, srcEndHz] onto [dstStartHz, dstEndHz],
+// keeping the point count: each output bin takes the source bin under its
+// centre; uncovered bins get `fillDbm`. Shows an in-flight Fixed / SCROLL-F
+// window change with the spectrum where it was measured.
+[[nodiscard]] std::vector<float> remapToWindow(const std::vector<float>& dbm,
+                                               std::int64_t srcStartHz, std::int64_t srcEndHz,
+                                               std::int64_t dstStartHz, std::int64_t dstEndHz,
+                                               float fillDbm);
+
+// Where a Fixed / SCROLL-F window [lowerHz, upperHz] must centre so the VFO
+// stays usable, or nullopt to stay put. Entering the outer `zoneFraction`
+// toward an edge (or leaving by under a width) pans so the VFO sits
+// `insetFraction` inside that edge; a farther jump re-centres; a VFO in the
+// zone moving away from its edge stays put. previousHz 0 = no direction known.
+[[nodiscard]] std::optional<double> scopeFollowCentre(double lowerHz, double upperHz,
+                                                      double previousHz, double hz,
+                                                      double zoneFraction,
+                                                      double insetFraction);
+// The centre nearest `requestedHz` whose window of `widthHz` keeps `vfoHz` at
+// least `marginHz` inside; the VFO itself when the width is too narrow.
+[[nodiscard]] double scopeCentreHoldingVfo(double requestedHz, double widthHz, double vfoHz,
+                                           double marginHz);
 
 // ---------------------------------------------------------------------------
 // Decoding

@@ -1,0 +1,290 @@
+name: Update Manifest
+
+# Builds, signs and publishes the in-app update manifest for a release
+# (RFC #5304 Phase 2; the format is docs/architecture/update-manifest.md).
+#
+# build    reads only: waits for the release's payload assets, extracts each
+#          payload, and writes manifest.json plus one patch bundle per payload
+#          and per earlier release (tools/build_update_manifest.py).
+# publish  runs in the update-signing environment (main and v* tags only,
+#          maintainer approval): signs the manifest with the Ed25519 update key, verifies
+#          the signature against packaging/update-signing.pub, attaches the
+#          bundles to the release and puts the manifest on
+#          updates.aethersdr.com (an R2 bucket written by this job alone).
+#
+# A dispatch with publish=false is a dry run: build only, the outputs kept as
+# a workflow artifact.
+
+on:
+  # No `branches:` filter, for the reason sign-release.yml gives: a tag
+  # build's head_branch is the tag, and the job's `if` restricts this to tags.
+  workflow_run:
+    workflows: ["AppImage", "Windows Installer"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v26.10.4)'
+        required: true
+      publish:
+        description: 'Sign and publish (false: build only, as a dry run)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+# Both builds trigger this, so one tag produces two runs. They queue rather
+# than race; the second finds the manifest already published and stops.
+concurrency:
+  group: update-manifest-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       contains(fromJSON('["push", "workflow_dispatch"]'), github.event.workflow_run.event) &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      # The tag reaches scripts only through the environment, and only once it
+      # has the shape of a stable release tag: vYY.M.patch with an optional
+      # hotfix (v26.7.4.1), and no pre-release suffix.
+      - name: Determine tag
+        id: tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$RUN_HEAD_BRANCH"
+          fi
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::Not a release tag; no update manifest is built."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+          persist-credentials: false
+
+      - name: Check the build was of the tag
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          tag_sha=$(git rev-parse HEAD)
+          if [ "$tag_sha" != "$RUN_HEAD_SHA" ]; then
+            echo "::error::The triggering build ran on $RUN_HEAD_SHA, not the tag's commit $tag_sha."
+            exit 1
+          fi
+
+      # The tool and the public key come from this workflow's own commit (main
+      # for a release, the dispatched ref for a dry run), not from the tag: a
+      # tag cut before this workflow existed has neither.
+      - name: Fetch the manifest tool
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/tool"
+          for f in tools/build_update_manifest.py tools/publish_update_manifest.py \
+                   packaging/update-signing.pub; do
+            gh api "repos/$GH_REPO/contents/$f?ref=$WORKFLOW_SHA" -H 'Accept: application/vnd.github.raw' \
+              > "$RUNNER_TEMP/tool/$(basename "$f")" || rm -f "$RUNNER_TEMP/tool/$(basename "$f")"
+          done
+          test -s "$RUNNER_TEMP/tool/build_update_manifest.py"
+          test -s "$RUNNER_TEMP/tool/publish_update_manifest.py"
+
+      # A second run for the same tag (both builds trigger this) stops here
+      # once the first has COMPLETELY published: the release's manifest and
+      # signature served and verifying, and latest/ too when this is the
+      # latest release. Anything less is rebuilt and published again, which
+      # repairs it. A dispatch always builds.
+      - name: Decide whether to publish
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "publish=$INPUT_PUBLISH" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ ! -s "$RUNNER_TEMP/tool/update-signing.pub" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+          state=$(python3 "$RUNNER_TEMP/tool/publish_update_manifest.py" check --tag "$TAG" \
+            --latest-tag "$latest" --public-key "$RUNNER_TEMP/tool/update-signing.pub")
+          echo "Publication of $TAG: $state"
+          if [ "$state" = complete ]; then
+            echo "publish=already" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait for every payload asset to be attached
+        if: ${{ steps.plan.outputs.publish != 'already' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          want="x86_64.AppImage aarch64.AppImage Windows-x64-portable.zip"
+          for i in $(seq 1 90); do
+            names=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
+            missing=
+            for w in $want; do
+              case "$names" in *"$w"*) ;; *) missing="$missing $w" ;; esac
+            done
+            if [ -z "$missing" ]; then
+              echo "All payload assets present."
+              exit 0
+            fi
+            echo "Waiting for:$missing  ($i/90)"
+            sleep 20
+          done
+          echo "::error::Timed out after 30 min waiting for:$missing"
+          exit 1
+
+      - name: Install unsquashfs and zstd
+        if: ${{ steps.plan.outputs.publish != 'already' }}
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q squashfs-tools zstd
+
+      - name: Build the manifest and patch bundles
+        if: ${{ steps.plan.outputs.publish != 'already' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # --fetch-from-github requires every payload: a download that still
+          # fails after retries stops the run rather than leaving a platform out.
+          python3 "$RUNNER_TEMP/tool/build_update_manifest.py" --tag "$TAG" --out update-out \
+            --fetch-from-github --depth 4 --work "$RUNNER_TEMP/update-work" \
+            --public-key "$RUNNER_TEMP/tool/update-signing.pub"
+          cp "$RUNNER_TEMP/tool/publish_update_manifest.py" "$RUNNER_TEMP/tool/build_update_manifest.py" update-out/
+          ls -l update-out
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: ${{ steps.plan.outputs.publish != 'already' }}
+        with:
+          name: update-manifest-${{ steps.tag.outputs.tag }}
+          path: update-out/
+          retention-days: 14
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: ${{ needs.build.outputs.publish == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: update-signing
+    permissions:
+      contents: write
+    # One publish at a time across ALL tags, so an older release's run can
+    # never interleave with a newer one's promotion of latest/.
+    concurrency:
+      group: update-manifest-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: update-manifest-${{ needs.build.outputs.tag }}
+          path: update-out
+
+      - name: Fetch the public key
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          gh api "repos/$GH_REPO/contents/packaging/update-signing.pub?ref=$WORKFLOW_SHA" \
+            -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/update-signing.pub"
+          openssl pkey -pubin -in "$RUNNER_TEMP/update-signing.pub" -noout
+
+      # Sign, then verify against the committed public key before anything
+      # is uploaded: a wrong or rotated secret fails here, loudly, instead of
+      # publishing a manifest no client can verify.
+      # The key signs only a schema-1 manifest for THIS tag, with a key_id,
+      # whose every URL is one of this release's downloads; checked before
+      # the key is written to disk.
+      - name: Sign and verify the manifest
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          python3 update-out/publish_update_manifest.py validate --tag "$TAG" --dir update-out
+          key="$RUNNER_TEMP/update-signing.pem"
+          trap 'rm -f "$key"' EXIT
+          ( umask 077; printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key" )
+          openssl pkeyutl -sign -rawin -inkey "$key" -in update-out/manifest.json \
+            -out update-out/manifest.json.sig
+          openssl pkeyutl -verify -rawin -pubin -inkey "$RUNNER_TEMP/update-signing.pub" \
+            -in update-out/manifest.json -sigfile update-out/manifest.json.sig
+          test "$(stat -c %s update-out/manifest.json.sig)" = 64
+
+      - name: Attach the patch bundles to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          shopt -s nullglob
+          bundles=(update-out/*.update.tar)
+          if [ ${#bundles[@]} -gt 0 ]; then
+            gh release upload "$TAG" "${bundles[@]}" --clobber
+          fi
+
+      # tools/publish_update_manifest.py writes the release's pair, reads it
+      # back and verifies it, then promotes latest/ only when this is GitHub's
+      # latest release AND latest/ does not already name a newer one (re-read
+      # just before the write; this job's concurrency group closes the rest).
+      # R2's S3 API with a token scoped to this one bucket (its id is the
+      # access key, the SHA-256 of its value the secret), signed by curl
+      # itself: no third-party uploader holds the credentials.
+      - name: Publish to updates.aethersdr.com
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.UPDATES_R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.UPDATES_R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.UPDATES_R2_SECRET_ACCESS_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+          python3 update-out/publish_update_manifest.py publish --tag "$TAG" --latest-tag "$latest" \
+            --public-key "$RUNNER_TEMP/update-signing.pub" --dir update-out
+
+      # What clients see, through the public site: complete, or this fails.
+      - name: Check the publication is complete
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+          state=$(python3 update-out/publish_update_manifest.py check --tag "$TAG" \
+            --latest-tag "$latest" --public-key "$RUNNER_TEMP/update-signing.pub")
+          echo "Publication of $TAG: $state"
+          test "$state" = complete

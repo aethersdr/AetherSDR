@@ -175,6 +175,19 @@ void IcomCivScheduler::expireRead(std::int64_t nowMs)
     ++m_stats.timeouts;
 }
 
+std::size_t IcomCivScheduler::cancelQueued(std::string_view key) noexcept
+{
+    return std::erase_if(m_queue,
+                         [key](const Queued& queued) { return queued.request.key == key; });
+}
+
+bool IcomCivScheduler::hasQueuedOrInFlight(std::string_view key) const noexcept
+{
+    return (m_inFlight && m_inFlight->request.key == key)
+        || std::any_of(m_queue.cbegin(), m_queue.cend(),
+                       [key](const Queued& queued) { return queued.request.key == key; });
+}
+
 void IcomCivScheduler::dropStaleExpired(std::int64_t nowMs)
 {
     while (!m_expired.empty() && m_expired.front().forgetAtMs <= nowMs) {
