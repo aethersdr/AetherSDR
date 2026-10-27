@@ -65,6 +65,7 @@ QString formatNetworkSeqErrors(int errors, int packets);
 QString networkQualityColor(const QString& quality);
 // The quality-level color matching an adaptive-throttle fps cap
 // (≤ 4 Poor, ≤ 8 Fair, else Good), for the throttle indicators.
+// Callers pass a cap in force (> 0); 0 is not "no cap" here and maps to Poor.
 QString adaptiveFpsCapColor(int fpsCap);
 QString buildNetworkTooltip(const RadioModel& model,
                             int adaptiveFpsCap,

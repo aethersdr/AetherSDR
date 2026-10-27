@@ -7173,6 +7173,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_panDisplayStatusConnections.clear();
         m_adaptiveThrottleActive = false;
         m_adaptiveFpsCap = 0;  // clear cap alongside throttle flag — see #2829 review
+        refreshAdaptiveThrottleChip();  // or the bar keeps the dead cap until the next connect
 
         // Clear spectrum/waterfall so the display doesn't look frozen
         if (m_panStack) {

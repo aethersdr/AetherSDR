@@ -246,7 +246,7 @@ private:
     bool         m_blinkEnabled{true};  // persisted via AppSettings "HeartbeatBlinkEnabled"
     QList<QString> m_connectedRadioIds;
     bool         m_discovering{false};  // solid amber while waiting for connection
-    QString      m_throttleFlashColor; // empty = default green; set while adaptive throttle is active
+    QString      m_throttleFlashColor; // empty = glow in the dot's own colour; set while adaptive throttle is active
     QString      m_pcAudioInputDevice;
     QString      m_pcAudioOutputDevice;
 
