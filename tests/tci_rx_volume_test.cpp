@@ -150,9 +150,12 @@ void testMalformedIsDropped()
     check(f.send(tci, QStringLiteral("rx_volume:0,-6")).isEmpty()
               && f.slice->audioGain() == before,
           "a negative second argument is neither a channel nor a percent");
-    check(f.send(tci, QStringLiteral("rx_volume:7,0,-6")).isEmpty()
+    // An unknown receiver NUMBER falls back to the first slice on purpose
+    // (tci-receivers.md rule 3), as for every command; only a non-number is
+    // refused.
+    check(f.send(tci, QStringLiteral("rx_volume:x,0,-6")).isEmpty()
               && f.slice->audioGain() == before,
-          "an unknown receiver is refused");
+          "a receiver that is not a number is refused");
 }
 
 } // namespace
