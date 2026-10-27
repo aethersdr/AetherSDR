@@ -727,6 +727,10 @@ bool MainWindow::sendWanRadioClientDisconnects(const QString& serial,
 // before the adaptive cap arrived. Live fps/line-duration status is held out
 // of the widgets while throttled, so these are the operator's values and the
 // cap never becomes saved radio state. Empty panId = every pan.
+//
+// A pan with a band change in flight is skipped. Its widget still holds the
+// band it left, and the new band carries its own rates, uncapped:
+// RadioModel holds the cap until the change settles (#6791).
 void MainWindow::restorePreCapPanRates(const QString& onlyPanId)
 {
     if (profileLoadRadioStateWritesHeld()) {
@@ -741,6 +745,7 @@ void MainWindow::restorePreCapPanRates(const QString& onlyPanId)
         if (!sw) continue;
         const QString panId = applet->panId();
         if (!onlyPanId.isEmpty() && panId != onlyPanId) continue;
+        if (m_radioModel.panBandInFlight(panId)) continue;
         // Route through requestPanDisplayRates, not raw Flex wire text: a
         // backend that shapes its own display rate (HL2) has no Flex
         // command sink, so the restore silently never arrived and an FPS
@@ -2196,7 +2201,6 @@ MainWindow::MainWindow(QWidget* parent)
             m_adaptiveFpsCapsSent.insert(fpsCap);
             m_adaptiveWfRatesSent.insert(m_radioModel.adaptiveWfRateForCap(fpsCap));
         } else {
-            m_recapPansAfterBandChange.clear();
             m_adaptiveFpsCapsSent.clear();
             m_adaptiveWfRatesSent.clear();
             restorePreCapPanRates();
@@ -2205,21 +2209,29 @@ MainWindow::MainWindow(QWidget* parent)
 
     // A Flex saves each pan's FPS and waterfall rate in the band it leaves, so
     // a band change while capped would store the cap as that band's setting.
-    // Put the operator's values back first; the cap goes back on at the pan's
-    // next non-cap fps report, which lands after the band switch. Only band
-    // changes AetherSDR dispatches pass through here: one from CAT, another
-    // client or a pan dragged across a band edge does not (#6791).
+    // Put the operator's values back first. Only band changes AetherSDR
+    // dispatches pass through here: one from CAT, another client or a pan
+    // dragged across a band edge does not (#6791).
     connect(&m_radioModel, &RadioModel::panBandAboutToDispatch,
             this, [this](const QString& panId) {
-        if (!m_adaptiveThrottleActive) return;
-        restorePreCapPanRates(panId);
-        m_recapPansAfterBandChange.insert(panId);
+        // restorePreCapPanRates() skips a pan whose previous band change is
+        // still in flight: the band being left has not been capped, and the
+        // widget still holds the band before it.
+        if (m_adaptiveThrottleActive)
+            restorePreCapPanRates(panId);
+    });
+    // The reply follows the new band's own pan and waterfall status, so the
+    // widget now holds that band's rates as the restore target. Until here
+    // RadioModel kept the cap off the pan, a tier change included.
+    connect(&m_radioModel, &RadioModel::panBandSettled,
+            this, [this](const QString& panId) {
+        if (m_adaptiveThrottleActive)
+            m_radioModel.sendAdaptiveCapToPan(panId, m_adaptiveFpsCap);
     });
     // Closing a pan has the same effect: the radio keeps the closing pan's
     // rates and gives them to the next pan it opens.
     connect(&m_radioModel, &RadioModel::panAboutToRemove,
             this, [this](const QString& panId) {
-        m_recapPansAfterBandChange.remove(panId);
         if (m_adaptiveThrottleActive)
             restorePreCapPanRates(panId);
     });
@@ -7195,7 +7207,6 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_panDisplayStatusConnections.clear();
         m_adaptiveThrottleActive = false;
         m_adaptiveFpsCap = 0;  // clear cap alongside throttle flag — see #2829 review
-        m_recapPansAfterBandChange.clear();
         m_adaptiveFpsCapsSent.clear();
         m_adaptiveWfRatesSent.clear();
 

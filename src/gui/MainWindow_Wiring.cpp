@@ -3384,7 +3384,7 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         }));
     connections.append(connect(
         pan, &PanadapterModel::fpsReported,
-        sw, [this, sw, panId](int fps) {
+        sw, [this, sw](int fps) {
             // The adaptive cap is transient client transport state: suppress only
             // the cap's own echo so the pre-cap radio value stays the restore
             // target, but let a genuine radio/profile update through even while
@@ -3394,15 +3394,6 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
             if (applyThrottledDisplayReport(m_adaptiveThrottleActive,
                                             m_adaptiveFpsCapsSent, fps)) {
                 sw->setFftFps(fps);
-                // A band change while capped restored this pan first. Put the
-                // cap back on at the first non-cap fps report after that. It is
-                // usually the echo of our own restore, not the new band's rate,
-                // but it is sent after band=, so the cap lands after the band
-                // switch either way; a later band report still updates the
-                // restore target through the gate above.
-                if (m_adaptiveThrottleActive && m_recapPansAfterBandChange.remove(panId)) {
-                    m_radioModel.sendAdaptiveCapToPan(panId, m_adaptiveFpsCap);
-                }
             }
         }));
     connections.append(connect(

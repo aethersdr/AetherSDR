@@ -33,6 +33,7 @@
 #include "SliceModel.h"
 #include "MeterModel.h"
 #include "PanadapterModel.h"
+#include "PanBandTransitions.h"
 #include "ProfileLoadPanWriteQueue.h"
 #include "TunerModel.h"
 #include "AmpModel.h"
@@ -1301,6 +1302,9 @@ signals:
     // command, while the pan can still be written to.
     void panAboutToRemove(const QString& panId);
     void panBandDispatchFailed(const QString& panId);
+    // The pan's last outstanding band change has settled: its reply (or a
+    // dispatch failure) arrived, after the new band's own rates (#6791).
+    void panBandSettled(const QString& panId);
     // Emitted when createPanadapter() is blocked because the radio's pan limit is reached.
     void panadapterLimitReached(int limit, const QString& model);
     // Emitted when the radio rejects a slice create command (e.g. limit reached across
@@ -2641,6 +2645,7 @@ private:
     static constexpr qint64 THROTTLE_MIN_DWELL_MS = 5000;
     qint64 m_lastThrottleEngageMs{0};   // QDateTime::currentMSecsSinceEpoch() at last engage
     bool   m_pendingThrottleLift{false}; // lift deferred by min-dwell; fired in evaluateNetworkQuality()
+    PanBandTransitions m_panBandTransitions;
 
     // Backend-reported transport stats for non-Flex families, which have no
     // m_connection/m_panStream. Populated only from
@@ -2713,7 +2718,12 @@ public:
     int     adaptiveWfRateForCap(int fpsCap) const;
     // Send one pan the adaptive cap's FPS and waterfall rate. Public so
     // MainWindow can put the cap back on after a band change while capped.
+    // Does nothing while the pan has a band change in flight.
     void    sendAdaptiveCapToPan(const QString& panId, int fpsCap);
+    // True while a band change sent to this pan awaits its reply: the client
+    // does not hold the new band's rates yet (see PanBandTransitions).
+    bool    panBandInFlight(const QString& panId) const
+    { return m_panBandTransitions.inFlight(panId); }
     QString networkQuality()   const;
     int     packetLossWindowSeconds() const { return NETWORK_LOSS_WINDOW_SAMPLES; }
     int     packetLossWindowDrops() const { return m_packetLossWindowErrors; }
