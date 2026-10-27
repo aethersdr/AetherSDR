@@ -550,3 +550,23 @@ func TestUnsharingADeviceEndsItsConnections(t *testing.T) {
 		t.Fatalf("a connection to a still-shared device was closed: %v", err)
 	}
 }
+
+// The HL2 discovery broadcast is sent only by a provisioned node sharing
+// discovered devices.
+func TestHL2SweepOnlyWhileSharingDiscovered(t *testing.T) {
+	off := false
+	for _, c := range []struct {
+		name string
+		cfg  provisionConfig
+		want bool
+	}{
+		{"unprovisioned", provisionConfig{}, false},
+		{"sharing by default", provisionConfig{TokenSHA256: "x"}, true},
+		{"sharing off", provisionConfig{TokenSHA256: "x", ShareDiscovered: &off}, false},
+	} {
+		n := &Node{cfg: c.cfg}
+		if got := n.SharingDiscovered(); got != c.want {
+			t.Errorf("%s: sweeps %v, want %v", c.name, got, c.want)
+		}
+	}
+}

@@ -52,8 +52,9 @@ AetherSDR (tailnet peer)                       radio container (host network nam
   - TCP to a shared address is spliced out through the radio's LAN. That
     carries the 4O3A accessories (Antenna Genius 9007, Power Genius XL 9008,
     Tuner Genius XL 9010), which the shim finds from their UDP announcements.
-  - A Hermes-Lite 2 never announces itself, so the shim broadcasts the
-    Protocol 1 discovery request (`EF FE 02`, UDP 1024) every 5 s to each LAN
+  - A Hermes-Lite 2 never announces itself, so while sharing discovered
+    devices is on the shim broadcasts the Protocol 1 discovery request
+    (`EF FE 02`, UDP 1024) every 5 s to each LAN
     the radio is on, skipping 172.30/16, and lists each HL2 at its reply's
     source address, keyed by MAC. A device seen at a new address leaves its
     old one at once.

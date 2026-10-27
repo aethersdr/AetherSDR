@@ -103,7 +103,8 @@ func directedBroadcast(p netip.Prefix, bits int) (netip.Addr, bool) {
 	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}), true
 }
 
-// sweepHL2 probes for HL2s every hl2SweepInterval and lists each reply.
+// sweepHL2 probes for HL2s every hl2SweepInterval while SweepHL2 allows,
+// and lists each reply.
 func (d *Discovery) sweepHL2() {
 	pc, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
@@ -131,6 +132,10 @@ func (d *Discovery) sweepHL2() {
 	}()
 	req := hl2DiscoveryRequest()
 	for {
+		if d.SweepHL2 == nil || !d.SweepHL2() {
+			time.Sleep(hl2SweepInterval)
+			continue
+		}
 		for _, b := range lanBroadcasts() {
 			_, _ = pc.WriteToUDPAddrPort(req, netip.AddrPortFrom(b, hl2Port))
 		}

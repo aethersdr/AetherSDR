@@ -130,6 +130,14 @@ func (n *Node) cfgPath() string   { return filepath.Join(n.StateDir, "provision.
 func (n *Node) tsnetDir() string  { return filepath.Join(n.StateDir, "tsnet") }
 func (n *Node) provisioned() bool { return n.cfg.TokenSHA256 != "" }
 
+// SharingDiscovered reports whether the node is provisioned with sharing of
+// discovered devices on: the only time it broadcasts for HL2s on the LAN.
+func (n *Node) SharingDiscovered() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.provisioned() && n.cfg.shareDiscovered()
+}
+
 func (n *Node) load() error {
 	if err := os.MkdirAll(n.StateDir, 0o700); err != nil {
 		return err

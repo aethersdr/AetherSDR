@@ -49,6 +49,7 @@ func main() {
 	disc := &Discovery{}
 	node := &Node{StateDir: *stateDir, RadioAddr: *radioAddr, MaxMTU: *maxMTU, Discovery: disc}
 	disc.OnChange = node.RefreshRoutes
+	disc.SweepHL2 = node.SharingDiscovered
 	disc.Start()
 	if err := node.load(); err != nil {
 		log.Printf("state: %v; starting unprovisioned", err)

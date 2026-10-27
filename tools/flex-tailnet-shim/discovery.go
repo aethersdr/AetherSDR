@@ -115,6 +115,9 @@ func parseAnnouncement(b []byte, src netip.Addr, port int) (Device, bool) {
 // Discovery tracks station devices heard on the LAN.
 type Discovery struct {
 	OnChange func() // called (not under lock) when the device set changes
+	// SweepHL2 gates the HL2 discovery broadcast; nil never sweeps. The 4O3A
+	// listeners always run, since listening sends nothing.
+	SweepHL2 func() bool
 
 	mu      sync.Mutex
 	devices map[string]Device // by IP
