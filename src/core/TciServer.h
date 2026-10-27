@@ -299,7 +299,9 @@ private:
         TxCoordinator::Producer txProducer;
         TxCoordinator::Request pttRequest;
         // The key-down's request, held until its key-up: keyer: (#5873).
+        // keyerHeld, not keyerRequest.valid(): a revoked request still owes its key-up.
         TxCoordinator::Request keyerRequest;
+        bool keyerHeld{false};
         QPointer<TciClient> socket;
         TciProtocol* protocol{nullptr};
         QString      processName;        // #5087 — see TciClientInfo

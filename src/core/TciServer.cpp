@@ -3547,7 +3547,7 @@ void TciServer::handleKeyerRequest(TciClient* client, const TciProtocol::KeyerRe
     TxCoordinator::Request input;
     if (request.down) {
         ClientState* state = clientStateFor(client);
-        if (!state || !client->live() || state->keyerRequest.valid()) {
+        if (!state || !client->live() || state->keyerHeld) {
             return;
         }
         input = client->ingressRequest ? *client->ingressRequest : state->txProducer.request();
@@ -3564,21 +3564,26 @@ void TciServer::handleKeyerRequest(TciClient* client, const TciProtocol::KeyerRe
             releaseTciKeyer(*state);
             return;
         }
-        if (!client->live() || state->keyerRequest.valid()) {
+        if (!client->live() || state->keyerHeld) {
             return;
         }
         state->keyerRequest = input;
+        state->keyerHeld = true;
         if (!m_model->requestProducerCw(input, true, false, true, {}, QStringLiteral("tci-keyer"))) {
             state->keyerRequest = {};
+            state->keyerHeld = false;
         }
     }, Qt::QueuedConnection);
 }
 
 void TciServer::releaseTciKeyer(ClientState& state)
 {
-    if (!state.keyerRequest.valid()) {
+    if (!state.keyerHeld) {
         return;
     }
+    // Revoked or invalidated requests are released too; the model decides
+    // whether the request still owns a CwKey intent.
+    state.keyerHeld = false;
     const TxCoordinator::Request request = std::exchange(state.keyerRequest, {});
     if (m_model) {
         (void)m_model->requestProducerCw(request, false, false, true, {}, QStringLiteral("tci-keyer"));
