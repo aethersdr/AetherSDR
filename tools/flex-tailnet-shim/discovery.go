@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-// Station-device discovery. 4O3A accessories announce themselves by UDP
+// Station-device discovery. Hermes-Lite 2s are found by asking (see
+// hl2discovery.go). 4O3A accessories announce themselves by UDP
 // broadcast on the station LAN, and the container shares the radio's network
 // namespace, so it hears them:
 //
@@ -145,6 +146,7 @@ func (d *Discovery) Start() {
 		}
 		go d.listen(pc, port)
 	}
+	go d.sweepHL2()
 	go d.expire()
 }
 
@@ -188,6 +190,17 @@ func (d *Discovery) note(dev Device) {
 	if d.devices == nil {
 		d.devices = map[string]Device{}
 	}
+	// A device that moved (same kind and serial at a new address) leaves
+	// its old entry, and so its old route, at once instead of on expiry.
+	moved := false
+	if dev.Serial != "" {
+		for ip, old := range d.devices {
+			if ip != dev.IP && old.Kind == dev.Kind && old.Serial == dev.Serial {
+				delete(d.devices, ip)
+				moved = true
+			}
+		}
+	}
 	prev, existed := d.devices[dev.IP]
 	if !existed && len(d.devices) >= maxDevices {
 		d.mu.Unlock()
@@ -195,7 +208,7 @@ func (d *Discovery) note(dev Device) {
 		return
 	}
 	d.devices[dev.IP] = dev
-	changed := !existed || prev.Kind != dev.Kind
+	changed := moved || !existed || prev.Kind != dev.Kind
 	d.mu.Unlock()
 	if changed {
 		log.Printf("discovery: %s %q at %s", dev.Kind, dev.Name, dev.IP)

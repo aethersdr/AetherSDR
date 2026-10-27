@@ -293,3 +293,76 @@ func TestSubnetFlowsNeverReachTheRadioItself(t *testing.T) {
 		}
 	}
 }
+
+// hl2Reply is an HL2 discovery reply: status, MAC 00:1C:C0:A2:13:DD,
+// gateware 74 (7.4), board 0x06.
+func hl2Reply(status byte) []byte {
+	b := make([]byte, 60)
+	copy(b, []byte{0xEF, 0xFE, status, 0x00, 0x1C, 0xC0, 0xA2, 0x13, 0xDD, 74, 0x06})
+	return b
+}
+
+func TestParseHL2Reply(t *testing.T) {
+	src := netip.MustParseAddrPort("192.168.50.120:1024")
+	for _, status := range []byte{0x02, 0x03} { // idle, and streaming to another client
+		d, ok := parseHL2Reply(hl2Reply(status), src)
+		if !ok || d.Kind != "Hermes-Lite 2" || d.IP != "192.168.50.120" || d.Port != 1024 ||
+			d.Serial != "00:1C:C0:A2:13:DD" || d.Version != "74" {
+			t.Fatalf("status %#x parsed as %+v (ok=%v)", status, d, ok)
+		}
+	}
+	other := hl2Reply(0x02)
+	other[10] = 0x05 // an ANAN (Orion) answering the same request
+	short := hl2Reply(0x02)[:10]
+	request := hl2DiscoveryRequest() // our own broadcast, heard back
+	for _, bad := range []struct {
+		name string
+		b    []byte
+		src  string
+	}{
+		{"other board", other, "192.168.50.120:1024"},
+		{"short", short, "192.168.50.120:1024"},
+		{"own request", request, "192.168.50.120:1024"},
+		{"wrong port", hl2Reply(0x02), "192.168.50.120:5000"},
+		{"public sender", hl2Reply(0x02), "8.8.4.4:1024"},
+		{"container network", hl2Reply(0x02), "172.30.2.2:1024"},
+	} {
+		if d, ok := parseHL2Reply(bad.b, netip.MustParseAddrPort(bad.src)); ok {
+			t.Errorf("%s accepted as %+v", bad.name, d)
+		}
+	}
+}
+
+func TestDirectedBroadcastSkipsTheContainerNetwork(t *testing.T) {
+	for _, c := range []struct {
+		prefix, want string
+	}{
+		{"192.168.50.254/24", "192.168.50.255"},
+		{"10.1.2.3/22", "10.1.3.255"},
+		{"172.30.1.1/24", ""}, // the radio's container network
+		{"172.30.2.1/24", ""}, // the radio's FPGA link
+		{"100.87.216.66/32", ""},
+		{"203.0.113.5/24", ""}, // not private
+	} {
+		got, ok := directedBroadcast(netip.MustParsePrefix(c.prefix), 32)
+		if (c.want == "") == ok || (ok && got.String() != c.want) {
+			t.Errorf("%s: broadcast %v (ok=%v), want %q", c.prefix, got, ok, c.want)
+		}
+	}
+}
+
+// An HL2 that gets a new DHCP lease is listed at its new address at once, so
+// its route follows it rather than waiting out the old entry.
+func TestMovedDeviceLeavesItsOldAddress(t *testing.T) {
+	d := &Discovery{}
+	changes := 0
+	d.OnChange = func() { changes++ }
+	a, _ := parseHL2Reply(hl2Reply(0x02), netip.MustParseAddrPort("192.168.50.120:1024"))
+	b, _ := parseHL2Reply(hl2Reply(0x02), netip.MustParseAddrPort("192.168.50.121:1024"))
+	d.note(a)
+	d.note(b)
+	got := d.Devices()
+	if len(got) != 1 || got[0].IP != "192.168.50.121" || changes != 2 {
+		t.Fatalf("devices %+v after %d changes, want only 192.168.50.121 after 2", got, changes)
+	}
+}
