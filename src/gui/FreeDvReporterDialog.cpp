@@ -244,6 +244,12 @@ FreeDvReporterDialog::FreeDvReporterDialog(QWidget* parent)
              + canonScrollBarRules() + canonIndicatorRules();
     });
     buildBody();
+    // The sheet's min-width becomes each band button's explicit minimum, which
+    // a layout honours over the text-derived hint; a wider font needs more.
+    for (QPushButton* b : std::as_const(m_bandBtns)) {
+        b->ensurePolished();
+        b->setMinimumWidth(qMax(b->minimumWidth(), b->minimumSizeHint().width()));
+    }
     // An explicit minimum overrides the layout's own, so the band row would
     // clip below what it needs (wider in the canon's semibold buttons).
     setMinimumWidth(qMax(minimumWidth(), minimumSizeHint().width()));
