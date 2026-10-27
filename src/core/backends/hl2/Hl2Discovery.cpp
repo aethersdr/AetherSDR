@@ -384,7 +384,7 @@ void Hl2Discovery::onReadyRead()
         // An HL2 has no on-radio name store; show the operator's custom nickname
         // (keyed by MAC/serial in AppSettings) if one is set, else the model name.
         info.nickname = effectiveNickname(QStringLiteral("hl2"), info.serial, info.model);
-        info.version  = QString::number(reply->gatewareVersion);
+        info.version  = QString::fromStdString(gatewareVersionText(*reply));
         // A bare revision number is not self-describing in a status bar.
         info.versionLabel = QStringLiteral("Gateware");
         // A radio already streaming to another client answers with 0x03. Show it

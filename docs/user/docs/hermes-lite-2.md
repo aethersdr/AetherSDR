@@ -37,7 +37,7 @@ Across a VPN or another subnet, use **Connect by IP** with **Radio type:** set t
 - **Connect to last radio on start up** works with the HL2.
 - **Nickname:** right-click the radio in the list → **Set Nickname…** / **Clear Nickname** (no need to connect), or **Settings → Radio Setup... → Radio → Nickname:** while connected. HL2 nicknames are stored on this computer, keyed by the radio's MAC address.
 - The very first connect on a computer spends a while planning its DSP filters; the app stays responsive while it does. The result is saved, so later connects are quick.
-- The status bar shows the gateware version.
+- The status bar and the radio list show the gateware version as major.minor, such as **74.3** for stock Hermes-Lite 2 gateware. Boards built on the HL2 can report their own minor version: a SQUARE SDR 2 reads **xx.52**.
 
 ### Board variant and hardware: HL2 Hardware
 
