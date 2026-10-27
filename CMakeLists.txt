@@ -1154,6 +1154,7 @@ set(CORE_SOURCES
     src/core/UpdateReleaseNotes.cpp
     src/core/UpdateStager.cpp
     src/core/UpdateInstaller.cpp
+    src/core/UpdateController.cpp
     src/core/NetworkDiagnostics.cpp
     src/core/WindowsFirewall.cpp
     src/core/OleCompoundFile.cpp

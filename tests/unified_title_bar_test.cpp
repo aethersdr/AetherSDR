@@ -456,6 +456,23 @@ int main(int argc, char** argv)
         bar->setUpdateAvailable(QString());
         app.processEvents();
         check(!updateState().value(QStringLiteral("visible")).toBool(), "empty version clears the badge");
+        // Staged: RESTART TO UPDATE, shown whatever the check says (Check
+        // daily off clears the available version, not a staged release).
+        bar->setUpdateStaged(QStringLiteral("26.10.3"));
+        app.processEvents();
+        check(updateState().value(QStringLiteral("staged")).toString() == QLatin1String("26.10.3")
+                  && updateState().value(QStringLiteral("visible")).toBool(),
+              "a staged release shows the badge");
+        check(badge && badge->text() == QLatin1String("RESTART TO UPDATE")
+                  && badge->accessibleName() == QLatin1String("AetherSDR update ready to install")
+                  && badge->accessibleDescription().contains(QLatin1String("26.10.3")),
+              "the staged badge says so, to a screen reader too");
+        bar->setUpdateAvailable(QStringLiteral("26.10.3"));
+        bar->setUpdateStaged(QString());
+        app.processEvents();
+        check(badge && badge->text() == QLatin1String("UPDATE") && badge->isVisible(),
+              "discarded, the badge is UPDATE again");
+        bar->setUpdateAvailable(QString());
     }
 
     // ── Radio tabs ──────────────────────────────────────────────────────────

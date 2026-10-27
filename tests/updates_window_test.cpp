@@ -2,6 +2,7 @@
 #include "UpdateTestNetwork.h"
 #include "core/AppSettings.h"
 #include "core/UpdateChecker.h"
+#include "core/UpdateController.h"
 #include "core/UpdateSettings.h"
 #include "gui/FirmwareUpdateCard.h"
 #include "gui/UpdatesWindow.h"
@@ -15,12 +16,23 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QDir>
+#include <QFileInfo>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QTemporaryDir>
+#include <QTest>
+
+#include "monocypher-ed25519.h"
+
+#include <filesystem>
 
 // The Updates window over an in-memory transport (no sockets) and the real
 // v26.10.3 release JSON: which view each answer produces, that release text
-// is never shown as markup, Skip, and the mirrored toggle.
+// is never shown as markup, Skip, and the mirrored toggle. Then Install
+// update in place: an UpdateController over the tests/fixtures/update
+// release (file:// downloads, a test signing key, a recording fake helper).
 
 using namespace AetherSDR;
 
@@ -52,6 +64,76 @@ const QPushButton* button(const UpdatesWindow& w, const QString& textStart)
     }
     return nullptr;
 }
+
+// A scratch install and release site for an UpdateController, signed by a
+// key made here, and a helper that only records what it was given.
+struct InstallRig {
+    QTemporaryDir tmp;
+    uint8_t secret[64];
+    uint8_t pub[32];
+    int launches = 0;
+    bool lastRestart = false;
+    bool inPlace = true;
+    QString rolledBack;
+
+    explicit InstallRig(bool withBundle = true)
+    {
+        uint8_t seed[32];
+        for (int i = 0; i < 32; ++i) {
+            seed[i] = static_cast<uint8_t>(0x71 + i);
+        }
+        crypto_ed25519_key_pair(secret, pub, seed);
+        UpdateStager::setTrustedKeysForTesting({QByteArray(reinterpret_cast<const char*>(pub), 32)});
+        const QString fixture = QStringLiteral(UPDATE_FIXTURE_DIR);
+        std::error_code ec;
+        std::filesystem::copy((fixture + QStringLiteral("/install-v26.10.2")).toStdString(),
+                              tmp.filePath(QStringLiteral("install")).toStdString(),
+                              std::filesystem::copy_options::recursive, ec);
+        QFile m(fixture + QStringLiteral("/release/manifest.json"));
+        m.open(QIODevice::ReadOnly);
+        const QByteArray manifest = m.readAll();
+        uint8_t sig[64];
+        crypto_ed25519_sign(sig, secret, reinterpret_cast<const uint8_t*>(manifest.constData()),
+                            static_cast<size_t>(manifest.size()));
+        put(QStringLiteral("site/latest/manifest.json"), manifest);
+        put(QStringLiteral("site/latest/manifest.json.sig"), QByteArray(reinterpret_cast<const char*>(sig), 64));
+        if (withBundle) {
+            const QString bundle = QStringLiteral("AetherSDR-v26.10.3-Windows-x64-from-v26.10.2.update.tar");
+            QFile b(fixture + QStringLiteral("/release/") + bundle);
+            b.open(QIODevice::ReadOnly);
+            put(QStringLiteral("dl/v26.10.3/") + bundle, b.readAll());
+        }
+        UpdateStager::setDownloadBaseForTesting(QUrl::fromLocalFile(tmp.filePath(QStringLiteral("dl"))));
+        UpdateSettings::setAcceptedManifestUtc({});
+    }
+    void put(const QString& rel, const QByteArray& data)
+    {
+        const QString path = tmp.filePath(rel);
+        QDir().mkpath(QFileInfo(path).absolutePath());
+        QFile f(path);
+        f.open(QIODevice::WriteOnly | QIODevice::Truncate);
+        f.write(data);
+    }
+    UpdateController::Environment env()
+    {
+        UpdateController::Environment e;
+        e.request.runningVersion = QStringLiteral("26.10.2");
+        e.request.platform = QStringLiteral("windows");
+        e.request.arch = QStringLiteral("x86_64");
+        e.request.installRoot = tmp.filePath(QStringLiteral("install"));
+        e.request.stagingRoot = tmp.filePath(QStringLiteral("update"));
+        e.request.manifestUrl = QUrl::fromLocalFile(tmp.filePath(QStringLiteral("site/latest/manifest.json")));
+        e.request.fullFallback = true;
+        e.canInstall = [this](QString*) { return inPlace; };
+        e.launchHelper = [this](const QString&, const QString&, bool restart, QString*) {
+            ++launches;
+            lastRestart = restart;
+            return true;
+        };
+        e.rolledBackVersion = [this] { return rolledBack; };
+        return e;
+    }
+};
 
 } // namespace
 
@@ -355,6 +437,183 @@ int main(int argc, char** argv)
               "a v3 radio is offered v3, not v4");
         check(FirmwareUpdateCard::preselectedRelease(published, QString()).isEmpty(),
               "no installed version, no preselection");
+    }
+
+    {
+        // Install update in place: Install → progress and Cancel → Restart
+        // to update, against the real fixture release.
+        UpdateSettings::setSkippedVersion(QString());
+        InstallRig rig;
+        UpdateController controller(rig.env());
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        auto* w = new UpdatesWindow(&checker, nullptr);
+        w->setController(&controller);
+        w->show();
+        app.processEvents();
+        network.last->finishWithBody(releaseJson(QStringLiteral("Tagline")));
+        app.processEvents();
+        auto* primary = w->findChild<QPushButton*>(QStringLiteral("updatesGet"));
+        auto* progressRow = w->findChild<QWidget*>(QStringLiteral("updatesInstallProgress"));
+        auto* progress = w->findChild<QProgressBar*>(QStringLiteral("updatesProgress"));
+        check(primary && primary->isVisible() && primary->text() == QLatin1String("Install update"),
+              "in place, the primary action is Install update");
+        check(primary && primary->accessibleName() == QLatin1String("Install AetherSDR 26.10.3")
+                  && !primary->accessibleDescription().isEmpty(),
+              "Install update names the release for a screen reader");
+        check(progressRow && !progressRow->isVisible(), "no progress before Install");
+        const QPushButton* download = button(*w, QStringLiteral("Download installer"));
+        check(download && download->isVisible() && download->accessibleDescription().contains(QLatin1String("browser")),
+              "Download installer keeps the browser route beside Install update");
+        check(progress && !progress->accessibleName().isEmpty(), "the progress bar has a name");
+
+        // Cancel: back to Install update, nothing kept.
+        if (primary) {
+            primary->click();
+        }
+        app.processEvents();
+        check(progressRow && progressRow->isVisible() && !primary->isVisible(), "staging shows progress, not the button");
+        check(download && !download->isVisible(), "no Download installer while staging");
+        auto* cancel = const_cast<QPushButton*>(button(*w, QStringLiteral("Cancel")));
+        check(cancel && !cancel->accessibleName().isEmpty(), "Cancel is offered, named");
+        if (cancel) {
+            cancel->click();
+        }
+        app.processEvents();
+        check(controller.state() == UpdateController::State::Idle, "Cancel stops staging");
+        check(primary && primary->isVisible() && primary->text() == QLatin1String("Install update"),
+              "after Cancel, Install update again");
+
+        // Install, staged: Restart to update, and the badge's state.
+        if (primary) {
+            primary->click();
+        }
+        QTest::qWaitFor([&] { return controller.state() == UpdateController::State::Staged; }, 20000);
+        app.processEvents();
+        check(controller.state() == UpdateController::State::Staged, "Install update stages the release");
+        check(primary && primary->isVisible() && primary->text() == QLatin1String("Restart to update"),
+              "staged, the primary action is Restart to update");
+        check(text(*w, "updatesFootnote").contains(QLatin1String("installs when you quit")),
+              "the footnote says it installs on quit");
+        QSignalSpy restart(w, &UpdatesWindow::restartRequested);
+        if (primary) {
+            primary->click();
+        }
+        check(restart.size() == 1 && rig.launches == 0, "Restart to update asks MainWindow, which hands it over");
+
+        // Skip a staged release: it is discarded.
+        auto* skip = const_cast<QPushButton*>(button(*w, QStringLiteral("Skip this version")));
+        if (skip) {
+            skip->click();
+        }
+        app.processEvents();
+        check(controller.state() == UpdateController::State::Idle
+                  && !QFileInfo::exists(rig.tmp.filePath(QStringLiteral("update/26.10.3"))),
+              "Skip discards the staged release");
+
+        // Ozy311's review: Skip, then Install the skipped release anyway
+        // (maintainer ruling: that clears the skip), then Skip again once it
+        // is ready. The download is discarded and nothing installs on quit.
+        UpdateSettings::setSkippedVersion(QStringLiteral("26.10.3"));
+        w->checkNow();   // refresh as skipped
+        network.last->finishWithBody(releaseJson(QStringLiteral("Tagline")));
+        app.processEvents();
+        QSignalSpy unskipBadge(w, &UpdatesWindow::badgeChanged);
+        if (primary) {
+            primary->click();
+        }
+        check(!UpdateChecker::isSkipped(QStringLiteral("26.10.3")) && unskipBadge.size() == 1
+                  && unskipBadge.first().first().toString() == QLatin1String("26.10.3"),
+              "installing a skipped release clears the skip and brings the badge back");
+        const bool ready =
+            QTest::qWaitFor([&] { return controller.state() == UpdateController::State::Staged; }, 20000);
+        app.processEvents();
+        check(ready, "the release installed after a skip is staged");
+        skip = const_cast<QPushButton*>(button(*w, QStringLiteral("Skip this version")));
+        check(skip && skip->isEnabled(), "a skipped release installed anyway can be skipped again");
+        if (skip) {
+            skip->click();
+        }
+        app.processEvents();
+        check(controller.state() == UpdateController::State::Idle && !controller.installOnQuit()
+                  && rig.launches == 0,
+              "skipping it again discards the download; nothing installs on quit");
+        UpdateSettings::setSkippedVersion(QString());
+
+        // Closing the window while it stages cancels it.
+        if (primary) {
+            primary->click();
+        }
+        app.processEvents();
+        check(controller.state() == UpdateController::State::Staging, "staging again");
+        w->close();
+        app.processEvents();
+        check(controller.state() == UpdateController::State::Idle, "closing the window stops staging");
+    }
+
+    {
+        // No patch and no full release can be had: the browser, with why.
+        UpdateSettings::setSkippedVersion(QString());
+        InstallRig rig(false);
+        UpdateController controller(rig.env());
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow w(&checker, nullptr);
+        w.setController(&controller);
+        w.show();
+        app.processEvents();
+        network.last->finishWithBody(releaseJson(QStringLiteral("Tagline")));
+        app.processEvents();
+        auto* primary = w.findChild<QPushButton*>(QStringLiteral("updatesGet"));
+        if (primary) {
+            primary->click();
+        }
+        QTest::qWaitFor([&] { return primary && primary->text().startsWith(QLatin1String("Get AetherSDR")); },
+                        20000);
+        check(primary && primary->text().startsWith(QLatin1String("Get AetherSDR 26.10.3")),
+              "a release that can't be prepared here falls back to the download");
+        check(text(w, "updatesNote").contains(QLatin1String("Download it instead")), "the note says why");
+    }
+
+    {
+        // Review of #6777: a release rolled back here is not offered in
+        // place again; the window says why and offers the download.
+        UpdateSettings::setSkippedVersion(QString());
+        InstallRig rig;
+        rig.rolledBack = QStringLiteral("26.10.3");
+        UpdateController controller(rig.env());
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow w(&checker, nullptr);
+        w.setController(&controller);
+        w.show();
+        app.processEvents();
+        network.last->finishWithBody(releaseJson(QStringLiteral("Tagline")));
+        app.processEvents();
+        check(button(w, QStringLiteral("Install update")) == nullptr
+                  && button(w, QStringLiteral("Get AetherSDR 26.10.3")) != nullptr,
+              "a rolled-back release offers the download, not Install update");
+        check(text(w, "updatesNote").contains(QLatin1String("rolled back")), "the note says it was rolled back");
+    }
+
+    {
+        // Where in place isn't possible, nothing changes: the download.
+        UpdateSettings::setSkippedVersion(QString());
+        InstallRig rig;
+        rig.inPlace = false;
+        UpdateController controller(rig.env());
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow w(&checker, nullptr);
+        w.setController(&controller);
+        w.show();
+        app.processEvents();
+        network.last->finishWithBody(releaseJson(QStringLiteral("Tagline")));
+        app.processEvents();
+        check(button(w, QStringLiteral("Get AetherSDR 26.10.3")) != nullptr,
+              "without in-place support, Get AetherSDR as before");
+        const QPushButton* link = button(w, QStringLiteral("Download installer"));
+        check(!link || !link->isVisible(), "no Download installer when the primary action is the download");
     }
 
     return failures ? 1 : 0;

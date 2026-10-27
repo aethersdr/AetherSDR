@@ -264,8 +264,8 @@ a write through a link, or a link pointing outside it).
 `AetherSDRUpdater.exe` (`src/updater/`) does the swap after AetherSDR
 exits. It is built with the static MSVC runtime and no Qt, and the app
 copies it into the state folder before starting it
-(`UpdateInstaller::launchHelper`, which the Updates window calls from the
-next PR on), because it renames the folder it was installed in. Its
+(`UpdateInstaller::launchHelper`, called by `UpdateController` below),
+because it renames the folder it was installed in. Its
 command line is versioned (`--protocol 1`), and anything else is refused.
 
 In-place updates are per-user. `launchHelper` refuses while AetherSDR runs
@@ -328,8 +328,8 @@ so a release reinstalled after the Broken message (below) is never
 replaced by the stale `.previous`. The outcome goes to `swap-result.txt`, which the app reads once
 at its next start and checks before believing (a known outcome and a
 plain version, or nothing is logged or kept). A rolled-back release is
-remembered as `Updates.rolledBackVersion`, which the next PR's Updates
-window uses to never offer it again.
+remembered as `Updates.rolledBackVersion`, which `UpdateController` uses to
+never stage or offer it again.
 
 ### The self-test is a permanent contract
 
@@ -343,6 +343,40 @@ start the full app, stop it after 60 s and roll back a good release.
 
 If a rollback rename itself fails, the helper shows a message naming the
 three folders and the log (`updater.log`), rather than failing silently.
+
+## Install update (the app's side)
+
+`UpdateController` (`src/core`) is the one place the app installs from.
+MainWindow owns it, so a staged release outlives the Updates window that
+started it; the window and the title-bar badge show its state:
+**Idle**, **Staging** (with progress), **Staged**, and **Handed** (the
+helper has it and waits for AetherSDR to exit).
+
+- Install update is offered only when `UpdateInstaller::canInstallInPlace`
+  says so: Windows, not a store install, no split elevated token,
+  `AetherSDRUpdater.exe` beside the app, and the install's parent writable.
+  Otherwise, or once a release falls back from the full download, the
+  window keeps **Get AetherSDR** in the browser. Beside Install update, a
+  **Download installer** link keeps the browser route (Phase 3 ruling).
+- Staging requests `fullFallback`, with GitHub's latest as the freeze
+  check's tag. Closing the window while it stages cancels it (a maintainer
+  ruling); a staged release stays.
+- At startup, before any check, `stagedRelease()` restores what an earlier
+  run staged. Each answer from the update check runs it again with the new
+  latest, so a superseded release is discarded. It never runs while
+  staging.
+- Skip this version discards a staged (or staging) release of that
+  version. A rolled-back version is never staged.
+- **Restart to update** runs `revalidate()` and then hands the release to
+  the helper with `--restart`, and AetherSDR quits normally. If the files
+  changed since staging, the release is discarded and the window says to
+  install again.
+- As AetherSDR quits (the end of `MainWindow::closeEvent`), a staged
+  release is revalidated and handed over without `--restart`, unless radio
+  firmware is being written. Revalidating hashes the whole tree, so the
+  quit waits for it.
+- At the next start the status bar reports the helper's result for about
+  10 seconds (`UpdateInstaller::lastSwapResult()`, read once in `main.cpp`).
 
 ## Bundle naming
 
