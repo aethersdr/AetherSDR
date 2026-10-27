@@ -87,7 +87,7 @@ def scan():
     for f in ui_files():
         rel = f.relative_to(REPO).as_posix()
         try:
-            text = f.read_text(errors="replace")
+            text = f.read_text(encoding="utf-8", errors="replace")
         except OSError as e:
             print(f"warning: unreadable {rel}: {e}", file=sys.stderr)
             continue
@@ -105,7 +105,7 @@ def load_json(path):
     if not path.is_file():
         return {}
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, ValueError) as e:
         print(f"warning: {path.name} is not valid JSON ({e}); treating as "
               "empty", file=sys.stderr)
@@ -209,7 +209,14 @@ def main():
             print("::error::aetherd touchpoints require a valid semantic tag: "
                   + ", ".join(invalid_tags))
             return 1
-        current = MANIFEST_MD.read_text() if MANIFEST_MD.is_file() else ""
+        # Read the same way the write below produces it: utf-8, and no newline
+        # translation, so --check compares like with like on every platform.
+        # (Path.read_text() only gained newline= in 3.13, so go through open().)
+        if MANIFEST_MD.is_file():
+            with MANIFEST_MD.open(encoding="utf-8", newline="") as f:
+                current = f.read()
+        else:
+            current = ""
         if current != out:
             print("::error::aetherd-touchpoints.md is stale — run"
                   " `python tools/gen_touchpoint_manifest.py`")
@@ -218,7 +225,17 @@ def main():
         return 0
 
     MANIFEST_MD.parent.mkdir(parents=True, exist_ok=True)
-    MANIFEST_MD.write_text(out)
+    # encoding= and newline= are both load-bearing here.
+    #
+    # Without encoding=, the text is written in the locale codec. On a Windows
+    # console that is cp1252, which cannot represent the "gui->engine" arrow in
+    # the heading this script generates, so the write raises UnicodeEncodeError
+    # *after* truncating the file — leaving the manifest empty (#6818).
+    #
+    # Without newline="", Python translates LF to CRLF on Windows, so a
+    # regenerated manifest would differ from the committed one on every line
+    # and --check would report it stale.
+    MANIFEST_MD.write_text(out, encoding="utf-8", newline="")
     print(f"wrote {MANIFEST_MD.relative_to(REPO)}: "
           f"{len(touchpoints)} touchpoint headers")
     return 0
