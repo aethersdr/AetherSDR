@@ -1089,12 +1089,7 @@ func (n *Node) subnetTCP(src, dst netip.AddrPort) (handler func(net.Conn), inter
 			return
 		}
 		// Only an admitted flow counts as evidence that the route is in use.
-		n.mu.Lock()
-		if n.routesInUse == nil {
-			n.routesInUse = map[netip.Prefix]bool{}
-		}
-		n.routesInUse[route] = true
-		n.mu.Unlock()
+		n.markRouteInUse(dst.Addr())
 		r, err := net.DialTimeout("tcp", dst.String(), 5*time.Second)
 		if err != nil {
 			log.Printf("subnet %s -> %s: %v", src, dst, err)

@@ -48,6 +48,19 @@ AetherSDR (tailnet peer)                       radio container (host network nam
   open sessions, transfers and device connections it no longer admits. The shim listens only on its own tailnet ports, so the
   radio's other services, such as its SSH, are not exposed, and a shared
   route never splices into the radio's own addresses.
+- **Station devices:** shared LAN devices are advertised as subnet routes.
+  - TCP to a shared address is spliced out through the radio's LAN. That
+    carries the 4O3A accessories (Antenna Genius 9007, Power Genius XL 9008,
+    Tuner Genius XL 9010), which the shim finds from their UDP announcements.
+  - A Hermes-Lite 2 never announces itself, so the shim broadcasts the
+    Protocol 1 discovery request (`EF FE 02`, UDP 1024) every 5 s to each LAN
+    the radio is on, skipping 172.30/16, and lists each HL2 at its reply's
+    source address, keyed by MAC. A device seen at a new address leaves its
+    old one at once.
+  - UDP is relayed only to a shared HL2's port 1024. Each remote flow gets its
+    own LAN socket and ends after 30 s with no datagram either way; a device
+    holds at most 16 flows. HL2 datagrams (1060 bytes on the wire) fit the
+    tailnet's 1280-byte MTU.
 - **Teardown (Principle VI):** when either side ends, the shim closes the radio
   connection at once. The radio drops the GUI client and unkeys anything that
   client owned. The shim never keeps a radio session alive for a client it
