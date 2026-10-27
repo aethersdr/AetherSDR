@@ -181,6 +181,29 @@ static bool argToDouble(const QStringList& args, int idx, double& out)
     return true;
 }
 
+// SQL_LEVEL is a threshold in dB, -140..0, per TCI v2.0. A slice stores a
+// 0..100 level; the backend's published squelch scale converts between the
+// two, and a backend that publishes none for the slice's mode keeps Flex's
+// -160 + level map, as the panadapter's SQL line does.
+static constexpr double kSqlMinDb = -140.0;
+
+static SquelchLevelScale sqlScaleFor(RadioModel* model, SliceModel* s)
+{
+    if (model && s) {
+        if (auto scale = squelchScaleForMode(
+                model->backendCapabilities().squelchLevelScale, s->mode())) {
+            return *scale;
+        }
+    }
+    return legacyDbmSquelchScale();
+}
+
+static int sqlLevelDb(RadioModel* model, SliceModel* s, int level)
+{
+    const double db = sqlScaleFor(model, s).thresholdDb(level);
+    return static_cast<int>(std::lround(std::clamp(db, kSqlMinDb, 0.0)));
+}
+
 SliceModel* TciProtocol::sliceForTrx(int trx) const
 {
     if (m_trxMap)
@@ -378,7 +401,7 @@ QString TciProtocol::generateInitBurst()
                          .arg(trx)
                          .arg(s->receiveSquelchOn() ? "true" : "false");
             burst += QStringLiteral("sql_level:%1,%2;")
-                         .arg(trx).arg(s->receiveSquelchLevel());
+                         .arg(trx).arg(sqlLevelDb(m_model, s, s->receiveSquelchLevel()));
 
             // AGC
             burst += QStringLiteral("agc_mode:%1,%2;")
@@ -1173,18 +1196,23 @@ QString TciProtocol::cmdSqlLevel(const QStringList& args, bool isSet)
 
     if (!isSet) {
         return QStringLiteral("sql_level:%1,%2;")
-                   .arg(trx).arg(s->receiveSquelchLevel());
+                   .arg(trx).arg(sqlLevelDb(m_model, s, s->receiveSquelchLevel()));
     }
 
     if (args.size() < 2) return {};
-    int level = 0;
-    if (!argToInt(args, 1, level)) return {};
+    double value = 0.0;
+    if (!argToDouble(args, 1, value)) return {};
+    // Positive values cannot be spec dB, so they are the 0..100 level older
+    // builds took.
+    const int level = (value > 0.0)
+        ? std::min(static_cast<int>(std::lround(value)), 100)
+        : sqlScaleFor(m_model, s).levelForThresholdDb(std::max(value, kSqlMinDb));
     auto& pending = (*m_pendingSquelch)[trx];
     pending.level = level;
     queueSquelch(s, trx, pending.on.value_or(s->receiveSquelchOn()), level);
 
     m_pendingNotification = QStringLiteral("sql_level:%1,%2;")
-                                .arg(trx).arg(level);
+                                .arg(trx).arg(sqlLevelDb(m_model, s, level));
     return {};
 }
 
