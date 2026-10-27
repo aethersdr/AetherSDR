@@ -4240,6 +4240,13 @@ void MainWindow::closeEvent(QCloseEvent* event)
         }
     }
 
+    // Lift any adaptive cap while the connection is alive, or the radio keeps
+    // the capped rates for the next session. Before the UI teardown below:
+    // the pre-cap rates live in the SpectrumWidgets, and prepareShutdown()
+    // deletes every pan applet, which left this loop nothing to send (#6791).
+    if (m_adaptiveThrottleActive)
+        restorePreCapPanRates();
+
     preparePanadapterUiForShutdown();
     auto& s = AppSettings::instance();
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());
@@ -4381,10 +4388,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
     if (m_nr2WisdomCancel) {
         m_nr2WisdomCancel->store(true);
     }
-    // Same reason as RADE above: lift any adaptive cap while the connection
-    // is alive, or the radio keeps the capped rates for the next session.
-    if (m_adaptiveThrottleActive)
-        restorePreCapPanRates();
     {
         ShutdownTrace trace("radio.disconnect");
         m_radioModel.disconnectFromRadio();
