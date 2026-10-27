@@ -73,13 +73,13 @@ their nicknames on this computer.
 
 | Page | What it covers |
 |------|----------------|
-| **Radio** | Radio information (serial, hardware version, region, options), identification (model, nickname, callsign), license info and [Firmware Update](./firmware-update.md) |
+| **Radio** | Radio information (serial, hardware version, region, options), identification (model, nickname, callsign), license info and the firmware version (**FW Version**; to update it, see [Firmware Update](./firmware-update.md)) |
 | **Network** | The radio's IP address, mask, MAC and gateway; DHCP/static IP configuration; **Advanced**: Enforce Private IP Connections, **Agent Automation (MCP)** (see [Automation Bridge and MCP](./automation-bridge-and-mcp.md)), Network MTU and the VITA-49 RX buffer (see [Low Bandwidth Connections](./low-bandwidth-connections.md)) |
 | **GPS** | Whether a GPS is installed, position, grid, altitude, satellites and lock status. The full dashboard is **Tools → AetherGPS...**. See [AetherClock and GPS](./aetherclock-and-gps.md). Hidden on radios without GPS hardware. |
 | **Calibration** | Host-side frequency calibration in ppb, for radios that cannot calibrate themselves ([Hermes-Lite 2](./hermes-lite-2.md)). Hidden on FlexRadio, which calibrates on the Receive page. |
 | **RTL Receiver** | ppm correction, IQ DC suppression and serial for an [RTL-SDR](./rtl-sdr.md) dongle. Only when one is connected. |
 | **HL2 Hardware** | Board variant, dither, companion filter board, CL1 external 10 MHz reference and tuner for the [Hermes-Lite 2](./hermes-lite-2.md). Only when an HL2 is connected. |
-| **ANAN Front End** | Starting sample rate, ADC choice, dither, randomization, filter-bank bypass and radio-speaker audio for the [ANAN-G2](./anan-g2.md). Available while disconnected or connected to a G2; changes apply on the next connect. |
+| **ANAN Front End** | Starting sample rate, ADC choice, dither, randomization, filter-bank bypass and radio-speaker audio for the [ANAN-G2](./anan-g2.md), which apply on the next connect, plus the band-pass filter bank and the speaker amplifier mute, which also apply at once. Available while disconnected or connected to a G2. |
 | **Droop Correction** | Panadapter edge-droop correction for the [ANAN-G2](./anan-g2.md). Only when one is connected. |
 
 ### RECEIVE & TRANSMIT
@@ -96,6 +96,10 @@ After connecting or reconnecting, the column becomes available once the radio
 has reported both supported firmware and the band's value, in either order.
 See [TX Controls](./tx-controls.md#tune) for the output scope and older firmware's
 **Inhibit during TUNE** settings.
+
+The TX Band Settings window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it; it reopens at the size and place you left it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). It's a window of its own, with its own taskbar entry. **View → Frameless Window** does not apply to it.
+
+The table shows the current TX profile's values and follows the radio while it's open. A value changed on the radio appears in the table, except in a field you are typing in. A change you make stays as you set it until the radio answers; one the radio refuses, or one the app can't send right now (for example while reconnecting), shows the radio's value again. Switching to another TX profile, reconnecting, or the radio reporting another band rebuilds the table, and text you were typing is dropped. Reopening the window after closing it also builds a fresh table.
 
 | Page | What it covers |
 |------|----------------|
@@ -167,8 +171,8 @@ operation. If the connection ends, the operation stops waiting and shows
 1. Reconnect to the radio.
 2. Start calibration again when the reference signal is ready.
 
-After switching radios or reconnecting, close and reopen **TX Band Settings**
-or **Radio Setup** before editing an existing transverter. An editor from the
+After switching radios or reconnecting, close and reopen **Radio Setup**
+before editing an existing transverter. An editor from the
 previous session cannot change a reused band or transverter identifier.
 
 ### You can't find where to connect to a radio

@@ -3,6 +3,8 @@
 #include "FreeDvReporterDialog.h"
 #include "FreeDvReporterModel.h"
 #include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
+#include "CanonTableStyle.h"
 #include "FramelessResizer.h"
 #include "core/AppSettings.h"
 #include "core/ThemeManager.h"
@@ -203,60 +205,22 @@ QRadioButton {
     color: {{color.canon.inkSoft}};
     spacing: 8px;
 }
-QTableView {
-    color: {{color.canon.ink}};
-    background: {{color.canon.nested}};
-    border: 1px solid {{color.canon.line}};
-    border-radius: 6px;
-    gridline-color: {{color.canon.line}};
-}
+)";
+
+// The station table's selection text color, header padding, and top-corner
+// radii, layered after the shared canon table rules.
+static constexpr const char* kReporterTableStyle = R"(
 QTableView::item:selected {
     color: {{color.canon.ink}};
-    background: {{color.canon.control}};
 }
 QHeaderView::section {
-    color: {{color.canon.cyan}};
-    background: {{color.canon.raised}};
-    border: none;
-    border-bottom: 1px solid {{color.canon.line}};
     padding: 3px 6px;
-    font-weight: 700;
 }
 QHeaderView::section:first {
     border-top-left-radius: 5px;
 }
 QHeaderView::section:last {
     border-top-right-radius: 5px;
-}
-QScrollBar:vertical {
-    background: transparent;
-    width: 12px;
-    margin: 8px 2px 8px 2px;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-height: 34px;
-}
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-QScrollBar:horizontal {
-    background: transparent;
-    height: 12px;
-    margin: 2px 8px 2px 8px;
-    border-radius: 6px;
-}
-QScrollBar::handle:horizontal {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-width: 34px;
-}
-QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
-    width: 0px;
 }
 )";
 
@@ -275,7 +239,9 @@ FreeDvReporterDialog::FreeDvReporterDialog(QWidget* parent)
     setMinimumSize(780, 390);
     FramelessResizer::install(this);
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kReporterStyle) + canonIndicatorRules();
+        return QString::fromLatin1(kReporterStyle) + canonTableRules()
+             + QString::fromLatin1(kReporterTableStyle)
+             + canonScrollBarRules() + canonIndicatorRules();
     });
     buildBody();
     // An explicit minimum overrides the layout's own, so the band row would

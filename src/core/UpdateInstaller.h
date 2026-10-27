@@ -15,9 +15,16 @@ namespace AetherSDR {
 class UpdateInstaller {
 public:
     // Per-user app data, outside the install: the staged release, the
-    // helper's copy, its journal, log and result. The Updates window stages
-    // here (next PR).
+    // helper's copy, its journal, log and result. UpdateController stages
+    // here.
     static QString stateDir();
+
+    // Whether this copy can update itself in place: Windows, not a store
+    // install, not elevated across a UAC boundary, AetherSDRUpdater.exe
+    // beside the app, and the install's parent writable (the swap renames
+    // the install there). Otherwise why says so, and the Updates window
+    // offers the download in the browser.
+    static bool canInstallInPlace(QString* why = nullptr);
 
     // AetherSDRUpdater's command line (protocol 1, src/updater/main_win.cpp).
     static QStringList helperArguments(qint64 pid, const QString& installDir,
@@ -39,6 +46,9 @@ public:
         QString version;
     };
     static SwapResult takeSwapResult(const QString& stateDir = UpdateInstaller::stateDir());
+    // What the last takeSwapResult() read (main.cpp reads it at start, before
+    // the window that reports it exists).
+    static SwapResult lastSwapResult();
 
     // --update-selftest <marker>: what the new version runs after the swap.
     // Writes this build's version to marker. True when written.
