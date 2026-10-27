@@ -1751,28 +1751,49 @@ QString TciProtocol::cmdRxChannelEnable(const QStringList& args, bool isSet)
     return {};
 }
 
-QString TciProtocol::cmdRxVolume(const QStringList& args, bool isSet)
+// RX_VOLUME is per receiver and per channel per TCI v2.0, on the same dB scale
+// as `volume:` (-60..0; -60 = silence).
+//   GET = `rx_volume:trx,channel;`   SET = `rx_volume:trx,channel,dB;`
+// A slice has one audio gain, so both channels read and write the same level.
+// Before this, the channel was read as the gain, so every spec SET muted the
+// slice. Older builds took `rx_volume:trx,N;` with N as percent; a second
+// argument that cannot be a channel (>= 2) is still read that way.
+QString TciProtocol::cmdRxVolume(const QStringList& args, bool /*isSet*/)
 {
-    // Per-receiver volume — maps to slice audioGain
     if (args.isEmpty()) return {};
     int trx = 0;
     if (!argToInt(args, 0, trx)) return {};
     auto* s = sliceForTrx(trx);
     if (!s) return {};
 
-    if (!isSet) {
-        return QStringLiteral("rx_volume:%1,%2;")
-                   .arg(trx).arg(static_cast<int>(s->audioGain()));
+    int channel = 0;
+    int pct = -1;   // -1 = GET
+    if (args.size() >= 3) {
+        if (!argToInt(args, 1, channel) || channel < 0 || channel > 1) return {};
+        double db = 0.0;
+        if (!argToDouble(args, 2, db)) return {};
+        pct = volumePercentFromDb(db);
+    } else if (args.size() == 2) {
+        int second = 0;
+        if (!argToInt(args, 1, second) || second < 0) return {};
+        if (second >= 2) {
+            pct = std::min(second, 100);   // legacy percent
+        } else {
+            channel = second;
+        }
     }
 
-    if (args.size() < 2) return {};
-    int gainPct = 0;
-    if (!argToInt(args, 1, gainPct)) return {};
-    const float gain = static_cast<float>(gainPct);
+    if (pct < 0) {
+        return QStringLiteral("rx_volume:%1,%2,%3;")
+                   .arg(trx).arg(channel)
+                   .arg(volumeDbFromPercent(qRound(s->audioGain())));
+    }
+
+    const float gain = static_cast<float>(pct);
     QMetaObject::invokeMethod(s, [s, gain]() { s->setAudioGain(gain); },
                               Qt::QueuedConnection);
-    m_pendingNotification = QStringLiteral("rx_volume:%1,%2;")
-                                .arg(trx).arg(static_cast<int>(gain));
+    m_pendingNotification = QStringLiteral("rx_volume:%1,%2,%3;")
+                                .arg(trx).arg(channel).arg(volumeDbFromPercent(pct));
     return {};
 }
 

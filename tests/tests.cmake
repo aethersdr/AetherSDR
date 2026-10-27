@@ -6874,6 +6874,13 @@ target_include_directories(cat_freedv_mode_tokens_test PRIVATE src tests)
 target_link_libraries(cat_freedv_mode_tokens_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME cat_freedv_mode_tokens_test COMMAND cat_freedv_mode_tokens_test)
 
+# TCI rx_volume in the spec form (trx,channel,dB). Injected stub backend,
+# TciProtocol fed command text. Socket-free, nothing keyed.
+add_executable(tci_rx_volume_test tests/tci_rx_volume_test.cpp)
+target_include_directories(tci_rx_volume_test PRIVATE src tests)
+target_link_libraries(tci_rx_volume_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME tci_rx_volume_test COMMAND tci_rx_volume_test)
+
 # #6142: a band-stack recall into DIGU/DIGL leaves the HL2's data-mode AGC
 # alone. A real, unconnected Hl2Backend behind RadioModel. Socket-free.
 add_executable(hl2_bandstack_digital_agc_test tests/hl2_bandstack_digital_agc_test.cpp)
@@ -9899,6 +9906,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_discovery_logging_test
     reroute_dead_controls_test
     cat_freedv_mode_tokens_test
+    tci_rx_volume_test
     hl2_bandstack_digital_agc_test
     radio_model_client_state_test
     pan_control_routing_test

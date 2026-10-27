@@ -3060,14 +3060,15 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         publishActiveTrx();
     }
 
-    // Per-slice audioGain → `rx_volume:trx,N;` broadcast. Without this,
+    // Per-slice audioGain → `rx_volume:trx,0,dB;` broadcast. Without this,
     // a GUI change to a slice's audio level was invisible to TCI clients;
     // remote controllers would drift out of sync. Part of issue #1764 fix.
+    // Same spec form and dB scale as the cmdRxVolume echo.
     connect(slice, &SliceModel::audioGainChanged, this, [this, slice](float gain) {
         if (m_clients.isEmpty()) return;
         const int trx = m_trxMap.trxForSlice(m_model, slice);
-        broadcast(QStringLiteral("rx_volume:%1,%2;")
-                      .arg(trx).arg(static_cast<int>(gain)));
+        broadcast(QStringLiteral("rx_volume:%1,0,%2;")
+                      .arg(trx).arg(TciProtocol::volumeDbFromPercent(qRound(gain))));
     });
 
     // DSP / squelch / RIT / XIT *_enable flags → per-slice broadcasts (#4161),
