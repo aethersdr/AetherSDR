@@ -737,6 +737,12 @@ popup at a time and only while it is open; an empty combo is refused up front
 > **sliders/combos** like `Tune power`, `RF power`, or `VOX level` are never
 > blocked — moving a value setter can't transmit.
 >
+> **VOX:** `invoke "VOX voice-operated transmit" setChecked false` disarms
+> without TX permission; `0`, `off`, `no`, and `unchecked` are also accepted.
+> Arming through `invoke` remains refused. The `vox_toggle` shortcut requires
+> TX permission in either direction; use the explicit disarm command to switch
+> VOX off without that permission.
+>
 > To deliberately drive a keying control (e.g. hardware-in-the-loop on a dummy
 > load), set `AETHER_AUTOMATION_ALLOW_TX=1` in the app's environment at launch.
 > Adding a new keying control? Call `markTxKeying(theButton)` — see
@@ -2601,17 +2607,22 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 
 → {"cmd":"pan","action":"close","value":"1"}
 ← {"ok":true,"pan":"close","requested":true,
-   "closed":[{"panId":"0x40000001","waterfallId":"0x42000001","resolved":true}]}
+   "closed":[{"panId":"0x40000001","waterfallId":"0x42000001","resolved":true,"requested":true}]}
 ```
 
 | `action` | `value` | effect |
 |---|---|---|
-| `create` (alias `add`) | — | create a new panadapter (panafall). The only UI path is an unaddressable label. |
+| `create` (alias `add`) | — | request a new panadapter through the backend's declared lifecycle control. |
 | `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). **MHz, not Hz**: the [four refusals listed under `tune`](#tune) apply here too, with `pan center` in the message. It matters more on this verb — `setPanCenter()` clamps only the low edge, so an unguarded out-of-range centre is stored and advertised over TCI (`dds:`) even though the radio rejects it. |
-| `close` (alias `remove`) | `<panId>` (`0x…`) / `<index>` (panIndex) / `active` / `all` | close pan(s). Sends `display pan remove` **and** `display panafall remove`, so a panafall-created pan closes without the slice-removal workaround. A single target won't close the last pan; `all` will. |
+| `close` (alias `remove`) | `<panId>` (`0x…`) / `<index>` (panIndex) / `active` / `all` | request removal of owned pan(s). Flex requests cleanup of the original paired waterfall too. A single target preserves the last pan; `all` allows requesting its removal but never overrides a native refusal or foreign ownership. |
 
-All are async (the radio echoes the change) — re-poll `get pans`. Every `pan`
-action is RX/config only; none keys the transmitter.
+Replies describe request admission, not observed completion — re-poll `get pans`.
+Creation correlates the returned ID with the original session's new owned pan;
+its waterfall may appear later. Unknown outcomes are not automatically retried.
+Each close entry reports `requested`; the compatibility field `closed` names the
+request list, not confirmed removals. An aggregate `ok:true` means at least one
+close request was dispatched, so inspect every entry after a partial refusal.
+Every `pan` action is RX/config only; none keys the transmitter.
 
 Floating and docking use the production pan title-bar control rather than a
 radio lifecycle command. Target its stable object name through the pan scope;
@@ -3259,6 +3270,7 @@ the radio tabs, the audio cluster, and the window controls on every platform.
 ← {"ok":true,"model":"titlebar","present":true,"height":52,"expectedHeight":52,
    "offsetInWindow":0,"screenRect":[103,40,1402,52],"minimalMode":false,
    "brand":{"wordmark":"AetherSDR","logoLoaded":true,"visible":true},
+   "update":{"version":"","visible":false},
    "radios":{"activeId":"DEMO-0001","width":291,"maximumWidth":16777215,
              "contentWidth":257,"overflowing":false,
              "popoverVisible":false,"pulseEnabled":true,
@@ -3288,6 +3300,9 @@ shared fallback caption widgets report `visible:false`. The fallback style
 is `shared`; Linux uses it when custom chrome is enabled. `qtVersion` is the
 actual runtime version, not the build-machine SDK version.
 `brand.rect` is `[x, y, width, height]` in title-bar coordinates.
+`update.version` is the newer release the UPDATE badge announces (empty when
+none, or when the operator skipped it); `update.visible` is false in minimal
+mode even when a version is set.
 On macOS, `chrome.nativeCaptionRect` is the union of visible native caption
 buttons in window-content coordinates (empty outside Cocoa or in fullscreen).
 With expanded chrome, check that the brand begins 16 logical pixels after the
@@ -5073,3 +5088,19 @@ waterfall rate still follow their existing radio-publication paths; this change
 does not establish whether their setters echo on every firmware version.
 The aetherd panadapter resource exposes the same Average/FPS request provenance
 and last radio publications as the bridge, including same-value confirmations.
+
+### VOX shortcut admission probe
+
+With an isolated demo app launched using `AETHER_AUTOMATION_NO_TX=1` and
+connected explicitly to `DEMO-0001`, run:
+
+```sh
+python3 tools/automation_vox_guard.py --socket /tmp/aethersdr-vox-probe
+```
+
+Pass the actual explicit socket path for your instance. This opt-in probe uses
+the running app's production shortcut registration and dispatcher and requires
+the specific TX-safety refusal; an absent main window is a failure. It sends no
+keying command. `phone_applet_vox_disarm_test` separately checks permission-free
+disarm from an armed model, aliases, refused arming, and native widget input
+without starting a socket server.

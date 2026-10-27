@@ -92,6 +92,9 @@ public:
     QString deviceMac() const { return m_mac; }
     int loaderCount() const { return m_loaderCount; }
     QString linkVersion() const;   // LinkFirmware: the version it runs
+    // The last action failed because the OS refused to open the download-mode
+    // port (Linux: the CTR2 access rule is missing or not applied yet).
+    bool lastFailureAccessDenied() const { return m_accessDenied; }
     Target target() const { return {m_device, m_port, m_mac, m_hidPath}; }
     // A unit whose firmware takes the link's FIRMWARE commands
     // (Ctr2ProxyModel::usbFirmwareCommands()): AetherCTR2, or stock firmware
@@ -276,6 +279,7 @@ private:
     int m_waitSeen{0};            // polls in a row it has been found in download mode
     QString m_lastBackup;         // the install's backup, while it runs and after
     bool m_installRunning{false}; // an install made here, with its backup
+    bool m_accessDenied{false};   // lastFailureAccessDenied()
 };
 
 } // namespace AetherSDR

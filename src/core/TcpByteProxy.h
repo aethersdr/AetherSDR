@@ -17,7 +17,8 @@ namespace AetherSDR {
 // gets its own fresh upstream connection; bytes flow through a ByteRelay
 // unchanged in both directions. The proxy never writes anything of its own
 // into either stream: local failures surface only through lastError() and
-// the log. IPv4 only. Design: docs/ctr2-tcp-proxy-design.md.
+// the log. Listens on IPv4; the radio upstream may be IPv4 or IPv6.
+// Design: docs/ctr2-tcp-proxy-design.md.
 class TcpByteProxy : public QObject {
     Q_OBJECT
 

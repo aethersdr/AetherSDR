@@ -19,7 +19,7 @@ bandwidth marked.
   Genius XL** is in OPERATE.
 
 > **Other amplifiers are not checked.** AetherSweep only knows about the
-> PGXL. If you have an ACOM, SPE, VK3AMP, KPA1500 or any other amplifier in
+> PGXL. If you have an ACOM, SPE, VK3AMP, RF-KIT, KPA1500 or any other amplifier in
 > line, put it in standby or bypass yourself before sweeping. See
 > [Amplifiers](./amplifiers.md).
 

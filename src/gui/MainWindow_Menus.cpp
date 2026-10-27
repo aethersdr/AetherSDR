@@ -40,6 +40,7 @@
 #include "SpectrumWidget.h"
 #include "SupportDialog.h"
 #include "TitleBar.h"
+#include "UpdatesWindow.h"
 #include "MidiMappingDialog.h"
 #include "ProfileImportExportDialog.h"
 #include "ProfileManagerDialog.h"
@@ -87,6 +88,8 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QAction>
+#include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QList>
 #include <QVariant>
 #include <QWidgetAction>
@@ -327,6 +330,12 @@ void MainWindow::buildMenuBar()
         m_waveformsDialog->raise();
         m_waveformsDialog->activateWindow();
     });
+
+    auto* updateAct = fileMenu->addAction("Update...");
+    updateAct->setMenuRole(QAction::NoRole);
+    updateAct->setStatusTip(QStringLiteral(
+        "See whether a newer AetherSDR is available, what is in it, and get it"));
+    connect(updateAct, &QAction::triggered, this, [this] { showUpdatesWindow(false); });
 
     fileMenu->addSeparator();
     auto* quitAct = fileMenu->addAction("&Quit");
@@ -583,9 +592,12 @@ void MainWindow::buildMenuBar()
 #ifdef HAVE_HIDAPI
     auto* rc28Action = controllersMenu->addAction("Icom RC-28 Remote Encoder...");
     connect(rc28Action, &QAction::triggered, this, [this] {
-        const bool fresh = !m_rc28MappingDialog;
-        showOrRaisePersistent(m_rc28MappingDialog, m_hidEncoder);
-        if (fresh && m_rc28MappingDialog)
+        // A canon dialog, so not showOrRaisePersistent(): that applies View →
+        // Frameless Window, which a CanonWindow does not follow.
+        if (!m_rc28MappingDialog) {
+            auto* dlg = new RC28MappingDialog(m_hidEncoder, this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            m_rc28MappingDialog = dlg;
             connect(m_rc28MappingDialog, &RC28MappingDialog::mappingFieldChanged,
                     this, [this](const QString& field, const QString& value) {
                 if (field == "f1Hold" || field == "f2Hold") {
@@ -602,6 +614,10 @@ void MainWindow::buildMenuBar()
                         m_hidSnapTimer->stop();
                 }
             });
+        }
+        m_rc28MappingDialog->show();
+        m_rc28MappingDialog->raise();
+        m_rc28MappingDialog->activateWindow();
     });
 #endif
     auto* ulanziAction = controllersMenu->addAction("Ulanzi Dial Mapping...");
@@ -844,7 +860,16 @@ void MainWindow::buildMenuBar()
             statusBar()->showMessage("Not connected to radio", 3000);
             return;
         }
-        showOrRaisePersistent(m_txBandDialog, &m_radioModel);
+        // A canon workspace window: created directly rather than through
+        // showOrRaisePersistent(), which would apply View → Frameless Window.
+        if (!m_txBandDialog) {
+            auto* dialog = new TxBandDialog(&m_radioModel, this);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            m_txBandDialog = dialog;
+        }
+        m_txBandDialog->show();
+        m_txBandDialog->raise();
+        m_txBandDialog->activateWindow();
     });
 
     // Inhibit during TUNE submenu — user selects which TX outputs to suppress.
@@ -1746,6 +1771,7 @@ void MainWindow::buildMenuBar()
     refreshWindowMenu();
 
     auto* helpMenu = menuBar()->addMenu("&Help");
+    helpMenu->setToolTipsVisible(true);  // a dimmed item states its reason on hover
 
     // ── Documentation ─────────────────────────────────────────────────────
     // The online manual (docs.aethersdr.com), its printable PDF, and the Log
@@ -1874,8 +1900,26 @@ void MainWindow::buildMenuBar()
         dlg->activateWindow();
     });
     helpMenu->addAction("Check for Updates...", this, [this]() {
-        m_updateChecker->checkNow();
+        showUpdatesWindow(true);
     });
+    auto* autoUpdateAct = helpMenu->addAction("Check for Updates Automatically");
+    m_autoUpdateAction = autoUpdateAct;
+    autoUpdateAct->setCheckable(true);
+    if (const QString store = UpdateChecker::storeName(); !store.isEmpty()) {
+        // The store owns updates here, so the background check never runs.
+        const QString reason =
+            QStringLiteral("Updates for this copy come from %1.").arg(store);
+        autoUpdateAct->setChecked(false);
+        autoUpdateAct->setEnabled(false);
+        autoUpdateAct->setStatusTip(reason);
+        autoUpdateAct->setToolTip(reason);
+    } else {
+        autoUpdateAct->setChecked(UpdateChecker::checkOnStartup());
+        autoUpdateAct->setStatusTip(QStringLiteral(
+            "Check for a newer release at startup, at most once a day, and show "
+            "UPDATE in the title bar when there is one"));
+        connect(autoUpdateAct, &QAction::toggled, this, &MainWindow::setAutomaticUpdateCheck);
+    }
     helpMenu->addSeparator();
     helpMenu->addAction("About AetherSDR", this, [this]{
         // Styled to the AetherSDR style guide: an ambient ground, the gradient
@@ -2251,4 +2295,90 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
     }
 }
 
+
+namespace {
+// Long enough that the update check does not compete with radio discovery
+// and the first connect for the network at launch.
+constexpr int kAutomaticUpdateCheckDelayMs = 15000;
+} // namespace
+
+void MainWindow::wireUpdateChecker()
+{
+    m_updateChecker = new UpdateChecker(this);
+    connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
+            [this](const QString& ver) {
+        if (m_titleBar) {
+            m_titleBar->setUpdateAvailable(
+                UpdateChecker::badgeVersion(ver, QCoreApplication::applicationVersion()));
+        }
+    });
+    connect(m_updateChecker, &UpdateChecker::upToDate, this,
+            [this] {
+        if (m_titleBar) {
+            m_titleBar->setUpdateAvailable({});
+        }
+    });
+    // Results and failures are shown in the Updates window, not in prompts.
+
+    QTimer::singleShot(kAutomaticUpdateCheckDelayMs, m_updateChecker, [checker = m_updateChecker] {
+        checker->checkAutomaticallyIfDue();
+    });
+}
+
+void MainWindow::restoreKnownUpdate()
+{
+    // The daily throttle may skip this launch's check, so the badge comes back
+    // from the release the last answer recorded, under the same rules.
+    const QString known = UpdateChecker::knownBadgeVersion();
+    if (known.isEmpty() || !m_titleBar) {
+        return;
+    }
+    m_titleBar->setUpdateAvailable(known);
+}
+
+void MainWindow::showUpdatesWindow(bool checkNow)
+{
+    // A CanonWindow (style guide, RFC #6226): created or raised directly.
+    if (!m_updatesWindow) {
+        auto* w = new UpdatesWindow(m_updateChecker, &m_radioModel, this);
+        w->setAttribute(Qt::WA_DeleteOnClose);
+        connect(w, &UpdatesWindow::badgeChanged, this, [this](const QString& version) {
+            if (m_titleBar) {
+                m_titleBar->setUpdateAvailable(version);
+            }
+        });
+        connect(w, &UpdatesWindow::automaticCheckToggled, this, &MainWindow::setAutomaticUpdateCheck);
+        m_updatesWindow = w;
+    }
+    if (checkNow) {
+        // Through the window, so an open one shows the check starting.
+        m_updatesWindow->checkNow();
+    }
+    m_updatesWindow->show();
+    m_updatesWindow->raise();
+    m_updatesWindow->activateWindow();
+}
+
+void MainWindow::setAutomaticUpdateCheck(bool on)
+{
+    // One handler for the Help toggle and the window's Check daily box, so
+    // the two never disagree. The toggle governs the badge too: off retires
+    // it, and on brings a known update back at once when the daily wait
+    // skips the request.
+    UpdateChecker::setCheckOnStartup(on);
+    if (m_autoUpdateAction) {
+        const QSignalBlocker block(m_autoUpdateAction);
+        m_autoUpdateAction->setChecked(on);
+    }
+    if (m_updatesWindow) {
+        m_updatesWindow->setAutomaticCheck(on);
+    }
+    if (!on) {
+        if (m_titleBar) {
+            m_titleBar->setUpdateAvailable({});
+        }
+    } else if (!m_updateChecker->checkAutomaticallyIfDue()) {
+        restoreKnownUpdate();
+    }
+}
 } // namespace AetherSDR

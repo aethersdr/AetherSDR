@@ -3,6 +3,8 @@
 #include "SpotRequest.h"
 #include "PanControlRequest.h"
 #include "SlicePresetRequest.h"
+#include "PanDisplayRequest.h"
+#include "PanLifecycleRequest.h"
 
 #include <QFlags>
 #include <QList>
@@ -361,6 +363,9 @@ struct RadioCapabilities {
     bool canCreateSlices = false;
     int maxSlices = 1;             // independent demod slices the radio supports
     int maxPanadapters = 1;        // simultaneous panadapters
+    // Desktop requests only; these do not widen the daemon capability catalogue.
+    std::optional<PanDisplayControl> panDisplayControl;
+    std::optional<PanLifecycleControl> panLifecycleControl;
     QVector<int> sampleRatesHz;    // supported per-receiver sample rates (Hz)
 
     // What this radio's panadapter span and vertical axis are made of, as two
@@ -667,6 +672,12 @@ struct RadioCapabilities {
     // Desktop utility verbs only; neither record adds daemon permissions.
     std::optional<SpotControl> spotControl;
     std::optional<PanControl> panControl;
+    // PanControlField::NoiseFloorRange, separate from panControl because it
+    // needs a license the radio reports. Absent refuses the field.
+    struct NoiseFloorRangeControl {
+        QString requiredLicenseFeature;
+    };
+    std::optional<NoiseFloorRangeControl> noiseFloorRangeControl;
     std::optional<SlicePresetControl> slicePresetControl;
     // The radio's streaming data plane uses VITA-49. This currently gates the
     // receive-socket buffer and network MTU controls; it describes the transport,
@@ -896,6 +907,12 @@ struct RadioCapabilities {
     // applet, the Profile Manager, import/export, the Profiles menu — goes away,
     // rather than offering an empty list the operator cannot populate.
     bool hasProfiles = false;
+    // The radio also stores named CW profiles (Flex `profile cw …`, SmartSDR
+    // 4.3.16+) that a client can list, load, create, delete and reset. Engaged
+    // gates ProfileRequest::Kind::Cw and the Profile Manager CW tab; meaningless
+    // unless hasProfiles is also true.
+    struct CwProfileControl {};
+    std::optional<CwProfileControl> cwProfileControl;
 
     // Per-slice RX audio and per-pan IQ as separate streams routed to virtual audio
     // devices for external decoders (Flex DAX). UI visibility only; the crash guard

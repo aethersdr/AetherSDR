@@ -80,6 +80,26 @@ Repeated commits of an unchanged field do not send another request. These
 actions currently support only **Radio nickname**; `setText` alone does not
 commit it.
 
+### Temporary station identity
+
+On FlexRadio, `station <name>` sets this client's session-only station label for
+other MultiFlex clients. Use one token without spaces. It does not change your
+saved station name or radio-wide callsign. A successful reply means the request
+was sent, not that the radio confirmed it. Unsupported or disconnected radios
+refuse the request.
+
+Your saved station-name edits are retained even if an automation request
+applies a temporary label at the same time.
+
+Stopping the bridge restores your saved name only while that bridge still owns
+the override in the same radio session. A newer operator edit takes precedence;
+an old restore or reconnect callback cannot overwrite it.
+
+The `txwaterfall on|off` command changes **Show TX in Waterfall** through the same
+route as Radio Setup. FlexRadio owns the flag on the radio; Hermes-Lite 2 keeps
+it client-side. Other unsupported radios refuse it. This display setting never
+keys the transmitter.
+
 ## Using transmit safety
 
 - The bridge refuses to operate any control that keys the transmitter (MOX/PTT, TUNE, ATU, CWX send, packet/APRS send) through its generic "click this control" path, whoever is asking.
@@ -96,6 +116,16 @@ Tick **Observe only** to hand a client visibility without control. The bridge th
 ## Checking which build you are talking to
 
 `ping` needs no token and returns the app version plus the **build identity**: the `git describe` string, commit SHA, the release tag it is based on, commits since that tag, and whether the build had local changes. It is the same identity **Help → About** shows, so a test build can be told apart from a release with the same version number.
+
+### Checking pan creation and removal
+
+`pan create` and `pan close` report whether the backend accepted a request for
+dispatch, not whether a display has appeared or disappeared. Re-poll `get pans`
+to observe the result. Each entry in a close response includes `requested`;
+`closed` is the compatibility name for that request list, not proof of removal.
+An explicit `pan close all` may request the last pan's removal, but still respects
+backend refusals and display ownership. A normal single-pan close preserves the
+last pan. No pan action enables transmit.
 
 ## Reference
 

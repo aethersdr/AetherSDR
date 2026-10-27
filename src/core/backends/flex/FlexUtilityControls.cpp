@@ -60,6 +60,11 @@ ReceiveDispatch FlexBackend::requestPanControl(const QString& panId, const PanCo
     case PanControlField::SegmentZoom: field = QStringLiteral("segment_zoom"); break;
     case PanControlField::ReceiveAntenna:
         field = QStringLiteral("rxant"); value = std::get<QString>(request.value); break;
+    case PanControlField::NoiseFloorRange:
+        // QString::number ignores the locale: the radio needs a '.' decimal.
+        field = QStringLiteral("noise_floor_range");
+        value = QString::number(std::get<double>(request.value), 'f', 1);
+        break;
     case PanControlField::Count: return ReceiveDispatch::Unsupported;
     }
     if (std::holds_alternative<bool>(request.value)) { value = QString::number(int(std::get<bool>(request.value))); }

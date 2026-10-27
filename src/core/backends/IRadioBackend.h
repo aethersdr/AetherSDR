@@ -16,6 +16,7 @@
 #include <QMap>
 #include <QHostAddress>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <QVariant>
@@ -194,8 +195,58 @@ public:
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSlicePreset(int, const SlicePresetRequest&)
     { return ReceiveDispatch::Unsupported; }
-    virtual ReceiveDispatch requestTxBand(const TxBandRequest&)
+    virtual ReceiveDispatch requestTxBand(const TxBandRequest&, const RadioSetupCompletion& = {})
     { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestPanDisplay(const QString& panId, const QString&,
+        const PanDisplayRequest& request, const RadioControlCompletion& = {},
+        const RadioControlFence& current = {})
+    {
+        const auto control = capabilities().panDisplayControl;
+        if (panId.isEmpty() || !request.valid() || !control
+            || !control->supports(request.field) || (current && !current())) {
+            return ReceiveDispatch::Unsupported;
+        }
+        const QPointer<IRadioBackend> alive(this);
+        using Field = PanDisplayField;
+        switch (request.field) {
+        case Field::Geometry: {
+            const PanGeometryRequest geometry = std::get<PanGeometryRequest>(request.value);
+            if ((geometry.centerMhz && !control->geometry.contains(PanGeometryComponent::Center))
+                || (geometry.bandwidthMhz && !control->geometry.contains(PanGeometryComponent::Bandwidth))) {
+                return ReceiveDispatch::Unsupported;
+            }
+            if (geometry.centerMhz) {
+                setPanCenter(panId, *geometry.centerMhz * 1.0e6,
+                    geometry.intent == PanGeometryRequest::Intent::Drag ? PanCenterIntent::Drag : PanCenterIntent::Range);
+            }
+            if (!alive || (current && !current())) { return ReceiveDispatch::Unsupported; }
+            if (geometry.bandwidthMhz) { alive->setPanBandwidth(panId, *geometry.bandwidthMhz * 1.0e6); }
+            break;
+        }
+        case Field::Average: setPanAverage(panId, std::get<int>(request.value)); break;
+        case Field::FrameRate: setPanFrameRate(panId, std::get<int>(request.value)); break;
+        case Field::WeightedAverage: setPanWeightedAverage(panId, std::get<bool>(request.value)); break;
+        case Field::SpectrumPoints: setPanPixelWidth(panId, std::get<int>(request.value)); break;
+        case Field::RfGain: setPanRfGain(panId, std::get<int>(request.value)); break;
+        default: return ReceiveDispatch::Unsupported;
+        }
+        return ReceiveDispatch::Dispatched;
+    }
+    virtual ReceiveDispatch requestPanLifecycle(const PanLifecycleRequest& request,
+        const PanLifecycleCompletion& = {}, const RadioControlFence& current = {})
+    {
+        const auto control = capabilities().panLifecycleControl;
+        if (!control || !control->supports(request.action) || (current && !current())) {
+            return ReceiveDispatch::Unsupported;
+        }
+        if (request.action == PanLifecycleAction::Create) {
+            return createPanadapter() ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+        }
+        if (request.action == PanLifecycleAction::Remove && !request.panId.isEmpty()) {
+            return removePanadapter(request.panId) ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+        }
+        return ReceiveDispatch::Unsupported;
+    }
     virtual ReceiveDispatch requestProfile(const ProfileRequest&,
                                            const RadioControlCompletion& = {},
                                            const RadioControlFence& = {})
@@ -448,6 +499,14 @@ public:
     {
         Q_UNUSED(panId);
         Q_UNUSED(step);
+    }
+    // How the radio's own scope window follows the VFO. `index` addresses the
+    // label list published on panScopeModesChanged; the control is enabled only
+    // for two or more labels, so only a backend with a real choice receives this.
+    virtual void setPanScopeMode(const QString& panId, int index)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(index);
     }
     virtual void setSliceRxAntenna(int sliceId, const QString& antenna)
     {
@@ -1271,6 +1330,13 @@ signals:
     void panPreampChanged(const QString& panId, int step);
     void panAttenuatorInfoChanged(const QString& panId, const QStringList& labels);
     void panAttenuatorChanged(const QString& panId, int step);
+
+    // The radio's scope mode, for a backend whose panadapter is the radio's own
+    // scope (Icom: Center / Scroll-F / Fixed). Fewer than two labels = no choice,
+    // shown unavailable; index -1 means a mode outside the list (e.g. SCROLL-C
+    // picked on the front panel), so the UI lights none.
+    void panScopeModesChanged(const QString& panId, const QStringList& labels);
+    void panScopeModeChanged(const QString& panId, int index);
 
     // Panadapter antenna selection (universal). Two signals because the wire may
     // report the selected RX antenna and the available list independently.

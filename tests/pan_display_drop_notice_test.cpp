@@ -1,34 +1,6 @@
-// A panadapter display control the client applied itself is not reported as
-// "nothing was sent to the radio".
-//
-// WtrFall Gain, Black Level, Clone to all Pans and Reset display defaults set
-// their value on the SpectrumWidget and then hand it to RadioModel for the
-// radio. RadioModel::sendCmd() drops Flex wire text on a backend with no
-// command plane and emits commandDropped, which MainWindow shows once per
-// session. This test pins when that send is withheld and when it is not.
-//
-// WHAT IS PROVED, AND HOW.
-//
-// 1. By execution, on RadioModel with an injected backend whose capabilities()
-//    are read off the real Hl2Backend / IcomCivBackend / FlexBackend:
-//      - no command plane, absolute-dB rows (HL2): none of the four raises
-//        commandDropped;
-//      - no command plane, rows the manual black point cannot reach (Icom):
-//        Black Level still raises commandDropped, and so does WtrFall Gain
-//        with manual black; with auto black WtrFall Gain raises nothing;
-//      - a command plane (Flex): the wire text, compared whole, per pan.
-//    "The client applied it" is checked on the renderer's own law
-//    (WaterfallLevelMap::level) with the row unit taken from the same
-//    capabilities, not asserted.
-//
-// 2. By SOURCE TEXT, for one claim no behavioural seam reaches: the four sites
-//    in MainWindow_Wiring.cpp set the widget first and then call the two
-//    RadioModel setters, and build no `display panafall set` gain or black
-//    text of their own. They are MainWindow lambdas and no test target
-//    constructs a MainWindow. It shows how the sites are written, not that
-//    they run.
-//
-// Socket-free. No radio, no peer, no application window.
+// Socket-free display notice coverage: local rendering is not a dropped radio
+// command. Declared backend support, not the presence of an unrelated command
+// plane, selects radio writes. GUI ordering is inspected separately as text.
 
 #include "TestSettingsProfile.h"
 #include "core/backends/flex/FlexBackend.h"
@@ -62,6 +34,8 @@ public:
             [&written](quint32, const QString& command) { written << command; };
         radio.m_connection = &connection;
     }
+    static void encoder(FlexBackend& backend, RadioModel& radio)
+    { backend.setSetupCommandSink(radio.setupCommandSink()); }
     static void releaseCommandPlane(RadioModel& radio) { radio.m_connection = nullptr; }
 };
 } // namespace AetherSDR
@@ -79,6 +53,15 @@ void check(bool ok, const QString& message)
 class StubBackend final : public IRadioBackend {
 public:
     RadioCapabilities caps;
+    std::function<ReceiveDispatch(const QString&, const QString&, const PanDisplayRequest&,
+        const RadioControlCompletion&, const RadioControlFence&)> display;
+    ReceiveDispatch requestPanDisplay(const QString& pan, const QString& waterfall,
+        const PanDisplayRequest& request, const RadioControlCompletion& completion = {},
+        const RadioControlFence& current = {}) override
+    {
+        return display ? display(pan, waterfall, request, completion, current)
+            : IRadioBackend::requestPanDisplay(pan, waterfall, request, completion, current);
+    }
     RadioCapabilities capabilities() const override { return caps; }
     bool isConnected() const override { return true; }
     void connectRadio(const RadioConnectRequest&) override {}
@@ -120,6 +103,8 @@ struct Fixture {
     QString pan1;
     QString wf0;
     QString wf1;
+    const QString backendPan0{QStringLiteral("0x40000000")};
+    const QString backendPan1{QStringLiteral("0x40000001")};
 
     explicit Fixture(const RadioCapabilities& caps)
     {
@@ -129,8 +114,8 @@ struct Fixture {
         radio.setBackendForTest(std::move(owned), caps.family);
         QObject::connect(&radio, &RadioModel::commandDropped, &radio,
                          [this](const QString& cmd) { dropped << cmd; });
-        emit backend->panCenterBandwidthChanged(QStringLiteral("first"), 7.100, 0.384);
-        emit backend->panCenterBandwidthChanged(QStringLiteral("second"), 14.100, 0.384);
+        emit backend->panCenterBandwidthChanged(backendPan0, 7.100, 0.384);
+        emit backend->panCenterBandwidthChanged(backendPan1, 14.100, 0.384);
         pan0 = RadioModel::neutralPanIdStringForTest(0);
         pan1 = RadioModel::neutralPanIdStringForTest(1);
         if (const PanadapterModel* pan = radio.panadapter(pan0)) {
@@ -258,7 +243,7 @@ void otherRowsWithoutCommandPlane()
     check(!clientDrawsColourGain(caps, false),
           "icom WtrFall Gain, manual black: no gain changes a dB row");
     f.radio.setWaterfallColorGainFor(f.pan0, 61, false);
-    check(f.dropped == QStringList{gainText(f.wf0, 61)},
+    check(f.dropped == QStringList{QStringLiteral("pan display")},
           "icom WtrFall Gain, manual black: still raises commandDropped");
     f.dropped.clear();
 
@@ -266,25 +251,25 @@ void otherRowsWithoutCommandPlane()
     check(!clientDrawsManualBlackLevel(caps),
           "icom Black Level: every slider position draws a dB row black");
     f.radio.setWaterfallBlackLevelFor(f.pan0, 40);
-    check(f.dropped == QStringList{blackText(f.wf0, 40)},
+    check(f.dropped == QStringList{QStringLiteral("pan display")},
           "icom Black Level: a slider that does nothing still raises commandDropped");
 
     f.dropped.clear();
     f.radio.setWaterfallColorGainFor(f.pan1, 70, true);
     f.radio.setWaterfallBlackLevelFor(f.pan1, 30);
-    check(f.dropped == QStringList{blackText(f.wf1, 30)},
+    check(f.dropped == QStringList{QStringLiteral("pan display")},
           "icom Clone to all Pans, auto black: only the black level is reported");
 
     f.dropped.clear();
     f.radio.setWaterfallColorGainFor(f.pan1, 71, false);
     f.radio.setWaterfallBlackLevelFor(f.pan1, 31);
-    check(f.dropped == QStringList{gainText(f.wf1, 71), blackText(f.wf1, 31)},
+    check(f.dropped == QStringList{QStringLiteral("pan display"), QStringLiteral("pan display")},
           "icom Clone to all Pans, manual black: gain and black are reported");
 
     f.dropped.clear();
     f.radio.setWaterfallColorGainFor(f.pan0, 50, true);
     f.radio.setWaterfallBlackLevelFor(f.pan0, 15);
-    check(f.dropped == QStringList{blackText(f.wf0, 15)},
+    check(f.dropped == QStringList{QStringLiteral("pan display")},
           "icom Reset display defaults: only the black level is reported");
 
     // The connect-time replay has no operator behind it and stays quiet.
@@ -294,14 +279,65 @@ void otherRowsWithoutCommandPlane()
     check(f.dropped.isEmpty(), "icom: the connect-time replay raises nothing");
 }
 
+void storedDisplayReplayIsSilent()
+{
+    for (const RadioCapabilities& caps : {icomCapabilities(), hl2Capabilities()}) {
+        Fixture f(caps);
+        f.radio.setPanWnb(true);
+        check(f.dropped.isEmpty(), caps.family + ": stored WNB replay is silent");
+        f.dropped.clear();
+        f.radio.setPanWnbLevel(73);
+        check(f.dropped.isEmpty(), caps.family + ": stored WNB level replay is silent");
+        f.dropped.clear();
+
+        PanadapterModel* pan = f.radio.activePanadapter();
+        check(f.radio.requestPanDisplay(pan, {PanDisplayField::LevelRange,
+                  PanLevelRange{-130.0, -30.0}}, {}, false) == ReceiveDispatch::Unsupported,
+              caps.family + ": silent level-range replay still refuses unsupported control");
+        check(f.dropped.isEmpty(), caps.family + ": stored level-range replay is silent");
+
+        for (const PanDisplayRequest& request : {
+                 PanDisplayRequest{PanDisplayField::Wnb, true},
+                 PanDisplayRequest{PanDisplayField::WnbLevel, 73}}) {
+            check(f.radio.requestPanDisplay(pan, request, {}, false) == ReceiveDispatch::Unsupported,
+                  caps.family + ": band-stack replay still refuses unsupported WNB");
+        }
+        check(f.dropped.isEmpty(), caps.family + ": band-stack WNB replay is silent");
+        f.radio.requestPanDisplay(pan, {PanDisplayField::Wnb, true});
+        f.radio.requestPanDisplay(pan, {PanDisplayField::WnbLevel, 73});
+        f.radio.requestPanDisplay(pan, {PanDisplayField::LevelRange,
+            PanLevelRange{-130.0, -30.0}});
+        check(f.dropped.size() == 3, caps.family + ": explicit operator requests still announce");
+    }
+
+    // Geometry-only display support, as declared by the demo backend. Do not
+    // construct SimBackend here: its transport threads initialize sockets.
+    RadioCapabilities geometryOnly = icomCapabilities();
+    geometryOnly.panDisplayControl = PanDisplayControl{
+        {PanDisplayField::Geometry}, {PanGeometryComponent::Center}};
+    Fixture f(geometryOnly);
+    check(f.radio.requestPanDisplay(f.radio.activePanadapter(),
+              {PanDisplayField::RfGain, 12}, {}, false) == ReceiveDispatch::Unsupported,
+          "geometry-only: RF-gain replay still refuses unsupported control");
+    check(f.dropped.isEmpty(), "geometry-only: stored RF-gain replay is silent");
+    f.radio.setPanRfGain(12);
+    check(f.dropped.size() == 1, "geometry-only: explicit RF-gain setter still announces");
+}
+
 // ── 1c. A command plane: the wire text, whole ───────────────────────────────
 
 void commandPlaneGetsTheWireText()
 {
+    FlexBackend encoder;
     RadioConnection connection;   // unopened: no socket, no thread
     QStringList written;
     {
         Fixture f(flexCapabilities());
+        TxOperationIntegrationTestAccess::encoder(encoder, f.radio);
+        f.backend->display = [&encoder](const QString& pan, const QString& waterfall,
+            const PanDisplayRequest& request, const RadioControlCompletion& completion, const RadioControlFence& current) {
+            return encoder.requestPanDisplay(pan, waterfall, request, completion, current);
+        };
         check(f.hasTwoPanes(), "flex: premise, two panes with distinct waterfall ids");
         TxOperationIntegrationTestAccess::useCommandPlane(f.radio, connection, written);
         check(f.radio.hasCommandPlane(), "flex: premise, a command plane");
@@ -342,6 +378,18 @@ void commandPlaneGetsTheWireText()
                   .arg(written.join(QStringLiteral(" | "))));
 
         written.clear();
+        f.radio.setPanWnb(true);
+        f.radio.setPanWnbLevel(73);
+        f.radio.requestPanDisplay(f.radio.activePanadapter(),
+            {PanDisplayField::RfGain, 12}, {}, false);
+        check(written == QStringList{
+                  QStringLiteral("display pan set %1 wnb=1").arg(f.backendPan1),
+                  QStringLiteral("display pan set %1 wnb_level=73").arg(f.backendPan1),
+                  QStringLiteral("display pan set %1 rfgain=12").arg(f.backendPan1)},
+              QStringLiteral("flex: silent replay still writes WNB and RF gain to the active second pan (got: %1)")
+                  .arg(written.join(QStringLiteral(" | "))));
+
+        written.clear();
         f.radio.setWaterfallColorGainFor(QStringLiteral("0xdeadbeef"), 60, false);
         f.radio.setWaterfallBlackLevelFor(QString(), 40);
         check(written.isEmpty(), "flex: an unknown or empty pan id writes nothing");
@@ -349,7 +397,7 @@ void commandPlaneGetsTheWireText()
     }
 }
 
-// The command plane decides, not the row unit: with both, the text is sent.
+// An unrelated command plane cannot manufacture a missing backend verb.
 void commandPlaneOutranksTheRowUnit()
 {
     RadioConnection connection;
@@ -358,8 +406,8 @@ void commandPlaneOutranksTheRowUnit()
         Fixture f(hl2Capabilities());
         TxOperationIntegrationTestAccess::useCommandPlane(f.radio, connection, written);
         f.radio.setWaterfallBlackLevelFor(f.pan0, 40);
-        check(written == QStringList{blackText(f.wf0, 40)} && f.dropped.isEmpty(),
-              "absolute-dB rows with a command plane: the black level is still sent");
+        check(written.isEmpty() && f.dropped.isEmpty(),
+              "absolute-dB rows remain local when the declared backend has no waterfall verb");
     }
 }
 
@@ -476,6 +524,7 @@ int main(int argc, char** argv)
 
     absoluteRowsWithoutCommandPlane();
     otherRowsWithoutCommandPlane();
+    storedDisplayReplayIsSilent();
     commandPlaneGetsTheWireText();
     commandPlaneOutranksTheRowUnit();
     guiSitesCallTheModelSetters();

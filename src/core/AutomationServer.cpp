@@ -4557,7 +4557,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
     // TX-safety guard — never key a live radio from the test bridge unless the
     // operator has explicitly opted in. (#3646 Phase 1 safety requirement.)
     const bool transmitControl = isTransmitControl(w);
-    if (transmitControl && txActionRequiresPermission(w) && !m_txAllowed) {
+    if (transmitControl && txActionRequiresPermission(w, action, value) && !m_txAllowed) {
         qCWarning(lcAutomation).noquote()
             << "BLOCKED transmit-related invoke on" << target
             << "(" << shortClassName(w) << ")";
@@ -7553,7 +7553,7 @@ QJsonObject AutomationServer::invokeTxAction(QObject* object, const QString& tar
     if (!self || !guardedObject) {
         return err(QStringLiteral("scoped control disappeared during preparation"));
     }
-    const bool requiresTx = txActionRequiresPermission(object) || bool(controller);
+    const bool requiresTx = txActionRequiresPermission(object, action, value) || bool(controller);
     TxKeyingAction::Prepared prepared = prepareTxKeyingAction(object, controller, action, value);
     if (!self) { return err(QStringLiteral("bridge disappeared during preparation")); }
     if (!prepared) {
@@ -11377,7 +11377,9 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
         const int limit = radio->maxPanadapters();
         if (have >= limit)
             return err(QStringLiteral("refused: at panadapter limit (%1)").arg(limit));
-        radio->createPanadapter();
+        if (!radio->createPanadapter()) {
+            return err(QStringLiteral("pan creation was not admitted by this backend"));
+        }
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("create")},
                            {QStringLiteral("requested"), true}, {QStringLiteral("priorCount"), have}};
     }
@@ -11608,6 +11610,10 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
         if (!all && radio->panadapters().size() <= 1)
             return err(QStringLiteral("refused: cannot close the last panadapter"));
 
+        const RadioControlSession session = radio->controlSession();
+        QMap<QString, QPointer<PanadapterModel>> originals;
+        for (const QString& pid : panIds) { originals.insert(pid, radio->panadapter(pid)); }
+        bool anyRequested = false;
         QJsonArray closed;
         for (const QString& pid : panIds) {
             const PanadapterModel* p = radio->panadapter(pid);
@@ -11616,9 +11622,13 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
             // exercises the exact GUI close path. removePanadapter sends the
             // FlexLib-correct pair "display pan remove" + "display panafall
             // remove" for a panafall, so the waterfall is freed too. (#3843)
-            radio->removePanadapter(pid);
+            const bool requested = radio->controlSessionCurrent(session) && originals.value(pid)
+                && radio->panadapter(pid) == originals.value(pid)
+                && radio->removePanadapter(pid, all ? PanCloseIntent::ExplicitTeardown : PanCloseIntent::Ordinary);
+            anyRequested = anyRequested || requested;
             QJsonObject o{{QStringLiteral("panId"), pid},
-                          {QStringLiteral("resolved"), p != nullptr}};
+                          {QStringLiteral("resolved"), p != nullptr},
+                          {QStringLiteral("requested"), requested}};
             if (!wfId.isEmpty())
                 o[QStringLiteral("waterfallId")] = wfId;
             closed.append(o);
@@ -11626,9 +11636,9 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
                                            << (wfId.isEmpty() ? QString() : QStringLiteral("+ wf ") + wfId);
         }
         return QJsonObject{
-            {QStringLiteral("ok"), true},
+            {QStringLiteral("ok"), anyRequested},
             {QStringLiteral("pan"), QStringLiteral("close")},
-            {QStringLiteral("requested"), true},   // radio echoes "… removed"; re-poll get pans
+            {QStringLiteral("requested"), anyRequested},   // radio echoes removal; re-poll get pans
             {QStringLiteral("closed"), closed},
         };
     }

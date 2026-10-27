@@ -1,6 +1,7 @@
 #include "core/backends/anan/P2Protocol.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace AetherSDR::anan {
@@ -139,12 +140,60 @@ std::array<std::uint8_t, 1444> buildDdcSpecific(int ddc0RateKsps, int numAdcs,
                             numAdcs, ditherEnabled, randomEnabled);
 }
 
+std::uint16_t alexRxFilterBits(AlexRxFilter filter) noexcept
+{
+    // Bits from the spec's SATURN/ANAN-G2 Alex0 and Alex1 tables (p.91). The
+    // shift yields unsigned int; the casts narrow it to the 16-bit word.
+    switch (filter) {
+    case AlexRxFilter::Bypass:    return std::uint16_t(1u << 12);
+    case AlexRxFilter::Bpf1_5MHz: return std::uint16_t(1u << 6);
+    case AlexRxFilter::Bpf6_5MHz: return std::uint16_t(1u << 5);
+    case AlexRxFilter::Bpf9_5MHz: return std::uint16_t(1u << 4);
+    case AlexRxFilter::Bpf13MHz:  return std::uint16_t(1u << 1);
+    case AlexRxFilter::Bpf20MHz:  return std::uint16_t(1u << 2);
+    case AlexRxFilter::Preamp6m:  return std::uint16_t(1u << 3);
+    }
+    // Unreachable for a valid enumerator. Bypass, not zero: zero energises no
+    // relay, and with the bank in series that is no signal path (p.90).
+    return std::uint16_t(1u << 12);
+}
+
+AlexRxFilter alexRxFilterFor(double tunedHz) noexcept
+{
+    const double mhz = tunedHz / 1e6;
+    // Every comparison with NaN is false, so a non-finite frequency would fall
+    // through to the 6 m preamp, which on HF is silence.
+    if (!std::isfinite(mhz)) {
+        return AlexRxFilter::Bypass;
+    }
+    if (mhz < 1.5) {
+        return AlexRxFilter::Bypass;      // below the bank's lowest filter
+    }
+    if (mhz < 2.1) {
+        return AlexRxFilter::Bpf1_5MHz;   // 160 m
+    }
+    if (mhz < 5.5) {
+        return AlexRxFilter::Bpf6_5MHz;   // 80 m, 60 m
+    }
+    if (mhz < 11.0) {
+        return AlexRxFilter::Bpf9_5MHz;   // 40 m, 30 m
+    }
+    if (mhz < 22.0) {
+        return AlexRxFilter::Bpf13MHz;    // 20 m, 17 m, 15 m
+    }
+    if (mhz < 35.0) {
+        return AlexRxFilter::Bpf20MHz;    // 12 m, 10 m
+    }
+    return AlexRxFilter::Preamp6m;        // 6 m
+}
+
 std::array<std::uint8_t, 1444> buildHighPriority(bool run,
                                                   std::span<const std::uint32_t> ddcFreqWords,
                                                   bool bypassAdc0Filters,
                                                   bool bypassAdc1Filters,
                                                   int adc0AttenuationDb,
-                                                  int adc1AttenuationDb) noexcept
+                                                  int adc1AttenuationDb,
+                                                  const HighPriorityOptions& opts) noexcept
 {
     std::array<std::uint8_t, 1444> pkt{};  // full spec length
     pkt[4] = run ? 0x01 : 0x00;  // bit[0] = run. Bits[1..4] = PTT0..3 -- there is no
@@ -155,16 +204,28 @@ std::array<std::uint8_t, 1444> buildHighPriority(bool run,
         std::min(ddcFreqWords.size(), static_cast<std::size_t>(kMaxDdcs));
     for (std::size_t n = 0; n < count; ++n)
         writeU32be(&pkt[9 + 4 * n], ddcFreqWords[n]);
-    // Alex0 register, bytes 1432-1435 -- ANT1 (bit 24) always, HF Bypass
-    // (bit 12) when requested. See this function's declaration comment.
+    // Alex0, bytes 1432-1435: ANT1 (bit 24) in the TX/antenna half, ADC0's
+    // receive selection in the low half. A filter replaces bypass: the series
+    // bank takes one relay. See this function's declaration comment.
     std::uint32_t alex0 = std::uint32_t{1} << 24;
-    if (bypassAdc0Filters)
+    if (opts.adc0Filter) {
+        alex0 |= alexRxFilterBits(*opts.adc0Filter);
+    } else if (bypassAdc0Filters) {
         alex0 |= std::uint32_t{1} << 12;
+    }
     writeU32be(&pkt[1432], alex0);
-    // Alex1 (RX2/BPF2) register, bytes 1430-1431 -- a separate 16-bit word,
-    // bit 12 "HF Bypass 2" (p.90-91's own Alex1 bit table).
-    if (bypassAdc1Filters)
+    // Alex1 (RX2/BPF2), bytes 1430-1431: ADC1's receive word, the same bits
+    // (p.91's Alex1 table).
+    if (opts.adc1Filter) {
+        writeU16be(&pkt[1430], alexRxFilterBits(*opts.adc1Filter));
+    } else if (bypassAdc1Filters) {
         writeU16be(&pkt[1430], std::uint16_t{1} << 12);
+    }
+    // Byte 1400 bit 1 mutes the speaker amplifier; bits 0 and 2 stay clear
+    // (HighPriorityOptions::muteSpeakerAmp).
+    if (opts.muteSpeakerAmp) {
+        pkt[1400] = std::uint8_t(1u << 1);
+    }
     // Step attenuators, pp.34,36: byte 1443 = ADC0, byte 1442 = ADC1, 0-31 dB.
     pkt[1443] = static_cast<std::uint8_t>(
         std::clamp(adc0AttenuationDb, 0, kMaxStepAttenuationDb));
@@ -177,14 +238,15 @@ std::array<std::uint8_t, 1444> buildHighPriority(bool run, std::uint32_t ddc0Fre
                                                   bool bypassAdc0Filters,
                                                   bool bypassAdc1Filters,
                                                   int adc0AttenuationDb,
-                                                  int adc1AttenuationDb) noexcept
+                                                  int adc1AttenuationDb,
+                                                  const HighPriorityOptions& opts) noexcept
 {
     // Delegates, same reasoning as buildDdcSpecific()'s single-DDC overload:
     // one implementation of the row layout, and byte-identical output to
     // what this built before (pinned by the existing tests).
     return buildHighPriority(run, std::span<const std::uint32_t>(&ddc0FreqWord, 1),
                              bypassAdc0Filters, bypassAdc1Filters,
-                             adc0AttenuationDb, adc1AttenuationDb);
+                             adc0AttenuationDb, adc1AttenuationDb, opts);
 }
 
 std::array<std::uint8_t, kSpeakerPacketBytes> buildSpeakerAudio(

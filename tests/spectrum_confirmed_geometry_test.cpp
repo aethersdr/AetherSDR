@@ -11,7 +11,9 @@
 #include "core/backends/rtl/RtlSdrBackend.h"
 #include "models/SliceModel.h"
 #include "models/PanadapterModel.h"
+#include "models/BandPlanManager.h"
 #include <QImage>
+#include <QToolTip>
 #include <QPainter>
 
 #include <QApplication>
@@ -84,11 +86,25 @@ struct SpectrumOffscreenTestAccess {
         widget.m_frequencyPreviewTargetCenterMhz = target;
         widget.m_frequencyPreviewTargetBandwidthMhz = span;
     }
+    // A point inside the band-plan hover row at `mhz` — the same geometry
+    // mouseMoveEvent() hit-tests (bottom 8 px of the spectrum area). (#4667)
+    static QPoint bandRow(const SpectrumWidget& widget, double mhz) {
+        const int specH = static_cast<int>((widget.height() - widget.freqScaleH()
+                                            - SpectrumWidget::DIVIDER_H)
+                                           * widget.m_spectrumFrac);
+        return {widget.mhzToX(mhz), specH - 4};
+    }
     static QPoint marker(SpectrumWidget& widget) {
         QImage image(widget.size(), QImage::Format_ARGB32);
         QPainter painter(&image);
         widget.drawOffScreenSlices(painter, QRect(0, 0, widget.width(), widget.spectrumPixelHeight()));
         return widget.m_offScreenRects.front().center();
+    }
+    // The shared anchored-zoom tail both the macOS trackpad (ZoomNativeGesture)
+    // and the touch pinch (QPinchGesture) funnel through after the refactor.
+    static void anchoredZoom(SpectrumWidget& widget, double bandwidthFactor,
+                             QPointF globalPos) {
+        widget.applyAnchoredZoom(bandwidthFactor, globalPos);
     }
 };
 }
@@ -131,6 +147,37 @@ void wait(int ms)
     }
 }
 bool near(double a, double b) { return std::abs(a - b) < 1e-10; }
+
+// Registered with QT_SCALE_FACTOR=2 (a Retina screen). A FLEX-8600 on 4.3.16
+// stops FFT and waterfall data for every client at xpixels 4093 or more.
+int runPanPixelsAtRetinaScale()
+{
+    int failures = 0;
+    const auto check = [&](bool ok, const char* name) {
+        std::printf("[%s] %s\n", ok ? "OK" : "FAIL", name);
+        failures += !ok;
+    };
+    SpectrumWidget pan;
+    pan.resize(1000, 600);
+    const double ratio = pan.devicePixelRatioF();
+    if (!near(ratio, 2.0)) {
+        std::printf("[FAIL] pan pixels: device pixel ratio is %g, expected 2\n", ratio);
+        return 1;
+    }
+    check(panXpixelsFor(&pan) == 2000, "pan pixels: a 1000-point pan requests 2000 device pixels");
+    pan.resize(1921, 600);
+    check(panXpixelsFor(&pan) == 3840, "pan pixels: a 1921-point pan (3842 unclamped) is capped at 3840");
+    pan.resize(2047, 600);
+    // The safety bound, from the measured stall: unlike the 3840 checks, which
+    // follow the chosen cap, this one must not be relaxed if the cap changes.
+    check(panXpixelsFor(&pan) <= 4092,
+          "pan pixels: a 2047-point pan (4094 unclamped, a stalling width) requests at most 4092");
+    pan.resize(2100, 600);
+    check(panXpixelsFor(&pan) == 3840, "pan pixels: a 2100-point pan is capped at 3840");
+    pan.resize(2560, 600);
+    check(panXpixelsFor(&pan) == 3840, "pan pixels: a 2560-point pan (a 5K screen's full width) is capped at 3840");
+    return failures ? 1 : 0;
+}
 }
 
 int main(int argc, char** argv)
@@ -139,6 +186,9 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
     if (app.arguments().contains(QStringLiteral("--flex-squelch-bridge-fixture"))) {
         return runFlexSquelchBridgeFixture(app);
+    }
+    if (app.arguments().contains(QStringLiteral("--pan-pixels-retina"))) {
+        return runPanPixelsAtRetinaScale();
     }
     int failures = 0;
     const auto check = [&](bool ok, const char* name) {
@@ -746,5 +796,93 @@ int main(int argc, char** argv)
               "Hermes Range centering moves its DDC pan while preserving slice RF");
     }
     widget.prepareForShutdown();
+    {
+        // Band-plan segment `usage` surfaces on hover over the band strip, and
+        // only there: a segment without usage, or a hidden strip, shows nothing.
+        // (#4667)
+        BandPlanManager plans;
+        plans.loadPlans();
+        plans.setActivePlan(QStringLiteral("IARU Region 1"));
+        check(plans.activePlanName() == QStringLiteral("IARU Region 1"),
+              "usage hover: IARU Region 1 plan loads from resources");
+        SpectrumWidget band;
+        band.resize(800, 400);
+        band.setBandPlanManager(&plans);
+        band.setBandPlanFontSize(6);
+        band.setFrequencyRangeImmediate(14.110, 0.040);
+        band.show();
+        // Offscreen there is no QRhi, so PanadapterMessageOverlay shows its
+        // "Spectrum renderer unavailable" notice over the band row just after
+        // show(), and mouseMoveEvent() yields to any child under the pointer.
+        // Wait for it to clear the row.
+        for (int i = 0; i < 100 && band.childAt(SpectrumOffscreenTestAccess::bandRow(band, 14.105)); ++i)
+            wait(50);
+        const auto hoverAt = [&](double mhz) {
+            const QPoint p = SpectrumOffscreenTestAccess::bandRow(band, mhz);
+            mouse(band, QEvent::MouseMove, p.x(), p.y());
+            wait(50);
+        };
+        const auto tipGone = [&]() {
+            wait(500);  // QToolTip::hideText() fades on a timer
+            return !QToolTip::isVisible();
+        };
+        // Control: the pre-existing spot tooltip must work under this harness,
+        // or the usage assertions below prove nothing.
+        hoverAt(14.100);
+        check(QToolTip::isVisible() && QToolTip::text().contains(QStringLiteral("IBP")),
+              "usage hover: control — spot tooltip at 14.100 shows");
+        QToolTip::hideText();
+        wait(500);
+        hoverAt(14.105);
+        const QString tip = QToolTip::text();
+        std::printf("    tooltip at 14.105: %s\n", qPrintable(tip));
+        check(QToolTip::isVisible()
+                  && tip.contains(QStringLiteral("14.101"))
+                  && tip.contains(QStringLiteral("ALL"))
+                  && tip.contains(QStringLiteral("automatically controlled data stations")),
+              "usage hover: 14.101-14.112 shows its chart usage note");
+        hoverAt(14.120);  // 14.112-14.350 ALL, no usage
+        check(tipGone(), "usage hover: a segment without usage shows no tooltip");
+        band.setBandPlanFontSize(0);
+        hoverAt(14.105);
+        check(tipGone(), "usage hover: no tooltip while the band strip is Off");
+    }
+    {
+        // The cap holds without a scale factor, so it stays pinned even if the
+        // --pan-pixels-retina registration's QT_SCALE_FACTOR is ignored.
+        SpectrumWidget wide;
+        wide.resize(5000, 600);
+        if (near(wide.devicePixelRatioF(), 1.0)) {
+            check(panXpixelsFor(&wide) == 3840, "pan pixels: a 5000-pixel pan at ratio 1 is capped at 3840");
+        } else {
+            std::printf("[SKIP] pan pixels: the ratio-1 cap case needs QT_SCALE_FACTOR unset (ratio is %g)\n",
+                        wide.devicePixelRatioF());
+        }
+    }
+
+    {
+        // Anchored gesture zoom (the shared applyAnchoredZoom extracted from the
+        // trackpad/pinch paths). Under confirmation the new span is requested,
+        // not applied locally, so assert the requested span and the clamp.
+        SpectrumWidget widget;
+        widget.resize(1000, 400);
+        widget.setPanGeometryConfirmationRequired(true);
+        widget.setFrequencyRangeImmediate(14.200, 0.200);
+        double reqSpan = -1;
+        QObject::connect(&widget, &SpectrumWidget::frequencyRangeChangeRequested,
+            &widget, [&](double, double span) { reqSpan = span; });
+        const QPointF anchor(widget.mapToGlobal(QPoint(widget.width() / 2,
+                                                       widget.height() / 2)));
+        SpectrumOffscreenTestAccess::anchoredZoom(widget, 0.5, anchor);
+        check(near(reqSpan, 0.100),
+              "anchored zoom: bandwidth factor 0.5 requests half the span");
+        check(near(widget.bandwidthMhz(), 0.200),
+              "anchored zoom: under confirmation the span is requested, not applied");
+        reqSpan = -1;
+        SpectrumOffscreenTestAccess::anchoredZoom(widget, 1.0e6, anchor);  // past max
+        check(reqSpan < 0, "anchored zoom past max bandwidth is clamped (no request)");
+        SpectrumOffscreenTestAccess::anchoredZoom(widget, 1.0e-9, anchor);  // past min
+        check(reqSpan < 0, "anchored zoom past min bandwidth is clamped (no request)");
+    }
     return failures ? 1 : 0;
 }

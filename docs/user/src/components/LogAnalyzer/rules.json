@@ -9,7 +9,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7715,
+          "line": 7597,
           "text": "else if (key == \"model\")"
         }
       ]
@@ -21,7 +21,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7724,
+          "line": 7606,
           "text": "else if (key == \"software_ver\")"
         }
       ]
@@ -94,7 +94,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7677,
+          "line": 7559,
           "text": "\"RadioModel: terminal GUI client registration failure\""
         }
       ]
@@ -111,12 +111,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7607,
+          "line": 7489,
           "text": "RadioModel: this GUI client was force-disconnected by another client"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7651,
+          "line": 7533,
           "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
         }
       ]
@@ -133,7 +133,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7517,
+          "line": 7399,
           "text": "RadioModel: multiFLEX disabled, other clients present"
         }
       ]
@@ -150,7 +150,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/RadioConnection.cpp",
-          "line": 624,
+          "line": 635,
           "text": "RadioConnection: socket error:"
         }
       ]
@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8858,
+          "line": 8743,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -188,12 +188,12 @@
       "source": [
         {
           "file": "src/core/backends/flex/RadioConnection.cpp",
-          "line": 685,
+          "line": 696,
           "text": "qCDebug(lcConnection) << \"RX:\" << line;"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7724,
+          "line": 7606,
           "text": "else if (key == \"software_ver\")"
         }
       ]
@@ -210,7 +210,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7918,
+          "line": 7800,
           "text": "RadioModel: no VITA-49 UDP data received after 10s"
         }
       ]
@@ -227,17 +227,17 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7896,
+          "line": 7778,
           "text": "RadioModel: UDP stream setup failed"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 231,
+          "line": 239,
           "text": "PanadapterStream: failed to bind UDP socket:"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7971,
+          "line": 7854,
           "text": "RadioModel: client udpport collision"
         }
       ]
@@ -254,7 +254,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 171,
+          "line": 177,
           "text": "capped by net.core.rmem_max"
         }
       ]
@@ -452,12 +452,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 1378,
+          "line": 1395,
           "text": "RadioModel: dax_rx stream create for channel"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 1836,
+          "line": 1899,
           "text": "stream create failed/dropped"
         }
       ]
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 13440,
+          "line": 13330,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -547,7 +547,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 13201,
+          "line": 13259,
           "text": "\"SpectrumWidget: QRhi failure:\""
         },
         {
@@ -574,7 +574,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 2002,
+          "line": 2009,
           "text": "SpectrumWidget: AETHER_NO_GPU/QT_OPENGL=software"
         }
       ]
@@ -608,7 +608,7 @@
       "source": [
         {
           "file": "src/main.cpp",
-          "line": 85,
+          "line": 86,
           "text": "Non-fatal X11 error suppressed (error_code="
         }
       ]
@@ -879,6 +879,57 @@
       ]
     },
     {
+      "id": "anan-discovery-bind-failed",
+      "severity": "warning",
+      "title": "ANAN-G2 discovery could not open its UDP socket",
+      "explanation": "AetherSDR could not open the UDP socket it searches for an ANAN-G2 with, so no G2 can appear under On This Network. Discovery tries again on every sweep; the text after the colon is the operating system's reason. If you don't use an ANAN-G2, you can ignore this.",
+      "match": {
+        "substring": "ANAN discovery: cannot bind a UDP socket"
+      },
+      "docs": "/anan-g2#setup",
+      "source": [
+        {
+          "file": "src/core/backends/anan/AnanDiscovery.cpp",
+          "line": 89,
+          "text": "ANAN discovery: cannot bind a UDP socket"
+        }
+      ]
+    },
+    {
+      "id": "anan-discovery-no-subnet",
+      "severity": "warning",
+      "title": "ANAN-G2 discovery found no network to search",
+      "explanation": "No network interface had an IPv4 broadcast address when AetherSDR searched for an ANAN-G2, so the search went to the global broadcast only: the computer was offline, or connected only through a VPN or a point-to-point link. Connect it to the G2's network; discovery keeps searching. If you don't use an ANAN-G2, you can ignore this.",
+      "match": {
+        "substring": "ANAN discovery: no IPv4 interface has a broadcast address"
+      },
+      "docs": "/anan-g2#setup",
+      "source": [
+        {
+          "file": "src/core/backends/anan/AnanDiscovery.cpp",
+          "line": 106,
+          "text": "ANAN discovery: no IPv4 interface has a broadcast address"
+        }
+      ]
+    },
+    {
+      "id": "anan-discovery-send-failed",
+      "severity": "warning",
+      "title": "ANAN-G2 discovery could not send a probe",
+      "explanation": "AetherSDR could not send its ANAN-G2 search to one address; the line names the address and the operating system's reason. A G2 on that address's subnet may not appear under On This Network. If your G2 is listed anyway, another address reached it. If you don't use an ANAN-G2, you can ignore this.",
+      "match": {
+        "substring": "ANAN discovery: cannot send a probe to"
+      },
+      "docs": "/anan-g2#setup",
+      "source": [
+        {
+          "file": "src/core/backends/anan/AnanDiscovery.cpp",
+          "line": 118,
+          "text": "ANAN discovery: cannot send a probe to"
+        }
+      ]
+    },
+    {
       "id": "hl2-socket-failed",
       "severity": "problem",
       "title": "Hermes-Lite 2: the UDP socket could not be opened",
@@ -890,7 +941,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 2849,
+          "line": 2886,
           "text": "HL2: could not open the UDP socket"
         }
       ]
@@ -910,7 +961,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/MetisClient.cpp",
-          "line": 510,
+          "line": 523,
           "text": "MetisClient: no EP6 for"
         }
       ]
@@ -932,8 +983,25 @@
         },
         {
           "file": "src/core/backends/icom/IcomSession.cpp",
-          "line": 258,
+          "line": 262,
           "text": "the radio rejected the username or password"
+        }
+      ]
+    },
+    {
+      "id": "icom-media-released",
+      "severity": "problem",
+      "title": "Icom: the radio released the audio and CI-V streams",
+      "explanation": "The radio ended the media session. This can follow an interrupted connection from another application. AetherSDR reconnects automatically; let the previous application finish disconnecting before switching applications.",
+      "match": {
+        "substring": "the radio released the serial and audio streams"
+      },
+      "docs": "/networked-icom#audio-and-radio-updates-stop-after-switching-applications",
+      "source": [
+        {
+          "file": "src/core/backends/icom/IcomSession.cpp",
+          "line": 401,
+          "text": "the radio released the serial and audio streams; "
         }
       ]
     },
@@ -989,7 +1057,7 @@
       "source": [
         {
           "file": "docs/user/docs/troubleshooting.md",
-          "line": 91,
+          "line": 109,
           "text": "error while loading shared libraries: libOpenGL.so.0"
         }
       ]
@@ -1007,7 +1075,7 @@
       "source": [
         {
           "file": "docs/user/docs/troubleshooting.md",
-          "line": 101,
+          "line": 119,
           "text": "needs glibc 2.38 or newer"
         }
       ]

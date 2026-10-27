@@ -305,9 +305,19 @@ author or reviewer — walks the list:
    PR removed, lowering `FROZEN_BOOL_COUNT` when a bool became a record, and
    lowering a converted file's command-plane count are all conforming. Growing
    a baseline, adding a stem or row, or retagging a `vendor(...)` header is
-   forbidden; the two maintainer carveouts (EB3 reclassification with
-   merge-base proof; a `FROZEN_BOOL_COUNT` raise on a maintainer ruling) are
-   rulings carrying that evidence, never a route to a passing check.
+   forbidden; the three maintainer carveouts (EB3 reclassification with
+   merge-base proof; a `FROZEN_BOOL_COUNT` raise on a maintainer ruling; an
+   EB3 **relocation**, below) are rulings carrying that evidence, never a
+   route to a passing check.
+
+   A **relocation** moves existing stems with the code that needs them, from
+   one file's row to another's, when a maintainer has ruled that the code
+   moves. All of these must hold: the old row shrinks by exactly the stems the
+   new row gains; no stem or vendor header is new to the baseline; the PR body
+   shows the merge-base and head per-file EB3 findings; and the ruling is
+   recorded on the tracking issue. It adds no coupling and converts nothing;
+   the moved stems stay burndown targets. First use: the radio firmware flow
+   leaving Radio Setup for the Updates window (#6718, ruling on #5304).
 5. **Touching a backend?** Read the THREADING AND LIFETIME CONTRACT in
    `IRadioBackend.h` against the diff, and re-check the #5554 notice above. A
    survey result means reading is the check, because no test will fail.

@@ -137,6 +137,10 @@
             "sparkGold": "#ffd970",
             "sparkGoldHot": "#fff6d8",
             "bloom": { "blue": "#293aa7ff", "teal": "#1a7bf2dc" },
+            "category": {
+              "cyan": "#5de3ff", "aqua": "#8ef7e6", "blue": "#3aa7ff", "amber": "#f0a35e",
+              "violet": "#c4a1ff", "rose": "#fca5a5", "teal": "#7bf2dc"
+            },
             "grid":     "#0978aad2"
           },
           "cw": {

@@ -1,7 +1,7 @@
-// The automation bridge may switch VOX off, with TX permission, and never on.
+// The automation bridge may switch VOX off, with or without TX permission, and never on.
 // The Phone applet's VOX button carries a disarm-only scoped action (#6053).
-// Every other path is pinned as it is: arming and pointer verbs are refused,
-// nothing passes without TX permission, the operator's own input is untouched.
+// Production shortcut registration/dispatch is exercised by tools/automation_vox_guard.py.
+// Every other path is pinned: arming and pointer verbs are refused, the operator's own input is untouched.
 // No radio, no socket, no transmission: a bare RadioModel's TransmitModel.
 
 #include "TestEventLoop.h"
@@ -18,6 +18,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
+#include <QMainWindow>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QTest>
@@ -190,17 +191,28 @@ int main(int argc, char** argv)
         tx.setVoxEnable(false);
     }
 
-    // ── Bridge, no TX permission: nothing passes ────────────────────────────
+    // ── Bridge, no TX permission: disarm passes, arming is refused ──────────
     server.setTxAllowed(false);
     {
         tx.setVoxEnable(true);
         const bool off = ok(invoke(server, QStringLiteral("setChecked"), QStringLiteral("false")));
+        const bool landed = AetherTest::waitFor([&] { return !tx.voxEnable() && !button->isChecked(); }, 2000);
+        check(off && landed, "TX not allowed: invoke setChecked false is accepted and disarms VOX (Principle VI)");
+        check(!tx.voxEnable() && !button->isChecked(), "TX not allowed: VOX is disarmed");
+
+        for (const char* spelling : {"0", "off", "no", "unchecked"}) {
+            tx.setVoxEnable(true);
+            const bool accepted = ok(invoke(server, QStringLiteral("setChecked"),
+                                            QString::fromLatin1(spelling)));
+            const bool disarmed = AetherTest::waitFor([&] { return !tx.voxEnable(); }, 2000);
+            const QByteArray what = QByteArray("TX not allowed: setChecked '") + spelling + "' disarms";
+            check(accepted && disarmed, what.constData());
+        }
+
         const bool click = ok(invoke(server, QStringLiteral("click")));
         const bool pointer = ok(clickAt(server));
         drain();
-        check(!off, "TX not allowed: invoke setChecked false is refused (unchanged)");
         check(!click && !pointer, "TX not allowed: click and clickAt are refused (unchanged)");
-        check(tx.voxEnable(), "TX not allowed: an armed VOX stays armed");
 
         tx.setVoxEnable(false);
         const bool on = ok(invoke(server, QStringLiteral("setChecked"), QStringLiteral("true")));
@@ -209,6 +221,30 @@ int main(int argc, char** argv)
         drain();
         check(!on && !toggle && !pointerOn && !tx.voxEnable(),
               "TX not allowed: arming is refused by every verb (unchanged)");
+    }
+
+    // The injected result tests the bridge's response mapping only. The full
+    // app probe exercises MainWindow's registration and dispatch independently.
+    {
+        QMainWindow window;
+        window.show();
+        bool dispatched = false;
+        bool permission = true;
+        server.setShortcutAutomationHandler([&](const QString& id, bool allowTx,
+                                                const std::shared_ptr<TxController>&) {
+            dispatched = id == QStringLiteral("vox_toggle");
+            permission = allowTx;
+            return 3; // MainWindow::ShortcutFireTxBlocked
+        });
+        server.setTxAllowed(false);
+        const QJsonObject rep = AutomationServerTestAccess::request(server,
+            QJsonObject{{QStringLiteral("cmd"), QStringLiteral("shortcut")},
+                        {QStringLiteral("target"), QStringLiteral("vox_toggle")}});
+        check(dispatched && !permission, "shortcut: bridge dispatches with TX permission off");
+        check(!ok(rep) && rep.value(QStringLiteral("error")).toString().startsWith(
+                  QStringLiteral("blocked: 'vox_toggle' keys the transmitter (TX-safety guard).")),
+              "shortcut: TX-blocked result produces the specific safety refusal");
+        server.setShortcutAutomationHandler({});
     }
 
     // ── The operator's own input ────────────────────────────────────────────
