@@ -137,10 +137,10 @@ public:
     void setOverflowMode(int mode);
     int overflowMode() const { return static_cast<int>(m_overflowMode); }
 
-    // Per-channel TCI RX gain (0.0–1.0), applied to outbound DAX audio before
-    // resampling and sending to TCI clients.  Decoupled from DaxRxGain<n> so
-    // DAX bridge and TCI maintain independent per-channel gains.
-    // Channel is 1-based (1–4).  Persists to TciRxGain<channel>.
+    static constexpr float kMaxRxGain = 31.6227766f;
+
+    // Per-channel TCI RX gain, from silence through unity to +30 dB.
+    // Independent of DAX bridge gain; channels 1-8 persist to TciRxGain<channel>.
     void setRxChannelGain(int channel, float gain);
     float rxChannelGain(int channel) const;
 

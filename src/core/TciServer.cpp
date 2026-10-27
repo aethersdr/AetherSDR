@@ -212,8 +212,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 const QString legacy = s.value(QStringLiteral("DaxRxGain%1").arg(ch), "0.5").toString();
                 s.setValue(key, legacy);
             }
-            m_rxChannelGain[ch - 1] = std::clamp(
-                s.value(key, "0.5").toString().toFloat(), 0.0f, 1.0f);
+            const float saved = s.value(key, "0.5").toString().toFloat();
+            m_rxChannelGain[ch - 1] = std::isfinite(saved)
+                ? std::clamp(saved, 0.0f, kMaxRxGain) : 0.5f;
         }
         s.save();
     }
@@ -875,13 +876,14 @@ void TciServer::setOverflowMode(int mode)
 void TciServer::setRxChannelGain(int channel, float gain)
 {
     if (channel < 1 || channel > 8) return;
-    const float clamped = std::clamp(gain, 0.0f, 1.0f);
+    if (!std::isfinite(gain)) return;
+    const float clamped = std::clamp(gain, 0.0f, kMaxRxGain);
     if (m_rxChannelGain[channel - 1] == clamped) return;
     m_rxChannelGain[channel - 1] = clamped;
     m_io->post([io = m_io.get(), channel, clamped] { io->setRxGain(channel, clamped); });
     auto& s = AppSettings::instance();
     s.setValue(QStringLiteral("TciRxGain%1").arg(channel),
-               QString::number(clamped, 'f', 2));
+               QString::number(clamped, 'g', 9));
     s.save();
 }
 
