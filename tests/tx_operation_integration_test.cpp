@@ -129,6 +129,10 @@ public:
     {
         server.clientStateFor(&socket)->txProducer.discardInputs();
     }
+    static void invalidateTciProducer(TciServer& server, TciClient& socket)
+    {
+        server.clientStateFor(&socket)->txProducer.invalidate();
+    }
     static void deferTciRoute(TciServer& server) { server.m_routeTransitionInFlight = true; }
     static void drainTciRoute(TciServer& server)
     {
@@ -2792,6 +2796,30 @@ void tciKeyerReleasesOnlyItsOwnKey()
         QCoreApplication::processEvents();
     }
     check(f.commands.contains("cw:off"), "a client that disconnects with its key down releases it");
+
+    // A revoked request is still owed its key-up: the key is down on the radio
+    // whether or not the client may keep keying (#6721 review).
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,true;"));
+    check(f.commands.contains("cw:on"), "fixture: the client's key is down before its input is discarded");
+    TxOperationIntegrationTestAccess::discardTciInputs(server, remote);
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,false;"));
+    check(f.commands.contains("cw:off"), "a key-up after the client's inputs were discarded still lifts its key");
+
+    // The I/O worker invalidates the producer before it reports the close.
+    auto* dropped = new TciClient;
+    TxOperationIntegrationTestAccess::addTciTextClient(server, *dropped, f.radio);
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(*dropped, QStringLiteral("keyer:0,true;"));
+    check(f.commands.contains("cw:on"), "fixture: the dropped client's key is down");
+    TxOperationIntegrationTestAccess::invalidateTciProducer(server, *dropped);
+    f.commands.clear();
+    emit dropped->disconnected();
+    for (int i = 0; i < 5; ++i) {
+        QCoreApplication::processEvents();
+    }
+    check(f.commands.contains("cw:off"), "a disconnect after the producer was invalidated still releases the key");
 }
 
 void tciPermissionRequiresConfirmedOwnership()
