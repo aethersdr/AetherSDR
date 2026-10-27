@@ -918,6 +918,9 @@ void RadioModel::setupBackend(const QString& family)
                 return sendTxTcpCommand(command, fence.operation, fence.keying,
                     [completion = fence.completion] { completion.finish(); }, std::move(reply), current);
             });
+            flex->setCwxConfigurationSink([this](const QString& command, const RadioControlFence& current) {
+                return sendCwxConfigurationCommand(command, current);
+            });
             // Slice verbs route through the TX-inhibit-guarded slice sink (§6), so
             // moving slice encode behind the seam keeps TX safety above it.
             flex->setSliceCommandSink([this](const QString& cmd){
@@ -2580,6 +2583,9 @@ RadioModel::RadioModel(QObject* parent)
     m_cwxModel.setTextSender([this](const QString& text, int wpm) {
         Q_UNUSED(wpm);
         return dispatchCwxText(text, m_cwxCommandOperation);
+    });
+    connect(&m_cwxModel, &CwxModel::requestRejected, this, [this](const QString& reason) {
+        emit radioMessageReceived(reason, MessageSeverity::Warning);
     });
     connect(&m_cwxModel, &CwxModel::transmissionCancelled, this, [this] {
         const TxCoordinator::Intent intent = m_cwxCommandIntent;
@@ -5728,6 +5734,25 @@ bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
     // by index=N and the TCP path provides a reliable delivery backstop.
     sendTxTcpCommand(fullCmd, operation, keying, keying ? std::function<void()>{} : partDelivered);
     return parts != 0;
+}
+
+bool RadioModel::sendCwxConfigurationCommand(const QString& command, RadioControlFence current)
+{
+    const std::shared_ptr<std::atomic<bool>> session = m_cwxSessionValid;
+    const auto permitted = [session, current = std::move(current)] {
+        return session->load(std::memory_order_acquire) && (!current || current());
+    };
+    if (!permitted()) { return false; }
+    if (m_wanConn) {
+        m_wanConn->sendCommand(command);
+        return true;
+    }
+    const QPointer<RadioConnection> connection = m_connection;
+    if (!connection) { return false; }
+    const quint32 seq = m_seqCounter.fetch_add(1);
+    return QMetaObject::invokeMethod(connection, [connection, seq, command, permitted] {
+        if (connection && permitted()) { connection->writeCommand(seq, command); }
+    }, Qt::QueuedConnection);
 }
 
 bool RadioModel::sendTxTcpCommand(const QString& command, const TxCoordinator::Operation& operation,

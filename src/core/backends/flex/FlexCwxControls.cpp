@@ -13,10 +13,18 @@ ReceiveDispatch FlexBackend::requestCwTextControl(const CwTextRequest& request,
     const TxCoordinator::Command& command, const RadioControlFence& current,
     const CwTextCompletion& completion)
 {
-    if (QThread::currentThread() != thread() || !request.valid() || !m_cwxSink || command.keying != request.keys()
+    if (QThread::currentThread() != thread() || !request.valid() || command.keying != request.keys()
+        || (current && !current())) {
+        return ReceiveDispatch::Unsupported;
+    }
+    if (request.configuration()) {
+        const auto sink = m_cwxConfigurationSink;
+        return sink && sink(FlexCwxControls::encode(request), current)
+            ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+    }
+    if (!m_cwxSink
         || (request.keys() && command.operation.independent())
         || !command.permitsDispatch(TxCoordinator::monotonicMs())
-        || (current && !current())
         || (request.origin == CwTextRequest::Origin::Transient
             && !command.operation.permitsDispatch(TxCoordinator::monotonicMs()))) {
         return ReceiveDispatch::Unsupported;

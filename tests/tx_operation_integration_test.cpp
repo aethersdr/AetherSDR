@@ -169,6 +169,9 @@ public:
     }
     static void bindCwxEncoder(RadioModel& radio, FlexBackend& encoder)
     {
+        encoder.setCwxConfigurationSink([&radio](const QString& wire, const RadioControlFence& current) {
+            return radio.sendCwxConfigurationCommand(wire, current);
+        });
         encoder.setCwxCommandSink([&radio](const QString& wire, const TxCoordinator::Command& command,
                                           const RadioControlFence& current, FlexBackend::CommandReply reply) {
             return radio.sendTxTcpCommand(wire, command.operation, command.keying,
@@ -1795,6 +1798,96 @@ void flexCwxLifecycle()
           "abandoning an unknown-length drain watch preserves queued text and macro tail");
 }
 
+void queuedCwxConfiguration()
+{
+    {
+        QStringList tcp;
+        RadioConnection connection;
+        Fixture f;
+        TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, tcp);
+        f.radio.cwxModel().setSpeed(31);
+        f.radio.cwxModel().setDelay(250);
+        f.radio.cwxModel().setQsk(true);
+        f.radio.cwxModel().saveMacro(0, "CQ%1");
+        check(!TxOperationIntegrationTestAccess::coordinator(f.radio).hasOwnership(),
+              "queued CWX configuration never acquires transmit ownership");
+        f.radio.cwxModel().send("CQ%1");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(tcp == QStringList({"cwx wpm 31", "cwx delay 250", "cwx qsk_enabled 1",
+                                  "cwx macro save 1 \"CQ%1\"", "cwx send \"CQ%1\" 1"}),
+              "staged CWX configuration precedes text after same-turn TX admission");
+    }
+    {
+        QStringList tcp;
+        RadioConnection connection;
+        Fixture f;
+        TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, tcp);
+        f.radio.cwxModel().setSpeed(31);
+        f.radio.cwxModel().setSpeed(35);
+        f.radio.cwxModel().send("NEW");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(tcp == QStringList({"cwx wpm 35", "cwx send \"NEW\" 1"}),
+              "a newer operator edit retires old speed without losing its staged replacement");
+    }
+    {
+        QStringList tcp;
+        RadioConnection connection;
+        Fixture f;
+        TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, tcp);
+        f.radio.cwxModel().setSpeed(31);
+        f.radio.cwxModel().setDelay(250);
+        f.radio.cwxModel().setQsk(true);
+        f.radio.cwxModel().saveMacro(0, "OLD");
+        f.radio.forceDisconnect();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(tcp.filter("cwx ").isEmpty(),
+              "disconnect retires queued CWX configuration at the original terminal writer");
+    }
+    {
+        Fixture f;
+        f.backend->connected = false;
+        f.radio.cwxModel().setSpeed(31);
+        f.radio.cwxModel().setDelay(250);
+        f.radio.cwxModel().setQsk(true);
+        f.radio.cwxModel().saveMacro(0, "DRAFT");
+        check(f.radio.cwxModel().speed() == 31 && f.radio.cwxModel().delay() == 250
+                  && f.radio.cwxModel().qskOn() && f.radio.cwxModel().macro(0) == "DRAFT"
+                  && f.commands.isEmpty()
+                  && !TxOperationIntegrationTestAccess::coordinator(f.radio).hasOwnership(),
+              "offline CWX settings remain local drafts without keying or claiming radio readback");
+    }
+}
+
+void queuedCwxErase()
+{
+    for (const bool holdMox : {false, true}) {
+        QStringList tcp;
+        RadioConnection connection;
+        Fixture f;
+        TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, tcp);
+        if (holdMox) { f.radio.setTransmit(true); }
+        const TxCoordinator::Operation mox = f.radio.transmitOperation();
+        f.radio.cwxModel().sendChar("A");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        tcp.clear();
+        f.radio.cwxModel().erase(1);
+        f.radio.cwxModel().sendChar("B");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(tcp == QStringList({"cwx erase 1", "cwx send \"B\" 2"}),
+              "live erase reaches the writer before replacement text with or without held MOX");
+        if (holdMox) {
+            check(mox.sameOperation(f.radio.transmitOperation())
+                      && mox.permitsDispatch(std::numeric_limits<qint64>::max()),
+                  "live erase does not release separately held MOX authority");
+        }
+    }
+}
+
 void overlappingCwContributions()
 {
     for (const bool withUdp : {false, true}) {
@@ -2919,6 +3012,8 @@ int main(int argc, char** argv)
     cwxCompletionAndRefusal();
     cwxFailureAndSpeedRestore();
     flexCwxLifecycle();
+    queuedCwxConfiguration();
+    queuedCwxErase();
     queuedNetCwEdges();
     netCwClientHandleEncoding();
     queuedCwSessionAndTcpFences();

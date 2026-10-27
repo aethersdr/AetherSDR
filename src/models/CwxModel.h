@@ -130,7 +130,7 @@ signals:
     void controlRequested(const AetherSDR::CwTextRequest& request);
     void replyControlRequested(const AetherSDR::CwTextRequest& request, int epoch, int nChars);
     void speedChanged(int wpm);
-    void speedCommandIssued(int wpm);
+    void requestRejected(const QString& reason);
     void speedStepChanged(int step);
     void delayChanged(int ms);
     void qskChanged(bool on);

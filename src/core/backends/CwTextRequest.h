@@ -47,6 +47,11 @@ struct CwTextRequest {
         return false;
     }
     bool keys() const { return field == Field::Send || field == Field::SendMacro; }
+    bool configuration() const
+    {
+        return origin == Origin::Operator && (field == Field::Speed || field == Field::Delay
+            || field == Field::Qsk || field == Field::SaveMacro);
+    }
 };
 
 // Additional buffered-keyer controls. Native text keyers retain their existing

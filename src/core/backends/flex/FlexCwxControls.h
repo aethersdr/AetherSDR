@@ -14,7 +14,7 @@ inline QString encode(const CwTextRequest& request)
     text.replace(QLatin1Char(' '), QChar(0x7f));
     text.replace(QLatin1Char('"'), QChar(0x1e));
     switch (request.field) {
-    case Field::Send: return QStringLiteral("cwx send \"%1\" %2").arg(text).arg(request.block);
+    case Field::Send: return QStringLiteral("cwx send \"%1\" %2").arg(text, QString::number(request.block));
     case Field::SendMacro: return QStringLiteral("cwx macro send %1").arg(request.value);
     case Field::SaveMacro: return QStringLiteral("cwx macro save %1 \"%2\"").arg(request.value + 1).arg(text);
     case Field::Speed: return QStringLiteral("cwx wpm %1").arg(request.value);

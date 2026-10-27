@@ -2040,6 +2040,7 @@ private:
     TxCoordinator::Operation m_cwxCommandOperation;
     unsigned m_cwxPendingDeliveries{0};
     bool m_cwxHandoffComplete{false};
+    std::shared_ptr<std::atomic<bool>> m_cwxSessionValid{std::make_shared<std::atomic<bool>>(true)};
     std::atomic<quint64> m_cwInputSession{0};
     std::chrono::steady_clock::time_point m_cwInputNotBefore{};
     static qint64 txMonotonicMs();
@@ -2067,6 +2068,7 @@ private:
     ReceiveDispatch dispatchCwxRequest(const CwTextRequest& request, TxCoordinator::Operation operation,
                                        int epoch, int nChars, RadioControlFence current);
     bool dispatchCwxText(const QString& text, TxCoordinator::Operation operation);
+    bool sendCwxConfigurationCommand(const QString& command, RadioControlFence current);
     void finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator::Intent intent);
     TxCoordinator::Completion trackCwxQueue(const TxCoordinator::Operation& operation);
     void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);

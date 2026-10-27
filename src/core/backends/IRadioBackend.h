@@ -812,7 +812,8 @@ public:
         return QStringLiteral("radio has no text keyer");
     }
     // Buffered text control is optional. Keying retains an admitted operation;
-    // configuration and original-intent cleanup never acquire one here.
+    // operator configuration uses session/edit fences without an operation;
+    // original-intent cleanup retains its operation and never acquires one here.
     virtual ReceiveDispatch requestCwTextControl(const CwTextRequest& request,
         const TxCoordinator::Command& command, const RadioControlFence& current,
         const CwTextCompletion& completion = {})

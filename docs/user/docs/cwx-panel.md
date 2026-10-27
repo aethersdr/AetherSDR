@@ -38,6 +38,10 @@ The panel has three views, chosen with the buttons at its top: **Send**, **Live*
 
 **Speed** sets the keyer speed in WPM (5–100 on FlexRadio).
 
+When disconnected, **Speed**, **Delay**, **QSK** and macro edits remain local
+drafts. Reconnecting reads the radio's current settings; it does not send those
+draft settings automatically.
+
 Right-click a sent bubble for **Resend** (sent again exactly as typed, per-word speed changes included) or **Clear History**.
 
 When the CWX queue empties, AetherSDR releases its text-send intent. A separately held **MOX** remains on; otherwise the radio returns to receive after the last character. **Escape** cancels queued text and its local sidetone without releasing a separately held **MOX**.
@@ -132,6 +136,16 @@ Break-in is off, so the keyer waits for MOX.
 
 1. Turn on **break-in**, or turn on MOX before keying.
 2. Check that **TUNE** is off; CW keying is locked out while it is on.
+
+### CWX reports invalid text or too many unacknowledged speed changes
+
+Pasted control characters are refused. A batch is also cancelled if more than
+256 speed changes remain unacknowledged by the radio.
+
+1. Remove control characters from the text, or shorten the message and reduce
+   per-word speed changes.
+2. Check the radio connection before starting a new send. Cancelled text is not
+   resent automatically.
 
 ## See also
 

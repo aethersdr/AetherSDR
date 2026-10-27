@@ -143,7 +143,12 @@ CwxModel::TransmissionPermit CwxModel::admitTransmission(const TransmissionRoute
 ReceiveDispatch CwxModel::dispatchRequest(const CwTextRequest& request, int epoch, int nChars,
                                           const TransmissionRoute& route)
 {
-    if (!request.valid()) { return ReceiveDispatch::Unsupported; }
+    if (!request.valid()) {
+        const QString reason = tr("CWX request refused: invalid text or keyer settings.");
+        qCWarning(lcCw) << reason;
+        emit requestRejected(reason);
+        return ReceiveDispatch::Unsupported;
+    }
     const RequestSender sender = route.command ? route.command : m_requestSender;
     const QPointer<CwxModel> self(this);
     const TransmissionPermit batch = queuedTransmissionPermit();
@@ -177,7 +182,16 @@ bool CwxModel::dispatchSpeed(int wpm, CwTextRequest::Origin origin, int epoch,
 {
     const auto echo = std::make_shared<const int>(wpm);
     constexpr qsizetype kMaximumSpeedEchoes = 256;
-    if (m_pendingWpmEchoes.size() >= kMaximumSpeedEchoes) { m_pendingWpmEchoes.clear(); }
+    if (m_pendingWpmEchoes.size() >= kMaximumSpeedEchoes) {
+        const QPointer<CwxModel> self(this);
+        clearBuffer();
+        if (self) {
+            const QString reason = tr("CWX batch cancelled: too many unacknowledged speed changes.");
+            qCWarning(lcCw) << reason;
+            emit requestRejected(reason);
+        }
+        return false;
+    }
     m_pendingWpmEchoes.append(echo);
     const QPointer<CwxModel> self(this);
     const ReceiveDispatch result = dispatchRequest({CwTextRequest::Field::Speed, wpm, {}, 0, origin},
@@ -197,9 +211,8 @@ void CwxModel::retireSpeedIntent()
 void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs, const TransmissionPermit& permit,
                                 const TransmissionRoute& route)
 {
-    // Find last segment with non-empty text — that block's cwx send goes via
-    // replyCommandReady so RadioModel can capture the radio_index and detect
-    // queue drain via sent= status instead of the broken queue= path. (#3949)
+    // Only the last non-empty segment needs a reply-index drain watch. Earlier
+    // segments retain their original operation and batch delivery fences.
     int lastNonEmpty = -1;
     for (int i = segs.size() - 1; i >= 0; --i) {
         if (!segs[i].text.isEmpty()) { lastNonEmpty = i; break; }
@@ -393,12 +406,9 @@ void CwxModel::saveMacro(int idx, const QString& text)
 
 void CwxModel::erase(int numChars)
 {
-    // KNOWN GAP (needs hardware / #3949 item 4): erase removes queued chars, so
-    // an armed drain watch at m_cwxEndIndex may point past the new tail — sent=
-    // could then never reach it and TX would stick for the full interlock
-    // timeout. The correct adjustment depends on the radio's post-erase sent=
-    // semantics, which aren't yet confirmed on the 8600. Left unchanged (bare
-    // commandReady) pending that observation rather than guessing an offset.
+    // Post-erase sent-index semantics need hardware qualification (#3949).
+    // Preserve the existing cancellation behavior without guessing a new tail;
+    // the original operation must retain this erase through terminal delivery.
     const QPointer<CwxModel> self(this);
     dispatchRequest({CwTextRequest::Field::Erase, numChars}, m_drainEpoch, -1);
     if (!self) { return; }
@@ -496,8 +506,6 @@ void CwxModel::setSpeed(int wpm)
             return;
         }
         emit speedChanged(m_speed);
-        if (!self) { return; }
-        emit speedCommandIssued(m_speed);
     }
 }
 

@@ -834,8 +834,11 @@ void RadioModel::abortProducerCwx(const TxCoordinator::Request& request)
 ReceiveDispatch RadioModel::dispatchCwxRequest(const CwTextRequest& request,
     TxCoordinator::Operation operation, int epoch, int nChars, RadioControlFence current)
 {
-    if (QThread::currentThread() != thread() || !request.valid() || !m_backend
-        || !isConnected() || m_txSessionClosing || m_expiringPendingCallbacks || (current && !current())) {
+    if (QThread::currentThread() != thread() || !request.valid() || (current && !current())) {
+        return ReceiveDispatch::Unsupported;
+    }
+    if (request.configuration() && !isConnected()) { return ReceiveDispatch::LocalOnly; }
+    if (!m_backend || !isConnected() || m_txSessionClosing || m_expiringPendingCallbacks) {
         return ReceiveDispatch::Unsupported;
     }
     const RadioCapabilities caps = backendCapabilities();
@@ -854,6 +857,9 @@ ReceiveDispatch RadioModel::dispatchCwxRequest(const CwTextRequest& request,
         return ReceiveDispatch::Unsupported;
     }
     if (!caps.cwTextControl->supports(request.field)) { return ReceiveDispatch::Unsupported; }
+    if (request.configuration()) {
+        return m_backend->requestCwTextControl(request, {{}, false}, current);
+    }
     const bool batchSpeed = request.origin != CwTextRequest::Origin::Operator;
     if (request.keys() && !operation.permitsDispatch(txMonotonicMs())) { return ReceiveDispatch::Unsupported; }
     if (request.origin == CwTextRequest::Origin::Transient) {
@@ -861,11 +867,6 @@ ReceiveDispatch RadioModel::dispatchCwxRequest(const CwTextRequest& request,
         current = [operation, captured = std::move(current)] {
             return operation.permitsDispatch(txMonotonicMs()) && (!captured || captured());
         };
-    }
-    if (!request.keys() && !batchSpeed) {
-        if (request.field != CwTextRequest::Field::Clear && request.field != CwTextRequest::Field::Erase) {
-            operation = m_txCoordinator.cleanupFence();
-        }
     }
     if (!request.keys() && !operation.permitsCleanup()) { return ReceiveDispatch::Unsupported; }
     const QPointer<RadioModel> self(this);
@@ -887,7 +888,8 @@ ReceiveDispatch RadioModel::dispatchCwxRequest(const CwTextRequest& request,
         m_cwxActive = false;
         m_cwxDrainArmed = false;
     }
-    const bool counted = request.keys() || batchSpeed || request.field == CwTextRequest::Field::Clear;
+    const bool counted = request.keys() || batchSpeed || request.field == CwTextRequest::Field::Clear
+        || request.field == CwTextRequest::Field::Erase;
     const TxCoordinator::Completion consumed = counted ? trackCwxQueue(operation) : TxCoordinator::Completion{};
     const TxCoordinator::Command command{operation, request.keys(), consumed};
     const ReceiveDispatch result = m_backend->requestCwTextControl(request, command, current, reply);
@@ -1070,6 +1072,8 @@ void RadioModel::resetTxOperations()
     // Close admission BEFORE cancellation/reply/model notifications can reenter
     // us; operation recovery alone only covers a previously active operation.
     m_txSessionClosing = true;
+    m_cwxSessionValid->store(false, std::memory_order_release);
+    m_cwxSessionValid = std::make_shared<std::atomic<bool>>(true);
     if (m_independentTxGrants) {
         m_independentTxGrants->invalidateRadio();
     }

@@ -29,6 +29,7 @@ void encodingAndValidation()
     const std::vector<std::pair<CwTextRequest, QByteArray>> cases{
         {{Field::Send, 0, QStringLiteral("CQ \"DX\" = + ( & $"), 17},
          QByteArray("cwx send \"") + QByteArray::fromHex("43517f1e44581e7f3d7f2b7f287f267f24") + "\" 17"},
+        {{Field::Send, 0, QStringLiteral("CQ%1%2%99"), 7}, "cwx send \"CQ%1%2%99\" 7"},
         {{Field::SendMacro, 12}, "cwx macro send 12"},
         {{Field::SaveMacro, 0, QStringLiteral("CQ TEST")}, QByteArray("cwx macro save 1 \"CQ\x7f" "TEST\"")},
         {{Field::SaveMacro, 11, {}}, "cwx macro save 12 \"\""},
@@ -121,6 +122,14 @@ void backendAdmissionAndReplies()
     backend.setCwxCommandSink([&](const QString&, const TxCoordinator::Command&,
                                   const RadioControlFence&, FlexBackend::CommandReply) { ++writes; return true; });
     const TxCoordinator::Command setting{idle.cleanupFence(), false};
+    check(backend.requestCwTextControl({CwTextRequest::Field::Speed, 30}, setting, [] { return true; })
+              == ReceiveDispatch::Unsupported,
+          "configuration cannot fall back to an operation-fenced TX writer");
+    backend.setCwxConfigurationSink([&](const QString&, const RadioControlFence& current) {
+        if (current && !current()) { return false; }
+        ++writes;
+        return true;
+    });
     check(backend.requestCwTextControl({CwTextRequest::Field::Speed, 30}, setting, [] { return true; })
               == ReceiveDispatch::Dispatched && writes == 1 && !idle.hasOwnership(),
           "ordinary speed configuration never acquires transmit ownership");
@@ -270,6 +279,45 @@ void receiverDestruction()
     check(result == ReceiveDispatch::Dispatched && !backend && replies == 0,
           "synchronous backend destruction cannot deliver into a retired receiver");
 }
+
+void boundedEchoTrackingAndInvalidText()
+{
+    CwxModel model;
+    CwxModel::TransmissionPermit firstSpeed;
+    CwxModel::TransmissionPermit firstText;
+    int cancelled = 0;
+    int dispatched = 0;
+    int warnings = 0;
+    model.setRequestSender([&](const CwTextRequest& request, int, int, CwxModel::TransmissionPermit current) {
+        if (!firstSpeed && request.origin == CwTextRequest::Origin::Transient) { firstSpeed = current; }
+        if (!firstText && request.keys()) { firstText = current; }
+        return ReceiveDispatch::Dispatched;
+    });
+    QObject::connect(&model, &CwxModel::transmissionCancelled, &model, [&] { ++cancelled; });
+    QObject::connect(&model, &CwxModel::transmissionDispatched, &model, [&](int, bool) { ++dispatched; });
+    QObject::connect(&model, &CwxModel::requestRejected, &model, [&](const QString&) { ++warnings; });
+    model.send(QStringLiteral("+E ").repeated(131));
+    check(cancelled == 1 && warnings == 1 && dispatched == 0 && model.speed() == 20
+              && firstSpeed && !firstSpeed() && firstText && !firstText(),
+          "echo-bound overflow cancels every queued speed/text write instead of dropping correlation");
+    model.send("+CQ");
+    model.applyStatus({{"wpm", "23"}});
+    model.applyStatus({{"wpm", "20"}});
+    check(dispatched == 1 && model.speed() == 20,
+          "a fresh batch after overflow retains its speed echo correlation");
+
+    CwxModel invalid;
+    int invalidWarnings = 0;
+    int textWrites = 0;
+    QObject::connect(&invalid, &CwxModel::requestRejected, &invalid, [&](const QString&) { ++invalidWarnings; });
+    invalid.setRequestSender([&](const CwTextRequest& request, int, int, CwxModel::TransmissionPermit) {
+        if (request.keys()) { ++textWrites; }
+        return ReceiveDispatch::Dispatched;
+    });
+    invalid.send(QStringLiteral("CQ") + QChar(0x1b));
+    check(invalidWarnings == 1 && textWrites == 0,
+          "invalid pasted control text reports a refusal without reaching a keying writer");
+}
 }
 
 int main(int argc, char** argv)
@@ -278,6 +326,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     encodingAndValidation();
     backendAdmissionAndReplies();
+    boundedEchoTrackingAndInvalidText();
     modelIntentAndEchoFences();
     receiverDestruction();
     return failures == 0 ? 0 : 1;
