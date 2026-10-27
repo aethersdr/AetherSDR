@@ -4,6 +4,7 @@
 #include "MeterSmoother.h"
 #include "core/ThemeManager.h"
 
+#include <QAccessible>
 #include <QElapsedTimer>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -57,6 +58,15 @@ public:
     float level() const { return m_smooth.value(); }
     bool isDragging() const { return m_dragging; }
 
+    void setDecibelGainRange(float maximumDb) {
+        if (!std::isfinite(maximumDb)) { return; }
+        m_decibelGain = true;
+        m_maximumDb = std::clamp(maximumDb, 0.0f, 60.0f);
+        m_maximumGain = std::pow(10.0f, m_maximumDb / 20.0f);
+        setGain(m_gain);
+        update();
+    }
+
     void setDragValueFormatter(DragValueFormatter formatter) {
         m_dragValueFormatter = std::move(formatter);
     }
@@ -68,13 +78,16 @@ public:
     }
 
     void setGain(float g) {
-        g = std::clamp(g, 0.0f, 1.0f);
+        if (!std::isfinite(g)) { return; }
+        g = std::clamp(g, 0.0f, m_maximumGain);
         if (g != m_gain) {
             m_gain = g;
-            // The level meter is drawn post-fader (level × gain), so a
-            // gain change must repaint to reflect the new effective
-            // output level immediately.
             update();
+            QAccessibleValueChangeEvent event(this, m_gain);
+            QAccessible::updateAccessibility(&event);
+        }
+        if (m_decibelGain) {
+            setToolTip(tr("Gain: %1\nMeter: -60 to 0 dBFS RMS").arg(dragValueText()));
         }
     }
 
@@ -95,7 +108,7 @@ public:
     }
 
 signals:
-    void gainChanged(float gain);  // 0.0–1.0
+    void gainChanged(float gain);
 
 protected:
     void paintEvent(QPaintEvent*) override {
@@ -121,11 +134,7 @@ protected:
         p.setPen(borderColour);
         p.drawRect(rect().adjusted(0, 0, -1, -1));
 
-        // Level meter fill (behind the slider) — post-fader: the
-        // smoothed RMS is multiplied by the current gain so the bar
-        // reflects the actual output level rather than the raw input.
-        // Moving the fader gives immediate visual feedback.
-        const float lvl = m_smooth.value() * m_gain;
+        const float lvl = std::clamp(m_smooth.value() * (m_decibelGain ? 1.0f : m_gain), 0.0f, 1.0f);
         if (lvl > 0.0f) {
             int fillW = static_cast<int>(lvl * barW);
             // Three-stop "level-meter heat": dim-accent at safe levels,
@@ -143,15 +152,22 @@ protected:
         }
 
         // Gain thumb position
-        int thumbX = margin + static_cast<int>(m_gain * barW);
+        const float position = gainPosition();
+        int thumbX = margin + static_cast<int>(position * barW);
         thumbX = std::clamp(thumbX, margin, margin + barW);
 
         // Gain fill (solid, up to thumb)
         if (m_gain > 0.0f) {
-            int gainW = static_cast<int>(m_gain * barW);
+            int gainW = static_cast<int>(position * barW);
             QColor gainFill = accent;
             gainFill.setAlpha(60);
             p.fillRect(margin, margin, gainW, barH, gainFill);
+        }
+
+        if (m_decibelGain) {
+            const int unityX = margin + static_cast<int>(60.0f / (60.0f + m_maximumDb) * barW);
+            p.setPen(tm.color(this, "color.text.secondary"));
+            p.drawLine(unityX, margin + barH / 2, unityX, margin + barH);
         }
 
         // Thumb line
@@ -173,9 +189,11 @@ protected:
         if (e->key() == Qt::Key_Right || e->key() == Qt::Key_Up)   delta = +0.05f;
         if (e->key() == Qt::Key_Left  || e->key() == Qt::Key_Down) delta = -0.05f;
         if (delta != 0.0f) {
-            float g = std::clamp(m_gain + delta, 0.0f, 1.0f);
+            float g = m_decibelGain
+                ? gainFromPosition(gainPosition() + (delta > 0.0f ? 1.0f : -1.0f) / (60.0f + m_maximumDb))
+                : std::clamp(m_gain + delta, 0.0f, 1.0f);
             if (g != m_gain) {
-                m_gain = g;
+                setGain(g);
                 emit gainChanged(m_gain);
                 update();
             }
@@ -237,11 +255,23 @@ protected:
     }
 
 private:
+    float gainPosition() const {
+        if (!m_decibelGain) { return m_gain; }
+        if (m_gain <= 0.0f) { return 0.0f; }
+        return std::clamp((20.0f * std::log10(m_gain) + 60.0f) / (60.0f + m_maximumDb), 0.0f, 1.0f);
+    }
+
+    float gainFromPosition(float position) const {
+        position = std::clamp(position, 0.0f, 1.0f);
+        if (position == 0.0f) { return 0.0f; }
+        if (!m_decibelGain) { return position; }
+        return std::pow(10.0f, (-60.0f + position * (60.0f + m_maximumDb)) / 20.0f);
+    }
+
     void updateGainFromMouse(int x) {
-        float g = static_cast<float>(x - 1) / static_cast<float>(width() - 2);
-        g = std::clamp(g, 0.0f, 1.0f);
+        const float g = gainFromPosition(static_cast<float>(x - 1) / static_cast<float>(std::max(1, width() - 2)));
         if (g != m_gain) {
-            m_gain = g;
+            setGain(g);
             emit gainChanged(m_gain);
             update();
         }
@@ -250,6 +280,11 @@ private:
     QString dragValueText() const {
         if (m_dragValueFormatter)
             return m_dragValueFormatter(m_gain);
+        if (m_decibelGain) {
+            if (m_gain <= 0.0f) { return tr("Muted"); }
+            const float db = 20.0f * std::log10(m_gain);
+            return QStringLiteral("%1%2 dB").arg(db > 0.05f ? "+" : "").arg(db, 0, 'f', 1);
+        }
         return QStringLiteral("%1%").arg(std::lround(m_gain * 100.0f));
     }
 
@@ -258,7 +293,7 @@ private:
         const int barW = width() - 2 * margin;
         if (barW <= 0)
             return fallbackGlobal;
-        int thumbX = margin + static_cast<int>(m_gain * barW);
+        int thumbX = margin + static_cast<int>(gainPosition() * barW);
         thumbX = std::clamp(thumbX, margin, margin + barW);
         return mapToGlobal(QPoint(thumbX, height() / 2));
     }
@@ -273,6 +308,9 @@ private:
     }
 
     float         m_gain{0.5f};
+    float         m_maximumGain{1.0f};
+    float         m_maximumDb{0.0f};
+    bool          m_decibelGain{false};
     MeterSmoother m_smooth;
     QTimer        m_animTimer;
     QElapsedTimer m_animElapsed;
