@@ -517,6 +517,16 @@ public slots:
     // frame and audioReady/meterUpdate per completed WdspChannel block.
     void processIqBlock(const std::vector<std::complex<float>>& iq);
 
+public:
+    // Raw IQ for a TCI IQ stream. While on, processIqBlock() hands the
+    // spectrum-handed samples (above the NCO is positive) out as iqReady, in
+    // runs of kIqTapPairs. Any thread may call it; off costs one relaxed load
+    // per block on the I/O thread.
+    void setIqTap(bool on) { m_iqTap.store(on, std::memory_order_relaxed); }
+    static constexpr std::size_t kIqTapPairs = 2048;
+
+public slots:
+
     // An EP6 sequence gap precedes the next block. Called by DirectConnection on
     // this object's I/O thread. Discards the partial panadapter frame so no FFT
     // spans the discontinuity (see Hl2Spectrum::reset()). The audio path is left
@@ -528,6 +538,7 @@ signals:
     void audioReady(const std::vector<float>& stereoPcm);   // interleaved L,R
     void spectrumReady(const std::vector<float>& binsDbfs); // DC-centred dBFS
     void meterUpdate(float dbfs);                           // audio-RMS S-meter
+    void iqReady(const std::vector<float>& interleavedIq);  // I,Q; see setIqTap
 
 private:
     // Pushes rxMinimumPhaseFor(m_config.mode) to the live channel. Only
@@ -651,6 +662,8 @@ private:
     // the demodulator takes the raw wire. A member rather than a local: this
     // runs per IQ block on the I/O thread.
     std::vector<std::complex<float>> m_conjugated;
+    std::atomic<bool> m_iqTap{false};
+    std::vector<float> m_iqTapOut;                  // I,Q awaiting a full run
     std::vector<float> m_i, m_q;                    // deinterleaved input scratch
     std::vector<float> m_left, m_right;             // WdspChannel output scratch
     // Applied to m_left/m_right on the way into m_stereo. See DcBlocker above
