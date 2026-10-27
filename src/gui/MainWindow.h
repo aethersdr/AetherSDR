@@ -1500,6 +1500,16 @@ private:
     void togglePanZoomModeForPan(const QString& panId, bool segmentZoom);
     void setPanZoomMode(bool segmentZoom, bool enable);
     void zoomActivePanadapter(double factor);
+    // Touch tap-and-hold -> synthesized right-click / context menu. On a
+    // touchscreen Qt synthesizes a LEFT click from a tap; a press held in place
+    // long enough is turned into a right-click here, so press-and-hold acts like
+    // the right mouse button (context menus) with no physical mouse. Driven from
+    // the qApp eventFilter watching Qt's synthesized mouse events.
+    QTimer*           m_touchHoldTimer{nullptr};
+    QPoint            m_touchHoldGlobalPos;
+    QPointer<QWidget> m_touchHoldWidget;
+    bool              m_touchHoldSwallowRelease{false};  // a fired hold owns the click
+
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
     static QString hidEncoderDefaultAction(int encoderIndex);
@@ -1529,15 +1539,6 @@ private:
     int     m_hidSensitivity{1};    // RC-28 pulses required per frequency step (1 = off)
     bool    m_hidAutoSnap{false};   // snap to nearest 1 kHz after rotation stops
     QTimer* m_hidSnapTimer{nullptr};
-    // Touch tap-and-hold -> synthesized right-click / context menu. On a
-    // touchscreen Qt synthesizes a LEFT click from a tap; a press held in place
-    // long enough is turned into a right-click here, so press-and-hold acts like
-    // the right mouse button (context menus) with no physical mouse. Driven from
-    // the qApp eventFilter watching Qt's synthesized mouse events.
-    QTimer*           m_touchHoldTimer{nullptr};
-    QPoint            m_touchHoldGlobalPos;
-    QPointer<QWidget> m_touchHoldWidget;
-    bool              m_touchHoldSwallowRelease{false};  // a fired hold owns the click
     // Contour shuttle ring (#5928): the ring only reports when it moves, so
     // this timer integrates the held position into steps while deflected.
     QTimer*               m_shuttleTimer{nullptr};
