@@ -159,7 +159,7 @@ private:
                                     const TransmissionRoute& route = {});
     bool dispatchSpeed(int wpm, CwTextRequest::Origin origin, int epoch,
                        const TransmissionRoute& route);
-    void retireSpeedIntent();
+    void retireSpeedIntent(bool retainEchoes = false);
     SendAvailability m_sendAvailability;
     TransmissionAdmission m_transmissionAdmission;
     TextSender m_textSender;
@@ -170,9 +170,9 @@ private:
     int     m_speed{20};
     int     m_delay{5};
     int     m_speedStep{3};
-    // Bounded expected transient values, not a count that consumes unrelated
-    // radio updates. Refusal removes its ticket; edits and session reset retire
-    // both queued speed writes and pending echo suppression.
+    // Bounded expected speed echoes. New edits revoke old queued writes but
+    // retain their possible echoes; refusal removes its ticket. Session reset
+    // or uncorrelated radio state retires both writes and echo suppression.
     QList<std::shared_ptr<const int>> m_pendingWpmEchoes;
     std::shared_ptr<std::atomic<bool>> m_speedIntentValid{std::make_shared<std::atomic<bool>>(true)};
     bool    m_qsk{false};

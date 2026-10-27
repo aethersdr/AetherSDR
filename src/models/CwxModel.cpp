@@ -4,6 +4,8 @@
 #include <QMap>
 #include <QScopeGuard>
 #include <QPointer>
+#include <algorithm>
+#include <iterator>
 #include <limits>
 
 namespace AetherSDR {
@@ -13,6 +15,7 @@ namespace {
 // entry point (user setSpeed and +/- modifier expansion) — one definition so
 // the two clamp sites can't drift. (#3949 review)
 inline int clampWpm(int wpm) { return qBound(5, wpm, 100); }
+constexpr qsizetype kMaximumSpeedEchoes = 256;
 
 }
 
@@ -160,10 +163,17 @@ ReceiveDispatch CwxModel::dispatchRequest(const CwTextRequest& request, int epoc
         return (!batchRequest || batch())
             && (!speedRequest || speed->load(std::memory_order_acquire));
     };
+    // Install correlation before dispatch: a synchronous sender may report
+    // status or a newer edit before it returns. Keep accepted tickets even
+    // when that newer edit retires this write's permit.
+    const std::shared_ptr<const int> echo = speedRequest ? std::make_shared<const int>(request.value) : nullptr;
+    if (echo) { m_pendingWpmEchoes.append(echo); }
     // Dispatch before notifying observers: a nested, newer edit must follow
     // this write, not be queued before an older request resumes its stack.
     const ReceiveDispatch result = sender ? sender(request, epoch, nChars, current) : ReceiveDispatch::LocalOnly;
-    if (!self || (batchRequest && epoch != self->m_drainEpoch) || !current()) {
+    if (!self) { return ReceiveDispatch::Unsupported; }
+    if (echo && result != ReceiveDispatch::Dispatched) { m_pendingWpmEchoes.removeOne(echo); }
+    if ((batchRequest && epoch != self->m_drainEpoch) || !current()) {
         return ReceiveDispatch::Unsupported;
     }
     if (nChars >= 0) {
@@ -180,8 +190,6 @@ ReceiveDispatch CwxModel::dispatchRequest(const CwTextRequest& request, int epoc
 bool CwxModel::dispatchSpeed(int wpm, CwTextRequest::Origin origin, int epoch,
                              const TransmissionRoute& route)
 {
-    const auto echo = std::make_shared<const int>(wpm);
-    constexpr qsizetype kMaximumSpeedEchoes = 256;
     if (m_pendingWpmEchoes.size() >= kMaximumSpeedEchoes) {
         const QPointer<CwxModel> self(this);
         clearBuffer();
@@ -192,20 +200,15 @@ bool CwxModel::dispatchSpeed(int wpm, CwTextRequest::Origin origin, int epoch,
         }
         return false;
     }
-    m_pendingWpmEchoes.append(echo);
-    const QPointer<CwxModel> self(this);
-    const ReceiveDispatch result = dispatchRequest({CwTextRequest::Field::Speed, wpm, {}, 0, origin},
-                                                   epoch, -1, route);
-    if (!self) { return false; }
-    if (result == ReceiveDispatch::Unsupported) { m_pendingWpmEchoes.removeOne(echo); }
-    return result != ReceiveDispatch::Unsupported;
+    return dispatchRequest({CwTextRequest::Field::Speed, wpm, {}, 0, origin}, epoch, -1, route)
+        != ReceiveDispatch::Unsupported;
 }
 
-void CwxModel::retireSpeedIntent()
+void CwxModel::retireSpeedIntent(bool retainEchoes)
 {
     m_speedIntentValid->store(false, std::memory_order_release);
     m_speedIntentValid = std::make_shared<std::atomic<bool>>(true);
-    m_pendingWpmEchoes.clear();
+    if (!retainEchoes) { m_pendingWpmEchoes.clear(); }
 }
 
 void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs, const TransmissionPermit& permit,
@@ -493,8 +496,14 @@ void CwxModel::setSpeed(int wpm)
 {
     wpm = clampWpm(wpm);
     if (wpm != m_speed) {
+        if (m_pendingWpmEchoes.size() >= kMaximumSpeedEchoes) {
+            const QString reason = tr("CWX speed change refused: too many unacknowledged speed changes.");
+            qCWarning(lcCw) << reason;
+            emit requestRejected(reason);
+            return;
+        }
         const int previous = m_speed;
-        retireSpeedIntent();
+        retireSpeedIntent(true);
         const std::shared_ptr<std::atomic<bool>> intent = m_speedIntentValid;
         m_speed = wpm;
         const QPointer<CwxModel> self(this);
@@ -589,11 +598,13 @@ void CwxModel::applyStatus(const QMap<QString, QString>& kvs)
         } else if (key == "wpm") {
             bool ok;
             int v = val.toInt(&ok);
-            if (ok && !m_pendingWpmEchoes.isEmpty() && *m_pendingWpmEchoes.first() == v) {
-                // Echo of a transient `cwx wpm` we emitted for a per-word speed
-                // modifier — swallow it so it can't clobber the authoritative
-                // base speed or flicker the Speed spinbox. (#272)
-                m_pendingWpmEchoes.removeFirst();
+            const auto echo = std::find_if(m_pendingWpmEchoes.cbegin(), m_pendingWpmEchoes.cend(),
+                [v](const std::shared_ptr<const int>& pending) { return *pending == v; });
+            if (ok && echo != m_pendingWpmEchoes.cend()) {
+                // A newer echo may skip superseded writes that never reached
+                // the terminal. Retain later tickets so an older operator or
+                // transient echo cannot retire the newest queued speed edit.
+                m_pendingWpmEchoes.erase(m_pendingWpmEchoes.cbegin(), std::next(echo));
             } else if (ok && v != m_speed) {
                 retireSpeedIntent();
                 m_speed = v;

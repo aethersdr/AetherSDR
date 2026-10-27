@@ -36,7 +36,7 @@ The CWX panel and the [DVK Panel](./dvk-panel.md) share the same space — openi
 
 The panel has three views, chosen with the buttons at its top: **Send**, **Live** and **Setup** (see [Views](#views)). In **Send**, type text and send it; sent text appears as history bubbles above the entry line. In **Live**, characters are keyed as you type them.
 
-**Speed** sets the keyer speed in WPM (5–100 on FlexRadio).
+**Speed** sets the keyer speed in WPM (5–100 on FlexRadio). With several speed edits pending, a delayed status echo from an earlier edit does not cancel your newer request.
 
 When disconnected, **Speed**, **Delay**, **QSK** and macro edits remain local
 drafts. Reconnecting reads the radio's current settings; it does not send those
@@ -140,7 +140,9 @@ Break-in is off, so the keyer waits for MOX.
 ### CWX reports invalid text or too many unacknowledged speed changes
 
 Pasted control characters are refused. A batch is also cancelled if more than
-256 speed changes remain unacknowledged by the radio.
+256 speed changes remain unacknowledged by the radio. At that limit, further
+**Speed** edits are refused without cancelling the existing batch; wait for the
+radio to acknowledge changes before trying again.
 
 1. Remove control characters from the text, or shorten the message and reduce
    per-word speed changes.

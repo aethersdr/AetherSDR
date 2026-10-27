@@ -262,6 +262,118 @@ void modelIntentAndEchoFences()
           "index overflow cancels only the original batch and never invents radio-idle evidence");
 }
 
+void operatorSpeedEchoOrdering()
+{
+    for (const bool editInSender : {true, false}) {
+        CwxModel model;
+        std::vector<CwxModel::TransmissionPermit> writes;
+        model.setRequestSender([&](const CwTextRequest& request, int, int, CwxModel::TransmissionPermit current) {
+            writes.push_back(std::move(current));
+            if (editInSender && request.value == 31) { model.setSpeed(35); }
+            return ReceiveDispatch::Dispatched;
+        });
+        QObject::connect(&model, &CwxModel::controlRequested, &model, [&](const CwTextRequest& request) {
+            if (!editInSender && request.value == 31) { model.setSpeed(35); }
+        });
+        model.setSpeed(31);
+        model.applyStatus({{"wpm", "31"}});
+        check(writes.size() == 2 && !writes.front()() && writes.back()() && model.speed() == 35,
+              "reentrant replacement preserves an accepted older echo without retiring the new write");
+        model.applyStatus({{"wpm", "35"}});
+        model.applyStatus({{"wpm", "31"}});
+        check(model.speed() == 31 && !writes.back()(),
+              "settled operator tickets cannot suppress a later independent radio change");
+    }
+    {
+        CwxModel model;
+        CwxModel::TransmissionPermit latest;
+        model.setRequestSender([&](const CwTextRequest& request, int, int, CwxModel::TransmissionPermit current) {
+            latest = std::move(current);
+            model.applyStatus({{"wpm", QString::number(request.value)}});
+            return ReceiveDispatch::Dispatched;
+        });
+        model.setSpeed(31);
+        model.setSpeed(35);
+        check(model.speed() == 35 && latest(), "synchronous WPM echoes cannot revoke their own write");
+        model.applyStatus({{"wpm", "31"}});
+        check(model.speed() == 31 && !latest(), "synchronous receipts leave no phantom operator echo");
+    }
+    {
+        CwxModel model;
+        CwxModel::TransmissionPermit latest;
+        model.setRequestSender([&](const CwTextRequest& request, int, int, CwxModel::TransmissionPermit current) {
+            if (request.field == CwTextRequest::Field::Speed) { latest = std::move(current); }
+            return ReceiveDispatch::Dispatched;
+        });
+        model.send("+CQ");
+        model.setSpeed(35);
+        model.applyStatus({{"wpm", "23"}});
+        model.applyStatus({{"wpm", "20"}});
+        check(model.speed() == 35 && latest(), "old transient and restore echoes preserve a newer operator edit");
+        model.applyStatus({{"wpm", "35"}});
+        model.applyStatus({{"wpm", "37"}});
+        check(model.speed() == 37 && !latest(), "uncorrelated radio state still retires queued speed writes");
+    }
+    {
+        CwxModel model;
+        model.setRequestSender([](const CwTextRequest&, int, int, CwxModel::TransmissionPermit) {
+            return ReceiveDispatch::Dispatched;
+        });
+        model.setSpeed(31);
+        model.setSpeed(35);
+        model.applyStatus({{"wpm", "35"}});
+        model.applyStatus({{"wpm", "31"}});
+        check(model.speed() == 31, "a newer echo retires skipped superseded tickets before later readback");
+        model.setSpeed(35);
+        model.setSpeed(31);
+        model.setSpeed(35);
+        for (const int echo : {35, 31, 35}) {
+            model.applyStatus({{"wpm", QString::number(echo)}});
+            check(model.speed() == 35, "repeated WPM values preserve the latest selection at every echo");
+        }
+        model.setSpeed(31);
+        model.resetDrainWatch();
+        model.setSpeed(35);
+        model.applyStatus({{"wpm", "31"}});
+        check(model.speed() == 31, "session reset discards operator as well as transient echo history");
+    }
+    for (const ReceiveDispatch refused : {ReceiveDispatch::Unsupported, ReceiveDispatch::LocalOnly}) {
+        CwxModel model;
+        CwxModel::TransmissionPermit latest;
+        model.setRequestSender([&](const CwTextRequest& request, int, int, CwxModel::TransmissionPermit current) {
+            if (request.value == 31) { return refused; }
+            latest = std::move(current);
+            return ReceiveDispatch::Dispatched;
+        });
+        model.setSpeed(31);
+        model.setSpeed(35);
+        model.applyStatus({{"wpm", "31"}});
+        check(model.speed() == 31 && !latest(), "refused or local-only speed edits leave no phantom radio echo");
+    }
+    {
+        CwxModel model;
+        int writes = 0;
+        int warnings = 0;
+        int cancelled = 0;
+        CwxModel::TransmissionPermit latest;
+        model.setRequestSender([&](const CwTextRequest&, int, int, CwxModel::TransmissionPermit current) {
+            ++writes;
+            latest = std::move(current);
+            return ReceiveDispatch::Dispatched;
+        });
+        QObject::connect(&model, &CwxModel::requestRejected, &model, [&](const QString&) { ++warnings; });
+        QObject::connect(&model, &CwxModel::transmissionCancelled, &model, [&] { ++cancelled; });
+        for (int i = 0; i < 256; ++i) { model.setSpeed(i % 2 == 0 ? 31 : 35); }
+        model.setSpeed(31);
+        check(writes == 256 && warnings == 1 && cancelled == 0 && model.speed() == 35 && latest(),
+              "operator echo bound refuses new edits without discarding history or cancelling existing work");
+        model.applyStatus({{"wpm", "35"}});
+        model.setSpeed(31);
+        check(writes == 257 && warnings == 1 && model.speed() == 31 && latest(),
+              "speed editing resumes after radio echoes free correlation capacity");
+    }
+}
+
 void receiverDestruction()
 {
     TxTestAuthority authority;
@@ -328,6 +440,7 @@ int main(int argc, char** argv)
     backendAdmissionAndReplies();
     boundedEchoTrackingAndInvalidText();
     modelIntentAndEchoFences();
+    operatorSpeedEchoOrdering();
     receiverDestruction();
     return failures == 0 ? 0 : 1;
 }

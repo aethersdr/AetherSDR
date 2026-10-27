@@ -1837,6 +1837,30 @@ void queuedCwxConfiguration()
         Fixture f;
         TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, tcp);
         f.radio.cwxModel().setSpeed(31);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(tcp == QStringList({"cwx wpm 31"}),
+              "first operator speed reaches the terminal before the replacement edit");
+        f.radio.cwxModel().setSpeed(35);
+        f.radio.cwxModel().applyStatus({{"wpm", "31"}});
+        check(f.radio.cwxModel().speed() == 35,
+              "older operator WPM echo cannot overwrite the newer pending selection");
+        f.radio.cwxModel().send("NEW");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(tcp == QStringList({"cwx wpm 31", "cwx wpm 35", "cwx send \"NEW\" 1"}),
+              "delayed first-speed status cannot drop the replacement WPM before text");
+        f.radio.cwxModel().applyStatus({{"wpm", "35"}});
+        f.radio.cwxModel().applyStatus({{"wpm", "33"}});
+        check(f.radio.cwxModel().speed() == 33,
+              "uncorrelated radio WPM remains authoritative after operator echoes settle");
+    }
+    {
+        QStringList tcp;
+        RadioConnection connection;
+        Fixture f;
+        TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, tcp);
+        f.radio.cwxModel().setSpeed(31);
         f.radio.cwxModel().setDelay(250);
         f.radio.cwxModel().setQsk(true);
         f.radio.cwxModel().saveMacro(0, "OLD");
