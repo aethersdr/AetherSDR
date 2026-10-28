@@ -55,6 +55,7 @@
 #include "WhatsNewDialog.h"
 #include "WindowShowState.h"
 #include "core/UpdateChecker.h"
+#include "core/UpdateController.h"
 #include "core/AppSettings.h"
 #include "core/SpotModeResolver.h"
 #include "core/ThemeManager.h"
@@ -2305,19 +2306,37 @@ constexpr int kAutomaticUpdateCheckDelayMs = 15000;
 void MainWindow::wireUpdateChecker()
 {
     m_updateChecker = new UpdateChecker(this);
+    m_updateController = new UpdateController(UpdateController::forThisApp(), this);
+    // A release staged by an earlier run, before any check (GitHub's latest
+    // is not known yet); each answer re-checks it against the new latest.
+    m_updateController->refreshStaged(QString());
+    connect(m_updateController, &UpdateController::stateChanged, this, [this] {
+        if (m_titleBar) {
+            const bool ready = m_updateController->state() == UpdateController::State::Staged
+                               || m_updateController->state() == UpdateController::State::Handed;
+            m_titleBar->setUpdateStaged(ready ? m_updateController->version() : QString());
+        }
+    });
     connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
             [this](const QString& ver) {
+        m_updateController->refreshStaged(ver);
         if (m_titleBar) {
+            // A release rolled back here is never announced again.
             m_titleBar->setUpdateAvailable(
-                UpdateChecker::badgeVersion(ver, QCoreApplication::applicationVersion()));
+                m_updateController->isRolledBack(ver)
+                    ? QString()
+                    : UpdateChecker::badgeVersion(ver, QCoreApplication::applicationVersion()));
         }
     });
     connect(m_updateChecker, &UpdateChecker::upToDate, this,
             [this] {
+        m_updateController->refreshStaged(m_updateChecker->latestRelease().version);
         if (m_titleBar) {
             m_titleBar->setUpdateAvailable({});
         }
     });
+    // After the window is up, so the status bar is there to say it.
+    QTimer::singleShot(0, this, &MainWindow::reportLastUpdate);
     // Results and failures are shown in the Updates window, not in prompts.
 
     QTimer::singleShot(kAutomaticUpdateCheckDelayMs, m_updateChecker, [checker = m_updateChecker] {
@@ -2327,10 +2346,14 @@ void MainWindow::wireUpdateChecker()
 
 void MainWindow::restoreKnownUpdate()
 {
+    if (m_titleBar && m_updateController
+        && m_updateController->state() == UpdateController::State::Staged) {
+        m_titleBar->setUpdateStaged(m_updateController->version());
+    }
     // The daily throttle may skip this launch's check, so the badge comes back
     // from the release the last answer recorded, under the same rules.
     const QString known = UpdateChecker::knownBadgeVersion();
-    if (known.isEmpty() || !m_titleBar) {
+    if (known.isEmpty() || !m_titleBar || (m_updateController && m_updateController->isRolledBack(known))) {
         return;
     }
     m_titleBar->setUpdateAvailable(known);
@@ -2348,6 +2371,8 @@ void MainWindow::showUpdatesWindow(bool checkNow)
             }
         });
         connect(w, &UpdatesWindow::automaticCheckToggled, this, &MainWindow::setAutomaticUpdateCheck);
+        connect(w, &UpdatesWindow::restartRequested, this, &MainWindow::restartToUpdate);
+        w->setController(m_updateController);
         m_updatesWindow = w;
     }
     if (checkNow) {
@@ -2357,6 +2382,41 @@ void MainWindow::showUpdatesWindow(bool checkNow)
     m_updatesWindow->show();
     m_updatesWindow->raise();
     m_updatesWindow->activateWindow();
+}
+
+void MainWindow::restartToUpdate()
+{
+    // The helper waits for this process to exit, then swaps the release in
+    // and starts it; the quit is the normal one, prompts and all.
+    QString problem;
+    const QString version = m_updateController->version();   // before a refusal clears it
+    if (!m_updateController->restartToUpdate(&problem)) {
+        if (m_updatesWindow) {
+            m_updatesWindow->showInstallProblem(problem, version);
+        }
+        return;
+    }
+    close();
+}
+
+void MainWindow::reportLastUpdate()
+{
+    // What AetherSDRUpdater did after the last run, read at start (main.cpp).
+    const UpdateController::LastUpdate r = UpdateController::lastUpdate();
+    QString text;
+    if (r.outcome == QLatin1String("Updated")) {
+        text = tr("Updated to AetherSDR %1.").arg(r.version);
+    } else if (r.outcome == QLatin1String("RolledBack")) {
+        text = tr("The update to %1 didn't start, so %2 was restored. It won't be offered again.")
+                   .arg(r.version, QCoreApplication::applicationVersion());
+    } else if (r.outcome == QLatin1String("SwapUndone") || r.outcome == QLatin1String("NotPossible")) {
+        text = tr("The update to %1 couldn't be put in place, so nothing changed.").arg(r.version);
+    } else if (r.outcome == QLatin1String("OldStillRunning")) {
+        text = tr("The update to %1 installs the next time you quit.").arg(r.version);
+    }
+    if (!text.isEmpty()) {
+        statusBar()->showMessage(text, 10000);
+    }
 }
 
 void MainWindow::setAutomaticUpdateCheck(bool on)

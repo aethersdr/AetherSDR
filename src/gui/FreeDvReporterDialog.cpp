@@ -2,13 +2,16 @@
 
 #include "FreeDvReporterDialog.h"
 #include "FreeDvReporterModel.h"
+#include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
+#include "CanonTableStyle.h"
+#include "FramelessResizer.h"
 #include "core/AppSettings.h"
 #include "core/ThemeManager.h"
 #include "models/SliceModel.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QFrame>
 #include <QGuiApplication>
 #include <QTableView>
 #include <QHeaderView>
@@ -113,14 +116,143 @@ constexpr Band kBands[FreeDvReporterDialog::BandCount] = {
 };
 } // namespace
 
+// The style guide's canon vocabulary (RFC #6226), as SpotHub and AetherRX use
+// it: transparent over CanonWindow's ground except the surfaces that carry
+// content. The station list sits nested with a cyan header row, the message
+// field sits on control, and a selected band reads like a selected stage tab
+// in AetherRX (aqua on nested). The message field's right-click menu is a
+// child of the field, so the transparent rule reaches it too; QMenu gets its
+// panel back.
+static constexpr const char* kReporterStyle = R"(
+QWidget {
+    color: {{color.canon.inkSoft}};
+    background: transparent;
+}
+QLabel {
+    background: transparent;
+}
+QMenu {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
+}
+QMenu::item {
+    padding: 4px 18px;
+}
+QMenu::item:selected {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+}
+QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
+}
+QPushButton {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: {{color.canon.nested}};
+    color: {{color.canon.aqua}};
+}
+QPushButton:focus {
+    border-color: {{color.canon.aqua}};
+}
+QPushButton:checked {
+    color: {{color.canon.aqua}};
+    background: {{color.canon.nested}};
+    border-color: {{color.canon.aqua}};
+}
+QPushButton:disabled {
+    /* Send stays legible while full-participant reporting is off: the muted
+       ink keeps it reading as greyed-out, not absent, which is how the row
+       explains its own gating (#4231). */
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+    background: transparent;
+}
+QPushButton[fdvBand="true"] {
+    min-width: 36px;
+    padding: 3px 6px;
+}
+QLineEdit {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 3px 6px;
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QLineEdit:focus {
+    border-color: {{color.canon.aqua}};
+}
+QLineEdit:disabled {
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+}
+QCheckBox,
+QRadioButton {
+    background: transparent;
+    color: {{color.canon.inkSoft}};
+    spacing: 8px;
+}
+)";
+
+// The station table's selection text color, header padding, and top-corner
+// radii, layered after the shared canon table rules.
+static constexpr const char* kReporterTableStyle = R"(
+QTableView::item:selected {
+    color: {{color.canon.ink}};
+}
+QHeaderView::section {
+    padding: 3px 6px;
+}
+QHeaderView::section:first {
+    border-top-left-radius: 5px;
+}
+QHeaderView::section:last {
+    border-top-right-radius: 5px;
+}
+)";
+
 // ── Constructor ────────────────────────────────────────────────────────────
 
 FreeDvReporterDialog::FreeDvReporterDialog(QWidget* parent)
-    : PersistentDialog("FreeDV Reporter", "FreeDvReporterGeometry", parent)
+    : CanonWindow(QStringLiteral("FreeDV Reporter"), parent, Kind::Workspace)
 {
-    setMinimumSize(780, 350);
-    theme::setContainer(this, QStringLiteral("reporter"));
+    setObjectName(QStringLiteral("freedvReporterWindow"));
+    theme::setContainer(this, QStringLiteral("canon/freedvReporter"));
+    // A workspace tool on the style guide's CanonWindow, like AetherRX and
+    // AetherTX: size and position persist under the key it used as a
+    // PersistentDialog, so saved geometry carries over, and it resizes from
+    // every edge. 40 px taller than before for the canon header.
+    setGeometryKey(QStringLiteral("FreeDvReporterGeometry"));
+    setMinimumSize(780, 390);
+    FramelessResizer::install(this);
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kReporterStyle) + canonTableRules()
+             + QString::fromLatin1(kReporterTableStyle)
+             + canonScrollBarRules() + canonIndicatorRules();
+    });
     buildBody();
+    // The sheet's min-width becomes each band button's explicit minimum, which
+    // a layout honours over the text-derived hint; a wider font needs more.
+    for (QPushButton* b : std::as_const(m_bandBtns)) {
+        b->ensurePolished();
+        b->setMinimumWidth(qMax(b->minimumWidth(), b->minimumSizeHint().width()));
+    }
+    // An explicit minimum overrides the layout's own, so the band row would
+    // clip below what it needs (wider in the canon's semibold buttons).
+    setMinimumWidth(qMax(minimumWidth(), minimumSizeHint().width()));
     restoreSettings();
     m_initializing = false;
 }
@@ -133,8 +265,9 @@ void FreeDvReporterDialog::buildBody()
     m_proxy = proxy;
 
     auto* root = new QVBoxLayout(bodyWidget());
-    root->setContentsMargins(6, 6, 6, 6);
-    root->setSpacing(4);
+    root->setContentsMargins(14, 12, 14, 14);
+    root->setSpacing(8);
+    root->addWidget(makeCanonHeader(QStringLiteral("FreeDV Reporter")));
 
     // ── Status message ─────────────────────────────────────────────────────
     // Shares the FreeDvMyMessage setting with SpotHub's FreeDV tab, so the
@@ -150,8 +283,6 @@ void FreeDvReporterDialog::buildBody()
     msgRow->setSpacing(6);
 
     m_msgLabel = new QLabel("Message");
-    ThemeManager::instance().applyStyleSheet(m_msgLabel,
-        "QLabel { color: {{color.text.primary}}; }");
     msgRow->addWidget(m_msgLabel);
     // Set after m_msgEdit exists — see below.
 
@@ -161,15 +292,6 @@ void FreeDvReporterDialog::buildBody()
     m_msgEdit->setAccessibleName("FreeDV Reporter status message");
     m_msgEdit->setText(AppSettings::instance()
                            .value("FreeDvMyMessage", "").toString());
-    ThemeManager::instance().applyStyleSheet(m_msgEdit,
-        "QLineEdit {"
-        "  background-color: {{color.background.0}};"
-        "  color: {{color.text.primary}};"
-        "  border: 1px solid {{color.background.2}};"
-        "  padding: 2px 4px;"
-        "}"
-        "QLineEdit:disabled { color: {{color.text.secondary}}; }"
-    );
     m_msgLabel->setBuddy(m_msgEdit);
     msgRow->addWidget(m_msgEdit, 1);
 
@@ -177,27 +299,6 @@ void FreeDvReporterDialog::buildBody()
     m_msgSendBtn->setObjectName(QStringLiteral("fdvReporterMessageSendButton"));
     m_msgSendBtn->setAutoDefault(false);
     m_msgSendBtn->setAccessibleName("Send FreeDV Reporter status message");
-    ThemeManager::instance().applyStyleSheet(m_msgSendBtn,
-        "QPushButton {"
-        "  background-color: {{color.background.2}};"
-        "  color: {{color.text.primary}};"
-        "  border: 1px solid {{color.background.2}};"
-        "  padding: 2px 10px;"
-        "}"
-        // background.1, not background.2 again — the existing Close button
-        // below has this same-as-base no-op already (pre-existing, out of
-        // scope here); this button shouldn't repeat it (#4231 review).
-        "QPushButton:hover { background-color: {{color.background.1}}; }"
-        // Widget×state tokens rather than generic chrome (docs/a11y.md):
-        // dimming the text alone left the disabled button reading as absent
-        // rather than greyed-out, which undercuts the row's own gating
-        // (#4231 review).
-        "QPushButton:disabled {"
-        "  background-color: {{color.button.background.disabled}};"
-        "  color: {{color.button.foreground.disabled}};"
-        "  border: 1px solid {{color.button.border.disabled}};"
-        "}"
-    );
     msgRow->addWidget(m_msgSendBtn);
 
     root->addWidget(m_msgRowWidget);
@@ -231,78 +332,33 @@ void FreeDvReporterDialog::buildBody()
         if (mhz > 0.0) emit tuneRequested(mhz);
     });
 
-    ThemeManager::instance().applyStyleSheet(m_table,
-        "QTableView {"
-        "  background-color: {{color.background.0}};"
-        "  color: {{color.text.primary}};"
-        "  gridline-color: {{color.background.2}};"
-        "  selection-background-color: {{color.background.2}};"
-        "  selection-color: {{color.text.primary}};"
-        "  border: 1px solid {{color.background.2}};"
-        "}"
-        "QHeaderView::section {"
-        "  background-color: {{color.background.2}};"
-        "  color: {{color.text.primary}};"
-        "  border: 1px solid {{color.background.0}};"
-        "  padding: 2px 4px;"
-        "}"
-    );
     root->addWidget(m_table, 1);
-
-    // ── Separator ──────────────────────────────────────────────────────────
-    auto* sep = new QFrame;
-    sep->setFrameShape(QFrame::HLine);
-    ThemeManager::instance().applyStyleSheet(sep,
-        "color: {{color.border.subtle}};");
-    root->addWidget(sep);
 
     // ── Bottom controls ────────────────────────────────────────────────────
     auto* bottom = new QHBoxLayout;
     bottom->setSpacing(6);
 
     m_trackCheck = new QCheckBox("Track");
-    ThemeManager::instance().applyStyleSheet(m_trackCheck,
-        "QCheckBox { color: {{color.text.primary}}; spacing: 8px; }"
-        + ThemeManager::checkBoxIndicatorStyle());
     bottom->addWidget(m_trackCheck);
 
     m_bandRadio = new QRadioButton("Band");
     m_bandRadio->setChecked(true);
     m_bandRadio->setToolTip("Ctrl+click band buttons to select multiple bands");
-    ThemeManager::instance().applyStyleSheet(m_bandRadio,
-        "QRadioButton { color: {{color.text.primary}}; }");
     bottom->addWidget(m_bandRadio);
 
     m_freqRadio = new QRadioButton("Freq");
-    ThemeManager::instance().applyStyleSheet(m_freqRadio,
-        "QRadioButton { color: {{color.text.primary}}; }");
     bottom->addWidget(m_freqRadio);
 
     m_bandGroup = new QButtonGroup(this);
     m_bandGroup->setExclusive(false);
 
-    // Band buttons share a single registered template string; ThemeManager
-    // re-resolves on theme change for each registered widget.
-    const QString bandBtnStyle =
-        "QPushButton {"
-        "  background-color: {{color.background.2}};"
-        "  color: {{color.text.primary}};"
-        "  border: 1px solid {{color.background.2}};"
-        "  padding: 2px 6px;"
-        "  min-width: 36px;"
-        "}"
-        "QPushButton:checked {"
-        "  background-color: {{color.accent}};"
-        "  color: {{color.background.0}};"
-        "}"
-        "QPushButton:hover {"
-        "  background-color: {{color.background.2}};"
-        "}";
-
     for (int i = 0; i < BandCount; ++i) {
         auto* btn = new QPushButton(kBands[i].label);
         btn->setCheckable(true);
-        ThemeManager::instance().applyStyleSheet(btn, bandBtnStyle);
+        btn->setProperty("fdvBand", true);
+        // Tab focus only: a band clicked off would otherwise keep the focus
+        // border, which matches the checked border.
+        btn->setFocusPolicy(Qt::TabFocus);
         m_bandGroup->addButton(btn, i);
         m_bandBtns.append(btn);
         bottom->addWidget(btn);
@@ -336,19 +392,6 @@ void FreeDvReporterDialog::buildBody()
     m_bandBtns.last()->setChecked(true);
 
     bottom->addStretch();
-
-    auto* closeBtn = new QPushButton("Close");
-    ThemeManager::instance().applyStyleSheet(closeBtn,
-        "QPushButton {"
-        "  background-color: {{color.background.2}};"
-        "  color: {{color.text.primary}};"
-        "  border: 1px solid {{color.background.2}};"
-        "  padding: 2px 10px;"
-        "}"
-        "QPushButton:hover { background-color: {{color.background.2}}; }"
-    );
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::hide);
-    bottom->addWidget(closeBtn);
 
     root->addLayout(bottom);
 
