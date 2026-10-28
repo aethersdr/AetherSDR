@@ -2938,14 +2938,14 @@ public:
         sent.clear();
         SliceDelta agc;
         agc.agcMode = QStringLiteral("fast");
-        agc.agcThreshold = 65;
+        agc.agcThreshold = 72;  // 65 is the default: no change, no signal
         s0->applyChanges(agc);
         if (!sent.contains(QStringLiteral("agc_mode:0,fast;"))
-            || !sent.contains(QStringLiteral("agc_gain:0,65;"))) {
+            || !sent.contains(QStringLiteral("agc_gain:0,72;"))) {
             std::printf("      GUI AGC change was not broadcast\n");
             return false;
         }
-        if (!protocol.generateInitBurst().contains(QStringLiteral("agc_gain:0,65;"))) {
+        if (!protocol.generateInitBurst().contains(QStringLiteral("agc_gain:0,72;"))) {
             std::printf("      init burst misses agc_gain\n");
             return false;
         }
