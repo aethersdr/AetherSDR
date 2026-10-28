@@ -909,6 +909,7 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexSetupControls.cpp
     src/core/backends/flex/FlexUtilityControls.cpp
     src/core/backends/flex/FlexStoredControls.cpp
+    src/core/backends/flex/FlexTransferControls.cpp
     src/core/backends/flex/FlexSliceLifecycleControls.cpp
     src/core/backends/flex/FlexPanControls.cpp
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
@@ -1255,6 +1256,7 @@ set(MODEL_SOURCES
     src/models/RadioModel_Setup.cpp
     src/models/RadioModel_Utilities.cpp
     src/models/RadioModel_StoredControls.cpp
+    src/models/RadioModel_TransferControls.cpp
     src/models/RadioModel_SliceLifecycle.cpp
     src/models/RadioModel_PanControls.cpp
     src/models/RadioModel_TxCoordinator.cpp

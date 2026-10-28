@@ -29,6 +29,10 @@ public:
     static void replaceConnectionGeneration(RadioModel& radio) { ++radio.m_sessionGeneration; }
     static auto productionSetupSink(RadioModel& radio, const RadioModel::SetupCommandWriter& writer)
     { return radio.setupCommandSink(writer); }
+    static auto productionTransferSink(RadioModel& radio, const RadioModel::TransferCommandWriter& writer)
+    { return radio.transferCommandSink(writer); }
+    static void transmitting(RadioModel& radio, bool active) { radio.m_radioTransmitting = active; }
+    static void peer(RadioModel& radio, const QHostAddress& address) { radio.m_lastInfo.address = address; }
     static void closing(RadioModel& radio, bool value) { radio.m_txSessionClosing = value; }
     static void expiring(RadioModel& radio, bool value) { radio.m_expiringPendingCallbacks = value; }
     static void retireBackend(RadioModel& radio) { radio.teardownBackend(); }

@@ -93,6 +93,16 @@ The **PROF** applet ("Profile Switcher", in the Station group of the applet butt
 2. Choose a **Destination** (default name `ASDR_Config_<timestamp>_v<version>.ssdr_cfg`).
 3. Click **Export**. The radio builds the package and AetherSDR saves it.
 
+AetherSDR accepts the download only from the connected radio and validates the
+complete ZIP package before replacing the destination. An invalid, truncated or
+oversized download leaves an existing backup intact. Packages are limited to
+250 MB. A transfer stays with the radio connection that started it; reconnecting
+requires starting the operation again.
+
+Firmware, waveform, profile and Radio DVK transfers share the radio's file
+server. If another transfer is running or the server is still settling, wait
+for it to finish before retrying.
+
 ### Import
 
 1. On the **Import** tab, choose the **Configuration Package** and click **Import**.

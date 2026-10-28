@@ -18,28 +18,6 @@ namespace AetherSDR {
 
 namespace {
 
-bool isSafeUploadFileName(const QString& fileName)
-{
-    if (fileName.isEmpty() || fileName.size() > 255) {
-        return false;
-    }
-
-    for (const QChar ch : fileName) {
-        const ushort c = ch.unicode();
-        const bool allowed =
-            (c >= 'A' && c <= 'Z')
-            || (c >= 'a' && c <= 'z')
-            || (c >= '0' && c <= '9')
-            || c == '.'
-            || c == '_'
-            || c == '-';
-        if (!allowed) {
-            return false;
-        }
-    }
-    return true;
-}
-
 QString installerText(const char* source)
 {
     return QCoreApplication::translate("WaveformInstaller", source);
@@ -50,21 +28,37 @@ QString installerText(const char* source)
 WaveformInstaller::WaveformInstaller(RadioModel* model, QObject* parent)
     : QObject(parent), m_model(model)
 {
+    m_idleTimeout.setSingleShot(true);
+    connect(&m_idleTimeout, &QTimer::timeout, this, [this] {
+        finishOperation(m_activeGeneration, false, tr("Waveform upload timed out while waiting for data."));
+    });
+    if (model) {
+        connect(model, &RadioModel::connectionStateChanged, this, [this] {
+            if (isInstalling() && !m_model->controlSessionCurrent(m_session)) {
+                finishOperation(m_activeGeneration, false, tr("Original radio session ended during installation."));
+            }
+        });
+    }
 }
 
-void WaveformInstaller::install(const QString& filePath)
+void WaveformInstaller::cancel()
 {
-    installDockerWaveform(filePath);
+    finishOperation(m_activeGeneration, false, tr("Waveform installation cancelled."));
 }
 
-void WaveformInstaller::installLegacyWaveform(const QString& filePath)
+void WaveformInstaller::install(const QString& filePath, std::optional<RadioControlSession> session)
 {
-    beginInstall(filePath, PackageKind::Legacy);
+    installDockerWaveform(filePath, session);
 }
 
-void WaveformInstaller::installDockerWaveform(const QString& filePath)
+void WaveformInstaller::installLegacyWaveform(const QString& filePath, std::optional<RadioControlSession> session)
 {
-    beginInstall(filePath, PackageKind::Docker);
+    beginInstall(filePath, PackageKind::Legacy, session);
+}
+
+void WaveformInstaller::installDockerWaveform(const QString& filePath, std::optional<RadioControlSession> session)
+{
+    beginInstall(filePath, PackageKind::Docker, session);
 }
 
 WaveformInstaller::PackagePreparationResult WaveformInstaller::preparePackage(
@@ -109,7 +103,7 @@ WaveformInstaller::PackagePreparationResult WaveformInstaller::preparePackage(
         }
     }
 
-    QByteArray data = file.readAll();
+    QByteArray data = file.read(kMaxFileBytes + 1);
     if (data.size() != expectedSize) {
         result.error = installerText("Could not read the complete waveform package");
         return result;
@@ -128,20 +122,22 @@ WaveformInstaller::PackagePreparationResult WaveformInstaller::preparePackage(
     return result;
 }
 
-void WaveformInstaller::beginInstall(const QString& filePath, PackageKind kind)
+void WaveformInstaller::beginInstall(const QString& filePath, PackageKind kind, std::optional<RadioControlSession> session)
 {
+    const QPointer<WaveformInstaller> alive(this);
     if (isInstalling()) {
         emit finished(false, tr("Install already in progress"));
         return;
     }
-    if (!m_model) {
-        emit finished(false, tr("No radio is available for waveform installation"));
+    if (!m_model || !m_model->controlSessionCurrent(session.value_or(m_model->controlSession()))) {
+        emit finished(false, tr("No original radio session is available for waveform installation"));
         return;
     }
 
+    m_session = session.value_or(m_model->controlSession());
     const QFileInfo fileInfo(filePath);
     const QString fileName = fileInfo.fileName();
-    if (!isSafeUploadFileName(fileName)) {
+    if (!transferTokenValid(fileName, 255)) {
         emit finished(false, tr("Waveform package filename contains characters "
                                 "that cannot be sent safely to the radio. "
                                 "Use letters, numbers, dots, dashes, and underscores."));
@@ -168,10 +164,17 @@ void WaveformInstaller::beginInstall(const QString& filePath, PackageKind kind)
     m_fileName = fileName;
     m_packageKind = kind;
     m_uploadPort = 0;
+    m_uploadConnected = false;
     m_activeGeneration = m_uploadState.begin(fileSize);
     const Generation generation = m_activeGeneration;
 
+    QTimer::singleShot(30 * 60 * 1000, this, [this, generation] {
+        finishOperation(generation, false, tr("Waveform installation exceeded its operation limit."));
+    });
+    const QPointer<WaveformInstaller> self(this);
     emit progressChanged(0, tr("Reading and validating waveform package..."));
+    if (!alive || !m_uploadState.isCurrent(generation)) { return; }
+    if (!self || !m_uploadState.isCurrent(generation)) { return; }
 
     auto* watcher = new QFutureWatcher<PackagePreparationResult>(this);
     connect(watcher, &QFutureWatcher<PackagePreparationResult>::finished,
@@ -196,95 +199,42 @@ void WaveformInstaller::beginInstall(const QString& filePath, PackageKind kind)
 
 void WaveformInstaller::requestUploadPort(Generation generation)
 {
-    if (!m_uploadState.isCurrent(generation)) {
+    const QPointer<WaveformInstaller> alive(this);
+    if (!m_uploadState.isCurrent(generation)) { return; }
+    const FileTransferPurpose purpose = m_packageKind == PackageKind::Legacy
+        ? FileTransferPurpose::LegacyWaveform : FileTransferPurpose::DockerWaveform;
+    if (m_model) { m_transfer = m_model->beginFileTransfer(purpose, this, m_session, 30 * 60 * 1000); }
+    if (!m_transfer) {
+        finishOperation(generation, false, tr("Transfer unavailable, busy, or original radio session ended."));
         return;
     }
-    if (!m_model) {
-        finishOperation(generation,
-                        false,
-                        tr("Radio disconnected during installation"));
-        return;
-    }
-
-    emit progressChanged(0, tr("Requesting upload port..."));
     const QPointer<WaveformInstaller> self(this);
-    if (m_packageKind == PackageKind::Legacy) {
-        m_model->sendCmdPublic(
-            QStringLiteral("file filename ") + m_fileName,
-            [self, generation](int code, const QString&) {
-                if (!self || !self->m_uploadState.isCurrent(generation)) {
-                    return;
-                }
-                if (code != 0) {
-                    self->finishOperation(
-                        generation,
-                        false,
-                        self->tr("Radio rejected the waveform filename (error 0x%1)")
-                            .arg(code, 0, 16));
-                    return;
-                }
-                if (!self->m_model) {
-                    self->finishOperation(generation,
-                                          false,
-                                          self->tr("Radio disconnected during installation"));
-                    return;
-                }
-                self->m_model->sendCmdPublic(
-                    QStringLiteral("file upload %1 new_waveform")
-                        .arg(self->m_fileData.size()),
-                    [self, generation](int uploadCode, const QString& body) {
-                        if (self) {
-                            self->onUploadPortReceived(generation, uploadCode, body);
-                        }
-                    });
-            });
-        return;
-    }
-
-    m_model->sendCmdPublic(
-        QStringLiteral("file upload %1 waveform_docker_image %2")
-            .arg(m_fileData.size())
-            .arg(m_fileName),
-        [self, generation](int code, const QString& body) {
-            if (self) {
-                self->onUploadPortReceived(generation, code, body);
-            }
+    emit progressChanged(0, tr("Requesting upload port..."));
+    if (!alive || !m_uploadState.isCurrent(generation)) { return; }
+    if (!self || !m_uploadState.isCurrent(generation)) { return; }
+    m_model->requestFileTransfer(m_transfer, {purpose, m_fileData.size(), m_fileName, 0},
+        [self, generation](const FileTransferReply& reply) {
+            if (self) { self->onUploadPortReceived(generation, reply); }
         });
 }
 
-void WaveformInstaller::cancel()
+void WaveformInstaller::onUploadPortReceived(Generation generation, const FileTransferReply& reply)
 {
-    if (!isInstalling()) {
-        return;
-    }
-
-    destroySocket();
-    m_uploadState.invalidate();
-    m_fileData.clear();
-    m_uploadPort = 0;
-    emit finished(false, tr("Install cancelled"));
-}
-
-void WaveformInstaller::onUploadPortReceived(Generation generation,
-                                             int code,
-                                             const QString& body)
-{
+    const QPointer<WaveformInstaller> alive(this);
     if (!m_uploadState.isCurrent(generation)) {
         return;
     }
-    if (code != 0) {
+    if (reply.result.kind != RadioControlReply::Kind::Accepted) {
         finishOperation(generation,
                         false,
-                        tr("Radio rejected upload (error 0x%1)").arg(code, 0, 16));
+                        reply.result.code == -1 ? reply.result.message :
+                        tr("Radio rejected upload (error 0x%1)").arg(reply.result.code, 0, 16));
         return;
     }
 
-    bool ok = false;
-    const uint parsedPort = body.trimmed().toUInt(&ok);
-    m_uploadPort = ok && parsedPort > 0U && parsedPort <= 65535U
-        ? static_cast<quint16>(parsedPort)
-        : kFallbackPort;
+    m_uploadPort = reply.port;
     emit progressChanged(0, tr("Connecting to port %1...").arg(m_uploadPort));
+    if (!alive || !m_uploadState.isCurrent(generation)) { return; }
 
     QTimer::singleShot(kConnectDelayMs, this, [this, generation] {
         if (m_uploadState.isCurrent(generation)) {
@@ -298,7 +248,7 @@ void WaveformInstaller::connectUploadSocket(Generation generation, quint16 port)
     if (!m_uploadState.isCurrent(generation)) {
         return;
     }
-    if (!m_model) {
+    if (!m_model || !m_model->fileTransferCurrent(m_transfer)) {
         finishOperation(generation,
                         false,
                         tr("Radio disconnected during installation"));
@@ -324,7 +274,7 @@ void WaveformInstaller::connectUploadSocket(Generation generation, quint16 port)
             });
 
     qCDebug(lcWaveform) << "WaveformInstaller: connecting to upload port" << port;
-    socket->connectToHost(m_model->radioAddress(), port);
+    socket->connectToHost(m_transfer->peer(), port);
 
     const QPointer<QTcpSocket> guardedSocket(socket);
     QTimer::singleShot(kConnectTimeoutMs, this,
@@ -332,7 +282,7 @@ void WaveformInstaller::connectUploadSocket(Generation generation, quint16 port)
         if (!m_uploadState.isCurrent(generation)
             || !guardedSocket
             || guardedSocket != m_socket
-            || guardedSocket->state() == QAbstractSocket::ConnectedState) {
+            || m_uploadConnected || guardedSocket->state() == QAbstractSocket::ConnectedState) {
             return;
         }
         if (port != kFallbackPort) {
@@ -345,6 +295,7 @@ void WaveformInstaller::connectUploadSocket(Generation generation, quint16 port)
 
 void WaveformInstaller::tryFallbackPort(Generation generation)
 {
+    const QPointer<WaveformInstaller> alive(this);
     if (!m_uploadState.isCurrent(generation)) {
         return;
     }
@@ -354,20 +305,25 @@ void WaveformInstaller::tryFallbackPort(Generation generation)
     }
 
     emit progressChanged(0, tr("Trying fallback port %1...").arg(kFallbackPort));
+    if (!alive || !m_uploadState.isCurrent(generation)) { return; }
     connectUploadSocket(generation, kFallbackPort);
 }
 
 void WaveformInstaller::onConnected(Generation generation, QTcpSocket* socket)
 {
+    const QPointer<WaveformInstaller> alive(this);
     if (!m_uploadState.isCurrent(generation) || socket != m_socket) {
         return;
     }
 
+    m_uploadConnected = true;
+    m_idleTimeout.start(30000);
     qCDebug(lcWaveform) << "WaveformInstaller: connected, sending"
                         << m_fileData.size() << "bytes";
     emit progressChanged(0, m_packageKind == PackageKind::Legacy
                              ? tr("Uploading legacy waveform...")
                              : tr("Uploading Docker waveform image..."));
+    if (!alive || !m_uploadState.isCurrent(generation)) { return; }
     queueNextChunk(generation, socket);
 }
 
@@ -377,12 +333,18 @@ void WaveformInstaller::queueNextChunk(Generation generation, QTcpSocket* socket
         return;
     }
 
+    if (!m_model || !m_model->fileTransferCurrent(m_transfer)) {
+        finishOperation(generation, false, tr("Original transfer ended."));
+        return;
+    }
     const qint64 requested = m_uploadState.nextChunkSize(generation, kChunkSize);
     if (requested <= 0) {
         return;
     }
     const qint64 offset = m_uploadState.queuedBytes();
+    const QPointer<WaveformInstaller> alive(this);
     const qint64 accepted = socket->write(m_fileData.constData() + offset, requested);
+    if (!alive || !m_uploadState.isCurrent(generation) || socket != m_socket) { return; }
     if (!m_uploadState.recordQueued(generation, requested, accepted)) {
         const QString detail = accepted < 0
             ? socket->errorString()
@@ -397,6 +359,7 @@ void WaveformInstaller::onBytesWritten(Generation generation,
                                        QTcpSocket* socket,
                                        qint64 bytes)
 {
+    const QPointer<WaveformInstaller> alive(this);
     if (!m_uploadState.isCurrent(generation) || socket != m_socket) {
         return;
     }
@@ -407,6 +370,7 @@ void WaveformInstaller::onBytesWritten(Generation generation,
         return;
     }
 
+    m_idleTimeout.start(30000);
     const qint64 acknowledged = m_uploadState.acknowledgedBytes();
     const qint64 total = m_uploadState.totalBytes();
     const int percent = static_cast<int>((acknowledged * 100LL) / total);
@@ -414,18 +378,18 @@ void WaveformInstaller::onBytesWritten(Generation generation,
                          tr("Uploading... %1 / %2 KB")
                              .arg(acknowledged / 1024)
                              .arg(total / 1024));
+    if (!alive || !m_uploadState.isCurrent(generation)) { return; }
 
     if (m_uploadState.complete(generation)) {
         qCDebug(lcWaveform) << "WaveformInstaller: upload complete";
         emit progressChanged(100, tr("Upload complete - installing on radio..."));
+        if (!alive || !m_uploadState.isCurrent(generation)) { return; }
         finishOperation(
             generation,
             true,
             m_packageKind == PackageKind::Legacy
-                ? tr("Legacy waveform uploaded successfully. "
-                     "The radio will install it momentarily.")
-                : tr("Docker waveform image uploaded successfully. "
-                     "The radio will install it momentarily."));
+                ? tr("Legacy waveform bytes sent. Check the installed-waveform list for confirmation.")
+                : tr("Docker waveform image bytes sent. Check the installed-waveform list for confirmation."));
         return;
     }
 
@@ -452,7 +416,7 @@ void WaveformInstaller::onError(Generation generation, QTcpSocket* socket)
         return;
     }
 
-    if (m_uploadState.queuedBytes() == 0 && m_uploadPort != kFallbackPort) {
+    if (!m_uploadConnected && m_uploadState.queuedBytes() == 0 && m_uploadPort != kFallbackPort) {
         tryFallbackPort(generation);
         return;
     }
@@ -469,10 +433,16 @@ void WaveformInstaller::finishOperation(Generation generation,
         return;
     }
 
-    destroySocket(!success);
+    m_finishing = true;
+    m_idleTimeout.stop();
     m_uploadState.invalidate();
+    if (m_model) { m_model->finishFileTransfer(m_transfer, m_uploadConnected ? 3000 : 0); }
+    else if (m_transfer) { m_transfer->cancel(); }
+    m_transfer.reset();
+    destroySocket(!success);
     m_fileData.clear();
     m_uploadPort = 0;
+    m_finishing = false;
     emit finished(success, message);
 }
 

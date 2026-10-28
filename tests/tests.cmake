@@ -3838,7 +3838,7 @@ add_executable(profile_transfer_test
     tests/profile_transfer_test.cpp
 )
 target_include_directories(profile_transfer_test PRIVATE src)
-target_link_libraries(profile_transfer_test PRIVATE Qt6::Core)
+target_link_libraries(profile_transfer_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME profile_transfer_test COMMAND profile_transfer_test)
 
 # #5612 — aborting an in-progress upload during cleanup or socket replacement
@@ -5032,7 +5032,7 @@ add_executable(flex_waveform_model_test
     src/models/FlexWaveformModel.cpp
 )
 target_include_directories(flex_waveform_model_test PRIVATE src)
-target_link_libraries(flex_waveform_model_test PRIVATE Qt6::Core Qt6::Test)
+target_link_libraries(flex_waveform_model_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME flex_waveform_model_test COMMAND flex_waveform_model_test)
 
 # Docker-waveform install gate policy (#4210) — header-only, pure logic.
@@ -10765,3 +10765,19 @@ if(HAVE_PIPEWIRE)
     target_link_libraries(pipewire_rx_bridge_test PRIVATE aethercore Qt6::Core)
     add_test(NAME pipewire_rx_bridge_test COMMAND pipewire_rx_bridge_test)
 endif()
+
+# M4 waveform/file-transfer admission, wire encoding and staged export validation.
+add_executable(file_transfer_control_test tests/file_transfer_control_test.cpp)
+target_include_directories(file_transfer_control_test PRIVATE src tests)
+target_link_libraries(file_transfer_control_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME file_transfer_control_test COMMAND file_transfer_control_test)
+add_executable(profile_export_validation_test tests/profile_export_validation_test.cpp)
+target_include_directories(profile_export_validation_test PRIVATE src)
+target_link_libraries(profile_export_validation_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME profile_export_validation_test COMMAND profile_export_validation_test)
+
+# Inert transport and synchronous callback injection; no sockets are opened.
+add_executable(transfer_lifecycle_test tests/transfer_lifecycle_test.cpp)
+target_include_directories(transfer_lifecycle_test PRIVATE src)
+target_link_libraries(transfer_lifecycle_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME transfer_lifecycle_test COMMAND transfer_lifecycle_test)

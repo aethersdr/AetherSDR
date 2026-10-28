@@ -15,6 +15,7 @@ class QVBoxLayout;
 
 namespace AetherSDR {
 
+struct RadioControlSession;
 class RadioModel;
 class WaveformInstaller;
 
@@ -52,7 +53,8 @@ private:
                              bool docker,
                              const QString& initialPath = {});
     // Everything after the file is chosen: WFP gate, installer, progress.
-    void installWaveformPath(bool docker, const QString& path, RadioModel* model);
+    void installWaveformPath(bool docker, const QString& path, RadioModel* model,
+                             const RadioControlSession& session);
     // Row feedback for Restart / Remove: a restart changes nothing visible,
     // so the row says what was asked and what the radio answered.
     void setRowNotice(const QString& name, const QString& text, const QString& tone, bool pending);

@@ -301,7 +301,7 @@
  },
  "core/DvkWavTransfer.h": {
   "tag": "vendor(flex)",
-  "note": "DVK WAV upload/download via SmartSDR 'dvk' verbs + ad-hoc TCP port streaming; FlexLib 5MB limit baked in",
+  "note": "DVK WAV conversion and bounded byte transport; typed file-transfer requests delegate slot selection and Flex wire negotiation to the backend.",
   "split": "",
   "confidence": "high"
  },
@@ -331,7 +331,7 @@
  },
  "core/FirmwareUploader.h": {
   "tag": "vendor(flex)",
-  "note": "SmartSDR firmware upload: 'file upload' cmd, .ssdr files, Flex TCP ports 4995/42607 \u2014 pure Flex protocol",
+  "note": "Firmware bytes and radio-confirmed outcome handling; typed negotiation delegates Flex commands and port parsing to the backend.",
   "split": "",
   "confidence": "high"
  },
@@ -601,7 +601,7 @@
  },
  "core/ProfileTransfer.h": {
   "tag": "vendor(flex)",
-  "note": "SmartSDR .ssdr_cfg database import/export over Flex TCP transfer protocol (meta_subset, ports 4995/42607)",
+  "note": "SmartSDR profile package preparation and staged ZIP validation; typed file-transfer requests delegate Flex wire negotiation to the backend.",
   "split": "",
   "confidence": "high"
  },
@@ -847,7 +847,7 @@
  },
  "core/WaveformInstaller.h": {
   "tag": "vendor(flex)",
-  "note": "Uploads Docker waveform images via SmartSDR fw 4.2.18 'file upload' TCP protocol \u2014 Flex-only ecosystem.",
+  "note": "Waveform package preparation and byte transport; typed file-transfer requests delegate Flex wire negotiation to the backend.",
   "split": "",
   "confidence": "high"
  },
@@ -1003,7 +1003,7 @@
  },
  "models/FlexWaveformModel.h": {
   "tag": "vendor(flex)",
-  "note": "FlexLib waveform/WFP container management: parses SmartSDR waveform status, emits Flex protocol commands",
+  "note": "Flex waveform/WFP status mirror with typed management intents; the backend encodes commands.",
   "split": "",
   "confidence": "high"
  },

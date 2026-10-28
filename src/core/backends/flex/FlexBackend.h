@@ -58,6 +58,13 @@ public:
     bool answersTransmitControl() const override { return bool(m_answeredSink); }
     // Configuration writes share LAN/WAN sequencing and report actual dispatch.
     void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
+    using TransferCommandSink = std::function<bool(const QString&, const FileTransferGuard&,
+                                                    const RadioControlCompletion&)>;
+    void setTransferCommandSink(TransferCommandSink sink) { m_transferSink = std::move(sink); }
+    ReceiveDispatch requestWaveform(const WaveformRequest&, const RadioControlCompletion&,
+        const FileTransferGuard&, const RadioControlFence&) override;
+    ReceiveDispatch requestFileTransfer(const FileTransferRequest&, const FileTransferCompletion&,
+        const FileTransferGuard&, const RadioControlFence&) override;
     void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId) override;
     void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
     // Primary keying verbs use an operation-fenced writer, never the generic
@@ -271,6 +278,7 @@ private:
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
     std::function<bool(const QString&, CommandReply)> m_sink;
+    TransferCommandSink m_transferSink;
     AnsweredCommandSink m_answeredSink;
     std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;
     quint64 m_nicknameSession{0};

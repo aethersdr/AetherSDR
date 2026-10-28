@@ -82,6 +82,7 @@ public:
     // import/export is unavailable.
     void importWav(int id, const QString& path) override;
     void exportWav(int id, const QString& path) override;
+    quint64 transferRevision() const override { return m_transferRevision; }
     bool canTransferWav() const override { return static_cast<bool>(m_transferBusyProbe); }
     bool isTransferring() const override { return m_transferBusyProbe && m_transferBusyProbe(); }
     void setWavTransferBusyProbe(std::function<bool()> probe) { m_transferBusyProbe = std::move(probe); }
@@ -125,6 +126,7 @@ private:
     Status m_pending{Unknown};
     int m_pendingId{-1};
     bool m_transferActive{false};
+    quint64 m_transferRevision{0};
 
     void setPending(Status pending);
     QVector<VoiceKeyerRecording> m_recordings;

@@ -90,14 +90,5 @@ int main()
                                                      QStringLiteral("4.1.5.0")) == 0,
                  "firmware comparison normalizes equivalent versions");
 
-    ok &= expect(AetherSDR::parseTransferPort(QStringLiteral("4995")).value_or(0) == 4995,
-                 "port parser accepts bare command reply body");
-    ok &= expect(AetherSDR::parseTransferPort(QStringLiteral("port=42607")).value_or(0) == 42607,
-                 "port parser accepts key-value command reply body");
-    ok &= expect(AetherSDR::parseTransferPort(QStringLiteral("endpoint=192.168.1.10:4995")).value_or(0) == 4995,
-                 "port parser prefers endpoint port over IP address octets");
-    ok &= expect(!AetherSDR::parseTransferPort(QStringLiteral("no usable port")).has_value(),
-                 "port parser rejects replies without a valid TCP port");
-
     return ok ? 0 : 1;
 }

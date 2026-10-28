@@ -282,6 +282,7 @@ void DvkModel::applyStatus(const QString& object, const QMap<QString, QString>& 
 
 void DvkModel::reset()
 {
+    ++m_transferRevision;
     const bool wasRefused = m_licenseRefused;
     m_status = Unknown;
     m_activeId = -1;

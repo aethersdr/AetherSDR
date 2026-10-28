@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include <QFrame>
 #include <QList>
 #include <QPair>
@@ -18,6 +20,7 @@ namespace AetherSDR {
 
 class FirmwareStager;
 class FirmwareUploader;
+struct RadioControlSession;
 class RadioModel;
 
 // The Updates window's radio section: the connected radio's firmware against
@@ -73,6 +76,7 @@ private:
     void setBusy(bool busy);
 
     QPointer<RadioModel> m_model;
+    std::shared_ptr<const RadioControlSession> m_preparationSession;
     FirmwareStager* m_stager{nullptr};
     FirmwareUploader* m_uploader{nullptr};
     bool m_staging{false};

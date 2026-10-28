@@ -1,6 +1,8 @@
 #pragma once
 #include "RadioSetupControl.h"
 #include "SpotRequest.h"
+#include "FileTransferRequest.h"
+#include "WaveformRequest.h"
 #include "PanControlRequest.h"
 #include "SlicePresetRequest.h"
 #include "PanDisplayRequest.h"
@@ -661,6 +663,8 @@ struct RadioCapabilities {
     // lock may be global and may also follow front-panel changes.
     bool hasRadioDialLock = false;
     bool hasRemoteOnControl = false; // client can configure wake-on-network
+    std::optional<FileTransferControl> fileTransferControl;
+    std::optional<WaveformControl> waveformControl;
     bool canUpgradeFirmware = false; // client can upload radio firmware
     bool hasSmartLink = false;       // client has the SmartLink/WAN service and pin store
     bool hasLicenseInfo = false;     // radio exposes SmartSDR entitlement details

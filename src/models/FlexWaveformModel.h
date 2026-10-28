@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/backends/WaveformRequest.h"
+
 #include <QObject>
 #include <QList>
 #include <QMap>
@@ -61,14 +63,14 @@ public:
 
     // The radio's reply to a command emitted above, routed back by RadioModel
     // so the UI can say what happened (a restart changes nothing visible).
-    void handleCommandReply(const QString& cmd, int code, const QString& body);
+    void handleCommandReply(const WaveformRequest& request, const RadioControlReply& reply);
 
 signals:
     void waveformsChanged();
     void wfpStatusChanged();
     void statusReportsChanged();
     void genericStatusReceived(const QMap<QString, QString>& report);
-    void commandReady(const QString& cmd);
+    void controlRequested(const AetherSDR::WaveformRequest& request);
     // action: "restart", "remove_container" or "uninstall".
     void commandFinished(const QString& action, const QString& name, bool ok,
                          const QString& message);

@@ -69,7 +69,8 @@ public:
                        FirmwareUploader::Generation generation,
                        int code)
     {
-        uploader.onUploadPortReceived(generation, code, {});
+        uploader.onUploadPortReceived(generation,
+            {{RadioControlReply::Kind::Failed, code, {}}, 0});
     }
 
     static void expire(FirmwareUploader& uploader,
