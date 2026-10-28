@@ -2765,6 +2765,32 @@ public:
         }
         return true;
     }
+    // DSB is a mode on every backend that has one (Flex, ANAN, HL2), but TCI
+    // knew no name for it: a radio-side DSB went out as usb, and a client's
+    // modulation:0,dsb was refused. It is advertised, and it round-trips.
+    static bool dsbRoundTripsAndIsAdvertised()
+    {
+        bool ok = false;
+        if (TciProtocol::smartsdrToTci(QStringLiteral("DSB")) != QStringLiteral("dsb")
+            || TciProtocol::tciToSmartSDR(QStringLiteral("dsb"), &ok) != QStringLiteral("DSB")
+            || !ok) {
+            std::printf("      DSB does not map to dsb and back
+");
+            return false;
+        }
+        RadioModel model;
+        TciProtocol protocol(&model);
+        const QString burst = protocol.generateInitBurst();
+        const int at = burst.indexOf(QStringLiteral("modulations_list:"));
+        const QString list = burst.mid(at, burst.indexOf(QLatin1Char(';'), at) - at);
+        if (!list.split(QLatin1Char(':')).value(1).split(QLatin1Char(','))
+                 .contains(QStringLiteral("dsb"))) {
+            std::printf("      modulations_list lacks dsb: %s
+", qPrintable(list));
+            return false;
+        }
+        return true;
+    }
 };
 
 } // namespace AetherSDR
@@ -2857,6 +2883,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::chronoStallCountsCatchUpAndLatePolls();
     const bool daxRestored
         = AetherSDR::TciServerReviewTest::txAudioRestoresTransmitDaxAsFound();
+    const bool dsbMode
+        = AetherSDR::TciServerReviewTest::dsbRoundTripsAndIsAdvertised();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -2945,6 +2973,9 @@ int main(int argc, char** argv)
                 chronoCatchUp ? "PASS" : "FAIL");
     std::printf("%s  TCI TX hands transmit dax back as found (#6538)\n",
                 daxRestored ? "PASS" : "FAIL");
+    std::printf("%s  DSB maps to dsb both ways and is in modulations_list
+",
+                dsbMode ? "PASS" : "FAIL");
 
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
@@ -2967,6 +2998,6 @@ int main(int argc, char** argv)
         && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
-        && chronoIdle && chronoCatchUp && daxRestored
+        && chronoIdle && chronoCatchUp && daxRestored && dsbMode
         ? 0 : 1;
 }

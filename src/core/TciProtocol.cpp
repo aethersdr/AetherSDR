@@ -99,6 +99,7 @@ QString TciProtocol::smartsdrToTci(const QString& mode)
         {"USB",  "usb"},   {"LSB",  "lsb"},
         {"CW",   "cw"},    {"CWL",  "cwr"},
         {"AM",   "am"},    {"SAM",  "sam"},
+        {"DSB",  "dsb"},
         {"FM",   "fm"},    {"NFM",  "nfm"},
         {"DFM",  "fm"},    {"FDM",  "fm"},
         {"DIGU", "digu"},  {"DIGL", "digl"},
@@ -114,6 +115,7 @@ QString TciProtocol::tciToSmartSDR(const QString& mode, bool* ok)
         {"usb",  "USB"},   {"lsb",  "LSB"},
         {"cw",   "CW"},    {"cwr",  "CWL"},
         {"am",   "AM"},    {"sam",  "SAM"},
+        {"dsb",  "DSB"},
         {"fm",   "FM"},    {"nfm",  "NFM"},
         {"digu", "DIGU"},  {"digl", "DIGL"},
         {"rtty", "RTTY"},
@@ -315,7 +317,7 @@ QString TciProtocol::generateInitBurst()
     // identity is #2806.
     burst += QStringLiteral("device:AetherSDR;");
     burst += QStringLiteral("receive_only:false;");
-    burst += QStringLiteral("modulations_list:usb,lsb,cw,cwr,am,sam,fm,nfm,digu,digl,rtty;");
+    burst += QStringLiteral("modulations_list:usb,lsb,cw,cwr,am,sam,dsb,fm,nfm,digu,digl,rtty;");
     burst += QStringLiteral("protocol:ExpertSDR3,1.5;");
 
     // ── Phase 2: Current state notifications ──────────────────────────
