@@ -2796,12 +2796,15 @@ public:
     static bool rxCtunExDrivesCenterLockInverted()
     {
         RadioModel model;
+        TciServer server(&model);
         QString error;
         if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)) {
             std::printf("      slice fixture failed: %s\n", qPrintable(error));
             return false;
         }
-        TciProtocol protocol(&model);
+        // The fixture model is not connected, so trx 0 resolves only
+        // through the server's stable map, as on the live accept path.
+        TciProtocol protocol(&model, &server.m_routingState, &server.m_trxMap);
 
         if (!protocol.handleCommand(QStringLiteral("rx_ctun_ex:0")).isEmpty()) {
             std::printf("      GET answered without a center-lock query\n");
