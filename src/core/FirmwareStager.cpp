@@ -300,6 +300,7 @@ void FirmwareStager::stageFromLocalFile(const QString& installerPath,
     m_stagedVersion.clear();
     m_installerPath = installerPath;
     m_expectedMd5.clear();   // user's responsibility — we don't have an authoritative source
+    m_stagedVerified = false;
 
     if (modelFamily != QStringLiteral("6x00") && modelFamily != QStringLiteral("9600")) {
         emit stageFailed("Cannot determine the firmware family for this radio.");
@@ -400,6 +401,8 @@ void FirmwareStager::downloadAndStage(const QString& version, const QString& mod
     m_targetVersion = version;
     m_modelFamily = modelFamily;
     m_cancelled = false;
+    m_stagedVerified = false;
+    m_expectedMd5.clear();   // never verify one release against another's hash
     m_stagedPath.clear();
     m_stagedVersion.clear();
 
@@ -549,8 +552,10 @@ void FirmwareStager::verifyAndExtract()
             QFile::remove(m_installerPath);
             return;
         }
+        m_stagedVerified = true;
         emit stageProgress(65, "Installer integrity verified ✓");
     } else {
+        m_stagedVerified = false;
         emit stageProgress(65, "MD5 hash not available — skipping verification.");
     }
 

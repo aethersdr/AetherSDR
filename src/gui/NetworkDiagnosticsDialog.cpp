@@ -1,5 +1,6 @@
 #include "NetworkDiagnosticsDialog.h"
 #include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
 #include "FramelessResizer.h"
 #include "ScopedChildWidget.h"
 #include "LogSyntaxHighlighter.h"
@@ -258,36 +259,6 @@ QScrollArea {
 QSplitter::handle {
     background: transparent;
 }
-QScrollBar:vertical {
-    background: transparent;
-    width: 12px;
-    margin: 8px 2px 8px 2px;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-height: 34px;
-}
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-QScrollBar:horizontal {
-    background: transparent;
-    height: 12px;
-    margin: 2px 8px 2px 8px;
-    border-radius: 6px;
-}
-QScrollBar::handle:horizontal {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-width: 34px;
-}
-QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
-    width: 0px;
-}
 )";
 
 static QFrame* makeDiagnosticsPanel(const QString& title, QWidget* parent = nullptr)
@@ -340,7 +311,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     FramelessResizer::install(this);
     bodyWidget()->setObjectName(QStringLiteral("networkDiagnosticsBody"));
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kNetworkDiagnosticsStyle) + canonIndicatorRules();
+        return QString::fromLatin1(kNetworkDiagnosticsStyle) + canonScrollBarRules() + canonIndicatorRules();
     });
 
     auto* body = new QVBoxLayout(bodyWidget());

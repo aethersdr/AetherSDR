@@ -29,9 +29,25 @@ public:
         return permit;
     }
 
+    // A revocable no-stream snapshot allows one original input to request
+    // allocation. It never permits audio, and allocation retires the snapshot.
+    static DaxTxAudioPermit unallocated()
+    {
+        DaxTxAudioPermit permit = blocked();
+        permit.m_state = std::make_shared<State>(0);
+        return permit;
+    }
+
+    bool allowsStreamCreation() const
+    {
+        return m_required && m_state && m_state->streamId == 0
+            && m_state->live.load(std::memory_order_acquire);
+    }
+
     bool permits() const
     {
-        return !m_required || (m_state && m_state->live.load(std::memory_order_acquire));
+        return !m_required || (m_state && m_state->streamId != 0
+            && m_state->live.load(std::memory_order_acquire));
     }
 
     bool permitsStream(quint32 streamId) const

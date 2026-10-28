@@ -73,9 +73,12 @@ ReceiveDispatch RadioModel::requestPanControl(PanadapterModel* pan, const PanCon
     if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
     const RadioControlSession session = controlSession();
     const RadioCapabilities caps = backendCapabilities();
+    const bool declared = request.field == PanControlField::NoiseFloorRange
+        ? panNoiseFloorRangeUnavailableReason().isEmpty()
+        : caps.panControl && caps.panControl->supports(request.field)
+            && (request.field == PanControlField::ReceiveAntenna || caps.panZoomModes);
     const bool available = m_backend && controlSessionCurrent(session) && request.valid()
-        && pan && panadapter(pan->panId()) == pan && caps.panControl && caps.panControl->supports(request.field)
-        && (request.field == PanControlField::ReceiveAntenna || caps.panZoomModes);
+        && pan && panadapter(pan->panId()) == pan && declared;
     const QPointer<RadioModel> alive(this);
     const ReceiveDispatch result = available
         ? m_backend->requestPanControl(pan->panId(), request) : ReceiveDispatch::Unsupported;

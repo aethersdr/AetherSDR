@@ -38,13 +38,14 @@ class MidiSettings {
 public:
     static MidiSettings& instance();
 
-    // Load/save the default settings file
+    // Load/save the default settings file. Saves replace the file atomically
+    // and return false on open, serialization, or commit failure. (#5160)
     void load();
-    void save();
+    bool save();
 
-    // Bindings
+    // Binding saves use the same atomic write and failure reporting. (#5160)
     QVector<MidiBinding> loadBindings() const;
-    void saveBindings(const QVector<MidiBinding>& bindings);
+    bool saveBindings(const QVector<MidiBinding>& bindings);
 
     // Device preferences
     QString lastDevice() const { return m_lastDevice; }
@@ -101,6 +102,8 @@ private:
     static QVector<MidiBinding> parseBindingsFromXml(const QString& filePath);
     static bool writeBindingsToXml(const QString& filePath,
                                    const QVector<MidiBinding>& bindings);
+    bool writeSettingsDocument(const QString& filePath,
+                                const QVector<MidiBinding>& bindings);
 
     QString m_lastDevice;
     bool    m_autoConnect{true};

@@ -276,9 +276,18 @@ void terminalWriter()
 
 void remoteRxAndNativeAudio()
 {
-    for (bool statusFirst : {false, true}) {
+    {
         AudioFixture f;
         TxOperationIntegrationTestAccess::startRx(f.radio);
+        check(f.backend->commands().isEmpty() && TxOperationIntegrationTestAccess::pendingAudio(f.radio) == 0,
+            "unregistered remote RX leaves no write or pending allocation");
+    }
+    for (bool statusFirst : {false, true}) {
+        AudioFixture f;
+        TxOperationIntegrationTestAccess::acceptGuiRegistration(f.radio);
+        TxOperationIntegrationTestAccess::startRx(f.radio);
+        check(!f.backend->writes.empty(), "registered remote RX starts its allocation");
+        if (f.backend->writes.empty()) { continue; }
         const size_t create = f.backend->writes.size() - 1;
         if (statusFirst) { f.stream(0x100, QStringLiteral("remote_audio_rx")); }
         TxOperationIntegrationTestAccess::stopRx(f.radio);

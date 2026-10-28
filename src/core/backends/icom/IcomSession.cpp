@@ -245,6 +245,10 @@ void IcomSession::onControlReady()
 
 void IcomSession::onControlPayload(const QByteArray& packet)
 {
+    // Failure is terminal even while its deferred stream teardown is pending.
+    if (m_failing) {
+        return;
+    }
     const auto pkt = asSpan(packet);
 
     // Dispatch on LENGTH, not on type: every one of these rides packet type
@@ -389,8 +393,16 @@ void IcomSession::onControlPayload(const QByteArray& packet)
         }
 
     case static_cast<qsizetype>(kLenConnInfo): {
-        if (m_connected)
+        if (m_connected) {
+            const ConnectionUsage usage = parseConnectionUsage(pkt);
+            if (usage.kind == ConnectionUsageKind::Available
+                && isCurrentControlPacket(pkt) && usage.authId == m_authId
+                && m_haveRadioId && usage.radioId == m_radioId) {
+                fail(QStringLiteral("the radio released the serial and audio streams; "
+                                    "reconnecting the Icom session"));
+            }
             return;
+        }
         const StreamGrant grant = parseStreamGrant(pkt);
         qCInfo(lcIcom) << "got stream-request reply, granted =" << grant.granted
                        << "byte0x60 =" << static_cast<quint8>(packet.at(0x60));

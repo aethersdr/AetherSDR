@@ -152,7 +152,10 @@ int main(int argc, char** argv)
         apply(QStringLiteral("waterfall"), QStringLiteral("garbage"));
         EXPECT_EQ(pan.waterfallId(), QStringLiteral("0x42000008"));  // kept
         apply(QStringLiteral("waterfall"), QStringLiteral("4200000f"));
-        EXPECT_EQ(pan.waterfallId(), QStringLiteral("4200000f"));    // bare hex accepted
+        EXPECT_EQ(pan.waterfallId(), QStringLiteral("0x4200000f"));  // bare hex, normalized
+        // StringHelper.TryParseInteger: unprefixed digits are decimal.
+        apply(QStringLiteral("waterfall"), QStringLiteral("42000000"));
+        EXPECT_EQ(pan.waterfallId(), QStringLiteral("0x0280de80"));
     }
 
     // Socket-free reproduction of the no-echo setter case and reconciliation.

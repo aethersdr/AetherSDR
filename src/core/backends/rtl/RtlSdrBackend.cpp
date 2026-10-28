@@ -245,6 +245,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
         PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove
     c.model  = m_modelName;
     c.manufacturer = m_vendor.isEmpty() ? QStringLiteral("Realtek") : m_vendor;
 

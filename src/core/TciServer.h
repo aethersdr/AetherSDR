@@ -246,6 +246,7 @@ private:
     void handleTrxRequest(TciClient* client, const TciProtocol::TrxRequest& request,
                           const TxCoordinator::Request& txRequest, bool wantsAudio,
                           const DaxTxAudioPermit& daxPermit);
+    void retireTrxRequest(TciClient* client, const TxCoordinator::Request& request);
     bool trxWantsAudio(TciClient* client, const TciProtocol::TrxRequest& request) const;
     void tuneSliceAndConfirm(
         TciClient* client, int trx, int channel, int sliceId, long long frequencyHz);
@@ -441,6 +442,7 @@ private:
         TxCoordinator::Request txRequest;
         bool wantsAudio{false};
         DaxTxAudioPermit daxPermit{DaxTxAudioPermit::blocked()};
+        bool waitingForDax{false};
     };
     std::optional<PendingTrxRequest> m_pendingTrxRequest;
     struct PendingRouteCommand

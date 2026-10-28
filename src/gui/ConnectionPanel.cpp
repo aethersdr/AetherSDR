@@ -38,6 +38,7 @@
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QSet>
 #include <QSpinBox>
 #include <QTcpSocket>
 #include <QHostInfo>
@@ -304,7 +305,7 @@ QString staleSelectionText(const RadioBindSettings& settings)
     if (iface.isEmpty())
         iface = QStringLiteral("Saved source");
     const QString addr = settings.bindAddress.isNull()
-        ? QStringLiteral("unknown IPv4")
+        ? QStringLiteral("unknown address")
         : settings.bindAddress.toString();
     return QStringLiteral("%1 (unavailable, last %2)").arg(iface, addr);
 }
@@ -1211,6 +1212,9 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
                 updateManualAdvancedVisibility();
                 setManualMessage(QString());
             });
+    connect(m_manualSourceCombo, &QComboBox::activated, this, [this](int) {
+        m_manualSourcePick = currentManualBindSettings();
+    });
 
     const auto doLogin = [this] {
         const QString email = m_emailEdit->text().trimmed();
@@ -1820,10 +1824,21 @@ void ConnectionPanel::updateLowBandwidthVisibility()
 
 void ConnectionPanel::updateManualAdvancedVisibility()
 {
-    const auto candidates = NetworkPathResolver::enumerateIpv4Candidates();
+    const auto family = NetworkPathResolver::targetFamily(
+        m_manualIpEdit ? m_manualIpEdit->text() : QString());
+    const auto candidates = NetworkPathResolver::enumerateCandidates(family);
+    // One IPv6 adapter normally has a GUA and a ULA; that is not a choice of
+    // path, so IPv6 counts adapters. IPv4 keeps counting addresses.
+    qsizetype paths = candidates.size();
+    if (family == QAbstractSocket::IPv6Protocol) {
+        QSet<QString> interfaces;
+        for (const auto& candidate : candidates)
+            interfaces.insert(candidate.interfaceId);
+        paths = interfaces.size();
+    }
     const RadioBindSettings settings = currentManualBindSettings();
     const bool hasExplicitSelection = settings.mode == RadioBindMode::Explicit;
-    const bool showToggle = candidates.size() > 1
+    const bool showToggle = paths > 1
         || hasExplicitSelection
         || m_manualSourceWarningLabel->isVisible();
 
@@ -2182,7 +2197,8 @@ void ConnectionPanel::refreshManualSourceOptions(const RadioBindSettings* select
     m_manualSourceCombo->setItemData(0, false, kSourceStaleRole);
 
     int selectedIndex = 0;
-    const auto candidates = NetworkPathResolver::enumerateIpv4Candidates();
+    const auto candidates = NetworkPathResolver::enumerateCandidates(
+        NetworkPathResolver::targetFamily(m_manualIpEdit ? m_manualIpEdit->text() : QString()));
     for (const auto& candidate : candidates) {
         const int idx = m_manualSourceCombo->count();
         m_manualSourceCombo->addItem(candidate.label());
@@ -2191,13 +2207,13 @@ void ConnectionPanel::refreshManualSourceOptions(const RadioBindSettings* select
         m_manualSourceCombo->setItemData(idx, candidate.interfaceName, kSourceInterfaceNameRole);
         m_manualSourceCombo->setItemData(idx, candidate.address.toString(), kSourceAddressRole);
         m_manualSourceCombo->setItemData(idx, false, kSourceStaleRole);
-
-        if (selected
-            && selected->mode == RadioBindMode::Explicit
-            && ((!selected->interfaceId.isEmpty() && selected->interfaceId == candidate.interfaceId)
-                || (!selected->bindAddress.isNull() && selected->bindAddress == candidate.address))) {
-            selectedIndex = idx;
-        }
+    }
+    if (selected && selected->mode == RadioBindMode::Explicit) {
+        const qsizetype match = NetworkPathResolver::matchSelection(
+            candidates, selected->interfaceId, selected->interfaceName, selected->bindAddress,
+            QHostAddress(m_manualIpEdit ? m_manualIpEdit->text().trimmed() : QString()));
+        if (match >= 0)
+            selectedIndex = 1 + static_cast<int>(match);   // row 0 is Auto
     }
 
     if (selected
@@ -2269,7 +2285,8 @@ void ConnectionPanel::applySavedSourceSelection(const QString& ip, bool restoreF
     RadioBindSettings settings = bindSettingsFromProfile(profile);
     if (settings.mode == RadioBindMode::Explicit) {
         const auto resolved = NetworkPathResolver::resolveExplicitSelection(
-            settings.interfaceId, settings.interfaceName, settings.bindAddress);
+            settings.interfaceId, settings.interfaceName, settings.bindAddress,
+            NetworkPathResolver::targetFamily(trimmedIp), QHostAddress(trimmedIp));
         if (resolved.isValid()) {
             settings.interfaceId = resolved.interfaceId;
             settings.interfaceName = resolved.interfaceName;
@@ -2285,6 +2302,8 @@ void ConnectionPanel::applySavedSourceSelection(const QString& ip, bool restoreF
 
     refreshManualSourceOptions(&settings);
     updateManualAdvancedVisibility();
+    if (restoreFamily)
+        m_manualSourcePick = settings;   // a chosen address brings its own path
 }
 
 RadioBindSettings ConnectionPanel::currentManualBindSettings(bool* staleSelection) const
@@ -2621,7 +2640,8 @@ void ConnectionPanel::onManualIpChanged(const QString& ip)
         // already selected. The saved profile is useful for startup and for
         // choosing a recent address, but it must not silently turn an
         // explicit interface back into Auto during an interactive edit.
-        const RadioBindSettings selected = currentManualBindSettings();
+        const RadioBindSettings selected = m_manualSourcePick.mode == RadioBindMode::Explicit
+            ? m_manualSourcePick : currentManualBindSettings();
         applySavedSourceSelection(trimmed, /*restoreFamily=*/false);
         if (selected.mode == RadioBindMode::Explicit)
             refreshManualSourceOptions(&selected);
@@ -2953,7 +2973,48 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         return;
     }
 
-    probeFlexRadio(trimmedIp, bindSettings);
+    RadioBindSettings flexBind = bindSettings;
+    if (!resolveNamedSourceFamily(trimmedIp, &flexBind))
+        return;
+    probeFlexRadio(trimmedIp, flexBind);
+}
+
+bool ConnectionPanel::resolveNamedSourceFamily(const QString& host, RadioBindSettings* bind)
+{
+    // The source list follows the typed text, so a host name lists IPv4
+    // paths. A name with only IPv6 addresses reaches the radio over IPv6:
+    // use the chosen interface's IPv6 address instead of failing on family.
+    if (bind->mode != RadioBindMode::Explicit || !QHostAddress(host).isNull())
+        return true;
+    const QHostInfo info = QHostInfo::fromName(host);
+    QHostAddress v6;
+    for (const QHostAddress& address : info.addresses()) {
+        bool isV4 = false;
+        address.toIPv4Address(&isV4);
+        if (isV4)
+            return true;   // reachable over IPv4: the listed path applies
+        if (v6.isNull() && address.protocol() == QAbstractSocket::IPv6Protocol)
+            v6 = address;
+    }
+    if (v6.isNull())
+        return true;   // unresolved: the probe reports it
+    const NetworkPathCandidate path = NetworkPathResolver::resolveExplicitSelection(
+        bind->interfaceId, bind->interfaceName, bind->bindAddress,
+        QAbstractSocket::IPv6Protocol, v6);
+    if (!path.isValid()) {
+        resetManualConnectButton();
+        setManualMessage(
+            QStringLiteral("“%1” has only IPv6 addresses, and the selected source path has "
+                           "no IPv6 address. Choose Auto or another path.").arg(host),
+            true);
+        reportStartupProbeFailure(
+            QStringLiteral("The source path for “%1” has no IPv6 address.").arg(host));
+        return false;
+    }
+    bind->interfaceId = path.interfaceId;
+    bind->interfaceName = path.interfaceName;
+    bind->bindAddress = path.address;
+    return true;
 }
 
 void ConnectionPanel::handleHl2ProbeResult(Hl2ProbeResult probe, const QString& trimmedIp)

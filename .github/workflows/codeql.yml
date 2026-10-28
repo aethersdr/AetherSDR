@@ -82,15 +82,19 @@ jobs:
     container: ghcr.io/aethersdr/aethersdr-ci:latest
     env:
       # Dependencies bring in the app libraries and waveform helper. Retain
-      # the two small tests whose first-party inputs are absent from the
-      # default production graph: the opt-in DeepFist asset downloader and
-      # the CTR2 firmware reference codec. The coverage check guards this list.
+      # the four small tests whose first-party inputs are absent from the
+      # default production graph: the opt-in DeepFist asset downloader, the
+      # DeepCW decoder, the CTR2 firmware reference codec, and the in-app
+      # updater's swap state machine (src/updater/UpdateSwap.cpp, otherwise
+      # built only for Windows; src/updater/main_win.cpp is Windows-only and
+      # stays outside this Linux scan). The coverage check guards this list.
       # This Linux configuration uses ENABLE_RADE=ON and the current vendored
       # snapshot, which defines rade_demod_wav. If coverage fails after a
       # merge, add the target owning the named input here and dispatch a run.
       CODEQL_BUILD_TARGETS: >-
         AetherSDR aetherd kiwi_directory_poc rade_demod_wav
-        deepfist_model_assets_test ctr2_hid_reference_test
+        deepfist_model_assets_test ctr2_hid_reference_test deepcw_ctc_test
+        update_swap_test
 
     strategy:
       matrix:

@@ -42,9 +42,9 @@ a widget subtree (for example, the `applet/tx` scope turns the
 checked-toggle accent red where the root theme has it blue — scope
 paths are slash-joined, and a widget opts in by carrying the path in
 its `themeContainer` property). The `canon` scope does the same for
-whole windows: AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, Radio Setup,
-Connect to Radio and AGC-T Calibration sit under `canon/aetherRx`, `canon/aetherTx`, `canon/aetherModem`,
-`canon/aetherMap`, `canon/aetherGps`, `canon/spotHub`, `canon/aetherControl`, `canon/radioSetup`, `canon/connection` and `canon/agcCalibration`, and it maps the base tokens onto the canon palette
+whole windows: AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Radio Setup,
+TX Band Settings, Callsign Lookup, Connect to Radio, AGC-T Calibration, Icom RC-28 Button Mapping, FFTW Wisdom and MQTT Settings sit under `canon/aetherRx`, `canon/aetherTx`, `canon/aetherModem`,
+`canon/aetherMap`, `canon/aetherGps`, `canon/spotHub`, `canon/freedvReporter`, `canon/aetherControl`, `canon/multiFlex`, `canon/radioSetup`, `canon/txBand`, `canon/callsignLookup`, `canon/connection`, `canon/agcCalibration`, `canon/rc28Mapping`, `canon/nr2Wisdom` and `canon/mqttSettings`, and it maps the base tokens onto the canon palette
 there (see [`aethersdr-style-guide.md`](aethersdr-style-guide.md)). The
 widget-aware accessors below resolve scope automatically — prefer them
 inside applets and anything painted inside a scoped window.
@@ -58,6 +58,21 @@ on/off toggle, filled `color.toggle.success.*` when on; a Select button is one
 of a set, filled canon cyan when chosen. A disabled control takes
 `color.control.unavailable`, checked or not. Changing a role on a live widget
 re-polishes it, so a status that turns to an error restyles at once.
+
+A canon table takes its rules from `canonTableRules()` (`CanonTableStyle.h`):
+`color.canon.nested` cells with `color.canon.line` rules and border, a
+`color.canon.control` selection band and cyan header text on
+`color.canon.raised`. SpotHub and the multiFLEX Dashboard append their own
+sizes and paddings after it. The selection rule sets no text color, so a
+window that colors items (the dashboard's PTT tick and its own station) keeps
+those colors on a selected row through a delegate, and a window that wants
+plain ink there adds it, as SpotHub does.
+
+Its scroll bars take `canonScrollBarRules()` (`CanonScrollBarStyle.h`): a
+12 px transparent track and a `color.canon.lineHi` handle with no step
+arrows, both orientations. AetherModem, AetherGPS, AetherMap, SpotHub,
+Network Diagnostics, Radio Setup and Icom RC-28 Button Mapping append it to
+their sheets.
 
 ### Consuming tokens
 

@@ -127,6 +127,7 @@ public:
     static bool deferredAbortIsClientScoped()
     {
         RadioModel model;
+        model.setBackendForTest(std::make_unique<TxCapableBackend>(), QStringLiteral("test"));
         TciServer server(&model);
         TciClient client;
         TciClient otherClient;
@@ -485,13 +486,17 @@ public:
     // cache drags transmit back to slice 0 — wrong band, wrong antenna.
     static bool pttRouteFixture(RadioModel& model, TciServer& server)
     {
-        QString error;
-        if (!model.automationApplySliceFixture(0, QString(), &error)
-            || !model.automationApplySliceFixture(1, QString(), &error)) {
-            std::fprintf(stderr, "ptt route fixtures failed: %s\n",
-                         error.toUtf8().constData());
-            return false;
-        }
+        // Route diagnostics are independent of Flex DAX media admission.
+        model.setBackendForTest(std::make_unique<TxCapableBackend>(), QStringLiteral("test"));
+        SliceDelta rx;
+        rx.inUse = true;
+        rx.active = true;
+        rx.mode = QStringLiteral("USB");
+        rx.frequency = 14.225;
+        rx.panId = QStringLiteral("0x40000000");
+        rx.txSlice = false;
+        model.emitBackendSliceChangedForTest(0, rx);
+        model.emitBackendSliceChangedForTest(1, rx);
         SliceModel* s1 = model.slice(1);
         if (!s1) {
             return false;

@@ -39,6 +39,7 @@
 #include "core/PerfTelemetry.h"
 #include "core/StreamStatus.h"
 #include "core/UdpRegistrationPolicy.h"
+#include "core/UnicastEndpoint.h"
 #include "core/WaterfallRate.h"
 #include "core/ClientDisplaySettings.h"  // per-radio client display state
 #include "ProfileLoadCommand.h"
@@ -716,8 +717,7 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
     // The probe's winning local address is transport metadata, not a family
     // parameter. Keep it neutral so each backend can use the route without
     // adding a family-string branch above the backend seam.
-    if (sessionBindAddress.protocol() == QAbstractSocket::IPv4Protocol)
-        req.localBindAddress = sessionBindAddress;
+    req.localBindAddress = usableUnicastAddress(sessionBindAddress);
 
     // The DDC0 rate and the front-end options are preferences the operator sets
     // in Radio Setup's "ANAN Front End" page. READ FROM AnanSettings, NOT FROM
@@ -740,6 +740,13 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
                           anan::AnanSettings::bypassAdc1Filters());
         req.params.insert(QStringLiteral("anan.speakerAudioEnabled"),
                           anan::AnanSettings::speakerAudioEnabled());
+        // Live once connected (the "anan"/"frontend.set" verb), and seeded here
+        // so the session's first High Priority packet already carries them: a
+        // muted speaker amplifier would otherwise speak for one keepalive.
+        req.params.insert(QStringLiteral("anan.bandFiltersEnabled"),
+                          anan::AnanSettings::bandFiltersEnabled());
+        req.params.insert(QStringLiteral("anan.speakerAmpMuted"),
+                          anan::AnanSettings::speakerAmpMuted());
         return;
     }
 
@@ -1097,6 +1104,19 @@ void RadioModel::setupBackend(const QString& family)
             [this](const QString& panId, int step) {
         if (auto* pan = resolveBackendPan(panId)) pan->setAttenuatorStep(step);
     });
+    // The radio's scope mode: same pass-through shape as the stages above.
+    connect(m_backend.get(), &IRadioBackend::panScopeModesChanged, this,
+            [this](const QString& panId, const QStringList& labels) {
+        if (auto* pan = resolveBackendPan(panId)) {
+            pan->setScopeModeLabels(labels);
+        }
+    });
+    connect(m_backend.get(), &IRadioBackend::panScopeModeChanged, this,
+            [this](const QString& panId, int index) {
+        if (auto* pan = resolveBackendPan(panId)) {
+            pan->setScopeModeIndex(index);
+        }
+    });
     connect(m_backend.get(), &IRadioBackend::panRxAntennaChanged, this,
             [this](const QString& panId, const QString& ant) {
         if (auto* pan = resolveBackendPan(panId)) pan->setRxAntenna(ant);
@@ -1229,6 +1249,7 @@ void RadioModel::setupBackend(const QString& family)
     connect(m_backend.get(), &IRadioBackend::capabilitiesChanged, this,
             [this] {
         publishCapabilities(isConnected());
+        refreshCwProfilesOnCapabilityChange();
         // All currently supported wake profiles transmit. If an RX-only Icom
         // profile is added, readiness must use an explicit identity signal.
         if (m_radioWakeActive && m_backend->capabilities().canTransmit) {
@@ -2092,6 +2113,19 @@ RadioModel::RadioModel(QObject* parent)
                             TxCoordinator::StopReason reason) { stopTxOperation(operation, reason); })
 {
     m_desktopTxActor = m_txCoordinator.registerActor({true, 0});
+    // FlexLib APD.cs matches against the transmit slice, else the active one.
+    m_transmitModel.setApdTxSliceResolver([this]() -> std::optional<TransmitModel::ApdTxSlice> {
+        SliceModel* slice = txSlice();
+        for (int i = 0; !slice && i < m_slices.size(); ++i) {
+            if (m_slices[i] && m_slices[i]->isActive()) {
+                slice = m_slices[i];
+            }
+        }
+        if (!slice) {
+            return std::nullopt;
+        }
+        return TransmitModel::ApdTxSlice{slice->txAntenna(), slice->frequency()};
+    });
     m_transmitModel.setKeyingAdmission([this](TransmitModel::KeyingIntent intent, bool on) -> TransmitModel::KeyingPermit {
         if (!on) {
             const TxCoordinator::Operation fence = m_txCoordinator.cleanupFence();
@@ -2146,6 +2180,8 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_daxTxGuardTimer, &QTimer::timeout, this, &RadioModel::refreshDaxTxOwnershipGuards);
     connect(this, &RadioModel::profileLoadStarted, this, &RadioModel::refreshDaxTxOwnershipGuards);
     connect(this, &RadioModel::profileLoadCompleted, this, &RadioModel::refreshDaxTxOwnershipGuards);
+    connect(this, &RadioModel::connectionStateChanged, this, &RadioModel::publishDaxTxOwnership);
+    connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::publishDaxTxOwnership);
     connect(this, &RadioModel::radioTransmittingChanged, this, [this](bool transmitting) {
         if (transmitting) {
             interruptDaxTxOwnership(tr("Transmission interrupted DAX TX ownership. Waiting for fresh radio status."));
@@ -2184,6 +2220,14 @@ RadioModel::RadioModel(QObject* parent)
             this, &RadioModel::refreshAutoAgcThresholdAvailability);
     connect(this, &RadioModel::capabilitiesChanged,
             this, &RadioModel::refreshAutoAgcThresholdAvailability);
+    connect(this, &RadioModel::infoChanged,
+            this, &RadioModel::panNoiseFloorRangeAvailabilityChanged);
+    connect(this, &RadioModel::licenseFeaturesChanged,
+            this, &RadioModel::panNoiseFloorRangeAvailabilityChanged);
+    connect(this, &RadioModel::capabilitiesChanged,
+            this, &RadioModel::panNoiseFloorRangeAvailabilityChanged);
+    connect(this, &RadioModel::connectionStateChanged,
+            this, &RadioModel::panNoiseFloorRangeAvailabilityChanged);
     qRegisterMetaType<SliceDspRequest>();
     qRegisterMetaType<DspParameterResetTarget>();
     qRegisterMetaType<SliceAudioRequest>();
@@ -6682,12 +6726,14 @@ void RadioModel::setBinauralRx(bool on)
 
 void RadioModel::setPanWnb(bool on)
 {
-    requestPanDisplay(activePanadapter(), {PanDisplayField::Wnb, on});
+    // Stored-state replay has no individual control action behind it.
+    requestPanDisplay(activePanadapter(), {PanDisplayField::Wnb, on}, {}, /*announce=*/false);
 }
 
 void RadioModel::setPanWnbLevel(int level)
 {
-    requestPanDisplay(activePanadapter(), {PanDisplayField::WnbLevel, level});
+    // Stored-state replay has no individual control action behind it.
+    requestPanDisplay(activePanadapter(), {PanDisplayField::WnbLevel, level}, {}, /*announce=*/false);
 }
 
 void RadioModel::setPanRfGain(int gain)
@@ -6715,6 +6761,14 @@ void RadioModel::setPanAttenuatorFor(const QString& panId, int step)
 {
     if (panId.isEmpty() || !m_backend) return;
     m_backend->setPanAttenuator(backendPanIdFor(panId), step);
+}
+
+void RadioModel::setPanScopeModeFor(const QString& panId, int index)
+{
+    if (panId.isEmpty() || !m_backend) {
+        return;
+    }
+    m_backend->setPanScopeMode(backendPanIdFor(panId), index);
 }
 
 // ── Display controls — FFT ─────────────────────────────────────────────────
@@ -7765,7 +7819,8 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                                       << "udpSeen=" << firstUdpPacketSeen();
                 emit connectionError(
                     tr("No spectrum data received from %1. Source mode: %2. TCP: %3. UDP: %4. "
-                       "UDP traffic from the radio may be blocked, or the wrong source path may be selected.")
+                       "UDP traffic from the radio may be blocked by a firewall on this computer "
+                       "or on the network path, or the wrong source path may be selected.")
                         .arg(targetRadioIp(), selectedSourceMode(),
                              localTcpEndpoint(), localUdpEndpoint()));
             }
@@ -8271,6 +8326,7 @@ void RadioModel::onDisconnected()
         m_pendingProfileLoadPanWrites.clear();
     }
     m_profileLoadPanWriteFlushTimer.stop();
+    m_cwProfilesRequested = false;
 
     // Release sleep inhibition on disconnect (#1420)
     m_sleepInhibitor.release();
@@ -9109,7 +9165,8 @@ QString RadioModel::selectedSourcePath() const
     QHostAddress resolved = m_lastInfo.sessionBindAddress;
     if (resolved.isNull() && m_connection)
         resolved = m_connection->localAddress();
-    if (!resolved.isNull() && resolved.protocol() == QAbstractSocket::IPv4Protocol)
+    resolved = usableUnicastAddress(resolved);
+    if (!resolved.isNull())
         return QStringLiteral("Auto (%1)").arg(resolved.toString());
     return QStringLiteral("Auto");
 }
@@ -9131,7 +9188,7 @@ QString RadioModel::localTcpEndpoint() const
     const quint16 localPort = m_connection->localTcpPort();
     if (localAddr.isNull() || localPort == 0)
         return QStringLiteral("Not connected");
-    return QStringLiteral("%1:%2").arg(localAddr.toString()).arg(localPort);
+    return endpointText(localAddr, localPort);
 }
 
 QString RadioModel::localUdpEndpoint() const
@@ -9145,7 +9202,7 @@ QString RadioModel::localUdpEndpoint() const
     const quint16 localPort = m_panStream->localPort();
     if (localAddr.isNull() || localPort == 0)
         return QStringLiteral("Not bound");
-    return QStringLiteral("%1:%2").arg(localAddr.toString()).arg(localPort);
+    return endpointText(localAddr, localPort);
 }
 
 bool RadioModel::firstUdpPacketSeen() const
@@ -9673,6 +9730,10 @@ void RadioModel::handleMessageReceived(const ParsedMessage& msg, quint64 gpsSess
         handleProfileStatusRaw("global", body.mid(15));  // skip "profile global "
         return;
     }
+    if (body.startsWith("profile cw ")) {
+        handleProfileStatusRaw("cw", body.mid(11));  // skip "profile cw "
+        return;
+    }
 
     // GPS status: "gps lat=...#lon=...#grid=...#tracked=...#visible=...#status=..."
     if (body.startsWith("gps ")) {
@@ -9796,6 +9857,25 @@ void RadioModel::refreshProfiles()
             ProfileRequest::Kind::Transmit, ProfileRequest::Kind::Mic}) {
         requestProfile({kind, ProfileRequest::Action::Refresh, {}});
     }
+    refreshCwProfilesIfSupported();
+}
+
+void RadioModel::refreshCwProfilesOnCapabilityChange()
+{
+    if (isConnected() && !m_cwProfilesRequested) {
+        refreshCwProfilesIfSupported();
+    }
+}
+
+void RadioModel::refreshCwProfilesIfSupported()
+{
+    // A connect-by-IP learns the firmware version after the connect-time
+    // refresh, so the CW capability can engage later in the session (#6668).
+    if (backendCapabilities().cwProfileControl.has_value()
+        && requestProfile({ProfileRequest::Kind::Cw, ProfileRequest::Action::Refresh, {}})
+            == ReceiveDispatch::Dispatched) {
+        m_cwProfilesRequested = true;
+    }
 }
 
 bool RadioModel::isProfileTransferBlocked() const
@@ -9830,6 +9910,13 @@ void RadioModel::requestLocalPtt()
 void RadioModel::createRxAudioStream()
 {
     if (!backendCapabilities().audioStreamControl) { return; }
+    // A pre-connect PC Audio toggle must not leave a request pending when no
+    // registered GUI session can send it. The connect handshake retries it.
+    if (!isConnected()
+        || m_guiClientRegistrationState.phase() != GuiClientRegistrationState::Phase::Registered) {
+        logRemoteAudioRxSummary(QStringLiteral("create deferred: GUI session not ready"));
+        return;
+    }
     if (m_remoteRxAllocationPending) {
         if (m_rxAudio.removeRequested) {
             m_rxAudio.removeRequested = false;
@@ -9838,6 +9925,7 @@ void RadioModel::createRxAudioStream()
         logRemoteAudioRxSummary(QStringLiteral("create skipped: request already pending"));
         return;
     }
+
     if (m_rxAudio.streamId != 0) {
         logRemoteAudioRxSummary(QStringLiteral("create skipped: stream already known"));
         return;
@@ -10382,6 +10470,28 @@ QString RadioModel::autoAgcThresholdUnavailableReason(const SliceModel* source) 
     }
     if (!source->agcThresholdMode()) {
         return tr("Waiting for the radio to report the AGC-T mode.");
+    }
+    return {};
+}
+
+QString RadioModel::panNoiseFloorRangeUnavailableReason() const
+{
+    if (!isConnected()) {
+        return tr("Connect to a radio to use Noise Floor Range.");
+    }
+    const auto control = backendCapabilities().noiseFloorRangeControl;
+    if (!control) {
+        return tr("Noise Floor Range requires a FLEX-8000 series or Aurora radio "
+                  "on firmware 4.3.16 or later.");
+    }
+    if (!control->requiredLicenseFeature.isEmpty()) {
+        const LicenseFeatureState feature = licenseFeature(control->requiredLicenseFeature);
+        if (!feature.seen) {
+            return tr("Waiting for the radio to confirm the Noise Floor Range license.");
+        }
+        if (!feature.enabled) {
+            return tr("Noise Floor Range requires SmartSDR+ (%1).").arg(feature.reason);
+        }
     }
     return {};
 }
@@ -12159,6 +12269,7 @@ void RadioModel::onStatusReceived(const QString& object,
             const bool radioTx = (state == "TRANSMITTING");
             m_radioTransmitting = radioTx;
             m_interlockState = state;
+            m_daxTxSelectionRxObserved = radioReceivingForTransmitDax();
             emit radioTransmittingChanged(radioTx);
 
             // Hardware PTT (mic, ACC, RCA TXREQ) and VOX key the radio without
@@ -13139,6 +13250,17 @@ void RadioModel::applyProfileChanges(const ProfileDelta& d)
             m_transmitModel.setActiveMicProfile(*d.current);
             qCDebug(lcProtocol) << "RadioModel: active mic profile:" << *d.current;
         }
+    } else if (d.type == QLatin1String("cw")) {
+        if (d.list) {
+            m_transmitModel.setCwProfileList(*d.list);
+            qCDebug(lcProtocol) << "RadioModel: CW profiles:" << *d.list;
+        } else if (d.current) {
+            m_transmitModel.setActiveCwProfile(*d.current);
+            qCDebug(lcProtocol) << "RadioModel: active CW profile:" << *d.current;
+        } else if (d.unsavedChanges) {
+            m_transmitModel.setCwProfileUnsaved(*d.unsavedChanges);
+            qCDebug(lcProtocol) << "RadioModel: CW profile unsaved changes:" << *d.unsavedChanges;
+        }
     } else if (d.type == QLatin1String("global")) {
         if (d.list) {
             m_globalProfiles = *d.list;
@@ -13776,6 +13898,9 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     apd["enabled"] = m_transmitModel.apdEnabled();
     apd["configurable"] = m_transmitModel.apdConfigurable();
     apd["equalizer_active"] = m_transmitModel.apdEqualizerActive();
+    const auto apdLifecycle = m_transmitModel.apdLifecycleState();
+    apd["lifecycle_state"] = apdLifecycle
+        ? TransmitModel::apdLifecycleStateName(*apdLifecycle) : QStringLiteral("unreported");
     transmit["apd"] = apd;
 
     QJsonObject profiles;

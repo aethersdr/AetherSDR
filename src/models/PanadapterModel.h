@@ -161,6 +161,12 @@ public:
     int attenuatorStep() const { return m_attenuatorStep; }
     void setAttenuatorLabels(const QStringList& labels);
     void setAttenuatorStep(int step);
+    // The radio's own scope mode (IRadioBackend::panScopeModesChanged). Empty
+    // labels = no choice to offer; index -1 = a mode outside the list.
+    QStringList scopeModeLabels() const { return m_scopeModeLabels; }
+    int scopeModeIndex() const { return m_scopeModeIndex; }
+    void setScopeModeLabels(const QStringList& labels);
+    void setScopeModeIndex(int index);
     // Normalized setters driven by the backend (aetherd RFC 2.3 — rfgain +
     // antenna promoted to universal typed signals). Each emits its existing
     // change-signal only on an actual change; the wire decode lives in
@@ -230,6 +236,9 @@ public:
     // zoom toggles read (#4057).
     bool bandZoomOn() const { return m_bandZoomOn; }
     bool segmentZoomOn() const { return m_segmentZoomOn; }
+    // Radio-owned noise floor range in dB (FlexLib Panadapter.NoiseFloorRange);
+    // empty until the radio reports it.
+    std::optional<double> noiseFloorRange() const { return m_noiseFloorRange; }
 
     // Configuration flags
     bool isResized() const { return m_resized; }
@@ -259,6 +268,8 @@ signals:
     void preampStepChanged(int step);
     void attenuatorLabelsChanged(const QStringList& labels);
     void attenuatorStepChanged(int step);
+    void scopeModeLabelsChanged(const QStringList& labels);
+    void scopeModeIndexChanged(int index);
     void wnbChanged(bool active, int level);
     void wnbStateChanged(bool active, int level, bool updating);
     void wideChanged(bool active);
@@ -281,6 +292,7 @@ signals:
     void daxiqChannelChanged(int channel);
     void bandZoomChanged(bool on);
     void segmentZoomChanged(bool on);
+    void noiseFloorRangeChanged(double db);
 
 private:
     AudioControlGuard m_iqBindingGuard;
@@ -316,6 +328,8 @@ private:
     int         m_preampStep{0};
     QStringList m_attenuatorLabels;
     int         m_attenuatorStep{0};
+    QStringList m_scopeModeLabels;
+    int         m_scopeModeIndex{-1};
     bool        m_wnbActive{false};
     bool        m_wnbUpdating{false};
     bool        m_wideActive{false};
@@ -336,6 +350,7 @@ private:
     int         m_daxiqChannel{0};
     bool        m_bandZoomOn{false};
     bool        m_segmentZoomOn{false};
+    std::optional<double> m_noiseFloorRange;
     bool        m_resized{false};
     bool        m_wfConfigured{false};
 };

@@ -7,6 +7,7 @@
 #include <QTimer>
 #include <QDateTime>
 #include <algorithm>
+#include <utility>
 
 namespace AetherSDR {
 namespace {
@@ -42,13 +43,66 @@ bool RadioModel::daxTxStreamReady() const
         && !m_daxTxUncertain && m_daxTxAudioPermit.permitsStream(m_daxTxStreamId);
 }
 
+bool RadioModel::prepareTciDaxTxStream(const TxCoordinator::Request& input,
+                                      const DaxTxAudioPermit& captured,
+                                      std::function<void(const DaxTxAudioPermit&)> completion)
+{
+    if (!input.valid() || !m_txCoordinator.ownsRequest(input) || !completion
+        || !captured.allowsStreamCreation() || !captured.sameGrant(m_daxTxAudioPermit)
+        || !isConnected() || m_txSessionClosing || m_daxTxStreamId != 0
+        || m_daxTxUncertain || m_daxTxOwnershipIntent || m_wsprTxInput.originalSessionCurrent()
+        || profileLoadRadioStateWritesHeld()) {
+        return false;
+    }
+    const quint64 session = m_daxTxSession;
+    const quint64 ticket = m_daxTxCreatePending ? m_daxTxCreateTicket : m_daxTxCreateTicket + 1;
+    auto* timer = new QTimer(this);
+    timer->setSingleShot(true);
+    timer->setTimerType(Qt::PreciseTimer);
+    const QPointer<QTimer> waiter(timer);
+    const QPointer<RadioModel> self(this);
+    const std::shared_ptr<bool> finished = std::make_shared<bool>(false);
+    const auto finish = [self, waiter, finished, completion = std::move(completion)](
+                            const DaxTxAudioPermit& permit) {
+        if (!waiter || std::exchange(*finished, true)) { return; }
+        waiter->stop();
+        if (self) { QObject::disconnect(self, nullptr, waiter, nullptr); }
+        waiter->deleteLater();
+        completion(permit);
+    };
+    const auto inspect = [this, input, session, ticket, finish] {
+        if (!input.valid() || !isConnected() || m_txSessionClosing
+            || session != m_daxTxSession || ticket != m_daxTxCreateTicket
+            || m_daxTxUncertain || m_daxTxOwnershipIntent || m_wsprTxInput.originalSessionCurrent()
+            || profileLoadRadioStateWritesHeld() || (m_daxTxKnown && !m_daxTxActive)) {
+            finish(DaxTxAudioPermit::blocked());
+        } else if (!m_daxTxCreatePending) {
+            if (m_daxTxStreamId == 0) {
+                finish(DaxTxAudioPermit::blocked());
+            } else if (m_daxTxKnown) {
+                finish(daxTxStreamReady() ? m_daxTxAudioPermit : DaxTxAudioPermit::blocked());
+            }
+        }
+    };
+    connect(this, &RadioModel::daxTxOwnershipChanged, timer, inspect);
+    connect(this, &RadioModel::txAudioStreamReady, timer, inspect);
+    connect(timer, &QTimer::timeout, timer, [finish] { finish(DaxTxAudioPermit::blocked()); });
+    timer->start(kOwnershipTimeoutMs);
+    if (!ensureDaxTxStream(DaxTxRequestReason::TciTxAudio)) {
+        finish(DaxTxAudioPermit::blocked());
+    } else if (self) {
+        inspect();
+    }
+    return true;
+}
+
 QString RadioModel::daxTxOwnershipUnavailableReason(bool take) const
 {
     if (!isConnected() || m_txSessionClosing) {
-        return tr("Connect to a radio before changing DAX TX ownership.");
+        return tr("Connect to a radio before changing DAX TX stream selection.");
     }
     if (!m_backend || !backendCapabilities().canTransmit || !backendCapabilities().hasDaxStreams) {
-        return tr("This radio does not support DAX TX stream ownership.");
+        return tr("This radio does not support DAX TX stream selection.");
     }
     if (ourClientHandle() == 0) {
         return tr("Waiting for this client's radio identity.");
@@ -58,19 +112,24 @@ QString RadioModel::daxTxOwnershipUnavailableReason(bool take) const
     }
     const bool preparingDax = std::any_of(m_daxTxInputs.cbegin(), m_daxTxInputs.cend(),
         [](const TxCoordinator::Request::Weak& input) { return input.lock().valid(); });
-    if (isRadioTransmitting() || transmitOwnershipPending() || preparingDax
+    // A locally completed over retains its TX actor until qualified stop
+    // evidence. Non-keying selection may use fresh RX without clearing it.
+    const bool locallyIdle = !transmitOwnershipPending()
+        || (m_txCoordinator.hasUnconfirmedLocalCompletion() && m_daxTxSelectionRxObserved
+            && m_pendingTxDeliveries == 0 && !m_txCoordinator.hasInFlightDispatches());
+    if (!radioReceivingForTransmitDax() || !locallyIdle || preparingDax || m_daxTxCreatePending
         || m_wsprTxInput.originalSessionCurrent()) {
-        return tr("Finish the current transmission or transmit preparation before changing DAX TX ownership.");
+        return tr("Finish the current transmission or transmit preparation before changing DAX TX stream selection.");
     }
     if (m_daxTxOwnershipIntent) {
-        return tr("Waiting for the current DAX TX ownership request.");
+        return tr("Waiting for the current DAX TX stream selection request.");
     }
     if (m_daxTxUncertain) {
         return tr("Waiting for fresh radio status after an unconfirmed request; no retry was sent.");
     }
     if (m_daxTxStreamId != 0
         && (m_daxTxClientHandle == 0 || m_daxTxClientHandle != ourClientHandle() || !m_daxTxKnown)) {
-        return tr("Waiting for confirmed ownership and TX status of this client's stream.");
+        return tr("Waiting for confirmed identity and TX status of this app's stream.");
     }
     if (take) {
         for (const SliceModel* slice : slices()) {
@@ -78,10 +137,10 @@ QString RadioModel::daxTxOwnershipUnavailableReason(bool take) const
                 return {};
             }
         }
-        return tr("Select a TX slice owned by this client before taking DAX TX.");
+        return tr("Select a TX slice belonging to this app before selecting its DAX TX stream.");
     }
     if (m_daxTxStreamId == 0) {
-        return tr("This client has no DAX TX stream to release.");
+        return tr("This app has no DAX TX stream to deselect.");
     }
     return {};
 }
@@ -117,6 +176,7 @@ QJsonObject RadioModel::daxTxOwnershipSnapshot() const
         {QStringLiteral("streamId"), streamToken(m_daxTxStreamId)},
         {QStringLiteral("clientHandle"), streamToken(m_daxTxClientHandle)},
         {QStringLiteral("txKnown"), m_daxTxKnown},
+        {QStringLiteral("uncertain"), m_daxTxUncertain},
         {QStringLiteral("owned"), owned},
         {QStringLiteral("ready"), daxTxStreamReady()},
         {QStringLiteral("pending"), m_daxTxOwnershipIntent.has_value()},
@@ -140,7 +200,11 @@ void RadioModel::publishDaxTxOwnership()
     const bool ready = isConnected() && m_daxTxStreamId != 0 && m_daxTxClientHandle != 0
         && m_daxTxClientHandle == ourClientHandle() && m_daxTxKnown && m_daxTxActive
         && !m_daxTxUncertain && !releasing;
-    if (!ready || !m_daxTxAudioPermit.permitsStream(m_daxTxStreamId)) {
+    const bool unallocated = isConnected() && !m_txSessionClosing
+        && backendCapabilities().hasDaxStreams && ourClientHandle() != 0
+        && m_daxTxStreamId == 0 && !m_daxTxUncertain && !releasing && !m_daxTxOwnershipIntent;
+    if (!(ready && m_daxTxAudioPermit.permitsStream(m_daxTxStreamId))
+        && !(unallocated && m_daxTxAudioPermit.allowsStreamCreation())) {
         const bool hadGrant = !m_daxTxAudioPermit.sameGrant(DaxTxAudioPermit::blocked());
         m_daxTxAudioPermit.revoke();
         m_daxTxAudioPermit = DaxTxAudioPermit::blocked();
@@ -148,6 +212,7 @@ void RadioModel::publishDaxTxOwnership()
         if (!self || session != m_daxTxSession || incarnation != m_daxTxIncarnation
             || revision != m_daxTxObservationRevision) { return; }
         if (ready) { m_daxTxAudioPermit = DaxTxAudioPermit::confirmed(m_daxTxStreamId); }
+        else if (unallocated) { m_daxTxAudioPermit = DaxTxAudioPermit::unallocated(); }
     }
     emit daxTxAudioRouteChanged(ready ? m_daxTxStreamId : 0, m_daxTxAudioPermit);
     if (self) { emit daxTxOwnershipChanged(); }
@@ -197,7 +262,7 @@ void RadioModel::refreshDaxTxOwnershipGuards()
         const qint64 remaining = m_profileLoadRadioStateWriteHoldUntilMs
             - QDateTime::currentMSecsSinceEpoch();
         m_daxTxGuardTimer.start(static_cast<int>(std::clamp<qint64>(remaining + 1, 1, 60000)));
-        interruptDaxTxOwnership(tr("The profile load interrupted DAX TX ownership. Waiting for fresh radio status."));
+        interruptDaxTxOwnership(tr("The profile load interrupted DAX TX stream selection. Waiting for fresh radio status."));
     }
     if (self && session == m_daxTxSession) { emit daxTxOwnershipChanged(); }
 }
@@ -216,6 +281,7 @@ void RadioModel::interruptDaxTxOwnership(const QString& reason)
 void RadioModel::resetDaxTxOwnership()
 {
     m_daxTxGuardTimer.stop();
+    m_daxTxSelectionRxObserved = false;
     retireDaxTxInputs();
     m_daxTxAudioPermit.revoke();
     ++m_daxTxSession;
@@ -301,7 +367,7 @@ void RadioModel::observeDaxTxStream(const DaxTxStreamDelta& delta)
         m_daxTxKnown = false;
         m_daxTxActive = false;
         m_wsprTxReleaseWhenReady = false;
-        finishDaxTxOwnership(false, tr("The stream's client ownership changed or became unknown."));
+        finishDaxTxOwnership(false, tr("The stream's client identity changed or became unknown."));
         return;
     }
     if (delta.clientHandle) {
@@ -450,7 +516,7 @@ void RadioModel::continueDaxTxOwnership()
             }
             if (!accepted) {
                 self->finishDaxTxOwnership(false, reason.isEmpty()
-                    ? tr("The radio refused the DAX TX ownership request.") : reason);
+                    ? tr("The radio refused the DAX TX stream selection request.") : reason);
                 return;
             }
             self->m_daxTxOwnershipIntent->accepted = true;
@@ -458,7 +524,7 @@ void RadioModel::continueDaxTxOwnership()
         });
     if (self && m_daxTxOwnershipIntent && request.ticket == m_daxTxOwnershipIntent->ticket
         && dispatch != ReceiveDispatch::Dispatched) {
-        finishDaxTxOwnership(false, tr("This backend could not dispatch DAX TX ownership."));
+        finishDaxTxOwnership(false, tr("This backend could not dispatch DAX TX stream selection."));
     }
 }
 
@@ -510,7 +576,7 @@ void RadioModel::expireDaxTxOwnership(quint64 ticket)
     m_daxTxUncertain = true;
     m_wsprTxReleaseWhenReady = false;
     m_daxTxOutcome = QStringLiteral("timed-out");
-    m_daxTxError = tr("DAX TX ownership was not confirmed. No retry or rollback was sent.");
+    m_daxTxError = tr("DAX TX stream selection was not confirmed. No retry or rollback was sent.");
     m_daxTxAudioPermit.revoke();
     retireDaxTxInputs();
     if (!self || session != m_daxTxSession) { return; }

@@ -92,4 +92,15 @@ inline bool spanControlLiveOnPan(bool radioWide,
     return owner.isEmpty() || owner == panId;
 }
 
+// Whether `panId`'s -/+ span pair is dimmed because the backend cannot change
+// the span at all: it declares its pan display controls and leaves bandwidth
+// out of them (today the Demo, whose span is its fixed audio scene). An absent
+// declaration keeps the pair live, as above. A pane showing KiwiSDR stays live
+// too: its -/+ zoom the Kiwi view, not the radio.
+inline bool spanFixedOnPan(bool connected, bool displayControlDeclared,
+                           bool bandwidthDeclared, bool paneShowsKiwi)
+{
+    return connected && displayControlDeclared && !bandwidthDeclared && !paneShowsKiwi;
+}
+
 }  // namespace AetherSDR

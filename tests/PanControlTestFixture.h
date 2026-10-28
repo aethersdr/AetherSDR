@@ -36,6 +36,11 @@ public:
         connection.m_commandSinkForTest = std::move(writer);
         backend.setAudioCommandSink(radio.audioCommandSink());
     }
+    static void acceptGuiRegistration(RadioModel& radio)
+    {
+        radio.m_guiClientRegistrationState.begin();
+        radio.m_guiClientRegistrationState.complete(0, {});
+    }
     static void startRx(RadioModel& radio) { radio.createRxAudioStream(); }
     static void stopRx(RadioModel& radio) { radio.removeRxAudioStream(); }
     static void hold(RadioModel& radio) { radio.m_profileLoadRadioStateWriteHoldUntilMs = QDateTime::currentMSecsSinceEpoch() + 60000; }

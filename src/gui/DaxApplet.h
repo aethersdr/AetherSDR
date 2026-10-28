@@ -49,6 +49,7 @@ signals:
 
 private:
     void buildUI();
+    void buildBridgeUI(QVBoxLayout* outer);
     void buildOwnershipUI(QVBoxLayout* outer);
     void updateDaxTxOwnership();
     void updateReceiveLabels();
@@ -61,8 +62,7 @@ private:
     int m_maxDaxChannels{kChannels};  // radio slice capacity (FlexLib table)
 
     QPushButton*  m_daxEnable{nullptr};
-    QPushButton*  m_daxTxTake{nullptr};
-    QPushButton*  m_daxTxRelease{nullptr};
+    QPushButton*  m_daxTxToggle{nullptr};
     QLabel*       m_daxTxOwnershipStatus{nullptr};
     QWidget*      m_daxRxRow[kChannels]{};  // per-channel row container — hidden to gate to maxSlices()
     MeterSlider*  m_daxRxMeter[kChannels]{};

@@ -376,6 +376,7 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         m_cwxCommandOperation = request ? m_txCoordinator.requestOperation(*request) : m_txOperation;
     }
     m_txOperationActivities |= static_cast<unsigned>(activity);
+    m_daxTxSelectionRxObserved = false;
     // Independent backend-generated media belongs to this captured grant's
     // input. The shared desktop producer cannot carry another actor's audio.
     // Keep desktop's compatible multi-contributor context unchanged.
@@ -714,6 +715,7 @@ std::function<void()> RadioModel::trackTxDelivery(const TxCoordinator::Operation
 {
     const bool tracked = operation.sameOperation(m_txOperation) && operation.permitsCleanup();
     if (tracked) {
+        m_daxTxSelectionRxObserved = false;
         ++m_pendingTxDeliveries;
     }
     return [this, operation, tracked] {
@@ -723,6 +725,7 @@ std::function<void()> RadioModel::trackTxDelivery(const TxCoordinator::Operation
         }
         --m_pendingTxDeliveries;
         completeLocalTxIfDrained();
+        emit daxTxOwnershipChanged();
     };
 }
 

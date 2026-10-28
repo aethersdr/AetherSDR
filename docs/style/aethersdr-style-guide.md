@@ -63,6 +63,7 @@ live in the `color.canon.*` token group of
 | Blooms | `color.canon.bloom.blue` / `bloom.teal` | blue 16 % top-right, teal 10 % top-left |
 | Grid | `color.canon.grid` | 64 px grid at 3.5 %, fading out |
 | Brand gradient | `color.brand.gradient` | `#3aa7ff → #5de3ff → #8ef7e6` at 100° |
+| Categories (marks only: chip dots, card edges) | `color.canon.category.{cyan,aqua,blue,amber,violet,rose,teal}` | aethersdr.com's category palette; 3:1 on the ground and raised cards in both themes |
 
 The theme JSON writes alpha colours in Qt's `#AARRGGBB` order
 (`#1f78a5d2` is the hairline above).
@@ -89,6 +90,7 @@ The canon does not change control geometry.
 |---|---|
 | A window in the canon (no title bar, 16 px rounded corners, ambient ground, round close button, drag to move, Escape or ⌘W / Ctrl+W to close) | `CanonWindow`; put content in `bodyWidget()` |
 | A surface in the canon inside the main window: an applet, a panadapter, a canvas (the same ground, hairline and round close button, square corners) | `CanonApplet`, `CanonPan` or `CanonCanvas` from `gui/CanonSurface.h`; put content in `bodyWidget()` |
+| A confirmation inside a canon window (instead of a `QMessageBox`) | `CanonPrompt` from `gui/CanonPrompt.h`: a small `CanonWindow` with a `color.accent.warning` eyebrow, the question in `ink`, and Cancel (secondary, the default) beside a confirm button named for the action, outlined in `color.accent.warning`. Return, Escape and the corner button decline; `exec()` returns `Accepted` only for the confirm button |
 | A logo or avatar with a contrast ring and a cyan spark | `SparkRing` |
 | A recognition control (gold spark around a button) | `SparkBorder` |
 | The "AetherSDR" wordmark ("Aether" in ink, "SDR" in the gradient) | `BrandMark::paintWordmark` |
@@ -112,8 +114,8 @@ windows" lists what it keeps (the `FramelessMoveHelper` drag, Escape and
 ⌘W, `WA_DeleteOnClose` plus a `QPointer` so a second open raises it).
 Which windows the canon covers: short-lived, informational windows (About,
 Remote Access, and the candidates listed on #6239, once the maintainer picks
-them), and the tool windows the maintainer has moved to it (Waveforms,
-Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, AetherControl, Radio Setup, Connect to Radio, AGC-T Calibration). Other tool and workspace dialogs keep
+them), and the tool windows the maintainer has moved to it (Updates, Waveforms,
+Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Radio Setup, TX Band Settings, Callsign Lookup, Connect to Radio, AGC-T Calibration, Icom RC-28 Button Mapping, FFTW Wisdom, MQTT Settings). Other tool and workspace dialogs keep
 `PersistentDialog` and `FramelessWindowTitleBar` as `docs/agents/gui.md`
 describes. For windows the canon covers,
 `FramelessWindowTitleBar` is deprecated: those dialogs move to
@@ -162,6 +164,10 @@ border, once every 7 s for the brand (cyan) and every 3 s for recognition
 exposed, and **hold still when the OS asks for reduced motion**
 (`QAccessibilityHints::motionPreference`). Do not add other animation
 without an RFC.
+
+**The Updates window's** primary action (File → Update..., RFC #5304),
+**Get AetherSDR x**, uses the brand gradient under the same accepted
+light-theme exception as About's OK (#6239).
 
 ## Migrating a surface
 

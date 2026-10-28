@@ -280,6 +280,8 @@ public:
     bool licenseFeatureEnabled(const QString& name) const;
     QString licenseFeatureReason(const QString& name) const;
     QString autoAgcThresholdUnavailableReason(const SliceModel* slice) const;
+    // Empty when the radio can take a noise floor range for its panadapters.
+    QString panNoiseFloorRangeUnavailableReason() const;
 
     QString ip()          const { return m_ip; }
     QString netmask()     const { return m_netmask; }
@@ -699,6 +701,15 @@ public:
     // so a connect must never replay this client-persisted flag onto it.
     void notePcAudioEnabled(bool on);
     bool ensureDaxTxStream(DaxTxRequestReason reason);
+    // Await only allocation and radio selection of this input's absent stream.
+    // Existing deselected streams require an explicit stream-selection action.
+    bool prepareTciDaxTxStream(const TxCoordinator::Request& input,
+                               const DaxTxAudioPermit& captured,
+                               std::function<void(const DaxTxAudioPermit&)> completion);
+    QJsonObject daxTxOwnershipSnapshot() const;
+    QString daxTxOwnershipUnavailableReason(bool take) const;
+    bool requestDaxTxOwnership(bool take);
+    bool daxTxStreamReady() const;
     // The radio's `transmit dax` flag is ONE bit for the whole radio, shared
     // with every client: it picks DAX TX or the microphone as the source of
     // the next transmission. Every in-process producer that needs it on holds
@@ -725,10 +736,6 @@ public:
     void acquireTransmitDax(DaxTxFlagHolder who);
     void releaseTransmitDax(DaxTxFlagHolder who);
     bool transmitDaxHeldBy(DaxTxFlagHolder who) const;
-    QJsonObject daxTxOwnershipSnapshot() const;
-    QString daxTxOwnershipUnavailableReason(bool take) const;
-    bool requestDaxTxOwnership(bool take);
-    bool daxTxStreamReady() const;
     bool prepareWsprTransmit(const TxCoordinator::Request& input);
     void releaseWsprTransmit(const TxCoordinator::Request& input);
     // "The WSPR beacon's transmit-audio route is ready." On a Flex that is
@@ -1074,8 +1081,12 @@ public:
     ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
                                      QObject* replyContext = nullptr,
                                      const RadioSetupCompletion& completion = {});
+    // The completion answers the radio's reply, or refuses at once when the
+    // request is not dispatched; it is dropped once replyContext is destroyed.
     ReceiveDispatch requestTxBand(const TxBandRequest& request,
-                                 std::optional<RadioControlSession> expectedSession = {});
+                                 std::optional<RadioControlSession> expectedSession = {},
+                                 QObject* replyContext = nullptr,
+                                 const RadioSetupCompletion& completion = {});
     ReceiveDispatch requestUsbCable(const UsbCableRequest& request);
     ReceiveDispatch requestTransverter(const TransverterRequest& request,
                                       QObject* replyContext = nullptr,
@@ -1153,6 +1164,9 @@ public:
     // wire-text fallback.
     void setPanPreampFor(const QString& panId, int step);
     void setPanAttenuatorFor(const QString& panId, int step);
+    // The radio's own scope mode — `index` addresses
+    // PanadapterModel::scopeModeLabels. Seam-only, like the two above.
+    void setPanScopeModeFor(const QString& panId, int index);
 
     // Display controls — FFT (display pan set)
     void setPanAverage(int frames);
@@ -1191,6 +1205,7 @@ signals:
     void infoChanged();
     void licenseFeaturesChanged();
     void autoAgcThresholdAvailabilityChanged();
+    void panNoiseFloorRangeAvailabilityChanged();
     void connectionStateChanged(bool connected);
     void tuneOutputControlChanged();
     // Per-pan transmit permission changed. Consumers use the pan id to update
@@ -1625,6 +1640,10 @@ private:
     void resetGpsState(bool receiveMessages = true);
     void wireGpsSessionReceivers(bool receiveMessages = true);
     void handleMessageReceived(const ParsedMessage& msg, quint64 gpsSessionGeneration);
+    // Asks for the CW profile list once per session, whenever the backend's CW
+    // capability is (or later becomes) engaged.
+    void refreshCwProfilesIfSupported();
+    void refreshCwProfilesOnCapabilityChange();
     void applyMemoryChanges(const MemoryDelta& delta);
     void reportMemoryImportFailure(const QString& reason);
     void applyProfileChanges(const ProfileDelta& delta);
@@ -2226,6 +2245,7 @@ private:
     bool        m_cwxDrainArmed{false}; // CWX drain-release latch, immune to interlock flicker (#3949)
     bool        m_txAudioGate{false}; // actual TX audio gate state
     bool        m_radioTransmitting{false}; // raw interlock TX state, any owner
+    bool        m_daxTxSelectionRxObserved{false};
     // Last interlock state= the radio reported, any owner; empty until one
     // arrives and on backends that report none. m_radioTransmitting is only
     // `state == TRANSMITTING`, so it is already false in PTT_REQUESTED and
@@ -2517,6 +2537,7 @@ private:
     QString     m_activeGlobalProfile;
     bool        m_profileDatabaseImporting{false};
     bool        m_profileDatabaseExporting{false};
+    bool        m_cwProfilesRequested{false};   // this session asked for "profile cw info"
     RadioStatusOwnership::RemoteAudioRxTracking m_rxAudio;
     struct DaxStreamDebugState {
         QString type;
