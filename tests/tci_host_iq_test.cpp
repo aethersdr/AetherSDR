@@ -87,6 +87,7 @@ class TciHostIqTest {
         TciServer server{&model};
         HostIqBackend* backend{nullptr};
         QHash<TciClient*, QList<QByteArray>> frames;
+        int binaryFrames = 0;  // IQ must take the droppable stream path
         QHash<TciClient*, QStringList> texts;
         Fixture()
         {
@@ -103,7 +104,8 @@ class TciHostIqTest {
         {
             auto* socket = new TciClient(&server);
             socket->textSink = [this, socket](const QString& t) { texts[socket].append(t); return qint64(t.size()); };
-            socket->binarySink = [this, socket](const QByteArray& b) { frames[socket].append(b); return qint64(b.size()); };
+            socket->streamSink = [this, socket](const QByteArray& b) { frames[socket].append(b); return qint64(b.size()); };
+            socket->binarySink = [this](const QByteArray& b) { ++binaryFrames; return qint64(b.size()); };
             TciServer::ClientState state;
             state.socket = socket;
             state.protocol = new TciProtocol(&model, &server.m_routingState, &server.m_trxMap);
@@ -134,6 +136,7 @@ public:
         f.backend->feed(3, 2048, 96000);
         check(f.said(a, QStringLiteral("iq_samplerate:96000;")), "the radio's rate is announced");
         check(f.frames[a].size() == 1, "one frame per backend run");
+        check(f.binaryFrames == 0, "IQ is sent droppable, never on the fatal binary path");
         if (!f.frames[a].isEmpty()) {
             const QByteArray& p = f.frames[a].first();
             check(word(p,0) == 0 && word(p,1) == 96000 && word(p,2) == 3

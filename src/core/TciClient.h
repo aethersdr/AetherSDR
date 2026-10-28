@@ -37,6 +37,7 @@ public:
     QWebSocketProtocol::CloseCode lastClose{QWebSocketProtocol::CloseCodeNormal};
     std::function<qint64(const QString&)> textSink;
     std::function<qint64(const QByteArray&)> binarySink;
+    std::function<qint64(const QByteArray&)> streamSink;
     std::function<void(QWebSocketProtocol::CloseCode, const QString&)> closeSink;
 
     quint64 id() const { return lifetime->id; }
@@ -51,6 +52,9 @@ public:
     { return live() && textSink ? textSink(message) : -1; }
     qint64 sendBinaryMessage(const QByteArray& message)
     { return live() && binarySink ? binarySink(message) : -1; }
+    // IQ frames: dropped, not fatal, while the transport is behind.
+    qint64 sendStreamMessage(const QByteArray& message)
+    { return live() && streamSink ? streamSink(message) : -1; }
     void close(QWebSocketProtocol::CloseCode code = QWebSocketProtocol::CloseCodeNormal,
                const QString& reason = {})
     {

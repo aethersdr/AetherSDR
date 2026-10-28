@@ -336,10 +336,34 @@ qint64 TciIoWorker::sendBinary(quint64 id, const QByteArray& message)
     return it->socket->sendBinaryMessage(message);
 }
 
+// IQ is a picture, not a conversation: a frame the socket cannot take now is
+// dropped and the client stays. It may fill only half the backlog, so text and
+// RX audio, which still close on overrun, always find room behind it. A 384 kHz
+// stream is ~3 MB/s; over Wi-Fi that used to retire the client within minutes.
+qint64 TciIoWorker::sendStreamFrame(quint64 id, const QByteArray& message)
+{
+    const auto it = m_clients.find(id);
+    if (it == m_clients.end() || !it->socket || !it->lifetime->live.load()) { return -1; }
+    const qint64 pending = it->socket->bytesToWrite();
+    if (pending > kMaxRxBacklogBytes / 2 - message.size()) {
+        if (it->droppedStreamFrames++ % 500 == 0) {
+            qCWarning(lcCat) << "TCI: IQ frame dropped, socket behind: client=" << id
+                             << "pending_bytes=" << pending << "dropped=" << it->droppedStreamFrames;
+        }
+        return 0;
+    }
+    return it->socket->sendBinaryMessage(message);
+}
+
 void TciIoWorker::closeClient(quint64 id, QWebSocketProtocol::CloseCode code, const QString& reason)
 {
     const auto it = m_clients.find(id);
     if (it == m_clients.end()) { return; }
+    // The server's disconnect line cannot tell this from a network drop.
+    if (code != QWebSocketProtocol::CloseCodeNormal) {
+        qCWarning(lcCat) << "TCI: closing client=" << id << "code=" << int(code) << "reason=" << reason
+                         << "pending_bytes=" << (it->socket ? it->socket->bytesToWrite() : -1);
+    }
     it->lifetime->live.store(false, std::memory_order_release);
     it->producer.invalidate();
     if (m_txClient == id) { stopChrono(); }
