@@ -961,6 +961,10 @@ void TciServer::onClientOpened(std::shared_ptr<TciClientLifetime> lifetime,
         return io->post([io, id, data] { io->sendBinary(id, data); }, data.size())
             ? data.size() : -1;
     };
+    ws->streamSink = [io, id](const QByteArray& data) -> qint64 {
+        return io->post([io, id, data] { io->sendStreamFrame(id, data); }, data.size())
+            ? data.size() : -1;
+    };
     ws->closeSink = [io, id](QWebSocketProtocol::CloseCode code, const QString& reason) {
         io->post([io, id, code, reason] { io->closeClient(id, code, reason); });
     };
@@ -4284,7 +4288,7 @@ void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sam
             reinterpret_cast<const float*>(swapped.constData()), iqFrames);
         for (auto& cs : m_clients) {
             if (cs.iqReceivers.contains(trx))
-                cs.socket->sendBinaryMessage(frame);
+                cs.socket->sendStreamMessage(frame);
         }
     }
 }
@@ -4497,7 +4501,7 @@ void TciServer::onSliceIqReady(int sliceId, const QByteArray& iqFloat32, int sam
                                                  samples, iqFrames);
         for (auto& cs : m_clients) {
             if (cs.iqReceivers.contains(trx))
-                cs.socket->sendBinaryMessage(frame);
+                cs.socket->sendStreamMessage(frame);
         }
     }
 }

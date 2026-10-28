@@ -70,6 +70,7 @@ public:
     void acknowledgeText(quint64 id);
     void sendText(quint64 id, const QString& message);
     qint64 sendBinary(quint64 id, const QByteArray& message);
+    qint64 sendStreamFrame(quint64 id, const QByteArray& message);
     void closeClient(quint64 id, QWebSocketProtocol::CloseCode code, const QString& reason);
     void configureClient(const TciStreamConfig& config);
     void configureLineOut(const TciLineOutConfig& config);
@@ -120,6 +121,7 @@ private:
         };
         std::deque<Text> texts;
         qsizetype textBytes{0};
+        quint64 droppedStreamFrames{0};
         int error{-1};
         QString errorText;
     };
