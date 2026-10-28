@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QTcpSocket>
 #include <QtTest>
+#include <memory>
 
 // Only inert socket objects are used; no test connects, binds, or listens.
 namespace AetherSDR {
@@ -63,8 +64,9 @@ class TransferLifecycleTest final : public QObject {
 private slots:
     void waveformProgressCanDestroyOrCancel()
     {
-        QPointer<WaveformInstaller> transfer = new WaveformInstaller(nullptr);
-        connect(transfer, &WaveformInstaller::progressChanged, this, [&] { delete transfer.data(); });
+        auto owned = std::make_unique<WaveformInstaller>(nullptr);
+        QPointer<WaveformInstaller> transfer(owned.get());
+        connect(transfer, &WaveformInstaller::progressChanged, this, [&] { owned.reset(); });
         WaveformInstallerTestAccess::acknowledge(*transfer);
         QVERIFY(transfer.isNull());
 
@@ -78,25 +80,28 @@ private slots:
     }
     void firmwareProgressCanDestroy()
     {
-        QPointer<FirmwareUploader> transfer = new FirmwareUploader(nullptr);
-        connect(transfer, &FirmwareUploader::progressChanged, this, [&] { delete transfer.data(); });
+        auto owned = std::make_unique<FirmwareUploader>(nullptr);
+        QPointer<FirmwareUploader> transfer(owned.get());
+        connect(transfer, &FirmwareUploader::progressChanged, this, [&] { owned.reset(); });
         FirmwareUploaderTestAccess::acknowledge(*transfer);
         QVERIFY(transfer.isNull());
     }
     void profileProgressCanDestroy()
     {
-        QPointer<ProfileTransfer> transfer = new ProfileTransfer(nullptr);
-        connect(transfer, &ProfileTransfer::progress, this, [&] { delete transfer.data(); });
+        auto owned = std::make_unique<ProfileTransfer>(nullptr);
+        QPointer<ProfileTransfer> transfer(owned.get());
+        connect(transfer, &ProfileTransfer::progress, this, [&] { owned.reset(); });
         ProfileTransferTestAccess::progress(*transfer);
         QVERIFY(transfer.isNull());
     }
     void dvkAdmissionCanDestroyAtStart()
     {
         DvkModel dvk(nullptr);
-        QPointer<DvkWavTransfer> transfer = new DvkWavTransfer(nullptr);
+        auto owned = std::make_unique<DvkWavTransfer>(nullptr);
+        QPointer<DvkWavTransfer> transfer(owned.get());
         DvkWavTransferTestAccess::enable(*transfer, dvk);
         connect(&dvk, &DvkModel::admissionChanged, this, [&] {
-            if (transfer && !dvk.canStartOperation()) { delete transfer.data(); }
+            if (transfer && !dvk.canStartOperation()) { owned.reset(); }
         });
         transfer->download(1, QStringLiteral("unused.wav"));
         QVERIFY(transfer.isNull());
