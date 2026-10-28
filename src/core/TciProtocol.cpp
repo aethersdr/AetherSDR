@@ -396,6 +396,8 @@ QString TciProtocol::generateInitBurst()
             // AGC
             burst += QStringLiteral("agc_mode:%1,%2;")
                          .arg(trx).arg(s->receiveAgcMode().toLower());
+            burst += QStringLiteral("agc_gain:%1,%2;")
+                         .arg(trx).arg(s->receiveAgcThreshold());
 
             // DSP
             burst += QStringLiteral("rx_nb_enable:%1,%2;")

@@ -2934,6 +2934,21 @@ public:
             std::printf("      GUI RIT/XIT offset was not broadcast\n");
             return false;
         }
+
+        sent.clear();
+        SliceDelta agc;
+        agc.agcMode = QStringLiteral("fast");
+        agc.agcThreshold = 65;
+        s0->applyChanges(agc);
+        if (!sent.contains(QStringLiteral("agc_mode:0,fast;"))
+            || !sent.contains(QStringLiteral("agc_gain:0,65;"))) {
+            std::printf("      GUI AGC change was not broadcast\n");
+            return false;
+        }
+        if (!protocol.generateInitBurst().contains(QStringLiteral("agc_gain:0,65;"))) {
+            std::printf("      init burst misses agc_gain\n");
+            return false;
+        }
         return true;
     }
 };
@@ -3126,7 +3141,7 @@ int main(int argc, char** argv)
                 dsbMode ? "PASS" : "FAIL");
     std::printf("%s  rx_ctun_ex drives center lock, inverted\n",
                 rxCtunEx ? "PASS" : "FAIL");
-    std::printf("%s  GUI split and RIT/XIT offsets reach clients\n",
+    std::printf("%s  GUI split, RIT/XIT offsets and AGC reach clients\n",
                 guiSplit ? "PASS" : "FAIL");
 
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();

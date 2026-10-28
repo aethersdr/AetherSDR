@@ -3202,6 +3202,31 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     wireOffset(&SliceModel::ritChanged, "rit_offset");
     wireOffset(&SliceModel::xitChanged, "xit_offset");
 
+    // AGC mode and gain from the GUI reached no client either. Read the way
+    // the GET reads (an external receive source can replace the slice's own),
+    // de-duped as text since status refreshes re-emit both.
+    auto wireAgc = [this, slice](auto signal, const char* cmd, std::function<QString()> read) {
+        auto last = std::make_shared<QString>();
+        connect(slice, signal, this, [this, slice, cmd, last, read] {
+            const QString v = read();
+            if (*last == v) {
+                return;
+            }
+            *last = v;
+            if (m_clients.isEmpty()) {
+                return;
+            }
+            broadcast(QStringLiteral("%1:%2,%3;")
+                          .arg(QLatin1String(cmd))
+                          .arg(m_trxMap.trxForSlice(m_model, slice))
+                          .arg(v));
+        });
+    };
+    wireAgc(&SliceModel::agcModeChanged, "agc_mode",
+            [slice] { return slice->receiveAgcMode().toLower(); });
+    wireAgc(&SliceModel::agcThresholdChanged, "agc_gain",
+            [slice] { return QString::number(slice->receiveAgcThreshold()); });
+
     // Deferred state sync on (re)wire: a Flex band change recreates the slice, and
     // if the restored frequency equals the init value no frequencyChanged fires,
     // so vfo: would never be announced (#2824). Push ~400 ms later, after the
