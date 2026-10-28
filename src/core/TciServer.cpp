@@ -921,6 +921,7 @@ void TciServer::onClientOpened(std::shared_ptr<TciClientLifetime> lifetime,
     // The IQ rate is shared across clients; a client joining after another
     // has moved it must not be told the 48000 default in its init burst.
     protocol->setIqSampleRate(achievedIqSampleRate());
+    protocol->setCenterLockQuery(m_centerLockQuery);
 
     ClientState cs;
     cs.txProducer = ([model = m_model, ws]() {
@@ -1646,6 +1647,9 @@ void TciServer::onTextMessage(const QString& msg)
         if (const auto request = client.protocol->takeTuneRequest()) {
             handleTuneRequest(ws, *request);
         }
+        if (const auto request = client.protocol->takeCenterLockRequest()) {
+            if (m_centerLockSet) m_centerLockSet(request->sliceId, request->locked);
+        }
 
         // If the command changed radio state, broadcast to all other clients
         QString notification = client.protocol->pendingNotification();
@@ -1669,6 +1673,16 @@ void TciServer::onTextMessage(const QString& msg)
         // stashes the 0-100 value and we apply it here via setTxGain().
         int txg = client.protocol->pendingTxGain();
         if (txg >= 0) setTxGain(txg / 100.0f);
+    }
+}
+
+void TciServer::setCenterLockHandlers(std::function<void(int, bool)> set,
+                                      std::function<bool(int)> query)
+{
+    m_centerLockSet = std::move(set);
+    m_centerLockQuery = std::move(query);
+    for (auto& cs : m_clients) {
+        if (cs.protocol) cs.protocol->setCenterLockQuery(m_centerLockQuery);
     }
 }
 

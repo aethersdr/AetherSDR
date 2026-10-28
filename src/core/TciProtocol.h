@@ -3,6 +3,7 @@
 
 #include <QString>
 #include <QStringList>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -46,6 +47,14 @@ public:
         bool tune { false };
     };
 
+    // rx_ctun_ex SET, already inverted: CTUN on is center lock off.
+    struct CenterLockRequest
+    {
+        int trx { -1 };
+        int sliceId { -1 };
+        bool locked { false };
+    };
+
     explicit TciProtocol(RadioModel* model, TciRoutingState* routingState = nullptr,
                          const TciTrxMap* trxMap = nullptr);
 
@@ -64,6 +73,14 @@ public:
     std::optional<SplitRequest> takeSplitRequest();
     std::optional<TrxRequest> takeTrxRequest();
     std::optional<TuneRequest> takeTuneRequest();
+    std::optional<CenterLockRequest> takeCenterLockRequest();
+
+    // Center lock lives in MainWindow, not RadioModel, so TciServer injects
+    // a query for `rx_ctun_ex` GETs. Unset (tests, no GUI) = GET unanswered.
+    void setCenterLockQuery(std::function<bool(int sliceId)> query)
+    {
+        m_centerLockQuery = std::move(query);
+    }
 
     // After handleCommand(), if the command was a master-volume SET, this
     // returns the requested level (0-100). -1 means no master-volume change
@@ -125,6 +142,7 @@ private:
     QString cmdCwMacrosSpeed(const QStringList& args, bool isSet);
     QString cmdCwMsg(const QStringList& args);
     QString cmdLock(const QStringList& args, bool isSet);
+    QString cmdRxCtunEx(const QStringList& args, bool isSet);
     QString cmdSqlEnable(const QStringList& args, bool isSet);
     QString cmdSqlLevel(const QStringList& args, bool isSet);
     void queueSquelch(SliceModel* s, int trx, bool on, int level);
@@ -250,6 +268,8 @@ private:
     std::optional<SplitRequest> m_splitRequest;
     std::optional<TrxRequest> m_trxRequest;
     std::optional<TuneRequest> m_tuneRequest;
+    std::optional<CenterLockRequest> m_centerLockRequest;
+    std::function<bool(int)> m_centerLockQuery;
     int         m_pendingMasterVolume{-1};   // -1 = no change requested
     int         m_pendingTxGain{-1};         // -1 = no change requested
     int         m_activeTrx{-1};             // -1 = focus not yet known (#4160)

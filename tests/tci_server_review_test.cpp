@@ -2774,8 +2774,7 @@ public:
         if (TciProtocol::smartsdrToTci(QStringLiteral("DSB")) != QStringLiteral("dsb")
             || TciProtocol::tciToSmartSDR(QStringLiteral("dsb"), &ok) != QStringLiteral("DSB")
             || !ok) {
-            std::printf("      DSB does not map to dsb and back
-");
+            std::printf("      DSB does not map to dsb and back\n");
             return false;
         }
         RadioModel model;
@@ -2785,8 +2784,56 @@ public:
         const QString list = burst.mid(at, burst.indexOf(QLatin1Char(';'), at) - at);
         if (!list.split(QLatin1Char(':')).value(1).split(QLatin1Char(','))
                  .contains(QStringLiteral("dsb"))) {
-            std::printf("      modulations_list lacks dsb: %s
-", qPrintable(list));
+            std::printf("      modulations_list lacks dsb: %s\n", qPrintable(list));
+            return false;
+        }
+        return true;
+    }
+
+    // rx_ctun_ex is Thetis's CTUN switch; AetherSDR maps it onto center
+    // lock, inverted. A SET is handed to TciServer as a request and
+    // broadcast; a GET is answered only once a query is injected.
+    static bool rxCtunExDrivesCenterLockInverted()
+    {
+        RadioModel model;
+        QString error;
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)) {
+            std::printf("      slice fixture failed: %s\n", qPrintable(error));
+            return false;
+        }
+        TciProtocol protocol(&model);
+
+        if (!protocol.handleCommand(QStringLiteral("rx_ctun_ex:0")).isEmpty()) {
+            std::printf("      GET answered without a center-lock query\n");
+            return false;
+        }
+
+        protocol.handleCommand(QStringLiteral("rx_ctun_ex:0,true"));
+        const QString note = protocol.pendingNotification();
+        const auto off = protocol.takeCenterLockRequest();
+        if (!off || off->sliceId != 0 || off->locked
+            || note != QStringLiteral("rx_ctun_ex:0,true;")) {
+            std::printf("      ctun true did not request center lock off\n");
+            return false;
+        }
+
+        protocol.handleCommand(QStringLiteral("rx_ctun_ex:0,false"));
+        const auto on = protocol.takeCenterLockRequest();
+        if (!on || !on->locked) {
+            std::printf("      ctun false did not request center lock on\n");
+            return false;
+        }
+
+        protocol.handleCommand(QStringLiteral("rx_ctun_ex:0,maybe"));
+        if (protocol.takeCenterLockRequest()) {
+            std::printf("      malformed bool produced a request\n");
+            return false;
+        }
+
+        protocol.setCenterLockQuery([](int sliceId) { return sliceId == 0; });
+        if (protocol.handleCommand(QStringLiteral("rx_ctun_ex:0"))
+            != QStringLiteral("rx_ctun_ex:0,false;")) {
+            std::printf("      GET of a locked slice is not ctun false\n");
             return false;
         }
         return true;
@@ -2885,6 +2932,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::txAudioRestoresTransmitDaxAsFound();
     const bool dsbMode
         = AetherSDR::TciServerReviewTest::dsbRoundTripsAndIsAdvertised();
+    const bool rxCtunEx
+        = AetherSDR::TciServerReviewTest::rxCtunExDrivesCenterLockInverted();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -2973,9 +3022,10 @@ int main(int argc, char** argv)
                 chronoCatchUp ? "PASS" : "FAIL");
     std::printf("%s  TCI TX hands transmit dax back as found (#6538)\n",
                 daxRestored ? "PASS" : "FAIL");
-    std::printf("%s  DSB maps to dsb both ways and is in modulations_list
-",
+    std::printf("%s  DSB maps to dsb both ways and is in modulations_list\n",
                 dsbMode ? "PASS" : "FAIL");
+    std::printf("%s  rx_ctun_ex drives center lock, inverted\n",
+                rxCtunEx ? "PASS" : "FAIL");
 
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
@@ -2998,6 +3048,6 @@ int main(int argc, char** argv)
         && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
-        && chronoIdle && chronoCatchUp && daxRestored && dsbMode
+        && chronoIdle && chronoCatchUp && daxRestored && dsbMode && rxCtunEx
         ? 0 : 1;
 }

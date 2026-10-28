@@ -2549,6 +2549,10 @@ void MainWindow::wireCatPorts()
     m_session->setTciServer(tci);
     m_appletPanel->tciApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->tciApplet()->setTciServer(tciServer());
+    // `rx_ctun_ex` (Thetis CTUN) drives center lock, the inverse switch.
+    tci->setCenterLockHandlers(
+        [this](int sliceId, bool locked) { automationSetCenterLock(sliceId, locked); },
+        [this](int sliceId) { return centerLockActiveForSlice(m_radioModel.slice(sliceId)); });
     // TCI RX row count follows the radio's slice capacity too (#4854 review).
     if (auto* tciApplet = m_appletPanel->tciApplet()) {
         tciApplet->setMaxDaxChannels(m_radioModel.maxSlices());
