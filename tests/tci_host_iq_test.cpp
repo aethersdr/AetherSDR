@@ -11,9 +11,12 @@
 #include <QCoreApplication>
 #include <QHash>
 #include <QStringList>
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <numbers>
 #include <vector>
 
 namespace AetherSDR {
@@ -133,6 +136,8 @@ public:
         check(f.said(a, QStringLiteral("iq_start:0;")), "iq_start confirmed without a DAX IQ plane");
         check(f.backend->tapped(3) && !f.backend->tapped(17), "only the receiver's slice is tapped");
 
+        // Asked for the radio's own rate: nothing to decimate.
+        f.command(a, QStringLiteral("iq_samplerate:96000;"));
         f.backend->feed(3, 2048, 96000);
         check(f.said(a, QStringLiteral("iq_samplerate:96000;")), "the radio's rate is announced");
         check(f.frames[a].size() == 1, "one frame per backend run");
@@ -149,13 +154,104 @@ public:
         check(f.frames[a].size() == 1, "an untapped slice's IQ is dropped");
 
         f.command(a, QStringLiteral("iq_samplerate:48000;"));
-        check(f.said(a, QStringLiteral("iq_samplerate:96000;")) && f.server.m_hostIqRate == 96000,
-              "a rate request is answered with the radio's rate");
+        check(f.said(a, QStringLiteral("iq_samplerate:48000;")) && f.server.m_hostIqRate == 96000,
+              "a lower rate request is granted while the radio stays at its own");
+        f.backend->feed(3, 2048, 96000);
+        check(f.frames[a].size() == 2 && word(f.frames[a].last(),1) == 48000
+                  && word(f.frames[a].last(),5) == 2048,
+              "the next frame carries half the pairs at the requested rate");
 
         f.command(a, QStringLiteral("iq_stop:0;"));
         check(!f.backend->tapped(3), "iq_stop releases the tap");
         f.backend->feed(3, 2048, 96000);
-        check(f.frames[a].size() == 1, "no frames after iq_stop");
+        check(f.frames[a].size() == 2, "no frames after iq_stop");
+    }
+    // The HL2 case behind the 1009 closes: a 384 kHz pan streamed 3 MB/s of
+    // IQ to a phone that never asked for more than 192 kHz.
+    static void decimatesToRequestedRate()
+    {
+        Fixture f; f.backend->add(3);
+        TciClient* a = f.client();
+        f.command(a, QStringLiteral("iq_start:0;"));
+        f.backend->feed(3, 4096, 384000);
+        check(f.said(a, QStringLiteral("iq_samplerate:48000;")) && !f.said(a, QStringLiteral("iq_samplerate:384000;")),
+              "unasked, the TCI default of 48 kHz is announced, not the pan's rate");
+        check(f.frames[a].size() == 1 && word(f.frames[a].first(),1) == 48000
+                  && word(f.frames[a].first(),5) == 2 * 512,
+              "384 kHz is decimated by eight");
+
+        f.command(a, QStringLiteral("iq_samplerate:192000;"));
+        check(f.said(a, QStringLiteral("iq_samplerate:192000;")), "192 kHz is granted below a 384 kHz radio");
+        f.backend->feed(3, 4096, 384000);
+        check(f.frames[a].size() == 2 && word(f.frames[a].last(),1) == 192000
+                  && word(f.frames[a].last(),5) == 2 * 2048,
+              "and the frames follow at 192 kHz");
+
+        f.backend->feed(3, 4096, 96000);
+        check(f.said(a, QStringLiteral("iq_samplerate:96000;")) && word(f.frames[a].last(),1) == 96000,
+              "a radio below the request is passed through at its own rate, never raised");
+        const auto at96k = f.texts[a].count(QStringLiteral("iq_samplerate:96000;"));
+        f.command(a, QStringLiteral("iq_samplerate:192000;"));
+        check(f.texts[a].count(QStringLiteral("iq_samplerate:96000;")) == at96k + 1,
+              "and a request above it is answered with what the frames carry");
+    }
+    static void decimatorKeepsTonesAndRejectsAliases()
+    {
+        // Complex tone at a fraction of the input rate, amplitude 1.
+        auto tone = [](double cyclesPerSample, int pairs) {
+            std::vector<float> iq(static_cast<std::size_t>(pairs) * 2);
+            for (int n = 0; n < pairs; ++n) {
+                iq[2*n] = static_cast<float>(std::cos(2.0 * std::numbers::pi * cyclesPerSample * n));
+                iq[2*n+1] = static_cast<float>(std::sin(2.0 * std::numbers::pi * cyclesPerSample * n));
+            }
+            return iq;
+        };
+        // Peak magnitude past the filter's start-up transient.
+        auto peak = [](const std::vector<float>& out) {
+            double p = 0.0;
+            for (std::size_t n = 200; 2 * n + 1 < out.size(); ++n) {
+                p = std::max(p, std::hypot(double(out[2*n]), double(out[2*n+1])));
+            }
+            return p;
+        };
+        const int pairs = 8192;
+        std::vector<float> out;
+
+        TciIqDecimator pass;
+        pass.configure(384000, 192000);
+        auto in = tone(0.2, pairs);   // 76.8 kHz: 0.4 of the 192 kHz span
+        pass.process(in.data(), pairs, out);
+        check(out.size() == 2 * (pairs / 2) && std::abs(peak(out) - 1.0) < 0.01,
+              "a tone inside the decimated span keeps its level");
+
+        TciIqDecimator alias;
+        alias.configure(384000, 192000);
+        in = tone(-0.35, pairs);      // would fold onto +0.3 of the output rate
+        alias.process(in.data(), pairs, out);
+        check(peak(out) < 0.001, "a tone outside it is rejected, not folded in (> 60 dB)");
+
+        // Block boundaries of any length, odd ones included, change nothing.
+        TciIqDecimator whole;
+        TciIqDecimator pieces;
+        whole.configure(384000, 48000);
+        pieces.configure(384000, 48000);
+        in = tone(0.01, pairs);
+        std::vector<float> wholeOut;
+        whole.process(in.data(), pairs, wholeOut);
+        std::vector<float> joined;
+        for (int at = 0, step = 1; at < pairs; at += step, step = step % 37 + 3) {
+            const int n = std::min(step, pairs - at);
+            pieces.process(in.data() + 2 * at, n, out);
+            joined.insert(joined.end(), out.begin(), out.end());
+        }
+        check(joined == wholeOut && wholeOut.size() == 2 * pairs / 8,
+              "uneven blocks give the same stream as one block");
+
+        check(TciIqDecimator::outputRate(384000, 192000) == 192000
+                  && TciIqDecimator::outputRate(384000, 24000) == 24000
+                  && TciIqDecimator::outputRate(96000, 192000) == 96000
+                  && TciIqDecimator::outputRate(48000, 48000) == 48000,
+              "rates halve toward the request and never go up");
     }
     static void sharedAndDisconnect()
     {
@@ -194,6 +290,7 @@ public:
     static int run()
     {
         startStreamsStop(); sharedAndDisconnect(); secondReceiverKeepsFirst(); refusalAnswers();
+        decimatesToRequestedRate(); decimatorKeepsTonesAndRejectsAliases();
         std::printf("TCI host IQ: %d checks, %d failures\n", checks, failures);
         return failures == 0 ? 0 : 1;
     }

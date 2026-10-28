@@ -1085,6 +1085,7 @@ set(CORE_SOURCES
     src/core/TciServer.cpp
     src/models/DaxReceiveModel.cpp
     src/core/TciRxConverter.cpp
+    src/core/TciIqDecimator.cpp
     src/core/TciPeerProcess.cpp
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
