@@ -1,5 +1,6 @@
 // Production encoder, admission and queued writer; no socket is initialized.
 #include "RadioSetupControlFixture.h"
+#include "core/backends/FileTransferOperation.h"
 #include "core/backends/flex/RadioConnection.h"
 #include <QCoreApplication>
 #include <QEvent>

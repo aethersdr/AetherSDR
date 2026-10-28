@@ -1,4 +1,5 @@
 #include "WaveformInstaller.h"
+#include "core/backends/FileTransferOperation.h"
 
 #include "LegacyWaveformPackage.h"
 #include "LogManager.h"

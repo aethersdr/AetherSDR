@@ -1,4 +1,5 @@
 #include "DvkWavTransfer.h"
+#include "core/backends/FileTransferOperation.h"
 #include "DvkWavConverter.h"
 #include "../models/DvkModel.h"
 #include "../models/RadioModel.h"

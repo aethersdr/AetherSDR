@@ -1,4 +1,5 @@
 #include "FirmwareUploader.h"
+#include "core/backends/FileTransferOperation.h"
 
 #include "LogManager.h"
 #include "../models/RadioModel.h"

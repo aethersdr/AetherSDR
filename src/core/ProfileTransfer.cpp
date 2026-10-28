@@ -1,4 +1,5 @@
 #include "ProfileTransfer.h"
+#include "core/backends/FileTransferOperation.h"
 
 #include "LogManager.h"
 #include "ZipArchive.h"

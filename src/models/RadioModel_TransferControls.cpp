@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "core/backends/FileTransferOperation.h"
 
 #include <QThread>
 #include <QTimer>
