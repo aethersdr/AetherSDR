@@ -183,6 +183,19 @@ void testMalformedIsDropped()
           "a receiver that is not a number is refused");
 }
 
+// TciServer relays a GUI squelch change as sql_level through the same
+// conversion the GET uses, so both name one dB value for one level.
+void testRelayConversionMatchesGet()
+{
+    Fixture f;
+    TciProtocol tci(&f.radio);
+    f.setSliceLevel(77);
+    check(TciProtocol::squelchLevelDb(&f.radio, f.slice, 77) == -83,
+          "the relay conversion maps level 77 to -83 dB");
+    check(f.send(tci, QStringLiteral("sql_level:0")) == QStringLiteral("sql_level:0,-83;"),
+          "and the GET answers the same dB");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -197,6 +210,7 @@ int main(int argc, char** argv)
     testPublishedScaleConverts();
     testLegacyLevelStillSets();
     testMalformedIsDropped();
+    testRelayConversionMatchesGet();
 
     std::printf("%s\n", g_failed == 0 ? "ALL PASSED" : "FAILURES");
     return g_failed == 0 ? 0 : 1;

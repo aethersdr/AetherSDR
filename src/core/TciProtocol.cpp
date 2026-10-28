@@ -204,6 +204,11 @@ static int sqlLevelDb(RadioModel* model, SliceModel* s, int level)
     return static_cast<int>(std::lround(std::clamp(db, kSqlMinDb, 0.0)));
 }
 
+int TciProtocol::squelchLevelDb(RadioModel* model, SliceModel* s, int level)
+{
+    return sqlLevelDb(model, s, level);
+}
+
 SliceModel* TciProtocol::sliceForTrx(int trx) const
 {
     if (m_trxMap)
