@@ -274,6 +274,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         connect(m_model, &RadioModel::backendRebuilt, this, [this] {
             m_hostIqSlices.clear();
             m_hostIqRate = 0;
+            m_hostIqDecimators.clear();
         });
     }
 
@@ -1551,14 +1552,12 @@ void TciServer::onTextMessage(const QString& msg)
                 continue;
             }
             // Host IQ runs at the radio's own rate, which is also its pan's
-            // span; TCI does not get to change that. Answer what is in force.
-            if (m_hostIqRate > 0) {
-                replyText(ws, QStringLiteral("iq_samplerate:%1;").arg(m_hostIqRate));
-                continue;
-            }
+            // span. TCI cannot change that, but it is decimated to the rate
+            // asked for, so the DAX model's rate list does not apply.
+            const bool hostIq = m_model && !m_model->backendCapabilities().hasDaxStreams;
             bool ok = false;
             const int rate = value.toInt(&ok);
-            const QList<int> modelRates = m_model
+            const QList<int> modelRates = m_model && !hostIq
                 ? m_model->daxIqModel().supportedSampleRates() : QList<int>{};
             // Clients can negotiate once before the radio identifies its model.
             // Retain that preference; stream creation still requires known rates.
@@ -1572,8 +1571,11 @@ void TciServer::onTextMessage(const QString& msg)
                 continue;
             }
             m_iqSampleRate = rate;
-            const int effectiveRate = effectiveIqSampleRate();
-            const int announcedRate = effectiveRate != 0 ? effectiveRate : rate;
+            const int effectiveRate = hostIq ? 0 : effectiveIqSampleRate();
+            // A live host stream answers with the rate its frames will carry:
+            // below the radio's rate as asked, never above it.
+            const int announcedRate = m_hostIqRate > 0 ? hostIqOutputRate()
+                                    : effectiveRate != 0 ? effectiveRate : rate;
             m_announcedIqSampleRate = announcedRate;
             if (m_model && effectiveRate != 0) {
                 for (int channel : std::as_const(m_tciIqChannels)) {
@@ -4454,10 +4456,12 @@ void TciServer::reconcileHostIqTaps(int keepSliceId)
         if (!wanted.contains(sliceId)) {
             m_model->setBackendSliceIqTap(sliceId, false);
             m_hostIqSlices.remove(sliceId);
+            m_hostIqDecimators.remove(sliceId);
         }
     }
     if (m_hostIqSlices.isEmpty()) {
         m_hostIqRate = 0;
+        m_hostIqDecimators.clear();
     }
 }
 
@@ -4466,23 +4470,35 @@ void TciServer::onSliceIqReady(int sliceId, const QByteArray& iqFloat32, int sam
     if (!m_hostIqSlices.contains(sliceId) || sampleRate <= 0) {
         return;
     }
-    // The rate is the radio's, not a negotiated one: say so when it first
-    // shows or changes, so a client's FFT axis matches the frames.
-    if (sampleRate != m_hostIqRate) {
-        m_hostIqRate = sampleRate;
-        m_announcedIqSampleRate = sampleRate;
+    // The frames go out at the radio's rate halved toward the requested one
+    // (a 384 kHz pan is 3 MB/s of IQ, more than a phone keeps up with). Say
+    // which rate when it first shows or changes, so a client's FFT axis
+    // matches the frames.
+    const bool radioRateChanged = sampleRate != m_hostIqRate;
+    m_hostIqRate = sampleRate;
+    const int outRate = hostIqOutputRate();
+    if (radioRateChanged || outRate != m_announcedIqSampleRate) {
+        m_announcedIqSampleRate = outRate;
         for (ClientState& cs : m_clients) {
             if (cs.protocol) {
-                cs.protocol->setIqSampleRate(sampleRate);
+                cs.protocol->setIqSampleRate(outRate);
             }
         }
-        broadcast(QStringLiteral("iq_samplerate:%1;").arg(sampleRate));
+        broadcast(QStringLiteral("iq_samplerate:%1;").arg(outRate));
     }
 
-    const auto* samples = reinterpret_cast<const float*>(iqFloat32.constData());
-    const int iqFrames = static_cast<int>(iqFloat32.size() / (2 * sizeof(float)));
-    if (iqFrames <= 0) {
+    const int inFrames = static_cast<int>(iqFloat32.size() / (2 * sizeof(float)));
+    if (inFrames <= 0) {
         return;
+    }
+    TciIqDecimator& decimator = m_hostIqDecimators[sliceId];
+    decimator.configure(sampleRate, m_iqSampleRate);
+    decimator.process(reinterpret_cast<const float*>(iqFloat32.constData()),
+                      inFrames, m_hostIqOut);
+    const float* samples = m_hostIqOut.data();
+    const int iqFrames = static_cast<int>(m_hostIqOut.size() / 2);
+    if (iqFrames <= 0) {
+        return;   // a short block the decimator is still filling from
     }
     // Every receiver on this slice, each with its own index in the header.
     // Sorted so the send order is reproducible, as in onIqDataReady().
@@ -4497,7 +4513,7 @@ void TciServer::onSliceIqReady(int sliceId, const QByteArray& iqFloat32, int sam
     }
     std::sort(receivers.begin(), receivers.end());
     for (int trx : std::as_const(receivers)) {
-        const QByteArray frame = buildAudioFrame(trx, 0 /*IQ*/, sampleRate, 2,
+        const QByteArray frame = buildAudioFrame(trx, 0 /*IQ*/, outRate, 2,
                                                  samples, iqFrames);
         for (auto& cs : m_clients) {
             if (cs.iqReceivers.contains(trx))
@@ -4573,6 +4589,7 @@ void TciServer::releaseAllIqStreams()
     }
     m_hostIqSlices.clear();
     m_hostIqRate = 0;
+    m_hostIqDecimators.clear();
     const QSet<int> owned = m_tciIqChannels;
     for (int channel : owned) {
         releaseIqChannel(channel);
@@ -4589,6 +4606,7 @@ void TciServer::resetIqStreamBookkeeping()
 {
     m_hostIqSlices.clear();
     m_hostIqRate = 0;
+    m_hostIqDecimators.clear();
     m_tciIqChannels.clear();
     m_iqCreateInFlight.clear();
     m_iqPanChannel.clear();
@@ -4596,9 +4614,9 @@ void TciServer::resetIqStreamBookkeeping()
 
 int TciServer::achievedIqSampleRate() const
 {
-    // Host IQ: the rate the radio's frames actually carry.
+    // Host IQ: the rate the frames actually carry once decimated.
     if (m_hostIqRate > 0) {
-        return m_hostIqRate;
+        return hostIqOutputRate();
     }
     if (m_model) {
         QList<int> channels(m_tciIqChannels.cbegin(), m_tciIqChannels.cend());
@@ -4612,6 +4630,11 @@ int TciServer::achievedIqSampleRate() const
     }
     const int rate = effectiveIqSampleRate();
     return rate != 0 ? rate : m_iqSampleRate;
+}
+
+int TciServer::hostIqOutputRate() const
+{
+    return TciIqDecimator::outputRate(m_hostIqRate, m_iqSampleRate);
 }
 
 int TciServer::effectiveIqSampleRate() const
