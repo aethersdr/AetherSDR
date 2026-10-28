@@ -4,6 +4,7 @@
 #include "core/SpotRequestQueue.h"
 #include "core/SpectrumDecodeScale.h"
 #include "core/backends/IndependentTxControl.h"
+#include "core/backends/AudioControlRequest.h"
 
 #include "core/backends/flex/CommandParser.h"   // MessageSeverity for radioMessageReceived
 #include "core/GuiClientRegistrationState.h"
@@ -23,6 +24,8 @@
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/SleepInhibitor.h"
 #include "core/DaxTxPolicy.h"
+#include "core/DaxTxAudioPermit.h"
+#include "core/backends/DaxTxStream.h"
 #include "core/NetworkMtuPolicy.h"  // networkMtuParam(); Radio Setup's MTU range
 #include "core/LocalMemoryBank.h"   // memory channels for a radio that has none
 #include "core/DigitalVoiceWaveformTelemetry.h"
@@ -698,6 +701,15 @@ public:
     // so a connect must never replay this client-persisted flag onto it.
     void notePcAudioEnabled(bool on);
     bool ensureDaxTxStream(DaxTxRequestReason reason);
+    // Await only allocation and radio selection of this input's absent stream.
+    // Existing deselected streams require an explicit stream-selection action.
+    bool prepareTciDaxTxStream(const TxCoordinator::Request& input,
+                               const DaxTxAudioPermit& captured,
+                               std::function<void(const DaxTxAudioPermit&)> completion);
+    QJsonObject daxTxOwnershipSnapshot() const;
+    QString daxTxOwnershipUnavailableReason(bool take) const;
+    bool requestDaxTxOwnership(bool take);
+    bool daxTxStreamReady() const;
     // The radio's `transmit dax` flag is ONE bit for the whole radio, shared
     // with every client: it picks DAX TX or the microphone as the source of
     // the next transmission. Every in-process producer that needs it on holds
@@ -745,7 +757,7 @@ public:
         if (wsprSeamAudioRouteReady(m_wsprTxSeamAudioArmed,
                                     backendCapabilities()))
             return true;
-        return m_daxTxStreamId != 0 && m_daxTxActive;
+        return (!m_wsprTxOwnershipRequested || m_wsprTxInput.valid()) && daxTxStreamReady();
     }
     QJsonObject troubleshootingSnapshot() const;
 
@@ -942,6 +954,10 @@ public:
                                         std::function<void()> observer);
     TxCoordinator::Context captureTxMedia(const TxCoordinator::Producer& producer) const;
     TxCoordinator::Context captureTxMedia(const TxCoordinator::Request& request) const;
+    TxCoordinator::Context captureDaxTxMedia(const TxCoordinator::Producer& producer) const;
+    TxCoordinator::Context captureDaxTxMedia(const TxCoordinator::Request& request) const;
+    void noteDaxTxInput(const TxCoordinator::Request& request);
+    DaxTxAudioPermit daxTxAudioPermit() const { return m_daxTxAudioPermit; }
     bool setProducerTransmit(const TxCoordinator::Request& request, bool tx,
                              TransmitModel::PttSource source = TransmitModel::PttSource::Dax);
     bool requestProducerPttOn(const TxCoordinator::Request& request, TransmitModel::PttSource source);
@@ -1358,6 +1374,8 @@ signals:
     void networkQualityChanged(const QString& quality, int pingMs);
     // Emitted when the radio assigns a TX audio stream ID (DAX TX).
     void txAudioStreamReady(quint32 streamId);
+    void daxTxOwnershipChanged();
+    void daxTxAudioRouteChanged(quint32 streamId, const AetherSDR::DaxTxAudioPermit& permit);
     // Emitted only after the active backend has drained finite TX-audio state.
     // drainMs is how much already-submitted audio (host queue plus radio
     // buffer) is still to be played — hold PTT for that long, then the tail.
@@ -1531,6 +1549,10 @@ public:
     // PC Audio: create/remove remote_audio_rx stream
     void createRxAudioStream();
     void removeRxAudioStream();
+    ReceiveDispatch requestAudioStream(AudioStreamRequest request, const AudioStreamCompletion& completion = {});
+    ReceiveDispatch requestGraphicEq(GraphicEqRequest request);
+    ReceiveDispatch requestPanIqBinding(PanadapterModel* pan, int channel);
+    void reassertSliceAudio(SliceModel* slice);
 
     // True only when dispatched; the callback reports the later radio reply.
     bool sendCmdPublic(const QString& cmd, std::function<void(int code, const QString& body)> cb);
@@ -1567,6 +1589,36 @@ private slots:
                                 const SpectrumCoverage& coverage);
 
 private:
+    void resetAudioControls();
+    void applyAudioStreamDelta(const AudioStreamDelta& delta);
+    struct AudioStreamIdentity {
+        AudioStreamKind kind;
+        int channel{0};
+        quint32 owner{0};
+        quint64 incarnation{0};
+    };
+    struct PendingAudioControl {
+        AudioStreamRequest request;
+        RadioControlSession session;
+        quint64 retirementSerial{0};
+        quint64 retirementEpoch{0};
+        quint64 incarnation{0};
+        AudioStreamCompletion completion;
+        bool completed{false};
+        bool answered{false};
+        QPointer<QTimer> deadline{};
+    };
+    QHash<quint32, AudioStreamIdentity> m_audioStreams;
+    QHash<quint32, quint64> m_audioRetirements;
+    QHash<quint64, std::shared_ptr<PendingAudioControl>> m_audioPending;
+    QHash<int, AudioControlGuard> m_graphicEqGuards;
+    quint64 m_audioTicket{0};
+    quint64 m_audioRetirementSerial{0};
+    quint64 m_audioRetirementEpoch{0};
+    AudioControlGuard m_remoteRxCreateGuard;
+    bool m_remoteRxAllocationPending{false};
+    quint64 m_remoteRxRequestRevision{0};
+    bool m_remoteRxRestartAfterCancel{false};
     struct PendingPanCreation;
     QMap<quint64, std::shared_ptr<PendingPanCreation>> m_pendingPanCreations;
     quint64 m_nextPanCreation{0};
@@ -1603,6 +1655,21 @@ private:
     void handlePanadapterStatus(const QString& panId, const QMap<QString, QString>& kvs);
     void handleProfileStatus(const QString& object, const QMap<QString, QString>& kvs);
     void handleProfileStatusRaw(const QString& profileType, const QString& rawBody);
+    friend class DaxTxOwnershipTestAccess;
+    void resetDaxTxOwnership();
+    void retireDaxTxInputs();
+    void observeDaxTxStream(const DaxTxStreamDelta& delta);
+    void publishDaxTxOwnership();
+    void refreshDaxTxOwnershipGuards();
+    void interruptDaxTxOwnership(const QString& reason);
+    bool beginDaxTxOwnership(bool take, bool wspr);
+    void continueDaxTxOwnership();
+    void completeDaxTxOwnership();
+    void expireDaxTxOwnership(quint64 ticket);
+    void finishDaxTxOwnership(bool success, const QString& reason);
+    void releaseWsprDaxTxOwnership();
+    void finishWsprDaxTxRelease();
+    bool acceptDaxTxCreate(quint32 id, quint64 startRevision);
     void traceDaxStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
     void handleDaxRxStreamRegistry(const QString& object, const QMap<QString, QString>& kvs);
     bool handleRemoteAudioRxStreamStatus(const QString& object,
@@ -1679,7 +1746,8 @@ private:
     // Route command to active connection (LAN or WAN)
     using ResponseCallback = RadioConnection::ResponseCallback;
     void requestRadioInfo();
-    quint32 sendCmd(const QString& command, ResponseCallback cb = nullptr);
+    quint32 sendCmd(const QString& command, ResponseCallback cb = nullptr,
+                    std::function<bool()> dispatchAllowed = {});
     quint32 clientHandle() const;
     PanadapterModel* ensureOwnedPanadapter(const QString& panId);
     void updateStreamFilters();
@@ -1988,6 +2056,8 @@ private:
     using SetupCommandWriter = std::function<bool(const QString&, ResponseCallback)>;
     using SetupCommandSink = std::function<bool(const QString&, const RadioSetupCompletion&)>;
     SetupCommandSink setupCommandSink(const SetupCommandWriter& writer = {});
+    using AudioCommandSink = std::function<bool(const QString&, ResponseCallback, const AudioControlGuard&)>;
+    AudioCommandSink audioCommandSink();
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend
@@ -2175,6 +2245,7 @@ private:
     bool        m_cwxDrainArmed{false}; // CWX drain-release latch, immune to interlock flicker (#3949)
     bool        m_txAudioGate{false}; // actual TX audio gate state
     bool        m_radioTransmitting{false}; // raw interlock TX state, any owner
+    bool        m_daxTxSelectionRxObserved{false};
     // Last interlock state= the radio reported, any owner; empty until one
     // arrives and on backends that report none. m_radioTransmitting is only
     // `state == TRANSMITTING`, so it is already false in PTT_REQUESTED and
@@ -2485,6 +2556,32 @@ private:
     QMap<quint32, DaxStreamDebugState> m_daxStreamDebug;
     quint32     m_daxTxStreamId{0};
     bool        m_daxTxActive{false};
+    bool        m_daxTxKnown{false};
+    quint64     m_daxTxSession{1};
+    quint64     m_daxTxIncarnation{1};
+    quint64     m_daxTxObservationRevision{0};
+    quint64     m_daxTxTicket{0};
+    quint64     m_daxTxCreateTicket{0};
+    QMap<quint32, quint64> m_daxTxRetiredAt;
+    struct DaxTxOwnershipIntent {
+        quint64 ticket{0};
+        quint64 session{0};
+        quint64 incarnation{0};
+        quint64 startRevision{0};
+        quint32 streamId{0};
+        bool take{false};
+        bool dispatched{false};
+        bool accepted{false};
+        DaxTxRequestGuard guard;
+    };
+    DaxTxRequestGuard m_daxTxCreateGuard;
+    std::optional<DaxTxOwnershipIntent> m_daxTxOwnershipIntent;
+    std::vector<TxCoordinator::Request::Weak> m_daxTxInputs;
+    QTimer m_daxTxGuardTimer;
+    DaxTxAudioPermit m_daxTxAudioPermit{DaxTxAudioPermit::blocked()};
+    bool m_daxTxUncertain{false};
+    QString m_daxTxOutcome;
+    QString m_daxTxError;
     bool        m_wsprTxOwnershipRequested{false};
     TxCoordinator::Request m_wsprTxInput;
     bool        m_wsprTxTransition{false};
@@ -2494,7 +2591,7 @@ private:
     // stream and no `transmit dax`. Latched by prepareWsprTransmit() and the
     // only thing releaseWsprTransmit() has to undo on that path.
     bool        m_wsprTxSeamAudioArmed{false};
-    quint32     m_daxTxClientHandle{0};  // Tracked for diagnostics only — not consulted in routing.
+    quint32     m_daxTxClientHandle{0};
     bool        m_daxTxCreatePending{false};
     // acquireTransmitDax() table: a bit per DaxTxFlagHolder, the flag the
     // first hold found, and a restore owed once the radio reaches RX.

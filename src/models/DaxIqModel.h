@@ -3,11 +3,16 @@
 #include <QObject>
 #include <QByteArray>
 #include <QMap>
+#include <QSet>
 #include <QString>
 #include <QThread>
 #include <QVector>
 #include <QList>
 #include <functional>
+#include <array>
+#include <utility>
+#include "core/backends/AudioControlRequest.h"
+#include "core/backends/ReceiveCommand.h"
 
 namespace AetherSDR {
 
@@ -43,10 +48,14 @@ public:
     explicit DaxIqModel(QObject* parent = nullptr);
     ~DaxIqModel() override;
 
-    // Commands (send to radio via commandReady signal)
-    void createStream(int channel);               // stream create type=dax_iq daxiq_channel=N
-    void removeStream(int channel);               // stream remove 0x<id>
-    void setSampleRate(int channel, int rate);     // stream set 0x<id> daxiq_rate=N
+    // Typed control requests; observations remain radio-authoritative.
+    bool createStream(int channel);
+    void removeStream(int channel);
+    void setSampleRate(int channel, int rate);
+    using ControlDispatcher = std::function<ReceiveDispatch(AudioStreamRequest, const AudioStreamCompletion&)>;
+    void setControlDispatcher(ControlDispatcher dispatcher) { m_dispatcher = std::move(dispatcher); }
+    bool createPending(int channel) const;
+    quint64 streamRevision(int channel) const;
 
     // Queried on the owner thread at request time so model/backend replacement
     // cannot leave a cached limit from the previous radio.
@@ -80,11 +89,22 @@ public:
 
 signals:
     void streamChanged(int channel);
-    void commandReady(const QString& cmd);
+    void controlRequested(const AetherSDR::AudioStreamRequest& request);
     void iqLevelReady(int channel, float rms);
     void iqSamplesReady(int channel, QVector<float> iqInterleaved, int sampleRate);
 
 private:
+    ReceiveDispatch dispatch(AudioStreamRequest request, const AudioStreamCompletion& completion = {});
+    ControlDispatcher m_dispatcher;
+    std::array<bool, NUM_CHANNELS> m_createPending{};
+    std::array<bool, NUM_CHANNELS> m_wanted{};
+    std::array<bool, NUM_CHANNELS> m_intentKnown{};
+    std::array<bool, NUM_CHANNELS> m_retryAfterCancel{};
+    std::array<quint32, NUM_CHANNELS> m_createdIds{};
+    QSet<quint32> m_ignoredStreams;
+    std::array<quint64, NUM_CHANNELS> m_streamRevisions{};
+    std::array<AudioControlGuard, NUM_CHANNELS> m_createGuards;
+    quint64 m_controlSession{0};
     // Worker→model relay: converts to QVector<float> and re-emits
     // iqSamplesReady only when a consumer (WFM demodulator) is connected.
     void relayIqSamples(int channel, const QByteArray& iqBytes, int sampleRate);

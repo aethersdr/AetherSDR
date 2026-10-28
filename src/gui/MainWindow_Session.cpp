@@ -1340,9 +1340,12 @@ void MainWindow::wireRadioModel()
     // also calls (aetherd Gap B; #4448).
     wirePanStreamTxSink();
 
+    connect(&m_radioModel, &RadioModel::daxTxAudioRouteChanged,
+            m_audio, &AudioEngine::setDaxTxAudioRoute);
     connect(&m_radioModel, &RadioModel::txAudioStreamReady,
             this, [this](quint32 streamId) {
-        m_audio->setTxStreamId(streamId);
+        // Stream allocation does not establish DAX ownership. The separate
+        // radio-confirmed route signal controls the DAX packetizers.
         // TX audio on remote_audio_tx always requires Opus (radio enforces compression=OPUS)
         m_audio->setOpusTxEnabled(true);
         qDebug() << "MainWindow: DAX TX stream ID set to" << Qt::hex << streamId;
@@ -2730,9 +2733,10 @@ void MainWindow::wirePanStreamTxSink()
     if (!ps || !m_audio)
         return;
     connect(m_audio, &AudioEngine::txPacketReady, ps,
-            [ps](const QByteArray& packet, const TxCoordinator::Context& context) {
+            [ps](const QByteArray& packet, const TxCoordinator::Context& context,
+                 const DaxTxAudioPermit& ownership) {
         const TxCoordinator::Dispatch dispatch = context.beginDispatch(TxCoordinator::monotonicMs());
-        if (dispatch) {
+        if (dispatch && ownership.permits()) {
             ps->sendToRadio(packet);
         }
     });
@@ -2815,6 +2819,8 @@ void MainWindow::wireDaxIq()
             }
             if (kvs.value("type") != "dax_iq") return;
             if (!streamStatusBelongsToUs(kvs, m_radioModel.ourClientHandle())) {
+                m_radioModel.panStream()->unregisterIqStream(streamId);
+                m_radioModel.daxIqModel().handleStreamRemoved(streamId);
                 qCDebug(lcDax) << "MainWindow: ignoring DAX IQ stream for another client"
                                 << "stream=0x" + QString::number(streamId, 16)
                                 << "owner=" << kvs.value("client_handle");
@@ -2828,7 +2834,9 @@ void MainWindow::wireDaxIq()
             int ch = kvs.value("daxiq_channel").toInt();
             // panStream() is null on a backend that carries its own IQ; there
             // is no VITA-49 stream to register against.
-            if (streamId && ch >= 1 && ch <= 4 && m_radioModel.panStream())
+            if (streamId && ch >= 1 && ch <= 4 && m_radioModel.panStream()
+                && m_radioModel.daxIqModel().stream(ch).exists
+                && m_radioModel.daxIqModel().stream(ch).streamId == streamId)
                 m_radioModel.panStream()->registerIqStream(streamId, ch);
         });
 

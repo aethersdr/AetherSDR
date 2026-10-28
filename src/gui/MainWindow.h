@@ -2360,6 +2360,8 @@ private:
 #if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
     DaxBridge* m_daxBridge{nullptr};
     QString m_savedMicSelection;  // restore on stopDax
+    RadioControlSession m_daxMicOverrideSession{};
+    quint64 m_daxMicOverrideRevision{0};
     bool startDax();
     void stopDax();
     // #2895: react to per-slice DAX channel (re)assignment while the bridge is

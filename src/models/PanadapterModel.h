@@ -19,6 +19,14 @@ class PanadapterModel : public QObject {
 
 public:
     explicit PanadapterModel(const QString& panId, QObject* parent = nullptr);
+    ~PanadapterModel() override { cancelIqBinding(); }
+    AudioControlGuard beginIqBinding()
+    {
+        cancelIqBinding();
+        m_iqBindingGuard = AudioControlGuard::create(30000);
+        return m_iqBindingGuard;
+    }
+    void cancelIqBinding() { m_iqBindingGuard.revoke(); }
 
     // Identity
     QString panId() const { return m_panId; }
@@ -287,6 +295,7 @@ signals:
     void noiseFloorRangeChanged(double db);
 
 private:
+    AudioControlGuard m_iqBindingGuard;
     quint64 m_controlRevision{0};
     quint64 m_ownershipRevision{0};
     quint64 m_fftObservationRevision{0};

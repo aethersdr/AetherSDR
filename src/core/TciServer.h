@@ -1,6 +1,7 @@
 #pragma once
 #ifdef HAVE_WEBSOCKETS
 
+#include "DaxTxAudioPermit.h"
 #include "TciProtocol.h"
 #include "TciClient.h"
 #include "TciAudioHeader.h"
@@ -243,7 +244,10 @@ private:
     void handleSplitRequest(TciClient* client, const TciProtocol::SplitRequest& request);
     void handleTrxRequest(TciClient* client, const TciProtocol::TrxRequest& request);
     void handleTrxRequest(TciClient* client, const TciProtocol::TrxRequest& request,
-                          const TxCoordinator::Request& txRequest);
+                          const TxCoordinator::Request& txRequest, bool wantsAudio,
+                          const DaxTxAudioPermit& daxPermit);
+    void retireTrxRequest(TciClient* client, const TxCoordinator::Request& request);
+    bool trxWantsAudio(TciClient* client, const TciProtocol::TrxRequest& request) const;
     void tuneSliceAndConfirm(
         TciClient* client, int trx, int channel, int sliceId, long long frequencyHz);
     void promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation);
@@ -296,6 +300,9 @@ private:
     struct ClientState {
         TxCoordinator::Producer txProducer;
         TxCoordinator::Request pttRequest;
+        DaxTxAudioPermit pttDaxPermit{DaxTxAudioPermit::blocked()};
+        bool pttWantsAudio{false};
+        std::optional<DaxTxAudioPermit> ingressDaxPermit;
         QPointer<TciClient> socket;
         TciProtocol* protocol{nullptr};
         QString      processName;        // #5087 — see TciClientInfo
@@ -433,6 +440,9 @@ private:
         QPointer<TciClient> client;
         TciProtocol::TrxRequest request;
         TxCoordinator::Request txRequest;
+        bool wantsAudio{false};
+        DaxTxAudioPermit daxPermit{DaxTxAudioPermit::blocked()};
+        bool waitingForDax{false};
     };
     std::optional<PendingTrxRequest> m_pendingTrxRequest;
     struct PendingRouteCommand

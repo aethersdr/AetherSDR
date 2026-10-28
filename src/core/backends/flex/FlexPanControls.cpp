@@ -27,11 +27,13 @@ ReceiveDispatch FlexBackend::requestPanDisplay(const QString& panId, const QStri
     const RadioControlFence& current)
 {
     using Field = PanDisplayField;
-    if (!request.valid() || !m_setupSink || (current && !current())) { return ReceiveDispatch::Unsupported; }
+    if (!request.valid() || (request.field != Field::DaxIqChannel && !m_setupSink)
+        || (current && !current())) { return ReceiveDispatch::Unsupported; }
     const QString id = displayId(request.targetsWaterfall() ? waterfallId : panId);
     if (id.isEmpty()) { return ReceiveDispatch::Unsupported; }
     QString fields;
     switch (request.field) {
+    case Field::DaxIqChannel: fields = QStringLiteral("daxiq_channel=%1").arg(std::get<int>(request.value)); break;
     case Field::Geometry: {
         const PanGeometryRequest geometry = std::get<PanGeometryRequest>(request.value);
         QStringList parts;
@@ -70,6 +72,18 @@ ReceiveDispatch FlexBackend::requestPanDisplay(const QString& panId, const QStri
     }
     const QString command = QStringLiteral("display %1 set %2 %3")
         .arg(request.targetsWaterfall() ? QStringLiteral("panafall") : QStringLiteral("pan"), id, fields);
+    if (request.field == Field::DaxIqChannel) {
+        if (!m_audioSink || !request.guard.permits()) { return ReceiveDispatch::Unsupported; }
+        const QPointer<FlexBackend> alive(this);
+        return m_audioSink(command, [alive, current, completion](int code, const QString& body) {
+            if (!completion) { return; }
+            if (!alive || (current && !current())) {
+                completion({RadioControlReply::Kind::Cancelled, -1, QStringLiteral("IQ binding retired")});
+            } else {
+                completion({code == 0 ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Failed, code, body});
+            }
+        }, request.guard) ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+    }
     const auto sink = m_setupSink;
     const QPointer<FlexBackend> alive(this);
     const auto finished = std::make_shared<bool>(false);

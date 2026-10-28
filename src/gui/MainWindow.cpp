@@ -3343,8 +3343,13 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
                     tr("TX Playback: no transmit control is available right now."), 4000);
                 return;
             }
-            toggleRxPlaybackTransmit(
-                controller->captureProgram(TxController::Activity::Mox).request());
+            const TxCoordinator::Request input =
+                controller->captureProgram(TxController::Activity::Mox).request();
+            const RadioCapabilities caps = m_radioModel.backendCapabilities();
+            if (!caps.hostModulates && !caps.takesTxAudioOverSeam) {
+                m_radioModel.noteDaxTxInput(input);
+            }
+            toggleRxPlaybackTransmit(input);
         });
         registerTxKeyingAction(m_rxDialog->txPlaybackAction(),
             [this](const std::shared_ptr<TxController>& controller,
@@ -3355,6 +3360,10 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
             }
             const TxCoordinator::Request input =
                 controller->captureProgram(TxController::Activity::Mox).request();
+            const RadioCapabilities caps = m_radioModel.backendCapabilities();
+            if (!caps.hostModulates && !caps.takesTxAudioOverSeam) {
+                m_radioModel.noteDaxTxInput(input);
+            }
             return [this, input] { toggleRxPlaybackTransmit(input); };
         });
         // Seed the EQ page with the filter it is looking at right now, rather
@@ -9402,9 +9411,8 @@ void MainWindow::reassertUnmutedSliceAudioForPan(const QString& panId)
         }
 
         // The model already shows unmuted, so SliceModel::setAudioMute(false)
-        // would no-op. Send the command directly to rebuild radio audio routing.
-        m_radioModel.sendCommand(
-            QString("slice set %1 audio_mute=0").arg(slice->sliceId()));
+        // would no-op. Reassert through the engine without changing local mute.
+        m_radioModel.reassertSliceAudio(slice);
     }
 }
 

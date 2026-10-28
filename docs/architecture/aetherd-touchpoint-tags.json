@@ -853,8 +853,8 @@
  },
  "core/WfmDemodulator.h": {
   "tag": "mixed(flex)",
-  "note": "WFM demod around WfmDsp: demod/Doppler-offset intent is core; IQ source is DAX IQ + SmartSDR cmds (flex)",
-  "split": "WFM demod capability + freq-offset/volume intent = core-profile; DAX IQ capture device/channel, DaxIqModel wiring, SmartSDR commandReady = flex",
+  "note": "WFM demod around WfmDsp: demod/Doppler-offset intent is core; IQ source remains Flex DAX IQ, with typed pan binding",
+  "split": "WFM demod capability + freq-offset/volume intent = core-profile; DAX IQ capture device/channel and DaxIqModel wiring = flex. Command encoding is behind IRadioBackend.",
   "confidence": "high"
  },
  "core/WfmSettings.h": {
@@ -985,7 +985,7 @@
  },
  "models/DaxIqModel.h": {
   "tag": "vendor(flex)",
-  "note": "Flex DAX IQ streams: dax_iq stream create/rate cmds, 4-ch DAX model, pipes to SDR apps \u2014 DAX is Flex-only",
+  "note": "Flex DAX IQ streams: typed create/remove/rate requests, four-channel model and pipes to SDR apps; Flex status parsing remains in the model",
   "split": "",
   "confidence": "high"
  },
@@ -997,7 +997,7 @@
  },
  "models/EqualizerModel.h": {
   "tag": "universal",
-  "note": "8-band TX/RX audio EQ state (enable + band gains) \u2014 core capability; SmartSDR wire parsing/cmds move to flex adapter",
+  "note": "8-band TX/RX audio EQ state and typed enable/band-gain intent are universal; Flex encoding is backend-owned, legacy status parsing remains",
   "split": "",
   "confidence": "high"
  },

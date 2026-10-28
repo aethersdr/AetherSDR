@@ -106,10 +106,7 @@ void WfmDemodulator::start(DaxIqModel* daxIq, const QString& deviceId,
                 // channel keeps whatever pan it was last assigned to and the
                 // signal can fall outside the ±fs/2 IQ window entirely.
                 if (!m_panId.isEmpty()) {
-                    const QString cmd = QString("display pan set %1 daxiq_channel=%2")
-                                        .arg(m_panId).arg(DAX_CHANNEL);
-                    qCInfo(lcAudio) << "WfmDemodulator: sending" << cmd;
-                    emit commandReady(cmd);
+                    m_panSent = m_iqPanBinder && m_iqPanBinder(m_panId, DAX_CHANNEL);
                 }
             } else {
                 qCWarning(lcAudio) << "WfmDemodulator: DAX capture failed, error="
@@ -129,15 +126,26 @@ void WfmDemodulator::start(DaxIqModel* daxIq, const QString& deviceId,
 
     // --- Fallback: VITA-49 DaxIqModel (Linux/macOS, or no DAX) ---
     if (!m_usingDaxCapture) {
+        if (!m_daxIq || m_daxIq->stream(DAX_CHANNEL).exists || m_daxIq->createPending(DAX_CHANNEL)) {
+            qCWarning(lcAudio) << "WfmDemodulator: IQ channel is already in use";
+            return;
+        }
         m_waveOut = new WaveOutWriter(this);
         if (!m_waveOut->open(deviceId, AUDIO_RATE, 2)) {
             qCWarning(lcAudio) << "WfmDemodulator: cannot open audio output" << deviceId;
             delete m_waveOut; m_waveOut = nullptr;
             return;
         }
-        connect(m_daxIq, &DaxIqModel::iqSamplesReady, this, &WfmDemodulator::onIqSamples);
-        connect(m_daxIq, &DaxIqModel::streamChanged,  this, &WfmDemodulator::onStreamChanged);
-        m_daxIq->createStream(DAX_CHANNEL);
+        connect(m_daxIq.data(), &DaxIqModel::iqSamplesReady, this, &WfmDemodulator::onIqSamples);
+        connect(m_daxIq.data(), &DaxIqModel::streamChanged,  this, &WfmDemodulator::onStreamChanged);
+        if (!m_daxIq->createStream(DAX_CHANNEL)) {
+            m_waveOut->close();
+            m_waveOut->deleteLater();
+            m_waveOut = nullptr;
+            disconnect(m_daxIq.data(), nullptr, this, nullptr);
+            return;
+        }
+        m_iqRevision = m_daxIq->streamRevision(DAX_CHANNEL);
         qCDebug(lcAudio) << "WfmDemodulator: VITA-49 fallback, panId=" << m_panId;
     }
 
@@ -152,8 +160,10 @@ void WfmDemodulator::stop()
     if (m_iqSource) { m_iqSource->stop(); delete m_iqSource; m_iqSource = nullptr; }
     if (m_iqDevice) { m_iqDevice->close(); delete m_iqDevice; m_iqDevice = nullptr; }
     if (m_daxIq) {
-        if (!m_usingDaxCapture) m_daxIq->removeStream(DAX_CHANNEL);
-        disconnect(m_daxIq, nullptr, this, nullptr);
+        if (!m_usingDaxCapture && m_daxIq->streamRevision(DAX_CHANNEL) == m_iqRevision) {
+            m_daxIq->removeStream(DAX_CHANNEL);
+        }
+        disconnect(m_daxIq.data(), nullptr, this, nullptr);
         m_daxIq = nullptr;
     }
     if (m_waveOut) { m_waveOut->close(); delete m_waveOut; m_waveOut = nullptr; }
@@ -193,14 +203,11 @@ void WfmDemodulator::ensureDsp(int iqRateHz)
 
 void WfmDemodulator::onStreamChanged(int channel)
 {
+    if (!m_daxIq) { return; }
     const auto& s = m_daxIq->stream(DAX_CHANNEL);
     if (channel != DAX_CHANNEL || m_panSent || m_panId.isEmpty()) return;
     if (!s.exists || s.streamId == 0) return;
-    const QString cmd = QString("stream set 0x%1 pan=%2")
-                        .arg(s.streamId, 0, 16).arg(m_panId);
-    qCDebug(lcAudio) << "WfmDemodulator: sending" << cmd;
-    emit commandReady(cmd);
-    m_panSent = true;
+    m_panSent = m_iqPanBinder && m_iqPanBinder(m_panId, DAX_CHANNEL);
 }
 
 void WfmDemodulator::onIqSamples(int channel, QVector<float> iq, int sampleRate)

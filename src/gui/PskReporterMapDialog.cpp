@@ -845,6 +845,10 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         }
         const TxCoordinator::Request input =
             controller->captureProgram(TxController::Activity::Mox).request();
+        const RadioCapabilities caps = m_radioModel->backendCapabilities();
+        if (!caps.hostModulates && !caps.takesTxAudioOverSeam) {
+            m_radioModel->noteDaxTxInput(input);
+        }
         return [this, controller, input] { scheduleBeacon(controller, input); };
     });
 
@@ -1975,7 +1979,13 @@ void PskReporterMapDialog::scheduleBeacon()
     if (m_radioModel) {
         const auto controller = std::make_shared<TxController>(
             m_radioModel, TransmitModel::PttSource::Wspr);
-        scheduleBeacon(controller, controller->captureProgram(TxController::Activity::Mox).request());
+        const TxCoordinator::Request input =
+            controller->captureProgram(TxController::Activity::Mox).request();
+        const RadioCapabilities caps = m_radioModel->backendCapabilities();
+        if (!caps.hostModulates && !caps.takesTxAudioOverSeam) {
+            m_radioModel->noteDaxTxInput(input);
+        }
+        scheduleBeacon(controller, input);
     }
 }
 
@@ -2324,7 +2334,7 @@ void PskReporterMapDialog::updateBeaconState()
         stopBeacon(tr("Transmit request was blocked"));
         return;
     }
-    m_beaconContext = m_radioModel->captureTxMedia(request);
+    m_beaconContext = m_radioModel->captureDaxTxMedia(request);
     QMetaObject::invokeMethod(m_audioEngine, [audio = m_audioEngine, context = m_beaconContext] {
         if (audio) { audio->startWsprPump(context); }
     }, Qt::QueuedConnection);

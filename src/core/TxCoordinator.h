@@ -189,6 +189,14 @@ public:
     // once: neither an old callback nor a reconnect can adopt a new operation.
     class Request {
     public:
+        class Weak {
+        public:
+            [[nodiscard]] Request lock() const;
+        private:
+            friend class Request;
+            std::weak_ptr<RequestState> m_state;
+        };
+        [[nodiscard]] Weak weak() const;
         [[nodiscard]] bool valid() const;
         // Cleanup bookkeeping only: ignores request/producer cancellation,
         // but never survives a connection reset or coordinator destruction.
@@ -215,10 +223,15 @@ public:
         [[nodiscard]] bool permitsDispatch(qint64 monotonicMs) const;
         [[nodiscard]] Dispatch beginDispatch(qint64 monotonicMs) const;
         [[nodiscard]] bool sameContext(const Context& other) const;
+        // Restrict media with a worker-safe, nonthrowing predicate; this cannot
+        // admit TX or renew the original operation. Each new restriction has a
+        // distinct accumulator identity, retained by its copied contexts.
+        [[nodiscard]] Context withMediaPermit(std::function<bool()> permit) const;
     private:
         friend class TxCoordinator;
         Producer m_producer;
         Operation m_operation;
+        std::shared_ptr<const std::function<bool()>> m_mediaPermit;
         quint64 m_session{0};
         bool m_continuous{false};
     };
@@ -272,6 +285,7 @@ public:
     [[nodiscard]] Actor requestActor(const Request& request) const;
     [[nodiscard]] bool isIndependentRequest(const Request& request) const;
     [[nodiscard]] bool ownsRequest(const Request& request) const;
+    [[nodiscard]] std::vector<Request> requestsFrom(const Request& original) const;
     [[nodiscard]] std::vector<Request> producerRequests(const Producer& producer) const;
     void setProducerAdmissionObserver(const Producer& producer, std::function<void()> observer);
     void notifyProducerAdmission(const Request& request);
@@ -335,6 +349,7 @@ public:
     [[nodiscard]] bool owns(const Actor& actor, const Operation& operation) const;
     [[nodiscard]] bool recovering() const;
     [[nodiscard]] bool hasOwnership() const;
+    [[nodiscard]] bool hasUnconfirmedLocalCompletion() const;
     [[nodiscard]] bool hasInFlightDispatches() const;
 
 private:

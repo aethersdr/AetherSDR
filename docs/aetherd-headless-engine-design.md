@@ -653,6 +653,15 @@ until resolved or the session ends, without automatic retry or orphan deletion.
 Delayed initialization and profile-load flushes cannot overwrite a replacement
 pan or newer operator intent. This batch does not add daemon protocol methods,
 DAX/IQ ownership or rendering features.
+Audio-stream allocation/removal, IQ rates and pan binding, and radio graphic EQ
+now use typed desktop requests with backend-owned Flex encoding. The engine
+fences original-session stream identities and revokes canceled/superseded writes
+at the queued transport boundary. Unknown allocation outcomes retain bounded
+reservations; a late reply can clean only its original, still-owned allocation.
+These control-plane operations do not select DAX TX, change the global DAX input,
+or grant keying authority. Native RX and host EQ retain their local routes;
+sample formats, resamplers and DSP scheduling are unchanged. DAX/IQ status
+decoding above the seam and the remaining command-plane sites are still M4 work.
 The desktop adapter has not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX
