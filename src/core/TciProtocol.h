@@ -226,6 +226,11 @@ public:
     // shared means a future change to slice iteration can't drift one path.
     static int txSliceTrxOrNone(RadioModel* model);
 
+    // Split made in the GUI: receiver `rx` listens while another slice holds
+    // TX. TCI reports it as split_enable on trx 0, the way a two-VFO radio
+    // reports VFO B transmitting.
+    static bool txOnOtherSlice(const RadioModel* model, const SliceModel* rx);
+
     // Resolve a contiguous TCI receiver index, then the legacy raw Flex slice
     // id, then the first slice for compatibility. Shared by parser and server
     // command paths so GET and SET never target different receivers.

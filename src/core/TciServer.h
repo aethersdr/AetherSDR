@@ -220,6 +220,8 @@ private:
     void broadcastSpotClicked(const QString& callsign, long long frequencyHz,
                               int trx, int channel);
     void broadcastSliceFrequencies(SliceModel* slice);
+    // Announce split_enable:0 when TX moves on or off the trx 0 slice in the GUI.
+    void publishMainSplit();
     void broadcastTxPermission(SliceModel* slice);
     void broadcastTxPermissions();
     void publishActiveTrx();
@@ -472,6 +474,8 @@ private:
     // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
     // band-change slice recreation momentarily leaves no slice marked TX.
     int               m_lastTxTrx{0};
+    // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).
+    int               m_announcedSplit{-1};
     TciClient*       m_txChronoClient{nullptr};
     QPointer<TciClient> m_tciPttClient;
     TxCoordinator::Request m_tciPttRequest;

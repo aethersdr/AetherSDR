@@ -252,6 +252,12 @@ int TciProtocol::txSliceTrxOrNone(RadioModel* model)
     return -1;
 }
 
+bool TciProtocol::txOnOtherSlice(const RadioModel* model, const SliceModel* rx)
+{
+    const SliceModel* tx = model ? model->txSlice() : nullptr;
+    return rx && tx && tx != rx;
+}
+
 int TciProtocol::txTrx() const
 {
     const int trx = m_trxMap ? m_trxMap->txSliceTrxOrNone(m_model)
@@ -333,6 +339,10 @@ QString TciProtocol::generateInitBurst()
             const long long hz = mhzToHz(s->frequency());
             burst += QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(hz);
             SliceModel* txVfo = sliceForVfo(trx, 1);
+            // GUI split: the TX slice is trx 0's VFO B (see TciServer::publishMainSplit).
+            if (trx == 0 && (!txVfo || txVfo == s) && txOnOtherSlice(m_model, s)) {
+                txVfo = m_model->txSlice();
+            }
             const long long txHz = mhzToHz(txVfo ? txVfo->frequency() : s->frequency());
             burst += QStringLiteral("vfo:%1,1,%2;").arg(trx).arg(txHz);
             // dds: = IQ-stream center (panadapter center). Skimmers learn the
@@ -367,7 +377,8 @@ QString TciProtocol::generateInitBurst()
             // tciSupport.py, SplitThreadSafeValue.get() + extract_current_vfo.)
             burst += QStringLiteral("split_enable:%1,%2;")
                          .arg(trx)
-                         .arg(m_routingState && m_routingState->splitRequested()
+                         .arg((m_routingState && m_routingState->splitRequested())
+                                      || (trx == 0 && txOnOtherSlice(m_model, s))
                                  ? QStringLiteral("true")
                                  : QStringLiteral("false"));
 
@@ -1020,13 +1031,10 @@ QString TciProtocol::cmdSplitEnable(const QStringList& args, bool isSet)
     if (!isSet) {
         bool split = m_routingState && m_routingState->splitRequested();
 
-        if (!m_routingState && s && m_model) {
-            for (auto* sl : m_model->slices()) {
-                if (sl->isTxSlice() && sl != s) {
-                    split = true;
-                    break;
-                }
-            }
+        // A split made in the GUI is just as real; without a routing state
+        // every receiver reports it, as before.
+        if ((trx == 0 || !m_routingState) && txOnOtherSlice(m_model, s)) {
+            split = true;
         }
         return QStringLiteral("split_enable:%1,%2;").arg(trx).arg(split ? "true" : "false");
     }

@@ -2841,6 +2841,101 @@ public:
         }
         return true;
     }
+
+    // Split made in the GUI (another slice holds TX) is reported as
+    // split_enable on trx 0, and GUI RIT/XIT offset changes reach clients.
+    static bool guiSplitAndRitOffsetReachClients()
+    {
+        RadioModel model;
+        TciClient sock;
+        TciServer server(&model);
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
+
+        QString err;
+        model.automationApplySliceFixture(0, QStringLiteral("A"), &err);
+        model.automationApplySliceFixture(1, QStringLiteral("B"), &err);
+        SliceModel* s0 = model.slice(0);
+        SliceModel* s1 = model.slice(1);
+        if (!s0 || !s1) {
+            std::printf("      slice fixture failed: %s\n", qPrintable(err));
+            return false;
+        }
+        server.wireSlice(s0->sliceId(), s0);
+        server.wireSlice(s1->sliceId(), s1);
+        TciProtocol protocol(&model, &server.m_routingState, &server.m_trxMap);
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+            [&sent](const QString& dir, const QString& msg) {
+                if (dir == QLatin1String("tx"))
+                    sent << msg.trimmed();
+            });
+
+        SliceDelta aTx;
+        aTx.txSlice = true;
+        s0->applyChanges(aTx);
+        server.publishMainSplit();
+        if (protocol.handleCommand(QStringLiteral("split_enable:0"))
+            != QStringLiteral("split_enable:0,false;")) {
+            std::printf("      TX on trx 0 reported as split\n");
+            return false;
+        }
+
+        sent.clear();
+        SliceDelta aRx;
+        aRx.txSlice = false;
+        s0->applyChanges(aRx);
+        SliceDelta bTx;
+        bTx.txSlice = true;
+        s1->applyChanges(bTx);
+        server.publishMainSplit();
+        if (!sent.contains(QStringLiteral("split_enable:0,true;"))) {
+            std::printf("      GUI split was not broadcast\n");
+            return false;
+        }
+        bool vfoB = false;
+        for (const QString& m : sent) {
+            vfoB = vfoB || m.startsWith(QLatin1String("vfo:0,1,"));
+        }
+        if (!vfoB) {
+            std::printf("      GUI split did not announce VFO B\n");
+            return false;
+        }
+        if (protocol.handleCommand(QStringLiteral("split_enable:0"))
+                != QStringLiteral("split_enable:0,true;")
+            || protocol.handleCommand(QStringLiteral("split_enable:1"))
+                != QStringLiteral("split_enable:1,false;")) {
+            std::printf("      split_enable GET does not follow the GUI split\n");
+            return false;
+        }
+        if (!protocol.generateInitBurst().contains(QStringLiteral("split_enable:0,true;"))) {
+            std::printf("      init burst misses the GUI split\n");
+            return false;
+        }
+
+        sent.clear();
+        server.publishMainSplit();
+        if (sent.contains(QStringLiteral("split_enable:0,true;"))) {
+            std::printf("      unchanged split was announced again\n");
+            return false;
+        }
+
+        sent.clear();
+        SliceDelta rit;
+        rit.ritFreq = 120;
+        s0->applyChanges(rit);
+        SliceDelta xit;
+        xit.xitFreq = -50;
+        s0->applyChanges(xit);
+        if (!sent.contains(QStringLiteral("rit_offset:0,120;"))
+            || !sent.contains(QStringLiteral("xit_offset:0,-50;"))) {
+            std::printf("      GUI RIT/XIT offset was not broadcast\n");
+            return false;
+        }
+        return true;
+    }
 };
 
 } // namespace AetherSDR
@@ -2937,6 +3032,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::dsbRoundTripsAndIsAdvertised();
     const bool rxCtunEx
         = AetherSDR::TciServerReviewTest::rxCtunExDrivesCenterLockInverted();
+    const bool guiSplit
+        = AetherSDR::TciServerReviewTest::guiSplitAndRitOffsetReachClients();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -3029,6 +3126,8 @@ int main(int argc, char** argv)
                 dsbMode ? "PASS" : "FAIL");
     std::printf("%s  rx_ctun_ex drives center lock, inverted\n",
                 rxCtunEx ? "PASS" : "FAIL");
+    std::printf("%s  GUI split and RIT/XIT offsets reach clients\n",
+                guiSplit ? "PASS" : "FAIL");
 
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
@@ -3051,6 +3150,6 @@ int main(int argc, char** argv)
         && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
-        && chronoIdle && chronoCatchUp && daxRestored && dsbMode && rxCtunEx
+        && chronoIdle && chronoCatchUp && daxRestored && dsbMode && rxCtunEx && guiSplit
         ? 0 : 1;
 }

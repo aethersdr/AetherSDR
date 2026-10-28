@@ -7,6 +7,7 @@
 #include "AudioEngine.h"
 #include "AppSettings.h"
 #include <QScopeGuard>
+#include <climits>
 #include <QMutexLocker>
 #include "LogManager.h"
 #include "TciPeerProcess.h"
@@ -429,6 +430,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 abortTciPtt();
             }
             m_tciDaxSlices.remove(sliceId);
+            // Closing the TX slice ends a GUI split without a txSliceChanged edge.
+            QTimer::singleShot(450, this, [this] { publishMainSplit(); });
 
             // Under the #4567 sticky map a removal does NOT renumber the
             // survivors (that renumbering was #4160's original concern) —
@@ -2968,6 +2971,35 @@ void TciServer::broadcastSliceFrequencies(SliceModel* slice)
             const int rxTrx = m_trxMap.trxForSlice(m_model, rxSlice);
             broadcast(QStringLiteral("vfo:%1,1,%2;").arg(rxTrx).arg(vfoHz));
         }
+    } else if (slice->isTxSlice() && slice != sliceForTrx(0)) {
+        // GUI split: the TX slice is trx 0's VFO B.
+        broadcast(QStringLiteral("vfo:0,1,%1;").arg(vfoHz));
+    }
+}
+
+void TciServer::publishMainSplit()
+{
+    if (!m_model) {
+        return;
+    }
+    SliceModel* main = sliceForTrx(0);
+    const bool split = m_routingState.splitRequested()
+        || TciProtocol::txOnOtherSlice(m_model, main);
+    // Tracked with no clients too, so the init burst and this baseline agree.
+    const int v = split ? 1 : 0;
+    if (m_announcedSplit == v) {
+        return;
+    }
+    m_announcedSplit = v;
+    if (m_clients.isEmpty()) {
+        return;
+    }
+    broadcast(QStringLiteral("split_enable:0,%1;").arg(split ? "true" : "false"));
+    if (SliceModel* tx = m_model->txSlice(); split && tx && tx != main) {
+        const long long txHz = TciProtocol::mhzToHz(tx->frequency());
+        if (txHz > 0) {
+            broadcast(QStringLiteral("vfo:0,1,%1;").arg(txHz));
+        }
     }
 }
 
@@ -3030,6 +3062,9 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         // leaves the cache pointing at the outgoing slice for the brief
         // band-change gap, which is the value drive should still use.
         if (tx) m_lastTxTrx = trx;
+        // Both edges of a TX move fire here, and a band change drops TX for
+        // ~340 ms; publish once it has settled.
+        QTimer::singleShot(450, this, [this] { publishMainSplit(); });
     });
 
     // Seed the TX-trx cache from current state — txSliceChanged only fires on
@@ -3144,6 +3179,28 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     wireFlag(&SliceModel::squelchChanged, "sql_enable", [slice]{ return slice->receiveSquelchOn(); });
     wireFlag(&SliceModel::ritChanged,     "rit_enable", [slice]{ return slice->ritOn(); });
     wireFlag(&SliceModel::xitChanged,     "xit_enable", [slice]{ return slice->xitOn(); });
+
+    // The offsets ride the same (on, hz) signals, whose hz the flag relay
+    // drops, so a GUI offset change reached no client. Relay it on its own,
+    // de-duped by value for the same status-refresh reason.
+    auto wireOffset = [this, slice](auto signal, const char* cmd) {
+        auto last = std::make_shared<int>(INT_MIN);  // nothing announced yet
+        connect(slice, signal, this, [this, slice, cmd, last](bool, int hz) {
+            if (*last == hz) {
+                return;
+            }
+            *last = hz;
+            if (m_clients.isEmpty()) {
+                return;
+            }
+            broadcast(QStringLiteral("%1:%2,%3;")
+                          .arg(QLatin1String(cmd))
+                          .arg(m_trxMap.trxForSlice(m_model, slice))
+                          .arg(hz));
+        });
+    };
+    wireOffset(&SliceModel::ritChanged, "rit_offset");
+    wireOffset(&SliceModel::xitChanged, "xit_offset");
 
     // Deferred state sync on (re)wire: a Flex band change recreates the slice, and
     // if the restored frequency equals the init value no frequencyChanged fires,
