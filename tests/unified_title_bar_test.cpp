@@ -204,6 +204,56 @@ int main(int argc, char** argv)
               "the left/right band and the top/bottom band follow their own widths");
     }
 
+    // ── The title bar answers as the caption so Windows offers Snap (#6825) ──
+    {
+        using Hit = WindowChrome::FrameHit;
+        const QRect win(100, 50, 1000, 600);
+        const int band = 8;
+        const int caption = 52;
+
+        // Without a caption height nothing changes: every existing caller
+        // (and every window that is not the main window) keeps the old answer.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 70), win, band, band) == Hit::Client,
+              "the title bar is client area when no caption height is given");
+
+        // The bar's background drags the window, which is what Windows needs
+        // before it offers drag-to-edge Snap and the Snap Assist picker.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 70), win, band, band, caption)
+                  == Hit::Caption,
+              "the title bar's background is the caption");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 101), win, band, band, caption)
+                  == Hit::Caption,
+              "the last pixel of the caption strip still drags");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 102), win, band, band, caption)
+                  == Hit::Client,
+              "the first pixel below the caption is client area");
+
+        // The resize band wins over the caption, or the top edge and the top
+        // corners would stop resizing the moment the caption was introduced.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 50), win, band, band, caption) == Hit::Top,
+              "the top resize band still wins over the caption");
+        check(WindowChrome::expandedFrameHit(QPoint(101, 51), win, band, band, caption)
+                  == Hit::TopLeft
+                  && WindowChrome::expandedFrameHit(QPoint(1098, 51), win, band, band, caption)
+                      == Hit::TopRight,
+              "the top corners still resize under the caption");
+        check(WindowChrome::expandedFrameHit(QPoint(101, 70), win, band, band, caption)
+                  == Hit::Left,
+              "the side band still resizes alongside the caption");
+
+        // Maximized: no resize band, but the caption must still answer or the
+        // window cannot be dragged back down off the top of the screen.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 70), win, 0, 0, caption) == Hit::Caption,
+              "the caption answers while maximized, so the window can be dragged free");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 350), win, 0, 0, caption) == Hit::Client,
+              "the body is still client area while maximized");
+
+        // A point outside the window is never the caption.
+        check(WindowChrome::expandedFrameHit(QPoint(20, 20), win, band, band, caption)
+                  == Hit::Client,
+              "a point outside the window is not the caption");
+    }
+
     // ── Native client-rect save/restore for the Windows expanded frame (#6303) ──
     {
         // Rects measured on Windows 10: the expanded frame keeps an 8 px resize
