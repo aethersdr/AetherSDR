@@ -895,6 +895,11 @@ public:
     bool wakeIcomRadio(int modelId, int address, QString* error = nullptr);
     bool radioWakeActive() const { return m_radioWakeActive; }
     void connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort);
+    // SmartLink only reaches Flex radios. A session that last ran another family
+    // (IC-705, HL2) still holds that backend, which has no PanadapterStream for the
+    // WAN hole punch, so swap to Flex before the connect is requested. Returns false
+    // when no PanadapterStream is available afterwards.
+    bool prepareFlexBackendForWan();
     void setPendingClientDisconnects(const QList<quint32>& handles);
     bool disconnectClient(quint32 handle);
     // Called by MainWindow in response to multiFlexConflictDetected().

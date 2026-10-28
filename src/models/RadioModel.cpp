@@ -3887,6 +3887,17 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     }
 }
 
+bool RadioModel::prepareFlexBackendForWan()
+{
+    cancelRadioWake();
+    if (m_family != QLatin1String("flex") || !m_backend) {
+        qCInfo(lcProtocol) << "RadioModel: switching backend family" << m_family
+                           << "-> flex for SmartLink";
+        rebuildBackendForFamily(QStringLiteral("flex"));
+    }
+    return m_panStream != nullptr;
+}
+
 void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort)
 {
     discardTuneInhibit();
