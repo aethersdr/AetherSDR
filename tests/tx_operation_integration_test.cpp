@@ -82,9 +82,20 @@ public:
     }
     static void observeTciDaxStream(RadioModel& radio, const DaxTxStreamDelta& delta)
     {
-        // setBackendForTest omits setupBackend's DAX signal binding. Exercise
-        // its production observer directly; Flex decoding has separate tests.
+        // Test injection omits the production Flex decoder bindings. Supply both
+        // audio identity and DAX-selection observations; decoding is tested separately.
+        AudioStreamDelta audio;
+        audio.streamId = delta.streamId;
+        audio.kind = AudioStreamKind::DaxTransmit;
+        audio.clientHandle = delta.clientHandle;
+        audio.removed = delta.removed;
+        audio.invalidOwner = delta.invalidOwner;
+        radio.applyAudioStreamDelta(audio);
         radio.observeDaxTxStream(delta);
+    }
+    static void bindAudioEncoder(RadioModel& radio, FlexBackend& encoder)
+    {
+        encoder.setAudioCommandSink(radio.audioCommandSink());
     }
     static std::function<void(int, const QString&)> takeDaxCreateReply(RadioModel& radio)
     {
@@ -305,7 +316,14 @@ public:
         radio.m_family = QStringLiteral("flex");
         radio.m_connection->m_commandSinkForTest =
             [&commands](quint32, const QString& c) { commands << c; };
-        radio.m_rxAudio.streamId = 0x12345678;
+        radio.m_connection->m_state.store(ConnectionState::Connected);
+        radio.m_connection->m_handle.store(0x71);
+        AudioStreamDelta audio;
+        audio.streamId = 0x12345678;
+        audio.kind = AudioStreamKind::RemoteReceive;
+        audio.clientHandle = 0x71;
+        radio.applyAudioStreamDelta(audio);
+        radio.m_rxAudio.streamId = audio.streamId;
         radio.createAudioStream();   // `stream remove` whose callback chains more sendCmds
     }
     static bool intentionalDisconnect(const RadioModel& radio) { return radio.m_intentionalDisconnect; }
@@ -351,6 +369,12 @@ public:
     std::function<void(const TxCoordinator::Operation&)> cwTextWriter;
     Writer cwTextQueueWriter;
     std::vector<RadioControlCompletion> selectionReplies;
+    std::function<ReceiveDispatch(const AudioStreamRequest&, const AudioStreamCompletion&)> audioWriter;
+    ReceiveDispatch requestAudioStream(const AudioStreamRequest& request,
+                                       const AudioStreamCompletion& completion) override
+    {
+        return audioWriter ? audioWriter(request, completion) : ReceiveDispatch::Unsupported;
+    }
     ReceiveDispatch requestTxSlice(int, bool, const RadioControlCompletion& completion,
                                    const RadioControlFence& current) override
     {
@@ -2713,6 +2737,7 @@ struct DaxTciFixture {
     static constexpr quint32 kStream = 0x4a000001;
     QStringList wire;
     RadioConnection identity;
+    FlexBackend audioEncoder;
     Fixture f{false};
     TciClient client;
     TciServer server{&f.radio};
@@ -2722,6 +2747,11 @@ struct DaxTciFixture {
     {
         f.backend->caps.hasDaxStreams = true;
         f.backend->caps.hasMultiClientSessions = true;
+        f.backend->caps.audioStreamControl = audioEncoder.capabilities().audioStreamControl;
+        TxOperationIntegrationTestAccess::bindAudioEncoder(f.radio, audioEncoder);
+        f.backend->audioWriter = [this](const AudioStreamRequest& request, const AudioStreamCompletion& completion) {
+            return audioEncoder.requestAudioStream(request, completion);
+        };
         TxOperationIntegrationTestAccess::injectTcp(f.radio, identity, wire);
         TxOperationIntegrationTestAccess::bindTciOwnershipIdentity(f.radio, &identity);
         f.radio.handleSliceStatusForTest(0, {
