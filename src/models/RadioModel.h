@@ -1918,6 +1918,7 @@ private:
     friend class RadioSetupControlTestAccess;
     friend class StoredControlTestAccess;
     friend class TciServerReviewTest;
+    friend class TciRxAudioTest;
     friend class TransmitDaxHoldTestAccess;
     void expirePendingCallbacks(const QString& reason);
 

@@ -169,10 +169,14 @@ AetherSDR retries after two seconds while recording remains enabled and an
 audio client is subscribed.
 
 DXLog uses its normal TCI audio subscription. In receive, it gets ordinary
-receiver audio. During radio-reported transmit, the current TX receiver's
-stream carries the selected radio microphone instead. The
-existing per-client sample rate, mono/stereo and float32/int16 negotiation
-still applies, including 48 kHz recording. Other receivers keep their RX audio.
+receiver audio. During radio-reported transmit owned by this AetherSDR client,
+the current TX receiver's stream carries the selected radio microphone instead.
+The radio must report a known TX owner matching this client's nonzero handle.
+If another MultiFlex client owns TX, or ownership is unknown, the stream keeps
+its ordinary receiver audio. Ownership changes take effect even while the radio
+remains transmitting. The existing per-client sample rate, mono/stereo and
+float32/int16 negotiation still applies, including 48 kHz recording. Other
+receivers keep their RX audio.
 
 The **MIC** fader controls only this outgoing recording feed. It appears only
 when **Mic During TX (Experimental)** is selected and remembers its setting.
@@ -195,7 +199,8 @@ differ, so adjust the MIC fader to balance recording levels.
 This saved option affects every audio subscriber on the TX receiver;
 do not use it with digital-mode clients that need uninterrupted RX-only audio.
 It captures the selected mic input, not an RF monitor, CW sidetone or a complete
-radio voice-keyer mix. DXLog recording and timing still need hardware validation
+radio voice-keyer mix. DXLog recording, MultiFlex microphone-source isolation
+and timing still need hardware validation
 ([#6410](https://github.com/aethersdr/AetherSDR/issues/6410)).
 
 Capture starts only with an audio subscriber and releases its own mic stream

@@ -274,6 +274,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             updateMicrophoneRecording();
         });
         connect(m_model, &RadioModel::connectionStateChanged, this, &TciServer::updateMicrophoneRecording);
+        connect(m_model, &RadioModel::txOwnerChanged, this, &TciServer::updateMicrophoneRecording);
     }
 
     // Cache S-meter values for periodic broadcast (avoid flooding clients)
@@ -2877,7 +2878,9 @@ void TciServer::updateMicrophoneRecording()
     }
     refreshRxBindings();
     const bool enabled = m_microphoneCaptureActive;
-    const bool transmitting = m_model->isRadioTransmitting();
+    const quint32 clientHandle = m_model->ourClientHandle();
+    const bool transmitting = m_model->isRadioTransmitting()
+        && clientHandle != 0 && m_model->txClientHandle() == clientHandle;
     const int trx = m_trxMap.trxForSlice(m_model, m_model->txSlice());
     m_io->post([io = m_io.get(), enabled, transmitting, trx] {
         io->setMicrophoneRecording(enabled, transmitting, trx);

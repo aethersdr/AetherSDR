@@ -11,8 +11,12 @@ slice binding independently.
 
 With **Mic During TX (Experimental)** enabled on a capture-capable backend,
 the TX receiver's ordinary type-1 RX_AUDIO route carries the selected radio
-microphone during radio-reported TX. All subscribers to that receiver see the
-substitution; other receiver routes retain RX audio. Unkeying restores RX.
+microphone during radio-reported TX only when the nonzero local client handle
+matches `tx_client_handle`. Foreign, zero or unknown ownership keeps RX audio;
+the permissive unknown-owner policy used by other TX consumers is not a
+recording grant. Ownership-only interlock updates refresh the selector without
+requiring a new TX-state edge. All subscribers to the mapped TX receiver see
+the substitution; other receiver routes retain RX audio. Unkeying restores RX.
 This changes the route's content, not its negotiated format or public receiver
 identity. It is not Line Out (type 4) or an independent TX stream.
 
@@ -22,6 +26,11 @@ The MIC fader attenuates only the recording feed. Capture failures retire the
 mic route and allow a new request after two seconds while enabled, connected,
 and subscribed. Unknown narrow-audio packets are dropped while mic creation
 is pending, so a packet preceding its create reply cannot become speaker audio.
+
+Socket-free tests cover local, foreign and unknown TX ownership, ownership-only
+handoffs and per-receiver packet contents. These establish client-side route
+selection, not the radio's microphone-source isolation or timing under live
+MultiFlex; those still require hardware qualification.
 
 ## Formats and conversion
 

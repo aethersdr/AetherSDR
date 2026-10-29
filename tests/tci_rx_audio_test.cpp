@@ -5,6 +5,7 @@
 #include "core/TciServer.h"
 #include "core/TciRxConverter.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/flex/RadioConnection.h"
 #include "models/RadioModel.h"
 #include "models/DaxReceiveModel.h"
 #include "models/SliceModel.h"
@@ -15,8 +16,10 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMap>
 #include <QStringList>
 #include "core/TciClient.h"
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <thread>
@@ -87,9 +90,12 @@ public:
     RadioCapabilities capabilities() const override {
         RadioCapabilities caps;
         if (exportAvailable) { caps.receiveAudioExport = ReceiveAudioExport{{24000,48000},8}; }
+        if (microphoneAvailable) { caps.microphoneCapture = RadioCapabilities::MicrophoneCapture{}; }
         return caps;
     }
     bool exportAvailable = true;
+    bool microphoneAvailable = false;
+    bool connected = false;
     bool microphoneCaptureEnabled = false;
     int microphoneCaptureChanges = 0;
     bool setMicrophoneCaptureEnabled(bool enabled) override {
@@ -100,7 +106,7 @@ public:
     bool ownsRxAudio() const override { return true; }
     void connectRadio(const RadioConnectRequest&) override {} // no transport
     void disconnectRadio() override { retirePcmStreams(); emit disconnected(); }
-    bool isConnected() const override { return false; }
+    bool isConnected() const override { return connected; }
     void setSliceFrequency(int, double) override {}
     void setSliceMode(int, const QString&) override {}
     void setSliceFilter(int, int, int) override {}
@@ -191,6 +197,80 @@ class TciRxAudioTest {
         }
     }
 public:
+    static void microphoneTxOwnership()
+    {
+        RadioConnection connection;
+        Fixture fixture;
+        fixture.model.m_connection = &connection;
+        fixture.backend->connected = true;
+        fixture.backend->microphoneAvailable = true;
+        fixture.backend->add(3);
+        fixture.backend->add(17);
+        SliceDelta txSlice;
+        txSlice.txSlice = true;
+        emit fixture.backend->sliceChanged(17, txSlice);
+        TciClient* otherReceiver = fixture.client(24000, 0);
+        TciClient* txReceiver = fixture.client(24000, 1);
+        fixture.server.m_running.store(true);
+        fixture.server.m_microphoneRecordingEnabled = true;
+        fixture.server.m_microphoneRecordingGain = 1.0f;
+        TciIoWorker* worker = fixture.server.m_io.get();
+        worker->setMicrophoneRecordingGain(1.0f);
+        fixture.server.updateMicrophoneRecording();
+        PcmProducer receiver;
+        receiver.start(PcmPurpose::Slice, 17);
+        PcmProducer other;
+        other.start(PcmPurpose::Slice, 3);
+        PcmProducer microphone;
+        microphone.start(PcmPurpose::Auxiliary);
+        const auto verifyRoute = [&](bool localTx, const char* name) {
+            check(worker->m_microphoneRecording && worker->m_recordingTransmitting == localTx
+                && worker->m_recordingTrx == 1, name);
+            fixture.packets.clear();
+            fixture.feed(17, frame(receiver, 1024, 0.25f, 0.25f));
+            fixture.feed(3, frame(other, 1024, 0.5f, 0.5f));
+            emit fixture.backend->microphonePcmReady(frame(microphone, 1024, 0.125f, 0.125f));
+            const QVector<float> recorded = floats(fixture.packets[txReceiver]);
+            check(recorded.size() == 2048 && std::all_of(recorded.cbegin(), recorded.cend(),
+                [localTx](float sample) { return sample == (localTx ? 0.125f : 0.25f); }),
+                "TX receiver records only mic for owned TX, otherwise only its own RX");
+            const QVector<float> unaffected = floats(fixture.packets[otherReceiver]);
+            check(unaffected.size() == 2048 && std::all_of(unaffected.cbegin(), unaffected.cend(),
+                [](float sample) { return sample == 0.5f; }),
+                "ownership changes never substitute mic on another receiver");
+        };
+        const auto interlock = [&](const QMap<QString, QString>& status) {
+            fixture.model.handleStatusForTest(QStringLiteral("interlock"), status);
+        };
+        interlock({{QStringLiteral("state"), QStringLiteral("TRANSMITTING")}});
+        verifyRoute(false, "zero local and unreported TX handles fail closed during radio TX");
+        connection.m_handle.store(0x1234);
+        interlock({{QStringLiteral("state"), QStringLiteral("TRANSMITTING")}});
+        verifyRoute(false, "known local handle does not admit an unreported TX owner");
+        interlock({{QStringLiteral("tx_client_handle"), QStringLiteral("0x1234")}});
+        verifyRoute(true, "ownership-only local grant selects mic on the mapped TX receiver");
+        interlock({{QStringLiteral("tx_client_handle"), QStringLiteral("0xbeef")}});
+        check(fixture.model.isRadioTransmitting(), "foreign ownership does not change radio-wide TX state");
+        verifyRoute(false, "ownership-only foreign handoff stops mic without a TX-state edge");
+        interlock({{QStringLiteral("tx_client_handle"), QStringLiteral("0x1234")}});
+        verifyRoute(true, "ownership-only local handoff restores mic during ongoing radio TX");
+        interlock({{QStringLiteral("tx_client_handle"), QStringLiteral("0x0")}});
+        verifyRoute(false, "zero TX owner is not treated as a local recording grant");
+        connection.m_handle.store(0);
+        interlock({{QStringLiteral("tx_client_handle"), QStringLiteral("0x1234")}});
+        verifyRoute(false, "unknown local handle cannot match a known TX owner");
+        connection.m_handle.store(0x1234);
+        interlock({{QStringLiteral("tx_client_handle"), QStringLiteral("0x1234")},
+                   {QStringLiteral("state"), QStringLiteral("RECEIVE")}});
+        verifyRoute(false, "local TX ownership alone does not substitute mic while receiving");
+        interlock({{QStringLiteral("state"), QStringLiteral("TRANSMITTING")}});
+        verifyRoute(true, "radio TX admits the retained matching owner from status deltas");
+        interlock({{QStringLiteral("tx_client_handle"), QStringLiteral("0xbeef")},
+                   {QStringLiteral("state"), QStringLiteral("TRANSMITTING")}});
+        verifyRoute(false, "combined foreign TX state and owner never admit mic");
+        fixture.model.m_connection = nullptr;
+    }
+
     static void rateMatrixAndStereo()
     {
         {
@@ -1264,6 +1344,7 @@ public:
 
     static int run()
     {
+        microphoneTxOwnership();
         serverConstructedAfterReceiverRestore();
         simultaneousEightReceiverHandshakes();
         eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
