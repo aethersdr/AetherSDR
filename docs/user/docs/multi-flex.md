@@ -54,7 +54,7 @@ AetherSDR handles this automatically:
 | **TX FREQ (MHz)** | Transmit frequency |
 | *(button)* | **Disconnect** removes that client from the radio |
 
-The **Enabled / Disabled** button above the table turns multiFLEX on or off on the radio. Below the table, **Enable** (Local PTT) requests PTT for your station when another client holds it.
+The **Enabled / Disabled** button above the table turns multiFLEX on or off on the radio. Below the table, **Enable** (Local PTT) requests PTT for your station when another client holds it. The request does not key the transmitter. With multiple clients connected, the Local PTT check follows the radio’s reported ownership; an accepted request alone does not change it.
 
 A green **multiFLEX** button appears in the title bar while other clients are connected. Hover it for the list of stations; click it to open the dashboard.
 

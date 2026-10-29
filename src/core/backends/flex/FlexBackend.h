@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include "FlexCwControls.h"
 #include <optional>
 
 #include <QMap>
@@ -60,6 +61,14 @@ public:
     void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
     void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId) override;
     void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
+    void decodeCwTransportStatus(const QString& object, const QMap<QString, QString>& values);
+    void setCwControlSink(FlexCwControls::ControlSink sink);
+    ReceiveDispatch requestCwControl(const CwControlRequest& request,
+        const TxCoordinator::Command& command) override;
+    void prepareCwTransport(quint32 handle, const RadioControlFence& current) override;
+    void retireCwTransport() override;
+    ReceiveDispatch requestLocalPtt(const RadioControlCompletion& completion,
+                                    const RadioControlFence& current) override;
     // Primary keying verbs use an operation-fenced writer, never the generic
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
@@ -266,6 +275,7 @@ private:
     void sendSlice(const QString& cmd);   // guarded slice path (§6)
     void sendSliceTune(int sliceId, const SliceTuneRequest& request);
 
+    std::unique_ptr<FlexCwControls> m_cwControls;
     RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
     QThread*          m_connThread{nullptr};    // owned (this-parented)
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread

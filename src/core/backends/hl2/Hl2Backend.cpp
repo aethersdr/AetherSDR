@@ -4694,6 +4694,24 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     }
 }
 
+ReceiveDispatch Hl2Backend::requestCwControl(const CwControlRequest& request,
+                                           const TxCoordinator::Command& command)
+{
+    if (request.kind == CwControlRequest::Kind::PttEnvelope) {
+        return IRadioBackend::requestCwControl(request, command);
+    }
+    if (request.kind != CwControlRequest::Kind::Carrier
+        || (request.down && !capabilities().canTransmit) || request.down != command.keying
+        || command.operation.independent()
+        || !command.permitsDispatch(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count())) {
+        return ReceiveDispatch::Unsupported;
+    }
+    setCwKeying(request.down, request.breakIn, request.breakInDelayMs,
+               command.operation, command.completion);
+    return ReceiveDispatch::Dispatched;
+}
+
 void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
     if (!TxCoordinator::Command{operation, down}.permitsDispatch(TxCoordinator::monotonicMs())) {

@@ -192,6 +192,13 @@ sessions are rechecked after cache signals, which can synchronously retire them.
 Neutral storage validation covers supported backend modes and wide FM filters;
 the legacy Flex editor dropdown is not the storage vocabulary.
 These desktop operations add no daemon catalogue methods or TX authority.
+NetCW carrier edges and CW PTT envelopes also use typed backend requests.
+RadioModel retains admission, producer ownership and sidetone policy;
+FlexCwControls owns the stream, framing, timestamp/index counters and redundant
+UDP scheduling with the operation-fenced TCP backstop. Queue completion includes
+cancelled work and is never radio-idle evidence. Local PTT requests retain their
+original session/client; only radio client status changes confirmed ownership.
+
 Independent slice create/remove, TX-slice selection, full duplex and runtime
 slice refresh also use typed `RadioModel` routes. `FlexSliceLifecycleControls`
 owns their wire encoding; the initial connection subscription batch is separate.

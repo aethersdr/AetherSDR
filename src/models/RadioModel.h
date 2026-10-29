@@ -15,6 +15,7 @@
 #include "core/backends/FrontEndOverload.h"
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/backends/IRadioBackend.h"     // backendHealthSnapshot() return type
+#include "core/backends/SessionCommandGuard.h"
 #include "core/backends/OfflineHealthSource.h" // health that survives disconnection
 
 #include <QHostAddress>
@@ -2088,17 +2089,8 @@ private:
     FlexWaveformModel   m_flexWaveformModel;
     DStarModel          m_dstarModel{nullptr, true};
 
-    // NetCW stream — VITA-49 UDP delivery for low-latency CW keying
-    quint32  m_netCwStreamId{0};
-    int      m_netCwIndex{1};           // sequential dedup index
-    QElapsedTimer m_netCwClock;          // 16-bit relative ms clock for time=0x....
-    qint64   m_netCwLastSendMs{-1};
-    bool sendNetCwCommand(const QString& cmd, const QString& debugSource = {},
-                          quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
-                          std::chrono::steady_clock::time_point scheduledAt = {},
-                          std::function<void()> delivered = {},
-                          const TxCoordinator::Operation* captured = nullptr);
-    QByteArray buildNetCwPacket(const QByteArray& payload);
+    bool dispatchCwSessionCommand(const QString& command, const SessionCommandGuard& guard,
+                                   const RadioControlCompletion& completion);
 
     QString     m_name;
     QString     m_model;
@@ -2363,11 +2355,6 @@ private:
     // The refusal both of the above perform: raise the interlock notification
     // and roll back TransmitModel's optimistic transmit state. Always false.
     bool refuseKeyWithInterlock(const QString& message, const QString& key);
-    // Apply the same capability + receive-only-pan preflight to a non-Flex CW
-    // carrier edge before it crosses the backend seam. Key-up always passes so
-    // an inhibit arriving mid-element can never strand RF on.
-    bool forwardNonFlexCwKeying(bool down, const TxCoordinator::Operation& operation,
-                                const TxCoordinator::Completion& completion);
     bool sendCwInput(bool down, bool ptt, bool notifySidetone,
                      const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
                      std::chrono::steady_clock::time_point scheduledAt,

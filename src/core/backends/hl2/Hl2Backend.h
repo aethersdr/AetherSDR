@@ -150,6 +150,8 @@ public:
     void removeNotch(int notchId) override;
     void setNotchesEnabled(bool on) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
+    ReceiveDispatch requestCwControl(const CwControlRequest& request,
+        const TxCoordinator::Command& command) override;
     void setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        TxAudioSource source,

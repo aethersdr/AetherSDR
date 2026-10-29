@@ -823,6 +823,60 @@ std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
     return std::make_unique<FlexBackend>();
 }
 
+bool RadioModel::dispatchCwSessionCommand(const QString& command,
+    const SessionCommandGuard& guard, const RadioControlCompletion& completion)
+{
+    const RadioControlSession session = controlSession();
+    if (!guard.current() || !controlSessionCurrent(session) || (!m_connection && !m_wanConn)) { return false; }
+    const QPointer<RadioModel> self(this);
+    const QPointer<WanConnection> connection(m_wanConn);
+    const quint64 wireGeneration = connection ? connection->commandSessionGeneration() : m_connection->commandSessionGeneration();
+    const auto sequence = std::make_shared<quint32>(0);
+    const auto finished = std::make_shared<bool>(false);
+    const QPointer<QTimer> deadline(new QTimer(this));
+    deadline->setSingleShot(true);
+    const auto finish = [self, connection, wireGeneration, sequence, finished, deadline, guard,
+                         session, completion](RadioControlReply reply) {
+        if (*finished) { return; }
+        *finished = true;
+        if (deadline) { deadline->stop(); deadline->deleteLater(); }
+        if (!self) { return; }
+        if (connection) { connection->forgetSessionReply(*sequence, wireGeneration); }
+        else { self->m_pendingCallbacks.remove(*sequence); }
+        if (!guard.current() || !self->controlSessionCurrent(session)) {
+            reply = {RadioControlReply::Kind::Cancelled, -1, QStringLiteral("The original request expired.")};
+        }
+        if (completion) { completion(reply); }
+        guard.cancel();
+    };
+    connect(deadline, &QTimer::timeout, this, [finish] {
+        finish({RadioControlReply::Kind::Failed, -1, QStringLiteral("No radio response; outcome unknown.")});
+    });
+    deadline->start(30000);
+    const ResponseCallback reply = [finish](int code, const QString& body) {
+        finish({code == 0 ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Failed, code, body});
+    };
+    if (connection) {
+        *sequence = connection->sendCommand(command, reply);
+        if (*sequence == 0) { finish({RadioControlReply::Kind::Cancelled, -1, QStringLiteral("No active command transport.")}); }
+        return *sequence != 0;
+    }
+    const QPointer<RadioConnection> lan(m_connection);
+    *sequence = m_seqCounter.fetch_add(1);
+    m_pendingCallbacks.insert(*sequence, reply);
+    return QMetaObject::invokeMethod(lan, [lan, self, guard, wireGeneration,
+                                                seq = *sequence, command, finish] {
+        if (lan && guard.current() && lan->isConnected()
+            && lan->commandSessionGeneration() == wireGeneration) {
+            lan->writeCommand(seq, command);
+        } else if (self) {
+            QMetaObject::invokeMethod(self, [finish] {
+                finish({RadioControlReply::Kind::Cancelled, -1, QStringLiteral("The original command transport ended.")});
+            }, Qt::QueuedConnection);
+        }
+    }, Qt::QueuedConnection);
+}
+
 RadioModel::SetupCommandSink RadioModel::setupCommandSink(const SetupCommandWriter& writer)
 {
     const QPointer<RadioModel> model(this);
@@ -910,6 +964,12 @@ void RadioModel::setupBackend(const QString& family)
                 }
             });
             flex->setSetupCommandSink(setupCommandSink());
+            connect(this, &RadioModel::statusReceived, flex, &FlexBackend::decodeCwTransportStatus);
+            flex->setCwControlSink([this, generation](const QString& command,
+                    const SessionCommandGuard& guard, const RadioControlCompletion& completion) {
+                return generation == m_backendReceiverGeneration
+                    && dispatchCwSessionCommand(command, guard, completion);
+            });
             flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
                 sendTxKeyingCommand(cmd, fence);
             });
@@ -1777,6 +1837,7 @@ void RadioModel::wireBackendReceiverState()
 
 void RadioModel::teardownBackend()
 {
+    if (m_backend) { m_backend->retireCwTransport(); }
     resetTransmitDaxSessionState();
     // Retirement callbacks can attempt edits before teardown returns.
     const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
@@ -4910,31 +4971,6 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
     }
 }
 
-bool RadioModel::forwardNonFlexCwKeying(bool down, const TxCoordinator::Operation& operation,
-                                       const TxCoordinator::Completion& completion)
-{
-    if (!m_backend) {
-        return false;
-    }
-    // Release is unconditional. Capability or pan state may change while an
-    // element is down; applying the preflight to key-up could leave the carrier
-    // (and Break-In MOX) asserted indefinitely.
-    if (down
-        && (!refuseKeyOnTransmitIncapableBackend()
-            || !refuseKeyInReceiveOnlyMode()
-            || transmitStartBlockedByInhibit(QStringLiteral("cw-key")))) {
-        return false;
-    }
-    emit backendCwKeyingForwarded(down);
-    if (!TxCoordinator::Command{operation, down}.permitsDispatch(txMonotonicMs())) {
-        return false;
-    }
-    m_backend->setCwKeying(down, m_transmitModel.cwBreakIn(),
-                           m_transmitModel.cwDelay(),
-                           operation, completion);
-    return true;
-}
-
 void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
 {
     (void)setTransmitImpl(tx, source, nullptr);
@@ -5459,28 +5495,21 @@ bool RadioModel::sendCwInput(bool down, bool ptt, bool notifySidetone,
             receiver->endLocalTxActivity(intent);
         }
     };
-    bool deferred = false;
+    const CwControlRequest edge{ptt ? CwControlRequest::Kind::PttEnvelope : CwControlRequest::Kind::Carrier,
+        down, m_transmitModel.cwBreakIn(), m_transmitModel.cwDelay(), scheduledAt,
+        debugSource, debugTraceId, debugSourceMs};
     bool accepted = false;
-    // Break-in remains the radio/backend's choice (FlexLib Radio.cs:8890-8965).
-    // A key edge alone does not invent CW PTT in semi-break-in mode.
-    if (m_backend && !usesFlexCommandPlane()) {
-        // Non-Flex backends apply edges at forward time. Only NetCW below
-        // back-dates the radio timestamp; the sidetone still uses scheduledAt.
+    {
         const TxCoordinator::Completion completion = trackTxQueue(original, finished);
-        deferred = true;
-        if (ptt && TxCoordinator::Command{operation, down}.permitsDispatch(txMonotonicMs())) {
-            m_backend->setKeying(down, operation, completion);
-            accepted = true;
-        } else if (!ptt) {
-            accepted = forwardNonFlexCwKeying(down, operation, completion);
+        if (m_backend && TxCoordinator::Command{operation, down}.permitsDispatch(txMonotonicMs())) {
+            if (!ptt) { emit backendCwKeyingForwarded(down); }
+            if (receiver && epoch == m_cwCommandEpoch && m_backend) {
+                accepted = m_backend->requestCwControl(edge, {operation, down, completion})
+                    == ReceiveDispatch::Dispatched;
+            }
         }
-    } else {
-        const QString command = ptt ? (down ? QStringLiteral("cw ptt 1") : QStringLiteral("cw ptt 0"))
-            : QString("cw key %1").arg(down ? 1 : 0);
-        deferred = sendNetCwCommand(command, debugSource, debugTraceId, debugSourceMs,
-                                    scheduledAt, finished, &operation);
-        accepted = deferred;
     }
+    if (!receiver) { return accepted; }
     if (accepted && epoch == m_cwCommandEpoch && !ptt) {
         const bool previous = m_cwKeyActive;
         m_cwKeyActive = down;
@@ -5491,9 +5520,6 @@ bool RadioModel::sendCwInput(bool down, bool ptt, bool notifySidetone,
             emit cwKeyDownChanged(down);
         }
     }
-    if (!down && !deferred) {
-        endLocalTxActivity(intent);
-    }
     if (down && !accepted) {
         if (request) {
             (void)m_txCoordinator.closeRequest(*request);
@@ -5501,238 +5527,6 @@ bool RadioModel::sendCwInput(bool down, bool ptt, bool notifySidetone,
         endLocalTxActivity(intent);
     }
     return accepted;
-}
-
-// ── NetCW stream — VITA-49 UDP delivery with redundant sends ────────────────
-
-QByteArray RadioModel::buildNetCwPacket(const QByteArray& payload)
-{
-    // VITA-49 header (28 bytes) + ASCII command payload.  Working Maestro
-    // captures show the payload null-padded to a 32-bit word boundary; keep
-    // the datagram length consistent with the VRT packet_size field.
-    const int payloadBytes = payload.size();
-    const int paddedPayloadBytes = (payloadBytes + 3) & ~3;
-    const int packetWords = static_cast<int>(std::ceil(payloadBytes / 4.0) + 7); // 7 header words
-    const int packetBytes = 28 + paddedPayloadBytes;
-
-    QByteArray pkt(packetBytes, '\0');
-    auto* w = reinterpret_cast<quint32*>(pkt.data());
-
-    // Word 0: ExtDataWithStream, C=1, T=0, TSI=3(Other), TSF=1(SampleCount)
-    static int pktCount = 0;
-    quint32 hdr = (0x3u << 28)     // pkt_type = ExtDataWithStream
-                | (1u << 27)       // C = 1 (class ID present)
-                | (0x3u << 22)     // TSI = 3 (Other)
-                | (0x1u << 20)     // TSF = 1 (SampleCount)
-                | ((pktCount & 0x0F) << 16)
-                | (packetWords & 0xFFFF);
-    pktCount = (pktCount + 1) & 0x0F;
-
-    w[0] = qToBigEndian(hdr);
-    w[1] = qToBigEndian(m_netCwStreamId);
-    w[2] = qToBigEndian<quint32>(0x00001C2D);      // OUI (FlexRadio)
-    w[3] = qToBigEndian<quint32>(0x534C03E3);       // ICC=0x534C, PCC=0x03E3
-    w[4] = 0; w[5] = 0; w[6] = 0;                  // timestamps
-
-    // Payload: ASCII command string
-    memcpy(pkt.data() + 28, payload.constData(), payloadBytes);
-
-    return pkt;
-}
-
-bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSource,
-                                  quint64 debugTraceId, quint64 debugSourceMs,
-                                 std::chrono::steady_clock::time_point scheduledAt,
-                                 std::function<void()> delivered,
-                                 const TxCoordinator::Operation* captured)
-{
-    const bool keying = baseCmd.endsWith(QLatin1String(" 1"));
-    if (keying) {
-        delivered = {};
-    }
-    const TxCoordinator::Operation operation = captured ? *captured
-        : keying ? m_txOperation : m_txCoordinator.cleanupFence();
-    if (!TxCoordinator::Command{operation, keying}.permitsDispatch(txMonotonicMs())) {
-        return false;
-    }
-    if (m_netCwStreamId == 0) {
-        // No netcw stream — fall back to TCP immediate
-        const QString fallbackCmd = baseCmd.contains("cw key")
-            ? QString(baseCmd).replace("cw key", "cw key immediate")
-            : baseCmd;
-        if (lcCw().isDebugEnabled()) {
-            const quint64 now = cwTraceNowMs();
-            qCDebug(lcCw).noquote().nospace()
-                << "CW netcw fallback trace=" << debugTraceId
-                << " t=" << now << "ms"
-                << " sinceSourceMs=" << (debugSourceMs ? static_cast<qint64>(now - debugSourceMs) : -1)
-                << " source=" << (debugSource.isEmpty() ? QStringLiteral("unknown") : debugSource)
-                << " cmd=\"" << fallbackCmd << "\"";
-        }
-        return sendTxTcpCommand(fallbackCmd, operation, keying, std::move(delivered));
-    }
-
-    // FlexLib format: "cw key 1 time=0x<hex_ms> index=<N> client_handle=0x<handle>".
-    // time= is a 16-bit relative ms counter, not an epoch; it resets after an idle
-    // gap and the radio accepts 0x0000 as a resync marker. m_netCwLastSendMs holds
-    // the back-dated value, so the effective idle threshold can be as low as ~2900 ms;
-    // crossing it only emits a fresh resync marker.
-    constexpr qint64 kNetCwIdleResetMs = 3000;
-    quint16 timeMs = 0;
-    // Trace-side observability: record what back-dating actually did to
-    // this edge, so a log capture distinguishes a session where back-dates
-    // applied cleanly from one where they were clamped or abandoned — the
-    // final time= value alone reads identically in both.
-    qint64 traceSchedAgeMs = -1;    // -1 = edge carried no schedule
-    qint64 traceBackdateMs = 0;     // ms actually subtracted from time=
-    bool   traceFellBack   = false; // ordering fallback re-stamped at send time
-    if (scheduledAt != std::chrono::steady_clock::time_point{})
-        traceSchedAgeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - scheduledAt).count();
-    if (!m_netCwClock.isValid()
-        || m_netCwLastSendMs < 0
-        || (m_netCwClock.elapsed() - m_netCwLastSendMs) > kNetCwIdleResetMs) {
-        // A burst's FIRST edge is never back-dated: this branch restarts the
-        // counter at 0, so it is stamped at send time and the burst's first
-        // element reconstructs short by that edge's age (wake latency + the
-        // queued GUI hop).  Every later delta is exact — the error is one
-        // element once per >3 s idle gap, i.e. once per over.
-        if (m_netCwClock.isValid())
-            m_netCwClock.restart();
-        else
-            m_netCwClock.start();
-        m_netCwLastSendMs = 0;
-    } else {
-        qint64 elapsed = m_netCwClock.elapsed();
-        // Back-date the counter by the edge's age when it carries a scheduled grid
-        // instant, so the radio reconstructs the intended rhythm rather than wake latency
-        // (#4890). Safe per edge: the radio uses the deltas between consecutive time=
-        // values. The age is clamped, and the result stays monotonic like FlexLib's.
-        if (scheduledAt != std::chrono::steady_clock::time_point{}) {
-            constexpr qint64 kMaxScheduleAgeMs = 100;
-            const qint64 age = traceSchedAgeMs;
-            if (age > 0) {
-                traceBackdateMs = std::min(age, kMaxScheduleAgeMs);
-                elapsed -= traceBackdateMs;
-            }
-            // Strictly increasing: two edges sharing a time= reconstruct as a zero-length
-            // element. Fall back to the real elapsed, not prev + 1: the counter is shared
-            // with unscheduled senders (`cw ptt`, TCI/MIDI `cw key`), and prev + 1 would hand
-            // the radio a 1 ms element. This also covers a fresh burst where `elapsed` goes
-            // negative.
-            if (elapsed <= m_netCwLastSendMs) {
-                elapsed = std::max(m_netCwClock.elapsed(), m_netCwLastSendMs + 1);
-                traceFellBack   = true;
-                traceBackdateMs = 0;   // the send went out un-back-dated
-            }
-        }
-        timeMs = static_cast<quint16>(elapsed & 0xFFFF);
-        m_netCwLastSendMs = elapsed;
-    }
-    int index = m_netCwIndex++;
-
-    // Published FlexLib 4.3.16 Radio.CWKey/CWPTT use ClientHandleHelper:
-    // client_handle is a uint32 rendered as 0x plus eight uppercase hex digits.
-    // This width belongs to the handle; the relative timestamp keeps its
-    // independent four-digit format.
-    const QString tsHex = QString("%1").arg(timeMs, 4, 16, QChar('0')).toUpper();
-    const QString chHex = QString("%1").arg(clientHandle(), 8, 16, QLatin1Char('0')).toUpper();
-    QString fullCmd = QString("%1 time=0x%2 index=%3 client_handle=0x%4")
-        .arg(baseCmd, tsHex, QString::number(index), chHex);
-
-    QByteArray payload = fullCmd.toLatin1();
-
-    // Redundant sends via UDP: 0ms, 5ms, 10ms, 15ms.  The radio dedupes by the
-    // ASCII `index=N` field, but each datagram needs a UNIQUE VITA-49
-    // packet_count — FlexLib's NetCWStream.AddTXData increments packet_count
-    // after each ToBytesTX(), so the four redundant copies arrive with counts
-    // N, N+1, N+2, N+3.  Reusing a single buffer (same packet_count on all
-    // four) makes the radio's VITA stream layer drop them as duplicates.
-    QByteArray packet0 = buildNetCwPacket(payload);
-    QByteArray packet1 = buildNetCwPacket(payload);
-    QByteArray packet2 = buildNetCwPacket(payload);
-    QByteArray packet3 = buildNetCwPacket(payload);
-    const quint64 scheduledMs = cwTraceNowMs();
-    const QString source = debugSource.isEmpty() ? QStringLiteral("unknown") : debugSource;
-
-    if (lcCw().isDebugEnabled()) {
-        qCDebug(lcCw).noquote().nospace()
-            << "CW netcw schedule trace=" << debugTraceId
-            << " t=" << scheduledMs << "ms"
-            << " sinceSourceMs=" << (debugSourceMs ? static_cast<qint64>(scheduledMs - debugSourceMs) : -1)
-            << " source=" << source
-            << " stream=0x" << QString::number(m_netCwStreamId, 16).toUpper()
-            << " index=" << index
-            << " time=0x" << tsHex
-            << " schedAgeMs=" << traceSchedAgeMs
-            << " backdateMs=" << traceBackdateMs
-            << " backdateFallback=" << (traceFellBack ? 1 : 0)
-            << " cmd=\"" << baseCmd << "\""
-            << " payloadBytes=" << payload.size()
-            << " packetBytes=" << packet0.size()
-            << " udpCopies=4 tcpBackstop=1";
-    }
-
-    auto logUdpSend = [debugTraceId, scheduledMs, source](int copy, int delayMs, int bytes) {
-        if (!lcCw().isDebugEnabled())
-            return;
-        const quint64 now = cwTraceNowMs();
-        qCDebug(lcCw).noquote().nospace()
-            << "CW netcw udp-send trace=" << debugTraceId
-            << " t=" << now << "ms"
-            << " source=" << source
-            << " copy=" << copy
-            << " delayMs=" << delayMs
-            << " actualDelayMs=" << static_cast<qint64>(now - scheduledMs)
-            << " timerSlipMs=" << (static_cast<qint64>(now - scheduledMs) - delayMs)
-            << " bytes=" << bytes;
-    };
-
-    // Capture the original transport AND operation. A delayed copy must not
-    // borrow a replacement backend (or a newer owner's key) after reconnect.
-    // Check again on the worker, not merely before queueing the thread hop.
-    const QPointer<PanadapterStream> stream = m_panStream;
-    const QPointer<RadioModel> receiver = this;
-    // Complete normal key-up only after BOTH transport queues have consumed
-    // the edge. Otherwise the faster UDP queue can invalidate a short TCP down.
-    const int parts = (stream ? 1 : 0) + ((m_connection || m_wanConn) ? 1 : 0);
-    const auto pending = std::make_shared<int>(parts);
-    const auto partDelivered = [pending, delivered] {
-        if (--*pending == 0 && delivered) {
-            delivered();
-        }
-    };
-    const auto sendCopy = [stream, operation, keying, logUdpSend, receiver, partDelivered](const QByteArray& packet, int copy, int delay) {
-        if (!stream) {
-            return;
-        }
-        QMetaObject::invokeMethod(stream, [stream, operation, keying, packet, copy, delay, logUdpSend, receiver, partDelivered] {
-            {
-                const TxCoordinator::Dispatch dispatch = operation.beginDispatch(txMonotonicMs(), keying);
-                if (!stream || !dispatch) {
-                    return;
-                }
-                logUdpSend(copy, delay, packet.size());
-                stream->sendToRadio(packet);
-            }
-            // Normal key-up is not cancellation. Keep its operation alive
-            // until queued key-downs and the final key-up copy have reached
-            // this worker; otherwise a short element can lose its down edge.
-            if (copy == 3 && !keying && receiver) {
-                QMetaObject::invokeMethod(receiver, partDelivered, Qt::QueuedConnection);
-            }
-        }, Qt::QueuedConnection);
-    };
-    sendCopy(packet0, 0, 0);
-    QTimer::singleShot(5, this, [sendCopy, packet1] { sendCopy(packet1, 1, 5); });
-    QTimer::singleShot(10, this, [sendCopy, packet2] { sendCopy(packet2, 2, 10); });
-    QTimer::singleShot(15, this, [sendCopy, packet3] { sendCopy(packet3, 3, 15); });
-
-    // FlexLib sends the same decorated netcw command over TCP after the UDP
-    // copies.  With the 16-bit timestamp format above, the radio can dedupe
-    // by index=N and the TCP path provides a reliable delivery backstop.
-    sendTxTcpCommand(fullCmd, operation, keying, keying ? std::function<void()>{} : partDelivered);
-    return parts != 0;
 }
 
 bool RadioModel::sendTxTcpCommand(const QString& command, const TxCoordinator::Operation& operation,
@@ -7607,6 +7401,12 @@ void RadioModel::requestRadioInfo()
 
 void RadioModel::registerAsGuiClient(const QString& clientId)
 {
+    const QPointer<RadioModel> cwOwner(this);
+    const RadioControlSession cwSession = controlSession();
+    const RadioControlFence cwCurrent = [cwOwner, cwSession] {
+        return cwOwner && cwOwner->controlSessionCurrent(cwSession);
+    };
+
     // aetherd Gap B: SmartSDR GUI-client registration is Flex-only. Every step
     // here — the client/sub command batch, client-handle negotiation and the
     // VITA-49 UDP stream bring-up (including the deferred 10 s no-data health
@@ -7636,7 +7436,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
     // Arming at "sub slice all" opens the window after onSliceAdded has already
     // chosen its source, so the guard is never consulted (#4759).
     emit sliceConnectEnumerationStarted();
-    sendCmd(QString("client gui %1").arg(clientId), [this](int code, const QString& body) {
+    sendCmd(QString("client gui %1").arg(clientId), [this, cwCurrent](int code, const QString& body) {
         armClientConnectionNoticeSuppression();
         if (commandNeverReachedRadio(code)) {
             // The session died before the radio answered -- a mid-handshake TCP
@@ -7793,7 +7593,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
             << QStringLiteral("port=%1").arg(udpPort);
         sendCmd(
             QString("client udpport %1").arg(udpPort),
-            [this, udpPort](int code2, const QString& body) {
+            [this, udpPort, cwCurrent](int code2, const QString& body) {
                 if (code2 == 0) {
                     qCInfo(lcProtocol).noquote()
                         << "RadioModel: client udpport registered"
@@ -7849,7 +7649,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                 requestRadioInfo();
 
                 sendCmd("slice list",
-                    [this](int code3, const QString& body) {
+                    [this, cwCurrent](int code3, const QString& body) {
                         emit sliceConnectEnumerationFinished();
                         const quint64 restoreGeneration = m_sessionModelGeneration;
                         QTimer::singleShot(kSessionRestorePruneDelayMs, this, [this, restoreGeneration]() {
@@ -7905,21 +7705,9 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                         // Request remote audio TX stream (voice mode, VOX monitoring).
                         // The radio-owned met_in_rx setting controls whether level
                         // meter data is reported while receiving.
-                        // Create netcw stream for low-latency CW keying via UDP
-                        sendCmd("stream create netcw",
-                            [this](int code, const QString& body) {
-                                if (code == 0) {
-                                    m_netCwStreamId = body.trimmed().toUInt(nullptr, 16);
-                                    m_netCwIndex = 1;
-                                    m_netCwClock.invalidate();
-                                    m_netCwLastSendMs = -1;
-                                    qCDebug(lcProtocol) << "RadioModel: netcw stream created, id:"
-                                             << Qt::hex << m_netCwStreamId;
-                                } else {
-                                    qCDebug(lcProtocol) << "RadioModel: netcw stream not supported, code"
-                                             << Qt::hex << code << "— using cw key immediate fallback";
-                                }
-                            });
+                        if (cwCurrent() && m_backend) {
+                            m_backend->prepareCwTransport(clientHandle(), cwCurrent);
+                        }
 
                         // Radio always forces Opus for remote_audio_tx regardless of
                         // what we request (confirmed by protocol testing, v1.4.0.0).
@@ -8258,6 +8046,7 @@ void RadioModel::onDisconnected()
     // dropping the continuation makes sure a reconnect starts from a fresh
     // peek rather than resuming a half-finished one. (#5653 review)
     ++m_sessionGeneration;
+    if (m_backend) { m_backend->retireCwTransport(); }
     settlePanCreations();
     const RadioControlSession retiringSetupSession = controlSession();
     ++m_receiveControlGeneration;
@@ -8413,10 +8202,7 @@ void RadioModel::onDisconnected()
     m_mac.clear();
     m_declaredBands.clear();
     m_rxAudio = {};
-    m_netCwStreamId = 0;
-    m_netCwIndex = 1;
-    m_netCwClock.invalidate();
-    m_netCwLastSendMs = -1;
+
     m_lineoutGain = 50;
     m_headphoneGain = 50;
     // The mutes are the previous radio's state just as much as the gains are.
@@ -9838,22 +9624,24 @@ bool RadioModel::isProfileTransferBlocked() const
 
 void RadioModel::requestLocalPtt()
 {
-    // "enforce_local_ptt" returns 0x50001000; the settable key matches the
-    // status key the radio broadcasts: local_ptt.  Firmware v1.4.0.0 quirk.
-    sendCmd("client set local_ptt=1", [this](int code, const QString& body) {
-        if (code != 0) {
-            qCWarning(lcProtocol) << "requestLocalPtt: radio returned error"
-                                  << Qt::hex << code << body;
-            return;
+    const QPointer<RadioModel> self(this);
+    const RadioControlSession session = controlSession();
+    const quint32 handle = clientHandle();
+    const RadioControlFence current = [self, session, handle] {
+        return self && self->controlSessionCurrent(session) && self->clientHandle() == handle;
+    };
+    if (!m_backend || !current()) { return; }
+    const ReceiveDispatch result = m_backend->requestLocalPtt([self, current](const RadioControlReply& reply) {
+        if (!self || !current()) { return; }
+        if (reply.kind != RadioControlReply::Kind::Accepted) {
+            qCWarning(lcProtocol) << "Local PTT request:" << reply.message;
         }
-        // Optimistic update: mark our own entry as having PTT in case the radio
-        // doesn't echo a local_ptt=1 status message back to us.
-        quint32 ours = clientHandle();
-        if (m_clientInfoMap.contains(ours)) {
-            m_clientInfoMap[ours].localPtt = true;
-            emitOtherClientsChanged();
-        }
-    });
+        // Only client status changes ownership. An accepted request is neither
+        // an ownership observation nor permission to key the transmitter.
+    }, current);
+    if (self && current() && result == ReceiveDispatch::Unsupported) {
+        qCWarning(lcProtocol) << "Local PTT request unavailable or already pending";
+    }
 }
 
 

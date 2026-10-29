@@ -40,6 +40,7 @@ public:
     ~RadioConnection() override;
 
     ConnectionState state() const       { return m_state.load(); }
+    quint64 commandSessionGeneration() const { return m_sessionGeneration.load(); }
     quint32 clientHandle() const        { return m_handle; }
     bool isSyntheticDemo() const        { return m_syntheticDemo; }  // RFC #4288
     bool isConnected() const            { return m_state.load() == ConnectionState::Connected; }
@@ -140,9 +141,9 @@ private:
     QByteArray   m_readBuffer;
     // Bumped by resetSessionState() at every session edge. Deferred work
     // captures it so a timer armed in one session cannot fire into the next
-    // (the synthetic-demo handshake). Connection-thread only, like the
-    // buffer above. (#5653 review)
-    quint64      m_sessionGeneration{0};
+    // (the synthetic-demo handshake). Only the connection thread mutates it;
+    // owner-thread callers capture the atomic value to fence queued commands.
+    std::atomic<quint64> m_sessionGeneration{0};
     QTimer*      m_heartbeat{nullptr};
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};
