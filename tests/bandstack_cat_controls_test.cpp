@@ -40,6 +40,8 @@ public:
     bool automaticAgc{false};
     bool localStep{false};
     QStringList commands;
+    int refreshes{0};
+    QStringList commandsAtRefresh;
     std::function<void(const QString&)> onCommand;
     Backend()
     {
@@ -64,7 +66,12 @@ public:
     }
     void record(const QString& command)
     {
-        commands.append(command);
+        if (command == QLatin1String("sub slice all")) {
+            ++refreshes;
+            commandsAtRefresh = commands;
+        } else {
+            commands.append(command);
+        }
         const auto callback = onCommand;
         if (callback) { callback(command); }
     }
@@ -128,6 +135,8 @@ void recallEncoding()
     check(f.slice->receiveAgcMode() == kiwiMode && f.slice->receiveAgcThreshold() == kiwiThreshold
           && f.slice->agcMode() == QLatin1String("slow") && f.slice->agcThreshold() == 65,
           "Kiwi and underlying radio AGC observations are unchanged until their own readback");
+    check(f.backend->refreshes == 1 && f.backend->commandsAtRefresh == f.backend->commands,
+          "a completed recall requests one observation refresh after all settings writes");
     SliceDelta accepted; accepted.rxAntenna = QStringLiteral("ANT2"); accepted.txAntenna = QStringLiteral("ANT2");
     accepted.agcMode = QStringLiteral("fast"); accepted.agcThreshold = 40;
     const qsizetype count = f.backend->commands.size();
@@ -218,6 +227,7 @@ void recallLifetime()
         f.recall(Fixture::entry());
         check(f.backend->commands == QStringList{"slice set 3 mode=LSB"},
               "session, slice, pan or ownership replacement stops the recall tail");
+        check(f.backend->refreshes == 0, "an interrupted recall sends no stale observation refresh");
     }
     {
         Fixture f;

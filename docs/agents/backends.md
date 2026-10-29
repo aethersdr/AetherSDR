@@ -211,6 +211,8 @@ session, slice, pan and ownership, and a newer recall supersedes the older tail.
 Physical antenna requests and radio AGC behind external receive replacement use
 typed backend verbs. CAT tuning steps use the same typed preset route as desktop
 controls and retain the queued request's original session and slice identity.
+A completed recall requests one slice-status refresh so a mode-change status
+cannot leave AGC values stale on firmware that only acknowledges AGC writes.
 Desktop spot, pan-utility and net/tuning-step requests also use typed backend
 verbs; their desktop-only field-set records are not daemon permissions. Spot
 batches retain their original control session and Clear All epoch and detach

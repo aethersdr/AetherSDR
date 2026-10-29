@@ -134,17 +134,22 @@ void RadioModel::recallBandStack(SliceModel* target, BandStackEntry entry,
             }
         })) { return; }
     }
-    if (!pan) { return; }
-    if (!apply([&] {
-        if (entry.wnbOn != pan->wnbActive()) {
-            requestPanDisplay(pan, {PanDisplayField::Wnb, entry.wnbOn}, {}, false);
-        }
-    })) { return; }
-    apply([&] {
-        if (entry.wnbLevel >= 0 && entry.wnbLevel <= 100 && entry.wnbLevel != pan->wnbLevel()) {
-            requestPanDisplay(pan, {PanDisplayField::WnbLevel, entry.wnbLevel}, {}, false);
-        }
-    });
+    if (pan) {
+        if (!apply([&] {
+            if (entry.wnbOn != pan->wnbActive()) {
+                requestPanDisplay(pan, {PanDisplayField::Wnb, entry.wnbOn}, {}, false);
+            }
+        })) { return; }
+        if (!apply([&] {
+            if (entry.wnbLevel >= 0 && entry.wnbLevel <= 100 && entry.wnbLevel != pan->wnbLevel()) {
+                requestPanDisplay(pan, {PanDisplayField::WnbLevel, entry.wnbLevel}, {}, false);
+            }
+        })) { return; }
+    }
+    // Flex 4.3.16 acknowledges AGC writes without echoing their values to the
+    // sender. Refresh after the batch so an earlier mode status cannot leave
+    // old AGC values displayed. This observes state; it never retries writes.
+    if (current()) { requestSliceInventoryRefresh(session); }
 }
 
 ReceiveDispatch RadioModel::requestSpot(const SpotRequest& request, PanadapterModel* pan,
