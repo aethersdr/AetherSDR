@@ -74,6 +74,12 @@ constexpr int kPowerRateLimitMs = 100;
 // PTT contract if an accepted CI-V PTT-off readback never arrives.
 constexpr int kIcomTciUnkeySettleMs = 500;
 
+// A Flex band change drops TX for up to ~340 ms (observed, not specified), so
+// the GUI split state is published once this has passed. If a slow machine
+// exceeds it, a spurious split_enable:false can go out; the next TX edge
+// publishes the settled state again.
+constexpr int kSplitSettleMs = 450;
+
 QString tciCommandName(const QString& message)
 {
     const QString trimmed = message.trimmed().toLower();
@@ -431,7 +437,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             }
             m_tciDaxSlices.remove(sliceId);
             // Closing the TX slice ends a GUI split without a txSliceChanged edge.
-            QTimer::singleShot(450, this, [this] { publishMainSplit(); });
+            QTimer::singleShot(kSplitSettleMs, this, [this] { publishMainSplit(); });
 
             // Under the #4567 sticky map a removal does NOT renumber the
             // survivors (that renumbering was #4160's original concern) —
@@ -3064,7 +3070,7 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         if (tx) m_lastTxTrx = trx;
         // Both edges of a TX move fire here, and a band change drops TX for
         // ~340 ms; publish once it has settled.
-        QTimer::singleShot(450, this, [this] { publishMainSplit(); });
+        QTimer::singleShot(kSplitSettleMs, this, [this] { publishMainSplit(); });
     });
 
     // Seed the TX-trx cache from current state — txSliceChanged only fires on
