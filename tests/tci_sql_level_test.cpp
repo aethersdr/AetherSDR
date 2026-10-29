@@ -2,7 +2,8 @@
 // -140..0. The value used to be taken as the slice's 0..100 level, so a spec
 // SET of -83 failed the level clamp and every read answered a level a client
 // then drew as dB. The backend's published squelch scale converts; without one
-// Flex's -160 + level map applies. A positive value is still the older level.
+// Flex's -160 + level map applies. The spec defines dB only, so a positive
+// value (an older client's 0..100 level) is ignored rather than read as dB.
 //
 // Socket-free: an injected stub backend and TciProtocol driven by command
 // text. Nothing is keyed.
@@ -125,8 +126,16 @@ void testSpecSetIsDecibels()
     check(tci.pendingNotification() == QStringLiteral("sql_level:0,-83;"),
           "the SET is echoed in dB");
 
+    f.send(tci, QStringLiteral("sql_level:0,-140"));
+    check(f.lastLevel() == 0, "-140 dB, the bottom of the range, opens the squelch fully");
+    check(tci.pendingNotification() == QStringLiteral("sql_level:0,-140;"),
+          "level 0 is echoed as the bottom of the range");
+
+    f.send(tci, QStringLiteral("sql_level:0,-139"));
+    check(f.lastLevel() == 21, "just above the bottom follows the map again");
+
     f.send(tci, QStringLiteral("sql_level:0,-200"));
-    check(f.lastLevel() == 20, "a value below -140 dB is held at -140 dB");
+    check(f.lastLevel() == 0, "a value below -140 dB is held at -140 dB");
     check(tci.pendingNotification() == QStringLiteral("sql_level:0,-140;"),
           "the held value is what is echoed");
 
@@ -161,14 +170,15 @@ void testPublishedScaleConverts()
           "and back again for the echo");
 }
 
-void testLegacyLevelStillSets()
+// Read as dB, an older client's level 35 would be above 0 dB and close the
+// squelch. Ignoring it leaves the slice as it was.
+void testPositiveValueIsIgnored()
 {
     Fixture f;
     TciProtocol tci(&f.radio);
-    f.send(tci, QStringLiteral("sql_level:0,35"));
-    check(f.lastLevel() == 35, "legacy sql_level:0,35 still sets level 35");
-    check(tci.pendingNotification() == QStringLiteral("sql_level:0,-125;"),
-          "the legacy SET is echoed in dB");
+    check(f.send(tci, QStringLiteral("sql_level:0,35")).isEmpty() && f.backend->levels.empty(),
+          "sql_level:0,35 requests nothing");
+    check(tci.pendingNotification().isEmpty(), "and echoes nothing");
 }
 
 void testMalformedIsDropped()
@@ -208,7 +218,7 @@ int main(int argc, char** argv)
     testSpecSetIsDecibels();
     testSpecGetAnswersDecibels();
     testPublishedScaleConverts();
-    testLegacyLevelStillSets();
+    testPositiveValueIsIgnored();
     testMalformedIsDropped();
     testRelayConversionMatchesGet();
 

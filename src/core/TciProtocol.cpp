@@ -1207,11 +1207,14 @@ QString TciProtocol::cmdSqlLevel(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     double value = 0.0;
     if (!argToDouble(args, 1, value)) return {};
-    // Positive values cannot be spec dB, so they are the 0..100 level older
-    // builds took.
-    const int level = (value > 0.0)
-        ? std::min(static_cast<int>(std::lround(value)), 100)
-        : sqlScaleFor(m_model, s).levelForThresholdDb(std::max(value, kSqlMinDb));
+    // The spec defines dB only. A positive value is outside its range, and is
+    // most likely an older client's 0..100 level; read as dB it would close
+    // the squelch, so it is ignored (TCI 2.1 p.6). The bottom of the range
+    // opens the squelch fully, so level 0 stays reachable.
+    if (value > 0.0) return {};
+    const int level = (value <= kSqlMinDb)
+        ? 0
+        : sqlScaleFor(m_model, s).levelForThresholdDb(value);
     auto& pending = (*m_pendingSquelch)[trx];
     pending.level = level;
     queueSquelch(s, trx, pending.on.value_or(s->receiveSquelchOn()), level);
