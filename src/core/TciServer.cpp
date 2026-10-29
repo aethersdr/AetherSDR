@@ -3876,7 +3876,7 @@ void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sam
             reinterpret_cast<const float*>(swapped.constData()), iqFrames);
         for (auto& cs : m_clients) {
             if (cs.iqReceivers.contains(trx))
-                cs.socket->sendStreamMessage(frame);
+                cs.socket->sendBinaryMessage(frame);
         }
     }
 }

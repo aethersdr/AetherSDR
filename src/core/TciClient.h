@@ -52,7 +52,7 @@ public:
     { return live() && textSink ? textSink(message) : -1; }
     qint64 sendBinaryMessage(const QByteArray& message)
     { return live() && binarySink ? binarySink(message) : -1; }
-    // IQ frames: dropped, not fatal, while the transport is behind.
+    // Host-backend IQ frames: dropped, not fatal, while the transport is behind.
     qint64 sendStreamMessage(const QByteArray& message)
     { return live() && streamSink ? streamSink(message) : -1; }
     void close(QWebSocketProtocol::CloseCode code = QWebSocketProtocol::CloseCodeNormal,
