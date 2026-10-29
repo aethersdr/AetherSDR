@@ -5,7 +5,10 @@
 #include "SessionCommandGuard.h"
 #include <QList>
 #include <QSet>
+#include <QString>
 #include <QStringList>
+#include <functional>
+#include <optional>
 #include <utility>
 
 namespace AetherSDR {
