@@ -2700,6 +2700,19 @@ public:
         return receiveOnlyProtocol.generateInitBurst()
             .contains(QStringLiteral("tx_enable:0,false;"));
     }
+    // The init burst names the TCI version the server targets. WSJT-X and
+    // JTDX key their command formats on "ExpertSDR3" alone, so the version
+    // can follow the spec without changing what they send.
+    static bool initBurstAnnouncesTci21()
+    {
+        RadioModel model;
+        model.setBackendForTest(std::make_unique<TxCapableBackend>(),
+                                QStringLiteral("test"));
+        TciProtocol protocol(&model);
+        const QString init = protocol.generateInitBurst();
+        return init.contains(QStringLiteral("protocol:ExpertSDR3,2.1;"))
+            && !init.contains(QStringLiteral("protocol:ExpertSDR3,1.5;"));
+    }
     // #5524 / #6538: TCI's TX audio session turns on the radio's
     // `transmit dax` flag and must hand back what it found. Left on, the next
     // mic transmission keys with no modulation, and Windows has no slice-mode
@@ -2855,6 +2868,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::chronoStallSnapshotIsIdle();
     const bool chronoCatchUp
         = AetherSDR::TciServerReviewTest::chronoStallCountsCatchUpAndLatePolls();
+    const bool initProtocol
+        = AetherSDR::TciServerReviewTest::initBurstAnnouncesTci21();
     const bool daxRestored
         = AetherSDR::TciServerReviewTest::txAudioRestoresTransmitDaxAsFound();
 
@@ -2945,6 +2960,8 @@ int main(int argc, char** argv)
                 chronoCatchUp ? "PASS" : "FAIL");
     std::printf("%s  TCI TX hands transmit dax back as found (#6538)\n",
                 daxRestored ? "PASS" : "FAIL");
+    std::printf("%s  init burst announces TCI protocol 2.1\n",
+                initProtocol ? "PASS" : "FAIL");
 
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
@@ -2967,6 +2984,6 @@ int main(int argc, char** argv)
         && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
-        && chronoIdle && chronoCatchUp && daxRestored
+        && chronoIdle && chronoCatchUp && daxRestored && initProtocol
         ? 0 : 1;
 }

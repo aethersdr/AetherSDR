@@ -310,13 +310,14 @@ QString TciProtocol::generateInitBurst()
     // Identity chosen so WSJT-X's TCITransceiver keeps full TX amplitude: it
     // halves samples (K2 = 0.499/0x7FFF vs K1 = 0.999/0x7FFF) only when device is
     // "SunSDR2DX"/"SunSDR2PRO" AND protocol doesn't start with "ExpertSDR3"; we fail
-    // both. "ExpertSDR3,1.5" also selects WSJT-X's ESDR3 command formats. The
+    // both. Any "ExpertSDR3" protocol selects WSJT-X's ESDR3 command formats;
+    // WSJT-X, JTDX and eesdr-tci read the name, not the version. The
     // RF2K-S whitelist (SunSDR2DX + ExpertSDR2) is not matched; a configurable
     // identity is #2806.
     burst += QStringLiteral("device:AetherSDR;");
     burst += QStringLiteral("receive_only:false;");
     burst += QStringLiteral("modulations_list:usb,lsb,cw,cwr,am,sam,fm,nfm,digu,digl,rtty;");
-    burst += QStringLiteral("protocol:ExpertSDR3,1.5;");
+    burst += QStringLiteral("protocol:ExpertSDR3,2.1;");
 
     // ── Phase 2: Current state notifications ──────────────────────────
     // Identical in syntax to the events fired by a live tuning
