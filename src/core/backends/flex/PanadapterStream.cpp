@@ -518,6 +518,8 @@ void PanadapterStream::stop()
     {
         QMutexLocker lock(&m_streamMutex);
         m_daxPcm.clear();
+        if (m_microphoneStreamId) { m_retiredMicrophoneStreams.insert(m_microphoneStreamId); }
+        m_microphoneStreamId = 0;
     }
     if (m_wanRegisterTimer) {
         m_wanRegisterTimer->stop();
@@ -619,6 +621,8 @@ void PanadapterStream::clearRegisteredStreams()
     m_pendingDbmRanges.clear();
     m_daxPcm.clear();
     m_daxStreamIds.clear();
+    m_microphoneStreamId = 0;
+    m_retiredMicrophoneStreams.clear();
     m_iqStreamIds.clear();
     m_loggedDaxPacketStreams.clear();
     m_loggedIqPacketStreams.clear();
@@ -808,8 +812,12 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         QMutexLocker lock(&m_streamMutex);
         if (m_daxStreamIds.contains(streamId))
             daxChannel = m_daxStreamIds[streamId];
+        if (m_microphoneStreamId != 0 && streamId == m_microphoneStreamId) {
+            daxChannel = 0;
+        }
         if (m_iqStreamIds.contains(streamId))
             iqChannel = m_iqStreamIds[streamId];
+        if (daxChannel < 0 && iqChannel < 0 && m_retiredMicrophoneStreams.contains(streamId)) { return; }
         if (daxChannel >= 0 && !m_loggedDaxPacketStreams.contains(streamId)) {
             m_loggedDaxPacketStreams.insert(streamId);
             logFirstDaxPacket = true;
@@ -983,10 +991,15 @@ void PanadapterStream::processDatagram(const QByteArray& data)
 
     if (daxChannel >= 0) {
         int channel = daxChannel;
+        const int payloadStart = channel == 0
+            ? 16 + ((word0 & 0x00c00000u) ? 4 : 0) + ((word0 & 0x00300000u) ? 8 : 0)
+            : VITA49_HEADER_BYTES;
+        if (channel == 0 && (((word0 >> 28) != 1 && (word0 >> 28) != 3)
+            || (word0 & 0x08000000u) == 0 || (word0 & 0xffffu) * 4 != data.size()
+            || (qFromBigEndian<quint32>(raw + 8) & 0xffffffu) != 0x001c2du)) { return; }
         QByteArray pcm;
         if (pcc == PCC_IF_NARROW) {
             // Float32 stereo big-endian from radio → native float32 stereo
-            const int payloadStart = VITA49_HEADER_BYTES;
             const int payloadBytes = data.size() - payloadStart - (hasTrailer ? 4 : 0);
             if (payloadBytes < 8 || payloadBytes % 8 != 0
                 || payloadBytes / 8 > PcmFrame::kMaxFrames) {
@@ -1004,7 +1017,6 @@ void PanadapterStream::processDatagram(const QByteArray& data)
                 }
             }
         } else if (pcc == PCC_IF_NARROW_REDUCED) {
-            const int payloadStart = VITA49_HEADER_BYTES;
             const int payloadBytes = data.size() - payloadStart - (hasTrailer ? 4 : 0);
             if (payloadBytes < 2 || payloadBytes % 2 != 0
                 || payloadBytes / 2 > PcmFrame::kMaxFrames) {
@@ -1322,7 +1334,8 @@ void PanadapterStream::publishLegacyDaxAudio(quint32 streamId, int channel,
     std::optional<PcmFrame> frame;
     {
         QMutexLocker lock(&m_streamMutex);
-        if (m_daxStreamIds.value(streamId, -1) != channel) {
+        if (channel == 0 ? m_microphoneStreamId != streamId
+                 : m_daxStreamIds.value(streamId, -1) != channel) {
             return;
         }
         auto it = m_daxPcm.find(streamId);
@@ -1339,7 +1352,8 @@ void PanadapterStream::publishLegacyDaxAudio(quint32 streamId, int channel,
         frame = it->second->legacyStereo24(pcm);
     }
     if (frame) {
-        emit daxPcmReady(channel, *frame);
+        if (channel == 0) { emit microphonePcmReady(*frame); }
+        else { emit daxPcmReady(channel, *frame); }
     }
 }
 
@@ -1690,6 +1704,20 @@ QVector<PanadapterStream::AudioStreamDiagnostics> PanadapterStream::audioStreamD
         return a.streamId < b.streamId;
     });
     return snapshot;
+}
+
+void PanadapterStream::registerMicrophoneStream(quint32 streamId)
+{
+    QMutexLocker lock(&m_streamMutex);
+    if (m_microphoneStreamId == streamId) { return; }
+    if (m_microphoneStreamId) { m_retiredMicrophoneStreams.insert(m_microphoneStreamId); }
+    m_retiredMicrophoneStreams.remove(streamId);
+    while (m_retiredMicrophoneStreams.size() > 32) {
+        m_retiredMicrophoneStreams.erase(m_retiredMicrophoneStreams.begin());
+    }
+    m_daxPcm.erase(m_microphoneStreamId);
+    m_loggedDaxPacketStreams.remove(m_microphoneStreamId);
+    m_microphoneStreamId = streamId;
 }
 
 void PanadapterStream::registerDaxStream(quint32 streamId, int channel)

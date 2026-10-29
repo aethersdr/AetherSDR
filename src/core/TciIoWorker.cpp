@@ -75,9 +75,26 @@ void TciIoWorker::publishTxLevel(float rms)
     emit txLevel(rms);
 }
 
+void TciIoWorker::publishMicrophoneLevel(double squareSum, quint64 samples, bool clipped)
+{
+    m_microphoneSquareSum += squareSum;
+    m_microphoneSamples += samples;
+    m_microphoneClipped |= clipped;
+    if (m_microphoneLevelPending || m_microphoneSamples == 0) { return; }
+    m_microphoneLevelPending = true;
+    const quint64 count = std::exchange(m_microphoneSamples, quint64{0});
+    const float rms = static_cast<float>(std::sqrt(std::exchange(m_microphoneSquareSum, 0.0) / count));
+    const bool clip = std::exchange(m_microphoneClipped, false);
+    emit microphoneRecordingLevel(rms, count, clip);
+}
+
 void TciIoWorker::acknowledgeLevel(int channel)
 {
     if (channel == 0) { m_txLevelPending = false; }
+    else if (channel == -1) {
+        m_microphoneLevelPending = false;
+        if (m_microphoneSamples > 0) { publishMicrophoneLevel(0.0, 0, false); }
+    }
     else if (channel >= 1 && channel <= 8) { m_rxLevelPending[channel - 1] = false; }
 }
 
@@ -370,6 +387,28 @@ void TciIoWorker::setRxGain(int channel, float gain)
     if (channel >= 1 && channel <= 8) { m_rxChannelGain[channel-1] = gain; }
 }
 
+void TciIoWorker::setMicrophoneRecordingGain(float gain)
+{
+    if (std::isfinite(gain)) { m_microphoneRecordingGain = std::clamp(gain, 0.0f, 1.0f); }
+}
+
+void TciIoWorker::setMicrophoneRecording(bool enabled, bool transmitting, int trx)
+{
+    if (m_microphoneRecording == enabled && m_recordingTransmitting == transmitting
+        && m_recordingTrx == trx) { return; }
+    m_microphoneRecording = enabled;
+    m_recordingTransmitting = transmitting;
+    m_recordingTrx = trx;
+    for (RxClient& client : m_rxClients) { client.converters.clear(); }
+}
+
+bool TciIoWorker::recordingRouteCurrent(quint64 key, int trx) const
+{
+    const bool microphone = key == rxRouteKey(true, 0);
+    const bool recordingTx = m_microphoneRecording && m_recordingTransmitting && trx == m_recordingTrx;
+    return microphone ? recordingTx : !recordingTx;
+}
+
 void TciIoWorker::setTxGain(float gain, int mode)
 {
     m_txGain = gain;
@@ -407,6 +446,7 @@ bool TciIoWorker::rxDeliveryCurrent(quint64 id, quint64 generation, quint64 key,
     const auto route = m_rxRoutes.constFind(key);
     const auto client = m_rxClients.constFind(id);
     return input.current() && binding != m_bindings.cend() && binding->current()
+        && recordingRouteCurrent(key, binding->trx)
         && route != m_rxRoutes.cend() && !route->retired && route->pin
         && route->pin->stream() == input.stream() && route->owner == binding->alive
         && client != m_rxClients.cend() && client->config.lifetime->live.load()
@@ -422,6 +462,7 @@ void TciIoWorker::receivePcm(quint64 key, const PcmFrame& frame)
     const auto found = m_bindings.constFind(key);
     if (found == m_bindings.cend() || !found->current()) { return; }
     const TciRxBinding binding = *found;
+    if (!recordingRouteCurrent(key, binding.trx)) { return; }
     const bool dax = (key >> 32) != 0;
     if (dax ? (input.stream().purpose != PcmPurpose::Auxiliary || input.stream().format != PcmFormat{})
             : (input.stream().purpose != PcmPurpose::Slice || input.stream().sliceId != binding.sliceId)) { return; }
@@ -445,8 +486,10 @@ void TciIoWorker::receivePcm(quint64 key, const PcmFrame& frame)
     route->owner = binding.alive;
     route->nextSample = input.firstSample() + input.frameCount();
     route->retired = false;
-    const float gain = binding.gainChannel >= 1 && binding.gainChannel <= 8
-        ? m_rxChannelGain[binding.gainChannel-1] : 1;
+    const bool microphone = key == rxRouteKey(true, 0);
+    const float gain = microphone ? m_microphoneRecordingGain
+        : (binding.gainChannel >= 1 && binding.gainChannel <= 8
+            ? m_rxChannelGain[binding.gainChannel-1] : 1);
     QList<std::pair<quint64, quint64>> recipients;
     for (auto it = m_rxClients.cbegin(); it != m_rxClients.cend(); ++it) {
         if (it->config.audio && (it->config.receiver < 0 || it->config.receiver == binding.trx)) {
@@ -454,9 +497,20 @@ void TciIoWorker::receivePcm(quint64 key, const PcmFrame& frame)
         }
     }
     if (recipients.isEmpty()) { return; }
-    double sum = 0;
-    for (float sample : input.samples()) { sum += double(sample) * sample; }
-    publishRxLevel(binding.gainChannel, float(std::sqrt(sum / input.samples().size()) * gain));
+    if (microphone) {
+        double sum = 0.0;
+        bool clipped = false;
+        for (float sample : input.samples()) {
+            const double scaled = static_cast<double>(sample) * gain;
+            sum += static_cast<double>(sample) * sample;
+            clipped |= std::abs(scaled) >= 1.0;
+        }
+        publishMicrophoneLevel(sum, static_cast<quint64>(input.samples().size()), clipped);
+    } else {
+        double sum = 0;
+        for (float sample : input.samples()) { sum += double(sample) * sample; }
+        publishRxLevel(binding.gainChannel, float(std::sqrt(sum / input.samples().size())));
+    }
     if (!self || !input.current() || !binding.current()) { return; }
     for (const auto& [id, generation] : recipients) {
         auto client = m_rxClients.find(id);

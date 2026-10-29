@@ -156,6 +156,50 @@ audio_stream_sample_type:int16;
 audio_stream_channels:1;
 ```
 
+### Experimental microphone recording with DXLog
+
+The FlexRadio microphone recording experiment is disabled by default. In the
+TCI Server applet, select **Mic During TX (Experimental)**, then connect DXLog
+to AetherSDR's normal TCI endpoint, usually
+`ws://127.0.0.1:50001`. No separate probe or audio device is needed.
+
+DXLog uses its normal TCI audio subscription. In receive, it gets ordinary
+receiver audio. During radio-reported transmit, the current TX receiver's
+stream carries the selected radio microphone instead. The
+existing per-client sample rate, mono/stereo and float32/int16 negotiation
+still applies, including 48 kHz recording. Other receivers keep their RX audio.
+
+The **MIC** fader controls only this outgoing recording feed. It appears only
+when **Mic During TX (Experimental)** is selected and remembers its setting.
+The default is 100 percent (0 dB, unity gain). Reduce it to attenuate the mic;
+zero mutes it. There is no boost or automatic loudness normalization. The
+gain popup shows attenuation in dB. The meter and adjacent dBFS readout show
+the post-fader microphone RMS level, with a dash when there is no current
+audio. **CLIP** is a separate warning for sample peaks at or above full scale,
+even when the RMS level is lower. The meter does not measure RF output or
+guarantee that the source was not already clipped.
+The MIC fader does not change radio MIC gain, RX levels or client-to-radio TX audio.
+
+The RX and MIC meters both show post-fader RMS on the same logarithmic
+scale, from -60 to 0 dBFS. Gain is applied once to the pre-fader RMS before
+display scaling; -30 dBFS occupies half the bar. Equal output RMS levels
+produce equal settled bar lengths.
+This does not normalize the audio: microphone and receiver source levels can
+differ, so adjust the MIC fader to balance recording levels.
+
+This saved option affects every audio subscriber on the TX receiver;
+do not use it with digital-mode clients that need uninterrupted RX-only audio.
+It captures the selected mic input, not an RF monitor, CW sidetone or a complete
+radio voice-keyer mix. DXLog recording and timing still need hardware validation
+([#6410](https://github.com/aethersdr/AetherSDR/issues/6410)).
+
+Capture starts only with an audio subscriber and releases its own mic stream
+when no subscribers remain or TCI stops. It never keys the radio, changes the
+mic source, enables MON or enables DAX TX. Any PTT is solely your action.
+Clear **Mic During TX (Experimental)** to release capture and restore RX-only
+TCI audio immediately, without restarting. The existing TX gain control still refers to audio arriving from clients,
+not the microphone recording feed.
+
 ### TX overflow handling
 
 Right-click the **TX** meter in the TCI Server applet to choose how transmit samples beyond ±1.0 are treated:

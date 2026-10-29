@@ -1,4 +1,4 @@
-// GENERATED FILE â€” regenerate with `python tools/gen_seam_probe_table.py`.
+// GENERATED FILE — regenerate with `python tools/gen_seam_probe_table.py`.
 // Derived from the `signals:` section of src/core/backends/IRadioBackend.h,
 // in declaration order. Add the signal to the header; never edit this table.
 //
@@ -47,6 +47,7 @@ AETHER_SEAM_PROBE(panRemoved);
 AETHER_SEAM_PROBE(notchChanged);
 AETHER_SEAM_PROBE(notchRemoved);
 AETHER_SEAM_PROBE(sliceAudioFrameReady);
+AETHER_SEAM_PROBE(microphonePcmReady);
 AETHER_SEAM_PROBE(panWideChanged);
 AETHER_SEAM_PROBE(panRangeChanged);
 AETHER_SEAM_PROBE(panBandwidthLimitsChanged);

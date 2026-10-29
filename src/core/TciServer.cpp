@@ -154,6 +154,14 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     : QObject(parent)
     , m_model(model)
 {
+    const QJsonObject recording = QJsonDocument::fromJson(
+        AppSettings::instance().value("TciRecording", "{}").toString().toUtf8())
+        .object();
+    m_microphoneRecordingEnabled = recording.value("microphoneDuringTx").toBool(false);
+    const double microphoneGain = recording.value("microphoneGain").toDouble(1.0);
+    if (std::isfinite(microphoneGain)) {
+        m_microphoneRecordingGain = static_cast<float>(std::clamp(microphoneGain, 0.0, 1.0));
+    }
     m_io = std::make_unique<TciIoWorker>();
     m_pcmIngress->worker = m_io.get();
     connect(m_io.get(), &TciIoWorker::rxLevel, this, [this](int channel, float rms) {
@@ -164,10 +172,17 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         m_io->post([io = m_io.get()] { io->acknowledgeLevel(0); });
         emit txLevel(rms);
     });
+    connect(m_io.get(), &TciIoWorker::microphoneRecordingLevel, this, [this](float rms, quint64 samples, bool clipped) {
+        m_io->post([io = m_io.get()] { io->acknowledgeLevel(-1); });
+        const bool active = m_microphoneRecordingEnabled && m_microphoneCaptureActive
+            && m_model && m_model->isRadioTransmitting();
+        emit microphoneRecordingLevel(active ? rms : 0.0f, active ? samples : quint64{0}, active && clipped);
+    });
     connect(m_io.get(), &TciIoWorker::audioStopped, this, [this](quint64 id, quint64 generation) {
         if (ClientState* client = clientStateFor(clientById(id)); client && client->rxGeneration == generation) {
             client->audioEnabled = false;
             ++client->rxGeneration;
+            updateMicrophoneRecording();
             emit clientsChanged();
         }
     });
@@ -212,8 +227,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 const QString legacy = s.value(QStringLiteral("DaxRxGain%1").arg(ch), "0.5").toString();
                 s.setValue(key, legacy);
             }
-            m_rxChannelGain[ch - 1] = std::clamp(
-                s.value(key, "0.5").toString().toFloat(), 0.0f, 1.0f);
+            const float saved = s.value(key, "0.5").toString().toFloat();
+            m_rxChannelGain[ch - 1] = std::isfinite(saved)
+                ? std::clamp(saved, 0.0f, 1.0f) : 0.5f;
         }
         s.save();
     }
@@ -224,6 +240,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         connect(m_model, &RadioModel::backendSliceAudioFrameReady,
                 this, &TciServer::onSlicePcmReady);
         connect(m_model, &RadioModel::backendRebuilt, this, &TciServer::retireAllRxRoutes);
+        connect(m_model, &RadioModel::backendRebuilt, this, &TciServer::updateMicrophoneRecording);
+        connect(m_model, &RadioModel::connectionStateChanged, this, &TciServer::updateMicrophoneRecording);
     }
 
     // Cache S-meter values for periodic broadcast (avoid flooding clients)
@@ -638,6 +656,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         for (SliceModel* slice : m_model->slices()) { bindSlice(slice); }
     }
     for (int ch = 1; ch <= 8; ++ch) { m_io->setRxGain(ch, m_rxChannelGain[ch - 1]); }
+    m_io->setMicrophoneRecordingGain(m_microphoneRecordingGain);
 }
 
 TciServer::~TciServer()
@@ -689,6 +708,7 @@ void TciServer::stopIo()
         delete client.protocol;
     }
     m_clients.clear();
+    updateMicrophoneRecording();
     if (m_ioThread && m_ioThread->isRunning()) {
         // One-way barrier only: the worker never waits on this thread.
         QThread* owner = thread();
@@ -875,6 +895,7 @@ void TciServer::setOverflowMode(int mode)
 void TciServer::setRxChannelGain(int channel, float gain)
 {
     if (channel < 1 || channel > 8) return;
+    if (!std::isfinite(gain)) { return; }
     const float clamped = std::clamp(gain, 0.0f, 1.0f);
     if (m_rxChannelGain[channel - 1] == clamped) return;
     m_rxChannelGain[channel - 1] = clamped;
@@ -1053,6 +1074,7 @@ void TciServer::onClientDisconnected()
             delete m_clients[i].protocol;
             resetClientRx(m_clients[i]);
             m_clients.removeAt(i);
+            updateMicrophoneRecording();
 
             // Release DAX if no remaining clients want audio (#1331)
             bool anyAudio = false;
@@ -2781,6 +2803,79 @@ void TciServer::syncClient(const ClientState& client)
         client.audioReceiver, client.audioSampleRate, client.audioChannels,
         client.audioFormat, client.rxGeneration};
     m_io->post([io = m_io.get(), config] { io->configureClient(config); });
+    updateMicrophoneRecording();
+}
+
+void TciServer::setMicrophoneRecordingEnabled(bool enabled)
+{
+    if (m_microphoneRecordingEnabled == enabled) { return; }
+    m_microphoneRecordingEnabled = enabled;
+    auto& settings = AppSettings::instance();
+    QJsonObject recording = QJsonDocument::fromJson(
+        settings.value("TciRecording", "{}").toString().toUtf8()).object();
+    recording.insert("microphoneDuringTx", enabled);
+    settings.setValue("TciRecording", QString::fromUtf8(
+        QJsonDocument(recording).toJson(QJsonDocument::Compact)));
+    settings.save();
+    updateMicrophoneRecording();
+    emit microphoneRecordingEnabledChanged(enabled);
+}
+
+void TciServer::setMicrophoneRecordingGain(float gain)
+{
+    if (!std::isfinite(gain)) { return; }
+    const float clamped = std::clamp(gain, 0.0f, 1.0f);
+    if (m_microphoneRecordingGain == clamped) { return; }
+    m_microphoneRecordingGain = clamped;
+    auto& settings = AppSettings::instance();
+    QJsonObject recording = QJsonDocument::fromJson(
+        settings.value("TciRecording", "{}").toString().toUtf8()).object();
+    recording.insert("microphoneGain", static_cast<double>(clamped));
+    settings.setValue("TciRecording", QString::fromUtf8(
+        QJsonDocument(recording).toJson(QJsonDocument::Compact)));
+    settings.save();
+    m_io->post([io = m_io.get(), clamped] { io->setMicrophoneRecordingGain(clamped); });
+    emit microphoneRecordingGainChanged(clamped);
+}
+
+void TciServer::updateMicrophoneRecording()
+{
+    if (!m_model) { return; }
+    if (!m_microphoneRecordingEnabled && !m_microphoneCaptureActive) { return; }
+    IRadioBackend* backend = m_model->backend();
+    if (m_microphoneBackend != backend) {
+        disconnect(m_microphoneConnection);
+        if (m_microphoneBackend && m_microphoneCaptureActive) {
+            m_microphoneBackend->setMicrophoneCaptureEnabled(false);
+        }
+        m_microphoneCaptureActive = false;
+        m_microphoneBackend = backend;
+        if (backend) {
+            m_microphoneConnection = connect(backend, &IRadioBackend::microphonePcmReady,
+                this, [this, backend](const PcmFrame& frame) {
+                    if (m_microphoneBackend != backend || !m_microphoneCaptureActive || !frame.current()) { return; }
+                    const quint64 key = TciIoWorker::rxRouteKey(true, 0);
+                    m_io->post([io = m_io.get(), key, frame] { io->receivePcm(key, frame); },
+                        frame.samples().size() * sizeof(float));
+                });
+        }
+    }
+    bool wanted = false;
+    for (const ClientState& client : m_clients) { wanted |= client.audioEnabled; }
+    wanted = wanted && m_microphoneRecordingEnabled && isRunning() && m_model->isConnected();
+    if (backend && wanted != m_microphoneCaptureActive) {
+        m_microphoneCaptureActive = backend->setMicrophoneCaptureEnabled(wanted) && wanted;
+        if (m_microphoneCaptureActive) {
+            qCInfo(lcCat) << "TCI: experimental microphone recording enabled; RX audio switches to mic during radio TX";
+        }
+    }
+    refreshRxBindings();
+    const bool enabled = m_microphoneCaptureActive;
+    const bool transmitting = m_model->isRadioTransmitting();
+    const int trx = m_trxMap.trxForSlice(m_model, m_model->txSlice());
+    m_io->post([io = m_io.get(), enabled, transmitting, trx] {
+        io->setMicrophoneRecording(enabled, transmitting, trx);
+    });
 }
 
 void TciServer::resetClientRx(ClientState& client)
@@ -2831,6 +2926,7 @@ void TciServer::refreshRxBindings()
                 bind(true, channel, owner, channel);
             }
         }
+        if (m_microphoneCaptureActive) { bind(true, 0, m_model->txSlice(), 0); }
     }
     for (const TciRxBinding& binding : m_rxBindings) {
         if (!next.contains(binding.key) && binding.alive) {
@@ -3584,6 +3680,7 @@ void TciServer::broadcastTuneState()
 
 void TciServer::onRadioTransmittingChanged(bool transmitting)
 {
+    updateMicrophoneRecording();
     const bool changed = transmitting != m_lastRadioTx;
     m_lastRadioTx = transmitting;
 

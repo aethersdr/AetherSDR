@@ -69,6 +69,8 @@ public:
     void receivePcm(quint64 key, const PcmFrame& frame);
     void retireRxRoute(quint64 key);
     void setRxGain(int channel, float gain);
+    void setMicrophoneRecording(bool enabled, bool transmitting, int trx);
+    void setMicrophoneRecordingGain(float gain);
     void setTxGain(float gain, int overflowMode);
     void prepareTx(quint64 id, const TxCoordinator::Context& context);
     void startChrono(quint64 id, int trx, const TxCoordinator::Context& context);
@@ -89,6 +91,7 @@ signals:
     void textReceived(quint64 id, const QString& text, const AetherSDR::TxCoordinator::Request& input);
     void rxLevel(int channel, float rms);
     void txLevel(float rms);
+    void microphoneRecordingLevel(float rms, quint64 samples, bool clipped);
     void txPcmReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
 
 private:
@@ -117,9 +120,14 @@ private:
     void acceptConnections();
     void publishRxLevel(int channel, float rms);
     void publishTxLevel(float rms);
+    void publishMicrophoneLevel(double squareSum, quint64 samples, bool clipped);
     void publishTelemetry();
     bool m_rxLevelPending[8]{};
     bool m_txLevelPending{false};
+    bool m_microphoneLevelPending{false};
+    double m_microphoneSquareSum{0.0};
+    quint64 m_microphoneSamples{0};
+    bool m_microphoneClipped{false};
     mutable QMutex m_diagnosticsMutex;
     QJsonObject m_diagnostics;
     void dispatchText(quint64 id);
@@ -128,6 +136,7 @@ private:
     void resetRxRoute(quint64 key);
     bool rxDeliveryCurrent(quint64 id, quint64 generation, quint64 key,
                            const PcmFrame& frame, const std::shared_ptr<TciRxConverter>& converter) const;
+    bool recordingRouteCurrent(quint64 key, int trx) const;
     static QByteArray encodeRxAudio(int trx, int rate, int channels, int format,
                                    const QVector<float>& stereo, float gain);
     void sendTxChronoFrame(quint64 id);
@@ -139,6 +148,10 @@ private:
     QHash<quint64, RxRoute> m_rxRoutes;
     PcmFrameGate m_rxGate;
     bool m_rxProcessing{false};
+    bool m_microphoneRecording{false};
+    float m_microphoneRecordingGain{1.0f};
+    bool m_recordingTransmitting{false};
+    int m_recordingTrx{-1};
     std::function<qint64(quint64, const QByteArray&)> m_rxSend;
     std::function<qint64(quint64)> m_rxBacklog;
     std::function<void(quint64, QWebSocketProtocol::CloseCode, const QString&)> m_rxClose;

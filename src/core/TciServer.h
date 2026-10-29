@@ -42,6 +42,7 @@ class SliceModel;
 class PanadapterModel;
 class Resampler;
 class TciRxConverter;
+class IRadioBackend;
 
 // Read-only snapshot of one connected TCI client, surfaced to the Radio
 // Setup → TCI tab. TCI has no client-identity handshake, so a client is
@@ -109,6 +110,10 @@ public:
     QVector<TciClientInfo> connectedClients() const;
 
     void setAudioEngine(AudioEngine* audio);
+    void setMicrophoneRecordingEnabled(bool enabled);
+    bool microphoneRecordingEnabled() const { return m_microphoneRecordingEnabled; }
+    void setMicrophoneRecordingGain(float gain);
+    float microphoneRecordingGain() const { return m_microphoneRecordingGain; }
     // Thread-safe owning ingress, safe even if a source callback overlaps
     // controller destruction. The closure contains no controller pointer.
     std::function<void(int, const PcmFrame&)> daxPcmSink() const;
@@ -169,6 +174,9 @@ public slots:
 
 signals:
     void clientCountChanged(int count);
+    void microphoneRecordingEnabledChanged(bool enabled);
+    void microphoneRecordingGainChanged(float gain);
+    void microphoneRecordingLevel(float rms, quint64 samples, bool clipped);
     void rxBindingsChanged();
     // Fired whenever the client list or any client's subscriptions change
     // (connect, disconnect, audio start/stop). The TCI tab repopulates on
@@ -181,7 +189,7 @@ signals:
     // emitted but can be muted per-command via the monitor's
     // suppression list to keep the stream readable.
     void tciMessage(const QString& direction, const QString& text);
-    void rxLevel(int channel, float rms);  // 1-based channel, RMS of TCI-gained RX audio
+    void rxLevel(int channel, float rms);  // 1-based channel, pre-fader RMS
     void txLevel(float rms);                // RMS of post-gain TCI TX audio
     // Emitted when a TCI client sends `volume:N;` (master volume SET).
     // MainWindow handles it by calling the same path as the title bar
@@ -355,6 +363,12 @@ private:
     TciClient* clientById(quint64 id) const;
     void resetClientRx(ClientState& client);
     void refreshRxBindings();
+    void updateMicrophoneRecording();
+    bool m_microphoneRecordingEnabled{false};
+    float m_microphoneRecordingGain{1.0f};
+    bool m_microphoneCaptureActive{false};
+    QPointer<IRadioBackend> m_microphoneBackend;
+    QMetaObject::Connection m_microphoneConnection;
     void retireAllRxRoutes();
     void retireSliceRx(int sliceId);
     QHash<quint64, TciRxBinding> m_rxBindings;

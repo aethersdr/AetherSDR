@@ -5,6 +5,8 @@
 class QPushButton;
 class QLabel;
 class QLineEdit;
+class QCheckBox;
+class QTimer;
 
 namespace AetherSDR {
 
@@ -51,12 +53,21 @@ private:
 #ifdef HAVE_WEBSOCKETS
     void buildUI();
     void updateTciStatus();
+    void updateMicrophoneRecordingControls();
 
     RadioModel* m_model{nullptr};
     TciServer*  m_tciServer{nullptr};
     int m_maxDaxChannels{kChannels};  // radio slice capacity (FlexLib table)
 
     QPushButton* m_tciEnable{nullptr};
+    QCheckBox* m_microphoneRecording{nullptr};
+    QWidget* m_microphoneRow{nullptr};
+    MeterSlider* m_microphoneMeter{nullptr};
+    QLabel* m_microphoneLevelLabel{nullptr};
+    QTimer* m_microphoneMeterTimer{nullptr};
+    double m_microphoneSquareSum{0.0};
+    quint64 m_microphoneSamples{0};
+    bool m_microphoneClipped{false};
     QLineEdit*   m_tciPort{nullptr};
     QLabel*      m_tciStatus{nullptr};
 
