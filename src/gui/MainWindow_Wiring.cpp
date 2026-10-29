@@ -7705,7 +7705,7 @@ void MainWindow::wireMeters()
         }
     }
 
-    // Data and scale use the same confirmed selection.
+    // Shared TX meter data and scale use the same confirmed selection.
     auto updatePowerScale = [this]() {
         const SharedTxMeterSelection selection = sharedTxMeterSelection();
         if (selection.source != m_sharedTxMeterSource) {
@@ -7726,7 +7726,8 @@ void MainWindow::wireMeters()
         const bool integratedAmp = m_radioModel.amplifier().present()
             && m_radioModel.amplifier().operate();
         m_appletPanel->txApplet()->setPowerScale(radioMaxWatts, integratedAmp);
-        m_appletPanel->tunerApplet()->setPowerScale(selection.maxWatts, selection.highPowerAmplifier);
+        m_appletPanel->tunerApplet()->setPowerScale(tunerMaxWatts(radioMaxWatts, selection),
+                                                   selection.highPowerAmplifier);
         m_appletPanel->healthApplet()->setPowerScale(radioMaxWatts, integratedAmp);
         m_appletPanel->setMeterPowerScale(selection.maxWatts, selection.highPowerAmplifier);
     };

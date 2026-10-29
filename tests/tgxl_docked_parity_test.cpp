@@ -13,6 +13,7 @@
 
 #include "gui/AccessoryPanelWidgets.h"
 #include "gui/HGauge.h"
+#include "gui/SharedTxMeterSelection.h"
 #include "gui/TunerApplet.h"
 #include "models/TunerModel.h"
 #include "core/TgxlConnection.h"
@@ -79,6 +80,7 @@ bool aVisibleKeyReads(QWidget* applet, const QString& caption)
 
 int main(int argc, char** argv)
 {
+    qputenv("AETHER_AUTOMATION", "1");  // HGauge publishes its range for assertions.
     QApplication app(argc, argv);
 
     TunerModel model;
@@ -91,6 +93,26 @@ int main(int argc, char** argv)
     settle();
 
     CHECK(!applet.isFloating());
+
+    // A tuner sees its own RF path; selecting KXPA100 readings for the
+    // shared meters must not shrink a 500 W radio's tuner range.
+    QWidget* forwardGauge = nullptr;
+    for (QWidget* widget : applet.findChildren<QWidget*>()) {
+        if (widget->accessibleName() == QStringLiteral("Forward power")) {
+            forwardGauge = widget;
+            break;
+        }
+    }
+    CHECK(forwardGauge != nullptr);
+    if (forwardGauge) {
+        for (const int radioWatts : {100, 500, 100}) {
+            const SharedTxMeterSelection selected = selectSharedTxMeters(
+                radioWatts, false, false, false, true);
+            applet.setPowerScale(tunerMaxWatts(radioWatts, selected), selected.highPowerAmplifier);
+            CHECK(forwardGauge->property("gaugeMax").toInt() == (radioWatts == 500 ? 600 : 200));
+            CHECK(selected.maxWatts == 100);
+        }
+    }
 
     // The indicator follows the direct connection's authenticated state,
     // while the radio relay can keep the rest of the tuner panel live.
