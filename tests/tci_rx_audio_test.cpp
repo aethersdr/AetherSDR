@@ -378,6 +378,31 @@ public:
         f.server.onSlicePcmReady(17,frame(b,128));
         check(!f.packets[other].isEmpty(), "client format changes preserve another client's staging");
     }
+    static void sampleTypeIsNamed()
+    {
+        // TCI 2.1 replies audio_stream_sample_type with the format's name in
+        // lower case, and an unknown format leaves the current one in place.
+        Fixture f; f.backend->add(3); TciClient* client=f.client(48000,0);
+        QStringList texts;
+        client->textSink=[&texts](const QString& text) { texts.append(text); return qint64(text.size()); };
+        auto reply=[&](const QString& cmd) {
+            texts.clear(); f.command(client,cmd);
+            return texts.filter(QStringLiteral("audio_stream_sample_type")).join(QString());
+        };
+        auto format=[&] { return f.server.clientStateFor(client)->audioFormat; };
+        check(reply(QStringLiteral("audio_stream_sample_type:int16;"))==QStringLiteral("audio_stream_sample_type:int16;")
+              && format()==0, "int16 is set and replied by name");
+        check(reply(QStringLiteral("audio_stream_sample_type:FLOAT32;"))==QStringLiteral("audio_stream_sample_type:float32;")
+              && format()==3, "the case of a set value does not matter, the reply is lower case");
+        check(reply(QStringLiteral("audio_stream_sample_type;"))==QStringLiteral("audio_stream_sample_type:float32;"),
+              "a bare read answers the current format");
+        check(reply(QStringLiteral("audio_stream_sample_type:int24;"))==QStringLiteral("audio_stream_sample_type:float32;")
+              && format()==3, "an unsupported format is ignored and the current one replied");
+        check(reply(QStringLiteral("audio_stream_sample_type:bogus;"))==QStringLiteral("audio_stream_sample_type:float32;")
+              && format()==3, "an unknown format no longer falls back to int16");
+        check(reply(QStringLiteral("audio_stream_sample_type:0;"))==QStringLiteral("audio_stream_sample_type:int16;")
+              && format()==0, "the older numeric form is still taken and answered by name");
+    }
     static void subscriptionAndForwardGapStaging()
     {
         // These fail if a reset drops just filter history or just the partial
@@ -1083,7 +1108,7 @@ public:
         simultaneousEightReceiverHandshakes();
         eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
         ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding(); nonFiniteInt16IsSilence();
-        replayAndEpochs(); resetIsolation(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
+        replayAndEpochs(); resetIsolation(); sampleTypeIsNamed(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
         staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); daxRouteSurvivesStreamUnregister(); pressureAndReplacement();
         std::printf("TCI RX: %d checks, %d failures\n",checks,failures);
         return failures==0 ? 0 : 1;
