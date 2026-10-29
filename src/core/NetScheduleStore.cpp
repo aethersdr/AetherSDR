@@ -17,6 +17,25 @@ namespace {
 // MemoryEntry's defaults. group/owner/index are radio-slot concepts and
 // deliberately omitted from the portable net format.
 
+bool safePresetToken(const QString& value)
+{
+    // Mode names can include future waveforms. Match the slice-create token
+    // alphabet without requiring the mode to be in this client's registry.
+    if (value.size() > 64) {
+        return false;
+    }
+    for (const QChar ch : value) {
+        if (!((ch >= QLatin1Char('A') && ch <= QLatin1Char('Z'))
+              || (ch >= QLatin1Char('a') && ch <= QLatin1Char('z'))
+              || (ch >= QLatin1Char('0') && ch <= QLatin1Char('9'))
+              || ch == QLatin1Char('_') || ch == QLatin1Char('.')
+              || ch == QLatin1Char('/') || ch == QLatin1Char('-'))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 QJsonObject presetToJson(const MemoryEntry& m)
 {
     QJsonObject o;
@@ -145,10 +164,26 @@ NetScheduleStore::ParseResult NetScheduleStore::parse(const QByteArray& bytes)
     }
 
     const QJsonArray arr = root.value("nets").toArray();
-    for (const QJsonValue& v : arr) {
+    for (qsizetype index = 0; index < arr.size(); ++index) {
+        const QJsonValue v = arr.at(index);
         if (!v.isObject())
             continue;
         NetEntry e = entryFromJson(v.toObject());
+        bool valid = true;
+        const auto checkToken = [&](const QString& value, const QString& field) {
+            if (!safePresetToken(value)) {
+                result.errors << QString("Net %1: preset.%2 must be empty or a token of at most "
+                                         "64 letters, digits, underscores, dots, slashes or hyphens")
+                                     .arg(index + 1).arg(field);
+                valid = false;
+            }
+        };
+        checkToken(e.preset.mode, QStringLiteral("mode"));
+        checkToken(e.preset.offsetDir, QStringLiteral("offsetDir"));
+        checkToken(e.preset.toneMode, QStringLiteral("toneMode"));
+        if (!valid) {
+            continue;
+        }
         if (e.id.isEmpty())
             e.id = newId();
         result.nets.append(e);
