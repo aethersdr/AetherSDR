@@ -1,4 +1,5 @@
 #include "core/backends/flex/FlexBackend.h"
+#include "FlexSessionControls.h"
 #include "core/backends/TuneOutputPolicy.h"
 #include "core/AppActivity.h"
 
@@ -698,6 +699,11 @@ RadioCapabilities FlexBackend::capabilities() const
         setup.fields.insert(static_cast<RadioSetupRequest::Field>(field));
     }
     caps.radioSetupControl = setup;
+    SessionControl session;
+    for (int field = 0; field < static_cast<int>(SessionControlField::Count); ++field) {
+        session.fields.insert(static_cast<SessionControlField>(field));
+    }
+    caps.sessionControl = session;
     caps.spotControl = SpotControl{{SpotAction::Add, SpotAction::Remove,
                                     SpotAction::Clear, SpotAction::Trigger}};
     caps.panControl = PanControl{{PanControlField::BandZoom, PanControlField::SegmentZoom,
@@ -1935,28 +1941,7 @@ void FlexBackend::decodeApdSamplerStatus(const QMap<QString, QString>& kvs)
 
 void FlexBackend::decodeRadioInfoMetadata(const QString& body)
 {
-    // FlexLib 4.3.16 Radio.UpdateInfo: this belongs to the comma-separated
-    // info reply, not radio status. A reply is a snapshot, unlike slice deltas.
-    RadioDelta delta;
-    delta.iaruRegion = 0;
-    for (QStringView field : QStringView(body).split(QLatin1Char(','))) {
-        const qsizetype eq = field.indexOf(QLatin1Char('='));
-        if (eq < 0 || field.left(eq).trimmed() != QLatin1String("iaru_region")) {
-            continue;
-        }
-        QStringView value = field.mid(eq + 1).trimmed();
-        delta.iaruRegion = 0;
-        if (value.size() > 16) { continue; }
-        const auto wrapper = [](QChar ch) {
-            return ch == QLatin1Char('\\') || ch == QLatin1Char('"');
-        };
-        while (!value.isEmpty() && wrapper(value.front())) { value = value.mid(1); }
-        while (!value.isEmpty() && wrapper(value.back())) { value = value.left(value.size() - 1); }
-        bool ok = false;
-        const int region = value.size() <= 8 ? value.toInt(&ok) : 0;
-        delta.iaruRegion = ok && region >= 1 && region <= 3 ? region : 0;
-    }
-    emit radioChanged(delta);
+    emit radioChanged(FlexSessionControls::infoMetadata(body));
 }
 
 void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)

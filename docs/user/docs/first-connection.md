@@ -95,6 +95,18 @@ The radio rejected AetherSDR's client registration (for example with error `F300
 1. Follow the message shown: typically another client must disconnect first, or the radio needs a restart.
 2. If the **Connected Stations** dialog appears, select a station and click **Disconnect Station**; see [Multi-Flex](./multi-flex.md).
 
+### Registration or client disconnection does not complete
+
+If GUI registration or a client disconnection required for startup goes
+unanswered for 30 seconds, AetherSDR reports the
+incomplete operation and closes that connection so the normal reconnect path
+can recover. A radio rejection is different: follow the radio's error as
+described above. After a reconnect, replies and delayed actions from the old
+connection cannot continue its registration or disconnect another station.
+
+Check the network connection and retry from **File → Connect to Radio...** if
+automatic reconnection does not restore the session.
+
 ### Connected, but no audio
 
 The PC audio path is off, or the wrong output device is selected.

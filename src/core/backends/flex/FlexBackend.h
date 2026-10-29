@@ -57,6 +57,11 @@ public:
     void setAnsweredCommandSink(AnsweredCommandSink sink) { m_answeredSink = std::move(sink); }
     bool answersTransmitControl() const override { return bool(m_answeredSink); }
     // Configuration writes share LAN/WAN sequencing and report actual dispatch.
+    using SessionCommandSink = std::function<bool(const QString&, const SessionCommandGuard&,
+                                                   const RadioControlCompletion&)>;
+    void setSessionCommandSink(SessionCommandSink sink) { m_sessionSink = std::move(sink); }
+    ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
+        const SessionCommandGuard& guard, const SessionControlCompletion& completion = {}) override;
     void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
     void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId) override;
     void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
@@ -273,6 +278,7 @@ private:
     std::function<bool(const QString&, CommandReply)> m_sink;
     AnsweredCommandSink m_answeredSink;
     std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;
+    SessionCommandSink m_sessionSink;
     quint64 m_nicknameSession{0};
     quint64 m_nicknameRequest{0};
     quint64 m_nicknameAppliedRequest{0};
