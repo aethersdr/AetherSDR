@@ -784,7 +784,7 @@ TxCoordinator::Intent TxCoordinator::beginIntent(const Operation& operation,
     const unsigned activityBit = static_cast<unsigned>(activity);
     if (!onThread() || !m_active.sameOperation(operation)
         || m_active.m_state->cancelled.load(std::memory_order_acquire)
-        || activityBit == 0 || activityBit > static_cast<unsigned>(Activity::Cwx)
+        || activityBit == 0 || activityBit > static_cast<unsigned>(Activity::Navtex)
         || (activityBit & (activityBit - 1)) != 0) {
         return {};
     }

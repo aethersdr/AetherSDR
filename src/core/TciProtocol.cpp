@@ -1666,20 +1666,11 @@ QString TciProtocol::cmdCwKeyerSpeed(const QStringList& args, bool /*isSet*/)
 }
 
 // Global command — see the note above cmdCwMacrosSpeed.
-QString TciProtocol::cmdCwMacrosDelay(const QStringList& args, bool /*isSet*/)
+QString TciProtocol::cmdCwMacrosDelay(const QStringList& /*args*/, bool /*isSet*/)
 {
-    // Delay before CW TX starts (ms). FlexRadio has cw_delay.
-    static int delay = 0;
-    if (args.isEmpty())
-        return QStringLiteral("cw_macros_delay:%1;").arg(delay);
-    if (!argToInt(args, args.size() == 1 ? 0 : 1, delay)) return {};
-    if (m_model) {
-        QString cmd = QStringLiteral("cw delay %1").arg(delay);
-        QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
-            model->sendCmdPublic(cmd, nullptr);
-        }, Qt::QueuedConnection);
-    }
-    m_pendingNotification = QStringLiteral("cw_macros_delay:%1;").arg(delay);
+    // TCI specifies a delay before transmission. The radio's CW break-in
+    // delay is after the last element, so it cannot implement this control.
+    // Unsupported commands produce neither a fabricated value nor a SET echo.
     return {};
 }
 

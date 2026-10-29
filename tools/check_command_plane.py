@@ -75,7 +75,7 @@ from pathlib import Path
 # drop the number here in the same commit. When a file reaches 0, delete its row.
 BASELINE = {
     # ---- models ----
-    "src/models/RadioModel.cpp": 83,
+    "src/models/RadioModel.cpp": 79,
     "src/models/CwxModel.cpp": 9,
     "src/models/DaxIqModel.cpp": 4,
     "src/models/EqualizerModel.cpp": 4,
@@ -92,7 +92,6 @@ BASELINE = {
     "src/core/FirmwareUploader.cpp": 2,
     "src/core/RigctlProtocol.cpp": 1,
     "src/core/WfmDemodulator.cpp": 2,
-    "src/core/TciProtocol.cpp": 1,
 }
 
 REPO = Path(__file__).resolve().parent.parent
@@ -208,6 +207,11 @@ WIRE_TEXT_HELPERS = ("sendSet", "sendSetBit", "sendRemove")
 
 # The plane's own signal. Always a site, wherever it appears above the seam.
 EMIT_RE = re.compile(r"(?:emit|Q_EMIT)\s+commandReady\s*\(")
+REPLY_EMIT_RE = re.compile(r"(?:emit|Q_EMIT)\s+replyCommandReady\s*\(")
+# CWX's two existing reply-aware sites belong to the separately claimed #6646
+# conversion. Keep its frozen ordinary-command count; all other files have a
+# zero allowance for reply-aware raw emissions, including newly added files.
+REPLY_MIGRATION_PENDING = {"src/models/CwxModel.cpp"}
 # A qualified call on one of the RadioModel receivers. sendCmdPublic is included
 # explicitly: it forwards straight to sendCmd(), and an earlier matcher of
 # `\bsendCmd\s*\(` did not match it, hiding ~26 call sites.
@@ -283,6 +287,8 @@ def count_for(path: Path) -> int:
          + len(QUALIFIED_RE.findall(text))
          + len(ACCESSOR_RE.findall(text))
          + len(HELPER_RE.findall(text)))
+    if rel not in REPLY_MIGRATION_PENDING:
+        n += len(REPLY_EMIT_RE.findall(text))
     if rel in PLANE_HELPER_FILES:
         n += len(UNQUALIFIED_RE.findall(text)) - len(DEF_RE.findall(text))
     return max(n, 0)

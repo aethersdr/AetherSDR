@@ -991,8 +991,8 @@
  },
  "models/DvkModel.h": {
   "tag": "mixed(flex)",
-  "note": "Voice keyer slots/commands are core-profile; status parsing + FlexLib SsdrErrors mapping are flex.",
-  "split": "Core: voice-keyer slots/status + rec/preview/playback intent. Vendor: SmartSDR status parsing, SsdrErrors code mapping, reply correlation.",
+  "note": "Typed voice-keyer requests and session-scoped reply identities are core-profile; SmartSDR status parsing and SsdrErrors mapping remain flex.",
+  "split": "Core: voice-keyer slots/status and typed recording/preview/playback intent. Backend: command encoding. Remaining vendor work: SmartSDR status parsing and SsdrErrors code mapping.",
   "confidence": "high"
  },
  "models/EqualizerModel.h": {

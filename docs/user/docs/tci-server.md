@@ -186,7 +186,7 @@ AetherSDR implements the TCI 2.0 command set, including:
 | Audio | `volume`, `mute`, `rx_volume`, `rx_mute`, `rx_balance`, `mon_enable`, `mon_volume`, `mic_level` |
 | AGC / SQL | `agc_mode`, `agc_gain`, `sql_enable`, `sql_level`, `lock` |
 | DSP | `rx_nb_enable/param`, `rx_nr_enable`, `rx_anf_enable`, `rx_apf_enable`, `rx_bin_enable`, `rx_anc_enable`, `rx_dse_enable`, `rx_nf_enable` |
-| CW | `cw_macros_speed`, `cw_keyer_speed`, `cw_macros_delay`, `cw_msg`, `cw_macros`, `cw_macros_stop`, `cw_terminal`, `keyer` |
+| CW | `cw_macros_speed`, `cw_keyer_speed`, `cw_msg`, `cw_macros`, `cw_macros_stop`, `cw_terminal`, `keyer` |
 | Audio streaming | `audio_start/stop`, `audio_samplerate`, `audio_stream_sample_type`, `audio_stream_channels`, `audio_stream_samples` |
 | IQ | `iq_start/stop`, `iq_samplerate` |
 | Spots | `spot`, `spot_delete`, `spot_clear`, `clicked_on_spot` |
@@ -195,6 +195,9 @@ AetherSDR implements the TCI 2.0 command set, including:
 
 Notes:
 
+- `cw_macros_delay` is unsupported and produces no value or confirmation. It
+  specifies a delay before transmission; the radio's CW break-in delay is a
+  different setting and is unaffected.
 - `volume` is in dB, as the spec defines it; the older percent form is still accepted. It is the same master level as the title-bar slider: the computer's level with PC Audio on, the radio's Line Out level with it off. `mic_level` is a global 0–100 %.
 - The server also broadcasts which slice has focus in the GUI, plus DSP, squelch, RIT/XIT and TX power when they change.
 - Opening a slice announces `rx_enable:<trx>,true;` and its `tx_enable` permission. Closing a slice sends `tx_enable:<trx>,false;` and `rx_enable:<trx>,false;` after approximately 500 ms. A band-change recreation within that window keeps its receiver number and sends no close notifications; surviving receivers keep their numbers. TX permission still follows ownership, mode, and panadapter inhibits. `trx_count` is not re-sent.

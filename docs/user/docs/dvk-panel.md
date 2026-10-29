@@ -63,7 +63,13 @@ If the source changes while you are renaming a slot or using its context menu or
 3. Click **■ STOP** to end recording.
 4. The recording is stored and the slot shows its duration.
 
-Recording never transmits. With the local keyer:
+Recording is separate from on-air playback.
+
+For **Radio DVK**, turn **VOX** off and wait for the radio to confirm it before
+pressing **● REC**. If VOX is on or its state is unconfirmed, the recording
+request is refused with a message in the panel. Keep VOX off while recording.
+
+With the local keyer:
 
 - **VOX is held off while you record.** If VOX is on, AetherSDR turns it off before recording starts — only once the radio has confirmed it — so your voice cannot key the transmitter, and turns it back on afterwards. If you have just turned VOX off yourself and the radio has not confirmed it yet, recording asks the radio again and starts once it answers; VOX stays off afterwards. The status line shows `· VOX held off` meanwhile. If you change VOX yourself during the recording, your setting is kept, and turning VOX on stops the recording without saving it. On a radio with no VOX that AetherSDR controls, such as the Hermes-Lite 2, there is nothing to hold.
 - **STOP works while recording is starting.** Pressing STOP before the radio has confirmed VOX is off cancels the recording.
@@ -83,11 +89,16 @@ Recording never transmits. With the local keyer:
 
 Only one operation runs at a time. STOP is enabled only while something is running, PLAY and PREV are disabled on an empty slot, and while a recording, playback, preview or WAV transfer is in progress the other start controls stay disabled. The button of the running recording, playback or preview stays enabled, so clicking it again stops it. A refused operation shows in the status line as, for example, `Play failed (slot 3): DVK requires an active SmartSDR+ subscription`.
 
+Radio DVK waits for radio status to confirm that an operation has ended. A
+missing reply does not mean the radio rejected or stopped it, so AetherSDR
+does not retry it automatically. **■ STOP** is an explicit request to stop
+the radio's current operation, even if you selected a different slot.
+
 ### Managing slots
 
 Right-click any slot row to access:
 
-- **Rename…** — inline text editor (also available via double-click on name). A name holds up to 61 UTF-8 bytes; quotes and `|` are removed. Enter saves, Escape cancels.
+- **Rename…** — inline text editor (also available via double-click on name). A name holds up to 61 UTF-8 bytes; Radio DVK removes quotes, backslashes and `|`. Enter saves, Escape cancels.
 - **Clear** — erase the recording (grayed out for empty slots and while the DVK is busy). The Radio DVK decides whether the slot keeps its name.
 - **Import WAV…** — load a WAV file into this slot (see [WAV file requirements](#wav-file-requirements))
 - **Export WAV…** — save the recording as a WAV file (grayed out for empty slots)

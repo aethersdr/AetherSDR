@@ -162,10 +162,11 @@ ReceiveDispatch FlexBackend::requestRadioSetup(const RadioSetupRequest& request,
 }
 
 ReceiveDispatch FlexBackend::requestTxBand(const TxBandRequest& request,
-                                           const RadioSetupCompletion& completion)
+                                           const RadioSetupCompletion& completion,
+                                           const RadioControlFence& current)
 {
     using Field = TxBandRequest::Field;
-    if (!request.valid() || !m_setupSink) { return ReceiveDispatch::Unsupported; }
+    if (!request.valid() || (current ? !m_serviceCommandSink : !m_setupSink)) { return ReceiveDispatch::Unsupported; }
     QString key;
     QString verb = QStringLiteral("interlock");
     switch (request.field) {
@@ -183,8 +184,17 @@ ReceiveDispatch FlexBackend::requestTxBand(const TxBandRequest& request,
     }
     const int value = std::holds_alternative<int>(request.value)
         ? std::get<int>(request.value) : int(std::get<bool>(request.value));
+    const QString command = QStringLiteral("%1 bandset %2 %3=%4").arg(verb).arg(request.bandId).arg(key).arg(value);
+    if (current) {
+        const auto sink = m_serviceCommandSink;
+        return sink(command, current, [completion](int code, const QString& body) {
+            if (completion) {
+                completion({code == 0 ? RadioSetupReply::Kind::Accepted : RadioSetupReply::Kind::Failed, code, body});
+            }
+        }) ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+    }
     const auto sink = m_setupSink;
-    return sink(QStringLiteral("%1 bandset %2 %3=%4").arg(verb).arg(request.bandId).arg(key).arg(value), completion)
+    return sink(command, completion)
         ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
 }
 

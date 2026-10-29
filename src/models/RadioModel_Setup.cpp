@@ -193,6 +193,15 @@ ReceiveDispatch RadioModel::requestTxBand(const TxBandRequest& request,
                                          QObject* replyContext,
                                          const RadioSetupCompletion& completion)
 {
+    return dispatchTxBand(request, expectedSession, replyContext, completion, false);
+}
+
+ReceiveDispatch RadioModel::dispatchTxBand(const TxBandRequest& request,
+                                          std::optional<RadioControlSession> expectedSession,
+                                          QObject* replyContext,
+                                          const RadioSetupCompletion& completion,
+                                          bool temporary)
+{
     if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
     const QPointer<RadioModel> alive(this);
     const RadioControlSession session = controlSession();
@@ -201,9 +210,16 @@ ReceiveDispatch RadioModel::requestTxBand(const TxBandRequest& request,
         if (reply) { reply({RadioSetupReply::Kind::Cancelled, -1, QStringLiteral("Original TX band editor session ended.")}); }
         return ReceiveDispatch::Unsupported;
     }
+    if (!temporary && request.valid() && controlSessionCurrent(session)) {
+        relinquishTuneInhibit(request);
+    }
+    const auto sessionAlive = m_transmitServiceSession;
+    const RadioControlFence current = [sessionAlive] {
+        return sessionAlive->load(std::memory_order_acquire);
+    };
     const ReceiveDispatch result = m_backend && controlSessionCurrent(session)
         && request.valid() && m_txBandSettings.contains(request.bandId)
-        ? m_backend->requestTxBand(request, reply) : ReceiveDispatch::Unsupported;
+        ? m_backend->requestTxBand(request, reply, current) : ReceiveDispatch::Unsupported;
     if (alive && session == controlSession()) {
         if (result == ReceiveDispatch::Unsupported && reply) {
             reply({RadioSetupReply::Kind::Refused, -1, QStringLiteral("TX band setting not dispatched")});

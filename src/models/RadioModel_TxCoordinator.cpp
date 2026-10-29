@@ -132,6 +132,7 @@ void RadioModel::abortTxProducerInputs(const TxCoordinator::Producer& producer,
             case TxActivity::Atu: (void)requestProducerAtu(request, false); break;
             case TxActivity::Tune: (void)requestProducerTune(request, false); break;
             case TxActivity::Mox: abortProducerPtt(request, source); break;
+            case TxActivity::VoiceKeyer: case TxActivity::Navtex: break;
             }
         }
     }
@@ -232,6 +233,12 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         return false;
     }
     if (request && !m_txCoordinator.acceptsRequest(*request)) {
+        return false;
+    }
+    const unsigned services = static_cast<unsigned>(TxActivity::VoiceKeyer)
+        | static_cast<unsigned>(TxActivity::Navtex);
+    if (m_txCoordinator.hasOtherIntents(m_txOperation, {},
+            (static_cast<unsigned>(activity) & services) ? 0 : services)) {
         return false;
     }
     // TUNE/ATU use the backend's shared carrier/PTT latch, unlike compatible
@@ -1006,6 +1013,15 @@ void RadioModel::cancelLocalTransmit()
     if (QThread::currentThread() != thread()) {
         return;
     }
+    // This is explicit operator Stop, unlike automatic operation retirement.
+    // DVK stop is global; automatic cleanup cannot prove another client's
+    // replacement has not acquired that radio operation.
+    const QPointer<RadioModel> alive(this);
+    if (m_dvkModel.status() == VoiceKeyer::Playback
+        || m_dvkModel.pendingOperation() == VoiceKeyer::Playback) {
+        m_dvkModel.playbackStop(m_dvkModel.activeId());
+    }
+    if (!alive) { return; }
     m_txCoordinator.discardCapturedRequests();
     m_cwInputSession.fetch_add(1, std::memory_order_release);
     m_cwInputNotBefore = std::chrono::steady_clock::now();
@@ -1050,6 +1066,14 @@ void RadioModel::resetTxOperations()
     // Close admission BEFORE cancellation/reply/model notifications can reenter
     // us; operation recovery alone only covers a previously active operation.
     m_txSessionClosing = true;
+    m_transmitServiceSession->store(false, std::memory_order_release);
+    m_transmitServiceSession = std::make_shared<std::atomic_bool>(true);
+    m_dvkTxRequest = 0;
+    m_navtexTxRequest = 0;
+    m_dvkTxIntent = {};
+    m_navtexTxIntent = {};
+    m_dvkModel.reset();
+    m_navtexModel.reset();
     if (m_independentTxGrants) {
         m_independentTxGrants->invalidateRadio();
     }

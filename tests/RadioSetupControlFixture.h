@@ -82,6 +82,14 @@ public:
     RadioSetupTestBackend()
     {
         setModelProvider([] { return QStringLiteral("FLEX-6700"); });
+        setServiceCommandSink([this](const QString& command, const RadioControlFence& current, CommandReply completion) {
+            if (!live || !accept || (current && !current())) { return false; }
+            commands.append(command);
+            if (completion) {
+                replies.push_back([completion](const RadioSetupReply& reply) { completion(reply.code, reply.message); });
+            }
+            return true;
+        });
         setSetupCommandSink([this](const QString& command, const RadioSetupCompletion& completion) {
             if (!live || !accept) { return false; }
             commands.append(command);
