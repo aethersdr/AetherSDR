@@ -162,6 +162,11 @@ The FlexRadio microphone recording experiment is disabled by default. In the
 TCI Server applet, select **Mic During TX (Experimental)**, then connect DXLog
 to AetherSDR's normal TCI endpoint, usually
 `ws://127.0.0.1:50001`. No separate probe or audio device is needed.
+The option stays visible but unavailable, with a reason, when the connected
+radio backend does not support microphone capture. PC Audio and MON do not
+need to be enabled. If capture is rejected or the radio removes its stream,
+AetherSDR retries after two seconds while recording remains enabled and an
+audio client is subscribed.
 
 DXLog uses its normal TCI audio subscription. In receive, it gets ordinary
 receiver audio. During radio-reported transmit, the current TX receiver's

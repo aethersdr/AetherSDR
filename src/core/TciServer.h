@@ -367,8 +367,7 @@ private:
     bool m_microphoneRecordingEnabled{false};
     float m_microphoneRecordingGain{1.0f};
     bool m_microphoneCaptureActive{false};
-    QPointer<IRadioBackend> m_microphoneBackend;
-    QMetaObject::Connection m_microphoneConnection;
+    QTimer* m_microphoneRetryTimer{nullptr};
     void retireAllRxRoutes();
     void retireSliceRx(int sliceId);
     QHash<quint64, TciRxBinding> m_rxBindings;

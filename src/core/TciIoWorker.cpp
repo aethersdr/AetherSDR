@@ -404,7 +404,7 @@ void TciIoWorker::setMicrophoneRecording(bool enabled, bool transmitting, int tr
 
 bool TciIoWorker::recordingRouteCurrent(quint64 key, int trx) const
 {
-    const bool microphone = key == rxRouteKey(true, 0);
+    const bool microphone = key == kMicrophoneRouteKey;
     const bool recordingTx = m_microphoneRecording && m_recordingTransmitting && trx == m_recordingTrx;
     return microphone ? recordingTx : !recordingTx;
 }
@@ -486,7 +486,7 @@ void TciIoWorker::receivePcm(quint64 key, const PcmFrame& frame)
     route->owner = binding.alive;
     route->nextSample = input.firstSample() + input.frameCount();
     route->retired = false;
-    const bool microphone = key == rxRouteKey(true, 0);
+    const bool microphone = key == kMicrophoneRouteKey;
     const float gain = microphone ? m_microphoneRecordingGain
         : (binding.gainChannel >= 1 && binding.gainChannel <= 8
             ? m_rxChannelGain[binding.gainChannel-1] : 1);

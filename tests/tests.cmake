@@ -9872,11 +9872,11 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # Every standalone test/tool target that takes $<TARGET_OBJECTS:aether_test_settings>
 # (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
-# Real applet with injected receive capabilities; no sockets/audio devices.
 if(TARGET Qt6::WebSockets)
     add_executable(tci_applet_test tests/tci_applet_test.cpp
         src/gui/TciApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
-        src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp)
+        src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp
+        src/gui/ControlAvailabilityRegistry.cpp)
     target_include_directories(tci_applet_test PRIVATE src tests)
     target_compile_definitions(tci_applet_test PRIVATE HAVE_WEBSOCKETS)
     target_link_libraries(tci_applet_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test Qt6::WebSockets)
@@ -9884,6 +9884,7 @@ if(TARGET Qt6::WebSockets)
     set_tests_properties(tci_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+# Real applet with injected receive capabilities; no sockets/audio devices.
 if(NOT WIN32)
     add_executable(dax_receive_applet_test tests/dax_receive_applet_test.cpp
         src/gui/DaxApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp

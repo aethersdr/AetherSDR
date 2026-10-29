@@ -1,4 +1,5 @@
 #include "TciApplet.h"
+#include "ControlAvailabilityRegistry.h"
 #include "SliceLabel.h"
 #include "core/ThemeManager.h"
 
@@ -285,9 +286,13 @@ void TciApplet::buildUI()
             ? QString::number(20.0f * std::log10(output), 'f', 1) : QStringLiteral("\u2014"));
         m_microphoneClipped = false;
         if (text != m_microphoneLevelLabel->text()) {
+            const bool clipTransition = (text == tr("CLIP"))
+                != (m_microphoneLevelLabel->text() == tr("CLIP"));
             m_microphoneLevelLabel->setText(text);
-            QAccessibleEvent event(m_microphoneLevelLabel, QAccessible::NameChanged);
-            QAccessible::updateAccessibility(&event);
+            if (clipTransition) {
+                QAccessibleEvent event(m_microphoneLevelLabel, QAccessible::NameChanged);
+                QAccessible::updateAccessibility(&event);
+            }
         }
     });
     updateMicrophoneRecordingControls();
@@ -387,8 +392,9 @@ void TciApplet::updateMicrophoneRecordingControls()
 {
     const bool enabled = m_tciServer && m_tciServer->microphoneRecordingEnabled();
     m_microphoneRow->setVisible(enabled);
-    m_microphoneMeter->setEnabled(enabled);
-    m_microphoneLevelLabel->setEnabled(enabled);
+    const bool supported = m_model && m_model->backendCapabilities().microphoneCapture.has_value();
+    m_microphoneMeter->setEnabled(enabled && supported);
+    m_microphoneLevelLabel->setEnabled(enabled && supported);
     m_microphoneSquareSum = 0.0;
     m_microphoneSamples = 0;
     m_microphoneClipped = false;
@@ -425,9 +431,22 @@ void TciApplet::setRadioModel(RadioModel* model)
 {
 #ifdef HAVE_WEBSOCKETS
     m_model = model;
+    delete m_microphoneAvailability;
+    m_microphoneAvailability = nullptr;
     if (!model) {
+        m_microphoneRecording->setEnabled(false);
+        m_microphoneRecording->setAccessibleDescription(tr("Microphone capture requires a supported connected radio."));
+        updateMicrophoneRecordingControls();
         return;
     }
+    m_microphoneAvailability = new ControlAvailabilityRegistry(*model, this);
+    m_microphoneAvailability->registerWidget(m_microphoneRecording,
+        tr("Microphone capture requires a supported connected radio and a TCI server."),
+        [this](bool connected, const RadioCapabilities& caps) {
+            return connected && m_tciServer && caps.microphoneCapture.has_value();
+        }, [this] { return m_tciServer && m_tciServer->microphoneRecordingEnabled(); }, false);
+    connect(model, &RadioModel::capabilitiesChanged, this,
+        [this](bool, const RadioCapabilities&) { updateMicrophoneRecordingControls(); });
 
     // Slice → DAX channel mapping drives both DAX and TCI RX indicators.
     // TCI RX1-8 carry the same DAX channels (PanadapterStream::daxPcmReady
@@ -501,7 +520,8 @@ void TciApplet::setTciServer(TciServer* tci)
     }
     m_tciServer = tci;
     m_microphoneMeter->setGain(tci ? tci->microphoneRecordingGain() : 1.0f);
-    m_microphoneRecording->setEnabled(tci != nullptr);
+    m_microphoneRecording->setEnabled(false);
+    if (m_microphoneAvailability) { m_microphoneAvailability->refreshEngaged(); }
     {
         const QSignalBlocker blocker(m_microphoneRecording);
         m_microphoneRecording->setChecked(tci && tci->microphoneRecordingEnabled());

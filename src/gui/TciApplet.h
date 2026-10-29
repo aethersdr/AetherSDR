@@ -13,6 +13,7 @@ namespace AetherSDR {
 class RadioModel;
 class TciServer;
 class MeterSlider;
+class ControlAvailabilityRegistry;
 
 // TCI Applet — TCI WebSocket server control panel.
 // Mirrors DaxApplet framework: per-channel meters + gain sliders for 8 RX
@@ -57,6 +58,7 @@ private:
 
     RadioModel* m_model{nullptr};
     TciServer*  m_tciServer{nullptr};
+    ControlAvailabilityRegistry* m_microphoneAvailability{nullptr};
     int m_maxDaxChannels{kChannels};  // radio slice capacity (FlexLib table)
 
     QPushButton* m_tciEnable{nullptr};

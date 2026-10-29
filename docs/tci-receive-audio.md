@@ -7,6 +7,22 @@ backend slice IDs resolve through `TciTrxMap`; a sparse slice ID is not a DAX
 channel or public receiver index. The Flex DAX route retains its channel gain and
 slice binding independently.
 
+## Opt-in microphone recording
+
+With **Mic During TX (Experimental)** enabled on a capture-capable backend,
+the TX receiver's ordinary type-1 RX_AUDIO route carries the selected radio
+microphone during radio-reported TX. All subscribers to that receiver see the
+substitution; other receiver routes retain RX audio. Unkeying restores RX.
+This changes the route's content, not its negotiated format or public receiver
+identity. It is not Line Out (type 4) or an independent TX stream.
+
+Flex supplies pre-TX-processing `dax_mic` PCM, relayed through RadioModel's
+generation and PCM admission gates. PC Audio and MON are not prerequisites.
+The MIC fader attenuates only the recording feed. Capture failures retire the
+mic route and allow a new request after two seconds while enabled, connected,
+and subscribed. Unknown narrow-audio packets are dropped while mic creation
+is pending, so a packet preceding its create reply cannot become speaker audio.
+
 ## Formats and conversion
 
 Producer metadata travels with each owning `PcmFrame`: source, session, format

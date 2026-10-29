@@ -3135,6 +3135,21 @@ void RadioModel::wireBackendPcm()
         }
         emit backendSliceAudioFrameReady(sliceId, frame);
     });
+    connect(m_backend.get(), &IRadioBackend::microphonePcmReady, this,
+            [this, generation](const PcmFrame& frame) {
+        if (generation != m_backendReceiverGeneration
+            || frame.stream().purpose != PcmPurpose::Auxiliary
+            || !m_slicePcmGate.accept(frame)) {
+            return;
+        }
+        emit backendMicrophonePcmReady(frame);
+    });
+    connect(m_backend.get(), &IRadioBackend::microphoneCaptureStopped, this,
+            [this, generation] {
+        if (generation == m_backendReceiverGeneration) {
+            emit backendMicrophoneCaptureStopped();
+        }
+    });
 }
 
 void RadioModel::wireRxDemodAudioBus()

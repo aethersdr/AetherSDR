@@ -51,6 +51,7 @@ class PanadapterStream : public QObject {
 
 public:
     static constexpr int VITA49_HEADER_BYTES = 28;
+    static constexpr int kMicrophoneCaptureChannel = 0;
 
     explicit PanadapterStream(QObject* parent = nullptr);
 
@@ -123,6 +124,8 @@ public:
     // DAX stream routing
     void registerDaxStream(quint32 streamId, int channel);
     void registerMicrophoneStream(quint32 streamId);
+    void retireMicrophoneStream(quint32 streamId);
+    void setMicrophoneCreatePending(bool pending);
     void unregisterDaxStream(quint32 streamId);
     QList<quint32> daxStreamIds() const;
     quint32 daxStreamIdForChannel(int channel) const;
@@ -244,6 +247,7 @@ private:
     PcmProducer m_pcmProducer;
     std::map<quint32, std::unique_ptr<PcmProducer>> m_daxPcm;
     quint32 m_microphoneStreamId{0};
+    bool m_microphoneCreatePending{false};
     QSet<quint32> m_retiredMicrophoneStreams;
     void publishLegacyDaxAudio(quint32 streamId, int channel, const QByteArray& pcm);
     void publishLegacyAudio(const QByteArray& pcm);

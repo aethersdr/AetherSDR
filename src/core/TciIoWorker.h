@@ -83,6 +83,8 @@ public:
     QJsonObject cachedChronoSnapshot() const;
     static quint64 rxRouteKey(bool dax, int id)
     { return (quint64(dax) << 32) | static_cast<quint32>(id); }
+    static constexpr int kMicrophoneRouteChannel = 0;
+    static constexpr quint64 kMicrophoneRouteKey = quint64{1} << 32;
 
 signals:
     void audioStopped(quint64 id, quint64 generation);

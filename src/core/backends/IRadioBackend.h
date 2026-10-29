@@ -1090,6 +1090,9 @@ public:
     };
     virtual LinkStats linkStats() const { return {}; }
 
+    // Called on the backend owner thread. True accepts an enable request;
+    // false refuses it or confirms disable. The backend owns its capture stream.
+    // Unexpected loss or asynchronous refusal emits microphoneCaptureStopped.
     virtual bool setMicrophoneCaptureEnabled(bool enabled)
     { Q_UNUSED(enabled); return false; }
 
@@ -1273,6 +1276,7 @@ signals:
     // a decoder on it. Flex does not emit this; its DAX channels are per-slice.
     void sliceAudioFrameReady(int sliceId, const AetherSDR::PcmFrame& pcm);
     void microphonePcmReady(const AetherSDR::PcmFrame& pcm);
+    void microphoneCaptureStopped();
 
 
     // The pan's front end is WIDE: the hardware band filter cannot serve every

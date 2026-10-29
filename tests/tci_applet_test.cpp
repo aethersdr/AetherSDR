@@ -3,8 +3,10 @@
 #include "core/TciServer.h"
 #include "gui/MeterSlider.h"
 #include "gui/TciApplet.h"
+#include "models/RadioModel.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QImage>
 #include <QTest>
 #include <cmath>
@@ -66,7 +68,7 @@ int main(int argc, char** argv)
                 meter->setGain(gain);
                 const float expectedLevel = (20.0f * std::log10(0.25f * gain) + 60.0f) / 60.0f;
                 check(std::abs(meter->level() - expectedLevel) < 0.001f,
-                      "RX applies gain once before logarithmic scaling, as in PR 6811");
+                      "RX applies gain exactly once before logarithmic scaling");
                 check(meter->grab().toImage() == expected,
                       "equal source RMS paints identical RX and MIC bars at every gain");
             }
@@ -109,6 +111,22 @@ int main(int argc, char** argv)
         }
         server.setRxChannelGain(1, std::numeric_limits<float>::quiet_NaN());
         check(server.rxChannelGain(1) == 0.5f, "server rejects non-finite RX gain");
+    }
+    {
+        RadioModel model;
+        TciServer server(&model);
+        TciApplet capabilityApplet;
+        capabilityApplet.setRadioModel(&model);
+        capabilityApplet.setTciServer(&server);
+        auto* checkbox = capabilityApplet.findChild<QCheckBox*>(QStringLiteral("tciMicrophoneRecording"));
+        check(checkbox && !checkbox->isEnabled(), "mic option is unavailable without a connected radio");
+        RadioCapabilities caps;
+        emit model.capabilitiesChanged(true, caps);
+        check(checkbox && !checkbox->isEnabled() && !checkbox->accessibleDescription().isEmpty(),
+              "unsupported backend dims the mic option with an accessible reason");
+        caps.microphoneCapture = RadioCapabilities::MicrophoneCapture{};
+        emit model.capabilitiesChanged(true, caps);
+        check(checkbox && checkbox->isEnabled(), "mic option is enabled only by an explicit capture capability");
     }
     std::printf("TCI applet: %d failures\n", failures);
     return failures == 0 ? 0 : 1;

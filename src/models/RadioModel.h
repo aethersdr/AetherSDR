@@ -1260,6 +1260,8 @@ signals:
     // Only a backend that demodulates in this process emits it; Flex per-slice
     // audio arrives as DAX channels instead.
     void backendSliceAudioFrameReady(int sliceId, const AetherSDR::PcmFrame& pcm);
+    void backendMicrophonePcmReady(const AetherSDR::PcmFrame& pcm);
+    void backendMicrophoneCaptureStopped();
 
     // Normalized demodulated-RX-audio bus: the audio the operator hears (24 kHz
     // stereo), whoever produced it. Exactly one producer is bound, chosen only
