@@ -517,6 +517,13 @@ public slots:
     // frame and audioReady/meterUpdate per completed WdspChannel block.
     void processIqBlock(const std::vector<std::complex<float>>& iq);
 
+    // An EP6 sequence gap precedes the next block. Called by DirectConnection on
+    // this object's I/O thread. Discards the partial panadapter frame so no FFT
+    // spans the discontinuity (see Hl2Spectrum::reset()). The audio path is left
+    // alone: dropping buffered samples would lengthen the hole, and resetting
+    // WDSP would restart filter and AGC state on one lost datagram.
+    void onSequenceGap();
+
 public:
     // Raw IQ for a TCI IQ stream. While on, processIqBlock() hands the
     // spectrum-handed samples (above the NCO is positive) out as iqReady, in
@@ -524,15 +531,6 @@ public:
     // per block on the I/O thread.
     void setIqTap(bool on) { m_iqTap.store(on, std::memory_order_relaxed); }
     static constexpr std::size_t kIqTapPairs = 2048;
-
-public slots:
-
-    // An EP6 sequence gap precedes the next block. Called by DirectConnection on
-    // this object's I/O thread. Discards the partial panadapter frame so no FFT
-    // spans the discontinuity (see Hl2Spectrum::reset()). The audio path is left
-    // alone: dropping buffered samples would lengthen the hole, and resetting
-    // WDSP would restart filter and AGC state on one lost datagram.
-    void onSequenceGap();
 
 signals:
     void audioReady(const std::vector<float>& stereoPcm);   // interleaved L,R
