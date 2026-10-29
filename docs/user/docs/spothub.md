@@ -195,6 +195,8 @@ The KiwiSDR DX Community database ships with AetherSDR, so no download is needed
 
 Imports an ADIF log and colors spot labels by worked status: **New DXCC**, **New Band**, **New Mode** or **Worked**. The log file is watched, so colors update whenever your logger writes a QSO.
 
+ADI fields can include their optional data type, such as `<CALL:6:S>WN4AZY`. Typed and untyped fields import the same callsign, band, frequency, mode and submode information.
+
 - **DXCC Colors** — Enabled / Disabled
 - **Log File (ADIF)** — **Browse…**
 - **Imported** — live QSO and entity counts
