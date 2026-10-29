@@ -41,6 +41,18 @@ struct SliceAgcRequest {
     int threshold{0};
     int offLevel{0};
     Origin origin{Origin::Operator};
+    bool valid() const
+    {
+        if (origin != Origin::Operator && origin != Origin::Recall) { return false; }
+        switch (field) {
+        case Field::Mode:
+            return mode == QLatin1String("off") || mode == QLatin1String("slow")
+                || mode == QLatin1String("med") || mode == QLatin1String("fast");
+        case Field::Threshold: return threshold >= 0 && threshold <= 100;
+        case Field::OffLevel: return offLevel >= 0 && offLevel <= 100;
+        }
+        return false;
+    }
 };
 
 // Dispatch is not readback. LocalOnly is meaningful for the client-side tune

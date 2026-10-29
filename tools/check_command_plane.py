@@ -81,7 +81,7 @@ BASELINE = {
     "src/models/EqualizerModel.cpp": 4,
     "src/models/FlexWaveformModel.cpp": 3,
     # ---- gui ----
-    "src/gui/MainWindow.cpp": 5,
+    "src/gui/MainWindow.cpp": 1,
     "src/gui/MainWindow_Wiring.cpp": 1,
     "src/gui/MainWindow_DigitalModes.cpp": 2,
     # ---- core (above the seam; backends/ is excluded) ----
@@ -90,7 +90,6 @@ BASELINE = {
     "src/core/WaveformInstaller.cpp": 3,
     "src/core/DvkWavTransfer.cpp": 1,
     "src/core/FirmwareUploader.cpp": 2,
-    "src/core/RigctlProtocol.cpp": 1,
     "src/core/WfmDemodulator.cpp": 2,
     "src/core/TciProtocol.cpp": 1,
 }

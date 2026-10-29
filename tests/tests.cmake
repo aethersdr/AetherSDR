@@ -722,6 +722,13 @@ target_link_libraries(radio_setup_control_routing_test PRIVATE aethercore Qt6::C
 add_test(NAME radio_setup_control_routing_test COMMAND radio_setup_control_routing_test)
 set_tests_properties(radio_setup_control_routing_test PROPERTIES TIMEOUT 45)
 
+# Socket-free bookmark/CAT routing through production handlers and encoders.
+add_executable(bandstack_cat_controls_test tests/bandstack_cat_controls_test.cpp)
+target_include_directories(bandstack_cat_controls_test PRIVATE src tests)
+target_link_libraries(bandstack_cat_controls_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME bandstack_cat_controls_test COMMAND bandstack_cat_controls_test)
+set_tests_properties(bandstack_cat_controls_test PROPERTIES TIMEOUT 30)
+
 # #6614: injected production writers and an unbound automation server object.
 # No socket endpoint, synthetic firmware peer, physical device or TX operation.
 add_executable(desktop_utility_routing_test tests/desktop_utility_routing_test.cpp)
@@ -9910,6 +9917,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    bandstack_cat_controls_test
     update_controller_test
     update_installer_test
     update_stager_test

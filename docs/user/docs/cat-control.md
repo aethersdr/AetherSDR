@@ -86,7 +86,7 @@ The letter is the port's row (first row = `cat-A`), not the slice. The path is a
 - **Split is tracked per client.** Each CAT client sees its own split state, so several WSJT-X instances (one per port) can all use **Split Operation: Fake It** (#4853).
 - **Safety.** A bare `ZZTX;` reads the transmit state; it does not key. TS-2000 satellite-mode TX is refused. Repeating `set_split_vfo` or `tx_enable` with the same value does not trip the radio's TX watchdog.
 - **S-meter.** rigctld `l STRENGTH` reads the real S-meter of the addressed slice, in dB relative to S9.
-- **Tuning step.** `set_ts 0` answers `RPRT -1` on every radio. On radios other than FlexRadio, `set_ts` sets AetherSDR's own tuning step.
+- **Tuning step.** `set_ts` accepts a positive whole number of Hz; zero, negative or malformed values answer `RPRT -1`. `RPRT 0` acknowledges that the request was queued. On FlexRadio, `get_ts` reports the step observed from the radio; on radios with a client-owned step, it reports AetherSDR's local value. A queued request stays with its original slice and is discarded if that slice or connection is replaced before dispatch.
 - **RF gain on other radios.** On the Hermes-Lite 2 and other non-Flex radios, `L RF` / `l RF` scale across the radio's published RF-gain range (on the HL2, 0.5 = +18 dB). Until a range is published the command answers `RPRT -11` (#6013).
 - **CW over rigctld.** `cwx send` and the clear commands go through the CWX model, so sidetone matches manual keying.
 

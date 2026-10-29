@@ -654,10 +654,10 @@ public:
     bool requestRadioAutoNotch(SliceModel* slice, bool on);
     bool requestAmCarrierLevel(int level);
 
-    // A band-stack bookmark's AGC, NB and NR through the SliceModel setters,
-    // so they reach every backend. NR only where radio-side NR exists; AGC not
-    // while KiwiSDR external receive replaces the slice (the caller sends it).
-    void recallBandStackReceiveDsp(SliceModel* slice, const BandStackEntry& entry);
+    // The caller supplies its tuning policy; the engine owns the remaining
+    // recall sequence and fences it to the original slice, pan and session.
+    void recallBandStack(SliceModel* slice, BandStackEntry entry,
+                         const std::function<void(SliceModel*, double)>& tune);
 
     // Radio-side recording is `slice set <n> record=/play=` on the slice's
     // command plane. Without one there is no radio-side recorder to reach, so
@@ -1086,7 +1086,8 @@ public:
     void flushQueuedSpots(int limit);
     void clearQueuedSpots();
     ReceiveDispatch requestPanControl(PanadapterModel* pan, const PanControlRequest& request);
-    ReceiveDispatch requestSlicePreset(SliceModel* slice, const SlicePresetRequest& request);
+    ReceiveDispatch requestSlicePreset(SliceModel* slice, const SlicePresetRequest& request,
+                                      std::optional<RadioControlSession> expectedSession = {});
     std::optional<RadioStationOverride> requestTemporaryStation(const QString& name);
     bool restoreTemporaryStation(const RadioStationOverride& owner);
     quint64 stationIdentityRevision() const { return m_stationIntentRevision; }
@@ -1932,6 +1933,7 @@ private:
     quint64 m_spotRequestEpoch{0};
     SpotRequestQueue m_spotRequests;
     bool m_flushingSpotRequests{false};
+    quint64 m_bandStackRecallRevision{0};
     quint64 m_stationIntentRevision{0};
     quint64 m_stationOverrideOwner{0};
     std::array<quint64, 5> m_outputIntentRevisions{};

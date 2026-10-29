@@ -205,6 +205,12 @@ and refuses any pending creation whose discarded history makes ownership
 uncertain, rather than issuing a cleanup receipt from incomplete evidence.
 GUI, CAT and TCI retain their existing topology, frequency, focus and audio
 policies. TX assignment is not keying and grants no extra TX authority.
+Band-stack recall runs through `RadioModel` with a value copy of the bookmark;
+the GUI supplies its existing tuning policy. Each step rechecks the original
+session, slice, pan and ownership, and a newer recall supersedes the older tail.
+Physical antenna requests and radio AGC behind external receive replacement use
+typed backend verbs. CAT tuning steps use the same typed preset route as desktop
+controls and retain the queued request's original session and slice identity.
 Desktop spot, pan-utility and net/tuning-step requests also use typed backend
 verbs; their desktop-only field-set records are not daemon permissions. Spot
 batches retain their original control session and Clear All epoch and detach
