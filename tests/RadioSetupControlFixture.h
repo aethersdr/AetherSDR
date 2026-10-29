@@ -81,6 +81,15 @@ public:
     }
     RadioSetupTestBackend()
     {
+        setAdministrationCommandSink([this](const QString& command,
+            const RadioControlCompletion& completion, const RadioControlFence& current,
+            const std::function<void()>& written) {
+            if (!live || !accept || !current || !current()) { return false; }
+            commands.append(command);
+            if (completion) { replies.push_back(completion); }
+            if (written) { written(); }
+            return true;
+        });
         setModelProvider([] { return QStringLiteral("FLEX-6700"); });
         setSetupCommandSink([this](const QString& command, const RadioSetupCompletion& completion) {
             if (!live || !accept) { return false; }

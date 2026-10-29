@@ -408,6 +408,21 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
         << " totalMs=" << totalTimer.elapsed();
 }
 
+bool RadioConnection::writeAdministrationCommand(quint32 seq, const QString& command,
+    quint64 generation, const SessionCommandGuard& guard)
+{
+    if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return false; }
+    if (m_commandSinkForTest) {
+        m_commandSinkForTest(seq, command);
+        return true;
+    }
+    if (m_independentPtt) {
+        m_independentPtt->otherCommand(command, TxCoordinator::monotonicMs());
+    }
+    return guard.current() && generation == m_sessionGeneration && isConnected()
+        && writeSocketCommand(seq, command);
+}
+
 void RadioConnection::writeCommand(quint32 seq, const QString& command)
 {
     if (m_commandSinkForTest) {

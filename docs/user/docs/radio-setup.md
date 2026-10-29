@@ -57,6 +57,17 @@ and restores the radio's reported value for malformed entries.
 
 ### RADIO
 
+**Remote On** and **multiFLEX:** become available after the connected radio
+reports their current settings. A pending edit is shown while its reply is
+outstanding; the radio's status remains the source of truth. Rejected or timed-out
+edits return to the last reported value. Reconnecting clears pending edits.
+Unsupported controls are dimmed with an explanation.
+
+**Reboot Radio** asks for confirmation and targets the radio session shown when
+the prompt opened. If that session changes, the confirmation cannot reboot the
+replacement session. Reboot is sent once; a missing response does not trigger
+another reboot request.
+
 On a FlexRadio, edit **Nickname** under **Settings → Radio Setup... → Radio**
 and press Enter or leave the field to save an edit on the radio. An untouched
 field follows the radio's current nickname and does not rename or clear it.

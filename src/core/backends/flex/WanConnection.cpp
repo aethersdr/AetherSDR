@@ -132,6 +132,7 @@ WanConnection::~WanConnection()
 
 void WanConnection::resetSessionState()
 {
+    ++m_sessionGeneration;
     // This object outlives every TLS session (a by-value MainWindow member), so
     // reset per session: otherwise a partial line from the dead link prefixes the
     // next session's first line and stale handle/sequence/callbacks answer into the
@@ -188,6 +189,23 @@ void WanConnection::disconnectFromRadio()
 }
 
 // ─── Command dispatch ────────────────────────────────────────────────────────
+
+quint32 WanConnection::sendAdministrationCommand(const QString& command, quint64 generation,
+    const SessionCommandGuard& guard, ResponseCallback callback)
+{
+    if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return 0; }
+    const quint32 seq = m_seqCounter.fetch_add(1);
+    if (callback) { m_pendingCallbacks.insert(seq, std::move(callback)); }
+    const QByteArray data = CommandParser::buildCommand(seq, command);
+    qCDebug(lcSmartLink) << "WAN TX:" << data.trimmed();
+    const qint64 written = m_socket.write(data);
+    m_socket.flush();
+    if (written != data.size()) {
+        m_pendingCallbacks.remove(seq);
+        return 0;
+    }
+    return seq;
+}
 
 quint32 WanConnection::sendCommand(const QString& command, ResponseCallback callback)
 {

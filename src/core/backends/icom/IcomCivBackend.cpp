@@ -361,6 +361,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.broadcastFmReceive = std::nullopt;
     c.fmDtcsCodes = {};
     c.family = QStringLiteral("icom");
+    c.cwReceiveControl = std::nullopt;
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
     c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove

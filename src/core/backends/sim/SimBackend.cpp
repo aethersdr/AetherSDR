@@ -276,6 +276,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = familyName();
+    caps.cwReceiveControl = std::nullopt;
     caps.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry}, {PanGeometryComponent::Center}};
     caps.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Answered,
         {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
