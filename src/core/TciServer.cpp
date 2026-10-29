@@ -4080,7 +4080,12 @@ void TciServer::onSliceIqReady(int sliceId, const QByteArray& iqFloat32, int sam
     if (inFrames <= 0) {
         return;
     }
-    TciIqDecimator& decimator = m_hostIqDecimators[sliceId];
+    // The guard above admits held slices only; the first frame creates one.
+    auto decimatorIt = m_hostIqDecimators.find(sliceId);
+    if (decimatorIt == m_hostIqDecimators.end()) {
+        decimatorIt = m_hostIqDecimators.insert(sliceId, TciIqDecimator{});
+    }
+    TciIqDecimator& decimator = *decimatorIt;
     decimator.configure(sampleRate, m_iqSampleRate);
     decimator.process(reinterpret_cast<const float*>(iqFloat32.constData()),
                       inFrames, m_hostIqOut);
