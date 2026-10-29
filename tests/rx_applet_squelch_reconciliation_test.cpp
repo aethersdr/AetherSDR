@@ -142,6 +142,9 @@ private slots:
         QPushButton* loop = rebuilt.findChild<QPushButton*>(QStringLiteral("cwAutoTuneLoop"));
         QVERIFY(loop);
         QVERIFY(loop->isChecked());
+        QPushButton* reverse = rebuilt.findChild<QPushButton*>(QStringLiteral("vfoFmReverseButton"));
+        QVERIFY(reverse);
+        QVERIFY(QMetaObject::invokeMethod(reverse, "released", Qt::DirectConnection));
         QObject::connect(&rebuilt, &VfoWidget::autotuneRequested, &radio,
             [&](bool on) { radio.requestCwAutoTune(slice, on ? CwAutoTuneAction::Start : CwAutoTuneAction::Stop); });
         // A synchronous refusal keeps cleanup available, even after a lock.

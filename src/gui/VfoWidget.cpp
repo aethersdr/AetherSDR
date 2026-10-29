@@ -2786,11 +2786,6 @@ void VfoWidget::buildTabContent()
             });
             connect(m_fmRevBtn, &QPushButton::released, this, [this] {
                 releaseTransmitFrequencyCheck();
-        disconnect(m_radioModel, &RadioModel::slotOccupancyChanged, this, &VfoWidget::updateCwAutoTuneControls);
-        disconnect(m_radioModel, &RadioModel::cwAutoTuneIntentChanged, this, &VfoWidget::updateCwAutoTuneControls);
-        disconnect(m_radioModel, &RadioModel::capabilitiesChanged, this, &VfoWidget::updateCwAutoTuneControls);
-        disconnect(m_radioModel, &RadioModel::connectionStateChanged, this, &VfoWidget::updateCwAutoTuneControls);
-        disconnect(m_radioModel, &RadioModel::infoChanged, this, &VfoWidget::updateCwAutoTuneControls);
             });
             m_fmRevBtn->installEventFilter(this);
             dirRow->addWidget(m_fmRevBtn);

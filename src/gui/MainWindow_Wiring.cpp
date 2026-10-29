@@ -6199,15 +6199,16 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     connect(s, &SliceModel::playOnChanged, this, &MainWindow::syncAetherRxRecordButtons);
     connect(s, &SliceModel::playEnabledChanged, this, &MainWindow::syncAetherRxRecordButtons);
     const QPointer<SliceModel> cwSource(s);
-    const RadioControlSession cwSession = m_radioModel.controlSession();
-    connect(w, &VfoWidget::autotuneRequested, this, [this, cwSource, cwSession](bool intermittent) {
-        if (cwSource && m_radioModel.controlSessionCurrent(cwSession)) {
+    // Same-radio reconnect can reclaim this slice and its VFO widget. Each
+    // new request binds its session in the model and validates this identity.
+    connect(w, &VfoWidget::autotuneRequested, this, [this, cwSource](bool intermittent) {
+        if (cwSource) {
             m_radioModel.requestCwAutoTune(cwSource,
                 intermittent ? CwAutoTuneAction::Start : CwAutoTuneAction::Stop);
         }
     });
-    connect(w, &VfoWidget::autotuneOnceRequested, this, [this, cwSource, cwSession]() {
-        if (cwSource && m_radioModel.controlSessionCurrent(cwSession)) {
+    connect(w, &VfoWidget::autotuneOnceRequested, this, [this, cwSource]() {
+        if (cwSource) {
             m_radioModel.requestCwAutoTune(cwSource, CwAutoTuneAction::Once);
         }
     });

@@ -9,6 +9,7 @@
 #include <QJsonValue>
 #include <QSslCertificate>
 #include <QSslConfiguration>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -446,8 +447,10 @@ void WanConnection::processLine(const QString& line)
     case MessageType::Response: {
         auto it = m_pendingCallbacks.find(msg.sequence);
         if (it != m_pendingCallbacks.end()) {
-            it.value()(msg.resultCode, msg.object);
+            // A completion may retire this session or alter the callback map.
+            ResponseCallback callback = std::move(it.value());
             m_pendingCallbacks.erase(it);
+            callback(msg.resultCode, msg.object);
         }
         break;
     }

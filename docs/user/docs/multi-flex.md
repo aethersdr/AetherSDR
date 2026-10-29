@@ -17,7 +17,8 @@ Multi-Flex lets AetherSDR operate alongside SmartSDR, Maestro, or another Aether
 Multi-Flex is a FlexRadio feature. Unsupported multiFLEX controls are dimmed with
 an explanation (see [Supported Radios](./supported-radios.md)). The **Enabled /
 Disabled** button waits for the radio's initial setting and returns to its last
-reported value if a change is rejected or times out.
+reported value if a change is rejected or times out. An accepted request stays
+visible until the radio reports a setting, including when you reconnect.
 
 ## Requirements
 

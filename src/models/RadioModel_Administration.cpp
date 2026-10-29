@@ -74,7 +74,12 @@ ReceiveDispatch RadioModel::requestAdministrationSetting(const RadioSetupRequest
         *finished = true;
         if (!alive) { return; }
         if (alive->controlSession() == session && alive->m_administrationRevisions[index] == revision) {
-            alive->m_administrationPending[index].reset();
+            // SmartSDR 4.3.16 does not echo these settings to their writer.
+            // Retain accepted intent until radio status supersedes it; the
+            // confirmed value still changes only in applyRadioChanges.
+            if (result.kind != RadioControlReply::Kind::Accepted) {
+                alive->m_administrationPending[index].reset();
+            }
             emit alive->infoChanged();
         }
         if (alive && owner && completion) { completion(result); }

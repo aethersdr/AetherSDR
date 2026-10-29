@@ -77,7 +77,7 @@ radio copy.
 | `panControl` | Band zoom, segment zoom, receive antenna | absent | absent | absent | absent | absent | `RadioModel::requestPanControl`, exact pan identity and the existing zoom availability gate |
 | `slicePresetControl` | Step, repeater offset, tone mode/value | absent | absent | absent | absent | absent | `RadioModel::requestSlicePreset`; absent fields remain unchanged. Client-owned step still applies locally where no command plane exists |
 
-### Radio automatic AGC threshold
+### Radio administration and CW receive auto-tune
 
 Radio administration uses typed `RemoteOnEnabled` and `MultiFlexEnabled` setup
 fields and the existing `canReboot` capability paired with `requestRadioReboot`.
@@ -87,6 +87,8 @@ Administration writes carry a bounded operation guard and the original transport
 generation across the LAN queue or WAN writer. Reconnect, owner retirement and
 superseding edits cancel pending work. Reboot recovery is bounded to the original
 radio. None of these controls extends daemon RPC permissions or permits TX.
+
+### Radio automatic AGC threshold
 
 `autoAgcThresholdControl` declares the implemented `requestSliceAgcThresholdMode`
 verb and its required license feature. Flex declares it only for a fully parsed

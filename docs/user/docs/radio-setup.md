@@ -58,9 +58,10 @@ and restores the radio's reported value for malformed entries.
 ### RADIO
 
 **Remote On** and **multiFLEX:** become available after the connected radio
-reports their current settings. A pending edit is shown while its reply is
-outstanding; the radio's status remains the source of truth. Rejected or timed-out
-edits return to the last reported value. Reconnecting clears pending edits.
+reports their current settings. The button shows your requested value, including
+after the radio accepts it without sending a status update. A later radio status
+supersedes that request. Rejected or timed-out edits return to the last reported
+value. Reconnecting clears requested values and reads the radio's settings again.
 Unsupported controls are dimmed with an explanation.
 
 **Reboot Radio** asks for confirmation and targets the radio session shown when

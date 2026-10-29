@@ -315,7 +315,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/WanConnection.cpp",
-          "line": 270,
+          "line": 271,
           "text": "WanConnection: cert fingerprint MISMATCH for"
         }
       ]
@@ -332,7 +332,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/WanConnection.cpp",
-          "line": 353,
+          "line": 354,
           "text": "WanConnection: socket error:"
         },
         {
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 13309,
+          "line": 13319,
           "text": "RadioModel: DAX TX create failed"
         }
       ]

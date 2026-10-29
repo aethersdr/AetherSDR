@@ -52,6 +52,23 @@ public:
     static int pending(const RadioModel& radio) { return radio.m_administrationWrites.size(); }
     static void receipt(RadioModel& radio, quint64 ticket, bool written)
     { radio.administrationWriteResult(ticket, written); }
+    static bool wanReplyRetiresBeforeCompletion()
+    {
+        WanConnection wan;
+        bool erasedBeforeCallback = false;
+        int completions = 0;
+        const quint64 generation = wan.commandSessionGeneration();
+        wan.m_pendingCallbacks.insert(10, [&](int, const QString&) {
+            ++completions;
+            erasedBeforeCallback = !wan.m_pendingCallbacks.contains(10);
+            wan.forgetSessionReply(10, generation);
+            // Completion may enqueue another request and invalidate hash iterators.
+            wan.m_pendingCallbacks.insert(11, [](int, const QString&) {});
+        });
+        wan.processLine(QByteArrayLiteral("R10|0|"));
+        wan.processLine(QByteArrayLiteral("R10|0|"));
+        return erasedBeforeCallback && completions == 1 && wan.m_pendingCallbacks.contains(11);
+    }
     static bool rebooting(const RadioModel& radio) { return radio.m_rebootInProgress; }
     static void expire(RadioModel& radio)
     {
@@ -139,6 +156,13 @@ void settingsAndStaleWrites()
         "superseded queued setting cannot reach the transport");
     fixture.ack();
     check(!fixture.radio.remoteOnEnabled(), "ACK alone does not mutate confirmed state");
+    fixture.radio.setRemoteOnEnabled(true);
+    drain();
+    fixture.ack();
+    check(fixture.radio.remoteOnRequested(),
+        "accepted intent remains visible when firmware omits its originating-client echo");
+    fixture.settings(false, false);
+    check(!fixture.radio.remoteOnRequested(), "radio status supersedes accepted requested intent");
     fixture.settings(true, false);
     check(fixture.radio.remoteOnEnabled() && fixture.radio.remoteOnRequested(),
         "independent status publication is authoritative");
@@ -162,6 +186,8 @@ void settingsAndStaleWrites()
 
 void lifetimeFences()
 {
+    check(RadioAdministrationTestAccess::wanReplyRetiresBeforeCompletion(),
+        "WAN consumes a reply before reentrant completion retires or replaces callbacks");
     Fixture fixture;
     fixture.settings();
     int callbacks = 0;
@@ -244,10 +270,19 @@ void cwOwnershipAndOrdering()
         "entitlement loss cleans up an existing loop without enabling new tuning");
     fixture.ack();
     RadioAdministrationTestAccess::license(fixture.radio, QStringLiteral("SmartSDR+"));
+    RadioAdministrationTestAccess::retire(fixture.radio);
+    const qsizetype beforeReconnect = fixture.writes.size();
+    fixture.radio.requestCwAutoTune(slice, CwAutoTuneAction::Once);
+    drain();
+    check(fixture.writes.size() == beforeReconnect + 1
+        && fixture.writes.last() == QStringLiteral("slice auto_tune 0"),
+        "new intent on a reclaimed slice binds the current session");
+    fixture.ack();
+    const qsizetype beforeOwnershipLoss = fixture.writes.size();
     fixture.radio.requestCwAutoTune(slice, CwAutoTuneAction::Start);
     RadioAdministrationTestAccess::own(fixture.radio, 0, false);
     drain();
-    check(!fixture.radio.cwAutoTuneLoopRequested(0) && fixture.writes.last() == QStringLiteral("slice auto_tune 0 int=0"),
+    check(!fixture.radio.cwAutoTuneLoopRequested(0) && fixture.writes.size() == beforeOwnershipLoss,
         "ownership loss cancels queued Start and never writes foreign cleanup");
     SliceModel* replacement = fixture.cw();
     fixture.radio.requestCwAutoTune(slice, CwAutoTuneAction::Once);

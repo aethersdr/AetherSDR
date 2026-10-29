@@ -12475,8 +12475,18 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
     if (d.netmask) { m_netmask = *d.netmask; changed = true; }
     if (d.gateway) { m_gateway = *d.gateway; changed = true; }
     if (d.networkName) { m_networkName = *d.networkName; changed = true; }
-    if (d.remoteOnEnabled) { m_administrationObserved[0] = true; m_remoteOnEnabled = *d.remoteOnEnabled; changed = true; }
-    if (d.multiFlexEnabled) { m_administrationObserved[1] = true; m_multiFlexEnabled = *d.multiFlexEnabled; changed = true; }
+    if (d.remoteOnEnabled) {
+        m_administrationObserved[0] = true;
+        m_administrationPending[0].reset();
+        m_remoteOnEnabled = *d.remoteOnEnabled;
+        changed = true;
+    }
+    if (d.multiFlexEnabled) {
+        m_administrationObserved[1] = true;
+        m_administrationPending[1].reset();
+        m_multiFlexEnabled = *d.multiFlexEnabled;
+        changed = true;
+    }
     if (d.enforcePrivateIp) { m_enforcePrivateIp = *d.enforcePrivateIp; changed = true; }
     if (d.binauralRx) { m_binauralRx = *d.binauralRx; changed = true; }
     if (d.fullDuplex) {

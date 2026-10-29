@@ -105,6 +105,7 @@ private slots:
 
 private:
     friend class WanConnectionTestAccess;
+    friend class RadioAdministrationTestAccess;
 
     void processLine(const QString& line);
 
