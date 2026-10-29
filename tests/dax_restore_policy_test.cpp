@@ -243,6 +243,29 @@ void testKeyForIndexMatchesPersistedNames()
                == QStringLiteral("DaxChannel_SliceZ"));
 }
 
+void testDaxQuitWritesAndPrunes()
+{
+    // A=2 assigned, B unassigned: A is written, B and the tail are removed.
+    const auto w = DaxRestorePolicy::quitWrite(true, true, {2, 0});
+    const bool setA = w.set.size() == 1
+                   && w.set.first().first == QStringLiteral("DaxChannel_SliceA")
+                   && w.set.first().second == 2;
+    report("DAX radio quit writes assigned slices and removes the rest",
+           setA && w.remove.contains(QStringLiteral("DaxChannel_SliceB"))
+               && w.remove.contains(QStringLiteral("DaxChannel_SliceZ"))
+               && !w.remove.contains(QStringLiteral("DaxChannel_SliceA")));
+}
+
+void testNonDaxQuitKeepsSavedKeys()
+{
+    // #6824 review: saved Flex A=2 -> connect an Icom/HL2 (every slice reads
+    // channel 0) -> quit. The quit must not touch the keys, or the next Flex
+    // session has nothing to restore.
+    const auto w = DaxRestorePolicy::quitWrite(false, true, {0, 0});
+    report("non-DAX radio quit leaves the saved DAX keys alone",
+           w.set.isEmpty() && w.remove.isEmpty());
+}
+
 }  // namespace
 
 int main()
@@ -269,6 +292,8 @@ int main()
     testRadioLessQuitPrunesNothing();
     testConnectedButUnenumeratedQuitPrunesNothing();
     testKeyForIndexMatchesPersistedNames();
+    testDaxQuitWritesAndPrunes();
+    testNonDaxQuitKeepsSavedKeys();
 
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;

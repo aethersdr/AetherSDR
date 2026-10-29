@@ -4280,24 +4280,22 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
     // Save per-slice DAX channel assignments for restore on next launch.
     // Keyed by slice index (A=0, B=1, ...) since radio-assigned IDs change.
+    // #4558: the write also drops keys beyond the slice count, so a config
+    // poisoned by an earlier multi-slice quit self-heals. A radio without DAX
+    // writes nothing, keeping the saved Flex assignment. DaxRestorePolicy::
+    // quitWrite() carries why, and the unit test pins each case.
     {
-        const QList<SliceModel*> slices = m_radioModel.slices();
-        for (int i = 0; i < slices.size(); ++i) {
-            const QString key = DaxRestorePolicy::keyForIndex(i);
-            if (slices[i]->daxChannel() > 0) {
-                s.setValue(key, QString::number(slices[i]->daxChannel()));
-            } else {
-                s.remove(key);
-            }
+        QList<int> channels;
+        for (SliceModel* slice : m_radioModel.slices()) {
+            channels << slice->daxChannel();
         }
-        // #4558: also drop keys beyond the slice count at quit, so a config
-        // poisoned by an earlier multi-slice quit self-heals instead of staying
-        // armed forever. Both preconditions — connected AND holding a populated
-        // slice list — are load-bearing; DaxRestorePolicy::staleKeysToPrune()
-        // carries why, and the unit test pins both.
-        for (const QString& key :
-             DaxRestorePolicy::staleKeysToPrune(m_radioModel.isConnected(),
-                                                slices.size())) {
+        const auto write = DaxRestorePolicy::quitWrite(
+            m_radioModel.backendCapabilities().hasDaxStreams,
+            m_radioModel.isConnected(), channels);
+        for (const auto& [key, channel] : write.set) {
+            s.setValue(key, QString::number(channel));
+        }
+        for (const QString& key : write.remove) {
             s.remove(key);
         }
     }
