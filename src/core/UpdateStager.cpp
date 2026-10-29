@@ -975,6 +975,19 @@ UpdateStager::StagedRelease UpdateStager::stagedRelease(const QString& stagingRo
     return chosen;
 }
 
+void UpdateStager::discard(const QString& stagingRoot, const QString& version)
+{
+    if (stagingRoot.isEmpty() || !releaseVersion().match(version).hasMatch()) {
+        return;
+    }
+    std::error_code ec;
+    for (const QString& suffix : {QString(), QStringLiteral(".json"), QStringLiteral(".manifest.json"),
+                                  QStringLiteral(".manifest.json.sig")}) {
+        fs::remove_all(toPath(recordPath(stagingRoot, version, suffix)), ec);
+    }
+    qCInfo(lcUpdater).noquote() << "staged update to v" + version + " discarded";
+}
+
 bool UpdateStager::revalidate(const QString& stagingRoot, const StagedRelease& staged,
                               const QString& platform, const QString& arch, QString* problem)
 {

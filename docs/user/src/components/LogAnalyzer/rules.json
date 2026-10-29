@@ -9,7 +9,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7540,
+          "line": 7562,
           "text": "else if (key == \"model\")"
         }
       ]
@@ -21,7 +21,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7549,
+          "line": 7571,
           "text": "else if (key == \"software_ver\")"
         }
       ]
@@ -94,7 +94,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7502,
+          "line": 7524,
           "text": "\"RadioModel: terminal GUI client registration failure\""
         }
       ]
@@ -111,12 +111,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7432,
+          "line": 7454,
           "text": "RadioModel: this GUI client was force-disconnected by another client"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7476,
+          "line": 7498,
           "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
         }
       ]
@@ -133,7 +133,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7342,
+          "line": 7364,
           "text": "RadioModel: multiFLEX disabled, other clients present"
         }
       ]
@@ -150,7 +150,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/RadioConnection.cpp",
-          "line": 624,
+          "line": 635,
           "text": "RadioConnection: socket error:"
         }
       ]
@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8683,
+          "line": 8707,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -188,12 +188,12 @@
       "source": [
         {
           "file": "src/core/backends/flex/RadioConnection.cpp",
-          "line": 685,
+          "line": 696,
           "text": "qCDebug(lcConnection) << \"RX:\" << line;"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7549,
+          "line": 7571,
           "text": "else if (key == \"software_ver\")"
         }
       ]
@@ -210,7 +210,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7743,
+          "line": 7765,
           "text": "RadioModel: no VITA-49 UDP data received after 10s"
         }
       ]
@@ -227,17 +227,17 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7721,
+          "line": 7743,
           "text": "RadioModel: UDP stream setup failed"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 231,
+          "line": 239,
           "text": "PanadapterStream: failed to bind UDP socket:"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7796,
+          "line": 7819,
           "text": "RadioModel: client udpport collision"
         }
       ]
@@ -254,7 +254,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 171,
+          "line": 177,
           "text": "capped by net.core.rmem_max"
         }
       ]
@@ -452,12 +452,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 1370,
+          "line": 1384,
           "text": "RadioModel: dax_rx stream create for channel"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 1836,
+          "line": 1899,
           "text": "stream create failed/dropped"
         }
       ]
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 13217,
+          "line": 13286,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -547,7 +547,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 13220,
+          "line": 13259,
           "text": "\"SpectrumWidget: QRhi failure:\""
         },
         {
@@ -574,7 +574,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 2002,
+          "line": 2009,
           "text": "SpectrumWidget: AETHER_NO_GPU/QT_OPENGL=software"
         }
       ]
@@ -608,7 +608,7 @@
       "source": [
         {
           "file": "src/main.cpp",
-          "line": 85,
+          "line": 86,
           "text": "Non-fatal X11 error suppressed (error_code="
         }
       ]
@@ -941,7 +941,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 2854,
+          "line": 2886,
           "text": "HL2: could not open the UDP socket"
         }
       ]
@@ -961,7 +961,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/MetisClient.cpp",
-          "line": 510,
+          "line": 523,
           "text": "MetisClient: no EP6 for"
         }
       ]
@@ -996,7 +996,7 @@
       "match": {
         "substring": "the radio released the serial and audio streams"
       },
-      "docs": "/next/networked-icom#audio-and-radio-updates-stop-after-switching-applications",
+      "docs": "/networked-icom#audio-and-radio-updates-stop-after-switching-applications",
       "source": [
         {
           "file": "src/core/backends/icom/IcomSession.cpp",
@@ -1057,7 +1057,7 @@
       "source": [
         {
           "file": "docs/user/docs/troubleshooting.md",
-          "line": 91,
+          "line": 109,
           "text": "error while loading shared libraries: libOpenGL.so.0"
         }
       ]
@@ -1075,7 +1075,7 @@
       "source": [
         {
           "file": "docs/user/docs/troubleshooting.md",
-          "line": 101,
+          "line": 119,
           "text": "needs glibc 2.38 or newer"
         }
       ]

@@ -97,7 +97,7 @@ Follow these pages in order the first time:
 
 - [TGXL Tuner Control](./tgxl-tuner-control.md) — 4O3A Tuner Genius XL, direct or relayed through the radio
 - [Peripherals](./peripherals.md) — PGXL amplifier, Antenna Genius and other accessories, with 4O3A access codes
-- [Amplifiers](./amplifiers.md) — ACOM, SPE Expert, VK3AMP and KPA1500 amplifiers
+- [Amplifiers](./amplifiers.md) — ACOM, SPE Expert, VK3AMP, KPA1500 and RF-KIT amplifiers
 - [ShackSwitch](./shackswitch.md) and [Green Heron Everyware](./green-heron-everyware.md) — antenna switches and rotators
 
 ### Controllers

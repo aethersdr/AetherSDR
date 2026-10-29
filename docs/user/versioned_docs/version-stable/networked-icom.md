@@ -69,7 +69,7 @@ Click **Connect by IP**. The model is identified over the wire, not from the rad
 
 AetherSDR treats an Icom differently from a FlexRadio:
 
-- **The radio is authoritative.** It remembers its own frequency, mode and filter. AetherSDR reads the radio's state and levels when it connects and never pushes saved state onto it.
+- **The radio is authoritative.** It remembers its own frequency, mode and filter. AetherSDR reads the radio's state and levels when it connects and never pushes saved state onto it. The one thing it initializes is the scope mode, described under [Panadapter scope modes](#panadapter-scope-modes).
 - **Unknown models fail closed.** Each verified model has its own command profile. A control that has not been proven on a model is hidden, and a radio AetherSDR does not recognize gets no panadapter and no transmit, rather than guessed defaults.
 
 What you can do:
@@ -81,6 +81,22 @@ What you can do:
 - **Radio Health** (**Tools → Radio Health...**) shows the radio's modulation inputs and levels.
 - **Decoders:** the CW, RTTY and AetherClock decoders work. The CW decoder opens in CW.
 - **Memory channels** use AetherSDR's shared bank on this computer, and the radio's own memories can be read in on models that support it. The IC-9700's radio memories are read-only.
+
+### Panadapter scope modes
+
+The panadapter is the radio's own scope, and the radio owns the scope mode. On the IC-7300MK2, the IC-705 (firmware 1.20 or later) and the IC-9700 (firmware 1.30 or later) the **Scope** row in the Display panel offers the radio's three modes:
+
+| Mode | What the window does |
+|---|---|
+| **Scroll-F** | The window stays put while you tune inside it, like a FlexRadio panadapter. Click to tune in place, drag the panadapter to pan the window, and the window follows the tuned frequency when it reaches an edge. This is the mode AetherSDR starts in. |
+| **Fixed** | The window is one of the radio's stored Fixed Edges presets and does not move on its own. |
+| **Center** | The window is centered on the tuned frequency and moves with every tune. Dragging the panadapter retunes the radio. |
+
+**At connect, AetherSDR reads the radio's scope mode and edge preset.** A radio found in Scroll-F or Fixed is left exactly as it was: nothing is written. A radio found in Center is switched to Scroll-F once per session, so the panadapter never starts slaved to the VFO. Picking Center in the Display panel is honored for that session, and the next connect initializes Scroll-F again. Picking Scroll-F or Fixed is written to the radio and stays across reconnects.
+
+**AetherSDR's window is the radio's Fixed Edges preset 4.** In Scroll-F and in Fixed chosen from the Display panel, every pan and zoom rewrites preset 4 for the band segment you are on; presets 1–3 are never written. If the radio is in Fixed on one of presets 1–3 (chosen on its front panel), the panadapter shows that preset as it is, no Scope button is lit, and a drag or zoom is refused with the view put back; click **Fixed** to switch the radio to preset 4 with the same window, after which the window is yours to pan and zoom. In Scroll-F on one of presets 1–3, the radio stays on that preset until the window first has to move: a drag or zoom in AetherSDR, or a dial move that reaches the edge of the window, switches the radio to preset 4 and writes there. The window cannot cross one of the radio's band-segment boundaries (for example 8.000 MHz on HF), so near a boundary it shifts rather than centers.
+
+Tuning works the same way as on other radios: click, drag the tuned-frequency marker, scroll the wheel, type a frequency, or recall a memory. A tune that leaves the window brings the window with it. The original IC-7300 has Center only, and the Scope row is dimmed with that reason. On the IC-9700 the panadapter follows one scope, MAIN or SUB, and that is the one read and initialized; in Dual scope the other scope is not drawn.
 
 ### PC Audio and data modes
 
@@ -118,6 +134,7 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 
 ### IC-705
 
+- On the IC-705, the preamp cycles through **OFF**, **P.AMP1** and **P.AMP2** below 74.800 MHz. At 74.800 MHz and above it toggles **OFF** / **P.AMP1**. The choices follow the radio's reported frequency; until that frequency is known, only OFF and P.AMP1 are offered. Changing ranges does not change the radio's preamp setting; its readback takes priority over routine meter polling. After reconnecting, S-meter readings wait for the radio's frequency so they use the correct HF or VHF reference.
 - 2 m and 70 cm are available alongside HF.
 - The speech processor button reads **COMP**, with a 0–10 slider and a numeric readout, as on the MK2.
 - **WFM** (broadcast FM) is receive-only.
@@ -142,6 +159,7 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 - On the IC-7300MK2, transmit audio drops out for about a third of a second roughly every 1.2 seconds while the radio stays keyed ([#6169](https://github.com/aethersdr/AetherSDR/issues/6169)).
 - CW speed, break-in and pitch do nothing on models without a CW text keyer, such as the IC-9700 ([#6110](https://github.com/aethersdr/AetherSDR/issues/6110)).
 - On the IC-9700, the panadapter trace can sit on the bottom line and look blank on a quiet band with the preamp off ([#4814](https://github.com/aethersdr/AetherSDR/issues/4814)).
+- In Scroll-F, the IC-7300MK2 sends no scope data while it is transmitting, so the panadapter freezes for the length of a transmission; in Center it keeps sweeping ([#6168](https://github.com/aethersdr/AetherSDR/issues/6168)).
 
 ## Troubleshooting
 
@@ -152,6 +170,14 @@ The **Icom CI-V:** address is wrong. AetherSDR does not correct a wrong address 
 1. Disconnect and open **Connect by IP** with **Radio type:** set to **Icom (network)**.
 2. Set **Icom CI-V:** to **Auto-detect (recommended)**.
 3. If you use **Custom...**, check the address on the radio under MENU > SET > Connectors > CI-V and type it as hex (for example `A2`).
+
+### Audio and radio updates stop after switching applications
+
+An interrupted application shutdown can leave an old network session on the radio. If the radio releases the current audio and CI-V streams while cleaning it up, AetherSDR disconnects and retries the connection automatically.
+
+1. Allow the automatic reconnect to finish. Frequency and other radio state are read again from the radio.
+2. When switching applications, disconnect the first application and let it finish before opening the next connection.
+3. If the radio continues refusing connections, check that another network client is not still using it.
 
 ### Connect by IP fails with a handshake error
 

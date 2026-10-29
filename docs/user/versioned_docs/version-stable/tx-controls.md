@@ -27,7 +27,10 @@ These controls operate the radio. External Elecraft tuners have their own applet
 - **MOX** — manual transmit
 - **ATU** — run the antenna tuner
 - **MEM** — use ATU memory
-- **APD** — Adaptive Pre-Distortion (Active/Cal/Avail indicators). On
+- **APD** — Adaptive Pre-Distortion (Active/Cal/Avail indicators).
+  **Active** lights when the radio reports a correction on air for the
+  transmit slice's antenna, frequency and power; on firmware 4.3 and later,
+  that means the radio's APD state is active or hold. On
   FLEX-8000-series radios running fw 4.2.18+, APD also supports
   **External APD**: pick a sampler-port input via the sub-menu so the radio
   can train its predistortion against the output of an external linear
@@ -155,6 +158,10 @@ changes made at the radio or by another client; **Breakin** requests a change.
 
 - **AM Carrier slider** (0–100)
 - **VOX** toggle + level + delay
+
+  Automation can explicitly disarm VOX with `invoke "VOX voice-operated transmit"
+  setChecked false` without TX permission. The `vox_toggle` automation shortcut
+  requires TX permission in either direction.
 - **DEXP** — downward expansion (noise gate on the radio's mic path)
 - **TX Filter** — Low Cut / High Cut step buttons
 

@@ -1,6 +1,7 @@
 #include "SupportDialog.h"
 #include "DocsLinks.h"
 #include "FramelessMessageBox.h"
+#include "ResetSettingsPrompts.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/SettingsPaths.h"
@@ -265,19 +266,8 @@ void SupportDialog::resetSettings(QWidget* parent)
             promptPaths << path;
     }
 
-    const QString prompt = QString(
-        "This will remove AetherSDR's app-specific settings only.\n"
-        "It will not change settings stored on the radio.\n"
-        "A backup of the current settings is written to\n%1\nbefore anything is removed.\n"
-        "AetherSDR will close immediately after reset so these files are not recreated.\n\n"
-        "Files to remove:\n"
-        "%2\n\n"
-        "Continue?")
-        .arg(AetherSDR::SettingsPaths::backupsDir(),
-             QString("- %1").arg(promptPaths.join("\n- ")));
-
-    if (FramelessMessageBox::question(parent, "Reset Settings", prompt,
-            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) {
+    if (!ResetSettingsPrompts::confirm(parent, AetherSDR::SettingsPaths::backupsDir(),
+                                      promptPaths)) {
         return;
     }
 
@@ -329,15 +319,7 @@ void SupportDialog::resetSettings(QWidget* parent)
         return;
     }
 
-    FramelessMessageBox::warning(
-        parent, "Reset Settings",
-        QString(
-            "Some files could not be removed.\n\n"
-            "Removed: %1\n"
-            "Failed: %2\n\n"
-            "AetherSDR will now close to avoid rewriting settings.")
-            .arg(removed.isEmpty() ? "none" : removed.join("\n"),
-                 failed.join("\n")));
+    ResetSettingsPrompts::showFailures(parent, removed, failed);
     QApplication::quit();
 }
 

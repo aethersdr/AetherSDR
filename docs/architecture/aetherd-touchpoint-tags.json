@@ -797,6 +797,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/UpdateController.h": {
+  "tag": "ui-support",
+  "note": "App self-update: Install update and Restart to update, owning UpdateStager and the helper hand-off for the Updates window and title bar; pure client plumbing, no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/UpdateInstaller.h": {
   "tag": "ui-support",
   "note": "App self-update: hands a staged release to AetherSDRUpdater.exe and reads its result at start; pure client plumbing, no radio state.",
