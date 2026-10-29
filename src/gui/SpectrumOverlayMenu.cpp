@@ -552,6 +552,9 @@ void SpectrumOverlayMenu::setMemories(const QMap<int, MemoryEntry>& memories, bo
 void SpectrumOverlayMenu::buildBandPanel()
 {
     m_bandPanel = new QWidget(parentWidget());
+    // Panels are siblings of this menu. Ignored descendant mouse events must
+    // stop at each panel instead of reaching the spectrum's tuning handlers.
+    m_bandPanel->setAttribute(Qt::WA_NoMousePropagation);
     applyPanelStyle(m_bandPanel, QStringLiteral("bandPanel"));
     m_bandPanel->hide();
 
@@ -616,6 +619,7 @@ void SpectrumOverlayMenu::buildBandPanel()
 void SpectrumOverlayMenu::buildAntPanel()
 {
     m_antPanel = new QWidget(parentWidget());
+    m_antPanel->setAttribute(Qt::WA_NoMousePropagation);
     applyPanelStyle(m_antPanel, QStringLiteral("antPanel"));
     m_antPanel->hide();
 
@@ -1458,6 +1462,7 @@ void SpectrumOverlayMenu::syncAntPanel()
 void SpectrumOverlayMenu::buildDaxPanel()
 {
     m_daxPanel = new QWidget(parentWidget());
+    m_daxPanel->setAttribute(Qt::WA_NoMousePropagation);
     applyPanelStyle(m_daxPanel, QStringLiteral("daxPanel"));
     m_daxPanel->hide();
 
@@ -1551,6 +1556,7 @@ void SpectrumOverlayMenu::toggleDaxPanel()
 void SpectrumOverlayMenu::buildMemoryPanel()
 {
     m_memoryPanel = new MemoryBrowsePanel(parentWidget());
+    m_memoryPanel->setAttribute(Qt::WA_NoMousePropagation);
     m_memoryPanel->hide();
     connect(m_memoryPanel, &MemoryBrowsePanel::memoryActivated, this,
             [this](int memoryIndex) {
@@ -1705,6 +1711,7 @@ void SpectrumOverlayMenu::updateLayout()
 void SpectrumOverlayMenu::buildDisplayPanel()
 {
     m_displayPanel = new QWidget(parentWidget());
+    m_displayPanel->setAttribute(Qt::WA_NoMousePropagation);
     applyPanelStyle(m_displayPanel, QStringLiteral("displayPanel"));
     m_displayPanel->hide();
 
@@ -3576,6 +3583,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     }
 
     m_bandPanel = new QWidget(parentWidget());
+    m_bandPanel->setAttribute(Qt::WA_NoMousePropagation);
     applyPanelStyle(m_bandPanel, QStringLiteral("bandPanel"));
     m_bandPanel->hide();
     m_bandPanel->installEventFilter(this);
@@ -3755,6 +3763,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     }
 
     m_xvtrPanel = new QWidget(parentWidget());
+    m_xvtrPanel->setAttribute(Qt::WA_NoMousePropagation);
     applyPanelStyle(m_xvtrPanel, QStringLiteral("xvtrPanel"));
     m_xvtrPanel->hide();
     m_xvtrPanel->installEventFilter(this);
