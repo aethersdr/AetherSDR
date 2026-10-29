@@ -1475,7 +1475,7 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     m_wsjtxPostSpots = new QCheckBox("Post decoded stations as spots");
     m_wsjtxPostSpots->setChecked(
         s.value("WsjtxPostSpotsEnabled", "True").toString() == "True");
-    ThemeManager::instance().applyStyleSheet(m_wsjtxPostSpots, cbStyle);
+    ThemeManager::instance().applyStyleSheet(m_wsjtxPostSpots, "QCheckBox { color: {{color.text.primary}}; }");
     connect(m_wsjtxPostSpots, &QCheckBox::toggled, this, [](bool on) {
         auto& s = AppSettings::instance();
         s.setValue("WsjtxPostSpotsEnabled", on ? "True" : "False");
