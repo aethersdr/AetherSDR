@@ -197,6 +197,8 @@ Imports an ADIF log and colors spot labels by worked status: **New DXCC**, **New
 
 ADI fields can include their optional data type, such as `<CALL:6:S>WN4AZY`. Typed and untyped fields import the same callsign, band, frequency, mode and submode information.
 
+Comments and application-specific fields are skipped using their declared lengths. Tag-looking text inside those fields does not change the imported contact or split it into extra records.
+
 - **DXCC Colors** — Enabled / Disabled
 - **Log File (ADIF)** — **Browse…**
 - **Imported** — live QSO and entity counts

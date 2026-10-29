@@ -2,36 +2,18 @@
 #include "CtyDatParser.h"
 
 #include <QFile>
+#include <QHash>
 #include <QRegularExpression>
 #include <QThread>
 #include <QtAlgorithms>
+
+#include <utility>
 
 namespace AetherSDR {
 
 // ---------------------------------------------------------------------------
 // Static helpers
 // ---------------------------------------------------------------------------
-
-// Extract the value of a named ADIF field from a block of text.
-// ADIF field format: <FIELDNAME:length>value  (case insensitive)
-static QString extractField(const QString& block, const QString& fieldName)
-{
-    // e.g. <CALL:6>G3ABC  or <CALL:6:S>G3ABC
-    // NOTE: do NOT make this regex static — the pattern depends on fieldName.
-    const QRegularExpression re(
-        R"(<)" + QRegularExpression::escape(fieldName) + R"(:(\d+)(?::[A-Z])?>)",
-        QRegularExpression::CaseInsensitiveOption);
-    auto m = re.match(block);
-    if (!m.hasMatch()) return {};
-    int len = m.captured(1).toInt();
-    int start = m.capturedEnd(0);
-    // Compare against the space remaining rather than adding: `len` is an
-    // attacker-controlled <FIELD:len> token, and start + len overflows int
-    // (UB, and a wrapped-negative sum slips past the guard) near INT_MAX.
-    // start <= block.length(), so the subtraction cannot underflow.
-    if (len < 0 || len > block.length() - start) return {};
-    return block.mid(start, len);
-}
 
 QString AdifParser::normaliseMode(const QString& mode, const QString& submode)
 {
@@ -86,32 +68,56 @@ QVector<QsoRecord> AdifParser::parse(const QByteArray& data)
     QVector<QsoRecord> records;
     const QString text = QString::fromUtf8(data);
 
-    // Skip ADIF header section (everything before <EOH>)
-    int bodyStart = 0;
-    int eoh = text.indexOf("<EOH>", 0, Qt::CaseInsensitive);
-    if (eoh != -1)
-        bodyStart = eoh + 5;
-
-    // Split on <EOR> record separators
-    static const QRegularExpression eorRe("<EOR>", QRegularExpression::CaseInsensitiveOption);
-    int pos = bodyStart;
-    QRegularExpressionMatchIterator it = eorRe.globalMatch(text, bodyStart);
-
-    while (it.hasNext()) {
-        auto eorMatch = it.next();
-        const QString block = text.mid(pos, eorMatch.capturedStart() - pos);
-        pos = eorMatch.capturedEnd();
-
-        if (block.trimmed().isEmpty()) continue;
+    // ADIF IV.A.1: data is length-delimited, including ignored fields.
+    // Only look for another specifier after consuming that data, so literal
+    // <CALL>, <EOH> or <EOR> text in a comment cannot become structure.
+    static const QRegularExpression fieldRe(
+        R"(<([^<>:]+)(?::([0-9]+)(?::[A-Z])?)?>)",
+        QRegularExpression::CaseInsensitiveOption);
+    QHash<QString, QString> fields;
+    qsizetype pos = 0;
+    while (pos < text.size()) {
+        const QRegularExpressionMatch match = fieldRe.match(text, pos);
+        if (!match.hasMatch()) {
+            break;
+        }
+        pos = match.capturedEnd();
+        const QString name = match.captured(1).toUpper();
+        if (!match.captured(2).isEmpty()) {
+            bool validLength = false;
+            const qlonglong length = match.captured(2).toLongLong(&validLength);
+            // Subtract first: an untrusted length must never overflow a
+            // start + length expression. A malformed field reads as absent;
+            // scanning continues so later well-formed fields can survive.
+            validLength = validLength && length <= text.size() - pos;
+            if ((name == "CALL" || name == "BAND" || name == "FREQ"
+                 || name == "MODE" || name == "SUBMODE") && !fields.contains(name)) {
+                fields.insert(name, validLength ? text.mid(pos, length) : QString());
+            }
+            if (validLength) {
+                pos += length;
+            }
+            continue;
+        }
+        if (name == "EOH") {
+            fields.clear();
+            records.clear();
+            continue;
+        }
+        if (name != "EOR") {
+            continue;
+        }
+        const QHash<QString, QString> recordFields = std::move(fields);
+        fields.clear();
 
         QsoRecord rec;
-        rec.callsign = extractField(block, "CALL").trimmed().toUpper();
+        rec.callsign = recordFields.value("CALL").trimmed().toUpper();
         if (rec.callsign.isEmpty()) continue;
 
         // Band: prefer explicit <BAND> field, fall back to <FREQ> → freqToBand.
         // Some loggers export bare numbers ("10", "20") instead of ADIF-standard
         // labels ("10m", "20m") — normalise those here.
-        rec.band = extractField(block, "BAND").trimmed().toLower();
+        rec.band = recordFields.value("BAND").trimmed().toLower();
         if (!rec.band.isEmpty() && !rec.band.endsWith('m') && !rec.band.endsWith("cm")) {
             static const QHash<QString,QString> bandMap = {
                 {"160","160m"},{"80","80m"},{"60","60m"},{"40","40m"},
@@ -123,7 +129,7 @@ QVector<QsoRecord> AdifParser::parse(const QByteArray& data)
             if (!mapped.isEmpty()) rec.band = mapped;
         }
         if (rec.band.isEmpty()) {
-            const QString freqStr = extractField(block, "FREQ").trimmed();
+            const QString freqStr = recordFields.value("FREQ").trimmed();
             if (!freqStr.isEmpty()) {
                 bool ok = false;
                 double mhz = freqStr.toDouble(&ok);
@@ -132,8 +138,8 @@ QVector<QsoRecord> AdifParser::parse(const QByteArray& data)
         }
 
         // Mode
-        const QString mode    = extractField(block, "MODE").trimmed();
-        const QString submode = extractField(block, "SUBMODE").trimmed();
+        const QString mode    = recordFields.value("MODE").trimmed();
+        const QString submode = recordFields.value("SUBMODE").trimmed();
         rec.modeGroup = normaliseMode(mode, submode);
 
         records.append(rec);
