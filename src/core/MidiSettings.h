@@ -39,7 +39,8 @@ public:
     static MidiSettings& instance();
 
     // Load/save the default settings file. Saves replace the file atomically
-    // and return false on open, serialization, or commit failure. (#5160)
+    // and return false on open, serialization, or commit failure. Preference
+    // saves also refuse to replace existing bindings after a read/parse failure.
     void load();
     bool save();
 
@@ -99,7 +100,9 @@ private:
     MidiSettings() = default;
     QString settingsFilePath() const;
 
-    static QVector<MidiBinding> parseBindingsFromXml(const QString& filePath);
+    enum class ReadOutcome { Absent, Parsed, Failed };
+    static QVector<MidiBinding> parseBindingsFromXml(const QString& filePath,
+                                                    ReadOutcome* outcome = nullptr);
     static bool writeBindingsToXml(const QString& filePath,
                                    const QVector<MidiBinding>& bindings);
     bool writeSettingsDocument(const QString& filePath,
