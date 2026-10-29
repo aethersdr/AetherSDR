@@ -35,7 +35,7 @@ public:
     bool enabled() const { return m_enabled; }
     // The radio does not refuse overlapping operations, so a new one may only
     // start from idle (Unknown, before any status, fails open), with no start
-    // of ours still awaiting its reply and no WAV transfer running.
+    // of ours still awaiting observed completion and no WAV transfer running.
     bool canStartOperation() const override;
     // The start awaiting radio completion, including an uncertain reply.
     Status pendingOperation() const override { return m_pending; }
@@ -62,7 +62,7 @@ public:
 
     static QString defaultName(int id);
     // Drops the characters the radio cannot carry in a quoted name (`"`, `'`,
-    // `|`), collapses spaces as the radio does, and trims to kMaxNameBytes.
+    // `|`, backslash, NUL), collapses spaces, and trims to kMaxNameBytes.
     static QString sanitizeName(const QString& name);
 
     // Commands

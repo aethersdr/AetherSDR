@@ -5051,6 +5051,7 @@ add_executable(navtex_model_test
 )
 target_include_directories(navtex_model_test PRIVATE src)
 target_link_libraries(navtex_model_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME navtex_model_test COMMAND navtex_model_test)
 
 add_executable(flex_waveform_model_test
     tests/flex_waveform_model_test.cpp

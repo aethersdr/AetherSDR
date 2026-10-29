@@ -5,6 +5,7 @@
 #include "models/RadioModel.h"
 #include <QCoreApplication>
 #include <QEvent>
+#include <QThread>
 #include <cstdio>
 #include <memory>
 #include <utility>
@@ -45,7 +46,14 @@ void flush()
 }
 class ConnectedFlex final : public FlexBackend {
 public:
-    bool isConnected() const override { return true; }
+    bool connected = false;
+    RadioCapabilities capabilities() const override
+    {
+        RadioCapabilities caps = FlexBackend::capabilities();
+        caps.receiveOnlyModes = {QStringLiteral("WFM")};
+        return caps;
+    }
+    bool isConnected() const override { return connected; }
 };
 struct Fixture {
     QStringList wire;
@@ -57,11 +65,15 @@ struct Fixture {
         ConnectedFlex* pointer = backend.get();
         radio.setBackendForTest(std::move(backend), "flex");
         TxOperationIntegrationTestAccess::inject(radio, inert, *pointer, wire);
-        radio.automationApplySliceFixture(0, "A");
+        if (!radio.automationApplySliceFixture(0, "A") || !radio.slice(0)) {
+            qFatal("Could not install the disconnected slice fixture");
+        }
         SliceDelta delta;
         delta.txSlice = true;
         delta.frequency = 7.244;
+        delta.mode = QStringLiteral("USB");
         radio.slice(0)->applyChanges(delta);
+        pointer->connected = true;
         radio.dvkModel().applyStatus("dvk", {{"status", "idle"}, {"enabled", "1"}});
         flush();
         wire.clear();
@@ -131,11 +143,14 @@ void terminalFence()
 {
     {
         Fixture f;
-        f.radio.handleStatusForTest("transmit", {{"vox_enable", "1"}});
+        TransmitDelta vox;
+        vox.voxEnable = true;
+        f.radio.transmitModel().applyChanges(vox);
         f.radio.dvkModel().recStart(1);
         flush();
         check(f.wire.isEmpty(), "VOX-on refuses radio recording before any command");
-        f.radio.handleStatusForTest("transmit", {{"vox_enable", "0"}});
+        vox.voxEnable = false;
+        f.radio.transmitModel().applyChanges(vox);
         f.radio.dvkModel().recStart(1);
         flush();
         check(f.wire == QStringList{"dvk rec_start id=1"}, "confirmed VOX-off admits recording intent");
@@ -190,8 +205,16 @@ void terminalFence()
     }
     {
         Fixture f;
+        QThread writer;
+        f.inert.moveToThread(&writer);
         f.radio.dvkModel().setName(1, "queued name");
         TxOperationIntegrationTestAccess::retire(f.radio);
+        writer.start();
+        QMetaObject::invokeMethod(&f.inert, [&f] {
+            f.inert.moveToThread(QCoreApplication::instance()->thread());
+        }, Qt::BlockingQueuedConnection);
+        writer.quit();
+        writer.wait();
         flush();
         check(f.wire.isEmpty(), "non-keying DVK requests also respect session retirement at the writer");
     }
