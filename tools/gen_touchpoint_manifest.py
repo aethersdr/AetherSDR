@@ -209,12 +209,20 @@ def main():
             print("::error::aetherd touchpoints require a valid semantic tag: "
                   + ", ".join(invalid_tags))
             return 1
-        # Read the same way the write below produces it: utf-8, and no newline
-        # translation, so --check compares like with like on every platform.
-        # (Path.read_text() only gained newline= in 3.13, so go through open().)
+        # Decode explicitly as utf-8 — the file is written as utf-8 below, and
+        # the locale codec must not get a say on either side.
+        #
+        # Newlines, though, are deliberately NOT read verbatim. git may
+        # materialize the committed LF as CRLF in the working tree (a
+        # core.autocrlf=true checkout on Windows, which .gitattributes does not
+        # override for this path), and that file is pristine as far as git is
+        # concerned. render() always emits LF, so comparing raw bytes would
+        # call a clean checkout stale and fail --check with nothing to fix.
+        # Universal-newline decoding (the default newline=None) folds CRLF to
+        # LF, so this compares content and ignores the checkout's line-ending
+        # convention. The writer below still pins LF, so what we commit is LF.
         if MANIFEST_MD.is_file():
-            with MANIFEST_MD.open(encoding="utf-8", newline="") as f:
-                current = f.read()
+            current = MANIFEST_MD.read_text(encoding="utf-8")
         else:
             current = ""
         if current != out:
