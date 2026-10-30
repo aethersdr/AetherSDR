@@ -2838,7 +2838,11 @@ void TciServer::setAudioEngine(AudioEngine* audio)
     if (audio) {
         connect(m_io.get(), &TciIoWorker::txPcmReady, audio,
                 &AudioEngine::feedDaxTxAudio, Qt::QueuedConnection);
-        connect(audio, &QObject::destroyed, this, [this] { m_audio = nullptr; m_lineOutCaptureWanted = false; });
+        connect(audio, &QObject::destroyed, this, [this] {
+            m_audio = nullptr;
+            m_lineOutCaptureWanted = false;
+            updateLineOutCapture();
+        });
         connect(audio, &AudioEngine::lineOutPcmReady, this,
             [ingress = m_pcmIngress](const PcmFrame& frame, bool transmitting) {
                 QMutexLocker lock(&ingress->mutex);
@@ -2871,7 +2875,8 @@ void TciServer::updateLineOutCapture()
 {
     bool wanted = false;
     for (const ClientState& client : m_clients) { wanted |= !client.lineOutReceivers.isEmpty(); }
-    wanted = wanted && isRunning() && m_model && m_model->isConnected();
+    wanted = wanted && m_audio && isRunning() && m_model && m_model->isConnected();
+    if (m_model) { m_model->setLineOutAudioRequested(wanted); }
     if (!m_audio || wanted == m_lineOutCaptureWanted) { return; }
     m_lineOutCaptureWanted = wanted;
     QMetaObject::invokeMethod(m_audio, [audio = m_audio, wanted] { audio->setLineOutCaptureEnabled(wanted); }, Qt::AutoConnection);
