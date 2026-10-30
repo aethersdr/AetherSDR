@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/PcmFrame.h"
+#include "core/ReceiveData.h"
 #include "core/SpectrumDecodeScale.h"
 #include <map>
 
@@ -29,6 +30,7 @@ class QNetworkDatagram;
 namespace AetherSDR {
 
 class RadioConnection;
+class FlexReceiveData;
 class OpusCodec;
 
 // Receives all VITA-49 (ExtDataWithStream, type 3) datagrams on the single
@@ -41,6 +43,7 @@ class OpusCodec;
 
 class PanadapterStream : public QObject {
     Q_OBJECT
+    friend class FlexReceiveDataTestAccess;
     friend class TxOperationIntegrationTestAccess;
     friend class VitaDscpStreamTestAccess;
     friend class WanUdpKeepaliveTestAccess;
@@ -52,7 +55,8 @@ class PanadapterStream : public QObject {
 public:
     static constexpr int VITA49_HEADER_BYTES = 28;
 
-    explicit PanadapterStream(QObject* parent = nullptr);
+    explicit PanadapterStream(QObject* parent = nullptr,
+                              std::shared_ptr<FlexReceiveData> receiveData = {});
 
     // Initialize socket and timer connections on the network thread.
     // Call after moveToThread() via QThread::started signal. (#561)
@@ -372,6 +376,8 @@ private:
 
     // Mutex guards stream ID sets, dBm ranges, yPixels, and DAX/IQ maps.
     // Written from main thread (RadioModel), read from network worker thread (#502).
+    std::shared_ptr<FlexReceiveData> m_receiveData;
+    void publishReceiveTelemetry();
     mutable QMutex  m_streamMutex;
     QSet<quint32>   m_knownPanStreams;     // registered pan stream IDs
     QSet<quint32>   m_knownWfStreams;     // registered wf stream IDs

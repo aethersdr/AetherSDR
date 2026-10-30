@@ -4,6 +4,7 @@
 #include "core/LogManager.h"
 #include <QDebug>
 #include <QDateTime>
+#include <QPointer>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <cmath>
@@ -158,6 +159,7 @@ void MeterModel::rescanAmpMeters()
 
 void MeterModel::defineMeter(const MeterDef& def)
 {
+    ++m_definitionRevision;
     const auto previous = m_defs.constFind(def.index);
     const bool redefinition = previous != m_defs.constEnd()
         && previous->source == def.source && previous->sourceIndex == def.sourceIndex
@@ -174,6 +176,7 @@ void MeterModel::defineMeter(const MeterDef& def)
         && def.name == QStringLiteral("LEVEL") && previous->unit != def.unit) {
         m_values.remove(def.index);
         m_valueUpdatedMs.remove(def.index);
+        m_valueReceivedNs.remove(def.index);
     }
     const bool nativeUnitChanged = redefinition && def.index == m_nativeAlcIndex
         && previous->unit != def.unit;
@@ -309,6 +312,7 @@ QList<int> MeterModel::firstDefinedIndices(int limit, std::optional<int> after) 
 
 void MeterModel::removeMeter(int index)
 {
+    ++m_definitionRevision;
     // Withdrawing an undeclared index is a no-op: backends withdraw defensively
     // during teardown without knowing which declarations landed. Proceeding would
     // reset m_manifestSliceContext (the next definition loses its SLC context) and
@@ -328,6 +332,7 @@ void MeterModel::removeMeter(int index)
     m_defs.remove(index);
     m_values.remove(index);
     m_valueUpdatedMs.remove(index);
+    m_valueReceivedNs.remove(index);
 
     const auto matchesIndex = [index](QMap<int, int>::iterator entry) {
         return entry.value() == index;
@@ -552,9 +557,11 @@ bool MeterModel::updateValueByName(const QString& source, const QString& name,
 
 void MeterModel::clear()
 {
+    ++m_definitionRevision;
     m_defs.clear();
     m_values.clear();
     m_valueUpdatedMs.clear();
+    m_valueReceivedNs.clear();
     m_sLevelIdxBySlice.clear();
     m_escLevelIdxBySlice.clear();
     m_compPeakIdxByTxSource.clear();
@@ -609,6 +616,7 @@ void MeterModel::clear()
     m_reflectedPower = 0.0f;
     m_swr = 1.0f;
     m_lastTxMeterUpdateMs = 0;
+    m_lastTxMeterReceivedNs = 0;
     m_lastFwdPowerUpdateMs = 0;
     m_lastReflectedPowerUpdateMs = 0;
     m_lastSwrUpdateMs = 0;
@@ -730,14 +738,9 @@ float MeterModel::convertAlcToGaugeDbfs(float raw, const QString& unit)
 
 qint64 MeterModel::newestValueAgeMs() const
 {
-    qint64 newest = -1;
-    for (auto it = m_valueUpdatedMs.constBegin(); it != m_valueUpdatedMs.constEnd(); ++it) {
-        if (it.value() > newest)
-            newest = it.value();
-    }
-    if (newest < 0)
-        return -1;
-    return QDateTime::currentMSecsSinceEpoch() - newest;
+    qint64 newest = 0;
+    for (qint64 received : m_valueReceivedNs) { newest = std::max(newest, received); }
+    return newest > 0 ? (receiveMonotonicNs() - newest) / 1'000'000 : -1;
 }
 
 bool MeterModel::isTxWaveformMeter(const MeterDef& def) const
@@ -887,13 +890,14 @@ void MeterModel::logCompressionSummary(const char* reason, bool force)
                       << "available" << m_hasCompPeakValue;
 }
 
-bool MeterModel::swrSampleLive(qint64 nowMs, qint64 swrMaxAgeMs) const
+bool MeterModel::swrSampleLive(qint64 swrMaxAgeMs) const
 {
     // See the declaration for the contract. Order matters: the SWR sample's
     // own age is always required — a stale ratio is not a measurement no
     // matter what power is doing (#4533, the 16-minute-old reading).
-    const bool swrFresh = m_lastSwrUpdateMs > 0
-        && (nowMs - m_lastSwrUpdateMs) <= swrMaxAgeMs;
+    const qint64 swrAge = valueAgeMs(m_swrIdx);
+    const bool swrFresh = m_lastSwrUpdateMs > 0 && swrAge >= 0
+        && swrAge <= swrMaxAgeMs;
     if (!swrFresh)
         return false;
     // Backend never published forward power (HL2): SWR self-gates upstream.
@@ -901,14 +905,14 @@ bool MeterModel::swrSampleLive(qint64 nowMs, qint64 swrMaxAgeMs) const
         return true;
     // Backend does publish power: a fresh ratio with no qualifying power
     // behind it is two noise samples divided (#4533's saturated 255.99).
-    return (nowMs - m_lastFwdPowerUpdateMs) <= kDirectionalMeterFreshnessMs
+    const qint64 powerAge = valueAgeMs(m_fwdPwrIdx);
+    return powerAge >= 0 && powerAge <= kDirectionalMeterFreshnessMs
         && m_fwdPowerInstant > kMinForwardWattsForSwr;
 }
 
 std::optional<float> MeterModel::swrIfLive() const
 {
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    return swrSampleLive(now, kTxMeterStaleMs) ? std::optional<float>(m_swr)
+    return swrSampleLive(kTxMeterStaleMs) ? std::optional<float>(m_swr)
                                                : std::nullopt;
 }
 
@@ -957,7 +961,7 @@ std::optional<float> MeterModel::fwdPowerIfLive() const
     if (m_fwdPwrIdx < 0 || m_lastFwdPowerUpdateMs <= 0) {
         return std::nullopt;      // undeclared, or declared and never fed
     }
-    const qint64 age = QDateTime::currentMSecsSinceEpoch() - m_lastFwdPowerUpdateMs;
+    const qint64 age = valueAgeMs(m_fwdPwrIdx);
     if (age < 0 || age > kTxMeterStaleMs) {
         return std::nullopt;
     }
@@ -969,8 +973,9 @@ bool MeterModel::hasRecentTxMeters(qint64 maxAgeMs) const
     if (m_lastTxMeterUpdateMs <= 0 || maxAgeMs < 0)
         return false;
 
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    return now - m_lastTxMeterUpdateMs <= maxAgeMs;
+    const qint64 age = m_lastTxMeterReceivedNs > 0
+        ? (receiveMonotonicNs() - m_lastTxMeterReceivedNs) / 1'000'000 : -1;
+    return age >= 0 && age <= maxAgeMs;
 }
 
 bool MeterModel::hasRecentReflectedPower(qint64 maxAgeMs) const
@@ -979,8 +984,40 @@ bool MeterModel::hasRecentReflectedPower(qint64 maxAgeMs) const
         return false;
     }
 
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    return now - m_lastReflectedPowerUpdateMs <= maxAgeMs;
+    const qint64 age = valueAgeMs(m_refPwrIdx);
+    return age >= 0 && age <= maxAgeMs;
+}
+
+void MeterModel::setLastTxMeterUpdateMsForTest(qint64 ms)
+{
+    m_lastTxMeterUpdateMs = ms;
+    m_lastTxMeterReceivedNs = ms > 0
+        ? receiveMonotonicNs() - (QDateTime::currentMSecsSinceEpoch() - ms) * 1'000'000 : 0;
+}
+
+void MeterModel::setLastSwrUpdateMsForTest(qint64 ms)
+{
+    m_lastSwrUpdateMs = ms;
+    m_valueUpdatedMs[m_swrIdx] = ms;
+    m_valueReceivedNs[m_swrIdx] = ms > 0
+        ? receiveMonotonicNs() - (QDateTime::currentMSecsSinceEpoch() - ms) * 1'000'000 : 0;
+}
+
+void MeterModel::updateReceivedValues(const ReceiveMeterBatch& batch)
+{
+    if (!batch.current() || batch.receipt.monotonicNs <= 0 || batch.receipt.utcMs <= 0
+        || batch.receipt.monotonicNs > receiveMonotonicNs()) { return; }
+    QVector<quint16> ids;
+    QVector<float> values;
+    QVector<ReceiveDataLease> definitions;
+    for (const ReceiveMeterSample& sample : batch.samples) {
+        if (sample.definition && sample.definition->current() && std::isfinite(sample.value)) {
+            ids.append(sample.id);
+            values.append(sample.value);
+            definitions.append(sample.definition);
+        }
+    }
+    applyValues(ids, values, batch.receipt, batch.lease, definitions);
 }
 
 void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>& vals)
@@ -989,10 +1026,19 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
 }
 
 template<typename Value>
-void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& vals)
+void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& vals,
+                            ReceiveReceipt receipt, ReceiveDataLease session,
+                            const QVector<ReceiveDataLease>& definitions)
 {
     const int n = qMin(ids.size(), vals.size());
-    const qint64 packetUpdatedMs = QDateTime::currentMSecsSinceEpoch();
+    const qint64 packetUpdatedMs = receipt.utcMs;
+    const QPointer<MeterModel> owner(this);
+    const quint64 definitionRevision = m_definitionRevision;
+    const auto current = [&] {
+        return owner && (!session || session->current())
+            && owner->m_definitionRevision == definitionRevision;
+    };
+    if (!current()) { return; }
     const int activeCompPeakIdx = compPeakIndexForActiveTxSlice();
     const int activeSwAlcIdx = swAlcIndexForActiveTxSlice();
     const int activeAlcGainIdx = alcGainIndexForActiveTxSlice();
@@ -1021,20 +1067,28 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
         auto it = m_defs.constFind(idx);
         if (it == m_defs.constEnd()) continue;
 
+        if (!current()) { return; }
+        if (!definitions.empty() && !definitions[i]->current()) { continue; }
+        if (receipt.monotonicNs < m_valueReceivedNs.value(idx, 0)) { continue; }
+        const MeterDef definition = *it;
         float v;
         if constexpr (std::is_same_v<Value, qint16>) {
-            v = convertRaw(*it, vals[i]);
+            v = convertRaw(definition, vals[i]);
         } else {
             v = vals[i];
         }
         m_values[idx] = v;
-        m_valueUpdatedMs[idx] = packetUpdatedMs;  // per-meter freshness (#3646)
+        m_valueUpdatedMs[idx] = packetUpdatedMs;
+        m_valueReceivedNs[idx] = receipt.monotonicNs;
 
         // Check if this meter is a per-slice LEVEL meter
         bool isSliceLevel = false;
         for (auto sit = m_sLevelIdxBySlice.constBegin(); sit != m_sLevelIdxBySlice.constEnd(); ++sit) {
             if (sit.value() == idx) {
-                if (it->unit == QStringLiteral("dBm")) { emit sLevelChanged(sit.key(), v); }
+                if (definition.unit == QStringLiteral("dBm")) {
+                    emit sLevelChanged(sit.key(), v);
+                    if (!current()) { return; }
+                }
                 isSliceLevel = true;
                 break;
             }
@@ -1044,6 +1098,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
             for (auto sit = m_escLevelIdxBySlice.constBegin(); sit != m_escLevelIdxBySlice.constEnd(); ++sit) {
                 if (sit.value() == idx) {
                     emit escLevelChanged(sit.key(), v);
+                    if (!current()) { return; }
                     isSliceLevel = true;
                     break;
                 }
@@ -1053,6 +1108,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
             // no-op, already emitted
         } else if (idx == m_fwdPwrIdx) {
             m_lastTxMeterUpdateMs = packetUpdatedMs;
+            m_lastTxMeterReceivedNs = receipt.monotonicNs;
             m_lastFwdPowerUpdateMs = m_lastTxMeterUpdateMs;
             // HONOUR THE DECLARED UNIT. This used to convert unconditionally
             // from dBm, which is right for a Flex or an HL2 and wrong for any
@@ -1083,6 +1139,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
             txChanged = true;
         } else if (idx == m_refPwrIdx) {
             m_lastTxMeterUpdateMs = packetUpdatedMs;
+            m_lastTxMeterReceivedNs = receipt.monotonicNs;
             m_lastReflectedPowerUpdateMs = m_lastTxMeterUpdateMs;
             // REFPWR is an independent directional-coupler reading: keep it in watts and
             // honour the declared unit, as FWDPWR does. MeterSurfaces.h advertises this
@@ -1094,6 +1151,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
             directionalChanged = true;
         } else if (idx == m_swrIdx) {
             m_lastTxMeterUpdateMs = packetUpdatedMs;
+            m_lastTxMeterReceivedNs = receipt.monotonicNs;
             m_lastSwrUpdateMs = m_lastTxMeterUpdateMs;
             m_swr = v;
             txChanged = true;
@@ -1122,7 +1180,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
             // Native presentation follows the same active waveform route as
             // legacy TCI ALC; a percent mapping is not physical dBFS.
             m_nativeAlcIndex = idx;
-            m_swAlc = convertAlcToGaugeDbfs(v, it->unit);
+            m_swAlc = convertAlcToGaugeDbfs(v, definition.unit);
             swAlcChangedFlag = true;
         } else if (activeAlcGainIdx >= 0 && idx == activeAlcGainIdx) {
             // Straight through. The unit is dB by declaration and there is no
@@ -1155,6 +1213,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
             m_paCurrent = v;
             m_hasPaCurrentValue = true;
             emit paCurrentChanged(m_paCurrent);
+            if (!current()) { return; }
         } else if (idx == m_supplyIdx) {
             m_supplyVolts = v;  // "+13.8A" = supply voltage at point A (before fuse)
             m_hasSupplyVoltsValue = true;   // a SAMPLE, not just a definition
@@ -1193,6 +1252,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
         }
 
         emit meterUpdated(idx, v);
+        if (!current()) { return; }
     }
 
     // SWR is derived from FWDPWR/REFPWR, so a stale reading is not a measurement;
@@ -1206,7 +1266,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
     // directionalPowerMetersChanged landing in the same cycle as txMetersChanged.
     const bool swrValid =
         m_swrIdx >= 0
-        && swrSampleLive(packetUpdatedMs, kDirectionalMeterFreshnessMs);
+        && swrSampleLive(kDirectionalMeterFreshnessMs);
     // 0.0f is a PLACEHOLDER carried alongside swrValid=false, never a value:
     // RadioSwrValidityFilter reads <1.0 as the radio's over-range sentinel and
     // other consumers clamp it to 1.0, so an unaccompanied 0.0f means opposite
@@ -1214,48 +1274,70 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
     const float publishedSwr = swrValid ? m_swr : 0.0f;
 
     // sLevelChanged is now emitted per-slice inline above
-    if (txChanged)
+    if (txChanged) {
         emit txMetersChanged(m_fwdPower, publishedSwr, swrValid);
+        if (!current()) { return; }
+    }
     if (directionalChanged) {
         const bool reflectedPowerMeasured = m_refPwrIdx >= 0
             && m_lastReflectedPowerUpdateMs > 0
-            && packetUpdatedMs - m_lastReflectedPowerUpdateMs
-                <= kDirectionalMeterFreshnessMs;
+            && valueAgeMs(m_refPwrIdx) >= 0
+            && valueAgeMs(m_refPwrIdx) <= kDirectionalMeterFreshnessMs;
         emit directionalPowerMetersChanged(m_fwdPowerInstant,
                                            m_reflectedPower,
                                            publishedSwr,
                                            swrValid,
                                            reflectedPowerMeasured);
+        if (!current()) { return; }
     }
     // Separate signal carries the raw pre-smoothed sample so consumers
     // can compute PEP peak-hold without re-tracking the smoothing
     // ballistics. (#2561)
-    if (fwdInstantChanged)
+    if (fwdInstantChanged) {
         emit txPeakChanged(m_fwdPowerInstant);
-    if (micChanged)
+        if (!current()) { return; }
+    }
+    if (micChanged) {
         emit micMetersChanged(m_micLevel, m_compLevel, m_micPeak, m_compPeak);
-    if (hwAlcChangedFlag)
+        if (!current()) { return; }
+    }
+    if (hwAlcChangedFlag) {
         emit this->hwAlcChanged(m_hwAlc);
+        if (!current()) { return; }
+    }
     if (swAlcChangedFlag) {
         emit this->swAlcChanged(m_swAlc);
+        if (!current()) { return; }
         emit alcValueChanged(alcValue(), alcUnit());
+        if (!current()) { return; }
     }
     if (alcGainChangedFlag) {
         emit this->alcGainChanged(m_alcGainDb);
+        if (!current()) { return; }
     }
-    if (txFilterLevelsChangedFlag)
+    if (txFilterLevelsChangedFlag) {
         emit txFilterLevelsChanged(m_scFilt1, m_scFilt2);
-    if (hwChanged)
+        if (!current()) { return; }
+    }
+    if (hwChanged) {
         emit hwTelemetryChanged(m_paTemp, m_supplyVolts);
-    if (ampChanged)
+        if (!current()) { return; }
+    }
+    if (ampChanged) {
         emit ampMetersChanged(m_ampFwdPwr, m_ampSwr, m_ampTemp,
                               m_hasAmpDrvValue ? m_ampDrv : 0.0f,
                               m_hasAmpDrvValue);
-    if (tgxlChanged)
+        if (!current()) { return; }
+    }
+    if (tgxlChanged) {
         emit tgxlMetersChanged(m_tgxlFwdPwr, m_tgxlSwr);
-    if (ampIdUpdated || ampTempUpdated)
+        if (!current()) { return; }
+    }
+    if (ampIdUpdated || ampTempUpdated) {
         emit ampVitalsChanged(m_ampDrainCurrent, m_hasAmpDrainCurrentValue, ampIdUpdated,
                               m_ampTemp, m_hasAmpTempValue, ampTempUpdated);
+        if (!current()) { return; }
+    }
 }
 
 int MeterModel::resolveTxWaveformIndex(const QMap<int, int>& byTxSource,
@@ -1313,11 +1395,11 @@ qint64 MeterModel::txFilterLevelSkewMs() const
     const int i2 = scFilt2IndexForActiveTxSlice();
     if (i1 < 0 || i2 < 0)
         return -1;
-    const qint64 a = m_valueUpdatedMs.value(i1, 0);
-    const qint64 b = m_valueUpdatedMs.value(i2, 0);
+    const qint64 a = m_valueReceivedNs.value(i1, 0);
+    const qint64 b = m_valueReceivedNs.value(i2, 0);
     if (a <= 0 || b <= 0)
         return -1;
-    return qAbs(a - b);
+    return qAbs(a - b) / 1'000'000;
 }
 
 const MeterDef* MeterModel::meterDef(int index) const
@@ -1339,10 +1421,10 @@ int MeterModel::findMeter(const QString& source, const QString& name, int source
 
 qint64 MeterModel::valueAgeMs(int index) const
 {
-    const qint64 upd = m_valueUpdatedMs.value(index, 0);
+    const qint64 upd = m_valueReceivedNs.value(index, 0);
     if (upd <= 0 || !m_values.contains(index))
         return -1;
-    return QDateTime::currentMSecsSinceEpoch() - upd;
+    return (receiveMonotonicNs() - upd) / 1'000'000;
 }
 
 float MeterModel::value(int index) const
@@ -1353,9 +1435,8 @@ float MeterModel::value(int index) const
 QJsonArray MeterModel::allMeters() const
 {
     QJsonArray meters;
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
     // One predicate for every surface — see swrSampleLive() (#4536).
-    const bool swrFresh = swrSampleLive(now, kTxMeterStaleMs);
+    const bool swrFresh = swrSampleLive(kTxMeterStaleMs);
     for (auto it = m_defs.constBegin(); it != m_defs.constEnd(); ++it) {
         const auto valueIt = m_values.constFind(it.key());
         bool hasValue = valueIt != m_values.constEnd();
@@ -1370,8 +1451,7 @@ QJsonArray MeterModel::allMeters() const
         // blank SWR without drive.
         if (hasValue && it.key() == m_swrIdx && !swrFresh)
             hasValue = false;
-        const qint64 upd = m_valueUpdatedMs.value(it.key(), 0);
-        const qint64 ageMs = (hasValue && upd > 0) ? (now - upd) : -1;
+        const qint64 ageMs = hasValue ? valueAgeMs(it.key()) : -1;
         meters.append(meterToJson(*it, hasValue, hasValue ? valueIt.value() : 0.0f, ageMs));
     }
     return meters;
@@ -1380,9 +1460,8 @@ QJsonArray MeterModel::allMeters() const
 QJsonArray MeterModel::metersForSource(const QString& source, int sourceIndex) const
 {
     QJsonArray meters;
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
     // One predicate for every surface — see swrSampleLive() (#4536).
-    const bool swrFresh = swrSampleLive(now, kTxMeterStaleMs);
+    const bool swrFresh = swrSampleLive(kTxMeterStaleMs);
     for (auto it = m_defs.constBegin(); it != m_defs.constEnd(); ++it) {
         const MeterDef& def = *it;
         if (def.source != source)
@@ -1398,8 +1477,7 @@ QJsonArray MeterModel::metersForSource(const QString& source, int sourceIndex) c
         // the disagreement #4533 was filed about rather than a second bug.
         if (hasValue && it.key() == m_swrIdx && !swrFresh)
             hasValue = false;
-        const qint64 upd = m_valueUpdatedMs.value(it.key(), 0);
-        const qint64 ageMs = (hasValue && upd > 0) ? (now - upd) : -1;
+        const qint64 ageMs = hasValue ? valueAgeMs(it.key()) : -1;
         meters.append(meterToJson(def, hasValue, hasValue ? valueIt.value() : 0.0f, ageMs));
     }
     return meters;

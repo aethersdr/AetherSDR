@@ -21,6 +21,7 @@
 #include "core/LogManager.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/flex/PanadapterStream.h"
+#include "core/backends/flex/FlexReceiveData.h"
 #include "core/backends/MemoryWireCodec.h"
 #include "core/backends/flex/FlexKvCarry.h"
 #include "models/ModelCapabilities.h"
@@ -55,9 +56,10 @@ FlexBackend::FlexBackend(QObject* parent)
     // preserved verbatim from the former RadioModel ctor (#502): PanadapterStream
     // thread FIRST, then RadioConnection thread. Both objects are parentless and
     // moved onto their thread; the thread is this-parented.
+    initializeReceiveData();
     m_networkThread = new QThread(this);
     m_networkThread->setObjectName("PanadapterStream");
-    m_panStream = new PanadapterStream;   // no parent — moved to thread
+    m_panStream = new PanadapterStream(nullptr, m_receiveData);   // no parent — moved to thread
     m_panStream->moveToThread(m_networkThread);
     connect(m_networkThread, &QThread::started, m_panStream, &PanadapterStream::init);
     AetherSDR::startStreamThread(m_networkThread);   // High QoS; see AppActivity.h
@@ -74,7 +76,10 @@ FlexBackend::FlexBackend(QObject* parent)
     connect(m_connection, &RadioConnection::connected,
             this, &IRadioBackend::connected);
     connect(m_connection, &RadioConnection::disconnected,
-            this, &IRadioBackend::disconnected);
+            this, [this] {
+        retireReceiveData();
+        emit disconnected();
+    });
     connect(m_connection, &RadioConnection::errorOccurred,
             this, &IRadioBackend::connectionError);
     connect(m_connection, &RadioConnection::independentPttStopped,
@@ -87,6 +92,7 @@ FlexBackend::FlexBackend(QObject* parent)
 
 FlexBackend::~FlexBackend()
 {
+    m_receiveData->close();
     // Sever our own lifecycle observation of the connection FIRST — as the old
     // ~RadioModel's earlier m_backend.reset() effectively did (the backend was
     // destroyed, auto-disconnecting these links, before the wire teardown ran).
@@ -400,6 +406,7 @@ void FlexBackend::setRadioReportedCapacity(int maxSlices, int maxPanadapters)
 // operator without a verdict (PR #6177 review).
 void FlexBackend::onRadioSessionEstablished()
 {
+    m_receiveData->begin();
     refreshPublishedFirmwareVersion();
 }
 
@@ -1432,6 +1439,7 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
             bool ok = false;
             const int idx = words[0].toInt(&ok);
             if (ok) {
+                m_receiveData->removeMeter(idx);
                 emit meterRemoved(idx);
             }
         }
@@ -1482,6 +1490,7 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
         carry(f, "low", def.low);
         carry(f, "hi", def.high);
         carry(f, "desc", def.description);
+        m_receiveData->defineMeter(def);
         emit meterDefined(def);
     }
 }
@@ -1857,6 +1866,7 @@ void FlexBackend::decodeTunerStatus(const QString& handle, const QMap<QString, Q
 
 void FlexBackend::clearExtensionHandles()
 {
+    retireReceiveData();
     // Identity replies belong to the same session as the cached encode handles.
     ++m_nicknameSession;
     ++m_tuneOutputSession;

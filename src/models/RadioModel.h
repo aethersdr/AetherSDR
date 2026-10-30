@@ -1937,6 +1937,8 @@ private:
     std::array<quint64, 5> m_outputIntentRevisions{};
     quint64 m_receiveControlGeneration{0};
     void wireBackendReceiverState();
+    void wireBackendReceiveData();
+    std::optional<ReceiveTelemetry> backendReceiveTelemetry() const;
     struct PendingSliceCreate;
     void wireSliceLifecycle();
     void reconcileSliceCreates();
@@ -2699,7 +2701,7 @@ public:
     // that carries everything in one stream has nothing to break down, and
     // rendering five rows of "0 / 0 packets" for it invents a distinction the
     // wire does not have.
-    bool    hasStreamCategoryStats() const { return m_panStream != nullptr; }
+    bool    hasStreamCategoryStats() const;
     bool    pendingThrottleLift() const { return m_pendingThrottleLift; }
     int     currentAdaptiveFpsCap() const;  // 0 = throttle inactive
     // The 1..100 waterfall RATE the adaptive throttle caps to for a given fps
@@ -2728,7 +2730,7 @@ public:
     bool    firstUdpPacketSeen() const;
 
     // Per-category stream stats (Audio, FFT, Waterfall, Meter, DAX)
-    PanadapterStream::CategoryStats categoryStats(PanadapterStream::StreamCategory cat) const;
+    ReceiveStreamStats::Counters categoryStats(ReceiveStreamStats::Category cat) const;
     QVector<PanadapterStream::AudioStreamDiagnostics> audioStreamDiagnostics() const;
     void resetAudioStreamDiagnostics();
 

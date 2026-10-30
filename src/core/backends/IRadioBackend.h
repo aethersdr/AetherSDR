@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/ReceiveData.h"
+
 #include "IndependentTxControl.h"
 
 #include "core/RadioSettingsIdentity.h"
@@ -1089,6 +1091,10 @@ public:
         QString localEndpoint;
     };
     virtual LinkStats linkStats() const { return {}; }
+    // Separate display/meter transport snapshots do not confirm a TCP ping.
+    virtual std::optional<ReceiveTelemetry> receiveTelemetry() const { return {}; }
+    // Revoke buffered and detached receive payloads before model/session teardown.
+    virtual void retireReceiveData() {}
 
     // ---- vendor extensions (namespaced, capability-advertised) ----
     // Vendor-specific verbs that are NOT part of the core profile. Clients
@@ -1349,16 +1355,19 @@ signals:
                          const QVariantMap& fields);
 
     // ---- data plane UP (RFC §4.2) ----
-    // Normalized outlets for spectrum and audio; binary frame formats are step-4
-    // work, so a backend may relay the existing in-tree frame types. No separate
-    // waterfall outlet: RadioModel derives the row from spectrumFrameReady, paced by
-    // the pan's waterfall rate. A backend with a genuinely separate waterfall plane
-    // adds an outlet together with its consumer.
+    // Native backends publish spectrumFrameReady; RadioModel derives their
+    // paced waterfall from it. The receive* outlets carry independently decoded
+    // display planes, converted meter batches and transport snapshots. They are
+    // in-process owning payloads, not the remote binary streaming protocol.
     // A producer may attach wider, same-observation RF coverage. Existing
     // producers omit it; consumers interested only in the viewport keep their
     // two-argument connection. One emission owns spectrum + paced history.
     void spectrumFrameReady(int panId, const QByteArray& frame,
                             const AetherSDR::SpectrumCoverage& coverage = AetherSDR::SpectrumCoverage());
+    void receiveSpectrumReady(const AetherSDR::ReceiveSpectrumFrame& frame);
+    void receiveWaterfallReady(const AetherSDR::ReceiveWaterfallRow& row);
+    void receiveMetersReady(const AetherSDR::ReceiveMeterBatch& batch);
+    void receiveTelemetryReady(const AetherSDR::ReceiveTelemetry& snapshot);
     void audioFrameReady(const AetherSDR::PcmFrame& pcm);
 
 protected:

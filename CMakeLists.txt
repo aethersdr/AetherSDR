@@ -904,6 +904,8 @@ set(CORE_SOURCES
     src/core/discovery/RadioDiscoverySource.h  # socket-free discovery interface (AUTOMOC)
     src/core/backends/LocalRadioDiscoverySource.cpp  # native discovery below the vendor seam
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
+    src/core/backends/flex/FlexReceiveData.cpp
+    src/core/backends/flex/FlexBackend_ReceiveData.cpp
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/flex/FlexModelControls.cpp
     src/core/backends/flex/FlexSetupControls.cpp
@@ -1251,6 +1253,7 @@ set(MODEL_SOURCES
     src/models/AprsDigipeaterModel.cpp
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
+    src/models/RadioModel_ReceiveData.cpp
     src/models/RadioModel.cpp
     src/models/RadioModel_Setup.cpp
     src/models/RadioModel_Utilities.cpp

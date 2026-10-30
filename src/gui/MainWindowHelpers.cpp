@@ -2,7 +2,6 @@
 
 #include "SpectrumPreviewLogic.h"
 #include "SpectrumWidget.h"
-#include "core/backends/flex/PanadapterStream.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/flex/SmartLinkClient.h"
 #include "models/BandSettings.h"
@@ -107,7 +106,7 @@ constexpr int kNetworkTooltipWidthPx = 300;
 // Distinct name (not an overload of formatNetworkSeqErrors): an
 // anonymous-namespace overload would hide the namespace-scope two-int
 // overload from unqualified lookup inside this TU.
-QString formatCategorySeqErrors(const PanadapterStream::CategoryStats& stats)
+QString formatCategorySeqErrors(const ReceiveStreamStats::Counters& stats)
 {
     return formatNetworkSeqErrors(stats.errors, stats.packets);
 }
@@ -154,16 +153,16 @@ QString buildNetworkTooltip(const RadioModel& model,
                             int adaptiveFpsCap,
                             bool throttleRestorePending)
 {
-    const PanadapterStream::CategoryStats audioStats =
-        model.categoryStats(PanadapterStream::CatAudio);
-    const PanadapterStream::CategoryStats fftStats =
-        model.categoryStats(PanadapterStream::CatFFT);
-    const PanadapterStream::CategoryStats waterfallStats =
-        model.categoryStats(PanadapterStream::CatWaterfall);
-    const PanadapterStream::CategoryStats meterStats =
-        model.categoryStats(PanadapterStream::CatMeter);
-    const PanadapterStream::CategoryStats daxStats =
-        model.categoryStats(PanadapterStream::CatDAX);
+    const ReceiveStreamStats::Counters audioStats =
+        model.categoryStats(ReceiveStreamStats::Audio);
+    const ReceiveStreamStats::Counters fftStats =
+        model.categoryStats(ReceiveStreamStats::Spectrum);
+    const ReceiveStreamStats::Counters waterfallStats =
+        model.categoryStats(ReceiveStreamStats::Waterfall);
+    const ReceiveStreamStats::Counters meterStats =
+        model.categoryStats(ReceiveStreamStats::Meter);
+    const ReceiveStreamStats::Counters daxStats =
+        model.categoryStats(ReceiveStreamStats::Dax);
 
     const QString quality = model.networkQuality();
     QString html = QStringLiteral(

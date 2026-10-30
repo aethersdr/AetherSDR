@@ -940,24 +940,6 @@ void RadioModel::setupBackend(const QString& family)
             m_panStream  = flex->panStream();    // non-owning; the backend owns it
             m_flexBackend = flex;                // transitional alias (2.3)
 
-            // aetherd Gap B (Step 1): forward Flex's render signals into the
-            // backend-neutral feed with unchanged samples/bounds. Flex tiles
-            // retain their intensity-scale semantics; the UI binds to RadioModel
-            // panFeed* signals instead of panStream() so the render path is
-            // family-agnostic. The receiver context preserves the original thread hop
-            // (PanadapterStream worker → RadioModel thread), so batching/pacing is
-            // unchanged. Valid for the whole life (panStream == RadioModel life).
-            connect(m_panStream, &PanadapterStream::spectrumReady,
-                    this, &RadioModel::panFeedSpectrumReady);
-            connect(m_panStream, &PanadapterStream::waterfallRowReady,
-                    this, [this, generation](quint32 id, const QVector<float>& bins,
-                                              double low, double high, quint32 timecode, qint64 emittedNs) {
-                if (generation == m_backendReceiverGeneration) {
-                    emit panFeedWaterfallRowReady(id, bins, low, high, timecode, emittedNs);
-                }
-            });
-            connect(m_panStream, &PanadapterStream::waterfallAutoBlackLevel,
-                    this, &RadioModel::panFeedWaterfallAutoBlackLevel);
         } else if (auto* sim = dynamic_cast<SimBackend*>(m_backend.get())) {
             // RFC #4288 Route A: SimBackend also owns a RadioConnection and a
             // PanadapterStream (running synthetically — no socket, no wire), so it
@@ -1485,8 +1467,9 @@ void RadioModel::setupBackend(const QString& family)
     connect(m_backend.get(), &IRadioBackend::linkStatsUpdated,
             this, &RadioModel::applyBackendLinkStats);
 
-    // Forward VITA-49 meter packets to MeterModel (cross-thread, auto-queued)
-    if (m_panStream)
+    wireBackendReceiveData();
+    // Only the simulator's compatibility producer still emits raw meter batches.
+    if (m_panStream && !backendReceiveTelemetry())
     connect(m_panStream, &PanadapterStream::meterDataReady, this,
             [this, generation](auto&&... values) {
         if (generation != m_backendReceiverGeneration) return;
@@ -1777,6 +1760,7 @@ void RadioModel::wireBackendReceiverState()
 
 void RadioModel::teardownBackend()
 {
+    if (m_backend) { m_backend->retireReceiveData(); }
     resetTransmitDaxSessionState();
     // Retirement callbacks can attempt edits before teardown returns.
     const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
@@ -2133,6 +2117,10 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<PcmFrame>();
     qRegisterMetaType<SpectrumCoverage>();
     qRegisterMetaType<SpectrumDecodeScale>();
+    qRegisterMetaType<ReceiveSpectrumFrame>();
+    qRegisterMetaType<ReceiveWaterfallRow>();
+    qRegisterMetaType<ReceiveMeterBatch>();
+    qRegisterMetaType<ReceiveTelemetry>();
     qRegisterMetaType<TxCoordinator::StopRequest>();
     qRegisterMetaType<TxStopEvidence>();
     qRegisterMetaType<SliceDelta>();
@@ -8239,6 +8227,7 @@ void RadioModel::restoreTuneInhibit()
 
 void RadioModel::onDisconnected()
 {
+    if (m_backend) { m_backend->retireReceiveData(); }
     resetTransmitDaxSessionState();
     const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
     discardTuneInhibit();
@@ -8748,7 +8737,10 @@ void RadioModel::evaluateNetworkQuality()
     // mean the same thing to the operator on either radio.
     int currentErrors = 0;
     int currentPackets = 0;
-    if (m_panStream) {
+    if (const auto snapshot = backendReceiveTelemetry()) {
+        currentErrors = snapshot->errors;
+        currentPackets = snapshot->packets;
+    } else if (m_panStream) {
         currentErrors = m_panStream->packetErrorCount();
         currentPackets = m_panStream->packetTotalCount();
     } else if (m_linkStats.reported) {
@@ -8791,7 +8783,10 @@ void RadioModel::evaluateNetworkQuality()
 
 void RadioModel::resetNetworkHealthSamples()
 {
-    if (m_panStream) {
+    if (const auto snapshot = backendReceiveTelemetry()) {
+        m_lastErrorCount = snapshot->errors;
+        m_lastPacketCount = snapshot->packets;
+    } else if (m_panStream) {
         m_lastErrorCount = m_panStream->packetErrorCount();
         m_lastPacketCount = m_panStream->packetTotalCount();
     } else if (m_linkStats.reported) {
@@ -9050,6 +9045,7 @@ double RadioModel::packetLossPercent() const
 // same zeros it always did.
 int RadioModel::audioPacketGapMs() const
 {
+    if (const auto snapshot = backendReceiveTelemetry()) { return snapshot->gapMs; }
     if (m_panStream)
         return m_panStream->audioPacketGapMs();
     return usesBackendLinkStats() ? std::max(0, m_linkStats.gapMs) : 0;
@@ -9057,6 +9053,7 @@ int RadioModel::audioPacketGapMs() const
 
 int RadioModel::audioPacketGapMaxMs() const
 {
+    if (const auto snapshot = backendReceiveTelemetry()) { return snapshot->gapMaxMs; }
     if (m_panStream)
         return m_panStream->audioPacketGapMaxMs();
     return usesBackendLinkStats() ? std::max(0, m_linkStats.gapMaxMs) : 0;
@@ -9064,6 +9061,7 @@ int RadioModel::audioPacketGapMaxMs() const
 
 int RadioModel::audioPacketJitterMs() const
 {
+    if (const auto snapshot = backendReceiveTelemetry()) { return snapshot->jitterMs; }
     if (m_panStream)
         return m_panStream->audioPacketJitterMs();
     return usesBackendLinkStats() ? std::max(0, m_linkStats.jitterMs) : 0;
@@ -9071,6 +9069,7 @@ int RadioModel::audioPacketJitterMs() const
 
 int RadioModel::packetDropCount() const
 {
+    if (const auto snapshot = backendReceiveTelemetry()) { return snapshot->errors; }
     if (m_panStream)
         return m_panStream->packetErrorCount();
     return usesBackendLinkStats() ? saturatingInt(m_linkStats.rxPacketsLost) : 0;
@@ -9078,6 +9077,7 @@ int RadioModel::packetDropCount() const
 
 int RadioModel::packetTotalCount() const
 {
+    if (const auto snapshot = backendReceiveTelemetry()) { return snapshot->packets; }
     if (m_panStream)
         return m_panStream->packetTotalCount();
     return usesBackendLinkStats() ? saturatingInt(m_linkStats.rxPackets) : 0;
@@ -9085,6 +9085,7 @@ int RadioModel::packetTotalCount() const
 
 qint64 RadioModel::rxBytes() const
 {
+    if (const auto snapshot = backendReceiveTelemetry()) { return snapshot->rxBytes; }
     if (m_panStream)
         return m_panStream->totalRxBytes();
     return usesBackendLinkStats() ? m_linkStats.rxBytes : 0;
@@ -9092,6 +9093,7 @@ qint64 RadioModel::rxBytes() const
 
 qint64 RadioModel::txBytes() const
 {
+    if (const auto snapshot = backendReceiveTelemetry()) { return snapshot->txBytes; }
     if (m_panStream)
         return m_panStream->totalTxBytes();
     return usesBackendLinkStats() ? m_linkStats.txBytes : 0;
@@ -9143,6 +9145,9 @@ QString RadioModel::localTcpEndpoint() const
 
 QString RadioModel::localUdpEndpoint() const
 {
+    if (const auto snapshot = backendReceiveTelemetry()) {
+        return snapshot->localEndpoint.isEmpty() ? QStringLiteral("Not bound") : snapshot->localEndpoint;
+    }
     if (!m_panStream) {
         if (usesBackendLinkStats() && !m_linkStats.localEndpoint.isEmpty())
             return m_linkStats.localEndpoint;
@@ -9157,16 +9162,24 @@ QString RadioModel::localUdpEndpoint() const
 
 bool RadioModel::firstUdpPacketSeen() const
 {
+    if (const auto snapshot = backendReceiveTelemetry()) { return snapshot->firstPacketSeen; }
     if (m_panStream)
         return m_panStream->hasReceivedPackets();
     return usesBackendLinkStats() && m_linkStats.rxPackets > 0;
 }
 
-PanadapterStream::CategoryStats RadioModel::categoryStats(PanadapterStream::StreamCategory cat) const
+bool RadioModel::hasStreamCategoryStats() const
 {
-    if (!m_panStream)
-        return {};
-    return m_panStream->categoryStats(cat);
+    return backendReceiveTelemetry().has_value() || m_panStream != nullptr;
+}
+
+ReceiveStreamStats::Counters RadioModel::categoryStats(ReceiveStreamStats::Category cat) const
+{
+    if (cat < 0 || cat >= ReceiveStreamStats::Count) { return {}; }
+    if (const auto snapshot = backendReceiveTelemetry()) { return snapshot->categories[cat]; }
+    if (!m_panStream) { return {}; }
+    const auto counters = m_panStream->categoryStats(static_cast<PanadapterStream::StreamCategory>(cat));
+    return {counters.bytes, counters.packets, counters.errors};
 }
 
 QVector<PanadapterStream::AudioStreamDiagnostics> RadioModel::audioStreamDiagnostics() const
@@ -13640,7 +13653,7 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     ownership["multiple_clients_present"] = clients.size() > 1;
     radio["ownership"] = ownership;
 
-    auto categoryStatsToJson = [this](PanadapterStream::StreamCategory cat) {
+    auto categoryStatsToJson = [this](ReceiveStreamStats::Category cat) {
         const auto stats = categoryStats(cat);
         QJsonObject obj;
         obj["bytes"] = static_cast<qint64>(stats.bytes);
@@ -13674,12 +13687,22 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     network["source"] = usesBackendLinkStats() ? QStringLiteral("backend_link")
                                                : QStringLiteral("vita49_stream");
     QJsonObject streamCategories;
-    streamCategories["audio"] = categoryStatsToJson(PanadapterStream::CatAudio);
-    streamCategories["fft"] = categoryStatsToJson(PanadapterStream::CatFFT);
-    streamCategories["waterfall"] = categoryStatsToJson(PanadapterStream::CatWaterfall);
-    streamCategories["meter"] = categoryStatsToJson(PanadapterStream::CatMeter);
-    streamCategories["dax"] = categoryStatsToJson(PanadapterStream::CatDAX);
+    streamCategories["audio"] = categoryStatsToJson(ReceiveStreamStats::Audio);
+    streamCategories["fft"] = categoryStatsToJson(ReceiveStreamStats::Spectrum);
+    streamCategories["waterfall"] = categoryStatsToJson(ReceiveStreamStats::Waterfall);
+    streamCategories["meter"] = categoryStatsToJson(ReceiveStreamStats::Meter);
+    streamCategories["dax"] = categoryStatsToJson(ReceiveStreamStats::Dax);
     network["stream_categories"] = streamCategories;
+    if (const auto received = backendReceiveTelemetry()) {
+        const ReceiveDeliveryStats& delivery = received->delivery;
+        network["receive_delivery"] = QJsonObject{
+            {"spectrum_replaced", qint64(delivery.spectrumReplaced)},
+            {"waterfall_dropped", qint64(delivery.waterfallDropped)},
+            {"meter_batches_dropped", qint64(delivery.meterBatchesDropped)},
+            {"rejected", qint64(delivery.rejected)},
+            {"queued_bytes", qint64(delivery.queuedBytes)},
+            {"peak_queued_bytes", qint64(delivery.peakQueuedBytes)}};
+    }
     radio["network"] = network;
 
     QJsonObject telemetry;
