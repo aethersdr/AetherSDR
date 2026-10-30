@@ -47,6 +47,8 @@ public:
     void meters(const QVector<quint16>& ids, const QVector<qint16>& values,
                 ReceiveReceipt receipt, ReceiveDataLease session = {});
     void telemetry(ReceiveTelemetry snapshot);
+    bool beginDrain();
+    void endDrain();
     QVector<Event> take(quint64 generation, qint64 nowNs = receiveMonotonicNs());
     ReceiveDeliveryStats stats() const;
     static float convertMeter(const QString& unit, qint16 raw);
@@ -79,6 +81,7 @@ private:
     qsizetype m_displayBytes = 0;
     qsizetype m_meterBytes = 0;
     bool m_scheduled = false;
+    bool m_draining = false;
     bool m_meterTurn = false;
 };
 

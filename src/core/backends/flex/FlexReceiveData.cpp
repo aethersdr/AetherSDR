@@ -171,7 +171,7 @@ void FlexReceiveData::accountLocked()
 }
 void FlexReceiveData::wakeLocked()
 {
-    if (!m_scheduled && m_wake && m_session
+    if (!m_scheduled && !m_draining && m_wake && m_session
         && (!m_display.empty() || !m_meters.empty() || m_telemetry)) {
         m_scheduled = true;
         m_wake(m_generation);
@@ -271,6 +271,19 @@ void FlexReceiveData::telemetry(ReceiveTelemetry snapshot)
     if (!m_session || snapshot.lease != m_session || !snapshot.current()) { return; }
     snapshot.delivery = m_stats;
     m_telemetry = std::move(snapshot);
+    wakeLocked();
+}
+bool FlexReceiveData::beginDrain()
+{
+    QMutexLocker lock(&m_mutex);
+    if (m_draining) { return false; }
+    m_draining = true;
+    return true;
+}
+void FlexReceiveData::endDrain()
+{
+    QMutexLocker lock(&m_mutex);
+    m_draining = false;
     wakeLocked();
 }
 QVector<FlexReceiveData::Event> FlexReceiveData::take(quint64 generation, qint64 nowNs)

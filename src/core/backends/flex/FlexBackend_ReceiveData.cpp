@@ -1,6 +1,7 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/FlexReceiveData.h"
 #include <QPointer>
+#include <QScopeGuard>
 #include <QThread>
 #include <type_traits>
 
@@ -31,7 +32,12 @@ void FlexBackend::retireReceiveData()
 void FlexBackend::drainReceiveData(quint64 generation)
 {
     Q_ASSERT(QThread::currentThread() == thread());
-    const QVector<FlexReceiveData::Event> events = m_receiveData->take(generation);
+    // A nested event loop in a consumer must not drain newer rows before the
+    // remainder of this batch. The buffer also survives reentrant destruction.
+    const std::shared_ptr<FlexReceiveData> buffer = m_receiveData;
+    if (!buffer->beginDrain()) { return; }
+    const auto finish = qScopeGuard([buffer] { buffer->endDrain(); });
+    const QVector<FlexReceiveData::Event> events = buffer->take(generation);
     const QPointer<FlexBackend> owner(this);
     for (const FlexReceiveData::Event& event : events) {
         if (!owner) { return; }

@@ -77,6 +77,29 @@ void check(bool condition, const char* message)
     if (!condition) { ++failures; }
 }
 void drain() { for (int i = 0; i < 4; ++i) { QCoreApplication::processEvents(QEventLoop::AllEvents); } }
+void nestedDelivery()
+{
+    RadioModel radio;
+    auto* backend = dynamic_cast<FlexBackend*>(radio.backend());
+    PanadapterStream* stream = backend->panStream();
+    FlexReceiveDataTestAccess::begin(*backend);
+    stream->registerPanStream(1); stream->registerWfStream(2);
+    QSignalSpy rows(&radio, &RadioModel::panFeedWaterfallRowReady);
+    const auto produce = [&](quint32 sequence) {
+        QMetaObject::invokeMethod(stream, [&, sequence] {
+            FlexReceiveDataTestAccess::fft(*stream, 1, sequence);
+            FlexReceiveDataTestAccess::waterfall(*stream, 2, sequence);
+        }, Qt::BlockingQueuedConnection);
+    };
+    bool nested = false;
+    QObject::connect(&radio, &RadioModel::panFeedSpectrumReady, &radio, [&] {
+        if (!nested) { nested = true; produce(2); drain(); }
+    });
+    produce(1); drain();
+    check(rows.size() == 2 && rows[0][4].toUInt() == 1 && rows[1][4].toUInt() == 2,
+          "nested event loop cannot deliver newer waterfall rows before the detached batch");
+}
+
 void meterClock()
 {
     MeterModel model;
@@ -127,6 +150,7 @@ int main(int argc, char** argv)
 {
     TestSettingsProfile profile("flex-receive-path");
     QCoreApplication app(argc, argv);
+    nestedDelivery();
     meterClock();
     RadioModel radio;
     auto* backend = dynamic_cast<FlexBackend*>(radio.backend());

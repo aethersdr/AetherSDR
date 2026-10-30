@@ -166,6 +166,25 @@ int main(int argc, char** argv)
     bounded.meters({5}, {256}, ReceiveReceipt::now(), retiredSession);
     check(bounded.stats().queuedBytes == 0, "old-session meter producer cannot enter a replacement session");
 
+    bounded.registerStream(pan, false);
+    bounded.spectrum(frame(bounded, pan, -60));
+    check(bounded.beginDrain(), "owner acquires drain reservation");
+    const quint64 nestedGeneration = wakes.back();
+    bounded.take(nestedGeneration);
+    const std::size_t duringDrain = wakes.size();
+    bounded.spectrum(frame(bounded, pan, -55));
+    check(!bounded.beginDrain() && wakes.size() == duringDrain,
+          "nested drain and producer wake stay deferred until delivery ends");
+    bounded.retire();
+    bounded.begin();
+    bounded.registerStream(pan, false);
+    bounded.spectrum(frame(bounded, pan, -50));
+    check(wakes.size() == duringDrain, "reconnect preserves the active drain reservation");
+    bounded.endDrain();
+    check(wakes.size() == duringDrain + 1 && wakes.back() != nestedGeneration
+          && bounded.take(wakes.back()).size() == 1,
+          "ending the outer drain wakes the replacement session exactly once");
+
     // Race retirement with a producer that already captured its stream lease.
     bounded.registerStream(pan, false);
     const ReceiveSpectrumFrame racing = frame(bounded, pan, -70);

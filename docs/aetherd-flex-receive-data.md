@@ -32,6 +32,7 @@ session identifiers.
 | Admission | 64 streams per display plane, 65,535 bins, 4,096 meter definitions |
 
 The queue posts at most one pending wake, tagged with its session generation.
+Nested event loops cannot start a second drain before the detached batch ends.
 No queue mutex is held while emitting signals. Consumers recheck leases after
 reentrant callbacks. MeterModel also ends a batch when a callback clears or
 redefines its metadata. Receipt time is captured before queueing: monotonic time
