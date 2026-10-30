@@ -205,6 +205,27 @@ void TciApplet::buildUI()
         outer->addLayout(row);
     }
 
+    auto* lineOutRow = new QHBoxLayout;
+    lineOutRow->setContentsMargins(4, 2, 4, 2);
+    m_lineOutIncludeTx = new QCheckBox(tr("Line Out TX (Experimental)"), this);
+    m_lineOutIncludeTx->setObjectName(QStringLiteral("tciLineOutIncludeTx"));
+    m_lineOutIncludeTx->setAccessibleName(tr("TCI Line Out TX recording"));
+    m_lineOutIncludeTx->setAccessibleDescription(tr(
+        "Include TX monitor audio already heard through PC Audio in Line Out. "
+        "Does not enable MON or add microphone audio. When off, Line Out is silent "
+        "during radio transmit, including simultaneous receive audio."));
+    m_lineOutIncludeTx->setToolTip(m_lineOutIncludeTx->accessibleDescription());
+    m_lineOutIncludeTx->setEnabled(false);
+    applyCanonSheet(m_lineOutIncludeTx, [] {
+        return QStringLiteral("QCheckBox { color: {{color.canon.inkSoft}}; font-size: 11px; }")
+            + canonIndicatorRules();
+    });
+    lineOutRow->addWidget(m_lineOutIncludeTx);
+    lineOutRow->addStretch();
+    outer->addLayout(lineOutRow);
+    connect(m_lineOutIncludeTx, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (m_tciServer) { m_tciServer->setLineOutIncludeTx(enabled); }
+    });
     // Port + Enable row (bottom)
     auto* enableRow = new QHBoxLayout;
     enableRow->setContentsMargins(4, 2, 4, 2);
@@ -323,9 +344,23 @@ void TciApplet::setRadioModel(RadioModel* model)
 {
 #ifdef HAVE_WEBSOCKETS
     m_model = model;
+    delete m_lineOutAvailability;
+    m_lineOutAvailability = nullptr;
     if (!model) {
+        m_lineOutIncludeTx->setEnabled(false);
+        m_lineOutIncludeTx->setAccessibleDescription(
+            tr("Line Out requires a connected radio and a running TCI server."));
         return;
     }
+    m_lineOutAvailability = new ControlAvailabilityRegistry(*model, this);
+    m_lineOutAvailability->registerWidget(m_lineOutIncludeTx,
+        tr("Line Out requires a connected radio and a running TCI server."),
+        [this](bool connected, const RadioCapabilities&) { return connected && m_tciServer; },
+        [this] { return m_tciServer && m_tciServer->lineOutIncludeTx(); }, false);
+    connect(model, &RadioModel::capabilitiesChanged, this,
+        [this](bool, const RadioCapabilities&) {
+            if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
+        });
 
     // Slice → DAX channel mapping drives both DAX and TCI RX indicators.
     // TCI RX1-8 carry the same DAX channels (PanadapterStream::daxPcmReady
@@ -391,8 +426,22 @@ void TciApplet::setRadioModel(RadioModel* model)
 void TciApplet::setTciServer(TciServer* tci)
 {
 #ifdef HAVE_WEBSOCKETS
+    if (m_tciServer) {
+        disconnect(m_tciServer, &TciServer::lineOutIncludeTxChanged, this, nullptr);
+        disconnect(m_tciServer, &TciServer::clientCountChanged, this, nullptr);
+    }
     m_tciServer = tci;
+    {
+        const QSignalBlocker blocker(m_lineOutIncludeTx);
+        m_lineOutIncludeTx->setChecked(tci && tci->lineOutIncludeTx());
+    }
+    if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
     if (tci) {
+        connect(tci, &TciServer::lineOutIncludeTxChanged, this, [this](bool enabled) {
+            const QSignalBlocker blocker(m_lineOutIncludeTx);
+            m_lineOutIncludeTx->setChecked(enabled);
+            if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
+        });
         connect(tci, &TciServer::clientCountChanged,
                 this, [this]() { updateTciStatus(); });
     }

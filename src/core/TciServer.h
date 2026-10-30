@@ -109,6 +109,8 @@ public:
     QVector<TciClientInfo> connectedClients() const;
 
     void setAudioEngine(AudioEngine* audio);
+    void setLineOutIncludeTx(bool enabled);
+    bool lineOutIncludeTx() const { return m_lineOutIncludeTx; }
     // Thread-safe owning ingress, safe even if a source callback overlaps
     // controller destruction. The closure contains no controller pointer.
     std::function<void(int, const PcmFrame&)> daxPcmSink() const;
@@ -171,6 +173,7 @@ public slots:
     void onDaxStreamUnregistered(int channel, quint32 streamId);
 
 signals:
+    void lineOutIncludeTxChanged(bool enabled);
     void clientCountChanged(int count);
     void rxBindingsChanged();
     // Fired whenever the client list or any client's subscriptions change
@@ -312,6 +315,8 @@ private:
         int          audioChannels{2};       // 1=mono, 2=stereo
         int          audioFormat{3};         // 0=int16, 3=float32
         quint64 rxGeneration{0};
+        QSet<int> lineOutReceivers;
+        quint64 lineOutGeneration{0};
         bool         rxSensorsEnabled{false};
         bool         txSensorsEnabled{false};
         // TCI IQ subscriptions are per client AND per receiver. SDC can open
@@ -357,6 +362,10 @@ private:
     void announceEffectiveIqSampleRate();
 
     void syncClient(const ClientState& client);
+    void syncLineOutClient(const ClientState& client);
+    void updateLineOutCapture();
+    bool m_lineOutIncludeTx{false};
+    bool m_lineOutCaptureWanted{false};
     TciClient* clientById(quint64 id) const;
     void resetClientRx(ClientState& client);
     void refreshRxBindings();

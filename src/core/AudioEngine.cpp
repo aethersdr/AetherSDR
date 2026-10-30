@@ -2726,6 +2726,7 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes)
                 alignedStereoFloatBytes(
                     std::min<qsizetype>(len, chunk.size()));
             if (capturedBytes > 0) {
+                captureLineOutAudio(chunk.left(capturedBytes), sampleRate);
                 captureAutomationAudio(
                     QStringLiteral("final"), QStringLiteral("mix"),
                     QString(), chunk.left(capturedBytes),
@@ -4419,6 +4420,80 @@ void AudioEngine::applyPendingRxSinkRate()
     }
 }
 
+void AudioEngine::setLineOutCaptureEnabled(bool enabled)
+{
+    m_lineOutCaptureEnabled = enabled;
+    if (!enabled) { resetLineOutCapture(); }
+}
+
+void AudioEngine::resetLineOutCapture()
+{
+    m_lineOutProducer.invalidate();
+    m_lineOutProducerStarted = false;
+    m_lineOutDeviceRate = 0;
+    m_lineOutLeftResampler.reset();
+    m_lineOutRightResampler.reset();
+}
+
+void AudioEngine::captureLineOutAudio(const QByteArray& pcm, int sampleRate)
+{
+    constexpr qsizetype frameBytes = 2 * sizeof(float);
+    if (!m_lineOutCaptureEnabled || sampleRate < 8000 || sampleRate > 384000 || pcm.isEmpty()
+        || pcm.size() % frameBytes != 0 || pcm.size() / frameBytes > PcmFrame::kMaxFrames) { return; }
+    const bool transmitting = m_radioTransmitting.load();
+    if (m_lineOutDeviceRate != sampleRate || m_lineOutCaptureTransmitting != transmitting) {
+        resetLineOutCapture();
+        m_lineOutDeviceRate = sampleRate;
+        m_lineOutCaptureTransmitting = transmitting;
+    }
+    QVector<float> samples(pcm.size() / sizeof(float));
+    std::memcpy(samples.data(), pcm.constData(), static_cast<std::size_t>(pcm.size()));
+    if (!std::ranges::all_of(samples, [](float sample) { return std::isfinite(sample); })) { return; }
+    const float gain = m_muted.load() ? 0.0f : m_rxVolume.load();
+    const auto publish = [this, gain, transmitting](QVector<float> output, int rate) {
+        const PcmFormat format{rate, PcmLayout::Stereo};
+        if (!m_lineOutProducerStarted) {
+            if (!m_lineOutProducer.start(PcmPurpose::Speaker, -1, format)) { return; }
+            m_lineOutProducerStarted = true;
+        }
+        for (float& sample : output) { sample *= gain; }
+        const auto frame = m_lineOutProducer.produce(std::move(output));
+        if (frame) { emit lineOutPcmReady(*frame, transmitting); }
+    };
+    if (sampleRate == 24000 || sampleRate == 48000) {
+        publish(std::move(samples), sampleRate);
+        return;
+    }
+    constexpr int blockFrames = 4096;
+    if (!m_lineOutLeftResampler) {
+        m_lineOutLeftResampler = std::make_unique<Resampler>(sampleRate, 48000, blockFrames);
+        m_lineOutRightResampler = std::make_unique<Resampler>(sampleRate, 48000, blockFrames);
+    }
+    const qsizetype frames = samples.size() / 2;
+    for (qsizetype offset = 0; offset < frames;) {
+        const int count = static_cast<int>(std::min<qsizetype>(blockFrames, frames - offset));
+        QVector<float> left(count);
+        QVector<float> right(count);
+        for (int index = 0; index < count; ++index) {
+            left[index] = samples[(offset + index) * 2];
+            right[index] = samples[(offset + index) * 2 + 1];
+        }
+        const QByteArray leftOutput = m_lineOutLeftResampler->process(left.constData(), count);
+        const QByteArray rightOutput = m_lineOutRightResampler->process(right.constData(), count);
+        if (leftOutput.size() != rightOutput.size()) { resetLineOutCapture(); return; }
+        const qsizetype outputFrames = leftOutput.size() / sizeof(float);
+        if (outputFrames > 0) {
+            QVector<float> output(outputFrames * 2);
+            for (qsizetype index = 0; index < outputFrames; ++index) {
+                std::memcpy(&output[index * 2], leftOutput.constData() + index * sizeof(float), sizeof(float));
+                std::memcpy(&output[index * 2 + 1], rightOutput.constData() + index * sizeof(float), sizeof(float));
+            }
+            publish(std::move(output), 48000);
+        }
+        offset += count;
+    }
+}
+
 void AudioEngine::stopRxStream()
 {
     stopSidetoneStream();
@@ -4456,6 +4531,7 @@ void AudioEngine::stopRxStream()
 
 void AudioEngine::closeRxSink()
 {
+    resetLineOutCapture();
     ++m_rxSinkGeneration;
     m_pendingRxSinkRate.reset();
     m_rxSinkProducerRate = 0;
