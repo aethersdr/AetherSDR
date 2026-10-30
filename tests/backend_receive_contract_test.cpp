@@ -532,7 +532,7 @@ void hostConfiguration()
             const auto& anan = static_cast<const anan::AnanBackend&>(*backend);
             check(last(observations).agcMode == QStringLiteral("fast") && last(observations).agcThreshold == 50
                       && anan.agcModeForTest() == 4
-                      && anan.agcMaxGainDbForTest() == anan::AnanBackend::agcKnobDb(50),
+                      && std::abs(anan.agcMaxGainDbForTest() - anan::AnanBackend::agcKnobDb(50)) < 1e-9,
                   "ANAN publishes the WDSP AGC configuration it retains");
         }
         check(affinity.violations().isEmpty(), "driven host backend signals stay on the owner thread");
