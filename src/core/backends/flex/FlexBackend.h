@@ -21,6 +21,7 @@ class FirmwareStager;
 
 class RadioConnection;
 class PanadapterStream;
+class FlexReceiveData;
 
 // FlexBackend — the IRadioBackend for the SmartSDR / FlexRadio wire stack.
 // Owns the RadioConnection and PanadapterStream and their two worker threads:
@@ -33,6 +34,7 @@ class FlexBackendTestAccess;
 
 class FlexBackend : public IRadioBackend {
     Q_OBJECT
+    friend class FlexReceiveDataTestAccess;
 
 public:
     explicit FlexBackend(QObject* parent = nullptr);
@@ -93,6 +95,8 @@ public:
     // ---- IRadioBackend ----
     RadioCapabilities capabilities() const override;
     void onRadioSessionEstablished() override;
+    std::optional<ReceiveTelemetry> receiveTelemetry() const override { return m_receiveTelemetry; }
+    void retireReceiveData() override;
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     bool isConnected() const override;
@@ -266,6 +270,10 @@ private:
     void sendSlice(const QString& cmd);   // guarded slice path (§6)
     void sendSliceTune(int sliceId, const SliceTuneRequest& request);
 
+    void initializeReceiveData();
+    void drainReceiveData(quint64 generation);
+    std::shared_ptr<FlexReceiveData> m_receiveData;
+    ReceiveTelemetry m_receiveTelemetry;
     RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
     QThread*          m_connThread{nullptr};    // owned (this-parented)
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread

@@ -64,4 +64,8 @@ AETHER_SEAM_PROBE(panAntennaListChanged);
 AETHER_SEAM_PROBE(panWaterfallLineDurationChanged);
 AETHER_SEAM_PROBE(extensionStatus);
 AETHER_SEAM_PROBE(spectrumFrameReady);
+AETHER_SEAM_PROBE(receiveSpectrumReady);
+AETHER_SEAM_PROBE(receiveWaterfallReady);
+AETHER_SEAM_PROBE(receiveMetersReady);
+AETHER_SEAM_PROBE(receiveTelemetryReady);
 AETHER_SEAM_PROBE(audioFrameReady);
