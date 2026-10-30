@@ -43,6 +43,7 @@
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
+#include "core/backends/SliceObservation.h"
 #include "core/backends/SpectrumCoverage.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/backends/TunerDelta.h"
@@ -1148,6 +1149,7 @@ signals:
     // the backend populates only the fields the wire reported, the model applies
     // exactly those. Replaces the prior stringly-keyed QVariantMap payload.
     void sliceChanged(int sliceId, const SliceDelta& delta);
+    void sliceObserved(const AetherSDR::SliceObservation& observation);
     // Where a slice IS a receiver, closing the receiver emits BOTH this and
     // panRemoved, or the stale SliceModel keeps counting against maxSlices().
     void sliceRemoved(int sliceId);

@@ -1,3 +1,4 @@
+#include "FlexSliceStatus.h"
 #include "RadioConnection.h"
 #include "FlexPttWireSession.h"
 #include "LanBindAddress.h"
@@ -231,7 +232,7 @@ void RadioConnection::emitSyntheticStatus(const QString& line)
     // payload to a live radio's. (RFC #4288 Stage 3)
     const ParsedMessage msg = CommandParser::parseLine(line);
     if (msg.type == MessageType::Status) {
-        emit statusReceived(msg.object, msg.kvs);
+        dispatchStatus(msg);
     }
 }
 
@@ -314,8 +315,23 @@ void RadioConnection::connectToHost(const QHostAddress& address,
     m_socket->connectToHost(address, port);
 }
 
+void RadioConnection::dispatchStatus(const ParsedMessage& message)
+{
+    if (FlexSliceStatus::isSlice(message.object)
+        && !message.kvs.contains(QStringLiteral("waveform_status"))) {
+        if (auto observation = FlexSliceStatus::decode(message.object, message.kvs)) {
+            observation->transportEpoch = m_sliceEpoch;
+            emit sliceObserved(*observation);
+        }
+        return;
+    }
+    emit statusReceived(message.object, message.kvs);
+}
+
 void RadioConnection::resetSessionState()
 {
+    m_sliceEpoch->store(false, std::memory_order_release);
+    m_sliceEpoch = std::make_shared<std::atomic_bool>(true);
     m_pttProtocol.store(PttProtocol::Unknown);
     if (m_independentPtt) {
         m_independentPtt->disconnect();
@@ -673,6 +689,7 @@ void RadioConnection::onHeartbeat()
 
 void RadioConnection::processLine(const QString& line)
 {
+    const auto ingressEpoch = m_sliceEpoch;
     if (m_independentPtt && !isSyntheticDemo()) {
         m_independentPtt->observe(line, TxCoordinator::monotonicMs());
         updateIndependentPttTimer();
@@ -745,7 +762,7 @@ void RadioConnection::processLine(const QString& line)
         emit commandResponse(msg.sequence, msg.resultCode, msg.object);
         break;
     case MessageType::Status:
-        emit statusReceived(msg.object, msg.kvs);
+        if (ingressEpoch == m_sliceEpoch) { dispatchStatus(msg); }
         break;
     default:
         break;

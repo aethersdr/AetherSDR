@@ -173,6 +173,7 @@ private slots:
         MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
         QSignalSpy connected(&connection, &RadioConnection::connected);
         QSignalSpy statuses(&connection, &RadioConnection::statusReceived);
+        QSignalSpy slices(&connection, &RadioConnection::sliceObserved);
         RadioInfo info;
         // Independent compatibility expectation: do not obtain the input from
         // the production constant, which would hide an accidental serial change.
@@ -180,7 +181,7 @@ private slots:
         info.address = QHostAddress(QHostAddress::LocalHost);
         connection.connectToRadio(info);
         QTRY_COMPARE_WITH_TIMEOUT(connected.size(), 1, 1000);
-        QTRY_VERIFY_WITH_TIMEOUT(statuses.size() >= 4, 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(statuses.size() >= 3 && slices.size() == 1, 1000);
         QCOMPARE(socket->connectAttempts, 0);
         QCOMPARE(socket->socketDescriptor(), qintptr(-1));
         QVERIFY(connection.isSyntheticDemo());

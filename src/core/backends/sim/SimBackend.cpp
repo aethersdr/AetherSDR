@@ -127,6 +127,15 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
         emit disconnected();
     });
 
+    connect(m_connection, &RadioConnection::sliceObserved, this,
+            [this](const SliceObservation& observation) {
+        if (!observation.current()) { return; }
+        // Demo publishes its values through its native sliceChanged producer.
+        SliceObservation lifecycle = observation;
+        lifecycle.values = {};
+        lifecycle.values.inUse = observation.values.inUse;
+        emit sliceObserved(lifecycle);
+    });
     // Seam geometry for dynamically created pans (#4887 phase 4): each needs the
     // panCenterBandwidthChanged bridge pan 0 gets in emitInitialState(), but only
     // after RadioModel has claimed the pan or the geometry is cached by index and
@@ -473,11 +482,8 @@ void SimBackend::emitInitialState()
     emit panWaterfallLineDurationChanged(QStringLiteral("0x40000000"),
                                          kWaterfallRate);
 
-    // One active slice on a sensible default, so the UI has something live to
-    // show the moment demo mode connects. Same rationale as the pan above: the
-    // wire "slice 0 RF_frequency=14.100" is delivered but decodeSliceStatus is
-    // Flex-only, so without this typed emit the slice model never gets a
-    // frequency and the VFO reads 0.
+    // SimBackend owns the canonical receiver values. Its synthetic transport
+    // contributes lifecycle/ownership only, so native state is published once.
     SliceDelta slice;
     slice.letter = QStringLiteral("A");
     slice.panId = QStringLiteral("0x40000000");
@@ -834,14 +840,8 @@ void SimBackend::injectHighSwr(double ratio)
 
 void SimBackend::injectDropSlice()
 {
-    // Yank the active slice out from under AE — exercises slice-gone teardown
-    // (VFO removal, TX-slice re-evaluation). Push it as the wire status AE decodes
-    // ("slice 0 … removed"), NOT the interface sliceRemoved signal: RadioModel
-    // consumes slice removal only through handleSliceStatus (the Flex backend
-    // never emits IRadioBackend::sliceRemoved), so the wire path is the one that
-    // actually reaches the teardown. A reconnect restores it via emitInitialState.
-    // AE detects slice removal via in_use=0 (RadioModel.cpp onStatusReceived),
-    // not a "removed" token — send the wire form AE actually acts on.
+    // Exercise the same typed retirement path as a radio's in_use=0 report.
+    // Reconnect restores the canonical receiver via emitInitialState().
     pushFaultStatus(QStringLiteral(
         "SDE300001|slice 0 client_handle=0xDE300001 in_use=0"));
 }
@@ -849,7 +849,7 @@ void SimBackend::injectDropSlice()
 void SimBackend::injectMalformedStatus()
 {
     // Push a deliberately garbled slice status so AE's decoder must fail closed
-    // (present-only + ok-guarded carry — decodeSliceStatus drops malformed present
+    // (present-only + ok-guarded carry — the slice decoder drops malformed present
     // fields rather than applying them). A real radio never sends this; AE must
     // NOT retune/reset the VFO to 0 or crash. Assertion: VFO/slice unaffected.
     // RF_frequency is non-numeric garbage; the ok-guarded toDouble drops it.

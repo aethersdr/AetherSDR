@@ -1,3 +1,4 @@
+#include "FlexSliceStatusTestSupport.h"
 // Production VFO/model/Flex encoder; no default socket, firmware peer or RF.
 #include "TestSettingsProfile.h"
 #include "SeamThreadAffinityProbe.h"
@@ -73,7 +74,7 @@ public:
         own(radio, true);
         FlexBackend* previous = radio.m_flexBackend;
         radio.m_flexBackend = qobject_cast<FlexBackend*>(radio.backend());
-        radio.handleSliceStatus(0, {{QStringLiteral("in_use"), QStringLiteral("1")},
+        applyFlexSliceStatus(radio, 0, {{QStringLiteral("in_use"), QStringLiteral("1")},
             {QStringLiteral("RF_frequency"), QStringLiteral("14.2")},
             {QStringLiteral("mode"), QStringLiteral("USB")}}, false);
         radio.m_flexBackend = previous;
@@ -132,7 +133,7 @@ struct Fixture {
     bool request(DspParameterResetTarget target, SliceModel* source = nullptr)
     { return radio.requestDspParameterReset(source ? source : slice(), radio.receiveControlSession(), target); }
     void status()
-    { backend->decodeSliceStatus(0, {{"nr_level", "50"}, {"nb_level", "50"}, {"apf_level", "30"}}); }
+    { publishFlexSliceStatus(*backend, 0, {{"nr_level", "50"}, {"nb_level", "50"}, {"apf_level", "30"}}); }
 };
 void encodingAndGates()
 {
@@ -246,14 +247,14 @@ void identityAndSession()
     RadioModelSliceLifecycleTestAccess::own(f.radio, true);
     f.slice()->invalidateFrequencyObservation();
     check(!f.request(Target::All) && !f.reset()->isEnabled(), "missing radio mode observation cannot authorize reset");
-    f.backend->decodeSliceStatus(0, {{"mode", "USB"}});
+    publishFlexSliceStatus(*f.backend, 0, {{"mode", "USB"}});
     check(f.reset()->isEnabled(), "same-value mode status restores availability after invalidation");
     f.slice()->setMode(QStringLiteral("CW"));
     f.commands.clear();
     check(!f.request(Target::All), "unconfirmed optimistic mode cannot authorize reset");
-    f.backend->decodeSliceStatus(0, {{"mode", "CW"}});
+    publishFlexSliceStatus(*f.backend, 0, {{"mode", "CW"}});
     check(f.reset()->isEnabled(), "radio confirmation re-enables reset for current mode");
-    f.backend->decodeSliceStatus(0, {{"mode", "USB"}});
+    publishFlexSliceStatus(*f.backend, 0, {{"mode", "USB"}});
     f.commands.clear();
     bool dispatched = true;
     SliceModel* slice = f.slice();
@@ -357,10 +358,10 @@ void targetAvailability()
     RadioModelSliceLifecycleTestAccess::identity(f.radio, "FLEX-6700", "4.3.16");
     check(!enabled(Target::Nrs) && !enabled(Target::Nrf) && enabled(Target::Nr),
           "hardware restrictions disable only unsupported targets");
-    f.backend->decodeSliceStatus(0, {{"mode", "CW"}});
+    publishFlexSliceStatus(*f.backend, 0, {{"mode", "CW"}});
     check(!enabled(Target::Anf) && !enabled(Target::Anfl) && !enabled(Target::Anft) && enabled(Target::All),
           "mode changes refresh individual menu availability");
-    f.backend->decodeSliceStatus(0, {{"mode", "FM"}});
+    publishFlexSliceStatus(*f.backend, 0, {{"mode", "FM"}});
     check(!enabled(Target::All) && !f.reset()->isEnabled() && f.commands.isEmpty(),
           "unsupported mode disables every target without a reset");
 }

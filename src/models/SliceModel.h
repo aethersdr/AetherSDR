@@ -418,7 +418,7 @@ public:
 
     // Apply a normalized, typed slice delta from the backend
     // (IRadioBackend::sliceChanged). Vendor-neutral fields only — the Flex wire
-    // decode lives in FlexBackend::decodeSliceStatus. Applies only the fields the
+    // decode lives in FlexSliceStatus::decodeValues. Applies only the fields the
     // delta has engaged (present-only). (aetherd RFC 2.3.)
     void applyChanges(const SliceDelta& delta);
 

@@ -1,3 +1,4 @@
+#include "FlexSliceStatusTestSupport.h"
 // Socket-free production-path tests. Only an injected transport recorder is
 // used; no radio, peer, listener, discovery or transmitter is opened.
 #include "TestSettingsProfile.h"
@@ -2726,8 +2727,8 @@ void tciPermissionRequiresConfirmedOwnership()
         }
     });
     const QMap<QString, QString> early{{QStringLiteral("in_use"), QStringLiteral("1")}};
-    f.radio.handleSliceStatusForTest(0, early);
-    f.radio.handleSliceStatusForTest(1, early);
+    applyFlexSliceStatus(f.radio, 0, early);
+    applyFlexSliceStatus(f.radio, 1, early);
     SliceDelta tx;
     tx.txSlice = true;
     tx.mode = QStringLiteral("USB");
@@ -2744,13 +2745,13 @@ void tciPermissionRequiresConfirmedOwnership()
     check(!TxOperationIntegrationTestAccess::tciPromotion(server, 0),
           "an unknown owner cannot bypass permission by requesting TX directly");
     for (const QString& owner : {QStringLiteral("0x0"), QStringLiteral("invalid")}) {
-        f.radio.handleSliceStatusForTest(0, {{QStringLiteral("client_handle"), owner}});
+        applyFlexSliceStatus(f.radio, 0, {{QStringLiteral("client_handle"), owner}});
         check(!TciProtocol::transmitPermitted(&f.radio, f.radio.slice(0)),
               "zero or malformed ownership does not grant TX permission");
     }
     TxOperationIntegrationTestAccess::bindTciOwnershipIdentity(f.radio, &identity);
     sent.clear();
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
     check(sent.contains(QStringLiteral("tx_enable:0,true;"))
               && !sent.contains(QStringLiteral("tx_enable:1,true;"))
@@ -2767,18 +2768,18 @@ void tciPermissionRequiresConfirmedOwnership()
     TxOperationIntegrationTestAccess::tciRequest(server, client, false, 1);
     TxOperationIntegrationTestAccess::tciSplit(server, false);
     sent.clear();
-    f.radio.handleSliceStatusForTest(1, {
+    applyFlexSliceStatus(f.radio, 1, {
         {QStringLiteral("client_handle"), QStringLiteral("0x87654321")}});
     check(!f.radio.slice(1) && f.radio.isSlotForeign(1)
               && sent.contains(QStringLiteral("tx_enable:1,false;"))
               && !TxOperationIntegrationTestAccess::tciPromotion(server, 1),
           "foreign owner settlement removes RX and explicitly denies TX");
     sent.clear();
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("client_handle"), QStringLiteral("0x87654321")}});
     check(!f.radio.slice(0) && sent.contains(QStringLiteral("tx_enable:0,false;")),
           "a receiver transferred away loses permission before the close debounce");
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("in_use"), QStringLiteral("1")},
         {QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
     check(TciProtocol::transmitPermitted(&f.radio, f.radio.slice(0)),
@@ -2795,7 +2796,7 @@ void tciPermissionRequiresConfirmedOwnership()
               && !TxOperationIntegrationTestAccess::tciPromotion(server, 0),
           "reconnect reclamation cannot reuse the old session's ownership proof");
     sent.clear();
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
     check(sent.contains(QStringLiteral("tx_enable:0,true;")),
           "fresh owner confirmation republishes permission after reconnect");
@@ -2829,15 +2830,15 @@ void tciPromotionRechecksPermissionAfterReply()
               "owned receiver promotion waits for the injected command reply");
         return f.backend->selectionReplies.back();
     };
-    f.radio.handleSliceStatusForTest(0, ours);
+    applyFlexSliceStatus(f.radio, 0, ours);
     RadioControlCompletion reply = begin();
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("client_handle"), QStringLiteral("0x87654321")}});
     reply({RadioControlReply::Kind::Accepted, 0, {}});
     check(replied && !permitted,
           "a successful promotion reply cannot key a receiver whose ownership changed");
 
-    f.radio.handleSliceStatusForTest(0, ours);
+    applyFlexSliceStatus(f.radio, 0, ours);
     reply = begin();
     SliceDelta mode;
     mode.mode = QStringLiteral("WFM");

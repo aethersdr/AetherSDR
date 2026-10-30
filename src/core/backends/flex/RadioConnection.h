@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/backends/SliceObservation.h"
+
 #include "CommandParser.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/IndependentTxControl.h"
@@ -90,6 +92,7 @@ signals:
     void messageReceived(const ParsedMessage& msg);
     void pingRttMeasured(int ms);
     void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
+    void sliceObserved(const AetherSDR::SliceObservation& observation);
     // Demo mode: the user tuned the (synthetic) slice VFO. MainWindow's
     // wireBackendSeam() forwards this to SimBackend::setSliceFrequency so the
     // birdie demodulates against it (pitch shifts, zero-beats). (RFC #4288)
@@ -115,6 +118,8 @@ private slots:
 
 private:
     void resetSocket();
+    void dispatchStatus(const ParsedMessage& message);
+    std::shared_ptr<std::atomic_bool> m_sliceEpoch = std::make_shared<std::atomic_bool>(true);
     void resetSessionState();
     void processLine(const QString& line);
     void setState(ConnectionState s);

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/backends/SliceObservation.h"
+
 #include "CommandParser.h"
 
 #include <QObject>
@@ -77,6 +79,7 @@ signals:
     void errorOccurred(const QString& message);
     void messageReceived(const ParsedMessage& msg);
     void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
+    void sliceObserved(const AetherSDR::SliceObservation& observation);
     void versionReceived(const QString& version);
     void pingRttMeasured(int ms);
 
@@ -103,6 +106,8 @@ private:
     void processLine(const QString& line);
 
     QSslSocket m_socket;
+    void dispatchStatus(const ParsedMessage& message);
+    std::shared_ptr<std::atomic_bool> m_sliceEpoch = std::make_shared<std::atomic_bool>(true);
     void resetSessionState();   // drop everything scoped to one TLS session
 
     QByteArray m_readBuffer;
