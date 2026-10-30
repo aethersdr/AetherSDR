@@ -33,12 +33,19 @@ QString operationName(DvkRequest::Operation operation)
 void DvkModel::request(const DvkRequest& command)
 {
     if (QThread::currentThread() != thread()) { return; }
-    if (!command.valid() || m_requests.size() >= 32
+    if (!command.valid() || (!command.stops() && m_requests.size() >= 29)
         || (!command.stops() && (m_transferActive || isTransferring()))
         || (command.starts() && !canStartOperation())) {
         emit commandFailed(operationName(command.operation), command.slot, 0,
                            tr("Voice keyer request was not dispatched."));
         return;
+    }
+    // Reserve one pending request for each global stop verb. Repeated stops
+    // share the unanswered request, so cleanup stays available and bounded.
+    if (command.stops()) {
+        for (const DvkRequest& pending : m_requests) {
+            if (pending.operation == command.operation) { return; }
+        }
     }
     const quint64 requestId = ++m_nextRequest;
     m_requests.insert(requestId, command);
@@ -242,6 +249,12 @@ void DvkModel::applyStatus(const QString& object, const QMap<QString, QString>& 
         }
         const QPointer<DvkModel> alive(this);
         if (newStatus != m_status || id != m_activeId) {
+            // A stop for the previous observed operation must not suppress a
+            // fresh stop after the radio advances to another activity.
+            for (auto pending = m_requests.begin(); pending != m_requests.end();) {
+                if (pending->stops()) { pending = m_requests.erase(pending); }
+                else { ++pending; }
+            }
             m_status = newStatus;
             m_activeId = id;
             emit statusChanged(m_status, m_activeId);

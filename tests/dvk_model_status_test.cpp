@@ -114,9 +114,6 @@ int main(int argc, char* argv[])
                        && kvs.value("duration") == QStringLiteral("1000") && kvs.size() == 3);
 
             DvkModel model;
-        quint64 requestId = 0;
-        QObject::connect(&model, &DvkModel::controlRequested, &model,
-            [&](const DvkRequest&, quint64 token) { requestId = token; });
             feed(model, QStringLiteral("S629BA1D4|dvk added %1").arg(body));
             const QByteArray modelled =
                 QStringLiteral("a DVK status keeps the name '%1' and its duration").arg(name).toUtf8();
@@ -151,9 +148,6 @@ int main(int argc, char* argv[])
     // ── Status lines captured from fw 4.2.20 ────────────────────────────────
     {
         DvkModel model;
-        quint64 requestId = 0;
-        QObject::connect(&model, &DvkModel::controlRequested, &model,
-            [&](const DvkRequest&, quint64 token) { requestId = token; });
         feed(model, QStringLiteral("S629BA1D4|dvk status=idle enabled=1"));
         for (int id = 1; id <= 12; ++id) {
             feed(model, QStringLiteral("S629BA1D4|dvk added id=%1 name=\"Recording %1\" duration=0")
@@ -198,9 +192,6 @@ int main(int argc, char* argv[])
     // ── Commands match the wiki ─────────────────────────────────────────────
     {
         DvkModel model;
-        quint64 requestId = 0;
-        QObject::connect(&model, &DvkModel::controlRequested, &model,
-            [&](const DvkRequest&, quint64 token) { requestId = token; });
         Sent sent;
         capture(model, sent);
         model.recStop(3);
@@ -225,9 +216,6 @@ int main(int argc, char* argv[])
     }
     {
         DvkModel model;
-        quint64 requestId = 0;
-        QObject::connect(&model, &DvkModel::controlRequested, &model,
-            [&](const DvkRequest&, quint64 token) { requestId = token; });
         Sent sent;
         capture(model, sent);
         model.setName(2, QStringLiteral("  CQ | \"DX\"   'test'  "));
@@ -289,9 +277,6 @@ int main(int argc, char* argv[])
     {
         // Review #6247: STOP before the echo names the slot it stops.
         DvkModel model;
-        quint64 requestId = 0;
-        QObject::connect(&model, &DvkModel::controlRequested, &model,
-            [&](const DvkRequest&, quint64 token) { requestId = token; });
         int stopId = 0;
         QObject::connect(&model, &DvkModel::controlRequested, &model,
                          [&stopId](const DvkRequest& request, quint64) {
@@ -325,9 +310,6 @@ int main(int argc, char* argv[])
     }
     {
         DvkModel model;
-        quint64 requestId = 0;
-        QObject::connect(&model, &DvkModel::controlRequested, &model,
-            [&](const DvkRequest&, quint64 token) { requestId = token; });
         model.noteRefusal(0x50000053u);
         report("a non-license refusal does not latch", !model.licenseRefused());
         model.noteRefusal(0x50004001u);

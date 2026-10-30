@@ -3,6 +3,7 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/TciProtocol.h"
 #include "models/RadioModel.h"
+#include "models/TxController.h"
 #include <QCoreApplication>
 #include <QEvent>
 #include <QThread>
@@ -138,9 +139,45 @@ void lifecycle()
     model.applyStatus("dvk", {{"status", "preview"}, {"id", "2"}});
     model.applyStatus("dvk", {{"status", "idle"}});
     check(model.canStartOperation(), "observed operation and idle settle an unknown reply");
+
+    DvkModel saturated;
+    QList<DvkRequest> queued;
+    QObject::connect(&saturated, &DvkModel::controlRequested, &saturated,
+        [&](const DvkRequest& request, quint64) { queued.append(request); });
+    saturated.playbackStart(1);
+    for (int i = 0; i < 40; ++i) { saturated.setName(2, "pending name"); }
+    check(queued.size() == 29, "ordinary pending requests preserve cleanup capacity");
+    saturated.playbackStop(1);
+    check(queued.size() == 30 && queued.last().operation == DvkRequest::Operation::PlaybackStop,
+          "STOP remains dispatchable when ordinary requests saturate the queue");
+    saturated.recStop(1);
+    saturated.previewStop(1);
+    for (int i = 0; i < 40; ++i) { saturated.playbackStop(1); }
+    check(queued.size() == 32, "all stop verbs remain available without unbounded duplicate requests");
+
+    DvkModel advancing;
+    int stops = 0;
+    QObject::connect(&advancing, &DvkModel::controlRequested, &advancing,
+        [&](const DvkRequest& request, quint64) { stops += request.stops(); });
+    advancing.playbackStart(1);
+    advancing.applyStatus("dvk", {{"status", "playback"}, {"id", "1"}});
+    advancing.playbackStop(1);
+    advancing.applyStatus("dvk", {{"status", "idle"}});
+    advancing.playbackStart(2);
+    advancing.playbackStop(2);
+    check(stops == 2, "unanswered old STOP cannot suppress STOP for a newer playback");
 }
 void terminalFence()
 {
+    {
+        Fixture f;
+        const auto controller = f.radio.localTxController();
+        for (const auto activity : {TxCoordinator::Activity::VoiceKeyer, TxCoordinator::Activity::Navtex}) {
+            check(!controller->capture(activity).valid() && !controller->current(activity).valid()
+                && !controller->captureProgram(activity).valid(),
+                  "service activities cannot enter the desktop controller's fixed input table");
+        }
+    }
     {
         Fixture f;
         TransmitDelta vox;
