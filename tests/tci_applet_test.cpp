@@ -119,9 +119,20 @@ int main(int argc, char** argv)
         capabilityApplet.setRadioModel(&model);
         capabilityApplet.setTciServer(&server);
         auto* checkbox = capabilityApplet.findChild<QCheckBox*>(QStringLiteral("tciMicrophoneRecording"));
+        auto* lineOut = capabilityApplet.findChild<QCheckBox*>(QStringLiteral("tciLineOutIncludeTx"));
+        check(lineOut && !lineOut->isEnabled() && !lineOut->isChecked(), "Line Out TX is opt-in and unavailable without a connected radio");
         check(checkbox && !checkbox->isEnabled(), "mic option is unavailable without a connected radio");
         RadioCapabilities caps;
         emit model.capabilitiesChanged(true, caps);
+        check(lineOut && lineOut->isEnabled(), "Line Out does not require the separate microphone capture capability");
+        if (lineOut) {
+            lineOut->setChecked(true);
+            check(server.lineOutIncludeTx() && !server.microphoneRecordingEnabled(), "Line Out checkbox changes only its own TX policy");
+            TciServer restored(&model);
+            check(restored.lineOutIncludeTx(), "Line Out TX preference persists independently");
+            server.setLineOutIncludeTx(false);
+            check(!lineOut->isChecked(), "Line Out checkbox mirrors controller policy changes");
+        }
         check(checkbox && !checkbox->isEnabled() && !checkbox->accessibleDescription().isEmpty(),
               "unsupported backend dims the mic option with an accessible reason");
         caps.microphoneCapture = RadioCapabilities::MicrophoneCapture{};

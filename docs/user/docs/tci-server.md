@@ -36,6 +36,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 |---|---|
 | **RX1 … RX8** | One row per receive channel: the slice it carries and a combined level meter / gain slider. Rows above the radio's slice capacity are hidden. |
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
+| **Line Out TX (Experimental)** | Includes TX monitor audio already present in PC Audio in the separate Line Out recording stream. Off by default. |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
 
@@ -155,6 +156,33 @@ Audio is float32 stereo by default. A client can ask for int16 and/or mono:
 audio_stream_sample_type:int16;
 audio_stream_channels:1;
 ```
+
+### Experimental Line Out recording
+
+Clients start and stop a separate stereo mix with `line_out_start:<receiver>;`
+and `line_out_stop:<receiver>;`. It uses TCI stream type **4**, fixed at
+**48 kHz stereo float32**, independently of ordinary RX format negotiation.
+The receiver number labels the subscription; its content is the same complete
+playback mix, not that receiver alone. RX and Line Out can run together.
+
+**PC Audio must be enabled.** Line Out copies the final shared playback mix,
+including the open slices' existing volume, pan and mute, client-side RX DSP,
+and other sources in that mix. Playback master volume and mute also apply.
+The TCI RX, TX and MIC faders do not add another recording gain to Line Out.
+It does not record other applications or separate local cue/sidetone devices.
+
+**Line Out TX (Experimental)** is off by default. When off, Line Out sends silence
+throughout radio TX, including any simultaneous RX: TX monitor and RX cannot be
+separated after mixing. When on, it records the existing playback mix during TX
+without adding a duplicate microphone feed. On FlexRadio, enable MON yourself
+to hear and record radio-side TX monitor audio. Subscribing never changes MON,
+microphone selection or transmitter state. This is separate from
+**Mic During TX (Experimental)** and does not require that option.
+
+If PC Audio is off, the subscription remains requested but produces no audio.
+Server-side `line_out_recorder_*` file recording is not implemented.
+Live TX, MON and multi-client recording qualification remain outstanding
+([#6410](https://github.com/aethersdr/AetherSDR/issues/6410)).
 
 ### Experimental microphone recording with DXLog
 

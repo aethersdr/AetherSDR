@@ -197,6 +197,139 @@ class TciRxAudioTest {
         }
     }
 public:
+    static void lineOutFailureIsolation()
+    {
+        for (int failureMode : {0, 1, 2}) {
+            Fixture fixture;
+            fixture.backend->add(0);
+            TciClient* failed = fixture.client(48000, 0);
+            TciClient* healthy = fixture.client(48000, 0);
+            fixture.command(failed, QStringLiteral("line_out_start:0;"));
+            fixture.command(healthy, QStringLiteral("line_out_start:0;"));
+            TciIoWorker& worker = *fixture.server.m_io;
+            const auto send = worker.m_rxSend;
+            worker.m_rxSend = [failed, failureMode, send](quint64 id, const QByteArray& packet) {
+                return id == failed->id() && failureMode == 1 ? qint64{0} : send(id, packet);
+            };
+            worker.m_rxBacklog = [&fixture, failed, failureMode](quint64 id) {
+                if (id != failed->id()) { return qint64{0}; }
+                if (failureMode == 0) { return qint64{256 * 1024}; }
+                if (failureMode == 2) { fixture.command(failed, QStringLiteral("line_out_stop:0;")); }
+                return qint64{0};
+            };
+            int closes = 0;
+            worker.m_rxClose = [&closes, failed](quint64 id, QWebSocketProtocol::CloseCode, const QString&) {
+                check(id == failed->id(), "Line Out closes only the slow client's connection");
+                ++closes;
+            };
+            PcmProducer producer;
+            producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+            worker.receiveLineOutPcm(frame(producer, 1024), false);
+            check(fixture.packets[failed].isEmpty() && fixture.packets[healthy].size() == 1,
+                  "Line Out backlog, short write and reentrant stop do not disrupt other subscribers");
+            check(fixture.server.clientStateFor(failed)->lineOutReceivers.isEmpty()
+                && worker.m_rxClients.value(failed->id()).config.audio,
+                "Line Out failure retires only that audio subscription before transport cleanup");
+            check(closes == (failureMode == 0 ? 1 : 0), "only Line Out backlog requests a connection close");
+            worker.m_rxSend = send;
+            worker.m_rxBacklog = [](quint64) { return qint64{0}; };
+            fixture.command(failed, QStringLiteral("line_out_start:0;"));
+            worker.receiveLineOutPcm(frame(producer, 1024), false);
+            check(fixture.packets[failed].size() == 1 && fixture.packets[healthy].size() == 2,
+                  "Line Out can be explicitly restarted after a delivery failure");
+        }
+    }
+
+    static void lineOutProtocol()
+    {
+        Fixture fixture;
+        fixture.backend->add(3);
+        fixture.backend->add(17);
+        TciClient* listener = fixture.client(48000, 0);
+        TciClient* other = fixture.client(48000, 1);
+        fixture.command(listener, QStringLiteral("audio_stop:0;line_out_start:0;line_out_start:1;"));
+        auto* state = fixture.server.clientStateFor(listener);
+        check(state && !state->audioEnabled && state->lineOutReceivers == QSet<int>{0, 1}, "Line Out starts independently of audio_start");
+        const quint64 generation = state->lineOutGeneration;
+        fixture.command(listener, QStringLiteral("line_out_start:0;audio_samplerate:8000;audio_stream_channels:1;"));
+        check(state->lineOutGeneration == generation, "duplicate Line Out start and RX negotiation preserve its subscription generation");
+        fixture.command(listener, QStringLiteral("line_out_start:-1;line_out_start:99;line_out_start:invalid;"));
+        check(state->lineOutReceivers == QSet<int>{0, 1}, "Line Out refuses malformed and out-of-range receiver subscriptions");
+        PcmProducer producer;
+        producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+        fixture.server.m_io->receiveLineOutPcm(frame(producer, 1024, 0.125f, -0.5f), false);
+        check(fixture.packets[listener].size() == 2 && fixture.packets[other].isEmpty(), "Line Out protocol delivers only to explicit subscribers");
+        fixture.packets[listener].clear();
+        fixture.command(listener, QStringLiteral("line_out_stop:0;"));
+        fixture.server.m_io->receiveLineOutPcm(frame(producer, 1024), false);
+        check(fixture.packets[listener].size() == 1 && word(fixture.packets[listener].first(), 0) == 1,
+              "Line Out stop removes only its requested receiver");
+        fixture.packets[listener].clear();
+        fixture.command(listener, QStringLiteral("audio_start:0;line_out_stop:1;"));
+        check(state->audioEnabled && state->lineOutReceivers.isEmpty(), "Line Out stop does not stop RX");
+        fixture.server.m_io->receiveLineOutPcm(frame(producer, 1024), false);
+        check(fixture.packets[listener].isEmpty(), "stopped Line Out emits no further packets");
+    }
+
+    static void lineOutDelivery()
+    {
+        Fixture fixture;
+        TciClient* listener = fixture.client(8000, 0, 1, 0);
+        TciClient* other = fixture.client();
+        TciIoWorker& worker = *fixture.server.m_io;
+        worker.setRxGain(1, 0.0f);
+        worker.setMicrophoneRecordingGain(0.0f);
+        TciLineOutConfig config{listener->lifetime, QSet<int>{0, 1}, 1};
+        worker.configureLineOut(config);
+        PcmProducer producer;
+        check(producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo}), "Line Out source starts");
+        const PcmFrame first = frame(producer, 1024, 0.125f, -0.5f);
+        worker.receiveLineOutPcm(first, false);
+        check(fixture.packets[listener].size() == 2 && fixture.packets[other].isEmpty(), "Line Out uses independent per-client receiver subscriptions");
+        QSet<quint32> receivers;
+        for (const QByteArray& packet : fixture.packets[listener]) {
+            receivers.insert(word(packet, 0));
+            check(word(packet, 1) == 48000 && word(packet, 2) == 3
+                && word(packet, 5) == 2048 && word(packet, 6) == 4
+                && word(packet, 7) == 2 && packet.size() == 64 + 2048 * 4,
+                "Line Out is fixed 48k stereo float32 type 4 despite RX negotiation");
+        }
+        check(receivers == QSet<quint32>{0, 1}, "Line Out labels each requested receiver without remapping RX");
+        const QVector<float> stereo = floats(fixture.packets[listener]);
+        check(stereo.size() == 4096 && stereo[0] == 0.125f && stereo[1] == -0.5f,
+              "Line Out preserves stereo pan and level without RX gain");
+        fixture.packets[listener].clear();
+        worker.receiveLineOutPcm(first, false);
+        check(fixture.packets[listener].isEmpty(), "Line Out rejects replay");
+        worker.receiveLineOutPcm(frame(producer, 1024), true);
+        const QVector<float> muted = floats(fixture.packets[listener]);
+        check(!muted.isEmpty() && std::ranges::all_of(muted, [](float sample) { return sample == 0.0f; }),
+              "Line Out excludes radio TX by default");
+        fixture.packets[listener].clear();
+        worker.setLineOutIncludeTx(true);
+        worker.receiveLineOutPcm(frame(producer, 1024, 0.25f, 0.5f), true);
+        const QVector<float> tx = floats(fixture.packets[listener]);
+        check(!tx.isEmpty() && tx[0] == 0.25f && tx[1] == 0.5f, "Line Out includes the existing TX mix once when enabled");
+        fixture.packets[listener].clear();
+        config.receivers.clear();
+        ++config.generation;
+        worker.configureLineOut(config);
+        worker.receiveLineOutPcm(frame(producer, 1024), false);
+        check(fixture.packets[listener].isEmpty() && worker.m_rxClients.value(listener->id()).config.audio,
+              "stopping Line Out leaves ordinary audio subscription intact");
+        config.receivers.insert(0);
+        ++config.generation;
+        worker.configureLineOut(config);
+        const PcmFrame stale = frame(producer, 1024);
+        producer.invalidate();
+        worker.receiveLineOutPcm(stale, false);
+        check(fixture.packets[listener].isEmpty(), "Line Out rejects revoked playback");
+        PcmProducer replacement;
+        replacement.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+        worker.receiveLineOutPcm(frame(replacement, 1024), false);
+        check(!fixture.packets[listener].isEmpty(), "Line Out accepts replacement only after old producer retirement");
+    }
+
     static void microphoneTxOwnership()
     {
         RadioConnection connection;
@@ -1347,7 +1480,7 @@ public:
         microphoneTxOwnership();
         serverConstructedAfterReceiverRestore();
         simultaneousEightReceiverHandshakes();
-        eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
+        lineOutFailureIsolation(); lineOutProtocol(); lineOutDelivery(); eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
         ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding(); nonFiniteInt16IsSilence();
         replayAndEpochs(); resetIsolation(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
         staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); daxRouteSurvivesStreamUnregister(); pressureAndReplacement();

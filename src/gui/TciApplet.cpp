@@ -212,6 +212,27 @@ void TciApplet::buildUI()
     }
 
     auto* recordingRow = new QHBoxLayout;
+    auto* lineOutRow = new QHBoxLayout;
+    lineOutRow->setContentsMargins(4, 2, 4, 2);
+    m_lineOutIncludeTx = new QCheckBox(tr("Line Out TX (Experimental)"), this);
+    m_lineOutIncludeTx->setObjectName(QStringLiteral("tciLineOutIncludeTx"));
+    m_lineOutIncludeTx->setAccessibleName(tr("TCI Line Out TX recording"));
+    m_lineOutIncludeTx->setAccessibleDescription(tr(
+        "Include TX monitor audio already heard through PC Audio in Line Out. "
+        "Does not enable MON or add microphone audio. When off, Line Out is silent "
+        "during radio transmit, including simultaneous receive audio."));
+    m_lineOutIncludeTx->setToolTip(m_lineOutIncludeTx->accessibleDescription());
+    m_lineOutIncludeTx->setEnabled(false);
+    applyCanonSheet(m_lineOutIncludeTx, [] {
+        return QStringLiteral("QCheckBox { color: {{color.canon.inkSoft}}; font-size: 11px; }")
+            + canonIndicatorRules();
+    });
+    lineOutRow->addWidget(m_lineOutIncludeTx);
+    lineOutRow->addStretch();
+    outer->addLayout(lineOutRow);
+    connect(m_lineOutIncludeTx, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (m_tciServer) { m_tciServer->setLineOutIncludeTx(enabled); }
+    });
     recordingRow->setContentsMargins(4, 2, 4, 2);
     m_microphoneRecording = new QCheckBox(tr("Mic During TX (Experimental)"), this);
     m_microphoneRecording->setObjectName(QStringLiteral("tciMicrophoneRecording"));
@@ -434,12 +455,18 @@ void TciApplet::setRadioModel(RadioModel* model)
     delete m_microphoneAvailability;
     m_microphoneAvailability = nullptr;
     if (!model) {
+        m_lineOutIncludeTx->setEnabled(false);
+        m_lineOutIncludeTx->setAccessibleDescription(tr("Line Out requires a connected radio, PC Audio and a TCI server."));
         m_microphoneRecording->setEnabled(false);
         m_microphoneRecording->setAccessibleDescription(tr("Microphone capture requires a supported connected radio."));
         updateMicrophoneRecordingControls();
         return;
     }
     m_microphoneAvailability = new ControlAvailabilityRegistry(*model, this);
+    m_microphoneAvailability->registerWidget(m_lineOutIncludeTx,
+        tr("Line Out requires a connected radio, PC Audio and a TCI server."),
+        [this](bool connected, const RadioCapabilities&) { return connected && m_tciServer; },
+        [this] { return m_tciServer && m_tciServer->lineOutIncludeTx(); }, false);
     m_microphoneAvailability->registerWidget(m_microphoneRecording,
         tr("Microphone capture requires a supported connected radio and a TCI server."),
         [this](bool connected, const RadioCapabilities& caps) {
@@ -513,12 +540,17 @@ void TciApplet::setTciServer(TciServer* tci)
 {
 #ifdef HAVE_WEBSOCKETS
     if (m_tciServer) {
+        disconnect(m_tciServer, &TciServer::lineOutIncludeTxChanged, this, nullptr);
         disconnect(m_tciServer, &TciServer::microphoneRecordingEnabledChanged, this, nullptr);
         disconnect(m_tciServer, &TciServer::microphoneRecordingGainChanged, this, nullptr);
         disconnect(m_tciServer, &TciServer::microphoneRecordingLevel, this, nullptr);
         disconnect(m_tciServer, &TciServer::clientCountChanged, this, nullptr);
     }
     m_tciServer = tci;
+    {
+        const QSignalBlocker blocker(m_lineOutIncludeTx);
+        m_lineOutIncludeTx->setChecked(tci && tci->lineOutIncludeTx());
+    }
     m_microphoneMeter->setGain(tci ? tci->microphoneRecordingGain() : 1.0f);
     m_microphoneRecording->setEnabled(false);
     if (m_microphoneAvailability) { m_microphoneAvailability->refreshEngaged(); }
@@ -527,6 +559,11 @@ void TciApplet::setTciServer(TciServer* tci)
         m_microphoneRecording->setChecked(tci && tci->microphoneRecordingEnabled());
     }
     if (tci) {
+        connect(tci, &TciServer::lineOutIncludeTxChanged, this, [this](bool enabled) {
+            const QSignalBlocker blocker(m_lineOutIncludeTx);
+            m_lineOutIncludeTx->setChecked(enabled);
+            if (m_microphoneAvailability) { m_microphoneAvailability->refreshEngaged(); }
+        });
         connect(tci, &TciServer::microphoneRecordingEnabledChanged, this, [this](bool enabled) {
             const QSignalBlocker blocker(m_microphoneRecording);
             m_microphoneRecording->setChecked(enabled);

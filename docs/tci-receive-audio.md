@@ -32,6 +32,37 @@ handoffs and per-receiver packet contents. These establish client-side route
 selection, not the radio's microphone-source isolation or timing under live
 MultiFlex; those still require hardware qualification.
 
+## Independent Line Out (type 4)
+
+`LINE_OUT_START:<receiver>;` / `LINE_OUT_STOP:<receiver>;` maintain subscriptions
+separate from `AUDIO_START` / `AUDIO_STOP`. Each requested receiver labels a copy
+of the same final shared playback mix. Wire format is fixed 48 kHz stereo float32;
+ordinary RX negotiation, RX gain and MIC gain do not alter it. The standard
+64-byte header has type 4 and scalar-sample length. Existing type-1 routing stays
+unchanged.
+
+The source is the stereo chunk accepted by the PC playback device, after source
+mixing, slice-controlled balance and client DSP. Capture applies the PC playback
+master gain/mute once. It is not a DAX sum and does not separately apply slice
+gain/pan. Non-native device rates, including 44.1 kHz, convert L/R independently
+to the typed 48 kHz domain; native 24/48 kHz capture preserves its format until
+the worker converts to the fixed wire rate. PCM epochs retire on disable,
+device close/rate change and TX-state transitions. The existing bounded mailbox
+and per-client 256 KiB output limit also apply to Line Out.
+
+`TciRecording.lineOutIncludeTx` defaults false. While false, Line Out sends
+silence during any radio TX, including simultaneous receive. While true, it
+passes the playback mix unchanged; it does not add `dax_mic` or local TX PCM.
+Radio-side MON must already be audible to appear in this mix. This is a
+presentation recording, not the station-owned mic-attribution contract above.
+No MON, PTT or radio input selection commands are issued. PC Audio is required;
+separate local cue/sidetone sinks and server-side file recording are outside scope.
+
+Socket-free tests cover wire subscriptions, negotiation independence, stereo,
+master gain/mute, replay/revocation, multi-source playback equality, TX opt-in,
+backpressure and reentrant stop. Real-radio MON/TX and logger recordings still
+need operator-controlled qualification.
+
 ## Formats and conversion
 
 Producer metadata travels with each owning `PcmFrame`: source, session, format

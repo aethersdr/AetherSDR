@@ -170,11 +170,13 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         AppSettings::instance().value("TciRecording", "{}").toString().toUtf8())
         .object();
     m_microphoneRecordingEnabled = recording.value("microphoneDuringTx").toBool(false);
+    m_lineOutIncludeTx = recording.value("lineOutIncludeTx").toBool(false);
     const double microphoneGain = recording.value("microphoneGain").toDouble(1.0);
     if (std::isfinite(microphoneGain)) {
         m_microphoneRecordingGain = static_cast<float>(std::clamp(microphoneGain, 0.0, 1.0));
     }
     m_io = std::make_unique<TciIoWorker>();
+    m_io->setLineOutIncludeTx(m_lineOutIncludeTx);
     m_microphoneRetryTimer = new QTimer(this);
     m_microphoneRetryTimer->setSingleShot(true);
     m_microphoneRetryTimer->setInterval(2000);
@@ -203,6 +205,14 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         }
     });
     connect(m_io.get(), &TciIoWorker::clientOpened, this, &TciServer::onClientOpened);
+    connect(m_io.get(), &TciIoWorker::lineOutStopped, this, [this](quint64 id, quint64 generation) {
+        if (ClientState* client = clientStateFor(clientById(id)); client && client->lineOutGeneration == generation) {
+            client->lineOutReceivers.clear();
+            ++client->lineOutGeneration;
+            updateLineOutCapture();
+            emit clientsChanged();
+        }
+    });
     connect(m_io.get(), &TciIoWorker::textReceived, this,
             [this](quint64 id, const QString& text, const TxCoordinator::Request& input) {
         QPointer<TciServer> self(this);
@@ -1662,10 +1672,29 @@ void TciServer::onTextMessage(const QString& msg)
             replyText(ws,cmd.trimmed() + ";");
             continue;
         }
-        if (trimmed.startsWith("line_out_start") ||
-            trimmed.startsWith("line_out_stop") ||
-            trimmed.startsWith("line_out_recorder")) {
-            // Line-out recording — not applicable to FlexRadio, acknowledge
+        if (trimmed.startsWith("line_out_start:") || trimmed.startsWith("line_out_stop:")) {
+            const bool starting = trimmed.startsWith("line_out_start:");
+            bool valid = false;
+            const int receiver = trimmed.section(QLatin1Char(':'), 1).toInt(&valid);
+            if (!valid || receiver < 0 || receiver >= 8
+                || (starting && (!m_model || receiver >= m_trxMap.trxCount(m_model)))) {
+                qCWarning(lcCat) << "TCI: invalid Line Out receiver";
+                continue;
+            }
+            const bool changed = starting ? !client.lineOutReceivers.contains(receiver)
+                                          : client.lineOutReceivers.contains(receiver);
+            if (changed) {
+                if (starting) { client.lineOutReceivers.insert(receiver); }
+                else { client.lineOutReceivers.remove(receiver); }
+                ++client.lineOutGeneration;
+                syncLineOutClient(client);
+            }
+            replyText(socket, cmd.trimmed() + ";");
+            if (!self || !socket || !socket->live()) { return; }
+            emit clientsChanged();
+            continue;
+        }
+        if (trimmed.startsWith("line_out_recorder")) {
             replyText(ws,cmd.trimmed() + ";");
             continue;
         }
@@ -2822,12 +2851,53 @@ TciClient* TciServer::clientById(quint64 id) const
 
 void TciServer::setAudioEngine(AudioEngine* audio)
 {
-    if (m_audio) { disconnect(m_io.get(), nullptr, m_audio, nullptr); }
+    if (m_audio) {
+        disconnect(m_io.get(), nullptr, m_audio, nullptr);
+        disconnect(m_audio, nullptr, this, nullptr);
+        QMetaObject::invokeMethod(m_audio, [previous = m_audio] { previous->setLineOutCaptureEnabled(false); }, Qt::AutoConnection);
+    }
     m_audio = audio;
+    m_lineOutCaptureWanted = false;
     if (audio) {
         connect(m_io.get(), &TciIoWorker::txPcmReady, audio,
                 &AudioEngine::feedDaxTxAudio, Qt::QueuedConnection);
+        connect(audio, &QObject::destroyed, this, [this] { m_audio = nullptr; m_lineOutCaptureWanted = false; });
+        connect(audio, &AudioEngine::lineOutPcmReady, this,
+            [ingress = m_pcmIngress](const PcmFrame& frame, bool transmitting) {
+                QMutexLocker lock(&ingress->mutex);
+                TciIoWorker* io = ingress->worker;
+                if (!io || !frame.current()) { return; }
+                io->post([io, frame, transmitting] { io->receiveLineOutPcm(frame, transmitting); },
+                         frame.samples().size() * sizeof(float));
+            }, Qt::DirectConnection);
     }
+    updateLineOutCapture();
+}
+
+void TciServer::setLineOutIncludeTx(bool enabled)
+{
+    if (m_lineOutIncludeTx == enabled) { return; }
+    m_lineOutIncludeTx = enabled;
+    writeRecordingSetting(QStringLiteral("lineOutIncludeTx"), enabled);
+    m_io->post([io = m_io.get(), enabled] { io->setLineOutIncludeTx(enabled); });
+    emit lineOutIncludeTxChanged(enabled);
+}
+
+void TciServer::syncLineOutClient(const ClientState& client)
+{
+    const TciLineOutConfig config{client.socket->lifetime, client.lineOutReceivers, client.lineOutGeneration};
+    m_io->post([io = m_io.get(), config] { io->configureLineOut(config); });
+    updateLineOutCapture();
+}
+
+void TciServer::updateLineOutCapture()
+{
+    bool wanted = false;
+    for (const ClientState& client : m_clients) { wanted |= !client.lineOutReceivers.isEmpty(); }
+    wanted = wanted && isRunning() && m_model && m_model->isConnected();
+    if (!m_audio || wanted == m_lineOutCaptureWanted) { return; }
+    m_lineOutCaptureWanted = wanted;
+    QMetaObject::invokeMethod(m_audio, [audio = m_audio, wanted] { audio->setLineOutCaptureEnabled(wanted); }, Qt::AutoConnection);
 }
 
 void TciServer::syncClient(const ClientState& client)
@@ -2836,6 +2906,7 @@ void TciServer::syncClient(const ClientState& client)
         client.audioReceiver, client.audioSampleRate, client.audioChannels,
         client.audioFormat, client.rxGeneration};
     m_io->post([io = m_io.get(), config] { io->configureClient(config); });
+    syncLineOutClient(client);
     updateMicrophoneRecording();
 }
 
@@ -2861,6 +2932,7 @@ void TciServer::setMicrophoneRecordingGain(float gain)
 
 void TciServer::updateMicrophoneRecording()
 {
+    updateLineOutCapture();
     if (!m_model) { return; }
     IRadioBackend* backend = m_model->backend();
     bool wanted = false;

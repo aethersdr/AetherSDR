@@ -63,6 +63,7 @@ private:
 
     QPushButton* m_tciEnable{nullptr};
     QCheckBox* m_microphoneRecording{nullptr};
+    QCheckBox* m_lineOutIncludeTx{nullptr};
     QWidget* m_microphoneRow{nullptr};
     MeterSlider* m_microphoneMeter{nullptr};
     QLabel* m_microphoneLevelLabel{nullptr};
