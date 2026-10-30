@@ -1891,8 +1891,6 @@ MainWindow::MainWindow(QWidget* parent)
     // ── Title bar: PC Audio, master volume, headphone volume ────────────────
     // The remote_audio_rx stream controls the radio's audio routing:
     // stream exists → audio to PC; stream removed → audio to radio speakers.
-    // TCI clients get RX audio via DAX (#1331), not this stream, so PC Audio
-    // is free to toggle the stream purely on its own local-sink needs.
     connect(m_titleBar, &TitleBar::pcAudioToggled, this, [this](bool on) {
         if (on) {
             // Restart the local audio sink to recover from stale WASAPI sessions
@@ -1903,10 +1901,7 @@ MainWindow::MainWindow(QWidget* parent)
             });
             m_radioModel.createRxAudioStream();
         } else {
-            // Stop the local sink so audio isn't played locally, then drop
-            // the remote_audio_rx stream. TCI clients get RX audio via DAX
-            // (#1331), not this stream, so there's no client to keep it
-            // alive for.
+            // Stop the local sink so audio isn't played locally.
             QMetaObject::invokeMethod(m_audio, [this]() {
                 m_audio->stopRxStream();
             });

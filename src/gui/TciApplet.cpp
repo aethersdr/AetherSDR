@@ -218,7 +218,7 @@ void TciApplet::buildUI()
     m_lineOutIncludeTx->setObjectName(QStringLiteral("tciLineOutIncludeTx"));
     m_lineOutIncludeTx->setAccessibleName(tr("TCI Line Out TX recording"));
     m_lineOutIncludeTx->setAccessibleDescription(tr(
-        "Include TX monitor audio already heard through PC Audio in Line Out. "
+        "Include TX monitor audio present in the radio speaker mix in Line Out. "
         "Does not enable MON or add microphone audio. When off, Line Out is silent "
         "during radio transmit, including simultaneous receive audio."));
     m_lineOutIncludeTx->setToolTip(m_lineOutIncludeTx->accessibleDescription());
@@ -456,7 +456,7 @@ void TciApplet::setRadioModel(RadioModel* model)
     m_microphoneAvailability = nullptr;
     if (!model) {
         m_lineOutIncludeTx->setEnabled(false);
-        m_lineOutIncludeTx->setAccessibleDescription(tr("Line Out requires a connected radio, PC Audio and a TCI server."));
+        m_lineOutIncludeTx->setAccessibleDescription(tr("Line Out requires a connected radio and a TCI server, not PC Audio."));
         m_microphoneRecording->setEnabled(false);
         m_microphoneRecording->setAccessibleDescription(tr("Microphone capture requires a supported connected radio."));
         updateMicrophoneRecordingControls();
@@ -464,7 +464,7 @@ void TciApplet::setRadioModel(RadioModel* model)
     }
     m_microphoneAvailability = new ControlAvailabilityRegistry(*model, this);
     m_microphoneAvailability->registerWidget(m_lineOutIncludeTx,
-        tr("Line Out requires a connected radio, PC Audio and a TCI server."),
+        tr("Line Out requires a connected radio and a TCI server, not PC Audio."),
         [this](bool connected, const RadioCapabilities&) { return connected && m_tciServer; },
         [this] { return m_tciServer && m_tciServer->lineOutIncludeTx(); }, false);
     m_microphoneAvailability->registerWidget(m_microphoneRecording,

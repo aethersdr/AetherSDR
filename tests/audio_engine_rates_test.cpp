@@ -53,6 +53,7 @@ public:
     static bool openSink(AudioEngine& engine, int rate) { return engine.openRxSink(rate); }
     static bool hasSink(const AudioEngine& engine) { return engine.m_audioDevice != nullptr; }
     static void drain(AudioEngine& engine, qsizetype bytes) { engine.drainRxAudio(bytes); }
+    static void timerTick(AudioEngine& engine) { QMetaObject::invokeMethod(engine.m_rxTimer, "timeout", Qt::DirectConnection); }
     static qsizetype rawBytes(const AudioEngine& engine)
     {
         qsizetype result = engine.m_rxBuffer.size();
@@ -247,6 +248,32 @@ void feed(AudioEngine& engine, PcmProducer& producer, QVector<float> samples)
 
 void rateMatrix()
 {
+    for (int producerRate : {24000, 48000}) {
+        Fixture fixture(48000);
+        AudioEngineRatesTestAccess::detach(fixture.engine);
+        fixture.engine.setLineOutCaptureEnabled(true);
+        fixture.engine.setRxVolume(1.0f);
+        QByteArray captured;
+        QObject::connect(&fixture.engine, &AudioEngine::lineOutPcmReady, &fixture.engine,
+            [&captured](const PcmFrame& frame, bool) { captured += bytes(frame.samples()); });
+        PcmProducer producer;
+        producer.start(PcmPurpose::Speaker, -1, {producerRate, PcmLayout::Stereo});
+        for (int tick = 0; tick < 100; ++tick) {
+            if (tick == 50) { fixture.engine.stopRxStream(); }
+            feed(fixture.engine, producer, tone(producerRate, producerRate / 100, tick * (producerRate / 100)));
+            AudioEngineRatesTestAccess::timerTick(fixture.engine);
+        }
+        check(!captured.isEmpty() && finite(captured), "Line Out records without any PC playback device");
+        check(amplitude(captured, 48000, 0, 1000) > 0.27
+            && amplitude(captured, 48000, 1, 2300) > 0.15,
+            "device-free Line Out preserves the radio stereo mix");
+        check(fixture.output.data().isEmpty(), "device-free recording does not write to PC playback");
+        const qsizetype capturedSize = captured.size();
+        fixture.engine.setLineOutCaptureEnabled(false);
+        feed(fixture.engine, producer, tone(producerRate, producerRate / 100, producerRate));
+        AudioEngineRatesTestAccess::timerTick(fixture.engine);
+        check(captured.size() == capturedSize, "recording timer stops producing PCM after the last listener leaves");
+    }
     {
         Fixture fixture(48000);
         QList<PcmFrame> frames;

@@ -9943,6 +9943,10 @@ void RadioModel::createRxAudioStream()
 
 void RadioModel::removeRxAudioStream()
 {
+    if (m_lineOutAudioRequested) {
+        m_rxAudio.removeRequested = false;
+        return;
+    }
     if (m_rxAudio.streamId == 0) {
         if (m_rxAudio.createPending) {
             m_rxAudio.removeRequested = true;
@@ -9971,10 +9975,22 @@ void RadioModel::removeRxAudioStream()
     logRemoteAudioRxSummary(QStringLiteral("remove requested"));
 }
 
+void RadioModel::setLineOutAudioRequested(bool requested)
+{
+    if (m_lineOutAudioRequested == requested) { return; }
+    m_lineOutAudioRequested = requested;
+    if (requested) {
+        m_rxAudio.removeRequested = false;
+        createRxAudioStream();
+    } else if (AppSettings::instance().value("PcAudioEnabled", "True").toString() != "True") {
+        removeRxAudioStream();
+    }
+}
+
 void RadioModel::scheduleRxAudioStreamEnsure(const QString& reason)
 {
     const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
-    if (!pcAudio) {
+    if (!pcAudio && !m_lineOutAudioRequested) {
         qCDebug(lcProtocol) << "RadioModel: PC audio disabled — skipping remote_audio_rx";
         if (m_rxAudio.streamId != 0) {
             qCDebug(lcProtocol) << "RadioModel: removing unexpected owned remote_audio_rx while PC audio is disabled";
@@ -9991,7 +10007,7 @@ void RadioModel::scheduleRxAudioStreamEnsure(const QString& reason)
             logRemoteAudioRxSummary(QStringLiteral("ensure canceled: disconnected"));
             return;
         }
-        if (!pcAudioNow) {
+        if (!pcAudioNow && !m_lineOutAudioRequested) {
             logRemoteAudioRxSummary(QStringLiteral("ensure canceled: no longer needed"));
             return;
         }
@@ -10050,7 +10066,7 @@ bool RadioModel::handleRemoteAudioRxStreamStatus(const QString& object,
     }
 
     const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
-    if (!pcAudio && m_rxAudio.streamId != 0
+    if (!pcAudio && !m_lineOutAudioRequested && m_rxAudio.streamId != 0
         && (action == RadioStatusOwnership::RemoteAudioRxAction::Adopted
             || action == RadioStatusOwnership::RemoteAudioRxAction::Updated)) {
         qCDebug(lcProtocol) << "RadioModel: removing restored remote_audio_rx because PC audio is disabled";

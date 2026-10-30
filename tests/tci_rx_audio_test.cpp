@@ -2,6 +2,7 @@
 // routing, conversion and encoding. Only WebSocket writes/backlog are injected.
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/AudioEngine.h"
 #include "core/TciServer.h"
 #include "core/TciRxConverter.h"
 #include "core/backends/IRadioBackend.h"
@@ -242,7 +243,11 @@ public:
 
     static void lineOutProtocol()
     {
+        AudioEngine audio;
         Fixture fixture;
+        fixture.server.setAudioEngine(&audio);
+        fixture.server.m_running.store(true);
+        fixture.backend->connected = true;
         fixture.backend->add(3);
         fixture.backend->add(17);
         TciClient* listener = fixture.client(48000, 0);
@@ -250,6 +255,7 @@ public:
         fixture.command(listener, QStringLiteral("audio_stop:0;line_out_start:0;line_out_start:1;"));
         auto* state = fixture.server.clientStateFor(listener);
         check(state && !state->audioEnabled && state->lineOutReceivers == QSet<int>{0, 1}, "Line Out starts independently of audio_start");
+        check(fixture.model.lineOutAudioRequested(), "TCI Line Out subscribers request radio audio independently of PC playback");
         const quint64 generation = state->lineOutGeneration;
         fixture.command(listener, QStringLiteral("line_out_start:0;audio_samplerate:8000;audio_stream_channels:1;"));
         check(state->lineOutGeneration == generation, "duplicate Line Out start and RX negotiation preserve its subscription generation");
@@ -261,12 +267,14 @@ public:
         check(fixture.packets[listener].size() == 2 && fixture.packets[other].isEmpty(), "Line Out protocol delivers only to explicit subscribers");
         fixture.packets[listener].clear();
         fixture.command(listener, QStringLiteral("line_out_stop:0;"));
+        check(fixture.model.lineOutAudioRequested(), "remaining Line Out subscription keeps the radio audio feed alive");
         fixture.server.m_io->receiveLineOutPcm(frame(producer, 1024), false);
         check(fixture.packets[listener].size() == 1 && word(fixture.packets[listener].first(), 0) == 1,
               "Line Out stop removes only its requested receiver");
         fixture.packets[listener].clear();
         fixture.command(listener, QStringLiteral("audio_start:0;line_out_stop:1;"));
         check(state->audioEnabled && state->lineOutReceivers.isEmpty(), "Line Out stop does not stop RX");
+        check(!fixture.model.lineOutAudioRequested(), "last Line Out stop releases its radio audio demand independently of RX");
         fixture.server.m_io->receiveLineOutPcm(frame(producer, 1024), false);
         check(fixture.packets[listener].isEmpty(), "stopped Line Out emits no further packets");
     }
