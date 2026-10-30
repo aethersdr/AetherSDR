@@ -209,9 +209,9 @@ WIRE_TEXT_HELPERS = ("sendSet", "sendSetBit", "sendRemove")
 EMIT_RE = re.compile(r"(?:emit|Q_EMIT)\s+commandReady\s*\(")
 REPLY_EMIT_RE = re.compile(r"(?:emit|Q_EMIT)\s+replyCommandReady\s*\(")
 # CWX's two existing reply-aware sites belong to the separately claimed #6646
-# conversion. Keep its frozen ordinary-command count; all other files have a
-# zero allowance for reply-aware raw emissions, including newly added files.
-REPLY_MIGRATION_PENDING = {"src/models/CwxModel.cpp"}
+# conversion. Only those two sites are grandfathered; additional reply sites
+# increase its ordinary frozen count. Every other file has zero allowance.
+REPLY_MIGRATION_PENDING = {"src/models/CwxModel.cpp": 2}
 # A qualified call on one of the RadioModel receivers. sendCmdPublic is included
 # explicitly: it forwards straight to sendCmd(), and an earlier matcher of
 # `\bsendCmd\s*\(` did not match it, hiding ~26 call sites.
@@ -287,8 +287,7 @@ def count_for(path: Path) -> int:
          + len(QUALIFIED_RE.findall(text))
          + len(ACCESSOR_RE.findall(text))
          + len(HELPER_RE.findall(text)))
-    if rel not in REPLY_MIGRATION_PENDING:
-        n += len(REPLY_EMIT_RE.findall(text))
+    n += max(0, len(REPLY_EMIT_RE.findall(text)) - REPLY_MIGRATION_PENDING.get(rel, 0))
     if rel in PLANE_HELPER_FILES:
         n += len(UNQUALIFIED_RE.findall(text)) - len(DEF_RE.findall(text))
     return max(n, 0)

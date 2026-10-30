@@ -43,6 +43,10 @@ class CommandPlaneTest(unittest.TestCase):
             emit replyCommandReady(cmd, epoch, size);
         '''), 1)
 
+    def test_cwx_reply_allowance_cannot_grow(self):
+        self.assertEqual(self.count("src/models/CwxModel.cpp",
+            'emit replyCommandReady(cmd, epoch, size);' * 3), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -375,6 +375,10 @@ void refusalAndClosing()
     TxOperationIntegrationTestAccess::closing(closing.radio, true);
     check(!TxOperationIntegrationTestAccess::apply(closing.radio),
           "an active snapshot cannot bypass session-closing refusal");
+    closing.restore();
+    check(closing.wire.count("interlock bandset 9 acc_tx_enabled=1") == 1
+        && closing.wire.count("interlock bandset 9 tx1_enabled=1") == 1,
+          "session closing still restores owned outputs before disconnecting the transport");
     closing.backend->connected = false;
     TxOperationIntegrationTestAccess::closing(closing.radio, false);
     check(!TxOperationIntegrationTestAccess::apply(closing.radio),

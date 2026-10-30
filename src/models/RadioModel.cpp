@@ -845,7 +845,7 @@ void RadioModel::wireFlexTransmitServices(FlexBackend* backend)
     const QPointer<RadioModel> model(this);
     backend->setServiceCommandSink([model](const QString& command, const RadioControlFence& current,
                                            FlexBackend::CommandReply completion) {
-        return model && model->isConnected() && !model->m_txSessionClosing
+        return model && model->isConnected()
             && !model->m_expiringPendingCallbacks && current && current()
             && model->sendCmd(command, std::move(completion), current) != 0;
     });
@@ -8218,7 +8218,7 @@ bool RadioModel::applyTuneInhibit()
                 m_tuneInhibit->outputs.removeAll(field);
             }
         };
-        const ReceiveDispatch dispatched = dispatchTxBand({bandId, field, false}, controlSession(), this, rejected, true);
+        const ReceiveDispatch dispatched = dispatchTxBand({bandId, field, false}, controlSession(), this, rejected, TxBandWrite::Inhibit);
         if (dispatched == ReceiveDispatch::Unsupported && epoch == m_tuneInhibitEpoch && m_tuneInhibit) {
             m_tuneInhibit->outputs.removeAll(field);
             allDispatched = false;
@@ -8253,7 +8253,7 @@ void RadioModel::restoreTuneInhibit()
             return;
         }
         if (m_tuneInhibit->outputs.removeOne(field)) {
-            dispatchTxBand({state.bandId, field, true}, controlSession(), this, {}, true);
+            dispatchTxBand({state.bandId, field, true}, controlSession(), this, {}, TxBandWrite::Restore);
         }
     }
     if (epoch == m_tuneInhibitEpoch) {

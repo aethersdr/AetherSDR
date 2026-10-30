@@ -2339,9 +2339,10 @@ private:
     void restoreTuneInhibit();  // restore only this cycle's temporary writes
     void discardTuneInhibit();
     void relinquishTuneInhibit(const TxBandRequest& request);
+    enum class TxBandWrite { Operator, Inhibit, Restore };
     ReceiveDispatch dispatchTxBand(const TxBandRequest& request,
         std::optional<RadioControlSession> expectedSession, QObject* replyContext,
-        const RadioSetupCompletion& completion, bool temporary);
+        const RadioSetupCompletion& completion, TxBandWrite origin);
     QString transmitInhibitMessageForSlice(const SliceModel* slice) const;
     QString transmitInhibitMessageForTxSlice() const;
     void enforceTransmitInhibitForPan(const QString& panId);
