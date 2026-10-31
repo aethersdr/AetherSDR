@@ -50,9 +50,34 @@ inline constexpr DocFieldCredential kDocFieldCredentials[] = {
     {"Icom", "Password", "icom_password"},
 };
 
+// Named connection credentials are keychain-only. Reserve the dynamic keys
+// at the settings seam too, so an import or CLI write cannot persist them.
+struct ScopedCredential {
+    const char* prefix;
+    const char* suffix;
+};
+inline constexpr ScopedCredential kScopedCredentials[] = {
+    {"smartlink/", "/refresh_token"},
+    {"icom/", "/password"},
+};
+
+inline bool isScopedCredentialKey(const QString& key)
+{
+    for (const auto& entry : kScopedCredentials) {
+        const QString prefix = QLatin1String(entry.prefix);
+        const QString suffix = QLatin1String(entry.suffix);
+        if (key.startsWith(prefix) && key.endsWith(suffix)
+            && key.size() == prefix.size() + 64 + suffix.size()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Exact-name check: is `key` one of the known flat credential keys?
 inline bool isFlatCredentialKey(const QString& key)
 {
+    if (isScopedCredentialKey(key)) { return true; }
     for (const auto& entry : kFlatCredentials) {
         if (key == QLatin1String(entry.settingsKey)) {
             return true;
@@ -64,6 +89,7 @@ inline bool isFlatCredentialKey(const QString& key)
 // Keychain key for a flat credential settings key (empty when `key` isn't one).
 inline QString keychainKeyForFlat(const QString& key)
 {
+    if (isScopedCredentialKey(key)) { return key; }
     for (const auto& entry : kFlatCredentials) {
         if (key == QLatin1String(entry.settingsKey)) {
             return QLatin1String(entry.keychainKey);

@@ -69,6 +69,8 @@
 #include "core/AutomationServer.h"
 
 #include <QDialogButtonBox>
+#include <QMediaDevices>
+#include <QAudioDevice>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -463,6 +465,27 @@ void MainWindow::wireDiscovery()
         }
     });
 
+    connect(m_connPanel, &ConnectionPanel::operatorPreferencesRequested, this,
+            [this](const QJsonObject& preferences) {
+        if (m_radioModel.isConnected()) { return; }
+        const auto deviceFor = [](const QList<QAudioDevice>& devices, const QString& encoded) {
+            const QByteArray id = QByteArray::fromBase64(encoded.toLatin1());
+            for (const QAudioDevice& device : devices) {
+                if (!id.isEmpty() && device.id() == id) { return device; }
+            }
+            return QAudioDevice{};
+        };
+        const QAudioDevice input = deviceFor(QMediaDevices::audioInputs(), preferences.value("inputDeviceId").toString());
+        const QAudioDevice output = deviceFor(QMediaDevices::audioOutputs(), preferences.value("outputDeviceId").toString());
+        applyAudioDeviceSelection(input, output, AudioDeviceSelection::OperatorChoice,
+                                  AudioDeviceSelection::OperatorChoice, false);
+        const QString layout = preferences.value("layout").toString("1");
+        AppSettings::instance().setValue("PanadapterLayout", layout);
+        AppSettings::instance().save();
+        // Arrangement is client-owned; never create/delete radio panadapters
+        // while applying an operator profile.
+        if (m_panStack) { m_panStack->rearrangeLayout(layout); }
+    });
     connect(m_connPanel, &ConnectionPanel::connectRequested,
             this, [this](const RadioInfo& info){
         QList<quint32> disconnectHandles;
@@ -777,14 +800,21 @@ void MainWindow::wireDiscovery()
     });
     connect(&m_wanConnection, &WanConnection::errorOccurred, this, [this](const QString& err) {
         m_connPanel->setStatusText("SmartLink error: " + err);
-        if (!m_reconnectDlg)
+        if (!m_reconnectDlg) {
             setPanadapterConnectionAnimation(false);
+            if (!m_radioModel.isConnected()) {
+                m_smartLink.setAccountLocked(false);
+                m_pendingWanRadio = {};
+            }
+        }
     });
 
 }
 
 void MainWindow::disconnectFromRadioByUser()
 {
+    m_smartLink.setAccountLocked(false);
+    m_pendingWanRadio = {};
     m_userDisconnected = true;
     m_wanReconnectTimer.stop();
     m_wanReconnectAttemptInProgress = false;
@@ -836,6 +866,11 @@ void MainWindow::maybeAutoConnectToDiscoveredRadio(const RadioInfo& info)
         m_connPanel->setStatusText(
             QStringLiteral("%1 is already in use by another client and can't be shared.")
                 .arg(info.model));
+        setPanadapterConnectionAnimation(false);
+        return;
+    }
+
+    if (!m_connPanel->applyWorkspaceOperator()) {
         setPanadapterConnectionAnimation(false);
         return;
     }
@@ -1131,6 +1166,8 @@ void MainWindow::wireRadioModel()
         m_wanReconnectTimer.stop();
         m_wanReconnectAttemptInProgress = false;
         m_terminalConnectionError = message;
+        m_smartLink.setAccountLocked(false);
+        m_pendingWanRadio = {};
         setPanadapterConnectionAnimation(false);
         if (m_reconnectDlg) {
             QDialog* reconnectDialog = m_reconnectDlg;

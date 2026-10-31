@@ -2503,6 +2503,12 @@
           "wait_visible": "connectionPanel"
         },
         {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
           "cmd": "resize",
           "target": "connectionPanel",
           "value": "760 800",
@@ -2515,9 +2521,10 @@
       "cleanup": [
         {
           "cmd": "invoke",
-          "target": "connectionLocalModeButton",
+          "target": "connectionBackToStation",
           "action": "click",
-          "_sleep": 0.5
+          "_sleep": 0.5,
+          "_allow_fail": true
         },
         {
           "cmd": "invoke",
@@ -2539,16 +2546,9 @@
           "_allow_fail": true
         }
       ],
-      "caption": "The Connect to Radio window, On This Network: every radio discovery found on the LAN. The addresses are blacked out.",
-      "alt": "Connect to Radio window. Three cards across the top read On This Network (selected), Remote with SmartLink and Connect by IP. The Available radios list holds three entries: Hermes-Lite 2, ready on your local network, highlighted, with its address blacked out; FLEX-8600 FLX8600 KK7GWY, shared radio on your network via multiFLEX at AetherSDR, USA; and AetherSDR Demo, Simulator (not on the air), DEMO, ready on your local network at 127.0.0.1. A Connect Selected Radio button and checkboxes for the adaptive frame-rate throttle, connecting to the last radio on start-up, waking an Icom on connect and showing the demo simulator follow, with Connected and a Disconnect button at the bottom.",
-      "redact": [
-        [
-          212,
-          318,
-          130,
-          22
-        ]
-      ]
+      "caption": "Choose a location, select a radio and use Connect to connect to that radio.",
+      "alt": "Connect to a radio window with Locations, the Radios at Home list, selected radio details, operator selection and SmartLink accounts.",
+      "radio": "demo"
     },
     {
       "id": "connect-by-ip-card",
@@ -2564,6 +2564,12 @@
           "wait_visible": "connectionPanel"
         },
         {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
           "cmd": "resize",
           "target": "connectionPanel",
           "value": "760 800",
@@ -2571,7 +2577,7 @@
         },
         {
           "cmd": "invoke",
-          "target": "connectionManualModeButton",
+          "target": "connectionAddRadio",
           "action": "click",
           "_sleep": 1.0
         },
@@ -2595,9 +2601,10 @@
       "cleanup": [
         {
           "cmd": "invoke",
-          "target": "connectionLocalModeButton",
+          "target": "connectionBackToStation",
           "action": "click",
-          "_sleep": 0.5
+          "_sleep": 0.5,
+          "_allow_fail": true
         },
         {
           "cmd": "invoke",
@@ -2619,8 +2626,9 @@
           "_allow_fail": true
         }
       ],
-      "caption": "The Connect by IP card, with a documentation address typed in.",
-      "alt": "Connect to Radio window with the Connect by IP card selected. The Radio IP address group has Radio type: FlexRadio, Radio IP: 192.0.2.25, Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander. Below are Connection options for slower links with a Use low bandwidth mode checkbox, and the shared checkboxes for the adaptive frame-rate throttle, connecting to the last radio, waking an Icom and showing the demo simulator."
+      "caption": "The saved manual connection form, with a documentation address typed in.",
+      "alt": "Connect to a radio manual form with Connection name above the radio family, host and source path, and Save connection beside Connect by IP.",
+      "radio": "demo"
     },
     {
       "id": "connect-smartlink-card",
@@ -2636,6 +2644,12 @@
           "wait_visible": "connectionPanel"
         },
         {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
           "cmd": "resize",
           "target": "connectionPanel",
           "value": "760 800",
@@ -2643,7 +2657,7 @@
         },
         {
           "cmd": "invoke",
-          "target": "connectionSmartLinkModeButton",
+          "target": "connectionManageAccounts",
           "action": "click",
           "_sleep": 1.0
         }
@@ -2654,9 +2668,10 @@
       "cleanup": [
         {
           "cmd": "invoke",
-          "target": "connectionLocalModeButton",
+          "target": "connectionBackToStation",
           "action": "click",
-          "_sleep": 0.5
+          "_sleep": 0.5,
+          "_allow_fail": true
         },
         {
           "cmd": "invoke",
@@ -2678,8 +2693,9 @@
           "_allow_fail": true
         }
       ],
-      "caption": "The Remote with SmartLink card, before signing in.",
-      "alt": "Connect to Radio window with the Remote with SmartLink card selected. The SmartLink account group has empty Email and Password fields and a Sign In button, with the note Sign in to see radios at remote stations. The Remote radios group reads Remote radios appear here after SmartLink sign-in. Connection options for slower links with Use low bandwidth mode sits below."
+      "caption": "Saved SmartLink accounts and sign-in, before authentication.",
+      "alt": "Connect to a radio SmartLink page with saved account selection, Add, Rename and Remove actions, sign-in fields and a remote radio list.",
+      "radio": "demo"
     },
     {
       "id": "connect-icom-rows",
@@ -2695,6 +2711,12 @@
           "wait_visible": "connectionPanel"
         },
         {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
           "cmd": "resize",
           "target": "connectionPanel",
           "value": "760 800",
@@ -2702,7 +2724,7 @@
         },
         {
           "cmd": "invoke",
-          "target": "connectionManualModeButton",
+          "target": "connectionAddRadio",
           "action": "click",
           "_sleep": 1.0
         },
@@ -2732,9 +2754,10 @@
       "cleanup": [
         {
           "cmd": "invoke",
-          "target": "connectionLocalModeButton",
+          "target": "connectionBackToStation",
           "action": "click",
-          "_sleep": 0.5
+          "_sleep": 0.5,
+          "_allow_fail": true
         },
         {
           "cmd": "invoke",
@@ -2757,7 +2780,8 @@
         }
       ],
       "caption": "Connect by IP with Radio type set to Icom (network): the Icom user, password, ports and CI-V rows appear.",
-      "alt": "Radio IP address group with Radio type: Icom (network), Radio IP: 192.0.2.30, empty Icom user and Icom password fields, Icom ports: Standard (50001–50003), Icom CI-V: Auto-detect (recommended), Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander."
+      "alt": "Radio IP address group with Radio type: Icom (network), Radio IP: 192.0.2.30, empty Icom user and Icom password fields, Icom ports: Standard (50001–50003), Icom CI-V: Auto-detect (recommended), Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander.",
+      "radio": "demo"
     },
     {
       "id": "runtime-monitor-threads",
@@ -4625,6 +4649,183 @@
       },
       "caption": "After Save, the status bar confirms the memory.",
       "alt": "The left end of the status bar reading Saved \"My first memory\" to memories."
+    },
+    {
+      "id": "station-home",
+      "page": "station-profiles",
+      "anchor_heading": "Setup",
+      "radio": "demo",
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "wait_visible": "connectionPanel"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionStationList",
+          "action": "selectRow",
+          "value": "0"
+        }
+      ],
+      "grab": {
+        "target": "connectionPanel"
+      },
+      "cleanup": [
+        {
+          "cmd": "connect",
+          "action": "hide",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "Locations organize your saved radios. The selected location is bold; the blue heading names its radio list.",
+      "alt": "Connect to a radio with Home selected in bold and a blue Radios at Home heading above the radio list."
+    },
+    {
+      "id": "station-pota",
+      "page": "station-profiles",
+      "anchor_heading": "Using saved connections",
+      "radio": "demo",
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "wait_visible": "connectionPanel"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionStationList",
+          "action": "selectRow",
+          "value": "1"
+        }
+      ],
+      "grab": {
+        "target": "connectionPanel"
+      },
+      "cleanup": [
+        {
+          "cmd": "connect",
+          "action": "hide",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "Choose POTA or another location to see its saved connection paths. Browsing locations does not connect or disconnect a radio.",
+      "alt": "POTA selected in the Locations list with its radios and connection summary."
+    },
+    {
+      "id": "operator-profile-selection",
+      "page": "station-profiles",
+      "anchor_heading": "Using operator profiles",
+      "radio": "demo",
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "wait_visible": "connectionPanel"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManageProfiles",
+          "action": "click"
+        }
+      ],
+      "grab": {
+        "target": "connectionOperatorProfiles"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "connectionOperatorProfiles"
+        },
+        {
+          "cmd": "connect",
+          "action": "hide",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "Operator profiles keep personal audio and layout preferences separate from locations and account credentials.",
+      "alt": "Operator profiles library with saved profiles and Create, Edit, Duplicate, Remove and Use profile actions."
+    },
+    {
+      "id": "operator-profile-creation",
+      "page": "station-profiles",
+      "anchor_heading": "Using operator profiles",
+      "radio": "demo",
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "wait_visible": "connectionPanel"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManageProfiles",
+          "action": "click"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionOperatorCreate",
+          "action": "click"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionProfileName",
+          "action": "setText",
+          "value": "Portable operator"
+        }
+      ],
+      "grab": {
+        "target": "connectionProfileEditor"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "connectionProfileEditor"
+        },
+        {
+          "cmd": "close",
+          "target": "connectionOperatorProfiles"
+        },
+        {
+          "cmd": "connect",
+          "action": "hide",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "Start from defaults or another profile, then choose microphone, output and pan arrangement. Enter saves the profile.",
+      "alt": "Create Operator profile dialog with a name, source profile, microphone, audio output, pan arrangement and Create and use profile action."
     }
   ]
 }

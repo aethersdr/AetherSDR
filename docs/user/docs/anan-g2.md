@@ -23,7 +23,7 @@ AetherSDR can receive with an Apache Labs **ANAN-G2** over openHPSDR Protocol 2.
 
 ## Setup
 
-The G2 is found automatically on your LAN: open **File → Connect to Radio...** → **On This Network**, select it and click **Connect Selected Radio**.
+The G2 is found automatically on your LAN: open **File → Connect to Radio...** → **Nearby radios**, select it and click **Connect Selected Radio**.
 
 Discovery also sends a directed broadcast to each attached IPv4 subnet. This can find a G2 on a second NIC with its own subnet. Two NICs sharing a subnet still use the preferred route; VPNs and routers may block broadcast discovery. If the G2 does not appear, use **Connect by IP** with **Radio type:** set to **ANAN-G2** (see [Manual Connection](./manual-connection.md)).
 

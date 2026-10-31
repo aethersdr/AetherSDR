@@ -2774,6 +2774,9 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
     }
 
     const QString normalizedAction = action.trimmed().toLower();
+    if (name == QLatin1String("connect") && normalizedAction == QLatin1String("profiles")) {
+        return true;
+    }
     // The probe constructs only an isolated TransmitModel and touches no session.
     if (name == QLatin1String("interlock") && action == QLatin1String("probe")) {
         return true;
@@ -3284,7 +3287,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doMeterWindow(a.action, a.value);
             });
 
-        add("connect", {}, "connect <list|show|hide|local|ip|wait> [args]",
+        add("connect", {}, "connect <list|profiles|profile stations|operators <id>|show|hide|local|ip|wait> [args]",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket* sock) -> QJsonObject {
                 if (a.action.isEmpty()) {
@@ -6496,6 +6499,19 @@ QJsonObject AutomationServer::doConnect(const QString& action,
         };
     }
 
+    if (a == QLatin1String("profiles")) {
+        return QJsonObject{{"ok", true}, {"profiles", conn->automationConnectionProfiles()}};
+    }
+    if (a == QLatin1String("profile")) {
+        const QStringList parts = arg.simplified().split(' ');
+        if (parts.size() != 2 || (parts[0] != QLatin1String("stations") && parts[0] != QLatin1String("operators"))) {
+            return err(QStringLiteral("connect profile requires stations|operators <id>"));
+        }
+        QString error;
+        if (!conn->automationSelectConnectionProfile(parts[0], parts[1], &error)) { return err(error); }
+        return QJsonObject{{"ok", true}};
+    }
+
     if (m_radioModel && m_radioModel->isConnected()) {
         return err(QStringLiteral("already connected to a radio"));
     }
@@ -6667,7 +6683,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
     }
 
     return err(QStringLiteral("unknown connect action: ") + action
-               + QStringLiteral(" (use list|show|hide|local|ip|wait)"));
+               + QStringLiteral(" (use list|profiles|profile|show|hide|local|ip|wait)"));
 }
 
 QJsonObject AutomationServer::doConnectDialog(const QString& action)

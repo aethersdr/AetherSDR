@@ -2785,6 +2785,9 @@ Bare-line forms are also accepted:
 
 ```text
 connect list
+connect profiles
+connect profile stations <station-id>
+connect profile operators <operator-id>
 connect show
 connect hide
 connect local first
@@ -2794,6 +2797,17 @@ connect ip 192.168.1.21 hl2
 connect wait 30000
 disconnect
 ```
+
+`connect profiles` returns the versioned connection workspace: saved locations and
+their connection paths, operator audio/layout preferences, account labels and
+references, and the selected IDs. The API retains the `stations` collection name
+for compatibility with saved documents; the UI calls these **Locations**.
+It never contains passwords or refresh tokens.
+It is available in Observe-only mode. `connect profile stations|operators <id>`
+persists a selection for the next connection, including while a radio is live;
+it neither connects nor applies audio or radio state. This mutation is refused
+in Observe-only mode. Profile creation and editing are exercised through the
+normal `connectionProfileEditor` widgets with `invoke`.
 
 `connect show` and `connect hide` idempotently show/raise or hide the
 modeless **Connect to Radio** dialog for visual debugging; they do not toggle,
@@ -4916,7 +4930,7 @@ audio devices require separate hardware validation.
 | `invoke` | — | invoke <target> <action> [value…] — drive a control (TX-guarded) |
 | `get` | — | get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters |
 | `meterwindow` | — | meterwindow <start [duration_ms]\|status\|stop> — bounded meter ages and unrounded peaks; never keys TX |
-| `connect` | — | connect <list\|show\|hide\|local\|ip\|wait> [args] |
+| `connect` | — | connect <list\|profiles\|profile stations\|operators <id>\|show\|hide\|local\|ip\|wait> [args] |
 | `disconnect` | — | disconnect from the radio |
 | `txtest` | — | txtest <twotone\|off> — TX-gated test signal |
 | `atu` | — | atu <bypass\|start> — antenna tuner (start is TX-gated) |
