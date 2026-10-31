@@ -242,13 +242,23 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             &TciServer::onRadioTransmittingChanged);
         connect(m_model, &RadioModel::radioTransmitConfirmed, this,
             &TciServer::onRadioTransmitConfirmed);
+        m_txSwrClock.start();
         connect(&m_model->meterModel(), &MeterModel::txMetersChanged,
                 this, [this](float fwd, float swr, bool swrValid) {
             m_cachedFwdPower = fwd;
             // TCI's wire format has no absent marker; 1.0 is what this cache
             // held before any SWR arrived, so absence maps back to it rather
             // than to 0.0 (which is out of the meter's domain).
-            m_cachedSwr = swrValid ? swr : 1.0f;
+            // The raw ratio is only a measurement while carrier is present:
+            // in speech pauses and at low drive it divides two noise floors
+            // (HL2 often reads rev > fwd there) and TCI clients light their
+            // high-SWR alarm on a matched antenna. Gate it through the same
+            // filter the S-meter uses so TCI reports what the operator sees.
+            const RadioSwrValidityFilter::Result gated = m_txSwrFilter.update(
+                m_model->meterModel().fwdPowerInstant(),
+                swrValid ? swr : 1.0f,
+                m_txSwrClock.elapsed(), kTciMaximumSwr);
+            m_cachedSwr = gated.hasReading ? gated.displayedSwr : 1.0f;
         });
         // tx_sensors' mic field is the same "transmit level" the S-meter's
         // Level face shows: MICPEAK where the radio publishes no MIC (HL2).
@@ -3586,6 +3596,13 @@ void TciServer::onRadioTransmittingChanged(bool transmitting)
 {
     const bool changed = transmitting != m_lastRadioTx;
     m_lastRadioTx = transmitting;
+
+    if (changed && !transmitting) {
+        // Same as the S-meter on un-key: the next over starts from rest, not
+        // from the last over's held reading.
+        m_txSwrFilter.reset();
+        m_cachedSwr = 1.0f;
+    }
 
     if (transmitting) {
         if (m_icomUnkeySettle.isSettling()) {

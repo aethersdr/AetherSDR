@@ -12,6 +12,7 @@
 #include "PcmFrame.h"
 #include "TxCoordinator.h"
 #include "core/backends/SliceLifecycleRequest.h"
+#include "models/RadioSwrValidityFilter.h"
 
 #include <QWebSocketProtocol>  // CloseCode for the m_rxClose test seam
 #include <QObject>
@@ -517,6 +518,11 @@ private:
     float             m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
     float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};
+    // tx_sensors' SWR goes through the S-meter's trust gate (see the
+    // txMetersChanged hookup); reset on every un-key edge.
+    static constexpr float kTciMaximumSwr = 10.0f;
+    RadioSwrValidityFilter m_txSwrFilter;
+    QElapsedTimer     m_txSwrClock;
     float             m_cachedMicLevel{-50.0f};
     float             m_cachedAlc{0.0f};       // SW-ALC peak, dBFS
 };

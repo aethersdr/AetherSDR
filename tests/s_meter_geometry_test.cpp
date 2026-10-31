@@ -1,7 +1,7 @@
 ﻿#include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "gui/AnalogMeterFaceTheme.h"
-#include "gui/RadioSwrValidityFilter.h"
+#include "models/RadioSwrValidityFilter.h"
 #include "gui/SMeterGeometry.h"
 #include "gui/SMeterWidget.h"
 #include "TestWindowActivation.h"

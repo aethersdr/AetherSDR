@@ -574,6 +574,32 @@ void testEveryTransmitLevelConsumerUsesTheHelper()
           "level face: every consumer shows MICPEAK where there is no MIC (VFO, Phone/CW, TCI too)");
 }
 
+// TCI tx_sensors' SWR must be the S-meter's trusted SWR, not the raw ratio:
+// between syllables and at low drive the raw ratio divides two noise floors
+// (an HL2 reads rev > fwd there) and TCI clients raise a high-SWR alarm on a
+// matched antenna while the S-meter correctly holds. Read as source text, like
+// the level-face check above, because the consumer is a TciServer lambda.
+void testTciSwrUsesTheSMeterValidityFilter()
+{
+    const QString text = readSource(QStringLiteral("src/core/TciServer.cpp"));
+    const QString marker = QStringLiteral("&MeterModel::txMetersChanged");
+    const qsizetype at = text.indexOf(marker);
+    check(at >= 0, "tci swr: TciServer consumes txMetersChanged");
+    const qsizetype end = text.indexOf(QStringLiteral("});"), at);
+    const QString body = text.mid(at, end < 0 ? -1 : end - at);
+    check(body.contains(QStringLiteral("m_txSwrFilter.update("))
+              && body.contains(QStringLiteral("fwdPowerInstant()")),
+          "tci swr: tx_sensors SWR is gated on forward power like the S-meter");
+    check(!body.contains(QStringLiteral("m_cachedSwr = swrValid ? swr")),
+          "tci swr: the raw ratio is no longer cached for tx_sensors");
+
+    const qsizetype edge =
+        text.indexOf(QStringLiteral("void TciServer::onRadioTransmittingChanged"));
+    const QString edgeBody = text.mid(edge, 600);
+    check(edge >= 0 && edgeBody.contains(QStringLiteral("m_txSwrFilter.reset()")),
+          "tci swr: un-key resets the held SWR, as the S-meter does");
+}
+
 // ── Rows 12/13: band-stack bookmark recall ──────────────────────────────────
 
 BandStackEntry bookmark()
@@ -730,6 +756,7 @@ int main(int argc, char** argv)
     testGraphicEqIsNotReportedAsUnsupported();
     testLevelFaceReadsMicPeakWhereThereIsNoMicMeter();
     testEveryTransmitLevelConsumerUsesTheHelper();
+    testTciSwrUsesTheSMeterValidityFilter();
     testBandStackRecallReachesTheSeam();
     testBandStackRecallWritesTheSameFlexWireText();
     testBandStackRecallLeavesTheKiwiAgcAlone();
