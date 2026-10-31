@@ -179,6 +179,26 @@ int main(int argc, char** argv)
     // One late packet each from the ordinary, wrap and resize cases.
     CHECK(stream.categoryStats(PanadapterStream::CatFFT).late == 3);
 
+    // A counter restart that lands 1-8 below the current frame is read as
+    // late, at either width, until the count passes the old frame: at most
+    // kVitaLateFrameLookback + 1 frames are lost, once. Accepted because
+    // FlexLib keeps its counter across a resize and drops any older frame
+    // with no limit (Panadapter.cs:805), and a FLEX-8600 capture showed
+    // waterfall timecodes stepping +1 across 6 width changes.
+    {
+        constexpr quint32 kId = kRef + 6;
+        Access::frame(stream, kId, 10, 100);
+        for (quint32 n = 5; n <= 10; ++n) {
+            Access::frame(stream, kId, n, 200);
+        }
+        Access::fragment(stream, kId, 6, 0, 200, Access::kTotalBins * 2,
+                         Access::kTotalBins * 2);
+        CHECK(emitted[kId].size() == 1);
+        CHECK(stream.categoryStats(PanadapterStream::CatFFT).late == 3 + 10 + 1);
+        Access::frame(stream, kId, 11, 200);
+        CHECK(emitted[kId].size() == 2);
+    }
+
     // Waterfall: a late tile from row 41 inside row 42 is dropped, and row 42
     // is emitted whole with its own values.
     {
