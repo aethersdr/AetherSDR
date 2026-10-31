@@ -169,7 +169,8 @@ playback mix, not that receiver alone. RX and Line Out can run together.
 and software mixer running without opening a PC playback device. It records
 the final shared stereo mix,
 including the open slices' existing volume, pan and mute, client-side RX DSP,
-and other sources in that mix. Playback master volume and mute also apply.
+and other sources in that mix. PC playback master volume and mute do not affect
+the recording, including when PC Audio is off.
 The TCI RX, TX and MIC faders do not add another recording gain to Line Out.
 It does not record other applications or separate local cue/sidetone devices.
 

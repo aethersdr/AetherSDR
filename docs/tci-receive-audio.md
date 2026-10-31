@@ -42,8 +42,8 @@ ordinary RX negotiation, RX gain and MIC gain do not alter it. The standard
 unchanged.
 
 The source is the stereo mixer output before the optional PC playback write, after source
-mixing, slice-controlled balance and client DSP. Capture applies the PC playback
-master gain/mute once. It is not a DAX sum and does not separately apply slice
+mixing, slice-controlled balance and client DSP. PC playback master gain and mute
+do not affect capture. It is not a DAX sum and does not separately apply slice
 gain/pan. Non-native device rates, including 44.1 kHz, convert L/R independently
 to the typed 48 kHz domain; native 24/48 kHz capture preserves its format until
 the worker converts to the fixed wire rate. PCM epochs retire on disable,
@@ -63,7 +63,7 @@ No MON, PTT or radio input selection commands are issued. PC Audio is optional;
 separate local cue/sidetone sinks and server-side file recording are outside scope.
 
 Socket-free tests cover wire subscriptions, negotiation independence, stereo,
-master gain/mute, replay/revocation, multi-source playback equality, TX opt-in,
+PC master gain/mute independence, replay/revocation, multi-source playback equality, TX opt-in,
 backpressure and reentrant stop. Real-radio MON/TX and logger recordings still
 need operator-controlled qualification.
 

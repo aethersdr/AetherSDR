@@ -4455,14 +4455,12 @@ void AudioEngine::captureLineOutAudio(const QByteArray& pcm, int sampleRate)
     QVector<float> samples(pcm.size() / sizeof(float));
     std::memcpy(samples.data(), pcm.constData(), static_cast<std::size_t>(pcm.size()));
     if (!std::ranges::all_of(samples, [](float sample) { return std::isfinite(sample); })) { return; }
-    const float gain = m_muted.load() ? 0.0f : m_rxVolume.load();
-    const auto publish = [this, gain, transmitting](QVector<float> output, int rate) {
+    const auto publish = [this, transmitting](QVector<float> output, int rate) {
         const PcmFormat format{rate, PcmLayout::Stereo};
         if (!m_lineOutProducerStarted) {
             if (!m_lineOutProducer.start(PcmPurpose::Speaker, -1, format)) { return; }
             m_lineOutProducerStarted = true;
         }
-        for (float& sample : output) { sample *= gain; }
         const auto frame = m_lineOutProducer.produce(std::move(output));
         if (frame) { emit lineOutPcmReady(*frame, transmitting); }
     };

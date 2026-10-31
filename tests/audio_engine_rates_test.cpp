@@ -252,14 +252,17 @@ void rateMatrix()
         Fixture fixture(48000);
         AudioEngineRatesTestAccess::detach(fixture.engine);
         fixture.engine.setLineOutCaptureEnabled(true);
-        fixture.engine.setRxVolume(1.0f);
+        fixture.engine.setRxVolume(0.0f);
         QByteArray captured;
         QObject::connect(&fixture.engine, &AudioEngine::lineOutPcmReady, &fixture.engine,
             [&captured](const PcmFrame& frame, bool) { captured += bytes(frame.samples()); });
         PcmProducer producer;
         producer.start(PcmPurpose::Speaker, -1, {producerRate, PcmLayout::Stereo});
         for (int tick = 0; tick < 100; ++tick) {
-            if (tick == 50) { fixture.engine.stopRxStream(); }
+            if (tick == 50) {
+                fixture.engine.setMuted(true);
+                fixture.engine.stopRxStream();
+            }
             feed(fixture.engine, producer, tone(producerRate, producerRate / 100, tick * (producerRate / 100)));
             AudioEngineRatesTestAccess::timerTick(fixture.engine);
         }
@@ -299,15 +302,15 @@ void rateMatrix()
             check(frames.last().samples().size() * static_cast<qsizetype>(sizeof(float)) == fixture.output.data().size(),
                   "Line Out captures exactly the stereo frames accepted by the output device");
             for (qsizetype index = 0; index < frames.last().samples().size(); ++index) {
-                check(std::abs(frames.last().samples()[index] - rendered[index] * 0.5f) < 1e-7f,
-                      "Line Out preserves rendered stereo with master gain applied once");
+                check(std::abs(frames.last().samples()[index] - rendered[index]) < 1e-7f,
+                      "Line Out preserves rendered stereo independently of PC master gain");
             }
         }
         fixture.engine.setMuted(true);
         feed(fixture.engine, producer, tone(48000, 480, 960));
         fixture.tick();
-        check(!frames.isEmpty() && std::ranges::all_of(frames.last().samples(), [](float sample) { return sample == 0.0f; }),
-              "Line Out respects playback mute");
+        check(!frames.isEmpty() && std::ranges::any_of(frames.last().samples(), [](float sample) { return sample != 0.0f; }),
+              "Line Out remains audible while PC playback is muted");
         fixture.engine.setLineOutCaptureEnabled(false);
         check(std::ranges::none_of(frames, [](const PcmFrame& frame) { return frame.current(); }),
               "disabling Line Out revokes queued captured frames");
