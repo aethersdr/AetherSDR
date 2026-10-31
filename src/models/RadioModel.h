@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/backends/SetupStatusObservation.h"
+
 #include "core/TxGrantManager.h"
 #include "core/SpotRequestQueue.h"
 #include "core/SpectrumDecodeScale.h"
@@ -1586,6 +1588,16 @@ private:
     // 2.3 — RadioModel residual.
     void applyGpsChanges(const GpsDelta& delta);
     void resetGpsState(bool receiveMessages = true);
+    friend class FlexSetupStatusTestPeer;
+    void applySetupObservation(const SetupStatusObservation& observation);
+    void retireSetupObservations();
+    void resetSetupObservations();
+    std::shared_ptr<SetupStatusLifetime> m_setupObservationLifetime;
+    void refreshLicenseSubscription(const QDateTime& now);
+    quint64 m_setupObservationGeneration{0};
+    std::array<quint64, 6> m_filterSharpnessRevisions{};
+    QMap<QString, QDateTime> m_licenseSubscriptions;
+    QTimer m_licenseExpiryTimer;
     void wireGpsSessionReceivers(bool receiveMessages = true);
     void handleMessageReceived(const ParsedMessage& msg, quint64 gpsSessionGeneration);
     // Asks for the CW profile list once per session, whenever the backend's CW
@@ -1988,6 +2000,8 @@ private:
     using SetupCommandWriter = std::function<bool(const QString&, ResponseCallback)>;
     using SetupCommandSink = std::function<bool(const QString&, const RadioSetupCompletion&)>;
     SetupCommandSink setupCommandSink(const SetupCommandWriter& writer = {});
+    bool sendSetupEntityCommand(const QString& command, const RadioSetupCompletion& completion,
+                                const std::shared_ptr<SetupStatusLifetime>& identity);
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend
@@ -2382,6 +2396,7 @@ public:
     const QMap<int, TxBandInfo>& txBandSettings() const { return m_txBandSettings; }
 
     struct XvtrInfo {
+        std::shared_ptr<SetupStatusLifetime> lifetime;
         int     index{0};
         int     order{-1};
         QString name;

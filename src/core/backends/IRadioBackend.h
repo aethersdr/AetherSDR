@@ -1,5 +1,7 @@
 #pragma once
 
+#include "SetupStatusObservation.h"
+
 #include "IndependentTxControl.h"
 
 #include "core/RadioSettingsIdentity.h"
@@ -1099,6 +1101,7 @@ public:
                                  quint64 requestId, const QVariant& arg = {}) = 0;
 
 signals:
+    void setupStatusObserved(const AetherSDR::SetupStatusObservation& observation);
     void independentTxStopped(const AetherSDR::TxStopEvidence& evidence);
     // The radio's own answer to a dispatched TransmitControlRequest whose
     // answerTicket was nonzero: applied when it accepted the setting. Emitted

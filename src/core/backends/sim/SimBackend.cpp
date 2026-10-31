@@ -74,6 +74,10 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     m_connection->moveToThread(m_connThread);
     connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
     m_connThread->start();
+    connect(m_connection, &RadioConnection::setupStatusObserved, this,
+            [this](const SetupStatusObservation& observation) {
+        if (observation.current()) { emit setupStatusObserved(observation); }
+    });
 
     // Re-emit wire errors as the interface's own signal (as FlexBackend does).
     // connected and disconnected are re-emitted by the ordered handlers below.

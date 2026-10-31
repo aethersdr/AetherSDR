@@ -184,6 +184,13 @@ Radio connection is not part of Radio Setup.
 
 See [First Connection](./first-connection.md) and [Manual Connection](./manual-connection.md).
 
+License information clears when its radio session ends. Subscription expiry is
+shown separately from feature availability: the radio’s feature reports decide
+which licensed controls are available. Filter sharpness edits are retained after the radio accepts them; later radio
+status takes precedence. Filter sharpness status updates preserve settings
+omitted from a partial radio report, and the controls follow confirmed changes
+made by another client.
+
 ## See also
 
 - [Audio Settings](./audio-settings.md)

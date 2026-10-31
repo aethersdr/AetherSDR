@@ -1,4 +1,5 @@
 #include "WanConnection.h"
+#include <QPointer>
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
 #include <QCryptographicHash>
@@ -132,6 +133,7 @@ WanConnection::~WanConnection()
 
 void WanConnection::resetSessionState()
 {
+    m_setupStatusSource.retire();
     // This object outlives every TLS session (a by-value MainWindow member), so
     // reset per session: otherwise a partial line from the dead link prefixes the
     // next session's first line and stale handle/sequence/callbacks answer into the
@@ -155,6 +157,7 @@ void WanConnection::connectToRadio(const QString& host, quint16 tlsPort,
     }
 
     resetSessionState();
+    m_setupStatusSource.begin();
     m_wanHandle = wanHandle;
     m_host      = host;
     m_expectedFingerprintHex = loadStoredFingerprint(host);
@@ -331,6 +334,7 @@ void WanConnection::onSslErrors(const QList<QSslError>& errors)
 
 void WanConnection::onSocketError(QAbstractSocket::SocketError /*error*/)
 {
+    m_setupStatusSource.retire();
     const QString msg = m_socket.errorString();
     qCWarning(lcSmartLink) << "WanConnection: socket error:" << msg;
     emit errorOccurred(msg);
@@ -369,6 +373,8 @@ void WanConnection::onHeartbeat()
 
 void WanConnection::processLine(const QString& line)
 {
+    const auto setupLifetime = m_setupStatusSource.lifetime();
+    const QPointer<WanConnection> setupOwner(this);
     // GPS coordinates are never useful in a support log. Compute this before
     // the certificate-decision early return so that path cannot bypass the
     // normal GPS payload suppression below.
@@ -408,7 +414,10 @@ void WanConnection::processLine(const QString& line)
     }
 
     ParsedMessage msg = CommandParser::parseLine(line);
+    const auto setupObservation = msg.type == MessageType::Status
+        ? m_setupStatusSource.decode(msg.object, msg.kvs, setupLifetime) : std::nullopt;
     emit messageReceived(msg);
+    if (!setupOwner) { return; }
 
     switch (msg.type) {
     case MessageType::Version:
@@ -435,6 +444,10 @@ void WanConnection::processLine(const QString& line)
     }
 
     case MessageType::Status:
+        if (setupObservation && setupObservation->current()) {
+            emit setupStatusObserved(*setupObservation);
+            if (!setupOwner) { return; }
+        }
         emit statusReceived(msg.object, msg.kvs);
         break;
 

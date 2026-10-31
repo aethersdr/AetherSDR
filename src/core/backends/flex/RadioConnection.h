@@ -1,5 +1,7 @@
 #pragma once
 
+#include "FlexSetupStatus.h"
+
 #include "CommandParser.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/IndependentTxControl.h"
@@ -52,6 +54,9 @@ public:
     QHostAddress explicitLocalBindAddress() const { return m_explicitBindAddr; }
     QHostAddress sessionLocalBindAddress() const  { return m_sessionBindAddr; }
 
+    std::shared_ptr<SetupStatusLifetime> setupStatusLifetime() const { return m_setupStatusSource.lifetime(); }
+    void retireSetupStatus() { m_setupStatusSource.retire(); }
+
     using ResponseCallback = std::function<void(int resultCode, const QString& body)>;
 
 public slots:
@@ -82,6 +87,7 @@ public slots:
     void injectFaultStatus(const QString& line);
 
 signals:
+    void setupStatusObserved(const AetherSDR::SetupStatusObservation& observation);
     void independentPttStopped(const AetherSDR::TxStopEvidence& evidence);
     void stateChanged(ConnectionState state);
     void connected();
@@ -116,6 +122,8 @@ private slots:
 private:
     void resetSocket();
     void resetSessionState();
+    friend class FlexSetupStatusTestPeer;
+    FlexSetupStatusSource m_setupStatusSource;
     void processLine(const QString& line);
     void setState(ConnectionState s);
     bool writeSocketCommand(quint32 seq, const QString& command);

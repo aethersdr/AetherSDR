@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <utility>
 #include <optional>
 
 #include <QMap>
@@ -13,6 +14,7 @@ class QThread;
 class QVersionNumber;
 
 namespace AetherSDR {
+class WanConnection;
 
 // Reads FlexRadio's published release list. Forward-declared rather than
 // included: this header is scanned above the radio seam, and the include
@@ -57,6 +59,11 @@ public:
     void setAnsweredCommandSink(AnsweredCommandSink sink) { m_answeredSink = std::move(sink); }
     bool answersTransmitControl() const override { return bool(m_answeredSink); }
     // Configuration writes share LAN/WAN sequencing and report actual dispatch.
+    void bindSetupStatus(WanConnection* wan);
+    void retireSetupStatus();
+    using SetupEntitySink = std::function<bool(const QString&, const RadioSetupCompletion&,
+                                               const std::shared_ptr<SetupStatusLifetime>&)>;
+    void setSetupEntityCommandSink(SetupEntitySink sink) { m_setupEntitySink = std::move(sink); }
     void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
     void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId) override;
     void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
@@ -261,6 +268,11 @@ public:
     void decodeProfileFlags(const QMap<QString, QString>& kvs);
 
 private:
+    SetupEntitySink m_setupEntitySink;
+    QPointer<QObject> m_setupStatusTransport;
+    QPointer<WanConnection> m_setupStatusWan;
+    QMetaObject::Connection m_setupStatusBinding;
+    quint64 m_setupStatusRevision{0};
     void send(const QString& cmd);
     void sendTx(const QString& cmd, const TxCoordinator::Command& command);
     void sendSlice(const QString& cmd);   // guarded slice path (§6)

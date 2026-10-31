@@ -110,7 +110,7 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
         *pending = false;
         if (completion) { completion(result); }
     };
-    const RadioSetupCompletion reply = fencedSetupCompletion(replyContext,
+    RadioSetupCompletion reply = fencedSetupCompletion(replyContext,
         calibration ? completed : completion, !identity && !localDisplay);
     const auto persistIdentity = [&] {
         if (request.field == Field::Callsign) {
@@ -157,6 +157,31 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
              || request.field == Field::LowLatencyDigital) && !caps.hasSharpFilters)
         || (request.field == Field::MaximumPowerPercent && !caps.txPowerBands.isEmpty())) {
         return refuse();
+    }
+    if (request.field == Field::SharpnessLevel || request.field == Field::SharpnessAuto) {
+        const bool automatic = request.field == Field::SharpnessAuto;
+        const SharpnessMode mode = automatic ? std::get<SharpnessAuto>(request.value).mode
+                                            : std::get<SharpnessLevel>(request.value).mode;
+        const size_t index = static_cast<size_t>(mode) * 2 + size_t(automatic);
+        const quint64 revision = ++m_filterSharpnessRevisions[index];
+        const RadioSetupCompletion notify = reply;
+        // Flex firmware 4.3.16 acknowledges sharpness writes without a self echo.
+        // Retain only an accepted request; subsequent status remains authoritative. (#6913)
+        reply = fencedSetupCompletion(this, [alive, request, mode, automatic, index, revision, notify](const RadioSetupReply& result) {
+            if (alive && alive->m_filterSharpnessRevisions[index] == revision) {
+                if (result.kind == RadioSetupReply::Kind::Accepted && automatic) {
+                    bool& value = mode == SharpnessMode::Voice ? alive->m_filterVoiceAuto
+                        : mode == SharpnessMode::Cw ? alive->m_filterCwAuto : alive->m_filterDigitalAuto;
+                    value = std::get<SharpnessAuto>(request.value).enabled;
+                } else if (result.kind == RadioSetupReply::Kind::Accepted) {
+                    int& value = mode == SharpnessMode::Voice ? alive->m_filterVoice
+                        : mode == SharpnessMode::Cw ? alive->m_filterCw : alive->m_filterDigital;
+                    value = std::get<SharpnessLevel>(request.value).level;
+                }
+                emit alive->infoChanged();
+            }
+            if (notify) { notify(result); }
+        });
     }
     RadioSetupRequest effective = request;
     if (effective.field == Field::NetworkMtu) {
@@ -218,13 +243,14 @@ ReceiveDispatch RadioModel::requestUsbCable(const UsbCableRequest& request)
     if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
     const QPointer<RadioModel> alive(this);
     const RadioControlSession session = controlSession();
-    const ReceiveDispatch result = m_backend && controlSessionCurrent(session)
-        && request.valid() && m_usbCableModel.cables().contains(request.serial)
-        && (request.bit < 0 || m_usbCableModel.cables().value(request.serial).type == QLatin1String("bit"))
-        ? m_backend->requestUsbCable(request) : ReceiveDispatch::Unsupported;
-    if (alive && session == controlSession()) {
-        reportReceiveDispatch(result, QStringLiteral("USB cable setting"));
-    }
+    UsbCableRequest effective = request;
+    const UsbCable cable = m_usbCableModel.cables().value(request.serial);
+    if (!effective.expectedLifetime) { effective.expectedLifetime = cable.lifetime; }
+    const ReceiveDispatch result = m_backend && controlSessionCurrent(session) && request.valid()
+        && effective.expectedLifetime && effective.expectedLifetime == cable.lifetime
+        && effective.expectedLifetime->current() && (request.bit < 0 || cable.type == QLatin1String("bit"))
+        ? m_backend->requestUsbCable(effective) : ReceiveDispatch::Unsupported;
+    if (alive && session == controlSession()) { reportReceiveDispatch(result, QStringLiteral("USB cable setting")); }
     return result;
 }
 
@@ -236,14 +262,25 @@ ReceiveDispatch RadioModel::requestTransverter(const TransverterRequest& request
     if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
     const QPointer<RadioModel> alive(this);
     const RadioControlSession session = controlSession();
-    const RadioSetupCompletion reply = fencedSetupCompletion(replyContext, completion);
+    TransverterRequest effective = request;
+    const bool creating = request.field == TransverterRequest::Field::Create;
+    const auto identity = m_xvtrList.value(request.id).lifetime;
+    if (!effective.expectedLifetime && !creating) { effective.expectedLifetime = identity; }
+    const auto current = [effective, creating, identity] {
+        return creating || (identity && identity == effective.expectedLifetime && identity->current());
+    };
+    const RadioSetupCompletion reply = fencedSetupCompletion(replyContext, completion
+        ? RadioSetupCompletion([completion, current](const RadioSetupReply& result) {
+            completion(current() ? result : RadioSetupReply{RadioSetupReply::Kind::Cancelled, -1,
+                QStringLiteral("the original transverter was removed or replaced")});
+        }) : RadioSetupCompletion{});
     if (expectedSession && *expectedSession != session) {
         if (reply) { reply({RadioSetupReply::Kind::Cancelled, -1, QStringLiteral("Original transverter editor session ended.")}); }
         return ReceiveDispatch::Unsupported;
     }
     const ReceiveDispatch result = m_backend && controlSessionCurrent(session) && request.valid()
-        && (request.field == TransverterRequest::Field::Create || m_xvtrList.contains(request.id))
-        ? m_backend->requestTransverter(request, reply) : ReceiveDispatch::Unsupported;
+        && current()
+        ? m_backend->requestTransverter(effective, reply) : ReceiveDispatch::Unsupported;
     if (alive && session == controlSession()) {
         if (result == ReceiveDispatch::Unsupported && reply) {
             reply({RadioSetupReply::Kind::Refused, -1, QStringLiteral("transverter configuration not dispatched")});

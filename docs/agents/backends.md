@@ -181,6 +181,20 @@ connection/backend generations fence calibration and transverter creation;
 acceptance does not confirm completion. Entity editors retain their original
 session, and USB inventory is retired at disconnect/replacement. Preserve the
 client-owned TX-waterfall flag and station settings separately from radio state.
+Flex setup reports cross the seam as `SetupStatusObservation`: transverters,
+USB cables and bits, licensing, and filter sharpness. Filter sharpness commands
+on firmware 4.3.16 do not echo status to their originating client. Accepted
+values are retained with per-field revisions and session fences; later status
+always wins. `FlexSetupStatus` validates
+wire fields before publication; optional fields retain absent-versus-empty
+semantics. Transport lifetimes and per-entity leases retire queued reports,
+editors, and final configuration writes on disconnect, removal, or cable-family
+replacement. These are radio-global inventories, not client-owned slice data.
+The model keeps at most 256 transverters, 256 USB cables, and 128 license feature
+names; the transport retains at most 512 setup entity leases. New entries beyond
+those bounds are rejected without evicting existing state. Subscription dates
+only select the displayed subscription; they never grant a feature.
+
 Profile and memory dialogs use typed `ProfileRequest` / `MemoryRequest` values
 through `RadioModel`; `FlexStoredControls` owns encoding, including recall
 corrections. Local memories consume neutral patches directly and retain their
