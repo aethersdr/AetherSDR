@@ -3747,7 +3747,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("titlebar", {},
-            "titlebar <selectRadio <id>|showDiscovery|minimize|maximize|close> "
+            "titlebar <selectRadio <id>|showRadioMenu <id>|showDiscovery|minimize|maximize|close> "
             "— drive the unified title bar's own controls",
             [](const QList<QByteArray>& p, A& a) -> QJsonObject {
                 a.action = vtok(p, 1);
@@ -9525,7 +9525,7 @@ QJsonObject AutomationServer::doTitleBar(const QString& action, const QString& t
 {
     if (action.trimmed().isEmpty()) {
         return err(QStringLiteral("titlebar needs an action "
-                                  "(selectRadio|showDiscovery|minimize|maximize|close)"));
+                                  "(selectRadio|showRadioMenu|showDiscovery|minimize|maximize|close)"));
     }
     if (!m_titleBarActionHandler) {
         return err(QStringLiteral("title bar actions unavailable"));

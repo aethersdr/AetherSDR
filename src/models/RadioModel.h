@@ -894,6 +894,8 @@ public:
     // One explicit wake, followed by one bounded connection attempt. Never persisted.
     bool wakeIcomRadio(int modelId, int address, QString* error = nullptr);
     bool radioWakeActive() const { return m_radioWakeActive; }
+    // Prepare the disconnected SmartLink transport before its UDP hole punch.
+    bool prepareWanConnection();
     void connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort);
     void setPendingClientDisconnects(const QList<quint32>& handles);
     bool disconnectClient(quint32 handle);

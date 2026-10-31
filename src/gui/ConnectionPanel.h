@@ -21,13 +21,16 @@
 #include <QStackedWidget>
 #include <QToolButton>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QAbstractSocket>
 #include <functional>
+#include <optional>
 
 class QVBoxLayout;
 class QScreen;
 class QScrollArea;
 class QSpinBox;
+class QTcpSocket;
 
 namespace AetherSDR {
 
@@ -136,6 +139,17 @@ public slots:
     QJsonObject workspaceSnapshot() const;
     bool applyWorkspaceOperator();
     bool selectWorkspaceProfile(const QString& collection, const QString& id, QString* error = nullptr);
+    QJsonArray connectionTargets() const;
+    QJsonObject connectionTarget(const QString& id) const;
+    bool selectConnectionTarget(const QString& id, bool edit = false);
+    void renameConnectionTarget(const QString& id);
+    bool validateConnectionTarget(const QJsonObject& target, QString* reason = nullptr) const;
+    void requestConnectionTarget(const QString& id);
+    void rememberSuccessfulTarget(const QJsonObject& target);
+    void connectTarget(const QJsonObject& target);
+    void cancelConnectionAttempt();
+    void showLocations();
+    QJsonObject attemptTarget() const { return m_attemptTarget; }
     QJsonObject automationConnectionProfiles() const override { return workspaceSnapshot(); }
     bool automationSelectConnectionProfile(const QString& collection, const QString& id, QString* error) override
     { return selectWorkspaceProfile(collection, id, error); }
@@ -159,6 +173,11 @@ signals:
     void startupConnectUnavailable(const QString& reason);
     void operatorPreferencesRequested(const QJsonObject& preferences);
     void workspaceChanged();
+    void explicitConnectionRequested();
+    void connectionTargetRequested(const QJsonObject& target);
+    void connectionNeedsAttention(const QString& reason);
+    void connectionAttemptFailed(const QString& reason);
+    void tabVisibilityRequested(const QString& id, bool visible);
 
 private slots:
     void onConnectionModeClicked(int id);
@@ -243,10 +262,12 @@ private:
     // Reports early startup credential/configuration or directed-probe failures.
     // Session authentication failures and broadcast discovery are separate paths.
     // Interactive/automation attempts are silent once the startup probe ends.
-    void reportStartupProbeFailure(const QString& reason);
+    void reportStartupProbeFailure(const QString& reason, bool needsInput = false);
     void handleHl2ProbeResult(Hl2ProbeResult probe, const QString& ip);
-    void finishManualProbe(const RadioInfo& info, bool routedOnly = false);
+    void finishManualProbe(const RadioInfo& info, bool routedOnly = false,
+                           std::optional<quint64> generation = std::nullopt);
     friend struct ConnectionPanelStartupTestAccess;
+    friend struct ConnectionPanelWorkspaceTestAccess;
     void resetManualConnectButton();
     // Re-activate the body layout after a page change. The overlap this used to
     // guard against — the Advanced section expanding, or the result line
@@ -289,6 +310,8 @@ private:
     bool activateWorkspaceAccount(const QString& id);
     void resumeWorkspaceSmartLink();
     void restoreWorkspaceManual(const QJsonObject& path);
+    void beginExplicitConnection();
+    void captureAttemptOperator();
 
     QJsonObject m_workspace;
     QListWidget* m_stationList{nullptr};
@@ -304,6 +327,12 @@ private:
     QString m_pendingWorkspaceConnection;
     QString m_pendingWorkspaceStation;
     QJsonObject m_pendingSmartLinkConnection;
+    QJsonObject m_attemptTarget;
+    QJsonObject m_connectedTarget;
+    QJsonObject m_attemptOperator;
+    quint64 m_connectionGeneration{0};
+    QPointer<QTcpSocket> m_probeSocket;
+    bool m_dispatchingTarget{false};
     bool m_allowLegacyIcomCredential{true};
     QLineEdit* m_manualConnectionName{nullptr};
 

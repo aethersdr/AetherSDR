@@ -4172,56 +4172,6 @@
       "alt": "Peripherals Add menu: Tuner Genius XL, Power Genius XL, Antenna Genius, ShackSwitch, ACOM Amplifier, SPE Expert Amplifier, VK3AMP Amplifier, RF-KIT Amplifier, Elecraft KPA1500 and LP-100A Meter."
     },
     {
-      "id": "radio-list-popup",
-      "page": "menu-reference",
-      "anchor_heading": "Radio tabs",
-      "offscreen": true,
-      "settle": 1.0,
-      "steps": [
-        {
-          "cmd": "titlebar",
-          "action": "showDiscovery",
-          "_sleep": 1.5
-        },
-        {
-          "wait_visible": "discoveredRadiosPopover"
-        }
-      ],
-      "grab": {
-        "target": "discoveredRadiosPopover"
-      },
-      "cleanup": [
-        {
-          "cmd": "close",
-          "target": "discoveredRadiosPopover",
-          "_allow_fail": true
-        },
-        {
-          "cmd": "close",
-          "target": "QMenu",
-          "_allow_fail": true,
-          "_sleep": 0.5
-        }
-      ],
-      "caption": "The radio list, opened from the plus button beside the radio tabs. Addresses are blacked out.",
-      "alt": "Discovered radios popup with a Search name, address, or status field. Three rows, each with an Actions button: FLX8600, connected; Hermes-Lite 2, available; and Simulator (not on the air), 127.0.0.1, available, with the first two addresses blacked out. Connect manually... and Rescan radios sit at the bottom.",
-      "redact": [
-        [
-          14,
-          86,
-          98,
-          20
-        ],
-        [
-          14,
-          143,
-          98,
-          20
-        ]
-      ],
-      "widget_redact": false
-    },
-    {
       "id": "spothub-add-spot",
       "page": "spothub",
       "anchor_heading": "Adding a spot by hand",
@@ -4826,6 +4776,314 @@
       ],
       "caption": "Start from defaults or another profile, then choose microphone, output and pan arrangement. Enter saves the profile.",
       "alt": "Create Operator profile dialog with a name, source profile, microphone, audio output, pan arrangement and Create and use profile action."
+    },
+    {
+      "id": "radio-tab-context-menu",
+      "page": "menu-reference",
+      "anchor_heading": "Radio tabs",
+      "radio": "demo",
+      "offscreen": true,
+      "settle": 0.5,
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionStationList",
+          "action": "selectRow",
+          "value": "0"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionAddRadio",
+          "action": "click"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualName",
+          "action": "setText",
+          "value": "Cabin Flex test"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualRadioType",
+          "action": "setCurrentText",
+          "value": "FlexRadio"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualIp",
+          "action": "setText",
+          "value": "192.0.2.55"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionSaveManual",
+          "action": "click"
+        },
+        {
+          "cmd": "connect",
+          "action": "hide"
+        },
+        {
+          "cmd": "contextMenu",
+          "target": "Radio Cabin Flex test, Saved"
+        },
+        {
+          "cmd": "hover",
+          "target": "QMenu"
+        }
+      ],
+      "grab": {
+        "target": "QMenu"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "QMenu",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "Each radio tab has a context menu. Unavailable actions remain visible with a reason.",
+      "alt": "A saved radio tab context menu with Connect or Switch, Disconnect, Rename, Connection settings and Remove from tabs actions."
+    },
+    {
+      "id": "radio-tab-switch-confirmation",
+      "page": "station-profiles",
+      "anchor_heading": "Using workspace radio tabs",
+      "radio": "demo",
+      "settle": 0.5,
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionStationList",
+          "action": "selectRow",
+          "value": "0"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionAddRadio",
+          "action": "click"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualName",
+          "action": "setText",
+          "value": "Cabin Flex test"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualRadioType",
+          "action": "setCurrentText",
+          "value": "FlexRadio"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualIp",
+          "action": "setText",
+          "value": "192.0.2.55"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionSaveManual",
+          "action": "click"
+        },
+        {
+          "cmd": "connect",
+          "action": "hide"
+        },
+        {
+          "cmd": "invoke",
+          "target": "Radio Cabin Flex test, Saved",
+          "action": "click"
+        },
+        {
+          "wait_visible": "radioSwitchConfirmation"
+        }
+      ],
+      "grab": {
+        "target": "radioSwitchConfirmation"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "radioSwitchConfirmation",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "Confirm a replacement while the current radio remains connected. Location names distinguish similarly named radios.",
+      "alt": "Switch radio prompt naming the source and destination Locations, explaining that the current radio will disconnect, with Cancel and Switch buttons."
+    },
+    {
+      "id": "radio-ip-startup-recovery",
+      "page": "station-profiles",
+      "anchor_heading": "Startup and recovery",
+      "radio": "demo",
+      "settle": 0.5,
+      "steps": [
+        {
+          "cmd": "disconnect"
+        },
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionAddRadio",
+          "action": "click"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualName",
+          "action": "setText",
+          "value": "Cabin Flex"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualRadioType",
+          "action": "setCurrentText",
+          "value": "FlexRadio"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualIp",
+          "action": "setText",
+          "value": "192.0.2.55"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualConnectButton",
+          "action": "click"
+        },
+        {
+          "sleep": 4.0
+        }
+      ],
+      "grab": {
+        "target": "connectionPanel"
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click"
+        }
+      ],
+      "caption": "An unavailable saved IP path keeps its connection name and offers Back to Locations.",
+      "alt": "Connect by IP shows a saved connection name, a documentation IP address, the failed connection reason and a Back to Locations button."
+    },
+    {
+      "id": "radio-tab-context-menu-light",
+      "page": "menu-reference",
+      "anchor_heading": "Radio tabs",
+      "radio": "demo",
+      "offscreen": true,
+      "settle": 0.5,
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionStationList",
+          "action": "selectRow",
+          "value": "0"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionAddRadio",
+          "action": "click"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualName",
+          "action": "setText",
+          "value": "Cabin Flex test"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualRadioType",
+          "action": "setCurrentText",
+          "value": "FlexRadio"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualIp",
+          "action": "setText",
+          "value": "192.0.2.55"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionSaveManual",
+          "action": "click"
+        },
+        {
+          "cmd": "connect",
+          "action": "hide"
+        },
+        {
+          "cmd": "invoke",
+          "target": "Default Light",
+          "action": "trigger"
+        },
+        {
+          "cmd": "contextMenu",
+          "target": "Radio Cabin Flex test, Saved"
+        },
+        {
+          "cmd": "hover",
+          "target": "QMenu"
+        }
+      ],
+      "grab": {
+        "target": "QMenu"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "QMenu",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "Default Dark",
+          "action": "trigger"
+        }
+      ],
+      "caption": "Highlighted menu text uses the matching canon foreground and selection surface in the light theme.",
+      "alt": "Light-theme radio tab context menu with Rename highlighted and readable dark text on a light selection surface."
     }
   ]
 }

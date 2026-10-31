@@ -33,6 +33,7 @@
 #include <QGuiApplication>
 #include <QDialogButtonBox>
 #include <QMenu>
+#include <QMap>
 #include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -43,6 +44,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QScreen>
+#include <QScopedValueRollback>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSet>
@@ -125,6 +127,10 @@ QMenu,
 QComboBoxPrivateContainer {
     background: {{color.canon.raised}};
 }
+QMenu::item { color: {{color.canon.ink}}; }
+QMenu::item:selected { background: {{color.canon.control}}; color: {{color.canon.ink}}; }
+QMenu::item:disabled { color: {{color.canon.muted}}; }
+QMenu::item:disabled:selected { background: {{color.canon.control}}; color: {{color.canon.muted}}; }
 QGroupBox {
     background: {{color.canon.raised}};
     border: 1px solid {{color.canon.line}};
@@ -1263,17 +1269,17 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     // Editing the route hands control back to the operator, including while
     // the asynchronous startup credential read is still pending.
     connect(m_manualIpEdit, &QLineEdit::textEdited, this, [this] {
-        m_startupProbe = false;
+        beginExplicitConnection();
     });
     connect(m_manualRadioTypeCombo, &QComboBox::activated, this, [this] {
-        m_startupProbe = false;
+        beginExplicitConnection();
     });
     // The address was CHOSEN, not typed — restore its remembered radio type.
     // `activated` fires only for a pick out of the popup, which is exactly the
     // gesture the per-address family restore was written for; the keystroke
     // path deliberately does not carry it (see applySavedSourceSelection).
     connect(m_manualIpCombo, &QComboBox::activated, this, [this](int) {
-        m_startupProbe = false;
+        beginExplicitConnection();
         applySavedSourceSelection(m_manualIpEdit->text().trimmed(),
                                   /*restoreFamily=*/true);
     });
@@ -1815,6 +1821,7 @@ void ConnectionPanel::setManualMessage(const QString& text, bool error)
     m_manualResultLabel->setVisible(true);
     // A long message wraps to more lines than the reserved height covers.
     refitToContent();
+    if (error && !m_startupProbe && !m_attemptTarget.isEmpty()) { emit connectionNeedsAttention(text); }
 }
 
 void ConnectionPanel::updateLocalPageState()
@@ -2169,14 +2176,14 @@ void ConnectionPanel::onWanSelectionChanged()
 
 void ConnectionPanel::onLocalConnectClicked()
 {
-    m_pendingSmartLinkConnection = {};
-    m_pendingWorkspaceStation.clear();
     const int row = m_radioList->currentRow();
     if (m_connected || row < 0 || row >= m_radios.size())
         return;
-    if (!applyWorkspaceOperator()) { return; }
+    beginExplicitConnection();
+    if (!m_dispatchingTarget) { m_pendingWorkspaceStation.clear(); m_pendingWorkspaceConnection.clear(); }
+    if (!applyWorkspaceOperator()) { emit connectionNeedsAttention(m_statusLabel->text()); return; }
 
-    const RadioInfo& info = m_radios[row];
+    const RadioInfo info = m_radios[row];
     // F5 (#4448): an in-use radio of a single-client family can't be shared,
     // and connecting would wedge both clients. Fail closed. The rule lives in
     // ConnectionSharingPolicy.h — one home, shared with the startup
@@ -2211,7 +2218,9 @@ void ConnectionPanel::onWanConnectClicked()
     const int row = m_wanList->currentRow();
     if (m_connected || row < 0 || row >= m_wanRadios.size())
         return;
-    if (!applyWorkspaceOperator()) { return; }
+    beginExplicitConnection();
+    if (!m_dispatchingTarget) { m_pendingWorkspaceStation.clear(); m_pendingWorkspaceConnection.clear(); }
+    if (!applyWorkspaceOperator()) { emit connectionNeedsAttention(m_statusLabel->text()); return; }
 
     saveLowBandwidthPreference(m_lowBwCheck->isChecked());
     rememberWorkspaceWan(m_wanRadios[row]);
@@ -2259,7 +2268,6 @@ void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
     });
 
     connect(client, &SmartLinkClient::authFailed, this, [this](const QString& err) {
-        m_pendingSmartLinkConnection = {};
         m_passwordEdit->clear();
         m_loginBtn->setText("Sign In");
         m_loginBtn->setEnabled(true);
@@ -2763,13 +2771,13 @@ void ConnectionPanel::onManualIpChanged(const QString& ip)
 
 void ConnectionPanel::onManualConnectClicked()
 {
-    m_pendingSmartLinkConnection = {};
     const QString ip = m_manualIpEdit->text().trimmed();
     if (m_connected || ip.isEmpty())
         return;
-    if (!applyWorkspaceOperator()) { return; }
+    beginExplicitConnection();
+    if (!applyWorkspaceOperator()) { emit connectionNeedsAttention(m_statusLabel->text()); return; }
 
-    m_pendingWorkspaceStation = m_workspace.value("selectedStation").toString();
+    if (!m_dispatchingTarget) { m_pendingWorkspaceStation = m_workspace.value("selectedStation").toString(); }
     m_manualConnectPending = true;
     m_startupProbe = false;
     setManualMessage(QStringLiteral("Checking %1…").arg(ip));
@@ -2782,7 +2790,7 @@ void ConnectionPanel::onManualAdvancedToggled(bool checked)
     m_manualAdvancedWidget->setVisible(checked);
 }
 
-void ConnectionPanel::reportStartupProbeFailure(const QString& reason)
+void ConnectionPanel::reportStartupProbeFailure(const QString& reason, bool needsInput)
 {
     // A startup probe is the one probe with nobody reading the manual page.
     // MainWindow has covered the window with "Looking for your radio…", and it
@@ -2791,12 +2799,30 @@ void ConnectionPanel::reportStartupProbeFailure(const QString& reason)
     // dialog that will never open. The operator is left with a spinner and no
     // route back to the connection UI. Hand the reason up instead.
     if (!m_startupProbe) {
+        if (!needsInput && !m_attemptTarget.isEmpty()) { emit connectionAttemptFailed(reason); }
         return;
     }
     m_startupProbe = false;
     // Land the operator on the page that explains the failure: the full
     // guidance setManualMessage() wrote lives on the Connect by IP page, and
     // the footer line MainWindow sets carries only the short reason.
+    bool restored = false;
+    for (const QJsonValue& value : connectionTargets()) {
+        const QJsonObject target = value.toObject();
+        for (const QJsonValue& entry : target.value("paths").toArray()) {
+            const QJsonObject path = entry.toObject();
+            if (path.value("kind").toString() == QLatin1String("manual")
+                && path.value("host").toString() == m_manualIpEdit->text().trimmed()) {
+                selectConnectionTarget(path.value("id").toString());
+                m_manualConnectionName->setText(target.value("name").toString());
+                m_pendingWorkspaceConnection = path.value("id").toString();
+                m_pendingWorkspaceStation = target.value("stationId").toString();
+                restored = true;
+                break;
+            }
+        }
+        if (restored) { break; }
+    }
     setCurrentMode(ManualMode);
     emit startupConnectUnavailable(reason);
 }
@@ -2813,6 +2839,7 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
     // an operator route edit/manual connect.
     if (restoreSavedFamily) {
         m_startupProbe = true;
+        captureAttemptOperator();
         if (!applyWorkspaceOperator()) {
             reportStartupProbeFailure(tr("The saved operator profile needs attention."));
             return;
@@ -2887,14 +2914,14 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                                "enter the same credentials here."),
                 true);
             reportStartupProbeFailure(
-                QStringLiteral("This Icom needs its network user name and password."));
+                QStringLiteral("This Icom needs its network user name and password."), true);
             return;
         }
         if (pass.isEmpty()) {
             if (m_activeIcomCredentialId.isEmpty() && !m_allowLegacyIcomCredential) {
                 resetManualConnectButton();
                 setManualMessage(tr("Enter this radio's password. It will be saved after a successful connection."), true);
-                reportStartupProbeFailure(tr("This Icom needs its own saved password."));
+                reportStartupProbeFailure(tr("This Icom needs its own saved password."), true);
                 return;
             }
             // Keychain reads are asynchronous. Startup auto-connect reaches
@@ -2906,8 +2933,9 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
             setManualMessage(QStringLiteral("Loading the saved Icom password…"));
             QPointer<ConnectionPanel> panel(this);
             const QString credentialId = m_activeIcomCredentialId;
-            IcomCredentials::loadForConnection(credentialId, this, [panel, requestedHost, credentialId](const QString& password) {
-                if (!panel) {
+            const quint64 generation = m_connectionGeneration;
+            IcomCredentials::loadForConnection(credentialId, this, [panel, requestedHost, credentialId, generation](const QString& password) {
+                if (!panel || panel->m_connectionGeneration != generation) {
                     return;
                 }
                 if (panel->m_activeIcomCredentialId != credentialId
@@ -2933,7 +2961,7 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                         true);
                     panel->m_manualConnectPending = false;
                     panel->reportStartupProbeFailure(
-                        QStringLiteral("No saved password for this Icom."));
+                        QStringLiteral("No saved password for this Icom."), true);
                     return;
                 }
                 if (panel->m_manualIcomPassEdit
@@ -2994,7 +3022,7 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                         setStatusText(civError);
                         m_manualIcomCivEdit->setFocus();
                         m_manualIcomCivEdit->selectAll();
-                        reportStartupProbeFailure(civError);
+                        reportStartupProbeFailure(civError, true);
                         return;
                     }
                 }
@@ -3162,8 +3190,9 @@ void ConnectionPanel::handleHl2ProbeResult(Hl2ProbeResult probe, const QString& 
     }
 }
 
-void ConnectionPanel::finishManualProbe(const RadioInfo& info, bool routedOnly)
+void ConnectionPanel::finishManualProbe(const RadioInfo& info, bool routedOnly, std::optional<quint64> generation)
 {
+    if (generation && *generation != m_connectionGeneration) { return; }
     const QJsonObject station = ConnectionWorkspace::find(m_workspace.value("stations").toArray(),
         m_pendingWorkspaceStation.isEmpty() ? m_workspace.value("selectedStation").toString() : m_pendingWorkspaceStation);
     QJsonObject path = ConnectionWorkspace::find(station.value("connections").toArray(), m_pendingWorkspaceConnection);
@@ -3566,7 +3595,9 @@ ConnectionPanel::AnanProbeResult ConnectionPanel::probeAnan(
 
 void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSettings& bindSettings)
 {
+    const quint64 generation = m_connectionGeneration;
     auto* sock = new QTcpSocket(this);
+    m_probeSocket = sock;
     if (bindSettings.mode == RadioBindMode::Explicit
         && !sock->bind(bindSettings.bindAddress, 0)) {
         m_manualSourceWarningLabel->setText(
@@ -3586,7 +3617,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
 
     sock->connectToHost(trimmedIp, 4992);
 
-    QTimer::singleShot(3000, sock, [this, sock, trimmedIp] {
+    QTimer::singleShot(3000, sock, [this, sock, trimmedIp, generation] {
+        if (generation != m_connectionGeneration) { return; }
         if (sock->state() != QAbstractSocket::ConnectedState) {
             sock->abort();
             sock->deleteLater();
@@ -3603,7 +3635,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
         }
     });
 
-    connect(sock, &QTcpSocket::connected, this, [this, sock, trimmedIp, bindSettings] {
+    connect(sock, &QTcpSocket::connected, this, [this, sock, trimmedIp, bindSettings, generation] {
+        if (generation != m_connectionGeneration) { return; }
         // Shared state across readyRead calls and the peek timer.
         auto buffer      = std::make_shared<QByteArray>();
         auto version     = std::make_shared<QString>();
@@ -3618,7 +3651,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
         peekTimer->setInterval(400);
 
         // Build RadioInfo from collected status and emit the connect signal.
-        auto finishProbe = [this, sock, trimmedIp, bindSettings, version, statusLines, localSrc] {
+        auto finishProbe = [this, sock, trimmedIp, bindSettings, version, statusLines, localSrc, generation] {
+            if (generation != m_connectionGeneration) { return; }
             QHostAddress targetAddress(trimmedIp);
             if (targetAddress.isNull()) {
                 targetAddress = sock->peerAddress();
@@ -3708,12 +3742,12 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
                 // A staged Icom credential belongs to the attempt it was staged for.
                 clearPendingIcomCredentials();
                 m_manualConnectPending = false;
-                finishManualProbe(info);
+                finishManualProbe(info, false, generation);
             } else {
                 setManualMessage(
                     QStringLiteral("Found a radio at %1 and saved the path for later.")
                         .arg(trimmedIp));
-                finishManualProbe(info, /*routedOnly=*/true);
+                finishManualProbe(info, /*routedOnly=*/true, generation);
             }
         };
 
@@ -3749,7 +3783,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
     });
 
     connect(sock, &QTcpSocket::errorOccurred, this,
-            [this, sock, trimmedIp](QAbstractSocket::SocketError) {
+            [this, sock, trimmedIp, generation](QAbstractSocket::SocketError) {
+        if (generation != m_connectionGeneration) { return; }
         const QString reason =
             QStringLiteral("Could not reach %1: %2").arg(trimmedIp, sock->errorString());
         setManualMessage(reason, true);
@@ -3759,6 +3794,264 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
         updateActionState();
         reportStartupProbeFailure(reason);
     });
+}
+
+QJsonArray ConnectionPanel::connectionTargets() const
+{
+    QJsonArray targets;
+    QSet<QString> savedIdentities;
+    const QJsonObject preferred = m_workspace.value("preferredPaths").toObject();
+    for (const QJsonValue& value : m_workspace.value("stations").toArray()) {
+        const QJsonObject station = value.toObject();
+        QMap<QString, QJsonArray> groups;
+        QStringList order;
+        for (const QJsonValue& entry : station.value("connections").toArray()) {
+            const QJsonObject path = entry.toObject();
+            const QString serial = path.value("serial").toString();
+            const QString identity = path.value("family").toString() + ':' + serial;
+            const QString key = serial.isEmpty() ? path.value("id").toString() : identity;
+            if (!serial.isEmpty()) { savedIdentities.insert(path.value("family").toString().isEmpty() ? "*:" + serial : identity); }
+            if (!groups.contains(key)) { order.append(key); }
+            groups[key].append(path);
+        }
+        for (const QString& key : order) {
+            const QJsonArray paths = groups.value(key);
+            const QString id = QStringLiteral("saved:") + station.value("id").toString()
+                + ':' + paths.first().toObject().value("id").toString();
+            QJsonObject path = paths.first().toObject();
+            for (const QJsonValue& entry : paths) {
+                const QJsonObject candidate = entry.toObject();
+                const QString name = candidate.value("name").toString().trimmed();
+                if (!name.isEmpty() && name.compare(candidate.value("host").toString(), Qt::CaseInsensitive) != 0
+                    && QHostAddress(name).isNull()) { path = candidate; break; }
+            }
+            const QString displayName = path.value("name").toString();
+            for (const QJsonValue& entry : paths) {
+                if (entry.toObject().value("id").toString() == preferred.value(id).toString()) {
+                    path = entry.toObject();
+                }
+            }
+            targets.append(QJsonObject{{"id", id}, {"stationId", station.value("id")},
+                {"location", station.value("name")}, {"name", displayName},
+                {"path", path}, {"paths", paths}, {"saved", true}});
+        }
+    }
+    const QString stationId = m_workspace.value("selectedStation").toString();
+    for (const RadioInfo& info : m_radios) {
+        const QString identity = info.family + ':' + info.serial;
+        if (savedIdentities.contains(identity) || savedIdentities.contains("*:" + info.serial)) { continue; }
+        QJsonObject path{{"id", "nearby:" + identity}, {"kind", "local"}, {"family", info.family},
+            {"serial", info.serial}, {"model", info.model}, {"name", info.nickname.isEmpty() ? info.model : info.nickname}, {"nearby", true}};
+        targets.append(QJsonObject{{"id", path.value("id")}, {"stationId", stationId},
+            {"name", path.value("name")}, {"path", path}, {"paths", QJsonArray{path}}, {"saved", false}});
+    }
+    for (const WanRadioInfo& info : m_wanRadios) {
+        if (savedIdentities.contains(QStringLiteral("flex:") + info.serial) || savedIdentities.contains("*:" + info.serial)) { continue; }
+        QJsonObject path{{"id", "remote:" + info.serial}, {"kind", "smartlink"}, {"family", "flex"},
+            {"serial", info.serial}, {"model", info.model}, {"name", info.nickname.isEmpty() ? info.model : info.nickname},
+            {"accountId", m_smartLink ? m_smartLink->accountId() : QString()}, {"nearby", true}};
+        targets.append(QJsonObject{{"id", path.value("id")}, {"stationId", stationId},
+            {"name", path.value("name")}, {"path", path}, {"paths", QJsonArray{path}}, {"saved", false}});
+    }
+    return targets;
+}
+
+QJsonObject ConnectionPanel::connectionTarget(const QString& id) const
+{
+    QJsonObject fallback;
+    for (const QJsonValue& value : connectionTargets()) {
+        QJsonObject target = value.toObject();
+        if (target.value("id").toString() == id) { return target; }
+        for (const QJsonValue& entry : target.value("paths").toArray()) {
+            const QJsonObject path = entry.toObject();
+            if (path.value("id").toString() == id) { target["path"] = path; return target; }
+            if (path.value("serial").toString() == id) {
+                if (target.value("stationId") == m_workspace.value("selectedStation")) { return target; }
+                fallback = target;
+            }
+        }
+    }
+    return fallback;
+}
+
+bool ConnectionPanel::selectConnectionTarget(const QString& id, bool edit)
+{
+    const QJsonObject target = connectionTarget(id);
+    if (target.isEmpty()) { return false; }
+    const QJsonObject path = target.value("path").toObject();
+    if (target.value("saved").toBool()) {
+        if (!selectWorkspaceProfile("stations", target.value("stationId").toString())) { return false; }
+        for (int row = 0; row < m_workspaceRadioList->count(); ++row) {
+            const QJsonArray paths = m_workspaceRadioList->item(row)->data(Qt::UserRole + 1).toJsonArray();
+            for (const QJsonValue& entry : paths) {
+                if (entry.toObject().value("id") == path.value("id")) {
+                    m_workspaceRadioList->setCurrentRow(row);
+                    for (int index = 0; index < m_workspacePath->count(); ++index) {
+                        if (m_workspacePath->itemData(index).toJsonObject().value("id") == path.value("id")) {
+                            m_workspacePath->setCurrentIndex(index);
+                            break;
+                        }
+                    }
+                    setCurrentMode(WorkspaceMode);
+                    if (edit) { findChild<QPushButton*>("connectionEditSaved")->click(); }
+                    return true;
+                }
+            }
+        }
+    }
+    return selectRadio(path.value("serial").toString());
+}
+
+void ConnectionPanel::renameConnectionTarget(const QString& id)
+{
+    const QJsonObject target = connectionTarget(id);
+    if (!target.value("saved").toBool() || target.value("path").toObject().value("serial").toString() == SimBackend::demoSerial()) { return; }
+    if (selectConnectionTarget(id)) {
+        editWorkspaceProfile("connections", target.value("path").toObject().value("id").toString(), false, true);
+    }
+}
+
+bool ConnectionPanel::validateConnectionTarget(const QJsonObject& target, QString* reason) const
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    const QJsonObject path = target.value("path").toObject();
+    if (path.isEmpty() || connectionTarget(target.value("id").toString()).isEmpty()) {
+        return refuse(tr("This saved connection is no longer available."));
+    }
+    const QJsonObject profile = target.contains("operator") ? target.value("operator").toObject()
+        : ConnectionWorkspace::find(m_workspace.value("operators").toArray(), m_workspace.value("selectedOperator").toString());
+    const QJsonObject preferences = profile.value("preferences").toObject();
+    for (const QString& key : {QStringLiteral("inputDeviceId"), QStringLiteral("outputDeviceId")}) {
+        const QByteArray id = QByteArray::fromBase64(preferences.value(key).toString().toLatin1());
+        const QList<QAudioDevice> devices = key == QLatin1String("inputDeviceId") ? QMediaDevices::audioInputs() : QMediaDevices::audioOutputs();
+        if (!id.isEmpty() && std::none_of(devices.cbegin(), devices.cend(), [&id](const QAudioDevice& device) { return device.id() == id; })) {
+            return refuse(tr("The selected operator's audio device is unavailable. Choose another device in Profiles."));
+        }
+    }
+    const QString kind = path.value("kind").toString();
+    if (kind == QLatin1String("local")) {
+        for (const RadioInfo& info : m_radios) {
+            if (info.serial == path.value("serial").toString() && (path.value("family").toString().isEmpty() || info.family == path.value("family").toString())) {
+                if (info.inUse && !familySupportsSharedInUseConnect(info.family)) {
+                    return refuse(tr("This radio is in use by another client and cannot be shared."));
+                }
+                return true;
+            }
+        }
+        return refuse(tr("This radio is not currently discovered. Power it on or choose another saved path."));
+    }
+    if (kind == QLatin1String("smartlink")) {
+        if (ConnectionWorkspace::find(m_workspace.value("accounts").toArray(), path.value("accountId").toString()).isEmpty()) {
+            return refuse(tr("This connection's SmartLink account was removed. Add that account again."));
+        }
+        return true;
+    }
+    if (kind == QLatin1String("manual") && m_manualRadioTypeCombo->findData(path.value("family").toString()) >= 0
+        && !normalizeManualIp(path.value("host").toString()).isEmpty()) {
+        return true;
+    }
+    return refuse(tr("Edit this connection to choose a supported radio type and address."));
+}
+
+void ConnectionPanel::requestConnectionTarget(const QString& id)
+{
+    QJsonObject target = connectionTarget(id);
+    if (target.isEmpty()) { return; }
+    beginExplicitConnection();
+    target["operator"] = ConnectionWorkspace::find(m_workspace.value("operators").toArray(), m_workspace.value("selectedOperator").toString());
+    emit connectionTargetRequested(target);
+}
+
+void ConnectionPanel::rememberSuccessfulTarget(const QJsonObject& target)
+{
+    m_connectedTarget = target;
+    refreshWorkspaceDetails();
+    if (!target.value("saved").toBool()) { return; }
+    QJsonObject next = m_workspace;
+    const QString pathId = target.value("path").toObject().value("id").toString();
+    next["lastConnection"] = QJsonObject{{"stationId", target.value("stationId")}, {"pathId", pathId}};
+    QJsonObject preferred = next.value("preferredPaths").toObject();
+    preferred[target.value("id").toString()] = pathId;
+    next["preferredPaths"] = preferred;
+    persistWorkspace(next);
+}
+
+void ConnectionPanel::connectTarget(const QJsonObject& target)
+{
+    cancelConnectionAttempt();
+    m_attemptTarget = target;
+    m_attemptOperator = target.value("operator").toObject();
+    m_pendingWorkspaceStation = target.value("stationId").toString();
+    const QJsonObject path = target.value("path").toObject();
+    m_pendingWorkspaceConnection = target.value("saved").toBool() ? path.value("id").toString() : QString();
+    const QScopedValueRollback<bool> dispatch(m_dispatchingTarget, true);
+    const QString kind = path.value("kind").toString();
+    if (kind == QLatin1String("local")) {
+        for (int row = 0; row < m_radios.size(); ++row) {
+            if (m_radios[row].serial == path.value("serial").toString() && (path.value("family").toString().isEmpty() || m_radios[row].family == path.value("family").toString())) {
+                m_radioList->setCurrentRow(row);
+                onLocalConnectClicked();
+                return;
+            }
+        }
+    } else if (kind == QLatin1String("smartlink")) {
+        m_pendingSmartLinkConnection = path;
+        const QString account = path.value("accountId").toString();
+        if (!m_smartLink || m_smartLink->accountId() != account || !m_smartLink->isAuthenticated() || !m_smartLink->isConnected()) {
+            selectConnectionTarget(target.value("id").toString());
+            if (!activateWorkspaceAccount(account)) { emit connectionNeedsAttention(tr("Sign in to this radio's saved SmartLink account.")); return; }
+            setCurrentMode(SmartLinkMode);
+            emit connectionNeedsAttention(tr("Looking up this radio with its saved account. Sign in if requested; connection will resume."));
+            return;
+        }
+        resumeWorkspaceSmartLink();
+        return;
+    } else if (kind == QLatin1String("manual")) {
+        restoreWorkspaceManual(path);
+        m_pendingWorkspaceStation = target.value("stationId").toString();
+        onManualConnectClicked();
+        return;
+    }
+    emit connectionNeedsAttention(tr("This radio is unavailable. Choose another saved connection path."));
+}
+
+void ConnectionPanel::cancelConnectionAttempt()
+{
+    ++m_connectionGeneration;
+    m_pendingSmartLinkConnection = {};
+    m_attemptTarget = {};
+    m_attemptOperator = {};
+    m_startupProbe = false;
+    m_manualConnectPending = false;
+    if (m_probeSocket) {
+        m_probeSocket->disconnect(this);
+        m_probeSocket->abort();
+        m_probeSocket->deleteLater();
+        m_probeSocket = nullptr;
+    }
+    resetManualConnectButton();
+}
+
+void ConnectionPanel::captureAttemptOperator()
+{
+    m_attemptOperator = ConnectionWorkspace::find(m_workspace.value("operators").toArray(), m_workspace.value("selectedOperator").toString());
+}
+
+void ConnectionPanel::beginExplicitConnection()
+{
+    if (m_dispatchingTarget) { return; }
+    cancelConnectionAttempt();
+    captureAttemptOperator();
+    emit explicitConnectionRequested();
+}
+
+void ConnectionPanel::showLocations()
+{
+    setCurrentMode(WorkspaceMode);
+    refreshWorkspace();
 }
 
 QJsonObject ConnectionPanel::workspaceSnapshot() const
@@ -3932,13 +4225,13 @@ void ConnectionPanel::buildWorkspace(QVBoxLayout* root)
     columns->addLayout(radioColumn, 1);
     m_modeStack->addWidget(page);
 
-    auto* back = new QPushButton(tr("‹ Back to location"), this);
+    auto* back = new QPushButton(tr("‹ Back to Locations"), this);
     back->setObjectName(QStringLiteral("connectionBackToStation"));
     root->insertWidget(0, back, 0, Qt::AlignLeft);
     connect(back, &QPushButton::clicked, this, [this] {
-        m_pendingSmartLinkConnection = {};
-        setCurrentMode(WorkspaceMode);
-        refreshWorkspace();
+        cancelConnectionAttempt();
+        emit explicitConnectionRequested();
+        showLocations();
     });
     connect(m_modeStack, &QStackedWidget::currentChanged, back,
         [back](int index) { back->setVisible(index != WorkspaceMode); });
@@ -3973,12 +4266,28 @@ void ConnectionPanel::buildWorkspace(QVBoxLayout* root)
     });
     connect(accounts, &QPushButton::clicked, this, [this] { setCurrentMode(SmartLinkMode); });
     connect(m_workspaceRadioList, &QListWidget::currentRowChanged, this, [this](int) {
-        m_pendingSmartLinkConnection = {};
+        if (m_workspaceRadioList->currentItem()) {
+            QJsonObject next = m_workspace;
+            QJsonObject browsed = next.value("browsedRadios").toObject();
+            browsed[next.value("selectedStation").toString()] = m_workspaceRadioList->currentItem()->data(Qt::UserRole).toString();
+            next["browsedRadios"] = browsed;
+            if (next != m_workspace) { persistWorkspace(next); }
+        }
         refreshWorkspaceDetails();
     });
     connect(m_workspacePath, &QComboBox::currentIndexChanged, this, [this] {
-        m_pendingSmartLinkConnection = {};
         refreshWorkspaceDetails();
+    });
+    connect(m_workspacePath, &QComboBox::activated, this, [this](int) {
+        const QString pathId = m_workspacePath->currentData().toJsonObject().value("id").toString();
+        const QJsonObject target = connectionTarget(pathId);
+        if (target.value("saved").toBool()) {
+            QJsonObject next = m_workspace;
+            QJsonObject preferred = next.value("preferredPaths").toObject();
+            preferred[target.value("id").toString()] = pathId;
+            next["preferredPaths"] = preferred;
+            persistWorkspace(next);
+        }
     });
     connect(m_workspaceConnect, &QPushButton::clicked, this, &ConnectionPanel::connectWorkspaceSelection);
     connect(m_workspaceSave, &QPushButton::clicked, this, &ConnectionPanel::saveWorkspaceSelection);
@@ -4077,8 +4386,7 @@ void ConnectionPanel::refreshWorkspace()
     const QSignalBlocker stationsBlock(m_stationList);
     const QSignalBlocker operatorsBlock(m_operatorCombo);
     const QSignalBlocker radiosBlock(m_workspaceRadioList);
-    const QString previous = m_workspaceRadioList->currentItem()
-        ? m_workspaceRadioList->currentItem()->data(Qt::UserRole).toString() : QString();
+    const QString previous = m_workspace.value("browsedRadios").toObject().value(m_workspace.value("selectedStation").toString()).toString();
     m_stationList->clear();
     const QString stationId = m_workspace.value("selectedStation").toString();
     for (const QJsonValue& value : m_workspace.value("stations").toArray()) {
@@ -4177,9 +4485,14 @@ void ConnectionPanel::refreshWorkspaceDetails()
 {
     if (!m_workspaceRadioList) { return; }
     const QListWidgetItem* item = m_workspaceRadioList->currentItem();
-    const QString previousPath = m_workspacePath->currentData().toJsonObject().value("id").toString();
+    QString previousPath = m_workspacePath->currentData().toJsonObject().value("id").toString();
     if (item && item->data(Qt::UserRole).toString() != m_workspaceSelection) {
         m_workspaceSelection = item->data(Qt::UserRole).toString();
+        const QJsonArray paths = item->data(Qt::UserRole + 1).toJsonArray();
+        if (!paths.isEmpty()) {
+            const QJsonObject target = connectionTarget(paths.first().toObject().value("id").toString());
+            previousPath = target.value("path").toObject().value("id").toString();
+        }
         const QSignalBlocker blocker(m_workspacePath);
         m_workspacePath->clear();
     }
@@ -4207,9 +4520,11 @@ void ConnectionPanel::refreshWorkspaceDetails()
     m_workspaceDetail->setText(path.isEmpty() ? tr("Choose a saved radio or add one from Nearby radios.")
         : tr("%1\n%2\n\nOperator: %3\n%4")
             .arg(path.value("name").toString(), path.value("model").toString(), profile.value("name").toString(), m_workspacePath->currentText()));
-    const bool allowed = !m_connected && !path.isEmpty() && !m_workspace.isEmpty();
+    const bool sameConnection = m_connected && !path.isEmpty() && path.value("id") == m_connectedTarget.value("path").toObject().value("id");
+    const bool allowed = !sameConnection && !path.isEmpty() && !m_workspace.isEmpty();
     m_workspaceConnect->setEnabled(allowed);
-    m_workspaceConnect->setAccessibleDescription(m_connected ? tr("Disconnect the current radio before connecting another.")
+    m_workspaceConnect->setText(sameConnection ? tr("Connected") : m_connected ? tr("Switch to this radio…") : tr("Connect"));
+    m_workspaceConnect->setAccessibleDescription(sameConnection ? tr("This saved connection is already active.") : m_connected ? tr("Confirm switching from the current connection to this radio.")
         : path.isEmpty() ? tr("Choose a radio first.") : tr("Uses the selected saved connection and operator preferences."));
     m_workspaceSave->setEnabled(!path.isEmpty());
     m_workspaceSave->setText(path.value("nearby").toBool() ? tr("Save to location") : tr("Copy to another location…"));
@@ -4224,7 +4539,6 @@ bool ConnectionPanel::selectWorkspaceProfile(const QString& collection, const QS
         setAutomationError(error, tr("Profile not found.")); return false;
     }
     QJsonObject next = m_workspace;
-    m_pendingSmartLinkConnection = {};
     next[collection == QLatin1String("stations") ? "selectedStation" : "selectedOperator"] = id;
     return persistWorkspace(next);
 }
@@ -4266,8 +4580,8 @@ void ConnectionPanel::storeWorkspaceConnection(const QJsonObject& connection, co
 void ConnectionPanel::rememberWorkspaceRadio(const RadioInfo& info, const QString& kind)
 {
     if (m_workspace.isEmpty()) { return; }
-    storeWorkspaceConnection({{"id", ConnectionWorkspace::newId()}, {"name", info.nickname.isEmpty() ? info.model : info.nickname},
-        {"model", info.model}, {"serial", info.serial}, {"family", info.family}, {"kind", kind}});
+    storeWorkspaceConnection({{"id", m_dispatchingTarget && !m_pendingWorkspaceConnection.isEmpty() ? m_pendingWorkspaceConnection : ConnectionWorkspace::newId()}, {"name", info.nickname.isEmpty() ? info.model : info.nickname},
+        {"model", info.model}, {"serial", info.serial}, {"family", info.family}, {"kind", kind}}, m_pendingWorkspaceStation);
 }
 
 void ConnectionPanel::rememberWorkspaceWan(const WanRadioInfo& info)
@@ -4275,7 +4589,7 @@ void ConnectionPanel::rememberWorkspaceWan(const WanRadioInfo& info)
     if (!m_smartLink) { return; }
     storeWorkspaceConnection({{"id", ConnectionWorkspace::newId()}, {"name", info.nickname.isEmpty() ? info.model : info.nickname},
         {"model", info.model}, {"serial", info.serial}, {"family", "flex"}, {"kind", "smartlink"},
-        {"accountId", m_smartLink->accountId()}, {"lowBandwidth", m_lowBwCheck->isChecked()}});
+        {"accountId", m_smartLink->accountId()}, {"lowBandwidth", m_lowBwCheck->isChecked()}}, m_pendingWorkspaceStation);
 }
 
 void ConnectionPanel::rememberWorkspaceManual(const QString& host, const QJsonObject& route)
@@ -4343,7 +4657,8 @@ void ConnectionPanel::saveWorkspaceSelection()
 bool ConnectionPanel::applyWorkspaceOperator()
 {
     if (m_workspace.isEmpty()) { return true; }
-    const QJsonObject profile = ConnectionWorkspace::find(m_workspace.value("operators").toArray(), m_workspace.value("selectedOperator").toString());
+    const QJsonObject profile = m_attemptOperator.isEmpty()
+        ? ConnectionWorkspace::find(m_workspace.value("operators").toArray(), m_workspace.value("selectedOperator").toString()) : m_attemptOperator;
     const QJsonObject preferences = profile.value("preferences").toObject();
     for (const QString& key : {QStringLiteral("inputDeviceId"), QStringLiteral("outputDeviceId")}) {
         const QByteArray id = QByteArray::fromBase64(preferences.value(key).toString().toLatin1());
@@ -4361,53 +4676,21 @@ bool ConnectionPanel::applyWorkspaceOperator()
 
 void ConnectionPanel::connectWorkspaceSelection()
 {
-    if (m_connected) { setStatusText(tr("Disconnect the current radio first.")); return; }
     const QJsonObject path = m_workspacePath->currentData().toJsonObject();
-    if (path.isEmpty()) { return; }
-    const QString kind = path.value("kind").toString();
-    if (kind == QLatin1String("local")) {
-        for (int i = 0; i < m_radios.size(); ++i) {
-            if (m_radios[i].serial == path.value("serial").toString()
-                && (path.value("family").toString().isEmpty() || m_radios[i].family == path.value("family").toString())) {
-                m_radioList->setCurrentRow(i);
-                onLocalConnectClicked();
-                return;
-            }
-        }
-        setStatusText(tr("This radio is not currently discovered. Power it on, retry discovery or add a saved IP path."));
-        return;
-    }
-    if (kind == QLatin1String("smartlink")) {
-        const QString id = path.value("accountId").toString();
-        if (ConnectionWorkspace::find(m_workspace.value("accounts").toArray(), id).isEmpty()) {
-            setStatusText(tr("This connection's SmartLink account was removed. Add that account again in SmartLink accounts."));
-            return;
-        }
-        m_pendingSmartLinkConnection = path;
-        if (!m_smartLink || m_smartLink->accountId() != id || !m_smartLink->isAuthenticated() || !m_smartLink->isConnected()) {
-            if (!activateWorkspaceAccount(id)) { m_pendingSmartLinkConnection = {}; return; }
-            setCurrentMode(SmartLinkMode);
-            setStatusText(tr("Looking up this radio with its saved account. Sign in if requested; the connection will continue automatically."));
-            return;
-        }
-        resumeWorkspaceSmartLink();
-        return;
-    }
-    if (kind == QLatin1String("manual")) {
-        if (m_manualRadioTypeCombo->findData(path.value("family").toString()) < 0) {
-            setStatusText(tr("This build cannot connect to that radio family.")); return;
-        }
-        restoreWorkspaceManual(path);
-        setCurrentMode(ManualMode);
-        onManualConnectClicked();
-    }
+    QJsonObject target = connectionTarget(path.value("id").toString());
+    if (target.isEmpty()) { return; }
+    beginExplicitConnection();
+    target["path"] = path;
+    target["operator"] = m_attemptOperator;
+    emit connectionTargetRequested(target);
 }
 
 void ConnectionPanel::restoreWorkspaceManual(const QJsonObject& path)
 {
     m_manualConnectionName->setText(path.value("name").toString());
     m_pendingWorkspaceConnection = path.value("id").toString();
-    m_pendingWorkspaceStation = m_workspace.value("selectedStation").toString();
+    m_pendingWorkspaceStation = m_attemptTarget.isEmpty() ? m_workspace.value("selectedStation").toString()
+        : m_attemptTarget.value("stationId").toString();
     m_activeIcomCredentialId = path.value("credentialId").toString();
     m_allowLegacyIcomCredential = path.value("legacyCredentials").toBool();
     m_manualIcomPassEdit->clear();
@@ -4437,6 +4720,7 @@ void ConnectionPanel::resumeWorkspaceSmartLink()
             m_lowBwCheck->setChecked(m_pendingSmartLinkConnection.value("lowBandwidth").toBool());
             m_pendingSmartLinkConnection = {};
             m_wanList->setCurrentRow(i);
+            const QScopedValueRollback<bool> dispatch(m_dispatchingTarget, true);
             onWanConnectClicked();
             return;
         }
@@ -4539,6 +4823,10 @@ void ConnectionPanel::editWorkspaceProfile(const QString& collection, const QStr
     name->setAccessibleName(tr("Profile name"));
     name->setMaxLength(128);
     name->setText(original.value("name").toString() + (duplicate ? tr(" copy") : QString()));
+    if (collection == QLatin1String("connections") && original.value("serial").toString() == SimBackend::demoSerial()) {
+        name->setReadOnly(true);
+        name->setAccessibleDescription(tr("The simulator keeps its safety label."));
+    }
     form->addRow(tr("Name:"), name);
     auto* email = new QLineEdit(dialog);
     email->setObjectName(QStringLiteral("connectionAccountEmail"));
@@ -4654,6 +4942,9 @@ void ConnectionPanel::editWorkspaceProfile(const QString& collection, const QStr
         QJsonObject record = original;
         record["id"] = newRecord ? ConnectionWorkspace::newId() : existingId;
         record["name"] = name->text().trimmed();
+        if (collection == QLatin1String("connections") && original.value("serial").toString() == SimBackend::demoSerial()) {
+            record["name"] = original.value("name");
+        }
         if (collection == QLatin1String("stations") && newRecord && !duplicate) { record["connections"] = QJsonArray(); }
         if (collection == QLatin1String("accounts")) {
             const QString address = email->text().trimmed();
@@ -4712,6 +5003,30 @@ void ConnectionPanel::showWorkspaceMenu(bool location, const QPoint& position)
     connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
     const QString collection = location ? QStringLiteral("stations") : QStringLiteral("connections");
     const bool saved = location || !m_workspacePath->currentData().toJsonObject().value("nearby").toBool();
+    if (!location) {
+        auto* connectAction = menu->addAction(m_connected ? tr("Switch to this radio…") : tr("Connect"));
+        connectAction->setObjectName(QStringLiteral("connectionRadioConnect"));
+        connectAction->setEnabled(m_workspaceConnect->isEnabled());
+        connectAction->setStatusTip(m_workspaceConnect->accessibleDescription());
+        connect(connectAction, &QAction::triggered, this, &ConnectionPanel::connectWorkspaceSelection);
+        auto* disconnectAction = menu->addAction(tr("Disconnect"));
+        disconnectAction->setObjectName(QStringLiteral("connectionRadioDisconnect"));
+        const bool selectedIsActive = m_connected && id == m_connectedTarget.value("path").toObject().value("id").toString();
+        disconnectAction->setEnabled(selectedIsActive);
+        disconnectAction->setStatusTip(selectedIsActive ? tr("Disconnect this radio and retain its workspace tab.") : tr("This saved connection is not active."));
+        connect(disconnectAction, &QAction::triggered, this, &ConnectionPanel::disconnectRequested);
+        menu->addSeparator();
+        const QJsonObject target = connectionTarget(id);
+        const QJsonObject switcher = QJsonDocument::fromJson(AppSettings::instance().value("RadioSwitcher", "{}").toString().toUtf8()).object();
+        const bool hidden = switcher.value("hiddenRadios").toArray().contains(target.value("id"));
+        auto* restore = menu->addAction(hidden ? tr("Add to tabs") : tr("Show in tabs"));
+        restore->setObjectName(QStringLiteral("connectionRadioRestoreTab"));
+        restore->setEnabled(saved);
+        restore->setStatusTip(saved ? tr("Restore this saved radio's workspace tab.") : tr("Save this radio to a Location first."));
+        connect(restore, &QAction::triggered, this, [this, target] {
+            emit tabVisibilityRequested(target.value("id").toString(), true);
+        });
+    }
     auto* edit = menu->addAction(tr("Edit"));
     edit->setObjectName(location ? QStringLiteral("connectionLocationEdit") : QStringLiteral("connectionRadioEdit"));
     edit->setEnabled(saved);
@@ -4755,8 +5070,9 @@ void ConnectionPanel::showWorkspaceMenu(bool location, const QPoint& position)
     }
     auto* rename = menu->addAction(tr("Rename"));
     rename->setObjectName(location ? QStringLiteral("connectionLocationRename") : QStringLiteral("connectionRadioRename"));
-    rename->setEnabled(saved);
-    rename->setStatusTip(saved ? tr("Change the saved display name.") : tr("Save this radio to a location first."));
+    const bool fixedDemoName = !location && m_workspacePath->currentData().toJsonObject().value("serial").toString() == SimBackend::demoSerial();
+    rename->setEnabled(saved && !fixedDemoName);
+    rename->setStatusTip(fixedDemoName ? tr("The simulator keeps its safety label.") : saved ? tr("Change the saved display name.") : tr("Save this radio to a location first."));
     connect(rename, &QAction::triggered, this, [this, collection, id] { editWorkspaceProfile(collection, id, false, true); });
     menu->addSeparator();
     auto* remove = menu->addAction(tr("Remove"));

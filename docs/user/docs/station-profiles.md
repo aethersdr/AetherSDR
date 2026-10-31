@@ -44,6 +44,45 @@ Connection forms retain the selected family's settings, including source interfa
 
 *Choose POTA or another location to see its saved connection paths. Browsing locations does not connect or disconnect a radio.*
 
+## Using workspace radio tabs
+
+Saved radios appear as persistent tabs in the main window, including saved IP connections and radios that are currently unavailable. A radio's saved paths share a tab within its Location. The second line shows its connection state and Location. Discovery updates availability without removing saved tabs or changing their order.
+
+Drag a tab left or right to reorder it, like browser tabs. Release to save the order across restarts; **Esc** cancels the drag. Drag near an edge to scroll through an overflowing strip. The mouse wheel and dragging empty strip space also scroll it. Reordering never connects or disconnects a radio. Hidden tabs retain their saved position, newly added radios appear at the end, and the active radio stays where you placed it.
+
+Click a disconnected radio tab to connect through its preferred saved path with the operator selected in **Operating as**. Clicking the connected tab keeps the current operating view. When another radio is connected, clicking a destination tab opens **Switch radio**. Choose **Switch** to disconnect the current radio and connect the destination, or **Cancel** to keep operating. Switching is unavailable during transmit. The active highlight changes only after the destination connects.
+
+Right-click a tab, or focus it and press **Shift+F10**, for these actions:
+
+<img src="/img/screens/radio-tab-switch-confirmation.png" width="552" alt="Switch radio prompt naming the source and destination Locations, explaining that the current radio will disconnect, with Cancel and Switch buttons." />
+
+*Confirm a replacement while the current radio remains connected. Location names distinguish similarly named radios.*
+
+| Action | Behavior |
+|---|---|
+| **Connect** / **Switch to this radio…** | Connect using the saved path, confirming replacement of a live connection. |
+| **Cancel connection** | Cancel a pending connection or sign-in continuation. |
+| **Disconnect** | Disconnect this client's live radio and keep its tab. |
+| **Rename…** | Change the saved connection label in both tabs and Locations. The simulator retains its safety label. |
+| **Connection settings…** | Open the matching Location, radio and saved path in the connection window. |
+| **Remove from tabs** | Hide a disconnected tab while preserving its saved paths and radio settings. |
+
+To restore a hidden tab, open **+**, select the saved radio and choose **Radio options… → Add to tabs**. **Remove** in the saved radio menu deletes saved entries after confirmation; it is separate from **Remove from tabs**.
+
+The **+** button opens **Connect to a radio** at the browsed Location. The dialog remembers the radio selected within each Location and the preferred path chosen for each radio. Browsing another Location or operator while connected preserves the live connection and audio. A pending connection keeps the Location, path and operator captured when it was requested, even if browsing changes afterward.
+
+If credentials need attention, the connection window opens at the relevant saved connection. A SmartLink sign-in continues the requested connection after authentication. Switching SmartLink accounts can require ending the existing remote session before sign-in. If a switch fails after disconnecting, **Retry** attempts the destination again and **Reconnect to [previous radio]** offers an explicit return.
+
+## Startup and recovery
+
+With auto-connect enabled and a last radio saved, startup opens the operating window and attempts that radio. With auto-connect disabled, or no saved last radio, startup opens Locations. A manual connection choice cancels startup auto-connect for that launch; late discovery, probe and credential results cannot override it.
+
+If a saved IP path fails at startup, **Connect by IP** shows the failure with the saved connection name. **‹ Back to Locations** returns to that saved radio's Location and selection so another path or radio can be chosen.
+
+<img src="/img/screens/radio-ip-startup-recovery.png" width="912" alt="Connect by IP shows a saved connection name, a documentation IP address, the failed connection reason and a Back to Locations button." />
+
+*An unavailable saved IP path keeps its connection name and offers Back to Locations.*
+
 ## Using operator profiles
 
 <img src="/img/screens/operator-profile-selection.png" width="732" alt="Operator profiles library with saved profiles and Create, Edit, Duplicate, Remove and Use profile actions." />

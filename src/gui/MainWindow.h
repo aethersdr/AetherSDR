@@ -1987,6 +1987,24 @@ private:
     bool m_paCurrentStatusPreferred{false};
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
+    bool m_startupConnectSuperseded{false};
+    quint64 m_radioChoiceGeneration{0};
+    bool m_radioDisconnectPending{false};
+    std::function<void()> m_afterRadioDisconnect;
+    void connectSelectedRadio(const RadioInfo& info);
+    void armRadioSwitchTimeout();
+    QJsonObject m_activeRadioTarget;
+    QJsonObject m_pendingRadioTarget;
+    QJsonObject m_previousRadioTarget;
+    QJsonObject m_failedRadioTarget;
+    QString m_radioSwitchPhase;
+    QPointer<QDialog> m_radioSwitchPrompt;
+    void beginExplicitRadioChoice();
+    void requestRadioTarget(const QJsonObject& target);
+    void performRadioSwitch(const QJsonObject& target);
+    void continueRadioSwitch(quint64 generation);
+    void failRadioSwitch(const QString& reason);
+    void handleRadioTabAction(const QString& id, const QString& action);
     bool m_commandDroppedNoticeShown{false};  // one status-bar notice per connect session (M0, #5263)
     // Slice lifecycle refusals already shown this connect session, keyed
     // "<operation>\n<reason>": one notice per distinct refusal, so a control

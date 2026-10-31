@@ -53,6 +53,9 @@ constexpr int  kDotTextGap    = 8;
 constexpr int  kAddButtonSize = 28;
 constexpr int  kStripSpacing  = 6;
 constexpr int  kStripMinWidth = 112;
+constexpr int  kDragEdgeMargin = 24;
+constexpr int  kDragScrollStep = 14;
+constexpr int  kDragScrollMs = 40;
 constexpr qreal kNameSizePx   = 12.5;
 constexpr qreal kStatusSizePx = 9.5;
 // A heartbeat swells the dot's glow and lets it fall away over this long.  The
@@ -114,6 +117,12 @@ QString radioTabStatusText(RadioTabStatus status)
 {
     switch (status) {
         case RadioTabStatus::Connected: return QStringLiteral("connected");
+        case RadioTabStatus::Saved: return QStringLiteral("saved");
+        case RadioTabStatus::Unavailable: return QStringLiteral("unavailable");
+        case RadioTabStatus::SignInRequired: return QStringLiteral("sign-in required");
+        case RadioTabStatus::Connecting: return QStringLiteral("connecting");
+        case RadioTabStatus::Disconnecting: return QStringLiteral("disconnecting");
+        case RadioTabStatus::Failed: return QStringLiteral("failed");
         case RadioTabStatus::InUse:     return QStringLiteral("in use");
         case RadioTabStatus::Available:
         default:                        return QStringLiteral("available");
@@ -127,6 +136,12 @@ QString radioTabStatusLabel(RadioTabStatus status)
     // deliberately differ — capitalizing radioTabStatusText() instead would
     // break every driver matching on `status`.
     switch (status) {
+        case RadioTabStatus::Saved: return QCoreApplication::translate("RadioTab", "Saved");
+        case RadioTabStatus::Unavailable: return QCoreApplication::translate("RadioTab", "Unavailable");
+        case RadioTabStatus::SignInRequired: return QCoreApplication::translate("RadioTab", "Sign-in required");
+        case RadioTabStatus::Connecting: return QCoreApplication::translate("RadioTab", "Connecting…");
+        case RadioTabStatus::Disconnecting: return QCoreApplication::translate("RadioTab", "Disconnecting…");
+        case RadioTabStatus::Failed: return QCoreApplication::translate("RadioTab", "Connection failed");
         case RadioTabStatus::Connected:
             return QCoreApplication::translate("RadioTab", "Connected");
         case RadioTabStatus::InUse:
@@ -545,8 +560,8 @@ RadioTabBar::RadioTabBar(QWidget* parent)
     m_addButton->setFocusPolicy(Qt::StrongFocus);
     m_addButton->setAccessibleName(tr("Add radio"));
     m_addButton->setAccessibleDescription(
-        tr("Open the list of discovered radios"));
-    m_addButton->setToolTip(tr("Discovered radios"));
+        tr("Open Locations and saved radio connections"));
+    m_addButton->setToolTip(tr("Connect to a radio"));
     ThemeManager::instance().applyStyleSheet(
         m_addButton,
         QStringLiteral(
@@ -564,10 +579,20 @@ RadioTabBar::RadioTabBar(QWidget* parent)
     // window and takes its initial focus.
     m_addButton->installEventFilter(this);
     connect(m_addButton, &QToolButton::clicked, this, [this]() {
-        emit discoveryPopoverRequested();
-        showDiscoveryPopover();
+        emit connectManuallyRequested();
     });
     m_layout->addWidget(m_addButton);
+    m_dragScrollTimer = new QTimer(this);
+    m_dragScrollTimer->setInterval(kDragScrollMs);
+    connect(m_dragScrollTimer, &QTimer::timeout, this, [this] {
+        if (!m_dragging || !m_dragPressedTab || !m_scrollArea) { m_dragScrollTimer->stop(); return; }
+        QScrollBar* bar = m_scrollArea->horizontalScrollBar();
+        const int before = bar->value();
+        bar->setValue(before + m_dragScrollDirection * kDragScrollStep);
+        reorderDraggedTab(m_dragLastGlobalX);
+        if (bar->value() == before) { m_dragScrollTimer->stop(); }
+    });
+
 
     // One shared ticker rather than an animation per tab: only the active tab
     // ever glows, and this app watches its idle-repaint budget closely.  The
@@ -598,6 +623,16 @@ RadioTabBar::RadioTabBar(QWidget* parent)
 
 bool RadioTabBar::eventFilter(QObject* watched, QEvent* ev)
 {
+    if (ev->type() == QEvent::KeyPress) {
+        auto* key = static_cast<QKeyEvent*>(ev);
+        if (key->key() == Qt::Key_Escape && m_dragging) { finishStripDrag(true); return true; }
+        if (auto* tab = qobject_cast<RadioTab*>(watched)) {
+            if (key->key() == Qt::Key_Menu || (key->key() == Qt::Key_F10 && key->modifiers() == Qt::ShiftModifier)) {
+                showRadioContextMenu(tab->entry().id);
+                return true;
+            }
+        }
+    }
     if (watched == m_addButton
         && (ev->type() == QEvent::FocusIn || ev->type() == QEvent::FocusOut)) {
         bool visible = false;
@@ -654,11 +689,13 @@ bool RadioTabBar::handleStripDrag(QObject* watched, QEvent* ev)
     const int x = qRound(me->globalPosition().x());
 
     if (type == QEvent::MouseButtonPress) {
-        m_dragArmed = me->button() == Qt::LeftButton && bar->maximum() > 0;
+        m_dragArmed = me->button() == Qt::LeftButton && (tab || bar->maximum() > 0);
         m_dragging = false;
         m_dragPressX = x;
         m_dragStartValue = bar->value();
         m_dragPressedTab = tab;
+        m_dragOriginalOrder.clear();
+        for (const RadioTabEntry& entry : m_radios) { m_dragOriginalOrder.append(entry.id); }
         return false;   // the tab still sees the press: a still click selects it
     }
     if (!m_dragArmed) {
@@ -666,7 +703,7 @@ bool RadioTabBar::handleStripDrag(QObject* watched, QEvent* ev)
     }
     if (type == QEvent::MouseMove) {
         if (!(me->buttons() & Qt::LeftButton)) {
-            m_dragArmed = m_dragging = false;
+            finishStripDrag(true);
             return false;
         }
         const int dx = x - m_dragPressX;
@@ -676,24 +713,85 @@ bool RadioTabBar::handleStripDrag(QObject* watched, QEvent* ev)
             // swallowed release can't activate it.
             if (m_dragPressedTab) {
                 m_dragPressedTab->setDown(false);
+                m_dragPressedTab->setCursor(Qt::ClosedHandCursor);
             }
             m_scrollArea->viewport()->setCursor(Qt::ClosedHandCursor);
         }
         if (m_dragging) {
-            bar->setValue(m_dragStartValue - dx);
+            if (m_dragPressedTab) {
+                m_dragLastGlobalX = x;
+                const int viewX = m_scrollArea->viewport()->mapFromGlobal(me->globalPosition().toPoint()).x();
+                m_dragScrollDirection = viewX < kDragEdgeMargin ? -1 : viewX > m_scrollArea->viewport()->width() - kDragEdgeMargin ? 1 : 0;
+                if (m_dragScrollDirection) { if (!m_dragScrollTimer->isActive()) { m_dragScrollTimer->start(); } }
+                else { m_dragScrollTimer->stop(); }
+                reorderDraggedTab(x);
+            } else { bar->setValue(m_dragStartValue - dx); }
             return true;
         }
         return false;
     }
-    // Release.
     const bool wasDragging = m_dragging;
+    finishStripDrag();
+    return wasDragging;
+}
+
+void RadioTabBar::reorderDraggedTab(int globalX)
+{
+    auto* moving = qobject_cast<RadioTab*>(m_dragPressedTab.data());
+    const int from = m_tabs.indexOf(moving);
+    if (from < 0) { return; }
+    const int x = m_tabHost->mapFromGlobal(QPoint(globalX, 0)).x();
+    int to = from;
+    if (x > moving->geometry().center().x()) {
+        for (int index = from + 1; index < m_tabs.size(); ++index) {
+            if (m_tabs[index]->isVisible() && x > m_tabs[index]->geometry().center().x()) { to = index; }
+        }
+    } else {
+        for (int index = from - 1; index >= 0; --index) {
+            if (m_tabs[index]->isVisible() && x < m_tabs[index]->geometry().center().x()) { to = index; }
+        }
+    }
+    if (from == to) { return; }
+    m_tabs.move(from, to);
+    m_radios.move(from, to);
+    m_tabsLayout->removeWidget(moving);
+    m_tabsLayout->insertWidget(to, moving);
+    m_tabsLayout->activate();
+}
+
+void RadioTabBar::finishStripDrag(bool cancel)
+{
+    const bool reordered = m_dragging && m_dragPressedTab;
+    if (m_dragScrollTimer) { m_dragScrollTimer->stop(); }
+    if (m_dragPressedTab) {
+        if (reordered || cancel) { m_dragPressedTab->setDown(false); }
+        m_dragPressedTab->setCursor(Qt::PointingHandCursor);
+    }
     m_dragArmed = m_dragging = false;
     m_dragPressedTab = nullptr;
-    if (wasDragging) {
-        m_scrollArea->viewport()->unsetCursor();
-        return true;
+    if (m_scrollArea) { m_scrollArea->viewport()->unsetCursor(); }
+    if (!reordered) { return; }
+    if (cancel) {
+        std::stable_sort(m_radios.begin(), m_radios.end(), [this](const RadioTabEntry& a, const RadioTabEntry& b) {
+            const int left = m_dragOriginalOrder.indexOf(a.id);
+            const int right = m_dragOriginalOrder.indexOf(b.id);
+            return (left < 0 ? m_dragOriginalOrder.size() : left) < (right < 0 ? m_dragOriginalOrder.size() : right);
+        });
+        std::stable_sort(m_tabs.begin(), m_tabs.end(), [this](const RadioTab* a, const RadioTab* b) {
+            const int left = m_dragOriginalOrder.indexOf(a->entry().id);
+            const int right = m_dragOriginalOrder.indexOf(b->entry().id);
+            return (left < 0 ? m_dragOriginalOrder.size() : left) < (right < 0 ? m_dragOriginalOrder.size() : right);
+        });
+        for (int index = 0; index < m_tabs.size(); ++index) {
+            m_tabsLayout->removeWidget(m_tabs[index]);
+            m_tabsLayout->insertWidget(index, m_tabs[index]);
+        }
+        m_tabsLayout->activate();
+        return;
     }
-    return false;
+    QStringList order;
+    for (const RadioTabEntry& entry : m_radios) { order.append(entry.id); }
+    if (order != m_dragOriginalOrder) { emit radioOrderChanged(order); }
 }
 
 QSize RadioTabBar::sizeHint() const
@@ -834,10 +932,23 @@ void RadioTabBar::setPulseEnabled(bool on)
 
 void RadioTabBar::setRadios(const QList<RadioTabEntry>& radios)
 {
-    if (m_radios == radios) {
-        return;   // discovery re-announces every 5 s; don't churn the widgets
+    QList<RadioTabEntry> updated = radios;
+    if (m_dragging && m_dragPressedTab) {
+        const auto* moving = qobject_cast<RadioTab*>(m_dragPressedTab.data());
+        const bool retained = moving && std::any_of(updated.cbegin(), updated.cend(), [moving](const RadioTabEntry& entry) { return entry.id == moving->entry().id; });
+        if (!retained) { finishStripDrag(true); }
+        else {
+            QStringList order;
+            for (const RadioTabEntry& entry : m_radios) { order.append(entry.id); }
+            std::stable_sort(updated.begin(), updated.end(), [&order](const RadioTabEntry& a, const RadioTabEntry& b) {
+                const int left = order.indexOf(a.id);
+                const int right = order.indexOf(b.id);
+                return (left < 0 ? order.size() : left) < (right < 0 ? order.size() : right);
+            });
+        }
     }
-    m_radios = radios;
+    if (m_radios == updated) { return; }
+    m_radios = updated;
     rebuild();
 }
 
@@ -907,9 +1018,13 @@ void RadioTabBar::rebuild()
     while (m_tabs.size() < m_radios.size()) {
         auto* tab = new RadioTab(m_radios.at(m_tabs.size()), this);
         tab->installEventFilter(this);   // drag-to-scroll (handleStripDrag)
+        tab->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(tab, &QWidget::customContextMenuRequested, this, [this, tab](const QPoint&) {
+            showRadioContextMenu(tab->entry().id);
+        });
         connect(tab, &QAbstractButton::clicked, this, [this, tab]() {
-            // A click opens the picker; it does not switch radios, so the
-            // active tab changes only when the session does (setActiveRadio).
+            // A click requests a connection; only a proven session may move
+            // the active highlight (setActiveRadio).
             // Re-assert the checked state: this checkable, ungrouped tab has
             // already toggled itself on press, and nothing else would restore
             // it for an unchanged active id.
@@ -942,7 +1057,7 @@ void RadioTabBar::applyActiveState()
     if (m_addButton) {
         m_addButton->setVisible(!m_compact);
     }
-    updateTabViewport(shown);
+    updateTabViewport(m_dragging ? nullptr : shown);
     applyLinkVisuals();
 }
 
@@ -1075,44 +1190,14 @@ void RadioTabBar::showDiscoveryPopover()
             " border: 1px solid {{color.border.strong}}; border-radius: 4px; padding: 4px; }"
             "QToolButton:hover { background: {{color.background.2}}; }"
             "QToolButton:focus { border-color: {{color.border.accent}}; }"));
-        auto* menu = new QMenu(actions);
-        menu->setObjectName(QStringLiteral("radioSwitcherMenu_") + id);
-        ThemeManager::instance().applyStyleSheet(menu, QStringLiteral(
-            "QMenu { background: {{color.background.1}}; color: {{color.text.primary}};"
-            " border: 1px solid {{color.border.strong}}; padding: 4px; }"
-            "QMenu::item { padding: 8px 18px; }"
-            "QMenu::item:selected { background: {{color.background.2}}; }"
-            "QMenu::item:disabled { color: {{color.text.disabled}}; }"
-            "QMenu::separator { height: 1px; background: {{color.border.strong}}; margin: 4px; }"));
-        auto addAction = [this, menu, id](const QString& label, const QString& action, bool enabled) {
-            QAction* item = menu->addAction(label);
-            item->setObjectName(QStringLiteral("radioSwitcher_") + action + '_' + id);
-            item->setEnabled(enabled);
-            if (action == QStringLiteral("remove")) {
-                item->setToolTip(tr("Hide this tab without deleting radio settings. Find it here again to restore it."));
-            }
-            connect(item, &QAction::triggered, this, [this, id, action]() {
-                if (m_popover) {
-                    m_popover->close();
-                }
-                emit radioActionRequested(id, action);
-            });
-        };
-        const bool connected = entry.status == RadioTabStatus::Connected;
-        addAction(tr("Disconnect"), QStringLiteral("disconnect"), connected);
-        addAction(tr("Rename\u2026"), QStringLiteral("rename"), entry.canRename);
-        addAction(tr("Radio setup\u2026"), QStringLiteral("setup"), connected);
-        menu->addSeparator();
-        addAction(entry.visibleInTabs ? tr("Remove from tabs") : tr("Add to tabs"),
-                  entry.visibleInTabs ? QStringLiteral("remove") : QStringLiteral("restore"),
-                  !connected);
+        QMenu* menu = createRadioMenu(entry, actions);
         actions->setMenu(menu);
         rowLayout->addWidget(actions);
         listLayout->addWidget(container);
         radioRows.append(container);
     }
     listLayout->addStretch();
-    auto filterRows = [radioRows, empty, this](const QString& query) {
+    auto filterRows = [radioRows, empty](const QString& query) {
         bool found = false;
         for (QWidget* row : radioRows) {
             const bool matches = row->property("radioSearchText").toString()
@@ -1137,13 +1222,13 @@ void RadioTabBar::showDiscoveryPopover()
                                   " max-height: 1px; }"));
     rows->addWidget(separator);
 
-    auto* manual = new QPushButton(tr("Connect manually\u2026"),
+    auto* manual = new QPushButton(tr("Manage connections\u2026"),
                                    popover->panel());
     manual->setFlat(true);
     manual->setCursor(Qt::PointingHandCursor);
     manual->setFocusPolicy(Qt::StrongFocus);
     manual->setObjectName(QStringLiteral("connectManuallyRow"));
-    manual->setAccessibleName(tr("Connect manually"));
+    manual->setAccessibleName(tr("Manage connections"));
     ThemeManager::instance().applyStyleSheet(manual, rowStyleTemplate());
     connect(manual, &QPushButton::clicked, this, [this]() {
         if (m_popover) {
@@ -1181,6 +1266,69 @@ void RadioTabBar::showDiscoveryPopover()
     search->setFocus(Qt::PopupFocusReason);
 }
 
+QMenu* RadioTabBar::createRadioMenu(const RadioTabEntry& entry, QWidget* parent)
+{
+    auto* menu = new QMenu(parent);
+    menu->setObjectName(QStringLiteral("radioSwitcherMenu_") + entry.id);
+    menu->setToolTipsVisible(true);
+    const QString heading = entry.location.isEmpty() ? entry.name : entry.location + middleDot() + entry.name;
+    menu->addSection(QFontMetrics(menu->font()).elidedText(heading, Qt::ElideRight, 280));
+    ThemeManager::instance().applyStyleSheet(menu, QStringLiteral(
+        "QMenu { background: {{color.canon.nested}}; color: {{color.canon.ink}};"
+        " border: 1px solid {{color.canon.lineHi}}; padding: 4px; }"
+        "QMenu::item { padding: 8px 18px; color: {{color.canon.ink}}; }"
+        "QMenu::item:selected { background: {{color.canon.control}}; color: {{color.canon.ink}}; }"
+        "QMenu::item:disabled { color: {{color.canon.muted}}; }"
+        "QMenu::item:disabled:selected { background: {{color.canon.control}}; color: {{color.canon.muted}}; }"
+        "QMenu::separator { height: 1px; background: {{color.canon.line}}; margin: 4px; }"));
+    const QString id = entry.id;
+    const auto add = [this, menu, id](const QString& label, const QString& action, bool enabled, const QString& reason) {
+        QAction* item = menu->addAction(label);
+        item->setObjectName(QStringLiteral("radioSwitcher_") + action + '_' + id);
+        item->setEnabled(enabled);
+        item->setStatusTip(reason);
+        item->setToolTip(reason);
+        connect(item, &QAction::triggered, this, [this, id, action] {
+            if (m_popover) { m_popover->close(); }
+            emit radioActionRequested(id, action);
+        });
+    };
+    const bool active = entry.id == m_activeId;
+    if (entry.canCancel) {
+        add(tr("Cancel connection"), QStringLiteral("cancel"), true, tr("Cancel this connection attempt."));
+    } else {
+        add(!m_activeId.isEmpty() && !active ? tr("Switch to this radio…") : tr("Connect"),
+            QStringLiteral("connect"), entry.canConnect && !active,
+            active ? tr("This radio is already connected.") : entry.connectReason);
+    }
+    add(tr("Disconnect"), QStringLiteral("disconnect"), active && !entry.canCancel,
+        active ? tr("Disconnect and keep this workspace tab.") : tr("This radio is not connected."));
+    menu->addSeparator();
+    add(tr("Rename…"), QStringLiteral("rename"), entry.canRename,
+        entry.canRename ? tr("Change the saved connection name in tabs and Locations.") : tr("Save this radio to a Location before renaming it. The simulator keeps its safety label."));
+    add(tr("Connection settings…"), QStringLiteral("settings"), true,
+        tr("Open this radio's Location and saved connection path."));
+    menu->addSeparator();
+    add(entry.visibleInTabs ? tr("Remove from tabs") : tr("Add to tabs"),
+        entry.visibleInTabs ? QStringLiteral("remove") : QStringLiteral("restore"), !active && !entry.canCancel,
+        active || entry.canCancel ? tr("Disconnect or cancel the connection first.") : tr("Keep the saved connection and radio settings."));
+    return menu;
+}
+
+bool RadioTabBar::showRadioContextMenu(const QString& id)
+{
+    for (RadioTab* tab : std::as_const(m_tabs)) {
+        if (tab->entry().id != id || !tab->isVisible()) { continue; }
+        if (m_contextMenu) { m_contextMenu->close(); }
+        QMenu* menu = createRadioMenu(tab->entry(), this);
+        m_contextMenu = menu;
+        connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
+        menu->popup(tab->mapToGlobal(QPoint(0, tab->height())));
+        return true;
+    }
+    return false;
+}
+
 QVariantMap RadioTabBar::state() const
 {
     QVariantList tabs;
@@ -1196,6 +1344,11 @@ QVariantMap RadioTabBar::state() const
             {QStringLiteral("name"), e.name},
             {QStringLiteral("status"), radioTabStatusText(e.status)},
             {QStringLiteral("model"), e.model},
+            {QStringLiteral("serial"), e.serial},
+            {QStringLiteral("location"), e.location},
+            {QStringLiteral("canConnect"), e.canConnect},
+            {QStringLiteral("connectReason"), e.connectReason},
+            {QStringLiteral("canCancel"), e.canCancel},
             {QStringLiteral("statusLine"), tab->statusLine()},
             {QStringLiteral("transport"), e.transport},
             {QStringLiteral("active"), tab->isChecked()},
@@ -1231,6 +1384,8 @@ QVariantMap RadioTabBar::state() const
              ? m_tabHost->width() > m_scrollArea->viewport()->width()
              : false},
         {QStringLiteral("popoverVisible"), isDiscoveryPopoverVisible()},
+        {QStringLiteral("contextMenuVisible"), m_contextMenu && m_contextMenu->isVisible()},
+        {QStringLiteral("reordering"), m_dragging && bool(m_dragPressedTab)},
         {QStringLiteral("pulseEnabled"), m_pulseEnabled},
         // The discovery heartbeat, which the active tab's dot now carries.
         // Exposed as a live level rather than a "beating" boolean so a caller
