@@ -64,6 +64,12 @@ It exercises both profiles at a custom address, both scope IDs and full native
 bin counts/positions, independent axes, out-of-range and malformed frames,
 foreign/stale deliveries, reordered MAIN/SUB state, DATA enums, split/focus,
 receiver-qualified confirmations, stereo decoder feeds and the speaker mix.
+The same dual-receiver test captures the production uplink writer without
+opening sockets. It checks mono PCM packet duration and stereo downmix level,
+24→48 kHz conversion after the resampler's acoustic delay, rejection while
+unkeyed or without audio authority, and cancellation of queued audio on unkey
+for both models. This proves host packet production, not target-radio TX.
+
 `icom_audio_test` checks byte/frame boundaries across stereo packets and channel
 counts for loss concealment. Existing Icom tests protect the previous models.
 

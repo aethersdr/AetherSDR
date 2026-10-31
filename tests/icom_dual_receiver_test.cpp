@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ranges>
 
 using namespace AetherSDR;
 using namespace AetherSDR::icom;
@@ -28,6 +29,13 @@ struct IcomStreamTestAccess {
     }
 };
 struct IcomCivBackendTestAccess {
+    static void captureUplink(IcomCivBackend& backend,
+                              std::vector<std::vector<std::uint8_t>>& packets)
+    {
+        backend.m_session->m_audio = new IcomStream(backend.m_session.get());
+        IcomStreamTestAccess::capture(*backend.m_session->m_audio, packets);
+    }
+    static void pumpUplink(IcomCivBackend& backend) { backend.m_session->onTxPump(); }
     static void requestMedia(IcomSession& session, std::vector<std::vector<std::uint8_t>>& packets,
                               std::uint8_t hint, int channels = 0)
     {
@@ -134,6 +142,7 @@ int main(int argc, char** argv)
               "production stream request negotiates RX shape independently of mono TX");
     }
     for (std::uint8_t model : {0x98, 0xb2}) {
+        std::vector<std::vector<std::uint8_t>> uplink;
         RadioModel radio;
         if (!radio.rebuildBackendForTest(QStringLiteral("icom"))) { return 1; }
         auto& backend = static_cast<IcomCivBackend&>(*radio.backend());
@@ -223,10 +232,62 @@ int main(int argc, char** argv)
               && IcomCivBackendTestAccess::dataItem(backend) == (model == 0x98 ? 94 : 132),
               "split selects SUB's exact DATA3 modulation register");
         TxTestAuthority authority;
+        IcomCivBackendTestAccess::captureUplink(backend, uplink);
+        const auto stereoPcm = [](int frames) {
+            std::vector<qint16> samples(static_cast<std::size_t>(frames) * 2);
+            for (int i = 0; i < frames; ++i) {
+                samples[i * 2] = 16384;
+                samples[i * 2 + 1] = 8192;
+            }
+            return QByteArray(reinterpret_cast<const char*>(samples.data()),
+                              static_cast<qsizetype>(samples.size() * sizeof(qint16)));
+        };
+        const auto submit = [&](int rate, const TxCoordinator::Context& context) {
+            backend.submitTxAudio(stereoPcm(4096), rate, TxAudioSource::ClientLeveled, context);
+            IcomCivBackendTestAccess::pumpUplink(backend);
+        };
+        const auto decodedUplink = [&] {
+            std::vector<std::uint8_t> payload;
+            for (const auto& packet : uplink) {
+                const auto chunk = audioPayload(packet);
+                payload.insert(payload.end(), chunk.begin(), chunk.end());
+            }
+            return decodeAudio(AudioCodec::Lpcm1ch16, payload);
+        };
+        submit(48000, authority.context);
+        check(uplink.empty(), "unkeyed dual receiver refuses outgoing audio packets");
         check(IcomCivBackendTestAccess::queuedPtt(backend,true,authority.operation),
               "authorized PTT uses one global 1C 00 at the customized address");
+        submit(48000, {});
+        check(uplink.empty(), "keyed dual receiver still requires an authorized audio context");
+        submit(48000, authority.context);
+        const auto direct = decodedUplink();
+        check(direct.size() == 960 && std::ranges::all_of(direct, [](float sample) {
+                  return std::abs(sample - 0.375f) < 0.0001f;
+              }), "production uplink packetizes one 20 ms mono frame from stereo input");
+        uplink.clear();
+        // Start a fresh transmission so the first frame here must come from
+        // the 24 -> 48 kHz path, rather than the preceding queue's tail.
+        check(IcomCivBackendTestAccess::queuedPtt(backend,false,authority.operation)
+              && IcomCivBackendTestAccess::queuedPtt(backend,true,authority.operation),
+              "new transmission clears the previous audio queue");
+        submit(24000, authority.context);
+        // The resampler retains acoustic filter delay. Drain the available
+        // complete packets before checking the settled signal at their tail.
+        for (int tick = 0; tick < 8; ++tick) { IcomCivBackendTestAccess::pumpUplink(backend); }
+        const auto resampled = decodedUplink();
+        check(resampled.size() >= 7680 && resampled.size() % 960 == 0
+              && std::ranges::all_of(resampled | std::views::drop(resampled.size() - 200), [](float sample) {
+                  return std::abs(sample - 0.375f) < 0.002f;
+              }), "24 kHz seam audio reaches the 48 kHz mono uplink with expected level");
+        // Leave another producer block queued to exercise unkey cancellation.
+        backend.submitTxAudio(stereoPcm(4096), 24000, TxAudioSource::ClientLeveled, authority.context);
         check(IcomCivBackendTestAccess::queuedPtt(backend,false,authority.operation),
               "unkey remains global and reaches the emergency dispatch path");
+        uplink.clear();
+        IcomCivBackendTestAccess::pumpUplink(backend);
+        submit(24000, authority.context);
+        check(uplink.empty(), "unkey flushes queued uplink audio and refuses new microphone frames");
         const auto modeWrite = buildFrameSub(0x50,0x26,1,std::array<std::uint8_t,3>{1,3,2});
         check(IcomCivBackendTestAccess::confirmation(backend, modeWrite) == buildFrameSub(0x50,0x26,1),
               "SUB mode write confirmation stays SUB");
