@@ -35,6 +35,8 @@ int main(int argc, char** argv)
     applet.setRadioModel(&model);
     applet.setTciServer(&server);
     auto* lineOut = applet.findChild<QCheckBox*>(QStringLiteral("tciLineOutIncludeTx"));
+    check(lineOut && lineOut->text() == QStringLiteral("Line Out TX"),
+          "Line Out TX control uses its plain feature name");
     check(lineOut && !lineOut->isChecked(), "Line Out TX inclusion defaults off");
     check(lineOut && !lineOut->isEnabled() && !lineOut->accessibleDescription().isEmpty(),
           "Line Out TX control is unavailable with an accessible reason when disconnected");

@@ -207,7 +207,7 @@ void TciApplet::buildUI()
 
     auto* lineOutRow = new QHBoxLayout;
     lineOutRow->setContentsMargins(4, 2, 4, 2);
-    m_lineOutIncludeTx = new QCheckBox(tr("Line Out TX (Experimental)"), this);
+    m_lineOutIncludeTx = new QCheckBox(tr("Line Out TX"), this);
     m_lineOutIncludeTx->setObjectName(QStringLiteral("tciLineOutIncludeTx"));
     m_lineOutIncludeTx->setAccessibleName(tr("TCI Line Out TX recording"));
     m_lineOutIncludeTx->setAccessibleDescription(tr(
