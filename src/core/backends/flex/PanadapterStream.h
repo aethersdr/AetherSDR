@@ -42,6 +42,7 @@ class OpusCodec;
 class PanadapterStream : public QObject {
     Q_OBJECT
     friend class TxOperationIntegrationTestAccess;
+    friend class FlexCwControlsTestAccess;
     friend class VitaDscpStreamTestAccess;
     friend class WanUdpKeepaliveTestAccess;
     friend class WanUdpKeepaliveSocketTestAccess;

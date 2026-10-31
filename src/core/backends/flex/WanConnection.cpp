@@ -132,6 +132,7 @@ WanConnection::~WanConnection()
 
 void WanConnection::resetSessionState()
 {
+    ++m_sessionGeneration;
     // This object outlives every TLS session (a by-value MainWindow member), so
     // reset per session: otherwise a partial line from the dead link prefixes the
     // next session's first line and stale handle/sequence/callbacks answer into the
@@ -428,8 +429,9 @@ void WanConnection::processLine(const QString& line)
     case MessageType::Response: {
         auto it = m_pendingCallbacks.find(msg.sequence);
         if (it != m_pendingCallbacks.end()) {
-            it.value()(msg.resultCode, msg.object);
+            const ResponseCallback callback = std::move(it.value());
             m_pendingCallbacks.erase(it);
+            callback(msg.resultCode, msg.object);
         }
         break;
     }

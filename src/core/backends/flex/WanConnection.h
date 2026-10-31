@@ -59,6 +59,10 @@ public:
     quint32 sendCommand(const QString& command,
                         ResponseCallback callback = nullptr);
 
+    quint64 commandSessionGeneration() const { return m_sessionGeneration; }
+    void forgetSessionReply(quint32 sequence, quint64 generation)
+    { if (generation == m_sessionGeneration) { m_pendingCallbacks.remove(sequence); } }
+
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): operator decides whether
     // to accept a new cert presented during a mismatch.  Connection is
     // paused — wan validate has NOT been sent — until one of these
@@ -105,6 +109,7 @@ private:
     QSslSocket m_socket;
     void resetSessionState();   // drop everything scoped to one TLS session
 
+    quint64 m_sessionGeneration{0};
     QByteArray m_readBuffer;
     QTimer     m_heartbeat;
     QString    m_wanHandle;
