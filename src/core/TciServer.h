@@ -8,6 +8,7 @@
 #include <QThread>
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
+#include "TciIqDecimator.h"
 #include "IcomTciUnkeySettle.h"
 #include "PcmFrame.h"
 #include "TxCoordinator.h"
@@ -76,6 +77,7 @@ class TciServer : public QObject {
     friend class TciServerReviewTest;
     friend class TciSliceLifecycleTestAccess;
     friend class TciRxAudioTest;
+    friend class TciHostIqTest;
     friend class Hl2TciSignalingTest;
     friend class TxOperationIntegrationTestAccess;
 
@@ -157,6 +159,9 @@ public slots:
     void onDaxPcmReady(int channel, const PcmFrame& frame);
     // IQ data from DAX IQ stream (big-endian float32 I/Q pairs)
     void onIqDataReady(int channel, const QByteArray& rawPayload, int sampleRate);
+    // IQ from a backend that has its own (HL2): native float32 I/Q pairs for
+    // one slice, centred on its pan. See IRadioBackend::sliceIqFrameReady.
+    void onSliceIqReady(int sliceId, const QByteArray& iqFloat32, int sampleRate);
     // Waterfall row from PanadapterStream — forwarded to spectrum_event subscribers
     void onWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
                              double lowMhz, double highMhz,
@@ -349,7 +354,13 @@ private:
     void resetIqStreamBookkeeping();
     int  achievedIqSampleRate() const;
     int  effectiveIqSampleRate() const;
+    int  hostIqOutputRate() const;
     void announceEffectiveIqSampleRate();
+    // Host IQ (no DAX IQ plane): the backend's tap per slice, kept equal to
+    // the slices the subscribed receivers resolve to. keepSliceId is one being
+    // armed whose client has not recorded the receiver yet.
+    bool armHostIq(int trx);
+    void reconcileHostIqTaps(int keepSliceId = -1);
 
     void syncClient(const ClientState& client);
     TciClient* clientById(quint64 id) const;
@@ -399,6 +410,12 @@ private:
     QHash<QString,int> m_iqPanChannel;       // panId → TCI-owned DAX IQ channel
     int                m_announcedIqSampleRate{48000};
     int                m_iqSampleRate{48000};// shared requested rate, all TCI receivers
+    QSet<int>          m_hostIqSlices;       // slices whose backend IQ tap TCI holds on
+    int                m_hostIqRate{0};      // rate of the last host IQ frame, 0 = none yet
+    // Host IQ arrives at the radio's rate (its pan span); each tapped slice
+    // is brought down to the requested m_iqSampleRate before it is sent.
+    QHash<int, TciIqDecimator> m_hostIqDecimators;   // sliceId → its decimator
+    std::vector<float> m_hostIqOut;                  // reused output buffer
     QHash<QString, long long> m_lastDdsCenterHz; // panId → last broadcast dds center, gates zoom-only re-emits (#3910)
     TciRoutingState m_routingState;
     // #4567: stable sliceId→trx receiver bindings. Acquired on sliceAdded,
