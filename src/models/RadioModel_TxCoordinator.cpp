@@ -234,6 +234,10 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     if (request && !m_txCoordinator.acceptsRequest(*request)) {
         return false;
     }
+    if (m_daxTxOwnershipIntent) {
+        interruptDaxTxOwnership(tr("Transmit preparation interrupted DAX TX ownership. Waiting for fresh radio status."));
+        return false;
+    }
     // TUNE/ATU use the backend's shared carrier/PTT latch, unlike compatible
     // MOX holds. Their release cannot preserve another producer's carrier.
     // Keep these combinations within one producer until a backend provides
@@ -372,6 +376,7 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         m_cwxCommandOperation = request ? m_txCoordinator.requestOperation(*request) : m_txOperation;
     }
     m_txOperationActivities |= static_cast<unsigned>(activity);
+    m_daxTxSelectionRxObserved = false;
     // Independent backend-generated media belongs to this captured grant's
     // input. The shared desktop producer cannot carry another actor's audio.
     // Keep desktop's compatible multi-contributor context unchanged.
@@ -388,7 +393,10 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
             return false;
         }
     }
-    return true;
+    const QPointer<RadioModel> self(this);
+    emit daxTxOwnershipChanged();
+    return self && !m_txSessionClosing && m_backend
+        && (request ? request->valid() : intent.permitsDispatch(txMonotonicMs()));
 }
 
 TransmitModel::KeyingRoute RadioModel::producerKeyingRoute(const TxCoordinator::Request& request,
@@ -598,6 +606,7 @@ void RadioModel::endLocalTxActivity(const TxCoordinator::Intent& intent)
 {
     if (m_txCoordinator.endIntent(intent)) {
         completeLocalTxIfDrained();
+        emit daxTxOwnershipChanged();
     }
 }
 
@@ -706,6 +715,7 @@ std::function<void()> RadioModel::trackTxDelivery(const TxCoordinator::Operation
 {
     const bool tracked = operation.sameOperation(m_txOperation) && operation.permitsCleanup();
     if (tracked) {
+        m_daxTxSelectionRxObserved = false;
         ++m_pendingTxDeliveries;
     }
     return [this, operation, tracked] {
@@ -715,6 +725,7 @@ std::function<void()> RadioModel::trackTxDelivery(const TxCoordinator::Operation
         }
         --m_pendingTxDeliveries;
         completeLocalTxIfDrained();
+        emit daxTxOwnershipChanged();
     };
 }
 

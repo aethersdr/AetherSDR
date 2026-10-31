@@ -306,6 +306,20 @@ TxCoordinator::Request TxCoordinator::Producer::makeRequest(const std::shared_pt
     return request;
 }
 
+TxCoordinator::Request::Weak TxCoordinator::Request::weak() const
+{
+    Weak reference;
+    reference.m_state = m_state;
+    return reference;
+}
+
+TxCoordinator::Request TxCoordinator::Request::Weak::lock() const
+{
+    Request request;
+    request.m_state = m_state.lock();
+    return request;
+}
+
 bool TxCoordinator::Request::valid() const
 {
     if (!m_state || m_state->closed.load(std::memory_order_acquire)
@@ -354,7 +368,7 @@ TxCoordinator::Request TxCoordinator::Request::derive() const
 
 bool TxCoordinator::Context::permitsDispatch(qint64 now) const
 {
-    if (now < 0 || !m_producer.valid()) {
+    if (now < 0 || !m_producer.valid() || (m_mediaPermit && !(*m_mediaPermit)())) {
         return false;
     }
     const std::shared_ptr<Identity> identity = m_producer.m_state->coordinator.lock();
@@ -392,7 +406,19 @@ bool TxCoordinator::Context::sameContext(const Context& other) const
 {
     return m_producer.sameProducer(other.m_producer) && m_session == other.m_session
         && m_continuous == other.m_continuous
+        && m_mediaPermit == other.m_mediaPermit
         && (m_continuous || m_operation.sameAuthority(other.m_operation));
+}
+
+TxCoordinator::Context TxCoordinator::Context::withMediaPermit(std::function<bool()> permit) const
+{
+    Context context = *this;
+    const std::shared_ptr<const std::function<bool()>> previous = m_mediaPermit;
+    context.m_mediaPermit = std::make_shared<const std::function<bool()>>(
+        [previous, permit = std::move(permit)] {
+            return (!previous || (*previous)()) && permit && permit();
+        });
+    return context;
 }
 
 TxCoordinator::TxCoordinator(StopHandler stopHandler, Clock clock)
@@ -592,6 +618,18 @@ TxCoordinator::Intent TxCoordinator::requestIntent(const Request& request) const
         intent.m_state = request.m_state->intent;
     }
     return intent;
+}
+
+std::vector<TxCoordinator::Request> TxCoordinator::requestsFrom(const Request& original) const
+{
+    std::vector<Request> requests;
+    if (!onThread() || !ownsRequest(original)) { return requests; }
+    for (const Request& request : m_boundRequests) {
+        if (request.sameRequest(original) || request.derivedFrom(original)) {
+            requests.push_back(request);
+        }
+    }
+    return requests;
 }
 
 bool TxCoordinator::ownsRequest(const Request& request) const
@@ -1096,6 +1134,11 @@ void TxCoordinator::emergencyStop()
 bool TxCoordinator::hasOwnership() const
 {
     return onThread() && (m_active.m_state || m_unconfirmed.m_state || m_stopping.m_state);
+}
+
+bool TxCoordinator::hasUnconfirmedLocalCompletion() const
+{
+    return onThread() && m_unconfirmed.m_state && !m_active.m_state && !m_stopping.m_state;
 }
 
 bool TxCoordinator::acknowledgeStopped(const Operation& operation)
