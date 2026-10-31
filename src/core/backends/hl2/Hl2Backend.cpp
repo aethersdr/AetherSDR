@@ -560,6 +560,12 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         m_alcPeakDbfs = dbfs;
         emit meterUpdate(QStringLiteral("TX:ALC"), dbfs);
     });
+    // Both sides of the TX passband, for the TX-filter-loss check (#6605).
+    // SC_FILT_2 last: MeterModel evaluates the pair when it arrives.
+    connect(m_txDsp, &Hl2TxDsp::filterLevels, this, [this](float in, float out) {
+        emit meterUpdate(QStringLiteral("TX:SC_FILT_1"), in);
+        emit meterUpdate(QStringLiteral("TX:SC_FILT_2"), out);
+    });
         // The gain the ALC applies, a separate meter from TX:ALC (a level):
         // they move in opposite directions. Mirrored into m_alcGainDb for
         // healthSnapshot() and published as TX:ALCGAIN for MeterModel.
@@ -8202,6 +8208,12 @@ void Hl2Backend::defineMeters()
     // on a full-scale block). sourceIndex 0 as for COMPPEAK: one transmitter.
     def(9, QStringLiteral("TX"),  QStringLiteral("ALCGAIN"), QStringLiteral("dB"),
         -20.0, 0.0,    QStringLiteral("Gain the ALC is applying"));
+    // Peaks either side of the TX passband (Hl2TxDsp::filterLevels): the names
+    // RadioModel's TX-filter-loss check reads (#4651). sourceIndex 0 as above.
+    def(10, QStringLiteral("TX"), QStringLiteral("SC_FILT_1"), QStringLiteral("dBFS"),
+        -140.0, 0.0,   QStringLiteral("Transmit audio after the ALC, into the modulator"));
+    def(11, QStringLiteral("TX"), QStringLiteral("SC_FILT_2"), QStringLiteral("dBFS"),
+        -140.0, 0.0,   QStringLiteral("Modulated transmit IQ, the modulator's output"));
 }
 
 void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)

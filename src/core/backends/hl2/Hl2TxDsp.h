@@ -164,6 +164,13 @@ signals:
     // moves opposite to alcGain (the harder the ALC works on a quiet mic, the
     // closer to full scale this sits).
     void alcPeak(float dbfs);
+    // Peak levels either side of the TX passband, in dBFS, once per ~100 ms of
+    // input: the post-ALC audio handed to the modulator, and the modulated IQ
+    // it produced. Published as TX:SC_FILT_1/SC_FILT_2, the taps RadioModel's
+    // TX-filter-loss check reads (#4651, #6605). In FM the IQ envelope is
+    // constant, so the pair cannot show a loss there. Not emitted for a window
+    // in which the modulator dropped a block.
+    void filterLevels(float inDbfs, float outDbfs);
     // Echoed from setMicGain so a readout reports the gain this object holds,
     // not the caller's copy of the request.
     void micGainChanged(double linear);
@@ -200,6 +207,13 @@ private:
     // across calls so the real-time path does not allocate per block.
     std::vector<float> m_levelled;
     std::vector<std::complex<float>> m_iq;
+
+    // filterLevels(): peaks held over one reporting window.
+    void noteFilterOutput(const std::vector<std::complex<float>>& iq);
+    float m_filterInPeak = 0.0f;
+    float m_filterOutPeak = 0.0f;
+    std::size_t m_filterWindowSamples = 0;
+    unsigned long long m_filterWindowFaultMark = 0;   // modulatorFaultBlocks() at window start
 
 #if AETHER_HL2_TX_TXA
     std::unique_ptr<WdspChannel> m_channel;
