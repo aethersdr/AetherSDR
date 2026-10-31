@@ -128,6 +128,24 @@ bool retainLockedEstimates()
                    "Unlocked stopped decoder kept old estimates");
 }
 
+bool releaseLocksUnderAnotherBackend()
+{
+    CwRxModel decoder;
+    PcmProducer producer;  // the lease must stay current while locking
+    if (!establishEstimates(decoder, producer)) { return false; }
+    decoder.lockPitch(true);
+    decoder.lockSpeed(true);
+    // ggmorse keeps its locks while another backend is selected (see
+    // retainLockedEstimates), so the release must reach it from there.
+    // Stopped and unlocked, ggmorse reports no estimate.
+    if (!require(decoder.selectBackend("stub"), "Stub backend selection failed")) { return false; }
+    decoder.releaseLocks();
+    return require(decoder.selectBackend("ggmorse") && !decoder.isRunning(),
+                   "GGMorse selection started an inactive worker")
+        && require(decoder.estimatedPitch() == 0 && decoder.estimatedSpeed() == 0,
+                   "Releasing locks under another backend left ggmorse locked");
+}
+
 bool sameRange(CwDecodeSettings::Range got, int low, int high)
 {
     return got.low == low && got.high == high;
@@ -322,5 +340,5 @@ int main(int argc, char** argv)
     if (!require(posts == settled + 1,
                  "Stale queued statusChanged survived the backend switch")) { return 1; }
     return require(!decoder.isRunning(), "Stopped decoder restarted") && retainLockedEstimates()
-        && unlockAfterStopClearsReadout() ? 0 : 1;
+        && releaseLocksUnderAnotherBackend() && unlockAfterStopClearsReadout() ? 0 : 1;
 }

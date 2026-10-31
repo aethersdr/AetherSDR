@@ -9572,8 +9572,7 @@ void MainWindow::routeCwDecoderOutput()
                 &m_cwDecoder, &CwRxModel::lockPitch);
         connect(m_cwDecoderApplet->lockSpeedButton(), &QPushButton::toggled,
                 &m_cwDecoder, &CwRxModel::lockSpeed);
-        m_cwDecoder.lockPitch(false);
-        m_cwDecoder.lockSpeed(false);
+        m_cwDecoder.releaseLocks();
         connect(m_cwDecoderApplet, &PanadapterApplet::pitchRangeChanged,
                 &m_cwDecoder, &CwRxModel::setPitchRange);
         m_cwDecoder.setPitchRange(m_cwDecoderApplet->pitchRangeLow(),
