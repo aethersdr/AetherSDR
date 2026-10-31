@@ -1,6 +1,7 @@
 #include "SmartLinkClient.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
+#include "models/ConnectionWorkspace.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -8,6 +9,8 @@
 #include <QNetworkReply>
 #include <QSslConfiguration>
 #include <QUrl>
+#include <QSignalBlocker>
+#include <QRegularExpression>
 
 #ifdef HAVE_KEYCHAIN
 #include <qt6keychain/keychain.h>
@@ -57,6 +60,10 @@ SmartLinkClient::SmartLinkClient(QObject* parent)
 
 SmartLinkClient::~SmartLinkClient()
 {
+    if (m_authReply) {
+        QObject::disconnect(m_authReply, nullptr, this, nullptr);
+        m_authReply->abort();
+    }
     // Prevent QSslSocket destructor from delivering signals into partially
     // destroyed state (e.g. disconnected → onSslDisconnected → m_pingTimer.stop
     // on a dead timer). See issue #842.
@@ -68,6 +75,12 @@ SmartLinkClient::~SmartLinkClient()
 
 void SmartLinkClient::login(const QString& email, const QString& password)
 {
+    if (m_accountLocked) {
+        emit authFailed(tr("Disconnect the current SmartLink radio before signing in again."));
+        return;
+    }
+    resetAuthentication();
+    const quint64 generation = m_authGeneration;
     // Auth0 Resource Owner Password Grant
     // https://auth0.com/docs/get-started/authentication-and-authorization-flow/resource-owner-password-flow
     QUrl url(QString("https://%1/oauth/token").arg(AUTH0_DOMAIN));
@@ -86,12 +99,19 @@ void SmartLinkClient::login(const QString& email, const QString& password)
 
     // Remember email (Base64-encoded) for pre-fill on next launch
     auto& s = AppSettings::instance();
-    s.setValue("SmartLinkEmail", QString::fromUtf8(email.toUtf8().toBase64()));
-    s.save();
+    if (m_accountId == QLatin1String("legacy")) {
+        s.setValue("SmartLinkEmail", QString::fromUtf8(email.toUtf8().toBase64()));
+        s.save();
+    }
 
     auto* reply = m_nam.post(req, QJsonDocument(body).toJson());
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+    m_authRequestInProgress = true;
+    m_authReply = reply;
+    connect(reply, &QNetworkReply::finished, this, [this, reply, generation] {
         reply->deleteLater();
+        if (generation != m_authGeneration) { return; }
+        m_authReply.clear();
+        m_authRequestInProgress = false;
 
         if (reply->error() != QNetworkReply::NoError) {
             const auto data = reply->readAll();
@@ -142,9 +162,14 @@ void SmartLinkClient::loginWithRefreshToken(const QString& refreshToken)
     qCDebug(lcSmartLink) << "SmartLinkClient: Auth0 refresh token login";
 
     m_authRequestInProgress = true;
+    m_refreshToken = refreshToken;
+    const quint64 generation = m_authGeneration;
     auto* reply = m_nam.post(req, QJsonDocument(body).toJson());
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+    m_authReply = reply;
+    connect(reply, &QNetworkReply::finished, this, [this, reply, generation] {
         reply->deleteLater();
+        if (generation != m_authGeneration) { return; }
+        m_authReply.clear();
         m_authRequestInProgress = false;
 
         if (reply->error() != QNetworkReply::NoError) {
@@ -152,6 +177,7 @@ void SmartLinkClient::loginWithRefreshToken(const QString& refreshToken)
             QJsonObject err = QJsonDocument::fromJson(data).object();
             QString desc = err.value("error_description").toString(reply->errorString());
             qCWarning(lcSmartLink) << "SmartLinkClient: Auth0 refresh failed:" << desc;
+            resetAuthentication();
             emit authFailed(desc);
             return;
         }
@@ -165,6 +191,7 @@ void SmartLinkClient::loginWithRefreshToken(const QString& refreshToken)
             m_refreshToken = newRefresh;
 
         if (m_idToken.isEmpty()) {
+            resetAuthentication();
             emit authFailed("No id_token in refresh response");
             return;
         }
@@ -179,26 +206,58 @@ void SmartLinkClient::loginWithRefreshToken(const QString& refreshToken)
 
 void SmartLinkClient::logout()
 {
+    if (m_accountLocked) {
+        emit authFailed(tr("Disconnect the current SmartLink radio before signing out."));
+        return;
+    }
+    clearCredentials();
+    resetAuthentication();
+}
+
+void SmartLinkClient::setAccountId(const QString& id)
+{
+    static const QRegularExpression valid(QStringLiteral("^(legacy|[a-f0-9]{64})$"));
+    if (m_accountLocked || !valid.match(id).hasMatch() || id == m_accountId) { return; }
+    resetAuthentication();
+    m_accountId = id;
+}
+
+void SmartLinkClient::resetAuthentication()
+{
+    ++m_authGeneration;
+    if (m_authReply) { m_authReply->abort(); }
+    m_authReply.clear();
+    m_authRequestInProgress = false;
     m_authenticated = false;
     m_idToken.clear();
     m_refreshToken.clear();
     m_userCallsign.clear();
     m_userFirstName.clear();
     m_userLastName.clear();
-    clearCredentials();
-    disconnect();
+    m_pingTimer.stop();
+    {
+        const QSignalBlocker blocker(&m_socket);
+        m_socket.abort();
+    }
+    m_serverConnected = false;
+    m_readBuffer.clear();
+    m_publicIp.clear();
+    emit radioListReceived({});
+    emit serverDisconnected();
 }
 
 // ── Credential Persistence ──────────────────────────────────────────────────
 
 void SmartLinkClient::saveCredentials()
 {
+    if (!m_refreshToken.isEmpty()) { m_sessionCredentials.insert(m_accountId, m_refreshToken); }
 #ifdef HAVE_KEYCHAIN
     if (m_refreshToken.isEmpty()) return;
 
     auto* job = new QKeychain::WritePasswordJob("AetherSDR");
     job->setAutoDelete(true);
-    job->setKey("smartlink_refresh_token");
+    job->setKey(ConnectionWorkspace::credentialKey(m_accountId));
+    job->setInsecureFallback(false);
     job->setTextData(m_refreshToken);
     connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
         if (j->error() != QKeychain::NoError)
@@ -212,10 +271,12 @@ void SmartLinkClient::saveCredentials()
 
 void SmartLinkClient::clearCredentials()
 {
+    m_sessionCredentials.remove(m_accountId);
 #ifdef HAVE_KEYCHAIN
     auto* job = new QKeychain::DeletePasswordJob("AetherSDR");
     job->setAutoDelete(true);
-    job->setKey("smartlink_refresh_token");
+    job->setKey(ConnectionWorkspace::credentialKey(m_accountId));
+    job->setInsecureFallback(false);
     connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
         if (j->error() != QKeychain::NoError && j->error() != QKeychain::EntryNotFound)
             qCWarning(lcSmartLink) << "SmartLinkClient: keychain clear failed:" << j->errorString();
@@ -224,17 +285,30 @@ void SmartLinkClient::clearCredentials()
     });
     job->start();
 #endif
-    AppSettings::instance().remove("SmartLinkEmail");
-    AppSettings::instance().save();
+    if (m_accountId == QLatin1String("legacy")) {
+        AppSettings::instance().remove("SmartLinkEmail");
+        AppSettings::instance().save();
+    }
 }
 
 void SmartLinkClient::tryAutoLogin()
 {
+    if (m_authenticated) {
+        reconnect();
+        return;
+    }
+    if (m_sessionCredentials.contains(m_accountId)) {
+        loginWithRefreshToken(m_sessionCredentials.value(m_accountId));
+        return;
+    }
 #ifdef HAVE_KEYCHAIN
     auto* job = new QKeychain::ReadPasswordJob("AetherSDR");
     job->setAutoDelete(true);
-    job->setKey("smartlink_refresh_token");
-    connect(job, &QKeychain::Job::finished, this, [this](QKeychain::Job* j) {
+    job->setKey(ConnectionWorkspace::credentialKey(m_accountId));
+    job->setInsecureFallback(false);
+    const quint64 generation = m_authGeneration;
+    connect(job, &QKeychain::Job::finished, this, [this, generation](QKeychain::Job* j) {
+        if (generation != m_authGeneration) { return; }
         auto* readJob = static_cast<QKeychain::ReadPasswordJob*>(j);
         if (j->error() != QKeychain::NoError || readJob->textData().isEmpty()) {
             qCDebug(lcSmartLink) << "SmartLinkClient: no stored credentials";
@@ -244,6 +318,15 @@ void SmartLinkClient::tryAutoLogin()
         loginWithRefreshToken(readJob->textData());
     });
     job->start();
+#endif
+}
+
+bool SmartLinkClient::persistentStoreAvailable()
+{
+#ifdef HAVE_KEYCHAIN
+    return true;
+#else
+    return false;
 #endif
 }
 

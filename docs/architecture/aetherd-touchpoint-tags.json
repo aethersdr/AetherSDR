@@ -1798,5 +1798,11 @@
   "note": "FlexLib-authoritative CWX command encoding and bounded queue-reply decoding. Only backend implementations and socket-free wire fixtures consume it.",
   "split": "",
   "confidence": "high"
+ },
+ "models/ConnectionWorkspace.h": {
+  "tag": "ui-support",
+  "note": "Local connection memberships, credential references and operator audio/layout preferences; no radio operating state.",
+  "split": "",
+  "confidence": "high"
  }
 }
