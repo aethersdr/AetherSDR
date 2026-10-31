@@ -1893,7 +1893,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // restore was actually suppressed. Logging every mid-session add would
         // report "skipping" for the overwhelmingly common case of no key at
         // all, which is noise in exactly the captures this logging exists for.
-        if (savedDax > 0 && m_daxRestore.restoreAllowed()) {
+        // The saved channel is app-wide, so after a Flex session it is still
+        // set when an Icom or HL2 connects. Those have no DAX channels; the
+        // write would be refused and raise the "not supported by this radio"
+        // notice on every connect.
+        const bool radioHasDax = m_radioModel.backendCapabilities().hasDaxStreams;
+        if (savedDax > 0 && radioHasDax && m_daxRestore.restoreAllowed()) {
             // QPointer guards against a dangling slice: a raw SliceModel*
             // stays non-null after the slice is destroyed, so the `s &&`
             // check below is only meaningful if the capture auto-nulls.
@@ -1914,8 +1919,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
         } else if (savedDax > 0) {
             qCDebug(lcDax) << "MainWindow: skipping last-session DAX restore"
                            << key << "=" << savedDax
-                           << "for mid-session slice add, id" << s->sliceId()
-                           << "(#4558)";
+                           << (radioHasDax ? "for mid-session slice add, id"
+                                           : "on a radio without DAX channels, slice")
+                           << s->sliceId() << "(#4558)";
         }
     }
 
