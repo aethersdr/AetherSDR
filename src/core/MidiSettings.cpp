@@ -497,7 +497,14 @@ void MidiSettings::load()
 
 bool MidiSettings::save()
 {
-    return saveBindings(loadBindings());
+    ReadOutcome outcome = ReadOutcome::Failed;
+    const QVector<MidiBinding> bindings = parseBindingsFromXml(settingsFilePath(), &outcome);
+    if (outcome == ReadOutcome::Failed) {
+        qWarning() << "MidiSettings: refusing preference save after settings read/parse failure"
+                   << settingsFilePath();
+        return false;
+    }
+    return saveBindings(bindings);
 }
 
 // ── Bindings ────────────────────────────────────────────────────────────────
@@ -560,11 +567,21 @@ bool MidiSettings::writeSettingsDocument(const QString& filePath,
     return true;
 }
 
-QVector<MidiBinding> MidiSettings::parseBindingsFromXml(const QString& filePath)
+QVector<MidiBinding> MidiSettings::parseBindingsFromXml(const QString& filePath,
+                                                      ReadOutcome* outcome)
 {
+    if (outcome) {
+        *outcome = ReadOutcome::Failed;
+    }
     QVector<MidiBinding> result;
     QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return result;
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        const QFileInfo info(filePath);
+        if (outcome && !info.exists() && !info.isSymLink()) {
+            *outcome = ReadOutcome::Absent;
+        }
+        return result;
+    }
 
     QXmlStreamReader xml(&file);
     while (!xml.atEnd()) {
@@ -581,6 +598,9 @@ QVector<MidiBinding> MidiSettings::parseBindingsFromXml(const QString& filePath)
             if (!b.paramId.isEmpty())
                 result.append(b);
         }
+    }
+    if (outcome && !xml.hasError() && file.error() == QFileDevice::NoError) {
+        *outcome = ReadOutcome::Parsed;
     }
     return result;
 }

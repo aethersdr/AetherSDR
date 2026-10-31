@@ -879,6 +879,70 @@ int main(int argc, char** argv)
 #endif
     }
 
+    {
+        const QString settingsPath = configRoot + "/AetherSDR/midi.settings";
+        const auto readSettings = [&settingsPath]() {
+            QFile file(settingsPath);
+            return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+        };
+        const auto writeSettings = [&settingsPath](const QByteArray& bytes) {
+            QFile file(settingsPath);
+            return file.open(QIODevice::WriteOnly)
+                && file.write(bytes) == bytes.size();
+        };
+
+        ok &= expect(QFile::remove(settingsPath), "remove settings for first-run fixture");
+        ok &= expect(settings.save(), "preference-only save permits an absent first-run file");
+        ok &= expect(readSettings().contains("<MidiSettings>") && settings.loadBindings().isEmpty(),
+                     "first-run preference save writes a valid empty document");
+
+        ok &= expect(writeSettings("<MidiSettings><Bindings/></MidiSettings>"),
+                     "write valid empty bindings fixture");
+        ok &= expect(settings.save(), "preference-only save permits valid empty bindings");
+        ok &= expect(settings.loadBindings().isEmpty(), "empty bindings stay empty");
+
+        ok &= expect(settings.saveBindings(saved), "write complete bindings fixture");
+        const QByteArray complete = readSettings();
+        const QByteArray truncated = complete.left(complete.indexOf("</MidiSettings>"));
+        for (const QByteArray& damaged : {QByteArray(), QByteArray("<MidiSettings><Bindings>"),
+                                        truncated}) {
+            ok &= expect(writeSettings(damaged), "write damaged settings fixture");
+            ok &= expect(!settings.save(), "preference-only save refuses malformed settings");
+            ok &= expect(readSettings() == damaged,
+                         "refused preference save preserves original bytes");
+        }
+
+#ifndef Q_OS_WIN
+        if (::geteuid() != 0) {
+            ok &= expect(writeSettings(complete), "write unreadable settings fixture");
+            ok &= expect(QFile::setPermissions(settingsPath, QFileDevice::WriteOwner),
+                         "remove settings read permission");
+            QFile probe(settingsPath);
+            ok &= expect(!probe.open(QIODevice::ReadOnly), "fixture really refuses file open");
+            probe.close();
+            const bool refused = !settings.save();
+            ok &= expect(QFile::setPermissions(settingsPath,
+                                              QFileDevice::ReadOwner | QFileDevice::WriteOwner),
+                         "restore settings read permission");
+            ok &= expect(refused, "preference-only save refuses an existing unreadable file");
+            ok &= expect(readSettings() == complete,
+                         "read failure does not replace the existing binding document");
+        } else {
+            std::cout << "[SKIP] MIDI settings read-permission fixture (running as root)\n";
+        }
+#endif
+        ok &= expect(writeSettings(complete), "restore readable settings fixture");
+        ok &= expect(settings.save(), "preference save recovers after the read failure is resolved");
+        const QVector<MidiBinding> recovered = settings.loadBindings();
+        ok &= expect(recovered.size() == expected.size(), "recovered save preserves every binding");
+        if (recovered.size() == expected.size()) {
+            for (int i = 0; i < expected.size(); ++i) {
+                ok &= expect(sameBinding(recovered[i], expected[i]),
+                             "recovered save preserves every binding field");
+            }
+        }
+    }
+
     QFile::remove(configRoot + "/AetherSDR/midi.settings");
     QDir(configRoot + "/AetherSDR").removeRecursively();
 
