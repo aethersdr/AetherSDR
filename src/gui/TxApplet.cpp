@@ -5,6 +5,7 @@
 #include "ComboStyle.h"
 #include "HGauge.h"
 #include "Theme.h"
+#include "TwoToneTuneGate.h"
 #include "core/TxKeyingMarker.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -901,9 +902,16 @@ void TxApplet::buildTuneContextMenu(QMenu& menu)
     // persist the choice in AppSettings.
     const QString current = m_model->tuneMode();
 
+    // A radio with no two-tone generator keys a single carrier for "Two Tone":
+    // dim the entry with its reason (accessibleDescription is not available on
+    // a QAction, so statusTip carries it, per the three-state doctrine).
+    const bool twoToneOk = !m_radioModel
+        || twoToneTuneAvailable(m_radioModel->isConnected(),
+                                m_radioModel->backendCapabilities());
+
     auto* mono = menu.addAction("Mono Tone");
     mono->setCheckable(true);
-    mono->setChecked(current != QStringLiteral("two_tone"));
+    mono->setChecked(!(twoToneOk && current == QStringLiteral("two_tone")));
     mono->setToolTip("Next Tune press transmits a single carrier (normal Tune).");
     connect(mono, &QAction::triggered, this, [this]() {
         if (m_model)
@@ -912,9 +920,14 @@ void TxApplet::buildTuneContextMenu(QMenu& menu)
 
     auto* two = menu.addAction("Two Tone");
     two->setCheckable(true);
-    two->setChecked(current == QStringLiteral("two_tone"));
+    two->setChecked(twoToneOk && current == QStringLiteral("two_tone"));
     two->setToolTip("Next Tune press transmits a two-tone test signal\n"
                     "(for IMD / linearity measurement).");
+    if (!twoToneOk) {
+        two->setEnabled(false);
+        two->setToolTip(twoToneTuneUnavailableReason());
+        two->setStatusTip(twoToneTuneUnavailableReason());
+    }
     connect(two, &QAction::triggered, this, [this]() {
         if (m_model)
             m_model->setTuneMode(QStringLiteral("two_tone"));

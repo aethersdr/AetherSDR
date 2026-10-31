@@ -9709,6 +9709,27 @@ add_test(NAME tx_applet_power_reconciliation_test
 set_tests_properties(tx_applet_power_reconciliation_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Two Tone TUNE refuses (menu entry dimmed with a reason, MIDI action and the
+# shortcut predicate decline before keying) on a radio with no two-tone
+# generator. Same link set as tx_applet_power_reconciliation_test.
+add_executable(two_tone_tune_gate_test
+    tests/two_tone_tune_gate_test.cpp
+    src/gui/TxApplet.cpp
+    src/gui/AtuPreTuneDialog.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(two_tone_tune_gate_test PRIVATE src)
+target_link_libraries(two_tone_tune_gate_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(two_tone_tune_gate_test PROPERTIES AUTOMOC ON)
+add_test(NAME two_tone_tune_gate_test
+         COMMAND two_tone_tune_gate_test)
+set_tests_properties(two_tone_tune_gate_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(phone_tx_filter_numeric_entry_test
     tests/phone_tx_filter_numeric_entry_test.cpp
     src/gui/PhoneApplet.cpp
