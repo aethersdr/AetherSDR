@@ -38,7 +38,7 @@ int main(int argc,char** argv)
     ReceiveBackend* source=backend.get();
     source->caps.canTransmit=false;
     source->caps.maxSlices=8;
-    source->caps.receiveAudioExport=ReceiveAudioExport{{24000,48000},8};
+    source->caps.receiveAudioExport=ReceiveAudioExport{{24000,44100,48000},8};
     model.setBackendForTest(std::move(backend),QStringLiteral("test"));
     DaxApplet widget;
     widget.setRadioModel(&model);

@@ -1,0 +1,237 @@
+2.11.2 (2025-03-04):
+	[ Armin Novak ]
+	* Add option BUILD_FAAD_CLI
+
+	[ Johannes Kauffmann ]
+	* Add conditional build with DRC
+
+	[ Roman Artiukhin ]
+	* Use adts_frame for adts header detection
+
+	[ gavtroy ]
+	* Fix gapless calculation in frontend
+
+	[ DingHao ]
+	* Fix write_audio_* function heap buffer overflow
+
+2.11.1 (2023-11-14):
+	[ Fabian Greffrath ]
+	* Build shared libraries and hide symbols by default.
+	* Install man page by default.
+	* Check for `lrintf()` availability, link with `-lm` and define `HAVE_LRINTF` accordingly.
+	* Set a default build type if none was specified.
+	* Build DLL name with SOVERSION by default on Windows.
+	* Fix inlined `lrintf()` function signatures.
+
+2.11.0 (2023-11-07):
+	[ Eugène Filin ]
+	* Fix incorrect variable initialization
+
+	[ Eugene Kliuchnikov ]
+	* CI/CD, build, etc
+
+	   - setup GitHub workflows; test build under MSVC, OSX, MSYS2, Linux
+	   - add CMake build system
+	   - additionally add Bazel build
+	   - remove automake and MSVC project files
+	   - add fuzzers that cover almost all decoder code
+	   - setup fuzzing for various builds: (no-)FIXED_POINT / (no-)DRM
+	   - remove dead code
+	   - address differes compilers warnings
+	   - move version to distingished place that different build systems can read
+
+	* "Safe" bugs
+
+	   "Safe" means that it is unlikely to be exploited; those affect the decoded
+	   result for (most likely) extreme inputs. Some fixes are useful only for
+	   "FIXED_POINT" build, since it has more restrictions on intermediate values.
+
+	   - "negative range" in estimate_current_envelope
+	   - integer overflow in channel downmixing
+	   - integer overflow in estimate_envelope
+	   - integer overflows caused by "practical infinite" gain
+	   - integer overflows in HF adjustment code
+	   - several "left shift of negative value"
+	   - priming RNG to avoid using values that does not look random at all
+	   - do not drop the first frame of output; other decoders don't do this
+	   - touching uninitialized values in lt_update_state
+	   - touching uninitialized values in bit-reader buffers
+
+	* "Almost Safe" bugs
+
+	   "Almost safe" means that those are unlinkly to be exploited; if those surface
+	   depends on build options / environment.
+
+	   - division by zero in HF (noise?) generator and scale factor adjustment
+	   - division by zero gen_rand_vector
+
+	* "Unsafe" bugs
+
+	   "Unsafe" means that those can cause crash, or could somehow else be exploited.
+
+	   - CLI: accessing unallocated memory in mp4info (corrupted / zero-samples input) (CVE-2023-38857)
+	   - CLI: out-of-bounds when parsing mp4 header
+	   - CLI: crash because of wrong mp4 frame offset calculation (CVE-2023-38857)
+	   - error handling rvlc_decode_scale_factors (CPU bomb?)
+	   - null pointer dereference (in DRM + PS build)
+	   - index-out-of-bounds / stack-buffer-overflow in decode_sce_lfe
+		 (for streams with PCE)
+	   - stack-buffer-overflow in pns_decode
+	   - null pointer derefernce (when channels change their type in the middle
+		 of the stream)
+	   - infinite loop on currupted stream
+	   - add practial limits for scale factors; otherwise calculated NaN/Inf values
+		 could confuse further logic, resulting in access-out-of-bounds
+	   - check sf_index in window_grouping_info to avoid access-out-of-bounds
+	   - clamp bs_pointer values to avoid access-out-of-bounds
+	   - infinite loop in fill_element
+	   - sanitize input values in ps_mix_phase to avoid access-out-of-bounds
+	   - fix internal decoder buffer size calculation to avoid heap-out-of-bounds
+	   - calculate channel length multiplier even if main channel is already allocated
+		 to avoid heap-out-of-bounds
+	   - reserve enough slots for channels in decode_sce_lfe
+		 to avoid heap-out-of-bounds
+
+	[ David Korczynski ]
+	* Fuzzing integration with oss-fuzz
+
+	[ Steveice10 ]
+	* Add define option to disable SBR/PS support
+	* Fix coefficient table selection in tns_decode_coef
+
+2.10.1 (2022-10-20):
+	[David Korczynski]
+	* Reject buffers of zero size.
+
+	[François Cartegnie]
+	* Fix 7.1 with PCE mapping.
+	* Have proper version string in `faad.h`.
+	* Add conditional build with DRC.
+
+2.10.0 (2020-10-20):
+	[ tatsuz ]
+	* updated Visual Studio projects to VS 2019 (#54)
+
+	[ Fabian Greffrath ]
+	* mp4read.c: fix stack-buffer-overflow in stringin()/ftypin()
+	* fix heap-buffer-overflow in mp4read.c
+
+	[ Clayton Smith ]
+	* Remove non-ASCII characters
+	* Remove trailing whitespace
+
+	[ Andrew Wesie ]
+	* Check return value of ltp_data.
+	* Restrict SBR frame length to 960 and 1024 samples.
+	* Support object type 29.
+	* Support implicit SBR signaling in frontend.
+	* Fix PNS decoding when only right channel is noise.
+	* Initialize element_id array with an invalid id.
+	* Fix NULL pointer dereferences.
+	* Fix infinite loop in adts_parse.
+	* Fix infinite loop in huffman_getescape.
+	* Check for error after each channel decode.
+	* Check for inconsistent number of channels.
+
+2.9.2 (2020-05-04):
+	[ Michał Janiszewski ]
+	* Only use x86-assembly when explicitly on x86
+	* Use unsigned integers correctly
+	* Initialize pointers that might otherwise not be
+
+	[ Fabian Greffrath ]
+	* update README esp. WRT directory structure
+
+	[ Rosen Penev ]
+	* fix compilation without SBR/PS_DEC (#48)
+	* fix compilation with LC_ONLY_DECODER (#47)
+
+	[ Fabian Greffrath ]
+	* fix "inline function 'cfftf1' declared but never defined" compiler warning
+	* fix some inconsistencies in the frontend output
+	* mp4read_open: add check for failed frame buffer allocation
+	* stszin: add check for allocation error and integer overflow
+	* add a pkg-config file
+
+	[ Stefan Pöschel ]
+	* frontend: address compile warning + add missing LF (#50)
+
+	[ François Cartegnie ]
+	* library name is faad (#52)
+	* Unbreak PS audio (#51)
+
+2.9.1 (2019-11-04):
+	[ Fabian Greffrath ]
+	* Include stdio.h in libfaad/ps_dec.c for stderr (Michael Fink)
+	* Fix Tille -> Title typo in frontend/mp4read.c (Alexander Thomas)
+
+2.9.0 (2019-09-09):
+	[ Krzysztof Nikiel ]
+	* Build system fixes and code clean-up
+
+	[ LoRd_MuldeR ]
+	* Fix compiler warnings and code indentation
+	* Fix compilation with GCC <= 4.7.3
+	* MSVC solution file clean-up
+
+	[ Cameron Cawley ]
+	* Fix compilation with GCC 4.7.4
+	* Fix compilation with MinGW
+
+	[ Michael Fink ]
+	* MSVC 2017 project file update
+
+	[ Hugo Lefeuvre ]
+	* Fix crash with unsupported MP4 files (NULL pointer dereference,
+	  division by zero)
+	* CVE-2019-6956: ps_dec: sanitize iid_index before mixing
+	* CVE-2018-20196: sbr_fbt: sanitize sbr->M (should not exceed MAX_M)
+	* CVE-2018-20199, CVE-2018-20360: specrec: better handle unexpected
+	  parametric stereo (PS)
+	* CVE-2018-20362, CVE-2018-19504, CVE-2018-20195, CVE-2018-20198,
+	  CVE-2018-20358: syntax.c: check for syntax element inconsistencies
+	* CVE-2018-20194, CVE-2018-19503, CVE-2018-20197, CVE-2018-20357,
+	  CVE-2018-20359, CVE-2018-20361: sbr_hfadj: sanitize frequency band
+	  borders
+
+	[ Hugo Beauzée-Luyssen ]
+	* CVE-2019-15296, CVE-2018-19502: Fix a couple buffer overflows
+
+	[ Filip Roséen ]
+	* Prevent crash on SCE followed by CPE
+
+	[ Gianfranco Costamagna ]
+	* Fix linking with GCC 9 and "-Wl,--as-needed"
+
+	[ Fabian Greffrath ]
+	* Enable the frontend to be built reproducibly
+
+2.8.8:
+2.8.7:
+	- MSVC build fixes
+	- fixed a coulple bugs
+2.8.6:
+2.8.5:
+	- another package fix
+2.8.4:
+	- minor fix to released packages
+2.8.3
+	- better autotools support
+2.8.2
+	- PNS bug fixed
+	- New MP4 input module
+	- NeAACDecGetVersion: 
+		new api function to get version and copyright strings
+
+2.8.1:
+	- seeking support for MP4 files
+2.8.0:
+	- patches and fixed bugs
+
+2009-02-02 - Version 2.7
+	* DAB+ support
+	* Use public headers internally to prevent duplicate declarations
+	* Explicitly typedef all types as signed
+	* Made sure MAIN prediction can't be started after the first frame
+	* Lot's of compilation issues solved
+	* Bugfix in SBR envelope border calculation

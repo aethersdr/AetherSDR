@@ -103,16 +103,20 @@ static void reconnectAtCaptureLimits()
         std::uint32_t rateHz;
         const char* mode;
         int filterHz;
+        bool digital = false;
     };
     // The first two need a smaller provisional receiver at the lowest legal
     // rate. The others straddle the WFM RF+transition guard's lower RF edge.
-    constexpr std::array<SavedCapture, 5> cases{{
+    constexpr SavedCapture cases[]{
         {100'000'000, 225'001, "WFM", 90'000},
         {100'000'000, 225'001, "FM", 7'000},
         {100'000, 2'400'000, "WFM", 90'000},
         {102'999, 2'400'000, "FM", 7'000},
-        {103'000, 2'400'000, "WFM", 90'000}
-    }};
+        {103'000, 2'400'000, "WFM", 90'000},
+#ifdef AETHER_ENABLE_NRSC5
+        {100'000'000, 2'400'000, "WFM", 90'000, true},
+#endif
+    };
     for (const SavedCapture& capture : cases) {
         const QString serial = QStringLiteral("bootstrap-%1-%2-%3")
             .arg(capture.centerHz).arg(capture.rateHz).arg(QLatin1String(capture.mode));
@@ -122,7 +126,14 @@ static void reconnectAtCaptureLimits()
         saved.mode = QLatin1String(capture.mode);
         saved.filterLowHz = -capture.filterHz; saved.filterHighHz = capture.filterHz;
         saved.wfmDeemphasisUs = 50;
-        saved.wfmForceMono = true;
+        saved.wfmForceMono = !capture.digital;
+        saved.wfmHdStereo = capture.digital;
+        saved.hdProgram = capture.digital ? 5 : 0;
+        saved.agcOffLevel = 37;
+        saved.cwPitchHz = 900;
+        saved.squelchEnabled = saved.mode == QLatin1String("FM");
+        saved.automaticSquelch = saved.squelchEnabled;
+        saved.automaticSquelchMarginDb = 13;
         check(RtlSliceSettings(scope).patch(capture.centerHz, capture.rateHz, {saved}),
               "capture-limit reconnect fixture preserves a valid saved receiver");
         const QJsonObject original = scope.featureExact("RtlSlices");
@@ -177,7 +188,11 @@ static void reconnectAtCaptureLimits()
                 check(actual.mode == expectedMode && actual.passband.carrierHz == saved.frequencyHz
                     && actual.passband.filterLowHz == saved.filterLowHz
                     && actual.passband.filterHighHz == saved.filterHighHz
-                    && actual.wfmDeemphasisUs == 50 && actual.wfmForceMono
+                    && actual.wfmDeemphasisUs == 50 && actual.wfmForceMono == saved.wfmForceMono
+                    && actual.wfmHdStereo == saved.wfmHdStereo && actual.hdProgram == saved.hdProgram
+                    && actual.agcOffLevel == saved.agcOffLevel && actual.cwPitchHz == saved.cwPitchHz
+                    && actual.automaticSquelch == saved.automaticSquelch
+                    && actual.automaticSquelchMarginDb == saved.automaticSquelchMarginDb
                     && actual.audioMute == saved.audioMute,
                     "provisional bootstrap does not resize or replace saved receiver choices");
                 check(device->starts == 1 && device->writes == 6 && device->cancels == 0,

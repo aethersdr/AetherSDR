@@ -98,8 +98,8 @@ std::optional<DecoderPcmBlock> DecoderPcmAdapter::accept(const PcmFrame& frame)
         reset();
         m_segmentSource = frame.epochLease();
         m_segmentFirstInputSample = frame.firstSample();
-        if (stream.format.sampleRateHz == 48000) {
-            m_resampler = std::make_unique<Resampler>(48000, DecoderPcmBlock::kSampleRateHz,
+        if (stream.format.sampleRateHz != DecoderPcmBlock::kSampleRateHz) {
+            m_resampler = std::make_unique<Resampler>(stream.format.sampleRateHz, DecoderPcmBlock::kSampleRateHz,
                                                      kInputBatchFrames);
         }
     }

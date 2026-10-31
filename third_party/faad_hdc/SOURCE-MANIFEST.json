@@ -1,0 +1,692 @@
+{
+  "schemaVersion": 1,
+  "project": "faad_hdc",
+  "sourceUrl": "https://github.com/knik0/faad2",
+  "sourceRevision": "673a22a3c7c33e96e2ff7aae7c4d2bc190dfbf92",
+  "upstreamLicense": "GPL-2.0-or-later",
+  "omittedUpstreamPaths": [
+    ".bazelrc",
+    ".github/workflows/build.yaml",
+    ".github/workflows/fuzz.yaml",
+    ".gitignore",
+    "BUILD.bazel",
+    "WORKSPACE.bazel",
+    "docs/Ahead AAC Decoder library documentation.doc",
+    "docs/Ahead AAC Decoder library documentation.pdf",
+    "docs/libfaad.3",
+    "frontend/audio.c",
+    "frontend/audio.h",
+    "frontend/faad.man",
+    "frontend/getopt.c",
+    "frontend/getopt.h",
+    "frontend/mp4read.c",
+    "frontend/mp4read.h",
+    "frontend/unicode_support.c",
+    "frontend/unicode_support.h",
+    "fuzz/fuzz_config.c",
+    "fuzz/fuzz_decode.c",
+    "libfaad2.def",
+    "workspace.bzl"
+  ],
+  "patches": [
+    {
+      "pathFromRepositoryRoot": "third_party/nrsc5/upstream/support/faad2-hdc-support.patch",
+      "sourceRevision": "0225922b6f68109df39d07391f4d855464598ab8",
+      "sha256": "e25e8d69c20269757c66ba38c730fbde4588393d981d45d86472beea5cffc117",
+      "application": "git apply --check, then git apply; no fuzz or ignored failure"
+    }
+  ],
+  "files": [
+    {
+      "upstreamPath": "AUTHORS",
+      "vendoredPath": "upstream/AUTHORS",
+      "upstreamSha256": "dd70437637d86b05ffa5cf1d0cccd35bba11bb8f64b523ebe28ce9a130b774f1",
+      "vendoredSha256": "dd70437637d86b05ffa5cf1d0cccd35bba11bb8f64b523ebe28ce9a130b774f1"
+    },
+    {
+      "upstreamPath": "CMakeLists.txt",
+      "vendoredPath": "upstream/CMakeLists.txt",
+      "upstreamSha256": "40be17908fadf397ea2ce0857f541cfaad4f50814e3f3eb0a538bac4299c9670",
+      "vendoredSha256": "4ddfffdc99f37a0b3ef24986fa26c01c1d19fe639e71031e9b16c4720e08aa6c"
+    },
+    {
+      "upstreamPath": "COPYING",
+      "vendoredPath": "upstream/COPYING",
+      "upstreamSha256": "d3baf3a54943cf12a994c85867a18dec84f810901b2f2878ddfd77efcc3c150f",
+      "vendoredSha256": "d3baf3a54943cf12a994c85867a18dec84f810901b2f2878ddfd77efcc3c150f"
+    },
+    {
+      "upstreamPath": "ChangeLog",
+      "vendoredPath": "upstream/ChangeLog",
+      "upstreamSha256": "1894c29072dde62862f241e2385446025569c9fefd69191282c72370e7338e0e",
+      "vendoredSha256": "1894c29072dde62862f241e2385446025569c9fefd69191282c72370e7338e0e"
+    },
+    {
+      "upstreamPath": "README",
+      "vendoredPath": "upstream/README",
+      "upstreamSha256": "1f4c7ff64ad2a330f5609471d583f88c6d573b71f23547e38f6f88d32170d918",
+      "vendoredSha256": "1f4c7ff64ad2a330f5609471d583f88c6d573b71f23547e38f6f88d32170d918"
+    },
+    {
+      "upstreamPath": "frontend/main.c",
+      "vendoredPath": "upstream/frontend/main.c",
+      "upstreamSha256": "f956fdc4bab32eabafdf12aff5044a34affaa330704a7d4f923ff9919efb328b",
+      "vendoredSha256": "aad7f17d0651f40f5da7153024118d270ac643fc59e42db4c45bbbbb4d1a1fd8"
+    },
+    {
+      "upstreamPath": "include/faad.h.in",
+      "vendoredPath": "upstream/include/faad.h.in",
+      "upstreamSha256": "c763b75c247add3756cdff0ba1e580a60b9b7e0c7d8d78f5a18c8c93bfceebf9",
+      "vendoredSha256": "c763b75c247add3756cdff0ba1e580a60b9b7e0c7d8d78f5a18c8c93bfceebf9"
+    },
+    {
+      "upstreamPath": "include/neaacdec.h",
+      "vendoredPath": "upstream/include/neaacdec.h",
+      "upstreamSha256": "798e82aff75aaf896f8fe9df26a2191d16817aea838a0d33b5b128e46337ad84",
+      "vendoredSha256": "08e0da4060e83df26691a8f6f2e1eb4ced1f4d867fe0da5d19dfa046e77e5dcd"
+    },
+    {
+      "upstreamPath": "libfaad/analysis.h",
+      "vendoredPath": "upstream/libfaad/analysis.h",
+      "upstreamSha256": "98b74d724f0df92528d5ea8912489ac01f62bebe110078ebc347ca8f2ccc634b",
+      "vendoredSha256": "98b74d724f0df92528d5ea8912489ac01f62bebe110078ebc347ca8f2ccc634b"
+    },
+    {
+      "upstreamPath": "libfaad/bits.c",
+      "vendoredPath": "upstream/libfaad/bits.c",
+      "upstreamSha256": "304b2e034bf4f9d2dbfbd727b431dd38da46ae8fa6aea75d07d147c54b359d34",
+      "vendoredSha256": "e5e84379959b2b9fb7e334389693da34badde5c923418e7d74632714a445ec57"
+    },
+    {
+      "upstreamPath": "libfaad/bits.h",
+      "vendoredPath": "upstream/libfaad/bits.h",
+      "upstreamSha256": "81e8aacc42ff85e2b25191d241be9d946c9c71a729ad3deef8aecec53d603c57",
+      "vendoredSha256": "1f3170a4e7bb3a7bc6b71edcb809cb97422ec908372f48812535ee2a2c862d02"
+    },
+    {
+      "upstreamPath": "libfaad/cfft.c",
+      "vendoredPath": "upstream/libfaad/cfft.c",
+      "upstreamSha256": "0ea7766f49fb137d033dd57e6bd2548d9eb2701a948529c328976bb1fa531465",
+      "vendoredSha256": "0ea7766f49fb137d033dd57e6bd2548d9eb2701a948529c328976bb1fa531465"
+    },
+    {
+      "upstreamPath": "libfaad/cfft.h",
+      "vendoredPath": "upstream/libfaad/cfft.h",
+      "upstreamSha256": "14761ba5aaa4ecaa1308975cf3c062780142c27029bf509ea1c8e1e418331b36",
+      "vendoredSha256": "14761ba5aaa4ecaa1308975cf3c062780142c27029bf509ea1c8e1e418331b36"
+    },
+    {
+      "upstreamPath": "libfaad/cfft_tab.h",
+      "vendoredPath": "upstream/libfaad/cfft_tab.h",
+      "upstreamSha256": "81cd09c19c00fd2b8055cd348daf4e6b55c52bdecb90e7aadb490a9054266e4e",
+      "vendoredSha256": "81cd09c19c00fd2b8055cd348daf4e6b55c52bdecb90e7aadb490a9054266e4e"
+    },
+    {
+      "upstreamPath": "libfaad/codebook/hcb.h",
+      "vendoredPath": "upstream/libfaad/codebook/hcb.h",
+      "upstreamSha256": "c29b747115cdb5e63208cbaf4340b0b406cb5ab31f84d508487f4142e11afaa9",
+      "vendoredSha256": "c29b747115cdb5e63208cbaf4340b0b406cb5ab31f84d508487f4142e11afaa9"
+    },
+    {
+      "upstreamPath": "libfaad/codebook/hcb_1.h",
+      "vendoredPath": "upstream/libfaad/codebook/hcb_1.h",
+      "upstreamSha256": "812786639afdf9bd1577ddd10ddce3bea79370c4a6a5446277535707fba0a635",
+      "vendoredSha256": "812786639afdf9bd1577ddd10ddce3bea79370c4a6a5446277535707fba0a635"
+    },
+    {
+      "upstreamPath": "libfaad/codebook/hcb_10.h",
+      "vendoredPath": "upstream/libfaad/codebook/hcb_10.h",
+      "upstreamSha256": "b97e36bdc34cadc84b7af13106849bf4efa2179e387b8cc380ddb915b6223e67",
+      "vendoredSha256": "b97e36bdc34cadc84b7af13106849bf4efa2179e387b8cc380ddb915b6223e67"
+    },
+    {
+      "upstreamPath": "libfaad/codebook/hcb_11.h",
+      "vendoredPath": "upstream/libfaad/codebook/hcb_11.h",
+      "upstreamSha256": "74cbea5f948917bd6cbaf514b7c222f9d02d443b0f3783d1fd17de2960273de1",
+      "vendoredSha256": "74cbea5f948917bd6cbaf514b7c222f9d02d443b0f3783d1fd17de2960273de1"
+    },
+    {
+      "upstreamPath": "libfaad/codebook/hcb_2.h",
+      "vendoredPath": "upstream/libfaad/codebook/hcb_2.h",
+      "upstreamSha256": "cf1392f536e917656a2aca3bf4bf438dd4b24beebd7ab319cc6cd40ea4733688",
+      "vendoredSha256": "cf1392f536e917656a2aca3bf4bf438dd4b24beebd7ab319cc6cd40ea4733688"
+    },
+    {
+      "upstreamPath": "libfaad/codebook/hcb_3.h",
+      "vendoredPath": "upstream/libfaad/codebook/hcb_3.h",
+      "upstreamSha256": "6f3289cf4bdbfb6801a3cf277a453dc1be8240f0e51518cb44735d257e3b06b1",
+      "vendoredSha256": "6f3289cf4bdbfb6801a3cf277a453dc1be8240f0e51518cb44735d257e3b06b1"
+    },
+    {
+      "upstreamPath": "libfaad/codebook/hcb_4.h",
+      "vendoredPath": "upstream/libfaad/codebook/hcb_4.h",
+      "upstreamSha256": "e69b22f2062239f19a04fc5f6136f89d48a432b298313641727b584e252facd3",
+      "vendoredSha256": "e69b22f2062239f19a04fc5f6136f89d48a432b298313641727b584e252facd3"
+    },
+    {
+      "upstreamPath": "libfaad/codebook/hcb_5.h",
+      "vendoredPath": "upstream/libfaad/codebook/hcb_5.h",
+      "upstreamSha256": "b1583b6ebf35764aaf3cbf952f697d0619a7a858dfd31a3886c9257526cd4b03",
+      "vendoredSha256": "b1583b6ebf35764aaf3cbf952f697d0619a7a858dfd31a3886c9257526cd4b03"
+    },
+    {
+      "upstreamPath": "libfaad/codebook/hcb_6.h",
+      "vendoredPath": "upstream/libfaad/codebook/hcb_6.h",
+      "upstreamSha256": "1a0939bafdde97cb3fb62bb8554aeacb66d104a1a74b0d3b024584de8d132c4f",
+      "vendoredSha256": "1a0939bafdde97cb3fb62bb8554aeacb66d104a1a74b0d3b024584de8d132c4f"
+    },
+    {
+      "upstreamPath": "libfaad/codebook/hcb_7.h",
+      "vendoredPath": "upstream/libfaad/codebook/hcb_7.h",
+      "upstreamSha256": "035acec6e4d28ab791fe53f8ab7450ddf1e7138b829a1839d903ec7614b16a26",
+      "vendoredSha256": "035acec6e4d28ab791fe53f8ab7450ddf1e7138b829a1839d903ec7614b16a26"
+    },
+    {
+      "upstreamPath": "libfaad/codebook/hcb_8.h",
+      "vendoredPath": "upstream/libfaad/codebook/hcb_8.h",
+      "upstreamSha256": "8e514b723d66661177ea00127ae1db401c93de087d586b43fffafdc4a0cc4025",
+      "vendoredSha256": "8e514b723d66661177ea00127ae1db401c93de087d586b43fffafdc4a0cc4025"
+    },
+    {
+      "upstreamPath": "libfaad/codebook/hcb_9.h",
+      "vendoredPath": "upstream/libfaad/codebook/hcb_9.h",
+      "upstreamSha256": "5f57474baef72243dbcecedfbecd28768dec41e651d606336aeab96047fe892e",
+      "vendoredSha256": "5f57474baef72243dbcecedfbecd28768dec41e651d606336aeab96047fe892e"
+    },
+    {
+      "upstreamPath": "libfaad/codebook/hcb_sf.h",
+      "vendoredPath": "upstream/libfaad/codebook/hcb_sf.h",
+      "upstreamSha256": "75df9f00c22d23285f681620f8ea8d97922df7546a5d741e0243207a648cc74b",
+      "vendoredSha256": "75df9f00c22d23285f681620f8ea8d97922df7546a5d741e0243207a648cc74b"
+    },
+    {
+      "upstreamPath": "libfaad/common.c",
+      "vendoredPath": "upstream/libfaad/common.c",
+      "upstreamSha256": "23bc661c85dee7821f7771a7313563f72c590740cb30a84fcdb605f301f757d4",
+      "vendoredSha256": "4ad73e881102f7b0509b34d144bcf74ca1b20ed5adb368a7dbb68b4ed5ef4151"
+    },
+    {
+      "upstreamPath": "libfaad/common.h",
+      "vendoredPath": "upstream/libfaad/common.h",
+      "upstreamSha256": "ab3becc31870a0eade97f8569c8e24ff69a887fff3dd960bb0fda833a9c4ab7a",
+      "vendoredSha256": "7068477b90964402a0a69d0e8f360b669a71722f9b2cf0219511317850e9afdb"
+    },
+    {
+      "upstreamPath": "libfaad/decoder.c",
+      "vendoredPath": "upstream/libfaad/decoder.c",
+      "upstreamSha256": "64c9b4502e7551eee11417fdb364b89d9e53728ccde4e45176a2f9e835172825",
+      "vendoredSha256": "78ef694355400f94e505b326a034df9e2a7b38705bf64ee03aa54f65e99680dc"
+    },
+    {
+      "upstreamPath": "libfaad/drc.c",
+      "vendoredPath": "upstream/libfaad/drc.c",
+      "upstreamSha256": "d8cad0825b6a051d5ad04076f514d2ae72e235debdb8177189d0c7905c92df79",
+      "vendoredSha256": "d8cad0825b6a051d5ad04076f514d2ae72e235debdb8177189d0c7905c92df79"
+    },
+    {
+      "upstreamPath": "libfaad/drc.h",
+      "vendoredPath": "upstream/libfaad/drc.h",
+      "upstreamSha256": "dc331e3fcf499304650f22b8db5288440be25a1ebe5a6e166a4c2611a42f3ac0",
+      "vendoredSha256": "dc331e3fcf499304650f22b8db5288440be25a1ebe5a6e166a4c2611a42f3ac0"
+    },
+    {
+      "upstreamPath": "libfaad/drm_dec.c",
+      "vendoredPath": "upstream/libfaad/drm_dec.c",
+      "upstreamSha256": "fd4ddf48b006ab4ab4c1f758609404708f42540e8abd0b9b5936bc0f5bf9abb8",
+      "vendoredSha256": "0261aafd59369c358374a2fd03c44e55c82c7d2b9473922c1c6186be5edf84d9"
+    },
+    {
+      "upstreamPath": "libfaad/drm_dec.h",
+      "vendoredPath": "upstream/libfaad/drm_dec.h",
+      "upstreamSha256": "2d7fbc506a6d6a3134bfd52029bb87f7eacb13b8a968a540d5a3b0ee56b6411c",
+      "vendoredSha256": "2e5d76bfc41d09b10bf749afdad972d367c36de12e6933bd559110838afdc168"
+    },
+    {
+      "upstreamPath": "libfaad/error.c",
+      "vendoredPath": "upstream/libfaad/error.c",
+      "upstreamSha256": "77287cfbc0759219be6af289bbfba5ae6eeee51a60ebbc21223be2d8f3515fa9",
+      "vendoredSha256": "77287cfbc0759219be6af289bbfba5ae6eeee51a60ebbc21223be2d8f3515fa9"
+    },
+    {
+      "upstreamPath": "libfaad/error.h",
+      "vendoredPath": "upstream/libfaad/error.h",
+      "upstreamSha256": "4abe243fcd032387b172ce394ef82ba0faa574c4bec00f1349eb1841807acb0b",
+      "vendoredSha256": "4abe243fcd032387b172ce394ef82ba0faa574c4bec00f1349eb1841807acb0b"
+    },
+    {
+      "upstreamPath": "libfaad/faad2.pc.in",
+      "vendoredPath": "upstream/libfaad/faad2.pc.in",
+      "upstreamSha256": "44c590599905a6b2b67dabe6bcadc4347b94f700ffb3086471d3724f1693c7f5",
+      "vendoredSha256": "44c590599905a6b2b67dabe6bcadc4347b94f700ffb3086471d3724f1693c7f5"
+    },
+    {
+      "upstreamPath": "libfaad/filtbank.c",
+      "vendoredPath": "upstream/libfaad/filtbank.c",
+      "upstreamSha256": "f1948147427c5c0b249ae989f61b6f5d72be51c72724e3a747fc10c08db84eee",
+      "vendoredSha256": "f1948147427c5c0b249ae989f61b6f5d72be51c72724e3a747fc10c08db84eee"
+    },
+    {
+      "upstreamPath": "libfaad/filtbank.h",
+      "vendoredPath": "upstream/libfaad/filtbank.h",
+      "upstreamSha256": "90e81e11cac10d565117010751acc6b15254bc4396b0e7987e47420548a79962",
+      "vendoredSha256": "90e81e11cac10d565117010751acc6b15254bc4396b0e7987e47420548a79962"
+    },
+    {
+      "upstreamPath": "libfaad/fixed.h",
+      "vendoredPath": "upstream/libfaad/fixed.h",
+      "upstreamSha256": "fcc639af56c3e9681bb3934ff7b695ae010dff5c5762dc5f213dcb3b82695985",
+      "vendoredSha256": "fcc639af56c3e9681bb3934ff7b695ae010dff5c5762dc5f213dcb3b82695985"
+    },
+    {
+      "upstreamPath": "libfaad/hcr.c",
+      "vendoredPath": "upstream/libfaad/hcr.c",
+      "upstreamSha256": "1fae10ed88f09c38b9030eff9f607bfed61023089c25d5c62aa494e263bc3e82",
+      "vendoredSha256": "1fae10ed88f09c38b9030eff9f607bfed61023089c25d5c62aa494e263bc3e82"
+    },
+    {
+      "upstreamPath": "libfaad/huffman.c",
+      "vendoredPath": "upstream/libfaad/huffman.c",
+      "upstreamSha256": "1e17914eae08260014cc02cd834bc7ec38de322a4abd27a04ff66d8ef32a27b7",
+      "vendoredSha256": "1e17914eae08260014cc02cd834bc7ec38de322a4abd27a04ff66d8ef32a27b7"
+    },
+    {
+      "upstreamPath": "libfaad/huffman.h",
+      "vendoredPath": "upstream/libfaad/huffman.h",
+      "upstreamSha256": "eec86c53f227b9d03308b21684da63dfeca1fbcc885d419202a3dbf8f1789a35",
+      "vendoredSha256": "eec86c53f227b9d03308b21684da63dfeca1fbcc885d419202a3dbf8f1789a35"
+    },
+    {
+      "upstreamPath": "libfaad/ic_predict.c",
+      "vendoredPath": "upstream/libfaad/ic_predict.c",
+      "upstreamSha256": "b36661e9b2f6e3d38507d25b482c003096b59801adfaa4685c2a7830f320e515",
+      "vendoredSha256": "b36661e9b2f6e3d38507d25b482c003096b59801adfaa4685c2a7830f320e515"
+    },
+    {
+      "upstreamPath": "libfaad/ic_predict.h",
+      "vendoredPath": "upstream/libfaad/ic_predict.h",
+      "upstreamSha256": "9f176652e5c63c7927831b33d797139fbd17e465a6df359b5e1e7c589962c652",
+      "vendoredSha256": "9f176652e5c63c7927831b33d797139fbd17e465a6df359b5e1e7c589962c652"
+    },
+    {
+      "upstreamPath": "libfaad/iq_table.h",
+      "vendoredPath": "upstream/libfaad/iq_table.h",
+      "upstreamSha256": "136063089b6e9319fab1aab0d42eba58b0a42c07afc9e394fa441b28ffa583bc",
+      "vendoredSha256": "136063089b6e9319fab1aab0d42eba58b0a42c07afc9e394fa441b28ffa583bc"
+    },
+    {
+      "upstreamPath": "libfaad/is.c",
+      "vendoredPath": "upstream/libfaad/is.c",
+      "upstreamSha256": "0eb29ed74ae3ebce2aba27460bd3c8ec2f9ec28fad8339c93de7c63f1fcb4870",
+      "vendoredSha256": "0eb29ed74ae3ebce2aba27460bd3c8ec2f9ec28fad8339c93de7c63f1fcb4870"
+    },
+    {
+      "upstreamPath": "libfaad/is.h",
+      "vendoredPath": "upstream/libfaad/is.h",
+      "upstreamSha256": "4d6b1c58bc115dd86f4d5ba7c61ff275a07763e4c9f706198f79d1201142f9da",
+      "vendoredSha256": "4d6b1c58bc115dd86f4d5ba7c61ff275a07763e4c9f706198f79d1201142f9da"
+    },
+    {
+      "upstreamPath": "libfaad/kbd_win.h",
+      "vendoredPath": "upstream/libfaad/kbd_win.h",
+      "upstreamSha256": "70540aa3de9aea352b014506d2f285c32da7c6065f0f8c5b50ef321448588e57",
+      "vendoredSha256": "70540aa3de9aea352b014506d2f285c32da7c6065f0f8c5b50ef321448588e57"
+    },
+    {
+      "upstreamPath": "libfaad/lt_predict.c",
+      "vendoredPath": "upstream/libfaad/lt_predict.c",
+      "upstreamSha256": "3d25f428111c47e3458edf8cc53b083988512ba91974c3c24966a5d3b4d81100",
+      "vendoredSha256": "3d25f428111c47e3458edf8cc53b083988512ba91974c3c24966a5d3b4d81100"
+    },
+    {
+      "upstreamPath": "libfaad/lt_predict.h",
+      "vendoredPath": "upstream/libfaad/lt_predict.h",
+      "upstreamSha256": "0b9784a45a2eb23fa432b6c1ac9d15ec021be6cbe596a786349e2c39f4532c21",
+      "vendoredSha256": "0b9784a45a2eb23fa432b6c1ac9d15ec021be6cbe596a786349e2c39f4532c21"
+    },
+    {
+      "upstreamPath": "libfaad/mdct.c",
+      "vendoredPath": "upstream/libfaad/mdct.c",
+      "upstreamSha256": "481e4674ef4f9ff5b8bf29f735c7f101a20954e378b891073dc2104aa9a9d588",
+      "vendoredSha256": "481e4674ef4f9ff5b8bf29f735c7f101a20954e378b891073dc2104aa9a9d588"
+    },
+    {
+      "upstreamPath": "libfaad/mdct.h",
+      "vendoredPath": "upstream/libfaad/mdct.h",
+      "upstreamSha256": "d1a4dadf95dbc3940013e3ba7910ec38403a448ec72771dbc1261f54a7a68bad",
+      "vendoredSha256": "d1a4dadf95dbc3940013e3ba7910ec38403a448ec72771dbc1261f54a7a68bad"
+    },
+    {
+      "upstreamPath": "libfaad/mdct_tab.h",
+      "vendoredPath": "upstream/libfaad/mdct_tab.h",
+      "upstreamSha256": "bf4022ebfddf5969cd065a5c2cf42332e09d6825d015a87551796576d74f4892",
+      "vendoredSha256": "bf4022ebfddf5969cd065a5c2cf42332e09d6825d015a87551796576d74f4892"
+    },
+    {
+      "upstreamPath": "libfaad/mp4.c",
+      "vendoredPath": "upstream/libfaad/mp4.c",
+      "upstreamSha256": "700c6752183075a9cee6176fd5defc7dba7a51ff20ef55721fd5b203793b7996",
+      "vendoredSha256": "700c6752183075a9cee6176fd5defc7dba7a51ff20ef55721fd5b203793b7996"
+    },
+    {
+      "upstreamPath": "libfaad/mp4.h",
+      "vendoredPath": "upstream/libfaad/mp4.h",
+      "upstreamSha256": "0b543f88bbedec3245a52388677dded05823483339ce2c25efc8c5f2b7e1918c",
+      "vendoredSha256": "0b543f88bbedec3245a52388677dded05823483339ce2c25efc8c5f2b7e1918c"
+    },
+    {
+      "upstreamPath": "libfaad/ms.c",
+      "vendoredPath": "upstream/libfaad/ms.c",
+      "upstreamSha256": "158b5c1bc9777c4adf67d17e8da0c95bf0cac395c1d887da8e45931d1f63bc0f",
+      "vendoredSha256": "158b5c1bc9777c4adf67d17e8da0c95bf0cac395c1d887da8e45931d1f63bc0f"
+    },
+    {
+      "upstreamPath": "libfaad/ms.h",
+      "vendoredPath": "upstream/libfaad/ms.h",
+      "upstreamSha256": "913977cc6e5b37335ff8c494d93fe8f882a0d05ccbe34106a04123e7412d76e2",
+      "vendoredSha256": "913977cc6e5b37335ff8c494d93fe8f882a0d05ccbe34106a04123e7412d76e2"
+    },
+    {
+      "upstreamPath": "libfaad/output.c",
+      "vendoredPath": "upstream/libfaad/output.c",
+      "upstreamSha256": "df55151d19a021bd12ba256d95ad326757b36dcdb2b01d5b55f117bc60108502",
+      "vendoredSha256": "df55151d19a021bd12ba256d95ad326757b36dcdb2b01d5b55f117bc60108502"
+    },
+    {
+      "upstreamPath": "libfaad/output.h",
+      "vendoredPath": "upstream/libfaad/output.h",
+      "upstreamSha256": "4fc4291a6e9207a081aa3610d9b5ad70da8d95175a6dce316b17e5579ab7f9ff",
+      "vendoredSha256": "4fc4291a6e9207a081aa3610d9b5ad70da8d95175a6dce316b17e5579ab7f9ff"
+    },
+    {
+      "upstreamPath": "libfaad/pns.c",
+      "vendoredPath": "upstream/libfaad/pns.c",
+      "upstreamSha256": "ed4d47afdafcc8f325e1b4790ebfddfdc09e899f555fc4a657cfa0ee5d5b7136",
+      "vendoredSha256": "ed4d47afdafcc8f325e1b4790ebfddfdc09e899f555fc4a657cfa0ee5d5b7136"
+    },
+    {
+      "upstreamPath": "libfaad/pns.h",
+      "vendoredPath": "upstream/libfaad/pns.h",
+      "upstreamSha256": "fed99c5b14d404c879d31e31d29e23b6e9e7b97bba7d1b509c65f9db02b1e47c",
+      "vendoredSha256": "fed99c5b14d404c879d31e31d29e23b6e9e7b97bba7d1b509c65f9db02b1e47c"
+    },
+    {
+      "upstreamPath": "libfaad/ps_dec.c",
+      "vendoredPath": "upstream/libfaad/ps_dec.c",
+      "upstreamSha256": "ba5e0ab56fa8afff78c815031524a452523e9380d6fa060f3abac75ddd17e681",
+      "vendoredSha256": "ba5e0ab56fa8afff78c815031524a452523e9380d6fa060f3abac75ddd17e681"
+    },
+    {
+      "upstreamPath": "libfaad/ps_dec.h",
+      "vendoredPath": "upstream/libfaad/ps_dec.h",
+      "upstreamSha256": "bdf72abfcb9bc3e957ad4d2905e984df009371a1cc062859d485918e67777479",
+      "vendoredSha256": "bdf72abfcb9bc3e957ad4d2905e984df009371a1cc062859d485918e67777479"
+    },
+    {
+      "upstreamPath": "libfaad/ps_syntax.c",
+      "vendoredPath": "upstream/libfaad/ps_syntax.c",
+      "upstreamSha256": "fb11a927956413ff12355238b6dbf5a98def2da4d9bca51deb936c0d337375d0",
+      "vendoredSha256": "fb11a927956413ff12355238b6dbf5a98def2da4d9bca51deb936c0d337375d0"
+    },
+    {
+      "upstreamPath": "libfaad/ps_tables.h",
+      "vendoredPath": "upstream/libfaad/ps_tables.h",
+      "upstreamSha256": "f93cb99806729b56d2a439cbccf3bb2cc039fae5d2cc285206a22ac7ac4fe17a",
+      "vendoredSha256": "f93cb99806729b56d2a439cbccf3bb2cc039fae5d2cc285206a22ac7ac4fe17a"
+    },
+    {
+      "upstreamPath": "libfaad/pulse.c",
+      "vendoredPath": "upstream/libfaad/pulse.c",
+      "upstreamSha256": "b9072dd68f62791c228e2346c4fd5c0ffcebd5d3432bd23493ff733b16607fa8",
+      "vendoredSha256": "b9072dd68f62791c228e2346c4fd5c0ffcebd5d3432bd23493ff733b16607fa8"
+    },
+    {
+      "upstreamPath": "libfaad/pulse.h",
+      "vendoredPath": "upstream/libfaad/pulse.h",
+      "upstreamSha256": "abf0d9823322d87c47ff8c688faf45c1627e875d5e0af21d836489e35778938b",
+      "vendoredSha256": "abf0d9823322d87c47ff8c688faf45c1627e875d5e0af21d836489e35778938b"
+    },
+    {
+      "upstreamPath": "libfaad/rvlc.c",
+      "vendoredPath": "upstream/libfaad/rvlc.c",
+      "upstreamSha256": "d90e7b0faa73cc8e5717c31ecc037e7cfa6c8e7e0200b2823a1b0f62470142c9",
+      "vendoredSha256": "d90e7b0faa73cc8e5717c31ecc037e7cfa6c8e7e0200b2823a1b0f62470142c9"
+    },
+    {
+      "upstreamPath": "libfaad/rvlc.h",
+      "vendoredPath": "upstream/libfaad/rvlc.h",
+      "upstreamSha256": "262ede8409646833fd48e1fb4a35df1f2fed9d8a57ad913d1bd52fc704b0e3c2",
+      "vendoredSha256": "262ede8409646833fd48e1fb4a35df1f2fed9d8a57ad913d1bd52fc704b0e3c2"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_dct.c",
+      "vendoredPath": "upstream/libfaad/sbr_dct.c",
+      "upstreamSha256": "ef70916bf8eace403ab7a3475b688cbef57257c551ebb91b54c4c981709eead4",
+      "vendoredSha256": "ef70916bf8eace403ab7a3475b688cbef57257c551ebb91b54c4c981709eead4"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_dct.h",
+      "vendoredPath": "upstream/libfaad/sbr_dct.h",
+      "upstreamSha256": "cf3027abd54ff02cca8cb53eef225a0f1addc349a4d55aee4856a2185fe1b1b5",
+      "vendoredSha256": "cf3027abd54ff02cca8cb53eef225a0f1addc349a4d55aee4856a2185fe1b1b5"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_dec.c",
+      "vendoredPath": "upstream/libfaad/sbr_dec.c",
+      "upstreamSha256": "f5c5ae679772a12ea98f502e813eaa04da77ffbd463716891733ceabb7946165",
+      "vendoredSha256": "272f1fff88067388f72ba5690fffb7849d5b8a57b930248cd17039de98bd6f12"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_dec.h",
+      "vendoredPath": "upstream/libfaad/sbr_dec.h",
+      "upstreamSha256": "906b0d68b3ca6676d75a285f3237be7dfa5192e176870a1037806c1659a0350f",
+      "vendoredSha256": "c9b49b2a1adaada7b7fc665e6fe3d18c6521323c0d13c78e2ea9e08a49b54e88"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_e_nf.c",
+      "vendoredPath": "upstream/libfaad/sbr_e_nf.c",
+      "upstreamSha256": "b69fabde5cb4721bc48d7539c691d8fb570c0d408c9f950a72f6f97999c639ed",
+      "vendoredSha256": "b69fabde5cb4721bc48d7539c691d8fb570c0d408c9f950a72f6f97999c639ed"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_e_nf.h",
+      "vendoredPath": "upstream/libfaad/sbr_e_nf.h",
+      "upstreamSha256": "0ec89825151ba5c3439aebce9974500633ecd2e2192bde0b64791238989973e7",
+      "vendoredSha256": "0ec89825151ba5c3439aebce9974500633ecd2e2192bde0b64791238989973e7"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_fbt.c",
+      "vendoredPath": "upstream/libfaad/sbr_fbt.c",
+      "upstreamSha256": "32453532480bdadd008b127810ac9864ce3faa73bb8139427ef3cb8215328d14",
+      "vendoredSha256": "32453532480bdadd008b127810ac9864ce3faa73bb8139427ef3cb8215328d14"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_fbt.h",
+      "vendoredPath": "upstream/libfaad/sbr_fbt.h",
+      "upstreamSha256": "416d55f49dd10da3c1664785d312e5f9c65cc60fa488366b5e7aa017918a59e3",
+      "vendoredSha256": "416d55f49dd10da3c1664785d312e5f9c65cc60fa488366b5e7aa017918a59e3"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_hfadj.c",
+      "vendoredPath": "upstream/libfaad/sbr_hfadj.c",
+      "upstreamSha256": "403db23a2d248afbd29bf0703319c4e18974be900693659a919ef0a8165bea8e",
+      "vendoredSha256": "403db23a2d248afbd29bf0703319c4e18974be900693659a919ef0a8165bea8e"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_hfadj.h",
+      "vendoredPath": "upstream/libfaad/sbr_hfadj.h",
+      "upstreamSha256": "4a53c7e9423f4ffd3a72a2ce1a02e0fe88c5ddf4860bcc8dd084a2cb98dda71d",
+      "vendoredSha256": "4a53c7e9423f4ffd3a72a2ce1a02e0fe88c5ddf4860bcc8dd084a2cb98dda71d"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_hfgen.c",
+      "vendoredPath": "upstream/libfaad/sbr_hfgen.c",
+      "upstreamSha256": "12e6351d78c509ab8d7a43e626bf871f562c150a300cb0aba1f25a771a3bfe04",
+      "vendoredSha256": "12e6351d78c509ab8d7a43e626bf871f562c150a300cb0aba1f25a771a3bfe04"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_hfgen.h",
+      "vendoredPath": "upstream/libfaad/sbr_hfgen.h",
+      "upstreamSha256": "38fb6ac458d6f637fd1ff8c7d88005945aa25acd82b4691c5b341b6f18bb89bc",
+      "vendoredSha256": "38fb6ac458d6f637fd1ff8c7d88005945aa25acd82b4691c5b341b6f18bb89bc"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_huff.c",
+      "vendoredPath": "upstream/libfaad/sbr_huff.c",
+      "upstreamSha256": "7e7e420891bd04bfd86945f6d1fbf6ef8ef3db601a3ad5f92e1b900c6d92469c",
+      "vendoredSha256": "7e7e420891bd04bfd86945f6d1fbf6ef8ef3db601a3ad5f92e1b900c6d92469c"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_huff.h",
+      "vendoredPath": "upstream/libfaad/sbr_huff.h",
+      "upstreamSha256": "c7394a14a2dd6878be53b81b3d2079a9f28320d89640bd6517cca9d8d527082b",
+      "vendoredSha256": "c7394a14a2dd6878be53b81b3d2079a9f28320d89640bd6517cca9d8d527082b"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_noise.h",
+      "vendoredPath": "upstream/libfaad/sbr_noise.h",
+      "upstreamSha256": "ebf972f09441c2a607b16fc8ac8b7e830a5b8f5529595daba972ccc27bc97170",
+      "vendoredSha256": "ebf972f09441c2a607b16fc8ac8b7e830a5b8f5529595daba972ccc27bc97170"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_qmf.c",
+      "vendoredPath": "upstream/libfaad/sbr_qmf.c",
+      "upstreamSha256": "e227134d98dc175741734f0eeaf42fabfa75e99ecd71fa24381f0805c1432d3f",
+      "vendoredSha256": "e227134d98dc175741734f0eeaf42fabfa75e99ecd71fa24381f0805c1432d3f"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_qmf.h",
+      "vendoredPath": "upstream/libfaad/sbr_qmf.h",
+      "upstreamSha256": "b2932c1aba63f33948504a1e2786df965b7b0eedffdb869b9914fb6aa8d0992d",
+      "vendoredSha256": "b2932c1aba63f33948504a1e2786df965b7b0eedffdb869b9914fb6aa8d0992d"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_qmf_c.h",
+      "vendoredPath": "upstream/libfaad/sbr_qmf_c.h",
+      "upstreamSha256": "81a7c0b46f31eb80b674b4caa16a81ed4ed48ae6f1f93f37178815188aef2a83",
+      "vendoredSha256": "81a7c0b46f31eb80b674b4caa16a81ed4ed48ae6f1f93f37178815188aef2a83"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_syntax.c",
+      "vendoredPath": "upstream/libfaad/sbr_syntax.c",
+      "upstreamSha256": "af9740680d0655bcebdcb53f8302d50d68603e0d9d285c1d43d8b1f892c87e2f",
+      "vendoredSha256": "0622799683e3dcdef555cf08d125cae73876e35b673f5415fc7487bd6c38594b"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_syntax.h",
+      "vendoredPath": "upstream/libfaad/sbr_syntax.h",
+      "upstreamSha256": "b99a1012f124eac127c56aa6c91b7239a5348938d8becab92d99d112e27752d3",
+      "vendoredSha256": "b99a1012f124eac127c56aa6c91b7239a5348938d8becab92d99d112e27752d3"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_tf_grid.c",
+      "vendoredPath": "upstream/libfaad/sbr_tf_grid.c",
+      "upstreamSha256": "7105328e3220116e1d5d3c3ced52d0fc172360f818ff7cd4c13e7de9791b5e22",
+      "vendoredSha256": "7105328e3220116e1d5d3c3ced52d0fc172360f818ff7cd4c13e7de9791b5e22"
+    },
+    {
+      "upstreamPath": "libfaad/sbr_tf_grid.h",
+      "vendoredPath": "upstream/libfaad/sbr_tf_grid.h",
+      "upstreamSha256": "d4d0be2de8298e9249774e7303c9cc492523f959ba561b7222c2f805222501b0",
+      "vendoredSha256": "d4d0be2de8298e9249774e7303c9cc492523f959ba561b7222c2f805222501b0"
+    },
+    {
+      "upstreamPath": "libfaad/sine_win.h",
+      "vendoredPath": "upstream/libfaad/sine_win.h",
+      "upstreamSha256": "c633d41a59845923df5694bd14c8e9f1905e4fc7648a2fb5f0f25dbfc67bcb51",
+      "vendoredSha256": "c633d41a59845923df5694bd14c8e9f1905e4fc7648a2fb5f0f25dbfc67bcb51"
+    },
+    {
+      "upstreamPath": "libfaad/specrec.c",
+      "vendoredPath": "upstream/libfaad/specrec.c",
+      "upstreamSha256": "84f1907e2f8089fde43bddd18e33f87567481c9864161e909c3d5d395e6d16c3",
+      "vendoredSha256": "84f1907e2f8089fde43bddd18e33f87567481c9864161e909c3d5d395e6d16c3"
+    },
+    {
+      "upstreamPath": "libfaad/specrec.h",
+      "vendoredPath": "upstream/libfaad/specrec.h",
+      "upstreamSha256": "e7d3b845c16f4c19320480b35046d1c3d0cf1351d5487571df57f8494b3d52c1",
+      "vendoredSha256": "e7d3b845c16f4c19320480b35046d1c3d0cf1351d5487571df57f8494b3d52c1"
+    },
+    {
+      "upstreamPath": "libfaad/ssr.c",
+      "vendoredPath": "upstream/libfaad/ssr.c",
+      "upstreamSha256": "0fdfc615585e42715fc750de7c1a4e006959537d616ab3051f81bf6bf42e9973",
+      "vendoredSha256": "0fdfc615585e42715fc750de7c1a4e006959537d616ab3051f81bf6bf42e9973"
+    },
+    {
+      "upstreamPath": "libfaad/ssr.h",
+      "vendoredPath": "upstream/libfaad/ssr.h",
+      "upstreamSha256": "b0354a5f8b89b536bd15bf8709b917289702b8a7cfe71cee883e8a0b32c8fc7f",
+      "vendoredSha256": "b0354a5f8b89b536bd15bf8709b917289702b8a7cfe71cee883e8a0b32c8fc7f"
+    },
+    {
+      "upstreamPath": "libfaad/ssr_fb.c",
+      "vendoredPath": "upstream/libfaad/ssr_fb.c",
+      "upstreamSha256": "bbcf4e804f78acac1689c4d10a0327d2aed3d9c6724bb01dda16a04a53a5e9c3",
+      "vendoredSha256": "bbcf4e804f78acac1689c4d10a0327d2aed3d9c6724bb01dda16a04a53a5e9c3"
+    },
+    {
+      "upstreamPath": "libfaad/ssr_fb.h",
+      "vendoredPath": "upstream/libfaad/ssr_fb.h",
+      "upstreamSha256": "43a600bb33427a9cd27b333435a0f35d2cf6c662df5950e5ea801bda5fca8a28",
+      "vendoredSha256": "43a600bb33427a9cd27b333435a0f35d2cf6c662df5950e5ea801bda5fca8a28"
+    },
+    {
+      "upstreamPath": "libfaad/ssr_ipqf.c",
+      "vendoredPath": "upstream/libfaad/ssr_ipqf.c",
+      "upstreamSha256": "3209f62e35ec7228c106185cce97b5d905714b8f5bc3af417e14e2cb04005dfe",
+      "vendoredSha256": "3209f62e35ec7228c106185cce97b5d905714b8f5bc3af417e14e2cb04005dfe"
+    },
+    {
+      "upstreamPath": "libfaad/ssr_ipqf.h",
+      "vendoredPath": "upstream/libfaad/ssr_ipqf.h",
+      "upstreamSha256": "bb9ca4ba6e70808d72808cd01449ecf1aacbeb311b7902d362fc3dbbff14e466",
+      "vendoredSha256": "bb9ca4ba6e70808d72808cd01449ecf1aacbeb311b7902d362fc3dbbff14e466"
+    },
+    {
+      "upstreamPath": "libfaad/ssr_win.h",
+      "vendoredPath": "upstream/libfaad/ssr_win.h",
+      "upstreamSha256": "35645021a29c425e3b6b9a049ee22068be535b371ade4a1dd3041d956d627d25",
+      "vendoredSha256": "35645021a29c425e3b6b9a049ee22068be535b371ade4a1dd3041d956d627d25"
+    },
+    {
+      "upstreamPath": "libfaad/structs.h",
+      "vendoredPath": "upstream/libfaad/structs.h",
+      "upstreamSha256": "cd547bbf59a112b81add8e1ef5d9d30282e97030400def577d9f447157b44ac6",
+      "vendoredSha256": "cd547bbf59a112b81add8e1ef5d9d30282e97030400def577d9f447157b44ac6"
+    },
+    {
+      "upstreamPath": "libfaad/syntax.c",
+      "vendoredPath": "upstream/libfaad/syntax.c",
+      "upstreamSha256": "62146abb3a64a1949bd5a9bf834d737b6c5e7927a588de13e30125bb798931a1",
+      "vendoredSha256": "56bec534b01c0d55bc47fd302f052034ad4b212e52cf17541ae1e1d2d5aea07d"
+    },
+    {
+      "upstreamPath": "libfaad/syntax.h",
+      "vendoredPath": "upstream/libfaad/syntax.h",
+      "upstreamSha256": "74cca2de950fda47a7e65361478e67125d8f68eb61607d87c4e62c764ee8fb59",
+      "vendoredSha256": "fe964c48d6599b27f92584b43811fa7ef4c444dd6defe557667c68aa24a78017"
+    },
+    {
+      "upstreamPath": "libfaad/tns.c",
+      "vendoredPath": "upstream/libfaad/tns.c",
+      "upstreamSha256": "3ea9dce050eefb0eaab0000c15427652fb94b1e7564797f0e1cdb9e88e2c6cd9",
+      "vendoredSha256": "3ea9dce050eefb0eaab0000c15427652fb94b1e7564797f0e1cdb9e88e2c6cd9"
+    },
+    {
+      "upstreamPath": "libfaad/tns.h",
+      "vendoredPath": "upstream/libfaad/tns.h",
+      "upstreamSha256": "2fb5b5ebf36b00e80109b23c9e06ed3a2f3e4a582b969126e877a813d1235272",
+      "vendoredSha256": "2fb5b5ebf36b00e80109b23c9e06ed3a2f3e4a582b969126e877a813d1235272"
+    },
+    {
+      "upstreamPath": "properties.json",
+      "vendoredPath": "upstream/properties.json",
+      "upstreamSha256": "345e2577fdd5443b73bc5c74d1a54725afb56f952aba432cb071f12dc8d0c710",
+      "vendoredSha256": "345e2577fdd5443b73bc5c74d1a54725afb56f952aba432cb071f12dc8d0c710"
+    }
+  ],
+  "upstreamTag": "2.11.2",
+  "fileCount": 108,
+  "vendoredBytes": 2478750
+}

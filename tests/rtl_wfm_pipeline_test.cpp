@@ -960,6 +960,12 @@ void admission()
         check(multiple->prepare(invalid) && ready(*multiple) && multiple->adopt(),
               "native AM/SAM admission is independent of receiver order");
     }
+    invalid = current;
+    invalid.receivers[0].wfmHdStereo = true;
+    invalid.receivers.push_back({{6, 103'000'000, -8000, 8000, 0, 3000, 3000}, Transaction::Mode::Fmn});
+    check(!multiple->prepare(invalid), "HD singleton refusal includes parked configured siblings");
+    invalid.receivingIds.clear();
+    check(!multiple->prepare(invalid), "all-parked membership cannot hide an unsupported HD combination");
     multiple->stop();
     multiple.reset(); native.reset(); legacy.reset();
     check(QThreadPool::globalInstance()->waitForDone(15000), "legacy admission fixtures release registry reservations");

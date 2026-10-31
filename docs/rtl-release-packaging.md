@@ -4,7 +4,8 @@ Official AppImage (both architectures), macOS DMG (both architectures), and
 Windows installer/portable/MSIX pipelines configure `ENABLE_RTL=ON` and
 `REQUIRE_RTL=ON`. Missing librtlsdr or float FFTW is a configure error. An
 intentional developer-only build can still set `ENABLE_RTL=OFF` with the
-requirement left OFF.
+requirement left OFF. `ENABLE_HD_FM` remains OFF by default and in official
+release workflows; local Digital evaluation packages explicitly opt in.
 
 `scripts/setup/rtl-dependencies.json` pins RTL-SDR Blog (the existing qualified
 Blog V4 driver variant), libusb, and FFTW sources by URL and SHA256. Unix setup
@@ -16,7 +17,9 @@ not an imported runtime of the library-only RTL target.
 
 Setup retains corresponding archives, copyright notices and the actual build
 recipes in `share/aethersdr-rtl-sources`. Those travel inside each payload.
-Source archives include their original license/copyright files.
+Source archives include their original license/copyright files. Private HD
+packages additionally carry the application source (including patched nrsc5
+and FAAD-HDC), decoder notices, and verified external dependency provenance.
 No setup script installs a USB driver, changes udev rules, or opens a radio.
 
 `tools/check_rtl_package.py` checks that the app imports RTL and float FFTW,

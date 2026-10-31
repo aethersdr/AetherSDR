@@ -82,7 +82,7 @@ double magnitude(const QVector<float>& samples, int rate, int channel, double hz
 void nativeIsExact()
 {
     // Catches native-rate filtering, stereo collapse, clipping and borrowed output.
-    for (const int rate : {24000, 48000}) {
+    for (const int rate : {24000, 44100, 48000}) {
         TciRxConverter converter({rate, PcmLayout::Stereo}, rate);
         QVector<float> input{0.0f, -0.0f, 1.25f, -1.5f, 0.123f, -0.456f};
         const QVector<float> expected = input;
@@ -115,7 +115,7 @@ void rateMatrixAndPartitioning()
     // channel intermixing and rate conversion dependent on producer chunk size.
     constexpr int kFrames = 49373;
     constexpr std::array<int, 7> kChunks{1, 255, 7, 511, 3, 1024, 31};
-    for (const int sourceRate : {24000, 48000}) {
+    for (const int sourceRate : {24000, 44100, 48000}) {
         for (const int outputRate : {8000, 12000, 24000, 44100, 48000}) {
             for (const PcmLayout layout : {PcmLayout::Mono, PcmLayout::Stereo}) {
                 std::printf("MATRIX: %d -> %d, %s\n", sourceRate, outputRate,
@@ -177,7 +177,7 @@ void rateMatrixAndPartitioning()
 void antiphaseAndWideAudio()
 {
     // Existing processStereoToStereo() averages LR and turns this into silence.
-    for (const int sourceRate : {24000, 48000}) {
+    for (const int sourceRate : {24000, 44100, 48000}) {
         for (const int outputRate : {8000, 12000, 24000, 44100, 48000}) {
             TciRxConverter converter({sourceRate, PcmLayout::Stereo}, outputRate);
             QVector<float> output;
@@ -206,7 +206,7 @@ void antiphaseAndWideAudio()
 void discardRetiresEverything()
 {
     // Catches resampler history or partial input surviving disconnect/restart.
-    for (const int rate : {24000, 48000}) {
+    for (const int rate : {24000, 44100, 48000}) {
         for (const int outputRate : {8000, 12000, 24000, 44100, 48000}) {
             TciRxConverter converter({rate, PcmLayout::Stereo}, outputRate);
             QVector<float> output;
@@ -230,7 +230,7 @@ void declaredLatencyMatchesWaveform()
 {
     // Catches a delay getter that describes only no-output warmup rather than
     // the acoustic filter delay, or samples assigned to the wrong clock.
-    for (const int sourceRate : {24000, 48000}) {
+    for (const int sourceRate : {24000, 44100, 48000}) {
         for (const int outputRate : {8000, 12000, 24000, 44100, 48000}) {
             TciRxConverter converter({sourceRate, PcmLayout::Stereo}, outputRate);
             QVector<float> impulse(49152 * 2, 0.0f);
@@ -264,7 +264,7 @@ void boundsAndRejection()
     // Catches malformed or poisoned data reaching a sink; invalid calls discard
     // old buffered audio instead of making it available to a later stream.
     for (const PcmFormat format : {PcmFormat{0, PcmLayout::Stereo},
-                                  PcmFormat{44100, PcmLayout::Stereo},
+                                  PcmFormat{32000, PcmLayout::Stereo},
                                   PcmFormat{24000, static_cast<PcmLayout>(9)}}) {
         TciRxConverter converter(format, 48000);
         int calls = 0;
