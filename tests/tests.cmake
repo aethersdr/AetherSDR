@@ -8965,6 +8965,18 @@ add_executable(hl2_gain_restore_test tests/hl2_gain_restore_test.cpp)
 target_include_directories(hl2_gain_restore_test PRIVATE src tests)
 target_link_libraries(hl2_gain_restore_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_gain_restore_test COMMAND hl2_gain_restore_test)
+# What an HL2 comes back with after a restart, through the operator's setters
+# and the production store/load: every offered mode with its passband, the last
+# band, per-band drive and LNA gain; and two radios (by MAC) in one profile.
+# Nothing answers at TEST-NET-1; the link-up push is run by hand; never keys.
+add_executable(hl2_persist_restart_test tests/hl2_persist_restart_test.cpp)
+target_include_directories(hl2_persist_restart_test PRIVATE src tests)
+target_link_libraries(hl2_persist_restart_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_persist_restart_test COMMAND hl2_persist_restart_test)
+add_executable(hl2_persist_two_radios_test tests/hl2_persist_two_radios_test.cpp)
+target_include_directories(hl2_persist_two_radios_test PRIVATE src tests)
+target_link_libraries(hl2_persist_two_radios_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_persist_two_radios_test COMMAND hl2_persist_two_radios_test)
 # Which automatic RF gain law a connect installs: applyRestoredState() and the
 # constructor must install the same one. Socket-free: link edges, telemetry and
 # bandscope blocks go in through MetisClient's own signals on a backend that
@@ -10114,6 +10126,8 @@ set(AETHER_SETTINGS_CONSUMERS
     automation_persist_diagnostics_test
     weather_radar_loading_test
     hl2_gain_restore_test
+    hl2_persist_restart_test
+    hl2_persist_two_radios_test
     hl2_rit_xit_test
     slice_rit_xit_seam_test
     hl2_tx_gate_test

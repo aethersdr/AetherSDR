@@ -1,0 +1,232 @@
+// What a Hermes-Lite 2 comes back with after a restart, driven through the
+// operator's own setters and read back through the production store and load.
+//
+// Two things are pinned that the neighbouring tests only pin in halves:
+//
+//  1. Every mode the menu offers, with the passband the operator left it on,
+//     survives capture -> RadioStateMemory store -> load -> a NEW backend ->
+//     the link-up push. hl2_mode_vocabulary_test checks the restore boundary
+//     with a hand-built document, and hl2_state_restore_test checks the capture
+//     shape; neither sends a mode the operator selected round the whole loop.
+//
+//  2. Band changes, per-band drive and per-band LNA gain across a restart: the
+//     last band is where the session comes back, each visited band keeps its
+//     own drive and gain, a hop in the restarted session applies the band's
+//     own values rather than the previous band's, and a band never visited
+//     takes the baseline rather than a neighbour's value.
+//
+// Socket-free in the sense of the default graph: nothing answers at TEST-NET-1,
+// the link-up push is run by hand, and the radio is never keyed (the drive is a
+// setpoint; the transmit gate stays shut). The settings profile is isolated.
+//
+// NOT COVERED: the wire. That the restored mode, passband, drive and gain
+// reach a real radio is the bench half.
+
+#include "Hl2PersistHarness.h"
+
+#include "TestSettingsProfile.h"
+#include "core/backends/hl2/Hl2ModeVocabulary.h"
+
+#include <QCoreApplication>
+
+using namespace AetherSDR;
+using namespace AetherSDR::persist;
+
+namespace {
+
+constexpr double k20m = 14'074'000.0;
+constexpr double k40m = 7'074'000.0;
+constexpr double k10m = 28'074'000.0;
+constexpr double k15m = 21'074'000.0;
+
+QString serialFor(int n)
+{
+    return QStringLiteral("AA:BB:CC:00:10:%1").arg(n, 2, 16, QLatin1Char('0')).toUpper();
+}
+
+// A passband that is not the mode's default and is valid for every mode: the
+// default pulled in by a tenth of its width on each edge. It still contains the
+// carrier for the modes that straddle it (CW included).
+std::pair<int, int> narrowed(double lo, double hi)
+{
+    const double tenth = (hi - lo) / 10.0;
+    return {static_cast<int>(lo + tenth), static_cast<int>(hi - tenth)};
+}
+
+}  // namespace
+
+int main(int argc, char** argv)
+{
+    TestSettingsProfile profile(QStringLiteral("aether-hl2-persist-restart"));
+    if (!profile.isValid()) {
+        std::fprintf(stderr, "FAIL: could not create an isolated settings profile\n");
+        return 1;
+    }
+    QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
+
+    RadioCapabilities caps;
+
+    // ======================================================================
+    // 1. Mode and passband, for every mode the menu offers
+    // ======================================================================
+    {
+        const QStringList modes = hl2::publishedModeStrings();
+        check(modes.size() >= 8, QStringLiteral("setup: the menu offers %1 modes").arg(modes.size()));
+
+        struct Chosen {
+            QString mode;
+            RestoredRadioState defaultDoc;   // as stored right after the mode click
+            RestoredRadioState customDoc;    // as stored after a passband edit
+            int lo = 0, hi = 0;              // the edited passband
+        };
+        QList<Chosen> chosen;
+
+        {
+            Session s(serialFor(0), RestoredRadioState{}, k20m);
+            caps = s.backend.capabilities();
+            for (const QString& mode : modes) {
+                Chosen c;
+                c.mode = mode;
+                s.backend.setSliceMode(0, mode);
+                c.defaultDoc = s.backend.currentOperatingState();
+                check(c.defaultDoc.mode == mode,
+                      QStringLiteral("capture: the slice holds %1 after the click, got \"%2\"")
+                          .arg(mode, c.defaultDoc.mode));
+                const auto [lo, hi] = narrowed(c.defaultDoc.filterLowHz, c.defaultDoc.filterHighHz);
+                c.lo = lo;
+                c.hi = hi;
+                s.backend.setSliceFilter(0, lo, hi);
+                c.customDoc = s.backend.currentOperatingState();
+                check(c.customDoc.filterLowHz == lo && c.customDoc.filterHighHz == hi
+                          && c.customDoc.mode == mode,
+                      QStringLiteral("capture: %1 holds the edited passband %2..%3")
+                          .arg(mode).arg(lo).arg(hi));
+                chosen.append(c);
+            }
+        }
+
+        // The default-passband documents: the mode alone must come back, and
+        // the passband with it, with nothing but the stored document to go on.
+        for (qsizetype i = 0; i < chosen.size(); ++i) {
+            const Chosen& c = chosen.at(i);
+            const RadioSettingsScope scope(QStringLiteral("hl2"), serialFor(static_cast<int>(i)));
+            bool stored = false;
+            const RestoredRadioState back = throughDisk(scope, caps, c.defaultDoc, &stored);
+            check(stored, QStringLiteral("%1: the default-passband document is stored").arg(c.mode));
+            hl2::Hl2Backend fresh;
+            fresh.applyRestoredState(back);
+            const RestoredRadioState& kept = fresh.restoredStateForTest();
+            check(kept.mode == c.mode
+                      && kept.filterLowHz == c.defaultDoc.filterLowHz
+                      && kept.filterHighHz == c.defaultDoc.filterHighHz,
+                  QStringLiteral("%1 and its default passband survive the disk and the restore boundary")
+                      .arg(c.mode));
+        }
+
+        // The edited passband, through a real restart: a new backend, a connect
+        // and the link-up push. The edit has to beat the mode's default, which
+        // the push derives first (the #4484 pair rule).
+        for (qsizetype i = 0; i < chosen.size(); ++i) {
+            const Chosen& c = chosen.at(i);
+            const RadioSettingsScope scope(QStringLiteral("hl2"),
+                                           serialFor(static_cast<int>(100 + i)));
+            // Control, taken before the restart and independent of what comes
+            // back: the document being stored really differs from the default.
+            check(c.customDoc.filterLowHz != c.defaultDoc.filterLowHz
+                      || c.customDoc.filterHighHz != c.defaultDoc.filterHighHz,
+                  QStringLiteral("%1: the stored edited passband differs from the mode's default "
+                                 "(control for the restore check below)").arg(c.mode));
+            const RestoredRadioState back = throughDisk(scope, caps, c.customDoc);
+            Session next(serialFor(static_cast<int>(100 + i)), back, k20m);
+            const RestoredRadioState now = next.backend.currentOperatingState();
+            check(now.mode == c.mode,
+                  QStringLiteral("%1 comes back after a restart, got \"%2\"").arg(c.mode, now.mode));
+            check(now.filterLowHz == c.lo && now.filterHighHz == c.hi,
+                  QStringLiteral("%1 comes back on the operator's passband %2..%3, not the "
+                                 "default %4..%5 — got %6..%7")
+                      .arg(c.mode).arg(c.lo).arg(c.hi)
+                      .arg(c.defaultDoc.filterLowHz).arg(c.defaultDoc.filterHighHz)
+                      .arg(now.filterLowHz).arg(now.filterHighHz));
+        }
+    }
+
+    // ======================================================================
+    // 2. Band changes, per-band drive and per-band LNA gain
+    // ======================================================================
+    {
+        const QString serial = serialFor(200);
+        const RadioSettingsScope scope(QStringLiteral("hl2"), serial);
+
+        RestoredRadioState firstSession;
+        {
+            Session s(serial, RestoredRadioState{}, k20m);
+            // 20 m: the first drive the operator sets becomes the baseline.
+            s.backend.setTxPower(30);
+            s.backend.setPanRfGain(s.panId, -6);
+            s.backend.setSliceFrequency(0, k40m);
+            s.backend.setTxPower(45);
+            s.backend.setPanRfGain(s.panId, 3);
+            s.backend.setSliceFrequency(0, k10m);
+            s.backend.setTxPower(20);
+            s.backend.setPanRfGain(s.panId, 8);
+            s.backend.setSliceMode(0, QStringLiteral("USB"));
+            firstSession = s.backend.currentOperatingState();
+            check(firstSession.rfFrequencyHz == k10m,
+                  "setup: the first session ends on 10 m");
+            check(Session::driveOf(firstSession, QStringLiteral("20m")) == 30
+                      && Session::driveOf(firstSession, QStringLiteral("40m")) == 45
+                      && Session::driveOf(firstSession, QStringLiteral("10m")) == 20,
+                  "setup: the capture holds each visited band's own drive");
+            check(Session::lnaOf(firstSession, QStringLiteral("20m")) == -6
+                      && Session::lnaOf(firstSession, QStringLiteral("40m")) == 3
+                      && Session::lnaOf(firstSession, QStringLiteral("10m")) == 8,
+                  "setup: the capture holds each visited band's own LNA gain");
+        }
+
+        bool stored = false;
+        const RestoredRadioState onDisk = throughDisk(scope, caps, firstSession, &stored);
+        check(stored, "the operating state is stored");
+
+        Session next(serial, onDisk, k20m);   // k20m ignored: the document has a frequency
+        const RestoredRadioState up = next.backend.currentOperatingState();
+        check(up.rfFrequencyHz == k10m,
+              "the restarted session comes back on the band it was left on (10 m)");
+        check(Session::driveOf(up, QStringLiteral("20m")) == 30
+                  && Session::driveOf(up, QStringLiteral("40m")) == 45
+                  && Session::driveOf(up, QStringLiteral("10m")) == 20,
+              "every band's drive survives the restart");
+        check(Session::lnaOf(up, QStringLiteral("20m")) == -6
+                  && Session::lnaOf(up, QStringLiteral("40m")) == 3
+                  && Session::lnaOf(up, QStringLiteral("10m")) == 8,
+              "every band's LNA gain survives the restart");
+        check(up.extension.value(QStringLiteral("txSetpoints")).toObject()
+                      .value(QStringLiteral("defaultPercent")).toInt(-1) == 30,
+              "the drive baseline (the first drive set) survives the restart");
+        check(next.liveLnaDb() == 8,
+              "the start band comes up on its own LNA gain, live");
+
+        // Hops in the restarted session apply the band's OWN values.
+        next.backend.setSliceFrequency(0, k20m);
+        check(next.liveLnaDb() == -6 && next.liveDriveFor(QStringLiteral("20m")) == 30,
+              "a hop to 20 m applies 20 m's gain and drive, not 10 m's");
+        next.backend.setSliceFrequency(0, k40m);
+        check(next.liveLnaDb() == 3 && next.liveDriveFor(QStringLiteral("40m")) == 45,
+              "a hop to 40 m applies 40 m's gain and drive");
+        next.backend.setSliceFrequency(0, k10m);
+        check(next.liveLnaDb() == 8 && next.liveDriveFor(QStringLiteral("10m")) == 20,
+              "and back to 10 m applies 10 m's own again");
+
+        // A band never visited: the baseline, never a neighbour's value.
+        next.backend.setSliceFrequency(0, k15m);
+        check(next.liveDriveFor(QStringLiteral("15m")) == 30,
+              "an unvisited band takes the stored drive baseline (30), not the band it came from (20)");
+        check(next.liveLnaDb() != 8 && next.liveLnaDb() != -6 && next.liveLnaDb() != 3,
+              "an unvisited band takes the shipped LNA default, not a visited band's gain");
+        check(!Session::hasLna(up, QStringLiteral("15m")) && !Session::hasDrive(up, QStringLiteral("15m")),
+              "negative control: the stored document had no 15 m entry to begin with");
+    }
+
+    std::printf("hl2_persist_restart_test: %s\n", g_failures == 0 ? "all checks passed" : "FAILED");
+    return g_failures == 0 ? 0 : 1;
+}
