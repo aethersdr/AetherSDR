@@ -165,7 +165,7 @@ int main(int argc, char** argv)
     // `display pan set … min_dbm=…` is Flex wire text. RadioModel::sendCmd drops
     // it at hasCommandPlane(), which is m_wanConn || m_connection, and
     // m_connection is assigned only inside the dynamic_cast<FlexBackend*> branch
-    // of RadioModel::setupBackend. FlexBackend::decodePanRange is the only
+    // of RadioModel::setupBackend. Flex display status is the only
     // reader of min_dbm anywhere in the tree.
     //
     // THE HL2'S radioOwnsDbmScale IS NOT ASSERTED HERE. Its DEFAULT is, below,

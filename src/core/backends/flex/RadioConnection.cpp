@@ -72,6 +72,7 @@ RadioConnection::RadioConnection(QObject* parent)
 
 RadioConnection::~RadioConnection()
 {
+    m_displayStatusSource.retire();
     disconnectFromRadio();
 }
 
@@ -139,6 +140,7 @@ bool RadioConnection::isDemoTarget(const RadioInfo& info)
 void RadioConnection::startSyntheticDemoConnect()
 {
     resetSessionState();
+    m_displayStatusSource.reset();
     // Pin this session. m_syntheticDemo alone cannot distinguish "still the
     // demo session I queued from" from "a NEW demo session started after mine
     // was torn down" -- a fast disconnect/reconnect sets the flag back to true
@@ -231,6 +233,11 @@ void RadioConnection::emitSyntheticStatus(const QString& line)
     // payload to a live radio's. (RFC #4288 Stage 3)
     const ParsedMessage msg = CommandParser::parseLine(line);
     if (msg.type == MessageType::Status) {
+        if (auto display = decodeFlexDisplayStatus(msg.object, msg.kvs, m_displayStatusSource.epoch());
+            display && display->current()) {
+            display->sourceHandle = msg.handle;
+            emit displayObserved(*display);
+        }
         emit statusReceived(msg.object, msg.kvs);
     }
 }
@@ -258,6 +265,7 @@ void RadioConnection::connectToHost(const QHostAddress& address,
         resetSocket();
     }
     resetSessionState();
+    m_displayStatusSource.reset();
 
     const QHostAddress preferredBindAddr =
         (bindMode == RadioBindMode::Explicit) ? explicitBindAddr : sessionBindAddr;
@@ -316,6 +324,7 @@ void RadioConnection::connectToHost(const QHostAddress& address,
 
 void RadioConnection::resetSessionState()
 {
+    m_displayStatusSource.retire();
     m_pttProtocol.store(PttProtocol::Unknown);
     if (m_independentPtt) {
         m_independentPtt->disconnect();
@@ -652,8 +661,12 @@ void RadioConnection::onReadyRead()
         m_readBuffer.clear();
         return;
     }
+    // Display revocation must not suppress teardown acknowledgments. Only a
+    // replaced transport lifetime ends this read batch.
+    const auto readEpoch = m_displayStatusSource.epoch();
     int newlinePos;
-    while ((newlinePos = m_readBuffer.indexOf('\n')) >= 0) {
+    while (readEpoch == m_displayStatusSource.epoch()
+           && (newlinePos = m_readBuffer.indexOf('\n')) >= 0) {
         // Strip the line terminator only. The evidence path must see malformed
         // whitespace; CommandParser separately trims for legacy presentation.
         QString line = QString::fromUtf8(m_readBuffer.left(newlinePos));
@@ -673,6 +686,7 @@ void RadioConnection::onHeartbeat()
 
 void RadioConnection::processLine(const QString& line)
 {
+    const auto displayEpoch = m_displayStatusSource.epoch();
     if (m_independentPtt && !isSyntheticDemo()) {
         m_independentPtt->observe(line, TxCoordinator::monotonicMs());
         updateIndependentPttTimer();
@@ -745,6 +759,11 @@ void RadioConnection::processLine(const QString& line)
         emit commandResponse(msg.sequence, msg.resultCode, msg.object);
         break;
     case MessageType::Status:
+        if (auto display = decodeFlexDisplayStatus(msg.object, msg.kvs, displayEpoch);
+            display && display->current()) {
+            display->sourceHandle = msg.handle;
+            emit displayObserved(*display);
+        }
         emit statusReceived(msg.object, msg.kvs);
         break;
     default:

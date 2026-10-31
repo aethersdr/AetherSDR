@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace AetherSDR {
 
@@ -53,27 +54,32 @@ quint32 parseHandleHex(const QString& text)
 
 void PanadapterModel::setClientHandle(const QString& h)
 {
-    const bool ownerChanged = m_ownerHandle != parseHandleHex(h);
+    const QPointer<PanadapterModel> self(this);
+    setOwnerHandle(parseHandleHex(h));
+    if (!self) { return; }
+    // Native backends historically leave the client handle unset.
+    m_ownerObserved = m_ownerHandle != 0;
+}
+
+void PanadapterModel::setOwnerHandle(quint32 handle)
+{
+    const bool ownerChanged = !m_ownerObserved || m_ownerHandle != handle;
+    m_ownerObserved = true;
     if (ownerChanged) {
         ++m_controlRevision;
         ++m_ownershipRevision;
         m_reportedCenterHz.reset();
         m_reportedBandwidthHz.reset();
     }
-    m_clientHandle = h;
-    m_ownerHandle = parseHandleHex(h);
-    if (ownerChanged) {
-        emit geometryObservationChanged();
-    }
+    m_ownerHandle = handle;
+    m_clientHandle = QString::number(handle, 16);
+    if (ownerChanged) { emit geometryObservationChanged(); }
 }
 
 bool PanadapterModel::ownedByClient(quint32 handle) const
 {
-    // An unknown owner is treated as ours: the radio hasn't told us
-    // otherwise, and failing open here would break every dBm command.
-    // Fail-open is ONLY safe for gating our own outbound commands — evidence
-    // against other clients must use ownerHandle() and fail closed (#3977).
-    return m_ownerHandle == 0 || m_ownerHandle == handle;
+    return m_ownerObserved ? handle != 0 && m_ownerHandle == handle
+                           : m_ownerHandle == 0 || m_ownerHandle == handle;
 }
 
 void PanadapterModel::setRfGainInfo(int low, int high, int step,
@@ -187,6 +193,7 @@ void PanadapterModel::recordGeometryObservation(double centerMhz, double bandwid
 
 void PanadapterModel::resetCenterKnownForReconnect()
 {
+    m_lifecyclePublished = false;
     ++m_controlRevision;
     m_displayIntentRevisions.fill(0);
     ++m_ownershipRevision;
@@ -254,27 +261,6 @@ bool PanadapterModel::setBandwidthLimits(double minMhz, double maxMhz)
     return true;
 }
 
-void PanadapterModel::applyWnbExtension(const QVariantMap& fields)
-{
-    bool dirty = false;
-    if (fields.contains(QStringLiteral("wnb"))) {
-        const bool w = fields.value(QStringLiteral("wnb")).toBool();
-        if (w != m_wnbActive) { m_wnbActive = w; dirty = true; }
-    }
-    if (fields.contains(QStringLiteral("wnb_level"))) {
-        const int lvl = std::clamp(fields.value(QStringLiteral("wnb_level")).toInt(), 0, 100);
-        if (lvl != m_wnbLevel) { m_wnbLevel = lvl; dirty = true; }
-    }
-    if (fields.contains(QStringLiteral("wnb_updating"))) {
-        const bool u = fields.value(QStringLiteral("wnb_updating")).toBool();
-        if (u != m_wnbUpdating) { m_wnbUpdating = u; dirty = true; }
-    }
-    if (dirty) {
-        emit wnbChanged(m_wnbActive, m_wnbLevel);
-        emit wnbStateChanged(m_wnbActive, m_wnbLevel, m_wnbUpdating);
-    }
-}
-
 void PanadapterModel::setRfGain(int gain)
 {
     if (gain != m_rfGain) {
@@ -317,7 +303,7 @@ void PanadapterModel::setWaterfallLineDuration(int rate)
     // PerfTelemetry is fed every report (even when unchanged), and
     // waterfallLineDurationReported likewise always fires; the change-gated
     // signal is waterfallLineDurationChanged. Semantics preserved verbatim from
-    // the old applyWaterfallStatus.
+    // a radio status observation.
     PerfTelemetry::instance().setWaterfallRate(rate);
     if (rate != m_waterfallLineDuration) {
         m_waterfallLineDuration = rate;
@@ -395,205 +381,114 @@ void PanadapterModel::setRequestedFftSettings(int average, int fps)
     }
 }
 
-void PanadapterModel::applyStateExtension(const QVariantMap& fields)
+bool PanadapterModel::applyDisplayValues(const DisplayValues& v, const std::function<bool()>& current)
 {
-    // The Flex-specific display-pan fields, applied from the backend's
-    // namespaced extensionStatus("flex","panState",…). Each key applies only
-    // when present, with the exact per-field semantics the old applyPanStatus
-    // had (aetherd RFC 2.3 — the decode lives in FlexBackend, not here).
-    // wide / loopa / loopb are bool wire flags. Mirror FlexLib's parse exactly
-    // (Panadapter.cs 1040-1068/1211-1223): byte.TryParse + reject > 1 → skip the
-    // update on a malformed/out-of-range value, keeping last-known-good state.
-    // Bare .toInt() != 0 silently coerced garbage to false and could clobber a
-    // prior true, diverging from FlexLib (Principle I; #4147).
-    if (fields.contains(QStringLiteral("wide"))) {
-        bool ok = false;
-        const uint v = fields.value(QStringLiteral("wide")).toString().toUInt(&ok);
-        if (ok && v <= 1) {
-            setWide(v != 0);
-        } else {
-            qCDebug(lcProtocol) << "PanadapterModel: invalid wide value"
-                                << fields.value(QStringLiteral("wide"));
-        }
+    const QPointer<PanadapterModel> self(this);
+    const auto alive = [&] { return self && (!current || current()); };
+    if (!alive()) { return false; }
+    if (v.centerMhz || v.bandwidthMhz) {
+        recordGeometryObservation(v.centerMhz.value_or(-1), v.bandwidthMhz.value_or(-1));
+        if (!alive()) { return false; }
+        setCenterBandwidth(v.centerMhz.value_or(-1), v.bandwidthMhz.value_or(-1));
+        if (!alive()) { return false; }
     }
-    if (fields.contains(QStringLiteral("loopa"))
-        || fields.contains(QStringLiteral("loopb"))) {
-        bool changed = false;
-        if (fields.contains(QStringLiteral("loopa"))) {
-            bool ok = false;
-            const uint v = fields.value(QStringLiteral("loopa")).toString().toUInt(&ok);
-            if (ok && v <= 1) {
-                const bool loopA = (v != 0);
-                if (loopA != m_loopA) { m_loopA = loopA; changed = true; }
-                if (loopA && m_loopB) { m_loopB = false; changed = true; }
-            } else {
-                qCDebug(lcProtocol) << "PanadapterModel: invalid loopa value"
-                                    << fields.value(QStringLiteral("loopa"));
-            }
-        }
-        if (fields.contains(QStringLiteral("loopb"))) {
-            bool ok = false;
-            const uint v = fields.value(QStringLiteral("loopb")).toString().toUInt(&ok);
-            if (ok && v <= 1) {
-                const bool loopB = (v != 0);
-                if (loopB != m_loopB) { m_loopB = loopB; changed = true; }
-                if (loopB && m_loopA) { m_loopA = false; changed = true; }
-            } else {
-                qCDebug(lcProtocol) << "PanadapterModel: invalid loopb value"
-                                    << fields.value(QStringLiteral("loopb"));
-            }
-        }
-        if (changed) {
+    if (v.minDbm || v.maxDbm) {
+        const double absent = std::numeric_limits<double>::quiet_NaN();
+        setRange(v.minDbm.value_or(absent), v.maxDbm.value_or(absent));
+        if (!alive()) { return false; }
+    }
+    if (v.rfGain) { setRfGain(*v.rfGain); if (!alive()) { return false; } }
+    if (v.rxAntenna) { setRxAntenna(*v.rxAntenna); if (!alive()) { return false; } }
+    if (v.antennas) { setAntList(*v.antennas); if (!alive()) { return false; } }
+    if (v.wide) { setWide(*v.wide); if (!alive()) { return false; } }
+    if (v.loopA || v.loopB) {
+        const bool beforeA = m_loopA;
+        const bool beforeB = m_loopB;
+        if (v.loopA) { m_loopA = *v.loopA; if (m_loopA) { m_loopB = false; } }
+        if (v.loopB) { m_loopB = *v.loopB; if (m_loopB) { m_loopA = false; } }
+        if (beforeA != m_loopA || beforeB != m_loopB) {
             emit loopChanged(m_loopA, m_loopB);
+            if (!alive()) { return false; }
         }
     }
-    if (fields.contains(QStringLiteral("fps"))) {
-        bool ok = false;
-        const int fps = fields.value(QStringLiteral("fps")).toInt(&ok);
-        if (ok) {
-            m_radioReportedFps = fps;
-            ++m_fftObservationRevision;
-            m_fpsIsRequest = false;
-            if (fps != m_fps) {
-                m_fps = fps;
-                emit fpsChanged(m_fps);
-            }
-            emit fpsReported(fps);
+    if (v.fps) {
+        m_radioReportedFps = *v.fps;
+        ++m_fftObservationRevision;
+        m_fpsIsRequest = false;
+        if (m_fps != *v.fps) {
+            m_fps = *v.fps;
+            emit fpsChanged(m_fps);
+            if (!alive()) { return false; }
         }
+        emit fpsReported(*v.fps);
+        if (!alive()) { return false; }
     }
-    // Averaging is radio-authoritative: parse the level the firmware echoes back
-    // and re-emit it so the display follows the radio's value after a
-    // global-profile / band switch (#4001; radio authority per #4261 — the UI no
-    // longer persists or re-asserts a client "desired" value). average=0 (off)
-    // is a valid value —
-    // the ok-guard rejects only a malformed field, exactly like fps.
-    if (fields.contains(QStringLiteral("average"))) {
-        bool ok = false;
-        const int average = fields.value(QStringLiteral("average")).toInt(&ok);
-        if (ok) {
-            m_radioReportedAverage = average;
-            ++m_fftObservationRevision;
-            m_averageIsRequest = false;
-            if (average != m_average) {
-                m_average = average;
-                emit averageChanged(m_average);
-            }
-            emit averageReported(average);
+    if (v.average) {
+        m_radioReportedAverage = *v.average;
+        ++m_fftObservationRevision;
+        m_averageIsRequest = false;
+        if (m_average != *v.average) {
+            m_average = *v.average;
+            emit averageChanged(m_average);
+            if (!alive()) { return false; }
         }
+        emit averageReported(*v.average);
+        if (!alive()) { return false; }
     }
-    // weighted_average is a bool flag on the wire (weighted_average=0/1) — same
-    // latent desync gap. Mirror FlexLib (Panadapter.cs 1195-1208): byte.TryParse
-    // with a parse guard ONLY — no > 1 range reject, unlike wide/loopa/loopb, so
-    // any value in byte range (0-255) applies as its truthiness, but negatives
-    // and > 255 fail the byte parse and are skipped (last-known-good kept)
-    // rather than coerced (Principle I; #4147).
-    if (fields.contains(QStringLiteral("weighted_average"))) {
-        bool ok = false;
-        const uint v =
-            fields.value(QStringLiteral("weighted_average")).toString().toUInt(&ok);
-        if (ok && v <= 255) {
-            const bool weighted = (v != 0);
-            m_weightedAverageKnown = true;   // radio has now reported it (#4261)
-            if (weighted != m_weightedAverage) {
-                m_weightedAverage = weighted;
-                emit weightedAverageChanged(m_weightedAverage);
-            }
-            emit weightedAverageReported(weighted);
-        } else {
-            qCDebug(lcProtocol) << "PanadapterModel: invalid weighted_average value"
-                                << fields.value(QStringLiteral("weighted_average"));
+    if (v.weightedAverage) {
+        m_weightedAverageKnown = true;
+        if (m_weightedAverage != *v.weightedAverage) {
+            m_weightedAverage = *v.weightedAverage;
+            emit weightedAverageChanged(m_weightedAverage);
+            if (!alive()) { return false; }
         }
+        emit weightedAverageReported(m_weightedAverage);
+        if (!alive()) { return false; }
     }
-    if (fields.contains(QStringLiteral("pre"))) {
-        const QString pre = fields.value(QStringLiteral("pre")).toString();
-        // Preamp is internal state only — no UI listeners, no emit (#1498).
-        if (pre != m_preamp) { m_preamp = pre; }
+    if (v.preamp) { m_preamp = *v.preamp; }
+    if (v.daxIqChannel && m_daxiqChannel != *v.daxIqChannel) {
+        m_daxiqChannel = *v.daxIqChannel;
+        emit daxiqChannelChanged(m_daxiqChannel);
+        if (!alive()) { return false; }
     }
-    // daxiq_channel mirrors FlexLib (Panadapter.cs 980-994): uint.TryParse and
-    // skip on failure — a garbled value must not rebind the pan to "no DAX IQ
-    // channel" (0), it keeps the last-known-good channel (#4147 audit).
-    if (fields.contains(QStringLiteral("daxiq_channel"))) {
-        bool ok = false;
-        const uint ch =
-            fields.value(QStringLiteral("daxiq_channel")).toString().toUInt(&ok);
-        if (ok) {
-            if (int(ch) != m_daxiqChannel) {
-                m_daxiqChannel = int(ch);
-                emit daxiqChannelChanged(int(ch));
-            }
-        } else {
-            qCDebug(lcProtocol) << "PanadapterModel: invalid daxiq_channel value"
-                                << fields.value(QStringLiteral("daxiq_channel"));
+    if (v.bandZoom && m_bandZoomOn != *v.bandZoom) {
+        m_bandZoomOn = *v.bandZoom;
+        emit bandZoomChanged(m_bandZoomOn);
+        if (!alive()) { return false; }
+    }
+    if (v.segmentZoom && m_segmentZoomOn != *v.segmentZoom) {
+        m_segmentZoomOn = *v.segmentZoom;
+        emit segmentZoomChanged(m_segmentZoomOn);
+        if (!alive()) { return false; }
+    }
+    if (v.noiseFloorRange && m_noiseFloorRange != *v.noiseFloorRange) {
+        m_noiseFloorRange = *v.noiseFloorRange;
+        emit noiseFloorRangeChanged(*m_noiseFloorRange);
+        if (!alive()) { return false; }
+    }
+    const bool oldWnb = m_wnbActive;
+    const int oldLevel = m_wnbLevel;
+    const bool oldUpdating = m_wnbUpdating;
+    if (v.wnb) { m_wnbActive = *v.wnb; }
+    if (v.wnbLevel) { m_wnbLevel = *v.wnbLevel; }
+    if (v.wnbUpdating) { m_wnbUpdating = *v.wnbUpdating; }
+    if (oldWnb != m_wnbActive || oldLevel != m_wnbLevel || oldUpdating != m_wnbUpdating) {
+        emit wnbChanged(m_wnbActive, m_wnbLevel);
+        if (!alive()) { return false; }
+        emit wnbStateChanged(m_wnbActive, m_wnbLevel, m_wnbUpdating);
+        if (!alive()) { return false; }
+    }
+    if (v.waterfallRate) {
+        PerfTelemetry::instance().setWaterfallRate(*v.waterfallRate);
+        if (m_waterfallLineDuration != *v.waterfallRate) {
+            m_waterfallLineDuration = *v.waterfallRate;
+            emit waterfallLineDurationChanged(m_waterfallLineDuration);
+            if (!alive()) { return false; }
         }
+        emit waterfallLineDurationReported(m_waterfallLineDuration);
+        if (!alive()) { return false; }
     }
-    // Band / segment zoom (#4057). Mirror FlexLib's parse exactly (Panadapter.cs
-    // 933-947/1159-1173): uint parse, values > 1 invalid → skip, no local mutual
-    // exclusion — the radio clears the sibling flag itself and broadcasts both
-    // transitions. Malformed values are ignored, not applied as 0, matching the
-    // wnb_level guard above (Principle VII).
-    if (fields.contains(QStringLiteral("band_zoom"))) {
-        bool ok = false;
-        const uint v = fields.value(QStringLiteral("band_zoom")).toString().toUInt(&ok);
-        if (ok && v <= 1) {
-            const bool on = (v == 1);
-            if (on != m_bandZoomOn) {
-                m_bandZoomOn = on;
-                emit bandZoomChanged(on);
-            }
-        }
-    }
-    if (fields.contains(QStringLiteral("segment_zoom"))) {
-        bool ok = false;
-        const uint v = fields.value(QStringLiteral("segment_zoom")).toString().toUInt(&ok);
-        if (ok && v <= 1) {
-            const bool on = (v == 1);
-            if (on != m_segmentZoomOn) {
-                m_segmentZoomOn = on;
-                emit segmentZoomChanged(on);
-            }
-        }
-    }
-    // FlexLib parses noise_floor_range with TryParseDouble and skips a
-    // malformed value (Panadapter.cs:1056); a non-finite one is malformed too.
-    if (fields.contains(QStringLiteral("noise_floor_range"))) {
-        bool ok = false;
-        const double db = fields.value(QStringLiteral("noise_floor_range")).toString().toDouble(&ok);
-        if (ok && std::isfinite(db) && m_noiseFloorRange != db) {
-            m_noiseFloorRange = db;
-            emit noiseFloorRangeChanged(db);
-        }
-    }
-    // #3977: ownership is radio-authoritative. When another session reclaims
-    // this pan (MultiFlex reconnect), the radio broadcasts the new
-    // client_handle; tracking it lets a superseded session stop adjusting a pan
-    // it no longer owns. Semantics preserved verbatim (parsed != 0 && changed).
-    if (fields.contains(QStringLiteral("client_handle"))) {
-        const quint32 parsed =
-            parseHandleHex(fields.value(QStringLiteral("client_handle")).toString());
-        if (parsed != 0 && parsed != m_ownerHandle) {
-            m_ownerHandle = parsed;
-            m_clientHandle = QString::number(parsed, 16);
-        }
-    }
-    // FlexLib parses the child waterfall stream id before assigning
-    // (Panadapter.cs 1177-1193, hex-aware TryParseInteger + skip on failure):
-    // validate before storing so garbage can't displace a previously-valid id —
-    // wfStreamId() pairing and the outgoing `display panafall set <id>` commands
-    // both read this back (#4147 audit). Accept the same forms the radio sends:
-    // "0x…" (base-0 auto-detect) or bare hex.
-    if (fields.contains(QStringLiteral("waterfall"))) {
-        const QString wf = fields.value(QStringLiteral("waterfall")).toString();
-        bool ok = false;
-        quint32 streamId = wf.toUInt(&ok, 0);
-        if (!ok) {
-            streamId = wf.toUInt(&ok, 16);
-        }
-        if (ok) {
-            setWaterfallId(QStringLiteral("0x%1").arg(streamId, 8, 16, QLatin1Char('0')));
-        } else {
-            qCDebug(lcProtocol) << "PanadapterModel: invalid waterfall value" << wf;
-        }
-    }
+    return true;
 }
 
 } // namespace AetherSDR

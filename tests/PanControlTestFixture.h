@@ -3,6 +3,7 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "models/RadioModel.h"
+#include "FlexDisplayStatusTestSupport.h"
 
 #include <QDateTime>
 #include <QStringList>
@@ -22,7 +23,11 @@ public:
     }
     static void release(RadioModel& radio) { radio.m_connection = nullptr; }
     static void status(RadioModel& radio, const QString& object, const QMap<QString, QString>& values)
-    { radio.onStatusReceived(object, values); }
+    {
+        const auto observation = decodeFlexDisplayStatus(object, values, radio.m_connection->m_displayStatusSource.epoch());
+        if (observation) { emit radio.m_backend->displayObserved(*observation); }
+        else { radio.onStatusReceived(object, values); }
+    }
     static int pending(const RadioModel& radio) { return radio.m_pendingPanCreations.size(); }
     static int history(const RadioModel& radio) { return radio.m_displayRetirements.size(); }
     static void retire(RadioModel& radio, const QString& id) { radio.retireDisplayResource(id); }
@@ -75,15 +80,7 @@ struct PanControlFixture {
         backend = owned.get();
         radio.setBackendForTest(std::move(owned), QStringLiteral("flex"), backend->panStream());
         TxOperationIntegrationTestAccess::identity(radio, identity, backend);
-        // Injection installs universal receivers. Forward the existing Flex
-        // display extension as setupBackend does for a production session.
-        QObject::connect(backend, &IRadioBackend::extensionStatus, &radio,
-            [this](const QString& ns, const QString& kind, const QVariantMap& fields) {
-                PanadapterModel* pan = radio.panadapter(fields.value(QStringLiteral("panId")).toString());
-                if (pan && ns == QLatin1String("flex") && kind == QLatin1String("panState")) {
-                    pan->applyStateExtension(fields);
-                }
-            });
+
     }
     ~PanControlFixture() { TxOperationIntegrationTestAccess::release(radio); }
     void status(const QString& object, const QMap<QString, QString>& values)

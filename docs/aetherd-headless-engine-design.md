@@ -653,6 +653,12 @@ until resolved or the session ends, without automatic retry or orphan deletion.
 Delayed initialization and profile-load flushes cannot overwrite a replacement
 pan or newer operator intent. This batch does not add daemon protocol methods,
 DAX/IQ ownership or rendering features.
+Flex panadapter/waterfall status now enters through typed observations on both
+LAN and WAN. Transport lifetimes, confirmed ownership and paired stream
+retirement fence delayed reports. New and reclaimed displays publish their
+available initial state together; bounded partial reports preserve reordered
+fields until ownership is known. This leaves the receive-data transport and
+other status domains as separate migration steps.
 The desktop adapter has not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX
