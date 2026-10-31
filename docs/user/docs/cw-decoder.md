@@ -69,6 +69,16 @@ With a neural decoder selected:
 - Callsign contact cards and the MQTT text stream come from ggmorse only.
 - AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on radios with SmartSDR+) works with any decoder.
 
+The slice's **Once** and **Loop** auto-tune controls adjust receive tuning;
+they do not transmit. Starting requires an unlocked CW slice owned by this
+client and SmartSDR+ support. **Loop** shows this client's requested loop state,
+not a radio-reported indication that a signal has been found. Rebuilding the
+slice controls preserves that request. Locking the slice or leaving CW mode
+requests Stop; an existing loop can also be stopped if its subscription becomes
+unavailable. Disconnecting or losing ownership clears the local request, and
+reconnecting does not restart it. Without SmartSDR+, the local **Zero Beat**
+control remains available where its decoder requirements are met.
+
 DeepCW discards its provisional text (about 5–7 seconds) when the source changes, audio is interrupted, or decoding stops. Its worker finishes the current inference or model load before stopping, so switching decoders can pause the interface until that work finishes.
 
 The neural decoders are not available on Intel Macs; there the selector does not appear and ggmorse decodes as before.

@@ -717,6 +717,11 @@ target_link_libraries(model_control_routing_test PRIVATE aethercore Qt6::Core Qt
 add_test(NAME model_control_routing_test COMMAND model_control_routing_test)
 
 add_executable(radio_setup_control_routing_test tests/radio_setup_control_routing_test.cpp)
+add_executable(radio_administration_control_test tests/radio_administration_control_test.cpp)
+target_include_directories(radio_administration_control_test PRIVATE src tests)
+target_link_libraries(radio_administration_control_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radio_administration_control_test COMMAND radio_administration_control_test)
+set_tests_properties(radio_administration_control_test PROPERTIES TIMEOUT 45)
 target_include_directories(radio_setup_control_routing_test PRIVATE src tests)
 target_link_libraries(radio_setup_control_routing_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radio_setup_control_routing_test COMMAND radio_setup_control_routing_test)

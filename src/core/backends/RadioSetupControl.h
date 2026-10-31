@@ -13,7 +13,7 @@ enum class RadioSetupField {
     CalibrationFrequencyMhz, FrequencyCorrectionPpb, ReferenceSource,
     MuteLocalWhenRemote, BinauralReceive, SharpnessLevel, SharpnessAuto,
     LowLatencyDigital, StartFrequencyCalibration, LineoutGain, LineoutMute,
-    HeadphoneGain, HeadphoneMute, FrontSpeakerMute, Count
+    HeadphoneGain, HeadphoneMute, FrontSpeakerMute, RemoteOnEnabled, MultiFlexEnabled, Count
 };
 
 struct RadioSetupControl {

@@ -183,6 +183,12 @@ public:
             || request.field == RadioSetupRequest::Field::ClientStation)
             ? ReceiveDispatch::LocalOnly : ReceiveDispatch::Unsupported;
     }
+    virtual ReceiveDispatch requestRadioReboot(const RadioControlCompletion&,
+        const RadioControlFence&, const std::function<void()>&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestCwAutoTune(int, CwAutoTuneAction,
+        const RadioControlCompletion&, const RadioControlFence&)
+    { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSpot(const SpotRequest&, const QString& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestPanControl(const QString&, const PanControlRequest&)

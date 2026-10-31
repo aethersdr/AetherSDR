@@ -1,4 +1,5 @@
 #include "TestSettingsProfile.h"
+#include "RadioSetupControlFixture.h"
 #include "core/AppSettings.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/flex/FlexBackend.h"
@@ -19,6 +20,21 @@
 using namespace AetherSDR;
 
 namespace AetherSDR {
+class RadioAdministrationTestAccess {
+public:
+    static SliceModel* cw(RadioModel& radio)
+    {
+        SliceModel* slice = RadioSetupControlTestAccess::addSlice(radio, 0);
+        radio.m_ownedSliceIds.insert(0);
+        radio.m_licenseSubscription = QStringLiteral("SmartSDR+");
+        SliceDelta delta;
+        delta.mode = QStringLiteral("CW");
+        slice->applyChanges(delta);
+        return slice;
+    }
+    static void license(RadioModel& radio, const QString& value)
+    { radio.m_licenseSubscription = value; emit radio.infoChanged(); }
+};
 struct RxAppletSquelchTestAccess {
     static QSlider* slider(RxApplet& applet) { return applet.m_sqlSlider; }
     static void mode(RxApplet& applet, RxApplet::SqlMode mode, bool propagate) {
@@ -103,6 +119,65 @@ class RxAppletSquelchReconciliationTest : public QObject
     Q_OBJECT
 
 private slots:
+    void cwLoopSurvivesWidgetRebuildAndStopsAfterEligibilityLoss()
+    {
+        RadioModel radio;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+        SliceModel* slice = RadioAdministrationTestAccess::cw(radio);
+        radio.requestCwAutoTune(slice, CwAutoTuneAction::Start);
+        QVERIFY(radio.cwAutoTuneLoopRequested(0));
+        {
+            VfoWidget first;
+            first.setSlice(slice);
+            first.setRadioModel(&radio);
+            QCoreApplication::processEvents();
+            QPushButton* loop = first.findChild<QPushButton*>(QStringLiteral("cwAutoTuneLoop"));
+            QVERIFY(loop);
+            QVERIFY(loop->isChecked());
+        }
+        VfoWidget rebuilt;
+        rebuilt.setSlice(slice);
+        rebuilt.setRadioModel(&radio);
+        QCoreApplication::processEvents();
+        QPushButton* loop = rebuilt.findChild<QPushButton*>(QStringLiteral("cwAutoTuneLoop"));
+        QVERIFY(loop);
+        QVERIFY(loop->isChecked());
+        QPushButton* reverse = rebuilt.findChild<QPushButton*>(QStringLiteral("vfoFmReverseButton"));
+        QVERIFY(reverse);
+        QVERIFY(QMetaObject::invokeMethod(reverse, "released", Qt::DirectConnection));
+        QObject::connect(&rebuilt, &VfoWidget::autotuneRequested, &radio,
+            [&](bool on) { radio.requestCwAutoTune(slice, on ? CwAutoTuneAction::Start : CwAutoTuneAction::Stop); });
+        // A synchronous refusal keeps cleanup available, even after a lock.
+        backend->setAdministrationCommandSink([](const QString&, const RadioControlCompletion& reply,
+            const RadioControlFence&, const std::function<void()>&) {
+            reply({RadioControlReply::Kind::Failed, 1, QStringLiteral("rejected")});
+            return true;
+        });
+        SliceDelta delta;
+        delta.locked = true;
+        slice->applyChanges(delta);
+        QCoreApplication::processEvents();
+        loop = rebuilt.findChild<QPushButton*>(QStringLiteral("cwAutoTuneLoop"));
+        QVERIFY(loop && loop->isChecked() && loop->isEnabled());
+        QPushButton* once = rebuilt.findChild<QPushButton*>(QStringLiteral("cwAutoTuneOnce"));
+        QVERIFY(once && !once->isEnabled());
+        RadioAdministrationTestAccess::license(radio, {});
+        QCoreApplication::processEvents();
+        backend->setAdministrationCommandSink([](const QString&, const RadioControlCompletion& reply,
+            const RadioControlFence&, const std::function<void()>&) {
+            reply({RadioControlReply::Kind::Accepted, 0, {}});
+            return true;
+        });
+        loop = rebuilt.findChild<QPushButton*>(QStringLiteral("cwAutoTuneLoop"));
+        QVERIFY(loop && loop->isEnabled());
+        QPointer<QPushButton> original(loop);
+        loop->click();
+        QVERIFY(original); // A synchronous reply must not delete its emitter.
+        QVERIFY(!radio.cwAutoTuneLoopRequested(0));
+        QCoreApplication::processEvents();
+        QVERIFY(!rebuilt.findChild<QPushButton*>(QStringLiteral("cwAutoTuneLoop")));
+    }
+
     void flexPerSliceAndPan()
     {
         RadioModel radio;
