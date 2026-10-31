@@ -239,6 +239,7 @@ private:
     friend class PcmCompatibilityTestAccess;
     friend class VitaSequenceLossLogTestAccess;
     friend struct PanadapterDbmRangeTestAccess;
+    friend struct PanadapterFftStragglerTestAccess;
     PcmProducer m_pcmProducer;
     std::map<quint32, std::unique_ptr<PcmProducer>> m_daxPcm;
     void publishLegacyDaxAudio(quint32 streamId, int channel, const QByteArray& pcm);

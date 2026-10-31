@@ -19,6 +19,18 @@ inline int boundedVitaPayloadBinCount(int declaredBins,
     return std::min(declaredBins, availableBytes / bytesPerBin);
 }
 
+// A packet whose FFT frame index is a few frames behind the one being
+// assembled is a late UDP straggler, not the start of a new frame. Unsigned
+// distance keeps the test correct across a 32-bit wrap; a larger backward jump
+// is a counter restart and starts a new frame.
+inline constexpr quint32 kFftStragglerLookbackFrames = 8;
+
+inline bool isStragglerFftFrame(quint32 currentFrame, quint32 packetFrame)
+{
+    const quint32 behind = currentFrame - packetFrame;
+    return behind >= 1 && behind <= kFftStragglerLookbackFrames;
+}
+
 // FLEX can publish one transitional FFT after an x_pixels increase where the
 // old-width prefix is valid but every newly-added bin is zero. Raw FFT zero is
 // the top/max-dBm pixel, so accepting that frame creates a tall right-hand
