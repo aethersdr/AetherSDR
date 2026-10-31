@@ -147,7 +147,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - CW, RTTY and AetherClock decoders, and the QSO recorder.
 - AX.25 packet with AetherModem (APRS, KISS TNC, terminal and mailbox).
 - **Memory channels**, stored on this computer in the bank shared by radios without memory slots. See [Memory Channels](./memory-channels.md).
-- **Tools → Radio Health...** shows link, temperature, supply, PA current, gateware and the transmit voice chain.
+- **Tools → Radio Health...** shows link, temperature, PA bias current (raw counts), gateware and the transmit voice chain.
 - Connection health in the title bar, status bar and network statistics.
 
 ## Reference
@@ -163,9 +163,9 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 
 ## Known issues
 
+- Only one Hermes-Lite 2 (gateware 74) on macOS, transmitting into a dummy load, has been tested for this page. Linux, Windows and other HL2 boards have not. If you run an HL2 there, reports of what works and what does not are welcome ([#5678](https://github.com/aethersdr/AetherSDR/issues/5678)).
 - Keying with the HL2's hardware PTT jack shows as transmit in AetherSDR and mutes the receiver, but does not carry host audio: only the radio is keyed, and AetherSDR sends no modulation ([#5998](https://github.com/aethersdr/AetherSDR/issues/5998)).
 - Each over starts with about 100 ms of keyed silence before your audio is transmitted ([#6052](https://github.com/aethersdr/AetherSDR/issues/6052)).
-- Changing CW break-in or its delay shows a "nothing was sent to the radio" notice, although both settings take effect ([#6153](https://github.com/aethersdr/AetherSDR/issues/6153)).
 
 ## Troubleshooting
 
