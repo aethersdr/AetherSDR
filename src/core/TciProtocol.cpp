@@ -1754,7 +1754,8 @@ QString TciProtocol::cmdRxChannelEnable(const QStringList& args, bool isSet)
 // RX_VOLUME is per receiver and per channel per TCI v2.0, on the same dB scale
 // as `volume:` (-60..0; -60 = silence).
 //   GET = `rx_volume:trx,channel;`   SET = `rx_volume:trx,channel,dB;`
-// A slice has one audio gain, so both channels read and write the same level.
+// Channel 0 is the receiver's slice; channel 1 is the route's TX slice
+// (tci-receivers.md rule 5), resolved by sliceForVfo() as `vfo:` does.
 // Before this, the channel was read as the gain, so every spec SET muted the
 // slice. Older builds took `rx_volume:trx,N;` with N as percent; a second
 // argument that cannot be a channel (>= 2) is still read that way.
@@ -1783,14 +1784,17 @@ QString TciProtocol::cmdRxVolume(const QStringList& args, bool /*isSet*/)
         }
     }
 
+    SliceModel* target = sliceForVfo(trx, channel);
+    if (!target) return {};
+
     if (pct < 0) {
         return QStringLiteral("rx_volume:%1,%2,%3;")
                    .arg(trx).arg(channel)
-                   .arg(volumeDbFromPercent(qRound(s->audioGain())));
+                   .arg(volumeDbFromPercent(qRound(target->audioGain())));
     }
 
     const float gain = static_cast<float>(pct);
-    QMetaObject::invokeMethod(s, [s, gain]() { s->setAudioGain(gain); },
+    QMetaObject::invokeMethod(target, [target, gain]() { target->setAudioGain(gain); },
                               Qt::QueuedConnection);
     m_pendingNotification = QStringLiteral("rx_volume:%1,%2,%3;")
                                 .arg(trx).arg(channel).arg(volumeDbFromPercent(pct));

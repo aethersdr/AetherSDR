@@ -78,6 +78,26 @@ struct Fixture {
         }
     }
 
+    // A second slice on the same pan that holds TX, as in a split.
+    SliceModel* addTxSlice()
+    {
+        SliceDelta delta;
+        delta.panId = QStringLiteral("tci-rx-volume/pan0");
+        delta.frequency = 14.25;
+        delta.mode = QStringLiteral("USB");
+        delta.filterLow = 100;
+        delta.filterHigh = 2900;
+        delta.inUse = true;
+        delta.txSlice = true;
+        emit backend->sliceChanged(1, delta);
+        SliceModel* tx = radio.slice(1);
+        if (!tx || !tx->isTxSlice()) {
+            std::fprintf(stderr, "FATAL: the TX slice was not materialised\n");
+            std::exit(2);
+        }
+        return tx;
+    }
+
     // SETs reach the slice through a queued call.
     QString send(TciProtocol& tci, const QString& cmd)
     {
@@ -117,10 +137,31 @@ void testSpecGetAnswersDecibels()
     check(f.send(tci, QStringLiteral("rx_volume:0,0")) == QStringLiteral("rx_volume:0,0,-6;"),
           "rx_volume:0,0 reads channel 0 in dB");
     check(f.send(tci, QStringLiteral("rx_volume:0,1")) == QStringLiteral("rx_volume:0,1,-6;"),
-          "rx_volume:0,1 reads channel 1, the same slice gain");
+          "rx_volume:0,1 reads channel 1; with no other TX slice that is the same slice");
     check(f.send(tci, QStringLiteral("rx_volume:0")) == QStringLiteral("rx_volume:0,0,-6;"),
           "rx_volume:0 reads channel 0");
     check(f.slice->audioGain() == before, "a read leaves the gain alone");
+}
+
+// Channel 1 is the route's TX slice (tci-receivers.md rule 5). With TX on a
+// second slice, a channel 1 SET or GET must reach that slice, not trx 0's.
+void testChannelOneIsTheTxSlice()
+{
+    Fixture f;
+    SliceModel* tx = f.addTxSlice();
+    TciProtocol tci(&f.radio);
+    f.send(tci, QStringLiteral("rx_volume:0,0,0"));
+    f.send(tci, QStringLiteral("rx_volume:0,1,-6"));
+
+    f.send(tci, QStringLiteral("rx_volume:0,1,-20"));
+    check(qRound(tx->audioGain()) == 10,
+          "rx_volume:0,1,-20 moves the TX slice to 10 %");
+    check(qRound(f.slice->audioGain()) == 100,
+          "rx_volume:0,1,-20 leaves the receiver's slice alone");
+    check(f.send(tci, QStringLiteral("rx_volume:0,1")) == QStringLiteral("rx_volume:0,1,-20;"),
+          "rx_volume:0,1 reads the TX slice");
+    check(f.send(tci, QStringLiteral("rx_volume:0,0")) == QStringLiteral("rx_volume:0,0,0;"),
+          "rx_volume:0,0 still reads the receiver's slice");
 }
 
 void testLegacyPercentStillSets()
@@ -169,6 +210,7 @@ int main(int argc, char** argv)
 
     testSpecSetIsDecibels();
     testSpecGetAnswersDecibels();
+    testChannelOneIsTheTxSlice();
     testLegacyPercentStillSets();
     testMalformedIsDropped();
 
