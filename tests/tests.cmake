@@ -9384,6 +9384,42 @@ add_test(NAME spectrum_overlay_fft_fps_bounds_test
 set_tests_properties(spectrum_overlay_fft_fps_bounds_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Memory drawer containment and scrolling through the actual overlay menu.
+# Widget-only regression coverage, no backend or sockets.
+add_executable(spectrum_overlay_memory_layout_test
+    tests/spectrum_overlay_memory_layout_test.cpp
+    src/gui/SpectrumOverlayMenu.cpp
+    src/gui/FrontEndOverloadIndicator.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
+    src/gui/MemoryBrowsePanel.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/DspParamPopup.cpp
+)
+target_include_directories(spectrum_overlay_memory_layout_test PRIVATE src tests)
+if(DEBIAN_GPU_FIX_REQUIRED)
+    target_include_directories(spectrum_overlay_memory_layout_test PRIVATE
+        "${DEBIAN_PRIVATE_INC}"
+        "${DEBIAN_PRIVATE_INC}/QtGui"
+    )
+endif()
+if(QT_FRAMEWORK_PRIVATE_INC)
+    target_include_directories(spectrum_overlay_memory_layout_test PRIVATE
+        "${QT_FRAMEWORK_PRIVATE_INC}"
+        "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
+    )
+endif()
+target_link_libraries(spectrum_overlay_memory_layout_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+if(TARGET Qt6::GuiPrivate)
+    target_link_libraries(spectrum_overlay_memory_layout_test PRIVATE Qt6::GuiPrivate)
+endif()
+set_target_properties(spectrum_overlay_memory_layout_test PROPERTIES AUTOMOC ON)
+add_test(NAME spectrum_overlay_memory_layout_test
+         COMMAND spectrum_overlay_memory_layout_test)
+set_tests_properties(spectrum_overlay_memory_layout_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Socket-free injection into real SliceModel/RxApplet/VfoWidget objects.
 # RadioModel supplies identity only; no connectRadio call or firmware peer.
 add_executable(rx_applet_squelch_reconciliation_test
@@ -10016,6 +10052,7 @@ set(AETHER_SETTINGS_CONSUMERS
     client_display_settings_test
     client_display_pan_settings_test
     spectrum_overlay_fft_fps_bounds_test
+    spectrum_overlay_memory_layout_test
     gui_nested_lifetime_test
     net_scheduler_modes_test
     rx_applet_squelch_reconciliation_test
