@@ -14,7 +14,7 @@ applies_to: ["FlexRadio", "Hermes-Lite 2 (local keyer: beta)", "Networked Icom (
 
 The DVK (Digital Voice Keyer) panel records and plays up to 12 voice messages, commonly used for contesting and repetitive voice operations. The messages are kept in one of two places:
 
-- **Radio DVK** — on the radio, using the FlexRadio's own voice keyer. It requires the radio's SmartSDR+ subscription.
+- **Radio DVK** — on the radio, using the FlexRadio's own voice keyer. It requires the radio to be licensed for it through SmartSDR+.
 - **Local** — on this computer, recorded from the PC microphone and played through AetherSDR's transmit audio. It needs no subscription, works with any radio AetherSDR can transmit on, and the recordings go with you from radio to radio.
 
 The panel, its buttons and the F1–F12 keys work the same way with either keyer.
@@ -24,7 +24,7 @@ The local keyer is verified on FlexRadio. On the Hermes-Lite 2 and Networked Ico
 ## Requirements
 
 - **Mode:** the DVK plays on the **transmit slice**, so it is available when the TX slice is in a **voice mode** (USB, LSB, AM, SAM, FM, NFM, DFM). The indicator is grayed out in digital and CW modes, and switching to a non-voice mode closes the panel. A local message playing when the TX slice leaves voice mode stops at once.
-- **Radio DVK:** a FlexRadio Aurora, FLEX-8000 series or FLEX-6000 series radio with an active SmartSDR+ subscription. See [SmartSDR+ license](#smartsdr-license).
+- **Radio DVK:** a FlexRadio Aurora, FLEX-8000 series or FLEX-6000 series radio licensed for the voice keyer through SmartSDR+. See [SmartSDR+ license](#smartsdr-license).
 - **Local:** a radio AetherSDR can transmit on. Recording uses the PC microphone, so on a FlexRadio the mic source must be **PC**.
 
 The DVK indicator is hidden only on a radio that can neither transmit nor host a voice keyer, such as an RTL-SDR or an ANAN-G2.
@@ -81,7 +81,7 @@ Recording never transmits. With the local keyer:
 - The progress bar fills cyan.
 - The status line reads `Previewing · slot 3 · 0.4s of 4.2s`.
 
-Only one operation runs at a time. STOP is enabled only while something is running, PLAY and PREV are disabled on an empty slot, and while a recording, playback, preview or WAV transfer is in progress the other start controls stay disabled. The button of the running recording, playback or preview stays enabled, so clicking it again stops it. A refused operation shows in the status line as, for example, `Play failed (slot 3): DVK requires an active SmartSDR+ subscription`.
+Only one operation runs at a time. STOP is enabled only while something is running, PLAY and PREV are disabled on an empty slot, and while a recording, playback, preview or WAV transfer is in progress the other start controls stay disabled. The button of the running recording, playback or preview stays enabled, so clicking it again stops it. A refused operation shows in the status line as, for example, `Play failed (slot 3): DVK is not licensed on this radio (SmartSDR+)`.
 
 ### Managing slots
 
@@ -151,9 +151,9 @@ The indicator can also be reached with the keyboard: Tab to it and press Enter.
 
 ### SmartSDR+ license
 
-When the Radio DVK is in use and the radio reports that the feature is not licensed, or refuses a DVK command or transfer with the SmartSDR+ error, the **DVK indicator itself is disabled** — grayed out with an arrow cursor and the tooltip "Digital Voice Keyer — requires an active SmartSDR+ subscription". The F1–F12 shortcuts and any open panel are gated the same way, and the panel status reads `Disabled · SmartSDR+ required`. With **Automatic by radio licence** selected, the same report switches the panel to the local keyer instead.
+When the Radio DVK is in use and the radio reports that the feature is not licensed, or refuses a DVK command or transfer with the SmartSDR+ error, the **DVK indicator itself is disabled** — grayed out with an arrow cursor and the tooltip "Digital Voice Keyer — not licensed on this radio (SmartSDR+)". The F1–F12 shortcuts and any open panel are gated the same way, and the panel status reads `Disabled · SmartSDR+ required`. With **Automatic by radio licence** selected, the same report switches the panel to the local keyer instead.
 
-AetherSDR only applies this once the radio positively says no; if the radio never reports the license, the Radio DVK stays available. If the radio later reports the license as enabled, for example after a subscription is activated mid-session, the Radio DVK becomes available again without reconnecting.
+A SmartSDR+ subscription licenses every feature released before it expires, and the radio keeps those features after it lapses, so AetherSDR goes by what the radio reports for the feature, never by the subscription's expiration date. AetherSDR only applies this once the radio positively says no; if the radio never reports the license, the Radio DVK stays available. If the radio later reports the license as enabled, for example after a subscription is activated mid-session, the Radio DVK becomes available again without reconnecting.
 
 ## Troubleshooting
 
@@ -162,7 +162,7 @@ AetherSDR only applies this once the radio positively says no; if the radio neve
 The transmit slice is not in a voice mode; or **Radio DVK** is selected and the radio reports no SmartSDR+ license, or has no voice keyer of its own (a Hermes-Lite 2 or Networked Icom radio).
 
 1. Switch the TX slice to a voice mode (USB, LSB, AM, SAM, FM, NFM or DFM).
-2. Hover the indicator. If the tooltip says it requires an active SmartSDR+ subscription, renew SmartSDR+ on the radio, or right-click the indicator and choose **Local — recordings on this computer**.
+2. Hover the indicator. If the tooltip says the radio isn't licensed, renew SmartSDR+ on the radio, or right-click the indicator and choose **Local — recordings on this computer**.
 3. On a radio with no voice keyer of its own, right-click the indicator, or choose **Settings → Voice Keyer Source...**, and pick **Local — recordings on this computer** or **Automatic by radio licence**.
 
 ### REC says to set the mic source to PC

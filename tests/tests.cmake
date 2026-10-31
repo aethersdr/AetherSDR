@@ -5093,6 +5093,15 @@ target_include_directories(dvk_availability_gate_test PRIVATE src)
 target_link_libraries(dvk_availability_gate_test PRIVATE Qt6::Core)
 add_test(NAME dvk_availability_gate_test COMMAND dvk_availability_gate_test)
 
+# SmartSDR+ entitlement: a lapsed subscription keeps the features released
+# before it expired. Header-only rules, no radio.
+add_executable(license_entitlement_test
+    tests/license_entitlement_test.cpp
+)
+target_include_directories(license_entitlement_test PRIVATE src)
+target_link_libraries(license_entitlement_test PRIVATE Qt6::Core)
+add_test(NAME license_entitlement_test COMMAND license_entitlement_test)
+
 # Who is holding live RX off the shared sink while audio plays back through it
 # (the QSO recorder, the PUDU monitor, a voice keyer preview). Header-only
 # policy, no radio and no audio device.

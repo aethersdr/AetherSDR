@@ -1809,13 +1809,14 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
-    // Propagate late-arriving SmartSDR+ subscription + dual-SCU diversity
+    // Propagate the late-arriving CW Autotune license + dual-SCU diversity
     // eligibility to all existing VFOs. Both depend on radio info (license
-    // subscription / model) that can arrive after a slice is created — in
-    // which case onSliceAdded reads empty strings and the VFO gets stuck in
-    // the wrong state (#1356 for SmartSDR+, #1503 for DIV).
+    // feature / model) that can arrive after a slice is created — in which
+    // case onSliceAdded reads empty state and the VFO gets stuck in the wrong
+    // state (#1356 for Autotune, #1503 for DIV). Every `license feature` and
+    // `license subscription` status emits infoChanged.
     connect(&m_radioModel, &RadioModel::infoChanged, this, [this]() {
-        const bool hasPlus = m_radioModel.licenseSubscription().contains("SmartSDR+");
+        const bool autotuneLicensed = m_radioModel.cwAutotuneLicensed();
         const bool divAllowed = m_radioModel.isDiversityAllowed();
         // Refresh extended-DSP (NRL/NRS/RNN/NRF) visibility here too: onSliceAdded
         // pushes it once at slice creation, but if the `model` status arrives after
@@ -1826,7 +1827,7 @@ MainWindow::MainWindow(QWidget* parent)
             for (auto* applet : m_panStack->allApplets()) {
                 auto* sw = applet->spectrumWidget();
                 for (auto* vfo : sw->findChildren<VfoWidget*>()) {
-                    vfo->setSmartSdrPlus(hasPlus);
+                    vfo->setCwAutotuneLicensed(autotuneLicensed);
                     vfo->setDiversityAllowed(divAllowed);
                     vfo->setHasExtendedDsp(hasExtendedDsp);
                 }

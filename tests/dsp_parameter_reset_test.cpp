@@ -13,6 +13,8 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QList>
+#include <QMap>
+#include <QDate>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMetaObject>
@@ -56,10 +58,13 @@ public:
             {QStringLiteral("name"), QStringLiteral("noise_reduction")},
             {QStringLiteral("enabled"), enabled}, {QStringLiteral("reason"), QStringLiteral("LICENSE_FILE")}});
     }
+    static void status(RadioModel& radio, const QString& object, const QMap<QString, QString>& kvs)
+    {
+        radio.onStatusReceived(object, kvs);
+    }
     static void expireSubscription(RadioModel& radio)
     {
-        radio.m_licenseSubscription = QStringLiteral("SmartSDR");
-        radio.m_licenseExpirationDate = QStringLiteral("01/01/2000");
+        radio.m_licenseSubscription = {QStringLiteral("SmartSDR+"), QDate(2000, 1, 1), false};
     }
     static void disconnectSession(RadioModel& radio)
     {
@@ -483,6 +488,49 @@ int bridgeFixture(QApplication& app)
     return result;
 }
 }
+// A SmartSDR+ subscription grants every feature released before it expires,
+// and the radio keeps those after it lapses: the `license feature` record is
+// the entitlement, the subscription's expiration is not.
+void cwAutotuneRetainedAfterLapse()
+{
+    Fixture f;
+    using Access = RadioModelSliceLifecycleTestAccess;
+    const auto autotune = [&](const QString& enabled) {
+        Access::status(f.radio, QStringLiteral("license feature"),
+            {{QStringLiteral("name"), QStringLiteral("auto_tune")},
+             {QStringLiteral("enabled"), enabled}, {QStringLiteral("reason"), QStringLiteral("PLUS")}});
+    };
+    const auto subscription = [&](const QString& expiration) {
+        Access::status(f.radio, QStringLiteral("license subscription"),
+            {{QStringLiteral("name"), QStringLiteral("smartsdr+")},
+             {QStringLiteral("expiration"), expiration}});
+    };
+    const QString future = QDate::currentDate().addYears(1).toString(Qt::ISODate);
+
+    check(!f.radio.cwAutotuneLicensed(), "no subscription and no feature record: Autotune locked");
+    subscription(QStringLiteral("2000-01-01"));
+    check(!f.radio.licenseSubscriptionActive()
+              && f.radio.licenseSubscription() == QStringLiteral("SmartSDR+ (expired)")
+              && f.radio.licenseExpirationDate() == QStringLiteral("01/01/2000"),
+          "a lapsed subscription is shown as expired with its date, not hidden");
+    check(!f.radio.cwAutotuneLicensed(), "lapsed subscription without a feature record: locked");
+    autotune(QStringLiteral("1"));
+    check(f.radio.cwAutotuneLicensed(), "Autotune the radio retained after the lapse stays usable");
+    subscription(future);
+    autotune(QStringLiteral("0"));
+    check(f.radio.licenseSubscriptionActive() && !f.radio.cwAutotuneLicensed(),
+          "the radio's feature record outranks an active subscription");
+    subscription(QStringLiteral("2000-01-01"));
+    check(f.radio.licenseSubscriptionActive() && f.radio.licenseSubscription() == QStringLiteral("SmartSDR+"),
+          "a lapsed status line never replaces an active subscription");
+
+    Fixture fresh;
+    Access::status(fresh.radio, QStringLiteral("license subscription"),
+        {{QStringLiteral("name"), QStringLiteral("smartsdr+")}, {QStringLiteral("expiration"), future}});
+    check(fresh.radio.cwAutotuneLicensed(),
+          "firmware that never reports the feature falls back to the active subscription");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("dsp-parameter-reset"));
@@ -494,5 +542,6 @@ int main(int argc, char** argv)
     userAndStatus();
     targetAvailability();
     invalidTargetSelection();
+    cwAutotuneRetainedAfterLapse();
     return failures ? 1 : 0;
 }
