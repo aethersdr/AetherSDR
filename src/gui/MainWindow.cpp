@@ -830,6 +830,9 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
                    << "— Flex backend unavailable";
         m_connPanel->setStatusText("SmartLink connection failed");
         setPanadapterConnectionAnimation(false);
+        // From requestWanReconnect(), let the next tick try again rather than
+        // re-arm forever behind an attempt that never started.
+        m_wanReconnectAttemptInProgress = false;
         return;
     }
     quint16 udpPort = m_radioModel.panStream()->localPort();
