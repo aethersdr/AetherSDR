@@ -461,7 +461,8 @@ private slots:
                  LinuxInstall::Switch::Kept);
         QCOMPARE(readFile(staged + QStringLiteral("/usr/lib/libQt6Core.so.6")), QByteArray("qt"));
         QCOMPARE(linkTarget(staged + QStringLiteral("/AppRun")), QStringLiteral("usr/bin/AetherSDR"));
-        QVERIFY(QFileInfo(staged + QStringLiteral("/usr/bin/AetherSDR")).isExecutable());
+        // The bit, not access(X_OK): /dev/shm is mounted noexec in containers.
+        QVERIFY(QFile::permissions(staged + QStringLiteral("/usr/bin/AetherSDR")) & QFileDevice::ExeOwner);
         QVERIFY(!QFileInfo::exists(paths.base + QStringLiteral("/26.10.4")));
         QCOMPARE(linkTarget(paths.base + QStringLiteral("/current")), QStringLiteral("26.10.3"));
         // current can't be changed (a folder no link renames over): put back too.
