@@ -19,7 +19,7 @@ static QString extractField(const QString& block, const QString& fieldName)
     // e.g. <CALL:6>G3ABC  or <CALL:6:S>G3ABC
     // NOTE: do NOT make this regex static — the pattern depends on fieldName.
     const QRegularExpression re(
-        R"(<)" + QRegularExpression::escape(fieldName) + R"((?::\d+(?::[A-Z])?)?:(\d+)>)",
+        R"(<)" + QRegularExpression::escape(fieldName) + R"(:(\d+)(?::[A-Z])?>)",
         QRegularExpression::CaseInsensitiveOption);
     auto m = re.match(block);
     if (!m.hasMatch()) return {};

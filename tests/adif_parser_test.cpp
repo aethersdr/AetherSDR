@@ -70,6 +70,33 @@ int main(int argc, char** argv)
               "normal log: second record fields intact");
     }
 
+    // ADIF IV.A.1 permits an optional type indicator after the length.
+    {
+        const auto recs = parse(dir,
+            "<CALL:6:S>WN4AZY<BAND:3:E>20M<MODE:2:E>CW<EOR>\n"
+            "<call:6:s>WN4AZY<freq:6:n>14.074<mode:4:e>MFSK<submode:3:s>FT8<eor>\n");
+        check(recs.size() == 2, "typed log: both records parse");
+        check(recs.size() == 2 && recs[0].callsign == "WN4AZY"
+                  && recs[0].band == "20m" && recs[0].modeGroup == "CW",
+              "typed CALL, BAND and MODE retain their values");
+        check(recs.size() == 2 && recs[1].callsign == "WN4AZY"
+                  && recs[1].band == "20m" && recs[1].modeGroup == "DATA",
+              "lowercase typed FREQ and SUBMODE retain their values");
+        const auto submode = parse(dir,
+            "<CALL:6>WN4AZY<BAND:3>20m<MODE:3>SSB<SUBMODE:3:S>FT8<EOR>");
+        check(submode.size() == 1 && submode[0].modeGroup == "DATA",
+              "typed SUBMODE takes precedence over MODE");
+        const auto over = parse(dir, "<CALL:2147483647:S>WN4AZY<EOR>");
+        check(over.isEmpty(), "typed CALL length INT_MAX: record rejected");
+        const auto exact = parse(dir, "<CALL:6:S>WN4AZY<EOR>");
+        check(exact.size() == 1 && exact[0].callsign == "WN4AZY",
+              "typed length exactly fills the record: accepted");
+        const auto shortData = parse(dir, "<CALL:7:S>WN4AZY<EOR>");
+        check(shortData.isEmpty(), "typed length one past the record: rejected");
+        const auto malformed = parse(dir, "<CALL:6:S:6>WN4AZY<EOR>");
+        check(malformed.isEmpty(), "extra length after type: rejected");
+    }
+
     // ── A length at INT_MAX ─────────────────────────────────────────────
     {
         const auto recs = parse(dir,
