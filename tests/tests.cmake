@@ -7086,11 +7086,11 @@ target_link_libraries(panadapter_dbm_range_test PRIVATE aethercore Qt6::Core)
 set_target_properties(panadapter_dbm_range_test PROPERTIES AUTOMOC ON)
 add_test(NAME panadapter_dbm_range_test COMMAND panadapter_dbm_range_test)
 
-add_executable(panadapter_fft_straggler_test tests/panadapter_fft_straggler_test.cpp)
-target_include_directories(panadapter_fft_straggler_test PRIVATE src)
-target_link_libraries(panadapter_fft_straggler_test PRIVATE aethercore Qt6::Core)
-set_target_properties(panadapter_fft_straggler_test PROPERTIES AUTOMOC ON)
-add_test(NAME panadapter_fft_straggler_test COMMAND panadapter_fft_straggler_test)
+add_executable(panadapter_late_packet_test tests/panadapter_late_packet_test.cpp)
+target_include_directories(panadapter_late_packet_test PRIVATE src)
+target_link_libraries(panadapter_late_packet_test PRIVATE aethercore Qt6::Core)
+set_target_properties(panadapter_late_packet_test PROPERTIES AUTOMOC ON)
+add_test(NAME panadapter_late_packet_test COMMAND panadapter_late_packet_test)
 
 # wirePanadapter() can see the placeholder SpectrumWidget more than once. The
 # helper keeps one timer/path per widget while retaining separate per-pan timers.
@@ -10014,7 +10014,7 @@ set(AETHER_SETTINGS_CONSUMERS
     wfm_controls_test
     spectrum_confirmed_geometry_test
     panadapter_dbm_range_test
-    panadapter_fft_straggler_test
+    panadapter_late_packet_test
     flex_slice_mode_intent_test
     rtl_slice_settings_test
     rtl_device_settings_test
