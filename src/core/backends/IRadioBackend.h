@@ -241,6 +241,12 @@ public:
         }
         return ReceiveDispatch::Unsupported;
     }
+    virtual ReceiveDispatch requestWaveform(const WaveformRequest&,
+        const RadioControlCompletion&, const FileTransferGuard&, const RadioControlFence&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestFileTransfer(const FileTransferRequest&,
+        const FileTransferCompletion&, const FileTransferGuard&, const RadioControlFence&)
+    { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestProfile(const ProfileRequest&,
                                            const RadioControlCompletion& = {},
                                            const RadioControlFence& = {})

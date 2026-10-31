@@ -73,6 +73,8 @@ radio copy.
 |---|---|---|---|---|---|---|---|
 | `radioSetupControl` | All implemented `RadioSetupRequest` fields, including physical outputs | absent | absent | absent | Lineout gain/mute | absent | `RadioModel::requestRadioSetup` admission; Radio Setup timing and maximum-power availability; existing output setters and controller requests |
 | `spotControl` | Add, remove, clear, trigger | absent | absent | absent | absent | absent | `RadioModel::requestSpot` and its session/epoch-fenced queue; local/passive, TCI and memory routes remain separate |
+| `waveformControl` | Restart, uninstall, remove container | absent | absent | absent | absent | absent | Typed waveform intent; backend encodes the command; completion is not a status observation |
+| `fileTransferControl` | Firmware, legacy waveform, profiles, DVK; Docker on WFP-capable hardware | absent | absent | absent | absent | absent | `RadioModel::beginFileTransfer` reserves the original session and peer; typed backend negotiation; queued-write cancellation and deadlines |
 | `panControl` | Band zoom, segment zoom, receive antenna | absent | absent | absent | absent | absent | `RadioModel::requestPanControl`, exact pan identity and the existing zoom availability gate |
 | `slicePresetControl` | Step, repeater offset, tone mode/value | absent | absent | absent | absent | absent | `RadioModel::requestSlicePreset`; absent fields remain unchanged. Client-owned step still applies locally where no command plane exists |
 

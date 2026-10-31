@@ -1,4 +1,5 @@
 #include "ProfileTransfer.h"
+#include "core/backends/FileTransferOperation.h"
 
 #include "LogManager.h"
 #include "ZipArchive.h"
@@ -12,6 +13,7 @@
 #include <QHostAddress>
 #include <QMap>
 #include <QSaveFile>
+#include <QTemporaryFile>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
@@ -56,6 +58,13 @@ QByteArray prepareDatabaseImportPayload(const QByteArray& ssdrCfg, bool* repacka
 ProfileTransfer::ProfileTransfer(RadioModel* model, QObject* parent)
     : QObject(parent), m_model(model)
 {
+    if (model) {
+        connect(model, &RadioModel::connectionStateChanged, this, [this] {
+            if (m_busy && !m_model->fileTransferCurrent(m_transfer)) {
+                fail(QStringLiteral("Original radio session ended during profile transfer."));
+            }
+        });
+    }
     m_timeout = new QTimer(this);
     m_timeout->setSingleShot(true);
     connect(m_timeout, &QTimer::timeout, this, [this] {
@@ -89,7 +98,8 @@ ProfileTransfer::~ProfileTransfer()
         cleanup();
 }
 
-void ProfileTransfer::exportDatabase(const ExportSelection& selection, const QString& destinationPath)
+void ProfileTransfer::exportDatabase(const ExportSelection& selection, const QString& destinationPath,
+                                     std::optional<RadioControlSession> session)
 {
     QString error;
     if (!validateCommonPreconditions(Operation::ExportDatabase, &error)) {
@@ -114,8 +124,15 @@ void ProfileTransfer::exportDatabase(const ExportSelection& selection, const QSt
         return;
     }
 
+    m_transfer = m_model->beginFileTransfer(FileTransferPurpose::ProfileMetadata, this,
+        session.value_or(m_model->controlSession()), kOverallTimeoutMs);
+    if (!m_transfer) {
+        emit failed(Operation::ExportDatabase, QStringLiteral("Transfer unavailable, busy, or original session ended."));
+        return;
+    }
+    const QPointer<ProfileTransfer> alive(this);
     const quint64 generation = begin(Operation::ExportDatabase, Phase::UploadMetaSubset);
-    if (!isCurrent(generation, Phase::UploadMetaSubset)) {
+    if (!alive || !isCurrent(generation, Phase::UploadMetaSubset)) {
         return;
     }
     m_path = destinationPath;
@@ -124,13 +141,14 @@ void ProfileTransfer::exportDatabase(const ExportSelection& selection, const QSt
         << "ProfileTransfer: export requested"
         << QStringLiteral("meta_subset_bytes=%1").arg(metaSubset.size());
     emit progress(QStringLiteral("Sending export selection to radio..."), 0, metaSubset.size());
+    if (!alive) { return; }
     if (!isCurrent(generation, Phase::UploadMetaSubset)) {
         return;
     }
-    requestUploadPort(metaSubset, QStringLiteral("db_meta_subset"));
+    requestUploadPort(metaSubset, FileTransferPurpose::ProfileMetadata);
 }
 
-void ProfileTransfer::importDatabase(const QString& ssdrCfgPath)
+void ProfileTransfer::importDatabase(const QString& ssdrCfgPath, std::optional<RadioControlSession> session)
 {
     QString error;
     if (!validateCommonPreconditions(Operation::ImportDatabase, &error)) {
@@ -148,7 +166,7 @@ void ProfileTransfer::importDatabase(const QString& ssdrCfgPath)
                     QStringLiteral("Cannot open import package: %1").arg(file.errorString()));
         return;
     }
-    const QByteArray payload = file.readAll();
+    const QByteArray payload = file.read(kMaxImportSize + 1);
     if (payload.size() != file.size()) {
         emit failed(Operation::ImportDatabase,
                     QStringLiteral("Could not read the complete .ssdr_cfg package."));
@@ -156,13 +174,21 @@ void ProfileTransfer::importDatabase(const QString& ssdrCfgPath)
     }
     bool repackaged = false;
     const QByteArray importPayload = prepareDatabaseImportPayload(payload, &repackaged, &error);
-    if (importPayload.isEmpty()) {
-        emit failed(Operation::ImportDatabase, error);
+    if (importPayload.isEmpty() || importPayload.size() > kMaxImportSize) {
+        emit failed(Operation::ImportDatabase, error.isEmpty()
+            ? QStringLiteral("Prepared import exceeds the 250 MB transfer limit.") : error);
         return;
     }
 
+    m_transfer = m_model->beginFileTransfer(FileTransferPurpose::ProfileImport, this,
+        session.value_or(m_model->controlSession()), kOverallTimeoutMs);
+    if (!m_transfer) {
+        emit failed(Operation::ImportDatabase, QStringLiteral("Transfer unavailable, busy, or original session ended."));
+        return;
+    }
+    const QPointer<ProfileTransfer> alive(this);
     const quint64 generation = begin(Operation::ImportDatabase, Phase::UploadImport);
-    if (!isCurrent(generation, Phase::UploadImport)) {
+    if (!alive || !isCurrent(generation, Phase::UploadImport)) {
         return;
     }
     m_path = ssdrCfgPath;
@@ -173,10 +199,11 @@ void ProfileTransfer::importDatabase(const QString& ssdrCfgPath)
         << QStringLiteral("upload_bytes=%1").arg(importPayload.size())
         << QStringLiteral("repackaged=%1").arg(repackaged ? 1 : 0);
     emit progress(QStringLiteral("Requesting database import upload port..."), 0, importPayload.size());
+    if (!alive) { return; }
     if (!isCurrent(generation, Phase::UploadImport)) {
         return;
     }
-    requestUploadPort(importPayload, QStringLiteral("db_import"));
+    requestUploadPort(importPayload, FileTransferPurpose::ProfileImport);
 }
 
 void ProfileTransfer::cancel()
@@ -262,6 +289,7 @@ quint64 ProfileTransfer::begin(Operation operation, Phase phase)
     m_busy = true;
     m_cancelled = false;
     m_usedFallbackPort = false;
+    m_uploadConnected = false;
     m_downloadFinalized = false;
     m_importCompletionScheduled = false;
     m_bytesDone = 0;
@@ -294,6 +322,11 @@ void ProfileTransfer::finish(QString path)
 
 void ProfileTransfer::cleanup()
 {
+    if (m_cleaningUp) { return; }
+    m_cleaningUp = true;
+    if (m_model) { m_model->finishFileTransfer(m_transfer, m_uploadConnected ? 3000 : 0); }
+    else if (m_transfer) { m_transfer->cancel(); }
+    m_transfer.reset();
     // Enter the terminal state before tearing down QObjects. Their methods can
     // emit synchronously, and no callback may start a second terminal outcome.
     m_busy = false;
@@ -310,7 +343,7 @@ void ProfileTransfer::cleanup()
     destroySocket(true);
     destroyServer();
     if (m_saveFile) {
-        m_saveFile->cancelWriting();
+        m_saveFile->close();
         m_saveFile->deleteLater();
         m_saveFile = nullptr;
     }
@@ -325,6 +358,7 @@ void ProfileTransfer::cleanup()
     m_downloadFinalized = false;
     m_importCompletionScheduled = false;
     m_phase = Phase::Idle;
+    m_cleaningUp = false;
 }
 
 void ProfileTransfer::destroySocket(bool abortConnection)
@@ -391,7 +425,7 @@ ExportSelection ProfileTransfer::expandSelection(ExportSelection selection) cons
 
 bool ProfileTransfer::validateCommonPreconditions(Operation operation, QString* error) const
 {
-    if (m_busy) {
+    if (isBusy()) {
         *error = QStringLiteral("A profile transfer is already in progress.");
         return false;
     }
@@ -471,7 +505,7 @@ bool ProfileTransfer::validateImportFile(const QString& path, QString* error) co
     return true;
 }
 
-void ProfileTransfer::requestUploadPort(const QByteArray& payload, const QString& uploadKind)
+void ProfileTransfer::requestUploadPort(const QByteArray& payload, FileTransferPurpose purpose)
 {
     if (!m_model) {
         // The QPointer nulled between begin() and here. Report it: begin() has
@@ -491,33 +525,29 @@ void ProfileTransfer::requestUploadPort(const QByteArray& payload, const QString
     m_bytesTotal = payload.size();
     m_usedFallbackPort = false;
 
-    const QString command = QStringLiteral("file upload %1 %2").arg(payload.size()).arg(uploadKind);
-    qCInfo(lcProtocol).noquote()
-        << "ProfileTransfer: command"
-        << command;
     const quint64 generation = m_operationGeneration;
     const Phase expectedPhase = m_phase;
     const quint64 requestId = nextAsyncId();
     m_uploadPortRequestId = requestId;
     startCommandTimeout(kCommandTimeoutMs, expectedPhase);
-    m_model->requestFileUploadPort(payload.size(), uploadKind,
+    m_model->requestFileTransfer(m_transfer, {purpose, payload.size(), {}, 0},
         makeUploadPortCallback(generation, expectedPhase, requestId));
 }
 
-std::function<void(int, const QString&)> ProfileTransfer::makeUploadPortCallback(
+FileTransferCompletion ProfileTransfer::makeUploadPortCallback(
     quint64 generation, Phase expectedPhase, quint64 requestId)
 {
     QPointer<ProfileTransfer> transfer(this);
-    return [transfer, generation, expectedPhase, requestId](int code, const QString& body) {
+    return [transfer, generation, expectedPhase, requestId](const FileTransferReply& reply) {
         if (!transfer) {
             return;
         }
-        transfer->handleUploadPortReceived(generation, expectedPhase, requestId, code, body);
+        transfer->handleUploadPortReceived(generation, expectedPhase, requestId, reply);
     };
 }
 
 void ProfileTransfer::handleUploadPortReceived(quint64 generation, Phase expectedPhase,
-                                               quint64 requestId, int code, const QString& body)
+                                               quint64 requestId, const FileTransferReply& reply)
 {
     if (!isCurrent(generation, expectedPhase) || requestId == 0
         || m_uploadPortRequestId != requestId) {
@@ -526,19 +556,20 @@ void ProfileTransfer::handleUploadPortReceived(quint64 generation, Phase expecte
 
     m_uploadPortRequestId = 0;
     stopCommandTimeout();
-    if (code != 0) {
-        fail(QStringLiteral("Radio rejected the file upload request (error 0x%1).")
-                 .arg(code, 0, 16));
+    if (reply.result.kind != RadioControlReply::Kind::Accepted) {
+        fail(reply.result.code == -1 ? reply.result.message :
+             QStringLiteral("Radio rejected the file upload request (error 0x%1).")
+                 .arg(reply.result.code, 0, 16));
         return;
     }
 
-    const auto parsedPort = parseTransferPort(body);
-    const quint16 port = parsedPort.value_or(kDefaultUploadPort);
+    const quint16 port = reply.port;
     connectUploadSocket(port);
 }
 
 void ProfileTransfer::connectUploadSocket(quint16 port)
 {
+    const QPointer<ProfileTransfer> alive(this);
     destroySocket(true);
     // A fallback has superseded the command reply that selected the old port.
     // The same operation can still receive that reply after the replacement.
@@ -575,6 +606,7 @@ void ProfileTransfer::connectUploadSocket(quint16 port)
 
     emit progress(QStringLiteral("Connecting to radio upload port %1...").arg(port),
                   m_bytesDone, m_bytesTotal);
+    if (!alive) { return; }
     if (!isCurrentSocket(generation, expectedPhase, socket)) {
         return;
     }
@@ -582,8 +614,9 @@ void ProfileTransfer::connectUploadSocket(quint16 port)
 
     QTimer::singleShot(200, this, makeUploadConnectCallback(
         generation, expectedPhase, socket, [transfer, socket, port] {
-            if (transfer && socket && transfer->m_model) {
-                socket->connectToHost(transfer->m_model->radioAddress(), port);
+            if (transfer && socket && transfer->m_model
+                && transfer->m_model->fileTransferCurrent(transfer->m_transfer)) {
+                socket->connectToHost(transfer->m_transfer->peer(), port);
             }
         }));
     startCommandTimeout(kConnectTimeoutMs, expectedPhase);
@@ -607,6 +640,7 @@ std::function<void()> ProfileTransfer::makeUploadConnectCallback(quint64 generat
 
 void ProfileTransfer::tryFallbackUploadPort()
 {
+    const QPointer<ProfileTransfer> alive(this);
     if (m_usedFallbackPort) {
         fail(QStringLiteral("Cannot connect to the radio transfer port."));
         return;
@@ -616,6 +650,7 @@ void ProfileTransfer::tryFallbackUploadPort()
     const Phase expectedPhase = m_phase;
     emit progress(QStringLiteral("Trying fallback transfer port %1...").arg(kFallbackTransferPort),
                   m_bytesDone, m_bytesTotal);
+    if (!alive) { return; }
     if (!isCurrent(generation, expectedPhase)) {
         return;
     }
@@ -625,16 +660,19 @@ void ProfileTransfer::tryFallbackUploadPort()
 void ProfileTransfer::handleUploadConnected(quint64 generation, Phase expectedPhase,
                                             QTcpSocket* socket)
 {
+    const QPointer<ProfileTransfer> alive(this);
     if (!isCurrentSocket(generation, expectedPhase, socket)) {
         return;
     }
 
+    m_uploadConnected = true;
     stopCommandTimeout();
     resetIdleTimer();
     emit progress(m_phase == Phase::UploadMetaSubset
                       ? QStringLiteral("Uploading export selection...")
                       : QStringLiteral("Uploading SmartSDR database package..."),
                   m_bytesDone, m_bytesTotal);
+    if (!alive) { return; }
     if (!isCurrentSocket(generation, expectedPhase, socket)) {
         return;
     }
@@ -647,31 +685,45 @@ void ProfileTransfer::sendNextUploadChunk(quint64 generation, Phase expectedPhas
     if (!isCurrentSocket(generation, expectedPhase, socket))
         return;
 
+    if ((m_transfer && !m_transfer->current())
+        || (m_model && !m_model->fileTransferCurrent(m_transfer))) {
+        fail(QStringLiteral("Original transfer ended."));
+        return;
+    }
     const qint64 remaining = m_uploadPayload.size() - m_bytesQueued;
     if (remaining <= 0)
         return;
 
     const qint64 toSend = qMin<qint64>(kUploadChunkSize, remaining);
-    const qint64 written = m_socket->write(m_uploadPayload.constData() + m_bytesQueued, toSend);
-    if (written < 0)
-        handleUploadError(generation, expectedPhase, socket);
-    else
-        m_bytesQueued += written;
+    const QPointer<ProfileTransfer> alive(this);
+    const qint64 written = socket->write(m_uploadPayload.constData() + m_bytesQueued, toSend);
+    if (!alive || !isCurrentSocket(generation, expectedPhase, socket)) { return; }
+    if (written <= 0 || written > toSend) {
+        fail(QStringLiteral("Upload failed: invalid socket byte accounting."));
+        return;
+    }
+    m_bytesQueued += written;
 }
 
 void ProfileTransfer::handleUploadBytesWritten(quint64 generation, Phase expectedPhase,
                                                QTcpSocket* socket, qint64 bytes)
 {
+    const QPointer<ProfileTransfer> alive(this);
     if (!isCurrentSocket(generation, expectedPhase, socket)) {
         return;
     }
 
+    if (bytes <= 0 || bytes > m_bytesQueued - m_bytesDone) {
+        fail(QStringLiteral("Upload failed: invalid socket byte accounting."));
+        return;
+    }
     resetIdleTimer();
     m_bytesDone += bytes;
     emit progress(m_phase == Phase::UploadMetaSubset
                       ? QStringLiteral("Uploading export selection...")
                       : QStringLiteral("Uploading SmartSDR database package..."),
                   m_bytesDone, m_bytesTotal);
+    if (!alive) { return; }
     if (!isCurrentSocket(generation, expectedPhase, socket)) {
         return;
     }
@@ -691,6 +743,7 @@ void ProfileTransfer::handleUploadBytesWritten(quint64 generation, Phase expecte
 void ProfileTransfer::handleUploadDisconnected(quint64 generation, Phase expectedPhase,
                                                 QTcpSocket* socket)
 {
+    const QPointer<ProfileTransfer> alive(this);
     if (!isCurrentSocket(generation, expectedPhase, socket)) {
         return;
     }
@@ -705,6 +758,8 @@ void ProfileTransfer::handleUploadDisconnected(quint64 generation, Phase expecte
 
     if (m_phase == Phase::UploadMetaSubset) {
         emit progress(QStringLiteral("Waiting for the radio to prepare the database package..."), 0, 0);
+        if (!alive) { return; }
+        if (!isCurrent(generation, expectedPhase)) { return; }
         QPointer<ProfileTransfer> transfer(this);
         QTimer::singleShot(kMetaSubsetSettleMs, this, makeMetadataSettleCallback(
             generation, expectedPhase, [transfer] {
@@ -741,7 +796,7 @@ void ProfileTransfer::handleUploadError(quint64 generation, Phase expectedPhase,
         return;
     }
 
-    if (m_bytesDone == 0 && m_uploadPort != kFallbackTransferPort) {
+    if (!m_uploadConnected && m_bytesQueued == 0 && m_uploadPort != kFallbackTransferPort) {
         tryFallbackUploadPort();
         return;
     }
@@ -752,6 +807,7 @@ void ProfileTransfer::handleUploadError(quint64 generation, Phase expectedPhase,
 
 void ProfileTransfer::requestPackageDownload()
 {
+    const QPointer<ProfileTransfer> alive(this);
     if (!m_busy)
         return;
     if (!m_model) {
@@ -765,31 +821,31 @@ void ProfileTransfer::requestPackageDownload()
     m_bytesTotal = 0;
     startCommandTimeout(kCommandTimeoutMs, Phase::DownloadPackage);
     emit progress(QStringLiteral("Requesting SmartSDR database package..."), 0, 0);
+    if (!alive) { return; }
     if (!isCurrent(generation, Phase::DownloadPackage)) {
         return;
     }
-    qCInfo(lcProtocol) << "ProfileTransfer: command file download db_package";
 
     const quint64 requestId = nextAsyncId();
     m_downloadPortRequestId = requestId;
-    m_model->requestFileDownloadPort(QStringLiteral("db_package"),
+    m_model->requestFileTransfer(m_transfer, {FileTransferPurpose::ProfileExport, 0, {}, 0},
         makeDownloadPortCallback(generation, Phase::DownloadPackage, requestId));
 }
 
-std::function<void(int, const QString&)> ProfileTransfer::makeDownloadPortCallback(
+FileTransferCompletion ProfileTransfer::makeDownloadPortCallback(
     quint64 generation, Phase expectedPhase, quint64 requestId)
 {
     QPointer<ProfileTransfer> transfer(this);
-    return [transfer, generation, expectedPhase, requestId](int code, const QString& body) {
+    return [transfer, generation, expectedPhase, requestId](const FileTransferReply& reply) {
         if (!transfer) {
             return;
         }
-        transfer->handleDownloadPortReceived(generation, expectedPhase, requestId, code, body);
+        transfer->handleDownloadPortReceived(generation, expectedPhase, requestId, reply);
     };
 }
 
 void ProfileTransfer::handleDownloadPortReceived(quint64 generation, Phase expectedPhase,
-                                                 quint64 requestId, int code, const QString& body)
+                                                 quint64 requestId, const FileTransferReply& reply)
 {
     if (!isCurrent(generation, expectedPhase) || requestId == 0
         || m_downloadPortRequestId != requestId) {
@@ -798,14 +854,14 @@ void ProfileTransfer::handleDownloadPortReceived(quint64 generation, Phase expec
 
     m_downloadPortRequestId = 0;
     stopCommandTimeout();
-    if (code != 0) {
-        fail(QStringLiteral("Radio rejected the database download request (error 0x%1).")
-                 .arg(code, 0, 16));
+    if (reply.result.kind != RadioControlReply::Kind::Accepted) {
+        fail(reply.result.code == -1 ? reply.result.message :
+            QStringLiteral("Radio rejected the database download request (error 0x%1).")
+                .arg(reply.result.code, 0, 16));
         return;
     }
 
-    const auto parsedPort = parseTransferPort(body);
-    const quint16 port = parsedPort.value_or(kFallbackTransferPort);
+    const quint16 port = reply.port;
     startDownloadServer(port);
 }
 
@@ -817,8 +873,9 @@ void ProfileTransfer::startDownloadServer(quint16 port)
         return;
     }
 
-    m_saveFile = new QSaveFile(m_path, this);
-    if (!m_saveFile->open(QIODevice::WriteOnly)) {
+    m_saveFile = new QTemporaryFile(QFileInfo(m_path).absolutePath()
+        + QStringLiteral("/.aethersdr-profile-XXXXXX"), this);
+    if (!m_saveFile->open()) {
         fail(QStringLiteral("Cannot create export file: %1").arg(m_saveFile->errorString()));
         return;
     }
@@ -851,10 +908,15 @@ void ProfileTransfer::handleDownloadConnection(quint64 generation, Phase expecte
         return;
     }
 
-    stopCommandTimeout();
-    m_socket = m_server->nextPendingConnection();
-    if (!m_socket)
+    QTcpSocket* pending = m_server->nextPendingConnection();
+    if (!pending) { return; }
+    if (!m_transfer || !transferPeerMatches(pending->peerAddress(), m_transfer->peer())) {
+        pending->abort();
+        pending->deleteLater();
         return;
+    }
+    stopCommandTimeout();
+    m_socket = pending;
     m_server->close();
 
     QPointer<QTcpSocket> socket(m_socket);
@@ -887,9 +949,18 @@ void ProfileTransfer::handleDownloadReadyRead(quint64 generation, Phase expected
     if (!isCurrentSocket(generation, expectedPhase, socket) || !m_saveFile) {
         return;
     }
+    if ((m_transfer && !m_transfer->current())
+        || (m_model && !m_model->fileTransferCurrent(m_transfer))) {
+        fail(QStringLiteral("Original transfer ended."));
+        return;
+    }
 
     resetIdleTimer();
-    const QByteArray chunk = m_socket->readAll();
+    if (m_socket->bytesAvailable() > kMaxImportSize - m_bytesDone) {
+        fail(QStringLiteral("Profile export exceeds the 250 MiB package limit."));
+        return;
+    }
+    const QByteArray chunk = m_socket->read(kMaxImportSize - m_bytesDone + 1);
     if (chunk.isEmpty())
         return;
 
@@ -906,7 +977,13 @@ void ProfileTransfer::handleDownloadReadyRead(quint64 generation, Phase expected
 void ProfileTransfer::handleDownloadDisconnected(quint64 generation, Phase expectedPhase,
                                                  QTcpSocket* socket)
 {
+    const QPointer<ProfileTransfer> alive(this);
     if (!isCurrentSocket(generation, expectedPhase, socket) || m_downloadFinalized) {
+        return;
+    }
+    if ((m_transfer && !m_transfer->current())
+        || (m_model && !m_model->fileTransferCurrent(m_transfer))) {
+        fail(QStringLiteral("Original transfer ended."));
         return;
     }
 
@@ -925,6 +1002,7 @@ void ProfileTransfer::handleDownloadDisconnected(quint64 generation, Phase expec
 
     qCInfo(lcProtocol) << "ProfileTransfer: export complete" << m_bytesDone << "bytes";
     emit progress(QStringLiteral("Export complete."), m_bytesDone, m_bytesDone);
+    if (!alive) { return; }
     if (!isCurrentSocket(generation, expectedPhase, socket)) {
         return;
     }
@@ -950,11 +1028,13 @@ void ProfileTransfer::handleDownloadError(quint64 generation, Phase expectedPhas
 
 void ProfileTransfer::waitForImportCompletion()
 {
+    const QPointer<ProfileTransfer> alive(this);
     const quint64 generation = m_operationGeneration;
     m_phase = Phase::WaitingForImport;
     stopIdleTimeout();
     emit progress(QStringLiteral("Import sent; waiting for radio to apply the database..."),
                   m_bytesDone, m_bytesTotal);
+    if (!alive) { return; }
 
     if (!isCurrent(generation, Phase::WaitingForImport)) {
         return;
@@ -996,6 +1076,7 @@ void ProfileTransfer::scheduleImportCompletion()
 
 void ProfileTransfer::completeImport()
 {
+    const QPointer<ProfileTransfer> alive(this);
     const quint64 generation = m_operationGeneration;
     if (!isCurrent(generation, Phase::WaitingForImport)) {
         return;
@@ -1009,6 +1090,7 @@ void ProfileTransfer::completeImport()
     }
     emit progress(QStringLiteral("Import complete. Refreshing profile lists..."),
                   m_bytesTotal, m_bytesTotal);
+    if (!alive) { return; }
     if (!isCurrent(generation, Phase::WaitingForImport)) {
         return;
     }
@@ -1028,7 +1110,8 @@ void ProfileTransfer::handleTimeout()
     switch (m_phase) {
     case Phase::UploadMetaSubset:
     case Phase::UploadImport:
-        if (!m_socket || m_socket->state() != QAbstractSocket::ConnectedState)
+        if (m_socket && !m_uploadConnected && m_bytesQueued == 0
+            && m_socket->state() != QAbstractSocket::ConnectedState)
             tryFallbackUploadPort();
         else
             fail(QStringLiteral("Timed out while uploading to the radio."));
@@ -1046,26 +1129,22 @@ void ProfileTransfer::handleTimeout()
 
 bool ProfileTransfer::commitExportFile(QString* error)
 {
-    if (!m_saveFile) {
-        *error = QStringLiteral("Export file is not open.");
+    if (!m_saveFile || !m_saveFile->flush() || !m_saveFile->seek(0)
+        || m_saveFile->size() <= 0 || m_saveFile->size() > kMaxImportSize) {
+        *error = QStringLiteral("Export package is unavailable or exceeds the size limit.");
         return false;
     }
-
-    if (!m_saveFile->commit()) {
-        *error = QStringLiteral("Could not finalize export package: %1").arg(m_saveFile->errorString());
+    const QByteArray payload = m_saveFile->read(kMaxImportSize + 1);
+    if (payload.size() != m_saveFile->size() || readZipEntries(payload, error).isEmpty()) {
+        if (error->isEmpty()) { *error = QStringLiteral("Invalid or incomplete export package."); }
         return false;
     }
-    m_saveFile->deleteLater();
-    m_saveFile = nullptr;
-
-    QFile file(m_path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        *error = QStringLiteral("Could not verify exported package.");
+    QSaveFile destination(m_path);
+    destination.setDirectWriteFallback(false);
+    if (!destination.open(QIODevice::WriteOnly)
+        || destination.write(payload) != payload.size() || !destination.commit()) {
+        *error = QStringLiteral("Could not finalize export package: %1").arg(destination.errorString());
         return false;
-    }
-    const QByteArray magic = file.read(4);
-    if (magic.size() >= 2 && magic.left(2) != "PK") {
-        qCWarning(lcProtocol) << "ProfileTransfer: exported package does not start with ZIP magic";
     }
     return true;
 }

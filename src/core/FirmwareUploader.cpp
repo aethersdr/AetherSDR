@@ -1,4 +1,5 @@
 #include "FirmwareUploader.h"
+#include "core/backends/FileTransferOperation.h"
 
 #include "LogManager.h"
 #include "../models/RadioModel.h"
@@ -30,13 +31,13 @@ FirmwareUploader::FirmwareUploader(RadioModel* model, QObject* parent)
     });
 }
 
-void FirmwareUploader::upload(const QString& filePath)
+void FirmwareUploader::upload(const QString& filePath, std::optional<RadioControlSession> session)
 {
     // Do not emit a terminal result for the operation which already owns this uploader.
     if (m_uploading) {
         return;
     }
-    if (!m_model || !m_model->isConnected()) {
+    if (!m_model || !m_model->controlSessionCurrent(session.value_or(m_model->controlSession()))) {
         emit finished(Outcome::Failed, tr("Connect to the radio before uploading firmware"));
         return;
     }
@@ -50,7 +51,7 @@ void FirmwareUploader::upload(const QString& filePath)
         emit finished(Outcome::Failed, tr("File too large (> 500MB)"));
         return;
     }
-    const QByteArray fileData = file.readAll();
+    const QByteArray fileData = file.read(kMaxFileBytes + 1);
     if (file.error() != QFileDevice::NoError) {
         emit finished(Outcome::Failed, tr("Could not read firmware file: %1").arg(file.errorString()));
         return;
@@ -64,11 +65,22 @@ void FirmwareUploader::upload(const QString& filePath)
         return;
     }
 
+    m_transfer = m_model->beginFileTransfer(FileTransferPurpose::Firmware, this,
+        session.value_or(m_model->controlSession()), overallTimeoutMsFor(fileData.size()));
+    if (!m_transfer) {
+        emit finished(Outcome::Failed, tr("Transfer unavailable, busy, or original radio session ended."));
+        return;
+    }
+    const FileTransferHandle operation = m_transfer;
+    const QPointer<FirmwareUploader> alive(this);
     if (!beginOperation(fileData, QFileInfo(filePath).fileName())) {
+        operation->cancel();
+        if (alive && m_transfer == operation) { m_transfer.reset(); }
         return;
     }
     const Generation generation = m_generation;
     emit progressChanged(0, tr("Preparing upload..."));
+    if (!alive) { return; }
     if (isCurrent(generation)) {
         requestUploadPort(generation);
     }
@@ -120,6 +132,7 @@ bool FirmwareUploader::beginOperation(const QByteArray& fileData, const QString&
     m_bytesAcknowledged = 0;
     m_pendingBytes = 0;
     m_uploadPort = 0;
+    m_uploadConnected = false;
     m_uploading = true;
     m_waitingForConfirmation = false;
     m_radioProgressSeen = false;
@@ -145,6 +158,7 @@ bool FirmwareUploader::beginOperation(const QByteArray& fileData, const QString&
 
 void FirmwareUploader::requestUploadPort(Generation generation)
 {
+    const QPointer<FirmwareUploader> alive(this);
     if (!isCurrent(generation)) {
         return;
     }
@@ -154,6 +168,7 @@ void FirmwareUploader::requestUploadPort(Generation generation)
     }
 
     emit progressChanged(0, tr("Requesting upload port..."));
+    if (!alive) { return; }
     if (!isCurrent(generation)) {
         return;
     }
@@ -163,35 +178,25 @@ void FirmwareUploader::requestUploadPort(Generation generation)
     if (!isCurrent(generation)) {
         return;
     }
-    m_model->sendCommand(QStringLiteral("file filename ") + m_fileName);
-    if (!isCurrent(generation) || !m_model) {
-        return;
-    }
-    // The barrier is armed in onUploadPortReceived, once the radio has actually
-    // accepted the command and opened its file server. Arming it here would
-    // lock out a retry after a rejection that dispatched no firmware byte and
-    // can leave no `file update` status pending (#5572 review).
     const QPointer<FirmwareUploader> self(this);
-    m_model->sendCmdPublic(
-        QStringLiteral("file upload %1 update").arg(m_fileData.size()),
-        [self, generation](int code, const QString& body) {
-            if (self) {
-                self->onUploadPortReceived(generation, code, body);
-            }
+    m_model->requestFileTransfer(m_transfer,
+        {FileTransferPurpose::Firmware, m_fileData.size(), m_fileName, 0},
+        [self, generation](const FileTransferReply& reply) {
+            if (self) { self->onUploadPortReceived(generation, reply); }
         });
 }
 
-void FirmwareUploader::onUploadPortReceived(Generation generation,
-                                             int code,
-                                             const QString& body)
+void FirmwareUploader::onUploadPortReceived(Generation generation, const FileTransferReply& reply)
 {
+    const QPointer<FirmwareUploader> alive(this);
     if (!isCurrent(generation)) {
         return;
     }
-    if (code != 0) {
+    if (reply.result.kind != RadioControlReply::Kind::Accepted) {
         finishOperation(generation,
                         Outcome::Failed,
-                        tr("Radio rejected firmware upload (error 0x%1)").arg(code, 0, 16));
+                        reply.result.code == -1 ? reply.result.message :
+                        tr("Radio rejected firmware upload (error 0x%1)").arg(reply.result.code, 0, 16));
         return;
     }
 
@@ -200,12 +205,9 @@ void FirmwareUploader::onUploadPortReceived(Generation generation,
     // barrier becomes real.
     markUploadDispatched();
 
-    bool parsed = false;
-    const uint port = body.trimmed().toUInt(&parsed);
-    const quint16 uploadPort = parsed && port > 0U && port <= 65535U
-        ? static_cast<quint16>(port)
-        : kDefaultPort;
+    const quint16 uploadPort = reply.port;
     emit progressChanged(0, tr("Connecting to port %1...").arg(uploadPort));
+    if (!alive) { return; }
     if (!isCurrent(generation)) {
         return;
     }
@@ -223,7 +225,7 @@ void FirmwareUploader::connectUploadSocket(Generation generation, quint16 port)
     if (!isCurrent(generation)) {
         return;
     }
-    if (!m_model) {
+    if (!m_model || !m_model->fileTransferCurrent(m_transfer)) {
         finishOperation(generation, Outcome::Failed, tr("Radio disconnected before upload started"));
         return;
     }
@@ -257,12 +259,13 @@ void FirmwareUploader::connectUploadSocket(Generation generation, quint16 port)
             });
 
     qCDebug(lcFirmware) << "FirmwareUploader: connecting to upload port" << port;
-    socket->connectToHost(m_model->radioAddress(), port);
+    socket->connectToHost(m_transfer->peer(), port);
     armTimeout(generation, kConnectTimeoutMs, tr("Cannot connect to firmware upload port"));
 }
 
 void FirmwareUploader::tryFallbackPort(Generation generation)
 {
+    const QPointer<FirmwareUploader> alive(this);
     if (!isCurrent(generation)) {
         return;
     }
@@ -271,6 +274,7 @@ void FirmwareUploader::tryFallbackPort(Generation generation)
         return;
     }
     emit progressChanged(0, tr("Trying fallback port %1...").arg(kFallbackPort));
+    if (!alive) { return; }
     if (!isCurrent(generation)) {
         return;
     }
@@ -279,11 +283,14 @@ void FirmwareUploader::tryFallbackPort(Generation generation)
 
 void FirmwareUploader::onConnected(Generation generation, QTcpSocket* socket)
 {
+    const QPointer<FirmwareUploader> alive(this);
     if (!isCurrent(generation) || socket != m_socket) {
         return;
     }
+    m_uploadConnected = true;
     qCDebug(lcFirmware) << "FirmwareUploader: connected, sending" << m_fileData.size() << "bytes";
     emit progressChanged(0, tr("Uploading firmware..."));
+    if (!alive) { return; }
     if (!isCurrent(generation)) {
         return;
     }
@@ -307,14 +314,20 @@ void FirmwareUploader::queueNextChunk(Generation generation)
     if (!isCurrent(generation) || m_waitingForConfirmation || m_pendingBytes != 0) {
         return;
     }
+    if ((m_transfer && !m_transfer->current())
+        || (m_model && !m_model->fileTransferCurrent(m_transfer))) {
+        finishOperation(generation, Outcome::Failed, tr("Original transfer ended."));
+        return;
+    }
     const qint64 remaining = m_fileData.size() - m_bytesQueued;
     if (remaining <= 0) {
         return;
     }
     const qint64 requested = qMin(kChunkSize, remaining);
     const WriteFunction writer = m_writer;
+    const QPointer<FirmwareUploader> alive(this);
     const qint64 accepted = writer(m_fileData.constData() + m_bytesQueued, requested);
-    if (!isCurrent(generation)) {
+    if (!alive || !isCurrent(generation)) {
         return;
     }
     if (accepted <= 0 || accepted > requested || accepted > remaining) {
@@ -339,6 +352,7 @@ void FirmwareUploader::onBytesWritten(Generation generation,
 
 void FirmwareUploader::acknowledgeBytes(Generation generation, qint64 bytes)
 {
+    const QPointer<FirmwareUploader> alive(this);
     if (!isCurrent(generation) || m_waitingForConfirmation) {
         return;
     }
@@ -362,6 +376,7 @@ void FirmwareUploader::acknowledgeBytes(Generation generation, qint64 bytes)
                              tr("Uploading... %1 / %2 KB")
                                  .arg(m_bytesAcknowledged / 1024)
                                  .arg(m_fileData.size() / 1024));
+        if (!alive) { return; }
         if (!isCurrent(generation)) {
             return;
         }
@@ -378,6 +393,7 @@ void FirmwareUploader::acknowledgeBytes(Generation generation, qint64 bytes)
         m_writer = {};
         emit progressChanged(m_radioProgressSeen ? m_radioProgressPercent : 100,
                              tr("Firmware bytes sent; waiting for radio confirmation..."));
+        if (!alive) { return; }
         if (!isCurrent(generation)) {
             return;
         }
@@ -419,7 +435,7 @@ void FirmwareUploader::onError(Generation generation, QTcpSocket* socket)
     if (!isCurrent(generation) || socket != m_socket || m_waitingForConfirmation) {
         return;
     }
-    if (m_bytesQueued == 0 && m_uploadPort != kFallbackPort) {
+    if (!m_uploadConnected && m_bytesQueued == 0 && m_uploadPort != kFallbackPort) {
         tryFallbackPort(generation);
         return;
     }
@@ -430,6 +446,7 @@ void FirmwareUploader::onRadioStatus(Generation generation,
                                       const QString& object,
                                       const QMap<QString, QString>& kvs)
 {
+    const QPointer<FirmwareUploader> alive(this);
     if (!isCurrent(generation) || object != QStringLiteral("file update")) {
         return;
     }
@@ -475,6 +492,7 @@ void FirmwareUploader::onRadioStatus(Generation generation,
                              ? tr("Radio reported firmware transfer %1%; installation remains unconfirmed")
                                    .arg(percent)
                              : tr("Radio reports firmware transfer... %1%").arg(percent));
+    if (!alive) { return; }
     if (!isCurrent(generation)) {
         return;
     }
@@ -560,7 +578,7 @@ void FirmwareUploader::onTimeout(Generation generation,
     if (!isCurrent(generation) || timeoutToken != m_timeoutToken) {
         return;
     }
-    if (m_socket
+    if (m_socket && !m_uploadConnected
         && m_socket->state() != QAbstractSocket::ConnectedState
         && m_bytesQueued == 0
         && m_uploadPort != kFallbackPort) {
@@ -618,8 +636,10 @@ void FirmwareUploader::finishOperation(Generation generation,
     if (!isCurrent(generation)) {
         return;
     }
+    m_generation = nextGeneration();
     m_timeoutTimer.stop();
     m_overallTimeoutTimer.stop();
+    if (m_transfer) { m_transfer->cancel(); m_transfer.reset(); }
     destroySocket(!m_waitingForConfirmation);
     disconnectStatusRelay();
     m_writer = {};
@@ -634,7 +654,6 @@ void FirmwareUploader::finishOperation(Generation generation,
     m_radioProgressPercent = 0;
     m_radioProgressAge.invalidate();
     m_uploading = false;
-    m_generation = nextGeneration();
     ++m_timeoutToken;
     ++m_overallTimeoutToken;
     // Release the barrier only for an outcome the RADIO settled (`file update

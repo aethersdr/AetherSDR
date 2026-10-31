@@ -316,6 +316,7 @@ void RadioConnection::connectToHost(const QHostAddress& address,
 
 void RadioConnection::resetSessionState()
 {
+    ++m_commandSession;
     m_pttProtocol.store(PttProtocol::Unknown);
     if (m_independentPtt) {
         m_independentPtt->disconnect();
@@ -406,6 +407,16 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
         << " streamMs=" << streamRemoveMs
         << " closeMs=" << closeMs
         << " totalMs=" << totalTimer.elapsed();
+}
+
+void RadioConnection::writeTransferCommand(quint32 seq, const QString& command,
+                                           const FileTransferGuard& guard, quint64 session)
+{
+    if (!guard.current() || session != commandSession() || !isConnected()) {
+        emit commandResponse(seq, -1, QStringLiteral("Original transfer ended before dispatch."));
+        return;
+    }
+    writeCommand(seq, command);
 }
 
 void RadioConnection::writeCommand(quint32 seq, const QString& command)

@@ -141,6 +141,12 @@ The container can run alongside other waveform containers, such as FreeDV.
 AetherSDR has its own RADE digital voice, so it doesn't need the FreeDV
 container (see [RADE Digital Voice](./rade-digital-voice.md)).
 
+Waveform installation stays with the radio connection that started it. If the
+radio reconnects while you choose or prepare the package, start the install
+again. Another firmware, profile or Radio DVK transfer must finish first.
+Upload completion means the bytes were sent; the radio's installed-waveform
+list confirms when the waveform becomes available.
+
 ## Part 4 — Join the radio to your tailnet
 
 <img src="/img/screens/tailnet-remote-access.png" width="600" alt="Remote Access window. The status line reads On your tailnet, container 0.4.0, 0 remote session(s), above an explanation of remote access over Tailscale. The Tailnet group shows the tailnet name and address (both blacked out) with a Copy button, Remote sessions 0 and Container version 0.4.0. Join your tailnet has an Auth key field (placeholder tskey-auth-...), Machine name flx8600, a Who may connect field (placeholder you@example.com, tag:operators), a note on single-use keys, and Save Access List and Change Key buttons. Station devices lists the devices found on the radio's network (blacked out) with a Share the devices found here over the tailnet checkbox, an Other devices field and Save Sharing. An amber note about the admin token and Refresh, Sign Out of Tailnet and Done buttons close the window." />

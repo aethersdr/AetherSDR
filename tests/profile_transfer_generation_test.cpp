@@ -31,16 +31,24 @@ public:
     {
         const quint64 requestId = transfer.nextAsyncId();
         transfer.m_uploadPortRequestId = requestId;
-        return transfer.makeUploadPortCallback(transfer.m_operationGeneration, transfer.m_phase,
+        const FileTransferCompletion callback = transfer.makeUploadPortCallback(transfer.m_operationGeneration, transfer.m_phase,
                                                requestId);
+        return [callback](int code, const QString& body) {
+            callback({{code == 0 ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Failed,
+                       code, body}, static_cast<quint16>(body.isEmpty() ? 42607 : body.toUShort())});
+        };
     }
 
     static std::function<void(int, const QString&)> armDownloadPortReply(ProfileTransfer& transfer)
     {
         const quint64 requestId = transfer.nextAsyncId();
         transfer.m_downloadPortRequestId = requestId;
-        return transfer.makeDownloadPortCallback(transfer.m_operationGeneration, transfer.m_phase,
+        const FileTransferCompletion callback = transfer.makeDownloadPortCallback(transfer.m_operationGeneration, transfer.m_phase,
                                                  requestId);
+        return [callback](int code, const QString& body) {
+            callback({{code == 0 ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Failed,
+                       code, body}, static_cast<quint16>(body.isEmpty() ? 42607 : body.toUShort())});
+        };
     }
 
     static QTcpSocket* socket(const ProfileTransfer& transfer)
@@ -175,7 +183,7 @@ int main(int argc, char* argv[])
             AetherSDR::ProfileTransferTestAccess::Phase::UploadImport);
         std::function<void(int, const QString&)> reply =
             AetherSDR::ProfileTransferTestAccess::armUploadPortReply(transfer);
-        reply(0, QStringLiteral("port=42607"));
+        reply(0, QStringLiteral("42607"));
 
         ok &= expect(AetherSDR::ProfileTransferTestAccess::socket(transfer) != nullptr,
                      "current upload-port reply creates the upload socket");

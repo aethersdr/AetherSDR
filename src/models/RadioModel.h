@@ -198,11 +198,11 @@ public:
     // and hand the operator exactly the ambiguous retry it exists to forbid.
     // It lives here because the connection is what it is really keyed to: only
     // a genuine disconnect→reconnect clears it (see setConnected()).
-    bool firmwareRetryBlocked() const { return m_firmwareRetryBlocked; }
+    bool firmwareRetryBlocked() const;
     void blockFirmwareRetryUntilReconnect() { m_firmwareRetryBlocked = true; }
     // Only for an outcome the radio itself settled (`file update failed=`),
     // which leaves nothing pending to misattribute to the next attempt.
-    void clearFirmwareRetryBlock() { m_firmwareRetryBlocked = false; }
+    void clearFirmwareRetryBlock();
     // "idle" / "connecting" / "connected" — the bridge's third value, so a
     // caller can tell a connect that is working from one that is not happening
     // at all. `isConnected()` is unchanged (#5413 item 3). Derived from
@@ -1076,6 +1076,14 @@ public:
                                       QObject* replyContext = nullptr,
                                       const RadioSetupCompletion& completion = {},
                                       std::optional<RadioControlSession> expectedSession = {});
+    FileTransferHandle beginFileTransfer(FileTransferPurpose purpose, QObject* owner,
+        const RadioControlSession& expectedSession, int timeoutMs);
+    bool fileTransferCurrent(const FileTransferHandle& operation) const;
+    void finishFileTransfer(const FileTransferHandle& operation, int settleMs = 0);
+    ReceiveDispatch requestFileTransfer(const FileTransferHandle& operation,
+        const FileTransferRequest& request, const FileTransferCompletion& completion);
+    ReceiveDispatch requestWaveform(const WaveformRequest& request, QObject* owner,
+        const RadioControlCompletion& completion);
     RadioControlSession controlSession() const;
     bool controlSessionCurrent(const RadioControlSession& session) const;
     ReceiveDispatch requestSpot(const SpotRequest& request, PanadapterModel* pan = nullptr,
@@ -1534,10 +1542,6 @@ public:
 
     // True only when dispatched; the callback reports the later radio reply.
     bool sendCmdPublic(const QString& cmd, std::function<void(int code, const QString& body)> cb);
-    void requestFileUploadPort(qint64 size, const QString& uploadKind,
-                               std::function<void(int code, const QString& body)> cb);
-    void requestFileDownloadPort(const QString& downloadKind,
-                                 std::function<void(int code, const QString& body)> cb);
     void refreshProfiles();
     bool isProfileTransferBlocked() const;
     bool profileDatabaseImporting() const { return m_profileDatabaseImporting; }
@@ -1679,7 +1683,8 @@ private:
     // Route command to active connection (LAN or WAN)
     using ResponseCallback = RadioConnection::ResponseCallback;
     void requestRadioInfo();
-    quint32 sendCmd(const QString& command, ResponseCallback cb = nullptr);
+    quint32 sendCmd(const QString& command, ResponseCallback cb = nullptr,
+                   std::optional<FileTransferGuard> transferGuard = {});
     quint32 clientHandle() const;
     PanadapterModel* ensureOwnedPanadapter(const QString& panId);
     void updateStreamFilters();
@@ -1988,6 +1993,11 @@ private:
     using SetupCommandWriter = std::function<bool(const QString&, ResponseCallback)>;
     using SetupCommandSink = std::function<bool(const QString&, const RadioSetupCompletion&)>;
     SetupCommandSink setupCommandSink(const SetupCommandWriter& writer = {});
+    using TransferCommandWriter = std::function<bool(const QString&, const FileTransferGuard&, ResponseCallback)>;
+    using TransferCommandSink = std::function<bool(const QString&, const FileTransferGuard&, const RadioControlCompletion&)>;
+    TransferCommandSink transferCommandSink(const TransferCommandWriter& writer = {});
+    bool fileTransferEligible(FileTransferPurpose purpose, bool holdingReservation) const;
+    FileTransferHandle m_fileTransferOperation;
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend
