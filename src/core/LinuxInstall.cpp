@@ -18,6 +18,11 @@
 #include <filesystem>
 #include <system_error>
 
+#ifdef Q_OS_LINUX
+#include <fcntl.h>   // AT_FDCWD
+#include <stdio.h>   // renameat2, RENAME_EXCHANGE
+#endif
+
 namespace fs = std::filesystem;
 
 namespace AetherSDR {
@@ -26,6 +31,11 @@ namespace {
 
 const QString kCurrent = QStringLiteral("current");
 const QString kAppRun = QStringLiteral("AppRun");
+// What a switch or an install leaves in <base> only if it is cut short, as
+// ".<prefix>-<uuid>": the next switch removes them.
+const QString kPartial = QStringLiteral("partial");
+const QString kNewCurrent = QStringLiteral("current");
+const QString kOld = QStringLiteral("old");
 
 // A release folder's name: the version, "26.10.4".
 bool isVersion(const QString& name)
@@ -45,11 +55,82 @@ QString unique(const QString& base, const QString& what)
                                + QUuid::createUuid().toString(QUuid::WithoutBraces));
 }
 
+bool isLeftover(const QString& name)
+{
+    for (const QString& what : {kPartial, kNewCurrent, kOld}) {
+        if (name.startsWith(QLatin1Char('.') + what + QLatin1Char('-'))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Whether a running process of this user runs a binary inside folder: a
+// second AetherSDR started from an older release, or from one installed
+// again. Its libraries and plugins load as it goes, so the folder stays.
+bool inUse(const QString& folder)
+{
+    std::error_code ec;
+    const std::string root = fs::weakly_canonical(toPath(folder), ec).string() + '/';
+    if (ec) {
+        return true;
+    }
+    for (const fs::directory_entry& e : fs::directory_iterator("/proc", ec)) {
+        const std::string pid = e.path().filename().string();
+        if (pid.find_first_not_of("0123456789") != std::string::npos) {
+            continue;
+        }
+        std::error_code err;
+        const std::string exe = fs::read_symlink(e.path() / "exe", err).string();
+        if (!err && exe.compare(0, root.size(), root) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// a and b, two folders, trade places in one step where the filesystem can
+// (Linux's RENAME_EXCHANGE): a reader sees one or the other at b, never
+// neither. Elsewhere, two renames, with b back as it was if the second fails.
+bool exchange(const QString& a, const QString& b, const QString& base)
+{
+#ifdef Q_OS_LINUX
+    if (::renameat2(AT_FDCWD, QFile::encodeName(a).constData(), AT_FDCWD, QFile::encodeName(b).constData(),
+                    RENAME_EXCHANGE)
+        == 0) {
+        return true;
+    }
+#endif
+    std::error_code ec;
+    const QString aside = unique(base, kOld);
+    fs::rename(toPath(b), toPath(aside), ec);
+    if (ec) {
+        return false;
+    }
+    fs::rename(toPath(a), toPath(b), ec);
+    if (ec) {
+        fs::rename(toPath(aside), toPath(b), ec);
+        return false;
+    }
+    fs::rename(toPath(aside), toPath(a), ec);
+    return true;
+}
+
+// path removed, unless a process still runs from it: then a later switch
+// removes it.
+void discard(const QString& path)
+{
+    std::error_code ec;
+    if (!inUse(path)) {
+        fs::remove_all(toPath(path), ec);
+    }
+}
+
 // <base>/current -> version, by renaming a new link over the old one: a
 // reader sees the old release or the new one, never neither.
 bool makeCurrent(const QString& base, const QString& version, QString* problem)
 {
-    const QString link = unique(base, QStringLiteral("current"));
+    const QString link = unique(base, kNewCurrent);
     std::error_code ec;
     fs::create_symlink(toPath(version), toPath(link), ec);
     if (!ec) {
@@ -96,7 +177,7 @@ bool moveTree(const QString& source, const QString& dest, bool keepSource, QStri
             return true;
         }
     }
-    const QString partial = unique(QFileInfo(dest).absolutePath(), QStringLiteral("partial"));
+    const QString partial = unique(QFileInfo(dest).absolutePath(), kPartial);
     fs::copy(toPath(source), toPath(partial), fs::copy_options::recursive | fs::copy_options::copy_symlinks,
              ec);
     if (!ec) {
@@ -179,7 +260,12 @@ bool linkTo(const QString& at, const QString& target)
     std::error_code ec;
     const fs::path p = toPath(at);
     const fs::file_status st = fs::symlink_status(p, ec);
-    if (fs::exists(st) && !fs::is_symlink(st)) {
+    if (fs::is_symlink(st)) {
+        // Ours already, or a link of the user's own (to their own build, a
+        // distribution's package): either way it stays as it is.
+        return fs::read_symlink(p, ec) == toPath(target);
+    }
+    if (fs::exists(st)) {
         return false;
     }
     fs::create_directories(p.parent_path(), ec);
@@ -251,35 +337,37 @@ bool LinuxInstall::install(const QString& tree, const QString& version, const Pa
     const QString dest = QDir(paths.base).filePath(version);
     // Run again from the installed tree, only the links are redone.
     if (QFileInfo(dest).canonicalFilePath() != source) {
-        std::error_code ec;
-        // Moved aside rather than removed in place: a running AetherSDR of
-        // that version keeps the files it has open, and the copy that works
-        // goes back if the new one can't be copied in.
-        QString old;
-        if (QFileInfo::exists(dest)) {
-            old = unique(paths.base, QStringLiteral("old"));
-            fs::rename(toPath(dest), toPath(old), ec);
-            if (ec) {
+        if (!QFileInfo::exists(dest)) {
+            if (!moveTree(source, dest, true, problem)) {
+                return false;
+            }
+        } else {
+            // That version again: the new copy is made beside the installed
+            // one, which current runs until the two trade places in one
+            // step. A copy that fails, or an installer killed meanwhile,
+            // leaves the installed one as it was. The old copy is then
+            // removed, unless an AetherSDR still runs from it.
+            const QString incoming = unique(paths.base, kPartial);
+            if (!moveTree(source, incoming, true, problem)) {
+                return false;
+            }
+            if (!exchange(incoming, dest, paths.base)) {
+                std::error_code ec;
+                fs::remove_all(toPath(incoming), ec);
                 *problem = QStringLiteral("%1 is in the way.").arg(dest);
                 return false;
             }
-        }
-        if (!moveTree(source, dest, true, problem)) {
-            if (!old.isEmpty()) {
-                fs::rename(toPath(old), toPath(dest), ec);
-            }
-            return false;
-        }
-        if (!old.isEmpty()) {
-            fs::remove_all(toPath(old), ec);
+            std::error_code ec;
+            const QString old = unique(paths.base, kOld);
+            fs::rename(toPath(incoming), toPath(old), ec);
+            discard(ec ? incoming : old);
         }
     }
-    if (!makeCurrent(paths.base, version, problem)) {
-        return false;
-    }
+    // The menu entry first: if it can't be written, nothing has changed.
     const QString current = QDir(paths.base).filePath(kCurrent);
     const QString run = QDir(current).filePath(kAppRun);
-    if (!writeDesktopEntry(dest, run, paths.applications, problem)) {
+    if (!writeDesktopEntry(dest, run, paths.applications, problem)
+        || !makeCurrent(paths.base, version, problem)) {
         return false;
     }
     // The release's icons, by the same relative paths, through current.
@@ -292,7 +380,7 @@ bool LinuxInstall::install(const QString& tree, const QString& version, const Pa
     }
     const QString command = QDir(paths.bin).filePath(QStringLiteral("aethersdr"));
     if (!linkTo(command, run) && note) {
-        *note = QStringLiteral("%1 is a file of your own, so it was left alone. AetherSDR runs as %2.")
+        *note = QStringLiteral("%1 is a file or link of your own, so it was left alone. AetherSDR runs as %2.")
                     .arg(command, run);
     }
     qCInfo(lcUpdater).noquote() << "installed v" + version + " in" << dest;
@@ -347,18 +435,28 @@ LinuxInstall::Switch LinuxInstall::switchTo(const QString& base, const QString& 
         return Switch::Current;
     }
     const QString dest = QDir(base).filePath(version);
-    fs::remove_all(toPath(dest), ec);   // a leftover: current never names it
+    // A leftover (current never names it), out of the way; kept aside while
+    // something runs from it.
+    if (QFileInfo::exists(dest)) {
+        if (inUse(dest)) {
+            fs::rename(toPath(dest), toPath(unique(base, kOld)), ec);
+        } else {
+            fs::remove_all(toPath(dest), ec);
+        }
+    }
     if (!moveTree(stagedDir, dest, false, problem)) {
         return Switch::Refused;
     }
-    // Back to staging, untouched, for the next try.
+    // Back to staging, untouched, for the next try: by a copy when staging
+    // is on another filesystem, as the move in was.
     const auto putBack = [&]() {
-        std::error_code e;
-        fs::rename(toPath(dest), toPath(stagedDir), e);
-        if (e) {
-            fs::remove_all(toPath(dest), e);
+        QString ignored;
+        if (moveTree(dest, stagedDir, false, &ignored)) {
+            return Switch::Kept;
         }
-        return Switch::Kept;
+        discard(dest);
+        *problem = QStringLiteral("AetherSDR %1 couldn't be kept to try again; it is downloaded again.").arg(version);
+        return Switch::Refused;
     };
     if (!test(dest, version)) {
         if (retry) {
@@ -374,16 +472,14 @@ LinuxInstall::Switch LinuxInstall::switchTo(const QString& base, const QString& 
     if (!makeCurrent(base, version, problem)) {
         return putBack();
     }
-    // The new release, the one running and the one current named stay;
-    // older releases and anything a crashed switch left go.
+    // The new release, the one running, the one current named and any
+    // another AetherSDR runs from stay; older releases and anything a
+    // crashed switch left go.
     for (const QFileInfo& e : QDir(base).entryInfoList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot
                                                        | QDir::System)) {
         const QString name = e.fileName();
-        const bool leftover = name.startsWith(QLatin1String(".partial-"))
-                              || name.startsWith(QLatin1String(".current-"))
-                              || name.startsWith(QLatin1String(".old-"));
-        if ((isVersion(name) && name != version && name != keep && name != was) || leftover) {
-            fs::remove_all(toPath(e.filePath()), ec);
+        if ((isVersion(name) && name != version && name != keep && name != was) || isLeftover(name)) {
+            discard(e.filePath());
         }
     }
     qCInfo(lcUpdater).noquote() << "v" + version + " is now the current release in" << base;

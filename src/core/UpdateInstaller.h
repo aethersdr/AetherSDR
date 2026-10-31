@@ -3,6 +3,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 namespace AetherSDR {
 
 // The app's side of putting a staged update in place (RFC #5304). On
@@ -43,6 +45,20 @@ public:
     // was handed over, and elsewhere.
     static bool launchHelper(const QString& stagedDir, const QString& version, bool restart,
                              QString* problem);
+
+    // Linux's hand-over, the switch (LinuxInstall::switchTo) into base
+    // beside keep, the running release: true when version is in place (or
+    // a newer one already was). Restart to update runs in a live session,
+    // so a failed self-test there is the release's fault and final. As
+    // AetherSDR quits it may be the session's (a logout takes the display
+    // away first), so the release is kept to try again at the next quit,
+    // up to the third, which is final. A final failure is remembered as
+    // rolled back; what happened is written to stateDir for the next start.
+    static bool switchRelease(const QString& base, const QString& stagedDir, const QString& version,
+                              const QString& keep,
+                              const std::function<bool(const QString& tree, const QString& version)>& selfTest,
+                              bool restart, const QString& stateDir, QString* problem);
+    static constexpr int kQuitSwitchTries = 3;
 
     // What the helper did, from <stateDir>/swap-result.txt, once: the file
     // is removed when read. A rolled-back release is remembered in

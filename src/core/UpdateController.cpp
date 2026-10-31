@@ -8,7 +8,9 @@
 
 #include <QCoreApplication>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QSysInfo>
+#include <QtConcurrent/QtConcurrentRun>
 
 namespace AetherSDR {
 
@@ -135,7 +137,7 @@ void UpdateController::setState(State s, const QString& version)
     }
     m_state = s;
     m_version = version;
-    if (s != State::Staged && s != State::Handed) {
+    if (s != State::Staged && s != State::Installing && s != State::Handed) {
         m_staged = {};
     }
     emit stateChanged();
@@ -146,7 +148,7 @@ void UpdateController::refreshStaged(const QString& latestVersion)
     if (!latestVersion.isEmpty()) {
         m_latest = latestVersion;
     }
-    if (m_state == State::Staging || m_state == State::Handed) {
+    if (m_state == State::Staging || m_state == State::Installing || m_state == State::Handed) {
         return;   // the sweep would remove the work in progress
     }
     const QString rolledBack = m_env.rolledBackVersion ? m_env.rolledBackVersion() : QString();
@@ -166,7 +168,8 @@ void UpdateController::refreshStaged(const QString& latestVersion)
 
 void UpdateController::install(const QString& latestVersion)
 {
-    if (m_state == State::Staging || m_state == State::Handed || latestVersion.isEmpty()) {
+    if (m_state == State::Staging || m_state == State::Installing || m_state == State::Handed
+        || latestVersion.isEmpty()) {
         return;
     }
     if (m_state == State::Staged && m_version == latestVersion) {
@@ -206,54 +209,79 @@ void UpdateController::discard(const QString& version)
     }
 }
 
-bool UpdateController::handOver(bool restart, QString* problemOut)
+UpdateController::HandOver UpdateController::runHandOver(const Environment& env,
+                                                         const UpdateStager::StagedRelease& staged, bool restart)
 {
-    QString scratch;
-    QString* problem = problemOut ? problemOut : &scratch;
-    if (m_state != State::Staged || m_staged.version.isEmpty()) {
-        *problem = tr("No update is ready to install.");
-        return false;
-    }
-    const UpdateStager::Request& r = m_env.request;
+    HandOver h;
+    const UpdateStager::Request& r = env.request;
     QString why;
     // The staged files are checked once more, against the signed manifest
     // kept beside them: nothing changed since staging goes in.
-    if (!UpdateStager::revalidate(r.stagingRoot, m_staged, r.platform, r.arch, &why)) {
-        qCWarning(lcUpdater).noquote() << "staged update to v" + m_staged.version + " refused:" << why;
-        UpdateStager::discard(r.stagingRoot, m_staged.version);
-        setState(State::Idle, {});
-        *problem = tr("The downloaded update changed on disk, so it was removed. Install it again.");
-        return false;
+    if (!UpdateStager::revalidate(r.stagingRoot, staged, r.platform, r.arch, &why)) {
+        qCWarning(lcUpdater).noquote() << "staged update to v" + staged.version + " refused:" << why;
+        h.changed = true;
+        return h;
     }
-    if (!m_env.launchHelper || !m_env.launchHelper(m_staged.dir, m_staged.version, restart, &why)) {
-        *problem = why.isEmpty() ? tr("The updater could not be started.") : why;
+    if (!env.launchHelper || !env.launchHelper(staged.dir, staged.version, restart, &h.problem)) {
         // On Linux the hand-over is the switch itself: a release that failed
         // its self-test there is gone, and nothing is staged any more.
-        if (!QFileInfo::exists(m_staged.dir)) {
-            UpdateStager::discard(r.stagingRoot, m_staged.version);
-            setState(State::Idle, {});
-        }
+        h.consumed = !QFileInfo::exists(staged.dir);
+        return h;
+    }
+    h.handed = true;
+    return h;
+}
+
+bool UpdateController::finishHandOver(const HandOver& h, const UpdateStager::StagedRelease& staged,
+                                      QString* problem)
+{
+    const QString& root = m_env.request.stagingRoot;
+    if (h.changed || h.consumed) {
+        UpdateStager::discard(root, staged.version);
+        setState(State::Idle, {});
+        *problem = h.changed ? tr("The downloaded update changed on disk, so it was removed. Install it again.")
+                             : h.problem;
         return false;
     }
-    const QString version = m_staged.version;
-    const UpdateStager::StagedRelease handed = m_staged;
-    setState(State::Handed, version);
-    m_staged = handed;
+    if (!h.handed) {
+        *problem = h.problem.isEmpty() ? tr("The updater could not be started.") : h.problem;
+        setState(State::Staged, staged.version);
+        m_staged = staged;
+        return false;
+    }
+    setState(State::Handed, staged.version);
+    m_staged = staged;
     return true;
 }
 
 bool UpdateController::restartToUpdate(QString* problem)
 {
-    return handOver(true, problem);
+    if (m_state != State::Staged || m_staged.version.isEmpty()) {
+        *problem = tr("No update is ready to install.");
+        return false;
+    }
+    const UpdateStager::StagedRelease staged = m_staged;
+    setState(State::Installing, staged.version);
+    auto* watcher = new QFutureWatcher<HandOver>(this);
+    connect(watcher, &QFutureWatcher<HandOver>::finished, this, [this, watcher, staged] {
+        QString why;
+        const bool handed = finishHandOver(watcher->result(), staged, &why);
+        watcher->deleteLater();
+        emit restartReady(handed, why, staged.version);
+    });
+    watcher->setFuture(QtConcurrent::run([env = m_env, staged] { return runHandOver(env, staged, true); }));
+    return true;
 }
 
 bool UpdateController::installOnQuit()
 {
-    if (m_state != State::Staged) {
+    if (m_state != State::Staged || m_staged.version.isEmpty()) {
         return false;
     }
+    // AetherSDR is closing: waited for here, on its way out.
+    const UpdateStager::StagedRelease staged = m_staged;
     QString problem;
-    if (!handOver(false, &problem)) {
+    if (!finishHandOver(runHandOver(m_env, staged, false), staged, &problem)) {
         qCWarning(lcUpdater).noquote() << "update not installed on quit:" << problem;
         return false;
     }

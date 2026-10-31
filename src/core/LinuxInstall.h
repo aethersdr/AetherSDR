@@ -49,8 +49,9 @@ public:
     // AetherSDR --install, from an unpacked tarball (or, later, from inside
     // the AppImage): copies tree into <base>/<version>, makes it current,
     // and points the menu entry, its icon and the aethersdr command at
-    // current. A file of the user's own at ~/.local/bin/aethersdr is left
-    // alone; note says so.
+    // current. A file or link of the user's own at ~/.local/bin/aethersdr is
+    // left alone; note says so. If the menu entry can't be written, current
+    // is not changed.
     static bool install(const QString& tree, const QString& version, const Paths& paths,
                         QString* problem, QString* note = nullptr);
 
@@ -65,12 +66,13 @@ public:
         Current,    // current already ran version or a newer release; stagedDir removed
         Kept,       // nothing changed and stagedDir is back where it was, to try again
         Failed,     // it failed its self-test and was removed (only when !retry)
-        Refused,    // nothing was moved: not a release to switch to
+        Refused,    // current unchanged: not a release to switch to, or one that
+                    // could be neither moved in nor put back (stagedDir is then gone)
     };
     // The switch: moves stagedDir to <base>/<version>, runs test on it, and
     // only if it passes makes it current. Afterwards every release folder
-    // except version, keep (the running release) and what current named is
-    // removed. current is never changed otherwise: a failed test, or a
+    // except version, keep (the running release), what current named and any
+    // another AetherSDR runs from is removed. current is never changed otherwise: a failed test, or a
     // failure to change it, leaves it as it was. retry: a failed test puts
     // the tree back in stagedDir (Kept) rather than removing it (Failed), for
     // a test that may have failed for want of a display, as AetherSDR quits.

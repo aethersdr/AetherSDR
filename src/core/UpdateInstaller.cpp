@@ -166,28 +166,12 @@ bool UpdateInstaller::launchHelper(const QString& stagedDir, const QString& vers
         *problem = QStringLiteral("This copy wasn't installed with AetherSDR --install.");
         return false;
     }
-    // Restart to update runs in a live session, so a failed self-test there
-    // is the release's fault. As AetherSDR quits it may be the session's
-    // (a logout takes the display away first): then it is kept, to try again.
-    using Switch = LinuxInstall::Switch;
-    const Switch result = LinuxInstall::switchTo(paths.base, stagedDir, version, QFileInfo(running).fileName(),
-                                                 LinuxInstall::selfTest, !restart, problem);
-    if (result == Switch::Failed) {
-        UpdateSettings::setRolledBackVersion(version);   // never offered again
-    }
-    if (result == Switch::Failed || result == Switch::Kept || result == Switch::Refused) {
+    if (!switchRelease(paths.base, stagedDir, version, QFileInfo(running).fileName(), LinuxInstall::selfTest,
+                       restart, stateDir(), problem)) {
         qCWarning(lcUpdater).noquote() << "update to v" + version + " not installed:" << *problem;
         return false;
     }
     const QString state = stateDir();
-    if (result == Switch::Switched) {
-        QDir().mkpath(state);
-        QSaveFile f(QDir(state).filePath(QStringLiteral("swap-result.txt")));
-        if (f.open(QIODevice::WriteOnly)) {
-            f.write(QByteArray(updater::outcomeName(updater::Outcome::Updated)) + ' ' + version.toUtf8() + '\n');
-            f.commit();
-        }
-    }
     // The tree has moved into the install (or was not needed): its record
     // goes with it.
     UpdateStager::discard(state, version);
@@ -206,6 +190,37 @@ bool UpdateInstaller::launchHelper(const QString& stagedDir, const QString& vers
     *problem = QStringLiteral("Installing updates in place isn't available on this system.");
     return false;
 #endif
+}
+
+bool UpdateInstaller::switchRelease(const QString& base, const QString& stagedDir, const QString& version,
+                                    const QString& keep,
+                                    const std::function<bool(const QString& tree, const QString& version)>& selfTest,
+                                    bool restart, const QString& stateDir, QString* problem)
+{
+    using Switch = LinuxInstall::Switch;
+    const int tried = restart ? 0 : UpdateSettings::quitSwitchTries(version);
+    const Switch result = LinuxInstall::switchTo(base, stagedDir, version, keep, selfTest,
+                                                 !restart && tried + 1 < kQuitSwitchTries, problem);
+    if (result == Switch::Kept && !restart) {
+        UpdateSettings::setQuitSwitchTries(version, tried + 1);
+    }
+    const auto report = [&](updater::Outcome outcome) {
+        QDir().mkpath(stateDir);
+        QSaveFile f(QDir(stateDir).filePath(QStringLiteral("swap-result.txt")));
+        if (f.open(QIODevice::WriteOnly)) {
+            f.write(QByteArray(updater::outcomeName(outcome)) + ' ' + version.toUtf8() + '\n');
+            f.commit();
+        }
+    };
+    if (result == Switch::Failed) {
+        UpdateSettings::setRolledBackVersion(version);   // never offered again
+        if (!restart) {
+            report(updater::Outcome::RolledBack);   // told at the next start
+        }
+    } else if (result == Switch::Switched) {
+        report(updater::Outcome::Updated);
+    }
+    return result == Switch::Switched || result == Switch::Current;
 }
 
 namespace {

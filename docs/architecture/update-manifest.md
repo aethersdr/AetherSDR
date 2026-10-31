@@ -196,6 +196,11 @@ That needs `full` to be a `.zip` of at most 512 MiB here; Linux's `.tar.zst` is 
 
 If the full release fails too, the browser fallback is offered, once.
 
+The Windows zip is unpacked in memory: the download and its unpacked
+files are held at once, on a worker thread. For v26.10.3 that measured
+548 MiB peak (a 157 MB zip, 344 MB of files). The caps above are hard
+ceilings, so this is footprint, not safety.
+
 ### The full release in-app (Linux)
 
 The client stages `full` in-app when its name ends in `.tar.zst` (and in
@@ -220,11 +225,6 @@ same tree the patches produce:
   so only the download is held in memory (134 MB for v26.10.4 x86_64, from
   a 348 MB tree). Every file is then checked against `files`, as in step 6.
   Nothing comes from the install.
-
-The full release is unpacked in memory: the download and its unpacked
-files are held at once, on a worker thread. For v26.10.3 that measured
-548 MiB peak (a 157 MB zip, 344 MB of files). The caps above are hard
-ceilings, so this is footprint, not safety.
 
 ### What stays staged
 
@@ -398,18 +398,26 @@ because `~/.local/share/AetherSDR` already holds user data. `LinuxInstall`
   app itself in `UpdateInstaller::launchHelper`: the staged tree is renamed
   into `install/<version>`, that folder's `AppRun --update-selftest` must
   pass (the same frozen contract, 60 s), and only then is a new link renamed
-  over `current`. Every other version folder except the one running is then
-  removed. A rename over a link is atomic, and the running tree is never
-  touched, so there is no window with nothing runnable, no journal and no
-  repair.
+  over `current`. Every other version folder is then removed, except the one
+  running, the one `current` named and any another AetherSDR runs from
+  (found through `/proc/<pid>/exe`). A rename over a link is atomic, and the
+  running tree is never touched, so there is no window with nothing
+  runnable, no journal and no repair. `--install` of a version already
+  installed copies the new tree beside it and trades the two in one step
+  (`renameat2(RENAME_EXCHANGE)`), so `current` never dangles, even if the
+  installer is killed mid-copy; the old copy is removed once nothing runs
+  from it.
 - If the self-test fails on **Restart to update**, the new folder is
   removed, `current` is unchanged and the release is remembered as rolled
   back; the window says so at once. As AetherSDR **quits**, a failure may be
   the session's rather than the release's (a logout takes the display away
   first), so the tree goes back to staging and is tried again at the next
-  quit or Restart (a maintainer ruling). If `current` cannot be changed, the
-  tree goes back to staging too. Success writes `Updated <version>` to
-  `swap-result.txt` for the next start.
+  quit or Restart (a maintainer ruling), counted in
+  `Updates.quitSwitchTries`. The third failure at quit is final: the
+  release is removed and rolled back, and `RolledBack <version>` is written
+  to `swap-result.txt` for the next start (a maintainer ruling). If
+  `current` cannot be changed, the tree goes back to staging too. Success
+  writes `Updated <version>`.
 - If `current` already names that release or a newer one (installed by hand
   meanwhile), the staged tree is dropped and nothing is switched: never a
   step back. Cleanup never removes the folder `current` named.
@@ -447,9 +455,11 @@ helper has it and waits for AetherSDR to exit).
 - Skip this version discards a staged (or staging) release of that
   version. A rolled-back version is never staged.
 - **Restart to update** runs `revalidate()` and then hands the release to
-  the helper with `--restart`, and AetherSDR quits normally. If the files
-  changed since staging, the release is discarded and the window says to
-  install again.
+  the helper with `--restart` on a worker thread (on Linux the switch and
+  its self-test run there too, a maintainer ruling), in the state
+  `Installing`; `restartReady` then closes the window, and AetherSDR quits
+  normally. If the files changed since staging, the release is discarded
+  and the window says to install again.
 - As AetherSDR quits (the end of `MainWindow::closeEvent`), a staged
   release is revalidated and handed over without `--restart`, unless radio
   firmware is being written. Revalidating hashes the whole tree, so the

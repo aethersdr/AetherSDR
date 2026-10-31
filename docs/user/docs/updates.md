@@ -50,7 +50,7 @@ Most updates download only what changed since your version. When that isn't poss
 Before the new version goes in, it is started once with a quick check, without a window or the radio. If that check fails, your previous version stays, and that release is never offered again.
 
 - **Windows:** a small updater swaps the new version in after AetherSDR quits. If the check fails, your previous version is put back. The previous version is kept beside the new one (in a folder named like your install with `.previous` after it) until the next update.
-- **Linux:** the new version goes in its own folder beside yours, and only once it passes the check does it become the one your menu entry and the `aethersdr` command start. If the check fails as AetherSDR quits, for example while you log out, the update stays ready and is tried again next time; only a failure after **Restart to update** stops it being offered. The version you were running is kept until the next update; see [Going back to the previous version on Linux](#going-back-to-the-previous-version-on-linux).
+- **Linux:** the new version goes in its own folder beside yours, and only once it passes the check does it become the one your menu entry and the `aethersdr` command start. If the check fails as AetherSDR quits, for example while you log out, the update stays ready and is tried again next time. A failure after **Restart to update**, or at a third quit in a row, stops it being offered. The version you were running is kept until the next update; see [Going back to the previous version on Linux](#going-back-to-the-previous-version-on-linux).
 
 The next time AetherSDR starts, the status bar says what happened: **Updated to AetherSDR** *version*, or that the update didn't start and your previous version was restored.
 
@@ -85,7 +85,7 @@ The AppImage runs from wherever you saved it, and updates by downloading the nex
    AetherSDR is copied into `~/.local/share/AetherSDR/install/`, added to your applications menu, and given an `aethersdr` command in `~/.local/bin`. It then starts.
 4. Delete the `squashfs-root` folder and the AppImage; they aren't used any more.
 
-Your settings, logs and downloads are the same ones the AppImage uses, so nothing has to be set up again. Running `--install` again from a newer release's unpacked AppImage installs that release the same way. If `~/.local/bin/aethersdr` is already a file of your own, it is left alone and the installer says so.
+Your settings, logs and downloads are the same ones the AppImage uses, so nothing has to be set up again. Running `--install` again from a newer release's unpacked AppImage installs that release the same way. If `~/.local/bin/aethersdr` is already a file or link of your own, it is left alone and the installer says so.
 
 ### Going back to the previous version on Linux
 
@@ -105,9 +105,12 @@ Quit AetherSDR, then remove what `--install` added:
 
 ```sh
 rm -rf ~/.local/share/AetherSDR/install
-rm -f ~/.local/share/applications/AetherSDR.desktop ~/.local/bin/aethersdr
-find ~/.local/share/icons/hicolor -name aethersdr.png -type l -delete
+rm -f ~/.local/share/applications/AetherSDR.desktop
+find ~/.local/bin/aethersdr ~/.local/share/icons/hicolor -type l \
+  -lname "$HOME/.local/share/AetherSDR/install/current/*" -delete
 ```
+
+Only the links `--install` made are removed: an `aethersdr` command or icon of your own stays.
 
 Your settings stay. They are under `~/.config/AetherSDR` and `~/.local/share/AetherSDR`, outside `install`.
 

@@ -27,6 +27,8 @@ public:
         Idle,      // nothing staged, nothing running
         Staging,   // downloading and applying; progress() reports it
         Staged,    // stagedVersion() is ready for Restart to update or the quit
+        Installing,   // Restart to update: checking it and handing it over
+                      // (on Linux, switching it in), on a worker thread
         Handed,    // the helper has it and is waiting for AetherSDR to exit
     };
 
@@ -86,12 +88,14 @@ public:
     void discard(const QString& version);
 
     // Restart to update: checks the staged files again and hands them to
-    // the helper, which starts the new version once AetherSDR has quit. The
-    // caller then quits. False with problem when it cannot (the staged
-    // release is then discarded, to be staged again).
+    // the helper, which starts the new version once AetherSDR has quit, on
+    // a worker thread (on Linux the switch and its self-test run there, up
+    // to a minute for a release that hangs). False with problem when
+    // nothing is staged; otherwise restartReady says how it went, and the
+    // caller quits when it was handed over.
     bool restartToUpdate(QString* problem);
-    // As the app quits: the same, silently, without the restart. False when
-    // nothing was handed over.
+    // As the app quits: the same, silently, without the restart, waited
+    // for. False when nothing was handed over.
     bool installOnQuit();
 
 signals:
@@ -106,9 +110,20 @@ signals:
     // the newer one and reason says so. Every attempt ends in staged,
     // browserNeeded or failed.
     void failed(const QString& reason, const QString& version);
+    // Restart to update finished: handed over (quit now), or not, with
+    // problem (the staged release is discarded when it can't be used again).
+    void restartReady(bool handed, const QString& problem, const QString& version);
 
 private:
-    bool handOver(bool restart, QString* problem);
+    // What a hand-over did, worked out off the GUI thread.
+    struct HandOver {
+        bool handed = false;
+        bool changed = false;    // the staged files changed on disk
+        bool consumed = false;   // the staged tree is gone (Linux's switch used it up)
+        QString problem;
+    };
+    static HandOver runHandOver(const Environment& env, const UpdateStager::StagedRelease& staged, bool restart);
+    bool finishHandOver(const HandOver& h, const UpdateStager::StagedRelease& staged, QString* problem);
     // A staging attempt for attempted ended without a release.
     void endAttempt(const QString& attempted, const QString& reason, bool browser);
     // A newer latest has been heard than version.
