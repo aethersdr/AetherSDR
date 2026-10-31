@@ -7,6 +7,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -78,6 +79,27 @@ QAbstractSpinBox {
 }
 QAbstractSpinBox:focus {
     border-color: {{color.canon.aqua}};
+}
+QComboBox {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+QComboBox:hover, QComboBox:focus {
+    border-color: {{color.canon.aqua}};
+}
+QComboBox::drop-down {
+    border: 0;
+    width: 18px;
+}
+QComboBox QAbstractItemView {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.lineHi}};
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
 }
 )";
 
@@ -257,6 +279,40 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     body->setSpacing(8);
     body->addWidget(makeCanonHeader(QStringLiteral("AGC-T Calibration")));
 
+    // Slice selector — visible only when more than one receiver is open.
+    // Lets the operator switch calibration target without leaving the dialog.
+    m_sliceCombo = new QComboBox(this);
+    m_sliceCombo->setToolTip(tr("Select which receiver to calibrate"));
+    m_sliceCombo->setAccessibleName(tr("Calibration receiver"));
+    body->addWidget(m_sliceCombo);
+    connect(m_sliceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int index) {
+        if (index < 0) return;
+        const int sliceId = m_sliceCombo->itemData(index).toInt();
+        if (SliceModel* s = m_radio->slice(sliceId); s && s != m_slice) {
+            setSlice(s);
+        }
+    });
+    connect(m_radio, &RadioModel::sliceAdded,
+            this, [this](SliceModel*) { refreshSliceCombo(); });
+    connect(m_radio, &RadioModel::sliceRemoved,
+            this, [this](int sliceId) {
+        // sliceRemoved fires before deleteLater(), so QPointer is still live here.
+        // Match on the id — don't wait for the pointer to null.
+        if (!m_slice || m_slice->sliceId() == sliceId) {
+            // m_slices has already been updated, so remaining excludes the removed slice.
+            const QList<SliceModel*> remaining = m_radio->slices();
+            setSlice(remaining.isEmpty() ? nullptr : remaining.first());
+        }
+        refreshSliceCombo();
+    });
+    // slotOccupancyChanged fires on reconnect reclaim paths where RadioModel
+    // re-acquires existing slots without emitting sliceAdded.  Without this
+    // connection the combo would be stale after a radio reconnect cycle.
+    connect(m_radio, &RadioModel::slotOccupancyChanged,
+            this, [this](int) { refreshSliceCombo(); });
+    refreshSliceCombo();
+
     m_modeLabel = new QLabel(this);
     m_modeLabel->setProperty("agcRole", QStringLiteral("mode"));
     m_modeLabel->setWordWrap(true);
@@ -364,6 +420,13 @@ void AgcCalibrationDialog::setSlice(SliceModel* slice)
         disconnectSlice(m_slice);
     }
     m_slice = slice;
+    // Keep the combo in sync when the active pan changes externally
+    // (e.g. Tools menu re-invoked while the dialog is already open).
+    if (m_sliceCombo && m_slice) {
+        const QSignalBlocker blocker(m_sliceCombo);
+        const int idx = m_sliceCombo->findData(m_slice->sliceId());
+        if (idx >= 0) m_sliceCombo->setCurrentIndex(idx);
+    }
     m_engine.setSlice(slice);
     if (m_slice) {
         connectSlice(m_slice);
@@ -372,6 +435,24 @@ void AgcCalibrationDialog::setSlice(SliceModel* slice)
     m_applyBtn->setEnabled(false);
     updateModeUi();
     refreshFromSlice();
+}
+
+void AgcCalibrationDialog::refreshSliceCombo()
+{
+    if (!m_sliceCombo) return;
+    const QSignalBlocker blocker(m_sliceCombo);
+    m_sliceCombo->clear();
+    const QList<SliceModel*> slices = m_radio->slices();
+    for (SliceModel* s : slices) {
+        m_sliceCombo->addItem(tr("Slice %1").arg(QChar('A' + s->sliceId())),
+                              s->sliceId());
+    }
+    if (m_slice) {
+        const int idx = m_sliceCombo->findData(m_slice->sliceId());
+        if (idx >= 0) m_sliceCombo->setCurrentIndex(idx);
+    }
+    // Hide when there is only one receiver — no choice to present.
+    m_sliceCombo->setVisible(slices.size() > 1);
 }
 
 void AgcCalibrationDialog::connectSlice(SliceModel* slice)

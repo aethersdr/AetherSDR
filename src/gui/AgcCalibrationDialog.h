@@ -9,6 +9,7 @@
 
 #include <functional>
 
+class QComboBox;
 class QLabel;
 class QPushButton;
 class QDoubleSpinBox;
@@ -81,6 +82,7 @@ private slots:
     void onFinished(bool applied);
     void pollNoiseFloor();
     void refreshFromSlice();
+    void refreshSliceCombo();
 
 private:
     void connectSlice(SliceModel* slice);
@@ -109,6 +111,7 @@ private:
     QLabel*         m_quietLabel{nullptr};
     QLabel*         m_recLabel{nullptr};
     QLabel*         m_hintLabel{nullptr};
+    QComboBox*      m_sliceCombo{nullptr};
     QPushButton*    m_startStopBtn{nullptr};
     QPushButton*    m_applyBtn{nullptr};
     QDoubleSpinBox* m_targetSpin{nullptr};

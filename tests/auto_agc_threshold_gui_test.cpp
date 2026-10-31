@@ -31,6 +31,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QComboBox>
 #include <QLabel>
 #include <QPointer>
 #include <QPoint>
@@ -150,6 +151,10 @@ public:
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
     void setKeying(bool, const TxCoordinator::Operation&, const TxCoordinator::Completion&) override {}
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
+
+    // Test helper: remove a single slice without replacing the whole backend.
+    // Named expelSlice to avoid hiding IRadioBackend::removeSlice (bool return).
+    void expelSlice(int sliceId) { emit sliceRemoved(sliceId); }
 };
 
 void settle()
@@ -325,6 +330,85 @@ private slots:
             QTest::qWait(400);
         }
         QVERIFY(result->text().startsWith(QStringLiteral("Recommended AGC-T")));
+    }
+
+    void calibrationDialogSliceComboSelectsReceiver()
+    {
+        Fixture fixture;
+        AudioEngine audio;
+        AgcCalibrationDialog dialog(&fixture.radio, &audio, {});
+        dialog.setSlice(fixture.radio.slice(0));
+        dialog.show();
+        settle();
+
+        auto* combo = dialog.findChild<QComboBox*>();
+        QVERIFY(combo);
+
+        // Locate the start/stop button — calibration is blocked when the
+        // targeted slice is in Automatic mode, so its enable state is a
+        // reliable proxy for which slice the dialog is actually monitoring.
+        QPushButton* startStop = nullptr;
+        for (QPushButton* btn : dialog.findChildren<QPushButton*>()) {
+            if (btn->text() == QStringLiteral("Auto Sweep")) {
+                startStop = btn;
+                break;
+            }
+        }
+        QVERIFY(startStop);
+
+        // Single receiver: combo must not be visible — no choice to present.
+        QCOMPARE(combo->count(), 1);
+        QVERIFY(!combo->isVisible());
+        QVERIFY(startStop->isEnabled()); // slice 0 is in Manual — calibration allowed
+
+        // Add a second slice — combo becomes visible with two items,
+        // still targeting slice 0.
+        fixture.backend->status(1, AgcThresholdMode::Manual);
+        settle();
+        QCOMPARE(combo->count(), 2);
+        QVERIFY(combo->isVisible());
+        QCOMPARE(combo->currentData().toInt(), 0);
+
+        // Pick slice 1 in the combo — dialog must retarget to slice 1.
+        const int idx1 = combo->findData(1);
+        QVERIFY(idx1 >= 0);
+        combo->setCurrentIndex(idx1);
+        settle();
+        QCOMPARE(combo->currentData().toInt(), 1);
+
+        // Prove retargeting: flip slice 1 to Automatic — that blocks
+        // calibration, so the button must be disabled.  If the dialog
+        // were still watching slice 0 (which remains Manual) the button
+        // would stay enabled and this assertion would fail.
+        fixture.backend->status(1, AgcThresholdMode::Automatic);
+        settle();
+        QVERIFY(!startStop->isEnabled());
+
+        // Restore slice 1 to Manual before triggering removal.
+        fixture.backend->status(1, AgcThresholdMode::Manual);
+        settle();
+        QVERIFY(startStop->isEnabled());
+
+        // Remove only slice 1 (the targeted slice), leaving slice 0 alive.
+        // The sliceRemoved handler must fall back to slice 0; the combo
+        // must shrink to one item and hide.
+        fixture.backend->expelSlice(1);
+        settle();
+        QCOMPARE(combo->count(), 1);
+        QVERIFY(!combo->isVisible());
+
+        // Prove fallback: slice 0 is in Manual mode so calibration is
+        // allowed — button must be enabled again.
+        QVERIFY(startStop->isEnabled());
+
+        // Stronger fallback proof: the previous assertion passes whether or
+        // not the dialog actually re-targeted A, because A was already in
+        // Manual before B was removed.  Flip A to Automatic — calibration
+        // must block, proving the dialog is monitoring A's signals and not
+        // some stale pre-removal state.
+        fixture.backend->status(0, AgcThresholdMode::Automatic);
+        settle();
+        QVERIFY(!startStop->isEnabled());
     }
 
     void initTestCase()
