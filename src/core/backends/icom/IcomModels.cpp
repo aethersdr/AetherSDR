@@ -17,9 +17,10 @@ namespace {
 //               00), 10 W.
 //   IC-7300MK2  CI-V address 0xB6 (FE FE E0 B6), 475 points, range 0..160, LAN
 //               data length 490, 0.03-74.8 MHz, all FOUR scope modes.
-// The rest are cross-referenced hardware facts, unverified: the transport is
+// IC-7610 and IC-7760 geometry is checked against their current CI-V guides.
+// The remaining rows are cross-referenced hardware facts: the transport is
 // shared, but each model's command table and scope geometry need its own guide.
-constexpr std::array<IcomModel, 7> kModels{{
+constexpr std::array<IcomModel, 8> kModels{{
     {
         /*civAddress*/ 0xA4, /*name*/ "IC-705",
         /*receivers*/ 1, /*vfos*/ 2,
@@ -62,8 +63,14 @@ constexpr std::array<IcomModel, 7> kModels{{
         kFreqBytes,
         true, 100.0,
         30'000ULL, 60'000'000ULL,
-        /*verified*/ false,
+        /*verified*/ true,
         /*bands*/ "",
+    },
+    {
+        // IC-7760 CI-V Reference Guide A7788-8EX-2, May 2025, pp. 23-26.
+        0xB2, "IC-7760", 2, 1, true, false,
+        true, 689, 200, 15, kFreqBytes,
+        true, 200.0, 30'000ULL, 60'000'000ULL, true, "",
     },
     {
         0x8E, "IC-785x", 2, 1,
@@ -200,6 +207,25 @@ constexpr std::array<std::string_view, 8> kExtendedFmAccessModes{
     "dtcs_tx", "dtcs_txrx", "ctcss_tx_dtcs_rx", "dtcs_tx_ctcss_rx"};
 constexpr std::array<std::string_view, 4> kToneSquelchFmAccessModes{
     "off", "ctcss_tx", "ctcss_rx", "ctcss_txrx"};
+
+constexpr std::array<FeatureEvidence, 5> kDualReceiverEvidence{{
+    {IcomFeature::Core, EvidenceKind::OfficialGuide,
+     "IC-7610 A7380-7EX-4; IC-7760 A7788-8EX-2, 25/26/29 and 1C 00/03"},
+    {IcomFeature::Scope, EvidenceKind::OfficialGuide,
+     "IC-7610 pp.14-15; IC-7760 pp.24-26, 689 amplitudes, 0-200"},
+    {IcomFeature::VfoMode, EvidenceKind::OfficialGuide,
+     "Model CI-V guides: 26 MAIN/SUB, DATA OFF/D1/D2/D3, FIL1/FIL2/FIL3"},
+    {IcomFeature::ModulationInput, EvidenceKind::OfficialGuide,
+     "IC-7610 SET 0090-0094; IC-7760 SET 0128-0132"},
+    {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
+     "IC-7610 and IC-7760 model CI-V guides, 1C 01"},
+}};
+constexpr std::array<std::string_view, 9> kDualReceiverModes{
+    "LSB", "USB", "CW", "CWR", "AM", "FM", "DIGL", "DIGU", "DFM"};
+constexpr std::array<ModulationInputChoice, 1> kIc7610LanChoice{{
+    {0x05, "LAN", ModSourceNetwork}}};
+constexpr std::array<ModulationInputChoice, 1> kIc7760LanChoice{{
+    {0x09, "LAN", ModSourceNetwork}}};
 
 constexpr std::array<FeatureEvidence, 17> kIc705Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
@@ -656,6 +682,24 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
     };
+    static const IcomModelProfile kIc7610Profile{
+        .supportedBringup = true,
+        .guideRevision = "IC-7610 CI-V A7380-7EX-4 (Sep 2025); hardware qualification pending",
+        .features = kDualReceiverEvidence,
+        .modulation = ModulationProfile{-1, -1, 90, 91, 92, 0x05, 0, kIc7610LanChoice},
+        .dualReceiver = DualReceiverProfile{86, {92, 93, 94}},
+        .scope = ScopeCommandProfile{true, true, true, true, true, 0, ScopeEdgeTable::None, true},
+        .modes = kDualReceiverModes,
+    };
+    static const IcomModelProfile kIc7760Profile{
+        .supportedBringup = true,
+        .guideRevision = "IC-7760 CI-V A7788-8EX-2 (May 2025); hardware qualification pending",
+        .features = kDualReceiverEvidence,
+        .modulation = ModulationProfile{-1, -1, 128, 129, 130, 0x09, 0, kIc7760LanChoice},
+        .dualReceiver = DualReceiverProfile{123, {130, 131, 132}},
+        .scope = ScopeCommandProfile{true, true, true, true, true, 0, ScopeEdgeTable::None, true},
+        .modes = kDualReceiverModes,
+    };
     static const IcomModelProfile kUnprofiled{};
     static const IcomModelProfile kTunerOnlyProfile{
         .guideRevision = "model-specific CI-V Reference Guide",
@@ -669,8 +713,11 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         return kIc9700Profile;
     case 0xB6:
         return kIc7300Mk2Profile;
+    case 0x98:
+        return kIc7610Profile;
+    case 0xB2:
+        return kIc7760Profile;
     case 0x94: // IC-7300
-    case 0x98: // IC-7610
     case 0x8E: // IC-7850 / IC-7851
         return kTunerOnlyProfile;
     default:

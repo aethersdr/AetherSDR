@@ -67,7 +67,8 @@ bool IcomSession::start(const Params& params)
     m_ignoredAuthReplies = 0;
     m_ignoredControlPackets = 0;
     m_tx = TxPacketizer(params.codec);
-    m_rx = RxAssembler(params.codec);
+    m_rxCodec = params.codec;
+    m_rx = RxAssembler(m_rxCodec);
 
     if (!codecSupported(params.codec)) {
         // Refusing here rather than at decode time is deliberate: a codec we
@@ -456,7 +457,12 @@ void IcomSession::requestStreamsIfReady()
     req.radioId   = m_radioId;
     req.radioName = m_radioName.toStdString();
     req.username  = m_params.username.toStdString();
-    req.rxCodec   = m_params.codec;
+    const bool stereoRx = m_params.rxChannels == 2
+        || (m_params.rxChannels == 0
+            && (m_advertisedCivAddress == 0x98 || m_advertisedCivAddress == 0xB2));
+    m_rxCodec = stereoRx ? AudioCodec::Lpcm2ch16 : m_params.codec;
+    m_rx = RxAssembler(m_rxCodec);
+    req.rxCodec   = m_rxCodec;
     req.txCodec   = m_params.codec;
     req.sampleRateHz = m_params.sampleRateHz;
     // The ports we ACTUALLY bound, not the defaults. This is why the media
