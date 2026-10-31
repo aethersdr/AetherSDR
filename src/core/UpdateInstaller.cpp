@@ -1,8 +1,10 @@
 #include "UpdateInstaller.h"
 
+#include "LinuxInstall.h"
 #include "LogManager.h"
 #include "UpdateChecker.h"
 #include "UpdateSettings.h"
+#include "UpdateStager.h"
 #include "updater/UpdateSwap.h"
 
 #include <QCoreApplication>
@@ -101,8 +103,21 @@ bool UpdateInstaller::canInstallInPlace(QString* why)
             reason = QStringLiteral("The folder AetherSDR is installed in can't be changed by this user.");
         }
     }
+#elif defined(Q_OS_LINUX)
+    const LinuxInstall::Paths paths = LinuxInstall::forThisUser();
+    if (LinuxInstall::treeOf(LinuxInstall::binaryDir(), paths.base).isEmpty()) {
+        reason = qEnvironmentVariableIsSet("APPIMAGE")
+                     ? QStringLiteral("The AppImage updates by downloading the new one.")
+                     : QStringLiteral("This copy wasn't installed with AetherSDR --install.");
+    } else {
+        // The new release goes in beside this one: try what the switch will do.
+        QTemporaryFile probe(QDir(paths.base).filePath(QStringLiteral(".aethersdr-update-XXXXXX")));
+        if (!probe.open()) {
+            reason = QStringLiteral("The folder AetherSDR is installed in can't be changed by this user.");
+        }
+    }
 #else
-    reason = QStringLiteral("Installing updates in place is Windows-only for now.");
+    reason = QStringLiteral("Installing updates in place isn't available on this system.");
 #endif
     if (why) {
         *why = reason;
@@ -141,13 +156,71 @@ bool UpdateInstaller::launchHelper(const QString& stagedDir, const QString& vers
     qCInfo(lcUpdater).noquote() << "updater started for v" + version
                                        + (restart ? " (restart)" : " (on quit)");
     return true;
+#elif defined(Q_OS_LINUX)
+    // No helper on Linux: the new release goes in beside this one and becomes
+    // current now, which the running app never notices; the result is
+    // reported at the next start, as the helper's is.
+    const LinuxInstall::Paths paths = LinuxInstall::forThisUser();
+    const QString running = LinuxInstall::treeOf(LinuxInstall::binaryDir(), paths.base);
+    if (running.isEmpty()) {
+        *problem = QStringLiteral("This copy wasn't installed with AetherSDR --install.");
+        return false;
+    }
+    if (!switchRelease(paths.base, stagedDir, version, QFileInfo(running).fileName(), LinuxInstall::selfTest,
+                       restart, stateDir(), problem)) {
+        qCWarning(lcUpdater).noquote() << "update to v" + version + " not installed:" << *problem;
+        return false;
+    }
+    const QString state = stateDir();
+    // The tree has moved into the install (or was not needed): its record
+    // goes with it.
+    UpdateStager::discard(state, version);
+    if (restart) {
+        const QString run = QDir(paths.base).filePath(QStringLiteral("current/AppRun"));
+        if (!LinuxInstall::startAfterExit(QCoreApplication::applicationPid(), run)) {
+            qCWarning(lcUpdater) << "the restart could not be arranged; AetherSDR quits without it";
+        }
+    }
+    qCInfo(lcUpdater).noquote() << "v" + version + " installed" + (restart ? " (restart)" : " (on quit)");
+    return true;
 #else
     Q_UNUSED(stagedDir);
     Q_UNUSED(version);
     Q_UNUSED(restart);
-    *problem = QStringLiteral("Installing updates in place is Windows-only for now.");
+    *problem = QStringLiteral("Installing updates in place isn't available on this system.");
     return false;
 #endif
+}
+
+bool UpdateInstaller::switchRelease(const QString& base, const QString& stagedDir, const QString& version,
+                                    const QString& keep,
+                                    const std::function<bool(const QString& tree, const QString& version)>& selfTest,
+                                    bool restart, const QString& stateDir, QString* problem)
+{
+    using Switch = LinuxInstall::Switch;
+    const int tried = restart ? 0 : UpdateSettings::quitSwitchTries(version);
+    const Switch result = LinuxInstall::switchTo(base, stagedDir, version, keep, selfTest,
+                                                 !restart && tried + 1 < kQuitSwitchTries, problem);
+    if (result == Switch::Kept && !restart) {
+        UpdateSettings::setQuitSwitchTries(version, tried + 1);
+    }
+    const auto report = [&](updater::Outcome outcome) {
+        QDir().mkpath(stateDir);
+        QSaveFile f(QDir(stateDir).filePath(QStringLiteral("swap-result.txt")));
+        if (f.open(QIODevice::WriteOnly)) {
+            f.write(QByteArray(updater::outcomeName(outcome)) + ' ' + version.toUtf8() + '\n');
+            f.commit();
+        }
+    };
+    if (result == Switch::Failed) {
+        UpdateSettings::setRolledBackVersion(version);   // never offered again
+        if (!restart) {
+            report(updater::Outcome::RolledBack);   // told at the next start
+        }
+    } else if (result == Switch::Switched) {
+        report(updater::Outcome::Updated);
+    }
+    return result == Switch::Switched || result == Switch::Current;
 }
 
 namespace {

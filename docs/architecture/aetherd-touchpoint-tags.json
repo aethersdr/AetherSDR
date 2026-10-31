@@ -1685,6 +1685,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/LinuxInstall.h": {
+  "tag": "ui-support",
+  "note": "App self-update on Linux: the install --install makes and the switch to a staged release after its self-test; pure client plumbing, no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/LocalWavPlayer.h": {
   "tag": "ui-support",
   "note": "Plays a voice-keyer slot's WAV on this computer's speakers (RFC #4214 PREV) through the output device the operator chose, fed via core/AudioOutputRouter.h. Never touches the radio or the transmitter: OS playback-device plumbing, no radio state, same precedent as core/AudioOutputRouter.h itself.",

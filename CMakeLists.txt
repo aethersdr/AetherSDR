@@ -1154,6 +1154,7 @@ set(CORE_SOURCES
     src/core/UpdateStager.cpp
     src/core/UpdateInstaller.cpp
     src/core/UpdateController.cpp
+    src/core/LinuxInstall.cpp
     src/core/NetworkDiagnostics.cpp
     src/core/WindowsFirewall.cpp
     src/core/OleCompoundFile.cpp

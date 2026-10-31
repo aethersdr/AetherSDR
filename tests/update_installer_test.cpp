@@ -6,6 +6,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -112,13 +113,82 @@ private slots:
                                                       QStringLiteral("26.10.4")));
     }
 
-    void launchingIsWindowsOnly()
+    void onlyAnInstalledCopyUpdatesInPlace()
     {
 #ifndef Q_OS_WIN
+        // This test binary is no installed release: it says why, and hands
+        // nothing over. Not run as an AppImage, whatever the environment.
+        qunsetenv("APPIMAGE");
+        QString why;
+        QVERIFY(!UpdateInstaller::canInstallInPlace(&why));
         QString problem;
         QVERIFY(!UpdateInstaller::launchHelper(QStringLiteral("x"), QStringLiteral("26.10.4"), true, &problem));
-        QVERIFY(problem.contains(QLatin1String("Windows")));
+#ifdef Q_OS_LINUX
+        QVERIFY(why.contains(QLatin1String("--install")));
+        QVERIFY(problem.contains(QLatin1String("--install")));
+#else
+        QVERIFY(!why.isEmpty() && !problem.isEmpty());
 #endif
+        QVERIFY(!QFileInfo::exists(QDir(UpdateInstaller::stateDir()).filePath(QStringLiteral("swap-result.txt"))));
+#endif
+    }
+
+    void aReleaseFailingAtQuitIsTriedThreeTimesThenRolledBack()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("the Linux switch");
+#endif
+        QTemporaryDir tmp;
+        const QString base = tmp.filePath(QStringLiteral("install"));
+        const QString state = tmp.filePath(QStringLiteral("state"));
+        QVERIFY(QDir().mkpath(base + QStringLiteral("/26.10.3/usr/bin")));
+        QVERIFY(QFile::link(QStringLiteral("26.10.3"), base + QStringLiteral("/current")));
+        const auto stage = [&](const QString& version) {
+            const QString dir = state + QLatin1Char('/') + version;
+            QDir().mkpath(dir + QStringLiteral("/usr/bin"));
+            QFile f(dir + QStringLiteral("/usr/bin/AetherSDR"));
+            f.open(QIODevice::WriteOnly);
+            return dir;
+        };
+        int tests = 0;
+        const auto fails = [&](const QString&, const QString&) {
+            ++tests;
+            return false;
+        };
+        const QString staged = stage(QStringLiteral("26.10.4"));
+        QString problem;
+        for (int quit = 1; quit < UpdateInstaller::kQuitSwitchTries; ++quit) {
+            QVERIFY(!UpdateInstaller::switchRelease(base, staged, QStringLiteral("26.10.4"), QStringLiteral("26.10.3"),
+                                                    fails, false, state, &problem));
+            QVERIFY(QFileInfo::exists(staged + QStringLiteral("/usr/bin/AetherSDR")));   // kept, to try again
+            QCOMPARE(UpdateSettings::quitSwitchTries(QStringLiteral("26.10.4")), quit);
+            QVERIFY(UpdateSettings::rolledBackVersion().isEmpty());
+        }
+        // The third quit is final: removed, rolled back, and told at the next start.
+        QVERIFY(!UpdateInstaller::switchRelease(base, staged, QStringLiteral("26.10.4"), QStringLiteral("26.10.3"),
+                                                fails, false, state, &problem));
+        QCOMPARE(tests, UpdateInstaller::kQuitSwitchTries);
+        QVERIFY(!QFileInfo::exists(staged));
+        QVERIFY(!QFileInfo::exists(base + QStringLiteral("/26.10.4")));
+        QCOMPARE(UpdateSettings::rolledBackVersion(), QStringLiteral("26.10.4"));
+        const UpdateInstaller::SwapResult r = UpdateInstaller::takeSwapResult(state);
+        QCOMPARE(r.outcome, QStringLiteral("RolledBack"));
+        QCOMPARE(r.version, QStringLiteral("26.10.4"));
+        // On Restart to update the first failure is final, and shown there.
+        const QString next = stage(QStringLiteral("26.10.5"));
+        QVERIFY(!UpdateInstaller::switchRelease(base, next, QStringLiteral("26.10.5"), QStringLiteral("26.10.3"),
+                                                fails, true, state, &problem));
+        QVERIFY(!QFileInfo::exists(next));
+        QCOMPARE(UpdateSettings::rolledBackVersion(), QStringLiteral("26.10.5"));
+        QVERIFY(UpdateInstaller::takeSwapResult(state).outcome.isEmpty());
+        // A release that passes is in place, and recorded as Updated.
+        const QString good = stage(QStringLiteral("26.10.6"));
+        QVERIFY2(UpdateInstaller::switchRelease(base, good, QStringLiteral("26.10.6"), QStringLiteral("26.10.3"),
+                                                [](const QString&, const QString&) { return true; }, false, state,
+                                                &problem),
+                 qPrintable(problem));
+        QCOMPARE(UpdateInstaller::takeSwapResult(state).outcome, QStringLiteral("Updated"));
+        UpdateSettings::setRolledBackVersion(QString());
     }
 };
 

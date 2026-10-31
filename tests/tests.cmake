@@ -4792,6 +4792,16 @@ target_link_libraries(update_installer_test PRIVATE aethercore Qt6::Core Qt6::Te
 set_target_properties(update_installer_test PROPERTIES AUTOMOC ON)
 add_test(NAME update_installer_test COMMAND update_installer_test)
 
+# LinuxInstall (RFC #5304 Phase 5): what --install makes (the release copied,
+# current, the menu entry, icon and command), the switch to a staged release
+# with its self-test and cleanup, and the relaunch after exit. Temporary
+# folders only. Skips on Windows.
+add_executable(linux_install_test tests/linux_install_test.cpp)
+target_include_directories(linux_install_test PRIVATE src tests)
+target_link_libraries(linux_install_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(linux_install_test PROPERTIES AUTOMOC ON)
+add_test(NAME linux_install_test COMMAND linux_install_test)
+
 # AetherSDRUpdater's folder swap (RFC #5304 Phase 3): UpdateSwap's state
 # machine on a simulated clock with injected processes and rename failures,
 # on every platform; the Win32 entry point is a thin shell over it. No Qt.
@@ -6130,6 +6140,11 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME bridge_docs_check
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_bridge_docs.py --check)
+    # The Generated Reference pages read names out of C++ string tables;
+    # literal() must read a translation-marked entry as its text.
+    add_test(NAME gen_reference_literal_test
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_gen_reference_literal.py)
     # The generated seam-probe table (tests/SeamSignalProbeTable.inc) vs
     # IRadioBackend.h. static-checks.yml runs the same --check on every PR;
     # this is the local copy, so `ctest` says so before a push does.
@@ -7085,6 +7100,12 @@ target_include_directories(panadapter_dbm_range_test PRIVATE src)
 target_link_libraries(panadapter_dbm_range_test PRIVATE aethercore Qt6::Core)
 set_target_properties(panadapter_dbm_range_test PROPERTIES AUTOMOC ON)
 add_test(NAME panadapter_dbm_range_test COMMAND panadapter_dbm_range_test)
+
+add_executable(panadapter_late_packet_test tests/panadapter_late_packet_test.cpp)
+target_include_directories(panadapter_late_packet_test PRIVATE src)
+target_link_libraries(panadapter_late_packet_test PRIVATE aethercore Qt6::Core)
+set_target_properties(panadapter_late_packet_test PROPERTIES AUTOMOC ON)
+add_test(NAME panadapter_late_packet_test COMMAND panadapter_late_packet_test)
 
 # wirePanadapter() can see the placeholder SpectrumWidget more than once. The
 # helper keeps one timer/path per widget while retaining separate per-pan timers.
@@ -8693,6 +8714,26 @@ add_executable(midi_relative_cc_decoder_test
 target_include_directories(midi_relative_cc_decoder_test PRIVATE src)
 add_test(NAME midi_relative_cc_decoder_test COMMAND midi_relative_cc_decoder_test)
 
+# Ulanzi Dial — Control Mapping on CanonWindow: fixed size, Return never
+# resets the pills, the status line follows the dial, named controls, and
+# every close destroys it. No backend or device; no socket.
+add_executable(ulanzi_dial_mapper_dialog_test
+    tests/ulanzi_dial_mapper_dialog_test.cpp
+    src/gui/UlanziDialMapperDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(ulanzi_dial_mapper_dialog_test PRIVATE src tests)
+target_link_libraries(ulanzi_dial_mapper_dialog_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME ulanzi_dial_mapper_dialog_test COMMAND ulanzi_dial_mapper_dialog_test)
+set_tests_properties(ulanzi_dial_mapper_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(ulanzi_chord_decoder_test
     tests/ulanzi_chord_decoder_test.cpp
     src/core/UlanziChordDecoder.cpp
@@ -9935,6 +9976,7 @@ set(AETHER_SETTINGS_CONSUMERS
     update_controller_test
     update_installer_test
     update_stager_test
+    ulanzi_dial_mapper_dialog_test
     mqtt_settings_dialog_test
     flex_readonly_metadata_test
     dsp_parameter_reset_test
@@ -10030,6 +10072,7 @@ set(AETHER_SETTINGS_CONSUMERS
     wfm_controls_test
     spectrum_confirmed_geometry_test
     panadapter_dbm_range_test
+    panadapter_late_packet_test
     flex_slice_mode_intent_test
     rtl_slice_settings_test
     rtl_device_settings_test

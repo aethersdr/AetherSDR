@@ -17,6 +17,8 @@ const QString kLastCheckUtcField = QStringLiteral("lastCheckUtc");
 const QString kLatestVersionField = QStringLiteral("latestVersion");
 const QString kAcceptedManifestField = QStringLiteral("acceptedManifestUtc");
 const QString kRolledBackVersionField = QStringLiteral("rolledBackVersion");
+const QString kQuitSwitchVersionField = QStringLiteral("quitSwitchVersion");
+const QString kQuitSwitchTriesField = QStringLiteral("quitSwitchTries");
 } // namespace
 
 QJsonObject UpdateSettings::readObj()
@@ -120,6 +122,20 @@ void UpdateSettings::setRolledBackVersion(const QString& version)
     o[kRolledBackVersionField] = VersionNumber::parse(version).isNull()
                                      ? QString()
                                      : VersionNumber::parse(version).toString();
+    write(o);
+}
+
+int UpdateSettings::quitSwitchTries(const QString& version)
+{
+    const QJsonObject o = readObj();
+    return o.value(kQuitSwitchVersionField).toString() == version ? o.value(kQuitSwitchTriesField).toInt() : 0;
+}
+
+void UpdateSettings::setQuitSwitchTries(const QString& version, int tries)
+{
+    QJsonObject o = readObj();
+    o[kQuitSwitchVersionField] = version;
+    o[kQuitSwitchTriesField] = tries;
     write(o);
 }
 

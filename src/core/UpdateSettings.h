@@ -54,6 +54,12 @@ public:
     static QString rolledBackVersion();
     static void setRolledBackVersion(const QString& version);
 
+    // How many quits in a row a staged Linux release failed its self-test
+    // as it was switched in (RFC #5304 Phase 5): the third is final. Zero
+    // for any other version.
+    static int quitSwitchTries(const QString& version);
+    static void setQuitSwitchTries(const QString& version, int tries);
+
     // Whether an automatic check may run at nowUtc: enabled, and the last
     // answer is missing, older than the interval, or in the future (the
     // clock moved backward).

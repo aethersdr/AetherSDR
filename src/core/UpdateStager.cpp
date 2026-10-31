@@ -434,6 +434,211 @@ bool checkTree(const fs::path& stage, const QList<UpdateManifest::File>& files, 
     return true;
 }
 
+// A ustar header block: its checksum (the header's bytes summed, the checksum
+// field counted as spaces) and the ustar magic. Patch bundles and full
+// tarballs both read headers this way.
+bool ustarHeaderValid(const QByteArray& header)
+{
+    quint32 sum = 0;
+    for (int i = 0; i < kTarBlock; ++i) {
+        sum += (i >= 148 && i < 156) ? quint32(' ') : quint32(quint8(header[i]));
+    }
+    bool ok = false;
+    const quint32 stored = header.mid(148, 8).trimmed().replace('\0', "").toUInt(&ok, 8);
+    return ok && stored == sum && header.mid(257, 5).startsWith("ustar");
+}
+
+// The window a full release's .tar.zst may need: zstd -19 uses 2^23 and
+// --long 2^27. Its bytes are already checked against the signed SHA-256.
+constexpr int kMaxFullWindowLog = 27;
+
+// Unpacks a ustar, fed in pieces as it is decompressed, into stage: exactly
+// the files and links the manifest lists, and the folders that hold them.
+// Anything else in it (another file, a hard link, a device, a long-name or
+// pax extension, a file of another size or a link to another target) is
+// refused. Contents are checked afterwards (checkTree).
+class TarUnpacker {
+public:
+    TarUnpacker(const fs::path& stage, const QList<UpdateManifest::File>& files)
+        : m_stage(stage)
+    {
+        for (const UpdateManifest::File& f : files) {
+            m_wanted.insert(f.path, &f);
+            QString dir = f.path;
+            for (qsizetype slash = dir.lastIndexOf(QLatin1Char('/')); slash > 0;
+                 slash = dir.lastIndexOf(QLatin1Char('/'))) {
+                dir.truncate(slash);
+                m_folders.insert(dir);
+            }
+        }
+    }
+
+    bool feed(const char* data, qsizetype size, QString* problem)
+    {
+        while (size > 0) {
+            if (m_state == State::Data) {
+                const qsizetype n = static_cast<qsizetype>(std::min<qint64>(m_left, size));
+                if (m_out.write(data, n) != n) {
+                    *problem = QStringLiteral("%1: cannot write the new file.").arg(m_name);
+                    return false;
+                }
+                m_left -= n;
+                data += n;
+                size -= n;
+                if (m_left == 0 && !finishFile(problem)) {
+                    return false;
+                }
+                continue;
+            }
+            if (m_state == State::Padding) {
+                const qsizetype n = static_cast<qsizetype>(std::min<qint64>(m_left, size));
+                m_left -= n;
+                data += n;
+                size -= n;
+                if (m_left == 0) {
+                    m_state = State::Header;
+                }
+                continue;
+            }
+            const qsizetype n = std::min<qsizetype>(kTarBlock - m_header.size(), size);
+            m_header.append(data, n);
+            data += n;
+            size -= n;
+            if (m_header.size() < kTarBlock) {
+                continue;
+            }
+            if (m_header.count('\0') == kTarBlock) {
+                m_state = State::End;   // the end-of-archive blocks, and tar's zero fill after them
+            } else if (m_state == State::End) {
+                *problem = QStringLiteral("The full release is damaged: data after its end.");
+                return false;
+            } else if (!header(problem)) {
+                return false;
+            }
+            m_header.clear();
+        }
+        return true;
+    }
+
+    bool finish(QString* problem)
+    {
+        if (m_state != State::End || !m_header.isEmpty()) {
+            *problem = QStringLiteral("The full release is damaged: it is cut short.");
+            return false;
+        }
+        if (m_seen.size() != m_wanted.size()) {
+            *problem = QStringLiteral("The full release is missing files.");
+            return false;
+        }
+        return true;
+    }
+
+private:
+    enum class State { Header, Data, Padding, End };
+
+    static QByteArray field(const QByteArray& h, int at, int size)
+    {
+        const QByteArray f = h.mid(at, size);
+        const qsizetype nul = f.indexOf('\0');
+        return nul < 0 ? f : f.left(nul);
+    }
+
+    bool header(QString* problem)
+    {
+        const auto damaged = [problem](const QString& why) {
+            *problem = QStringLiteral("The full release is damaged: %1.").arg(why);
+            return false;
+        };
+        if (!ustarHeaderValid(m_header)) {
+            return damaged(QStringLiteral("bad header"));
+        }
+        bool ok = false;
+        const qint64 size = field(m_header, 124, 12).trimmed().toLongLong(&ok, 8);
+        if (!ok || size < 0) {
+            return damaged(QStringLiteral("bad header"));
+        }
+        const QByteArray prefix = field(m_header, 345, 155);
+        QString name = QString::fromUtf8(prefix.isEmpty() ? field(m_header, 0, 100)
+                                                          : prefix + '/' + field(m_header, 0, 100));
+        const char type = m_header[156];
+        if (type == '5') {
+            if (name.endsWith(QLatin1Char('/'))) {
+                name.chop(1);
+            }
+            if (size != 0 || !m_folders.contains(name) || !noLinkOnTheWay(m_stage, name)) {
+                return damaged(QStringLiteral("unexpected folder %1").arg(name));
+            }
+            std::error_code ec;
+            fs::create_directories(m_stage / toPath(name), ec);
+            if (ec) {
+                *problem = QStringLiteral("%1: the folder could not be made.").arg(name);
+                return false;
+            }
+            return true;
+        }
+        const UpdateManifest::File* f = m_wanted.value(name);
+        if (!f || m_seen.contains(name) || !noLinkOnTheWay(m_stage, name)) {
+            return damaged(QStringLiteral("unexpected entry %1").arg(name));
+        }
+        m_seen.insert(name);
+        const fs::path target = m_stage / toPath(name);
+        std::error_code ec;
+        fs::create_directories(target.parent_path(), ec);
+        if (type == '2') {
+            if (!f->symlink || size != 0 || QString::fromUtf8(field(m_header, 157, 100)) != f->target) {
+                return damaged(QStringLiteral("%1 is not the expected link").arg(name));
+            }
+            fs::create_symlink(toPath(f->target), target, ec);
+            if (ec) {
+                *problem = QStringLiteral("%1: the link could not be made.").arg(name);
+                return false;
+            }
+            return true;
+        }
+        if ((type != '0' && type != '\0') || f->symlink || size != f->size) {
+            return damaged(QStringLiteral("%1 is not the expected file").arg(name));
+        }
+        m_name = name;
+        m_target = target;
+        m_out.setFileName(native(target));
+        if (!m_out.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+            *problem = QStringLiteral("%1: cannot write the new file.").arg(name);
+            return false;
+        }
+        m_executable = f->executable;
+        m_left = size;
+        m_padding = (kTarBlock - size % kTarBlock) % kTarBlock;
+        m_state = State::Data;
+        return size > 0 || finishFile(problem);
+    }
+
+    bool finishFile(QString* problem)
+    {
+        if (!m_out.flush()) {
+            *problem = QStringLiteral("%1: cannot write the new file.").arg(m_name);
+            return false;
+        }
+        m_out.close();
+        setExecutable(m_target, m_executable);
+        m_left = m_padding;
+        m_state = m_padding > 0 ? State::Padding : State::Header;
+        return true;
+    }
+
+    fs::path m_stage;
+    QHash<QString, const UpdateManifest::File*> m_wanted;
+    QSet<QString> m_folders;
+    QSet<QString> m_seen;
+    State m_state{State::Header};
+    QByteArray m_header;
+    QFile m_out;
+    QString m_name;
+    fs::path m_target;
+    bool m_executable{false};
+    qint64 m_left{0};
+    qint64 m_padding{0};
+};
+
 } // namespace
 
 // ── Manifest ────────────────────────────────────────────────────────────────
@@ -697,15 +902,10 @@ bool UpdateStager::readBundle(const QByteArray& bundle, QHash<QString, QByteArra
         if (header.count('\0') == kTarBlock) {
             return true;
         }
-        quint32 sum = 0;
-        for (int i = 0; i < kTarBlock; ++i) {
-            sum += (i >= 148 && i < 156) ? quint32(' ') : quint32(quint8(header[i]));
-        }
-        bool ok = false;
-        const quint32 stored = header.mid(148, 8).trimmed().replace('\0', "").toUInt(&ok, 8);
-        if (!ok || stored != sum || !header.mid(257, 5).startsWith("ustar")) {
+        if (!ustarHeaderValid(header)) {
             return broken(QStringLiteral("bad header"));
         }
+        bool ok = false;
         const char type = header[156];
         const QString name = QString::fromLatin1(header.left(100).split('\0').first());
         if ((type != '0' && type != '\0') || header[345] != '\0' || !memberName().match(name).hasMatch()
@@ -883,6 +1083,66 @@ bool UpdateStager::applyFull(const QString& installRoot, const QByteArray& zip,
     }
     if (ec) {
         return fail(QStringLiteral("The install could not be read."));
+    }
+    if (!checkTree(stage, files, &why)) {
+        return fail(QStringLiteral("The unpacked files do not match the release: %1.").arg(why));
+    }
+    return true;
+}
+
+bool UpdateStager::applyFullTar(const QByteArray& tarZst, const QList<UpdateManifest::File>& files,
+                                const QString& stagingDir, QString* problem,
+                                const std::atomic_bool* cancelled)
+{
+    const fs::path stage = toPath(stagingDir);
+    const auto fail = [&](const QString& why) {
+        *problem = why;
+        std::error_code ignore;
+        fs::remove_all(stage, ignore);
+        return false;
+    };
+    std::error_code ec;
+    fs::remove_all(stage, ec);
+    fs::create_directories(stage, ec);
+    if (stagingDir.isEmpty() || ec) {
+        return fail(QStringLiteral("The staging folder could not be made."));
+    }
+    std::unique_ptr<ZSTD_DCtx, size_t (*)(ZSTD_DCtx*)> dctx(ZSTD_createDCtx(), ZSTD_freeDCtx);
+    if (!dctx || ZSTD_isError(ZSTD_DCtx_setParameter(dctx.get(), ZSTD_d_windowLogMax, kMaxFullWindowLog))) {
+        return fail(QStringLiteral("The decompressor could not be set up."));
+    }
+    TarUnpacker tar(stage, files);
+    QByteArray buf(1 << 20, Qt::Uninitialized);
+    ZSTD_inBuffer in{tarZst.constData(), static_cast<size_t>(tarZst.size()), 0};
+    size_t ret = 1;
+    QString why;
+    while (in.pos < in.size) {
+        if (cancelled && cancelled->load()) {
+            return fail(QStringLiteral("cancelled"));
+        }
+        ZSTD_outBuffer o{buf.data(), static_cast<size_t>(buf.size()), 0};
+        ret = ZSTD_decompressStream(dctx.get(), &o, &in);
+        if (ZSTD_isError(ret)) {
+            return fail(QStringLiteral("The full release is damaged: %1.")
+                            .arg(QString::fromLatin1(ZSTD_getErrorName(ret))));
+        }
+        if (!tar.feed(buf.constData(), static_cast<qsizetype>(o.pos), &why)) {
+            return fail(why);
+        }
+    }
+    // Whatever the decoder still holds once all input is in.
+    while (ret != 0) {
+        ZSTD_outBuffer o{buf.data(), static_cast<size_t>(buf.size()), 0};
+        ret = ZSTD_decompressStream(dctx.get(), &o, &in);
+        if (ZSTD_isError(ret) || o.pos == 0) {
+            return fail(QStringLiteral("The full release is damaged: it is cut short."));
+        }
+        if (!tar.feed(buf.constData(), static_cast<qsizetype>(o.pos), &why)) {
+            return fail(why);
+        }
+    }
+    if (!tar.finish(&why)) {
+        return fail(why);
     }
     if (!checkTree(stage, files, &why)) {
         return fail(QStringLiteral("The unpacked files do not match the release: %1.").arg(why));
@@ -1096,13 +1356,25 @@ QUrl fetchUrl(const UpdateManifest::Asset& asset, const QString& tag)
     return QUrl(b + QLatin1Char('/') + tag + QLatin1Char('/') + asset.name);
 }
 
+// The full downloads the app can stage: Windows' portable zip, Linux's
+// tarball. Anything else (the AppImage) is offered in the browser.
+bool isZip(const UpdateManifest::Asset& full)
+{
+    return full.name.endsWith(QLatin1String(".zip"), Qt::CaseInsensitive);
+}
+
+bool isTarZst(const UpdateManifest::Asset& full)
+{
+    return full.name.endsWith(QLatin1String(".tar.zst"));
+}
+
 } // namespace
 
 void UpdateStager::fallBack(const QString& reason)
 {
     const UpdateManifest::Asset& full = m_payload->full;
     if (m_request.fullFallback && m_stage != Stage::Full
-        && full.name.endsWith(QLatin1String(".zip"), Qt::CaseInsensitive) && full.size <= kMaxFullBytes) {
+        && (isZip(full) || isTarZst(full)) && full.size <= kMaxFullBytes) {
         qCInfo(lcUpdater).noquote() << "no patch applied (" + reason + "); staging the full release";
         m_stage = Stage::Full;
         m_download->get(fetchUrl(full, m_manifest.tag), full.size, tr("The update is larger than it said."));
@@ -1264,9 +1536,12 @@ void UpdateStager::onDownloaded(const QUrl&, const QByteArray& body)
         const QString install = m_request.installRoot;
         const QList<UpdateManifest::File> files = m_payload->files;
         const std::shared_ptr<std::atomic_bool> cancelled = m_cancelled;
-        runWorker([install, body, files, cancelled](const QString& work) {
+        const bool tar = isTarZst(m_payload->full);
+        runWorker([install, body, files, cancelled, tar](const QString& work) {
             QString problem;
-            return applyFull(install, body, files, work, &problem, cancelled.get()) ? QString() : problem;
+            const bool ok = tar ? applyFullTar(body, files, work, &problem, cancelled.get())
+                                : applyFull(install, body, files, work, &problem, cancelled.get());
+            return ok ? QString() : problem;
         });
         return;
     }

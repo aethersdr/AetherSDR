@@ -292,10 +292,10 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget*
     m_get->setObjectName(QStringLiteral("updatesGet"));
     m_get->setCursor(Qt::PointingHandCursor);
     actions->addWidget(m_get);
-    m_download = new QPushButton(tr("Download installer"));
+    m_download = new QPushButton(tr("Download release"));
     m_download->setObjectName(QStringLiteral("updatesGhost"));
     m_download->setCursor(Qt::PointingHandCursor);
-    m_download->setAccessibleName(tr("Download installer"));
+    m_download->setAccessibleName(tr("Download release"));
     actions->addWidget(m_download);
     m_notes = new QPushButton(tr("Full release notes"));
     m_notes->setObjectName(QStringLiteral("updatesSecondary"));
@@ -506,6 +506,7 @@ void UpdatesWindow::primaryClicked()
         return;
     }
     if (m_controller->state() != UpdateController::State::Staging
+        && m_controller->state() != UpdateController::State::Installing
         && m_controller->state() != UpdateController::State::Handed) {
         m_installProblem.clear();
         // Installing a skipped release means it is wanted after all.
@@ -629,7 +630,8 @@ void UpdatesWindow::refresh()
     // Whatever release it is staging: a newer latest heard meanwhile waits
     // until it finishes (the controller then discards it).
     const bool staging = inPlace && installState == State::Staging;
-    const bool staged = inPlace && forThis && (installState == State::Staged || installState == State::Handed);
+    const bool installing = installState == State::Installing || installState == State::Handed;
+    const bool staged = inPlace && forThis && (installState == State::Staged || installing);
     m_get->setVisible(canDownload && !staging);
     m_progressRow->setVisible(staging);
     // The browser route stays beside Install update (Phase 3 ruling).
@@ -683,12 +685,14 @@ void UpdatesWindow::refresh()
         }
     }
     if (!m_firmwareBusy) {
-        // Handed to the helper: AetherSDR is quitting.
-        m_get->setEnabled(!(staged && installState == State::Handed));
+        // Being handed over, or handed to the helper: AetherSDR is quitting.
+        m_get->setEnabled(!(staged && installing));
         m_autoCheck->setEnabled(UpdateChecker::storeName().isEmpty());
     }
 
-    if (staged) {
+    if (staged && installState == State::Installing) {
+        m_footnote->setText(tr("Installing AetherSDR %1…").arg(release.version));
+    } else if (staged) {
         m_footnote->setText(tr("AetherSDR %1 is ready. It installs when you quit, or now with Restart to update.")
                                 .arg(release.version));
     } else if (staging) {

@@ -97,9 +97,10 @@ public:
         QString stagingRoot;       // per-user app data, outside the install
         QUrl manifestUrl;          // kManifestUrl unless a test says otherwise
         // When no patch applies (or one fails), stage the full release
-        // instead: the signed portable zip's files plus the installer's own
-        // (unins*). Windows: its full download is that tree. Otherwise
-        // fullDownloadNeeded() is emitted, as before.
+        // instead: on Windows the signed portable zip's files plus the
+        // installer's own (unins*), on Linux the signed .tar.zst's. A full
+        // download that is neither (the AppImage) ends in
+        // fullDownloadNeeded(), as without it.
         bool fullFallback = false;
     };
 
@@ -159,6 +160,14 @@ public:
     static bool applyFull(const QString& installRoot, const QByteArray& zip,
                           const QList<UpdateManifest::File>& files, const QString& stagingDir,
                           QString* problem, const std::atomic_bool* cancelled = nullptr);
+
+    // The full release from its .tar.zst (Linux) into stagingDir, streamed:
+    // exactly the files and links manifest lists, then every file checked.
+    // Nothing is taken from the install. On any failure, or once cancelled
+    // is set, stagingDir is removed.
+    static bool applyFullTar(const QByteArray& tarZst, const QList<UpdateManifest::File>& files,
+                             const QString& stagingDir, QString* problem,
+                             const std::atomic_bool* cancelled = nullptr);
 
     // The release staged in stagingRoot, if it is still the one to install:
     // staged for runningVersion, from installRoot, it is GitHub's latest

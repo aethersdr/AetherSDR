@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QVector>
+#include <QtGlobal>
 
 #include <algorithm>
 
@@ -17,6 +18,19 @@ inline int boundedVitaPayloadBinCount(int declaredBins,
         return 0;
     }
     return std::min(declaredBins, availableBytes / bytesPerBin);
+}
+
+// A display packet whose FFT frame index or waterfall timecode is a few frames
+// behind the one being assembled is a late UDP packet, not the start of a new
+// frame. Both counters step by one per frame. Unsigned distance keeps the test
+// correct across a 32-bit wrap; a larger backward jump is a counter restart
+// and starts a new frame.
+inline constexpr quint32 kVitaLateFrameLookback = 8;
+
+inline bool isLateVitaFrame(quint32 currentFrame, quint32 packetFrame)
+{
+    const quint32 behind = currentFrame - packetFrame;
+    return behind >= 1 && behind <= kVitaLateFrameLookback;
 }
 
 // FLEX can publish one transitional FFT after an x_pixels increase where the
