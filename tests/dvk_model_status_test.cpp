@@ -1,3 +1,4 @@
+#include "FlexSetupStatusTestSupport.h"
 // #6244 — DvkModel against the SmartSDR API wiki (TCPIP-dvk) and lines
 // captured from a FLEX-8600 on fw 4.2.20. Status lines go through the real
 // CommandParser, so quoted names with spaces are covered end to end.
@@ -287,9 +288,7 @@ int main(int argc, char* argv[])
         using Kvs = QMap<QString, QString>;  // Q_ARG cannot take the comma
         const auto status = [&radio](const QString& name, const QString& enabled) {
             const Kvs kvs{{QStringLiteral("name"), name}, {QStringLiteral("enabled"), enabled}};
-            QMetaObject::invokeMethod(&radio, "onStatusReceived", Qt::DirectConnection,
-                                      Q_ARG(QString, QStringLiteral("license feature")),
-                                      Q_ARG(Kvs, kvs));
+            FlexSetupStatusTestPeer::deliver(radio, QStringLiteral("license feature"), kvs);
         };
         radio.dvkModel().noteRefusal(0x50004001u);
         report("a refusal reaches RadioModel's entitlement input", radio.dvkLicenseRefused());

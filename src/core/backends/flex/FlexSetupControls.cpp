@@ -192,7 +192,7 @@ ReceiveDispatch FlexBackend::requestTransverter(const TransverterRequest& reques
                                                 const RadioSetupCompletion& completion)
 {
     using Field = TransverterRequest::Field;
-    if (!request.valid() || !m_setupSink) { return ReceiveDispatch::Unsupported; }
+    if (!request.valid() || (!m_setupSink && !m_setupEntitySink)) { return ReceiveDispatch::Unsupported; }
     QString command;
     if (request.field == Field::Create) { command = QStringLiteral("xvtr create"); }
     else if (request.field == Field::Remove) { command = QStringLiteral("xvtr remove %1").arg(request.id); }
@@ -219,14 +219,18 @@ ReceiveDispatch FlexBackend::requestTransverter(const TransverterRequest& reques
         }
         command = QStringLiteral("xvtr set %1 %2=%3").arg(request.id).arg(key, value);
     }
-    const auto sink = m_setupSink;
+    const auto sink = [legacy = m_setupSink, guarded = m_setupEntitySink, identity = request.expectedLifetime]
+        (const QString& command, const RadioSetupCompletion& reply) {
+        if (identity && !identity->current()) { return false; }
+        return guarded ? guarded(command, reply, identity) : legacy && legacy(command, reply);
+    };
     return sink(command, completion) ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
 }
 
 ReceiveDispatch FlexBackend::requestUsbCable(const UsbCableRequest& request)
 {
     using Field = UsbCableRequest::Field;
-    if (!request.valid() || !m_setupSink) { return ReceiveDispatch::Unsupported; }
+    if (!request.valid() || (!m_setupSink && !m_setupEntitySink)) { return ReceiveDispatch::Unsupported; }
     const auto token = [](const QString& text) {
         if (text.isEmpty() || text.size() > 128) { return false; }
         for (const QChar ch : text) {
@@ -236,7 +240,11 @@ ReceiveDispatch FlexBackend::requestUsbCable(const UsbCableRequest& request)
         return true;
     };
     if (!token(request.serial)) { return ReceiveDispatch::Unsupported; }
-    const auto sink = m_setupSink;
+    const auto sink = [legacy = m_setupSink, guarded = m_setupEntitySink, identity = request.expectedLifetime]
+        (const QString& command, const RadioSetupCompletion& reply) {
+        if (identity && !identity->current()) { return false; }
+        return guarded ? guarded(command, reply, identity) : legacy && legacy(command, reply);
+    };
     if (request.field == Field::Remove) {
         return sink(QStringLiteral("usb_cable remove %1").arg(request.serial), {})
             ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;

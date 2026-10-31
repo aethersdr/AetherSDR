@@ -840,6 +840,41 @@ RadioModel::SetupCommandSink RadioModel::setupCommandSink(const SetupCommandWrit
     };
 }
 
+bool RadioModel::sendSetupEntityCommand(const QString& command, const RadioSetupCompletion& completion,
+                                         const std::shared_ptr<SetupStatusLifetime>& identity)
+{
+    if (!controlSessionCurrent(controlSession()) || (identity && !identity->current())) { return false; }
+    ResponseCallback reply;
+    if (completion) {
+        reply = [completion](int code, const QString& body) {
+            completion({code == 0 ? RadioSetupReply::Kind::Accepted : RadioSetupReply::Kind::Failed, code, body});
+        };
+    }
+    if (m_wanConn) {
+        const auto transport = m_wanConn->setupStatusLifetime();
+        if (!transport->current() || (identity && !identity->current())) { return false; }
+        return m_wanConn->sendCommand(command, std::move(reply)) != 0;
+    }
+    if (!m_connection) { return false; }
+    const auto transport = m_connection->setupStatusLifetime();
+    if (!transport->current()) { return false; }
+    const quint32 sequence = m_seqCounter.fetch_add(1);
+    if (reply) { m_pendingCallbacks.insert(sequence, std::move(reply)); }
+    const QPointer<RadioModel> owner(this);
+    QMetaObject::invokeMethod(m_connection, [connection = m_connection, owner, transport, identity, sequence, command] {
+        if (transport->current() && (!identity || identity->current())) {
+            connection->writeCommand(sequence, command);
+        } else if (owner) {
+            QMetaObject::invokeMethod(owner, [owner, sequence] {
+                if (!owner) { return; }
+                const ResponseCallback callback = owner->m_pendingCallbacks.take(sequence);
+                if (callback) { callback(-1, QStringLiteral("configuration target retired before write")); }
+            });
+        }
+    });
+    return true;
+}
+
 void RadioModel::setupBackend(const QString& family)
 {
     // Rerunnable on every family switch. Every connection made here must have the
@@ -910,6 +945,11 @@ void RadioModel::setupBackend(const QString& family)
                 }
             });
             flex->setSetupCommandSink(setupCommandSink());
+            flex->setSetupEntityCommandSink([this, generation](const QString& command,
+                const RadioSetupCompletion& completion, const std::shared_ptr<SetupStatusLifetime>& identity) {
+                return generation == m_backendReceiverGeneration
+                    && sendSetupEntityCommand(command, completion, identity);
+            });
             flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
                 sendTxKeyingCommand(cmd, fence);
             });
@@ -1544,6 +1584,13 @@ void RadioModel::applyBackendLinkStats(const IRadioBackend::LinkStats& stats)
 
 void RadioModel::wireBackendReceiverState()
 {
+    if (m_backend) {
+        const quint64 generation = m_backendReceiverGeneration;
+        connect(m_backend.get(), &IRadioBackend::setupStatusObserved, this,
+                [this, generation](const SetupStatusObservation& observation) {
+            if (generation == m_backendReceiverGeneration) { applySetupObservation(observation); }
+        });
+    }
     wireTuneOutputControl();
     if (!m_backend) {
         return;
@@ -1777,6 +1824,7 @@ void RadioModel::wireBackendReceiverState()
 
 void RadioModel::teardownBackend()
 {
+    retireSetupObservations();
     resetTransmitDaxSessionState();
     // Retirement callbacks can attempt edits before teardown returns.
     const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
@@ -1819,7 +1867,7 @@ void RadioModel::teardownBackend()
         // which is precisely why the acknowledgment is owed immediately rather
         // than after the m_backend.reset() below.
         acknowledgeTxTransportTeardown(m_txOperation);
-        m_usbCableModel.clear();
+        resetSetupObservations();
         return;
     }
     if (m_connection)
@@ -1860,7 +1908,7 @@ void RadioModel::teardownBackend()
     // "this wire has no round trip to time".
     m_backendLinkShape = {};
     // Publish inventory retirement only after the old backend and state are gone.
-    m_usbCableModel.clear();
+    resetSetupObservations();
 }
 
 void RadioModel::expirePendingCallbacks(const QString& reason)
@@ -2186,6 +2234,14 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
     qRegisterMetaType<RadioDelta>();
+    qRegisterMetaType<SetupStatusObservation>();
+    m_licenseExpiryTimer.setInterval(60000);
+    connect(&m_licenseExpiryTimer, &QTimer::timeout, this, [this] {
+        const QString oldSubscription = m_licenseSubscription;
+        const QString oldExpiration = m_licenseExpirationDate;
+        refreshLicenseSubscription(QDateTime::currentDateTime());
+        if (oldSubscription != m_licenseSubscription || oldExpiration != m_licenseExpirationDate) { emit infoChanged(); }
+    });
     qRegisterMetaType<GpsDelta>();
     qRegisterMetaType<MemoryDelta>();
 
@@ -3755,6 +3811,12 @@ void RadioModel::emitInterlockNotification(const QString& message,
 
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
+    if (m_connection) { m_connection->retireSetupStatus(); }
+    if (m_flexBackend) { m_flexBackend->bindSetupStatus(nullptr); }
+    const QPointer<RadioModel> setupOwner(this);
+    const quint64 setupGeneration = m_setupObservationGeneration + 1;
+    resetSetupObservations();
+    if (!setupOwner || setupGeneration != m_setupObservationGeneration) { return; }
     discardTuneInhibit();
     resetTuneOutputControl();
     cancelRadioWake();
@@ -3905,6 +3967,11 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
         m_wanConn->disconnect(this);
 
     m_wanConn = wan;
+    if (m_flexBackend) { m_flexBackend->bindSetupStatus(wan); }
+    const QPointer<RadioModel> setupOwner(this);
+    const quint64 setupGeneration = m_setupObservationGeneration + 1;
+    resetSetupObservations();
+    if (!setupOwner || setupGeneration != m_setupObservationGeneration) { return; }
     resetGpsState();
     // This WAN target has no discovery firmware seed. Keep the previous LAN
     // identity out of firmware-shaped capabilities until its info reply arrives.
@@ -4201,6 +4268,8 @@ bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
 
 void RadioModel::disconnectFromRadio()
 {
+    if (m_wanConn) { m_wanConn->retireSetupStatus(); }
+    if (m_connection) { m_connection->retireSetupStatus(); }
     resetTxOperations();
     restoreTuneInhibit();
     cancelRadioWake();
@@ -8239,6 +8308,7 @@ void RadioModel::restoreTuneInhibit()
 
 void RadioModel::onDisconnected()
 {
+    retireSetupObservations();
     resetTransmitDaxSessionState();
     const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
     discardTuneInhibit();
@@ -8527,7 +8597,7 @@ void RadioModel::onDisconnected()
     if (m_intentionalDisconnect || m_lastInfo.address.isNull())
         m_sessionRadioOwnsMemories = false;
     if (retiringSetupSession == controlSession()) {
-        m_usbCableModel.clear();
+        resetSetupObservations();
     }
 }
 
@@ -11416,139 +11486,6 @@ void RadioModel::onStatusReceived(const QString& object,
         return;
     }
 
-    // XVTR status: "xvtr 0 name=2m rf_freq=144.000000 if_freq=28.000000 ..."
-    static const QRegularExpression xvtrRe(R"(^xvtr\s+(\d+)$)");
-    if (object.startsWith("xvtr")) {
-        const auto m = xvtrRe.match(object);
-        if (m.hasMatch()) {
-            int idx = m.captured(1).toInt();
-            // "in_use=0" means the xvtr was removed
-            if (kvs.contains("in_use") && kvs["in_use"] == "0") {
-                const auto existing = m_xvtrList.constFind(idx);
-                if (existing != m_xvtrList.cend()) {
-                    qCDebug(lcProtocol).noquote().nospace()
-                        << "RadioModel: xvtr removed idx=" << idx
-                        << " name=" << (existing->name.isEmpty() ? QStringLiteral("(unnamed)") : existing->name)
-                        << " order=" << existing->order
-                        << " is_valid=" << existing->isValid
-                        << " has_is_valid=" << existing->hasIsValid;
-                } else {
-                    qCDebug(lcProtocol).noquote().nospace()
-                        << "RadioModel: xvtr removed idx=" << idx
-                        << " name=(unknown)";
-                }
-                m_xvtrList.remove(idx);
-                emit infoChanged();
-                return;
-            }
-            auto& x = m_xvtrList[idx];
-            x.index = idx;
-            if (kvs.contains("order"))     x.order   = kvs["order"].toInt();
-            if (kvs.contains("name"))      x.name     = kvs["name"];
-            if (kvs.contains("rf_freq"))   x.rfFreq   = kvs["rf_freq"].toDouble();
-            if (kvs.contains("if_freq"))   x.ifFreq   = kvs["if_freq"].toDouble();
-            if (kvs.contains("lo_error"))  x.loError  = kvs["lo_error"].toDouble();
-            if (kvs.contains("rx_gain"))   x.rxGain   = kvs["rx_gain"].toDouble();
-            if (kvs.contains("max_power")) x.maxPower = kvs["max_power"].toDouble();
-            if (kvs.contains("rx_only"))   x.rxOnly   = kvs["rx_only"] == "1";
-            const bool statusHasIsValid = kvs.contains("is_valid");
-            if (statusHasIsValid) {
-                x.isValid = kvs["is_valid"] == "1";
-                x.hasIsValid = true;
-            }
-            qCDebug(lcProtocol).noquote().nospace()
-                << "RadioModel: xvtr status idx=" << x.index
-                << " name=" << (x.name.isEmpty() ? QStringLiteral("(unnamed)") : x.name)
-                << " order=" << x.order
-                << " rf_mhz=" << x.rfFreq
-                << " if_mhz=" << x.ifFreq
-                << " offset_mhz=" << (x.rfFreq - x.ifFreq)
-                << " rx_only=" << x.rxOnly
-                << " max_power=" << x.maxPower
-                << " is_valid=" << x.isValid
-                << " status_has_is_valid=" << statusHasIsValid
-                << " has_is_valid=" << x.hasIsValid;
-            emit infoChanged();
-        }
-        return;
-    }
-
-    // Filter sharpness: "radio filter_sharpness VOICE level=3 auto_level=0"
-    if (object.startsWith("radio filter_sharpness")) {
-        int level = kvs.value("level", "-1").toInt();
-        bool autoLvl = kvs.value("auto_level", "0") == "1";
-        if (object.contains("VOICE"))       { m_filterVoice = level; m_filterVoiceAuto = autoLvl; }
-        else if (object.contains("CW"))     { m_filterCw = level; m_filterCwAuto = autoLvl; }
-        else if (object.contains("DIGITAL")){ m_filterDigital = level; m_filterDigitalAuto = autoLvl; }
-        emit infoChanged();
-        return;
-    }
-
-    // License info (fw v1.4.0.0): three sub-objects per FlexLib:
-    //   "license"              — radio_id, issued, last_refreshed_date, highest_major_version, region
-    //   "license subscription" — name=smartsdr+|smartsdr+_early_access, expiration=<date>
-    //   "license feature"      — name, enabled, reason (BUILT_IN|LICENSE_FILE|PLUS|EA)
-    if (object == "license" && !kvs.contains("name")) {
-        if (kvs.contains("radio_id")) {
-            m_licenseRadioId = kvs["radio_id"].toUpper();
-        }
-        if (kvs.contains("highest_major_version")) {
-            m_licenseMaxVersion = kvs["highest_major_version"];
-        }
-        // Base subscription is always "SmartSDR" — upgraded by subscription messages
-        if (m_licenseSubscription.isEmpty()) {
-            m_licenseSubscription = "SmartSDR";
-        }
-        emit infoChanged();
-        return;
-    }
-    if (object == "license subscription") {
-        // Per FlexLib: name=smartsdr+ or name=smartsdr+_early_access
-        // with expiration=<ISO-8601 date>
-        QString name = kvs.value("name").toLower();
-        QString expStr = kvs.value("expiration");
-        QDate expDate = QDate::fromString(expStr.left(10), Qt::ISODate);
-        bool active = expDate.isValid() && expDate >= QDate::currentDate();
-        if (name == "smartsdr+_early_access" && active) {
-            m_licenseSubscription = "SmartSDR+ Early Access";
-            m_licenseExpirationDate = expDate.toString("MM/dd/yyyy");
-        } else if (name == "smartsdr+" && active) {
-            m_licenseSubscription = "SmartSDR+";
-            m_licenseExpirationDate = expDate.toString("MM/dd/yyyy");
-        }
-        emit infoChanged();
-        return;
-    }
-    if (object == "license feature") {
-        const QString name = normalizedLicenseFeatureName(kvs.value("name"));
-        const QString enabledText = kvs.value("enabled").trimmed();
-        const QString reason = kvs.value("reason").trimmed().toLower();
-        if (name.isEmpty() || (enabledText != QLatin1String("0") && enabledText != QLatin1String("1"))) {
-            qWarning() << "RadioModel: malformed license feature status" << kvs;
-            return;
-        }
-
-        const LicenseFeatureState next{
-            true,
-            enabledText == QLatin1String("1"),
-            reason.isEmpty() ? QStringLiteral("unknown") : reason
-        };
-        const LicenseFeatureState current = m_licenseFeatures.value(name);
-        const bool changed = !current.seen
-            || current.enabled != next.enabled
-            || current.reason != next.reason;
-        if (changed) {
-            m_licenseFeatures.insert(name, next);
-            emit licenseFeaturesChanged();
-        }
-        // The radio's licensed status outranks an earlier 50004001 refusal.
-        if (next.enabled && name == DvkModel::kLicenseFeature) {
-            m_dvkModel.clearRefusal();
-        }
-        emit infoChanged();
-        return;
-    }
-
     if (object == "radio oscillator") {
         if (kvs.contains("state"))        m_oscState    = kvs["state"];
         if (kvs.contains("setting"))      m_oscSetting  = kvs["setting"];
@@ -12113,34 +12050,6 @@ void RadioModel::onStatusReceived(const QString& object,
             } else {
                 m_spotModel.applySpotStatus(idx, kvs);
             }
-        }
-        return;
-    }
-
-    // USB cable status: "usb_cable FTDI-1234 type=cat enable=1 ..."
-    //                   "usb_cable FTDI-1234 bit 0 enable=1 source=active_slice ..."
-    //                   "usb_cable FTDI-1234 removed"
-    if (object.startsWith("usb_cable ")) {
-        QString rest = object.mid(10);  // after "usb_cable "
-        // Serial number is the first word
-        int spaceIdx = rest.indexOf(' ');
-        QString sn = (spaceIdx >= 0) ? rest.left(spaceIdx) : rest;
-
-        if (rest.contains("removed")) {
-            m_usbCableModel.handleRemoved(sn);
-        } else {
-            // Check for bit-level status: remaining object text is "bit <N>"
-            // The CommandParser puts extra object words before the KV split.
-            // "usb_cable FTDI-1234 bit 3" → object="usb_cable FTDI-1234 bit 3", kvs={enable=1,...}
-            QMap<QString, QString> effectiveKvs = kvs;
-            if (spaceIdx >= 0) {
-                QString afterSn = rest.mid(spaceIdx + 1).trimmed();
-                if (afterSn.startsWith("bit ")) {
-                    int bitNum = afterSn.mid(4).trimmed().toInt();
-                    effectiveKvs["_bit_number"] = QString::number(bitNum);
-                }
-            }
-            m_usbCableModel.applyStatus(sn, effectiveKvs);
         }
         return;
     }

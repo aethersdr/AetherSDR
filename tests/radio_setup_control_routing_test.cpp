@@ -1,3 +1,4 @@
+#include "FlexSetupStatusTestSupport.h"
 // FlexLib 4.2.18 Radio.cs, Xvtr.cs, TxBandSettings.cs and Usb*Cable.cs.
 // Wire and independently injected observations; no sockets or RF.
 #include "TestSettingsProfile.h"
@@ -261,7 +262,7 @@ void routingAndReplies()
     check(radio.requestTransverter({2, X::RxOnly, true}) == ReceiveDispatch::Dispatched
         && backend->commands == QStringList{"xvtr set 2 rx_only=1"}
         && !radio.xvtrList().value(2).rxOnly, "transverter intent never invents radio state");
-    radio.usbCableModel().applyStatus(QStringLiteral("FTDI01"),
+    applyCableStatus(radio.usbCableModel(), QStringLiteral("FTDI01"),
         {{QStringLiteral("type"), QStringLiteral("bit")}, {QStringLiteral("name"), QStringLiteral("Original")}});
     QSignalSpy intents(&radio.usbCableModel(), &UsbCableModel::controlRequested);
     backend->commands.clear();
@@ -475,7 +476,7 @@ void usbRetirementCompletesBeforePublication()
     RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
     const auto retired = std::make_shared<bool>(false);
     backend->retired = retired;
-    radio.usbCableModel().applyStatus("FTDI01", {{"type", "bit"}});
+    applyCableStatus(radio.usbCableModel(), "FTDI01", {{"type", "bit"}});
     const QMetaObject::Connection teardownObserver = QObject::connect(&radio.usbCableModel(), &UsbCableModel::cableRemoved, &radio, [&](const QString&) {
         check(*retired && !radio.backend(), "USB retirement observers see an already-retired backend");
         RadioSetupControlTestAccess::replaceConnectionGeneration(radio);
@@ -483,7 +484,7 @@ void usbRetirementCompletesBeforePublication()
     RadioSetupControlTestAccess::retireBackend(radio);
     check(*retired && !radio.backend(), "reentrant USB listeners cannot skip backend teardown");
     installRadioSetupBackend(radio);
-    radio.usbCableModel().applyStatus("FTDI02", {{"type", "bit"}});
+    applyCableStatus(radio.usbCableModel(), "FTDI02", {{"type", "bit"}});
     RadioSetupControlTestAccess::pendingDisconnectState(radio);
     QObject::disconnect(teardownObserver);
     QObject::connect(&radio.usbCableModel(), &UsbCableModel::cableRemoved, &radio, [&](const QString&) {

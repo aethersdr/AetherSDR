@@ -1,4 +1,5 @@
 #include "RadioConnection.h"
+#include <QPointer>
 #include "FlexPttWireSession.h"
 #include "LanBindAddress.h"
 #include "core/LogManager.h"
@@ -139,6 +140,7 @@ bool RadioConnection::isDemoTarget(const RadioInfo& info)
 void RadioConnection::startSyntheticDemoConnect()
 {
     resetSessionState();
+    m_setupStatusSource.begin();
     // Pin this session. m_syntheticDemo alone cannot distinguish "still the
     // demo session I queued from" from "a NEW demo session started after mine
     // was torn down" -- a fast disconnect/reconnect sets the flag back to true
@@ -229,8 +231,14 @@ void RadioConnection::emitSyntheticStatus(const QString& line)
     // Parse the raw status line into (object, kvs) exactly as the real receive
     // path does, then emit statusReceived — so RadioModel sees an identical
     // payload to a live radio's. (RFC #4288 Stage 3)
+    const auto lifetime = m_setupStatusSource.lifetime();
+    const QPointer<RadioConnection> alive(this);
     const ParsedMessage msg = CommandParser::parseLine(line);
     if (msg.type == MessageType::Status) {
+        if (const auto observation = m_setupStatusSource.decode(msg.object, msg.kvs, lifetime)) {
+            emit setupStatusObserved(*observation);
+            if (!alive) { return; }
+        }
         emit statusReceived(msg.object, msg.kvs);
     }
 }
@@ -258,6 +266,7 @@ void RadioConnection::connectToHost(const QHostAddress& address,
         resetSocket();
     }
     resetSessionState();
+    m_setupStatusSource.begin();
 
     const QHostAddress preferredBindAddr =
         (bindMode == RadioBindMode::Explicit) ? explicitBindAddr : sessionBindAddr;
@@ -316,6 +325,7 @@ void RadioConnection::connectToHost(const QHostAddress& address,
 
 void RadioConnection::resetSessionState()
 {
+    m_setupStatusSource.retire();
     m_pttProtocol.store(PttProtocol::Unknown);
     if (m_independentPtt) {
         m_independentPtt->disconnect();
@@ -673,6 +683,8 @@ void RadioConnection::onHeartbeat()
 
 void RadioConnection::processLine(const QString& line)
 {
+    const auto setupLifetime = m_setupStatusSource.lifetime();
+    const QPointer<RadioConnection> setupOwner(this);
     if (m_independentPtt && !isSyntheticDemo()) {
         m_independentPtt->observe(line, TxCoordinator::monotonicMs());
         updateIndependentPttTimer();
@@ -697,7 +709,10 @@ void RadioConnection::processLine(const QString& line)
     }
 
     ParsedMessage msg = CommandParser::parseLine(line);
+    const auto setupObservation = msg.type == MessageType::Status
+        ? m_setupStatusSource.decode(msg.object, msg.kvs, setupLifetime) : std::nullopt;
     emit messageReceived(msg);
+    if (!setupOwner) { return; }
 
     switch (msg.type) {
     case MessageType::Version: {
@@ -745,6 +760,10 @@ void RadioConnection::processLine(const QString& line)
         emit commandResponse(msg.sequence, msg.resultCode, msg.object);
         break;
     case MessageType::Status:
+        if (setupObservation && setupObservation->current()) {
+            emit setupStatusObserved(*setupObservation);
+            if (!setupOwner) { return; }
+        }
         emit statusReceived(msg.object, msg.kvs);
         break;
     default:
@@ -787,6 +806,7 @@ int RadioConnection::kernelRttMs() const
 
 void RadioConnection::setState(ConnectionState s)
 {
+    if (s == ConnectionState::Disconnected || s == ConnectionState::Error) { m_setupStatusSource.retire(); }
     m_state.store(s);
     emit stateChanged(s);
 }

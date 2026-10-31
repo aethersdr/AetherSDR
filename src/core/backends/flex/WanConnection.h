@@ -1,5 +1,7 @@
 #pragma once
 
+#include "FlexSetupStatus.h"
+
 #include "CommandParser.h"
 
 #include <QObject>
@@ -55,6 +57,9 @@ public:
     void disconnectFromRadio();
 
     // Same command interface as RadioConnection
+    std::shared_ptr<SetupStatusLifetime> setupStatusLifetime() const { return m_setupStatusSource.lifetime(); }
+    void retireSetupStatus() { m_setupStatusSource.retire(); }
+
     using ResponseCallback = std::function<void(int resultCode, const QString& body)>;
     quint32 sendCommand(const QString& command,
                         ResponseCallback callback = nullptr);
@@ -72,6 +77,7 @@ public:
     void rejectPresentedCert();
 
 signals:
+    void setupStatusObserved(const AetherSDR::SetupStatusObservation& observation);
     void connected();
     void disconnected();
     void errorOccurred(const QString& message);
@@ -100,6 +106,8 @@ private slots:
 private:
     friend class WanConnectionTestAccess;
 
+    friend class FlexSetupStatusTestPeer;
+    FlexSetupStatusSource m_setupStatusSource;
     void processLine(const QString& line);
 
     QSslSocket m_socket;

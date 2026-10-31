@@ -1,4 +1,5 @@
 #include "core/backends/flex/FlexBackend.h"
+#include "WanConnection.h"
 #include "core/backends/TuneOutputPolicy.h"
 #include "core/AppActivity.h"
 
@@ -48,6 +49,31 @@ QStringList uniqueCommaList(const QString& value)
 
 } // namespace
 
+void FlexBackend::retireSetupStatus()
+{
+    ++m_setupStatusRevision;
+    QObject::disconnect(m_setupStatusBinding);
+    if (m_setupStatusWan) { m_setupStatusWan->retireSetupStatus(); }
+    else if (m_connection) { m_connection->retireSetupStatus(); }
+}
+
+void FlexBackend::bindSetupStatus(WanConnection* wan)
+{
+    QObject* transport = wan ? static_cast<QObject*>(wan) : m_connection;
+    if (m_setupStatusTransport != transport) { retireSetupStatus(); }
+    QObject::disconnect(m_setupStatusBinding);
+    m_setupStatusTransport = transport;
+    m_setupStatusWan = wan;
+    const quint64 revision = ++m_setupStatusRevision;
+    const auto receive = [this, revision](const SetupStatusObservation& observation) {
+        if (revision == m_setupStatusRevision && observation.current()) {
+            emit setupStatusObserved(observation);
+        }
+    };
+    if (wan) { m_setupStatusBinding = connect(wan, &WanConnection::setupStatusObserved, this, receive); }
+    else if (m_connection) { m_setupStatusBinding = connect(m_connection, &RadioConnection::setupStatusObserved, this, receive); }
+}
+
 FlexBackend::FlexBackend(QObject* parent)
     : IRadioBackend(parent)
 {
@@ -68,6 +94,7 @@ FlexBackend::FlexBackend(QObject* parent)
     m_connection->moveToThread(m_connThread);
     connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
     m_connThread->start();
+    bindSetupStatus(nullptr);
 
     // Observe wire lifecycle and re-emit as the interface's own signals. Queued
     // (auto) connections: the connection lives on its worker thread.
@@ -87,6 +114,7 @@ FlexBackend::FlexBackend(QObject* parent)
 
 FlexBackend::~FlexBackend()
 {
+    retireSetupStatus();
     // Sever our own lifecycle observation of the connection FIRST — as the old
     // ~RadioModel's earlier m_backend.reset() effectively did (the backend was
     // destroyed, auto-disconnecting these links, before the wire teardown ran).

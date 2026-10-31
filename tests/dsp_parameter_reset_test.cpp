@@ -1,3 +1,4 @@
+#include "FlexSetupStatusTestSupport.h"
 // Production VFO/model/Flex encoder; no default socket, firmware peer or RF.
 #include "TestSettingsProfile.h"
 #include "SeamThreadAffinityProbe.h"
@@ -52,7 +53,7 @@ public:
     }
     static void license(RadioModel& radio, const QString& enabled)
     {
-        radio.onStatusReceived(QStringLiteral("license feature"), {
+        FlexSetupStatusTestPeer::deliver(radio, QStringLiteral("license feature"), {
             {QStringLiteral("name"), QStringLiteral("noise_reduction")},
             {QStringLiteral("enabled"), enabled}, {QStringLiteral("reason"), QStringLiteral("LICENSE_FILE")}});
     }
