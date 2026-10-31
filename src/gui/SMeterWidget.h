@@ -8,7 +8,7 @@
 
 #include "AnalogMeterFaceTheme.h"
 #include "core/KiwiSdrProtocol.h"
-#include "RadioSwrValidityFilter.h"
+#include "models/RadioSwrValidityFilter.h"
 #include "SMeterGeometry.h"
 
 class QPainter;
