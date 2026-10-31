@@ -2022,7 +2022,14 @@ private:
     // a teardown reorder can't leave a dangling scheduler here. (#4139)
     QPointer<PanadapterRenderScheduler> m_renderScheduler;
     void coalescedUpdate();                 // update(), coalesced into one present per slot
-    bool presentNeededBesideFft() const;    // FFT frames not carrying presents (#6883)
+    // While FFT frames are presenting, a scroll tick, waterfall row or overlay
+    // change rides the next one instead of compositing the window on its own
+    // (#6883). deferPresentToFft() returns true when it deferred, and arms
+    // m_fftPresentWake so the deferred state is still presented if that FFT
+    // frame never arrives.
+    bool presentNeededBesideFft() const;
+    bool deferPresentToFft();
+    QTimer* m_fftPresentWake{nullptr};
     // VFO passband drag state (#404)
     bool m_draggingVfo{false};
     int  m_vfoDragOffsetHz{0};  // Hz offset from VFO at grab point (#1120)

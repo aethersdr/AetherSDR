@@ -2108,13 +2108,23 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
             return;
         }
 
-        if (presentNeededBesideFft()) {
+        if (!deferPresentToFft()) {
             coalescedUpdate();
         }
         if (waterfallScrollProgressRows() >= m_waterfallScrollDistanceRows) {
             // Keep the completed phase so the viewport remains one full row
             // advanced until the next radio row resets the clock.
             m_waterfallScrollTimer->stop();
+        }
+    });
+
+    m_fftPresentWake = new QTimer(this);
+    m_fftPresentWake->setSingleShot(true);
+    m_fftPresentWake->setTimerType(Qt::PreciseTimer);
+    connect(m_fftPresentWake, &QTimer::timeout, this, [this]() {
+        // An FFT frame since the deferral already presented the state.
+        if (presentNeededBesideFft()) {
+            coalescedUpdate();
         }
     });
 
@@ -2646,7 +2656,7 @@ VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
     // While FFT frames are presenting, the next one redraws the labels; a
     // render of their own is another whole-window composite (#6883).
     connect(w, &VfoWidget::smartMtrLabelsChanged, this, [this]() {
-        markOverlayDirty("smartMtr", presentNeededBesideFft());
+        markOverlayDirty("smartMtr", !deferPresentToFft());
     });
     m_vfoWidgets[sliceId] = w;
     w->show();
@@ -2696,7 +2706,7 @@ void SpectrumWidget::adoptVfoWidget(int sliceId, VfoWidget* widget)
     widget->setProperty("sliceId", sliceId);
     installVfoCursorEventFilter(widget);
     connect(widget, &VfoWidget::smartMtrLabelsChanged, this,
-            [this]() { markOverlayDirty("smartMtr"); });
+            [this]() { markOverlayDirty("smartMtr", !deferPresentToFft()); });
     m_vfoWidgets[sliceId] = widget;
     widget->show();
     widget->raise();
@@ -9160,7 +9170,7 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
 
     // While FFT frames are presenting, the next one shows this row; a present
     // of its own would be a second whole-window composite per frame (#6883).
-    if (visibleStream && presentNeededBesideFft()) {
+    if (visibleStream && !deferPresentToFft()) {
         coalescedUpdate();
     }
 }
@@ -11940,6 +11950,20 @@ bool SpectrumWidget::presentNeededBesideFft() const
     return AetherSDR::presentNeededBesideFft(
         m_lastFftPresentClock.isValid() ? m_lastFftPresentClock.elapsed() : -1,
         m_fftFps);
+}
+
+bool SpectrumWidget::deferPresentToFft()
+{
+    const qint64 remainingMs = AetherSDR::fftLivenessRemainingMs(
+        m_lastFftPresentClock.isValid() ? m_lastFftPresentClock.elapsed() : -1,
+        m_fftFps);
+    if (remainingMs <= 0) {
+        return false;
+    }
+    if (m_fftPresentWake) {
+        m_fftPresentWake->start(static_cast<int>(remainingMs));
+    }
+    return true;
 }
 
 void SpectrumWidget::coalescedUpdate()

@@ -590,6 +590,19 @@ inline bool presentNeededBesideFft(std::int64_t sinceFftPresentMs, int fftFps)
     return sinceFftPresentMs > framePeriodMs + framePeriodMs / 2;
 }
 
+// Milliseconds until a live FFT stream stops counting as live, so a present
+// deferred to the next FFT frame can be made anyway if that frame never
+// comes. 0 means the stream is not live and the caller should present now.
+inline std::int64_t fftLivenessRemainingMs(std::int64_t sinceFftPresentMs,
+                                           int fftFps)
+{
+    if (presentNeededBesideFft(sinceFftPresentMs, fftFps)) {
+        return 0;
+    }
+    const std::int64_t framePeriodMs = 1000 / fftFps;
+    return framePeriodMs + framePeriodMs / 2 - sinceFftPresentMs + 1;
+}
+
 inline float waterfallScrollSampleOffsetUnit(float progressRows,
                                               float distanceRows,
                                               int textureRows)

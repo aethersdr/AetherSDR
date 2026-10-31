@@ -773,6 +773,15 @@ int testWaterfallScrollProgress()
         || !presentNeededBesideFft(10, -5)) {
         return fail("with no FFT stream the scroll timer must keep presenting");
     }
+    // A deferred present is made anyway the moment the stream stops being live.
+    if (fftLivenessRemainingMs(0, 25) != 61
+        || fftLivenessRemainingMs(42, 25) != 19
+        || fftLivenessRemainingMs(60, 25) != 1
+        || fftLivenessRemainingMs(61, 25) != 0
+        || fftLivenessRemainingMs(-1, 25) != 0
+        || fftLivenessRemainingMs(10, 0) != 0) {
+        return fail("a deferred present must be woken when the FFT stops");
+    }
     return 0;
 }
 
