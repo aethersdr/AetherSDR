@@ -1,3 +1,4 @@
+#include "FlexSliceStatusTestSupport.h"
 // Socket-free model, backend encoding and protocol routing. Observations and
 // replies are injected independently; no peer, radio, TX or listening server.
 #include "TestSettingsProfile.h"
@@ -365,7 +366,7 @@ void boundedRetirementHistory()
         uncertain = result.created;
     });
     for (int id = 1000; id != 2024; ++id) {
-        f.radio.handleSliceStatusForTest(id, {}, true);
+        applyFlexSliceStatus(f.radio, id, {}, true);
     }
     settle();
     check(RadioModelSliceLifecycleTestAccess::retirementCount(f.radio) <= 64,
@@ -404,14 +405,14 @@ void foreignRetirementBeforePublication()
         });
         const QMap<QString, QString> foreign{{QStringLiteral("client_handle"), QStringLiteral("99")},
                                             {QStringLiteral("in_use"), QStringLiteral("1")}};
-        if (alreadyForeign) { f.radio.handleSliceStatusForTest(2, foreign); }
+        if (alreadyForeign) { applyFlexSliceStatus(f.radio, 2, foreign); }
         QObject owner;
         const quint64 ticket = f.create(&owner, {});
         f.radio.cancelSliceCreation(ticket);
-        f.radio.handleSliceStatusForTest(2, foreign);
-        f.radio.handleSliceStatusForTest(2, {{QStringLiteral("client_handle"), QStringLiteral("99")},
+        applyFlexSliceStatus(f.radio, 2, foreign);
+        applyFlexSliceStatus(f.radio, 2, {{QStringLiteral("client_handle"), QStringLiteral("99")},
                                            {QStringLiteral("in_use"), QStringLiteral("0")}}, true);
-        f.radio.handleSliceStatusForTest(2, {{QStringLiteral("client_handle"), QStringLiteral("1")},
+        applyFlexSliceStatus(f.radio, 2, {{QStringLiteral("client_handle"), QStringLiteral("1")},
                                            {QStringLiteral("in_use"), QStringLiteral("1")}});
         f.publish(2);
         SliceDelta pan;

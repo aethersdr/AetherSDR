@@ -1,3 +1,4 @@
+#include "FlexSliceStatusTestSupport.h"
 // #5890 / #5554 section 2.3: bounded seed for the first M4 receive group.
 // No firmware peer, connect to hardware, USB enumeration, or keying. The
 // registry distinguishes protocol declarations from desktop implementations.
@@ -149,7 +150,10 @@ const std::array kFamilies{
 
 SliceDelta last(const QSignalSpy& observations)
 {
-    return observations.isEmpty() ? SliceDelta{} : qvariant_cast<SliceDelta>(observations.last().at(1));
+    if (observations.isEmpty()) { return {}; }
+    const QList<QVariant>& report = observations.last();
+    return report.size() == 1 ? report.at(0).value<SliceObservation>().values
+                              : report.at(1).value<SliceDelta>();
 }
 
 void declarations()
@@ -183,7 +187,7 @@ void flexCommandsAndObservations()
         int genericCommands = 0;
         backend.setSliceCommandSink([&](const QString& command) { commands.append(command); });
         backend.setCommandSink([&](const QString&) { ++genericCommands; });
-        QSignalSpy observations(&backend, &IRadioBackend::sliceChanged);
+        QSignalSpy observations(&backend, &IRadioBackend::sliceObserved);
         test::SeamThreadAffinityProbe affinity(&backend);
         test::attachAllSeamSignals(affinity);
         request(backend, kOperations[i]);
@@ -192,7 +196,7 @@ void flexCommandsAndObservations()
         check(observations.isEmpty(), "Flex dispatch does not manufacture observed state");
         // Intentionally differs from every request. A client cannot mistake
         // acceptance for confirmation or overwrite an authoritative answer.
-        backend.decodeSliceStatus(0, {{"RF_frequency", "14.260000"}, {"mode", "USB"},
+        publishFlexSliceStatus(backend, 0, {{"RF_frequency", "14.260000"}, {"mode", "USB"},
             {"filter_lo", "100"}, {"filter_hi", "2900"},
             {"agc_mode", "slow"}, {"agc_threshold", "65"}});
         const SliceDelta observed = last(observations);
@@ -335,7 +339,7 @@ void receiveControlContracts()
     int generic = 0;
     flex.setSliceCommandSink([&](const QString& command) { commands.append(command); });
     flex.setCommandSink([&](const QString&) { ++generic; });
-    QSignalSpy observations(&flex, &IRadioBackend::sliceChanged);
+    QSignalSpy observations(&flex, &IRadioBackend::sliceObserved);
     const std::array keys{"nb", "nr", "anf", "", "apf", "lms_nr", "speex_nr",
                           "rnnoise", "nrf", "lms_anf", "anft"};
     for (std::size_t i = 0; i < keys.size(); ++i) {
@@ -385,7 +389,7 @@ void receiveControlContracts()
               "slice set 3 rxant=RX_A", "slice lock 3", "slice unlock 3"} && generic == 0,
           "Flex routes all controls through guarded slice sink; squelch uses separate changed fields");
     check(observations.isEmpty(), "dispatch does not manufacture Flex radio observations");
-    flex.decodeSliceStatus(3, {{"audio_level", "29"}, {"audio_mute", "0"}, {"audio_pan", "20"},
+    publishFlexSliceStatus(flex, 3, {{"audio_level", "29"}, {"audio_mute", "0"}, {"audio_pan", "20"},
         {"nb", "0"}, {"nb_level", "33"}, {"squelch", "0"}, {"squelch_level", "18"},
         {"rxant", "ANT1"}, {"lock", "1"}});
     const SliceDelta truth = last(observations);
@@ -528,7 +532,7 @@ void hostConfiguration()
             const auto& anan = static_cast<const anan::AnanBackend&>(*backend);
             check(last(observations).agcMode == QStringLiteral("fast") && last(observations).agcThreshold == 50
                       && anan.agcModeForTest() == 4
-                      && anan.agcMaxGainDbForTest() == anan::AnanBackend::agcKnobDb(50),
+                      && std::abs(anan.agcMaxGainDbForTest() - anan::AnanBackend::agcKnobDb(50)) < 1e-9,
                   "ANAN publishes the WDSP AGC configuration it retains");
         }
         check(affinity.violations().isEmpty(), "driven host backend signals stay on the owner thread");

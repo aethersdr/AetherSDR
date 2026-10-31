@@ -24,6 +24,7 @@ AETHER_SEAM_PROBE(linkStatsUpdated);
 AETHER_SEAM_PROBE(extensionResult);
 AETHER_SEAM_PROBE(extensionError);
 AETHER_SEAM_PROBE(sliceChanged);
+AETHER_SEAM_PROBE(sliceObserved);
 AETHER_SEAM_PROBE(sliceRemoved);
 AETHER_SEAM_PROBE(sliceLifecycleFailed);
 AETHER_SEAM_PROBE(meterUpdate);

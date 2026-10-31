@@ -1,3 +1,4 @@
+#include "FlexSliceStatus.h"
 #include "WanConnection.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
@@ -130,8 +131,23 @@ WanConnection::~WanConnection()
 
 // ─── Connection ──────────────────────────────────────────────────────────────
 
+void WanConnection::dispatchStatus(const ParsedMessage& message)
+{
+    if (FlexSliceStatus::isSlice(message.object)
+        && !message.kvs.contains(QStringLiteral("waveform_status"))) {
+        if (auto observation = FlexSliceStatus::decode(message.object, message.kvs)) {
+            observation->transportEpoch = m_sliceEpoch;
+            emit sliceObserved(*observation);
+        }
+        return;
+    }
+    emit statusReceived(message.object, message.kvs);
+}
+
 void WanConnection::resetSessionState()
 {
+    m_sliceEpoch->store(false, std::memory_order_release);
+    m_sliceEpoch = std::make_shared<std::atomic_bool>(true);
     // This object outlives every TLS session (a by-value MainWindow member), so
     // reset per session: otherwise a partial line from the dead link prefixes the
     // next session's first line and stale handle/sequence/callbacks answer into the
@@ -369,6 +385,7 @@ void WanConnection::onHeartbeat()
 
 void WanConnection::processLine(const QString& line)
 {
+    const auto ingressEpoch = m_sliceEpoch;
     // GPS coordinates are never useful in a support log. Compute this before
     // the certificate-decision early return so that path cannot bypass the
     // normal GPS payload suppression below.
@@ -435,7 +452,7 @@ void WanConnection::processLine(const QString& line)
     }
 
     case MessageType::Status:
-        emit statusReceived(msg.object, msg.kvs);
+        if (ingressEpoch == m_sliceEpoch) { dispatchStatus(msg); }
         break;
 
     default:

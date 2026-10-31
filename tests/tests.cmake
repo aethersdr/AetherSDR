@@ -10825,3 +10825,10 @@ if(HAVE_PIPEWIRE)
     target_link_libraries(pipewire_rx_bridge_test PRIVATE aethercore Qt6::Core)
     add_test(NAME pipewire_rx_bridge_test COMMAND pipewire_rx_bridge_test)
 endif()
+
+# Socket-free production LAN/WAN ingress and typed slice ownership lifecycle.
+add_executable(flex_slice_observation_test tests/flex_slice_observation_test.cpp)
+target_include_directories(flex_slice_observation_test PRIVATE src tests)
+target_link_libraries(flex_slice_observation_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(flex_slice_observation_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_slice_observation_test COMMAND flex_slice_observation_test)

@@ -1,3 +1,4 @@
+#include "FlexSliceStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
@@ -2010,7 +2011,7 @@ public:
     {
         QMap<QString, QString> kvs;
         kvs.insert(QStringLiteral("pan"), panId);
-        model.handleSliceStatusForTest(sliceId, kvs, false);
+        applyFlexSliceStatus(model, sliceId, kvs, false);
     }
 
     struct IqHarness {
@@ -2533,9 +2534,9 @@ public:
         const QMap<QString, QString> sliceStatus{
             {QStringLiteral("in_use"), QStringLiteral("1")},
         };
-        model.handleSliceStatusForTest(0, sliceStatus);
-        model.handleSliceStatusForTest(1, sliceStatus);
-        model.handleSliceStatusForTest(2, sliceStatus);
+        applyFlexSliceStatus(model, 0, sliceStatus);
+        applyFlexSliceStatus(model, 1, sliceStatus);
+        applyFlexSliceStatus(model, 2, sliceStatus);
         SliceDelta first;
         first.panId = QStringLiteral("pan-a");
         first.frequency = 14.074;
@@ -2664,7 +2665,7 @@ public:
         // A band-change recreation retains its receiver and permission, but
         // a genuine close must revoke permission before that receiver is reused.
         sent.clear();
-        model.handleSliceStatusForTest(1, {}, true);
+        applyFlexSliceStatus(model, 1, {}, true);
         model.emitBackendSliceChangedForTest(1, second);
         spin(600);
         if (sent.contains(QStringLiteral("tx_enable:1,false;"))) {
@@ -2672,7 +2673,7 @@ public:
             return false;
         }
         sent.clear();
-        model.handleSliceStatusForTest(1, {}, true);
+        applyFlexSliceStatus(model, 1, {}, true);
         spin(600);
         if (!sent.contains(QStringLiteral("tx_enable:1,false;"))
             || sent.contains(QStringLiteral("tx_enable:0,false;"))
@@ -2692,7 +2693,7 @@ public:
         RadioModel receiveOnly;
         receiveOnly.setBackendForTest(std::make_unique<TxCapableBackend>(false),
                                       QStringLiteral("test"));
-        receiveOnly.handleSliceStatusForTest(0, sliceStatus);
+        applyFlexSliceStatus(receiveOnly, 0, sliceStatus);
         SliceDelta receiveOnlySlice;
         receiveOnlySlice.panId = QStringLiteral("pan-a");
         receiveOnly.emitBackendSliceChangedForTest(0, receiveOnlySlice);

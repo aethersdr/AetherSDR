@@ -20,6 +20,7 @@ namespace AetherSDR {
 class FirmwareStager;
 
 class RadioConnection;
+class WanConnection;
 class PanadapterStream;
 
 // FlexBackend — the IRadioBackend for the SmartSDR / FlexRadio wire stack.
@@ -200,12 +201,9 @@ public:
     // line) and emit the normalized meterDefined/meterRemoved signals. Mirrors
     // FlexLib Radio.cs ParseMeterStatus. (aetherd RFC 2.3 — MeterModel touchpoint.)
     void decodeMeterStatus(const QString& rawBody);
-    // Decode a Flex slice-status kv-set into the normalized, canonically-named
-    // slice change map and emit sliceChanged(sliceId, changes). Owns all the
-    // Flex wire knowledge (key names like "RF_frequency"/"filter_lo", "1"→bool,
-    // comma-split lists); SliceModel::applyChanges consumes only canonical keys.
-    // (aetherd RFC 2.3 — SliceModel touchpoint, full canonical rename.)
-    void decodeSliceStatus(int sliceId, const QMap<QString, QString>& kvs);
+    // Forward session-bound observations already decoded at transport ingress.
+    void acceptSliceObservation(const SliceObservation& observation);
+    void attachWanSliceSource(WanConnection* source);
 
     // Decode the five Flex transmit-family status planes into a normalized,
     // typed TransmitDelta and emit transmitChanged (aetherd RFC 2.3 — TransmitModel
@@ -266,6 +264,9 @@ private:
     void sendSlice(const QString& cmd);   // guarded slice path (§6)
     void sendSliceTune(int sliceId, const SliceTuneRequest& request);
 
+    QPointer<WanConnection> m_sliceWanSource;
+    QMetaObject::Connection m_wanSliceConnection;
+    quint64 m_sliceSourceRevision = 0;
     RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
     QThread*          m_connThread{nullptr};    // owned (this-parented)
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread

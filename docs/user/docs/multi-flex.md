@@ -34,6 +34,7 @@ AetherSDR handles this automatically:
 
 - **On connect:** AetherSDR checks whether existing slices belong to another client. If so, it creates its own slice and panadapter.
 - **Ownership:** panadapter and slice ownership is taken from the radio's status, not from the order packets arrive in, so joining a radio that already has clients attaches you to the right objects.
+- **Released slices:** a slot becomes available when the radio reports its removal or its owning client disconnects. A reassigned slice uses its new owner's state; queued updates from a disconnected session do not restore the old slice.
 - **Joining:** the connection watchdog allows a grace period while a second client joins, so the join does not trigger a false disconnect.
 - **Status filtering:** only slice, pan and waterfall updates that match your `client_handle` are processed. Spectrum and waterfall packets from other clients' panadapters are dropped.
 - **Shared radios** show "Shared radio on your network via multiFLEX" in the Connect to Radio list.
