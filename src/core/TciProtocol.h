@@ -224,6 +224,10 @@ public:
 
     static long long mhzToHz(double mhz);
 
+    // A slice squelch level (0..100) as the spec's sql_level dB, the scale
+    // sql_level GET and SET use. TciServer relays GUI changes with it.
+    static int squelchLevelDb(RadioModel* model, SliceModel* s, int level);
+
     // IQ center (DDS) for a slice = its populated panadapter center in Hz.
     // Falls back to the slice frequency while the pan is absent or its center
     // still holds the model placeholder (#3910, #3913 review).

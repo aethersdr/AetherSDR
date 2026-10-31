@@ -3070,6 +3070,40 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
                       .arg(trx).arg(static_cast<int>(gain)));
     });
 
+    // Squelch level → `sql_level:trx,dB;`. The sql_enable relay below drops
+    // the level, so a GUI squelch slider reached no client. De-duped in dB:
+    // the radio re-sends squelch on every status refresh. Both squelch signals
+    // feed it, since an external receive source reports on its own one, and
+    // receiveSquelchLevel() reads whichever is active. Seeded like the flag
+    // relays below: deferred past the band-change recreate settle (#2824),
+    // QPointer-guarded, sharing the de-dup baseline.
+    auto lastSqlDb = std::make_shared<int>(1);  // above 0 dB: nothing announced yet
+    auto relaySqlLevel = [this, lastSqlDb](SliceModel* s) {
+        const int db = TciProtocol::squelchLevelDb(m_model, s, s->receiveSquelchLevel());
+        if (*lastSqlDb == db) {
+            return;
+        }
+        *lastSqlDb = db;
+        if (m_clients.isEmpty()) {
+            return;
+        }
+        broadcast(QStringLiteral("sql_level:%1,%2;")
+                      .arg(m_trxMap.trxForSlice(m_model, s)).arg(db));
+    };
+    connect(slice, &SliceModel::squelchChanged, this,
+            [slice, relaySqlLevel](bool, int) { relaySqlLevel(slice); });
+    connect(slice, &SliceModel::externalReceiveSquelchChanged, this,
+            [slice, relaySqlLevel](bool, int) { relaySqlLevel(slice); });
+    {
+        QPointer<SliceModel> guard(slice);
+        QTimer::singleShot(400, this, [this, guard, relaySqlLevel]() {
+            if (!guard || m_clients.isEmpty()) {
+                return;
+            }
+            relaySqlLevel(guard);
+        });
+    }
+
     // DSP / squelch / RIT / XIT *_enable flags → per-slice broadcasts (#4161),
     // including to the client that sent the SET (command echo skips the sender).
     // Each relay de-dups against a shared `last` baseline, because SliceModel
