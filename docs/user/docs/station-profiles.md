@@ -32,7 +32,7 @@ Press **Enter** or keypad **Enter** to save an entry in the location, saved-conn
 
 Radio names appear in bold, with model and availability beneath. Unnamed radios show their address as secondary information. Saved names take priority when several paths identify one radio.
 
-The selected-radio summary shows its saved access path and the operator for the next connection. Multiple paths for a verified radio identity appear in **Saved connection path**. Choose the desired path before connecting. Only the selected SmartLink account supplies the current remote list.
+The selected-radio card shows the model above the radio name, followed by separate **Connection**, **SmartLink** (for remote connections) and **Operator** rows. The connection and operator describe the next connection. Multiple paths for a verified radio identity appear under **Connection settings → Connect using**. Choose the desired path before connecting. Only the selected SmartLink account supplies the current remote list.
 
 Right-click a radio, or open **Radio options…**, for **Edit**, **Move**, **Rename** and **Remove**. **Move** carries its saved paths to another location; **Remove** asks for confirmation. Expand **Connection settings** to save a nearby radio or **Copy to another location…**. Copying a path preserves its shared account reference. It does not copy a password or create another radio.
 
