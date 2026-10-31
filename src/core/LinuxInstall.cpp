@@ -63,12 +63,26 @@ bool makeCurrent(const QString& base, const QString& version, QString* problem)
     return true;
 }
 
-// The release current names, or empty.
+// The release current names, or empty: a version folder of base, however
+// the link is written ("26.10.4", "./26.10.4" or a full path). A link to
+// anything else names no release.
 QString currentVersion(const QString& base)
 {
     std::error_code ec;
-    const fs::path target = fs::read_symlink(toPath(QDir(base).filePath(kCurrent)), ec);
-    return ec ? QString() : QString::fromStdString(target.string());
+    const fs::path root = fs::weakly_canonical(toPath(base), ec);
+    fs::path target = ec ? fs::path() : fs::read_symlink(root / kCurrent.toStdString(), ec);
+    if (ec) {
+        return {};
+    }
+    if (target.is_relative()) {
+        target = root / target;
+    }
+    const fs::path real = fs::weakly_canonical(target, ec);
+    if (ec || real.parent_path() != root) {
+        return {};
+    }
+    const QString name = QString::fromStdString(real.filename().string());
+    return isVersion(name) ? name : QString();
 }
 
 // source to dest, which must not exist, without ever leaving a partial
@@ -238,18 +252,26 @@ bool LinuxInstall::install(const QString& tree, const QString& version, const Pa
     // Run again from the installed tree, only the links are redone.
     if (QFileInfo(dest).canonicalFilePath() != source) {
         std::error_code ec;
+        // Moved aside rather than removed in place: a running AetherSDR of
+        // that version keeps the files it has open, and the copy that works
+        // goes back if the new one can't be copied in.
+        QString old;
         if (QFileInfo::exists(dest)) {
-            // Moved aside rather than removed in place: a running
-            // AetherSDR of that version keeps the files it has open.
-            const QString old = unique(paths.base, QStringLiteral("old"));
+            old = unique(paths.base, QStringLiteral("old"));
             fs::rename(toPath(dest), toPath(old), ec);
-            fs::remove_all(toPath(old), ec);
-        }
-        if (QFileInfo::exists(dest) || !moveTree(source, dest, true, problem)) {
-            if (problem->isEmpty()) {
+            if (ec) {
                 *problem = QStringLiteral("%1 is in the way.").arg(dest);
+                return false;
+            }
+        }
+        if (!moveTree(source, dest, true, problem)) {
+            if (!old.isEmpty()) {
+                fs::rename(toPath(old), toPath(dest), ec);
             }
             return false;
+        }
+        if (!old.isEmpty()) {
+            fs::remove_all(toPath(old), ec);
         }
     }
     if (!makeCurrent(paths.base, version, problem)) {
