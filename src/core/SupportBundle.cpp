@@ -3,6 +3,7 @@
 #include "SettingsSanitizer.h"
 #include "AsyncLogWriter.h"  // redactPii — GHSA-ccrg-j8cp-qhc4
 #include "LogManager.h"
+#include "ExternalFilePath.h"
 #include "SystemInventory.h"
 #include "GpuSelector.h"
 #include "ZipArchive.h"
@@ -277,6 +278,11 @@ QString SupportBundle::recentLogTail(int lines)
     return all.join('\n').trimmed();
 }
 
+QString SupportBundle::externalFilePath(const QString& path)
+{
+    return ExternalFilePath::resolve(path);
+}
+
 void SupportBundle::openEmailClient(const QString& bundlePath,
                                     const SystemInfo& sys,
                                     const RadioInfo& radio)
@@ -302,7 +308,8 @@ void SupportBundle::openEmailClient(const QString& bundlePath,
         body += "Radio: not connected\n";
     }
 
-    body += QString("\nPlease attach the support bundle saved at:\n  %1\n").arg(bundlePath);
+    body += QString("\nPlease attach the support bundle saved at:\n  %1\n")
+        .arg(externalFilePath(bundlePath));
     body += "\nDescribe the issue below:\n---\n\n";
 
     QUrl url("mailto:support@aethersdr.com");

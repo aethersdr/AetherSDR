@@ -10360,6 +10360,16 @@ if(RADE_FOUND)
     add_test(NAME rade_phase_renorm_test COMMAND rade_phase_renorm_test)
 endif()
 
+# Filesystem-only MSIX presentation-path resolution; fixtures use a private temp directory.
+add_executable(external_file_path_test
+    tests/external_file_path_test.cpp src/core/ExternalFilePath.cpp)
+target_include_directories(external_file_path_test PRIVATE src)
+target_link_libraries(external_file_path_test PRIVATE Qt6::Core)
+if(WIN32)
+    target_link_libraries(external_file_path_test PRIVATE shell32 ole32 uuid)
+endif()
+add_test(NAME external_file_path_test COMMAND external_file_path_test)
+
 # ── Deferred retrofits: applied after the LAST test, wherever it is declared ──
 #
 # Three things have to hold for every test in this file: GUI harnesses get

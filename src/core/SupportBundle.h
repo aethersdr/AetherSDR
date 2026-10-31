@@ -68,6 +68,9 @@ public:
     // Returns the full path to the archive, or empty string on failure.
     static QString createBundle(const RadioInfo& radio);
 
+    // Physical log/bundle location for display and external applications.
+    static QString externalFilePath(const QString& path);
+
     // Flush the log pipeline and return the last `lines` lines of the most
     // recent on-disk log (#3705).  The on-disk log is already secret-redacted
     // at capture (AsyncLogWriter::formatLine → redactPii), so this is the

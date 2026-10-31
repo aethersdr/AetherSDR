@@ -141,7 +141,13 @@ For a crash, also attach the crash report your operating system kept: `coredumpc
 |---|---|
 | **Linux** | `~/.config/AetherSDR/logs/` |
 | **macOS** | `~/Library/Preferences/AetherSDR/logs/` |
-| **Windows** | `%LOCALAPPDATA%\AetherSDR\logs\` |
+| **Windows (installer or portable)** | `%LOCALAPPDATA%\AetherSDR\logs\` |
+| **Windows (Microsoft Store)** | Usually `%LOCALAPPDATA%\Packages\<package-family>\LocalCache\Local\AetherSDR\logs\` |
+
+For the Microsoft Store build, use the path shown in **Support & Diagnostics**
+or **Open Log Folder** to find the current file. Windows can keep older files
+from an installer or portable build in the original location. The dialog and
+support-bundle email show the location of the specific file being shared.
 
 - Every launch starts a new file named `aethersdr-<date>-<time>.log`. Attach the newest one. On Linux and macOS, `aethersdr.log` in the same folder is a link to it; on Windows it is a `.lnk` shortcut.
 - A log that grows past 100 MB is rotated to a new file.
