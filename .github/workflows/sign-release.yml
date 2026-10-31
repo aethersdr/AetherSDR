@@ -103,7 +103,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          want="x86_64.AppImage aarch64.AppImage x86_64.tar.zst aarch64.tar.zst Windows-x64-setup.exe Windows-x64-portable.zip"
+          want="x86_64.AppImage aarch64.AppImage Windows-x64-setup.exe Windows-x64-portable.zip"
+          # Linux tarballs, when the tag's own AppImage build makes them.
+          if grep -q -- '--tarball' .github/workflows/appimage.yml; then
+            want="$want x86_64.tar.zst aarch64.tar.zst"
+          fi
           for i in $(seq 1 90); do
             names=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
             missing=

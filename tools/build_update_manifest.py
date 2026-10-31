@@ -37,7 +37,8 @@ Usage (the AppImage build, the release tarball of one AppImage):
     python3 tools/build_update_manifest.py --tarball AetherSDR-v26.10.4-x86_64.AppImage \\
         AetherSDR-v26.10.4-x86_64.tar.zst
 
-Needs python3 >= 3.10, zstd >= 1.5 and (for AppImages) unsquashfs. Nothing
+Needs python3 >= 3.10, zstd >= 1.5 (>= 1.4.8 for --tarball alone) and (for
+AppImages) unsquashfs. Nothing
 here executes a downloaded file: an AppImage's squashfs is located from its
 ELF header and read with unsquashfs, so an aarch64 image is handled on an
 x86_64 runner.
@@ -241,18 +242,30 @@ def zstd_whole(new: Path, out: Path, window_log: int) -> None:
                     str(new), "-o", str(out)], check=True)
 
 
+def _tar_info(name: str, kind: bytes = tarfile.REGTYPE, mode: int = 0o644, size: int = 0) -> tarfile.TarInfo:
+    """A header that depends only on what is passed: no time, owner or group."""
+    info = tarfile.TarInfo(name)
+    info.type = kind
+    info.mode = mode
+    info.size = size
+    info.mtime = 0
+    info.uid = info.gid = 0
+    info.uname = info.gname = ""
+    return info
+
+
+def _folders_of(paths) -> set[str]:
+    """Every folder that holds one of paths: the only folder entries a
+    release tarball may carry."""
+    return {str(a) for path in paths for a in PurePosixPath(path).parents} - {"."}
+
+
 def deterministic_tar(members: list[tuple[str, Path]], out: Path) -> None:
     """A tar whose bytes depend only on its members' names and contents."""
     with tarfile.open(out, "w", format=tarfile.USTAR_FORMAT) as tar:
         for name, path in members:
-            info = tarfile.TarInfo(name)
-            info.size = path.stat().st_size
-            info.mode = 0o644
-            info.mtime = 0
-            info.uid = info.gid = 0
-            info.uname = info.gname = ""
             with path.open("rb") as f:
-                tar.addfile(info, f)
+                tar.addfile(_tar_info(name, size=path.stat().st_size), f)
 
 
 # ── The release tarball (Linux's `full`) ───────────────────────────────────
@@ -263,32 +276,22 @@ def write_release_tarball(root: Path, tree: dict[str, Entry], out: Path) -> None
     folder that holds one of them, nothing else, and bytes that depend only
     on the tree. A name ustar cannot hold (even with its prefix field) fails
     here rather than turning into a pax or GNU header the app refuses."""
-    folders = sorted({str(a) for path in tree for a in PurePosixPath(path).parents} - {"."})
     tar_path = out.with_name(out.name + ".tar-tmp")
     try:
         with tarfile.open(tar_path, "w", format=tarfile.USTAR_FORMAT) as tar:
-            def info(name: str, kind: bytes, mode: int) -> tarfile.TarInfo:
-                i = tarfile.TarInfo(name)
-                i.type = kind
-                i.mode = mode
-                i.mtime = 0
-                i.uid = i.gid = 0
-                i.uname = i.gname = ""
-                return i
-            for name in sorted(folders + list(tree)):
+            for name in sorted(_folders_of(tree) | set(tree)):
                 if name not in tree:
-                    tar.addfile(info(name, tarfile.DIRTYPE, 0o755))
+                    tar.addfile(_tar_info(name, tarfile.DIRTYPE, 0o755))
                     continue
                 e = tree[name]
                 if e.type == "symlink":
-                    i = info(name, tarfile.SYMTYPE, 0o777)
+                    i = _tar_info(name, tarfile.SYMTYPE, 0o777)
                     i.linkname = e.target
                     tar.addfile(i)
                 else:
-                    i = info(name, tarfile.REGTYPE, 0o755 if e.executable else 0o644)
-                    i.size = e.size
                     with (root / name).open("rb") as f:
-                        tar.addfile(i, f)
+                        tar.addfile(_tar_info(name, tarfile.REGTYPE, 0o755 if e.executable else 0o644,
+                                              e.size), f)
         subprocess.run(["zstd", "-q", "-f", f"-{ZSTD_LEVEL}", "-T0", str(tar_path), "-o", str(out)],
                        check=True)
     finally:
@@ -310,7 +313,7 @@ def check_release_tarball(tarball: Path, files: list[dict]) -> None:
     they hold an entry, the end-of-archive blocks and only zeros after. Raises
     ValueError on the first difference."""
     want = {f["path"]: f for f in files}
-    folders = {str(a) for path in want for a in PurePosixPath(path).parents} - {"."}
+    folders = _folders_of(want)
     seen: set[str] = set()
     undecodable = ValueError(f"{tarball.name}: not a zstd stream the app can decode "
                              f"(a window above {TARBALL_MAX_WINDOW}?)")
@@ -366,6 +369,10 @@ def check_release_tarball(tarball: Path, files: list[dict]) -> None:
                 continue
             if kind != b"0" or not f or f["type"] != "file" or f["size"] != size:
                 raise ValueError(f"{name}: type {kind!r}, size {size}: not this file in the manifest")
+            # The app takes the exec bit from `files`, but a user's tar takes
+            # it from here.
+            if bool(_octal(h[100:108]) & 0o111) != f["executable"]:
+                raise ValueError(f"{name}: exec bit differs from the manifest")
             digest, left = hashlib.sha256(), size
             while left:
                 b = block()
@@ -580,13 +587,17 @@ class MissingPayload(RuntimeError):
 
 def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
           public_key: Path | None, work_root: Path, discard_assets: bool = False,
-          require_all: bool = False) -> dict:
+          require_all: bool = False, release_tarballs: bool = True) -> dict:
     """discard_assets: delete each downloaded asset once used (CI disk);
     never set for assets the caller supplied.
 
     require_all: every payload in PAYLOADS must be present in `tag`, or the
     build fails (MissingPayload) instead of writing a manifest that silently
-    leaves a platform out. A missing EARLIER release only loses that patch."""
+    leaves a platform out. A missing EARLIER release only loses that patch.
+
+    release_tarballs: Linux's full is the release tarball, required with
+    require_all. False for a release cut before the AppImage build made them:
+    full is then the AppImage, as it was."""
     out.mkdir(parents=True, exist_ok=True)
     manifest = {
         "schema": SCHEMA,
@@ -612,7 +623,7 @@ def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
         # Linux's full download is the release tarball, the tree the app
         # stages in-app, once it is shown to hold exactly these files.
         full = asset
-        if kind.tarball_suffix:
+        if kind.tarball_suffix and release_tarballs:
             tarball = get_asset(tag, kind.tarball_name(tag))
             if tarball is not None:
                 check_release_tarball(tarball, files)
@@ -671,7 +682,7 @@ def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
-    if argv[:1] == ["--tarball"]:
+    if "--tarball" in argv:
         tp = argparse.ArgumentParser(description="The release tarball of one AppImage.")
         tp.add_argument("--tarball", required=True, type=Path, metavar="APPIMAGE")
         tp.add_argument("out", type=Path)
@@ -696,6 +707,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--assets", action="append", default=[], metavar="TAG=DIR",
                     help="a directory already holding a release's assets")
     ap.add_argument("--work", type=Path, help="scratch directory (default: a temp dir)")
+    ap.add_argument("--no-release-tarballs", action="store_true",
+                    help="a release cut before the AppImage build made tarballs: Linux's full is the AppImage")
     ap.add_argument("--require-all", action="store_true",
                     help="fail unless every payload is present (implied by --fetch-from-github)")
     args = ap.parse_args(argv)
@@ -722,7 +735,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         manifest = build(args.tag, args.out, args.depth, get_asset, earlier, args.public_key, work,
                          discard_assets=args.fetch_from_github,
-                         require_all=args.require_all or args.fetch_from_github)
+                         require_all=args.require_all or args.fetch_from_github,
+                         release_tarballs=not args.no_release_tarballs)
     except MissingPayload as e:
         print(f"error: {e}; no manifest written", file=sys.stderr)
         return 1

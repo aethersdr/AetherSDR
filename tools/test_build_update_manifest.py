@@ -452,6 +452,14 @@ class ReleaseTarball(Base):
         part = {k: e for k, e in tree.items() if k != "usr/lib/libQt6Core.so.6"}
         bum.write_release_tarball(root, part, self.tmp / "part.tar.zst")
         refused(self.tmp / "part.tar.zst", "an entry missing")
+        # An executable whose header has lost its exec bit (the app takes it
+        # from `files`, a user's tar from the header), and the reverse.
+        lost = [dict(f, executable=False) if f["path"] == "usr/bin/AetherSDR" else f for f in files]
+        with self.assertRaises(ValueError, msg="exec bit"):
+            bum.check_release_tarball(good, lost)
+        gained = [dict(f, executable=True) if f["path"] == "usr/lib/libQt6Core.so.6.12.0" else f for f in files]
+        with self.assertRaises(ValueError, msg="exec bit"):
+            bum.check_release_tarball(good, gained)
         # Another compressor's stream named .tar.zst, and zstd followed by
         # gzip: zstd -d decodes both, the app neither.
         import gzip
@@ -539,10 +547,17 @@ class LinuxFull(Base):
         (p,) = self.run_build()["payloads"]
         self.assertEqual(p["full"]["asset"], "AetherSDR-v26.10.4-x86_64.AppImage")
 
+    def test_a_release_cut_before_tarballs_keeps_the_appimage(self) -> None:
+        get = lambda t, n: (self.dl / n) if (self.dl / n).exists() else None  # noqa: E731
+        m = bum.build("v26.10.4", self.tmp / "out", 0, get, [], None, self.tmp / "w",
+                      require_all=False, release_tarballs=False)
+        self.assertEqual(m["payloads"][0]["full"]["asset"], "AetherSDR-v26.10.4-x86_64.AppImage")
+
     def test_the_cli_makes_and_checks_a_tarball(self) -> None:
         out = self.tmp / "AetherSDR-v26.10.4-x86_64.tar.zst"
-        self.assertEqual(bum.main(["--tarball", str(self.dl / "AetherSDR-v26.10.4-x86_64.AppImage"), str(out),
-                                   "--work", str(self.tmp / "tw")]), 0)
+        # Options in either order.
+        self.assertEqual(bum.main(["--work", str(self.tmp / "tw"), "--tarball",
+                                   str(self.dl / "AetherSDR-v26.10.4-x86_64.AppImage"), str(out)]), 0)
         bum.check_release_tarball(out, bum.files_list(bum.scan_tree(self.root)))
 
 

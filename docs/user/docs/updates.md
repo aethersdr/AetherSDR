@@ -69,12 +69,14 @@ Copies that cannot install in place offer **Get AetherSDR**. Store-managed copie
 The AppImage runs from wherever you saved it, and updates by downloading the next AppImage. To have **Install update** keep AetherSDR current instead, install it once from the release tarball:
 
 1. Download `AetherSDR-<version>-x86_64.tar.zst` (or `-aarch64.tar.zst` for a 64-bit ARM computer such as a Raspberry Pi) from the [releases page](https://github.com/aethersdr/AetherSDR/releases/latest). It holds the same files as the AppImage.
-2. In a terminal, in the folder you saved it to, unpack it into a folder of its own:
+2. In a terminal, in the folder you saved it to, unpack it into a folder of its own, using the name of the file you downloaded:
 
    ```sh
    mkdir aethersdr
-   tar --zstd -xf AetherSDR-*.tar.zst -C aethersdr
+   tar --zstd -xf AetherSDR-<version>-x86_64.tar.zst -C aethersdr
    ```
+
+   This needs the `zstd` package. If your `tar` doesn't know `--zstd` (GNU tar older than 1.31, as on Ubuntu 20.04), use `zstd -dc AetherSDR-<version>-x86_64.tar.zst | tar -xf - -C aethersdr` instead.
 
 3. Install it:
 

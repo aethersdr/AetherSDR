@@ -212,8 +212,11 @@ same tree the patches produce. The AppImage workflow writes it as
 attaches it beside the AppImage, where Sign Release Artifacts GPG-signs it
 and lists it in `SHA256SUMS.txt`. Update Manifest then reads it back with a
 reader written from this contract and names it `full` only if it holds
-exactly the payload's `files`; a release whose tarball is missing or differs
-gets no manifest.
+exactly the payload's `files`, exec bits included (the app takes them from
+`files`, but a user's `tar` from the archive); a release whose tarball is
+missing or differs gets no manifest. A release is expected to carry tarballs
+when its own tag's AppImage workflow builds them, so a release cut before
+then (re-run to repair it) keeps the AppImage as Linux's `full`.
 
 - A zstd stream (one frame or several) of a POSIX ustar archive, with a
   window of at most 2^27 (zstd's default levels use 2^23 and less, `--long`

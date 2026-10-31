@@ -39,6 +39,11 @@ KEY_FPR = "B7656E6BCB2E022B79F0F97B5578D10E3D5918F3"
 SIGNABLE = ("x86_64.AppImage", "aarch64.AppImage", "x86_64.tar.zst", "aarch64.tar.zst",
             "Windows-x64-setup.exe", "Windows-x64-portable.zip")
 BUILD_WORKFLOWS = ("AppImage", "Windows Installer", "macOS DMG")
+
+
+def signables(tarballs: bool) -> tuple[str, ...]:
+    """SIGNABLE for a release: the Linux tarballs only once its AppImage build made them."""
+    return SIGNABLE if tarballs else tuple(s for s in SIGNABLE if not s.endswith(".tar.zst"))
 # Started by publishing the release, not by the tag push: it typesets, signs
 # and attaches the PDF manual.
 DOCS_WORKFLOW = "Docs"
@@ -239,10 +244,21 @@ def _check_macos_steps(repo: str, r: dict[str, Any]) -> None:
 
 # --------------------------------------------------------------------- assets
 
-def expected_assets(v: str, hotfix: bool) -> list[str]:
+def release_makes_tarballs(repo: str, v: str) -> bool:
+    """Whether the tag's own AppImage workflow builds the Linux release
+    tarballs: a release cut before that carries none, and is not short of them."""
+    proc = run([_tool("gh"), "api", f"repos/{repo}/contents/.github/workflows/appimage.yml?ref={v}",
+                "-H", "Accept: application/vnd.github.raw"], check=False)
+    if proc.returncode != 0:
+        report("WARN", "the tag's AppImage workflow read", "could not read it; expecting the Linux tarballs")
+        return True
+    return "--tarball" in proc.stdout
+
+
+def expected_assets(v: str, hotfix: bool, tarballs: bool = True) -> list[str]:
     bare = ".".join(v.lstrip("v").split(".")[:3])  # 26.9.5 and 26.9.5.0 both package as 26.9.5.0
     names = [f"AetherSDR-{v}-x86_64.AppImage", f"AetherSDR-{v}-aarch64.AppImage",
-             f"AetherSDR-{v}-x86_64.tar.zst", f"AetherSDR-{v}-aarch64.tar.zst",
+             *([f"AetherSDR-{v}-x86_64.tar.zst", f"AetherSDR-{v}-aarch64.tar.zst"] if tarballs else []),
              f"AetherSDR-{v}-macOS-apple-silicon.dmg", f"AetherSDR-{v}-macOS-intel.dmg",
              f"AetherSDR-{v}-Windows-x64-setup.exe", f"AetherSDR-{v}-Windows-x64-portable.zip",
              f"AetherSDR-{v}-source.tar.gz", "SHA256SUMS.txt", f"AetherSDR-Manual-{v}.pdf"]
@@ -262,9 +278,9 @@ def expected_symbol_assets(v: str) -> list[str]:
             f"AetherSDR-{v}-Windows-x64-symbols.tar.xz"]
 
 
-def check_assets(rel: dict[str, Any], v: str, hotfix: bool) -> dict[str, dict[str, Any]]:
+def check_assets(rel: dict[str, Any], v: str, hotfix: bool, tarballs: bool) -> dict[str, dict[str, Any]]:
     assets = {a["name"]: a for a in rel.get("assets", [])}
-    want = expected_assets(v, hotfix)
+    want = expected_assets(v, hotfix, tarballs)
     missing = [n for n in want if n not in assets]
     n_want = len(want)
     if missing:
@@ -288,7 +304,7 @@ def check_assets(rel: dict[str, Any], v: str, hotfix: bool) -> dict[str, dict[st
     # are uploaded in the same `gh release upload` as their signatures, so
     # their timestamps tie (either order, within a few seconds); only a real
     # gap there means a re-sign clobbered one file and not the other.
-    built = [f"AetherSDR-{v}-{s}" for s in SIGNABLE]
+    built = [f"AetherSDR-{v}-{s}" for s in signables(tarballs)]
     late, gaps = [], []
     for n in want:
         if not n.endswith(".asc") or n not in assets or n[:-4] not in assets:
@@ -333,7 +349,7 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Namespace) -> None:
+def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Namespace, tarballs: bool) -> None:
     if args.skip_download:
         report("SKIP", "download and verify signatures and checksums", "--skip-download")
         return
@@ -342,6 +358,9 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
     patterns = ["SHA256SUMS.txt", "SHA256SUMS.txt.asc", f"AetherSDR-{v}-source.tar.gz", f"AetherSDR-{v}-source.tar.gz.asc",
                 f"AetherSDR-{v}-x86_64.AppImage", f"AetherSDR-{v}-x86_64.AppImage.asc",
                 f"AetherSDR-Manual-{v}.pdf", f"AetherSDR-Manual-{v}.pdf.asc"]
+    if tarballs:
+        # The in-app full download for Linux: its bytes and signature too.
+        patterns += [f"AetherSDR-{v}-x86_64.tar.zst", f"AetherSDR-{v}-x86_64.tar.zst.asc"]
     if args.all:
         patterns = [n for n in assets if not n.endswith(".dmg") and not n.endswith(".msixupload")]
     patterns = [p for p in patterns if p in assets]
@@ -362,11 +381,11 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
             m = re.match(r"^([0-9a-f]{64})\s+\*?(.+)$", line.strip())
             if m:
                 entries[m.group(2)] = m.group(1)
-        want = [f"AetherSDR-{v}-{s}" for s in SIGNABLE] + [f"AetherSDR-{v}-source.tar.gz"]
+        want = [f"AetherSDR-{v}-{s}" for s in signables(tarballs)] + [f"AetherSDR-{v}-source.tar.gz"]
         if sorted(entries) == sorted(want):
-            report("PASS", "SHA256SUMS.txt covers exactly the seven signable files")
+            report("PASS", f"SHA256SUMS.txt covers exactly the {len(want)} signable files")
         else:
-            report("FAIL", "SHA256SUMS.txt covers exactly the seven signable files",
+            report("FAIL", f"SHA256SUMS.txt covers exactly the {len(want)} signable files",
                    f"listed: {', '.join(sorted(entries)) or '(none)'}\nexpected: {', '.join(want)}")
         bad, checked = [], []
         for name, digest in entries.items():
@@ -399,7 +418,7 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
         else:
             report("WARN", "release signing key file", "docs/RELEASE-SIGNING-KEY.pub.asc not found; relying on the local keyring")
         for name in ["SHA256SUMS.txt", f"AetherSDR-{v}-source.tar.gz", f"AetherSDR-{v}-x86_64.AppImage",
-                     f"AetherSDR-Manual-{v}.pdf"]:
+                     *([f"AetherSDR-{v}-x86_64.tar.zst"] if tarballs else []), f"AetherSDR-Manual-{v}.pdf"]:
             sig = ddir / (name + ".asc")
             if not sig.exists() or not (ddir / name).exists():
                 report("SKIP", f"gpg --verify {name}.asc", "not downloaded")
@@ -523,8 +542,9 @@ def main(argv: list[str] | None = None) -> int:
     rel = check_release(args.repo, v, first_line, args.not_latest)
     windows_run, _ = check_runs(args.repo, v, tagged_at)
     if rel:
-        assets = check_assets(rel, v, hotfix)
-        check_downloads(args.repo, v, assets, args)
+        tarballs = release_makes_tarballs(args.repo, v)
+        assets = check_assets(rel, v, hotfix, tarballs)
+        check_downloads(args.repo, v, assets, args, tarballs)
     check_store(args.repo, windows_run, hotfix)
 
     fails = [r for r in results if r[0] == "FAIL"]

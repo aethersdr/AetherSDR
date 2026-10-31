@@ -83,6 +83,18 @@ jobs:
           ref: refs/tags/${{ steps.tag.outputs.tag }}
           persist-credentials: false
 
+      # A release carries Linux tarballs when its own AppImage build made them;
+      # one cut before that (or dispatched again to repair it) keeps the
+      # AppImage as Linux's full.
+      - name: Does the release carry tarballs?
+        id: tarballs
+        run: |
+          if grep -q -- '--tarball' .github/workflows/appimage.yml; then
+            echo "expected=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "expected=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check the build was of the tag
         if: ${{ github.event_name == 'workflow_run' }}
         env:
@@ -150,8 +162,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.tag.outputs.tag }}
+          TARBALLS: ${{ steps.tarballs.outputs.expected }}
         run: |
-          want="x86_64.AppImage aarch64.AppImage x86_64.tar.zst aarch64.tar.zst Windows-x64-portable.zip"
+          want="x86_64.AppImage aarch64.AppImage Windows-x64-portable.zip"
+          if [ "$TARBALLS" = true ]; then
+            want="$want x86_64.tar.zst aarch64.tar.zst"
+          fi
           for i in $(seq 1 90); do
             names=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
             missing=
@@ -179,12 +195,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
+          TARBALLS: ${{ steps.tarballs.outputs.expected }}
         run: |
           # --fetch-from-github requires every payload: a download that still
           # fails after retries stops the run rather than leaving a platform out.
+          no_tarballs=
+          [ "$TARBALLS" = true ] || no_tarballs=--no-release-tarballs
           python3 "$RUNNER_TEMP/tool/build_update_manifest.py" --tag "$TAG" --out update-out \
             --fetch-from-github --depth 4 --work "$RUNNER_TEMP/update-work" \
-            --public-key "$RUNNER_TEMP/tool/update-signing.pub"
+            --public-key "$RUNNER_TEMP/tool/update-signing.pub" $no_tarballs
           cp "$RUNNER_TEMP/tool/publish_update_manifest.py" "$RUNNER_TEMP/tool/build_update_manifest.py" update-out/
           ls -l update-out
 
