@@ -36,7 +36,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 |---|---|
 | **RX1 … RX8** | One row per receive channel: the slice it carries, a logarithmic output level meter and a 0-100% receive gain slider. Rows above the radio's slice capacity are hidden. |
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
-| **Line Out TX** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
+| **Include TX (Line Out)** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
 
@@ -175,7 +175,7 @@ and other sources in that mix. Playback master volume and mute also apply.
 The TCI RX, TX and MIC faders do not add another recording gain to Line Out.
 It does not record other applications or separate local cue/sidetone devices.
 
-**Line Out TX** is off by default. When off, Line Out sends silence
+**Include TX (Line Out)** is off by default. When off, Line Out sends silence
 throughout radio TX, including any simultaneous RX: TX monitor and RX cannot be
 separated after mixing. When on, it records the existing playback mix during TX
 without adding a duplicate microphone feed. On FlexRadio, enable MON yourself

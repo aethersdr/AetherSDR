@@ -207,9 +207,9 @@ void TciApplet::buildUI()
 
     auto* lineOutRow = new QHBoxLayout;
     lineOutRow->setContentsMargins(4, 2, 4, 2);
-    m_lineOutIncludeTx = new QCheckBox(tr("Line Out TX"), this);
+    m_lineOutIncludeTx = new QCheckBox(tr("Include TX (Line Out)"), this);
     m_lineOutIncludeTx->setObjectName(QStringLiteral("tciLineOutIncludeTx"));
-    m_lineOutIncludeTx->setAccessibleName(tr("TCI Line Out TX recording"));
+    m_lineOutIncludeTx->setAccessibleName(tr("TCI Include TX (Line Out)"));
     m_lineOutIncludeTx->setAccessibleDescription(tr(
         "Include TX monitor audio present in the radio speaker mix in Line Out. "
         "Does not enable MON or add microphone audio. When off, Line Out is silent "
