@@ -71,6 +71,16 @@ public:
     // Broadcast one discovery datagram now (also called by the interval timer).
     void sweepNow();
 
+    // Addresses probed by unicast in every sweep, besides the broadcasts. A
+    // broadcast does not cross a router, so an HL2 on another subnet is only
+    // found this way (the desktop's connect-by-IP probe is the same idea).
+    // Empty by default; a reply is handled exactly like a broadcast reply.
+    void setDirectedTargets(const QList<QHostAddress>& targets);
+    // The accepted targets, after the IPv4-only, non-null, de-duplicating
+    // filter setDirectedTargets applies. Lets the policy be asserted without
+    // a socket (tests/hl2_discovery_logging_test is the sibling precedent).
+    [[nodiscard]] QList<QHostAddress> directedTargets() const { return m_directedTargets; }
+
     [[nodiscard]] bool isRunning() const noexcept;
 
     // Canonical "AA:BB:CC:DD:EE:FF" rendering of a discovery reply's MAC, which
@@ -138,6 +148,7 @@ private:
     QList<QUdpSocket*> m_sockets;
     QTimer* m_timer = nullptr;
     QHash<QString, Seen> m_seen;   // keyed by serial (the MAC string)
+    QList<QHostAddress> m_directedTargets;
     DiscoveryNotices m_notices;
     bool m_answered = false;       // an HL2 replied since the last sweep
 };

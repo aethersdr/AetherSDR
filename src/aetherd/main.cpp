@@ -57,6 +57,12 @@ int main(int argc, char* argv[])
         QStringLiteral("discover-sim"),
         QStringLiteral("Publish the simulator discovery identity without accessing radio hardware."));
     parser.addOption(localDiscoveryOption);
+    const QCommandLineOption hl2AddressOption(
+        QStringLiteral("hl2-address"),
+        QStringLiteral("With --discover-local, also probe this IPv4 address for a Hermes-Lite 2 "
+                       "(an HL2 on another subnet; repeatable). Discovery only; never connects."),
+        QStringLiteral("ipv4"));
+    parser.addOption(hl2AddressOption);
     parser.addOption(simDiscoveryOption);
     const QCommandLineOption controlOption(
         QStringLiteral("allow-local-control"),
@@ -128,7 +134,8 @@ int main(int argc, char* argv[])
     // client can race the one-shot target binding or see partial resources.
     std::unique_ptr<AetherSDR::RadioDiscoverySource> discoverySource =
         AetherSDR::aetherd::makeDiscoverySource(
-            {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption)});
+            {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption),
+             parser.values(hl2AddressOption)});
     AetherSDR::RadioSession radioSession;
     radioSession.setSessionId(1);
     std::unique_ptr<AetherSDR::control::RadioConnectionTarget> connectionTarget;

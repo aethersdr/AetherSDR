@@ -190,7 +190,10 @@ Daemon startup is passive by default (`sources: []`, `entries: []`).
 `--discover-local` explicitly enables existing Flex/HL2/ANAN LAN discovery and
 RTL-SDR USB enumeration when built in. `--discover-sim` independently publishes
 the existing simulator identity without constructing a radio backend or scanning
-LAN/USB. The flags may be combined. No discovered radio is connected. Icom's
+LAN/USB. The flags may be combined. With `--discover-local`, `--hl2-address <ipv4>`
+(repeatable) also probes that address by unicast for a Hermes-Lite 2 that a
+broadcast cannot reach, for example one on another subnet; a reply is handled
+like a broadcast reply. No discovered radio is connected. Icom's
 manual address/credentials, SmartLink and external directories are outside this
 slice; desktop discovery and autoconnect remain unchanged.
 
