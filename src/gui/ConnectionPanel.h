@@ -317,7 +317,14 @@ private:
     QListWidget* m_stationList{nullptr};
     QListWidget* m_workspaceRadioList{nullptr};
     QLabel* m_workspaceTitle{nullptr};
-    QLabel* m_workspaceDetail{nullptr};
+    QLabel* m_workspaceModel{nullptr};
+    QLabel* m_workspaceName{nullptr};
+    QWidget* m_workspaceDetails{nullptr};
+    QLabel* m_workspaceConnection{nullptr};
+    QLabel* m_workspaceAccount{nullptr};
+    QLabel* m_workspaceOperator{nullptr};
+    QLabel* m_workspaceNote{nullptr};
+    QLabel* m_workspacePathLabel{nullptr};
     QComboBox* m_workspacePath{nullptr};
     QPushButton* m_workspaceConnect{nullptr};
     QPushButton* m_workspaceSave{nullptr};

@@ -4145,17 +4145,60 @@ void ConnectionPanel::buildWorkspace(QVBoxLayout* root)
     auto* detail = new QGroupBox(page);
     detail->setObjectName(QStringLiteral("connectionSelectedRadioGroup"));
     detail->setAccessibleName(tr("Selected radio"));
-    applyStyle(detail, "QGroupBox { margin-top: 0; }");
+    applyStyle(detail,
+        "QGroupBox#connectionSelectedRadioGroup { background: {{color.canon.nested}};"
+        " border: 1px solid {{color.canon.line}}; border-radius: 12px; margin-top: 0; }");
     auto* detailLayout = new QVBoxLayout(detail);
-    m_workspaceDetail = makeWrappedLabel(tr("Choose a saved radio or add one from discovery."));
-    m_workspaceDetail->setTextFormat(Qt::PlainText);
-    m_workspaceDetail->setAccessibleName(tr("Selected connection details"));
-    detailLayout->addWidget(m_workspaceDetail);
+    detailLayout->setContentsMargins(16, 16, 16, 16);
+    detailLayout->setSpacing(10);
+    auto* identity = new QVBoxLayout;
+    identity->setSpacing(4);
+    m_workspaceModel = makeWrappedLabel(QString(), kHintLabelStyle);
+    m_workspaceModel->setObjectName(QStringLiteral("connectionSelectedRadioModel"));
+    m_workspaceModel->setTextFormat(Qt::PlainText);
+    QFont modelFont = m_workspaceModel->font();
+    modelFont.setLetterSpacing(QFont::AbsoluteSpacing, 1);
+    m_workspaceModel->setFont(modelFont);
+    identity->addWidget(m_workspaceModel);
+    m_workspaceName = makeWrappedLabel(QString(),
+        "QLabel { color: {{color.canon.ink}}; font-size: 18px; font-weight: 600;"
+        " background: transparent; border: none; }");
+    m_workspaceName->setObjectName(QStringLiteral("connectionSelectedRadioName"));
+    m_workspaceName->setTextFormat(Qt::PlainText);
+    identity->addWidget(m_workspaceName);
+    detailLayout->addLayout(identity);
+    m_workspaceDetails = new QWidget(detail);
+    auto* detailsForm = new QFormLayout(m_workspaceDetails);
+    detailsForm->setContentsMargins(0, 0, 0, 0);
+    detailsForm->setHorizontalSpacing(12);
+    detailsForm->setVerticalSpacing(8);
+    detailsForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    detailsForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    const auto addDetailRow = [detailsForm](const QString& caption, const QString& name) {
+        auto* key = makeWrappedLabel(caption, kHintLabelStyle);
+        auto* value = makeWrappedLabel(QString(),
+            "QLabel { color: {{color.canon.inkSoft}}; font-size: 12px; font-weight: normal;"
+            " background: transparent; border: none; }");
+        value->setObjectName(name);
+        value->setTextFormat(Qt::PlainText);
+        value->setAccessibleDescription(caption);
+        detailsForm->addRow(key, value);
+        return value;
+    };
+    m_workspaceConnection = addDetailRow(tr("Connection"), QStringLiteral("connectionSelectedRadioConnection"));
+    m_workspaceAccount = addDetailRow(tr("SmartLink"), QStringLiteral("connectionSelectedRadioAccount"));
+    m_workspaceOperator = addDetailRow(tr("Operator"), QStringLiteral("connectionSelectedRadioOperator"));
+    detailLayout->addWidget(m_workspaceDetails);
+    m_workspaceNote = makeWrappedLabel(QString(), kHintLabelStyle);
+    m_workspaceNote->setObjectName(QStringLiteral("connectionSelectedRadioNote"));
+    m_workspaceNote->setTextFormat(Qt::PlainText);
+    detailLayout->addWidget(m_workspaceNote);
     m_workspacePath = new QComboBox(detail);
     m_workspacePath->setObjectName(QStringLiteral("connectionWorkspacePath"));
     m_workspacePath->setAccessibleName(tr("Saved connection path"));
+    m_workspacePath->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_workspacePath->setMinimumContentsLength(12);
     applyComboStyle(m_workspacePath);
-    detailLayout->addWidget(m_workspacePath);
     m_workspaceSave = new QPushButton(tr("Save to location"), detail);
     m_workspaceSave->setObjectName(QStringLiteral("connectionSaveToStation"));
     auto* connectionSettings = new QToolButton(detail);
@@ -4164,17 +4207,31 @@ void ConnectionPanel::buildWorkspace(QVBoxLayout* root)
     connectionSettings->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     connectionSettings->setArrowType(Qt::RightArrow);
     connectionSettings->setCheckable(true);
+    applyStyle(connectionSettings,
+        "QToolButton { color: {{color.canon.cyan}}; border: none; font-size: 11px;"
+        " padding: 4px 0; text-align: left; }"
+        "QToolButton:hover { color: {{color.canon.aqua}}; }");
     detailLayout->addWidget(connectionSettings);
     auto* settingsBody = new QWidget(detail);
     auto* settingsLayout = new QVBoxLayout(settingsBody);
     settingsLayout->setContentsMargins(0, 0, 0, 0);
+    settingsLayout->setSpacing(6);
+    m_workspacePathLabel = makeWrappedLabel(tr("Connect using"), kHintLabelStyle);
+    m_workspacePathLabel->setBuddy(m_workspacePath);
+    settingsLayout->addWidget(m_workspacePathLabel);
+    settingsLayout->addWidget(m_workspacePath);
     settingsLayout->addWidget(m_workspaceSave);
+    auto* settingsActions = new QHBoxLayout;
     auto* editConnection = new QPushButton(tr("Edit connection"), detail);
     editConnection->setObjectName(QStringLiteral("connectionEditSaved"));
-    settingsLayout->addWidget(editConnection);
+    settingsActions->addWidget(editConnection);
     auto* removeConnection = new QPushButton(tr("Remove connection"), detail);
     removeConnection->setObjectName(QStringLiteral("connectionRemoveSaved"));
-    settingsLayout->addWidget(removeConnection);
+    settingsActions->addWidget(removeConnection);
+    settingsLayout->addLayout(settingsActions);
+    for (QPushButton* action : {m_workspaceSave, editConnection, removeConnection}) {
+        applyStyle(action, "QPushButton { font-size: 12px; font-weight: normal; padding: 5px 6px; }");
+    }
     detailLayout->addWidget(settingsBody);
     settingsBody->hide();
     connect(connectionSettings, &QToolButton::toggled, this, [this, connectionSettings, settingsBody](bool open) {
@@ -4182,22 +4239,27 @@ void ConnectionPanel::buildWorkspace(QVBoxLayout* root)
         settingsBody->setVisible(open);
         refitToContent();
     });
-    detailLayout->addStretch();
     m_workspaceConnect = new QPushButton(tr("Connect"), detail);
     m_workspaceConnect->setObjectName(QStringLiteral("connectionWorkspaceConnect"));
     m_workspaceConnect->setAccessibleName(tr("Connect to selected radio"));
     applyStyle(m_workspaceConnect,
-        "QPushButton { background: {{color.canon.cyan}}; color: {{color.canon.onAccent}};"
+        "QPushButton { background: {{color.brand.gradient}}; color: {{color.canon.onAccent}}; font-weight: bold;"
         " border: 1px solid {{color.canon.lineHi}}; border-radius: 6px; padding: 8px 14px; }"
         "QPushButton:disabled { background: {{color.canon.control}}; color: {{color.canon.muted}}; }");
     detailLayout->addWidget(m_workspaceConnect);
     auto* radioOptions = new QPushButton(tr("Radio options…"), detail);
     radioOptions->setObjectName(QStringLiteral("connectionRadioOptions"));
-    detailLayout->addWidget(radioOptions);
+    applyStyle(radioOptions,
+        "QPushButton { color: {{color.canon.cyan}}; background: transparent; border: 1px solid transparent;"
+        " font-size: 11px; font-weight: normal; padding: 2px 4px; }"
+        "QPushButton:hover { color: {{color.canon.aqua}}; }"
+        "QPushButton:focus { border-color: {{color.canon.lineHi}}; }");
+    detailLayout->addWidget(radioOptions, 0, Qt::AlignRight);
     connect(radioOptions, &QPushButton::clicked, this, [this, radioOptions] {
         showWorkspaceMenu(false, radioOptions->mapToGlobal(QPoint(0, radioOptions->height())));
     });
-    detailColumn->addWidget(detail, 1);
+    detailColumn->addWidget(detail);
+    detailColumn->addStretch(1);
     radioRow->addLayout(detailColumn, 1);
     radioColumn->addLayout(radioRow, 1);
     auto* tools = new QHBoxLayout;
@@ -4516,10 +4578,27 @@ void ConnectionPanel::refreshWorkspaceDetails()
     }
     const QJsonObject path = m_workspacePath->currentData().toJsonObject();
     m_workspacePath->setVisible(m_workspacePath->count() > 1);
+    m_workspacePathLabel->setVisible(m_workspacePath->count() > 1);
     const QJsonObject profile = ConnectionWorkspace::find(m_workspace.value("operators").toArray(), m_workspace.value("selectedOperator").toString());
-    m_workspaceDetail->setText(path.isEmpty() ? tr("Choose a saved radio or add one from Nearby radios.")
-        : tr("%1\n%2\n\nOperator: %3\n%4")
-            .arg(path.value("name").toString(), path.value("model").toString(), profile.value("name").toString(), m_workspacePath->currentText()));
+    const QString model = path.value("model").toString();
+    m_workspaceModel->setText(model.toUpper());
+    m_workspaceModel->setVisible(!model.isEmpty());
+    m_workspaceName->setText(item ? item->text().section(QLatin1Char('\n'), 0, 0) : tr("Choose a radio"));
+    const QString kind = path.value("kind").toString();
+    m_workspaceConnection->setText(kind == QLatin1String("local") ? tr("Local discovery")
+        : kind == QLatin1String("smartlink") ? tr("SmartLink") : path.value("host").toString());
+    const QString account = ConnectionWorkspace::find(m_workspace.value("accounts").toArray(),
+        path.value("accountId").toString()).value("name").toString();
+    m_workspaceAccount->setText(account);
+    auto* detailsForm = static_cast<QFormLayout*>(m_workspaceDetails->layout());
+    detailsForm->setRowVisible(m_workspaceAccount, kind == QLatin1String("smartlink"));
+    m_workspaceOperator->setText(profile.value("name").toString());
+    m_workspaceDetails->setVisible(!path.isEmpty());
+    const QString location = ConnectionWorkspace::find(m_workspace.value("stations").toArray(),
+        m_workspace.value("selectedStation").toString()).value("name").toString();
+    m_workspaceNote->setText(path.isEmpty() ? tr("Choose a saved radio or add one from Nearby radios.")
+        : path.value("nearby").toBool() ? tr("Nearby radio. Save it to this location for next time.")
+        : tr("Saved connection at %1.").arg(location));
     const bool sameConnection = m_connected && !path.isEmpty() && path.value("id") == m_connectedTarget.value("path").toObject().value("id");
     const bool allowed = !sameConnection && !path.isEmpty() && !m_workspace.isEmpty();
     m_workspaceConnect->setEnabled(allowed);
