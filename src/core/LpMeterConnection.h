@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QElapsedTimer>
 #include <QObject>
 #include <QString>
 #include <QTcpSocket>
@@ -120,7 +121,9 @@ private:
     void armReconnect();
     void pollTick();
     void setDataFlowing(bool flowing);
-    static qint64 nowMs();
+    // Monotonic: every PollGate and RangeTracker decision is a difference of
+    // two of these, and a wall-clock step backward would freeze them (#6803).
+    qint64 nowMs() const;
 
     QIODevice*    m_device{nullptr};
     QTcpSocket    m_socket;
@@ -145,6 +148,7 @@ private:
     bool m_dataFlowing{false};
     bool m_dataFlowStateKnown{false};
 
+    QElapsedTimer m_clock;
     QTimer m_pollTimer;
     QTimer m_reconnectTimer;
     // Link-alive-but-meter-quiet watchdog. Restarted by every valid record.
