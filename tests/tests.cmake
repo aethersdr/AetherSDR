@@ -9338,6 +9338,12 @@ target_link_libraries(pan_control_routing_test PRIVATE aethercore Qt6::Core Qt6:
 add_test(NAME pan_control_routing_test COMMAND pan_control_routing_test)
 set_tests_properties(pan_control_routing_test PROPERTIES TIMEOUT 30)
 
+# Socket-free Flex status parsing through RadioModel's real routing seam.
+add_executable(radiomodel_spot_status_test tests/radiomodel_spot_status_test.cpp)
+target_include_directories(radiomodel_spot_status_test PRIVATE src tests)
+target_link_libraries(radiomodel_spot_status_test PRIVATE aethercore Qt6::Core)
+add_test(NAME radiomodel_spot_status_test COMMAND radiomodel_spot_status_test)
+
 # RadioModel's own client-owned state on an ANAN: the master-volume read-back,
 # the restored line-out level, and the Tuning-domain step. Socket-free, through
 # setBackendForTest() and a TestSettingsProfile store.
@@ -9943,6 +9949,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_bandstack_digital_agc_test
     radio_model_client_state_test
     pan_control_routing_test
+    radiomodel_spot_status_test
     squelch_level_scale_test
     hl2_pan_create_async_test
     hl2_session_memory_test
