@@ -147,7 +147,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - CW, RTTY and AetherClock decoders, and the QSO recorder.
 - AX.25 packet with AetherModem (APRS, KISS TNC, terminal and mailbox).
 - **Memory channels**, stored on this computer in the bank shared by radios without memory slots. See [Memory Channels](./memory-channels.md).
-- **Tools → Radio Health...** shows link, temperature, supply, PA current, gateware and the transmit voice chain.
+- **Tools → Radio Health...** shows link, temperature, PA bias current (raw counts), gateware and the transmit voice chain.
 - Connection health in the title bar, status bar and network statistics.
 
 ## Reference
