@@ -120,13 +120,15 @@ std::size_t TxController::index(Activity activity)
     case Activity::CwKey: return 3;
     case Activity::CwPtt: return 4;
     case Activity::Cwx: return 5;
+    case Activity::VoiceKeyer:
+    case Activity::Navtex: break;
     }
-    Q_UNREACHABLE();
+    return 6; // Service activities use their typed model requests.
 }
 
 TxController::Input TxController::capture(Activity activity)
 {
-    if (!valid() || m_nativeDevice) {
+    if (!valid() || m_nativeDevice || index(activity) >= m_inputs.size()) {
         return {};
     }
     Input& input = m_scopeOwner ? m_scopeOwner->m_inputs[index(activity)] : m_inputs[index(activity)];
@@ -141,6 +143,7 @@ TxController::Input TxController::capture(Activity activity)
 
 TxController::Input TxController::current(Activity activity) const
 {
+    if (index(activity) >= m_inputs.size()) { return {}; }
     const Input input = m_scopeOwner ? m_scopeOwner->m_inputs[index(activity)] : m_inputs[index(activity)];
     if (m_scopeOwner && !input.m_request.sameInputEpoch(m_scopeInput)) { return {}; }
     return input;
@@ -149,7 +152,7 @@ TxController::Input TxController::current(Activity activity) const
 TxController::Input TxController::captureProgram(Activity activity)
 {
     Input input;
-    if (valid() && !m_nativeDevice) {
+    if (valid() && !m_nativeDevice && index(activity) < m_inputs.size()) {
         input.m_radio = m_radio;
         input.m_request = m_scopeOwner ? m_scopeInput : m_producer.request();
         input.m_activity = activity;
@@ -248,6 +251,8 @@ bool TxController::Input::start(bool twoTone) const
         accepted = m_radio->requestProducerCw(request, true, m_activity == Activity::CwPtt);
         break;
     case Activity::Cwx:
+    case Activity::VoiceKeyer:
+    case Activity::Navtex:
         return false;
     }
     return accepted;
@@ -288,6 +293,8 @@ void TxController::Input::stop() const
     case Activity::Tune: (void)m_radio->requestProducerTune(request, false); break;
     case Activity::Atu: (void)m_radio->requestProducerAtu(request, false); break;
     case Activity::Cwx: m_radio->abortProducerCwx(request); break;
+    case Activity::VoiceKeyer:
+    case Activity::Navtex: break;
     case Activity::CwKey:
     case Activity::CwPtt:
         (void)m_radio->requestProducerCw(request, false, m_activity == Activity::CwPtt);

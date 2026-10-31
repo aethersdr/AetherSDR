@@ -193,6 +193,15 @@ ReceiveDispatch RadioModel::requestTxBand(const TxBandRequest& request,
                                          QObject* replyContext,
                                          const RadioSetupCompletion& completion)
 {
+    return dispatchTxBand(request, expectedSession, replyContext, completion, TxBandWrite::Operator);
+}
+
+ReceiveDispatch RadioModel::dispatchTxBand(const TxBandRequest& request,
+                                          std::optional<RadioControlSession> expectedSession,
+                                          QObject* replyContext,
+                                          const RadioSetupCompletion& completion,
+                                          TxBandWrite origin)
+{
     if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
     const QPointer<RadioModel> alive(this);
     const RadioControlSession session = controlSession();
@@ -201,9 +210,23 @@ ReceiveDispatch RadioModel::requestTxBand(const TxBandRequest& request,
         if (reply) { reply({RadioSetupReply::Kind::Cancelled, -1, QStringLiteral("Original TX band editor session ended.")}); }
         return ReceiveDispatch::Unsupported;
     }
-    const ReceiveDispatch result = m_backend && controlSessionCurrent(session)
+    if (origin == TxBandWrite::Operator && request.valid() && controlSessionCurrent(session)) {
+        relinquishTuneInhibit(request);
+    }
+    const bool restoring = origin == TxBandWrite::Restore;
+    const bool admitted = restoring
+        ? isConnected() && !m_expiringPendingCallbacks
+        : controlSessionCurrent(session);
+    const auto sessionAlive = m_transmitServiceSession;
+    // An owned restore is queued to the original transport before its ordered
+    // disconnect. Closing TX admission must not cancel that cleanup; ordinary
+    // configuration and service requests still expire with their session.
+    const RadioControlFence current = [sessionAlive, restoring] {
+        return restoring || sessionAlive->load(std::memory_order_acquire);
+    };
+    const ReceiveDispatch result = m_backend && admitted
         && request.valid() && m_txBandSettings.contains(request.bandId)
-        ? m_backend->requestTxBand(request, reply) : ReceiveDispatch::Unsupported;
+        ? m_backend->requestTxBand(request, reply, current) : ReceiveDispatch::Unsupported;
     if (alive && session == controlSession()) {
         if (result == ReceiveDispatch::Unsupported && reply) {
             reply({RadioSetupReply::Kind::Refused, -1, QStringLiteral("TX band setting not dispatched")});

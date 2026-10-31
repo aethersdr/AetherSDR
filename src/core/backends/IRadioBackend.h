@@ -34,6 +34,7 @@
 #include "core/backends/ReceiveCommand.h"
 #include "core/backends/ModelControlRequest.h"
 #include "core/backends/RadioSetupRequest.h"
+#include "core/backends/TransmitServiceRequest.h"
 #include "core/backends/SpotRequest.h"
 #include "core/backends/PanControlRequest.h"
 #include "core/backends/SlicePresetRequest.h"
@@ -189,7 +190,14 @@ public:
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSlicePreset(int, const SlicePresetRequest&)
     { return ReceiveDispatch::Unsupported; }
-    virtual ReceiveDispatch requestTxBand(const TxBandRequest&, const RadioSetupCompletion& = {})
+    virtual ReceiveDispatch requestDvk(const DvkRequest&, const TransmitServiceCompletion&,
+                                       const TxCoordinator::Command& = {}, const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestNavtex(const NavtexRequest&, const TransmitServiceCompletion&,
+                                          const TxCoordinator::Command&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestTxBand(const TxBandRequest&, const RadioSetupCompletion& = {},
+                                          const RadioControlFence& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestPanDisplay(const QString& panId, const QString&,
         const PanDisplayRequest& request, const RadioControlCompletion& = {},

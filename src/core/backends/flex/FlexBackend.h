@@ -64,6 +64,10 @@ public:
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
     void setTxCommandSink(std::function<void(const QString&, const TxCoordinator::Command&)> sink);
+    using RepliedTxSink = std::function<bool(const QString&, const TxCoordinator::Command&, CommandReply)>;
+    void setRepliedTxSink(RepliedTxSink sink) { m_repliedTxSink = std::move(sink); }
+    using ServiceCommandSink = std::function<bool(const QString&, const RadioControlFence&, CommandReply)>;
+    void setServiceCommandSink(ServiceCommandSink sink) { m_serviceCommandSink = std::move(sink); }
     // Slice verbs (setSliceFrequency/Mode/Filter) route through THIS sink, which
     // RadioModel wires to its TX-inhibit-guarded sendSliceCommand — so keeping
     // the encode's TX safety above the seam (RFC §6). Falls back to the generic
@@ -117,7 +121,13 @@ public:
                                       const RadioSetupCompletion& completion = {},
                                       const RadioControlFence& current = {}) override;
     ReceiveDispatch requestTxBand(const TxBandRequest& request,
-                                  const RadioSetupCompletion& completion = {}) override;
+                                  const RadioSetupCompletion& completion = {},
+                                  const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestDvk(const DvkRequest& request, const TransmitServiceCompletion& completion,
+                               const TxCoordinator::Command& fence = {},
+                               const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestNavtex(const NavtexRequest& request, const TransmitServiceCompletion& completion,
+                                  const TxCoordinator::Command& fence) override;
     ReceiveDispatch requestSpot(const SpotRequest& request, const QString& panId = {}) override;
     ReceiveDispatch requestPanControl(const QString& panId, const PanControlRequest& request) override;
     ReceiveDispatch requestSlicePreset(int sliceId, const SlicePresetRequest& request) override;
@@ -280,6 +290,8 @@ private:
     QMap<int, quint64> m_tuneOutputRequests;
     QSet<int> m_tuneOutputKnownBands;
     std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
+    RepliedTxSink m_repliedTxSink;
+    ServiceCommandSink m_serviceCommandSink;
     std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;
     bool firmwareAtLeast(const QVersionNumber& minimum) const;

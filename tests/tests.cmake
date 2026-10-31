@@ -5061,6 +5061,7 @@ add_executable(navtex_model_test
 )
 target_include_directories(navtex_model_test PRIVATE src)
 target_link_libraries(navtex_model_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME navtex_model_test COMMAND navtex_model_test)
 
 add_executable(flex_waveform_model_test
     tests/flex_waveform_model_test.cpp
@@ -7443,6 +7444,8 @@ find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME check_a11y_test
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_a11y_test.py)
+    add_test(NAME check_command_plane_test
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_command_plane_test.py)
 endif()
 
 # #5262 M3a: the three-state control doctrine as a mechanism. Pins the two
@@ -8123,6 +8126,12 @@ add_executable(tune_inhibit_restore_test tests/tune_inhibit_restore_test.cpp)
 target_include_directories(tune_inhibit_restore_test PRIVATE src tests)
 target_link_libraries(tune_inhibit_restore_test PRIVATE aethercore Qt6::Core)
 add_test(NAME tune_inhibit_restore_test COMMAND tune_inhibit_restore_test)
+
+# Typed transmit services, injected final writers, and lifecycle races; no sockets or RF.
+add_executable(transmit_services_test tests/transmit_services_test.cpp)
+target_include_directories(transmit_services_test PRIVATE src tests)
+target_link_libraries(transmit_services_test PRIVATE aethercore Qt6::Core)
+add_test(NAME transmit_services_test COMMAND transmit_services_test)
 
 add_executable(tx_operation_integration_test tests/tx_operation_integration_test.cpp)
 target_include_directories(tx_operation_integration_test PRIVATE src tests)
@@ -10005,6 +10014,7 @@ set(AETHER_SETTINGS_CONSUMERS
     offline_health_registry_test
     tx_operation_integration_test
     tune_inhibit_restore_test
+    transmit_services_test
     tx_audio_context_test
     backend_slice_lifecycle_test
     slice_lifecycle_routing_test

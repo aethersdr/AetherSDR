@@ -1,196 +1,129 @@
-// Standalone test harness for NavtexModel state machine.
-//
-// Build: produced by CMake as `navtex_model_test`.
-// Run:   ./build/navtex_model_test
-// Exit:  0 = pass, 1 = fail.
-
+// Model lifecycle only: no sockets, peer process or RF.
 #include "models/NavtexModel.h"
-
 #include <QCoreApplication>
 #include <QSignalSpy>
-
 #include <cstdio>
-#include <cstdlib>
+#include <limits>
 
-using AetherSDR::NavtexModel;
-using AetherSDR::NavtexMsg;
-using AetherSDR::NavtexMsgStatus;
-using AetherSDR::NavtexStatus;
-
+using namespace AetherSDR;
 namespace {
-
-int g_failed = 0;
-
-void report(const char* name, bool ok, const QString& detail = {}) {
-    std::printf("%s %-58s %s\n", ok ? "[ OK ]" : "[FAIL]", name,
-                detail.toUtf8().constData());
-    if (!ok) ++g_failed;
+int failures = 0;
+void check(bool value, const char* label)
+{
+    std::printf("[%s] %s\n", value ? "PASS" : "FAIL", label);
+    failures += !value;
 }
-
-QString lastCommand(QSignalSpy& spy) {
-    if (spy.isEmpty()) return {};
-    const auto args = spy.last();
-    if (args.isEmpty()) return {};
-    return args.first().toString();
+quint64 latest(const QSignalSpy& spy) { return spy.last().last().toULongLong(); }
 }
-
-} // namespace
-
-int main(int argc, char** argv) {
+int main(int argc, char** argv)
+{
     QCoreApplication app(argc, argv);
-
-    // ── Pending → Queued (happy path via response) ─────────────────────────
     {
-        NavtexModel m;
-        QSignalSpy cmdSpy(&m, &NavtexModel::replyCommandReady);
-        QSignalSpy msgsSpy(&m, &NavtexModel::messagesChanged);
-
-        m.sendMessage('A', 'B', "TEST MESSAGE");
-
-        report("sendMessage emits replyCommandReady",
-               cmdSpy.size() == 1);
-
-        const QString cmd = cmdSpy.last().first().toString();
-        const int seq = cmdSpy.last().last().toInt();
-        report("command starts with 'navtex send'",
-               cmd.startsWith("navtex send"));
-        report("command includes tx_ident=A",
-               cmd.contains("tx_ident=A"));
-        report("command includes subject_indicator=B",
-               cmd.contains("subject_indicator=B"));
-        report("command quotes msg_text",
-               cmd.contains("msg_text=\"TEST MESSAGE\""));
-
-        // Radio confirms with index 42
-        m.handleSendResponse(seq, 0, "42");
-
-        report("handleSendResponse(success) → message added",
-               m.messages().size() == 1);
-        report("message status promoted to Queued",
-               m.messages().first().status == NavtexMsgStatus::Queued,
-               QString::number(static_cast<int>(m.messages().first().status)));
-        report("message idx = 42",
-               m.messages().first().idx == 42u);
-        report("messagesChanged emitted",
-               msgsSpy.size() == 1);
+        NavtexModel model;
+        QSignalSpy requests(&model, &NavtexModel::controlRequested);
+        QSignalSpy settled(&model, &NavtexModel::operationSettled);
+        model.sendMessage('A', 'B', "TEST MESSAGE", 123);
+        check(requests.size() == 1, "one typed submission");
+        const NavtexRequest request = requests.last().first().value<NavtexRequest>();
+        check(request.transmitter == 'A' && request.subject == 'B'
+            && request.text == "TEST MESSAGE" && request.serial == 123, "intent preserves message fields");
+        const quint64 token = latest(requests);
+        model.handleSendResponse(token, {TransmitServiceReply::Outcome::Accepted, 0, "42"});
+        check(model.messages().size() == 1 && model.messages().first().status == NavtexMsgStatus::Queued
+            && settled.isEmpty(), "acceptance queues without claiming completed transmission");
+        model.parseStatus("navtex sent", {{"idx", "42"}, {"serial_num", "124"}});
+        check(model.messages().first().status == NavtexMsgStatus::Sent && settled.size() == 1
+            && model.messages().first().serialNum == 124
+            && !model.messages().first().dateTime.isEmpty(), "sent status completes the matching operation");
+        model.parseStatus("navtex sent", {{"idx", "42"}});
+        model.handleSendResponse(token, {TransmitServiceReply::Outcome::Rejected, 7, {}});
+        check(settled.size() == 1 && model.messages().size() == 1
+            && model.messages().first().status == NavtexMsgStatus::Sent, "duplicates cannot regress sent");
     }
-
-    // ── Queued → Sent via "navtex sent" status ─────────────────────────────
     {
-        NavtexModel m;
-        QSignalSpy cmdSpy(&m, &NavtexModel::replyCommandReady);
-        m.sendMessage('A', 'B', "MSG");
-        const int seq = cmdSpy.last().last().toInt();
-        m.handleSendResponse(seq, 0, "7");
-
-        QMap<QString, QString> sentKvs;
-        sentKvs["idx"] = "7";
-        sentKvs["serial_num"] = "100";
-        m.parseStatus("navtex sent", sentKvs);
-
-        report("status promoted to Sent",
-               m.messages().first().status == NavtexMsgStatus::Sent);
-        report("serial_num populated",
-               m.messages().first().serialNum == 100u);
-        report("dateTime stamped",
-               !m.messages().first().dateTime.isEmpty());
+        NavtexModel model;
+        QSignalSpy requests(&model, &NavtexModel::controlRequested);
+        QSignalSpy settled(&model, &NavtexModel::operationSettled);
+        model.sendMessage('A', 'B', "early status");
+        model.parseStatus("navtex sent", {{"idx", "7"}, {"serial_num", "5"}});
+        model.handleSendResponse(latest(requests), {TransmitServiceReply::Outcome::Accepted, 0, "7"});
+        check(model.messages().size() == 1 && model.messages().first().msgText == "early status"
+            && model.messages().first().status == NavtexMsgStatus::Sent && settled.size() == 1,
+            "status before reply merges into one message with original text");
+        model.reset();
+        model.sendMessage('A', 'B', "new session");
+        model.handleSendResponse(latest(requests), {TransmitServiceReply::Outcome::Accepted, 0, "7"});
+        check(model.messages().size() == 2 && model.messages().last().status == NavtexMsgStatus::Queued,
+            "radio index reuse does not inherit another session's sent status");
     }
-
-    // ── Send failure (resp != 0) ───────────────────────────────────────────
     {
-        NavtexModel m;
-        QSignalSpy cmdSpy(&m, &NavtexModel::replyCommandReady);
-        m.sendMessage('A', 'B', "FAIL");
-        const int seq = cmdSpy.last().last().toInt();
-        m.handleSendResponse(seq, /*respVal=*/0x50001000, "");
-
-        report("send failure → message added with Error status",
-               m.messages().size() == 1
-            && m.messages().first().status == NavtexMsgStatus::Error);
+        NavtexModel model;
+        QSignalSpy requests(&model, &NavtexModel::controlRequested);
+        QSignalSpy settled(&model, &NavtexModel::operationSettled);
+        model.sendMessage('A', 'B', "unknown");
+        const quint64 old = latest(requests);
+        model.handleSendResponse(old, {TransmitServiceReply::Outcome::Unknown, 0, {}});
+        check(model.messages().last().status == NavtexMsgStatus::Unknown && settled.isEmpty(),
+            "timeout never claims rejected, sent or cancelled at the radio");
+        model.sendMessage('A', 'B', "missing index");
+        model.handleSendResponse(latest(requests), {TransmitServiceReply::Outcome::Accepted, 0, "not-an-index"});
+        check(model.messages().last().status == NavtexMsgStatus::Unknown, "malformed acceptance has unknown outcome");
+        model.sendMessage('A', 'B', "rejected");
+        model.handleSendResponse(latest(requests), {TransmitServiceReply::Outcome::Rejected, 0x50001000, {}});
+        check(model.messages().last().status == NavtexMsgStatus::Error && settled.size() == 1,
+            "confirmed rejection settles only its own request");
+        model.sendMessage('A', 'B', "retired");
+        const quint64 retired = latest(requests);
+        model.reset();
+        const qsizetype count = model.messages().size();
+        model.handleSendResponse(retired, {TransmitServiceReply::Outcome::Accepted, 0, "9"});
+        check(model.messages().size() == count && model.messages().last().status == NavtexMsgStatus::Unknown,
+            "reset retires pending work and ignores late replies");
     }
-
-    // ── Orphan "navtex sent" for unknown idx (Multi-Flex case) ─────────────
     {
-        NavtexModel m;
-        QMap<QString, QString> sentKvs;
-        sentKvs["idx"] = "999";
-        sentKvs["serial_num"] = "55";
-        m.parseStatus("navtex sent", sentKvs);
-
-        report("orphan navtex sent synthesized into messages",
-               m.messages().size() == 1
-            && m.messages().first().idx == 999u
-            && m.messages().first().status == NavtexMsgStatus::Sent);
+        NavtexModel model;
+        QSignalSpy requests(&model, &NavtexModel::controlRequested);
+        for (const QString& text : {QString(), QString("a\nb"), QString("a\rb"),
+                                   QString("a|b"), QString(QChar(0)), QString(4097, 'x')}) {
+            model.sendMessage('A', 'B', text);
+        }
+        model.sendMessage('\n', 'B', "injected");
+        model.sendMessage('A', ' ', "injected");
+        check(requests.isEmpty(), "malformed framing and bounded fields refuse before dispatch");
+        model.sendMessage('A', 'B', QString(4096, 'x'), std::numeric_limits<uint>::max());
+        check(requests.size() == 1, "maximum valid payload and serial accepted as intent");
+        for (int i = 0; i < 100; ++i) { model.sendMessage('A', 'B', "bounded"); }
+        check(requests.size() == 16, "pending submissions are bounded");
+        model.reset();
+        for (int i = 0; i < 400; ++i) {
+            model.parseStatus("navtex sent", {{"idx", QString::number(i)}});
+        }
+        check(model.messages().size() == 256, "history is bounded separately from pending intent");
     }
-
-    // ── Status string parsing (case-insensitive per FlexLib) ───────────────
     {
-        NavtexModel m;
-        QSignalSpy statusSpy(&m, &NavtexModel::statusChanged);
-
-        QMap<QString, QString> kvs;
-        kvs["status"] = "Active";
-        m.parseStatus("navtex", kvs);
-        report("status=Active recognised",
-               m.status() == NavtexStatus::Active && statusSpy.size() == 1);
-
-        kvs["status"] = "TRANSMITTING";  // uppercase
-        m.parseStatus("navtex", kvs);
-        report("status=TRANSMITTING (uppercase) recognised",
-               m.status() == NavtexStatus::Transmitting);
-
-        kvs["status"] = "queuefull";  // lowercase
-        m.parseStatus("navtex", kvs);
-        report("status=queuefull (lowercase) recognised",
-               m.status() == NavtexStatus::QueueFull);
-
-        kvs["status"] = "garbage";
-        m.parseStatus("navtex", kvs);
-        report("unknown status falls back to Error",
-               m.status() == NavtexStatus::Error);
+        NavtexModel model;
+        model.parseStatus("navtex", {{"status", "Active"}});
+        check(model.status() == NavtexStatus::Active, "status case accepted");
+        model.parseStatus("navtex", {{"status", "TRANSMITTING"}});
+        check(model.status() == NavtexStatus::Transmitting, "transmitting status observed");
+        model.parseStatus("navtex", {{"status", "queuefull"}});
+        check(model.status() == NavtexStatus::QueueFull, "queue full preserved");
+        model.parseStatus("navtex", {{"status", "garbage"}});
+        check(model.status() == NavtexStatus::Error, "unknown status is an error");
     }
-
-    // ── msg_text quote escaping (the bug we fixed) ─────────────────────────
     {
-        NavtexModel m;
-        QSignalSpy cmdSpy(&m, &NavtexModel::replyCommandReady);
-        m.sendMessage('A', 'B', "say \"hello\"");
-        const QString cmd = cmdSpy.last().first().toString();
-
-        report("embedded quote escaped as \\\"",
-               cmd.contains("msg_text=\"say \\\"hello\\\"\""),
-               cmd);
-
-        m.sendMessage('A', 'B', "back\\slash");
-        const QString cmd2 = cmdSpy.last().first().toString();
-        report("embedded backslash escaped as \\\\",
-               cmd2.contains("msg_text=\"back\\\\slash\""),
-               cmd2);
+        NavtexModel model;
+        QSignalSpy requests(&model, &NavtexModel::controlRequested);
+        QSignalSpy settled(&model, &NavtexModel::operationSettled);
+        model.sendMessage('A', 'B', "retain ownership independently of history");
+        model.handleSendResponse(latest(requests), {TransmitServiceReply::Outcome::Accepted, 0, "500"});
+        for (int i = 0; i < 300; ++i) {
+            model.parseStatus("navtex sent", {{"idx", QString::number(i)}});
+        }
+        model.parseStatus("navtex sent", {{"idx", "500"}, {"serial_num", "invalid"}});
+        check(settled.isEmpty(), "malformed status cannot retire queue ownership");
+        model.parseStatus("navtex sent", {{"idx", "500"}, {"serial_num", "1"}});
+        check(settled.size() == 1, "history eviction cannot lose active queue ownership");
     }
-
-    // ── Idempotent navtex sent (already-Sent message) ──────────────────────
-    {
-        NavtexModel m;
-        QSignalSpy cmdSpy(&m, &NavtexModel::replyCommandReady);
-        m.sendMessage('A', 'B', "MSG");
-        const int seq = cmdSpy.last().last().toInt();
-        m.handleSendResponse(seq, 0, "5");
-
-        QMap<QString, QString> sentKvs;
-        sentKvs["idx"] = "5";
-        m.parseStatus("navtex sent", sentKvs);
-        const auto firstStamp = m.messages().first().dateTime;
-
-        // Second occurrence shouldn't change state or duplicate
-        m.parseStatus("navtex sent", sentKvs);
-        report("redundant navtex sent ignored",
-               m.messages().size() == 1
-            && m.messages().first().dateTime == firstStamp);
-    }
-
-    if (g_failed == 0)
-        std::printf("\nAll NavtexModel tests passed.\n");
-    else
-        std::printf("\n%d test(s) failed.\n", g_failed);
-    return g_failed == 0 ? 0 : 1;
+    return failures ? 1 : 0;
 }
