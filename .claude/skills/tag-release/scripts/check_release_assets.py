@@ -282,8 +282,8 @@ def check_assets(rel: dict[str, Any], v: str, hotfix: bool) -> dict[str, dict[st
     if extra:
         bad = [e for e in extra if "msixupload" in e]
         report("FAIL" if bad else "WARN", "no unexpected assets", ", ".join(extra))
-    # The four CI-built binaries are attached by other workflows before the
-    # signing job runs, so their .asc must be strictly newer. The tarball and
+    # The six CI-built binaries are attached by other workflows before the
+    # signing job runs, so their .asc must be strictly newer. The source tarball and
     # SHA256SUMS.txt (the signing job) and the manual PDF (the Docs workflow)
     # are uploaded in the same `gh release upload` as their signatures, so
     # their timestamps tie (either order, within a few seconds); only a real

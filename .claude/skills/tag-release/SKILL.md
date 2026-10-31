@@ -622,11 +622,11 @@ Each decision put through AskUserQuestion and the answer. "None." if so.
 | Docs | <url> | 1 | success | release: published; manual PDF signed and attached |
 Re-run or dispatched by hand: <what, when> / none.
 
-### Assets (17 / 16 for a hotfix)
-- [x] AetherSDR-vX.Y.Z-x86_64.AppImage — .asc +<min> after the binary (tarball and SHA256SUMS: same upload as their .asc)
+### Assets (21 / 20 for a hotfix)
+- [x] AetherSDR-vX.Y.Z-x86_64.AppImage — .asc +<min> after the binary (source tarball and SHA256SUMS: same upload as their .asc)
 - … one line per expected asset, ticked or **missing** …
 - [x] AetherSDR-X.Y.Z.0-Windows-x64.msixupload — version checked / n/a (hotfix)
-SHA256SUMS.txt covers: the five expected files. Verified locally: `gpg --verify SHA256SUMS.txt.asc` OK, sha256 of <files> OK, `gpg --verify <artifact>.asc` OK, `gpg --verify AetherSDR-Manual-vX.Y.Z.pdf.asc` OK, tarball CMakeLists says X.Y.Z / not run: <why>.
+SHA256SUMS.txt covers: the seven expected files. Verified locally: `gpg --verify SHA256SUMS.txt.asc` OK, sha256 of <files> OK, `gpg --verify <artifact>.asc` OK, `gpg --verify AetherSDR-Manual-vX.Y.Z.pdf.asc` OK, tarball CMakeLists says X.Y.Z / not run: <why>.
 
 ### Store
 Draft staged: yes — Submit to Store is the maintainer's click / **no** — step failed: "<quoted reason>". Recovery: <as step 5>. / n/a (hotfix).

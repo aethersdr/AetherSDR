@@ -63,8 +63,8 @@ of the set above:
 | `AetherSDR-vX.Y.Z-Windows-x64-symbols.tar.xz` | Windows Installer | AetherSDR, helper and Qt PDBs |
 
 They are neither GPG-signed nor in `SHA256SUMS.txt`. `.tar.xz` keeps them out
-of the signing job's `*.AppImage`/`*.exe`/`*.zip` download patterns, so
-`SHA256SUMS.txt` stays at five lines. `check_release_assets.py` reports them
+of the signing job's `*.AppImage`/`*.tar.zst`/`*.exe`/`*.zip` download
+patterns, so `SHA256SUMS.txt` stays at seven lines. `check_release_assets.py` reports them
 as a separate check: missing ones are a `WARN`, because that build's crashes
 cannot be symbolized; the release itself is unaffected. The workflows' symbol
 steps are `continue-on-error` for the same reason, so a missing archive means
@@ -73,11 +73,12 @@ re-running a green release job.
 
 ## Signature timing
 
-The four CI-built binaries (rows 1, 3, 7, 9) are attached by their build
-workflows before the signing job runs, so each `.asc` is minutes newer than
-its binary; a `.asc` older than its binary means the binary was re-attached
-(a re-run) after signing and the signature covers other bytes. The tarball
-and `SHA256SUMS.txt` (rows 11, 13) are produced by the signing job, and the
+The six CI-built binaries (rows 1, 3, 7, 9, 18, 20) are attached by their
+build workflows before the signing job runs, so each `.asc` is minutes newer
+than its binary; a `.asc` older than its binary means the binary was
+re-attached (a re-run) after signing and the signature covers other bytes.
+The source tarball and `SHA256SUMS.txt` (rows 11, 13) are produced by the
+signing job, and the
 manual (row 16) by Docs, and each goes up in the same `gh release upload` as
 its `.asc`, so those timestamps tie within a second, in either order — v26.9.4's tarball is stamped one second
 *after* its signature. Both signing runs upload with `--clobber`, so the

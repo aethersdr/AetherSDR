@@ -452,11 +452,42 @@ class ReleaseTarball(Base):
         part = {k: e for k, e in tree.items() if k != "usr/lib/libQt6Core.so.6"}
         bum.write_release_tarball(root, part, self.tmp / "part.tar.zst")
         refused(self.tmp / "part.tar.zst", "an entry missing")
+        # Another compressor's stream named .tar.zst, and zstd followed by
+        # gzip: zstd -d decodes both, the app neither.
+        import gzip
+        disguised = self.tmp / "gz.tar.zst"
+        disguised.write_bytes(gzip.compress(tar_path.read_bytes(), mtime=0))
+        refused(disguised, "gzip")
+        mixed = self.tmp / "mixed.tar.zst"
+        mixed.write_bytes(good.read_bytes() + gzip.compress(b"\0" * 1024, mtime=0))
+        refused(mixed, "zstd then gzip")
         # A window larger than the app's 2^27 (streamed, so zstd keeps it).
         wide = self.tmp / "wide.tar.zst"
         with tar_path.open("rb") as src, wide.open("wb") as dst:
             subprocess.run(["zstd", "-q", "--long=28", "-c"], stdin=src, stdout=dst, check=True)
         refused(wide, "window")
+
+    def test_frames_the_app_also_decodes_are_accepted(self) -> None:
+        root = self.tree()
+        tree = bum.scan_tree(root)
+        good = self.tmp / "good.tar.zst"
+        bum.write_release_tarball(root, tree, good)
+        # A skippable frame first, and the archive split over two frames.
+        skip = self.tmp / "skip.tar.zst"
+        skip.write_bytes(b"\x50\x2a\x4d\x18\x04\x00\x00\x00abcd" + good.read_bytes())
+        bum.check_release_tarball(skip, bum.files_list(tree))
+        tar_path = self.tmp / "t.tar"
+        subprocess.run(["zstd", "-q", "-d", "-f", str(good), "-o", str(tar_path)], check=True)
+        raw = tar_path.read_bytes()
+        halves = [self.tmp / "h1", self.tmp / "h2"]
+        halves[0].write_bytes(raw[:len(raw) // 2])
+        halves[1].write_bytes(raw[len(raw) // 2:])
+        two = self.tmp / "two.tar.zst"
+        with two.open("wb") as out:
+            for h in halves:
+                out.write(subprocess.run(["zstd", "-q", "-c", str(h)], check=True,
+                                         stdout=subprocess.PIPE).stdout)
+        bum.check_release_tarball(two, bum.files_list(tree))
 
     def test_a_name_ustar_cannot_hold_fails_the_build(self) -> None:
         root = self.tmp / "long"

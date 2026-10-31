@@ -314,6 +314,13 @@ def check_release_tarball(tarball: Path, files: list[dict]) -> None:
     seen: set[str] = set()
     undecodable = ValueError(f"{tarball.name}: not a zstd stream the app can decode "
                              f"(a window above {TARBALL_MAX_WINDOW}?)")
+    # zstd -d also decodes gzip, xz and lz4, alone or after a zstd frame;
+    # the app decodes zstd frames only. -l walks every frame and refuses
+    # anything else.
+    listed = subprocess.run(["zstd", "-q", "-l", str(tarball)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if listed.returncode != 0:
+        raise ValueError(f"{tarball.name}: not zstd frames throughout, which is all the app decodes")
     with tarball.open("rb") as src:
         proc = subprocess.Popen(["zstd", "-q", "-d", "-c", f"--memory={TARBALL_MAX_WINDOW}"],
                                 stdin=src, stdout=subprocess.PIPE)
