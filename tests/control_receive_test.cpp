@@ -452,6 +452,13 @@ void productionCapabilityContracts()
     check(hl2Caps.receiveModeControl && hl2Caps.receiveFilterControl && hl2Caps.receiveAudioControl
         && hl2Caps.receivePanCenterControl && !hl2Caps.receivePanBandwidthControl,
         "HL2 exposes receive controls but not topology-changing bandwidth");
+    hl2::Hl2Backend::setHostOffersTransmit(false);
+    {
+        hl2::Hl2Backend headless;
+        check(!headless.capabilities().canTransmit,
+            "an HL2 in a host without an HL2 transmit path (aetherd) declares itself receive only");
+    }
+    hl2::Hl2Backend::setHostOffersTransmit(true);
     SliceDelta observed;
     int gainReports = 0;
     QObject::connect(&hl2, &IRadioBackend::sliceChanged, &hl2, [&](int, const SliceDelta& delta) {

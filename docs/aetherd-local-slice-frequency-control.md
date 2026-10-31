@@ -123,8 +123,9 @@ TX-capable daemon paths, not inferred from this receive-only method.
 
 The production simulator is the fully exercised integration path for this
 slice. RTL-SDR is eligible when built and connected but is not hardware-certified
-by simulator tests. Ordinary TX-enabled HL2 lacks normalized idle readback and
-remains unavailable; explicitly TX-disabled HL2 can qualify. Flex and ANAN
+by simulator tests. A TX-enabled HL2 lacks normalized idle readback and
+remains unavailable; aetherd constructs the HL2 TX-disabled (no HL2 TX grant
+exists), so in the daemon it qualifies. Flex and ANAN
 currently lack verified command coverage and remain unavailable. Icom's
 profile-driven bounds/readback can satisfy the model seam, but the current daemon
 catalogue intentionally does not offer Icom/manual connections. None of these
