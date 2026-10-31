@@ -3,6 +3,7 @@
 #include "SpotRequest.h"
 #include "PanControlRequest.h"
 #include "SlicePresetRequest.h"
+#include "CwTextRequest.h"
 #include "PanDisplayRequest.h"
 #include "PanLifecycleRequest.h"
 
@@ -965,6 +966,7 @@ struct RadioCapabilities {
     int cwPitchStepHz = 10;
 
     QString cwTextKeyerName{QStringLiteral("CWX")};
+    std::optional<CwTextControl> cwTextControl;
     int cwTextMinWpm = 5;
     int cwTextMaxWpm = 100;
     int cwTextMaxMessageChars = 0;  // 0 = backend has no fixed whole-message limit
