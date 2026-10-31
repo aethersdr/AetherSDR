@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/AppSettings.h"
+#include "core/CwDecoder.h"
 #include "CwRxModel.h"
 
 #include <QByteArray>
@@ -117,7 +118,7 @@ public:
 
     // The pitch range centred on the CW pitch: 300 Hz wide, shifted to stay
     // inside the slider span (a pitch beyond the span gets the edge window).
-    static constexpr int kPitchHalfWidth = 150;
+    static constexpr int kPitchHalfWidth = CwDecoder::kPitchHalfWidthHz;
     static constexpr Range pitchRangeAround(int pitchHz)
     {
         const int width = 2 * kPitchHalfWidth;
