@@ -43,8 +43,8 @@ checked-toggle accent red where the root theme has it blue — scope
 paths are slash-joined, and a widget opts in by carrying the path in
 its `themeContainer` property). The `canon` scope does the same for
 whole windows: AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Radio Setup,
-TX Band Settings, Callsign Lookup, Connect to Radio, AGC-T Calibration, Icom RC-28 Button Mapping, FFTW Wisdom, MQTT Settings, Keyboard Shortcuts and Ulanzi Dial — Control Mapping sit under `canon/aetherRx`, `canon/aetherTx`, `canon/aetherModem`,
-`canon/aetherMap`, `canon/aetherGps`, `canon/spotHub`, `canon/freedvReporter`, `canon/aetherControl`, `canon/multiFlex`, `canon/radioSetup`, `canon/txBand`, `canon/callsignLookup`, `canon/connection`, `canon/agcCalibration`, `canon/rc28Mapping`, `canon/nr2Wisdom`, `canon/mqttSettings`, `canon/shortcuts` and `canon/ulanziDial`, and it maps the base tokens onto the canon palette
+TX Band Settings, Callsign Lookup, Connect to Radio, AGC-T Calibration, Icom RC-28 Button Mapping, FFTW Wisdom, MQTT Settings, Keyboard Shortcuts, Ulanzi Dial — Control Mapping and Net Scheduler sit under `canon/aetherRx`, `canon/aetherTx`, `canon/aetherModem`,
+`canon/aetherMap`, `canon/aetherGps`, `canon/spotHub`, `canon/freedvReporter`, `canon/aetherControl`, `canon/multiFlex`, `canon/radioSetup`, `canon/txBand`, `canon/callsignLookup`, `canon/connection`, `canon/agcCalibration`, `canon/rc28Mapping`, `canon/nr2Wisdom`, `canon/mqttSettings`, `canon/shortcuts`, `canon/ulanziDial` and `canon/netScheduler`, and it maps the base tokens onto the canon palette
 there (see [`aethersdr-style-guide.md`](aethersdr-style-guide.md)). The
 widget-aware accessors below resolve scope automatically — prefer them
 inside applets and anything painted inside a scoped window.

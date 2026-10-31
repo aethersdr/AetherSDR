@@ -7,7 +7,6 @@
 #include <QByteArray>
 #include <QComboBox>
 #include <QDialog>
-#include <QDialogButtonBox>
 #include <QPushButton>
 #include <QTableWidget>
 #include <QStringList>
@@ -171,9 +170,8 @@ private slots:
             if (QComboBox* combo = modeCombo(*editor)) {
                 displayedMode = combo->currentText();
             }
-            auto* buttons = editor->findChild<QDialogButtonBox*>();
-            if (buttons && buttons->button(QDialogButtonBox::Ok)) {
-                buttons->button(QDialogButtonBox::Ok)->click();
+            if (QPushButton* ok = buttonByText(*editor, QStringLiteral("OK"))) {
+                ok->click();
             } else {
                 editor->reject();
             }

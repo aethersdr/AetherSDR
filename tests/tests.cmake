@@ -9671,9 +9671,10 @@ add_executable(gui_nested_lifetime_test
     src/gui/AdaptiveFilterControls.cpp
     src/gui/GuardedSlider.h
     src/gui/NetSchedulerDialog.cpp
-    src/gui/PersistentDialog.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
     src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
 )
 target_include_directories(gui_nested_lifetime_test PRIVATE src tests)
 target_link_libraries(gui_nested_lifetime_test PRIVATE
@@ -9683,13 +9684,34 @@ add_test(NAME gui_nested_lifetime_test COMMAND gui_nested_lifetime_test)
 set_tests_properties(gui_nested_lifetime_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Net Scheduler on CanonWindow (RFC #6226): the workspace shape and canon scope,
+# the saved-geometry carry-over, the Remove box's Cancel default, and the
+# editor. Socket-free; it never touches a radio.
+add_executable(net_scheduler_dialog_test
+    tests/net_scheduler_dialog_test.cpp
+    src/gui/NetSchedulerDialog.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/FramelessResizer.cpp
+)
+target_include_directories(net_scheduler_dialog_test PRIVATE src tests)
+target_link_libraries(net_scheduler_dialog_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME net_scheduler_dialog_test COMMAND net_scheduler_dialog_test)
+set_tests_properties(net_scheduler_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 60)
+
 # Socket-free capture, editor and saved-preset round trips in the real dialog.
 add_executable(net_scheduler_modes_test
     tests/net_scheduler_modes_test.cpp
     src/gui/NetSchedulerDialog.cpp
-    src/gui/PersistentDialog.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
     src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
 )
 target_include_directories(net_scheduler_modes_test PRIVATE src tests)
 target_link_libraries(net_scheduler_modes_test PRIVATE

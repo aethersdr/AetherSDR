@@ -1,17 +1,21 @@
 #include "NetSchedulerDialog.h"
+#include "CanonIndicators.h"
+#include "CanonMessageBox.h"
+#include "FramelessResizer.h"
+#include "ModemChrome.h"
 #include "ScopedChildWidget.h"
 
 #include "core/NetRecurrence.h"
 #include "core/NetScheduleStore.h"
 #include "core/DigitalVoiceFeature.h"
 #include "core/MemoryFieldValues.h"
+#include "core/ThemeManager.h"
 
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDate>
 #include <QDateEdit>
 #include <QDateTime>
-#include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFile>
 #include <QFileDialog>
@@ -22,7 +26,6 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
 #include <QSaveFile>
@@ -73,6 +76,56 @@ QString formatNext(const NetEntry& entry)
     const QString when = occ.toString("ddd MMM d, h:mm AP");
     const QString abbr = occ.timeZoneAbbreviation();
     return abbr.isEmpty() ? when : QString("%1 %2").arg(when, abbr);
+}
+
+// The canon sheet the AetherRX / AetherTX Settings dialogs wear, plus the
+// widgets this window has that they do not: the other spin boxes (as the
+// sheet's QSpinBox), the intro and next-firing lines, the hairline between the
+// schedule and the tuning preset, and the popups (a combo's list, the date's
+// calendar, a field's right-click menu), which would otherwise take the
+// sheet's transparent ground.
+QString netSchedulerSheet()
+{
+    return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
+        + QStringLiteral(
+            "QDoubleSpinBox, QDateTimeEdit { color: {{color.canon.ink}};"
+            " background: {{color.canon.control}}; border: 1px solid {{color.canon.lineHi}};"
+            " border-radius: 5px; padding: 10px 12px; }"
+            "QLabel#netSchedulerIntro { color: {{color.canon.muted}}; }"
+            "QLabel#netSchedulerNext { color: {{color.canon.cyan}}; font-weight: 600; }"
+            "QFrame#netSchedulerRule { background: {{color.canon.line}}; border: none; }"
+            // A weekday chip is one letter in a 34 px button; the canon
+            // button's padding would leave it no room.
+            "QPushButton#netWeekdayChip { padding: 6px 0px; }"
+            // The canon sheet sets a selection background but no selection ink,
+            // leaving selected text white on canon.nested (1.27:1 in Default
+            // Light) until #6917 fixes it there.
+            "QTableWidget, QLineEdit { selection-color: {{color.canon.ink}}; }"
+            "QComboBox QAbstractItemView { color: {{color.canon.inkSoft}};"
+            " background: {{color.canon.nested}}; border: 1px solid {{color.canon.lineHi}};"
+            " selection-background-color: {{color.canon.cyan}};"
+            " selection-color: {{color.canon.onAccent}}; }"
+            "QCalendarWidget QWidget { color: {{color.canon.inkSoft}};"
+            " background: {{color.canon.nested}}; }"
+            "QCalendarWidget QAbstractItemView { selection-background-color: {{color.canon.cyan}};"
+            " selection-color: {{color.canon.onAccent}}; }"
+            "QMenu { color: {{color.canon.inkSoft}}; background: {{color.canon.raised}};"
+            " border: 1px solid {{color.canon.lineHi}}; }"
+            "QMenu::item { padding: 4px 18px; }"
+            "QMenu::item:selected { color: {{color.canon.onAccent}};"
+            " background: {{color.canon.cyan}}; }"
+            "QMenu::item:disabled { color: {{color.control.unavailable}}; }"
+            "QMenu::separator { height: 1px; margin: 4px 8px;"
+            " background: {{color.canon.line}}; }");
+}
+
+// A notice with one OK button, for the window's errors and empty results.
+void showNotice(QWidget* parent, const QString& title, const QString& text)
+{
+    ScopedChildWidget<CanonMessageBox> box(title, text, parent);
+    box.get()->setDefaultButton(box.get()->addButton(QStringLiteral("OK"),
+                                                     CanonMessageBox::Role::Accept));
+    box.get()->exec();
 }
 
 // --- editor -------------------------------------------------------------
@@ -189,19 +242,27 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
 {
     const NetSchedulerDialog::CaptureFn captureFn = capture;
     const QPointer<QWidget> parentGuard(parent);
-    ScopedChildWidget<QDialog> dialogOwner(parent);
-    QDialog& dlg = *dialogOwner.get();
-    dlg.setWindowTitle(isNew ? QStringLiteral("Add Net") : QStringLiteral("Edit Net"));
+    const QString title = isNew ? QStringLiteral("Add Net") : QStringLiteral("Edit Net");
+    ScopedChildWidget<CanonWindow> dialogOwner(title, parent);
+    CanonWindow& dlg = *dialogOwner.get();
+    dlg.setObjectName(QStringLiteral("netEditorDialog"));
     dlg.setModal(true);
-    dlg.setMinimumWidth(440);
+    dlg.setMinimumWidth(560);
+    applyCanonSheet(dlg.bodyWidget(), [] {
+        // OK is outlined in cyan as the default, as CanonMessageBox draws it.
+        return netSchedulerSheet()
+            + QStringLiteral("QPushButton:default { color: {{color.canon.cyan}};"
+                             " border-color: {{color.canon.cyan}}; }");
+    });
 
     EditorControls c;
-    auto* root = new QVBoxLayout(&dlg);
-    root->setContentsMargins(16, 16, 16, 16);
-    root->setSpacing(12);
+    auto* root = new QVBoxLayout(dlg.bodyWidget());
+    root->setContentsMargins(14, 12, 14, 14);
+    root->setSpacing(10);
+    root->addWidget(makeCanonHeader(title));
 
     auto* form = new QFormLayout();
-    form->setLabelAlignment(Qt::AlignRight);
+    form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     form->setSpacing(8);
     root->addLayout(form);
 
@@ -241,6 +302,7 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
     chipRow->setSpacing(4);
     for (int i = 0; i < 7; ++i) {
         auto* chip = new QPushButton(QString::fromLatin1(kWeekdayShort[i]), c.weekdayRow);
+        chip->setObjectName(QStringLiteral("netWeekdayChip"));
         chip->setCheckable(true);
         chip->setFixedWidth(34);
         chip->setCursor(Qt::PointingHandCursor);
@@ -302,17 +364,13 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
     c.lead->setCurrentIndex(2);
     form->addRow(QStringLiteral("Remind me"), c.lead);
 
-    // Separator.
+    // Separator, spanning the one form so both halves share a label column.
     auto* sep = new QFrame(&dlg);
-    sep->setFrameShape(QFrame::HLine);
-    sep->setFrameShadow(QFrame::Sunken);
-    root->addWidget(sep);
+    sep->setObjectName(QStringLiteral("netSchedulerRule"));
+    sep->setFixedHeight(1);
+    form->addRow(sep);
 
     // Tuning preset.
-    auto* tuneForm = new QFormLayout();
-    tuneForm->setLabelAlignment(Qt::AlignRight);
-    tuneForm->setSpacing(8);
-    root->addLayout(tuneForm);
 
     auto* freqRow = new QHBoxLayout();
     c.freq = new QDoubleSpinBox(&dlg);
@@ -328,7 +386,7 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
     auto* captureBtn = new QPushButton(QStringLiteral("Capture current VFO"), &dlg);
     captureBtn->setCursor(Qt::PointingHandCursor);
     freqRow->addWidget(captureBtn);
-    tuneForm->addRow(QStringLiteral("Frequency"), freqRow);
+    form->addRow(QStringLiteral("Frequency"), freqRow);
 
     auto* filterRow = new QHBoxLayout();
     c.filterLow = new QSpinBox(&dlg);
@@ -341,21 +399,29 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
     filterRow->addWidget(new QLabel(QStringLiteral("to"), &dlg));
     filterRow->addWidget(c.filterHigh);
     filterRow->addStretch(1);
-    tuneForm->addRow(QStringLiteral("Filter"), filterRow);
+    form->addRow(QStringLiteral("Filter"), filterRow);
 
     c.notes = new QLineEdit(&dlg);
     c.notes->setPlaceholderText(QStringLiteral("Net control, NetLogger name, etc."));
-    tuneForm->addRow(QStringLiteral("Notes"), c.notes);
+    form->addRow(QStringLiteral("Notes"), c.notes);
 
     // Live next-occurrence preview.
     c.nextLabel = new QLabel(&dlg);
-    c.nextLabel->setStyleSheet("color: palette(highlight); font-weight: 600;");
+    c.nextLabel->setObjectName(QStringLiteral("netSchedulerNext"));
     root->addWidget(c.nextLabel);
 
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-    root->addWidget(buttons);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    QObject::connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    // Cancel, then OK at the far right, as CanonMessageBox lays out its row.
+    auto* buttons = new QHBoxLayout();
+    buttons->setSpacing(8);
+    buttons->addStretch(1);
+    auto* cancelBtn = new QPushButton(QStringLiteral("Cancel"), &dlg);
+    auto* okBtn = new QPushButton(QStringLiteral("OK"), &dlg);
+    okBtn->setDefault(true);
+    buttons->addWidget(cancelBtn);
+    buttons->addWidget(okBtn);
+    root->addLayout(buttons);
+    QObject::connect(okBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+    QObject::connect(cancelBtn, &QPushButton::clicked, &dlg, &QDialog::reject);
 
     // --- behaviour ---
     auto snapshotEntry = [&c, &entry]() {
@@ -413,13 +479,8 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
             return;
         }
         if (m.freq <= 0.0) {
-            ScopedChildWidget<QMessageBox> infoOwner(dialogGuard.data());
-            QMessageBox& info = *infoOwner.get();
-            info.setWindowTitle(QStringLiteral("Capture current VFO"));
-            info.setText(QStringLiteral("Open a slice on a connected radio first."));
-            info.setIcon(QMessageBox::Information);
-            info.setStandardButtons(QMessageBox::Ok);
-            info.exec();
+            showNotice(dialogGuard.data(), QStringLiteral("Capture current VFO"),
+                       QStringLiteral("Open a slice on a connected radio first."));
             return;
         }
         c.freq->setValue(m.freq);
@@ -479,6 +540,8 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
     }
 
     refresh();
+    // The Dialog-scale field padding (12 px) plus the 1 px border.
+    ModemChrome::insetSpinText(&dlg, 13);
 
     const int resultCode = dlg.exec();
     if (!parentGuard || !dialogOwner || resultCode != QDialog::Accepted) {
@@ -499,21 +562,29 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
 } // namespace
 
 NetSchedulerDialog::NetSchedulerDialog(QList<NetEntry> entries, CaptureFn capture, QWidget* parent)
-    : PersistentDialog(QStringLiteral("Net Scheduler"),
-                       QStringLiteral("NetSchedulerDialogGeometry"), parent)
+    : CanonWindow(QStringLiteral("Net Scheduler"), parent, Kind::Workspace)
     , m_entries(std::move(entries))
     , m_capture(std::move(capture))
 {
-    setMinimumSize(640, 380);
+    setObjectName(QStringLiteral("netSchedulerDialog"));
+    theme::setContainer(this, QStringLiteral("canon/netScheduler"));
+    // A workspace tool on the style guide's CanonWindow, like AetherRX and
+    // AetherTX: it keeps its position under the key it used as a
+    // PersistentDialog (the saved geometry carries over), and resizes from
+    // every edge. Its minimum is set once the layout is built.
+    setGeometryKey(QStringLiteral("NetSchedulerDialogGeometry"));
+    FramelessResizer::install(this);
+    applyCanonSheet(bodyWidget(), netSchedulerSheet);
 
     auto* root = new QVBoxLayout(bodyWidget());
-    root->setContentsMargins(9, 9, 9, 9);
-    root->setSpacing(9);
+    root->setContentsMargins(14, 12, 14, 14);
+    root->setSpacing(10);
+    root->addWidget(makeCanonHeader(QStringLiteral("Net Scheduler")));
 
     auto* intro = new QLabel(
         QStringLiteral("Schedule recurring nets and get a reminder with one-click tuning."),
         bodyWidget());
-    intro->setStyleSheet("color: palette(mid);");
+    intro->setObjectName(QStringLiteral("netSchedulerIntro"));
     root->addWidget(intro);
 
     m_table = new QTableWidget(bodyWidget());
@@ -525,9 +596,15 @@ NetSchedulerDialog::NetSchedulerDialog(QList<NetEntry> entries, CaptureFn captur
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->verticalHeader()->setVisible(false);
+    // The canon table is monospace and wider per character than the old
+    // native font, so the fixed-width columns size to what they hold and the
+    // text columns share the rest.
+    m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     m_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
     m_table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    m_table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    m_table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
     m_table->setAccessibleName(QStringLiteral("Scheduled nets"));
     root->addWidget(m_table, 1);
 
@@ -562,8 +639,27 @@ NetSchedulerDialog::NetSchedulerDialog(QList<NetEntry> entries, CaptureFn captur
         QTimer::singleShot(0, this, &NetSchedulerDialog::onEdit);
     });
 
+    // A disabled net's row is drawn in the theme's muted ink, resolved when
+    // the table is filled, so a theme change refills it.
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, [this] {
+        const int row = selectedRow();
+        populateTable();
+        if (row >= 0)
+            m_table->setCurrentCell(row, 1);
+        updateMinimumSize();
+    });
+
     populateTable();
     updateButtons();
+    updateMinimumSize();
+}
+
+// 760x420 fits the canon header, the seven canon buttons on one row and the
+// monospace table on macOS. A font with wider metrics grows the minimum to
+// what the layout needs, so no button label is clipped at the minimum.
+void NetSchedulerDialog::updateMinimumSize()
+{
+    setMinimumSize(QSize(760, 420).expandedTo(minimumSizeHint()));
 }
 
 int NetSchedulerDialog::selectedRow() const
@@ -573,6 +669,7 @@ int NetSchedulerDialog::selectedRow() const
 
 void NetSchedulerDialog::populateTable()
 {
+    const QColor muted = ModemChrome::colour("{{color.canon.muted}}", this);
     m_table->setRowCount(m_entries.size());
     for (int row = 0; row < m_entries.size(); ++row) {
         const NetEntry& e = m_entries.at(row);
@@ -594,7 +691,7 @@ void NetSchedulerDialog::populateTable()
         if (!e.enabled) {
             for (int col = 0; col < m_table->columnCount(); ++col) {
                 if (auto* it = m_table->item(row, col))
-                    it->setForeground(palette().brush(QPalette::Disabled, QPalette::Text));
+                    it->setForeground(muted);
             }
         }
     }
@@ -677,15 +774,16 @@ void NetSchedulerDialog::onRemove()
     const QString entryId = m_entries.at(row).id;
     const QString entryName = m_entries.at(row).name;
     const QPointer<NetSchedulerDialog> self(this);
-    ScopedChildWidget<QMessageBox> boxOwner(this);
-    QMessageBox& box = *boxOwner.get();
-    box.setWindowTitle(QStringLiteral("Remove Net"));
-    box.setText(QStringLiteral("Remove \"%1\" from your schedule?").arg(entryName));
-    box.setIcon(QMessageBox::Question);
-    box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    ScopedChildWidget<CanonMessageBox> boxOwner(
+        QStringLiteral("Remove Net"),
+        QStringLiteral("Remove \"%1\" from your schedule?").arg(entryName), this);
+    CanonMessageBox& box = *boxOwner.get();
+    box.setDefaultButton(box.addButton(QStringLiteral("Cancel"), CanonMessageBox::Role::Reject));
+    QPushButton* removeBtn = box.addButton(QStringLiteral("Remove"),
+                                           CanonMessageBox::Role::Destructive);
+    removeBtn->setObjectName(QStringLiteral("netRemoveConfirm"));
     box.exec();
-    if (!self || !boxOwner
-        || box.standardButton(box.clickedButton()) != QMessageBox::Yes) {
+    if (!self || !boxOwner || box.clickedButton() != removeBtn) {
         return;
     }
     for (int i = 0; i < self->m_entries.size(); ++i) {
@@ -727,49 +825,37 @@ void NetSchedulerDialog::onImport()
 
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
-        ScopedChildWidget<QMessageBox> warningOwner(self.data());
-        QMessageBox& warning = *warningOwner.get();
-        warning.setWindowTitle(QStringLiteral("Import"));
-        warning.setText(QStringLiteral("Could not open the file."));
-        warning.setIcon(QMessageBox::Warning);
-        warning.setStandardButtons(QMessageBox::Ok);
-        warning.exec();
+        showNotice(self.data(), QStringLiteral("Import"),
+                   QStringLiteral("Could not open the file."));
         return;
     }
     const auto result = NetScheduleStore::parse(file.readAll());
     if (!result.ok()) {
-        ScopedChildWidget<QMessageBox> warningOwner(self.data());
-        QMessageBox& warning = *warningOwner.get();
-        warning.setWindowTitle(QStringLiteral("Import"));
-        warning.setText(QStringLiteral("Could not read this file:\n%1")
-                            .arg(result.errors.join('\n')));
-        warning.setIcon(QMessageBox::Warning);
-        warning.setStandardButtons(QMessageBox::Ok);
-        warning.exec();
+        showNotice(self.data(), QStringLiteral("Import"),
+                   QStringLiteral("Could not read this file:\n%1")
+                       .arg(result.errors.join('\n')));
         return;
     }
     if (result.nets.isEmpty()) {
-        ScopedChildWidget<QMessageBox> infoOwner(self.data());
-        QMessageBox& info = *infoOwner.get();
-        info.setWindowTitle(QStringLiteral("Import"));
-        info.setText(QStringLiteral("No nets were found in this file."));
-        info.setIcon(QMessageBox::Information);
-        info.setStandardButtons(QMessageBox::Ok);
-        info.exec();
+        showNotice(self.data(), QStringLiteral("Import"),
+                   QStringLiteral("No nets were found in this file."));
         return;
     }
-
     NetScheduleStore::MergePolicy policy = NetScheduleStore::MergePolicy::Duplicate;
-    ScopedChildWidget<QMessageBox> boxOwner(self.data());
-    QMessageBox& box = *boxOwner.get();
-    box.setWindowTitle(QStringLiteral("Import Net Schedule"));
-    box.setText(QStringLiteral("Importing %1 net(s). How should entries that already "
-                               "exist be handled?")
-                    .arg(result.nets.size()));
-    auto* skipBtn = box.addButton(QStringLiteral("Skip existing"), QMessageBox::AcceptRole);
-    auto* overwriteBtn = box.addButton(QStringLiteral("Overwrite"), QMessageBox::AcceptRole);
-    auto* dupBtn = box.addButton(QStringLiteral("Import as new"), QMessageBox::AcceptRole);
-    box.addButton(QMessageBox::Cancel);
+    ScopedChildWidget<CanonMessageBox> boxOwner(
+        QStringLiteral("Import Net Schedule"),
+        QStringLiteral("Importing %1 net(s). How should entries that already "
+                       "exist be handled?")
+            .arg(result.nets.size()),
+        self.data());
+    CanonMessageBox& box = *boxOwner.get();
+    box.addButton(QStringLiteral("Cancel"), CanonMessageBox::Role::Reject);
+    auto* dupBtn = box.addButton(QStringLiteral("Import as new"), CanonMessageBox::Role::Accept);
+    auto* overwriteBtn = box.addButton(QStringLiteral("Overwrite"),
+                                       CanonMessageBox::Role::Destructive);
+    auto* skipBtn = box.addButton(QStringLiteral("Skip existing"), CanonMessageBox::Role::Accept);
+    // Return keeps what is already there.
+    box.setDefaultButton(skipBtn);
     box.exec();
     if (!self || !boxOwner) {
         return;
@@ -801,13 +887,8 @@ void NetSchedulerDialog::onExport()
         self->m_entries, QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly) || file.write(json) != json.size() || !file.commit()) {
-        ScopedChildWidget<QMessageBox> warningOwner(self.data());
-        QMessageBox& warning = *warningOwner.get();
-        warning.setWindowTitle(QStringLiteral("Export"));
-        warning.setText(QStringLiteral("Could not write the file."));
-        warning.setIcon(QMessageBox::Warning);
-        warning.setStandardButtons(QMessageBox::Ok);
-        warning.exec();
+        showNotice(self.data(), QStringLiteral("Export"),
+                   QStringLiteral("Could not write the file."));
         return;
     }
 }

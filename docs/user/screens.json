@@ -2346,36 +2346,36 @@
           "_sleep": 1.5
         },
         {
-          "wait_visible": "QDialog"
+          "wait_visible": "netEditorDialog"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/QLineEdit",
+          "target": "netEditorDialog/QLineEdit",
           "action": "setText",
           "value": "Tuesday 20 m Net"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/Thursday",
+          "target": "netEditorDialog/Thursday",
           "action": "setChecked",
           "value": "false",
           "_allow_fail": true
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/Tuesday",
+          "target": "netEditorDialog/Tuesday",
           "action": "setChecked",
           "value": "true"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/QDoubleSpinBox",
+          "target": "netEditorDialog/QDoubleSpinBox",
           "action": "setValue",
           "value": "14.250"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/OK",
+          "target": "netEditorDialog/OK",
           "action": "click",
           "_sleep": 1.0
         },
@@ -2386,36 +2386,36 @@
           "_sleep": 1.5
         },
         {
-          "wait_visible": "QDialog"
+          "wait_visible": "netEditorDialog"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/QLineEdit",
+          "target": "netEditorDialog/QLineEdit",
           "action": "setText",
           "value": "Sunday 20 m Net"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/Thursday",
+          "target": "netEditorDialog/Thursday",
           "action": "setChecked",
           "value": "false",
           "_allow_fail": true
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/Sunday",
+          "target": "netEditorDialog/Sunday",
           "action": "setChecked",
           "value": "true"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/QDoubleSpinBox",
+          "target": "netEditorDialog/QDoubleSpinBox",
           "action": "setValue",
           "value": "14.300"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/OK",
+          "target": "netEditorDialog/OK",
           "action": "click",
           "_sleep": 1.0
         }
@@ -2424,7 +2424,7 @@
         "target": "NetSchedulerDialog"
       },
       "caption": "The Net Scheduler with two weekly nets added.",
-      "alt": "Net Scheduler window. A table with columns On, Name, Repeats, Next, Frequency and Mode lists two nets: Tuesday 20 m Net, weekly, 14.2500 MHz USB, and Sunday 20 m Net, weekly, 14.3000 MHz USB, the second selected. Add…, Edit…, Remove, Disable, Tune Now, Import… and Export… buttons run along the bottom."
+      "alt": "Net Scheduler window with its title in the canon header and a round close button in the top-right corner. A table with columns On, Name, Repeats, Next, Frequency and Mode lists two nets: Tuesday 20 m Net, weekly, 14.2500 MHz USB, and Sunday 20 m Net, weekly, 14.3000 MHz USB, the second selected. Add…, Edit…, Remove, Disable, Tune Now, Import… and Export… buttons run along the bottom."
     },
     {
       "id": "net-scheduler-add-net",
@@ -2447,47 +2447,47 @@
           "_sleep": 1.5
         },
         {
-          "wait_visible": "QDialog"
+          "wait_visible": "netEditorDialog"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/QLineEdit",
+          "target": "netEditorDialog/QLineEdit",
           "action": "setText",
           "value": "Tuesday 20 m Net"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/Thursday",
+          "target": "netEditorDialog/Thursday",
           "action": "setChecked",
           "value": "false",
           "_allow_fail": true
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/Tuesday",
+          "target": "netEditorDialog/Tuesday",
           "action": "setChecked",
           "value": "true"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/QDoubleSpinBox",
+          "target": "netEditorDialog/QDoubleSpinBox",
           "action": "setValue",
           "value": "14.250"
         }
       ],
       "grab": {
-        "target": "QDialog"
+        "target": "netEditorDialog"
       },
       "cleanup": [
         {
           "cmd": "invoke",
-          "target": "QDialog/Cancel",
+          "target": "netEditorDialog/Cancel",
           "action": "click",
           "_sleep": 1.0
         }
       ],
       "caption": "Adding a net: name, repeat pattern, time, reminder and frequency.",
-      "alt": "Add Net dialog. Name: Tuesday 20 m Net. Repeats Weekly every 1 week(s), On with day buttons M, T, W, T, F, S, S. At 8:00 PM, Etc/UTC. Remind me 10 minutes before. Frequency 14.250000 MHz, USB, with a Capture current VFO button. Filter 100 Hz to 2800 Hz, an empty Notes field, the next occurrence in blue, and OK and Cancel buttons."
+      "alt": "Add Net dialog with its title in the canon header and a round close button in the top-right corner. Name: Tuesday 20 m Net. Repeats Weekly every 1 week(s), On with day buttons M, T, W, T, F, S, S. At 8:00 PM, Etc/UTC. Remind me 10 minutes before. Frequency 14.250000 MHz, USB, with a Capture current VFO button. Filter 100 Hz to 2800 Hz, an empty Notes field, the next occurrence in blue, and OK and Cancel buttons."
     },
     {
       "id": "connect-dialog",
