@@ -774,19 +774,6 @@ void AmpApplet::applyDensityAtScale(qreal scale)
     m_portA->setScale(f ? s : 1.0);
     m_portB->setScale(f ? s : 1.0);
 
-    // The SWR bar carries its scale as a gradient across the empty track —
-    // the one piece of the panel that is a colour, not a layout, so it is
-    // resolved from the theme rather than copied off the hardware.
-    QGradientStops swrStops;
-    if (f) {
-        const ThemeGradient swrScale =
-            theme.gradient(this, QStringLiteral("color.accessory.swrScale"));
-        for (const ThemeGradientStop& stop : swrScale.stops) {
-            swrStops.append({stop.at, stop.color});
-        }
-    }
-    m_swrGauge->setTrackGradient(swrStops);
-
     applyMeffaControls();
     placeReadings();
     m_telemetryGrid->setHorizontalSpacing(px(10));
