@@ -6,6 +6,7 @@
 
 class QLabel;
 class QHBoxLayout;
+class QPlainTextEdit;
 class QPushButton;
 
 namespace AetherSDR {
@@ -28,6 +29,9 @@ public:
     CanonMessageBox(const QString& title, const QString& text, QWidget* parent = nullptr);
 
     void setInformativeText(const QString& text);
+    // A list to scroll through below the texts (the rows an import skipped),
+    // in a read-only panel no taller than kDetailsHeight; hidden when empty.
+    void setDetailedText(const QString& text);
     // Lets the operator select and copy the texts (commands to paste).
     void setTextSelectable(bool on);
 
@@ -37,12 +41,15 @@ public:
     void setDefaultButton(QPushButton* button);
     QPushButton* clickedButton() const { return m_clicked; }
 
+    static constexpr int kDetailsHeight = 180;
+
 protected:
     void showEvent(QShowEvent* event) override;
 
 private:
     QLabel*             m_text{nullptr};
     QLabel*             m_info{nullptr};
+    QPlainTextEdit*     m_details{nullptr};
     QHBoxLayout*        m_buttons{nullptr};
     QList<QPushButton*> m_added;
     QPushButton*        m_default{nullptr};

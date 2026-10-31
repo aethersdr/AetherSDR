@@ -9,6 +9,8 @@
 
 #include <QApplication>
 #include <QLabel>
+#include <QPlainTextEdit>
+#include <QScrollBar>
 #include <QPushButton>
 #include <QTest>
 #include <QTimer>
@@ -180,6 +182,35 @@ int main(int argc, char** argv)
         QTimer::singleShot(0, &box, [restore] { restore->click(); });
         EXPECT_TRUE(box.exec() == QDialog::Accepted);
         EXPECT_TRUE(box.clickedButton() == restore);
+    }
+
+    // ---- the details show only when there are some, as text to scroll and
+    //      copy, without taking the focus from the default button ----
+    {
+        Box b;
+        auto* details = b.box.findChild<QPlainTextEdit*>(QStringLiteral("canonMessageDetails"));
+        EXPECT_TRUE(details && details->isHidden());
+        QStringList rows;
+        for (int i = 0; i < 200; ++i)
+            rows << QStringLiteral("Line %1: invalid ACTION_ID '<b>x</b>'.").arg(i + 2);
+        b.box.setDetailedText(rows.join(QLatin1Char('\n')));
+        bool shown = false;
+        bool scrolls = false;
+        bool focused = false;
+        b.run([&](CanonMessageBox& box) {
+            shown = details && details->isVisible();
+            // The 200 lines scroll inside the panel; none is cut off.
+            scrolls = details && details->verticalScrollBar()->maximum() > 0
+                      && details->height() <= CanonMessageBox::kDetailsHeight;
+            focused = b.install->hasFocus();
+            pressKey(box, Qt::Key_Escape);
+        });
+        EXPECT_TRUE(shown && scrolls && focused);
+        EXPECT_TRUE(details && details->isReadOnly());
+        EXPECT_TRUE(details && details->toPlainText().startsWith(
+                                   QStringLiteral("Line 2: invalid ACTION_ID '<b>x</b>'.")));
+        b.box.setDetailedText({});
+        EXPECT_TRUE(details && details->isHidden());
     }
 
     if (g_failures == 0) {

@@ -773,5 +773,29 @@ int main(int argc, char** argv)
                      "a session reset forgets the radio's PTT mic override");
     }
 
+    // An applied CW pitch announces cwPitchReported before cwPitchChanged, and a
+    // repeat of the held value is still announced; the CW decoder's range rule
+    // depends on both. A local setter announces only the change.
+    {
+        TransmitModel pitchTx;
+        QStringList order;
+        QObject::connect(&pitchTx, &TransmitModel::cwPitchReported,
+                         [&order](int hz) { order.append(QStringLiteral("reported:%1").arg(hz)); });
+        QObject::connect(&pitchTx, &TransmitModel::cwPitchChanged,
+                         [&order](int hz) { order.append(QStringLiteral("changed:%1").arg(hz)); });
+        // CONSTRUCTED pitches: they exercise the signal order only.
+        pitchTx.applyChanges(td([](TransmitDelta& d) { d.cwPitch = 800; }));
+        ok &= expect(order == QStringList{"reported:800", "changed:800"},
+                     "an applied CW pitch announces the report before the change");
+        order.clear();
+        pitchTx.applyChanges(td([](TransmitDelta& d) { d.cwPitch = 800; }));
+        ok &= expect(order == QStringList{"reported:800"},
+                     "a repeated CW pitch is announced as a report without a change");
+        order.clear();
+        pitchTx.setCwPitch(700);
+        ok &= expect(order == QStringList{"changed:700"},
+                     "a local CW pitch change is not announced as a report");
+    }
+
     return ok ? 0 : 1;
 }

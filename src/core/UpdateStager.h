@@ -167,7 +167,9 @@ public:
     // (other versions' trees and records, half-written records, the work
     // folders a crashed run left); nothing else in the folder is touched,
     // since it is the swap helper's state folder too. Never call it while a
-    // stager isBusy(), whose work folder it would remove.
+    // stager isBusy(), whose work folder it would remove. Just after
+    // cancel() is fine: isBusy() is false then, and a worker still finishing
+    // only removes its own work folder, which may already be gone.
     // An empty githubLatestTag (not known yet) discards nothing on that
     // ground. Cheap: reads the record only. revalidate() checks every file.
     static StagedRelease stagedRelease(const QString& stagingRoot, const QString& runningVersion,
@@ -175,6 +177,9 @@ public:
                                        const QString& rolledBackVersion);
     // Before the swap: the staged tree's signed manifest still verifies and
     // every file still matches it.
+    // Removes a staged release and its record: skipped, or its files no
+    // longer match. Nothing else in stagingRoot is touched.
+    static void discard(const QString& stagingRoot, const QString& version);
     static bool revalidate(const QString& stagingRoot, const StagedRelease& staged,
                            const QString& platform, const QString& arch, QString* problem);
 

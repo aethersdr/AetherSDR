@@ -39,6 +39,8 @@ Looked-up callsigns are cached for **7 days**, together with station photos, so 
 
 Open it from **Tools → Callsign Lookup...** or press **Ctrl+Shift+L**.
 
+The Callsign Lookup window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it; it reopens at the size and place you left it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). It's a window of its own, with its own taskbar entry. **View → Frameless Window** does not apply to it.
+
 Type a callsign and press **Lookup**. The card shows the callsign, license class, name, location, grid, county, QSL methods (LoTW, eQSL, QSL) and the distance and bearing from your station, plus the station photo. Click the callsign to open its QRZ.com page.
 
 The status line says where the answer came from: "Fetched from QRZ.com", or "From cache — fetched *n* day(s) ago". **Refresh** fetches fresh data from QRZ.com even if the callsign is cached.

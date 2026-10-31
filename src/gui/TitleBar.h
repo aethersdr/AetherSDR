@@ -84,6 +84,9 @@ public:
     // A newer AetherSDR release, or empty to clear. Non-empty shows the
     // UPDATE pill after the wordmark; clicking it emits updateBadgeClicked().
     void setUpdateAvailable(const QString& latestVersion);
+    // An update downloaded and ready to install (empty: none). The pill
+    // then reads RESTART TO UPDATE, whatever setUpdateAvailable() says.
+    void setUpdateStaged(const QString& version);
 
     // Status-bar transmit timer (left of the PC Audio button). Driven by
     // RadioModel::operatorTransmitChanged — runs only for operator MOX/PTT/VOX
@@ -203,6 +206,7 @@ private:
     RadioTabBar* m_radioTabs{nullptr};
     QLabel*      m_experimentalRadioLabel{nullptr};
     QPushButton* m_updateBadge{nullptr};
+    QString m_stagedVersion;
     QString      m_updateVersion;
     void refreshUpdateBadge();
     QLabel*      m_otherTxLabel{nullptr};

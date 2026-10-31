@@ -36,7 +36,8 @@ Select **RADE** from the mode dropdown in either the RX applet or the VFO widget
 
 - sets the radio to **DIGU** or **DIGL** using the band's usual sideband (LSB bands get DIGL; 60 m uses DIGU);
 - sets the filter to **750–2250 Hz** (mirrored for DIGL);
-- makes the RADE slice the **TX slice**.
+- makes the RADE slice the **TX slice**;
+- turns on the radio's **DAX** transmit input, which carries RADE's modem audio. On Windows (and Linux builds without PipeWire), turning RADE off or moving TX to another slice puts DAX back the way it was. On macOS and PipeWire builds, DAX follows the slice's mode instead, so it stays on while the slice is still in DIGU/DIGL ([#6595](https://github.com/aethersdr/AetherSDR/issues/6595)).
 
 RADE stays active across PTT cycles. It switches itself off if the radio or another client changes the slice to a mode other than DIGU/DIGL. If the RADE engine fails to start, the slice's previous mode, filter and TX assignment are restored.
 

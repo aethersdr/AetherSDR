@@ -248,6 +248,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (micChanged) emit micStateChanged();
     if (phoneChanged) emit phoneStateChanged();
     if (filterCutoffChanged) emit txFilterCutoffChanged(m_txFilterLow, m_txFilterHigh);
+    if (d.cwPitch) emit cwPitchReported(m_cwPitch);
     if (cwPitchChanged_) emit cwPitchChanged(m_cwPitch);
     if (cwSpeedChanged_) emit cwSpeedChanged(m_cwSpeed);
 

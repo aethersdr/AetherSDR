@@ -1,6 +1,9 @@
 #include "CallsignLookupDialog.h"
 
 #include "CallsignCard.h"
+#include "CanonIndicators.h"
+#include "FramelessResizer.h"
+#include "ModemChrome.h"
 #include "core/CallsignLookupService.h"
 #include "core/CallsignUtils.h"
 #include "core/ThemeManager.h"
@@ -10,6 +13,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QStyle>
+#include <QStyleOptionFrame>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -84,15 +89,41 @@ void LiveCwContactsDialog::clearContact()
 }
 
 CallsignLookupDialog::CallsignLookupDialog(QWidget* parent)
-    : PersistentDialog(QStringLiteral("Callsign Lookup"),
-                       QStringLiteral("CallsignLookupDialogGeometry"), parent)
+    : CanonWindow(QStringLiteral("Callsign Lookup"), parent, Kind::Workspace)
 {
     setObjectName(QStringLiteral("CallsignLookupDialog"));
-    setMinimumSize(420, 260);
+    // The canon scope maps the base tokens the contact card paints with onto
+    // the canon palette, so the card matches the window without a variant.
+    theme::setContainer(this, QStringLiteral("canon/callsignLookup"));
+    // A workspace tool on the style guide's CanonWindow, like AetherRX and
+    // AetherTX: size and position persist under the key it used as a
+    // PersistentDialog (the saved geometry carries over), and it resizes from
+    // every edge.
+    setGeometryKey(QStringLiteral("CallsignLookupDialogGeometry"));
+    FramelessResizer::install(this);
+    // The canon controls sheet the AetherRX and AetherTX Settings dialogs use,
+    // with their default button in cyan. It clears every descendant to
+    // transparent, and the field's right-click menu is a child of the field,
+    // so QMenu gets its canon panel back.
+    applyCanonSheet(bodyWidget(), [] {
+        return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
+               + QStringLiteral(
+                   "QPushButton:default { color: {{color.canon.cyan}}; border-color: {{color.canon.cyan}}; }"
+                   "QLabel#callsignLookupStatus { color: {{color.canon.muted}}; font-size: 11px; }"
+                   "QMenu { color: {{color.canon.inkSoft}}; background: {{color.canon.raised}};"
+                   " border: 1px solid {{color.canon.lineHi}}; }"
+                   "QMenu::item { padding: 4px 18px; }"
+                   "QMenu::item:selected { color: {{color.canon.onAccent}};"
+                   " background: {{color.canon.cyan}}; }"
+                   "QMenu::item:disabled { color: {{color.control.unavailable}}; }"
+                   "QMenu::separator { height: 1px; margin: 4px 8px;"
+                   " background: {{color.canon.line}}; }");
+    });
 
     auto* root = new QVBoxLayout(bodyWidget());
-    root->setContentsMargins(12, 12, 12, 12);
+    root->setContentsMargins(14, 12, 14, 14);
     root->setSpacing(10);
+    root->addWidget(makeCanonHeader(QStringLiteral("Callsign Lookup")));
 
     auto* inputRow = new QHBoxLayout;
     inputRow->setSpacing(8);
@@ -102,10 +133,6 @@ CallsignLookupDialog::CallsignLookupDialog(QWidget* parent)
     m_input->setAccessibleName(QStringLiteral("Callsign to look up"));
     m_input->setPlaceholderText(QStringLiteral("Enter callsign — e.g. KI6BCJ"));
     m_input->setMaxLength(14);
-    ThemeManager::instance().applyStyleSheet(m_input,
-        "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}};"
-        " border: 1px solid {{color.border.strong}}; border-radius: 3px;"
-        " padding: 5px 8px; font-size: 14px; font-weight: bold; }");
     // Callsigns are uppercase; retype as the operator enters them.
     connect(m_input, &QLineEdit::textEdited, this, [this](const QString& t) {
         const QString up = t.toUpper();
@@ -115,18 +142,12 @@ CallsignLookupDialog::CallsignLookupDialog(QWidget* parent)
     connect(m_input, &QLineEdit::returnPressed, this, [this] { startLookup(false); });
     inputRow->addWidget(m_input, 1);
 
-    const QString btnStyle =
-        "QPushButton { background: {{color.background.2}}; color: {{color.text.primary}};"
-        " border: 1px solid {{color.border.strong}}; border-radius: 3px;"
-        " padding: 5px 14px; font-size: 12px; }"
-        "QPushButton:hover { border-color: {{color.accent}}; color: {{color.accent.bright}}; }"
-        "QPushButton:disabled { color: {{color.text.disabled}}; }";
-
     m_lookupBtn = new QPushButton(QStringLiteral("Lookup"), this);
     m_lookupBtn->setObjectName(QStringLiteral("callsignLookupGo"));
     m_lookupBtn->setAccessibleName(QStringLiteral("Look up callsign"));
+    // Drawn as the default; Return in the field looks up through
+    // returnPressed, since a workspace window doesn't turn Return into a click.
     m_lookupBtn->setDefault(true);
-    ThemeManager::instance().applyStyleSheet(m_lookupBtn, btnStyle);
     connect(m_lookupBtn, &QPushButton::clicked, this, [this] { startLookup(false); });
     inputRow->addWidget(m_lookupBtn);
 
@@ -134,11 +155,23 @@ CallsignLookupDialog::CallsignLookupDialog(QWidget* parent)
     m_refreshBtn->setObjectName(QStringLiteral("callsignLookupRefresh"));
     m_refreshBtn->setAccessibleName(QStringLiteral("Refresh from QRZ, bypassing the cache"));
     m_refreshBtn->setToolTip(QStringLiteral("Fetch fresh data from QRZ.com even if cached"));
-    ThemeManager::instance().applyStyleSheet(m_refreshBtn, btnStyle);
     connect(m_refreshBtn, &QPushButton::clicked, this, [this] { startLookup(true); });
     inputRow->addWidget(m_refreshBtn);
 
     root->addLayout(inputRow);
+
+    // The field always shows its whole placeholder in the canon sheet's
+    // monospace font, whichever face the platform resolves it to; the window's
+    // minimum grows with it.
+    m_input->ensurePolished();
+    QStyleOptionFrame frame;
+    frame.initFrom(m_input);
+    frame.lineWidth = m_input->style()->pixelMetric(QStyle::PM_DefaultFrameWidth, &frame, m_input);
+    const int frameWidth = frame.rect.width()
+        - m_input->style()->subElementRect(QStyle::SE_LineEditContents, &frame, m_input).width();
+    m_input->setMinimumWidth(m_input->fontMetrics().horizontalAdvance(m_input->placeholderText())
+                             + frameWidth + m_input->textMargins().left()
+                             + m_input->textMargins().right() + 4);
 
     m_card = new CallsignCard(CallsignCard::Variant::Large, this);
     m_card->setVisible(false);
@@ -147,11 +180,10 @@ CallsignLookupDialog::CallsignLookupDialog(QWidget* parent)
     m_status = new QLabel(this);
     m_status->setObjectName(QStringLiteral("callsignLookupStatus"));
     m_status->setWordWrap(true);
-    ThemeManager::instance().applyStyleSheet(m_status,
-        "QLabel { color: {{color.text.label}}; font-size: 11px; background: transparent; }");
     root->addWidget(m_status);
 
     root->addStretch();
+    setMinimumSize(minimumSizeHint().expandedTo(QSize(500, 320)));
 
     auto& svc = CallsignLookupService::instance();
     connect(&svc, &CallsignLookupService::infoReady, this,
