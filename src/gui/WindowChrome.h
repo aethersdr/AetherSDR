@@ -90,27 +90,47 @@ inline bool claimsWholeWindowAsClient(Qt::WindowFlags flags, const QOperatingSys
 // live mouse-button state into synthetic presses, doubling real clicks (#6272).
 // Physical pixels; `borderX` / `borderY` are the resize bands on the left/right
 // and top/bottom edges (0 while maximized).
-enum class FrameHit { Client, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight };
+//
+// `Caption` is the title bar's own draggable background: the answer Windows
+// needs before it will offer drag-to-edge Snap and list the window in the Snap
+// Assist picker (#6825). Only the caller knows which points are the bar's empty
+// background rather than its tabs, menus and buttons, so this reports Caption
+// for the whole `captionHeight` strip and MainWindow::nativeEvent narrows it
+// with TitleBar::isSystemMoveAreaAt() — answering HTCAPTION over an interactive
+// widget is what made menus close as they opened (#6272). A `captionHeight` of
+// 0 disables it, which is how every non-main window keeps the old behaviour.
+enum class FrameHit { Client, Caption, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight };
 
-inline FrameHit expandedFrameHit(const QPoint& point, const QRect& window, int borderX, int borderY)
+inline FrameHit expandedFrameHit(const QPoint& point, const QRect& window, int borderX, int borderY,
+                                 int captionHeight = 0)
 {
-    if (borderX <= 0 || borderY <= 0 || !window.contains(point)) {
+    if (!window.contains(point)) {
         return FrameHit::Client;
     }
-    const bool left = point.x() < window.left() + borderX;
-    const bool right = point.x() > window.right() - borderX;
-    const bool top = point.y() < window.top() + borderY;
-    const bool bottom = point.y() > window.bottom() - borderY;
-    if (left) {
-        return top ? FrameHit::TopLeft : bottom ? FrameHit::BottomLeft : FrameHit::Left;
+    // Maximized and fullscreen have no resize band, but the caption still has
+    // to answer or the window cannot be dragged back off the top of the screen.
+    if (borderX > 0 && borderY > 0) {
+        const bool left = point.x() < window.left() + borderX;
+        const bool right = point.x() > window.right() - borderX;
+        const bool top = point.y() < window.top() + borderY;
+        const bool bottom = point.y() > window.bottom() - borderY;
+        if (left) {
+            return top ? FrameHit::TopLeft : bottom ? FrameHit::BottomLeft : FrameHit::Left;
+        }
+        if (right) {
+            return top ? FrameHit::TopRight : bottom ? FrameHit::BottomRight : FrameHit::Right;
+        }
+        if (top) {
+            return FrameHit::Top;
+        }
+        if (bottom) {
+            return FrameHit::Bottom;
+        }
     }
-    if (right) {
-        return top ? FrameHit::TopRight : bottom ? FrameHit::BottomRight : FrameHit::Right;
+    if (captionHeight > 0 && point.y() < window.top() + captionHeight) {
+        return FrameHit::Caption;
     }
-    if (top) {
-        return FrameHit::Top;
-    }
-    return bottom ? FrameHit::Bottom : FrameHit::Client;
+    return FrameHit::Client;
 }
 
 // Windows: the native window rect that gives `client`, keeping the frame the
