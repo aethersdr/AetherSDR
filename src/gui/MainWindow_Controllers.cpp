@@ -1979,7 +1979,8 @@ bool MainWindow::dispatchScopedMidiTx(const QString& id, float value,
     return dispatchMidiTxInput(id, value, m_radioModel, controller,
         [this](const QString& action, bool press, const std::shared_ptr<TxController>& source) {
             (void)handleScopedCwMomentaryShortcut(action, press, source, false);
-        });
+        },
+        [this](const QString& why) { statusBar()->showMessage(why, 6000); });
 }
 
 void MainWindow::registerMidiParams()

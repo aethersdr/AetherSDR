@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MainWindowHelpers.h"
+#include "TwoToneTuneGate.h"
 #include "models/TxController.h"
 
 #include <functional>
@@ -12,7 +13,8 @@ namespace AetherSDR {
 // through to a setter that captures the native operator's authority.
 inline bool dispatchMidiTxInput(const QString& id, float value, RadioModel& radio,
     const std::shared_ptr<TxController>& controller,
-    const std::function<void(const QString&, bool, const std::shared_ptr<TxController>&)>& cwHandler)
+    const std::function<void(const QString&, bool, const std::shared_ptr<TxController>&)>& cwHandler,
+    const std::function<void(const QString&)>& refused = {})
 {
     const bool cw = id == QLatin1String(kCwStraightKeyActionId)
         || id == QLatin1String(kCwLeftPaddleActionId)
@@ -35,6 +37,9 @@ inline bool dispatchMidiTxInput(const QString& id, float value, RadioModel& radi
         : value == -1.0f
             ? !(tune ? radio.transmitModel().isTuning() : radio.transmitModel().isTransmitting())
             : value > 0.5f);
+    // A start on a radio with no two-tone generator is refused here, before the
+    // input is captured or any keying call is made; the action is consumed.
+    if (twoTone && on && !twoToneTuneMayStart(radio, refused)) { return true; }
     const TxController::Input input = on ? controller->capture(activity) : controller->current(activity);
     if (on) {
         (void)input.start(twoTone);

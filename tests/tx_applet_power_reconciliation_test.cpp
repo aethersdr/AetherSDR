@@ -315,6 +315,8 @@ public:
         RadioCapabilities caps;
         caps.canTransmit = true;
         caps.hasTuner = true;
+        // The MIDI two-tone case below exercises a radio that has the generator.
+        caps.twoToneGenerator = RadioCapabilities::TwoToneGenerator{QStringLiteral("test")};
         return caps;
     }
     bool isConnected() const override { return connected; }
