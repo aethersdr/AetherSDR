@@ -2108,7 +2108,9 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
             return;
         }
 
-        coalescedUpdate();
+        if (presentNeededBesideFft()) {
+            coalescedUpdate();
+        }
         if (waterfallScrollProgressRows() >= m_waterfallScrollDistanceRows) {
             // Keep the completed phase so the viewport remains one full row
             // advanced until the next radio row resets the clock.
@@ -2641,8 +2643,11 @@ VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
     installVfoCursorEventFilter(w);
     // The flag's SmartMTR value labels are painted in our overlay pass; refresh
     // the overlay whenever they change or the flag moves.
-    connect(w, &VfoWidget::smartMtrLabelsChanged, this,
-            [this]() { markOverlayDirty("smartMtr"); });
+    // While FFT frames are presenting, the next one redraws the labels; a
+    // render of their own is another whole-window composite (#6883).
+    connect(w, &VfoWidget::smartMtrLabelsChanged, this, [this]() {
+        markOverlayDirty("smartMtr", presentNeededBesideFft());
+    });
     m_vfoWidgets[sliceId] = w;
     w->show();
     w->raise();
@@ -8797,6 +8802,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm, const Spectru
         }
     }
 
+    m_lastFftPresentClock.restart();
     coalescedUpdate();
 }
 
@@ -9152,7 +9158,9 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     if (PerfTelemetry::instance().enabled())
         PerfTelemetry::instance().recordWaterfallNativeRows(rowsToPush);
 
-    if (visibleStream) {
+    // While FFT frames are presenting, the next one shows this row; a present
+    // of its own would be a second whole-window composite per frame (#6883).
+    if (visibleStream && presentNeededBesideFft()) {
         coalescedUpdate();
     }
 }
@@ -11925,6 +11933,13 @@ void SpectrumWidget::leaveEvent(QEvent* event)
     m_hoveredSpotKey.clear();
     m_lastTooltipRect = {};
     updateTrackedCursorState(QPoint(-1, -1), false);
+}
+
+bool SpectrumWidget::presentNeededBesideFft() const
+{
+    return AetherSDR::presentNeededBesideFft(
+        m_lastFftPresentClock.isValid() ? m_lastFftPresentClock.elapsed() : -1,
+        m_fftFps);
 }
 
 void SpectrumWidget::coalescedUpdate()

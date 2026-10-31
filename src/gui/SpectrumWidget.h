@@ -1890,6 +1890,7 @@ private:
     // the retained radio rows remain discrete and authoritative.
     QTimer* m_waterfallScrollTimer{nullptr};
     QElapsedTimer m_waterfallScrollClock;
+    QElapsedTimer m_lastFftPresentClock;  // last data-driven FFT present (#6883)
     float m_waterfallScrollDistanceRows{1.0f};
     // Per-visible-row frequency frame, indexed by the physical waterfall ring
     // row. The GPU uses this to place each row in the current viewport without
@@ -2021,6 +2022,7 @@ private:
     // a teardown reorder can't leave a dangling scheduler here. (#4139)
     QPointer<PanadapterRenderScheduler> m_renderScheduler;
     void coalescedUpdate();                 // update(), coalesced into one present per slot
+    bool presentNeededBesideFft() const;    // FFT frames not carrying presents (#6883)
     // VFO passband drag state (#404)
     bool m_draggingVfo{false};
     int  m_vfoDragOffsetHz{0};  // Hz offset from VFO at grab point (#1120)
