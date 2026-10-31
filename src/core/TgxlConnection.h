@@ -98,6 +98,10 @@ signals:
     // tuner has cleared it, which it does on its own a few seconds later.
     // Broadcast to every connected client, not just the one that acted.
     void alertChanged(const QString& text);
+    // Custom antenna names from the 3-way model (v1.2.41+). Underscores in
+    // the firmware encoding are decoded to spaces. Empty strings indicate the
+    // firmware did not return a name for that port.
+    void antennaNamesChanged(const QString& name1, const QString& name2, const QString& name3);
 
 private slots:
     void onConnected();
