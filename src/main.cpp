@@ -273,7 +273,8 @@ static int runInstallCli(int argc, char* argv[])
         std::printf("%s\n", qPrintable(note));
     }
     if (qEnvironmentVariableIsSet("WAYLAND_DISPLAY") || qEnvironmentVariableIsSet("DISPLAY")) {
-        // Run from the AppImage, the installed copy must not inherit its variables.
+        // Run from the AppImage, the installed copy must not inherit its
+        // variables, or a descriptor that keeps its mount alive.
         QProcess process;
         process.setProgram(run);
         QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
@@ -281,6 +282,7 @@ static int runInstallCli(int argc, char* argv[])
             env.remove(name);
         }
         process.setProcessEnvironment(env);
+        process.setUnixProcessParameters(QProcess::UnixProcessFlag::CloseFileDescriptors);
         process.startDetached();
     }
     return EXIT_SUCCESS;

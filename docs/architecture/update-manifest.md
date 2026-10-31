@@ -420,7 +420,9 @@ because `~/.local/share/AetherSDR` already holds user data. `LinuxInstall`
   started copy, and the one `--install` starts, run without the AppImage
   runtime's variables (`APPIMAGE`, `APPDIR`, `ARGV0`, `OWD`), whose mount
   is gone by then and which would make the installed copy take itself for
-  the AppImage. Before it restarts, the version goes in
+  the AppImage, and without any inherited descriptor: the runtime leaves
+  one open on its mount, which would keep the mount and the AppImage file
+  alive for as long as the installed copy runs. Before it restarts, the version goes in
   `Updates.installedFromAppImage`; the installed copy's next start reports
   it in the status bar once (`UpdateController::lastUpdate`, outcome
   `Installed`) and clears it, a maintainer ruling. The AppImage never

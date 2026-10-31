@@ -556,6 +556,10 @@ bool LinuxInstall::startAfterExit(qint64 pid, const QString& program, const QStr
         env.remove(name);
     }
     process.setProcessEnvironment(env);
+    // Nothing of this process's is handed on: started from the AppImage, an
+    // inherited descriptor on its mount keeps the mount, and the AppImage
+    // file, alive for as long as the new copy runs.
+    process.setUnixProcessParameters(QProcess::UnixProcessFlag::CloseFileDescriptors);
     return process.startDetached();
 }
 

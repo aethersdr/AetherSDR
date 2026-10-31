@@ -10,6 +10,9 @@
 
 #include <atomic>
 #include <filesystem>
+
+#include <fcntl.h>    // open
+#include <unistd.h>   // close
 #include <thread>
 
 // LinuxInstall (RFC #5304 Phase 5): the install --install makes, the switch
@@ -719,14 +722,20 @@ private slots:
     }
 
     // Install for updates restarts into the install without the AppImage's
-    // variables, and with everything else.
+    // variables or its open descriptors, and with everything else.
     void theRelaunchDropsTheVariablesItIsTold()
     {
         QTemporaryDir tmp;
         const QString seen = tmp.filePath(QStringLiteral("seen"));
         const QString program = tmp.filePath(QStringLiteral("program"));
+        // A descriptor without close-on-exec, as the AppImage runtime leaves
+        // one on its mount.
+        const int held = ::open(tmp.path().toUtf8().constData(), O_RDONLY | O_DIRECTORY);
+        QVERIFY(held > 2);
+        const QByteArray fd = QByteArray::number(held);
         writeFile(program,
-                  "#!/bin/sh\nprintf '%s|%s' \"${APPIMAGE-unset}\" \"${AETHER_KEPT-unset}\" > '" + seen.toUtf8()
+                  "#!/bin/sh\nif [ -e /proc/self/fd/" + fd + " ]; then h=held; else h=closed; fi\n"
+                  "printf '%s|%s|%s' \"${APPIMAGE-unset}\" \"${AETHER_KEPT-unset}\" \"$h\" > '" + seen.toUtf8()
                       + ".part' && mv '" + seen.toUtf8() + ".part' '" + seen.toUtf8() + "'\n",
                   true);
         qputenv("APPIMAGE", "/home/op/AetherSDR.AppImage");
@@ -737,11 +746,12 @@ private slots:
         QVERIFY(LinuxInstall::startAfterExit(quitting.processId(), program, {QStringLiteral("APPIMAGE")}));
         qunsetenv("APPIMAGE");
         qunsetenv("AETHER_KEPT");
+        ::close(held);
         QVERIFY(quitting.waitForFinished(5000));
         QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(seen), 5000);
         QFile f(seen);
         QVERIFY(f.open(QIODevice::ReadOnly));
-        QCOMPARE(f.readAll(), QByteArray("unset|yes"));
+        QCOMPARE(f.readAll(), QByteArray("unset|yes|closed"));
     }
 };
 
