@@ -6,6 +6,7 @@
 #include <QAccessible>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QVBoxLayout>
 
@@ -29,6 +30,14 @@ CanonMessageBox::CanonMessageBox(const QString& title, const QString& text, QWid
                + QStringLiteral(
                    "QLabel#canonMessageText { color: {{color.canon.ink}}; }"
                    "QLabel#canonMessageInfo { color: {{color.canon.inkSoft}}; }"
+                   "QPlainTextEdit#canonMessageDetails { color: {{color.canon.inkSoft}};"
+                   " background: {{color.canon.nested}}; border: 1px solid {{color.canon.line}};"
+                   " border-radius: 6px; padding: 4px; }"
+                   "QScrollBar:horizontal { background: transparent; height: 12px;"
+                   " margin: 2px 8px 2px 8px; border-radius: 6px; }"
+                   "QScrollBar::handle:horizontal { background: {{color.canon.lineHi}};"
+                   " border-radius: 5px; min-width: 34px; }"
+                   "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }"
                    "QPushButton { padding: 6px 18px; }"
                    "QPushButton:default { color: {{color.canon.cyan}}; border-color: {{color.canon.cyan}}; }"
                    "QPushButton[role=\"destructive\"] { color: {{color.canon.sparkGold}}; }");
@@ -64,6 +73,17 @@ CanonMessageBox::CanonMessageBox(const QString& title, const QString& text, QWid
     m_info->hide();
     root->addWidget(m_info);
 
+    m_details = new QPlainTextEdit;
+    m_details->setObjectName(QStringLiteral("canonMessageDetails"));
+    m_details->setReadOnly(true);
+    m_details->setLineWrapMode(QPlainTextEdit::NoWrap);
+    m_details->setMinimumWidth(kTextWidth);
+    m_details->setMaximumWidth(kMaxTextWidth);
+    m_details->setMaximumHeight(kDetailsHeight);
+    m_details->setAccessibleName(QStringLiteral("Details"));
+    m_details->hide();
+    root->addWidget(m_details);
+
     root->addSpacing(4);
     m_buttons = new QHBoxLayout;
     m_buttons->setSpacing(8);
@@ -77,6 +97,14 @@ void CanonMessageBox::setInformativeText(const QString& text)
     m_info->setVisible(!text.isEmpty());
     setAccessibleDescription(text.isEmpty() ? m_text->text()
                                             : m_text->text() + QLatin1Char('\n') + text);
+}
+
+// The details stay out of the accessible description, which is read aloud
+// when the box opens; the panel carries its own accessible name instead.
+void CanonMessageBox::setDetailedText(const QString& text)
+{
+    m_details->setPlainText(text);
+    m_details->setVisible(!text.isEmpty());
 }
 
 void CanonMessageBox::setTextSelectable(bool on)

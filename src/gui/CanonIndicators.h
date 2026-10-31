@@ -2,7 +2,9 @@
 
 // Canon check boxes and radio buttons for stylesheets (style guide, RFC
 // #6226): canonIndicatorRules() returns QCheckBox / QRadioButton indicator
-// rules whose images are painted here in color.canon.* colours.
+// rules whose images are painted here in color.canon.* colours,
+// canonItemCheckRules() the same check boxes for an item view's check column,
+// and canonSpinArrowRules() the spin box steppers to go with them.
 //
 // Painted, not drawn with stylesheet borders: a QSS border cannot carry a tick
 // or a dot, and a translucent canon hairline drawn as a rounded QSS border
@@ -21,10 +23,13 @@
 #include <QColor>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPointF>
+#include <QSize>
 #include <QString>
 #include <QWidget>
 
 #include <functional>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -51,11 +56,16 @@ inline QColor canonColour(const char* token)
     return ThemeManager::instance().color(QStringLiteral("color.canon.") + QLatin1String(token));
 }
 
-} // namespace detail
+// The eight indicator images, check boxes then radio buttons, each off, on,
+// off disabled and on disabled.
+struct CanonIndicatorImages {
+    QString checkOff, checkOn, checkOffDis, checkOnDis;
+    QString radioOff, radioOn, radioOffDis, radioOnDis;
+};
 
-inline QString canonIndicatorRules()
+// All eight, or none if any could not be written.
+inline std::optional<CanonIndicatorImages> canonIndicatorImages()
 {
-    using detail::canonColour;
     const QColor control = canonColour("control");
     const QColor lineHi  = canonColour("lineHi");
     const QColor line    = canonColour("line");
@@ -100,7 +110,6 @@ inline QString canonIndicatorRules()
         };
     };
 
-    using detail::canonIndicatorPath;
     const QString checkOff = canonIndicatorPath(QStringLiteral("check_off"), key,
                                                 checkBox(control, lineHi, nullptr));
     const QString checkOn = canonIndicatorPath(QStringLiteral("check_on"), key,
@@ -121,10 +130,21 @@ inline QString canonIndicatorRules()
     for (const QString* p : {&checkOff, &checkOn, &checkOffDis, &checkOnDis,
                              &radioOff, &radioOn, &radioOffDis, &radioOnDis}) {
         if (p->isEmpty()) {
-            return {};   // Qt's own indicators rather than blank ones
+            return std::nullopt;   // Qt's own indicators rather than blank ones
         }
     }
+    return CanonIndicatorImages{checkOff, checkOn, checkOffDis, checkOnDis,
+                                radioOff, radioOn, radioOffDis, radioOnDis};
+}
 
+} // namespace detail
+
+inline QString canonIndicatorRules()
+{
+    const std::optional<detail::CanonIndicatorImages> img = detail::canonIndicatorImages();
+    if (!img) {
+        return {};
+    }
     // Quoted: a cache path can hold spaces (a Windows profile name).
     return QStringLiteral(
         "QCheckBox::indicator, QRadioButton::indicator {"
@@ -137,8 +157,76 @@ inline QString canonIndicatorRules()
         "QRadioButton::indicator:checked { image: url(\"%6\"); }"
         "QRadioButton::indicator:unchecked:disabled { image: url(\"%7\"); }"
         "QRadioButton::indicator:checked:disabled { image: url(\"%8\"); }")
-        .arg(checkOff, checkOn, checkOffDis, checkOnDis,
-             radioOff, radioOn, radioOffDis, radioOnDis);
+        .arg(img->checkOff, img->checkOn, img->checkOffDis, img->checkOnDis,
+             img->radioOff, img->radioOn, img->radioOffDis, img->radioOnDis);
+}
+
+// The canon check images for an item view's checkable items (a table's check
+// column), which a QCheckBox rule does not reach: `view` is the view's class
+// name, as the selector takes it (QTableWidget). Empty, like
+// canonIndicatorRules(), when the images could not be written.
+inline QString canonItemCheckRules(const QString& view)
+{
+    const std::optional<detail::CanonIndicatorImages> img = detail::canonIndicatorImages();
+    if (!img) {
+        return {};
+    }
+    return QStringLiteral(
+        "%1::indicator { width: 18px; height: 18px; }"
+        "%1::indicator:unchecked { image: url(\"%2\"); }"
+        "%1::indicator:checked { image: url(\"%3\"); }"
+        "%1::indicator:unchecked:disabled { image: url(\"%4\"); }"
+        "%1::indicator:checked:disabled { image: url(\"%5\"); }")
+        .arg(view, img->checkOff, img->checkOn, img->checkOffDis, img->checkOnDis);
+}
+
+// A spin box with a styled frame draws its steppers from the sheet or not at
+// all: without these rules Qt falls back to two specks. Each stepper is a
+// column at the field's right with a painted triangle in the canon ink,
+// regenerated per theme like the indicators above. Left out if an
+// arrow could not be written, so the field keeps Qt's own.
+inline QString canonSpinArrowRules()
+{
+    const QColor color = ThemeManager::instance().color(QStringLiteral("color.canon.inkSoft"));
+    const QString key = color.name(QColor::HexRgb).remove(QLatin1Char('#'));
+    auto arrow = [&](const QString& name, bool up) {
+        return themedImagePath(QStringLiteral("spin-arrows"), name, key, QSize(8, 5), 1,
+                               [color, up](QPainter& p) {
+            p.setRenderHint(QPainter::Antialiasing);
+            p.setPen(Qt::NoPen);
+            p.setBrush(color);
+            const QPointF upTri[] = {{0, 5}, {8, 5}, {4, 0}};
+            const QPointF downTri[] = {{0, 0}, {8, 0}, {4, 5}};
+            p.drawPolygon(up ? upTri : downTri, 3);
+        });
+    };
+    const QString up = arrow(QStringLiteral("up"), true);
+    const QString down = arrow(QStringLiteral("down"), false);
+    if (up.isEmpty() || down.isEmpty()) {
+        return {};
+    }
+    return QStringLiteral(
+        "QSpinBox, QDoubleSpinBox { padding-right: 16px; }"
+        "QSpinBox::up-button, QDoubleSpinBox::up-button,"
+        " QSpinBox::down-button, QDoubleSpinBox::down-button {"
+        " subcontrol-origin: border; width: 16px; border: none;"
+        " border-left: 1px solid {{color.canon.line}}; background: transparent; }"
+        "QSpinBox::up-button, QDoubleSpinBox::up-button {"
+        " subcontrol-position: top right; border-top-right-radius: 4px; }"
+        "QSpinBox::down-button, QDoubleSpinBox::down-button {"
+        " subcontrol-position: bottom right; border-bottom-right-radius: 4px; }"
+        "QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,"
+        " QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {"
+        " background: {{color.canon.nested}}; }"
+        "QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {"
+        " image: url(\"%1\"); width: 8px; height: 5px; }"
+        "QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {"
+        " image: url(\"%2\"); width: 8px; height: 5px; }"
+        "QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled,"
+        " QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled,"
+        " QSpinBox::up-arrow:off, QDoubleSpinBox::up-arrow:off,"
+        " QSpinBox::down-arrow:off, QDoubleSpinBox::down-arrow:off { image: none; }")
+        .arg(up, down);
 }
 
 // Apply a sheet built by `build` (which embeds canonIndicatorRules()) to

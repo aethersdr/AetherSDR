@@ -1,4 +1,7 @@
 #include "MqttSettingsDialog.h"
+#include "CanonIndicators.h"
+#include "FramelessResizer.h"
+#include "ModemChrome.h"
 
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
@@ -34,6 +37,92 @@ namespace {
 
 constexpr int kMaxPublishButtons = 12;
 
+// Text-field padding, and the 1 px border the ModemChrome sheet draws round
+// every field. The port field's editor takes their sum as its text inset.
+constexpr int kFieldPadV = 5;
+constexpr int kFieldPadH = 10;
+constexpr int kFieldBorder = 1;
+
+// What the shared canon dialog sheet (ModemChrome, as the AetherRX and AetherTX
+// Settings dialogs wear it) leaves out: tabs and group boxes as SpotHub's;
+// fields and buttons sized for a form of several rows; the port field's font,
+// to match the text fields beside it; the table's cell editor, which would
+// otherwise take the field padding and clip its own text; and the fields'
+// right-click menus, children of the fields that the sheet's transparent
+// rule would otherwise leave with no panel.
+constexpr const char* kMqttCanonRules = R"(
+QTabWidget::pane {
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 10px;
+    top: -1px;
+}
+QTabBar::tab {
+    color: {{color.canon.muted}};
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 6px 12px;
+    font-weight: 600;
+}
+QTabBar::tab:hover {
+    color: {{color.canon.ink}};
+}
+QTabBar::tab:selected {
+    color: {{color.canon.cyan}};
+    border-bottom-color: {{color.canon.cyan}};
+}
+QGroupBox {
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 8px;
+    margin-top: 14px;
+    padding-top: 6px;
+    font-weight: 700;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: {{color.canon.cyan}};
+}
+QLineEdit,
+QSpinBox {
+    padding: %1px %2px;
+}
+QPushButton {
+    padding: 6px 14px;
+}
+QSpinBox {
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 13px;
+}
+QTableWidget QLineEdit {
+    border-radius: 0px;
+    padding: 0px 6px;
+}
+QMenu {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
+}
+QMenu::item {
+    padding: 4px 18px;
+}
+QMenu::item:selected {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+}
+QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
+}
+)";
+
 QTableWidgetItem* textItem(const QString& text = {})
 {
     return new QTableWidgetItem(text);
@@ -65,11 +154,19 @@ QList<int> selectedRowsDescending(QTableWidget* table)
 } // namespace
 
 MqttSettingsDialog::MqttSettingsDialog(QWidget* parent)
-    : PersistentDialog(tr("MQTT Settings"),
-                       QStringLiteral("MqttSettingsDialogGeometry"),
-                       parent)
+    : CanonWindow(tr("MQTT Settings"), parent)
 {
-    theme::setContainer(this, QStringLiteral("dialog/mqttSettings"));
+    setObjectName(QStringLiteral("mqttSettingsDialog"));
+    theme::setContainer(this, QStringLiteral("canon/mqttSettings"));
+    // The canon header adds about 40 px to the old 620x520.
+    setMinimumSize(620, 560);
+    FramelessResizer::install(this);
+    applyCanonSheet(bodyWidget(), [] {
+        return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
+             + QString::fromLatin1(kMqttCanonRules).arg(kFieldPadV).arg(kFieldPadH)
+             + canonSpinArrowRules()
+             + canonItemCheckRules(QStringLiteral("QTableWidget"));
+    });
     buildUi();
     loadSettings();
     loadPasswordFromKeychain();
@@ -77,10 +174,10 @@ MqttSettingsDialog::MqttSettingsDialog(QWidget* parent)
 
 void MqttSettingsDialog::buildUi()
 {
-    setMinimumSize(620, 520);
-
     auto* root = new QVBoxLayout(bodyWidget());
+    root->setContentsMargins(14, 12, 14, 14);
     root->setSpacing(8);
+    root->addWidget(makeCanonHeader(tr("MQTT Settings")));
 
     auto* tabs = new QTabWidget;
     root->addWidget(tabs, 1);
@@ -88,7 +185,7 @@ void MqttSettingsDialog::buildUi()
     auto* brokerTab = new QWidget;
     auto* brokerLayout = new QVBoxLayout(brokerTab);
     auto* form = new QFormLayout;
-    form->setLabelAlignment(Qt::AlignRight);
+    form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
     m_hostEdit = new QLineEdit;
     m_hostEdit->setObjectName(QStringLiteral("mqttHost"));
@@ -99,6 +196,11 @@ void MqttSettingsDialog::buildUi()
     m_portSpin->setRange(1, 65535);
     m_portSpin->setObjectName(QStringLiteral("mqttPort"));
     m_portSpin->setAccessibleName(tr("MQTT broker port"));
+    // The sheet's left padding never reaches a spin box's editor (it sits on
+    // the frame's inner edge), so its text gets the text fields' inset here.
+    if (auto* editor = m_portSpin->findChild<QLineEdit*>()) {
+        editor->setTextMargins(kFieldPadH + kFieldBorder, 0, 0, 0);
+    }
     form->addRow(tr("Port:"), m_portSpin);
 
     m_userEdit = new QLineEdit;
@@ -174,7 +276,6 @@ void MqttSettingsDialog::buildUi()
         if (!def.gateable) {
             cb->setChecked(true);
             cb->setEnabled(false);
-            cb->setStyleSheet(QStringLiteral("QCheckBox:disabled { color: #556; }"));
         }
         m_internalSubBoxes.append(cb);
         internalLayout->addWidget(cb);
@@ -216,7 +317,6 @@ void MqttSettingsDialog::buildUi()
         if (!def.gateable) {
             cb->setChecked(true);
             cb->setEnabled(false);
-            cb->setStyleSheet(QStringLiteral("QCheckBox:disabled { color: #556; }"));
         }
         m_internalPubBoxes.append(cb);
         pubInternalLayout->addWidget(cb);

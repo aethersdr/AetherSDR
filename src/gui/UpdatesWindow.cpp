@@ -2,6 +2,7 @@
 
 #include "core/ThemeManager.h"
 #include "core/UpdateChecker.h"
+#include "core/UpdateController.h"
 #include "gui/CanonIndicators.h"
 #include "gui/FirmwareUpdateCard.h"
 #include "gui/FlowLayout.h"
@@ -16,6 +17,7 @@
 #include <QLocale>
 #include <QPainter>
 #include <QPainterPath>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -195,9 +197,10 @@ QString sheet()
                "QLabel[role=\"status\"][tone=\"danger\"] { color: {{color.accent.danger}}; }"
                "QLabel[role=\"status\"][tone=\"current\"] { color: {{color.canon.aqua}}; }"
                "QLabel[role=\"caution\"] { color: {{color.accent.warning}}; font-size: 12px; }"
-               "QProgressBar#firmwareProgress { background: {{color.canon.nested}}; border: 1px solid {{color.canon.line}};"
-               " border-radius: 4px; }"
-               "QProgressBar#firmwareProgress::chunk { background: {{color.brand.gradient}}; border-radius: 3px; }"
+               "QProgressBar#firmwareProgress, QProgressBar#updatesProgress { background: {{color.canon.nested}};"
+               " border: 1px solid {{color.canon.line}}; border-radius: 4px; }"
+               "QProgressBar#firmwareProgress::chunk, QProgressBar#updatesProgress::chunk {"
+               " background: {{color.brand.gradient}}; border-radius: 3px; }"
                "QScrollBar:vertical { background: transparent; width: 8px; margin: 2px; }"
                "QScrollBar::handle:vertical { background: {{color.canon.lineHi}}; border-radius: 3px;"
                " min-height: 24px; }"
@@ -289,6 +292,11 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget*
     m_get->setObjectName(QStringLiteral("updatesGet"));
     m_get->setCursor(Qt::PointingHandCursor);
     actions->addWidget(m_get);
+    m_download = new QPushButton(tr("Download installer"));
+    m_download->setObjectName(QStringLiteral("updatesGhost"));
+    m_download->setCursor(Qt::PointingHandCursor);
+    m_download->setAccessibleName(tr("Download installer"));
+    actions->addWidget(m_download);
     m_notes = new QPushButton(tr("Full release notes"));
     m_notes->setObjectName(QStringLiteral("updatesSecondary"));
     m_notes->setCursor(Qt::PointingHandCursor);
@@ -306,6 +314,34 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget*
     actions->addWidget(m_skip);
     actions->addStretch(1);
     content->addLayout(actions);
+
+    // Install update in progress: what it is doing, how far, and Cancel.
+    m_progressRow = new QWidget;
+    m_progressRow->setObjectName(QStringLiteral("updatesInstallProgress"));
+    auto* progressRow = new QVBoxLayout(m_progressRow);
+    progressRow->setContentsMargins(0, 0, 0, 0);
+    progressRow->setSpacing(6);
+    auto* progressLine = new QHBoxLayout;
+    m_progressLabel = plainLabel(QStringLiteral("status"));
+    m_progressLabel->setObjectName(QStringLiteral("updatesInstallStatus"));
+    m_progressLabel->setAccessibleName(tr("Update install status"));
+    progressLine->addWidget(m_progressLabel, 1);
+    m_cancel = new QPushButton(tr("Cancel"));
+    m_cancel->setObjectName(QStringLiteral("updatesSecondary"));
+    m_cancel->setCursor(Qt::PointingHandCursor);
+    m_cancel->setAccessibleName(tr("Cancel the update"));
+    m_cancel->setAccessibleDescription(tr("Stops downloading the update. Nothing is changed."));
+    progressLine->addWidget(m_cancel);
+    progressRow->addLayout(progressLine);
+    m_progress = new QProgressBar;
+    m_progress->setObjectName(QStringLiteral("updatesProgress"));
+    m_progress->setAccessibleName(tr("Update download progress"));
+    m_progress->setRange(0, 100);
+    m_progress->setTextVisible(false);
+    m_progress->setFixedHeight(8);
+    progressRow->addWidget(m_progress);
+    m_progressRow->hide();
+    content->addWidget(m_progressRow);
 
     auto* footer = new QHBoxLayout;
     m_footnote = plainLabel(QStringLiteral("footnote"));
@@ -338,7 +374,13 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget*
         m_autoCheck->setAccessibleDescription(m_autoCheck->toolTip());
     }
 
-    connect(m_get, &QPushButton::clicked, this, &UpdatesWindow::openDownload);
+    connect(m_get, &QPushButton::clicked, this, &UpdatesWindow::primaryClicked);
+    connect(m_download, &QPushButton::clicked, this, &UpdatesWindow::openDownload);
+    connect(m_cancel, &QPushButton::clicked, this, [this] {
+        if (m_controller) {
+            m_controller->cancel();
+        }
+    });
     connect(m_notes, &QPushButton::clicked, this, [this] {
         const QString version = m_checker ? m_checker->latestRelease().version : QString();
         QDesktopServices::openUrl(UpdateChecker::releasePageUrl(version));
@@ -348,7 +390,12 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget*
         if (!m_checker) {
             return;
         }
-        UpdateChecker::skipVersion(m_checker->latestRelease().version);
+        const QString version = m_checker->latestRelease().version;
+        UpdateChecker::skipVersion(version);
+        // Skipping a release that is staged, or being staged, discards it.
+        if (m_controller) {
+            m_controller->discard(version);
+        }
         emit badgeChanged(QString());
         refresh();
     });
@@ -389,6 +436,85 @@ void UpdatesWindow::setAutomaticCheck(bool on)
 {
     const QSignalBlocker block(m_autoCheck);
     m_autoCheck->setChecked(on && UpdateChecker::storeName().isEmpty());
+}
+
+void UpdatesWindow::setController(UpdateController* controller)
+{
+    if (m_controller) {
+        disconnect(m_controller, nullptr, this, nullptr);
+    }
+    m_controller = controller;
+    // Asked once: it probes the install folder.
+    m_canInPlace = controller && controller->canInstallInPlace();
+    if (controller) {
+        connect(controller, &UpdateController::stateChanged, this, &UpdatesWindow::refresh);
+        connect(controller, &UpdateController::progress, this,
+                [this](const QString& step, qint64 done, qint64 total) {
+                    if (total > 0) {
+                        const int percent = static_cast<int>(done * 100 / total);
+                        m_progress->setRange(0, 100);
+                        m_progress->setValue(percent);
+                        m_progressLabel->setText(tr("%1… %2%").arg(step).arg(percent));
+                    } else {
+                        m_progress->setRange(0, 0);   // busy: no size to count against
+                        m_progressLabel->setText(tr("%1…").arg(step));
+                    }
+                    m_progress->setAccessibleDescription(m_progressLabel->text());
+                });
+        // Each outcome is kept with the release it was about, not whatever
+        // the check shows now.
+        connect(controller, &UpdateController::browserNeeded, this,
+                [this](const QString& reason, const QString& version) {
+                    m_browserReason = reason;
+                    m_browserVersion = version;
+                    refresh();
+                });
+        connect(controller, &UpdateController::failed, this, [this](const QString& reason, const QString& version) {
+            m_installProblem = reason;
+            m_problemVersion = version;
+            refresh();
+        });
+    }
+    refresh();
+}
+
+void UpdatesWindow::showInstallProblem(const QString& problem, const QString& version)
+{
+    m_installProblem = problem;
+    m_problemVersion = version;
+    refresh();
+}
+
+bool UpdatesWindow::installsInPlace(const QString& version) const
+{
+    return m_controller && m_canInPlace && !m_controller->isRolledBack(version)
+           && !(m_browserVersion == version && !m_browserReason.isEmpty());
+}
+
+void UpdatesWindow::primaryClicked()
+{
+    if (!m_checker) {
+        return;
+    }
+    const QString version = m_checker->latestRelease().version;
+    if (!installsInPlace(version)) {
+        openDownload();
+        return;
+    }
+    if (m_controller->state() == UpdateController::State::Staged && m_controller->version() == version) {
+        emit restartRequested();
+        return;
+    }
+    if (m_controller->state() != UpdateController::State::Staging
+        && m_controller->state() != UpdateController::State::Handed) {
+        m_installProblem.clear();
+        // Installing a skipped release means it is wanted after all.
+        if (UpdateChecker::isSkipped(version)) {
+            UpdateChecker::unskipVersion(version);
+            emit badgeChanged(version);
+        }
+        m_controller->install(version);
+    }
 }
 
 UpdatesWindow::View UpdatesWindow::currentView() const
@@ -444,6 +570,13 @@ void UpdatesWindow::refresh()
             note = tr("Couldn't reach GitHub for this release's details. Check your connection, then try again.");
         } else if (m_failed) {
             note = tr("Couldn't reach GitHub just now. This is its last answer.");
+        } else if (m_controller && m_controller->isRolledBack(release.version)) {
+            note = tr("This release didn't start on this computer, so it was rolled back and isn't installed "
+                      "here again.");
+        } else if (m_browserVersion == release.version && !m_browserReason.isEmpty()) {
+            note = tr("The update couldn't be prepared here: %1 Download it instead.").arg(m_browserReason);
+        } else if (!m_installProblem.isEmpty() && m_problemVersion == release.version) {
+            note = m_installProblem;
         } else if (UpdateChecker::isSkipped(release.version)) {
             note = tr("You skipped this release, so UPDATE is not shown in the title bar.");
         }
@@ -487,12 +620,42 @@ void UpdatesWindow::refresh()
 
     const ReleaseAsset asset = UpdateChecker::assetForThisComputer(release);
     const bool canDownload = view == View::Available && store.isEmpty();
-    m_get->setVisible(canDownload);
-    m_get->setText(tr("Get AetherSDR %1  →").arg(release.version));
-    m_get->setAccessibleName(tr("Get AetherSDR %1").arg(release.version));
-    m_get->setAccessibleDescription(asset.url.isValid()
-                                        ? tr("Downloads %1 in your browser.").arg(asset.name)
-                                        : tr("Opens the release page to choose a download."));
+    // Install update, in place, when the controller can; the browser
+    // otherwise, or once this release fell back to it.
+    using State = UpdateController::State;
+    const bool inPlace = canDownload && installsInPlace(release.version);
+    const State installState = m_controller ? m_controller->state() : State::Idle;
+    const bool forThis = m_controller && m_controller->version() == release.version;
+    // Whatever release it is staging: a newer latest heard meanwhile waits
+    // until it finishes (the controller then discards it).
+    const bool staging = inPlace && installState == State::Staging;
+    const bool staged = inPlace && forThis && (installState == State::Staged || installState == State::Handed);
+    m_get->setVisible(canDownload && !staging);
+    m_progressRow->setVisible(staging);
+    // The browser route stays beside Install update (Phase 3 ruling).
+    m_download->setVisible(inPlace && !staging);
+    m_download->setAccessibleDescription(asset.url.isValid()
+                                             ? tr("Downloads %1 in your browser instead.").arg(asset.name)
+                                             : tr("Opens the release page to choose a download instead."));
+    if (staged) {
+        m_get->setText(tr("Restart to update"));
+        m_get->setAccessibleName(tr("Restart to update to AetherSDR %1").arg(release.version));
+        m_get->setAccessibleDescription(
+            tr("Quits AetherSDR, installs v%1 and starts it again. Otherwise it installs when you quit.")
+                .arg(release.version));
+    } else if (inPlace) {
+        m_get->setText(tr("Install update"));
+        m_get->setAccessibleName(tr("Install AetherSDR %1").arg(release.version));
+        m_get->setAccessibleDescription(
+            tr("Downloads v%1 and gets it ready. Nothing changes until AetherSDR restarts or quits.")
+                .arg(release.version));
+    } else {
+        m_get->setText(tr("Get AetherSDR %1  →").arg(release.version));
+        m_get->setAccessibleName(tr("Get AetherSDR %1").arg(release.version));
+        m_get->setAccessibleDescription(asset.url.isValid()
+                                            ? tr("Downloads %1 in your browser.").arg(asset.name)
+                                            : tr("Opens the release page to choose a download."));
+    }
     m_notes->setVisible(known);
     // Offered whenever there is something to retry: always outside a new
     // release, and inside one whose details did not arrive.
@@ -514,15 +677,26 @@ void UpdatesWindow::refresh()
             w->setAccessibleDescription(waiting);
         } else if (w->toolTip() == waiting) {
             w->setToolTip(QString());
-            w->setAccessibleDescription(QString());
+            if (w != m_get) {   // the primary button's was just set above
+                w->setAccessibleDescription(QString());
+            }
         }
     }
     if (!m_firmwareBusy) {
-        m_get->setEnabled(true);
+        // Handed to the helper: AetherSDR is quitting.
+        m_get->setEnabled(!(staged && installState == State::Handed));
         m_autoCheck->setEnabled(UpdateChecker::storeName().isEmpty());
     }
 
-    if (canDownload) {
+    if (staged) {
+        m_footnote->setText(tr("AetherSDR %1 is ready. It installs when you quit, or now with Restart to update.")
+                                .arg(release.version));
+    } else if (staging) {
+        m_footnote->setText(tr("Nothing changes until AetherSDR restarts or quits. Closing this window stops it."));
+    } else if (inPlace) {
+        m_footnote->setText(tr("Downloads the update built for this computer. It installs when AetherSDR restarts "
+                               "or quits."));
+    } else if (canDownload) {
         m_footnote->setText(asset.url.isValid()
                                 ? tr("Downloads %1, the file built for this computer.").arg(asset.name)
                                 : tr("Opens the release page, where you choose the download for this computer."));
@@ -556,6 +730,10 @@ void UpdatesWindow::showFirmware()
 void UpdatesWindow::done(int result)
 {
     if (!m_firmware || m_firmware->confirmStop(this)) {
+        // Closing stops an update still being staged (a staged one stays).
+        if (m_controller && m_controller->state() == UpdateController::State::Staging) {
+            m_controller->cancel();
+        }
         CanonWindow::done(result);
     }
 }

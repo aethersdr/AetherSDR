@@ -1955,8 +1955,8 @@
       "grab": {
         "target": "ShortcutDialog"
       },
-      "caption": "The keyboard shortcuts editor. Bound keys are coloured by category on the keyboard map; the table below lists every action.",
-      "alt": "Keyboard shortcuts editor. A full keyboard map fills the top half, with bound keys coloured by category, for example T for MOX and Space for PTT in red, G for go to frequency, and the arrow keys for tuning. A colour legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right, and Import…, Export…, Reset All to Defaults and Close buttons."
+      "caption": "The keyboard shortcuts editor. Bound keys are colored by category on the keyboard map; the table below lists every action.",
+      "alt": "Keyboard shortcuts editor. A full keyboard map fills the upper part of the window, with bound keys colored by category, for example T for MOX and Space for PTT in red, G for go to frequency, and the arrow keys for tuning. A color legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right, and Import…, Export…, Reset All to Defaults and Close buttons."
     },
     {
       "id": "theme-editor",
@@ -2117,7 +2117,7 @@
         "target": "MqttSettingsDialog"
       },
       "caption": "The MQTT Settings window with the default broker fields.",
-      "alt": "MQTT Settings window with tabs Broker, Subscriptions and Publish Buttons, on Broker. Host is localhost, Port 1883, User and Password are empty, TLS has a Use TLS option and CA cert is optional, blank = system CA bundle with a Browse… button. OK, Cancel and Apply buttons sit at the bottom."
+      "alt": "MQTT Settings window with its title in the canon header and a round close button in the top-right corner, and tabs Broker, Subscriptions and Publish Buttons, on Broker. Host is localhost, Port 1883, User and Password are empty, TLS has a Use TLS option and CA cert is optional, blank = system CA bundle with a Browse… button. OK, Cancel and Apply buttons sit at the bottom."
     },
     {
       "id": "callsign-lookup-prefix",

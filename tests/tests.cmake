@@ -2344,6 +2344,48 @@ add_test(NAME canon_window_test COMMAND canon_window_test)
 set_tests_properties(canon_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Callsign Lookup on CanonWindow (RFC #6226), built like AetherRX and AetherTX:
+# a frameless workspace window in the canon scope that restores the old
+# dialog's geometry. Socket-free: no lookup is started.
+add_executable(callsign_lookup_dialog_test
+    tests/callsign_lookup_dialog_test.cpp
+    src/gui/CallsignLookupDialog.cpp
+    src/gui/CallsignCard.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(callsign_lookup_dialog_test PRIVATE src tests)
+target_link_libraries(callsign_lookup_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(callsign_lookup_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME callsign_lookup_dialog_test COMMAND callsign_lookup_dialog_test)
+set_tests_properties(callsign_lookup_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# MQTT Settings on CanonWindow: the fields' right-click menus keep a canon
+# panel. Socket-free; the dialog is never accepted, so no broker connection.
+add_executable(mqtt_settings_dialog_test
+    tests/mqtt_settings_dialog_test.cpp
+    src/gui/MqttSettingsDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(mqtt_settings_dialog_test PRIVATE src tests)
+target_link_libraries(mqtt_settings_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(mqtt_settings_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME mqtt_settings_dialog_test COMMAND mqtt_settings_dialog_test)
+set_tests_properties(mqtt_settings_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # CanonMessageBox (RFC #6226): the canon question box reports the button
 # clicked, and none when it is closed instead.
 add_executable(canon_message_box_test
@@ -2363,6 +2405,54 @@ target_link_libraries(canon_message_box_test PRIVATE Qt6::Core Qt6::Gui Qt6::Wid
 set_target_properties(canon_message_box_test PROPERTIES AUTOMOC ON)
 add_test(NAME canon_message_box_test COMMAND canon_message_box_test)
 set_tests_properties(canon_message_box_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Reset Settings' prompts (RFC #6226): Return, Escape and the corner button
+# cancel the destructive confirmation; only Yes confirms. Socket-free; nothing
+# is removed.
+add_executable(reset_settings_prompts_test
+    tests/reset_settings_prompts_test.cpp
+    src/gui/ResetSettingsPrompts.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(reset_settings_prompts_test PRIVATE src tests)
+target_link_libraries(reset_settings_prompts_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(reset_settings_prompts_test PROPERTIES AUTOMOC ON)
+add_test(NAME reset_settings_prompts_test COMMAND reset_settings_prompts_test)
+set_tests_properties(reset_settings_prompts_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
+# The shortcut editor as a CanonWindow dialog: its scope, and questions that
+# change nothing unless their accepting button is clicked.
+add_executable(shortcut_dialog_test
+    tests/shortcut_dialog_test.cpp
+    src/gui/ShortcutDialog.cpp
+    src/gui/KeyboardMapWidget.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/ModemChrome.cpp
+    src/core/ShortcutManager.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(shortcut_dialog_test PRIVATE src)
+target_link_libraries(shortcut_dialog_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(shortcut_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME shortcut_dialog_test COMMAND shortcut_dialog_test)
+set_tests_properties(shortcut_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # CanonApplet, CanonPan and CanonCanvas (RFC #6226): the canon ground with
@@ -2631,6 +2721,11 @@ if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
     add_test(NAME spectrum_confirmed_geometry_test COMMAND spectrum_confirmed_geometry_test)
     set_tests_properties(spectrum_confirmed_geometry_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
+    # Same binary at a Retina device pixel ratio: pins the Flex pan xpixels cap.
+    add_test(NAME spectrum_pan_pixels_retina_test
+        COMMAND spectrum_confirmed_geometry_test --pan-pixels-retina)
+    set_tests_properties(spectrum_pan_pixels_retina_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2;AETHER_AUTOMATION_NO_TX=1")
 endif()
 
 add_executable(pan_frame_guard_test tests/pan_frame_guard_test.cpp)
@@ -4718,6 +4813,17 @@ target_compile_definitions(update_stager_test PRIVATE
 set_target_properties(update_stager_test PROPERTIES AUTOMOC ON)
 add_test(NAME update_stager_test COMMAND update_stager_test)
 
+# UpdateController (RFC #5304 Phase 3): Install update, Cancel, what stays
+# staged across launches, Skip, Restart to update and the install on quit,
+# against the same fixture with file:// downloads and a fake helper.
+add_executable(update_controller_test tests/update_controller_test.cpp)
+target_include_directories(update_controller_test PRIVATE src tests)
+target_link_libraries(update_controller_test PRIVATE aethercore aether_monocypher Qt6::Core Qt6::Network Qt6::Test)
+target_compile_definitions(update_controller_test PRIVATE
+    UPDATE_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures/update")
+set_target_properties(update_controller_test PROPERTIES AUTOMOC ON)
+add_test(NAME update_controller_test COMMAND update_controller_test)
+
 add_executable(update_release_notes_test tests/update_release_notes_test.cpp)
 target_include_directories(update_release_notes_test PRIVATE src)
 target_link_libraries(update_release_notes_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -4727,7 +4833,8 @@ add_test(NAME update_release_notes_test COMMAND update_release_notes_test)
 
 # The Updates window over the in-memory transport and the real v26.10.3
 # release JSON: each view, plain-text release text, Skip, the mirrored
-# toggle. No sockets.
+# toggle, and Install update in place over tests/fixtures/update with
+# file:// downloads and a fake helper. No sockets.
 add_executable(updates_window_test
     tests/updates_window_test.cpp
     src/gui/UpdatesWindow.cpp
@@ -4737,9 +4844,10 @@ add_executable(updates_window_test
 )
 target_include_directories(updates_window_test PRIVATE src tests)
 target_link_libraries(updates_window_test PRIVATE
-    aetherdesktop_support aethercore Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test)
+    aetherdesktop_support aethercore aether_monocypher Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test)
 target_compile_definitions(updates_window_test PRIVATE
-    UPDATE_RELEASE_FIXTURE="${CMAKE_SOURCE_DIR}/tests/fixtures/release/v26.10.3.json")
+    UPDATE_RELEASE_FIXTURE="${CMAKE_SOURCE_DIR}/tests/fixtures/release/v26.10.3.json"
+    UPDATE_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures/update")
 set_target_properties(updates_window_test PROPERTIES AUTOMOC ON)
 add_test(NAME updates_window_test COMMAND updates_window_test)
 
@@ -8127,7 +8235,8 @@ set_target_properties(docs_links_test PROPERTIES AUTOMOC ON)
 add_test(NAME docs_links_test COMMAND docs_links_test)
 set_tests_properties(docs_links_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 
-# FreeDV Reporter status-message row (#4231). Guarded like the dialog
+# FreeDV Reporter status-message row (#4231) and its canon window: the
+# resizer, legacy geometry, an opaque field menu. Guarded like the dialog
 # itself — FreeDvReporterDialog only exists when WebSockets are available.
 # Dialog-side only: the test never reaches qso.freedv.org.
 if(Qt6WebSockets_FOUND)
@@ -8138,9 +8247,9 @@ if(Qt6WebSockets_FOUND)
         tests/freedv_reporter_message_test.cpp
         src/gui/FreeDvReporterDialog.cpp
         src/gui/FreeDvReporterModel.cpp
-        src/gui/PersistentDialog.cpp
+        src/gui/CanonWindow.cpp
         src/gui/FramelessResizer.cpp
-        src/gui/FramelessWindowTitleBar.cpp
+        ${THEME_TEST_RESOURCES}
     )
     target_include_directories(freedv_reporter_message_test PRIVATE src)
     target_link_libraries(freedv_reporter_message_test PRIVATE
@@ -9554,6 +9663,23 @@ set_tests_properties(net_scheduler_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     TIMEOUT 60)
 
+# Socket-free capture, editor and saved-preset round trips in the real dialog.
+add_executable(net_scheduler_modes_test
+    tests/net_scheduler_modes_test.cpp
+    src/gui/NetSchedulerDialog.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/FramelessResizer.cpp
+)
+target_include_directories(net_scheduler_modes_test PRIVATE src tests)
+target_link_libraries(net_scheduler_modes_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME net_scheduler_modes_test COMMAND net_scheduler_modes_test)
+set_tests_properties(net_scheduler_modes_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Injected serial transport and backend only: no sockets, serial ports or RF.
 add_executable(kxpa100_tx_controls_test tests/kxpa100_tx_controls_test.cpp
     src/gui/TxApplet.cpp src/gui/AtuPreTuneDialog.cpp src/gui/DragValuePopup.cpp
@@ -9806,8 +9932,10 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    update_controller_test
     update_installer_test
     update_stager_test
+    mqtt_settings_dialog_test
     flex_readonly_metadata_test
     dsp_parameter_reset_test
     cw_rx_model_test
@@ -9895,6 +10023,7 @@ set(AETHER_SETTINGS_CONSUMERS
     client_display_pan_settings_test
     spectrum_overlay_fft_fps_bounds_test
     gui_nested_lifetime_test
+    net_scheduler_modes_test
     rx_applet_squelch_reconciliation_test
     vfo_meter_overlay_invalidation_test
     fm_filter_controls_test
@@ -9942,7 +10071,10 @@ set(AETHER_SETTINGS_CONSUMERS
     aether_rx_profiles_test
     theme_manager_test
     canon_window_test
+    callsign_lookup_dialog_test
     canon_message_box_test
+    shortcut_dialog_test
+    reset_settings_prompts_test
     canon_surface_test
     kpa500_applet_test
     kxpa100_applet_test

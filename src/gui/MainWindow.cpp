@@ -32,6 +32,8 @@
 #include "ClientDisconnectDialog.h"
 #include "ConnectedStationsDialog.h"
 #include "TitleBar.h"
+#include "UpdatesWindow.h"
+#include "core/UpdateController.h"
 #include "WindowCaptionButtons.h"
 #include "WindowChrome.h"
 #ifdef Q_OS_MACOS
@@ -1664,6 +1666,22 @@ MainWindow::MainWindow(QWidget* parent)
     // TX-decode is on, so calling it on every phoneStateChanged is cheap.
     connect(&m_radioModel.transmitModel(), &TransmitModel::phoneStateChanged,
             this, [this]() { refreshCwDecodeState(); });
+
+    // The receive decoder's pitch range follows the CW pitch: a range that
+    // contains the pitch is kept, one that misses it is re-centred on it
+    // (CwDecodeSettings::pitchRangeFor). cwPitchReported also carries a
+    // reported pitch the model already held, which cwPitchChanged skips.
+    // The pitch itself is only read here, never stored or sent.
+    const auto followCwPitch = [this](int hz) {
+        if (const auto range = CwDecodeSettings::pitchRangeFor(hz, CwDecodeSettings::pitchRange())) {
+            CwDecodeSettings::setPitchRange(range->low, range->high);
+            if (m_cwDecoderApplet) {
+                m_cwDecoderApplet->restoreCwRanges();
+            }
+        }
+    };
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchReported, this, followCwPitch);
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchChanged, this, followCwPitch);
 
     // RTTY decoder audio feed is wired in wireRxDemodAudioSinks() above,
     // gated on the decoder being running.
@@ -3434,22 +3452,28 @@ void MainWindow::toggleAetherRxDialog()
 #ifdef HAVE_MQTT
 void MainWindow::showMqttSettingsDialog()
 {
-    const bool wasFresh = !m_mqttSettingsDialog;
-    showOrRaisePersistent(m_mqttSettingsDialog);
-    if (!wasFresh || !m_mqttSettingsDialog)
-        return;
+    // A canon dialog, so not showOrRaisePersistent(): that applies View →
+    // Frameless Window, which a CanonWindow does not follow.
+    if (!m_mqttSettingsDialog) {
+        auto* dlg = new MqttSettingsDialog(this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_mqttSettingsDialog = dlg;
 
-    connect(m_mqttSettingsDialog, &MqttSettingsDialog::settingsSaved,
-            this, [this](const QString& password) {
-        if (!m_appletPanel || !m_appletPanel->mqttApplet())
-            return;
-        auto* mqttApplet = m_appletPanel->mqttApplet();
-        mqttApplet->setCachedPassword(password);
-        mqttApplet->refreshSettings();
-        if (m_mqttClient) {
-            m_mqttClient->setSubscriptions(mqttSubscriptionTopics(mqttApplet->topicConfig()));
-        }
-    });
+        connect(dlg, &MqttSettingsDialog::settingsSaved,
+                this, [this](const QString& password) {
+            if (!m_appletPanel || !m_appletPanel->mqttApplet())
+                return;
+            auto* mqttApplet = m_appletPanel->mqttApplet();
+            mqttApplet->setCachedPassword(password);
+            mqttApplet->refreshSettings();
+            if (m_mqttClient) {
+                m_mqttClient->setSubscriptions(mqttSubscriptionTopics(mqttApplet->topicConfig()));
+            }
+        });
+    }
+    m_mqttSettingsDialog->show();
+    m_mqttSettingsDialog->raise();
+    m_mqttSettingsDialog->activateWindow();
 }
 
 void MainWindow::publishCwDecodeMqtt(const QString& text, float cost, bool rx)
@@ -4476,6 +4500,15 @@ void MainWindow::closeEvent(QCloseEvent* event)
 #ifdef HAVE_WEBSOCKETS
         m_freedvClient = nullptr;
 #endif
+    }
+
+    // A staged update installs as AetherSDR quits (RFC #5304): the helper
+    // waits for this process to exit. Not while radio firmware is being
+    // written, not when a new instance is already starting from the install
+    // (a UI-scale restart), and not twice after Restart to update handed it
+    // over. Every quit, close() or QApplication::quit(), arrives here.
+    if (m_updateController && !m_relaunchingApp && !(m_updatesWindow && m_updatesWindow->firmwareBusy())) {
+        m_updateController->installOnQuit();
     }
 
     QMainWindow::closeEvent(event);
@@ -9779,6 +9812,7 @@ void MainWindow::applyUiScale(int pct)
         QString("UI scale changed to %1%. Restart AetherSDR now to apply?").arg(pct),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer == QMessageBox::Yes) {
+        m_relaunchingApp = true;
 #ifdef Q_OS_MACOS
         // On macOS, relaunch via 'open -n' so the .app bundle is activated through
         // Launch Services — direct binary exec bypasses the bundle, causing dock

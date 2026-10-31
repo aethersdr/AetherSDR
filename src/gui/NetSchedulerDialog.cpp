@@ -8,6 +8,7 @@
 #include "core/NetRecurrence.h"
 #include "core/NetScheduleStore.h"
 #include "core/DigitalVoiceFeature.h"
+#include "core/MemoryFieldValues.h"
 #include "core/ThemeManager.h"
 
 #include <QAbstractSpinBox>
@@ -50,7 +51,20 @@ QStringList commonModes()
 {
     return filterUnavailableDigitalVoiceModes(
         {"LSB", "USB", "CW", "CWL", "CWU", "AM", "SAM",
-         "FM", "NFM", "DFM", "DSTR", "DIGL", "DIGU", "RTTY", "FDV"});
+         "FM", "NFM", "DFM", "DSTR", "DIGL", "DIGU", "RTTY", "FDVU", "FDVL", "FDV"});
+}
+
+void selectPresetMode(QComboBox& combo, const QString& mode)
+{
+    const QString token = MemoryFields::modeToWire(mode);
+    if (token.isEmpty()) {
+        return;
+    }
+    // Saved and captured waveforms can extend the common offline choices.
+    if (combo.findText(token) < 0) {
+        combo.addItem(token);
+    }
+    combo.setCurrentText(token);
 }
 
 // Friendly one-line preview of the next firing, e.g.
@@ -478,8 +492,7 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
             return;
         }
         c.freq->setValue(m.freq);
-        if (!m.mode.isEmpty())
-            c.mode->setCurrentText(m.mode);
+        selectPresetMode(*c.mode, m.mode);
         c.filterLow->setValue(m.rxFilterLow);
         c.filterHigh->setValue(m.rxFilterHigh);
         refresh();
@@ -519,8 +532,7 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
     c.notes->setText(entry.notes);
     if (entry.preset.freq > 0.0)
         c.freq->setValue(entry.preset.freq);
-    if (!entry.preset.mode.isEmpty())
-        c.mode->setCurrentText(entry.preset.mode);
+    selectPresetMode(*c.mode, entry.preset.mode);
     c.filterLow->setValue(entry.preset.rxFilterLow);
     c.filterHigh->setValue(entry.preset.rxFilterHigh);
 
@@ -529,8 +541,7 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
         const MemoryEntry m = captureFn();
         if (m.freq > 0.0) {
             c.freq->setValue(m.freq);
-            if (!m.mode.isEmpty())
-                c.mode->setCurrentText(m.mode);
+            selectPresetMode(*c.mode, m.mode);
             c.filterLow->setValue(m.rxFilterLow);
             c.filterHigh->setValue(m.rxFilterHigh);
         }

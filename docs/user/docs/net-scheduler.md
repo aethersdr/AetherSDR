@@ -37,7 +37,11 @@ Click **Add…** and fill in (a new net starts as Weekly on today's weekday):
   before**, or **1 hour before**.
 - **Frequency**, with **Capture current VFO** to copy the active slice's
   frequency, mode and filter (it needs an open slice on a connected radio).
-- **Mode** and **Filter**.
+- **Mode** and **Filter**. FreeDV presets can use **FDVU** (upper sideband)
+  or **FDVL** (lower sideband); **FDV** is also available for existing presets.
+  Capturing or editing a preset also preserves a mode name outside the common
+  choices, such as a radio waveform. Mode names are normalized to uppercase.
+  The connected radio must support that mode to tune to it.
 - **Notes:** net control, NetLogger name and anything else you want to keep
   with it.
 
