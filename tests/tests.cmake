@@ -9925,6 +9925,16 @@ if(NOT WIN32)
     set_tests_properties(dax_receive_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+if(TARGET Qt6::WebSockets)
+    add_executable(tci_rx_applet_test tests/tci_rx_applet_test.cpp
+        src/gui/TciApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
+        src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp)
+    target_include_directories(tci_rx_applet_test PRIVATE src tests)
+    target_link_libraries(tci_rx_applet_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+    add_test(NAME tci_rx_applet_test COMMAND tci_rx_applet_test)
+    set_tests_properties(tci_rx_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 set(AETHER_SETTINGS_CONSUMERS
     update_controller_test
     update_installer_test
@@ -9951,6 +9961,7 @@ set(AETHER_SETTINGS_CONSUMERS
     noise_blanker_kind_model_test
     automation_nb2_capability_test
     tci_rx_audio_test
+    tci_rx_applet_test
     bandscope_trace_render_test
     decoder_audio_routing_test
     ax25_receive_model_test

@@ -137,10 +137,8 @@ public:
     void setOverflowMode(int mode);
     int overflowMode() const { return static_cast<int>(m_overflowMode); }
 
-    // Per-channel TCI RX gain (0.0–1.0), applied to outbound DAX audio before
-    // resampling and sending to TCI clients.  Decoupled from DaxRxGain<n> so
-    // DAX bridge and TCI maintain independent per-channel gains.
-    // Channel is 1-based (1–4).  Persists to TciRxGain<channel>.
+    // Per-channel TCI RX attenuation, from silence through unity (0.0-1.0).
+    // Independent of DAX bridge gain; channels 1-8 persist to TciRxGain<channel>.
     void setRxChannelGain(int channel, float gain);
     float rxChannelGain(int channel) const;
 
@@ -181,7 +179,7 @@ signals:
     // emitted but can be muted per-command via the monitor's
     // suppression list to keep the stream readable.
     void tciMessage(const QString& direction, const QString& text);
-    void rxLevel(int channel, float rms);  // 1-based channel, RMS of TCI-gained RX audio
+    void rxLevel(int channel, float rms);  // 1-based channel, pre-fader RMS
     void txLevel(float rms);                // RMS of post-gain TCI TX audio
     // Emitted when a TCI client sends `volume:N;` (master volume SET).
     // MainWindow handles it by calling the same path as the title bar

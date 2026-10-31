@@ -311,6 +311,41 @@ public:
         check(s[0] == 0 && s[1] == 0 && s[2] == 0, "non-finite samples encode as int16 silence");
         check(s[3] == 16384, "a finite neighbour is untouched");
     }
+    static void receiveAttenuationAndMeter()
+    {
+        Fixture f;
+        f.server.setRxChannelGain(1, 0.5f);
+        check(f.server.rxChannelGain(1) == 0.5f, "TCI RX retains linear attenuation");
+        {
+            TciServer restored(nullptr);
+            check(restored.rxChannelGain(1) == 0.5f, "saved TCI attenuation survives server reconstruction");
+        }
+        const float otherGain = f.server.rxChannelGain(2);
+        f.server.setRxChannelGain(1, 100.0f);
+        check(f.server.rxChannelGain(1) == 1.0f, "TCI RX gain cannot exceed unity");
+        f.server.setRxChannelGain(1, std::numeric_limits<float>::quiet_NaN());
+        check(f.server.rxChannelGain(1) == 1.0f, "TCI RX rejects non-finite gain");
+        check(f.server.rxChannelGain(2) == otherGain, "TCI RX attenuation leaves other channels unchanged");
+        f.server.setRxChannelGain(1, 0.5f);
+                f.server.m_io->drain();
+                f.backend->add(3);
+                TciClient* client = f.client(24000, 0);
+        float reportedRms = -1.0f;
+        QObject::connect(&f.server, &TciServer::rxLevel, &f.server,
+                         [&](int channel, float rms) { if (channel == 1) { reportedRms = rms; } });
+                PcmProducer producer;
+                producer.start(PcmPurpose::Slice, 3);
+        f.feed(3, frame(producer, 1, 0.25f, -0.5f));
+        check(floats(f.packets[client]) == QVector<float>({0.125f, -0.25f}),
+              "production receive worker attenuates audio exactly once");
+        check(std::fabs(reportedRms - std::sqrt((0.25f * 0.25f + 0.5f * 0.5f) / 2.0f)) < 0.000001f,
+              "TCI meter receives pre-fader RMS for immediate gain feedback");
+        const QByteArray pcm = TciIoWorker::encodeRxAudio(0, 24000, 2, 0, {0.25f, -0.5f}, 0.5f);
+        qint16 samples[2]{};
+        std::memcpy(samples, pcm.constData() + 64, sizeof(samples));
+        check(samples[0] == 4096 && samples[1] == -8192, "PCM16 TCI audio keeps linear attenuation");
+        f.server.setRxChannelGain(1, 0.5f);
+    }
     static void replayAndEpochs()
     {
         Fixture f; f.backend->add(3);
@@ -1082,7 +1117,7 @@ public:
         serverConstructedAfterReceiverRestore();
         simultaneousEightReceiverHandshakes();
         eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
-        ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding(); nonFiniteInt16IsSilence();
+        ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding(); nonFiniteInt16IsSilence(); receiveAttenuationAndMeter();
         replayAndEpochs(); resetIsolation(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
         staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); daxRouteSurvivesStreamUnregister(); pressureAndReplacement();
         std::printf("TCI RX: %d checks, %d failures\n",checks,failures);

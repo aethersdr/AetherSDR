@@ -34,7 +34,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 
 | Control | Meaning |
 |---|---|
-| **RX1 … RX8** | One row per receive channel: the slice it carries and a combined level meter / gain slider. Rows above the radio's slice capacity are hidden. |
+| **RX1 … RX8** | One row per receive channel: the slice it carries, a logarithmic output level meter and a 0-100% receive gain slider. Rows above the radio's slice capacity are hidden. |
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
@@ -156,6 +156,14 @@ audio_stream_sample_type:int16;
 audio_stream_channels:1;
 ```
 
+### Receive gain and level metering
+
+Each **RX** slider attenuates the audio sent to every TCI client receiving that channel. **0%** mutes the stream; **100%** is unity gain and preserves the source audio level. The slider does not amplify audio above unity. Dragging shows the gain as a percentage; arrow keys adjust it by five percentage points. Gains are saved independently for each channel.
+
+The RX meter shows the **post-gain output** on a logarithmic **-60 to 0 dBFS RMS** scale. Half the bar is -30 dBFS RMS. The thumb indicates gain, not measured audio level. Moving the slider updates the meter immediately using the most recent source level. Speaker volume, speaker mute and DAX applet gain do not adjust TCI receive audio.
+
+The meter measures RMS, not peaks, so leave headroom for speech transients when adjusting recording levels in an external application. A larger logarithmic meter indication does not mean the stream has been amplified.
+
 ### TX overflow handling
 
 Right-click the **TX** meter in the TCI Server applet to choose how transmit samples beyond ±1.0 are treated:
@@ -261,6 +269,14 @@ Audio only flows after the client sends `audio_start`.
 
 1. Check that the client has audio streaming turned on. WSJT-X sends `audio_start` automatically.
 2. Test by hand with [wscat](#testing-with-wscat): send `audio_start:0;` and watch for binary frames.
+
+### Recordings are too quiet at 100% receive gain
+
+At 100%, AetherSDR passes the source audio level without amplification.
+
+1. Check that the appropriate **RX** slider in the **TCI Server** applet is at **100%** to remove client-side attenuation.
+2. If the recording remains too quiet, adjust recording gain or normalization in the recording application, if supported. Check strong signals for clipping.
+3. Do not raise speaker volume or the **TX** slider to adjust TCI receive audio; these control different paths.
 
 ### WSJT-X shows "TCI failed to set ptt"
 
