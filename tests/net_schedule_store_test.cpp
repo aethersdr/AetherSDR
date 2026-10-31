@@ -1,6 +1,9 @@
 #include "core/NetScheduleStore.h"
 
 #include <QByteArray>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 #include <iostream>
 
@@ -110,6 +113,46 @@ int main()
         const QByteArray future = R"({"format":"aether.netschedule","version":999,"nets":[]})";
         const auto fr = NetScheduleStore::parse(future);
         ok &= expect(!fr.ok(), "newer-than-supported version reports an error");
+    }
+
+    // Imported preset tokens must remain safe even when callers use nets
+    // without checking errors (the startup schedule loader does this).
+    {
+        const QStringList fields = {"mode", "offsetDir", "toneMode"};
+        QStringList invalid = {"USB C2|xmit 1", "USB\nC2|xmit 1", " USB", "USB ",
+                               "USB=FM", "USB|FM", QString(65, QLatin1Char('A')),
+                               QStringLiteral("USB") + QChar(0x7f),
+                               QStringLiteral("USB") + QChar(0xa0),
+                               QStringLiteral("USB") + QChar(0x2028)};
+        for (ushort control = 0; control < 0x20; ++control) {
+            invalid.append(QStringLiteral("USB") + QChar(control));
+        }
+        for (const QString& field : fields) {
+            for (const QString& value : invalid) {
+                QJsonObject bad{{"name", "Unsafe net"}, {"preset", QJsonObject{{field, value}}}};
+                QJsonObject good{{"name", "Safe net"}, {"preset", QJsonObject{{"mode", "FDVU"}}}};
+                const QJsonObject root{{"nets", QJsonArray{good, bad}}};
+                const auto parsed = NetScheduleStore::parse(QJsonDocument(root).toJson());
+                const QByteArray context = (field + ": " + value.toHtmlEscaped()).toUtf8();
+                ok &= expect(!parsed.ok(), context.constData());
+                ok &= expect(parsed.nets.size() == 1 && parsed.nets.first().name == "Safe net",
+                             "unsafe entry omitted, valid sibling retained");
+                ok &= expect(parsed.errors.join(' ').contains(field)
+                                 && parsed.errors.join(' ').contains("2"),
+                             "error identifies the preset field and one-based net position");
+            }
+        }
+        for (const QString& mode : QStringList{"FDVU", "FDVL", "FDV", "DSTR",
+                                               "Future_Waveform-1.2/Test", QString(64, QLatin1Char('A')), ""}) {
+            NetEntry net = sampleNet();
+            net.preset.mode = mode;
+            net.preset.offsetDir.clear();
+            net.preset.toneMode.clear();
+            const auto parsed = NetScheduleStore::parse(NetScheduleStore::serialize({net}));
+            ok &= expect(parsed.ok() && parsed.nets.size() == 1
+                             && parsed.nets.first().preset.mode == mode,
+                         "safe, future, maximum-length and empty optional tokens preserved");
+        }
     }
 
     // --- merge policies -------------------------------------------------
