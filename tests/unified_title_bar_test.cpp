@@ -29,6 +29,7 @@
 // state assertion, so only the rendered bar can catch it.
 
 #include "gui/RadioTabBar.h"
+#include "gui/ExperimentalRadioSupport.h"
 #include "gui/TitleBar.h"
 #include "gui/WindowCaptionButtons.h"
 #include "gui/WindowChrome.h"
@@ -36,6 +37,7 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QDir>
 #include <QFocusEvent>
 #include <QFrame>
 #include <QImage>
@@ -285,6 +287,35 @@ int main(int argc, char** argv)
     host.resize(1400, 200);
     host.show();
     app.processEvents();
+    for (const QString& model : {QStringLiteral("IC-7610"), QStringLiteral("IC-7760")}) {
+        QWidget fixtureHost;
+        auto* previewBar = new TitleBar(&fixtureHost);
+        fixtureHost.resize(1400,100);
+        fixtureHost.show();
+        app.processEvents();
+        const auto descriptor = experimentalRadioDescriptor(QStringLiteral("icom"), model);
+        check(descriptor.has_value(), "new dual-receiver Icom retains experimental support classification");
+        RadioTabEntry receiver;
+        receiver.id = model;
+        receiver.name = model;
+        receiver.model = model;
+        receiver.status = RadioTabStatus::Connected;
+        previewBar->setRadioTabs({receiver});
+        previewBar->setActiveRadio(model);
+        previewBar->setExperimentalRadioFamily(descriptor ? descriptor->displayName : QString{});
+        auto* badge = previewBar->findChild<QLabel*>(QStringLiteral("experimentalRadioBadge"));
+        check(badge && !badge->isHidden() && badge->text() == QStringLiteral("EXPERIMENTAL")
+                  && !badge->accessibleDescription().isEmpty(),
+              "IC-7610/7760 shows the accessible EXPERIMENTAL badge in the radio-tab strip");
+        const QString screenshotDir = qEnvironmentVariable("AETHER_TEST_SCREENSHOT_DIR");
+        if (!screenshotDir.isEmpty()) {
+            QDir().mkpath(screenshotDir);
+            app.processEvents();
+            check(previewBar->grab().save(screenshotDir + QLatin1Char('/') + model.toLower()
+                                  + QStringLiteral("-experimental.png")),
+                  "offline Icom radio-tab fixture screenshot is saved");
+        }
+    }
 
 #ifdef Q_OS_MACOS
     QWidget uncreatedHost;

@@ -127,7 +127,7 @@ public:
     void setTransmitFrequencyCheck(bool on) override;
     void setVox(bool on, int level, int delayMs) override;
     void setAtu(bool start, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
-    // One slice, always the transmit slice: the slice id is ignored.
+    // Legacy single-receiver tune offsets; high-end MAIN/SUB routing is deferred.
     void setSliceRitEnabled(int sliceId, bool on) override;
     void setSliceXitEnabled(int sliceId, bool on) override;
     void setSliceRitOffset(int sliceId, int hz) override;

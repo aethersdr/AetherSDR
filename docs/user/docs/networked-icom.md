@@ -151,8 +151,12 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 
 ### IC-7610 and IC-7760
 
-These models have two fixed slices and panadapters: **MAIN** and **SUB**. Each
-uses its radio's native 689-bin scope. Spectrum and waterfall share the same
+Both models are marked **experimental** in the **Icom CI-V** model list and
+show the **EXPERIMENTAL** badge in the radio-tab strip while connected.
+
+These models have two fixed slices and panadapters: slice **A** represents
+**MAIN**, and slice **B** represents **SUB**. Each uses its radio's native
+689-bin scope. Spectrum and waterfall share the same
 frequency edges. Center zoom uses native spans; Fixed and scroll views retain
 the radio's edge presets. Turn on Dualwatch and dual scope on the radio when
 using both receivers. The actual LAN startup sequence still needs verification

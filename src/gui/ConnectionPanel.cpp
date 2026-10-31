@@ -1,4 +1,5 @@
 #include "ConnectionPanel.h"
+#include "ExperimentalRadioSupport.h"
 #include "core/AppSettings.h"
 #include "models/ConnectionWorkspace.h"
 #include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with MainWindow_Session
@@ -2503,7 +2504,11 @@ void ConnectionPanel::populateIcomCivCombo()
             QStringLiteral("%1").arg(model.civAddress, 2, 16, QLatin1Char('0')).toUpper();
         // "%1 — %2" is populateSerialPortCombo's own label idiom, with the raw
         // value in userData so the read-back never has to re-parse the label.
-        m_manualIcomCivCombo->addItem(QStringLiteral("%1 — %2").arg(name, hex), hex);
+        const bool experimental = experimentalRadioDescriptor(QStringLiteral("icom"), name).has_value();
+        const QString label = experimental
+            ? tr("%1 — %2 (experimental)").arg(name, hex)
+            : QStringLiteral("%1 — %2").arg(name, hex);
+        m_manualIcomCivCombo->addItem(label, hex);
     }
     // TRAILING sentinel, and the read-back below relies on it being last.
     m_manualIcomCivCombo->addItem(tr("Custom..."), QStringLiteral("__custom__"));

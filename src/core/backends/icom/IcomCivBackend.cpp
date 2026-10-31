@@ -6374,6 +6374,11 @@ void IcomCivBackend::setTransmitFrequencyCheck(bool on)
 
 void IcomCivBackend::setSliceRitEnabled(int sliceId, bool on)
 {
+    if (hasDualReceivers()) {
+        emit configurationWarning(QStringLiteral("MAIN/SUB RIT and XIT routing is deferred in the initial bring-up."));
+        return;
+    }
+
     Q_UNUSED(sliceId);
     m_ritOn = on;
     sendUserCommand(cmdRitEnable(m_session ? m_session->civAddress() : 0xA4, on));
@@ -6381,6 +6386,11 @@ void IcomCivBackend::setSliceRitEnabled(int sliceId, bool on)
 
 void IcomCivBackend::setSliceXitEnabled(int sliceId, bool on)
 {
+    if (hasDualReceivers()) {
+        emit configurationWarning(QStringLiteral("MAIN/SUB RIT and XIT routing is deferred in the initial bring-up."));
+        return;
+    }
+
     Q_UNUSED(sliceId);
     m_xitOn = on;
     sendUserCommand(cmdXitEnable(m_session ? m_session->civAddress() : 0xA4, on));
@@ -6388,6 +6398,11 @@ void IcomCivBackend::setSliceXitEnabled(int sliceId, bool on)
 
 void IcomCivBackend::setSliceRitOffset(int sliceId, int hz)
 {
+    if (hasDualReceivers()) {
+        emit configurationWarning(QStringLiteral("MAIN/SUB RIT and XIT routing is deferred in the initial bring-up."));
+        return;
+    }
+
     Q_UNUSED(sliceId);
     m_ritOffsetHz = hz;
     // ONE offset register serves both RIT and XIT on this radio — 21 00 is the

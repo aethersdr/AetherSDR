@@ -212,7 +212,7 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
         if (frame.data.size() != kFreqBytes) { return true; }
         const auto frequency = decodeFreq(frame.data);
         if (!frequency) { return true; }
-        m_civScheduler.observe(frame, nowMs());
+        (void)m_civScheduler.observe(frame, nowMs());
         TransmitDelta delta;
         delta.transmitFreq = *frequency / 1e6;
         emit transmitChanged(delta);

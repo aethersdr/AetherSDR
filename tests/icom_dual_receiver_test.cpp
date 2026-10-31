@@ -57,12 +57,20 @@ struct IcomCivBackendTestAccess {
     {
         backend.m_session = std::make_unique<IcomSession>(); // unstarted, no sockets
         backend.m_session->setCivAddress(0x50); // identity != configured bus address
-        backend.m_model = modelForId(model);
+        backend.m_model = &unknownModel();
+        backend.m_deviceName = QStringLiteral("Operator-named RF deck");
         backend.m_connected = true;
         backend.m_sessionGeneration = 7;
-        backend.m_civReported = 0x50;
+        backend.m_civReported = 0;
         emit backend.connected();
-        backend.initialiseDualReceivers();
+        CivFrame identity;
+        identity.from = 0x50;
+        identity.to = kControllerAddress;
+        identity.cmd = cmd::kReadId;
+        identity.hasSub = true;
+        identity.sub = 0;
+        identity.data = {model};
+        backend.onCivFrame(identity,7);
         (void)backend.m_civScheduler.reset();
         backend.m_lanOutput = 0;
     }
@@ -157,7 +165,12 @@ int main(int argc, char** argv)
             [&](int id, const PcmFrame& pcm) { ++sliceAudio[id]; receiverSample[id] = pcm.samples().last(); });
         QObject::connect(&backend, &IRadioBackend::audioFrameReady,
             [&](const PcmFrame& pcm) { ++speakerFrames; speakerSample = pcm.samples().last(); });
+        int identityUpdates = 0;
+        QObject::connect(&radio,&RadioModel::infoChanged,[&] { ++identityUpdates; });
         IcomCivBackendTestAccess::prepare(backend, model);
+        check(radio.model() == (model == 0x98 ? QStringLiteral("IC-7610") : QStringLiteral("IC-7760"))
+              && radio.nickname() == QStringLiteral("Operator-named RF deck") && identityUpdates > 0,
+              "CI-V 19 00 publishes the canonical status-bar model independently of address and nickname");
         check(slices[0] && slices[1] && backend.capabilities().maxPanadapters == 2,
               "two fixed receivers and two pans after identity");
         IcomCivBackendTestAccess::inject(backend, makeScope(0,0,14'100'000,100'000));

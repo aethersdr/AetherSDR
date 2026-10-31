@@ -18,7 +18,9 @@ The implementation follows the operator's Icom oracle, sections 13.2–13.6 and
   identifier. No source code is copied from wfview.
 
 The CI-V identity reply selects the hardware profile, independently of a
-customized command address. Names supplied by an operator do not select a
+customized command address. The canonical model is published through RadioModel
+and its infoChanged signal, which refreshes the status-bar model label. Names
+supplied by an operator do not select a
 hardware profile. Profiles record official-guide evidence separately from live
 hardware evidence. `verified` in the identity table means the documented facts
 were checked, not that this app was tested on that hardware.
@@ -45,6 +47,14 @@ also requests stereo; `icom.rxChannels=1/2` can override the receive transport
 for an automated connection using a customized address. An unknown identity
 never gains TX or scope capability from that hint. Mono sessions publish no
 invented SUB audio feed and warn that SUB audio is unavailable.
+
+## Connection dialog integration
+
+This branch integrates PR #6889, including its dependency #6885. Icom model
+choices retain the existing CI-V hex userData and saved-path/Location behavior.
+The chooser uses the same experimental-support policy as the radio-tab strip:
+IC-7610 and IC-7760 are experimental; IC-7300MK2 retains its supported status.
+The integration build is stacked on those pending PRs.
 
 ## Offline verification
 
@@ -104,3 +114,18 @@ Useful next automation verbs would report per-receiver scope freshness/bin
 geometry, capture identified audio channels, and assert the global TX route
 against actual TX-frequency readback. They should consume real observations,
 not manufacture a radio session or elevate offline fixtures into hardware proof.
+
+## UI evidence
+
+The connection dialog images were captured through the automation bridge from
+an isolated, disconnected app with TX automation disabled. The badges below
+are offline `TitleBar` fixtures for the canonical identities, not connected
+hardware screenshots.
+
+![Experimental CI-V model choices](assets/icom-dual-receiver/icom-experimental-model-list.png)
+
+![IC-7760 selected in the integrated connection dialog](assets/icom-dual-receiver/icom-7760-connection-dialog.png)
+
+![IC-7610 experimental tab strip, offline fixture](assets/icom-dual-receiver/ic-7610-experimental.png)
+
+![IC-7760 experimental tab strip, offline fixture](assets/icom-dual-receiver/ic-7760-experimental.png)
