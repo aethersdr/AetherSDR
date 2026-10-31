@@ -1,5 +1,10 @@
 #include "RadioModel.h"
 #include "core/AppSettings.h"
+#include "core/BandStackSettings.h"
+#include "core/MemoryFieldValues.h"
+
+#include <algorithm>
+#include <cmath>
 
 #include <QPointer>
 #include <QList>
@@ -8,6 +13,144 @@
 #include <QThread>
 
 namespace AetherSDR {
+
+void RadioModel::recallBandStack(SliceModel* target, BandStackEntry entry,
+                                 const std::function<void(SliceModel*, double)>& tune)
+{
+    if (QThread::currentThread() != thread() || !tune || !target
+        || !std::isfinite(entry.frequencyMhz) || entry.frequencyMhz <= 0.0) { return; }
+    // Client-side digital modes need not appear in firmware's mode list.
+    const bool modeToken = !entry.mode.isEmpty() && entry.mode.size() <= 32
+        && std::all_of(entry.mode.cbegin(), entry.mode.cend(), [](QChar c) {
+            return (c >= QLatin1Char('A') && c <= QLatin1Char('Z'))
+                || (c >= QLatin1Char('0') && c <= QLatin1Char('9'))
+                || c == QLatin1Char('_') || c == QLatin1Char('-');
+        });
+    if (!modeToken || (!MemoryFields::isStorableMode(entry.mode)
+        && !target->modeList().contains(entry.mode))) { return; }
+    const QPointer<RadioModel> owner(this);
+    const QPointer<SliceModel> original(target);
+    const QString panId = target->panId();
+    const QPointer<PanadapterModel> pan(panadapter(panId));
+    const bool hadPan = !pan.isNull();
+    const quint64 panOwnership = pan ? pan->ownershipRevision() : 0;
+    const bool external = target->externalReceiveReplacementActive();
+    const RadioControlSession session = controlSession();
+    const quint64 generation = target->receiveSessionGeneration();
+    const quint64 revision = ++m_bandStackRecallRevision;
+    const auto current = [owner, original, pan, hadPan, panId, panOwnership, external,
+                          session, generation, revision] {
+        return owner && original && owner->controlSessionCurrent(session)
+            && !owner->m_stagingReceiveModels && owner->m_backend
+            && owner->m_bandStackRecallRevision == revision
+            && original->receiveSessionGeneration() == generation
+            && original->externalReceiveReplacementActive() == external
+            && owner->slice(original->sliceId()) == original
+            && !owner->isSlotForeign(original->sliceId()) && original->panId() == panId
+            && (!hadPan || (pan && owner->panadapter(panId) == pan
+                && pan->ownershipRevision() == panOwnership));
+    };
+    // Every setter can synchronously replace the session or start a new recall.
+    // The value-copy above survives bookmark-list reloads from those callbacks.
+    const auto apply = [&current](const auto& action) {
+        if (!current()) { return false; }
+        action();
+        return current();
+    };
+    if (!apply([&] {
+        if (original->mode() != entry.mode) { original->setMode(entry.mode); }
+    })) { return; }
+    if (!apply([&] { tune(original, entry.frequencyMhz); })) { return; }
+    if (!apply([&] {
+        if (entry.filterLow != 0 || entry.filterHigh != 0) {
+            original->setFilterWidth(entry.filterLow, entry.filterHigh);
+        }
+    })) { return; }
+    // Antenna requests leave the displayed ports to backend observations.
+    // A bookmark contains physical port identifiers, never presentation aliases.
+    if (!apply([&] {
+        if (!entry.rxAntenna.isEmpty() && entry.rxAntenna != original->rxAntenna()
+            && original->rxAntennaList().contains(entry.rxAntenna)) {
+            const ReceiveDispatch result = m_backend->requestSliceRxAntenna(original->sliceId(), entry.rxAntenna);
+            if (current()) { reportReceiveDispatch(result, QStringLiteral("bookmark RX antenna"), false); }
+        }
+    })) { return; }
+    if (!apply([&] {
+        if (!entry.txAntenna.isEmpty() && entry.txAntenna != original->txAntenna()
+            && original->txAntennaList().contains(entry.txAntenna)) {
+            const ReceiveDispatch result = m_backend->requestSliceControl(original->sliceId(),
+                {SliceControlRequest::Field::TxAntenna, entry.txAntenna});
+            if (current()) { reportReceiveDispatch(result, QStringLiteral("bookmark TX antenna"), false); }
+        }
+    })) { return; }
+    const auto recallAgc = [&] {
+        if (!apply([&] {
+            const SliceAgcRequest request{SliceAgcRequest::Field::Mode, entry.agcMode,
+                original->agcThreshold(), original->agcOffLevel(), SliceAgcRequest::Origin::Recall};
+            if (request.valid() && entry.agcMode != original->agcMode()) {
+                if (original->externalReceiveReplacementActive()) {
+                    m_backend->requestSliceAgc(original->sliceId(), request);
+                } else {
+                    original->recallAgcMode(entry.agcMode);
+                }
+            }
+        })) { return false; }
+        return apply([&] {
+            const SliceAgcRequest request{SliceAgcRequest::Field::Threshold, original->agcMode(),
+                entry.agcThreshold, original->agcOffLevel(), SliceAgcRequest::Origin::Recall};
+            const bool manual = !backendCapabilities().autoAgcThresholdControl
+                || original->agcThresholdMode() == AgcThresholdMode::Manual;
+            if (request.valid() && manual && !original->automaticAgcThresholdActiveOrPending()
+                && entry.agcThreshold != original->agcThreshold()) {
+                if (original->externalReceiveReplacementActive()) {
+                    m_backend->requestSliceAgc(original->sliceId(), request);
+                } else {
+                    original->recallAgcThreshold(entry.agcThreshold);
+                }
+            }
+        });
+    };
+    // Preserve the existing ordering: the radio AGC behind Kiwi precedes audio;
+    // ordinary receive AGC follows it, after the mode's own AGC defaults.
+    if (external && !recallAgc()) { return; }
+    if (!apply([&] {
+        if (entry.audioGain >= 0 && entry.audioGain <= 100
+            && static_cast<int>(original->audioGain()) != entry.audioGain) {
+            original->setAudioGain(static_cast<float>(entry.audioGain));
+        }
+    })) { return; }
+    if (!external && !recallAgc()) { return; }
+    if (!apply([&] { if (entry.nbOn != original->nbOn()) { original->setNb(entry.nbOn); } })) { return; }
+    if (!apply([&] {
+        if (entry.nbLevel >= 0 && entry.nbLevel <= 100 && entry.nbLevel != original->nbLevel()) {
+            original->setNbLevel(entry.nbLevel);
+        }
+    })) { return; }
+    if (radioSideNoiseReductionAvailable()) {
+        if (!apply([&] { if (entry.nrOn != original->nrOn()) { original->setNr(entry.nrOn); } })) { return; }
+        if (!apply([&] {
+            if (entry.nrLevel >= 0 && entry.nrLevel <= 100 && entry.nrLevel != original->nrLevel()) {
+                original->setNrLevel(entry.nrLevel);
+            }
+        })) { return; }
+    }
+    if (pan) {
+        if (!apply([&] {
+            if (entry.wnbOn != pan->wnbActive()) {
+                requestPanDisplay(pan, {PanDisplayField::Wnb, entry.wnbOn}, {}, false);
+            }
+        })) { return; }
+        if (!apply([&] {
+            if (entry.wnbLevel >= 0 && entry.wnbLevel <= 100 && entry.wnbLevel != pan->wnbLevel()) {
+                requestPanDisplay(pan, {PanDisplayField::WnbLevel, entry.wnbLevel}, {}, false);
+            }
+        })) { return; }
+    }
+    // Flex 4.3.16 acknowledges AGC writes without echoing their values to the
+    // sender. Refresh after the batch so an earlier mode status cannot leave
+    // old AGC values displayed. This observes state; it never retries writes.
+    if (current()) { requestSliceInventoryRefresh(session); }
+}
 
 ReceiveDispatch RadioModel::requestSpot(const SpotRequest& request, PanadapterModel* pan,
                                        std::optional<RadioControlSession> expectedSession,
@@ -88,14 +231,17 @@ ReceiveDispatch RadioModel::requestPanControl(PanadapterModel* pan, const PanCon
     return result;
 }
 
-ReceiveDispatch RadioModel::requestSlicePreset(SliceModel* target, const SlicePresetRequest& request)
+ReceiveDispatch RadioModel::requestSlicePreset(SliceModel* target, const SlicePresetRequest& request,
+                                               std::optional<RadioControlSession> expectedSession)
 {
     if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
     const RadioControlSession session = controlSession();
     const QPointer<RadioModel> alive(this);
     const QPointer<SliceModel> original(target);
-    if (!m_backend || !controlSessionCurrent(session) || !request.valid()
-        || !original || slice(original->sliceId()) != original) { return ReceiveDispatch::Unsupported; }
+    if (!m_backend || !controlSessionCurrent(session) || !request.valid() || m_stagingReceiveModels
+        || !original || slice(original->sliceId()) != original
+        || isSlotForeign(original->sliceId())) { return ReceiveDispatch::Unsupported; }
+    if (expectedSession && *expectedSession != session) { return ReceiveDispatch::Unsupported; }
     SlicePresetRequest effective = request;
     const std::optional<SlicePresetControl> control = backendCapabilities().slicePresetControl;
     if ((request.direction && (!control || !control->supports(SlicePresetField::RepeaterOffset)))

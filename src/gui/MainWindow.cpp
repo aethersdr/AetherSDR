@@ -5671,60 +5671,15 @@ void MainWindow::buildUI()
             m_radioModel.settingsScope(), m_bandPlanMgr);
     });
     connect(bsPanel, &BandStackPanel::recallRequested, this,
-            [this](const BandStackEntry& e) {
-        auto* slice = activeSlice();
-        if (!slice) return;
-        int id = slice->sliceId();
-
-        // Mode first (affects filter ranges). The HL2's data-mode AGC relies
-        // on this order; hl2_bandstack_digital_agc_test replays it.
-        if (slice->mode() != e.mode) {
-            slice->setMode(e.mode);
-        }
-        applyTuneRequest(slice, e.frequencyMhz,
-                         TuneIntent::AbsoluteJump, "bandstack-recall");
-        // Filter
-        if (e.filterLow != 0 || e.filterHigh != 0) {
-            slice->setFilterWidth(e.filterLow, e.filterHigh);
-        }
-        // Antennas
-        if (!e.rxAntenna.isEmpty() && e.rxAntenna != slice->rxAntenna()) {
-            m_radioModel.sendCommand(QString("slice set %1 rxant=%2").arg(id).arg(e.rxAntenna));
-        }
-        if (!e.txAntenna.isEmpty() && e.txAntenna != slice->txAntenna()) {
-            m_radioModel.sendCommand(QString("slice set %1 txant=%2").arg(id).arg(e.txAntenna));
-        }
-        // AGC while KiwiSDR external receive audio replaces the slice: the
-        // bookmark holds the RADIO's AGC, which the SliceModel setters would
-        // write into the KiwiSDR AGC, so it goes as wire text here and
-        // recallBandStackReceiveDsp() below leaves the AGC alone.
-        if (slice->externalReceiveReplacementActive()) {
-            if (!e.agcMode.isEmpty() && e.agcMode != slice->agcMode()) {
-                m_radioModel.sendCommand(QString("slice set %1 agc_mode=%2").arg(id).arg(e.agcMode));
-            }
-            if (!slice->automaticAgcThresholdActiveOrPending()
-                && e.agcThreshold != slice->agcThreshold()) {
-                m_radioModel.sendCommand(QString("slice set %1 agc_threshold=%2").arg(id).arg(e.agcThreshold));
-            }
-        }
-        // Volume
-        if (static_cast<int>(slice->audioGain()) != e.audioGain) {
-            slice->setAudioGain(static_cast<float>(e.audioGain));
-        }
-        // AGC (outside KiwiSDR replacement), NB and NR through the SliceModel
-        // setters, so they reach every backend, not only a command plane.
-        m_radioModel.recallBandStackReceiveDsp(slice, e);
-        // Stored WNB values are optional replay, not individual control actions.
-        if (auto* pan = m_radioModel.activePanadapter()) {
-            if (e.wnbOn != pan->wnbActive()) {
-                m_radioModel.requestPanDisplay(pan, {PanDisplayField::Wnb, e.wnbOn},
-                    {}, /*announce=*/false);
-            }
-            if (e.wnbLevel != pan->wnbLevel()) {
-                m_radioModel.requestPanDisplay(pan, {PanDisplayField::WnbLevel, e.wnbLevel},
-                    {}, /*announce=*/false);
-            }
-        }
+            [this](const BandStackEntry& entry) {
+        const QPointer<MainWindow> owner(this);
+        m_radioModel.recallBandStack(activeSlice(), entry,
+            [owner](SliceModel* slice, double mhz) {
+                if (owner) {
+                    owner->applyTuneRequest(slice, mhz,
+                        TuneIntent::AbsoluteJump, "bandstack-recall");
+                }
+            });
     });
     connect(bsPanel, &BandStackPanel::removeRequested, this,
             [this](int index) {

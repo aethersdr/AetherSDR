@@ -165,6 +165,17 @@ Status cards appear over the spectrum for things like "Center Lock released", a 
 
 The status bar at the bottom of the window starts with the band-stack indicator and **+PAN** (add a panadapter), followed by indicators such as **TNF**, **CWX**, **ASR**, **DVK** and **FDX** (each only on radios and builds that support it). Click an indicator to toggle it, or press **Tab** to reach it and **Return** or **Enter** to activate it.
 
+Click a bookmark in the band-stack panel to recall its saved receive settings
+on the active slice. The recall stays with that slice and its panadapter even
+if focus changes. Disconnecting, replacing either resource, or starting another
+recall stops the remaining settings from the older recall.
+
+Saved antenna ports must appear in the radio's available-port lists; invalid or
+unavailable ports are skipped. Antenna indicators change when the radio reports
+the accepted selection. Saved AGC-T does not override automatic AGC-T. With
+KiwiSDR receive replacement active, the saved radio AGC settings remain separate
+from KiwiSDR's receive AGC.
+
 **FDX** requests full duplex through the connected radio. A refusal leaves its
 state unchanged; a delayed reply cannot overwrite a newer request or a newer
 radio status. Enabling full duplex does not start a transmission.

@@ -1,6 +1,5 @@
 // A band-stack recall into DIGU/DIGL leaves the Hermes-Lite 2's data-mode AGC
-// alone (#6142). Driven in MainWindow's recall order: SliceModel::setMode(),
-// then RadioModel::recallBandStackReceiveDsp(), against a real Hl2Backend.
+// alone (#6142). Runs RadioModel::recallBandStack() against a real Hl2Backend.
 // Socket-free: the backend is never connected, so there is no Metis
 // transport, no DSP chain and no radio. Nothing is keyed.
 
@@ -47,20 +46,17 @@ public:
 BandStackEntry bookmark(const char* mode, const char* agcMode, int agcThreshold)
 {
     BandStackEntry e;
+    e.frequencyMhz = 14.1;
     e.mode = QString::fromLatin1(mode);
     e.agcMode = QString::fromLatin1(agcMode);
     e.agcThreshold = agcThreshold;
     return e;
 }
 
-// MainWindow's BandStackPanel::recallRequested lambda, AGC-relevant steps in
-// its order: the mode first, then the receive DSP.
+// The production recall sequence; tuning policy is independent of AGC.
 void recall(RadioModel& radio, SliceModel* slice, const BandStackEntry& e)
 {
-    if (slice->mode() != e.mode) {
-        slice->setMode(e.mode);
-    }
-    radio.recallBandStackReceiveDsp(slice, e);
+    radio.recallBandStack(slice, e, [](SliceModel*, double) {});
 }
 
 struct Hl2Fixture {
