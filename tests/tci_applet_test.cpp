@@ -120,8 +120,8 @@ int main(int argc, char** argv)
         capabilityApplet.setTciServer(&server);
         auto* checkbox = capabilityApplet.findChild<QCheckBox*>(QStringLiteral("tciMicrophoneRecording"));
         auto* lineOut = capabilityApplet.findChild<QCheckBox*>(QStringLiteral("tciLineOutIncludeTx"));
-        check(checkbox && checkbox->text() == QStringLiteral("Mic During TX"), "microphone TX control uses its plain feature name");
-        check(lineOut && lineOut->text() == QStringLiteral("Line Out TX"), "Line Out TX control uses its plain feature name");
+        check(checkbox && checkbox->text() == QStringLiteral("Include TX (RX Streams)"), "microphone TX control uses its plain feature name");
+        check(lineOut && lineOut->text() == QStringLiteral("Include TX (Line Out)"), "Line Out TX control uses its plain feature name");
         check(lineOut && !lineOut->isEnabled() && !lineOut->isChecked(), "Line Out TX is opt-in and unavailable without a connected radio");
         check(checkbox && !checkbox->isEnabled(), "mic option is unavailable without a connected radio");
         RadioCapabilities caps;

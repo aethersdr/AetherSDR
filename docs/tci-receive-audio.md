@@ -9,7 +9,7 @@ slice binding independently.
 
 ## Opt-in microphone recording
 
-With **Mic During TX** enabled on a capture-capable backend,
+With **Include TX (RX Streams)** enabled on a capture-capable backend,
 the TX receiver's ordinary type-1 RX_AUDIO route carries the selected radio
 microphone during radio-reported TX only when the nonzero local client handle
 matches `tx_client_handle`. Foreign, zero or unknown ownership keeps RX audio;

@@ -214,9 +214,9 @@ void TciApplet::buildUI()
     auto* recordingRow = new QHBoxLayout;
     auto* lineOutRow = new QHBoxLayout;
     lineOutRow->setContentsMargins(4, 2, 4, 2);
-    m_lineOutIncludeTx = new QCheckBox(tr("Line Out TX"), this);
+    m_lineOutIncludeTx = new QCheckBox(tr("Include TX (Line Out)"), this);
     m_lineOutIncludeTx->setObjectName(QStringLiteral("tciLineOutIncludeTx"));
-    m_lineOutIncludeTx->setAccessibleName(tr("TCI Line Out TX recording"));
+    m_lineOutIncludeTx->setAccessibleName(tr("TCI Include TX (Line Out)"));
     m_lineOutIncludeTx->setAccessibleDescription(tr(
         "Include TX monitor audio present in the radio speaker mix in Line Out. "
         "Does not enable MON or add microphone audio. When off, Line Out is silent "
@@ -234,9 +234,9 @@ void TciApplet::buildUI()
         if (m_tciServer) { m_tciServer->setLineOutIncludeTx(enabled); }
     });
     recordingRow->setContentsMargins(4, 2, 4, 2);
-    m_microphoneRecording = new QCheckBox(tr("Mic During TX"), this);
+    m_microphoneRecording = new QCheckBox(tr("Include TX (RX Streams)"), this);
     m_microphoneRecording->setObjectName(QStringLiteral("tciMicrophoneRecording"));
-    m_microphoneRecording->setAccessibleName(tr("TCI microphone recording"));
+    m_microphoneRecording->setAccessibleName(tr("TCI Include TX (RX Streams)"));
     m_microphoneRecording->setAccessibleDescription(tr(
         "Replace the TX receiver's TCI audio with the radio microphone during transmit. "
         "Affects all subscribers on that receiver; leave off for RX-only digital clients."));
@@ -277,7 +277,7 @@ void TciApplet::buildUI()
     m_microphoneMeter->setObjectName(QStringLiteral("tciMicrophoneGain"));
     m_microphoneMeter->setAccessibleName(tr("TCI mic recording gain"));
     m_microphoneMeter->setAccessibleDescription(tr(
-        "Enable Mic During TX to adjust the recording feed. "
+        "Enable Include TX (RX Streams) to adjust the recording feed. "
         "Zero to 100 percent, attenuation only; does not change radio MIC gain or RF output."));
     m_microphoneMeter->setToolTip(m_microphoneMeter->accessibleDescription());
     m_microphoneMeter->setLogarithmicLevelEnabled(true);
