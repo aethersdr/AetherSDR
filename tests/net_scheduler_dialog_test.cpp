@@ -105,15 +105,22 @@ private slots:
     // A rectangle the PersistentDialog era saved restores in the canon window.
     void legacyGeometryCarriesOver()
     {
+        // The minimum moves with the font, so seed just above whatever it is
+        // here: a fixed width would be clamped up under wider metrics, and the
+        // case would test the clamp rather than the carry-over.
+        const QSize seeded = [] {
+            NetSchedulerDialog probe(twoNets(), [] { return MemoryEntry{}; });
+            return probe.minimumSize() + QSize(6, 6);
+        }();
         QWidget legacy;
-        legacy.setGeometry(10, 20, 780, 520);  // inside the offscreen 800x600 screen
+        legacy.setGeometry(2, 20, seeded.width(), seeded.height());  // inside the offscreen 800x600 screen
         AppSettings::instance().setValue(kGeometryKey,
                                          QString::fromLatin1(legacy.saveGeometry().toBase64()));
 
         NetSchedulerDialog dlg(twoNets(), [] { return MemoryEntry{}; });
         dlg.show();
         QVERIFY(QTest::qWaitForWindowExposed(&dlg));
-        QCOMPARE(dlg.size(), QSize(780, 520));
+        QCOMPARE(dlg.size(), seeded);
     }
 
     // A legacy rectangle smaller than the window's minimum opens at the minimum.
