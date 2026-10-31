@@ -13,6 +13,7 @@
 #endif
 #include "ScopedChildWidget.h"
 #include "AgcModeAvailability.h"
+#include "AgcGainText.h"
 #include "FmTonePresentation.h"
 #include "gui/CtcssToneLabel.h"
 #include "PhaseKnob.h"
@@ -1932,9 +1933,14 @@ void VfoWidget::buildTabContent()
         connect(m_agcTSlider, &QSlider::valueChanged, this, [this](int v) {
             if (m_agcValueLbl) m_agcValueLbl->setText(QString::number(v));
             const bool agcOff = m_slice && (m_slice->receiveAgcMode() == "off");
+            // As updateAgcSliderFromSlice() reads the capabilities.
+            const bool scaled = m_radioModel && m_radioModel->isConnected() && m_slice
+                && !m_slice->externalReceiveReplacementActive();
+            const QString gain = agcKnobText(v, scaled
+                ? m_radioModel->backendCapabilities().agcGainScale : std::nullopt);
             m_agcTSlider->setToolTip(agcOff
-                ? QString("AGC Off Level: %1 dB").arg(v)
-                : QString("AGC Threshold: %1 dB").arg(v));
+                ? QString("AGC Off Level: %1").arg(gain)
+                : QString("AGC Threshold: %1").arg(gain));
             if (!m_updatingFromModel && m_slice && m_agcTSlider->isEnabled()) {
                 if (agcOff) m_slice->setAgcOffLevel(v);
                 else m_slice->setAgcThreshold(v);
@@ -6148,8 +6154,8 @@ void VfoWidget::updateAgcSliderFromSlice()
     m_agcTSlider->setValue(value);
     m_agcTSlider->setToolTip(!available
         ? tr("AGC threshold and off level are unavailable on this radio")
-        : agcOff ? QString("AGC Off Level: %1 dB").arg(value)
-        : QString("AGC Threshold: %1 dB").arg(value));
+        : agcOff ? QString("AGC Off Level: %1").arg(agcKnobText(value, caps.agcGainScale))
+        : QString("AGC Threshold: %1").arg(agcKnobText(value, caps.agcGainScale)));
     m_agcTSlider->setAccessibleName(agcOff ? "AGC off level" : "AGC threshold");
     m_agcValueLbl->setText(QString::number(value));
 }
