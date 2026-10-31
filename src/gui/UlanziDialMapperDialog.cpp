@@ -78,7 +78,7 @@ public:
         setAttribute(Qt::WA_StyledBackground, false);
         setAutoFillBackground(false);
         setStyleSheet(QStringLiteral("QWidget#UlanziDialCanvas { background: transparent; }"));
-        setFixedSize(620, 590);
+        setFixedSize(620, 548);
         // The fallback body paints from canon tokens.
         connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
                 this, qOverload<>(&QWidget::update));
@@ -137,9 +137,9 @@ constexpr PillSpec kPillSpecs[] = {
 };
 constexpr int kPillCount = sizeof(kPillSpecs) / sizeof(kPillSpecs[0]);
 
-// The 620 x 590 canvas with the canon header above it and the status row
+// The 620 x 548 canvas with the canon header above it and the status row
 // below, inside the body margins and the window's hairline inset.
-constexpr QSize kDialogSize(642, 722);
+constexpr QSize kDialogSize(642, 680);
 
 // The style guide's canon vocabulary (RFC #6226) over the AetherRX / AetherTX
 // Settings sheet: each control's action is a round pill on control in cyan,
@@ -250,6 +250,8 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
         tr("Install a udev rule (with administrator approval) so AetherSDR can "
            "read this dial's input. Required once per machine."));
     m_grantAccessBtn->setVisible(false);
+    // Return must never raise a privileged prompt.
+    m_grantAccessBtn->setAutoDefault(false);
     connect(m_grantAccessBtn, &QPushButton::clicked,
             this, &UlanziDialMapperDialog::onGrantAccessClicked);
     bottomRow->addWidget(m_grantAccessBtn);
@@ -319,14 +321,14 @@ QPoint UlanziDialMapperDialog::normalizedAnchor(double nx, double ny)
 
 QRect UlanziDialMapperDialog::dialBodyRect() const
 {
-    // Fixed geometry inside the upper region (620 × 555) of the canvas
-    // (620 × 590). Body honours the trimmed image aspect (512:562 ≈ 0.911)
+    // Fixed geometry inside the upper region (620 × 515) of the canvas
+    // (620 × 548). Body honours the trimmed image aspect (512:562 ≈ 0.911)
     // at 320×352, centered in the upper region to leave vertical space for
-    // the bottom rotary and single-tap combo controls at y >= 488.
+    // the bottom rotary and single-tap combo controls at y >= 468.
     const int bw = 320;
     const int bh = 352;
     const int bx = (620 - bw) / 2;       // 150
-    const int by = (555 - bh) / 2;       // 101
+    const int by = (515 - bh) / 2;       // 81
     return QRect(bx, by, bw, bh);
 }
 
@@ -452,12 +454,12 @@ void UlanziDialMapperDialog::layoutPills()
 
     if (m_rotaryLabel && m_rotaryCombo && m_singleTapLabel) {
         m_rotaryLabel->resize(75, 24);
-        m_rotaryLabel->move(175, 488);
+        m_rotaryLabel->move(175, 468);
         m_rotaryCombo->resize(180, 24);
-        m_rotaryCombo->move(255, 488);
+        m_rotaryCombo->move(255, 468);
 
         m_singleTapLabel->resize(75, 24);
-        m_singleTapLabel->move(175, 520);
+        m_singleTapLabel->move(175, 500);
     }
 
     // No connector lines: pills sit "almost touching" the body edge at
@@ -470,19 +472,19 @@ void UlanziDialMapperDialog::layoutPills()
         QPoint center;
         if (p.id == QLatin1String("top_left")) {
             p.combo->resize(120, p.combo->sizeHint().height());
-            p.combo->move(110, 63);
-            p.pillCenter = QPoint(110 + 60, 63 + p.combo->height() / 2);
+            p.combo->move(110, 43);
+            p.pillCenter = QPoint(110 + 60, 43 + p.combo->height() / 2);
             return;
         } else if (p.id == QLatin1String("top_middle")) {
             // Centred over the dial: canvas 620 wide, combo 120 wide.
             p.combo->resize(120, p.combo->sizeHint().height());
-            p.combo->move(250, 63);
-            p.pillCenter = QPoint(310, 63 + p.combo->height() / 2);
+            p.combo->move(250, 43);
+            p.pillCenter = QPoint(310, 43 + p.combo->height() / 2);
             return;
         } else if (p.id == QLatin1String("top_right")) {
             p.combo->resize(120, p.combo->sizeHint().height());
-            p.combo->move(390, 63);
-            p.pillCenter = QPoint(390 + 60, 63 + p.combo->height() / 2);
+            p.combo->move(390, 43);
+            p.pillCenter = QPoint(390 + 60, 43 + p.combo->height() / 2);
             return;
         } else if (p.id == QLatin1String("side_lt")) {
             center = QPoint(body.left()  - sz.width() / 2 - touchGap + 138,
@@ -498,8 +500,8 @@ void UlanziDialMapperDialog::layoutPills()
                             body.top()   + body.height() * 68 / 100 - 15);
         } else if (p.id == QLatin1String("dial_press")) {
             p.combo->resize(180, p.combo->sizeHint().height());
-            p.combo->move(255, 520);
-            p.pillCenter = QPoint(345, 520 + p.combo->height() / 2);
+            p.combo->move(255, 500);
+            p.pillCenter = QPoint(345, 500 + p.combo->height() / 2);
             return;
         }
 

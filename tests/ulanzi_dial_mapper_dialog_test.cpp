@@ -13,10 +13,12 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QLabel>
+#include <QLayout>
 #include <QPointer>
 #include <QPushButton>
 #include <QSet>
 #include <QTest>
+#include <QToolButton>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -56,6 +58,13 @@ void fixedSizeCanonDialog()
     check(dlg.minimumSize() == dlg.maximumSize(), "it keeps a fixed size");
     check(dlg.findChild<FramelessResizer*>() == nullptr,
           "it installs no FramelessResizer, since its contents are pixel-placed");
+    check(dlg.height() <= 700, "its fixed height fits a 768-px screen");
+    // A fixed size overrides the layout's minimum, so a font that needs more
+    // would clip the status row instead of growing the window.
+    dlg.show();
+    check(QTest::qWaitForWindowExposed(&dlg), "the window is exposed");
+    check(dlg.bodyWidget()->layout()->minimumSize().height() <= dlg.bodyWidget()->height(),
+          "the fixed height holds the header, canvas and status row");
 }
 
 // Return in a pill must not press Reset to Defaults: on the PersistentDialog,
@@ -164,7 +173,12 @@ void everyCloseDestroysTheWindow()
         } else if (path == 2) {
             QTest::keySequence(dlg, QKeySequence::Close);
         } else {
-            dlg->close();
+            for (QToolButton* b : dlg->findChildren<QToolButton*>()) {
+                if (b->accessibleName() == QStringLiteral("Close")) {
+                    QTest::mouseClick(b, Qt::LeftButton);
+                    break;
+                }
+            }
         }
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         check(exposed && dlg.isNull(), names[path]);
