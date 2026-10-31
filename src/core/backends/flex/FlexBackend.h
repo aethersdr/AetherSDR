@@ -4,6 +4,7 @@
 #include <optional>
 
 #include <QMap>
+#include <QPointer>
 #include <QSet>
 #include <QString>
 
@@ -20,6 +21,7 @@ namespace AetherSDR {
 class FirmwareStager;
 
 class RadioConnection;
+class WanConnection;
 class PanadapterStream;
 
 // FlexBackend — the IRadioBackend for the SmartSDR / FlexRadio wire stack.
@@ -213,10 +215,9 @@ public:
     // clamped numeric parses, uppercase, and list split; the model applies the
     // present fields. Called from the matching RadioModel status choke points.
     void decodeTransmitStatus(const QMap<QString, QString>& kvs);
-    // Decode radio-global status ("radio …" / "radio slices …" etc.) into the
-    // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel
-    // residual). Present-only, ok-guarded numeric parses.
-    void decodeRadioStatus(const QMap<QString, QString>& kvs);
+    void bindRadioStatus(WanConnection* wan);
+    void invalidateRadioStatus();
+    void acceptRadioStatus(const RadioStatusObservation& observation);
     // Full info reply: missing/invalid region clears the observation.
     void decodeRadioInfoMetadata(const QString& body);
     void decodeInterlockStatus(const QMap<QString, QString>& kvs);
@@ -261,6 +262,13 @@ public:
     void decodeProfileFlags(const QMap<QString, QString>& kvs);
 
 private:
+    QPointer<QObject> m_radioStatusTransport;
+    QPointer<WanConnection> m_radioStatusWan;
+    quint64 m_radioModelRevision{0};
+    QMetaObject::Connection m_radioStatusBinding;
+    quint64 m_radioStatusBindingRevision{0};
+    std::shared_ptr<RadioStatusLifetime> m_radioStatusLifetime;
+
     void send(const QString& cmd);
     void sendTx(const QString& cmd, const TxCoordinator::Command& command);
     void sendSlice(const QString& cmd);   // guarded slice path (§6)

@@ -132,6 +132,7 @@ WanConnection::~WanConnection()
 
 void WanConnection::resetSessionState()
 {
+    if (const auto end = m_radioStatusSource.end()) { emit radioStatusObserved(*end); }
     // This object outlives every TLS session (a by-value MainWindow member), so
     // reset per session: otherwise a partial line from the dead link prefixes the
     // next session's first line and stale handle/sequence/callbacks answer into the
@@ -155,6 +156,7 @@ void WanConnection::connectToRadio(const QString& host, quint16 tlsPort,
     }
 
     resetSessionState();
+    m_radioStatusSource.begin();
     m_wanHandle = wanHandle;
     m_host      = host;
     m_expectedFingerprintHex = loadStoredFingerprint(host);
@@ -176,6 +178,7 @@ void WanConnection::connectToRadio(const QString& host, quint16 tlsPort,
 
 void WanConnection::disconnectFromRadio()
 {
+    if (const auto end = m_radioStatusSource.end()) { emit radioStatusObserved(*end); }
     m_heartbeat.stop();
     if (m_socket.state() != QAbstractSocket::UnconnectedState) {
         // Send disconnect marker (FlexLib sends 0x04)
@@ -369,6 +372,8 @@ void WanConnection::onHeartbeat()
 
 void WanConnection::processLine(const QString& line)
 {
+    const auto radioLifetime = m_radioStatusSource.lifetime();
+    const quint32 radioLocalHandle = clientHandle();
     // GPS coordinates are never useful in a support log. Compute this before
     // the certificate-decision early return so that path cannot bypass the
     // normal GPS payload suppression below.
@@ -435,6 +440,9 @@ void WanConnection::processLine(const QString& line)
     }
 
     case MessageType::Status:
+        if (const auto observation = decodeFlexRadioStatus(msg.object, msg.kvs, radioLifetime, radioLocalHandle)) {
+            emit radioStatusObserved(*observation);
+        }
         emit statusReceived(msg.object, msg.kvs);
         break;
 

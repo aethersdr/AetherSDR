@@ -71,6 +71,10 @@ When multiFLEX is **disabled** on the radio and another client is already connec
 - **Global slot index (A=0, B=1, …)**, the default.
 - **Radio-assigned letter with global subscript (A₂)**, which matches SmartSDR's letters in multi-client sessions and still shows which physical slot you are on.
 
+Client names and local PTT status follow the radio's live reports. A disconnected
+client is removed from the client list; its delayed connection notification cannot
+be reused for a later connection with the same radio-assigned handle.
+
 ## Troubleshooting
 
 ### The Connected Stations dialog appears when you connect

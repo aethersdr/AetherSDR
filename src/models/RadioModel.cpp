@@ -159,13 +159,6 @@ QString atuStatusToString(ATUStatus status)
     return "Unknown";
 }
 
-bool statusFlagSet(const QMap<QString, QString>& kvs, const QString& key)
-{
-    const QString value = kvs.value(key).trimmed();
-    return value == QStringLiteral("1")
-        || value.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
-}
-
 // isProfileOwnedRadioStateWrite() moved to ProfileLoadCommand.h so the
 // classification contract has a light, dependency-free test target
 // (profile_load_command_test). Behaviour unchanged. (#4142)
@@ -252,31 +245,6 @@ bool streamStatusRemoved(const StreamObjectParts& stream,
     return stream.action == QStringLiteral("removed")
         || kvs.contains(QStringLiteral("removed"))
         || kvs.value(QStringLiteral("in_use")) == QStringLiteral("0");
-}
-
-bool looksLikeClientId(const QString& value)
-{
-    static const QRegularExpression guidRe(
-        QStringLiteral(R"(^\{?[0-9A-Fa-f]{8}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{12}\}?$)"));
-    return guidRe.match(value.trimmed()).hasMatch();
-}
-
-QString clientConnectionSource(const QMap<QString, QString>& kvs)
-{
-    const QStringList keys = {
-        QStringLiteral("ip"),
-        QStringLiteral("client_ip"),
-        QStringLiteral("remote_ip"),
-        QStringLiteral("name")
-    };
-
-    for (const QString& key : keys) {
-        const QString value = cleanClientText(kvs.value(key));
-        if (!value.isEmpty() && !looksLikeClientId(value))
-            return value;
-    }
-
-    return {};
 }
 
 bool isRoutineClientConnectionInfo(const QString& text)
@@ -1550,6 +1518,10 @@ void RadioModel::wireBackendReceiverState()
     }
     const quint64 generation = m_backendReceiverGeneration;
     wireGpsSessionReceivers();
+    connect(m_backend.get(), &IRadioBackend::radioStatusObserved, this,
+            [this, generation](const RadioStatusObservation& observation) {
+        if (generation == m_backendReceiverGeneration) { applyRadioObservation(observation); }
+    });
     // The radio's answer to a transmit setting the caller waits on. Queued, so
     // an answer never lands inside the request that asked for it, and a
     // replaced backend's late answer is dropped by the generation guard.
@@ -1777,6 +1749,7 @@ void RadioModel::wireBackendReceiverState()
 
 void RadioModel::teardownBackend()
 {
+    resetRadioObservations();
     resetTransmitDaxSessionState();
     // Retirement callbacks can attempt edits before teardown returns.
     const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
@@ -2186,6 +2159,8 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
     qRegisterMetaType<RadioDelta>();
+    qRegisterMetaType<RadioStatusObservation>();
+    qRegisterMetaType<std::optional<int>>();
     qRegisterMetaType<GpsDelta>();
     qRegisterMetaType<MemoryDelta>();
 
@@ -3759,6 +3734,11 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     resetTuneOutputControl();
     cancelRadioWake();
     m_wanConn = nullptr;  // LAN mode
+    resetRadioObservations();
+    if (m_flexBackend) {
+        m_flexBackend->invalidateRadioStatus();
+        m_flexBackend->bindRadioStatus(nullptr);
+    } else if (m_connection) { m_connection->invalidateRadioStatus(); }
     // aetherd Gap B: the backend follows the radio the operator selected. A Flex
     // and a Hermes-Lite 2 need different backends, and the picker is where that
     // choice is actually made — so swap the backend here rather than pinning the
@@ -3905,6 +3885,8 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
         m_wanConn->disconnect(this);
 
     m_wanConn = wan;
+    resetRadioObservations();
+    if (m_flexBackend) { m_flexBackend->bindRadioStatus(wan); }
     resetGpsState();
     // This WAN target has no discovery firmware seed. Keep the previous LAN
     // identity out of firmware-shaped capabilities until its info reply arrives.
@@ -3921,14 +3903,29 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
     m_reconnectTimer.stop();
 
     // Wire WAN connection signals (same as RadioConnection)
-    connect(wan, &WanConnection::connected, this, &RadioModel::onConnected);
-    connect(wan, &WanConnection::disconnected, this, &RadioModel::onDisconnected);
-    connect(wan, &WanConnection::errorOccurred, this, &RadioModel::onConnectionError);
-    connect(wan, &WanConnection::certFingerprintMismatch,
-            this, &RadioModel::certFingerprintMismatch);
-    connect(wan, &WanConnection::versionReceived, this, &RadioModel::onVersionReceived);
-    connect(wan, &WanConnection::statusReceived, this, &RadioModel::onStatusReceived);
-    connect(wan, &WanConnection::pingRttMeasured, this, [this](int ms) {
+    const quint64 wanGeneration = m_backendReceiverGeneration;
+    const quint64 wanBinding = m_wanBindingGeneration;
+    const auto wanSource = wan->radioStatusLifetime();
+    const QPointer<WanConnection> wanAlive(wan);
+    const auto wanCurrent = [this, wanAlive, wanGeneration, wanBinding, wanSource] {
+        return wanAlive && m_wanConn == wanAlive && m_backendReceiverGeneration == wanGeneration
+            && m_wanBindingGeneration == wanBinding && wanAlive->radioStatusLifetime() == wanSource;
+    };
+    connect(wan, &WanConnection::connected, this, [this, wanCurrent] { if (wanCurrent()) { onConnected(); } });
+    connect(wan, &WanConnection::disconnected, this, [this, wanCurrent] { if (wanCurrent()) { onDisconnected(); } });
+    connect(wan, &WanConnection::errorOccurred, this, [this, wanCurrent](const QString& message) {
+        if (wanCurrent()) { onConnectionError(message); }
+    });
+    connect(wan, &WanConnection::certFingerprintMismatch, this,
+            [this, wanCurrent](const QString& host, const QString& expected, const QString& presented) {
+        if (wanCurrent()) { emit certFingerprintMismatch(host, expected, presented); }
+    });
+    connect(wan, &WanConnection::versionReceived, this, [this, wanCurrent](const QString& version) {
+        if (wanCurrent()) { onVersionReceived(version); }
+    });
+    connect(wan, &WanConnection::statusReceived, this, [this, wanCurrent](const QString& object, const QMap<QString, QString>& fields) { if (wanCurrent()) { onStatusReceived(object, fields); } });
+    connect(wan, &WanConnection::pingRttMeasured, this, [this, wanCurrent](int ms) {
+        if (!wanCurrent()) { return; }
         m_pingMissCount = 0;
         m_lastPingRtt = ms;
         evaluateNetworkQuality();
@@ -3988,7 +3985,8 @@ void RadioModel::applyKnownGuiClients(const QStringList& handles,
                                       const QStringList& hosts,
                                       bool replaceExisting)
 {
-    if (replaceExisting) {
+    if (replaceExisting && m_liveClientHandles.isEmpty() && m_retiredClientHandles.isEmpty()) {
+        m_clientLifecycles.clear();
         m_clientStations.clear();
         m_clientInfoMap.clear();
         m_startupClientConnections.clear();
@@ -4000,8 +3998,10 @@ void RadioModel::applyKnownGuiClients(const QStringList& handles,
 
     for (int i = 0; i < handles.size(); ++i) {
         const quint32 handle = parseClientHandle(handles[i]);
-        if (handle == 0)
-            continue;
+        if (handle == 0 || m_liveClientHandles.contains(handle)
+            || m_retiredClientHandles.contains(handle) || !m_clientHistoryComplete) { continue; }
+        if (!m_clientInfoMap.contains(handle) && m_clientInfoMap.size() >= kMaxObservedClients) { continue; }
+        if (!m_clientLifecycles.contains(handle)) { m_clientLifecycles[handle] = ++m_clientLifecycleRevision; }
         if (replaceExisting)
             m_startupClientConnections.insert(handle);
 
@@ -4075,9 +4075,10 @@ void RadioModel::announceClientConnection(quint32 handle,
         return;
 
     m_announcedClientConnections.insert(handle);
-    QTimer::singleShot(750, this, [this, handle, source, station, program] {
-        if (!m_clientInfoMap.contains(handle))
-            return;
+    const quint64 lifecycle = m_clientLifecycles.value(handle);
+    QTimer::singleShot(750, this, [this, handle, lifecycle, source, station, program] {
+        if (handle == clientHandle() || !m_clientInfoMap.contains(handle)
+            || m_clientLifecycles.value(handle) != lifecycle) { return; }
 
         const auto client = m_clientInfoMap.value(handle);
         QString latestSource = client.source.isEmpty() ? source : client.source;
@@ -4085,9 +4086,9 @@ void RadioModel::announceClientConnection(quint32 handle,
         QString latestProgram = client.program.isEmpty() ? program : client.program;
 
         if (m_wanConn && (latestSource.isEmpty() || latestSource == QStringLiteral("SmartLink"))) {
-            QTimer::singleShot(1250, this, [this, handle, latestSource, latestStation, latestProgram] {
-                if (!m_clientInfoMap.contains(handle))
-                    return;
+            QTimer::singleShot(1250, this, [this, handle, lifecycle, latestSource, latestStation, latestProgram] {
+                if (handle == clientHandle() || !m_clientInfoMap.contains(handle)
+                    || m_clientLifecycles.value(handle) != lifecycle) { return; }
 
                 const auto client = m_clientInfoMap.value(handle);
                 emit clientConnected(handle,
@@ -4201,6 +4202,9 @@ bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
 
 void RadioModel::disconnectFromRadio()
 {
+    ++m_wanBindingGeneration;
+    if (m_flexBackend) { m_flexBackend->invalidateRadioStatus(); }
+    else if (m_connection) { m_connection->invalidateRadioStatus(); }
     resetTxOperations();
     restoreTuneInhibit();
     cancelRadioWake();
@@ -4212,8 +4216,9 @@ void RadioModel::disconnectFromRadio()
     if (m_wanConn) {
         WanConnection* wan = m_wanConn;
         wan->disconnect(this);  // remove stale signal connections before adding the one-shot teardown (#224)
-        connect(wan, &WanConnection::disconnected, this, [this, wan]() {
-            if (m_wanConn == wan) {
+        const quint64 binding = m_wanBindingGeneration;
+        connect(wan, &WanConnection::disconnected, this, [this, wan, binding]() {
+            if (m_wanConn == wan && m_wanBindingGeneration == binding) {
                 onDisconnected();
             }
         }, Qt::SingleShotConnection);
@@ -7444,6 +7449,9 @@ void RadioModel::cancelMultiFlexConflict()
 
 void RadioModel::handleForcedClientDisconnect()
 {
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    const quint64 observationGeneration = m_radioObservationGeneration;
     if (m_forcedDisconnectInProgress)
         return;
 
@@ -7453,6 +7461,8 @@ void RadioModel::handleForcedClientDisconnect()
 
     qCWarning(lcProtocol) << "RadioModel: this GUI client was force-disconnected by another client";
     emit forcedDisconnectRequested();
+    if (!alive || controlSession() != session
+        || m_radioObservationGeneration != observationGeneration) { return; }
 
     closeConnectionForTerminalDisconnect();
 }
@@ -7471,6 +7481,7 @@ void RadioModel::closeConnectionForTerminalDisconnect()
         return;
     }
 
+    if (!m_connection) { return; }
     const quint32 handle = clientHandle();
     const QString streamId = RadioStatusOwnership::streamCommandId(m_rxAudio.streamId);
     if (m_connection->isConnected()) {
@@ -7486,6 +7497,9 @@ void RadioModel::closeConnectionForTerminalDisconnect()
 
 void RadioModel::handleDuplicateClientIdDisconnect()
 {
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    const quint64 observationGeneration = m_radioObservationGeneration;
     if (m_forcedDisconnectInProgress) {
         return;
     }
@@ -7499,6 +7513,8 @@ void RadioModel::handleDuplicateClientIdDisconnect()
     emit connectionError(tr("Connection stopped: another AetherSDR client was using this "
                             "station identity. A distinct identity has been selected; reconnect "
                             "to continue."));
+    if (!alive || controlSession() != session
+        || m_radioObservationGeneration != observationGeneration) { return; }
     // Close the socket ourselves — the radio does not guarantee a TCP close on
     // a duplicate-id eviction, and the error above tells the operator to
     // reconnect, which must start from a fully torn-down connection.
@@ -8239,6 +8255,7 @@ void RadioModel::restoreTuneInhibit()
 
 void RadioModel::onDisconnected()
 {
+    resetRadioObservations();
     resetTransmitDaxSessionState();
     const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
     discardTuneInhibit();
@@ -11331,91 +11348,6 @@ void RadioModel::onStatusReceived(const QString& object,
     traceDaxStreamStatus(object, kvs);
     handleDaxRxStreamRegistry(object, kvs);
 
-    if (object == "radio") {
-        handleRadioStatus(kvs);
-        return;
-    }
-
-    // Client connected/disconnected:
-    //   object="client 0x7594C952"       kvs={connected, program=SmartSDR, station=W1AW}
-    //   object="client 0x7594C952 disconnected"  kvs={forced=0, ...}
-    static const QRegularExpression clientRe(R"(^client\s+(0x[0-9A-Fa-f]+)(?:\s+(\w+))?$)");
-    if (object.startsWith("client 0x")) {
-        const auto cm = clientRe.match(object);
-        if (cm.hasMatch()) {
-            quint32 handle = cm.captured(1).toUInt(nullptr, 16);
-            QString action = cm.captured(2);  // "disconnected" or empty
-
-            if (action == "disconnected") {
-                if (handle == clientHandle()) {
-                    if (statusFlagSet(kvs, QStringLiteral("duplicate_client_id"))) {
-                        handleDuplicateClientIdDisconnect();
-                    } else if (statusFlagSet(kvs, QStringLiteral("forced"))) {
-                        handleForcedClientDisconnect();
-                    }
-                }
-                m_clientStations.remove(handle);
-                m_clientInfoMap.remove(handle);
-                m_announcedClientConnections.remove(handle);
-                m_startupClientConnections.remove(handle);
-                // Drop any foreign-slot markers tied to the disconnecting
-                // handle so the RX-applet tab row stops dimming slots the
-                // client no longer owns.  A graceful disconnect usually
-                // also produces `slice N removed=1` echoes which would
-                // clear these, but hard/abrupt drops don't — covering both
-                // paths here is harmless and avoids stale dim markers
-                // (#2606).
-                auto it = m_foreignSliceOwners.begin();
-                while (it != m_foreignSliceOwners.end()) {
-                    if (it.value() == handle) {
-                        const int sliceId = it.key();
-                        it = m_foreignSliceOwners.erase(it);
-                        emit slotOccupancyChanged(sliceId);
-                    } else {
-                        ++it;
-                    }
-                }
-                emitOtherClientsChanged();
-            } else if (action == "connected" || kvs.contains("connected")) {
-                QString program = cleanClientText(kvs.value("program", "Unknown"));
-                QString station = cleanClientText(kvs.value("station", program));
-                QString source = clientConnectionSource(kvs);
-                auto existing = m_clientInfoMap.constFind(handle);
-                if (source.isEmpty() && existing != m_clientInfoMap.cend())
-                    source = existing->source;
-                if (source.isEmpty() && m_wanConn)
-                    source = QStringLiteral("SmartLink");
-                bool ptt = kvs.value("local_ptt", "0") == "1";
-                m_clientStations[handle] = station;
-                ClientInfo client;
-                client.clientId = kvs.value(QStringLiteral("client_id")).trimmed();
-                client.station = station;
-                client.program = program;
-                client.source = source;
-                client.localPtt = ptt;
-                m_clientInfoMap[handle] = client;
-                if (handle != clientHandle()) {
-                    m_lastMultiFlexClientConnectMs = QDateTime::currentMSecsSinceEpoch();
-                    qCDebug(lcProtocol).noquote()
-                        << "RadioModel: noted Multi-Flex client connect for ping grace"
-                        << QStringLiteral("handle=%1").arg(hexId(handle))
-                        << QStringLiteral("program=%1").arg(program)
-                        << QStringLiteral("station=%1").arg(station)
-                        << QStringLiteral("source=%1").arg(source.isEmpty() ? QStringLiteral("direct") : source);
-                }
-                emitOtherClientsChanged();
-                if (!shouldSuppressClientConnectionNotice(handle))
-                    announceClientConnection(handle, source, station, program);
-            } else if (kvs.contains("local_ptt") && m_clientInfoMap.contains(handle)) {
-                // Partial update: radio echoes local_ptt state change without
-                // a full connected message (e.g. after enforce_local_ptt command).
-                m_clientInfoMap[handle].localPtt = kvs.value("local_ptt") == "1";
-                emitOtherClientsChanged();
-            }
-        }
-        return;
-    }
-
     // XVTR status: "xvtr 0 name=2m rf_freq=144.000000 if_freq=28.000000 ..."
     static const QRegularExpression xvtrRe(R"(^xvtr\s+(\d+)$)");
     if (object.startsWith("xvtr")) {
@@ -11545,33 +11477,6 @@ void RadioModel::onStatusReceived(const QString& object,
         if (next.enabled && name == DvkModel::kLicenseFeature) {
             m_dvkModel.clearRefusal();
         }
-        emit infoChanged();
-        return;
-    }
-
-    if (object == "radio oscillator") {
-        if (kvs.contains("state"))        m_oscState    = kvs["state"];
-        if (kvs.contains("setting"))      m_oscSetting  = kvs["setting"];
-        if (kvs.contains("locked"))       m_oscLocked   = kvs["locked"] == "1";
-        if (kvs.contains("ext_present"))  m_extPresent  = kvs["ext_present"] == "1";
-        if (kvs.contains("gpsdo_present") || kvs.contains("gnss_present")) {
-            // Firmware generations use either spelling. Treat them as aliases
-            // within this status update; do not latch a previous true value
-            // when a later update explicitly reports that the source is gone.
-            m_gpsdoPresent = kvs.value("gpsdo_present") == QLatin1String("1")
-                || kvs.value("gnss_present") == QLatin1String("1");
-        }
-        if (kvs.contains("tcxo_present")) m_tcxoPresent = kvs["tcxo_present"] == "1";
-        emit oscillatorChanged();
-        emit infoChanged();
-        return;
-    }
-
-    if (object == "radio static_net_params") {
-        m_staticIp      = kvs.value("ip");
-        m_staticNetmask = kvs.value("netmask");
-        m_staticGateway = kvs.value("gateway");
-        m_hasStaticIp   = !m_staticIp.isEmpty();
         emit infoChanged();
         return;
     }
@@ -12356,15 +12261,6 @@ void RadioModel::setMultiFlexEnabled(bool on)
     emit infoChanged();
 }
 
-void RadioModel::handleRadioStatus(const QMap<QString, QString>& kvs)
-{
-    // aetherd RFC 2.3 (RadioModel residual): the radio-global wire decode moved
-    // to FlexBackend::decodeRadioStatus → radioChanged → applyRadioChanges (the
-    // ctor-wired handler). This choke point drives it so live + deferred status
-    // both convert.
-    if (m_flexBackend) m_flexBackend->decodeRadioStatus(kvs);
-}
-
 void RadioModel::publishRadioReportedCapacity()
 {
     if (!m_flexBackend)
@@ -12378,8 +12274,11 @@ void RadioModel::publishRadioReportedCapacity()
         m_maxPanadapters);
 }
 
-void RadioModel::applyRadioChanges(const RadioDelta& d)
+void RadioModel::applyRadioChanges(const RadioDelta& d, const std::function<bool()>& current)
 {
+    const QPointer<RadioModel> alive(this);
+    const auto valid = [&] { return alive && (!current || current()); };
+    if (!valid()) { return; }
     bool changed = false;
     if (d.model) {
         m_model = *d.model;
@@ -12417,6 +12316,7 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
         if (updatedMax != m_maxSlices) {
             m_maxSlices = updatedMax;
             publishRadioReportedCapacity();
+            if (!valid()) { return; }
         }
         changed = true;
     }
@@ -12436,7 +12336,8 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
     if (d.callsign) {
         if (*d.callsign != m_callsign) {
             m_callsign = *d.callsign;
-            emit callsignChanged(callsign());   // effective value, not the raw radio field
+            emit callsignChanged(callsign());
+            if (!valid()) { return; }   // effective value, not the raw radio field
         }
         changed = true;
     }
@@ -12467,6 +12368,7 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
         if (m_autoSave != newAutoSave) {
             m_autoSave = newAutoSave;
             emit autoSaveChanged(newAutoSave);
+            if (!valid()) { return; }
             changed = true;
         }
     }
@@ -12475,12 +12377,18 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
     if (d.lowLatencyDigital) { m_lowLatencyDigital = *d.lowLatencyDigital; changed = true; }
     if (d.rttyMarkDefault) {
         m_rttyMarkDefault = *d.rttyMarkDefault;
-        for (SliceModel* s : m_slices)
-            s->setRttyMarkDefault(m_rttyMarkDefault);
+        QList<QPointer<SliceModel>> slices;
+        for (SliceModel* slice : m_slices) { slices.append(slice); }
+        for (const QPointer<SliceModel>& slice : slices) {
+            if (!slice || !m_slices.contains(slice.data())) { continue; }
+            slice->setRttyMarkDefault(m_rttyMarkDefault);
+            if (!valid()) { return; }
+        }
         changed = true;
     }
     if (d.tnfEnabled) {
         m_tnfModel.applyGlobalEnabled(*d.tnfEnabled);
+        if (!valid()) { return; }
     }
     // Audio outputs
     bool audioChanged = false;
@@ -12489,10 +12397,13 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
     if (d.headphoneGain) { m_headphoneGain = *d.headphoneGain; audioChanged = true; }
     if (d.headphoneMute) { m_headphoneMute = *d.headphoneMute; audioChanged = true; }
     if (d.frontSpeakerMute) { m_frontSpeakerMute = *d.frontSpeakerMute; audioChanged = true; }
-    if (d.daxiqCapacity)  m_daxIqModel.setCapacity(*d.daxiqCapacity);
-    if (d.daxiqAvailable) m_daxIqModel.setAvailable(*d.daxiqAvailable);
+    if (d.daxiqCapacity) { m_daxIqModel.setCapacity(*d.daxiqCapacity); }
+    if (!valid()) { return; }
+    if (d.daxiqAvailable) { m_daxIqModel.setAvailable(*d.daxiqAvailable); }
+    if (!valid()) { return; }
 
-    if (audioChanged) emit audioOutputChanged();
+    if (audioChanged) { emit audioOutputChanged(); }
+    if (!valid()) { return; }
     if (changed) emit infoChanged();
 }
 

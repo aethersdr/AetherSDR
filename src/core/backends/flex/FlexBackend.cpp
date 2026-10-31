@@ -20,6 +20,7 @@
 #include "core/FirmwareStager.h"    // reads FlexRadio's published release list
 #include "core/LogManager.h"
 #include "core/backends/flex/RadioConnection.h"
+#include "core/backends/flex/WanConnection.h"
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/backends/MemoryWireCodec.h"
 #include "core/backends/flex/FlexKvCarry.h"
@@ -68,6 +69,7 @@ FlexBackend::FlexBackend(QObject* parent)
     m_connection->moveToThread(m_connThread);
     connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
     m_connThread->start();
+    bindRadioStatus(nullptr);
 
     // Observe wire lifecycle and re-emit as the interface's own signals. Queued
     // (auto) connections: the connection lives on its worker thread.
@@ -87,6 +89,7 @@ FlexBackend::FlexBackend(QObject* parent)
 
 FlexBackend::~FlexBackend()
 {
+    invalidateRadioStatus();
     // Sever our own lifecycle observation of the connection FIRST — as the old
     // ~RadioModel's earlier m_backend.reset() effectively did (the backend was
     // destroyed, auto-disconnecting these links, before the wire teardown ran).
@@ -1959,55 +1962,63 @@ void FlexBackend::decodeRadioInfoMetadata(const QString& body)
     emit radioChanged(delta);
 }
 
-void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
+void FlexBackend::invalidateRadioStatus()
 {
-    // Radio-global status → typed RadioDelta (aetherd RFC 2.3 — RadioModel
-    // residual). Present-only, ok-guarded via the shared flexkv carriers; the
-    // model-side orchestration (slice-capacity bounding, rtty→slices propagation,
-    // TNF/DAX-IQ sub-models, the change-gated emits) stays in applyRadioChanges.
-    RadioDelta d;
-    // Identity / capability
-    carry(kvs, "model", d.model);
-    carry(kvs, "slices", d.slicesAvailable);
-    carry(kvs, "callsign", d.callsign);
-    carry(kvs, "nickname", d.nickname);
-    carry(kvs, "region", d.region);
-    carry(kvs, "radio_options", d.radioOptions);
-    carry(kvs, "bands", d.bandsRaw);   // optional radio-declared bands (gateway/non-Flex); validated in RadioModel
-    // Global flags
-    carry(kvs, "remote_on_enabled", d.remoteOnEnabled);
-    carry(kvs, "mf_enable", d.multiFlexEnabled);
-    carry(kvs, "enforce_private_ip_connections", d.enforcePrivateIp);
-    carry(kvs, "binaural_rx", d.binauralRx);
-    carry(kvs, "full_duplex_enabled", d.fullDuplex);
-    carry(kvs, "mute_local_audio_when_remote", d.muteLocalWhenRemote);
-    carry(kvs, "auto_save", d.autoSave);
-    carry(kvs, "low_latency_digital_modes", d.lowLatencyDigital);
-    carry(kvs, "tnf_enabled", d.tnfEnabled);
-    // Calibration / defaults
-    carry(kvs, "freq_error_ppb", d.freqErrorPpb);
-    carry(kvs, "cal_freq", d.calFreqMhz);
-    carry(kvs, "rtty_mark_default", d.rttyMarkDefault);
-    // Audio outputs
-    carry(kvs, "lineout_gain", d.lineoutGain);
-    carry(kvs, "lineout_mute", d.lineoutMute);
-    carry(kvs, "headphone_gain", d.headphoneGain);
-    carry(kvs, "headphone_mute", d.headphoneMute);
-    carry(kvs, "front_speaker_mute", d.frontSpeakerMute);
-    // DAX-IQ capacity
-    carry(kvs, "daxiq_capacity", d.daxiqCapacity);
-    carry(kvs, "daxiq_available", d.daxiqAvailable);
-    emit radioChanged(d);
+    // Retire the ingress source even when its first report is still queued.
+    if (m_radioStatusWan) { m_radioStatusWan->invalidateRadioStatus(); }
+    else if (m_connection && m_radioStatusTransport == m_connection) { m_connection->invalidateRadioStatus(); }
+    ++m_radioModelRevision;
+    if (m_radioStatusLifetime) {
+        m_radioStatusLifetime->active.store(false, std::memory_order_release);
+        m_radioStatusLifetime->deliveryOpen.store(false, std::memory_order_release);
+        m_radioStatusLifetime.reset();
+    }
+}
 
-    // Announce the capability revision a model-name change causes (#5594 M1):
-    // capabilities() derives its table from the model name, which arrives here in a
-    // `radio ...` status after connect. Must follow emit radioChanged(d): consumers
-    // re-read the model through m_modelProvider, which returns the new name only
-    // once RadioModel has applied this delta (same thread, direct delivery).
-    // Guarded against the last announced name because `radio ...` status repeats
-    // on unrelated edits (callsign, nickname, gains).
-    if (d.model && *d.model != m_announcedModel) {
-        m_announcedModel = *d.model;
+void FlexBackend::bindRadioStatus(WanConnection* wan)
+{
+    QObject* transport = wan ? static_cast<QObject*>(wan) : static_cast<QObject*>(m_connection);
+    const auto incoming = wan ? wan->radioStatusLifetime() : m_connection->radioStatusLifetime();
+    if (m_radioStatusTransport != transport) { invalidateRadioStatus(); }
+    else if (m_radioStatusLifetime && m_radioStatusLifetime != incoming) {
+        m_radioStatusLifetime->active.store(false, std::memory_order_release);
+        m_radioStatusLifetime->deliveryOpen.store(false, std::memory_order_release);
+    }
+    QObject::disconnect(m_radioStatusBinding);
+    m_radioStatusTransport = transport;
+    m_radioStatusWan = wan;
+    m_radioStatusLifetime = incoming;
+    const quint64 binding = ++m_radioStatusBindingRevision;
+    const auto receive = [this, binding](const RadioStatusObservation& observation) {
+        if (binding == m_radioStatusBindingRevision) { acceptRadioStatus(observation); }
+    };
+    if (wan) {
+        m_radioStatusBinding = connect(wan, &WanConnection::radioStatusObserved, this, receive);
+    } else if (m_connection) {
+        m_radioStatusBinding = connect(m_connection, &RadioConnection::radioStatusObserved, this, receive);
+    }
+}
+
+void FlexBackend::acceptRadioStatus(const RadioStatusObservation& observation)
+{
+    if (!observation.current()) { return; }
+    m_radioStatusLifetime = observation.lifetime;
+    const quint64 revision = observation.radio.model ? ++m_radioModelRevision : m_radioModelRevision;
+    const quint64 binding = m_radioStatusBindingRevision;
+    const QPointer<FlexBackend> alive(this);
+    emit radioStatusObserved(observation);
+    if (!alive || !observation.current()
+        || (observation.radio.model && revision != m_radioModelRevision)
+        || binding != m_radioStatusBindingRevision) { return; }
+    if (observation.kind == RadioStatusObservation::Kind::SessionEnded) {
+        observation.lifetime->deliveryOpen.store(false, std::memory_order_release);
+        return;
+    }
+    // Model application precedes the notification: the capability provider
+    // reads the model name that this observation just published.
+    if (observation.kind == RadioStatusObservation::Kind::Radio
+        && observation.radio.model && *observation.radio.model != m_announcedModel) {
+        m_announcedModel = *observation.radio.model;
         emit capabilitiesChanged();
     }
 }

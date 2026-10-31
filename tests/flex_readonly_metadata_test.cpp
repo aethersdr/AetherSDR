@@ -1,3 +1,4 @@
+#include "FlexRadioStatusTestSupport.h"
 // Published FlexLib Slice.ChainMode and Radio.UpdateInfo metadata through the
 // production decoder, typed seam, model and bridge. No sockets are opened.
 #include "TestSettingsProfile.h"
@@ -318,7 +319,7 @@ private slots:
         Fixture f;
         QVERIFY(f.init());
         f.backend->decodeRadioInfoMetadata(QStringLiteral("region=USA,iaru_region=2"));
-        f.backend->decodeRadioStatus({{QStringLiteral("region"), QStringLiteral("USA")}});
+        observeRadioStatus(*f.backend, {{QStringLiteral("region"), QStringLiteral("USA")}});
         QCOMPARE(f.radio.iaruRegion().value_or(0), 2);
         f.backend->decodeRadioInfoMetadata(QStringLiteral("region=USA"));
         QVERIFY(!f.radio.iaruRegion().has_value());

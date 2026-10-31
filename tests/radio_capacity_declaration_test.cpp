@@ -1,3 +1,4 @@
+#include "FlexRadioStatusTestSupport.h"
 // #5594 item 3: the panadapter and slice capacity a Flex declares for itself.
 //
 // A radio states its capacity outright in the discovery packet. Observed on a
@@ -165,7 +166,7 @@ int main(int argc, char** argv)
         // A smaller radio arrives on a path that never calls connectToRadio():
         // its model lands on the status plane instead. The model table must be
         // allowed to answer again.
-        m.handleStatusForTest(QStringLiteral("radio"),
+        observeRadioStatus(m, QStringLiteral("radio"),
                               {{QStringLiteral("model"), QStringLiteral("FLEX-6400")}});
         check(m.maxPanadapters() == capabilitiesFor(QStringLiteral("FLEX-6400")).maxSlices,
               "after a disconnect a model= status restores the model-table "

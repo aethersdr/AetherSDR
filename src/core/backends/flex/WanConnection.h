@@ -1,5 +1,7 @@
 #pragma once
 
+#include "FlexRadioStatus.h"
+
 #include "CommandParser.h"
 
 #include <QObject>
@@ -55,6 +57,10 @@ public:
     void disconnectFromRadio();
 
     // Same command interface as RadioConnection
+    // Only these source operations are safe across the transport thread boundary.
+    std::shared_ptr<RadioStatusLifetime> radioStatusLifetime() const { return m_radioStatusSource.lifetime(); }
+    void invalidateRadioStatus() { m_radioStatusSource.invalidate(); }
+
     using ResponseCallback = std::function<void(int resultCode, const QString& body)>;
     quint32 sendCommand(const QString& command,
                         ResponseCallback callback = nullptr);
@@ -76,6 +82,7 @@ signals:
     void disconnected();
     void errorOccurred(const QString& message);
     void messageReceived(const ParsedMessage& msg);
+    void radioStatusObserved(const AetherSDR::RadioStatusObservation& observation);
     void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
     void versionReceived(const QString& version);
     void pingRttMeasured(int ms);
@@ -98,6 +105,8 @@ private slots:
     void onHeartbeat();
 
 private:
+    friend class FlexRadioStatusTestPeer;
+    FlexRadioStatusSource m_radioStatusSource;
     friend class WanConnectionTestAccess;
 
     void processLine(const QString& line);

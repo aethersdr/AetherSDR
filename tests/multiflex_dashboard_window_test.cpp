@@ -1,3 +1,4 @@
+#include "FlexRadioStatusTestSupport.h"
 // The multiFLEX Dashboard is a canon dialog.
 //
 // Pinned here, each with its control:
@@ -70,15 +71,17 @@ int pixelsNear(const QImage& image, const QColor& color, int slack)
     return n;
 }
 
-// Feeds two stations into a bare model: client 0x00000000 is us (a bare
-// model's own handle is 0), and the other station holds PTT.
+// The inert transport has a valid local identity; no socket is opened.
 void addTwoStations(RadioModel& model)
 {
-    model.handleStatusForTest(QStringLiteral("client 0x00000000"),
+    auto* backend = dynamic_cast<FlexBackend*>(model.backend());
+    Q_ASSERT(backend);
+    FlexRadioStatusTestPeer::handle(*backend->connection(), 0x1234);
+    observeRadioStatus(model, QStringLiteral("client 0x1234"),
         {{QStringLiteral("connected"), QString()},
          {QStringLiteral("program"), QStringLiteral("AetherSDR")},
          {QStringLiteral("station"), QStringLiteral("Bench")}});
-    model.handleStatusForTest(QStringLiteral("client 0x7594C952"),
+    observeRadioStatus(model, QStringLiteral("client 0x7594C952"),
         {{QStringLiteral("connected"), QString()},
          {QStringLiteral("program"), QStringLiteral("SmartSDR")},
          {QStringLiteral("station"), QStringLiteral("Shack")},
@@ -290,7 +293,7 @@ private slots:
             addTwoStations(model);
             auto* table = window.findChild<QTableWidget*>();
             QVERIFY(table);
-            const int ours = rowOfHandle(table, 0);
+            const int ours = rowOfHandle(table, 0x1234);
             const int other = rowOfHandle(table, 0x7594C952);
             QVERIFY(ours >= 0 && other >= 0);
             const QColor success = tm.color(table, QStringLiteral("color.accent.success"));
@@ -332,7 +335,7 @@ private slots:
         addTwoStations(model);
         auto* table = window.findChild<QTableWidget*>();
         QVERIFY(table);
-        const int ours = rowOfHandle(table, 0);
+        const int ours = rowOfHandle(table, 0x1234);
         const int other = rowOfHandle(table, 0x7594C952);
         QWidget* disconnectBefore = table->cellWidget(other, 4);
         QTableWidgetItem* tickBefore = table->item(other, 0);
@@ -429,7 +432,7 @@ private slots:
                                    + QStringLiteral("/rows-%1.png").arg(QLatin1String(theme)));
 
             for (int row = 0; row < table->rowCount(); ++row) {
-                const bool isUs = table->item(row, 0)->data(Qt::UserRole).toUInt() == 0;
+                const bool isUs = table->item(row, 0)->data(Qt::UserRole).toUInt() == 0x1234;
                 const QString station = table->item(row, 1)->text();
                 if (isUs) {
                     if (table->item(row, 1)->foreground().color() != cyan)

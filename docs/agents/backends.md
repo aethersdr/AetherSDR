@@ -102,6 +102,20 @@ Contract: [`docs/aetherd-stage4-tx-coordinator.md`](../aetherd-stage4-tx-coordin
   through backend queues and retries. Producer identity does not confer an
   independent actor grant.
 
+## Radio and client status observations
+
+Flex LAN and SmartLink decode radio-global, client, oscillator and static-network
+reports into present-only `RadioStatusObservation` values before the owner-thread
+seam. Existing `RadioDelta` fields remain the radio-global contract. The model
+owns client inventory, discovery precedence and notification policy. A disconnect
+retires ordinary reports immediately; terminal client reports precede an ordered
+end marker, and a replacement session invalidates both. Delayed client notices
+retain the original client incarnation. Repeated values remain observations for
+pending operations even when no presentation change is needed. Calibration progress
+is typed; acceptance, observed running and observed completion remain distinct.
+Unconverted status families keep the compatibility relay. No daemon method or TX
+authority is added by this status migration.
+
 ## In-process audio and spectrum — one route each
 
 `IRadioBackend::audioFrameReady` has two possible routes to
