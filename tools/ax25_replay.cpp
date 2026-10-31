@@ -78,6 +78,10 @@ bool loadWav(const QString& path, std::vector<float>& samples, int& sampleRate, 
             .arg(format).arg(channels).arg(bits);
         return false;
     }
+    if (dataBytes % 4 != 0) {
+        err = QStringLiteral("data chunk length %1 is not a multiple of 4 (float32 sample size)").arg(dataBytes);
+        return false;
+    }
     samples.resize(static_cast<size_t>(dataBytes / 4));
     std::memcpy(samples.data(), data, static_cast<size_t>(dataBytes));
     return true;
