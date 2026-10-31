@@ -48,7 +48,7 @@ int main(int argc, char** argv)
         const int before = publications;
         IcomCivBackendTestAccess::selectModel(backend, model);
         const RadioCapabilities caps = backend.capabilities();
-        const int expected = model.hasScope ? 1 : 0;
+        const int expected = model.hasScope ? (profileFor(model).dualReceiver ? 2 : 1) : 0;
         dualScopeModels += model.hasScope && model.receivers > 1;
         noScopeModels += !model.hasScope;
         const bool backendCorrect = caps.maxPanadapters == expected

@@ -104,6 +104,20 @@ bool expandManualAdvancedSection(ConnectionPanel& panel)
     return true;
 }
 
+void checkExperimentalIcomModels()
+{
+    ConnectionPanel panel;
+    auto* chooser = panel.findChild<QComboBox*>(QStringLiteral("connectionManualIcomCivCombo"));
+    for (const QString& value : {QStringLiteral("98"), QStringLiteral("B2")}) {
+        const int index = chooser ? chooser->findData(value) : -1;
+        report(qPrintable(QStringLiteral("Icom %1 is labelled experimental in the CI-V chooser").arg(value)),
+               chooser && index >= 0 && chooser->itemText(index).contains(QStringLiteral("experimental"), Qt::CaseInsensitive));
+    }
+    const int supported = chooser ? chooser->findData(QStringLiteral("B6")) : -1;
+    report("supported IC-7300MK2 retains its supported chooser label",
+           chooser && supported >= 0 && !chooser->itemText(supported).contains(QStringLiteral("experimental"), Qt::CaseInsensitive));
+}
+
 void checkIcomManualGuidanceIsModelNeutral()
 {
     ConnectionPanel panel;
@@ -810,6 +824,7 @@ int main(int argc, char** argv)
     }
 
     app.setFont(originalFont);
+    checkExperimentalIcomModels();
     checkIcomManualGuidanceIsModelNeutral();
     checkIcomCustomNatPorts();
     checkIcomUsesRoutedRetention();

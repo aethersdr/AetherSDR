@@ -109,10 +109,11 @@ public:
     // retransmitter could not repair becomes a brief silence rather than a
     // click. Sized from the average packet, which is the right use of the 10 ms
     // figure — an approximation standing in for data we do not have.
-    [[nodiscard]] std::vector<float> concealLoss(int packets, int sampleRateHz) const;
+    [[nodiscard]] std::vector<float> concealLoss(int packets, int sampleRateHz);
 
 private:
     AudioCodec m_codec;
+    std::vector<std::uint8_t> m_partialFrame; // At most three stereo PCM bytes.
 };
 
 }  // namespace AetherSDR::icom

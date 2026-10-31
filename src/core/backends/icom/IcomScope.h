@@ -157,6 +157,7 @@ private:
     ScopeFrame m_partial;
     bool m_assembling = false;
     int  m_expectedDivision = 0;
+    int  m_totalDivisions = 0;
 };
 
 // ---------------------------------------------------------------------------

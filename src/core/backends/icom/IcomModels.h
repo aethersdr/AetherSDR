@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -422,6 +423,13 @@ struct SquelchScaleProfile {
 // here. Adding a radio is intentionally metadata-first and conservative: code
 // migrated to a facet must treat its absence as unsupported and must never
 // borrow another model's command shape or calibration.
+// Absolute MAIN/SUB addressing (25/26/29), two simultaneous 689-bin scopes.
+// SET-menu items are decimal numbers encoded as two BCD bytes on the wire.
+struct DualReceiverProfile {
+    int lanOutputItem = -1;
+    std::array<int, 3> dataInputItems{};
+};
+
 struct IcomModelProfile {
     bool supportedBringup = false;
     bool hasGpsHardware = false;
@@ -438,6 +446,7 @@ struct IcomModelProfile {
 
     std::span<const IcomBand> bands;
     std::optional<ModulationProfile> modulation;
+    std::optional<DualReceiverProfile> dualReceiver;
     std::optional<TxBandwidthProfile> txBandwidth;
     std::optional<FmRepeaterProfile> fmRepeater;
     std::optional<CwTextKeyerProfile> cwTextKeyer;

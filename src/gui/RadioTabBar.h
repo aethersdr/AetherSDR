@@ -3,6 +3,7 @@
 #include <QAbstractButton>
 #include <QList>
 #include <QString>
+#include <QStringList>
 #include <QVariantMap>
 #include <QPointer>
 #include <QWidget>
@@ -10,6 +11,7 @@
 class QHBoxLayout;
 class QScrollArea;
 class QTimer;
+class QMenu;
 
 namespace AetherSDR {
 
@@ -21,11 +23,17 @@ namespace AetherSDR {
 enum class RadioTabStatus {
     Available,   // discovered, idle — slate
     Connected,   // this client owns the session — green, slow pulse
-    InUse        // another station has it — amber
+    InUse,       // another station has it — amber
+    Saved,
+    Unavailable,
+    SignInRequired,
+    Connecting,
+    Disconnecting,
+    Failed
 };
 
 // The machine-readable status token the automation bridge publishes:
-// "connected" / "available" / "in use", lower-case and untranslated. Drivers
+// Connection and availability tokens are lower-case and untranslated. Drivers
 // match on these, so they are a contract — see docs/automation-bridge.md.
 QString radioTabStatusText(RadioTabStatus status);
 
@@ -37,7 +45,12 @@ QString radioTabStatusLabel(RadioTabStatus status);
 struct RadioTabEntry {
     bool           canRename{false};
     bool           visibleInTabs{true};
-    QString        id;         // stable key — serial, or family:address for HL2
+    bool           canConnect{true};
+    bool           canCancel{false};
+    QString        connectReason;
+    QString        serial;
+    QString        location;
+    QString        id;         // stable saved workspace identity; hardware serial is separate
     QString        name;       // "Hermes-Lite 2", "FLEX-6600" — or the operator's nickname
     QString        model;      // hardware model; shown on line two only when `name` hides it
     QString        detail;     // free text appended after the status, e.g. a callsign
@@ -48,7 +61,9 @@ struct RadioTabEntry {
     {
         return id == o.id && name == o.name && model == o.model && detail == o.detail
             && transport == o.transport && status == o.status
-            && canRename == o.canRename && visibleInTabs == o.visibleInTabs;
+            && canRename == o.canRename && visibleInTabs == o.visibleInTabs
+            && canConnect == o.canConnect && canCancel == o.canCancel
+            && connectReason == o.connectReason && serial == o.serial && location == o.location;
     }
 };
 
@@ -126,8 +141,7 @@ private:
     bool          m_focusVisible{false};
 };
 
-// The radio strip: one tab per known radio, plus a "+" that opens the
-// discovered-radios popover.
+// Persistent workspace radio tabs; "+" opens Locations and saved connections.
 class RadioTabBar : public QWidget {
     Q_OBJECT
 
@@ -169,6 +183,7 @@ public:
     // bridge and the keyboard both need a non-mouse entry point).
     void showDiscoveryPopover();
     bool isDiscoveryPopoverVisible() const;
+    bool showRadioContextMenu(const QString& id);
 
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
@@ -183,6 +198,7 @@ public:
 signals:
     void radioActivated(const QString& id);
     void radioActionRequested(const QString& id, const QString& action);
+    void radioOrderChanged(const QStringList& ids);
     void rescanRequested();
     void discoveryPopoverRequested();
     void connectManuallyRequested();
@@ -192,6 +208,7 @@ private:
     void applyActiveState();
     RadioTab* linkCarrierTab() const;
     void refreshOpenPopover();   // rebuild an open popover from m_discovered
+    QMenu* createRadioMenu(const RadioTabEntry& entry, QWidget* parent);
     QString   linkRadioId() const;   // the radio the heartbeat describes
     void updateTabViewport(RadioTab* ensureVisible = nullptr);
     // Push the current link state (override colour, alarm phase, glow level)
@@ -200,15 +217,20 @@ private:
 
     QHBoxLayout*         m_layout{nullptr};
     QScrollArea*         m_scrollArea{nullptr};
-    // Drag-to-scroll for an overflowing strip: a press on a tab or between
-    // tabs that moves sideways past the drag distance pans the strip and is
-    // not a click.
+    // Tabs drag to reorder; empty strip space drags to scroll. Neither gesture
+    // activates a radio. Edge scrolling keeps overflowed destinations reachable.
     bool handleStripDrag(QObject* watched, QEvent* ev);
+    void reorderDraggedTab(int globalX);
+    void finishStripDrag(bool cancel = false);
     QPointer<QAbstractButton> m_dragPressedTab;
     int                  m_dragPressX{0};
     int                  m_dragStartValue{0};
     bool                 m_dragArmed{false};
     bool                 m_dragging{false};
+    QStringList          m_dragOriginalOrder;
+    int                  m_dragLastGlobalX{0};
+    int                  m_dragScrollDirection{0};
+    QTimer*              m_dragScrollTimer{nullptr};
     QWidget*             m_tabHost{nullptr};
     QHBoxLayout*         m_tabsLayout{nullptr};
     QList<RadioTabEntry> m_radios;
@@ -216,6 +238,7 @@ private:
     QList<RadioTab*>     m_tabs;
     QAbstractButton*     m_addButton{nullptr};
     QWidget*             m_popover{nullptr};
+    QPointer<QMenu>      m_contextMenu;
     bool                 m_popoverRefreshPending{false};   // waiting on a row's menu to close
     QString              m_activeId;
     QString              m_carrierId;   // last session's radio; carries the link through a drop

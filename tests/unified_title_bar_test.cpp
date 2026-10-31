@@ -29,6 +29,7 @@
 // state assertion, so only the rendered bar can catch it.
 
 #include "gui/RadioTabBar.h"
+#include "gui/ExperimentalRadioSupport.h"
 #include "gui/TitleBar.h"
 #include "gui/WindowCaptionButtons.h"
 #include "gui/WindowChrome.h"
@@ -36,6 +37,7 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QDir>
 #include <QFocusEvent>
 #include <QFrame>
 #include <QImage>
@@ -285,6 +287,35 @@ int main(int argc, char** argv)
     host.resize(1400, 200);
     host.show();
     app.processEvents();
+    for (const QString& model : {QStringLiteral("IC-7610"), QStringLiteral("IC-7760")}) {
+        QWidget fixtureHost;
+        auto* previewBar = new TitleBar(&fixtureHost);
+        fixtureHost.resize(1400,100);
+        fixtureHost.show();
+        app.processEvents();
+        const auto descriptor = experimentalRadioDescriptor(QStringLiteral("icom"), model);
+        check(descriptor.has_value(), "new dual-receiver Icom retains experimental support classification");
+        RadioTabEntry receiver;
+        receiver.id = model;
+        receiver.name = model;
+        receiver.model = model;
+        receiver.status = RadioTabStatus::Connected;
+        previewBar->setRadioTabs({receiver});
+        previewBar->setActiveRadio(model);
+        previewBar->setExperimentalRadioFamily(descriptor ? descriptor->displayName : QString{});
+        auto* badge = previewBar->findChild<QLabel*>(QStringLiteral("experimentalRadioBadge"));
+        check(badge && !badge->isHidden() && badge->text() == QStringLiteral("EXPERIMENTAL")
+                  && !badge->accessibleDescription().isEmpty(),
+              "IC-7610/7760 shows the accessible EXPERIMENTAL badge in the radio-tab strip");
+        const QString screenshotDir = qEnvironmentVariable("AETHER_TEST_SCREENSHOT_DIR");
+        if (!screenshotDir.isEmpty()) {
+            QDir().mkpath(screenshotDir);
+            app.processEvents();
+            check(previewBar->grab().save(screenshotDir + QLatin1Char('/') + model.toLower()
+                                  + QStringLiteral("-experimental.png")),
+                  "offline Icom radio-tab fixture screenshot is saved");
+        }
+    }
 
 #ifdef Q_OS_MACOS
     QWidget uncreatedHost;
@@ -675,6 +706,133 @@ int main(int argc, char** argv)
         bar->setActiveRadio(connected.id);
     }
 
+    // Reordering works without overflow and preserves widget/connection identity.
+    {
+        RadioTabBar reorder;
+        RadioTabEntry a = connected; a.id = "order-a";
+        RadioTabEntry b = inUse; b.id = "order-b";
+        RadioTabEntry c = inUse; c.id = "order-c";
+        reorder.setRadios({a, b, c});
+        reorder.resize(900, 40);
+        reorder.show();
+        reorder.setActiveRadio(a.id);
+        app.processEvents();
+        int activations = 0;
+        QStringList savedOrder;
+        int saves = 0;
+        QObject::connect(&reorder, &RadioTabBar::radioActivated, [&activations](const QString&) { ++activations; });
+        QObject::connect(&reorder, &RadioTabBar::radioOrderChanged, [&savedOrder, &saves](const QStringList& order) { savedOrder = order; ++saves; });
+        RadioTab* first = nullptr;
+        RadioTab* last = nullptr;
+        for (RadioTab* tab : reorder.findChildren<RadioTab*>()) {
+            if (tab->entry().id == a.id) { first = tab; }
+            if (tab->entry().id == c.id) { last = tab; }
+        }
+        const QPointF pressGlobal = first->mapToGlobal(QPointF(first->width() / 2.0, first->height() / 2.0));
+        const QPointF endGlobal = last->mapToGlobal(QPointF(last->width() / 2.0 + 20, last->height() / 2.0));
+        const auto send = [](RadioTab* tab, QEvent::Type type, QPointF global, Qt::MouseButtons held) {
+            QMouseEvent event(type, tab->mapFromGlobal(global), global,
+                type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton, held, Qt::NoModifier);
+            QApplication::sendEvent(tab, &event);
+        };
+        send(first, QEvent::MouseButtonPress, pressGlobal, Qt::LeftButton);
+        send(first, QEvent::MouseMove, endGlobal, Qt::LeftButton);
+        b.detail = "updated during drag";
+        reorder.setRadios({a, b, c});
+        send(first, QEvent::MouseButtonRelease, endGlobal, Qt::NoButton);
+        check(savedOrder == QStringList{b.id, c.id, a.id} && saves == 1, "dragging past tab centers emits one complete saved order");
+        check(activations == 0 && reorder.activeRadioId() == a.id && first->entry().id == a.id,
+            "reordering and discovery refresh preserve the active radio and dragged widget");
+        const auto visualOrder = [&reorder] {
+            QStringList result;
+            for (const QVariant& tab : reorder.state().value("tabs").toList()) { result.append(tab.toMap().value("id").toString()); }
+            return result;
+        };
+        check(visualOrder() == savedOrder, "bridge inspection exposes tabs in visual order");
+        const QPointF newPress = first->mapToGlobal(QPointF(first->width() / 2.0, first->height() / 2.0));
+        send(first, QEvent::MouseButtonPress, newPress, Qt::LeftButton);
+        send(first, QEvent::MouseMove, pressGlobal, Qt::LeftButton);
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(first, &escape);
+        check(visualOrder() == savedOrder && saves == 1, "Escape cancels a reorder without persisting it");
+        QKeyEvent menuKey(QEvent::KeyPress, Qt::Key_F10, Qt::ShiftModifier);
+        QApplication::sendEvent(first, &menuKey);
+        check(reorder.state().value("contextMenuVisible").toBool() && reorder.activeRadioId() == a.id,
+            "Shift+F10 opens the tab menu without switching radios");
+        if (QMenu* menu = reorder.findChild<QMenu*>()) { menu->close(); }
+    }
+
+    // A tab's menu targets that tab, including with keyboard activation.
+    {
+        RadioTabBar* tabs = bar->radioTabBar();
+        QString requestedId;
+        QString requestedAction;
+        const auto request = QObject::connect(tabs, &RadioTabBar::radioActionRequested,
+            [&requestedId, &requestedAction](const QString& id, const QString& action) {
+                requestedId = id; requestedAction = action;
+            });
+        const QString active = tabs->activeRadioId();
+        check(tabs->showRadioContextMenu(inUse.id), "an inactive tab opens its own context menu");
+        QMenu* menu = tabs->findChild<QMenu*>(QStringLiteral("radioSwitcherMenu_") + inUse.id);
+        QAction* connect = menu ? menu->findChild<QAction*>(QStringLiteral("radioSwitcher_connect_") + inUse.id) : nullptr;
+        check(connect && connect->text() == QStringLiteral("Switch to this radio…"), "context connect names the replacement action");
+        if (connect) { connect->trigger(); }
+        check(requestedId == inUse.id && requestedAction == QStringLiteral("connect"), "context action targets the clicked radio");
+        check(tabs->activeRadioId() == active, "opening or invoking a menu cannot optimistically change the active radio");
+        if (menu) { menu->close(); }
+        QObject::disconnect(request);
+        RadioTabEntry pending = inUse;
+        pending.canCancel = true;
+        pending.canConnect = false;
+        pending.status = RadioTabStatus::Connecting;
+        tabs->setRadios({connected, pending});
+        app.processEvents();
+        tabs->showRadioContextMenu(pending.id);
+        QMenu* pendingMenu = tabs->findChildren<QMenu*>().last();
+        check(pendingMenu && pendingMenu->findChild<QAction*>(QStringLiteral("radioSwitcher_cancel_") + pending.id), "a connecting tab exposes Cancel connection");
+        if (pendingMenu) { pendingMenu->close(); }
+        tabs->setRadios({connected, inUse});
+        app.processEvents();
+    }
+
+    // A global accent-menu foreground must not leak onto a canon selection.
+    {
+        RadioTabBar* tabs = bar->radioTabBar();
+        const QString priorSheet = app.styleSheet();
+        for (const QString& theme : {QStringLiteral("Default Dark"), QStringLiteral("Default Light")}) {
+            auto& tm = ThemeManager::instance();
+            check(tm.setActiveTheme(theme), "context menu render theme loads");
+            app.setStyleSheet(priorSheet + QStringLiteral("QMenu::item:selected { color: %1; }")
+                .arg(tm.color(QStringLiteral("color.canon.onAccent")).name()));
+            tabs->showRadioContextMenu(inUse.id);
+            auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            QAction* action = menu ? menu->findChild<QAction*>(QStringLiteral("radioSwitcher_connect_") + inUse.id) : nullptr;
+            check(menu && action, "the theme render uses the actual radio tab menu");
+            if (menu && action) {
+                menu->setActiveAction(action);
+                app.processEvents();
+                const QImage rendered = menu->grab().toImage().convertToFormat(QImage::Format_ARGB32);
+                const qreal dpr = rendered.devicePixelRatio();
+                const QRect row = menu->actionGeometry(action);
+                const QRect pixels(qRound(row.x() * dpr), qRound(row.y() * dpr), qRound(row.width() * dpr), qRound(row.height() * dpr));
+                const QColor ink = tm.color(menu, QStringLiteral("color.canon.ink"));
+                int inkPixels = 0;
+                for (int y = pixels.top(); y <= pixels.bottom() && y < rendered.height(); ++y) {
+                    for (int x = pixels.left(); x <= pixels.right() && x < rendered.width(); ++x) {
+                        const QColor actual = rendered.pixelColor(x, y);
+                        if (qAbs(actual.red() - ink.red()) < 12 && qAbs(actual.green() - ink.green()) < 12
+                            && qAbs(actual.blue() - ink.blue()) < 12) { ++inkPixels; }
+                    }
+                }
+                check(inkPixels > 10, "highlighted menu text renders with the theme's canon ink");
+                check(!menu->styleSheet().contains(QStringLiteral("{{")), "all menu theme tokens resolve");
+                menu->close();
+            }
+        }
+        app.setStyleSheet(priorSheet);
+        ThemeManager::instance().setActiveTheme(QStringLiteral("Default Dark"));
+    }
+
     // ── Discovered-radios popover ───────────────────────────────────────────
     RadioTabBar* tabs = bar->radioTabBar();
     check(tabs != nullptr, "the bar owns a radio tab strip");
@@ -695,7 +853,7 @@ int main(int argc, char** argv)
             check(manual != nullptr, "the popover exposes its manual-connect row");
             check(heading != nullptr, "the popover exposes its heading");
             if (manual) {
-                check(manual->text() == QStringLiteral("Connect manually\u2026"),
+                check(manual->text() == QStringLiteral("Manage connections\u2026"),
                       "the manual-connect ellipsis is valid Unicode");
                 check(!manual->styleSheet().contains(QStringLiteral("{{")),
                       "the popover row resolves every theme token");
@@ -878,8 +1036,7 @@ int main(int argc, char** argv)
             check(hbar->value() < before,
                   "a vertical wheel notch scrolls the overflowing strip sideways");
 
-            // Dragging a tab sideways pans the overflowing strip and is not a
-            // click; a press that does not move still activates the tab.
+            // Dragging empty strip space scrolls; a still tab click activates.
             hbar->setValue(hbar->maximum() / 2);
             RadioTab* grabbed = nullptr;
             int grabX = 0;   // a point on the tab that is inside the viewport
@@ -899,19 +1056,19 @@ int main(int argc, char** argv)
                     tabs, &RadioTabBar::radioActivated, [&activations](const QString&) { ++activations; });
                 // A real pointer's screen position does not move with the strip.
                 const QPointF pressGlobal = grabbed->mapToGlobal(QPointF(grabX, grabbed->height() / 2.0));
-                auto send = [grabbed, pressGlobal](QEvent::Type type, int dx, Qt::MouseButtons held) {
+                auto send = [surface = scroller->viewport(), pressGlobal](QEvent::Type type, int dx, Qt::MouseButtons held) {
                     const QPointF global = pressGlobal + QPointF(dx, 0);
-                    QMouseEvent e(type, grabbed->mapFromGlobal(global), global,
+                    QMouseEvent e(type, surface->mapFromGlobal(global), global,
                                   type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
                                   held, Qt::NoModifier);
-                    QApplication::sendEvent(grabbed, &e);
+                    QApplication::sendEvent(surface, &e);
                 };
                 const int start = hbar->value();
                 send(QEvent::MouseButtonPress, 0, Qt::LeftButton);
                 send(QEvent::MouseMove, -20, Qt::LeftButton);
                 send(QEvent::MouseMove, -60, Qt::LeftButton);
                 send(QEvent::MouseButtonRelease, -60, Qt::NoButton);
-                checkEqual(hbar->value() - start, 60, "dragging a tab 60 px left pans the strip 60 px");
+                checkEqual(hbar->value() - start, 60, "dragging empty space 60 px left pans the strip 60 px");
                 checkEqual(activations, 0, "a drag does not activate the tab it started on");
                 // Click where that tab is now, after the pan.
                 const QPointF here(grabbed->width() / 2.0, grabbed->height() / 2.0);

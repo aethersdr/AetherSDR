@@ -173,8 +173,31 @@ static void testLossConcealment()
     check(rx.concealLoss(-1, 48000).empty(), "a negative count is not a giant allocation");
 }
 
+static void testStereoPacketBoundaries()
+{
+    const std::array<std::uint8_t, 8> bytes{0x00,0x20,0x00,0xe0,0x00,0x40,0x00,0xc0};
+    for (std::size_t boundary = 1; boundary < bytes.size(); ++boundary) {
+        RxAssembler rx(AudioCodec::Lpcm2ch16);
+        const auto first = rx.accept(std::span<const std::uint8_t>(bytes).first(boundary));
+        const auto second = rx.accept(std::span<const std::uint8_t>(bytes).subspan(boundary));
+        std::vector<float> samples(first);
+        samples.insert(samples.end(), second.begin(), second.end());
+        check(samples == std::vector<float>{0.25f,-0.25f,0.5f,-0.5f},
+              "fragmented stereo payload retains channel and byte alignment");
+        check(rx.concealLoss(3,48000).size() == 2880,
+              "stereo concealment counts frames rather than scalar mono samples");
+    }
+    RxAssembler rx(AudioCodec::Lpcm2ch16);
+    check(rx.accept(std::span<const std::uint8_t>(bytes).first(3)).empty(),
+          "incomplete stereo frame is withheld");
+    (void)rx.concealLoss(1,48000);
+    check(rx.accept(bytes) == std::vector<float>{0.25f,-0.25f,0.5f,-0.5f},
+          "loss clears a partial stereo frame before the next packet");
+}
+
 int main()
 {
+    testStereoPacketBoundaries();
     testCodecSupport();
     testLpcm16RoundTrip();
     testEightBitAndULaw();
