@@ -14,6 +14,7 @@
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
+#include <QFontDatabase>
 #include <QFontInfo>
 #include <QFontMetrics>
 #include <QGridLayout>
@@ -1047,6 +1048,16 @@ int main(int argc, char** argv)
     }
 
     QApplication app(argc, argv);
+
+    // Standalone widget tests bypass main.cpp's bundled-font registration.
+    // Windows offscreen can otherwise measure missing-glyph boxes as text.
+    for (const char* font : {":/fonts/Inter-Regular.ttf", ":/fonts/Inter-Bold.ttf"}) {
+        report(font, QFontDatabase::addApplicationFont(QString::fromLatin1(font)) >= 0);
+    }
+    report("default font contains A", QFontMetrics(QApplication::font()).inFontUcs4(U'A'));
+    if (g_failed != 0) {
+        return 1;
+    }
 
     std::printf("AmpApplet temperature unit test harness\n\n");
 

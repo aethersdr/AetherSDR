@@ -5957,6 +5957,7 @@ set_tests_properties(pgxl_direct_protocol_test PROPERTIES SKIP_RETURN_CODE 77)
 # Existing loopback QTcpServer binds for the live status portion of this test.
 add_executable(pgxl_panel_test
     tests/pgxl_panel_test.cpp
+    ${THEME_TEST_RESOURCES}
     src/gui/AmpApplet.cpp
     src/gui/AccessoryPanelWidgets.cpp
     src/gui/DragValuePopup.cpp
@@ -9283,6 +9284,7 @@ set_tests_properties(filter_passband_widget_test PROPERTIES
 
 add_executable(amp_applet_test
     tests/amp_applet_test.cpp
+    ${THEME_TEST_RESOURCES}
     src/gui/AmpApplet.cpp
     src/gui/AccessoryPanelWidgets.cpp
     src/gui/DragValuePopup.cpp
@@ -9300,6 +9302,8 @@ target_link_libraries(amp_applet_test PRIVATE
 )
 set_target_properties(amp_applet_test PROPERTIES AUTOMOC ON)
 add_test(NAME amp_applet_test COMMAND amp_applet_test)
+set_tests_properties(amp_applet_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Socket-free legacy display-key retirement, including WNB and per-pan isolation.
 add_executable(radio_owned_display_settings_test tests/radio_owned_display_settings_test.cpp)

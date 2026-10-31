@@ -20,6 +20,8 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <QFontDatabase>
+#include <QFontMetrics>
 #include <algorithm>
 #include <cstdlib>
 #include <QLayout>
@@ -119,6 +121,19 @@ int main(int argc, char** argv)
         qputenv("QT_QPA_PLATFORM", "offscreen");
     }
     QApplication app(argc, argv);
+
+    // Standalone widget tests bypass main.cpp's bundled-font registration.
+    // Windows offscreen can otherwise measure missing-glyph boxes as text.
+    for (const char* font : {":/fonts/Inter-Regular.ttf", ":/fonts/Inter-Bold.ttf"}) {
+        if (QFontDatabase::addApplicationFont(QString::fromLatin1(font)) < 0) {
+            std::fprintf(stderr, "Could not load bundled test font: %s\n", font);
+            return 1;
+        }
+    }
+    CHECK(QFontMetrics(QApplication::font()).inFontUcs4(U'A'));
+    if (g_failures != 0) {
+        return 1;
+    }
 
     QTcpServer server;
     if (!server.listen(QHostAddress::LocalHost, 0)) {
