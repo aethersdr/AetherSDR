@@ -469,7 +469,7 @@ comes back here as a second prep PR; do not pre-empt it.
 ## 8. Post-tag verification — done by `/tag-release`
 
 Step 4 of `/tag-release` (`scripts/check_release_assets.py`) verifies the
-seventeen-asset set (sixteen for a hotfix, the PDF manual and its `.asc`
+twenty-one-asset set (twenty for a hotfix, the PDF manual and its `.asc`
 included), the `.asc` timing, the
 `.msixupload` version, `SHA256SUMS.txt` coverage, the downloaded signatures
 and the Store step, and its report carries the result. Nothing here

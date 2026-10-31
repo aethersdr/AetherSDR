@@ -36,7 +36,8 @@ from pathlib import Path
 from typing import Any
 
 KEY_FPR = "B7656E6BCB2E022B79F0F97B5578D10E3D5918F3"
-SIGNABLE = ("x86_64.AppImage", "aarch64.AppImage", "Windows-x64-setup.exe", "Windows-x64-portable.zip")
+SIGNABLE = ("x86_64.AppImage", "aarch64.AppImage", "x86_64.tar.zst", "aarch64.tar.zst",
+            "Windows-x64-setup.exe", "Windows-x64-portable.zip")
 BUILD_WORKFLOWS = ("AppImage", "Windows Installer", "macOS DMG")
 # Started by publishing the release, not by the tag push: it typesets, signs
 # and attaches the PDF manual.
@@ -241,6 +242,7 @@ def _check_macos_steps(repo: str, r: dict[str, Any]) -> None:
 def expected_assets(v: str, hotfix: bool) -> list[str]:
     bare = ".".join(v.lstrip("v").split(".")[:3])  # 26.9.5 and 26.9.5.0 both package as 26.9.5.0
     names = [f"AetherSDR-{v}-x86_64.AppImage", f"AetherSDR-{v}-aarch64.AppImage",
+             f"AetherSDR-{v}-x86_64.tar.zst", f"AetherSDR-{v}-aarch64.tar.zst",
              f"AetherSDR-{v}-macOS-apple-silicon.dmg", f"AetherSDR-{v}-macOS-intel.dmg",
              f"AetherSDR-{v}-Windows-x64-setup.exe", f"AetherSDR-{v}-Windows-x64-portable.zip",
              f"AetherSDR-{v}-source.tar.gz", "SHA256SUMS.txt", f"AetherSDR-Manual-{v}.pdf"]
@@ -253,7 +255,7 @@ def expected_assets(v: str, hotfix: bool) -> list[str]:
 
 def expected_symbol_assets(v: str) -> list[str]:
     # Debug-symbol archives, one per platform build (docs/debugging-crashes.md).
-    # Kept out of the seventeen: users never download them, nothing signs them,
+    # Kept out of the twenty-one: users never download them, nothing signs them,
     # and a missing one costs crash symbolization, not the release.
     return [f"AetherSDR-{v}-x86_64-symbols.tar.xz", f"AetherSDR-{v}-aarch64-symbols.tar.xz",
             f"AetherSDR-{v}-macOS-apple-silicon-symbols.tar.xz", f"AetherSDR-{v}-macOS-intel-symbols.tar.xz",
@@ -362,9 +364,9 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
                 entries[m.group(2)] = m.group(1)
         want = [f"AetherSDR-{v}-{s}" for s in SIGNABLE] + [f"AetherSDR-{v}-source.tar.gz"]
         if sorted(entries) == sorted(want):
-            report("PASS", "SHA256SUMS.txt covers exactly the five signable files")
+            report("PASS", "SHA256SUMS.txt covers exactly the seven signable files")
         else:
-            report("FAIL", "SHA256SUMS.txt covers exactly the five signable files",
+            report("FAIL", "SHA256SUMS.txt covers exactly the seven signable files",
                    f"listed: {', '.join(sorted(entries)) or '(none)'}\nexpected: {', '.join(want)}")
         bad, checked = [], []
         for name, digest in entries.items():

@@ -5,7 +5,9 @@ name: Update Manifest
 #
 # build    reads only: waits for the release's payload assets, extracts each
 #          payload, and writes manifest.json plus one patch bundle per payload
-#          and per earlier release (tools/build_update_manifest.py).
+#          and per earlier release (tools/build_update_manifest.py). Linux's
+#          `full` is the release tarball the AppImage build attached, once it
+#          is shown to hold exactly the payload's files.
 # publish  runs in the update-signing environment (main and v* tags only,
 #          maintainer approval): signs the manifest with the Ed25519 update key, verifies
 #          the signature against packaging/update-signing.pub, attaches the
@@ -149,7 +151,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          want="x86_64.AppImage aarch64.AppImage Windows-x64-portable.zip"
+          want="x86_64.AppImage aarch64.AppImage x86_64.tar.zst aarch64.tar.zst Windows-x64-portable.zip"
           for i in $(seq 1 90); do
             names=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
             missing=

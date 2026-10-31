@@ -66,26 +66,28 @@ Copies that cannot install in place offer **Get AetherSDR**. Store-managed copie
 
 ## Installing AetherSDR on Linux so it updates itself
 
-The AppImage runs from wherever you saved it, and updates by downloading the next AppImage. To have **Install update** keep AetherSDR current instead, install it once from the AppImage:
+The AppImage runs from wherever you saved it, and updates by downloading the next AppImage. To have **Install update** keep AetherSDR current instead, install it once from the release tarball:
 
-1. Download the AppImage for your processor from the [releases page](https://github.com/aethersdr/AetherSDR/releases/latest).
-2. In a terminal, in the folder you saved it to, unpack it:
+1. Download `AetherSDR-<version>-x86_64.tar.zst` (or `-aarch64.tar.zst` for a 64-bit ARM computer such as a Raspberry Pi) from the [releases page](https://github.com/aethersdr/AetherSDR/releases/latest). It holds the same files as the AppImage.
+2. In a terminal, in the folder you saved it to, unpack it into a folder of its own:
 
    ```sh
-   chmod +x AetherSDR-*.AppImage
-   ./AetherSDR-*.AppImage --appimage-extract
+   mkdir aethersdr
+   tar --zstd -xf AetherSDR-*.tar.zst -C aethersdr
    ```
 
 3. Install it:
 
    ```sh
-   ./squashfs-root/AppRun --install
+   ./aethersdr/AppRun --install
    ```
 
    AetherSDR is copied into `~/.local/share/AetherSDR/install/`, added to your applications menu, and given an `aethersdr` command in `~/.local/bin`. It then starts.
-4. Delete the `squashfs-root` folder and the AppImage; they aren't used any more.
+4. Delete the `aethersdr` folder and the tarball; they aren't used any more.
 
-Your settings, logs and downloads are the same ones the AppImage uses, so nothing has to be set up again. Running `--install` again from a newer release's unpacked AppImage installs that release the same way. If `~/.local/bin/aethersdr` is already a file or link of your own, it is left alone and the installer says so.
+An AppImage works too: `./AetherSDR-*.AppImage --appimage-extract` unpacks it into `squashfs-root`, and `./squashfs-root/AppRun --install` installs it.
+
+Your settings, logs and downloads are the same ones the AppImage uses, so nothing has to be set up again. Running `--install` again from a newer release's unpacked tarball installs that release the same way. If `~/.local/bin/aethersdr` is already a file or link of your own, it is left alone and the installer says so.
 
 ### Going back to the previous version on Linux
 
