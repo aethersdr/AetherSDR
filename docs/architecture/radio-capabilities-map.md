@@ -122,7 +122,11 @@ The optional `receiveModeControl`, `receiveFilterControl`, `receiveAudioControl`
 `receivePanCenterControl`, and `receivePanBandwidthControl` records are read by
 `ModelReceiveControlTarget` at action time and by `RadioResourceAdapter` for
 versioned metadata/observation provenance. All six backends declare each record
-explicitly. They do not change UI visibility or migrate legacy command routes.
+explicitly. They do not migrate legacy command routes. `receiveFilterControl` also
+reaches the desktop through `ModeFilters` (`RxApplet`, `VfoWidget`): which FM rows
+are declared decides whether the FM width presets show and whether the passband
+widget is enabled or replaced by the "Filter unavailable" placeholder, and a
+declared row range-checks saved presets for its mode.
 Null or unknown authority fails closed. Their full per-backend support matrix,
 range contracts, TX-idle restrictions and remaining no-op/coupling limitations
 are in [local receive control](../aetherd-local-receive-control.md#qualified-backend-surface).
