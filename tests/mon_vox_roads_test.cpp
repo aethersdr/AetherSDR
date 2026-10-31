@@ -169,6 +169,16 @@ void testTciRefusesAndReportsTheTrueState()
     check("and the peers are told it is still false",
           tci.pendingNotification() == QLatin1String("mon_enable:false;"));
 
+    // A previous radio can leave the monitor on; a peer must still be able to clear it.
+    tx.setSbMonitor(true);
+    QCoreApplication::processEvents();
+    check("precondition: the monitor was left on by a previous radio", tx.sbMonitor());
+    tci.handleCommand(QStringLiteral("mon_enable:false"));
+    QCoreApplication::processEvents();
+    check("mon_enable:false still clears it", !tx.sbMonitor());
+    check("and the peers are told false",
+          tci.pendingNotification() == QLatin1String("mon_enable:false;"));
+
     tci.handleCommand(QStringLiteral("mon_volume:80"));
     QCoreApplication::processEvents();
     check("mon_volume leaves the model's level alone", tx.monGainSb() == mon0);

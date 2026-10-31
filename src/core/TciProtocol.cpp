@@ -2004,8 +2004,10 @@ QString TciProtocol::cmdMonEnable(const QStringList& args, bool /*isSet*/)
     bool on = false;
     if (!argToBool(args, args.size() == 1 ? 0 : 1, on)) return {};
     // A radio with no transmit monitor: leave the model alone and tell peers
-    // the state it really has, as rx_anf_enable does where it refuses.
-    if (!m_model->transmitMonitorAvailable()) {
+    // the state it really has, as rx_anf_enable does where it refuses. Only ON
+    // is refused: a peer clearing a value a previous radio left behind must
+    // still get through, as `U VOX 0` does on the rigctl road.
+    if (on && !m_model->transmitMonitorAvailable()) {
         m_pendingNotification = QStringLiteral("mon_enable:%1;")
             .arg(m_model->transmitModel().sbMonitor() ? "true" : "false");
         return {};
