@@ -20,13 +20,21 @@
 #include <QCommandLinkButton>
 #include <QStackedWidget>
 #include <QToolButton>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QAbstractSocket>
+#include <functional>
+#include <optional>
 
 class QVBoxLayout;
 class QScreen;
 class QScrollArea;
 class QSpinBox;
+class QTcpSocket;
 
 namespace AetherSDR {
+
+struct NetworkPathCandidate;
 
 // Novice-first dialog for local, SmartLink, and manual/VPN radio connections:
 // a CanonWindow dialog (style guide, RFC #6226) that MainWindow places itself,
@@ -128,6 +136,23 @@ public slots:
 
     // SmartLink
     void setSmartLinkClient(SmartLinkClient* client);
+    QJsonObject workspaceSnapshot() const;
+    bool applyWorkspaceOperator();
+    bool selectWorkspaceProfile(const QString& collection, const QString& id, QString* error = nullptr);
+    QJsonArray connectionTargets() const;
+    QJsonObject connectionTarget(const QString& id) const;
+    bool selectConnectionTarget(const QString& id, bool edit = false);
+    void renameConnectionTarget(const QString& id);
+    bool validateConnectionTarget(const QJsonObject& target, QString* reason = nullptr) const;
+    void requestConnectionTarget(const QString& id);
+    void rememberSuccessfulTarget(const QJsonObject& target);
+    void connectTarget(const QJsonObject& target);
+    void cancelConnectionAttempt();
+    void showLocations();
+    QJsonObject attemptTarget() const { return m_attemptTarget; }
+    QJsonObject automationConnectionProfiles() const override { return workspaceSnapshot(); }
+    bool automationSelectConnectionProfile(const QString& collection, const QString& id, QString* error) override
+    { return selectWorkspaceProfile(collection, id, error); }
 
 signals:
     void connectRequested(const RadioInfo& radio);
@@ -146,6 +171,13 @@ signals:
     // the operator-facing reason, which would otherwise be stranded on the
     // manual page (see reportStartupProbeFailure).
     void startupConnectUnavailable(const QString& reason);
+    void operatorPreferencesRequested(const QJsonObject& preferences);
+    void workspaceChanged();
+    void explicitConnectionRequested();
+    void connectionTargetRequested(const QJsonObject& target);
+    void connectionNeedsAttention(const QString& reason);
+    void connectionAttemptFailed(const QString& reason);
+    void tabVisibilityRequested(const QString& id, bool visible);
 
 private slots:
     void onConnectionModeClicked(int id);
@@ -165,7 +197,8 @@ private:
     enum ConnectionMode {
         LocalMode = 0,
         SmartLinkMode = 1,
-        ManualMode = 2
+        ManualMode = 2,
+        WorkspaceMode = 3
     };
 
     void setCurrentMode(ConnectionMode mode);
@@ -229,10 +262,12 @@ private:
     // Reports early startup credential/configuration or directed-probe failures.
     // Session authentication failures and broadcast discovery are separate paths.
     // Interactive/automation attempts are silent once the startup probe ends.
-    void reportStartupProbeFailure(const QString& reason);
+    void reportStartupProbeFailure(const QString& reason, bool needsInput = false);
     void handleHl2ProbeResult(Hl2ProbeResult probe, const QString& ip);
-    void finishManualProbe(const RadioInfo& info, bool routedOnly = false);
+    void finishManualProbe(const RadioInfo& info, bool routedOnly = false,
+                           std::optional<quint64> generation = std::nullopt);
     friend struct ConnectionPanelStartupTestAccess;
+    friend struct ConnectionPanelWorkspaceTestAccess;
     void resetManualConnectButton();
     // Re-activate the body layout after a page change. The overlap this used to
     // guard against — the Advanced section expanding, or the result line
@@ -250,11 +285,63 @@ private:
     void saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,
                            const QHostAddress& lastSuccessfulLocalIp,
-                           quint16 icomBasePort = 0);
+                           quint16 icomBasePort = 0, bool rememberWorkspace = true);
     void saveLowBandwidthPreference(bool enabled);
     void setManualMessage(const QString& text, bool error = false);
     QString formatLocalRadioLabel(const RadioInfo& radio) const;
     QString formatWanRadioLabel(const WanRadioInfo& radio) const;
+    void buildWorkspace(QVBoxLayout* root);
+    void refreshWorkspace();
+    void refreshWorkspaceDetails();
+    bool persistWorkspace(const QJsonObject& document);
+    void editWorkspaceProfile(const QString& collection, const QString& id = {}, bool duplicate = false, bool renameOnly = false);
+    void showWorkspaceMenu(bool location, const QPoint& position);
+    void moveWorkspaceRadio();
+    void manageOperatorProfiles();
+    void removeWorkspaceProfile(const QString& collection, const QString& id, bool confirmed = false);
+    void saveWorkspaceSelection();
+    void connectWorkspaceSelection();
+    void rememberWorkspaceRadio(const RadioInfo& info, const QString& kind);
+    void rememberWorkspaceWan(const WanRadioInfo& info);
+    void rememberWorkspaceManual(const QString& host, const QJsonObject& route);
+    void storeWorkspaceConnection(const QJsonObject& connection, const QString& stationId = {}, bool preserveName = true);
+    bool prepareWorkspaceLogin(const QString& email);
+    void refreshWorkspaceAccounts();
+    bool activateWorkspaceAccount(const QString& id);
+    void resumeWorkspaceSmartLink();
+    void restoreWorkspaceManual(const QJsonObject& path);
+    void beginExplicitConnection();
+    void captureAttemptOperator();
+
+    QJsonObject m_workspace;
+    QListWidget* m_stationList{nullptr};
+    QListWidget* m_workspaceRadioList{nullptr};
+    QLabel* m_workspaceTitle{nullptr};
+    QLabel* m_workspaceModel{nullptr};
+    QLabel* m_workspaceName{nullptr};
+    QWidget* m_workspaceDetails{nullptr};
+    QLabel* m_workspaceConnection{nullptr};
+    QLabel* m_workspaceAccount{nullptr};
+    QLabel* m_workspaceOperator{nullptr};
+    QLabel* m_workspaceNote{nullptr};
+    QLabel* m_workspacePathLabel{nullptr};
+    QComboBox* m_workspacePath{nullptr};
+    QPushButton* m_workspaceConnect{nullptr};
+    QPushButton* m_workspaceSave{nullptr};
+    QComboBox* m_operatorCombo{nullptr};
+    QComboBox* m_accountCombo{nullptr};
+    QString m_workspaceSelection;
+    QString m_pendingWorkspaceConnection;
+    QString m_pendingWorkspaceStation;
+    QJsonObject m_pendingSmartLinkConnection;
+    QJsonObject m_attemptTarget;
+    QJsonObject m_connectedTarget;
+    QJsonObject m_attemptOperator;
+    quint64 m_connectionGeneration{0};
+    QPointer<QTcpSocket> m_probeSocket;
+    bool m_dispatchingTarget{false};
+    bool m_allowLegacyIcomCredential{true};
+    QLineEdit* m_manualConnectionName{nullptr};
 
     QVBoxLayout* m_rootLayout{nullptr};
     QScrollArea* m_bodyScroll{nullptr};
@@ -340,6 +427,8 @@ private:
     void clearPendingIcomCredentials();
 
     QString      m_pendingIcomPassword;
+    QString      m_activeIcomCredentialId;
+    QString      m_pendingIcomUsername;
     QString      m_pendingIcomHost;
     QString      m_pendingIcomResolvedHost;
     quint16      m_pendingIcomBasePort{0};
@@ -357,6 +446,7 @@ private:
     // can flip the list's family on the way; the pick survives so the exact
     // address comes back when the family does.
     RadioBindSettings m_manualSourcePick;
+    std::function<QList<NetworkPathCandidate>(QAbstractSocket::NetworkLayerProtocol)> m_manualSourceCandidates;
     bool         m_manualConnectPending{false};
     // Set for the duration of a startup probe (probeRadio's restoreSavedFamily
     // call), which is the one probe with no operator watching the manual page.

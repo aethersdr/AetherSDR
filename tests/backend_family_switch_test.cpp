@@ -394,6 +394,22 @@ int main(int argc, char** argv)
                   QStringLiteral("latch: the stale value survives, unvouched-for"));
         }
 
+        // SmartLink preparation uses the real production family switch, without dialling.
+        switchTo(model, QStringLiteral("sim"), rebuilt);
+        model.connectToRadio(demoInfo());
+        check(waitForConnected(model, true), QStringLiteral("WAN preparation: simulator is live"));
+        check(!model.prepareWanConnection() && model.family() == QStringLiteral("sim"),
+              QStringLiteral("WAN preparation refuses to replace a live session"));
+        model.disconnectFromRadio();
+        check(waitForConnected(model, false), QStringLiteral("WAN preparation waits for source teardown"));
+        const int beforeWan = rebuilt.count();
+        check(model.prepareWanConnection() && model.family() == QStringLiteral("flex") && model.panStream(),
+              QStringLiteral("WAN preparation replaces the simulator with the real stream transport"));
+        check(rebuilt.count() == beforeWan + 1, QStringLiteral("WAN preparation announces exactly one backend replacement"));
+        check(model.prepareWanConnection() && rebuilt.count() == beforeWan + 1,
+              QStringLiteral("WAN preparation reuses an already prepared transport"));
+        switchTo(model, QStringLiteral("hl2"), rebuilt);
+
         // 7. Destroy the model with a backend attached (the app-exit path). The
         //    timer is declared OUTSIDE this scope so it outlives ~RadioModel and
         //    can actually be read.

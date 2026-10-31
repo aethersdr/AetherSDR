@@ -172,14 +172,20 @@ The **UPDATE** badge appears when a newer AetherSDR release is available; click 
 
 ### Radio tabs
 
-<img src="/img/screens/radio-list-popup.png" width="380" alt="Discovered radios popup with a Search name, address, or status field. Three rows, each with an Actions button: FLX8600, connected; Hermes-Lite 2, available; and Simulator (not on the air), 127.0.0.1, available, with the first two addresses blacked out. Connect manually... and Rescan radios sit at the bottom." />
+<img src="/img/screens/radio-tab-context-menu-light.png" width="216" alt="Light-theme radio tab context menu with Rename highlighted and readable dark text on a light selection surface." />
 
-*The radio list, opened from the plus button beside the radio tabs. Addresses are blacked out.*
+*Highlighted menu text uses the matching canon foreground and selection surface in the light theme.*
 
-- Line one is the radio's name; line two is its state in words (for example "Link lost"), so color is never the only signal.
-- The dot on the active tab is the **radio-link indicator**. It pulses once per discovery heartbeat, turns amber while discovering and red after three missed heartbeats (blinking, or solid if **View → Blink Status Indicator** is off). The alarm stays on the radio that dropped until you disconnect on purpose, start a new session or remove the tab. A deliberate disconnect never raises it. Right-click the tabs to toggle blinking.
-- When the tabs no longer fit, scroll them with the mouse wheel or drag them sideways.
-- **"+"** opens the radio list: search by name, model, address or status; a per-radio **Actions** menu (Disconnect, Rename…, Radio setup…, Remove from tabs / Add to tabs); **Connect manually…**; **Rescan radios**. Removing a tab only hides it; it does not forget the radio or its credentials. Selecting a radio opens the connection panel on it; nothing connects without your confirmation.
+<img src="/img/screens/radio-tab-context-menu.png" width="216" alt="A saved radio tab context menu with Connect or Switch, Disconnect, Rename, Connection settings and Remove from tabs actions." />
+
+*Each radio tab has a context menu. Unavailable actions remain visible with a reason.*
+
+- Saved radio tabs remain in the workspace when discovery cannot find them. Line one shows the saved name; line two shows the state and Location in words.
+- Click a disconnected tab to connect through its preferred saved path. If another radio is live, confirm **Switch** before it disconnects. Clicking the active tab keeps the current view.
+- Right-click a tab, or focus it and press **Shift+F10**, for **Connect** / **Switch to this radio…**, **Disconnect**, **Rename…**, **Connection settings…**, and **Remove from tabs**. A pending connection offers **Cancel connection**. Removing a tab keeps its saved connection; restore it through **Radio options… → Add to tabs** in the connection window.
+- **+** opens Locations at the browsed Location. Connection settings opens the matching saved radio and path. Browsing preserves the active connection; see [Location and Operator Profiles](./station-profiles.md#using-workspace-radio-tabs).
+- The dot on the active tab is the **radio-link indicator**. It pulses with discovery heartbeats and shows link loss in red. The tab also spells out **Link lost**. **View → Blink Status Indicator** controls blinking.
+- Drag tabs to reorder them; the order persists across restarts. **Esc** cancels a drag. When tabs no longer fit, drag near an edge to scroll while reordering, use the mouse wheel, or drag empty strip space.
 
 ### Transmit timer
 

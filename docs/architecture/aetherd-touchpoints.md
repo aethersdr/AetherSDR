@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 274 touchpoint headers (223 core, 51 models) — 274/274 tagged, 0/274 converted.
+**Totals:** 275 touchpoint headers (223 core, 52 models) — 275/275 tagged, 0/275 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -239,6 +239,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/BandDefs.h` | 5 | universal — Static ARRL band plan table (edges, default freq/mode, GEN/WWV); canonical band-plan data, no vendor ties. | unconverted |
 | `models/BandPlanManager.h` | 9 | universal — Band-plan overlay data (segments/spots/license classes, region merge) from JSON; radio-agnostic canon | unconverted |
 | `models/BandSettings.h` | 6 | universal — Per-band save/restore of canonical state (freq/mode/filter/AGC/WNB/display range) — band memories, no vendor fields | unconverted |
+| `models/ConnectionWorkspace.h` | 1 | universal — Versioned local station membership, connection references and operator audio/layout configuration. QtCore only; no vendor wire API or radio operating state. | unconverted |
 | `models/Ctr2ProxyModel.h` | 5 | peripheral(ctr2) — CTR2-Max controller relay: an operator-enabled opaque byte relay between the controller (TCP listener in Wi-Fi mode, USB HID link in USB mode) and a dedicated radio TCP connection. The CTR2 is an independent radio client; nothing passes RadioModel, a backend socket or IRadioBackend. A device that negotiates link extensions (HID Feature report 0x02; never a stock CTR2) also receives AetherSDR's own audio spectrum, from the GUI's Ctr2AudioSpectrumFeeder, beside the relayed stream. A peripheral accessory transport, NOT behind the radio seam. See docs/ctr2-tcp-proxy-design.md and docs/ctr2-usb-relay-design.md (RFC #6091). | unconverted |
 | `models/CwDecodeSettings.h` | 9 | ui-support — CW receive backend selection and display preferences in the existing feature-owned settings blob; no radio state. | unconverted |
 | `models/CwRxModel.h` | 2 | universal — Receive CW backend catalog and lifecycle over typed PCM; decoder workers remain private and TX is separate. | unconverted |

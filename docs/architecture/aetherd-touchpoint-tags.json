@@ -1732,5 +1732,11 @@
   "note": "Explicit per-radio amplifier telemetry association; no radio or tuner commands.",
   "split": "",
   "confidence": "high"
+ },
+ "models/ConnectionWorkspace.h": {
+  "tag": "universal",
+  "note": "Versioned local station membership, connection references and operator audio/layout configuration. QtCore only; no vendor wire API or radio operating state.",
+  "split": "",
+  "confidence": "high"
  }
 }

@@ -807,6 +807,12 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
         return;
     }
 
+    if (!m_radioModel.prepareWanConnection()) {
+        const QString reason = tr("Disconnect the current radio before preparing SmartLink.");
+        if (!m_pendingRadioTarget.isEmpty()) { failRadioSwitch(reason); }
+        else { m_connPanel->setStatusText(reason); }
+        return;
+    }
     m_userDisconnected = false;
     m_radioModel.setKnownGuiClients(splitClientField(info.guiClientHandles),
                                     splitClientField(info.guiClientPrograms),
@@ -822,14 +828,12 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
     // Pre-bind UDP socket for VITA-49 reception BEFORE requesting
     // connection, so we can pass our port to the SmartLink server.
     // The server tells the radio our public IP:port for UDP streaming.
-    // SmartLink is a Flex service, so in practice this path only runs with a
-    // PanadapterStream present -- but it dereferenced it bare, and "in practice"
-    // is what the HL2 bring-up kept disproving. Decline instead of crashing.
     if (!m_radioModel.panStream()) {
         qWarning() << "MainWindow: WAN connect requested with no PanadapterStream"
                    << "— backend does not use VITA-49 transport";
         return;
     }
+    m_smartLink.setAccountLocked(true);
     quint16 udpPort = m_radioModel.panStream()->localPort();
     if (udpPort == 0) {
         // Not yet bound — start WAN early to get a port
@@ -2468,7 +2472,7 @@ MainWindow::MainWindow(QWidget* parent)
     // Auto-connect to routed radios (probed, not broadcast-discovered)
     connect(m_connPanel, &ConnectionPanel::routedRadioFound,
             this, [this](const RadioInfo& info) {
-        if (m_userDisconnected || m_radioModel.isConnected()) return;
+        if (m_userDisconnected || m_startupConnectSuperseded || m_radioModel.isConnected()) return;
         if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
             return;
         const QString lastSerial = AppSettings::instance()
@@ -2521,7 +2525,9 @@ MainWindow::MainWindow(QWidget* parent)
             m_connPanel->setStatusText("Looking for your radio…");
             setPanadapterConnectionAnimation(true, "Looking for your radio…");
             QTimer::singleShot(500, this, [this, routedIp] {
-                m_connPanel->probeRadio(routedIp, /*restoreSavedFamily=*/true);
+                if (!m_startupConnectSuperseded && !m_userDisconnected) {
+                    m_connPanel->probeRadio(routedIp, /*restoreSavedFamily=*/true);
+                }
             });
         }
     }
@@ -4856,16 +4862,16 @@ bool MainWindow::automationTitleBarAction(const QString& action,
         return fail(QStringLiteral("no radio tab bar"));
     }
 
-    if (action == QLatin1String("selectRadio")) {
+    if (action == QLatin1String("selectRadio") || action == QLatin1String("showRadioMenu")) {
         if (target.isEmpty()) {
-            return fail(QStringLiteral("selectRadio needs a radio id"));
+            return fail(action + QStringLiteral(" needs a radio id"));
         }
         // Drive the real tab widget rather than the model behind it: the point
         // of the verb is to prove the control the operator clicks works, and a
         // model-only path would pass even if the tab were unreachable.
         const auto tabWidgets = tabs->findChildren<RadioTab*>();
         for (RadioTab* tab : tabWidgets) {
-            if (tab->entry().id == target) {
+            if (tab->entry().id == target || tab->entry().serial == target) {
                 // A hidden tab (removed from the strip, or compacted away)
                 // is one the operator cannot click either.
                 if (!tab->isVisible()) {
@@ -4874,8 +4880,12 @@ bool MainWindow::automationTitleBarAction(const QString& action,
                 }
                 // Discovery can rebuild the strip before the deferred turn.
                 const QPointer<RadioTab> guarded(tab);
-                return later([guarded]() {
-                    if (guarded) guarded->click();
+                const bool menu = action == QLatin1String("showRadioMenu");
+                const QPointer<RadioTabBar> bar(tabs);
+                return later([guarded, bar, menu]() {
+                    if (!guarded) { return; }
+                    if (menu && bar) { bar->showRadioContextMenu(guarded->entry().id); }
+                    else { guarded->click(); }
                 });
             }
         }
@@ -7199,7 +7209,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
 
         setPanadapterConnectionAnimation(
-            !m_userDisconnected && !terminalConnectionFailure,
+            !m_userDisconnected && !terminalConnectionFailure && m_pendingRadioTarget.isEmpty(),
             "Reconnecting to radio…");
 
         if (terminalConnectionFailure) {
@@ -7207,7 +7217,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
 
         // Show reconnect dialog on unexpected disconnect (only one at a time)
-        if (!m_userDisconnected && !m_reconnectDlg && !m_radioModel.radioWakeActive()) {
+        if (!m_userDisconnected && m_pendingRadioTarget.isEmpty() && !m_reconnectDlg && !m_radioModel.radioWakeActive()) {
             const bool frameless = framelessWindowEnabled();
             m_reconnectDlg = new QDialog(this);
             m_reconnectDlg->setWindowTitle(tr("Radio Disconnected"));
@@ -7263,6 +7273,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 reconnectDialog->deleteLater();
             });
             connect(dismissBtn, &QPushButton::clicked, this, [this]() {
+                m_smartLink.setAccountLocked(false);
+                m_pendingWanRadio = {};
                 m_userDisconnected = true;
                 m_wanReconnectTimer.stop();
                 m_wanReconnectAttemptInProgress = false;
@@ -7283,6 +7295,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
 
 void MainWindow::onConnectionError(const QString& msg)
 {
+    if (!m_pendingRadioTarget.isEmpty()) { failRadioSwitch(msg); return; }
+
     // A failed auto-connect must count, or the retry is unbounded — see
     // maybeAutoConnectToDiscoveredRadio(). Done here rather than in that slot
     // because this is the only place a connect is known to have ended badly.
