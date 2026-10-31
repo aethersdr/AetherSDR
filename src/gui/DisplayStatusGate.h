@@ -27,7 +27,9 @@ inline bool applyThrottledDisplayReport(bool throttleActive,
 // tier's value after the cap has moved on — in the status that follows a band
 // change, for instance. Compared with only the current cap, that stale echo
 // read as the operator's setting, became the restore target, and was sent
-// back as "the operator's value" on disconnect (#6791). `capsSent` is any set
+// back as "the operator's value" on disconnect (#6791). The cost: a genuine
+// report equal to any cap sent this episode (a band entered or a profile
+// loaded at 4/8/15 fps, say) is taken as our echo too. `capsSent` is any set
 // with contains(int): QSet<int> in the app, std::set<int> in the test.
 template <typename CapSet>
 inline bool applyThrottledDisplayReport(bool throttleActive,

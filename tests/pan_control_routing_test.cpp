@@ -390,6 +390,44 @@ void staleDisplayAndGainInfo()
     check(TxOperationIntegrationTestAccess::pending(f.radio) == 1, "prepublication removal cannot be correlated to a reused ID");
     check(f.radio.panadapter(id) == pan, "adversarial replies preserve unrelated pan identity");
 }
+void bandTransitionHoldsAdaptiveCap()
+{
+    // #6791: from a band request until its reply, RadioModel keeps the
+    // adaptive cap off the pan (the radio would save it as the new band's
+    // rates), and the last reply announces panBandSettled once.
+    PanControlFixture f;
+    const QString id = QStringLiteral("0x40000000");
+    f.publish(id, QStringLiteral("0x42000000"));
+    f.clear();
+    QStringList settled;
+    QObject::connect(&f.radio, &RadioModel::panBandSettled, &f.radio,
+                     [&](const QString& pan) { settled.append(pan); });
+    const QString cap = QStringLiteral("display pan set 0x40000000 fps=8");
+
+    f.radio.requestPanBand(id, QStringLiteral("40m"));
+    const qsizetype first = f.backend->commands().indexOf(QStringLiteral("display pan set 0x40000000 band=40m"));
+    check(first >= 0 && f.radio.panBandInFlight(id), "a dispatched band change is in flight until its reply");
+    f.radio.sendAdaptiveCapToPan(id, 8);
+    check(!f.backend->commands().contains(cap), "no adaptive cap while the band change is in flight");
+
+    f.radio.requestPanBand(id, QStringLiteral("80m"));
+    const qsizetype second = f.backend->commands().indexOf(QStringLiteral("display pan set 0x40000000 band=80m"));
+    if (first >= 0) { f.backend->answer(static_cast<size_t>(first)); }
+    check(settled.isEmpty() && f.radio.panBandInFlight(id),
+          "the first reply leaves the newer band change in flight");
+    if (second >= 0) { f.backend->answer(static_cast<size_t>(second)); }
+    check(settled == QStringList{id} && !f.radio.panBandInFlight(id), "the last reply settles the pan once");
+    f.radio.sendAdaptiveCapToPan(id, 8);
+    check(f.backend->commands().contains(cap), "the cap goes on once the band change has settled");
+
+    f.radio.requestPanBand(id, QStringLiteral("20m"));
+    const qsizetype third = f.backend->commands().indexOf(QStringLiteral("display pan set 0x40000000 band=20m"));
+    f.remove(id);
+    check(!f.radio.panBandInFlight(id), "a pan the radio removed is no longer in flight");
+    settled.clear();
+    if (third >= 0) { f.backend->answer(static_cast<size_t>(third)); }
+    check(settled.isEmpty(), "a reply that arrives after the pan is gone announces nothing");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -403,6 +441,7 @@ int main(int argc, char** argv)
     removal();
     deferredGeometry();
     staleDisplayAndGainInfo();
+    bandTransitionHoldsAdaptiveCap();
     std::printf("%d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

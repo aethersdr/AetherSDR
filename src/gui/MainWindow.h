@@ -1172,7 +1172,7 @@ private:
     void disconnectWanRadioClients(const WanRadioInfo& info);
     // Lift the adaptive cap on one pan (or every pan) by sending its
     // pre-cap FPS and waterfall rate. Used on throttle lift, and before a
-    // disconnect or band change while capped.
+    // disconnect, app close, band change or pan close while capped.
     void restorePreCapPanRates(const QString& onlyPanId = {});
     void startWanRadioConnect(const WanRadioInfo& info, bool promptForClientSlots = true);
     void requestWanReconnect();
