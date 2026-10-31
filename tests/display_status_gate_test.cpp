@@ -8,6 +8,7 @@
 #include "gui/DisplayStatusGate.h"
 
 #include <cstdio>
+#include <set>
 
 using namespace AetherSDR;
 
@@ -51,6 +52,26 @@ int main()
            applyThrottledDisplayReport(true, 67, 67) == false);
     report("line-duration: profile change (!= cap) applied",
            applyThrottledDisplayReport(true, 67, 100) == true);
+
+    // ── Every cap this episode sent (#6791). On a Fair/Poor link the cap
+    // moves 8 -> 4 -> 8; a status carrying the earlier 8 after the cap moved
+    // to 4 is still our echo, not the operator's setting. ─────────────────
+    const std::set<int> fpsCapsSent{8, 4};
+    report("episode: an earlier tier's echo is suppressed",
+           applyThrottledDisplayReport(true, fpsCapsSent, 8) == false);
+    report("episode: the current tier's echo is suppressed",
+           applyThrottledDisplayReport(true, fpsCapsSent, 4) == false);
+    report("episode: the operator's value is applied",
+           applyThrottledDisplayReport(true, fpsCapsSent, 25) == true);
+    report("episode: nothing is suppressed once the throttle lifts",
+           applyThrottledDisplayReport(false, fpsCapsSent, 8) == true);
+    report("episode: value <= 0 never applies",
+           applyThrottledDisplayReport(true, fpsCapsSent, 0) == false);
+    const std::set<int> wfCapsSent{75, 65};
+    report("episode: an earlier tier's line-duration echo is suppressed",
+           applyThrottledDisplayReport(true, wfCapsSent, 75) == false);
+    report("episode: the operator's line duration is applied",
+           applyThrottledDisplayReport(true, wfCapsSent, 80) == true);
 
     if (g_failed == 0) {
         std::printf("\nAll %d display-status-gate tests passed.\n", g_total);

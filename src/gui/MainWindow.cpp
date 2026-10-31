@@ -725,6 +725,39 @@ bool MainWindow::sendWanRadioClientDisconnects(const QString& serial,
     return true;
 }
 
+// Send each pan the FPS and waterfall rate captured in its SpectrumWidget
+// before the adaptive cap arrived. Live fps/line-duration status is held out
+// of the widgets while throttled, so these are the operator's values and the
+// cap never becomes saved radio state. Empty panId = every pan.
+//
+// A pan with a band change in flight is skipped. Its widget still holds the
+// band it left, and the new band carries its own rates, uncapped:
+// RadioModel holds the cap until the change settles (#6791).
+void MainWindow::restorePreCapPanRates(const QString& onlyPanId)
+{
+    if (profileLoadRadioStateWritesHeld()) {
+        qCDebug(lcProtocol)
+            << "MainWindow: adaptive throttle restore suppressed during profile load";
+        return;
+    }
+    if (!m_panStack) return;
+    for (auto* applet : m_panStack->allApplets()) {
+        if (!applet) continue;
+        auto* sw = applet->spectrumWidget();
+        if (!sw) continue;
+        const QString panId = applet->panId();
+        if (!onlyPanId.isEmpty() && panId != onlyPanId) continue;
+        if (m_radioModel.panBandInFlight(panId)) continue;
+        // Route through requestPanDisplayRates, not raw Flex wire text: a
+        // backend that shapes its own display rate (HL2) has no Flex
+        // command sink, so the restore silently never arrived and an FPS
+        // change made while throttled was lost for good. The dispatcher
+        // picks the seam or the wire per backend. (#4470)
+        m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
+                                            sw->wfLineDuration());
+    }
+}
+
 void MainWindow::disconnectWanRadioClients(const WanRadioInfo& info)
 {
     const auto clients = buildDisconnectClients(info);
@@ -2182,31 +2215,43 @@ MainWindow::MainWindow(QWidget* parent)
         m_adaptiveFpsCap = active ? fpsCap : 0;
         if (m_titleBar)
             m_titleBar->setThrottleFlashColor(active ? fpsCapColor(fpsCap) : QString{});
-        if (!active) {
-            // Throttle lifted — restore the radio values captured in each
-            // SpectrumWidget before the transient cap status arrived. Live
-            // fps/line-duration status is deliberately held out of the widgets
-            // while throttled, so the cap never becomes profile state.
-            if (profileLoadRadioStateWritesHeld()) {
-                qCDebug(lcProtocol)
-                    << "MainWindow: adaptive throttle restore suppressed during profile load";
-                return;
-            }
-            if (!m_panStack) return;
-            for (auto* applet : m_panStack->allApplets()) {
-                if (!applet) continue;
-                auto* sw = applet->spectrumWidget();
-                if (!sw) continue;
-                const QString panId = applet->panId();
-                // Route through requestPanDisplayRates, not raw Flex wire text: a
-                // backend that shapes its own display rate (HL2) has no Flex
-                // command sink, so the restore silently never arrived and an FPS
-                // change made while throttled was lost for good. The dispatcher
-                // picks the seam or the wire per backend. (#4470)
-                m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
-                                                    sw->wfLineDuration());
-            }
+        if (active) {
+            m_adaptiveFpsCapsSent.insert(fpsCap);
+            m_adaptiveWfRatesSent.insert(m_radioModel.adaptiveWfRateForCap(fpsCap));
+        } else {
+            m_adaptiveFpsCapsSent.clear();
+            m_adaptiveWfRatesSent.clear();
+            restorePreCapPanRates();
         }
+    });
+
+    // A Flex saves each pan's FPS and waterfall rate in the band it leaves, so
+    // a band change while capped would store the cap as that band's setting.
+    // Put the operator's values back first. Only band changes AetherSDR
+    // dispatches pass through here: one from CAT, another client or a pan
+    // dragged across a band edge does not (#6791).
+    connect(&m_radioModel, &RadioModel::panBandAboutToDispatch,
+            this, [this](const QString& panId) {
+        // restorePreCapPanRates() skips a pan whose previous band change is
+        // still in flight: the band being left has not been capped, and the
+        // widget still holds the band before it.
+        if (m_adaptiveThrottleActive)
+            restorePreCapPanRates(panId);
+    });
+    // The reply follows the new band's own pan and waterfall status, so the
+    // widget now holds that band's rates as the restore target. Until here
+    // RadioModel kept the cap off the pan, a tier change included.
+    connect(&m_radioModel, &RadioModel::panBandSettled,
+            this, [this](const QString& panId) {
+        if (m_adaptiveThrottleActive)
+            m_radioModel.sendAdaptiveCapToPan(panId, m_adaptiveFpsCap);
+    });
+    // Closing a pan has the same effect: the radio keeps the closing pan's
+    // rates and gives them to the next pan it opens.
+    connect(&m_radioModel, &RadioModel::panAboutToRemove,
+            this, [this](const QString& panId) {
+        if (m_adaptiveThrottleActive)
+            restorePreCapPanRates(panId);
     });
 
     connect(&m_radioModel.meterModel(), &MeterModel::hwTelemetryChanged,
@@ -4232,6 +4277,13 @@ void MainWindow::closeEvent(QCloseEvent* event)
             slice->setExternalReceiveAudioReplacementMute(false, restoreMute);
         }
     }
+
+    // Lift any adaptive cap while the connection is alive, or the radio keeps
+    // the capped rates for the next session. Before the UI teardown below:
+    // the pre-cap rates live in the SpectrumWidgets, and prepareShutdown()
+    // deletes every pan applet, which left this loop nothing to send (#6791).
+    if (m_adaptiveThrottleActive)
+        restorePreCapPanRates();
 
     preparePanadapterUiForShutdown();
     auto& s = AppSettings::instance();
@@ -7188,6 +7240,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_panDisplayStatusConnections.clear();
         m_adaptiveThrottleActive = false;
         m_adaptiveFpsCap = 0;  // clear cap alongside throttle flag — see #2829 review
+        m_adaptiveFpsCapsSent.clear();
+        m_adaptiveWfRatesSent.clear();
 
         // Clear spectrum/waterfall so the display doesn't look frozen
         if (m_panStack) {

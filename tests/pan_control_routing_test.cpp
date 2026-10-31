@@ -240,6 +240,45 @@ void removal()
         check(!f.radio.removePanadapter(QStringLiteral("0x40000000")), "ordinary close preserves the last pan");
         check(f.radio.removePanadapter(QStringLiteral("0x40000000"), PanCloseIntent::ExplicitTeardown), "explicit teardown can request last-pan removal");
     }
+    {
+        // #6791: the adaptive-throttle restore writes a closing pan's rates
+        // from panAboutToRemove. That write must reach the wire before the
+        // removal, and must not trip the teardown fence (the signal fires
+        // before removePanadapter() snapshots the pan's revision).
+        PanControlFixture f;
+        f.publish(QStringLiteral("0x40000000"));
+        f.publish(QStringLiteral("0x40000001"), QStringLiteral("0x42000001"));
+        f.clear();
+        QStringList seen;
+        QObject::connect(&f.radio, &RadioModel::panAboutToRemove, &f.radio, [&](const QString& id) {
+            seen.append(id);
+            f.radio.requestPanDisplayRates(id, 25, 80);
+        });
+        const bool removed = f.radio.removePanadapter(QStringLiteral("0x40000001"));
+        const QStringList commands = f.backend->commands();
+        const qsizetype fps = commands.indexOf(QStringLiteral("display pan set 0x40000001 fps=25"));
+        const qsizetype wf = commands.indexOf(QStringLiteral("display panafall set 0x42000001 line_duration=80"));
+        const qsizetype remove = commands.indexOf(QStringLiteral("display pan remove 0x40000001"));
+        if (fps < 0 || wf < 0 || remove < 0) {
+            std::printf("about-to-remove writes: %s\n", qPrintable(commands.join(QLatin1Char('|'))));
+        }
+        check(seen == QStringList{QStringLiteral("0x40000001")}, "panAboutToRemove fires once with the closing pan's ID");
+        check(removed && fps >= 0 && wf >= 0 && remove > fps && remove > wf,
+              "a rate write from panAboutToRemove goes out before the removal, which still proceeds");
+    }
+    {
+        // Its own fixture: a removal stays in the model until the radio
+        // reports it, so after the close above 0x40000000 is not yet the
+        // last pan.
+        PanControlFixture f;
+        f.publish(QStringLiteral("0x40000000"));
+        f.clear();
+        bool announced = false;
+        QObject::connect(&f.radio, &RadioModel::panAboutToRemove, &f.radio,
+                         [&](const QString&) { announced = true; });
+        check(!f.radio.removePanadapter(QStringLiteral("0x40000000")) && !announced,
+              "a refused close (last pan) does not announce panAboutToRemove");
+    }
     for (bool reassigned : {false, true}) {
         PanControlFixture f;
         f.publish(QStringLiteral("0x40000000"));
@@ -351,6 +390,44 @@ void staleDisplayAndGainInfo()
     check(TxOperationIntegrationTestAccess::pending(f.radio) == 1, "prepublication removal cannot be correlated to a reused ID");
     check(f.radio.panadapter(id) == pan, "adversarial replies preserve unrelated pan identity");
 }
+void bandTransitionHoldsAdaptiveCap()
+{
+    // #6791: from a band request until its reply, RadioModel keeps the
+    // adaptive cap off the pan (the radio would save it as the new band's
+    // rates), and the last reply announces panBandSettled once.
+    PanControlFixture f;
+    const QString id = QStringLiteral("0x40000000");
+    f.publish(id, QStringLiteral("0x42000000"));
+    f.clear();
+    QStringList settled;
+    QObject::connect(&f.radio, &RadioModel::panBandSettled, &f.radio,
+                     [&](const QString& pan) { settled.append(pan); });
+    const QString cap = QStringLiteral("display pan set 0x40000000 fps=8");
+
+    f.radio.requestPanBand(id, QStringLiteral("40m"));
+    const qsizetype first = f.backend->commands().indexOf(QStringLiteral("display pan set 0x40000000 band=40m"));
+    check(first >= 0 && f.radio.panBandInFlight(id), "a dispatched band change is in flight until its reply");
+    f.radio.sendAdaptiveCapToPan(id, 8);
+    check(!f.backend->commands().contains(cap), "no adaptive cap while the band change is in flight");
+
+    f.radio.requestPanBand(id, QStringLiteral("80m"));
+    const qsizetype second = f.backend->commands().indexOf(QStringLiteral("display pan set 0x40000000 band=80m"));
+    if (first >= 0) { f.backend->answer(static_cast<size_t>(first)); }
+    check(settled.isEmpty() && f.radio.panBandInFlight(id),
+          "the first reply leaves the newer band change in flight");
+    if (second >= 0) { f.backend->answer(static_cast<size_t>(second)); }
+    check(settled == QStringList{id} && !f.radio.panBandInFlight(id), "the last reply settles the pan once");
+    f.radio.sendAdaptiveCapToPan(id, 8);
+    check(f.backend->commands().contains(cap), "the cap goes on once the band change has settled");
+
+    f.radio.requestPanBand(id, QStringLiteral("20m"));
+    const qsizetype third = f.backend->commands().indexOf(QStringLiteral("display pan set 0x40000000 band=20m"));
+    f.remove(id);
+    check(!f.radio.panBandInFlight(id), "a pan the radio removed is no longer in flight");
+    settled.clear();
+    if (third >= 0) { f.backend->answer(static_cast<size_t>(third)); }
+    check(settled.isEmpty(), "a reply that arrives after the pan is gone announces nothing");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -364,6 +441,7 @@ int main(int argc, char** argv)
     removal();
     deferredGeometry();
     staleDisplayAndGainInfo();
+    bandTransitionHoldsAdaptiveCap();
     std::printf("%d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

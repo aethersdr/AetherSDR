@@ -3389,18 +3389,19 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
             // the cap's own echo so the pre-cap radio value stays the restore
             // target, but let a genuine radio/profile update through even while
             // throttled (#4261 — otherwise it's lost when the throttle lifts).
+            // Every cap this episode sent counts as our echo, not just the
+            // current one (#6791).
             if (applyThrottledDisplayReport(m_adaptiveThrottleActive,
-                                            m_adaptiveFpsCap, fps)) {
+                                            m_adaptiveFpsCapsSent, fps)) {
                 sw->setFftFps(fps);
             }
         }));
     connections.append(connect(
         pan, &PanadapterModel::waterfallLineDurationReported,
         sw, [this, sw](int lineDurationMs) {
-            if (applyThrottledDisplayReport(
-                    m_adaptiveThrottleActive,
-                    m_radioModel.adaptiveWfRateForCap(m_adaptiveFpsCap),
-                    lineDurationMs)) {
+            if (applyThrottledDisplayReport(m_adaptiveThrottleActive,
+                                            m_adaptiveWfRatesSent,
+                                            lineDurationMs)) {
                 sw->setWfLineDuration(lineDurationMs);
             }
         }));
@@ -3463,13 +3464,12 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         sw->setFftWeightedAvg(pan->weightedAverage());
     }
     if (applyThrottledDisplayReport(m_adaptiveThrottleActive,
-                                    m_adaptiveFpsCap, pan->fps())) {
+                                    m_adaptiveFpsCapsSent, pan->fps())) {
         sw->setFftFps(pan->fps());
     }
-    if (applyThrottledDisplayReport(
-            m_adaptiveThrottleActive,
-            m_radioModel.adaptiveWfRateForCap(m_adaptiveFpsCap),
-            pan->waterfallLineDuration())) {
+    if (applyThrottledDisplayReport(m_adaptiveThrottleActive,
+                                    m_adaptiveWfRatesSent,
+                                    pan->waterfallLineDuration())) {
         sw->setWfLineDuration(pan->waterfallLineDuration());
     }
 }

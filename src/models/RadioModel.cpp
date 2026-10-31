@@ -1136,6 +1136,7 @@ void RadioModel::setupBackend(const QString& family)
             m_backendWfLastRowNs.remove(idx);
         }
         m_panadapters.remove(modelPanId);
+        m_panBandTransitions.forget(modelPanId);
         if (m_panStream) {
             m_panStream->unregisterPanStream(pan->panStreamId());
             m_panStream->unregisterWfStream(pan->wfStreamId());
@@ -5903,6 +5904,14 @@ bool RadioModel::removePanadapter(const QString& panId, PanCloseIntent intent)
         || !control->supports(PanLifecycleAction::Remove)
         || !original->ownedByClient(clientHandle())
         || (intent == PanCloseIntent::Ordinary && m_panadapters.size() <= 1)) { return false; }
+    // Before the fence below snapshots the pan's revision: a listener may
+    // still write to this pan (the adaptive-throttle restore does, so the
+    // radio doesn't keep the cap for the next pan it opens in this slot).
+    {
+        const QPointer<RadioModel> guard(this);
+        emit panAboutToRemove(panId);
+        if (!guard || !original || !controlSessionCurrent(session)) { return false; }
+    }
     const QString waterfallId = original->waterfallId();
     const quint64 revision = original->controlRevision();
     const quint64 retired = m_displayRetirements.value(panId);
@@ -6511,10 +6520,23 @@ bool RadioModel::dispatchPanBand(const QString& panId, const QString& bandKey)
     const RadioControlSession session = controlSession();
     emit panBandAboutToDispatch(panId);
     if (!alive) { return false; }
+    // In flight until the reply, which follows the new band's own pan and
+    // waterfall status. Any reply settles it, Cancelled included (a newer
+    // band request retires this one's fence): the status arrived either way.
+    const quint64 transition = m_panBandTransitions.begin(panId);
+    const RadioControlCompletion settled = [alive, panId, transition](const RadioControlReply&) {
+        if (alive && alive->m_panBandTransitions.settle(panId, transition)) {
+            emit alive->panBandSettled(panId);
+        }
+    };
     const ReceiveDispatch result = controlSessionCurrent(session)
-        ? requestPanDisplay(original, {PanDisplayField::Band, bandKey}) : ReceiveDispatch::Unsupported;
+        ? requestPanDisplay(original, {PanDisplayField::Band, bandKey}, settled)
+        : ReceiveDispatch::Unsupported;
     if (!alive) { return false; }
     if (result == ReceiveDispatch::Unsupported) {
+        if (m_panBandTransitions.settle(panId, transition)) {
+            emit panBandSettled(panId);
+        }
         emit panBandDispatchFailed(panId);
         return false;
     }
@@ -7099,6 +7121,7 @@ void RadioModel::stageSessionModelsForReconnect()
         }
     }
     m_panadapters.clear();
+    m_panBandTransitions.clear();
 
     m_ownedSliceIds.clear();
     if (!m_rawSliceModeLists.isEmpty()) {
@@ -7186,6 +7209,7 @@ void RadioModel::dropAllSessionModelsForFamilySwitch()
     }
     const QMap<QString, PanadapterModel*> livePans = m_panadapters;
     m_panadapters.clear();
+    m_panBandTransitions.clear();
     for (auto it = livePans.cbegin(); it != livePans.cend(); ++it) {
         if (!it.value()) continue;
         emit panadapterRemoved(it.key());
@@ -8966,6 +8990,9 @@ void RadioModel::sendAdaptiveCapToPan(const QString& panId, int fpsCap)
 {
     if (panId.isEmpty() || fpsCap <= 0) return;
     if (profileLoadRadioStateWritesHeld()) return;
+    // The radio would save the cap as the new band's rates. MainWindow caps
+    // the pan once the band change settles (#6791).
+    if (m_panBandTransitions.inFlight(panId)) return;
     auto* pan = m_panadapters.value(panId, nullptr);
     if (!pan) return;
     // A backend that shapes its own display rate has no Flex command sink, so the
@@ -11678,6 +11705,7 @@ void RadioModel::onStatusReceived(const QString& object,
                 m_panTransmitInhibitReasons.remove(panId);
                 m_panTransmitInhibitedTxSlices.remove(panId);
                 auto* pan = m_panadapters.take(panId);
+                m_panBandTransitions.forget(panId);
                 if (!pan) {
                     pan = m_stalePanadapters.take(panId);
                 }
