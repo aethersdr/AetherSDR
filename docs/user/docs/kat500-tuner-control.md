@@ -23,14 +23,14 @@ Use a local USB serial port or a raw TCP serial bridge such as ser2net or aether
 
 1. Open **Settings → Radio Setup... → Peripherals → Elecraft KAT500**.
 2. Select **Serial** and the tuner port/baud (4800, 9600, 19200 or 38400), or **Network** and the raw TCP host/port. The network bridge owns baud and 8N1 line settings. Telnet/RFC 2217 and Elecraft Remote authentication are not supported.
-3. Click **Connect**. **Auto-connect** reconnects using the saved client connection preferences when enabled.
+3. Click **Connect**. **Connect automatically** reconnects using the saved client connection preferences when enabled.
 4. The **KT500** button appears after KAT500 identification. It remains available during logical power-off or stale replies and disappears when the transport closes.
 
 For **Network**, enter a hostname or IP address without a URL scheme, path, spaces or control characters, and a port from 1 to 65535. Invalid entries are rejected before connecting.
 
 ## Using the applet
 
-**ON/OFF** shows confirmed power. Click it to request the opposite state; the label changes after readback. Silence is stale, not OFF. **Tune** requests tuner search only after your explicit click; supply RF according to the Elecraft manual. **Cancel** requests cancellation while the tuner reports an active search. AetherSDR does not generate a radio carrier for these controls.
+**ON/OFF** shows confirmed power. Click it to request the opposite state; the label changes after readback. Silence is stale, not OFF. **Tune** requests tuner search only after your explicit click; supply RF according to the Elecraft manual. **Cancel** requests cancellation while a search is pending or the tuner reports an active search. If another request or late reply is draining, cancellation waits for that drain before being sent once. The button stays dimmed while cancellation is pending; normal controls require confirmed search completion and fresh tuning/forward-ADC readbacks. The tuner decides whether RF conditions permit an operating command; AetherSDR confirms the result from hardware readback. AetherSDR does not generate a radio carrier for these controls.
 
 **Auto**, **Manual** and **Bypass** select the tuner mode. **ANT 1**, **ANT 2** and **ANT 3** remain visible. The applet automatically reads antenna availability for the confirmed band after connecting and when a new band is reported. Buttons become available after those replies; antennas disabled in the tuner configuration remain dimmed with a reason. Confirmed mode and antenna selections remain visible with dimmed text while actions are unavailable. **Clear fault** clears the current fault, not stored fault history.
 
@@ -42,7 +42,7 @@ The main buttons have hover help describing their actions. When a control is una
 - **BYP ON** means the physical bypass relays are bypassing the matching network. Clicking the pill changes those relays without changing the operating mode. Recall or tuning in Auto/Manual can engage the network again.
 - **Auto + BYP ON** can be normal: a tune can find that the antenna is already well matched and save bypass as the best setting.
 
-**Mini** is about half the height of Full. It keeps **ON/OFF**, **Tune/Cancel** and **Full**, with readouts for mode, antenna, frequency/band, SWR and fault/readiness. Switch to **Full** to change mode or antenna, clear faults, view the physical-state pills, or open a drawer. The normal docked view uses compact 22 px buttons without scrolling. Expanded drawers and short popped-out windows scroll when needed. **BYP** and **ATT** show physical bypass and attenuator state. Click either pill to request the opposite state. **KEY PASS** means the KAT500 key-line relay is connected; click to block amplifier keying. **KEY BLOCK** means it is interrupted; click to allow keying. These three pills are toggles: they retain confirmed state until the tuner replies and are unavailable during RF, tuning, maintenance or missing readback. Hover over each for its full function, current state and next action. This affects the amplifier only if its key line passes through the tuner, and does not indicate amplifier transmission; READY, WAIT, TUNING, OFF or STALE describes availability. In Mini, the middle pill combines mode, selected antenna and availability. **READY** means the tuner can accept an operating request; it does not indicate a tuned match. The pill is yellow when Bypass mode or physical bypass is active. Hover over a pill for its full description.
+**Mini** is about half the height of Full. It keeps **ON/OFF**, **Tune/Cancel** and **Full**, with readouts for mode, antenna, frequency/band, SWR and fault/readiness. Switch to **Full** to change mode or antenna, clear faults, view the physical-state pills, or open a drawer. The normal docked view uses compact 22 px buttons without scrolling. Expanded drawers and short popped-out windows scroll when needed. **BYP** and **ATT** show physical bypass and attenuator state. Click either pill to request the opposite state. **KEY PASS** means the KAT500 key-line relay is connected; click to block amplifier keying. **KEY BLOCK** means it is interrupted; click to allow keying. These three pills are toggles: they retain confirmed state until the tuner replies and are unavailable during tuning, maintenance or missing readback. The tuner may reject or defer a request because of RF; AetherSDR sends it once, polls for confirmation, and reports a timeout if the requested state is not confirmed. Hover over each for its full function, current state and next action. This affects the amplifier only if its key line passes through the tuner, and does not indicate amplifier transmission; READY, WAIT, TUNING, OFF or STALE describes availability. In Mini, the middle pill combines mode, selected antenna and availability. **READY** means AetherSDR can send an operating request; it does not indicate a tuned match. The pill is yellow when Bypass mode or physical bypass is active. Hover over a pill for its full description.
 
 The single **SWR** meter shows adjusted SWR. Press and hold its pill with the mouse to preview the last bypass SWR in the same meter; the pill becomes yellow and reads **BYP**. Release to return to adjusted SWR. This is a display-only comparison: it does not switch the tuner into bypass. Readings remain after RF stops; the tooltip identifies adjusted SWR without a fresh RF indication, and bypass preview always shows the last observed reading. **—** means no reading is available. The meter uses the TX Controls scale: 1–3, amber from 2 and red from 2.5, with labeled major ticks every 0.5 and minor ticks every 0.1. The pill still shows the exact reading above 3.
 
@@ -50,7 +50,7 @@ Expand **Manual** for C/L totals and eight relay checkboxes each. Checkbox label
 
 **History** plots last-observed SWR and forward/reflected ADC counts for five minutes. Each graph includes a trace legend, latest value, vertical scale and time labels; gaps mean missing replies. ADC counts are not watts. SWR can describe an earlier physical RF measurement. The graphs grow and shrink with the popout; smaller windows scroll when the expanded controls no longer fit.
 
-**Settings → Signal path** contains **Capacitor on antenna side**; checked places the capacitor on the antenna side. The **BYP**, **ATT** and **KEY** controls are directly available as pills in Full view. **BYP** operates only the matching-network bypass relays and leaves Auto/Manual mode unchanged; recall or tuning can engage the network again. Use the main **Bypass** mode button to disable tuning. All signal-path controls require confirmed readback and the same fresh, idle, no-RF conditions as Manual.
+**Settings → Signal path** contains **Capacitor on antenna side**; checked places the capacitor on the antenna side. The **BYP**, **ATT** and **KEY** controls are directly available as pills in Full view. **BYP** operates only the matching-network bypass relays and leaves Auto/Manual mode unchanged; recall or tuning can engage the network again. Use the main **Bypass** mode button to disable tuning. All signal-path controls require confirmed readback and the same fresh readbacks and completed-search conditions as Manual.
 
 Settings also shows identity, installed firmware, serial, DIRECT/NETWORK endpoint, baud where applicable, freshness, availability explanations and the last operation result. **Last observed** exposes the tuner readings:
 
@@ -66,7 +66,7 @@ F, FX and FC are displayed in kHz; FY is a range in kHz. They can remain after R
 
 **Debug** offers normal state/errors or **Verbose** wire and wake traffic, with copy, atomic save, clear and paused display. New entries stay in view when scrolled to the bottom. Scroll up to inspect older entries without jumping, or pause the display; resuming catches up to the newest entry. Debug TX means serial writes, not RF. Drawer triangles point down when expanded and right when collapsed.
 
-**Follow TX frequency** defaults off. Enabling it follows the effective TX slice frequency, including XIT and split offsets. When eligibility returns, a frequency change that has not yet been attempted can proceed. A failed or canceled request is not retried for the same frequency; change the effective TX frequency or switch Follow off and on to authorize a fresh attempt. It does not key a radio. The applet’s own **Tune** button remains a tuner-only request.
+**Follow TX frequency** defaults off. Enabling it follows the effective TX slice frequency, including XIT and split offsets. With fresh telemetry confirming no tuning search, Follow can send a frequency recall while forward ADC is nonzero, including during transmission. The request is sent once and checked by readback; an unconfirmed recall reports a failure. Hardware behavior for frequency recall during RF is unverified: if the tuner ignores it, unkeying does not retry that frequency. When eligibility returns, a frequency change that has not yet been attempted can proceed. A failed or canceled request is not retried for the same frequency; change the effective TX frequency or switch Follow off and on to authorize a fresh attempt. It does not key a radio. The applet’s own **Tune** button remains a tuner-only request.
 
 ### Dedicated tuner controls and pre-tune
 
@@ -114,6 +114,20 @@ Restore requires a complete firmware 02.16 backup matching the connected tuner s
 ### Controls are disabled
 
 Open **Settings** for the availability explanation, or read the control's tooltip or accessible description. Connect and identify the tuner, wait for fresh replies, turn it on, and keep it idle with no RF before writes. Configuration and memory tools require firmware 02.16. Bootloader identity directs you to the official Utility.
+
+### Tune or WAIT does not clear
+
+If a Tune request is not confirmed, fresh idle readback clears the pending search. Missing replies keep Cancel available until the tuner reports its state or the search watchdog requests cancellation.
+
+**TUNING** means the tuner reports an active search. Click **Cancel** and stop any radio carrier separately. A search started with **Tune** or **Full tune without saving** has a 30-second watchdog that requests cancellation once. It does not key or stop a radio carrier. Searches started outside this client are not automatically canceled.
+
+Cancellation polls for idle for up to 10 seconds; missing replies can end it sooner with an error. If cancellation is not confirmed, the applet keeps the reported tuner state and allows another explicit **Cancel**. It never assumes the tuner stopped just because a deadline expired.
+
+**WAIT** can mean an operation is pending, late replies are draining, or safety readback is missing or unsafe. Hover over a disabled control or open **Settings** for the reason. A small nonzero **VFWD** reading can remain while idle. It is an uncalibrated ADC count, so normal operating controls do not require literal zero. Fresh **TP0** confirms that no tuning search is active; it does not prove RF is absent. Operating requests rely on the tuner's own switching protections and confirmed readback. Configuration, restore, memory erasure and reset retain the stricter zero-ADC preflight; a persistent offset can still block those tools. Do not use reconnect as a substitute for stopping RF.
+
+If configuration or restore cannot obtain fresh idle/no-RF preflight replies, it stops with an error instead of repeating preflight indefinitely. Confirmed writes remain applied. Check the connection and readback before explicitly retrying.
+
+**Disconnect → Connect** discards queued client commands and reads the tuner again; it does not cancel a hardware search or replay a previous Tune/Cancel. **Connect automatically** only changes automatic connection behavior and does not reset an active connection.
 
 ### A requested value is not confirmed
 
