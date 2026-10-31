@@ -1170,6 +1170,8 @@ private:
     bool confirmClientSlotAvailability(const WanRadioInfo& info, QList<quint32>* disconnectHandles);
     bool sendWanRadioClientDisconnects(const QString& serial, const QList<quint32>& handles);
     void disconnectWanRadioClients(const WanRadioInfo& info);
+    // Push the throttle's enabled flag and current cap to the radio tab's AT chip.
+    void refreshAdaptiveThrottleChip();
     void startWanRadioConnect(const WanRadioInfo& info, bool promptForClientSlots = true);
     void requestWanReconnect();
     void showForcedDisconnectDialog(bool wasWan, const RadioInfo& radioInfo, const WanRadioInfo& wanInfo);
@@ -2073,7 +2075,6 @@ private:
     QHash<QString, QVector<QMetaObject::Connection>> m_panDisplayStatusConnections;
     bool m_adaptiveThrottleActive{false}; // fps/wf status held as restore targets while true
     int  m_adaptiveFpsCap{0};             // current cap (> 0 when throttle active); shown in network label
-    void refreshAdaptiveThrottleChip();   // push enabled + cap to the radio tab's AT chip
     QTimer* m_layoutRestoreTimer{nullptr}; // debounced layout rearrange after pans added on connect
     qint64 m_layoutRestoreUntilMs{0};
     // WheelApf-while-off hint: wall-clock until which the notice is already

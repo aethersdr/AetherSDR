@@ -1011,6 +1011,17 @@ int main(int argc, char** argv)
                 check(sessionTab->toolTip().contains(QLatin1String("Network Fair")),
                       "with AT the quality is shown, spelled out not colour-only");
                 check(dotPixel(sessionTab) == fair, "with AT the dot takes the quality colour");
+                // Link state still speaks first (dotColor()): an override such
+                // as the amber discovery pulse wins over the quality colour,
+                // and a lost link stops announcing the old grade.
+                tabs->setLinkIndicator(QColor(QStringLiteral("#e0a020")), /*alarm=*/false);
+                check(dotPixel(sessionTab) == QColor(QStringLiteral("#e0a020")).rgb(),
+                      "a link override still speaks over the quality colour");
+                tabs->setLinkIndicator(QColor(QStringLiteral("#cc3333")), /*alarm=*/true);
+                check(!sessionTab->toolTip().contains(QLatin1String("Network Fair")),
+                      "a lost link does not keep announcing the old quality");
+                tabs->setLinkIndicator(QColor(), /*alarm=*/false);
+                check(dotPixel(sessionTab) == fair, "the quality colour returns once the link state clears");
                 check(!idleTab->toolTip().contains(QLatin1String("Network")),
                       "another radio's tab does not claim this session's quality");
                 check(sessionTab->isThrottleChipShown(), "an armed throttle shows the AT chip");

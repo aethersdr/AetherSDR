@@ -477,7 +477,9 @@ void RadioTab::paintEvent(QPaintEvent* ev)
 
     if (m_chipShown) {
         // Outlined while the throttle is merely armed; filled in the cap's
-        // quality colour while it is holding the frame rate down.
+        // quality colour while it is holding the frame rate down. The letters
+        // stay in the primary text colour when filled: the cap colours on
+        // their own tint miss 4.5:1 in both bundled themes (RFC #6790).
         const QColor ink = m_chipTint.isValid()
             ? m_chipTint
             : theme.color(this, QStringLiteral("color.text.secondary"));
@@ -490,6 +492,9 @@ void RadioTab::paintEvent(QPaintEvent* ev)
         p.setBrush(fill);
         p.drawRoundedRect(chipRect.adjusted(0.5, 0.5, -0.5, -0.5), kChipRadius, kChipRadius);
         p.setFont(uiFont(this, kChipSizePx, 700));
+        if (m_chipTint.isValid()) {
+            p.setPen(theme.color(this, QStringLiteral("color.text.primary")));
+        }
         p.drawText(chipRect, Qt::AlignCenter, QStringLiteral("AT"));
     }
     y += nameFm.height();
