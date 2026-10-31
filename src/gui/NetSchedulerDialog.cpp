@@ -97,6 +97,10 @@ QString netSchedulerSheet()
             // A weekday chip is one letter in a 34 px button; the canon
             // button's padding would leave it no room.
             "QPushButton#netWeekdayChip { padding: 6px 0px; }"
+            // The canon sheet sets a selection background but no selection ink,
+            // leaving selected text white on canon.nested (1.27:1 in Default
+            // Light) until #6917 fixes it there.
+            "QTableWidget, QLineEdit { selection-color: {{color.canon.ink}}; }"
             "QComboBox QAbstractItemView { color: {{color.canon.inkSoft}};"
             " background: {{color.canon.nested}}; border: 1px solid {{color.canon.lineHi}};"
             " selection-background-color: {{color.canon.cyan}};"
