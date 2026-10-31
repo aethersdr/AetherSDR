@@ -11,7 +11,6 @@
 #include "core/MemoryFieldValues.h"
 #include "core/ThemeManager.h"
 
-#include <QAbstractSpinBox>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDate>
@@ -114,17 +113,6 @@ QString netSchedulerSheet()
             "QMenu::item:disabled { color: {{color.control.unavailable}}; }"
             "QMenu::separator { height: 1px; margin: 4px 8px;"
             " background: {{color.canon.line}}; }");
-}
-
-// The sheet's left padding never reaches a spin box's editor (it sits on the
-// frame's inner edge), so its text gets the text fields' inset here: the
-// Dialog-scale field padding (12 px) plus the 1 px border.
-void insetSpinText(QWidget* root)
-{
-    for (auto* spin : root->findChildren<QAbstractSpinBox*>()) {
-        if (auto* editor = spin->findChild<QLineEdit*>())
-            editor->setTextMargins(13, 0, 0, 0);
-    }
 }
 
 // A notice with one OK button, for the window's errors and empty results.
@@ -548,7 +536,8 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
     }
 
     refresh();
-    insetSpinText(&dlg);
+    // The Dialog-scale field padding (12 px) plus the 1 px border.
+    ModemChrome::insetSpinText(&dlg, 13);
 
     const int resultCode = dlg.exec();
     if (!parentGuard || !dialogOwner || resultCode != QDialog::Accepted) {

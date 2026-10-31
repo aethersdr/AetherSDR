@@ -60,4 +60,9 @@ QColor colour(const char* placeholder);
 // inside a canon window takes the canon scope's colours.
 QColor colour(const char* placeholder, const QWidget* scope);
 
+// The sheet's left padding never reaches a spin box's editor (it sits on the
+// frame's inner edge), so a window gives each spin box under `root` the text
+// fields' inset: `left` is its field padding plus border, in px.
+void insetSpinText(QWidget* root, int left);
+
 } // namespace AetherSDR::ModemChrome

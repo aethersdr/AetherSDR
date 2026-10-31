@@ -196,11 +196,6 @@ void MqttSettingsDialog::buildUi()
     m_portSpin->setRange(1, 65535);
     m_portSpin->setObjectName(QStringLiteral("mqttPort"));
     m_portSpin->setAccessibleName(tr("MQTT broker port"));
-    // The sheet's left padding never reaches a spin box's editor (it sits on
-    // the frame's inner edge), so its text gets the text fields' inset here.
-    if (auto* editor = m_portSpin->findChild<QLineEdit*>()) {
-        editor->setTextMargins(kFieldPadH + kFieldBorder, 0, 0, 0);
-    }
     form->addRow(tr("Port:"), m_portSpin);
 
     m_userEdit = new QLineEdit;
@@ -228,6 +223,7 @@ void MqttSettingsDialog::buildUi()
     form->addRow(tr("CA cert:"), caRow);
 
     brokerLayout->addLayout(form);
+    ModemChrome::insetSpinText(brokerTab, kFieldPadH + kFieldBorder);
     brokerLayout->addStretch();
     tabs->addTab(brokerTab, tr("Broker"));
 
