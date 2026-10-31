@@ -14,6 +14,9 @@
 #include <algorithm>
 #include <vector>
 #include <limits>
+#include <optional>
+#include <span>
+#include <string>
 
 using namespace AetherSDR::hl2;
 
@@ -257,6 +260,8 @@ int main()
         check(r && r->isHermesLite2(), "board 0x06 -> Hermes-Lite 2");
         check(r && r->mac[0] == 0x10 && r->mac[5] == 0x15, "MAC parsed");
         check(r && r->gatewareVersion == 0x4A, "gateware byte parsed");
+        check(r && r->gatewareMinor == std::optional<std::uint8_t>(0),
+              "minor version read from offset 0x15 (zero here)");
         check(r && r->numRx == 0x04, "receiver count read from offset 0x13 (19)");
         check(r && r->numRx != 0x45, "not offset 20 — that is the board/bandscope byte");
         check(r && r->numRx != 0x77, "not offset 18");
@@ -269,6 +274,26 @@ int main()
         shortReply[10] = 0x06;
         const auto sr = parseDiscoveryReply(shortReply);
         check(sr && sr->numRx == 0, "short reply -> numRx defaults to 0 (no OOB read)");
+        check(sr && !sr->gatewareMinor, "short reply -> no minor version (no OOB read)");
+        // The gateware minor version is VERSION_MINOR at offset 0x15
+        // (usopenhpsdr1.v:286, offset = 0x3B - 0x26). Neighbors carry other
+        // values so a read one byte off is caught. SQUARE SDR 2 reports 52 (#6806).
+        reply[2] = 0x02;
+        reply[0x14] = 0x7F;                                        // cw_hang_time byte
+        reply[0x15] = 52;                                          // VERSION_MINOR
+        reply[0x16] = 0x11;                                        // unused/zero upstream
+        const auto sq = parseDiscoveryReply(reply);
+        check(sq && sq->gatewareMinor == std::optional<std::uint8_t>(52),
+              "minor version 52 read from offset 0x15, not its neighbors");
+        check(sq && gatewareVersionText(*sq) == "74.52", "version text is major.minor, decimal");
+        reply[0x15] = 3;
+        check(gatewareVersionText(*parseDiscoveryReply(reply)) == "74.3", "stock HL2 reads 74.3");
+        // 0x15 is the last byte a reply must carry to report a minor version.
+        check(parseDiscoveryReply(std::span<const std::uint8_t>(reply.data(), 0x16))->gatewareMinor
+                  == std::optional<std::uint8_t>(3), "a reply ending at offset 0x15 still carries it");
+        const auto cut = parseDiscoveryReply(std::span<const std::uint8_t>(reply.data(), 0x15));
+        check(cut && !cut->gatewareMinor && gatewareVersionText(*cut) == "74",
+              "a reply ending before 0x15 shows the major version alone");
         std::array<std::uint8_t, 4> junk{0x00, 0x11, 0x22, 0x33};
         check(!parseDiscoveryReply(junk).has_value(), "non-Metis bytes rejected");
     }

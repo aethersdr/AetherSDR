@@ -3236,7 +3236,7 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                 // in Radio Setup showed that name when found locally and
                 // "Hermes-Lite 2" when reached over the VPN. Needs the serial first.
                 info.nickname = hl2::Hl2Discovery::effectiveNickname(info.family, info.serial, info.model);
-                info.version  = QString::number(reply->gatewareVersion);
+                info.version  = QString::fromStdString(hl2::gatewareVersionText(*reply));
                 // Same label Hl2Discovery sets on the broadcast path — this
                 // is the SECOND place an HL2 RadioInfo is built, and a field
                 // set in only one of them is not set at all.

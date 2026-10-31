@@ -521,6 +521,8 @@ std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> 
     // stream all-zero IQ. Short replies leave 0 so callers apply a default.
     if (pkt.size() > 19)
         r.numRx = pkt[19];
+    if (pkt.size() > 0x15)
+        r.gatewareMinor = pkt[0x15];   // `6'h26: VERSION_MINOR`
 
     // Telemetry, offsets 0x17-0x29: the EP6 response set in the same raw units,
     // readable without a stream (control.v:899 is combinational; no `run` gate
@@ -585,6 +587,14 @@ std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> 
         r.pttHangTimeMs = static_cast<int>(pkt[0x28] & 0x1F);
     }
     return r;
+}
+
+std::string gatewareVersionText(const DiscoveryReply& reply)
+{
+    std::string text = std::to_string(reply.gatewareVersion);
+    if (reply.gatewareMinor)
+        text += '.' + std::to_string(*reply.gatewareMinor);
+    return text;
 }
 
 std::array<std::uint8_t, kUsbPacketSize> ep2Packet(std::uint32_t seq, const Cc& a, const Cc& b) noexcept
