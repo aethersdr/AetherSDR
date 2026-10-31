@@ -1126,6 +1126,10 @@ void MainWindow::showAddPanadapterDialog()
 {
     if (!m_radioModel.isConnected()) return;
     const int maxPans = m_radioModel.maxPanadapters();
+    if (maxPans <= 0) {
+        showPanadapterSliceCapacityMessage();
+        return;
+    }
     // Determine current layout from actual pan count, not saved setting
     const bool canvasEnabled = m_workspaceController
         && m_workspaceController->isEnabled();
