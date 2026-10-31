@@ -1,6 +1,7 @@
 #include "FirmwareInstallDialog.h"
 
 #include "CanonIndicators.h"
+#include "CanonMessageBox.h"
 #include "ComboStyle.h"
 #include "Ctr2ProxyPanel.h"
 #include "ModemChrome.h"
@@ -19,14 +20,20 @@
 #include <QFileDialog>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QStyle>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <utility>
+
+#ifdef Q_OS_LINUX
+#include <cerrno>
+#include <unistd.h>
+#endif
 
 namespace AetherSDR {
 
@@ -76,6 +83,33 @@ FirmwareInstallModel::Target afterAlert(FirmwareInstallModel& fw,
     return now.device == FirmwareInstallModel::Device::Bootloader && fw.loaderCount() == 1
                ? now
                : target;
+}
+
+// The selected unit, for a press that waits (on the access question or a
+// fresh read of its offer) before acting: a change of selection drops it.
+QString unitKey(const FirmwareInstallModel::Target& target)
+{
+    return target.hidPath + QLatin1Char('|') + target.mac.toUpper();
+}
+
+// For a run after an access grant: the unit as it is now, if it is the one
+// the operator chose (same MAC, or the only one in download mode when the
+// choice had none); else false with the reason.
+bool retarget(FirmwareInstallModel& fw, const FirmwareInstallModel::Target& chosen,
+              FirmwareInstallModel::Target* now, QString* problem)
+{
+    fw.lookAgain();
+    const FirmwareInstallModel::Target current = fw.target();
+    const bool same = chosen.mac.isEmpty()
+        ? current.device == FirmwareInstallModel::Device::Bootloader && fw.loaderCount() == 1
+        : current.mac.compare(chosen.mac, Qt::CaseInsensitive) == 0;
+    if (!same) {
+        *problem = FirmwareInstallDialog::tr("The CTR2-Max changed while access was being "
+                                             "granted. Press the button again.");
+        return false;
+    }
+    *now = current;
+    return true;
 }
 
 QListWidgetItem* note(QListWidget* list, const QString& text)
@@ -345,6 +379,7 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
             [this] { restartInto(int(FirmwareInstallModel::Firmware::Bootloader)); });
     connect(m_cancel, &QPushButton::clicked, this, [this] {
         // Before cancel(): a wait ends at once, and says so.
+        m_actions.invalidate();   // no access retry resumes what was stopped
         m_step->setText(tr("Stopping…"));
         m_fw->cancel();
     });
@@ -662,6 +697,87 @@ void FirmwareInstallDialog::sync()
     m_bar->setVisible(running && !m_fw->waitingForDownloadMode());
 }
 
+bool FirmwareInstallDialog::offerAccessFirst(std::function<void()> again)
+{
+#ifdef Q_OS_LINUX
+    using Device = FirmwareInstallModel::Device;
+    const FirmwareInstallModel::Target target = m_fw->target();
+    if (!m_relay || (target.device != Device::LinkFirmware && target.device != Device::Stock)
+        || target.hidPath.isEmpty())
+        return false;
+    const QByteArray path = target.hidPath.toLocal8Bit();
+    if (::access(path.constData(), R_OK | W_OK) == 0 || errno != EACCES)
+        return false;
+    // A ticket for this press: another action or Cancel meanwhile drops it.
+    const Ctr2ActionRetry::Ticket ticket = m_actions.mark(unitKey(target));
+    // Declined, or no install could start: the action goes ahead as before.
+    return m_relay->offerAccessRule(Ctr2ProxyPanel::RuleUse::Firmware, [this, ticket, again] {
+        // What the action can do (restart on request, or the buttons) depends
+        // on the firmware's version and commands, which the relay reads once
+        // it can open the device: rescan, and wait for them (up to ~5 s).
+        if (m_model)
+            m_model->refreshDevices();
+        waitForFirmwareInfo(20, ticket, again);
+    });
+#else
+    Q_UNUSED(again);
+    return false;
+#endif
+}
+
+bool FirmwareInstallDialog::refreshOfferFirst(std::function<void()> again)
+{
+    using Device = FirmwareInstallModel::Device;
+    if (std::exchange(m_offerRefreshed, false))
+        return false;   // the repeat after the read
+    const FirmwareInstallModel::Target target = m_fw->target();
+    if (!m_model || m_model->isRunning()
+        || (target.device != Device::LinkFirmware && target.device != Device::Stock)
+        || m_fw->takesCommands(target))
+        return false;
+    const Ctr2ActionRetry::Ticket ticket = m_actions.mark(unitKey(target));
+    m_step->setText(tr("Reading the CTR2-Max's firmware…"));
+    m_model->reprobeFirmware();
+    waitForFirmwareInfo(8, ticket, [this, again] {
+        m_step->clear();
+        m_offerRefreshed = true;
+        again();
+    });
+    return true;
+}
+
+void FirmwareInstallDialog::waitForFirmwareInfo(int tries, Ctr2ActionRetry::Ticket ticket,
+                                                std::function<void()> again)
+{
+    // Another action, Cancel, or another unit selected meanwhile: drop it.
+    if (!m_actions.current(ticket, unitKey(m_fw->target()))) {
+        m_step->clear();
+        return;
+    }
+    // Known once the relay has read the device: a version (AetherCTR2), or
+    // the restart commands (stock firmware that offers them). Stock firmware
+    // without them stays unknown, and gets the buttons after the wait.
+    if (tries > 0 && m_fw->linkVersion().isEmpty() && !m_fw->takesCommands(m_fw->target())) {
+        QTimer::singleShot(250, this, [this, tries, ticket, again] {
+            waitForFirmwareInfo(tries - 1, ticket, again);
+        });
+        return;
+    }
+    again();
+}
+
+
+void FirmwareInstallDialog::runJob(const QString& doneText, Ctr2ActionRetry::Job job,
+                                   bool retarget, bool retryUsed)
+{
+    m_actions.started(job, doneText, retryUsed);
+    m_offerRefreshed = false;
+    m_jobDone = doneText;
+    QString problem;
+    const bool ok = job(retarget, &problem);
+    started(ok, problem, doneText);
+}
+
 void FirmwareInstallDialog::started(bool ok, const QString& problem, const QString& doneText)
 {
     if (!ok) {
@@ -686,41 +802,47 @@ bool FirmwareInstallDialog::askDownloadMode(bool buttons)
     if (!buttons) {
         return true;
     }
-    ScopedChildWidget<QMessageBox> ask(QMessageBox::Information,
-                                       tr("Put the CTR2-Max in download mode"),
-                                       tr("Put the CTR2-Max in download mode now."),
-                                       QMessageBox::Ok | QMessageBox::Cancel, this);
+    ScopedChildWidget<CanonMessageBox> ask(tr("Put the CTR2-Max in download mode"),
+                                           tr("Put the CTR2-Max in download mode now."), this);
     ask.get()->setInformativeText(
         tr("Hold BOOT (through the hole in the back), press and release RESET, then release "
            "BOOT. Its screen goes dark; that is normal. AetherSDR carries on by itself once it "
            "finds it there."));
-    ask.get()->setDefaultButton(QMessageBox::Ok);
-    return ask.get()->exec() == QMessageBox::Ok;
+    ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject);
+    QPushButton* ok = ask.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept);
+    ask.get()->setDefaultButton(ok);
+    ask.get()->exec();
+    return ask && ask.get()->clickedButton() == ok;
 }
 
 void FirmwareInstallDialog::confirmRestore(const QString& path)
 {
     FirmwareInstallModel::Target target = m_fw->target();
-    ScopedChildWidget<QMessageBox> ask(QMessageBox::Warning, tr("Restore the backup?"),
-                                       backupText(path), QMessageBox::Cancel, this);
+    ScopedChildWidget<CanonMessageBox> ask(tr("Restore the backup?"), backupText(path), this);
     ask.get()->setInformativeText(
         tr("A backup goes back only onto the CTR2-Max it came from, and only if the file is "
            "unchanged since it was made."));
-    QPushButton* go = ask.get()->addButton(tr("Restore"), QMessageBox::DestructiveRole);
+    // Return keeps what is on the device; restoring takes a click.
+    ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
+    QPushButton* go = ask.get()->addButton(tr("Restore"), CanonMessageBox::Role::Destructive);
     ask.get()->exec();
-    if (ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
+    if (!ask || ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
         return;
     target = afterAlert(*m_fw, target);
     const QString done = tr("The backup is restored and the CTR2-Max is restarting.");
     m_step->setText(tr("Connecting…"));
-    m_jobDone = done;
-    QString problem;
-    const bool ok = m_fw->restoreBackup(target, path, &problem);
-    started(ok, problem, done);
+    runJob(done, [this, target, path](bool again, QString* problem) {
+        FirmwareInstallModel::Target t = target;
+        return (!again || retarget(*m_fw, target, &t, problem)) && m_fw->restoreBackup(t, path, problem);
+    });
 }
 
 void FirmwareInstallDialog::onInstall()
 {
+    if (offerAccessFirst([this] { onInstall(); }))
+        return;
+    if (refreshOfferFirst([this] { onInstall(); }))
+        return;
     // The device is the one shown now; the model refuses if it changes
     // while the questions below are open.
     FirmwareInstallModel::Target target = m_fw->target();
@@ -737,27 +859,28 @@ void FirmwareInstallDialog::onInstall()
     const QString product = m_fw->releaseProduct();
     const QString version = m_fw->releaseVersion();
     const QString folder = QDir::toNativeSeparators(FirmwareInstallModel::backupFolder());
-    ScopedChildWidget<QMessageBox> ask(QMessageBox::Question, tr("Install %1?").arg(product),
-                                       tr("Install %1 %2 on this CTR2-Max?").arg(product, version),
-                                       QMessageBox::Cancel, this);
+    ScopedChildWidget<CanonMessageBox> ask(tr("Install %1?").arg(product),
+                                           tr("Install %1 %2 on this CTR2-Max?").arg(product, version),
+                                           this);
     ask.get()->setInformativeText(
         tr("Its whole flash is backed up first, to %1; that takes about a minute. The install "
            "writes only what the firmware's manifest lists: the stock firmware, its settings and "
            "its registration are kept.")
             .arg(folder));
-    QPushButton* go = ask.get()->addButton(tr("Install"), QMessageBox::AcceptRole);
+    ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject);
+    QPushButton* go = ask.get()->addButton(tr("Install"), CanonMessageBox::Role::Accept);
     ask.get()->setDefaultButton(go);
     ask.get()->exec();
-    if (ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
+    if (!ask || ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
         return;
     target = afterAlert(*m_fw, target);
     const QString done =
         tr("%1 %2 is installed and starting. The backup is in %3.").arg(product, version, folder);
     m_step->setText(tr("Connecting…"));
-    m_jobDone = done;
-    QString problem;
-    const bool ok = m_fw->installRelease(target, &problem);
-    started(ok, problem, done);
+    runJob(done, [this, target](bool again, QString* problem) {
+        FirmwareInstallModel::Target t = target;
+        return (!again || retarget(*m_fw, target, &t, problem)) && m_fw->installRelease(t, problem);
+    });
 }
 
 void FirmwareInstallDialog::installOverLink()
@@ -770,24 +893,23 @@ void FirmwareInstallDialog::installOverLink()
     }
     const QString product = m_fw->releaseProduct();
     const QString version = m_fw->releaseVersion();
-    ScopedChildWidget<QMessageBox> ask(
-        QMessageBox::Question, tr("Install %1?").arg(product),
+    ScopedChildWidget<CanonMessageBox> ask(
+        tr("Install %1?").arg(product),
         tr("Install %1 %2 over the USB cable? The device runs %3 now.")
             .arg(product, version, m_fw->linkVersion()),
-        QMessageBox::Cancel, this);
+        this);
     ask.get()->setInformativeText(
         tr("It takes about three minutes. The device checks the firmware's signature, and keeps "
            "the firmware it has if anything goes wrong."));
-    QPushButton* go = ask.get()->addButton(tr("Install"), QMessageBox::AcceptRole);
+    ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject);
+    QPushButton* go = ask.get()->addButton(tr("Install"), CanonMessageBox::Role::Accept);
     ask.get()->setDefaultButton(go);
     ask.get()->exec();
-    if (ask.get()->clickedButton() != go)
+    if (!ask || ask.get()->clickedButton() != go)
         return;
     const QString done = tr("%1 %2 is installed and running.").arg(product, version);
     m_step->setText(tr("Starting the update…"));
-    m_jobDone = done;
-    const bool ok = m_fw->installOverLink(target, &problem);
-    started(ok, problem, done);
+    runJob(done, [this, target](bool, QString* why) { return m_fw->installOverLink(target, why); });
 }
 
 void FirmwareInstallDialog::onOpenFile()
@@ -813,6 +935,10 @@ void FirmwareInstallDialog::onOpenFile()
 
 void FirmwareInstallDialog::installStockFirmware()
 {
+    if (offerAccessFirst([this] { installStockFirmware(); }))
+        return;
+    if (refreshOfferFirst([this] { installStockFirmware(); }))
+        return;
     using Device = FirmwareInstallModel::Device;
     FirmwareInstallModel::Target target = m_fw->target();
     const QString backup = selectedBackup(m_fileList);
@@ -830,9 +956,8 @@ void FirmwareInstallDialog::installStockFirmware()
     }
     const QString name = m_fw->stockFirmwareName();
     const QString folder = QDir::toNativeSeparators(FirmwareInstallModel::backupFolder());
-    ScopedChildWidget<QMessageBox> ask(QMessageBox::Question, tr("Update the CTR2-Max?"),
-                                       tr("Install %1 on this CTR2-Max?").arg(name),
-                                       QMessageBox::Cancel, this);
+    ScopedChildWidget<CanonMessageBox> ask(tr("Update the CTR2-Max?"),
+                                           tr("Install %1 on this CTR2-Max?").arg(name), this);
     QString info = tr("Only the firmware itself is written: the CTR2-Max keeps its settings, its "
                       "registration and AetherCTR2. Its whole flash is backed up first, to %1; "
                       "that takes about a minute.")
@@ -842,25 +967,30 @@ void FirmwareInstallDialog::installStockFirmware()
                 + tr("AetherCTR2 restarts into download mode for the update; the relay stops "
                      "while it runs.");
     ask.get()->setInformativeText(info);
-    QPushButton* go = ask.get()->addButton(tr("Update"), QMessageBox::AcceptRole);
+    ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject);
+    QPushButton* go = ask.get()->addButton(tr("Update"), CanonMessageBox::Role::Accept);
     ask.get()->setDefaultButton(go);
     ask.get()->exec();
-    if (ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
+    if (!ask || ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
         return;
     target = afterAlert(*m_fw, target);
     const QString done =
         tr("%1 is installed and starting. The backup is in %2.").arg(name, folder);
     m_step->setText(tr("Connecting…"));
-    m_jobDone = done;
-    QString problem;
-    const bool ok = m_fw->installStockFirmware(target, &problem);
-    started(ok, problem, done);
+    runJob(done, [this, target](bool again, QString* problem) {
+        FirmwareInstallModel::Target t = target;
+        return (!again || retarget(*m_fw, target, &t, problem)) && m_fw->installStockFirmware(t, problem);
+    });
 }
 
 void FirmwareInstallDialog::restartInto(int which)
 {
     using Firmware = FirmwareInstallModel::Firmware;
     const auto firmware = static_cast<Firmware>(which);
+    if (offerAccessFirst([this, which] { restartInto(which); }))
+        return;
+    if (refreshOfferFirst([this, which] { restartInto(which); }))
+        return;
     FirmwareInstallModel::Target target = m_fw->target();
     // Firmware that cannot restart into download mode takes the unit's buttons: the
     // alert is all there is to it, and Status follows when it gets there.
@@ -883,10 +1013,11 @@ void FirmwareInstallDialog::restartInto(int which)
                              ? tr("The CTR2-Max is restarting into its stock firmware.")
                              : tr("The CTR2-Max is restarting into download mode.");
     m_step->setText(tr("Asking the CTR2-Max to restart…"));
-    m_jobDone = done;
-    QString problem;
-    const bool ok = m_fw->restartInto(target, firmware, &problem);
-    started(ok, problem, done);
+    runJob(done, [this, target, firmware](bool again, QString* problem) {
+        FirmwareInstallModel::Target t = target;
+        return (!again || retarget(*m_fw, target, &t, problem))
+               && m_fw->restartInto(t, firmware, problem);
+    });
 }
 
 void FirmwareInstallDialog::onFinished(bool ok, const QString& message)
@@ -897,14 +1028,37 @@ void FirmwareInstallDialog::onFinished(bool ok, const QString& message)
         text += QLatin1Char(' ')
                 + tr("It did not restart by itself (%1): press RESET on the CTR2-Max.").arg(message);
     m_jobDone.clear();
-#ifdef Q_OS_LINUX
-    if (!ok && message.contains(QStringLiteral("Permission")))
-        text += QLatin1Char(' ')
-                + tr("Add yourself to the group that owns the port (dialout or uucp, depending on "
-                     "the distribution) and log in again.");
-#endif
     m_step->setText(text);
     syncLists();   // a new backup, or one fewer
+#ifdef Q_OS_LINUX
+    // The download-mode port is closed to this login: offer the access rule,
+    // then run the same action again. Queued, so the question does not open
+    // inside the job's own finished signal.
+    if (!ok && m_fw->lastFailureAccessDenied() && m_actions.hasJob() && m_relay) {
+        // The action that failed, and only while it is still the operator's
+        // latest: another action or Cancel in the meantime drops the retry.
+        const Ctr2ActionRetry::Ticket ticket = m_actions.ticket();
+        const auto again = [this, ticket] {
+            if (!m_actions.current(ticket) || m_fw->busy())
+                return;
+            m_step->setText(tr("Access granted. Trying again…"));
+            runJob(ticket.doneText, ticket.job, true);
+        };
+        // With the rule in place, a port that has only just appeared may not
+        // have its ACL yet: try once more before saying anything.
+        if (Ctr2ProxyPanel::accessRuleInstalled() && !m_actions.retried()) {
+            QTimer::singleShot(1000, this, [this, ticket] {
+                if (!m_actions.current(ticket) || m_fw->busy())
+                    return;
+                runJob(ticket.doneText, ticket.job, true, true);
+            });
+            return;
+        }
+        QTimer::singleShot(0, this, [this, again] {
+            m_relay->offerAccessRule(Ctr2ProxyPanel::RuleUse::DownloadMode, again);
+        });
+    }
+#endif
 }
 
 } // namespace AetherSDR

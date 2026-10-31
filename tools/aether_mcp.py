@@ -106,7 +106,7 @@ def bridge_socket_path():
     if _proof_session_started:
         raise RuntimeError(
             "Owned proof instance is not running; use app_instance launch to start "
-            "a new demo-only proof. Automatic attachment to another app is disabled.")
+            "a new proof instance. Automatic attachment to another app is disabled.")
     override = os.environ.get("AETHER_MCP_SOCKET")
     if override:
         return override
@@ -292,7 +292,8 @@ def _wait_for_owned_app(instance, timeout=25):
             raise RuntimeError("authenticated bridge label did not match the launched instance")
         if whoami.get("txAllowed") is not False:
             raise RuntimeError("fresh-build bridge did not keep TX automation disabled")
-        require_demo_identity(whoami)
+        if instance.get("demoOnly"):
+            require_demo_identity(whoami)
         return ping, whoami
     raise RuntimeError(last_error)
 
@@ -454,11 +455,11 @@ TOOLS = [
             "proof build owned by this MCP server. Launch accepts an absolute "
             "AetherSDR worktree and runs only its canonical build artifact, "
             "handing the existing AETHER_MCP_TOKEN to the child in memory. It "
-            "uses a unique explicit socket/label, disables radio autoconnect, "
-            "requires a demo-only capable binary, pins demo-only/TX-off, and succeeds "
-            "only after authenticated "
-            "whoami confirms demo-only and matches the child PID and identity. "
-            "The fresh settings profile is deleted after the child exits. No token is returned, "
+            "uses a unique explicit socket/label and pins TX off. Normal launches "
+            "retain the selected saved profile and its AutoConnectToLastRadio "
+            "setting. Optional demo_only launches require isolation support and "
+            "use a fresh disposable profile with autoconnect disabled. Both paths "
+            "verify authenticated child PID and identity. No token is returned, "
             "logged, passed on the command line, or written to settings."),
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["launch", "status", "stop"]},
@@ -466,6 +467,8 @@ TOOLS = [
                          "description": "absolute AetherSDR worktree path for launch"},
             "label": {"type": "string",
                       "description": "optional safe instance label for launch"},
+            "demo_only": {"type": "boolean", "default": False,
+                          "description": "optional simulator-only launch with a disposable profile"},
         }, "required": ["action"]},
     },
     {
@@ -931,7 +934,7 @@ def handle_tool(name, args):
                 and identity == instance["socket"]
                 and whoami.get("label") == instance["label"]
                 and whoami.get("txAllowed") is False
-                and whoami.get("demoOnly") is True)
+                and (not instance.get("demoOnly") or whoami.get("demoOnly") is True))
             return text_result({
                 "ok": True,
                 "running": True,
@@ -962,9 +965,14 @@ def handle_tool(name, args):
         except ValueError as exc:
             return error_result(str(exc))
 
+        demo_only = args.get("demo_only", False)
+        if not isinstance(demo_only, bool):
+            return error_result("demo_only must be a boolean")
         socket_path = _instance_socket()
-        settings_dir = tempfile.mkdtemp(prefix="aether-mcp-settings-")
-        child_env = demo_environment(settings_dir)
+        settings_dir = tempfile.mkdtemp(prefix="aether-mcp-settings-") if demo_only else None
+        child_env = demo_environment(settings_dir) if demo_only else os.environ.copy()
+        if not demo_only:
+            child_env.pop("AETHER_AUTOMATION_DEMO_ONLY", None)
         child_env["AETHER_AUTOMATION"] = "1"
         child_env["AETHER_AUTOMATION_NO_TX"] = "1"
         child_env["AETHER_AUTOMATION_SOCKET"] = socket_path
@@ -974,11 +982,12 @@ def handle_tool(name, args):
         child_env.pop("AETHER_AUTOMATION_ALLOW_TX", None)
         child_env.pop("AETHER_MCP_SOCKET", None)
 
-        try:
-            prepare_demo_launch(executable, child_env)
-        except RuntimeError as exc:
-            _remove_owned_profile({"settingsDir": settings_dir})
-            return error_result(f"fresh-build isolation preflight failed: {exc}")
+        if demo_only:
+            try:
+                prepare_demo_launch(executable, child_env)
+            except RuntimeError as exc:
+                _remove_owned_profile({"settingsDir": settings_dir})
+                return error_result(f"fresh-build isolation preflight failed: {exc}")
 
         popen_kwargs = {
             "cwd": str(root),
@@ -1005,6 +1014,7 @@ def handle_tool(name, args):
             "worktree": str(root),
             "executable": str(executable),
             "settingsDir": settings_dir,
+            "demoOnly": demo_only,
         }
         try:
             ping, whoami = _wait_for_owned_app(_owned_app)

@@ -99,6 +99,7 @@
 #include "models/Kat500Model.h"
 #include "models/Kxpa100Model.h"
 #include "core/Kpa1500Connection.h"
+#include "core/RfkitConnection.h"
 #include "core/DxccColorProvider.h"
 
 #include <QMainWindow>
@@ -165,6 +166,7 @@ class MemoryHistoryRing;
 class CpuHistoryRing;
 class UiTickLagMeter;
 class WhatsNewDialog;
+class Nr2WisdomDialog;
 class ProfileManagerDialog;
 class SettingsBrowserDialog;
 class ProfileImportExportDialog;
@@ -180,6 +182,8 @@ struct NetEntry;
 struct MemoryEntry;
 class PropDashboardDialog;
 class UpdateChecker;
+class UpdateController;
+class UpdatesWindow;
 class TxBandDialog;
 class BandscopeDialog;
 class AetherRxDialog;
@@ -191,6 +195,7 @@ class LiveCwContactsDialog;
 class Ax25HfPacketDecodeDialog;
 class PskReporterMapDialog;
 class GpsLocationDialog;
+class MultiFlexDialog;
 #ifdef AETHER_ASR_ENABLED
 class CopyAssistController;
 #endif
@@ -445,6 +450,12 @@ private:
 
     void buildUI();
     void buildMenuBar();
+    void wireUpdateChecker();          // MainWindow_Menus.cpp
+    void showUpdatesWindow(bool checkNow);  // MainWindow_Menus.cpp
+    void setAutomaticUpdateCheck(bool on);  // MainWindow_Menus.cpp
+    void restoreKnownUpdate();         // MainWindow_Menus.cpp
+    void restartToUpdate();            // MainWindow_Menus.cpp
+    void reportLastUpdate();           // MainWindow_Menus.cpp
     void minimizeActiveApplicationWindow();
     void toggleActiveApplicationWindowFullScreen();
     void applyDarkTheme();
@@ -1350,6 +1361,7 @@ private:
     class Kxpa100RadioAssociation* m_kxpa100Association = nullptr;
     QPointer<class AtuPreTuneDialog> m_kat500PreTuneDialog;
     Kpa500Connection  m_kpa500Conn;      // Elecraft KPA500 amplifier, serial or raw TCP
+    RfkitConnection   m_rfkitConn;       // RF-KIT amplifier, REST/JSON over HTTP (default port 8080)
     Kpa1500Connection m_kpa1500Conn;     // Elecraft KPA1500 amplifier, TCP control/status on port 1500 (#4097)
     BandPlanManager*  m_bandPlanMgr{nullptr};
 #ifdef HAVE_CW_RX_BACKENDS
@@ -1560,6 +1572,17 @@ private:
     QMetaObject::Connection m_tmate2XitConn;
 #endif
 
+    // Touch tap-and-hold -> synthesized right-click / context menu. On a
+    // touchscreen Qt synthesizes a LEFT click from a tap; a press held in place
+    // long enough is turned into a right-click here, so press-and-hold acts like
+    // the right mouse button (context menus) with no physical mouse. Driven from
+    // the qApp eventFilter watching Qt's synthesized mouse events. Kept outside
+    // HAVE_HIDAPI: a touchscreen gesture, not a USB encoder one (#6782).
+    QTimer*           m_touchHoldTimer{nullptr};
+    QPoint            m_touchHoldGlobalPos;
+    QPointer<QWidget> m_touchHoldWidget;
+    bool              m_touchHoldSwallowRelease{false};  // a fired hold owns the click
+
     // The amplifier's forward power and SWR reach the S-Meter, the cross-needle
     // and the TMate2 from TWO sources — the radio-relayed AMP meters and the
     // amplifier's own port-9008 status. They are the same measurement, so the
@@ -1740,11 +1763,12 @@ private:
 #endif
     QPointer<PskReporterMapDialog> m_pskReporterMapDialog;
     QPointer<GpsLocationDialog> m_gpsLocationDialog;
+    QPointer<MultiFlexDialog> m_multiFlexDialog;
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<CanonWindow> m_aboutWindow;
     QPointer<AetherRxDialog> m_rxDialog;
-    QPointer<QDialog> m_nr2WisdomDialog;
+    QPointer<Nr2WisdomDialog> m_nr2WisdomDialog;
     // The running NR2 wisdom worker and its cancel flag, so shutdown can stop
     // it before AudioEngine teardown needs the FFTW planner lock (#6287).
     QPointer<QThread> m_nr2WisdomThread;
@@ -1855,7 +1879,7 @@ private:
     void applyFirmwareCurrencyToVersionLabel();
     // The version row's StatusIndicator action: opens the release notes of the
     // radio's own line while the firmware is out of date, otherwise nothing.
-    void openFirmwareReleaseNotes();
+    void openFirmwareUpdate();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
     QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)
@@ -2182,6 +2206,14 @@ private:
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
     UpdateChecker* m_updateChecker{nullptr};
+    // Install update in place (RFC #5304): outlives the Updates window, so
+    // a staged release installs on quit (closeEvent).
+    UpdateController* m_updateController{nullptr};
+    // applyUiScale() starts a new instance before quitting: the swap would
+    // find the install in use, so a staged update waits for the next quit.
+    bool m_relaunchingApp{false};
+    QPointer<UpdatesWindow> m_updatesWindow;
+    QAction* m_autoUpdateAction{nullptr};
 
 // CTR2 TCP proxy prototype (MainWindow_Controllers.cpp); never persisted, off at launch
     Ctr2ProxyModel* m_ctr2ProxyModel{nullptr};

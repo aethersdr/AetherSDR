@@ -70,9 +70,15 @@ The token decides which client you have deliberately let in. It is not a wall ag
 
 It offers typed tools (`bridge_status`, `dump_tree`, `grab_widget`, `get_state`, `get_log`, `invoke`, `tune`, `slice`, `pan`, `record`, `menu`, `connect`, `capture_audio`, `wait_for`, `assert_state` and more), plus a raw `bridge_command` for everything else, a `validate_ui_change` prompt, and read-only state resources. The transmit verbs are deliberately reachable only through `bridge_command`.
 
-### Launching a simulator proof instance
+### Launching a proof instance
 
-The MCP `app_instance` tool launches a separate simulator-only proof process.
+The MCP `app_instance` tool launches a separate process and pins automation TX
+off. Normal launches preserve the selected saved profile, including an inherited
+`AETHER_SETTINGS_DIR`, and honor **Connect to last radio on start up**. They
+require authenticated process identity but do not require simulator support.
+Only launch a profile whose radio connection you intend to use.
+
+Add `"demo_only":true` to request the optional simulator-only mode.
 It uses a fresh settings profile, disables automatic radio connection, and pins
 automation TX off. Physical radio connections are refused through both the
 bridge and the app's connection window. Operator settings are not copied into
@@ -82,12 +88,15 @@ SmartLink sign-in, token refresh, and server reconnect are disabled in this
 process. It does not read, save, or delete your stored SmartLink credentials;
 signing out in a proof instance does not sign out your normal app.
 
-The tool checks isolation support before opening the app and verifies the
-running process reports `demoOnly:true`. A build without that support is refused.
+The demo-only option checks isolation support before opening the app and verifies
+the running process reports `demoOnly:true`. A build without that support is
+refused for this option; normal launches remain available.
 After a proof launch attempt, later MCP commands stay bound to the owned proof
 session. If launch fails or that process exits, launch another proof instance;
-the wrapper will not switch to another running app automatically. Use your
-normal interactive AetherSDR instance for physical radio work.
+the wrapper will not switch to another running app automatically. Normal launch
+profiles are preserved after exit; only the disposable demo profile is deleted.
+Simulator mode is optional for reviews and proofs. It cannot establish real
+firmware or protocol convergence.
 
 ### Editing the radio nickname
 

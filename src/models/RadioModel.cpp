@@ -40,6 +40,7 @@
 #include "core/PerfTelemetry.h"
 #include "core/StreamStatus.h"
 #include "core/UdpRegistrationPolicy.h"
+#include "core/UnicastEndpoint.h"
 #include "core/WaterfallRate.h"
 #include "core/ClientDisplaySettings.h"  // per-radio client display state
 #include "ProfileLoadCommand.h"
@@ -717,8 +718,7 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
     // The probe's winning local address is transport metadata, not a family
     // parameter. Keep it neutral so each backend can use the route without
     // adding a family-string branch above the backend seam.
-    if (sessionBindAddress.protocol() == QAbstractSocket::IPv4Protocol)
-        req.localBindAddress = sessionBindAddress;
+    req.localBindAddress = usableUnicastAddress(sessionBindAddress);
 
     // The DDC0 rate and the front-end options are preferences the operator sets
     // in Radio Setup's "ANAN Front End" page. READ FROM AnanSettings, NOT FROM
@@ -741,6 +741,13 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
                           anan::AnanSettings::bypassAdc1Filters());
         req.params.insert(QStringLiteral("anan.speakerAudioEnabled"),
                           anan::AnanSettings::speakerAudioEnabled());
+        // Live once connected (the "anan"/"frontend.set" verb), and seeded here
+        // so the session's first High Priority packet already carries them: a
+        // muted speaker amplifier would otherwise speak for one keepalive.
+        req.params.insert(QStringLiteral("anan.bandFiltersEnabled"),
+                          anan::AnanSettings::bandFiltersEnabled());
+        req.params.insert(QStringLiteral("anan.speakerAmpMuted"),
+                          anan::AnanSettings::speakerAmpMuted());
         return;
     }
 
@@ -1075,6 +1082,19 @@ void RadioModel::setupBackend(const QString& family)
             [this](const QString& panId, int step) {
         if (auto* pan = resolveBackendPan(panId)) pan->setAttenuatorStep(step);
     });
+    // The radio's scope mode: same pass-through shape as the stages above.
+    connect(m_backend.get(), &IRadioBackend::panScopeModesChanged, this,
+            [this](const QString& panId, const QStringList& labels) {
+        if (auto* pan = resolveBackendPan(panId)) {
+            pan->setScopeModeLabels(labels);
+        }
+    });
+    connect(m_backend.get(), &IRadioBackend::panScopeModeChanged, this,
+            [this](const QString& panId, int index) {
+        if (auto* pan = resolveBackendPan(panId)) {
+            pan->setScopeModeIndex(index);
+        }
+    });
     connect(m_backend.get(), &IRadioBackend::panRxAntennaChanged, this,
             [this](const QString& panId, const QString& ant) {
         if (auto* pan = resolveBackendPan(panId)) pan->setRxAntenna(ant);
@@ -1207,6 +1227,7 @@ void RadioModel::setupBackend(const QString& family)
     connect(m_backend.get(), &IRadioBackend::capabilitiesChanged, this,
             [this] {
         publishCapabilities(isConnected());
+        refreshCwProfilesOnCapabilityChange();
         // All currently supported wake profiles transmit. If an RX-only Icom
         // profile is added, readiness must use an explicit identity signal.
         if (m_radioWakeActive && m_backend->capabilities().canTransmit) {
@@ -6682,12 +6703,14 @@ void RadioModel::setBinauralRx(bool on)
 
 void RadioModel::setPanWnb(bool on)
 {
-    requestPanDisplay(activePanadapter(), {PanDisplayField::Wnb, on});
+    // Stored-state replay has no individual control action behind it.
+    requestPanDisplay(activePanadapter(), {PanDisplayField::Wnb, on}, {}, /*announce=*/false);
 }
 
 void RadioModel::setPanWnbLevel(int level)
 {
-    requestPanDisplay(activePanadapter(), {PanDisplayField::WnbLevel, level});
+    // Stored-state replay has no individual control action behind it.
+    requestPanDisplay(activePanadapter(), {PanDisplayField::WnbLevel, level}, {}, /*announce=*/false);
 }
 
 void RadioModel::setPanRfGain(int gain)
@@ -6715,6 +6738,14 @@ void RadioModel::setPanAttenuatorFor(const QString& panId, int step)
 {
     if (panId.isEmpty() || !m_backend) return;
     m_backend->setPanAttenuator(backendPanIdFor(panId), step);
+}
+
+void RadioModel::setPanScopeModeFor(const QString& panId, int index)
+{
+    if (panId.isEmpty() || !m_backend) {
+        return;
+    }
+    m_backend->setPanScopeMode(backendPanIdFor(panId), index);
 }
 
 // ── Display controls — FFT ─────────────────────────────────────────────────
@@ -7765,7 +7796,8 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                                       << "udpSeen=" << firstUdpPacketSeen();
                 emit connectionError(
                     tr("No spectrum data received from %1. Source mode: %2. TCP: %3. UDP: %4. "
-                       "UDP traffic from the radio may be blocked, or the wrong source path may be selected.")
+                       "UDP traffic from the radio may be blocked by a firewall on this computer "
+                       "or on the network path, or the wrong source path may be selected.")
                         .arg(targetRadioIp(), selectedSourceMode(),
                              localTcpEndpoint(), localUdpEndpoint()));
             }
@@ -8269,6 +8301,7 @@ void RadioModel::onDisconnected()
         m_pendingProfileLoadPanWrites.clear();
     }
     m_profileLoadPanWriteFlushTimer.stop();
+    m_cwProfilesRequested = false;
 
     // Release sleep inhibition on disconnect (#1420)
     m_sleepInhibitor.release();
@@ -9107,7 +9140,8 @@ QString RadioModel::selectedSourcePath() const
     QHostAddress resolved = m_lastInfo.sessionBindAddress;
     if (resolved.isNull() && m_connection)
         resolved = m_connection->localAddress();
-    if (!resolved.isNull() && resolved.protocol() == QAbstractSocket::IPv4Protocol)
+    resolved = usableUnicastAddress(resolved);
+    if (!resolved.isNull())
         return QStringLiteral("Auto (%1)").arg(resolved.toString());
     return QStringLiteral("Auto");
 }
@@ -9129,7 +9163,7 @@ QString RadioModel::localTcpEndpoint() const
     const quint16 localPort = m_connection->localTcpPort();
     if (localAddr.isNull() || localPort == 0)
         return QStringLiteral("Not connected");
-    return QStringLiteral("%1:%2").arg(localAddr.toString()).arg(localPort);
+    return endpointText(localAddr, localPort);
 }
 
 QString RadioModel::localUdpEndpoint() const
@@ -9143,7 +9177,7 @@ QString RadioModel::localUdpEndpoint() const
     const quint16 localPort = m_panStream->localPort();
     if (localAddr.isNull() || localPort == 0)
         return QStringLiteral("Not bound");
-    return QStringLiteral("%1:%2").arg(localAddr.toString()).arg(localPort);
+    return endpointText(localAddr, localPort);
 }
 
 bool RadioModel::firstUdpPacketSeen() const
@@ -9671,6 +9705,10 @@ void RadioModel::handleMessageReceived(const ParsedMessage& msg, quint64 gpsSess
         handleProfileStatusRaw("global", body.mid(15));  // skip "profile global "
         return;
     }
+    if (body.startsWith("profile cw ")) {
+        handleProfileStatusRaw("cw", body.mid(11));  // skip "profile cw "
+        return;
+    }
 
     // GPS status: "gps lat=...#lon=...#grid=...#tracked=...#visible=...#status=..."
     if (body.startsWith("gps ")) {
@@ -9794,6 +9832,25 @@ void RadioModel::refreshProfiles()
             ProfileRequest::Kind::Transmit, ProfileRequest::Kind::Mic}) {
         requestProfile({kind, ProfileRequest::Action::Refresh, {}});
     }
+    refreshCwProfilesIfSupported();
+}
+
+void RadioModel::refreshCwProfilesOnCapabilityChange()
+{
+    if (isConnected() && !m_cwProfilesRequested) {
+        refreshCwProfilesIfSupported();
+    }
+}
+
+void RadioModel::refreshCwProfilesIfSupported()
+{
+    // A connect-by-IP learns the firmware version after the connect-time
+    // refresh, so the CW capability can engage later in the session (#6668).
+    if (backendCapabilities().cwProfileControl.has_value()
+        && requestProfile({ProfileRequest::Kind::Cw, ProfileRequest::Action::Refresh, {}})
+            == ReceiveDispatch::Dispatched) {
+        m_cwProfilesRequested = true;
+    }
 }
 
 bool RadioModel::isProfileTransferBlocked() const
@@ -9827,6 +9884,16 @@ void RadioModel::requestLocalPtt()
 
 void RadioModel::createRxAudioStream()
 {
+    // A pre-connect PC Audio toggle must not leave a request pending when no
+    // registered GUI session can send it. The connect handshake retries it.
+    if (!hasCommandPlane() || !isConnected()
+        || m_guiClientRegistrationState.phase() != GuiClientRegistrationState::Phase::Registered) {
+        logRemoteAudioRxSummary(hasCommandPlane()
+            ? QStringLiteral("create deferred: GUI session not ready")
+            : QStringLiteral("create skipped: backend has no command plane"));
+        return;
+    }
+
     if (m_rxAudio.streamId != 0) {
         logRemoteAudioRxSummary(QStringLiteral("create skipped: stream already known"));
         return;
@@ -13129,6 +13196,17 @@ void RadioModel::applyProfileChanges(const ProfileDelta& d)
         } else if (d.current) {
             m_transmitModel.setActiveMicProfile(*d.current);
             qCDebug(lcProtocol) << "RadioModel: active mic profile:" << *d.current;
+        }
+    } else if (d.type == QLatin1String("cw")) {
+        if (d.list) {
+            m_transmitModel.setCwProfileList(*d.list);
+            qCDebug(lcProtocol) << "RadioModel: CW profiles:" << *d.list;
+        } else if (d.current) {
+            m_transmitModel.setActiveCwProfile(*d.current);
+            qCDebug(lcProtocol) << "RadioModel: active CW profile:" << *d.current;
+        } else if (d.unsavedChanges) {
+            m_transmitModel.setCwProfileUnsaved(*d.unsavedChanges);
+            qCDebug(lcProtocol) << "RadioModel: CW profile unsaved changes:" << *d.unsavedChanges;
         }
     } else if (d.type == QLatin1String("global")) {
         if (d.list) {

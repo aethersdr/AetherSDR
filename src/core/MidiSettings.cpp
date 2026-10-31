@@ -495,34 +495,9 @@ void MidiSettings::load()
              << "device:" << m_lastDevice << "autoConnect:" << m_autoConnect;
 }
 
-void MidiSettings::save()
+bool MidiSettings::save()
 {
-    QString path = settingsFilePath();
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    auto bindings = loadBindings();
-
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qWarning() << "MidiSettings: failed to save" << path;
-        return;
-    }
-
-    QXmlStreamWriter xml(&file);
-    xml.setAutoFormatting(true);
-    xml.writeStartDocument();
-    xml.writeStartElement("MidiSettings");
-
-    xml.writeTextElement("LastDevice", m_lastDevice);
-    xml.writeTextElement("AutoConnect", m_autoConnect ? "True" : "False");
-
-    // Write bindings inline in the main settings file
-    xml.writeStartElement("Bindings");
-    for (const auto& b : bindings)
-        writeBindingElement(xml, b);
-    xml.writeEndElement(); // Bindings
-
-    xml.writeEndElement(); // MidiSettings
-    xml.writeEndDocument();
+    return saveBindings(loadBindings());
 }
 
 // ── Bindings ────────────────────────────────────────────────────────────────
@@ -532,30 +507,57 @@ QVector<MidiBinding> MidiSettings::loadBindings() const
     return parseBindingsFromXml(settingsFilePath());
 }
 
-void MidiSettings::saveBindings(const QVector<MidiBinding>& bindings)
+bool MidiSettings::saveBindings(const QVector<MidiBinding>& bindings)
 {
-    // Re-save the full file with updated bindings
-    QString path = settingsFilePath();
-    QDir().mkpath(QFileInfo(path).absolutePath());
+    return writeSettingsDocument(settingsFilePath(), bindings);
+}
 
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+bool MidiSettings::writeSettingsDocument(const QString& filePath,
+                                        const QVector<MidiBinding>& bindings)
+{
+    QDir().mkpath(QFileInfo(filePath).absolutePath());
 
-    QXmlStreamWriter xml(&file);
-    xml.setAutoFormatting(true);
-    xml.writeStartDocument();
-    xml.writeStartElement("MidiSettings");
+    // QSaveFile writes beside the target and renames over it on commit(), so
+    // a crash or full disk leaves the previous settings intact instead of a
+    // truncated file. (#5160)
+    QSaveFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qWarning() << "MidiSettings: failed to save" << filePath;
+        return false;
+    }
 
-    xml.writeTextElement("LastDevice", m_lastDevice);
-    xml.writeTextElement("AutoConnect", m_autoConnect ? "True" : "False");
+    // Scope writer so document finishes before commit()
+    {
+        QXmlStreamWriter xml(&file);
+        xml.setAutoFormatting(true);
+        xml.writeStartDocument();
+        xml.writeStartElement("MidiSettings");
 
-    xml.writeStartElement("Bindings");
-    for (const auto& b : bindings)
-        writeBindingElement(xml, b);
-    xml.writeEndElement();
+        xml.writeTextElement("LastDevice", m_lastDevice);
+        xml.writeTextElement("AutoConnect", m_autoConnect ? "True" : "False");
 
-    xml.writeEndElement();
-    xml.writeEndDocument();
+        // Write bindings inline in the main settings file
+        xml.writeStartElement("Bindings");
+        for (const auto& b : bindings) {
+            writeBindingElement(xml, b);
+        }
+        xml.writeEndElement(); // Bindings
+
+        xml.writeEndElement(); // MidiSettings
+        xml.writeEndDocument();
+
+        if (xml.hasError()) {
+            qWarning() << "MidiSettings: XML error writing" << filePath;
+            file.cancelWriting();
+            return false;
+        }
+    }
+
+    if (!file.commit()) {
+        qWarning() << "MidiSettings: failed to commit" << filePath;
+        return false;
+    }
+    return true;
 }
 
 QVector<MidiBinding> MidiSettings::parseBindingsFromXml(const QString& filePath)

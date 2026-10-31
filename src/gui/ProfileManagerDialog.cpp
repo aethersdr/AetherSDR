@@ -1,4 +1,5 @@
 #include "ProfileManagerDialog.h"
+#include "ControlAvailabilityRegistry.h"
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -23,7 +24,8 @@ namespace {
 ProfileRequest::Kind profileKind(const QString& type)
 {
     return type == QLatin1String("global") ? ProfileRequest::Kind::Global
-        : type == QLatin1String("transmit") ? ProfileRequest::Kind::Transmit : ProfileRequest::Kind::Mic;
+        : type == QLatin1String("transmit") ? ProfileRequest::Kind::Transmit
+        : type == QLatin1String("cw") ? ProfileRequest::Kind::Cw : ProfileRequest::Kind::Mic;
 }
 }
 
@@ -99,6 +101,15 @@ ProfileManagerDialog::ProfileManagerDialog(RadioModel* model, QWidget* parent)
                         model->transmitModel().activeMicProfile()),
         "Microphone");
 
+    // CW tab — SmartSDR 4.3.16 added CW profiles; older firmware dims the page.
+    QWidget* cwPage = buildProfileTab("cw", model->transmitModel().cwProfileList(),
+                                      model->transmitModel().activeCwProfile());
+    m_tabs->addTab(cwPage, "CW");
+    auto* availability = new ControlAvailabilityRegistry(*model, this);
+    availability->registerWidget(cwPage,
+        QStringLiteral("CW profiles need a radio running SmartSDR v4.3.16 or later."),
+        [](bool, const RadioCapabilities& caps) { return caps.cwProfileControl.has_value(); });
+
     // Auto-Save tab
     m_tabs->addTab(buildAutoSaveTab(), "Auto-Save");
 
@@ -121,6 +132,17 @@ ProfileManagerDialog::ProfileManagerDialog(RadioModel* model, QWidget* parent)
     });
     connect(&model->transmitModel(), &TransmitModel::micProfileListChanged, this, [this] {
         refreshTab("mic");
+    });
+    connect(&model->transmitModel(), &TransmitModel::cwProfilesChanged, this, [this] {
+        refreshTab("cw");
+    });
+    // The dirty flag only toggles its line; rebuilding the list would drop the
+    // operator's selection on every CW setting change.
+    connect(&model->transmitModel(), &TransmitModel::cwProfileUnsavedChanged, this,
+            [this](bool unsaved) {
+        if (m_cwUnsavedLabel) {
+            m_cwUnsavedLabel->setVisible(unsaved);
+        }
     });
 }
 
@@ -170,11 +192,30 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
     status->setVisible(false);
     vbox->addWidget(status);
 
+    const bool isCw = (type == "cw");
+    QPushButton* resetBtn = nullptr;
+    if (isCw) {
+        // FlexLib 4.3.16 gives CW profiles a reset verb that TX/Mic lack.
+        resetBtn = new QPushButton("Reset");
+        resetBtn->setObjectName(QStringLiteral("profileResetBtn_cw"));
+        resetBtn->setEnabled(false);
+        btnRow->insertWidget(2, resetBtn);
+
+        // The radio flags edits to the active CW profile that are not yet saved.
+        m_cwUnsavedLabel = new QLabel("The active CW profile has unsaved changes.");
+        m_cwUnsavedLabel->setObjectName(QStringLiteral("profileUnsaved_cw"));
+        m_cwUnsavedLabel->setVisible(m_model->transmitModel().cwProfileUnsaved());
+        vbox->addWidget(m_cwUnsavedLabel);
+    }
+
     if (!isGlobal) {
-        auto* note = new QLabel(
-            "Updates to existing profiles save automatically — enable\n"
-            "Auto-Save (Auto-Save tab) so changes follow the active profile.\n"
-            "Create makes a new profile; it does not overwrite an existing one.");
+        auto* note = new QLabel(isCw
+            ? QStringLiteral("Create makes a new CW profile; it does not overwrite an\n"
+                             "existing one. Reset returns the selected profile to the radio's\n"
+                             "built-in CW values, not to the settings of the Default profile.")
+            : QStringLiteral("Updates to existing profiles save automatically — enable\n"
+                             "Auto-Save (Auto-Save tab) so changes follow the active profile.\n"
+                             "Create makes a new profile; it does not overwrite an existing one."));
         note->setStyleSheet("QLabel { color: #6888a0; font-size: 11px; }");
         note->setWordWrap(true);
         vbox->addWidget(note);
@@ -195,9 +236,12 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
 
     // Selection enables Load/Delete and populates the name field
     connect(list, &QListWidget::currentItemChanged, this,
-            [nameEdit, loadBtn, deleteBtn](QListWidgetItem* current, QListWidgetItem*) {
+            [nameEdit, loadBtn, deleteBtn, resetBtn](QListWidgetItem* current, QListWidgetItem*) {
         loadBtn->setEnabled(current != nullptr);
         deleteBtn->setEnabled(current != nullptr);
+        if (resetBtn) {
+            resetBtn->setEnabled(current != nullptr);
+        }
         if (current)
             nameEdit->setText(current->text());
     });
@@ -346,6 +390,10 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
             for (int i = 0; i < list->count(); ++i) {
                 if (list->item(i)->text() == name) { exists = true; break; }
             }
+            if (exists && type == "cw") {
+                setTabStatus(type, QString("A CW profile named \"%1\" already exists.").arg(name), true);
+                return;
+            }
             if (exists) {
                 const QString kind = (type == "transmit") ? "TX" : "Mic";
                 if (!m_model->autoSave()) {
@@ -439,6 +487,36 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
         modelGuard->requestProfile({profileKind(type), ProfileRequest::Action::Remove, name}, self, {}, session);
     });
 
+    if (resetBtn) {
+        connect(resetBtn, &QPushButton::clicked, this, [this, type, list] {
+            auto* item = list->currentItem();
+            if (!item) return;
+            const QString name = item->text();
+
+            const QPointer<ProfileManagerDialog> self(this);
+            const QPointer<RadioModel> modelGuard(m_model);
+            const RadioControlSession session = m_model->controlSession();
+            ScopedChildWidget<QMessageBox> boxOwner(this);
+            QMessageBox& box = *boxOwner.get();
+            box.setIcon(QMessageBox::Question);
+            box.setWindowTitle("Reset CW Profile");
+            box.setText(QString("Reset CW profile \"%1\"?").arg(name));
+            box.setInformativeText("Its settings return to the radio's built-in CW values. "
+                                   "The Default profile is not copied.");
+            box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+            const int reply = box.exec();
+            if (!self || !modelGuard || self->m_model != modelGuard.data() || !boxOwner
+                || modelGuard->controlSession() != session) {
+                return;
+            }
+            if (reply != QMessageBox::Yes) return;
+
+            setTabStatus(type, QString(), false);
+            modelGuard->requestProfile({ProfileRequest::Kind::Cw, ProfileRequest::Action::Reset, name},
+                                       self, {}, session);
+        });
+    }
+
     return page;
 }
 
@@ -521,6 +599,9 @@ void ProfileManagerDialog::refreshTab(const QString& type)
     } else if (type == "mic") {
         profiles = m_model->transmitModel().micProfileList();
         active = m_model->transmitModel().activeMicProfile();
+    } else if (type == "cw") {
+        profiles = m_model->transmitModel().cwProfileList();
+        active = m_model->transmitModel().activeCwProfile();
     }
 
     tw.list->clear();

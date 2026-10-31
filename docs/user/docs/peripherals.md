@@ -10,7 +10,7 @@ description: "the station accessories it talks to directly, over the network or 
 the station accessories it talks to directly, over the network or a serial
 port, rather than through the radio. It covers the 4O3A Tuner Genius XL
 (TGXL), Power Genius XL (PGXL) and Antenna Genius (AG), the ShackSwitch, ACOM,
-SPE Expert, VK3AMP and Elecraft KPA1500 amplifiers, the Elecraft KAT500 tuner, and the TelePost LP-100A
+SPE Expert, VK3AMP, Elecraft KPA1500 and RF-KIT amplifiers, the Elecraft KAT500 tuner, and the TelePost LP-100A
 wattmeter.
 
 Each device has its own applet once it is connected. Those are described on
@@ -207,6 +207,7 @@ The **AG** applet (Antennas & Switching) controls a 4O3A Antenna Genius.
 | SPE Expert Amplifier | Serial (115200 8N1) or a ser2net host | 7000 |
 | VK3AMP Amplifier | TCP control, UDP telemetry | 5005 (UDP 5010) |
 | Elecraft KPA1500 | TCP | 1500 |
+| RF-KIT Amplifier | HTTP (REST/JSON) | 8080 |
 | LP-100A Meter | Serial (115200 8N1) or a ser2net host in raw mode | 2000 |
 
 ### Settings
@@ -215,7 +216,7 @@ The TGXL, PGXL, Antenna Genius and ShackSwitch addresses keep their own keys
 (`TGXL_ManualIp`, `PGXL_ManualIp`, `AG_ManualIp`, `SS_ManualIp` and the
 matching port keys). The device list, **Reconnect automatically**, the
 per-device toggles (`Peripherals.<id>.AutoConnect`, ids `tgxl`, `pgxl`, `ag`,
-`shackswitch`) and the ACOM, SPE, VK3AMP, KPA1500 and LP-100A connection
+`shackswitch`) and the ACOM, SPE, VK3AMP, KPA1500, RF-KIT and LP-100A connection
 settings live in the `Peripherals` document in `AetherSDR.db`. Access codes
 live only in the OS keychain. See [Settings and Backups](./settings-and-backups.md).
 

@@ -248,6 +248,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (micChanged) emit micStateChanged();
     if (phoneChanged) emit phoneStateChanged();
     if (filterCutoffChanged) emit txFilterCutoffChanged(m_txFilterLow, m_txFilterHigh);
+    if (d.cwPitch) emit cwPitchReported(m_cwPitch);
     if (cwPitchChanged_) emit cwPitchChanged(m_cwPitch);
     if (cwSpeedChanged_) emit cwSpeedChanged(m_cwSpeed);
 
@@ -738,6 +739,30 @@ void TransmitModel::setActiveMicProfile(const QString& profile)
     if (m_activeMicProfile != profile) {
         m_activeMicProfile = profile;
         emit micStateChanged();
+    }
+}
+
+void TransmitModel::setCwProfileList(const QStringList& profiles)
+{
+    if (m_cwProfileList != profiles) {
+        m_cwProfileList = profiles;
+        emit cwProfilesChanged();
+    }
+}
+
+void TransmitModel::setActiveCwProfile(const QString& profile)
+{
+    if (m_activeCwProfile != profile) {
+        m_activeCwProfile = profile;
+        emit cwProfilesChanged();
+    }
+}
+
+void TransmitModel::setCwProfileUnsaved(bool unsaved)
+{
+    if (m_cwProfileUnsaved != unsaved) {
+        m_cwProfileUnsaved = unsaved;
+        emit cwProfileUnsavedChanged(unsaved);
     }
 }
 

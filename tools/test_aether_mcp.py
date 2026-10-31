@@ -691,7 +691,7 @@ def test_secure_app_instance():
             os.environ["AETHER_SETTINGS_DIR"] = temp_root
             os.environ["AETHER_AUTOMATION_DEMO_ONLY"] = "0"
             launched = json.loads(aether_mcp.handle_tool(
-                "app_instance", {"action": "launch", "worktree": str(worktree),
+                "app_instance", {"action": "launch", "demo_only": True, "worktree": str(worktree),
                                  "label": "secure-proof"})["content"][0]["text"])
 
             argv, kwargs, process = popen_calls[-1]
@@ -751,6 +751,40 @@ def test_secure_app_instance():
 
             check("owned profile removed after exit without touching inherited profile",
                   not profile.exists() and Path(temp_root).is_dir())
+            # Normal launches must work with older binaries and preserve both
+            # an explicitly selected settings directory and the default profile.
+            demo_only[0] = None
+            preflight_failure[0] = "unsupported"
+            for selected_profile in (temp_root, None):
+                if selected_profile:
+                    os.environ["AETHER_SETTINGS_DIR"] = selected_profile
+                else:
+                    os.environ.pop("AETHER_SETTINGS_DIR", None)
+                os.environ["AETHER_AUTOMATION_DEMO_ONLY"] = "1"
+                config_calls.clear()
+                normal = json.loads(aether_mcp.handle_tool(
+                    "app_instance", {"action": "launch", "worktree": str(worktree)})["content"][0]["text"])
+                normal_env = popen_calls[-1][1]["env"]
+                check("normal launch preserves selected/default profile without demo preflight",
+                      normal.get("authenticated") is True and not config_calls
+                      and normal_env.get("AETHER_SETTINGS_DIR") == selected_profile
+                      and "AETHER_AUTOMATION_DEMO_ONLY" not in normal_env
+                      and normal_env.get("AETHER_AUTOMATION_NO_TX") == "1"
+                      and "AETHER_AUTOMATION_ALLOW_TX" not in normal_env
+                      and normal.get("settingsDir") is None)
+                normal_status = json.loads(aether_mcp.handle_tool(
+                    "app_instance", {"action": "status"})["content"][0]["text"])
+                check("normal identity needs no demo capability",
+                      normal_status.get("authenticated") is True)
+                aether_mcp.handle_tool("app_instance", {"action": "stop"})
+                check("normal stop preserves the operator profile", Path(temp_root).is_dir())
+            before = len(popen_calls)
+            malformed = aether_mcp.handle_tool("app_instance", {
+                "action": "launch", "worktree": str(worktree), "demo_only": "false"})
+            check("malformed isolation choice refuses before spawning",
+                  malformed.get("isError") is True and len(popen_calls) == before)
+            os.environ["AETHER_SETTINGS_DIR"] = temp_root
+            demo_only[0] = True
             for failure in ("isolation-policy", "unsupported", "unisolated", "string-bool",
                             "version", "malformed", "nonobject", "timeout", "oserror",
                             "set", "get", "readback"):
@@ -758,7 +792,7 @@ def test_secure_app_instance():
                 before = len(popen_calls)
                 config_calls.clear()
                 refused = aether_mcp.handle_tool(
-                    "app_instance", {"action": "launch", "worktree": str(worktree)})
+                    "app_instance", {"action": "launch", "demo_only": True, "worktree": str(worktree)})
                 failed_profile = Path(config_calls[0][1]["env"]["AETHER_SETTINGS_DIR"])
                 check("preflight refuses before GUI and cleans profile: " + failure,
                       refused.get("isError") is True and len(popen_calls) == before
@@ -768,7 +802,7 @@ def test_secure_app_instance():
             for value in (False, None, "true", 1):
                 demo_only[0] = value
                 refused = aether_mcp.handle_tool(
-                    "app_instance", {"action": "launch", "worktree": str(worktree)})
+                    "app_instance", {"action": "launch", "demo_only": True, "worktree": str(worktree)})
                 failed_process = popen_calls[-1][2]
                 check("runtime demo identity fails closed: " + repr(value),
                       refused.get("isError") is True and failed_process.terminated
@@ -779,7 +813,7 @@ def test_secure_app_instance():
             os.environ.pop("AETHER_MCP_TOKEN", None)
             before = len(popen_calls)
             refused = aether_mcp.handle_tool(
-                "app_instance", {"action": "launch", "worktree": str(worktree)})
+                "app_instance", {"action": "launch", "demo_only": True, "worktree": str(worktree)})
             check("app_instance refuses tokenless launch before spawning",
                   refused.get("isError") is True and len(popen_calls) == before,
                   str(refused))
@@ -787,7 +821,7 @@ def test_secure_app_instance():
             os.environ["AETHER_MCP_TOKEN"] = "runtime-only-secret"
             tx_allowed[0] = True
             rejected = aether_mcp.handle_tool(
-                "app_instance", {"action": "launch", "worktree": str(worktree),
+                "app_instance", {"action": "launch", "demo_only": True, "worktree": str(worktree),
                                  "label": "unsafe-proof"})
             unsafe_process = popen_calls[-1][2]
             check("app_instance kills child when authenticated TX is not pinned off",
@@ -797,7 +831,7 @@ def test_secure_app_instance():
             tx_allowed[0] = False
             ignore_stop[0] = True
             stubborn = json.loads(aether_mcp.handle_tool(
-                "app_instance", {"action": "launch", "worktree": str(worktree),
+                "app_instance", {"action": "launch", "demo_only": True, "worktree": str(worktree),
                                  "label": "stubborn-proof"})["content"][0]["text"])
             refused_stop = json.loads(aether_mcp.handle_tool(
                 "app_instance", {"action": "stop"})["content"][0]["text"])
@@ -816,7 +850,7 @@ def test_secure_app_instance():
             # privileged command must be refused (fail closed), not launched.
             accept_tokenless[0] = True
             insecure = aether_mcp.handle_tool(
-                "app_instance", {"action": "launch", "worktree": str(worktree),
+                "app_instance", {"action": "launch", "demo_only": True, "worktree": str(worktree),
                                  "label": "insecure-proof"})
             check("app_instance refuses a bridge that accepts tokenless commands",
                   insecure.get("isError") is True

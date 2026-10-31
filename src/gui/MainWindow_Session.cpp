@@ -63,11 +63,11 @@
 #include "core/ThemeManager.h"
 #include "SpectrumWidget.h"
 #include "TitleBar.h"
+#include "UpdatesWindow.h"
 #include "core/AppSettings.h"
 #include "core/AutomationBridgeSettings.h"
 #include "core/AutomationServer.h"
 
-#include <QDesktopServices>
 #include <QDialogButtonBox>
 #include <QLabel>
 #include <QLineEdit>
@@ -2260,6 +2260,18 @@ void MainWindow::wirePanLifecycle()
                 this, [this, panId = pan->panId()](int step) {
             m_radioModel.setPanAttenuatorFor(panId, step);
         });
+        // The radio's scope mode: same model -> menu / menu -> model shape.
+        connect(pan, &PanadapterModel::scopeModeLabelsChanged,
+                applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::setScopeModeLabels);
+        connect(pan, &PanadapterModel::scopeModeIndexChanged,
+                applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::setScopeModeIndex);
+        connect(applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::scopeModeChanged,
+                this, [this, panId = pan->panId()](int index) {
+            m_radioModel.setPanScopeModeFor(panId, index);
+        });
         // Seed from whatever the model already holds: this wiring can run after
         // the backend has published, and a control built empty would stay empty
         // until the operator moved something on the radio.
@@ -2276,6 +2288,9 @@ void MainWindow::wirePanLifecycle()
         syncPreampIndicator();
         applet->spectrumWidget()->overlayMenu()->setAttenuatorLabels(pan->attenuatorLabels());
         applet->spectrumWidget()->overlayMenu()->setAttenuatorStep(pan->attenuatorStep());
+        applet->spectrumWidget()->overlayMenu()->setRadioFamily(m_radioModel.family());
+        applet->spectrumWidget()->overlayMenu()->setScopeModeLabels(pan->scopeModeLabels());
+        applet->spectrumWidget()->overlayMenu()->setScopeModeIndex(pan->scopeModeIndex());
 
         // Push display dimensions to the radio so it sends full-size FFT bins.
         // Without this, the radio uses xpixels=50 ypixels=20 (default) and
@@ -3397,23 +3412,16 @@ void MainWindow::applyFirmwareCurrencyToVersionLabel()
 }
 
 // The version row's action (click, Return/Enter, or the accessible Press):
-// open the release notes, but ONLY while it shows an out-of-date version,
-// which is the state the tooltip invites a click in. Otherwise it does nothing.
-void MainWindow::openFirmwareReleaseNotes()
+// open the Updates window at the radio's firmware, but ONLY while it shows an
+// out-of-date version, which is the state the tooltip invites a click in.
+// Otherwise it does nothing.
+void MainWindow::openFirmwareUpdate()
 {
     if (m_radioFirmwareCurrency != AetherSDR::FirmwareCurrency::Status::Outdated)
         return;
-    const auto& source = m_radioModel.backendCapabilities().firmwareUpdateSource;
-    if (!source.has_value())
-        return;
-    // The newest release OF THE RADIO'S OWN LINE, never the newest overall: an
-    // operator on v3 must not be handed v4's notes.
-    const QString url = AetherSDR::FirmwareCurrency::releaseNotesUrl(
-        source->releaseNotesUrlTemplate,
-        AetherSDR::FirmwareCurrency::upgradeTargetFor(
-            source->publishedReleases, m_radioVersionLabel->text()));
-    if (!url.isEmpty())
-        QDesktopServices::openUrl(QUrl(url));
+    showUpdatesWindow(false);
+    if (m_updatesWindow)
+        m_updatesWindow->showFirmware();
 }
 
 void MainWindow::createPansSequentially(const QString& layoutId, int total,

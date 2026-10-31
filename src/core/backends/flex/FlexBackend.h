@@ -116,7 +116,8 @@ public:
     ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
                                       const RadioSetupCompletion& completion = {},
                                       const RadioControlFence& current = {}) override;
-    ReceiveDispatch requestTxBand(const TxBandRequest& request) override;
+    ReceiveDispatch requestTxBand(const TxBandRequest& request,
+                                  const RadioSetupCompletion& completion = {}) override;
     ReceiveDispatch requestSpot(const SpotRequest& request, const QString& panId = {}) override;
     ReceiveDispatch requestPanControl(const QString& panId, const PanControlRequest& request) override;
     ReceiveDispatch requestSlicePreset(int sliceId, const SlicePresetRequest& request) override;
@@ -284,6 +285,7 @@ private:
     bool firmwareAtLeast(const QVersionNumber& minimum) const;
     int nrsLevelMaximum() const;
     int m_announcedNrsLevelMaximum = 100;
+    bool m_announcedCwProfiles = false;
     std::function<QString()> m_firmwareVersionProvider;
     std::function<bool()> m_autoAgcThresholdLicenseProvider;
     std::function<std::optional<bool>()> m_dspResetLicenseProvider;

@@ -102,7 +102,8 @@ Use a single active CTR2 connection for the prototype. Close additional
 accepted connections without sending a banner and without disturbing the
 active connection. Validate port ranges and reject destinations resolving to
 the proxy's own local listener, including another local interface with the
-same listening endpoint. IPv6 and hostnames can remain future scope.
+same listening endpoint. The radio upstream may be IPv4 or IPv6; the listen
+address stays IPv4, and hostnames remain future scope.
 
 No configuration persistence is needed for this prototype. If later added,
 use one feature-owned AppSettings document; never persist active connections,

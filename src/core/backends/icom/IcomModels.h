@@ -231,11 +231,13 @@ struct IcomBand {
 // generic relative indication rather than borrowing another radio's curve.
 [[nodiscard]] std::span<const CurvePoint> powerCurveFor(const IcomModel& model);
 
-// The front-end stages this model offers, in register order (index 0 is OFF).
+// The front-end stages at the radio-reported frequency, in register order
+// (index 0 is OFF). Zero frequency uses the shared stages of a ranged ladder.
 // EMPTY means no verified ladder: publish NOTHING rather than borrow another
 // radio's (stages are genuinely per-model), so the operator gets no button
 // instead of a mislabelled one.
-[[nodiscard]] std::span<const std::string_view> preampLabelsFor(const IcomModel& model);
+[[nodiscard]] std::span<const std::string_view> preampLabelsFor(
+    const IcomModel& model, std::uint64_t frequencyHz = 0);
 
 // The demodulator modes this model offers, in AetherSDR's NEUTRAL vocabulary
 // (SliceModel / mode combo strings). EMPTY means no verified table: publish
@@ -316,12 +318,23 @@ struct SetMenuProfile {
     int civTransceiveItem = -1;
 };
 
+// Which Fixed Edges range table (CivCodec.h) a model uses.
+enum class ScopeEdgeTable : std::uint8_t { None, Hf, Ic705, Ic9700 };
+
 struct ScopeCommandProfile {
     bool center = false;
     bool fixed = false;
     bool scrollCenter = false;
     bool scrollFixed = false;
     bool hasSweepSpeed = false;
+    // The Fixed Edges slot (27 16 / 27 1E) AetherSDR owns in Fixed and
+    // SCROLL-F; the operator's other slots are never written. 0 = SCROLL-F is
+    // not offered. Slot 4 exists from IC-705 firmware 1.20 / IC-9700 1.30;
+    // older firmware answers FA to SCROLL-F and keeps Center.
+    int dedicatedEdgeSlot = 0;
+    ScopeEdgeTable edgeTable = ScopeEdgeTable::None;
+    // 27 12/14/15/16/17/19/1A and 27 00 carry 00 MAIN / 01 SUB (IC-9700).
+    bool mainSubSelector = false;
 };
 
 struct CwTextKeyerProfile {
@@ -439,6 +452,8 @@ struct IcomModelProfile {
     std::optional<MemoryProfile> memory;
     std::optional<NetworkConfigurationProfile> networkConfiguration;
     std::span<const std::string_view> preampLabels;
+    // Zero means no frequency restriction on the model ladder.
+    std::uint64_t preampTwoStageUpperExclusiveHz = 0;
     std::span<const AttenStep> attenuatorSteps;
     std::span<const std::string_view> modes;
     std::span<const std::string_view> receiveOnlyModes;

@@ -158,6 +158,10 @@ changes made at the radio or by another client; **Breakin** requests a change.
 
 - **AM Carrier slider** (0–100)
 - **VOX** toggle + level + delay
+
+  Automation can explicitly disarm VOX with `invoke "VOX voice-operated transmit"
+  setChecked false` without TX permission. The `vox_toggle` automation shortcut
+  requires TX permission in either direction.
 - **DEXP** — downward expansion (noise gate on the radio's mic path)
 - **TX Filter** — Low Cut / High Cut step buttons
 

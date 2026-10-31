@@ -134,7 +134,10 @@ FirmwareInstallModel::FirmwareInstallModel(Ctr2ProxyModel* relay, QObject* paren
 
     connect(m_job, &EspFirmwareJob::connected, this, &FirmwareInstallModel::connected);
     connect(m_job, &EspFirmwareJob::progress, this, &FirmwareInstallModel::progress);
-    connect(m_job, &EspFirmwareJob::finished, this, &FirmwareInstallModel::onJobFinished);
+    connect(m_job, &EspFirmwareJob::finished, this, [this](bool ok, const QString& message) {
+        m_accessDenied = !ok && m_job->accessDenied();
+        onJobFinished(ok, message);
+    });
     if (m_relay) {
         connect(m_relay, &Ctr2ProxyModel::firmwareUpdateStep, this,
                 &FirmwareInstallModel::stepChanged);
@@ -157,6 +160,7 @@ FirmwareInstallModel::FirmwareInstallModel(Ctr2ProxyModel* relay, QObject* paren
                     }
                     m_waiting = false;
                     m_waitStart = {};
+                    m_accessDenied = false;   // over the USB link, not a serial port
                     onJobFinished(ok, ok ? QString() : message);
                 });
     }
@@ -799,6 +803,7 @@ void FirmwareInstallModel::startWhenInDownloadMode()
     QString problem;
     if (!start(target(), &problem)) {
         emit busyChanged();
+        m_accessDenied = false;
         emit finished(false, problem);
     }
 }
@@ -881,6 +886,7 @@ void FirmwareInstallModel::cancel()
         m_waiting = false;
         m_waitStart = {};
         emit busyChanged();
+        m_accessDenied = false;
         emit finished(false, tr("Cancelled. Nothing was written."));
         return;
     }

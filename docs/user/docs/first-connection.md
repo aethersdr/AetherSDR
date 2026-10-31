@@ -97,7 +97,7 @@ this window.
 1. Use the simulator in the proof instance.
 2. For normal radio work, open your normal interactive AetherSDR app without
    `AETHER_AUTOMATION_DEMO_ONLY` in its launch environment. See
-   [Automation Bridge and MCP](./automation-bridge-and-mcp.md#launching-a-simulator-proof-instance).
+   [Automation Bridge and MCP](./automation-bridge-and-mcp.md#launching-a-proof-instance).
 
 ### The radio refuses the connection
 

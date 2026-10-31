@@ -77,7 +77,7 @@ These are the actions you can bind in **Settings → Configure Shortcuts...**, w
 | ATU Start | `atu_start` |   | Keys the transmitter |
 | TUNE Toggle | `tune_toggle` |   | Keys the transmitter |
 | Two-Tone Tune | `two_tone_tune` |   | Keys the transmitter |
-| VOX Toggle | `vox_toggle` |   |   |
+| VOX Toggle | `vox_toggle` |   | Keys the transmitter |
 | Speech Processor Toggle | `speech_proc_toggle` |   |   |
 | DAX TX Toggle | `dax_toggle` |   |   |
 | TX Monitor Toggle | `tx_monitor_toggle` |   |   |

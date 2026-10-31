@@ -7,6 +7,7 @@
 
 #include "core/backends/icom/IcomScope.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <numeric>
@@ -155,10 +156,8 @@ static void testZoomEscapesTheSnap()
 
 static void testScrollModesAndNegativeEdge()
 {
-    // All four scope modes are REAL on the IC-7300MK2 — its CI-V guide lists
-    // 00/01/02/03 for 0x27 0x14. The IC-705's guide lists only 00 and 01, so
-    // the mode set is per-model. Geometrically the scroll modes behave like
-    // Fixed: lower and upper edges direct, no centre+span conversion.
+    // 0x27 0x14 modes 00-03 (IC-7300MK2; IC-705 >= 1.20; IC-9700 >= 1.30). The
+    // scroll modes report lower and upper edges directly, like Fixed.
     std::vector<std::uint8_t> wave(kScopePointsIc705, 60);
     ScopeDecoder d;
 
@@ -309,6 +308,69 @@ static void testDbmMapping()
     check(clamped[0] < -59.9f && clamped[0] > -60.1f, "values above 160 clamp to the ceiling");
 }
 
+// SCROLL-F: while an edge write is in flight the view already shows the new
+// window; the old sweep has to land at the frequencies it was measured at.
+static void testRemapToWindow()
+{
+    // 10 bins over 7.000-7.010 MHz, each bin's value its own index.
+    std::vector<float> src(10);
+    std::iota(src.begin(), src.end(), 0.0f);
+
+    // Same window: identity.
+    auto same = remapToWindow(src, 7'000'000, 7'010'000, 7'000'000, 7'010'000, -999.0f);
+    check(same == src, "remap onto the same window is the identity");
+
+    // Scrolled up by 3 kHz: the first 7 bins are the source's last 7, the
+    // last 3 are uncovered and take the fill.
+    auto up = remapToWindow(src, 7'000'000, 7'010'000, 7'003'000, 7'013'000, -999.0f);
+    check(up[0] == 3.0f && up[6] == 9.0f, "a scroll up shifts the measured bins down");
+    check(up[7] == -999.0f && up[9] == -999.0f, "and the uncovered bins take the fill");
+
+    // Scrolled down by 2 kHz: the first 2 bins are uncovered.
+    auto down = remapToWindow(src, 7'000'000, 7'010'000, 6'998'000, 7'008'000, -999.0f);
+    check(down[0] == -999.0f && down[1] == -999.0f && down[2] == 0.0f,
+          "a scroll down leaves the low bins empty");
+
+    // Zoomed out 2x about the same centre: the source fills the middle half.
+    auto wide = remapToWindow(src, 7'000'000, 7'010'000, 6'995'000, 7'015'000, -999.0f);
+    check(wide[0] == -999.0f && wide[9] == -999.0f, "a zoom out leaves both flanks empty");
+    // Bin centres 7.002 and 7.008 MHz are source bins 2 and 8.
+    check(wide[3] == 2.0f && wide[6] == 8.0f, "and compresses the source into the middle");
+
+    // Disjoint window: everything is fill, nothing is invented.
+    auto away = remapToWindow(src, 7'000'000, 7'010'000, 7'100'000, 7'110'000, -999.0f);
+    check(std::all_of(away.begin(), away.end(), [](float v) { return v == -999.0f; }),
+          "a window the sweep does not cover is all fill");
+}
+
+// Fixed / SCROLL-F placement: follow a VFO the operator did not tune here,
+// and never let a window drop the VFO (SCROLL-F pages away from it).
+static void testScopeWindowPlacement()
+{
+    // 14.000-14.100, zone 10 %, inset 25 %.
+    const auto inside = scopeFollowCentre(14'000'000, 14'100'000, 14'050'000, 14'060'000, 0.1, 0.25);
+    check(!inside, "a VFO well inside the window leaves it alone");
+    const auto right = scopeFollowCentre(14'000'000, 14'100'000, 14'089'000, 14'092'000, 0.1, 0.25);
+    check(right && std::abs(*right - 14'067'000.0) < 1.0,
+          "entering the right zone pans so the VFO sits 25 % inside the right edge");
+    const auto away = scopeFollowCentre(14'000'000, 14'100'000, 14'095'000, 14'093'000, 0.1, 0.25);
+    check(!away, "a VFO in the zone moving away from its edge stays put");
+    const auto left = scopeFollowCentre(14'000'000, 14'100'000, 14'004'000, 13'990'000, 0.1, 0.25);
+    check(left && std::abs(*left - 14'015'000.0) < 1.0,
+          "leaving by less than a width pans so the VFO sits 25 % inside the left edge");
+    const auto far = scopeFollowCentre(14'000'000, 14'100'000, 14'050'000, 14'300'000, 0.1, 0.25);
+    check(far && *far == 14'300'000.0, "a jump of more than a width re-centres");
+
+    check(scopeCentreHoldingVfo(14'050'000, 100'000, 14'060'000, 2'000) == 14'050'000,
+          "a window that already holds the VFO is unchanged");
+    check(scopeCentreHoldingVfo(14'000'000, 100'000, 14'060'000, 2'000) == 14'012'000,
+          "a drag stops with the VFO the margin inside the upper edge");
+    check(scopeCentreHoldingVfo(14'200'000, 100'000, 14'060'000, 2'000) == 14'108'000,
+          "and inside the lower edge");
+    check(scopeCentreHoldingVfo(14'200'000, 3'000, 14'060'000, 2'000) == 14'060'000,
+          "a window narrower than twice the margin centres on the VFO");
+}
+
 int main()
 {
     testWlanSinglePacket();
@@ -320,6 +382,8 @@ int main()
     testDivisionGapIsAbandoned();
     testNonScopeFramesIgnored();
     testDbmMapping();
+    testRemapToWindow();
+    testScopeWindowPlacement();
 
     if (g_failures == 0)
         std::printf("icom_scope_test: all checks passed\n");

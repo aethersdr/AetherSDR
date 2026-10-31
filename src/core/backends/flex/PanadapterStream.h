@@ -24,6 +24,8 @@
 #include <functional>
 #include <initializer_list>
 
+class QNetworkDatagram;
+
 namespace AetherSDR {
 
 class RadioConnection;
@@ -43,6 +45,7 @@ class PanadapterStream : public QObject {
     friend class VitaDscpStreamTestAccess;
     friend class WanUdpKeepaliveTestAccess;
     friend class WanUdpKeepaliveSocketTestAccess;
+    friend class LanUdpKeepaliveTestAccess;
     // Inject the terminal transport in socket-free queue/cancellation tests.
     std::function<void(const QByteArray&)> m_packetSinkForTest;
 
@@ -230,16 +233,21 @@ signals:
 private slots:
     void onDatagramReady();
     void sendWanUdpRegister();
+    void sendLanKeepalive();
 
 private:
     friend class PcmCompatibilityTestAccess;
     friend class VitaSequenceLossLogTestAccess;
     friend struct PanadapterDbmRangeTestAccess;
+    friend struct PanadapterLatePacketTestAccess;
     PcmProducer m_pcmProducer;
     std::map<quint32, std::unique_ptr<PcmProducer>> m_daxPcm;
     void publishLegacyDaxAudio(quint32 streamId, int channel, const QByteArray& pcm);
     void publishLegacyAudio(const QByteArray& pcm);
     void processDatagram(const QByteArray& data);
+    void handleReceivedDatagram(const QNetworkDatagram& dg);
+    void startLanKeepalive();
+    qint64 writeLanDatagram(const QByteArray& data, const QHostAddress& to, quint16 port);
     void confirmWanRegistration(const QByteArray& data);
     // Raise the kernel receive buffer (SO_RCVBUF) on the bound VITA-49 socket so
     // bursts / brief drain stalls don't overflow it and surface as false
@@ -318,6 +326,10 @@ private:
         bool isComplete() const { return coverage.isComplete(); }
     };
 
+    // m_frameMutex guards m_frames and m_wfFrames: assembled on the network
+    // worker thread, removed from the main thread on pan/session teardown.
+    // Never nested with m_streamMutex, and released before any emit.
+    mutable QMutex m_frameMutex;
     QMap<quint32, WaterfallFrame> m_wfFrames;  // per-stream waterfall frame assembly
 
     // Per-stream packet sequence tracking (4-bit count in VITA-49 word0 bits 19:16)
@@ -343,6 +355,7 @@ public:
         qint64 bytes{0};
         int    packets{0};
         int    errors{0};
+        int    late{0};    // FFT/waterfall packets discarded as late (#6883)
     };
     struct AudioStreamDiagnostics {
         quint32 streamId{0};
@@ -396,12 +409,13 @@ private:
     QMap<quint32, QPair<float,float>> m_pendingDbmRanges;  // streamId → pending echoed range
     QMap<quint32, int> m_yPixels;  // streamId → ypixels for FFT bin scaling
     RadioConnection* m_conn{nullptr};
-    QMap<quint32, FrameAssembler> m_frames;  // per-stream FFT frame assembly
+    QMap<quint32, FrameAssembler> m_frames;  // per-stream FFT frame assembly; m_frameMutex
     QMap<quint32, StreamStats> m_streamStats;  // keyed by stream ID
     mutable QMutex m_statsMutex;
     QElapsedTimer m_seqLossClock;  // time base for StreamStats::lossLog; read only on new streams and errors
     VitaSequenceLossBudget m_seqLossBudget;  // all streams' lines together; under m_statsMutex
     CategoryStats m_catStats[CatCount]{};
+    void recordLatePacket(StreamCategory cat);
 
     struct AudioStreamTracker {
         quint16 packetClassCode{0};
@@ -486,10 +500,16 @@ private:
     std::function<bool()> m_wanBindForTest;
     std::function<qint64(const QByteArray&, const QHostAddress&, quint16)> m_wanWriteForTest;
     bool m_wanBoundForTest{false};
+    // Inject only the terminal LAN bind/write in socket-free lifecycle tests.
+    std::function<bool()> m_lanBindForTest;
+    std::function<qint64(const QByteArray&, const QHostAddress&, quint16)> m_lanWriteForTest;
+    bool m_lanBoundForTest{false};
 
     // WAN UDP registration and keepalive
     QTimer*  m_wanRegisterTimer{nullptr};   // udp_register: 50 ms until VITA, then 5 s
     QTimer*  m_routedPrimeTimer{nullptr};   // 250ms: non-WAN UDP prime retry until first packet
+    QTimer*  m_lanKeepaliveTimer{nullptr};  // 5 s: non-WAN keepalive for the whole session
+    bool     m_lanKeepaliveFailed{false};   // warn once per session, not every 5 s
     bool     m_isWanMode{false};
     bool     m_wanRegistered{false};
     quint32  m_wanClientHandle{0};

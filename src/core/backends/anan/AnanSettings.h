@@ -47,6 +47,20 @@ public:
     static bool speakerAudioEnabled();
     static void setSpeakerAudioEnabled(bool on);
 
+    // ---- Live options: the High Priority packet carries them every 100 ms ----
+
+    // Select the receive band-pass filter for the tuned frequency (true) or
+    // hold the banks to the bypass flags above (false, the default). Off by
+    // default: the bank is in series ahead of the ADC, so a filter that does
+    // not cover the tuned frequency is silence, and the band edges still need
+    // confirming band by band on a radio.
+    static bool bandFiltersEnabled();
+    static void setBandFiltersEnabled(bool on);
+
+    // Mute the radio's speaker amplifier (High Priority byte 1400 bit 1).
+    static bool speakerAmpMuted();
+    static void setSpeakerAmpMuted(bool on);
+
     // The DDC0 rates a session may start at, for a UI offering the choice.
     //
     // Here rather than read from the protocol header directly, because a setup

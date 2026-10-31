@@ -43,7 +43,7 @@ private:
     RadioModel* m_model;
     QTabWidget* m_tabs;
 
-    // Per-tab widgets (indexed by type: "global", "transmit", "mic")
+    // Per-tab widgets (indexed by type: "global", "transmit", "mic", "cw")
     struct TabWidgets {
         QLineEdit*   nameEdit;
         QListWidget* list;
@@ -55,6 +55,7 @@ private:
     QMap<QString, TabWidgets> m_tabWidgets;
 
     QCheckBox* m_autoSaveTx{nullptr};
+    QLabel*    m_cwUnsavedLabel{nullptr};
 };
 
 } // namespace AetherSDR

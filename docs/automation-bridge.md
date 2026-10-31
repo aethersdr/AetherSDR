@@ -34,6 +34,22 @@ production; it only exists when you ask for it via an env var.
 
 ## Quickstart
 
+Normal automation preserves the selected saved profile (including an inherited
+`AETHER_SETTINGS_DIR`) and honors `AutoConnectToLastRadio`. Enabling the bridge
+alone does not disable autoconnect or force simulator mode. Use only a profile
+and radio connection authorized for the task. The normal MCP launch is:
+
+```json
+{"action":"launch","worktree":"/absolute/path/to/AetherSDR","label":"proof"}
+```
+
+Simulator isolation is an optional test mode, not a prerequisite for review,
+fix, certification, or proof workflows. Use it for behavior the simulator can
+exercise. Real firmware and protocol convergence require the intended radio;
+state explicitly when that validation has not run.
+
+### Optional simulator-only launch
+
 ```bash
 # 1. Build with the bridge available (it's compiled in unconditionally;
 #    the env var below is what turns it on at runtime).
@@ -79,7 +95,7 @@ This process pin restricts radio connections to the simulator, including native
 UI actions, and cannot be disabled through settings. It is an application radio
 policy, not an operating-system network sandbox. Hardware proof requires explicit
 operator authorization and a separate process without the demo-only variable;
-normal interactive launches retain their existing behavior. Delete the manual
+normal interactive and automation launches retain their saved-profile behavior. Delete the manual
 scratch settings directory only after the process exits. The MCP `app_instance`
 tool manages this lifecycle automatically and is the preferred cross-platform
 proof launcher.
@@ -251,14 +267,23 @@ child process environment using the app's existing `AETHER_MCP_TOKEN` runtime
 override; the token is never a command-line argument, MCP result, discovery
 field, log message, or settings value.
 
-Each launch gets a unique explicit local socket, safe label, and fresh owned
-settings directory, overriding inherited `AETHER_SETTINGS_DIR`. The wrapper pins
-`AETHER_AUTOMATION_DEMO_ONLY=1` and `AETHER_AUTOMATION_NO_TX=1`, removes any
-inherited TX-enable flag, and requires the headless policy/config preflight
-before spawning the GUI. It refuses success unless token-free `ping` reports
-that auth is required, a tokenless privileged request is refused, and
-authenticated `whoami` matches the exact child PID, socket, and label with
-`txAllowed:false` and `demoOnly:true`. There is no hardware mode in this tool.
+Each launch gets a unique explicit local socket and safe label. Normal launches
+preserve the inherited `AETHER_SETTINGS_DIR`, or the default saved profile when
+none is set, and honor `AutoConnectToLastRadio`. They do not run the isolation
+preflight or change that preference, and work with authenticated builds that
+lack demo-only support. The wrapper removes an inherited demo-only variable
+unless the launch explicitly requests `"demo_only":true`.
+
+With `"demo_only":true`, the wrapper instead creates a fresh owned settings
+directory, pins `AETHER_AUTOMATION_DEMO_ONLY=1`, disables autoconnect in that
+profile, and requires the headless policy/config preflight before spawning.
+This optional path additionally requires authenticated `whoami.demoOnly:true`.
+It refuses unsupported binaries rather than falling back to a normal launch.
+
+Both paths pin `AETHER_AUTOMATION_NO_TX=1` and remove any inherited TX-enable
+flag. Both require token-free `ping` to report authentication, a tokenless
+privileged request to be refused, and authenticated `whoami` to match the exact
+child PID, socket, and label with `txAllowed:false`.
 All other MCP tools then target that owned socket. Once a proof launch is
 requested, the wrapper never falls back to inherited or discovered instances,
 even if launch fails or the child exits. Later tools fail clearly until another
@@ -271,8 +296,8 @@ fails, ownership and the profile are retained until the process exits.
 
 The tool fails closed if the wrapper has no token. It does not read, print, or
 copy a secret from the app settings UI, so an assistant never needs to put the
-credential in chat or a plaintext MCP configuration. The fresh proof profile
-does not inherit operator preferences. Observe-only can be enabled within that
+credential in chat or a plaintext MCP configuration. Only the optional demo-only profile
+does not inherit operator preferences; normal profiles are never deleted by cleanup. Observe-only can be enabled within that
 instance; `readOnly:true` then blocks mutating bridge tools.
 
 What the token *does* and *doesn't* do: it opts a **specific** client in
@@ -777,6 +802,12 @@ popup at a time and only while it is open; an empty combo is refused up front
 > anyway, so the marker still covers them (#3918). Setpoint
 > **sliders/combos** like `Tune power`, `RF power`, or `VOX level` are never
 > blocked — moving a value setter can't transmit.
+>
+> **VOX:** `invoke "VOX voice-operated transmit" setChecked false` disarms
+> without TX permission; `0`, `off`, `no`, and `unchecked` are also accepted.
+> Arming through `invoke` remains refused. The `vox_toggle` shortcut requires
+> TX permission in either direction; use the explicit disarm command to switch
+> VOX off without that permission.
 >
 > To deliberately drive a keying control (e.g. hardware-in-the-loop on a dummy
 > load), set `AETHER_AUTOMATION_ALLOW_TX=1` in the app's environment at launch.
@@ -3234,6 +3265,7 @@ the radio tabs, the audio cluster, and the window controls on every platform.
 ← {"ok":true,"model":"titlebar","present":true,"height":52,"expectedHeight":52,
    "offsetInWindow":0,"screenRect":[103,40,1402,52],"minimalMode":false,
    "brand":{"wordmark":"AetherSDR","logoLoaded":true,"visible":true},
+   "update":{"version":"","staged":"","visible":false},
    "radios":{"activeId":"DEMO-0001","width":291,"maximumWidth":16777215,
              "contentWidth":257,"overflowing":false,
              "popoverVisible":false,"pulseEnabled":true,
@@ -3263,6 +3295,11 @@ shared fallback caption widgets report `visible:false`. The fallback style
 is `shared`; Linux uses it when custom chrome is enabled. `qtVersion` is the
 actual runtime version, not the build-machine SDK version.
 `brand.rect` is `[x, y, width, height]` in title-bar coordinates.
+`update.version` is the newer release the UPDATE badge announces (empty when
+none, or when the operator skipped it); `update.staged` is the release
+downloaded and ready to install, when the badge reads RESTART TO UPDATE
+(empty otherwise); `update.visible` is false in minimal mode even when a
+version is set.
 On macOS, `chrome.nativeCaptionRect` is the union of visible native caption
 buttons in window-content coordinates (empty outside Cocoa or in fullscreen).
 With expanded chrome, check that the brand begins 16 logical pixels after the
@@ -3848,8 +3885,9 @@ its own per-pid socket + discovery entry).
    "txAllowed":false,"demoOnly":true,"version":"26.6.5"}
 ```
 
-`demoOnly` reports the process-pinned simulator-only radio policy. Proof launchers
-require the literal boolean `true`; absent or false is not evidence of isolation.
+`demoOnly` reports the process-pinned simulator-only radio policy. Optional
+demo-only launches require the literal boolean `true`; normal launches do not
+require this field. Absent or false is not evidence of isolation.
 `txAllowed` reports the effective automation TX gate, including the process pin
 and operator preference; check it before assuming a keying verb will work. `label` is
 `AETHER_AUTOMATION_LABEL` (a human tag for the instance).
@@ -5049,3 +5087,19 @@ waterfall rate still follow their existing radio-publication paths; this change
 does not establish whether their setters echo on every firmware version.
 The aetherd panadapter resource exposes the same Average/FPS request provenance
 and last radio publications as the bridge, including same-value confirmations.
+
+### VOX shortcut admission probe
+
+With an isolated demo app launched using `AETHER_AUTOMATION_NO_TX=1` and
+connected explicitly to `DEMO-0001`, run:
+
+```sh
+python3 tools/automation_vox_guard.py --socket /tmp/aethersdr-vox-probe
+```
+
+Pass the actual explicit socket path for your instance. This opt-in probe uses
+the running app's production shortcut registration and dispatcher and requires
+the specific TX-safety refusal; an absent main window is a failure. It sends no
+keying command. `phone_applet_vox_disarm_test` separately checks permission-free
+disarm from an armed model, aliases, refused arming, and native widget input
+without starting a socket server.

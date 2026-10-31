@@ -33,6 +33,8 @@
 #include "ClientDisconnectDialog.h"
 #include "ConnectedStationsDialog.h"
 #include "TitleBar.h"
+#include "UpdatesWindow.h"
+#include "core/UpdateController.h"
 #include "WindowCaptionButtons.h"
 #include "WindowChrome.h"
 #ifdef Q_OS_MACOS
@@ -116,7 +118,6 @@
 #include "AntennaGeniusApplet.h"
 #include "ShackSwitchApplet.h"
 #include "RadioSetupDialog.h"
-#include "ReleaseTagText.h"
 #include "AgcCalibrationDialog.h"
 #include "AudioDeviceChangeDialog.h"
 #include "NetworkDiagnosticsDialog.h"
@@ -154,6 +155,7 @@
 #include "SliceTroubleshootingDialog.h"
 #include "ShortcutDialog.h"
 #include "MultiFlexDialog.h"
+#include "Nr2WisdomDialog.h"
 #include "HelpDialog.h"
 #include "ThemeEditorDialog.h"
 #include "WhatsNewDialog.h"
@@ -202,9 +204,7 @@
 #include <QGuiApplication>
 #include <QProcess>
 #include <QScreen>
-#include <QAccessible>
 #include <QTimer>
-#include <QElapsedTimer>
 #include <QDateTime>
 #include <QIcon>
 #include <QCursor>
@@ -225,7 +225,6 @@
 #include <QSplitter>
 #include <QMenuBar>
 #include <QDialog>
-#include <QGridLayout>
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QMenu>
@@ -248,8 +247,6 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include "core/VersionNumber.h"
-#include "core/UpdateChecker.h"
-#include <QDesktopServices>
 #include <QPointer>
 #include <QTextEdit>
 #include <QPlainTextEdit>
@@ -766,10 +763,19 @@ void MainWindow::showMultiFlexDialog()
         return;
     }
 
-    MultiFlexDialog dlg(&m_radioModel, this);
-    connect(&dlg, &MultiFlexDialog::disconnectClientRequested,
-            this, &MainWindow::handleMultiFlexClientDisconnect);
-    dlg.exec();
+    // A canon dialog that stays open beside the main window: raised if it is
+    // already open, otherwise created. Closing it (Escape, Ctrl+W, the corner
+    // button) destroys it, so each open starts fresh.
+    if (!m_multiFlexDialog) {
+        auto* dlg = new MultiFlexDialog(&m_radioModel, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        connect(dlg, &MultiFlexDialog::disconnectClientRequested,
+                this, &MainWindow::handleMultiFlexClientDisconnect);
+        m_multiFlexDialog = dlg;
+    }
+    m_multiFlexDialog->show();
+    m_multiFlexDialog->raise();
+    m_multiFlexDialog->activateWindow();
 }
 
 void MainWindow::handleMultiFlexClientDisconnect(quint32 handle, const QString& displayName)
@@ -1408,34 +1414,8 @@ MainWindow::MainWindow(QWidget* parent)
     m_kiwiSdrManager = new KiwiSdrManager(this);
     m_kiwiSdrManager->setOperatorCallsign(m_radioModel.callsign());
 
-    // UpdateChecker — must be created before buildMenuBar() which references it
-    m_updateChecker = new UpdateChecker(this);
-    connect(m_updateChecker, &UpdateChecker::updateAvailable, this, [this](const QString& ver) {
-        const QString current = QCoreApplication::applicationVersion();
-        FramelessMessageBox box(this);
-        box.setWindowTitle("AetherSDR Update Available");
-        box.setIcon(QMessageBox::Information);
-        setUpdateAvailableText(box, current, ver);
-        QPushButton* viewBtn = box.addButton("View Latest Release", QMessageBox::ActionRole);
-        viewBtn->setAutoDefault(false);
-        QPushButton* closeBtn = box.addButton(QMessageBox::Close);
-        closeBtn->setAutoDefault(false);
-        // Force minimum width via layout spacer — setMinimumWidth() is ignored by QMessageBox
-        if (auto* grid = qobject_cast<QGridLayout*>(box.layout()))
-            grid->addItem(new QSpacerItem(480, 0, QSizePolicy::Minimum, QSizePolicy::Fixed),
-                          grid->rowCount(), 0, 1, grid->columnCount());
-        box.exec();
-        if (box.clickedButton() == viewBtn)
-            QDesktopServices::openUrl(QUrl(UpdateChecker::kReleasesPageUrl));
-    });
-    connect(m_updateChecker, &UpdateChecker::upToDate, this, [this](const QString& ver) {
-        FramelessMessageBox::information(this, "Check for Updates",
-            QString("AetherSDR is up to date (v%1).").arg(ver));
-    });
-    connect(m_updateChecker, &UpdateChecker::checkFailed, this, [this]() {
-        FramelessMessageBox::warning(this, "Check for Updates",
-            "Could not reach GitHub. Check your connection and try again.");
-    });
+    // Before buildMenuBar(): Help → Check for Updates references the checker.
+    wireUpdateChecker();
 
     buildMenuBar();
     buildUI();
@@ -1696,6 +1676,22 @@ MainWindow::MainWindow(QWidget* parent)
     // TX-decode is on, so calling it on every phoneStateChanged is cheap.
     connect(&m_radioModel.transmitModel(), &TransmitModel::phoneStateChanged,
             this, [this]() { refreshCwDecodeState(); });
+
+    // The receive decoder's pitch range follows the CW pitch: a range that
+    // contains the pitch is kept, one that misses it is re-centred on it
+    // (CwDecodeSettings::pitchRangeFor). cwPitchReported also carries a
+    // reported pitch the model already held, which cwPitchChanged skips.
+    // The pitch itself is only read here, never stored or sent.
+    const auto followCwPitch = [this](int hz) {
+        if (const auto range = CwDecodeSettings::pitchRangeFor(hz, CwDecodeSettings::pitchRange())) {
+            CwDecodeSettings::setPitchRange(range->low, range->high);
+            if (m_cwDecoderApplet) {
+                m_cwDecoderApplet->restoreCwRanges();
+            }
+        }
+    };
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchReported, this, followCwPitch);
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchChanged, this, followCwPitch);
 
     // RTTY decoder audio feed is wired in wireRxDemodAudioSinks() above,
     // gated on the decoder being running.
@@ -3466,22 +3462,28 @@ void MainWindow::toggleAetherRxDialog()
 #ifdef HAVE_MQTT
 void MainWindow::showMqttSettingsDialog()
 {
-    const bool wasFresh = !m_mqttSettingsDialog;
-    showOrRaisePersistent(m_mqttSettingsDialog);
-    if (!wasFresh || !m_mqttSettingsDialog)
-        return;
+    // A canon dialog, so not showOrRaisePersistent(): that applies View →
+    // Frameless Window, which a CanonWindow does not follow.
+    if (!m_mqttSettingsDialog) {
+        auto* dlg = new MqttSettingsDialog(this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_mqttSettingsDialog = dlg;
 
-    connect(m_mqttSettingsDialog, &MqttSettingsDialog::settingsSaved,
-            this, [this](const QString& password) {
-        if (!m_appletPanel || !m_appletPanel->mqttApplet())
-            return;
-        auto* mqttApplet = m_appletPanel->mqttApplet();
-        mqttApplet->setCachedPassword(password);
-        mqttApplet->refreshSettings();
-        if (m_mqttClient) {
-            m_mqttClient->setSubscriptions(mqttSubscriptionTopics(mqttApplet->topicConfig()));
-        }
-    });
+        connect(dlg, &MqttSettingsDialog::settingsSaved,
+                this, [this](const QString& password) {
+            if (!m_appletPanel || !m_appletPanel->mqttApplet())
+                return;
+            auto* mqttApplet = m_appletPanel->mqttApplet();
+            mqttApplet->setCachedPassword(password);
+            mqttApplet->refreshSettings();
+            if (m_mqttClient) {
+                m_mqttClient->setSubscriptions(mqttSubscriptionTopics(mqttApplet->topicConfig()));
+            }
+        });
+    }
+    m_mqttSettingsDialog->show();
+    m_mqttSettingsDialog->raise();
+    m_mqttSettingsDialog->activateWindow();
 }
 
 void MainWindow::publishCwDecodeMqtt(const QString& text, float cost, bool rx)
@@ -3594,7 +3596,7 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
                                          &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
                                          m_kiwiSdrManager, &m_acomConn, &m_speConn,
                                          &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn, &m_kpa500Conn,
-                                         this, &m_kat500Model, &m_kxpa100Model);
+                                         this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         m_radioSetupDialog = dlg;
     }
@@ -4190,6 +4192,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // destructor-path unkey somewhere to run while the event loop is still
     // live, rather than during member destruction (#4097).
     m_kpa1500Conn.disconnect();
+    // The RF-KIT likewise has zero radio awareness. Closing it here also aborts
+    // any request still in flight while the event loop is live, rather than
+    // leaving that to member destruction.
+    m_rfkitConn.disconnect();
     // The LP-100A is likewise independent of the radio lifecycle and may be
     // connected through a shared ser2net proxy. Close it explicitly while
     // the event loop is still live instead of relying on member destruction.
@@ -4504,6 +4510,15 @@ void MainWindow::closeEvent(QCloseEvent* event)
 #ifdef HAVE_WEBSOCKETS
         m_freedvClient = nullptr;
 #endif
+    }
+
+    // A staged update installs as AetherSDR quits (RFC #5304): the helper
+    // waits for this process to exit. Not while radio firmware is being
+    // written, not when a new instance is already starting from the install
+    // (a UI-scale restart), and not twice after Restart to update handed it
+    // over. Every quit, close() or QApplication::quit(), arrives here.
+    if (m_updateController && !m_relaunchingApp && !(m_updatesWindow && m_updatesWindow->firmwareBusy())) {
+        m_updateController->installOnQuit();
     }
 
     QMainWindow::closeEvent(event);
@@ -5486,6 +5501,9 @@ void MainWindow::buildUI()
             this, &MainWindow::updatePcAudioTooltip, Qt::QueuedConnection);
     connect(m_titleBar, &TitleBar::multiFlexClicked,
             this, &MainWindow::showMultiFlexDialog);
+    connect(m_titleBar, &TitleBar::updateBadgeClicked,
+            this, [this] { showUpdatesWindow(false); });
+    restoreKnownUpdate();
     connect(m_titleBar, &TitleBar::minimalModeRequested,
             this, &MainWindow::toggleMinimalModeFromAction);
     connect(m_titleBar, &TitleBar::minimalModeWindowedExitRequested, this, [this]() {
@@ -5706,13 +5724,15 @@ void MainWindow::buildUI()
         // AGC (outside KiwiSDR replacement), NB and NR through the SliceModel
         // setters, so they reach every backend, not only a command plane.
         m_radioModel.recallBandStackReceiveDsp(slice, e);
-        // WNB (panadapter-level, not slice)
+        // Stored WNB values are optional replay, not individual control actions.
         if (auto* pan = m_radioModel.activePanadapter()) {
             if (e.wnbOn != pan->wnbActive()) {
-                m_radioModel.requestPanDisplay(pan, {PanDisplayField::Wnb, e.wnbOn});
+                m_radioModel.requestPanDisplay(pan, {PanDisplayField::Wnb, e.wnbOn},
+                    {}, /*announce=*/false);
             }
             if (e.wnbLevel != pan->wnbLevel()) {
-                m_radioModel.requestPanDisplay(pan, {PanDisplayField::WnbLevel, e.wnbLevel});
+                m_radioModel.requestPanDisplay(pan, {PanDisplayField::WnbLevel, e.wnbLevel},
+                    {}, /*announce=*/false);
             }
         }
     });
@@ -6141,7 +6161,7 @@ void MainWindow::buildUI()
     applyStatusBarCompactLabelStyle(m_radioVersionLabel, QStringLiteral("{{color.text.secondary}}"));
     m_radioVersionLabel->setAlignment(Qt::AlignCenter);
     // Only out-of-date firmware is actionable, but the row is wired once here
-    // rather than as the verdict changes: openFirmwareReleaseNotes() checks
+    // rather than as the verdict changes: openFirmwareUpdate() checks
     // m_radioFirmwareCurrency and does nothing otherwise, and
     // applyFirmwareCurrencyToVersionLabel() drops the tab stop it does not need.
     m_radioVersionLabel->installEventFilter(this);
@@ -8284,6 +8304,11 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     if (m_multiFlexAction) {
         m_multiFlexAction->setVisible(!connected || caps.hasMultiClientSessions);
     }
+    // The dashboard stays open beside the main window, so a radio without
+    // multi-client sessions closes it rather than leaving it to drive one.
+    if (connected && !caps.hasMultiClientSessions && m_multiFlexDialog) {
+        m_multiFlexDialog->close();  // QPointer, guarded above
+    }
     updateToolsMenuState();
     // Both entries open the SAME host serial knob (m_aetherControlAction is
     // this app's name for it), so neither is a radio capability -- see #5778.
@@ -9523,6 +9548,9 @@ void MainWindow::routeCwDecoderOutput()
 
     // Connect to new applet
     if (m_cwDecoderApplet) {
+        // Each pan builds its own range sliders; the decoder's ranges are one
+        // shared setting, so the target shows the saved ones before they are pushed.
+        m_cwDecoderApplet->restoreCwRanges();
         connect(&m_cwDecoder, &CwRxModel::textDecoded,
                 m_cwDecoderApplet, &PanadapterApplet::appendCwText);
         // TX-side decoded text routes to a separate slot so the panel
@@ -9691,185 +9719,18 @@ void MainWindow::enableNr2WithWisdom()
         const auto result = std::make_shared<std::atomic<int>>(
             static_cast<int>(SpectralNR::WisdomResult::Failed));
 
-        const bool frameless =
-            AppSettings::instance().value("FramelessWindow", "True").toString() == "True";
-
-        auto* dlg = new QDialog(this);
-        dlg->setObjectName("nr2WisdomDialog");
-        dlg->setWindowTitle("AetherSDR — FFTW Wisdom");
-        if (frameless) {
-            dlg->setWindowFlag(Qt::FramelessWindowHint, true);
-        }
-        // Modeless — wisdom generation can take minutes; locking the
-        // operator out of the radio for that whole window was a worse UX
-        // than letting them keep operating while the worker thread runs
-        // in the background.  The thread is already off the GUI thread
-        // (see QThread::create below); progress callbacks marshal back
-        // via QMetaObject::invokeMethod and the Cancel path is wired
-        // through QDialog::rejected.
-        dlg->setWindowModality(Qt::NonModal);
-        // Tool window flag so the dialog floats above the main window
-        // without claiming a separate taskbar entry, and stays visible
-        // when the operator clicks back to the main UI.
-        dlg->setWindowFlag(Qt::Tool, true);
-        dlg->setAttribute(Qt::WA_ShowWithoutActivating, true);
-#ifdef Q_OS_MACOS
-        // Qt maps Qt::Tool to an NSPanel, which AppKit hides whenever the
-        // application deactivates — fatal for a dialog that is modeless by
-        // design and lives for minutes.  This attribute is what turns that
-        // off: QWidgetPrivate::create() forwards it to the QWindow property
-        // _q_macAlwaysShowToolWindow, which QCocoaWindow reads to decide
-        // NSWindow.hidesOnDeactivate.  It is read during window creation, so
-        // it MUST stay ahead of the first show()/winId() — moving it below
-        // would silently no-op on macOS with nothing failing elsewhere.
-        dlg->setAttribute(Qt::WA_MacAlwaysShowToolWindow, true);
-#endif
-        dlg->setMinimumWidth(500);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(dlg, "QDialog { background: #050710; }"
-            "QLabel { color: {{color.text.secondary}}; background: transparent; }"
-            "QProgressBar { text-align: center; font-size: 13px;"
-            " font-weight: bold; color: {{color.text.primary}};"
-            " background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 3px; }"
-            "QProgressBar::chunk { background: {{color.accent}}; }");
-
-        auto* root = new QVBoxLayout(dlg);
-        root->setContentsMargins(0, 0, 0, 0);
-        root->setSpacing(0);
-
-        auto* titleBar = new FramelessWindowTitleBar(QStringLiteral("AetherSDR — FFTW Wisdom"), dlg);
-        titleBar->setVisible(frameless);
-        root->addWidget(titleBar);
-
-        auto* content = new QWidget(dlg);
-        auto* body = new QVBoxLayout(content);
-        body->setContentsMargins(10, frameless ? 8 : 10, 10, 10);
-        body->setSpacing(10);
-
-        auto* label = new QLabel(
-            "Optimizing FFT plans for NR2...\n\n"
-            "This window will automatically close when wisdom generation is complete.",
-            content);
-        label->setObjectName("nr2WisdomStatusLabel");
-        label->setWordWrap(true);
-        body->addWidget(label);
-
-        auto* progress = new QProgressBar(content);
-        progress->setObjectName("nr2WisdomProgressBar");
-        progress->setRange(0, 100);
-        progress->setValue(0);
-        body->addWidget(progress);
-
-        auto* activityRow = new QHBoxLayout();
-        activityRow->setContentsMargins(0, 0, 0, 0);
-        auto* activityLabel = new QLabel("Working", content);
-        activityLabel->setObjectName("nr2WisdomActivityLabel");
-        activityLabel->setAccessibleName("FFTW wisdom generation activity");
-        activityRow->addWidget(activityLabel);
-        activityRow->addStretch();
-        auto* elapsedLabel = new QLabel("Elapsed: 0:00", content);
-        elapsedLabel->setObjectName("nr2WisdomElapsedTimeLabel");
-        elapsedLabel->setAccessibleName("Elapsed time");
-        activityRow->addWidget(elapsedLabel);
-        body->addLayout(activityRow);
-
-        auto* reassuranceLabel = new QLabel(
-            "Still working — FFTW planning can take several minutes on some systems.", content);
-        reassuranceLabel->setObjectName("nr2WisdomReassuranceLabel");
-        reassuranceLabel->setAccessibleName("FFTW wisdom generation reassurance");
-        reassuranceLabel->setWordWrap(true);
-        // Reserve the row while hidden.  This line toggles on every quiet
-        // interval, and without the reservation each toggle relayouts the
-        // dialog — the tool window grows when it appears and is left with
-        // dead space when it goes.  #4728 is a report about this window
-        // being visually unstable at exactly this point in the run, so the
-        // replacement liveness cue must not reintroduce geometry churn.
-        QSizePolicy reassurancePolicy = reassuranceLabel->sizePolicy();
-        reassurancePolicy.setRetainSizeWhenHidden(true);
-        reassuranceLabel->setSizePolicy(reassurancePolicy);
-        reassuranceLabel->hide();
-        body->addWidget(reassuranceLabel);
-
-        const auto announceLabel = [](QLabel* target) {
-            target->setAccessibleName(target->text());
-            QAccessibleEvent event(target, QAccessible::NameChanged);
-            QAccessible::updateAccessibility(&event);
-        };
-
-        auto* buttonRow = new QHBoxLayout();
-        buttonRow->addStretch();
-        auto* cancelButton = new QPushButton("Cancel", content);
-        cancelButton->setObjectName("nr2WisdomCancelButton");
-        cancelButton->setAutoDefault(false);
-        cancelButton->setDefault(false);
-        buttonRow->addWidget(cancelButton);
-        body->addLayout(buttonRow);
-        root->addWidget(content);
-
+        // The window shows progress and takes the cancel; the worker reads
+        // `cancelled`, which the window's cancel and shutdown both set.
+        auto* dlg = new Nr2WisdomDialog(this);
+        connect(dlg, &Nr2WisdomDialog::cancelRequested, this,
+                [cancelled]() { cancelled->store(true); });
         m_nr2WisdomDialog = dlg;
         dlg->show();
 
-        auto* activityTimer = new QTimer(dlg);
-        activityTimer->setInterval(500);
-        const auto elapsedTimer = std::make_shared<QElapsedTimer>();
-        const auto lastCallbackTimer = std::make_shared<QElapsedTimer>();
-        elapsedTimer->start();
-        lastCallbackTimer->start();
-        connect(activityTimer, &QTimer::timeout, dlg,
-            [cancelled, activityLabel, elapsedLabel, reassuranceLabel,
-                elapsedTimer, lastCallbackTimer, announceLabel]() {
-                const qint64 elapsedSeconds = elapsedTimer->elapsed() / 1000;
-                elapsedLabel->setText(QString("Elapsed: %1:%2")
-                    .arg(elapsedSeconds / 60)
-                    .arg(elapsedSeconds % 60, 2, 10, QLatin1Char('0')));
-                const int dotCount = static_cast<int>((elapsedTimer->elapsed() / 500) % 4);
-                activityLabel->setText(QString("%1%2")
-                    .arg(cancelled->load() ? "Canceling" : "Working")
-                    .arg(QString(dotCount, QLatin1Char('.'))));
-                if (cancelled->load()) {
-                    reassuranceLabel->setText(
-                        "Cancel requested — waiting for the current FFT plan to finish.");
-                    reassuranceLabel->show();
-                } else {
-                    const bool quiet = lastCallbackTimer->elapsed() >= 10000;
-                    if (quiet && !reassuranceLabel->isVisible()) {
-                        reassuranceLabel->show();
-                        announceLabel(reassuranceLabel);
-                    } else if (!quiet) {
-                        reassuranceLabel->hide();
-                    }
-                }
-            });
-        activityTimer->start();
-
-        const auto requestCancel = [cancelled, label, progress, cancelButton,
-                                       activityLabel, reassuranceLabel, announceLabel]() {
-            if (cancelled->exchange(true)) {
-                return;
-            }
-            // activityLabel is left to the activity timer: it reads
-            // `cancelled` and switches to the animated "Canceling..." on its
-            // next tick.  Setting a static string here would be overwritten
-            // within 500 ms, and the animated form is the better affordance
-            // anyway — it keeps proving the app is alive while the in-flight
-            // FFT plan finishes.
-            reassuranceLabel->setText(
-                "Cancel requested — waiting for the current FFT plan to finish.");
-            reassuranceLabel->show();
-            announceLabel(reassuranceLabel);
-            cancelButton->setEnabled(false);
-            progress->setRange(0, 0);
-            label->setText("Canceling FFTW wisdom generation...\n\n"
-                           "Audio will continue unchanged. This may take a moment while the current FFT plan finishes.");
-        };
-        connect(cancelButton, &QPushButton::clicked, dlg, requestCancel);
-        connect(dlg, &QDialog::rejected, dlg, requestCancel);
-
-        const QPointer<QDialog> dlgGuard(dlg);
-        auto* thread = QThread::create([cancelled, result, dlgGuard, label, progress,
-                                           reassuranceLabel, lastCallbackTimer]() {
+        const QPointer<Nr2WisdomDialog> dlgGuard(dlg);
+        auto* thread = QThread::create([cancelled, result, dlgGuard]() {
             const auto wisdomResult = AudioEngine::generateWisdom(
-                [cancelled, dlgGuard, label, progress, reassuranceLabel,
-                    lastCallbackTimer](int step, int total, const std::string& desc) {
+                [cancelled, dlgGuard](int step, int total, const std::string& desc) {
                     if (!dlgGuard) {
                         return;
                     }
@@ -9878,18 +9739,14 @@ void MainWindow::enableNr2WithWisdom()
                     }
                     int pct = total > 0 ? (step * 100 / total) : 0;
                     QString d = QString::fromStdString(desc);
-                    QMetaObject::invokeMethod(dlgGuard.data(), [dlgGuard, label, progress, reassuranceLabel,
-                                                                  lastCallbackTimer, pct, d]() {
+                    QMetaObject::invokeMethod(dlgGuard.data(), [dlgGuard, pct, d]() {
                         if (!dlgGuard) {
                             return;
                         }
-                        lastCallbackTimer->restart();
-                        reassuranceLabel->hide();
                         if (!d.isEmpty()) {
-                            label->setText(d + "\n\n"
-                                "This window will automatically close when wisdom generation is complete.");
+                            dlgGuard->setStepDescription(d);
                         } else {
-                            progress->setValue(pct);
+                            dlgGuard->setProgress(pct);
                         }
                     });
                 },
@@ -9898,25 +9755,17 @@ void MainWindow::enableNr2WithWisdom()
         });
         m_nr2WisdomThread = thread;
         m_nr2WisdomCancel = cancelled;
-        connect(thread, &QThread::finished, this, [this, dlg, progress, label, thread, result,
-                                                     activityTimer, activityLabel, reassuranceLabel,
-                                                     announceLabel]() {
+        connect(thread, &QThread::finished, this, [this, dlg, thread, result]() {
             m_nr2WisdomCancel.reset();
             const auto wisdomResult =
                 static_cast<SpectralNR::WisdomResult>(result->load());
             const bool ready = wisdomResult == SpectralNR::WisdomResult::Ready
                             || wisdomResult == SpectralNR::WisdomResult::Generated;
-            activityTimer->stop();
-            reassuranceLabel->hide();
-            progress->setRange(0, 100);
-            progress->setValue(ready ? 100 : 0);
 
             if (!ready) {
-                activityLabel->setText("Stopped");
-                label->setText(wisdomResult == SpectralNR::WisdomResult::Cancelled
-                    ? "Wisdom generation canceled. Audio was left unchanged."
-                    : "Wisdom generation failed. Audio was left unchanged.");
-                announceLabel(label);
+                dlg->showResult(wisdomResult == SpectralNR::WisdomResult::Cancelled
+                    ? Nr2WisdomDialog::Outcome::Canceled
+                    : Nr2WisdomDialog::Outcome::Failed);
                 if (auto* a = m_appletPanel ? m_appletPanel->clientRxDspApplet() : nullptr) {
                     if (auto* w = a->widget()) {
                         w->syncFromEngine();
@@ -9934,9 +9783,7 @@ void MainWindow::enableNr2WithWisdom()
                 return;
             }
 
-            activityLabel->setText("Complete");
-            label->setText("Wisdom generation complete!");
-            announceLabel(label);
+            dlg->showResult(Nr2WisdomDialog::Outcome::Complete);
             QTimer::singleShot(800, this, [this, dlg, thread]() {
                 dlg->accept();
                 dlg->deleteLater();
@@ -9975,6 +9822,7 @@ void MainWindow::applyUiScale(int pct)
         QString("UI scale changed to %1%. Restart AetherSDR now to apply?").arg(pct),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer == QMessageBox::Yes) {
+        m_relaunchingApp = true;
 #ifdef Q_OS_MACOS
         // On macOS, relaunch via 'open -n' so the .app bundle is activated through
         // Launch Services — direct binary exec bypasses the bundle, causing dock
@@ -11428,11 +11276,13 @@ void MainWindow::restoreBandState(const BandSnapshot& snap)
         // Don't push center or bandwidth — slice tune recenters the pan and
         // the radio determines bandwidth. Pushing stale saved values causes
         // FFT/waterfall misalignment during the transition (#279, #291).
-        // Only restore dBm scale (client-side display preference).
+        // Replay optional display fields without unsupported-control notices.
         m_radioModel.requestPanDisplay(pan,
-            {PanDisplayField::LevelRange, PanLevelRange{snap.minDbm, snap.maxDbm}});
+            {PanDisplayField::LevelRange, PanLevelRange{snap.minDbm, snap.maxDbm}},
+            {}, /*announce=*/false);
+        m_radioModel.requestPanDisplay(pan,
+            {PanDisplayField::RfGain, snap.rfGain}, {}, /*announce=*/false);
     }
-    m_radioModel.setPanRfGain(snap.rfGain);
     m_radioModel.setPanWnb(snap.wnbOn);
     if (auto* sw = spectrum()) {
         sw->setSpectrumFrac(snap.spectrumFrac);
