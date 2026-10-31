@@ -1961,7 +1961,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     // symmetric-about-the-carrier like AM, so they take AM's range; the straddle
     // keeps the carrier inside the passband. CW/CWL add the BFO to the cuts in
     // dspFilterHz(), whose pitch reaches 6000 Hz (setCwPitch), so their cuts stop
-    // at 6000 Hz and the demodulator's edges stay inside +-12000 Hz.
+    // at 6000 Hz and the demodulator's edges stay inside +-12000 Hz. Unlike a
+    // Flex, whose pitch is radio-owned and so not guessed, the host DSP owns the
+    // BFO here (cwBfoOffsetHz), which is why CW and FM can be declared at all.
     c.receiveFilterControl = ReceiveFilterControl{SliceFrequencyControl::Authority::Engine, {
         {QStringLiteral("USB"), 0, 11990, 10, 12000, 10, 12000},
         {QStringLiteral("DIGU"), 0, 11990, 10, 12000, 10, 12000},
