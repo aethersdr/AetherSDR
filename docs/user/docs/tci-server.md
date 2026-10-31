@@ -36,6 +36,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 |---|---|
 | **RX1 … RX8** | One row per receive channel: the slice it carries and a combined level meter / gain slider. Rows above the radio's slice capacity are hidden. |
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
+| **Include TX (Line Out)** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
 
@@ -155,6 +156,92 @@ Audio is float32 stereo by default. A client can ask for int16 and/or mono:
 audio_stream_sample_type:int16;
 audio_stream_channels:1;
 ```
+
+### Line Out recording
+
+Clients start and stop a separate stereo mix with `line_out_start:<receiver>;`
+and `line_out_stop:<receiver>;`. It uses TCI stream type **4**, fixed at
+**48 kHz stereo float32**, independently of ordinary RX format negotiation.
+The receiver number labels the subscription; its content is the same complete
+playback mix, not that receiver alone. RX and Line Out can run together.
+
+**PC Audio is optional.** A Line Out subscription keeps the incoming radio audio
+and software mixer running without opening a PC playback device. It records
+the final shared stereo mix,
+including the open slices' existing volume, pan and mute, client-side RX DSP,
+and other sources in that mix. PC playback master volume and mute do not affect
+the recording, including when PC Audio is off.
+The TCI RX, TX and MIC faders do not add another recording gain to Line Out.
+It does not record other applications or separate local cue/sidetone devices.
+
+**Include TX (Line Out)** is off by default. When off, Line Out sends silence
+throughout radio TX, including any simultaneous RX: TX monitor and RX cannot be
+separated after mixing. When on, it records the existing playback mix during TX
+without adding a duplicate microphone feed. On FlexRadio, enable MON yourself
+to hear and record radio-side TX monitor audio. Subscribing never changes MON,
+microphone selection or transmitter state. This is separate from
+**Include TX (RX Streams)** and does not require that option.
+
+Switching PC Audio on or off does not stop an active Line Out subscription.
+The radio audio stream is released after the last Line Out listener stops unless
+PC playback still needs it.
+Server-side `line_out_recorder_*` file recording is not implemented.
+Live TX, MON and multi-client recording qualification remain outstanding
+([#6410](https://github.com/aethersdr/AetherSDR/issues/6410)).
+
+### Microphone recording with DXLog
+
+FlexRadio microphone recording is disabled by default. In the
+TCI Server applet, select **Include TX (RX Streams)**, then connect DXLog
+to AetherSDR's normal TCI endpoint, usually
+`ws://127.0.0.1:50001`. No separate probe or audio device is needed.
+The option stays visible but unavailable, with a reason, when the connected
+radio backend does not support microphone capture. PC Audio and MON do not
+need to be enabled. If capture is rejected or the radio removes its stream,
+AetherSDR retries after two seconds while recording remains enabled and an
+audio client is subscribed.
+
+DXLog uses its normal TCI audio subscription. In receive, it gets ordinary
+receiver audio. During radio-reported transmit owned by this AetherSDR client,
+the current TX receiver's stream carries the selected radio microphone instead.
+The radio must report a known TX owner matching this client's nonzero handle.
+If another MultiFlex client owns TX, or ownership is unknown, the stream keeps
+its ordinary receiver audio. Ownership changes take effect even while the radio
+remains transmitting. The existing per-client sample rate, mono/stereo and
+float32/int16 negotiation still applies, including 48 kHz recording. Other
+receivers keep their RX audio.
+
+The **MIC** fader controls only this outgoing recording feed. It appears only
+when **Include TX (RX Streams)** is selected and remembers its setting.
+The default is 100 percent (0 dB, unity gain). Reduce it to attenuate the mic;
+zero mutes it. There is no boost or automatic loudness normalization. The
+gain popup shows attenuation in dB. The meter and adjacent dBFS readout show
+the post-fader microphone RMS level, with a dash when there is no current
+audio. **CLIP** is a separate warning for sample peaks at or above full scale,
+even when the RMS level is lower. The meter does not measure RF output or
+guarantee that the source was not already clipped.
+The MIC fader does not change radio MIC gain, RX levels or client-to-radio TX audio.
+
+The RX and MIC meters both show post-fader RMS on the same logarithmic
+scale, from -60 to 0 dBFS. Gain is applied once to the pre-fader RMS before
+display scaling; -30 dBFS occupies half the bar. Equal output RMS levels
+produce equal settled bar lengths.
+This does not normalize the audio: microphone and receiver source levels can
+differ, so adjust the MIC fader to balance recording levels.
+
+This saved option affects every audio subscriber on the TX receiver;
+do not use it with digital-mode clients that need uninterrupted RX-only audio.
+It captures the selected mic input, not an RF monitor, CW sidetone or a complete
+radio voice-keyer mix. DXLog recording, MultiFlex microphone-source isolation
+and timing still need hardware validation
+([#6410](https://github.com/aethersdr/AetherSDR/issues/6410)).
+
+Capture starts only with an audio subscriber and releases its own mic stream
+when no subscribers remain or TCI stops. It never keys the radio, changes the
+mic source, enables MON or enables DAX TX. Any PTT is solely your action.
+Clear **Include TX (RX Streams)** to release capture and restore RX-only
+TCI audio immediately, without restarting. The existing TX gain control still refers to audio arriving from clients,
+not the microphone recording feed.
 
 ### TX overflow handling
 

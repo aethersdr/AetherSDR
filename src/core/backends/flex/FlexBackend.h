@@ -43,6 +43,8 @@ public:
     // and its connection()/panStream() getters delegate to them.
     RadioConnection*  connection() const { return m_connection; }
     PanadapterStream* panStream()  const { return m_panStream; }
+    bool setMicrophoneCaptureEnabled(bool enabled) override;
+    void decodeMicrophoneStatus(const QString& object, const QMap<QString, QString>& kvs);
 
     // Core verbs share RadioModel's guarded command funnel and wire-write path.
     using CommandReply = std::function<void(int, const QString&)>;
@@ -270,6 +272,11 @@ private:
     QThread*          m_connThread{nullptr};    // owned (this-parented)
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
+    bool m_microphoneRequested{false};
+    int m_microphonePendingCreates{0};
+    quint32 m_microphoneStreamId{0};
+    quint64 m_microphoneSession{0};
+    quint64 m_microphoneGeneration{0};
     std::function<bool(const QString&, CommandReply)> m_sink;
     AnsweredCommandSink m_answeredSink;
     std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;

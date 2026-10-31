@@ -47,6 +47,8 @@ AETHER_SEAM_PROBE(panRemoved);
 AETHER_SEAM_PROBE(notchChanged);
 AETHER_SEAM_PROBE(notchRemoved);
 AETHER_SEAM_PROBE(sliceAudioFrameReady);
+AETHER_SEAM_PROBE(microphonePcmReady);
+AETHER_SEAM_PROBE(microphoneCaptureStopped);
 AETHER_SEAM_PROBE(panWideChanged);
 AETHER_SEAM_PROBE(panRangeChanged);
 AETHER_SEAM_PROBE(panBandwidthLimitsChanged);

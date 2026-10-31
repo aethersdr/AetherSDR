@@ -5,12 +5,15 @@
 class QPushButton;
 class QLabel;
 class QLineEdit;
+class QCheckBox;
+class QTimer;
 
 namespace AetherSDR {
 
 class RadioModel;
 class TciServer;
 class MeterSlider;
+class ControlAvailabilityRegistry;
 
 // TCI Applet — TCI WebSocket server control panel.
 // Mirrors DaxApplet framework: per-channel meters + gain sliders for 8 RX
@@ -51,12 +54,23 @@ private:
 #ifdef HAVE_WEBSOCKETS
     void buildUI();
     void updateTciStatus();
+    void updateMicrophoneRecordingControls();
 
     RadioModel* m_model{nullptr};
     TciServer*  m_tciServer{nullptr};
+    ControlAvailabilityRegistry* m_microphoneAvailability{nullptr};
     int m_maxDaxChannels{kChannels};  // radio slice capacity (FlexLib table)
 
     QPushButton* m_tciEnable{nullptr};
+    QCheckBox* m_microphoneRecording{nullptr};
+    QCheckBox* m_lineOutIncludeTx{nullptr};
+    QWidget* m_microphoneRow{nullptr};
+    MeterSlider* m_microphoneMeter{nullptr};
+    QLabel* m_microphoneLevelLabel{nullptr};
+    QTimer* m_microphoneMeterTimer{nullptr};
+    double m_microphoneSquareSum{0.0};
+    quint64 m_microphoneSamples{0};
+    bool m_microphoneClipped{false};
     QLineEdit*   m_tciPort{nullptr};
     QLabel*      m_tciStatus{nullptr};
 

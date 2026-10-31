@@ -2,9 +2,11 @@
 // routing, conversion and encoding. Only WebSocket writes/backlog are injected.
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/AudioEngine.h"
 #include "core/TciServer.h"
 #include "core/TciRxConverter.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/flex/RadioConnection.h"
 #include "models/RadioModel.h"
 #include "models/DaxReceiveModel.h"
 #include "models/SliceModel.h"
@@ -13,8 +15,12 @@
 #include <QTimer>
 #include <QSemaphore>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMap>
 #include <QStringList>
 #include "core/TciClient.h"
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <thread>
@@ -85,13 +91,23 @@ public:
     RadioCapabilities capabilities() const override {
         RadioCapabilities caps;
         if (exportAvailable) { caps.receiveAudioExport = ReceiveAudioExport{{24000,48000},8}; }
+        if (microphoneAvailable) { caps.microphoneCapture = RadioCapabilities::MicrophoneCapture{}; }
         return caps;
     }
     bool exportAvailable = true;
+    bool microphoneAvailable = false;
+    bool connected = false;
+    bool microphoneCaptureEnabled = false;
+    int microphoneCaptureChanges = 0;
+    bool setMicrophoneCaptureEnabled(bool enabled) override {
+        microphoneCaptureEnabled = enabled;
+        ++microphoneCaptureChanges;
+        return enabled;
+    }
     bool ownsRxAudio() const override { return true; }
     void connectRadio(const RadioConnectRequest&) override {} // no transport
     void disconnectRadio() override { retirePcmStreams(); emit disconnected(); }
-    bool isConnected() const override { return false; }
+    bool isConnected() const override { return connected; }
     void setSliceFrequency(int, double) override {}
     void setSliceMode(int, const QString&) override {}
     void setSliceFilter(int, int, int) override {}
@@ -182,8 +198,398 @@ class TciRxAudioTest {
         }
     }
 public:
+    static void lineOutFailureIsolation()
+    {
+        for (int failureMode : {0, 1, 2}) {
+            Fixture fixture;
+            fixture.backend->add(0);
+            TciClient* failed = fixture.client(48000, 0);
+            TciClient* healthy = fixture.client(48000, 0);
+            fixture.command(failed, QStringLiteral("line_out_start:0;"));
+            fixture.command(healthy, QStringLiteral("line_out_start:0;"));
+            TciIoWorker& worker = *fixture.server.m_io;
+            const auto send = worker.m_rxSend;
+            worker.m_rxSend = [failed, failureMode, send](quint64 id, const QByteArray& packet) {
+                return id == failed->id() && failureMode == 1 ? qint64{0} : send(id, packet);
+            };
+            worker.m_rxBacklog = [&fixture, failed, failureMode](quint64 id) {
+                if (id != failed->id()) { return qint64{0}; }
+                if (failureMode == 0) { return qint64{256 * 1024}; }
+                if (failureMode == 2) { fixture.command(failed, QStringLiteral("line_out_stop:0;")); }
+                return qint64{0};
+            };
+            int closes = 0;
+            worker.m_rxClose = [&closes, failed](quint64 id, QWebSocketProtocol::CloseCode, const QString&) {
+                check(id == failed->id(), "Line Out closes only the slow client's connection");
+                ++closes;
+            };
+            PcmProducer producer;
+            producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+            worker.receiveLineOutPcm(frame(producer, 1024), false);
+            check(fixture.packets[failed].isEmpty() && fixture.packets[healthy].size() == 1,
+                  "Line Out backlog, short write and reentrant stop do not disrupt other subscribers");
+            check(fixture.server.clientStateFor(failed)->lineOutReceivers.isEmpty()
+                && worker.m_rxClients.value(failed->id()).config.audio,
+                "Line Out failure retires only that audio subscription before transport cleanup");
+            check(closes == (failureMode == 0 ? 1 : 0), "only Line Out backlog requests a connection close");
+            worker.m_rxSend = send;
+            worker.m_rxBacklog = [](quint64) { return qint64{0}; };
+            fixture.command(failed, QStringLiteral("line_out_start:0;"));
+            worker.receiveLineOutPcm(frame(producer, 1024), false);
+            check(fixture.packets[failed].size() == 1 && fixture.packets[healthy].size() == 2,
+                  "Line Out can be explicitly restarted after a delivery failure");
+        }
+    }
+
+    static void lineOutProtocol()
+    {
+        AudioEngine audio;
+        Fixture fixture;
+        fixture.server.setAudioEngine(&audio);
+        fixture.server.m_running.store(true);
+        fixture.backend->connected = true;
+        fixture.backend->add(3);
+        fixture.backend->add(17);
+        TciClient* listener = fixture.client(48000, 0);
+        TciClient* other = fixture.client(48000, 1);
+        fixture.command(listener, QStringLiteral("audio_stop:0;line_out_start:0;line_out_start:1;"));
+        auto* state = fixture.server.clientStateFor(listener);
+        check(state && !state->audioEnabled && state->lineOutReceivers == QSet<int>{0, 1}, "Line Out starts independently of audio_start");
+        check(fixture.model.lineOutAudioRequested(), "TCI Line Out subscribers request radio audio independently of PC playback");
+        const quint64 generation = state->lineOutGeneration;
+        fixture.command(listener, QStringLiteral("line_out_start:0;audio_samplerate:8000;audio_stream_channels:1;"));
+        check(state->lineOutGeneration == generation, "duplicate Line Out start and RX negotiation preserve its subscription generation");
+        fixture.command(listener, QStringLiteral("line_out_start:-1;line_out_start:99;line_out_start:invalid;"));
+        check(state->lineOutReceivers == QSet<int>{0, 1}, "Line Out refuses malformed and out-of-range receiver subscriptions");
+        PcmProducer producer;
+        producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+        fixture.server.m_io->receiveLineOutPcm(frame(producer, 1024, 0.125f, -0.5f), false);
+        check(fixture.packets[listener].size() == 2 && fixture.packets[other].isEmpty(), "Line Out protocol delivers only to explicit subscribers");
+        fixture.packets[listener].clear();
+        fixture.command(listener, QStringLiteral("line_out_stop:0;"));
+        check(fixture.model.lineOutAudioRequested(), "remaining Line Out subscription keeps the radio audio feed alive");
+        fixture.server.m_io->receiveLineOutPcm(frame(producer, 1024), false);
+        check(fixture.packets[listener].size() == 1 && word(fixture.packets[listener].first(), 0) == 1,
+              "Line Out stop removes only its requested receiver");
+        fixture.packets[listener].clear();
+        fixture.command(listener, QStringLiteral("audio_start:0;line_out_stop:1;"));
+        check(state->audioEnabled && state->lineOutReceivers.isEmpty(), "Line Out stop does not stop RX");
+        check(!fixture.model.lineOutAudioRequested(), "last Line Out stop releases its radio audio demand independently of RX");
+        fixture.server.m_io->receiveLineOutPcm(frame(producer, 1024), false);
+        check(fixture.packets[listener].isEmpty(), "stopped Line Out emits no further packets");
+    }
+
+    static void lineOutDelivery()
+    {
+        Fixture fixture;
+        TciClient* listener = fixture.client(8000, 0, 1, 0);
+        TciClient* other = fixture.client();
+        TciIoWorker& worker = *fixture.server.m_io;
+        worker.setRxGain(1, 0.0f);
+        worker.setMicrophoneRecordingGain(0.0f);
+        TciLineOutConfig config{listener->lifetime, QSet<int>{0, 1}, 1};
+        worker.configureLineOut(config);
+        PcmProducer producer;
+        check(producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo}), "Line Out source starts");
+        const PcmFrame first = frame(producer, 1024, 0.125f, -0.5f);
+        worker.receiveLineOutPcm(first, false);
+        check(fixture.packets[listener].size() == 2 && fixture.packets[other].isEmpty(), "Line Out uses independent per-client receiver subscriptions");
+        QSet<quint32> receivers;
+        for (const QByteArray& packet : fixture.packets[listener]) {
+            receivers.insert(word(packet, 0));
+            check(word(packet, 1) == 48000 && word(packet, 2) == 3
+                && word(packet, 5) == 2048 && word(packet, 6) == 4
+                && word(packet, 7) == 2 && packet.size() == 64 + 2048 * 4,
+                "Line Out is fixed 48k stereo float32 type 4 despite RX negotiation");
+        }
+        check(receivers == QSet<quint32>{0, 1}, "Line Out labels each requested receiver without remapping RX");
+        const QVector<float> stereo = floats(fixture.packets[listener]);
+        check(stereo.size() == 4096 && stereo[0] == 0.125f && stereo[1] == -0.5f,
+              "Line Out preserves stereo pan and level without RX gain");
+        fixture.packets[listener].clear();
+        worker.receiveLineOutPcm(first, false);
+        check(fixture.packets[listener].isEmpty(), "Line Out rejects replay");
+        worker.receiveLineOutPcm(frame(producer, 1024), true);
+        const QVector<float> muted = floats(fixture.packets[listener]);
+        check(!muted.isEmpty() && std::ranges::all_of(muted, [](float sample) { return sample == 0.0f; }),
+              "Line Out excludes radio TX by default");
+        fixture.packets[listener].clear();
+        worker.setLineOutIncludeTx(true);
+        worker.receiveLineOutPcm(frame(producer, 1024, 0.25f, 0.5f), true);
+        const QVector<float> tx = floats(fixture.packets[listener]);
+        check(!tx.isEmpty() && tx[0] == 0.25f && tx[1] == 0.5f, "Line Out includes the existing TX mix once when enabled");
+        fixture.packets[listener].clear();
+        config.receivers.clear();
+        ++config.generation;
+        worker.configureLineOut(config);
+        worker.receiveLineOutPcm(frame(producer, 1024), false);
+        check(fixture.packets[listener].isEmpty() && worker.m_rxClients.value(listener->id()).config.audio,
+              "stopping Line Out leaves ordinary audio subscription intact");
+        config.receivers.insert(0);
+        ++config.generation;
+        worker.configureLineOut(config);
+        const PcmFrame stale = frame(producer, 1024);
+        producer.invalidate();
+        worker.receiveLineOutPcm(stale, false);
+        check(fixture.packets[listener].isEmpty(), "Line Out rejects revoked playback");
+        PcmProducer replacement;
+        replacement.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+        worker.receiveLineOutPcm(frame(replacement, 1024), false);
+        check(!fixture.packets[listener].isEmpty(), "Line Out accepts replacement only after old producer retirement");
+    }
+
+    static void microphoneTxOwnership()
+    {
+        RadioConnection connection;
+        Fixture fixture;
+        fixture.model.m_connection = &connection;
+        fixture.backend->connected = true;
+        fixture.backend->microphoneAvailable = true;
+        fixture.backend->add(3);
+        fixture.backend->add(17);
+        SliceDelta txSlice;
+        txSlice.txSlice = true;
+        emit fixture.backend->sliceChanged(17, txSlice);
+        TciClient* otherReceiver = fixture.client(24000, 0);
+        TciClient* txReceiver = fixture.client(24000, 1);
+        fixture.server.m_running.store(true);
+        fixture.server.m_microphoneRecordingEnabled = true;
+        fixture.server.m_microphoneRecordingGain = 1.0f;
+        TciIoWorker* worker = fixture.server.m_io.get();
+        worker->setMicrophoneRecordingGain(1.0f);
+        fixture.server.updateMicrophoneRecording();
+        PcmProducer receiver;
+        receiver.start(PcmPurpose::Slice, 17);
+        PcmProducer other;
+        other.start(PcmPurpose::Slice, 3);
+        PcmProducer microphone;
+        microphone.start(PcmPurpose::Auxiliary);
+        const auto verifyRoute = [&](bool localTx, const char* name) {
+            check(worker->m_microphoneRecording && worker->m_recordingTransmitting == localTx
+                && worker->m_recordingTrx == 1, name);
+            fixture.packets.clear();
+            fixture.feed(17, frame(receiver, 1024, 0.25f, 0.25f));
+            fixture.feed(3, frame(other, 1024, 0.5f, 0.5f));
+            emit fixture.backend->microphonePcmReady(frame(microphone, 1024, 0.125f, 0.125f));
+            const QVector<float> recorded = floats(fixture.packets[txReceiver]);
+            check(recorded.size() == 2048 && std::all_of(recorded.cbegin(), recorded.cend(),
+                [localTx](float sample) { return sample == (localTx ? 0.125f : 0.25f); }),
+                "TX receiver records only mic for owned TX, otherwise only its own RX");
+            const QVector<float> unaffected = floats(fixture.packets[otherReceiver]);
+            check(unaffected.size() == 2048 && std::all_of(unaffected.cbegin(), unaffected.cend(),
+                [](float sample) { return sample == 0.5f; }),
+                "ownership changes never substitute mic on another receiver");
+        };
+        const auto interlock = [&](const QMap<QString, QString>& status) {
+            fixture.model.handleStatusForTest(QStringLiteral("interlock"), status);
+        };
+        interlock({{QStringLiteral("state"), QStringLiteral("TRANSMITTING")}});
+        verifyRoute(false, "zero local and unreported TX handles fail closed during radio TX");
+        connection.m_handle.store(0x1234);
+        interlock({{QStringLiteral("state"), QStringLiteral("TRANSMITTING")}});
+        verifyRoute(false, "known local handle does not admit an unreported TX owner");
+        interlock({{QStringLiteral("tx_client_handle"), QStringLiteral("0x1234")}});
+        verifyRoute(true, "ownership-only local grant selects mic on the mapped TX receiver");
+        interlock({{QStringLiteral("tx_client_handle"), QStringLiteral("0xbeef")}});
+        check(fixture.model.isRadioTransmitting(), "foreign ownership does not change radio-wide TX state");
+        verifyRoute(false, "ownership-only foreign handoff stops mic without a TX-state edge");
+        interlock({{QStringLiteral("tx_client_handle"), QStringLiteral("0x1234")}});
+        verifyRoute(true, "ownership-only local handoff restores mic during ongoing radio TX");
+        interlock({{QStringLiteral("tx_client_handle"), QStringLiteral("0x0")}});
+        verifyRoute(false, "zero TX owner is not treated as a local recording grant");
+        connection.m_handle.store(0);
+        interlock({{QStringLiteral("tx_client_handle"), QStringLiteral("0x1234")}});
+        verifyRoute(false, "unknown local handle cannot match a known TX owner");
+        connection.m_handle.store(0x1234);
+        interlock({{QStringLiteral("tx_client_handle"), QStringLiteral("0x1234")},
+                   {QStringLiteral("state"), QStringLiteral("RECEIVE")}});
+        verifyRoute(false, "local TX ownership alone does not substitute mic while receiving");
+        interlock({{QStringLiteral("state"), QStringLiteral("TRANSMITTING")}});
+        verifyRoute(true, "radio TX admits the retained matching owner from status deltas");
+        interlock({{QStringLiteral("tx_client_handle"), QStringLiteral("0xbeef")},
+                   {QStringLiteral("state"), QStringLiteral("TRANSMITTING")}});
+        verifyRoute(false, "combined foreign TX state and owner never admit mic");
+        fixture.model.m_connection = nullptr;
+    }
+
     static void rateMatrixAndStereo()
     {
+        {
+            auto& settings = AppSettings::instance();
+            const bool hadRecording = settings.contains("TciRecording");
+            const QVariant savedRecording = settings.value("TciRecording");
+            settings.remove("TciRecording");
+            settings.save();
+            TciServer server(nullptr);
+            check(!server.microphoneRecordingEnabled(), "microphone recording preference defaults off");
+            check(server.microphoneRecordingGain() == 1.0f,
+                "mic recording gain defaults to unity without enabling capture");
+            int gainChanges = 0;
+            QObject::connect(&server, &TciServer::microphoneRecordingGainChanged,
+                &server, [&gainChanges](float) { ++gainChanges; });
+            server.setMicrophoneRecordingGain(0.5f);
+            server.setMicrophoneRecordingGain(0.5f);
+            server.setMicrophoneRecordingGain(std::numeric_limits<float>::quiet_NaN());
+            server.setMicrophoneRecordingGain(std::numeric_limits<float>::infinity());
+            check(server.microphoneRecordingGain() == 0.5f && gainChanges == 1
+                && server.m_io->m_microphoneRecordingGain == 0.5f,
+                "saved mic gain is idempotent, rejects non-finite values and updates the worker");
+            int changes = 0;
+            QObject::connect(&server, &TciServer::microphoneRecordingEnabledChanged,
+                &server, [&changes](bool) { ++changes; });
+            server.setMicrophoneRecordingEnabled(true);
+            server.setMicrophoneRecordingEnabled(true);
+            check(server.microphoneRecordingEnabled() && changes == 1,
+                "recording preference is opt-in and idempotent");
+            TciServer restored(nullptr);
+            check(restored.microphoneRecordingEnabled(), "recording preference survives a new server");
+            check(restored.microphoneRecordingGain() == 0.5f
+                && restored.m_io->m_microphoneRecordingGain == 0.5f,
+                "mic recording gain survives a new server and enable preference writes");
+            server.setMicrophoneRecordingEnabled(false);
+            TciServer disabled(nullptr);
+            check(!disabled.microphoneRecordingEnabled() && changes == 2,
+                "explicit off persists and notifies the control");
+            check(disabled.microphoneRecordingGain() == 0.5f,
+                "disabling recording preserves the saved mic gain");
+            if (hadRecording) { settings.setValue("TciRecording", savedRecording); }
+            else { settings.remove("TciRecording"); }
+            settings.save();
+        }
+        {
+            Fixture fixture;
+            fixture.server.setMicrophoneRecordingEnabled(true);
+            check(fixture.backend->microphoneCaptureChanges == 0,
+                "enabling the preference without a running recorder does not create capture");
+            fixture.server.m_microphoneCaptureActive = true;
+            fixture.backend->microphoneCaptureEnabled = true;
+            fixture.server.m_io->setMicrophoneRecording(true, true, 0);
+            fixture.server.setMicrophoneRecordingEnabled(false);
+            check(!fixture.backend->microphoneCaptureEnabled
+                && fixture.backend->microphoneCaptureChanges == 1
+                && !fixture.server.m_microphoneCaptureActive,
+                "clearing the preference releases the active backend capture");
+            check(!fixture.server.m_io->m_microphoneRecording,
+                "clearing the preference disables the worker microphone route immediately");
+        }
+        {
+            Fixture fixture;
+            fixture.backend->add(0);
+            TciClient* recorder = fixture.client(24000, 0);
+            TciClient* resampledRecorder = fixture.client(48000, 0, 1, 0);
+            TciIoWorker* worker = fixture.server.m_io.get();
+            QObject::disconnect(worker, &TciIoWorker::microphoneRecordingLevel, &fixture.server, nullptr);
+            const quint64 micKey = TciIoWorker::rxRouteKey(true, 0);
+            auto bindings = worker->m_bindings;
+            bindings.insert(micKey, {micKey, 0, 0, 0, std::make_shared<std::atomic<bool>>(true)});
+            worker->setRxBindings(bindings);
+            PcmProducer receiver;
+            receiver.start(PcmPurpose::Slice, 0);
+            PcmProducer microphone;
+            microphone.start(PcmPurpose::Auxiliary);
+            float microphoneRms = -1.0f;
+            quint64 microphoneSamples = 0;
+            bool microphoneClipped = false;
+            int microphoneLevelUpdates = 0;
+            QObject::connect(worker, &TciIoWorker::microphoneRecordingLevel, worker,
+                [&](float rms, quint64 samples, bool clipped) {
+                    microphoneRms = rms;
+                    microphoneSamples = samples;
+                    microphoneClipped = clipped;
+                    ++microphoneLevelUpdates;
+                });
+            worker->receivePcm(micKey, frame(microphone, 1024));
+            check(fixture.packets[recorder].isEmpty(), "microphone recording is disabled by default");
+            worker->setMicrophoneRecording(true, true, 0);
+            fixture.feed(0, frame(receiver, 1024));
+            check(fixture.packets[recorder].isEmpty(), "opt-in transmit recording excludes simultaneous receiver samples");
+            worker->receivePcm(micKey, frame(microphone, 32768, 0.125f, -0.25f));
+            headers(fixture.packets[recorder], 24000, 0, 2, 3);
+            headers(fixture.packets[resampledRecorder], 48000, 0, 1, 0);
+            check(floats(fixture.packets[recorder]).value(0) == 0.125f,
+                "recording delivers physical mic samples at unity gain as type-1 audio");
+            const float expectedRms = std::sqrt((0.125f * 0.125f + 0.25f * 0.25f) * 0.5f);
+            check(std::abs(microphoneRms - expectedRms) < 0.000001f
+                && microphoneSamples == 65536 && !microphoneClipped && microphoneLevelUpdates == 1,
+                "mic meter reports stereo RMS, not peak amplitude, with source sample count");
+            fixture.packets[recorder].clear();
+            worker->setMicrophoneRecordingGain(0.5f);
+            worker->receivePcm(micKey, frame(microphone, 1024, 0.125f, -0.25f));
+            check(floats(fixture.packets[recorder]).value(0) == 0.0625f,
+                "mic recording gain attenuates outgoing audio exactly once");
+            const QByteArray monoPacket = fixture.packets[resampledRecorder].last();
+            qint16 monoSample = 0;
+            std::memcpy(&monoSample, monoPacket.constData() + monoPacket.size() - sizeof(monoSample), sizeof(monoSample));
+            check(std::abs(static_cast<int>(monoSample) + 1024) <= 1,
+                "negotiated 48 kHz mono int16 recording uses the same mic attenuation");
+            check(microphoneLevelUpdates == 1, "mic RMS events are bounded until acknowledged");
+            worker->acknowledgeLevel(-1);
+            worker->receivePcm(micKey, frame(microphone, 1024, 0.125f, -0.25f));
+            check(std::abs(microphoneRms - expectedRms) < 0.000001f,
+                "mic RMS stays pre-fader so the shared meter applies gain exactly once");
+            worker->receivePcm(micKey, frame(microphone, 512, 1.0f, -3.0f));
+            worker->acknowledgeLevel(-1);
+            const float coalescedRms = std::sqrt((expectedRms * expectedRms * 2.0f + 5.0f) / 3.0f);
+            check(std::abs(microphoneRms - coalescedRms) < 0.000001f
+                && microphoneSamples == 3072 && microphoneLevelUpdates == 3,
+                "coalesced mic RMS is sample-weighted, not a held maximum or average amplitude");
+            check(microphoneClipped && microphoneRms * 0.5f < 1.0f,
+                "a brief clipped sample remains flagged even when post-fader RMS is below full scale");
+            fixture.packets[recorder].clear();
+            worker->setMicrophoneRecordingGain(0.0f);
+            worker->receivePcm(micKey, frame(microphone, 1024, 0.125f, -0.25f));
+            const QVector<float> muted = floats(fixture.packets[recorder]);
+            check(!muted.isEmpty() && std::all_of(muted.cbegin(), muted.cend(),
+                [](float sample) { return sample == 0.0f; }), "mic fader can mute the recording feed");
+            worker->acknowledgeLevel(-1);
+            check(std::abs(microphoneRms - expectedRms) < 0.000001f && !microphoneClipped,
+                "muting preserves pre-fader mic RMS and clears the post-fader clip flag");
+            worker->setMicrophoneRecordingGain(2.0f);
+            check(worker->m_microphoneRecordingGain == 1.0f, "mic recording gain cannot boost");
+            worker->setMicrophoneRecordingGain(-1.0f);
+            check(worker->m_microphoneRecordingGain == 0.0f, "negative mic recording gain clamps to mute");
+            worker->setMicrophoneRecordingGain(std::numeric_limits<float>::quiet_NaN());
+            worker->setMicrophoneRecordingGain(std::numeric_limits<float>::infinity());
+            check(worker->m_microphoneRecordingGain == 0.0f, "non-finite mic gains are rejected");
+            fixture.packets[recorder].clear();
+            worker->setMicrophoneRecording(false, true, 0);
+            worker->receivePcm(micKey, frame(microphone, 1024));
+            check(fixture.packets[recorder].isEmpty(), "turning recording off during TX blocks microphone audio");
+            fixture.feed(0, frame(receiver, 1024));
+            check(!fixture.packets[recorder].isEmpty(), "turning recording off during TX restores receiver audio");
+            check(floats(fixture.packets[recorder]).value(0) == 0.25f,
+                "muting mic recording does not attenuate receiver audio");
+            fixture.packets[recorder].clear();
+            worker->setMicrophoneRecording(true, false, 0);
+            worker->receivePcm(micKey, frame(microphone, 1024));
+            check(fixture.packets[recorder].isEmpty(), "mic audio is not exported after return to receive");
+            fixture.feed(0, frame(receiver, 1024));
+            check(!fixture.packets[recorder].isEmpty(), "ordinary receiver recording resumes after operator unkeys");
+        }
+        {
+            Fixture fixture;
+            fixture.backend->add(0);
+            TciClient* recorder = fixture.client(24000, 0);
+            TciIoWorker* worker = fixture.server.m_io.get();
+            QObject::disconnect(worker, &TciIoWorker::rxLevel, &fixture.server, nullptr);
+            float sourceRms = -1.0f;
+            QObject::connect(worker, &TciIoWorker::rxLevel, worker,
+                [&sourceRms](int, float rms) { sourceRms = rms; });
+            PcmProducer receiver;
+            receiver.start(PcmPurpose::Slice, 0);
+            const float expectedRms = std::sqrt((0.125f * 0.125f + 0.25f * 0.25f) * 0.5f);
+            for (float gain : {1.0f, 0.5f, 0.0f}) {
+                worker->setRxGain(1, gain);
+                worker->acknowledgeLevel(1);
+                fixture.packets[recorder].clear();
+                fixture.feed(0, frame(receiver, 1024, 0.125f, -0.25f));
+                check(std::abs(sourceRms - expectedRms) < 0.000001f,
+                      "RX telemetry stays pre-fader at unity, half gain and mute");
+                const QVector<float> samples = floats(fixture.packets[recorder]);
+                check(!samples.isEmpty() && samples.first() == 0.125f * gain,
+                      "pre-fader RX telemetry leaves outgoing audio gain unchanged");
+            }
+        }
         // Catches forced 24k producer interpretation,
         // stereo downmix, unbounded packets and last-client-only accounting.
         for (int sourceRate : {24000,48000}) {
@@ -1079,9 +1485,10 @@ public:
 
     static int run()
     {
+        microphoneTxOwnership();
         serverConstructedAfterReceiverRestore();
         simultaneousEightReceiverHandshakes();
-        eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
+        lineOutFailureIsolation(); lineOutProtocol(); lineOutDelivery(); eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
         ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding(); nonFiniteInt16IsSilence();
         replayAndEpochs(); resetIsolation(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
         staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); daxRouteSurvivesStreamUnregister(); pressureAndReplacement();

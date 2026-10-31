@@ -42,6 +42,7 @@ class SliceModel;
 class PanadapterModel;
 class Resampler;
 class TciRxConverter;
+class IRadioBackend;
 
 // Read-only snapshot of one connected TCI client, surfaced to the Radio
 // Setup → TCI tab. TCI has no client-identity handshake, so a client is
@@ -109,6 +110,12 @@ public:
     QVector<TciClientInfo> connectedClients() const;
 
     void setAudioEngine(AudioEngine* audio);
+    void setMicrophoneRecordingEnabled(bool enabled);
+    bool microphoneRecordingEnabled() const { return m_microphoneRecordingEnabled; }
+    void setMicrophoneRecordingGain(float gain);
+    float microphoneRecordingGain() const { return m_microphoneRecordingGain; }
+    void setLineOutIncludeTx(bool enabled);
+    bool lineOutIncludeTx() const { return m_lineOutIncludeTx; }
     // Thread-safe owning ingress, safe even if a source callback overlaps
     // controller destruction. The closure contains no controller pointer.
     std::function<void(int, const PcmFrame&)> daxPcmSink() const;
@@ -168,7 +175,11 @@ public slots:
     void onDaxStreamUnregistered(int channel, quint32 streamId);
 
 signals:
+    void lineOutIncludeTxChanged(bool enabled);
     void clientCountChanged(int count);
+    void microphoneRecordingEnabledChanged(bool enabled);
+    void microphoneRecordingGainChanged(float gain);
+    void microphoneRecordingLevel(float rms, quint64 samples, bool clipped);
     void rxBindingsChanged();
     // Fired whenever the client list or any client's subscriptions change
     // (connect, disconnect, audio start/stop). The TCI tab repopulates on
@@ -181,7 +192,7 @@ signals:
     // emitted but can be muted per-command via the monitor's
     // suppression list to keep the stream readable.
     void tciMessage(const QString& direction, const QString& text);
-    void rxLevel(int channel, float rms);  // 1-based channel, RMS of TCI-gained RX audio
+    void rxLevel(int channel, float rms);  // 1-based channel, pre-fader RMS
     void txLevel(float rms);                // RMS of post-gain TCI TX audio
     // Emitted when a TCI client sends `volume:N;` (master volume SET).
     // MainWindow handles it by calling the same path as the title bar
@@ -307,6 +318,8 @@ private:
         int          audioChannels{2};       // 1=mono, 2=stereo
         int          audioFormat{3};         // 0=int16, 3=float32
         quint64 rxGeneration{0};
+        QSet<int> lineOutReceivers;
+        quint64 lineOutGeneration{0};
         bool         rxSensorsEnabled{false};
         bool         txSensorsEnabled{false};
         // TCI IQ subscriptions are per client AND per receiver. SDC can open
@@ -352,9 +365,18 @@ private:
     void announceEffectiveIqSampleRate();
 
     void syncClient(const ClientState& client);
+    void syncLineOutClient(const ClientState& client);
+    void updateLineOutCapture();
+    bool m_lineOutIncludeTx{false};
+    bool m_lineOutCaptureWanted{false};
     TciClient* clientById(quint64 id) const;
     void resetClientRx(ClientState& client);
     void refreshRxBindings();
+    void updateMicrophoneRecording();
+    bool m_microphoneRecordingEnabled{false};
+    float m_microphoneRecordingGain{1.0f};
+    bool m_microphoneCaptureActive{false};
+    QTimer* m_microphoneRetryTimer{nullptr};
     void retireAllRxRoutes();
     void retireSliceRx(int sliceId);
     QHash<quint64, TciRxBinding> m_rxBindings;

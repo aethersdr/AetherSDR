@@ -7,6 +7,66 @@ backend slice IDs resolve through `TciTrxMap`; a sparse slice ID is not a DAX
 channel or public receiver index. The Flex DAX route retains its channel gain and
 slice binding independently.
 
+## Opt-in microphone recording
+
+With **Include TX (RX Streams)** enabled on a capture-capable backend,
+the TX receiver's ordinary type-1 RX_AUDIO route carries the selected radio
+microphone during radio-reported TX only when the nonzero local client handle
+matches `tx_client_handle`. Foreign, zero or unknown ownership keeps RX audio;
+the permissive unknown-owner policy used by other TX consumers is not a
+recording grant. Ownership-only interlock updates refresh the selector without
+requiring a new TX-state edge. All subscribers to the mapped TX receiver see
+the substitution; other receiver routes retain RX audio. Unkeying restores RX.
+This changes the route's content, not its negotiated format or public receiver
+identity. It is not Line Out (type 4) or an independent TX stream.
+
+Flex supplies pre-TX-processing `dax_mic` PCM, relayed through RadioModel's
+generation and PCM admission gates. PC Audio and MON are not prerequisites.
+The MIC fader attenuates only the recording feed. Capture failures retire the
+mic route and allow a new request after two seconds while enabled, connected,
+and subscribed. Unknown narrow-audio packets are dropped while mic creation
+is pending, so a packet preceding its create reply cannot become speaker audio.
+
+Socket-free tests cover local, foreign and unknown TX ownership, ownership-only
+handoffs and per-receiver packet contents. These establish client-side route
+selection, not the radio's microphone-source isolation or timing under live
+MultiFlex; those still require hardware qualification.
+
+## Independent Line Out (type 4)
+
+`LINE_OUT_START:<receiver>;` / `LINE_OUT_STOP:<receiver>;` maintain subscriptions
+separate from `AUDIO_START` / `AUDIO_STOP`. Each requested receiver labels a copy
+of the same final shared playback mix. Wire format is fixed 48 kHz stereo float32;
+ordinary RX negotiation, RX gain and MIC gain do not alter it. The standard
+64-byte header has type 4 and scalar-sample length. Existing type-1 routing stays
+unchanged.
+
+The source is the stereo mixer output before the optional PC playback write, after source
+mixing, slice-controlled balance and client DSP. PC playback master gain and mute
+do not affect capture. It is not a DAX sum and does not separately apply slice
+gain/pan. Non-native device rates, including 44.1 kHz, convert L/R independently
+to the typed 48 kHz domain; native 24/48 kHz capture preserves its format until
+the worker converts to the fixed wire rate. PCM epochs retire on disable,
+device close/rate change and TX-state transitions. The existing bounded mailbox
+and per-client 256 KiB output limit also apply to Line Out. A Line Out subscriber
+independently retains the radio speaker stream. Without a playback device, the
+existing 10 ms timer drains the same mixer at 48 kHz; no audio sink is opened.
+Turning PC Audio off closes only playback and does not stop recording. The last
+Line Out subscriber releases its demand without removing a stream needed by PC Audio.
+
+`TciRecording.lineOutIncludeTx` defaults false. While false, Line Out sends
+silence during any radio TX, including simultaneous receive. While true, it
+passes the playback mix unchanged; it does not add `dax_mic` or local TX PCM.
+Radio-side MON must already be audible to appear in this mix. This is a
+presentation recording, not the station-owned mic-attribution contract above.
+No MON, PTT or radio input selection commands are issued. PC Audio is optional;
+separate local cue/sidetone sinks and server-side file recording are outside scope.
+
+Socket-free tests cover wire subscriptions, negotiation independence, stereo,
+PC master gain/mute independence, replay/revocation, multi-source playback equality, TX opt-in,
+backpressure and reentrant stop. Real-radio MON/TX and logger recordings still
+need operator-controlled qualification.
+
 ## Formats and conversion
 
 Producer metadata travels with each owning `PcmFrame`: source, session, format

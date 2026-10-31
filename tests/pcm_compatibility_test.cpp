@@ -3,6 +3,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AudioEngine.h"
 #include "core/backends/flex/PanadapterStream.h"
+#include "core/backends/flex/FlexBackend.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
@@ -30,6 +31,10 @@ public:
     static void dax(PanadapterStream& stream, quint32 id, int channel, const QByteArray& pcm)
     {
         stream.publishLegacyDaxAudio(id, channel, pcm);
+    }
+    static void datagram(PanadapterStream& stream, const QByteArray& packet)
+    {
+        stream.processDatagram(packet);
     }
 };
 } // namespace AetherSDR
@@ -160,6 +165,21 @@ void backendAndAudioRouting()
     source->speaker(QByteArray(7, '\0'));
     source->sliceAudio(3, bytes({std::numeric_limits<float>::infinity(), 0.0f}));
     check(taps == 1 && slices == 1, "malformed backend PCM never enters model buses");
+
+    int microphoneFrames = 0;
+    QObject::connect(&model, &RadioModel::backendMicrophonePcmReady, &model,
+        [&](const PcmFrame&) { ++microphoneFrames; });
+    PcmProducer micProducer;
+    micProducer.start(PcmPurpose::Auxiliary);
+    const PcmFrame micFrame = *micProducer.produce({0.25f, -0.25f});
+    emit source->microphonePcmReady(micFrame);
+    emit source->microphonePcmReady(micFrame);
+    emit source->microphonePcmReady(oldSpeaker);
+    check(microphoneFrames == 1, "model admits microphone PCM once and rejects speaker frames");
+    const PcmFrame retiredMic = *micProducer.produce({0.25f, -0.25f});
+    micProducer.invalidate();
+    emit source->microphonePcmReady(retiredMic);
+    check(microphoneFrames == 1, "model rejects microphone frames revoked before delivery");
 
     const quint64 oldInstance = oldSlice.stream().receiverInstance;
     emit source->sliceRemoved(3);
@@ -305,10 +325,101 @@ void flexCompatibility()
     check(!dax.current(), "DAX removal revokes queued PCM");
     PcmCompatibilityTestAccess::dax(stream, 0x101, 4, bytes(samples));
     check(daxCount == 1, "removed DAX stream cannot emit more PCM");
+    PcmFrame microphone;
+    int microphoneCount = 0;
+    QObject::connect(&stream, &PanadapterStream::microphonePcmReady, &stream,
+        [&](const PcmFrame& frame) { microphone = frame; ++microphoneCount; });
+    constexpr quint32 micId = 0x04000008;
+    QByteArray micPacket = packet;
+    qToBigEndian<quint32>(0x38500000u | quint32(micPacket.size() / 4), micPacket.data());
+    qToBigEndian<quint32>(micId, micPacket.data() + 4);
+    qToBigEndian<quint32>(0x001c2d, micPacket.data() + 8);
+    qToBigEndian<quint32>(0x000003e3, micPacket.data() + 12);
+    stream.setMicrophoneCreatePending(true);
+    PcmCompatibilityTestAccess::datagram(stream, micPacket);
+    check(speaker == before && microphoneCount == 0,
+        "unregistered mic packets cannot reach speakers while creation is pending");
+    QByteArray pendingReduced = micPacket;
+    qToBigEndian<quint32>(0x00000123, pendingReduced.data() + 12);
+    PcmCompatibilityTestAccess::datagram(stream, pendingReduced);
+    check(speaker == before && microphoneCount == 0,
+        "pending reduced-bandwidth microphone packets also cannot reach speakers");
+    stream.registerDaxStream(0x101, 4);
+    QByteArray daxPacket = micPacket;
+    qToBigEndian<quint32>(0x101, daxPacket.data() + 4);
+    PcmCompatibilityTestAccess::datagram(stream, daxPacket);
+    check(daxCount == 2 && speaker == before,
+        "pending mic creation preserves registered DAX receive routing");
+    stream.unregisterDaxStream(0x101);
+    stream.registerMicrophoneStream(micId);
+    stream.setMicrophoneCreatePending(false);
+    PcmCompatibilityTestAccess::datagram(stream, micPacket);
+    check(microphoneCount == 1 && microphone.legacyStereo24() == bytes(samples),
+        "owned microphone VITA packets preserve samples through separate typed PCM");
+    check(speaker == before && daxCount == 2, "mic packets never enter speaker or DAX RX consumer buses");
+    QByteArray badMic = micPacket;
+    badMic[3] = 0;
+    PcmCompatibilityTestAccess::datagram(stream, badMic);
+    check(microphoneCount == 1, "malformed microphone VITA word length is rejected");
+    stream.registerMicrophoneStream(0);
+    check(!microphone.current(), "microphone removal revokes queued frames");
+    PcmCompatibilityTestAccess::datagram(stream, micPacket);
+    check(speaker == before && microphoneCount == 1, "retired microphone packets cannot leak to speaker audio");
+    stream.registerMicrophoneStream(micId);
+    PcmCompatibilityTestAccess::datagram(stream, micPacket);
+    check(microphoneCount == 2 && microphone.current(), "microphone stream can be rearmed with a fresh PCM lifetime");
     stream.stop();
+    check(!microphone.current(), "network stream stop revokes microphone PCM");
+    PcmCompatibilityTestAccess::datagram(stream, micPacket);
+    check(microphoneCount == 2 && speaker == before, "stopped mic route cannot mint frames or leak to speakers");
     check(!last.current(), "Flex stop revokes queued speaker frame");
     PcmCompatibilityTestAccess::narrow(stream, packet);
     check(speaker == before, "stopped Flex PCM adapter refuses publication");
+
+    QStringList commands;
+    QList<FlexBackend::CommandReply> replies;
+    FlexBackend backend;
+    backend.setCommandSink(std::function<bool(const QString&, FlexBackend::CommandReply)>(
+        [&](const QString& command, FlexBackend::CommandReply reply) {
+            commands.append(command);
+            if (reply) { replies.append(std::move(reply)); }
+            return true;
+        }));
+    check(backend.setMicrophoneCaptureEnabled(true)
+        && backend.setMicrophoneCaptureEnabled(true) && commands.size() == 1
+        && commands.first() == QStringLiteral("stream create type=dax_mic"),
+        "mic capture is receive-only and repeated acquisition creates one owned stream");
+    backend.setMicrophoneCaptureEnabled(false);
+    replies.first()(0, QStringLiteral("0x04000008"));
+    check(commands.size() == 2 && commands.last() == QStringLiteral("stream remove 0x4000008"),
+        "late mic create reply after cancellation removes only that requested stream");
+    int cancelledSpeakerPackets = 0;
+    QObject::connect(backend.panStream(), &PanadapterStream::pcmFrameReady, &backend,
+        [&](const PcmFrame&) { ++cancelledSpeakerPackets; });
+    PcmCompatibilityTestAccess::datagram(*backend.panStream(), micPacket);
+    QCoreApplication::sendPostedEvents(&backend, QEvent::MetaCall);
+    check(cancelledSpeakerPackets == 0, "cancelled create reply retires its stream before releasing the speaker guard");
+    backend.setMicrophoneCaptureEnabled(true);
+    replies.last()(0, QStringLiteral("0x04000009"));
+    backend.setMicrophoneCaptureEnabled(false);
+    check(commands.size() == 4 && commands.last() == QStringLiteral("stream remove 0x4000009"),
+        "last mic consumer releases only its own assigned stream");
+    int stopped = 0;
+    QObject::connect(&backend, &IRadioBackend::microphoneCaptureStopped, &backend,
+        [&] { ++stopped; });
+    backend.setMicrophoneCaptureEnabled(true);
+    replies.last()(1, QStringLiteral("rejected"));
+    check(stopped == 1 && backend.setMicrophoneCaptureEnabled(true),
+        "asynchronous capture failure is reported and permits another acquisition");
+    replies.last()(0, QStringLiteral("0x0400000a"));
+    backend.decodeMicrophoneStatus(QStringLiteral("stream 0x0400000b removed"), {});
+    check(stopped == 1, "foreign stream removal cannot stop owned microphone capture");
+    backend.decodeMicrophoneStatus(QStringLiteral("stream 0x0400000a removed"), {});
+    check(stopped == 2 && backend.setMicrophoneCaptureEnabled(true),
+        "radio-side mic removal is reported and clears the owned stream for reacquisition");
+    replies.last()(0, QStringLiteral("0x0400000c"));
+    backend.setMicrophoneCaptureEnabled(false);
+    backend.setCommandSink(std::function<bool(const QString&, FlexBackend::CommandReply)>{});
 }
 } // namespace
 

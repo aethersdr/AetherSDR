@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 #include <QDateTime>
 #include <QHash>
@@ -19,6 +20,7 @@
 #include "core/FirmwareCurrency.h"  // publishedVersionIsStale() — the one freshness rule
 #include "core/FirmwareStager.h"    // reads FlexRadio's published release list
 #include "core/LogManager.h"
+#include "core/StreamStatus.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/backends/MemoryWireCodec.h"
@@ -75,6 +77,22 @@ FlexBackend::FlexBackend(QObject* parent)
             this, &IRadioBackend::connected);
     connect(m_connection, &RadioConnection::disconnected,
             this, &IRadioBackend::disconnected);
+    connect(m_connection, &RadioConnection::disconnected, this, [this] {
+        ++m_microphoneSession;
+        ++m_microphoneGeneration;
+        m_microphoneRequested = false;
+        m_microphonePendingCreates = 0;
+        m_panStream->setMicrophoneCreatePending(false);
+        m_microphoneStreamId = 0;
+        m_panStream->registerMicrophoneStream(0);
+        emit microphoneCaptureStopped();
+    });
+    connect(m_connection, &RadioConnection::statusReceived,
+            this, &FlexBackend::decodeMicrophoneStatus);
+    connect(m_panStream, &PanadapterStream::microphonePcmReady, this,
+        [this](const PcmFrame& frame) {
+            if (m_microphoneRequested && frame.current()) { emit microphonePcmReady(frame); }
+        });
     connect(m_connection, &RadioConnection::errorOccurred,
             this, &IRadioBackend::connectionError);
     connect(m_connection, &RadioConnection::independentPttStopped,
@@ -130,6 +148,76 @@ FlexBackend::~FlexBackend()
         m_networkThread->wait(3000);
     }
     m_panStream = nullptr;
+}
+
+bool FlexBackend::setMicrophoneCaptureEnabled(bool enabled)
+{
+    if (enabled == m_microphoneRequested) { return enabled; }
+    const quint64 generation = ++m_microphoneGeneration;
+    m_microphoneRequested = enabled;
+    if (!enabled) {
+        const quint32 streamId = std::exchange(m_microphoneStreamId, 0);
+        m_panStream->registerMicrophoneStream(0);
+        if (streamId && m_sink) {
+            m_sink(QStringLiteral("stream remove 0x%1").arg(streamId, 0, 16), {});
+        }
+        return false;
+    }
+    if (!m_sink) { m_microphoneRequested = false; return false; }
+    const quint64 session = m_microphoneSession;
+    const QPointer<FlexBackend> owner(this);
+    ++m_microphonePendingCreates;
+    m_panStream->setMicrophoneCreatePending(true);
+    const bool dispatched = m_sink(QStringLiteral("stream create type=dax_mic"),
+        [owner, session, generation](int code, const QString& body) {
+            if (!owner || owner->m_microphoneSession != session) { return; }
+            --owner->m_microphonePendingCreates;
+            bool valid = false;
+            const quint32 streamId = body.trimmed().toUInt(&valid, 16);
+            if (code != 0 || !valid || streamId == 0) {
+                owner->m_panStream->setMicrophoneCreatePending(owner->m_microphonePendingCreates > 0);
+                if (owner->m_microphoneGeneration == generation) {
+                    owner->m_microphoneRequested = false;
+                    qCWarning(lcDax) << "Flex microphone recording stream rejected" << code << body.left(160);
+                    emit owner->microphoneCaptureStopped();
+                }
+                return;
+            }
+            if (!owner->m_microphoneRequested || owner->m_microphoneGeneration != generation) {
+                owner->m_panStream->retireMicrophoneStream(streamId);
+                if (owner->m_sink) {
+                    owner->m_sink(QStringLiteral("stream remove 0x%1").arg(streamId, 0, 16), {});
+                }
+                owner->m_panStream->setMicrophoneCreatePending(owner->m_microphonePendingCreates > 0);
+                return;
+            }
+            owner->m_microphoneStreamId = streamId;
+            owner->m_panStream->registerMicrophoneStream(streamId);
+            owner->m_panStream->setMicrophoneCreatePending(owner->m_microphonePendingCreates > 0);
+            qCInfo(lcDax) << "Flex microphone recording stream ready" << Qt::hex << streamId;
+        });
+    if (!dispatched) {
+        --m_microphonePendingCreates;
+        m_panStream->setMicrophoneCreatePending(m_microphonePendingCreates > 0);
+        m_microphoneRequested = false;
+    }
+    return dispatched && m_microphoneRequested;
+}
+
+void FlexBackend::decodeMicrophoneStatus(const QString& object, const QMap<QString, QString>& kvs)
+{
+    const QStringList parts = object.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() < 2 || parts.first() != QLatin1String("stream")
+        || m_microphoneStreamId == 0
+        || parseStatusHandle(parts[1]) != m_microphoneStreamId) { return; }
+    if (!parts.contains(QStringLiteral("removed"))
+        && !kvs.contains(QStringLiteral("removed"))
+        && kvs.value(QStringLiteral("in_use")) != QLatin1String("0")) { return; }
+    ++m_microphoneGeneration;
+    m_microphoneRequested = false;
+    m_microphoneStreamId = 0;
+    m_panStream->registerMicrophoneStream(0);
+    emit microphoneCaptureStopped();
 }
 
 void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
@@ -742,6 +830,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.voxControl = RadioCapabilities::VoxControl{/*hasDelay*/ true};
     caps.txMonitorControl = RadioCapabilities::TxMonitorControl{};
     caps.lineoutControl = RadioCapabilities::LineoutControl{};
+    caps.microphoneCapture = RadioCapabilities::MicrophoneCapture{};
     // The radio stores "Show TX in Waterfall" and echoes it in transmit status.
     caps.txWaterfallClientFlag = std::nullopt;
 

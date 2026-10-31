@@ -854,6 +854,11 @@ struct RadioCapabilities {
     // radio has no line out, so `mixer lineout` text reaches nothing (#4665).
     struct LineoutControl {};
     std::optional<LineoutControl> lineoutControl;
+    struct MicrophoneCapture {
+        enum class Placement { BeforeTransmitProcessing };
+        Placement placement{Placement::BeforeTransmitProcessing};
+    };
+    std::optional<MicrophoneCapture> microphoneCapture;
 
 
     // TX audio reaches this backend through IRadioBackend::submitTxAudio rather than

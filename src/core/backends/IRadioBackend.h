@@ -1090,6 +1090,12 @@ public:
     };
     virtual LinkStats linkStats() const { return {}; }
 
+    // Called on the backend owner thread. True accepts an enable request;
+    // false refuses it or confirms disable. The backend owns its capture stream.
+    // Unexpected loss or asynchronous refusal emits microphoneCaptureStopped.
+    virtual bool setMicrophoneCaptureEnabled(bool enabled)
+    { Q_UNUSED(enabled); return false; }
+
     // ---- vendor extensions (namespaced, capability-advertised) ----
     // Vendor-specific verbs that are NOT part of the core profile. Clients
     // discover available namespaces via capabilities().extensionNamespaces.
@@ -1269,6 +1275,8 @@ signals:
     // PRE-mute, PRE-gain and PRE-balance, like Flex DAX: muting a slice must not stop
     // a decoder on it. Flex does not emit this; its DAX channels are per-slice.
     void sliceAudioFrameReady(int sliceId, const AetherSDR::PcmFrame& pcm);
+    void microphonePcmReady(const AetherSDR::PcmFrame& pcm);
+    void microphoneCaptureStopped();
 
 
     // The pan's front end is WIDE: the hardware band filter cannot serve every

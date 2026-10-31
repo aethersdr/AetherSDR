@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QMutex>
 #include <QPointer>
+#include <QSet>
 #include <QTimer>
 #include <deque>
 #include <functional>
@@ -41,6 +42,12 @@ struct TciStreamConfig {
     quint64 generation{0};
 };
 
+struct TciLineOutConfig {
+    std::shared_ptr<TciClientLifetime> lifetime;
+    QSet<int> receivers;
+    quint64 generation{0};
+};
+
 // Owns sockets, PCM conversion and chrono. No model, backend, settings or UI
 // pointer may enter this object. Only copied control snapshots, revocation
 // handles and owning PCM cross its boundary. It never waits for the controller.
@@ -64,11 +71,16 @@ public:
     qint64 sendBinary(quint64 id, const QByteArray& message);
     void closeClient(quint64 id, QWebSocketProtocol::CloseCode code, const QString& reason);
     void configureClient(const TciStreamConfig& config);
+    void configureLineOut(const TciLineOutConfig& config);
+    void setLineOutIncludeTx(bool enabled);
+    void receiveLineOutPcm(const PcmFrame& frame, bool transmitting);
     void removeClient(quint64 id);
     void setRxBindings(const QHash<quint64, TciRxBinding>& bindings);
     void receivePcm(quint64 key, const PcmFrame& frame);
     void retireRxRoute(quint64 key);
     void setRxGain(int channel, float gain);
+    void setMicrophoneRecording(bool enabled, bool transmitting, int trx);
+    void setMicrophoneRecordingGain(float gain);
     void setTxGain(float gain, int overflowMode);
     void prepareTx(quint64 id, const TxCoordinator::Context& context);
     void startChrono(quint64 id, int trx, const TxCoordinator::Context& context);
@@ -81,14 +93,18 @@ public:
     QJsonObject cachedChronoSnapshot() const;
     static quint64 rxRouteKey(bool dax, int id)
     { return (quint64(dax) << 32) | static_cast<quint32>(id); }
+    static constexpr int kMicrophoneRouteChannel = 0;
+    static constexpr quint64 kMicrophoneRouteKey = quint64{1} << 32;
 
 signals:
     void audioStopped(quint64 id, quint64 generation);
+    void lineOutStopped(quint64 id, quint64 generation);
     void clientOpened(std::shared_ptr<TciClientLifetime> lifetime, QHostAddress address, quint16 port);
     void clientClosed(quint64 id, int closeCode, int error, const QString& errorText);
     void textReceived(quint64 id, const QString& text, const AetherSDR::TxCoordinator::Request& input);
     void rxLevel(int channel, float rms);
     void txLevel(float rms);
+    void microphoneRecordingLevel(float rms, quint64 samples, bool clipped);
     void txPcmReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
 
 private:
@@ -114,12 +130,24 @@ private:
         quint64 nextSample{0};
         bool retired{false};
     };
+    struct LineOutClient {
+        TciLineOutConfig config;
+        std::shared_ptr<TciRxConverter> converter;
+    };
+    bool lineOutDeliveryCurrent(quint64 id, quint64 generation, int receiver,
+                                const PcmFrame& frame,
+                                const std::shared_ptr<TciRxConverter>& converter) const;
     void acceptConnections();
     void publishRxLevel(int channel, float rms);
     void publishTxLevel(float rms);
+    void publishMicrophoneLevel(double squareSum, quint64 samples, bool clipped);
     void publishTelemetry();
     bool m_rxLevelPending[8]{};
     bool m_txLevelPending{false};
+    bool m_microphoneLevelPending{false};
+    double m_microphoneSquareSum{0.0};
+    quint64 m_microphoneSamples{0};
+    bool m_microphoneClipped{false};
     mutable QMutex m_diagnosticsMutex;
     QJsonObject m_diagnostics;
     void dispatchText(quint64 id);
@@ -128,17 +156,29 @@ private:
     void resetRxRoute(quint64 key);
     bool rxDeliveryCurrent(quint64 id, quint64 generation, quint64 key,
                            const PcmFrame& frame, const std::shared_ptr<TciRxConverter>& converter) const;
+    bool recordingRouteCurrent(quint64 key, int trx) const;
     static QByteArray encodeRxAudio(int trx, int rate, int channels, int format,
-                                   const QVector<float>& stereo, float gain);
+                                   const QVector<float>& stereo, float gain, int type = 1);
     void sendTxChronoFrame(quint64 id);
     void logTxAudioSummary(const char* reason);
     QWebSocketServer* m_server{nullptr};
     QHash<quint64, Client> m_clients;
     QHash<quint64, RxClient> m_rxClients;
+    QHash<quint64, LineOutClient> m_lineOutClients;
+    PcmFrameGate m_lineOutGate;
+    PcmEpochLease m_lineOutEpoch;
+    quint64 m_lineOutNextSample{0};
+    bool m_lineOutProcessing{false};
+    bool m_lineOutIncludeTx{false};
+    bool m_lineOutTransmitting{false};
     QHash<quint64, TciRxBinding> m_bindings;
     QHash<quint64, RxRoute> m_rxRoutes;
     PcmFrameGate m_rxGate;
     bool m_rxProcessing{false};
+    bool m_microphoneRecording{false};
+    float m_microphoneRecordingGain{1.0f};
+    bool m_recordingTransmitting{false};
+    int m_recordingTrx{-1};
     std::function<qint64(quint64, const QByteArray&)> m_rxSend;
     std::function<qint64(quint64)> m_rxBacklog;
     std::function<void(quint64, QWebSocketProtocol::CloseCode, const QString&)> m_rxClose;

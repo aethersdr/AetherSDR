@@ -1260,6 +1260,8 @@ signals:
     // Only a backend that demodulates in this process emits it; Flex per-slice
     // audio arrives as DAX channels instead.
     void backendSliceAudioFrameReady(int sliceId, const AetherSDR::PcmFrame& pcm);
+    void backendMicrophonePcmReady(const AetherSDR::PcmFrame& pcm);
+    void backendMicrophoneCaptureStopped();
 
     // Normalized demodulated-RX-audio bus: the audio the operator hears (24 kHz
     // stereo), whoever produced it. Exactly one producer is bound, chosen only
@@ -1528,9 +1530,11 @@ public:
     // an optimistic update in case the radio doesn't echo the state change.
     void requestLocalPtt();
 
-    // PC Audio: create/remove remote_audio_rx stream
+    // Speaker mix shared by PC playback and independent Line Out demand.
     void createRxAudioStream();
     void removeRxAudioStream();
+    void setLineOutAudioRequested(bool requested);
+    bool lineOutAudioRequested() const { return m_lineOutAudioRequested; }
 
     // True only when dispatched; the callback reports the later radio reply.
     bool sendCmdPublic(const QString& cmd, std::function<void(int code, const QString& body)> cb);
@@ -1916,6 +1920,7 @@ private:
     friend class RadioSetupControlTestAccess;
     friend class StoredControlTestAccess;
     friend class TciServerReviewTest;
+    friend class TciRxAudioTest;
     friend class TransmitDaxHoldTestAccess;
     void expirePendingCallbacks(const QString& reason);
 
@@ -2468,6 +2473,7 @@ private:
     bool        m_profileDatabaseExporting{false};
     bool        m_cwProfilesRequested{false};   // this session asked for "profile cw info"
     RadioStatusOwnership::RemoteAudioRxTracking m_rxAudio;
+    bool m_lineOutAudioRequested{false};
     struct DaxStreamDebugState {
         QString type;
         quint32 clientHandle{0};

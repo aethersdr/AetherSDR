@@ -1,9 +1,11 @@
 #include "TciApplet.h"
+#include "ControlAvailabilityRegistry.h"
 #include "SliceLabel.h"
 #include "core/ThemeManager.h"
 
 #ifdef HAVE_WEBSOCKETS
 #include "MeterSlider.h"
+#include "CanonIndicators.h"
 #include "core/AppSettings.h"
 #include "core/TciServer.h"
 #include "models/RadioModel.h"
@@ -14,9 +16,14 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QLineEdit>
+#include <QCheckBox>
 #include <QMenu>
 #include <QActionGroup>
+#include <QAccessible>
+#include <QSignalBlocker>
+#include <QTimer>
 #include <algorithm>
+#include <cmath>
 #endif
 
 namespace AetherSDR {
@@ -92,10 +99,13 @@ void TciApplet::buildUI()
 
         m_rxMeter[i] = new MeterSlider;
         m_rxMeter[i]->setAccessibleName(tr("TCI RX %1 gain").arg(i + 1));
+        m_rxMeter[i]->setAccessibleDescription(tr("Receive attenuation from 0 to 100 percent; meter shows output from -60 to 0 dBFS RMS"));
+        m_rxMeter[i]->setToolTip(tr("RX gain: 0-100% (100% is unity)\nMeter: -60 to 0 dBFS RMS"));
+        m_rxMeter[i]->setLogarithmicLevelEnabled(true);
         {
             auto key = QStringLiteral("TciRxGain%1").arg(i + 1);
             float saved = settings.value(key, "0.5").toString().toFloat();
-            m_rxMeter[i]->setGain(std::clamp(saved, 0.0f, 1.0f));
+            m_rxMeter[i]->setGain(std::isfinite(saved) ? std::clamp(saved, 0.0f, 1.0f) : 0.5f);
         }
         connect(m_rxMeter[i], &MeterSlider::gainChanged, this, [this, i](float g) {
             auto& ss = AppSettings::instance();
@@ -201,6 +211,113 @@ void TciApplet::buildUI()
         outer->addLayout(row);
     }
 
+    auto* recordingRow = new QHBoxLayout;
+    auto* lineOutRow = new QHBoxLayout;
+    lineOutRow->setContentsMargins(4, 2, 4, 2);
+    m_lineOutIncludeTx = new QCheckBox(tr("Include TX (Line Out)"), this);
+    m_lineOutIncludeTx->setObjectName(QStringLiteral("tciLineOutIncludeTx"));
+    m_lineOutIncludeTx->setAccessibleName(tr("TCI Include TX (Line Out)"));
+    m_lineOutIncludeTx->setAccessibleDescription(tr(
+        "Include TX monitor audio present in the radio speaker mix in Line Out. "
+        "Does not enable MON or add microphone audio. When off, Line Out is silent "
+        "during radio transmit, including simultaneous receive audio."));
+    m_lineOutIncludeTx->setToolTip(m_lineOutIncludeTx->accessibleDescription());
+    m_lineOutIncludeTx->setEnabled(false);
+    applyCanonSheet(m_lineOutIncludeTx, [] {
+        return QStringLiteral("QCheckBox { color: {{color.canon.inkSoft}}; font-size: 11px; }")
+            + canonIndicatorRules();
+    });
+    lineOutRow->addWidget(m_lineOutIncludeTx);
+    lineOutRow->addStretch();
+    outer->addLayout(lineOutRow);
+    connect(m_lineOutIncludeTx, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (m_tciServer) { m_tciServer->setLineOutIncludeTx(enabled); }
+    });
+    recordingRow->setContentsMargins(4, 2, 4, 2);
+    m_microphoneRecording = new QCheckBox(tr("Include TX (RX Streams)"), this);
+    m_microphoneRecording->setObjectName(QStringLiteral("tciMicrophoneRecording"));
+    m_microphoneRecording->setAccessibleName(tr("TCI Include TX (RX Streams)"));
+    m_microphoneRecording->setAccessibleDescription(tr(
+        "Replace the TX receiver's TCI audio with the radio microphone during transmit. "
+        "Affects all subscribers on that receiver; leave off for RX-only digital clients."));
+    m_microphoneRecording->setToolTip(m_microphoneRecording->accessibleDescription());
+    m_microphoneRecording->setEnabled(false);
+    applyCanonSheet(m_microphoneRecording, [] {
+        return QStringLiteral("QCheckBox { color: {{color.canon.inkSoft}}; font-size: 11px; }")
+            + canonIndicatorRules();
+    });
+    recordingRow->addWidget(m_microphoneRecording);
+    recordingRow->addStretch();
+    outer->addLayout(recordingRow);
+    connect(m_microphoneRecording, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (m_tciServer) { m_tciServer->setMicrophoneRecordingEnabled(enabled); }
+    });
+
+    auto* microphoneRow = new QHBoxLayout;
+    microphoneRow->setContentsMargins(4, 1, 4, 1);
+    microphoneRow->setSpacing(4);
+    auto* microphoneLabel = new QLabel(tr("MIC:"), this);
+    microphoneLabel->setFixedWidth(40);
+    applyCanonSheet(microphoneLabel, [] {
+        return QStringLiteral("QLabel { color: {{color.canon.muted}}; font-size: 11px; }");
+    });
+    microphoneRow->addWidget(microphoneLabel);
+    m_microphoneLevelLabel = new QLabel(QStringLiteral("\u2014"), this);
+    m_microphoneLevelLabel->setObjectName(QStringLiteral("tciMicrophoneLevel"));
+    m_microphoneLevelLabel->setAccessibleName(tr("TCI mic recording RMS level"));
+    m_microphoneLevelLabel->setAccessibleDescription(tr(
+        "Post-fader microphone RMS in dBFS; CLIP indicates a sample peak at or above full scale"));
+    m_microphoneLevelLabel->setToolTip(m_microphoneLevelLabel->accessibleDescription());
+    m_microphoneLevelLabel->setFixedWidth(40);
+    applyCanonSheet(m_microphoneLevelLabel, [] {
+        return QStringLiteral("QLabel { color: {{color.canon.inkSoft}}; font-size: 10px; }");
+    });
+    microphoneRow->addWidget(m_microphoneLevelLabel);
+    m_microphoneMeter = new MeterSlider(this);
+    m_microphoneMeter->setObjectName(QStringLiteral("tciMicrophoneGain"));
+    m_microphoneMeter->setAccessibleName(tr("TCI mic recording gain"));
+    m_microphoneMeter->setAccessibleDescription(tr(
+        "Enable Include TX (RX Streams) to adjust the recording feed. "
+        "Zero to 100 percent, attenuation only; does not change radio MIC gain or RF output."));
+    m_microphoneMeter->setToolTip(m_microphoneMeter->accessibleDescription());
+    m_microphoneMeter->setLogarithmicLevelEnabled(true);
+    m_microphoneMeter->setGain(1.0f);
+    m_microphoneMeter->setDragValueFormatter([](float gain) {
+        return gain > 0.0f ? QStringLiteral("%1 dB").arg(20.0f * std::log10(gain), 0, 'f', 1)
+                           : tr("Mute");
+    });
+    connect(m_microphoneMeter, &MeterSlider::gainChanged, this, [this](float gain) {
+        if (m_tciServer) { m_tciServer->setMicrophoneRecordingGain(gain); }
+    });
+    microphoneRow->addWidget(m_microphoneMeter, 1);
+    m_microphoneRow = new QWidget(this);
+    m_microphoneRow->setObjectName(QStringLiteral("tciMicrophoneRow"));
+    m_microphoneRow->setLayout(microphoneRow);
+    outer->addWidget(m_microphoneRow);
+    m_microphoneMeterTimer = new QTimer(this);
+    m_microphoneMeterTimer->setInterval(100);
+    connect(m_microphoneMeterTimer, &QTimer::timeout, this, [this] {
+        const float rms = m_microphoneSamples > 0
+            ? static_cast<float>(std::sqrt(m_microphoneSquareSum / m_microphoneSamples)) : 0.0f;
+        m_microphoneSquareSum = 0.0;
+        m_microphoneSamples = 0;
+        m_microphoneMeter->setLevel(rms);
+        const float output = rms * m_microphoneMeter->gain();
+        const QString text = m_microphoneClipped ? tr("CLIP") : (output > 0.0f
+            ? QString::number(20.0f * std::log10(output), 'f', 1) : QStringLiteral("\u2014"));
+        m_microphoneClipped = false;
+        if (text != m_microphoneLevelLabel->text()) {
+            const bool clipTransition = (text == tr("CLIP"))
+                != (m_microphoneLevelLabel->text() == tr("CLIP"));
+            m_microphoneLevelLabel->setText(text);
+            if (clipTransition) {
+                QAccessibleEvent event(m_microphoneLevelLabel, QAccessible::NameChanged);
+                QAccessible::updateAccessibility(&event);
+            }
+        }
+    });
+    updateMicrophoneRecordingControls();
+
     // Port + Enable row (bottom)
     auto* enableRow = new QHBoxLayout;
     enableRow->setContentsMargins(4, 2, 4, 2);
@@ -292,6 +409,22 @@ void TciApplet::buildUI()
     });
 }
 
+void TciApplet::updateMicrophoneRecordingControls()
+{
+    const bool enabled = m_tciServer && m_tciServer->microphoneRecordingEnabled();
+    m_microphoneRow->setVisible(enabled);
+    const bool supported = m_model && m_model->backendCapabilities().microphoneCapture.has_value();
+    m_microphoneMeter->setEnabled(enabled && supported);
+    m_microphoneLevelLabel->setEnabled(enabled && supported);
+    m_microphoneSquareSum = 0.0;
+    m_microphoneSamples = 0;
+    m_microphoneClipped = false;
+    m_microphoneMeter->setLevel(0.0f);
+    m_microphoneLevelLabel->setText(QStringLiteral("\u2014"));
+    if (enabled) { m_microphoneMeterTimer->start(); }
+    else { m_microphoneMeterTimer->stop(); }
+}
+
 void TciApplet::updateTciStatus()
 {
     if (!m_tciStatus) {
@@ -319,9 +452,28 @@ void TciApplet::setRadioModel(RadioModel* model)
 {
 #ifdef HAVE_WEBSOCKETS
     m_model = model;
+    delete m_microphoneAvailability;
+    m_microphoneAvailability = nullptr;
     if (!model) {
+        m_lineOutIncludeTx->setEnabled(false);
+        m_lineOutIncludeTx->setAccessibleDescription(tr("Line Out requires a connected radio and a TCI server, not PC Audio."));
+        m_microphoneRecording->setEnabled(false);
+        m_microphoneRecording->setAccessibleDescription(tr("Microphone capture requires a supported connected radio."));
+        updateMicrophoneRecordingControls();
         return;
     }
+    m_microphoneAvailability = new ControlAvailabilityRegistry(*model, this);
+    m_microphoneAvailability->registerWidget(m_lineOutIncludeTx,
+        tr("Line Out requires a connected radio and a TCI server, not PC Audio."),
+        [this](bool connected, const RadioCapabilities&) { return connected && m_tciServer; },
+        [this] { return m_tciServer && m_tciServer->lineOutIncludeTx(); }, false);
+    m_microphoneAvailability->registerWidget(m_microphoneRecording,
+        tr("Microphone capture requires a supported connected radio and a TCI server."),
+        [this](bool connected, const RadioCapabilities& caps) {
+            return connected && m_tciServer && caps.microphoneCapture.has_value();
+        }, [this] { return m_tciServer && m_tciServer->microphoneRecordingEnabled(); }, false);
+    connect(model, &RadioModel::capabilitiesChanged, this,
+        [this](bool, const RadioCapabilities&) { updateMicrophoneRecordingControls(); });
 
     // Slice → DAX channel mapping drives both DAX and TCI RX indicators.
     // TCI RX1-8 carry the same DAX channels (PanadapterStream::daxPcmReady
@@ -387,11 +539,49 @@ void TciApplet::setRadioModel(RadioModel* model)
 void TciApplet::setTciServer(TciServer* tci)
 {
 #ifdef HAVE_WEBSOCKETS
+    if (m_tciServer) {
+        disconnect(m_tciServer, &TciServer::lineOutIncludeTxChanged, this, nullptr);
+        disconnect(m_tciServer, &TciServer::microphoneRecordingEnabledChanged, this, nullptr);
+        disconnect(m_tciServer, &TciServer::microphoneRecordingGainChanged, this, nullptr);
+        disconnect(m_tciServer, &TciServer::microphoneRecordingLevel, this, nullptr);
+        disconnect(m_tciServer, &TciServer::clientCountChanged, this, nullptr);
+    }
     m_tciServer = tci;
+    {
+        const QSignalBlocker blocker(m_lineOutIncludeTx);
+        m_lineOutIncludeTx->setChecked(tci && tci->lineOutIncludeTx());
+    }
+    m_microphoneMeter->setGain(tci ? tci->microphoneRecordingGain() : 1.0f);
+    m_microphoneRecording->setEnabled(false);
+    if (m_microphoneAvailability) { m_microphoneAvailability->refreshEngaged(); }
+    {
+        const QSignalBlocker blocker(m_microphoneRecording);
+        m_microphoneRecording->setChecked(tci && tci->microphoneRecordingEnabled());
+    }
     if (tci) {
+        connect(tci, &TciServer::lineOutIncludeTxChanged, this, [this](bool enabled) {
+            const QSignalBlocker blocker(m_lineOutIncludeTx);
+            m_lineOutIncludeTx->setChecked(enabled);
+            if (m_microphoneAvailability) { m_microphoneAvailability->refreshEngaged(); }
+        });
+        connect(tci, &TciServer::microphoneRecordingEnabledChanged, this, [this](bool enabled) {
+            const QSignalBlocker blocker(m_microphoneRecording);
+            m_microphoneRecording->setChecked(enabled);
+            updateMicrophoneRecordingControls();
+        });
+        connect(tci, &TciServer::microphoneRecordingGainChanged,
+                m_microphoneMeter, &MeterSlider::setGain);
+        connect(tci, &TciServer::microphoneRecordingLevel, this, [this](float rms, quint64 samples, bool clipped) {
+            if (m_microphoneMeter->isEnabled()) {
+                m_microphoneSquareSum += static_cast<double>(rms) * rms * samples;
+                m_microphoneSamples += samples;
+                m_microphoneClipped |= clipped;
+            }
+        });
         connect(tci, &TciServer::clientCountChanged,
                 this, [this]() { updateTciStatus(); });
     }
+    updateMicrophoneRecordingControls();
     updateTciStatus();
 #else
     (void)tci;
@@ -437,13 +627,8 @@ void TciApplet::setTciRxLevel(int channel, float rms)
     if (channel < 1 || channel > kChannels) {
         return;
     }
-    // Exponential smoothing: fast attack (α=0.4), slow decay (α=0.08)
-    static float smoothed[kChannels]{};
-    float& s = smoothed[channel - 1];
-    float alpha = (rms > s) ? 0.4f : 0.08f;
-    s = alpha * rms + (1.0f - alpha) * s;
     if (m_rxMeter[channel - 1]) {
-        m_rxMeter[channel - 1]->setLevel(std::clamp(s * 2.0f, 0.0f, 1.0f));
+        m_rxMeter[channel - 1]->setLevel(rms);
     }
 #else
     (void)channel;
