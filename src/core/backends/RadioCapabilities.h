@@ -1,5 +1,6 @@
 #pragma once
 #include "RadioSetupControl.h"
+#include "SessionControlRequest.h"
 #include "SpotRequest.h"
 #include "PanControlRequest.h"
 #include "SlicePresetRequest.h"
@@ -669,6 +670,8 @@ struct RadioCapabilities {
     bool hasAudioCompression = false; // selectable compressed radio-audio transport
     bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
     std::optional<RadioSetupControl> radioSetupControl;
+    // Desktop session bootstrap; does not advertise daemon methods or TX rights.
+    std::optional<SessionControl> sessionControl;
     // Desktop utility verbs only; neither record adds daemon permissions.
     std::optional<SpotControl> spotControl;
     std::optional<PanControl> panControl;

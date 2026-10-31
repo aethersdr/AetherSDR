@@ -716,6 +716,15 @@ target_include_directories(model_control_routing_test PRIVATE src tests)
 target_link_libraries(model_control_routing_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME model_control_routing_test COMMAND model_control_routing_test)
 
+# Production encoders, model sequencing and in-memory transport injection;
+# no listener, bind, connect or synthetic firmware peer.
+add_executable(session_control_test tests/session_control_test.cpp)
+target_include_directories(session_control_test PRIVATE src tests)
+target_link_libraries(session_control_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(session_control_test PROPERTIES AUTOMOC ON)
+add_test(NAME session_control_test COMMAND session_control_test)
+set_tests_properties(session_control_test PROPERTIES TIMEOUT 45)
+
 add_executable(radio_setup_control_routing_test tests/radio_setup_control_routing_test.cpp)
 target_include_directories(radio_setup_control_routing_test PRIVATE src tests)
 target_link_libraries(radio_setup_control_routing_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -9926,6 +9935,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    session_control_test
     update_controller_test
     update_installer_test
     update_stager_test
