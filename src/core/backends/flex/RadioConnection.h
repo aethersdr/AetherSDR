@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CommandParser.h"
+#include "FlexDisplayStatus.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/IndependentTxControl.h"
 
@@ -36,6 +37,7 @@ class RadioConnection : public QObject {
     std::function<void(quint32, const QString&)> m_commandSinkForTest;
 
 public:
+    void retireDisplayObservations() { m_displayStatusSource.retire(); }
     explicit RadioConnection(QObject* parent = nullptr);
     ~RadioConnection() override;
 
@@ -82,6 +84,7 @@ public slots:
     void injectFaultStatus(const QString& line);
 
 signals:
+    void displayObserved(const AetherSDR::DisplayObservation& observation);
     void independentPttStopped(const AetherSDR::TxStopEvidence& evidence);
     void stateChanged(ConnectionState state);
     void connected();
@@ -114,6 +117,8 @@ private slots:
     void onHeartbeat();
 
 private:
+    friend class FlexDisplayStatusTestAccess;
+    FlexDisplayStatusSource m_displayStatusSource;
     void resetSocket();
     void resetSessionState();
     void processLine(const QString& line);

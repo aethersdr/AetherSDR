@@ -1,341 +1,106 @@
-// aetherd RFC 2.3 template coverage: the pan decode/normalize chain.
-//
-// Exercises the three facets the 2.3 template introduces on the pan touchpoint:
-//   1. DECODE    — FlexBackend::decodePanCenterBandwidth → panCenterBandwidthChanged
-//   2. EXTENSION — FlexBackend::decodePanExtensions      → extensionStatus("flex","panWnb")
-//   3. the model sinks — PanadapterModel::setCenterBandwidth / applyWnbExtension
-//
-// Notably pins the wnb_level numeric guard (#4063 review): a malformed
-// wnb_level must be dropped, not applied as 0.
-
-#include "core/backends/flex/FlexBackend.h"
-#include "models/PanadapterModel.h"
-
+// Socket-free production display decoder and normalized model contracts.
+#include "FlexDisplayStatusTestSupport.h"
 #include <QCoreApplication>
 #include <QSignalSpy>
-#include <QVariantMap>
-#include <QString>
 #include <cmath>
 #include <cstdio>
 
 using namespace AetherSDR;
-
-static int g_failures = 0;
-
-#define CHECK(cond) do { \
-    if (!(cond)) { \
-        std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); \
-        ++g_failures; \
-    } \
-} while (0)
+static int failures = 0;
+#define CHECK(condition) do { if (!(condition)) { ++failures; std::fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #condition); } } while (false)
 
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
-
-    // ---- Facet 1: DECODE (center/bandwidth) ----
-    {
-        FlexBackend backend;
-        QSignalSpy spy(&backend, &IRadioBackend::panCenterBandwidthChanged);
-
-        // Neither field present → no emission (matches old touch-only behavior).
-        backend.decodePanCenterBandwidth(QStringLiteral("0x40000000"),
-                                         {{QStringLiteral("min_dbm"), QStringLiteral("-120")}});
-        CHECK(spy.count() == 0);
-
-        // center only → emitted, bandwidth carries the -1 "unchanged" sentinel.
-        backend.decodePanCenterBandwidth(QStringLiteral("0x40000000"),
-                                         {{QStringLiteral("center"), QStringLiteral("7.15")}});
-        CHECK(spy.count() == 1);
-        {
-            const QList<QVariant> a = spy.takeFirst();
-            CHECK(a.at(0).toString() == QStringLiteral("0x40000000"));
-            CHECK(qFuzzyCompare(a.at(1).toDouble(), 7.15));
-            CHECK(a.at(2).toDouble() < 0.0);
-        }
-
-        // both present → both carried through.
-        backend.decodePanCenterBandwidth(QStringLiteral("0x40000000"),
-                                         {{QStringLiteral("center"), QStringLiteral("14.2")},
-                                          {QStringLiteral("bandwidth"), QStringLiteral("0.2")}});
-        CHECK(spy.count() == 1);
-        {
-            const QList<QVariant> a = spy.takeFirst();
-            CHECK(qFuzzyCompare(a.at(1).toDouble(), 14.2));
-            CHECK(qFuzzyCompare(a.at(2).toDouble(), 0.2));
-        }
+    const auto epoch = std::make_shared<std::atomic_bool>(true);
+    const auto decode = [&](const QMap<QString, QString>& values, bool waterfall = false) {
+        return decodeFlexDisplayStatus(waterfall ? QStringLiteral("display waterfall 0xF2000001")
+                                                : QStringLiteral("display pan 0xC0000001"), values, epoch);
+    };
+    const auto all = decode({{"center", "7.15"}, {"bandwidth", "0.2"}, {"min_dbm", "-125"},
+        {"max_dbm", "-40"}, {"rfgain", "-8"}, {"rxant", "RX_A"}, {"ant_list", "ANT1,ANT2"},
+        {"fps", "25"}, {"average", "0"}, {"weighted_average", "255"}, {"wide", "1"},
+        {"loopa", "0"}, {"loopb", "1"}, {"pre", "20"}, {"daxiq_channel", "2"},
+        {"band_zoom", "1"}, {"segment_zoom", "0"}, {"noise_floor_range", "3.5"},
+        {"wnb", "1"}, {"wnb_level", "42"}, {"wnb_updating", "1"},
+        {"x_pixels", "1024"}, {"y_pixels", "700"}, {"client_handle", "0xABCDEF01"},
+        {"waterfall", "0xF2000001"}});
+    CHECK(all && all->id == QLatin1String("0xc0000001") && all->ownerHandle == 0xabcdef01U
+          && all->pairedId == QStringLiteral("0xf2000001"));
+    CHECK(all->values.centerMhz == 7.15 && all->values.bandwidthMhz == 0.2
+          && all->values.minDbm == -125 && all->values.maxDbm == -40);
+    CHECK(all->values.rfGain == -8 && all->values.rxAntenna == QStringLiteral("RX_A")
+          && all->values.antennas == QStringList({QStringLiteral("ANT1"), QStringLiteral("ANT2")}));
+    CHECK(all->values.fps == 25 && all->values.average == 0 && all->values.weightedAverage == true);
+    CHECK(all->values.wide == true && all->values.loopA == false && all->values.loopB == true);
+    CHECK(all->values.bandZoom == true && all->values.segmentZoom == false
+          && all->values.noiseFloorRange == 3.5 && all->values.daxIqChannel == 2);
+    CHECK(all->values.wnb == true && all->values.wnbLevel == 42 && all->values.wnbUpdating == true);
+    CHECK(all->values.xPixels == 1024 && all->values.yPixels == 700 && all->values.preamp == QStringLiteral("20"));
+    const auto partial = decode({{"center", "7.1"}, {"unrelated", "ignored"}});
+    CHECK(partial && partial->values.centerMhz == 7.1 && !partial->values.bandwidthMhz
+          && !partial->values.fps && !partial->ownerHandle && !partial->pairedId);
+    for (const QString& bad : {QStringLiteral("garbage"), QStringLiteral("nan"), QStringLiteral("inf"), QStringLiteral("1e300")}) {
+        const auto invalid = decode({{"center", bad}, {"bandwidth", bad}, {"min_dbm", bad},
+            {"max_dbm", "-40"}, {"noise_floor_range", bad}, {"rfgain", bad}, {"fps", bad}, {"average", bad}});
+        CHECK(invalid && !invalid->values.centerMhz && !invalid->values.bandwidthMhz && !invalid->values.minDbm
+              && invalid->values.maxDbm == -40 && !invalid->values.noiseFloorRange && !invalid->values.rfGain
+              && !invalid->values.fps && !invalid->values.average);
     }
-
-    // ---- Facet 1b: DECODE (min/max dBm) + the NaN "unchanged" sentinel ----
-    {
-        FlexBackend backend;
-        QSignalSpy spy(&backend, &IRadioBackend::panRangeChanged);
-
-        // Neither field present → no emission.
-        backend.decodePanRange(QStringLiteral("0x40000000"),
-                               {{QStringLiteral("center"), QStringLiteral("7.1")}});
-        CHECK(spy.count() == 0);
-
-        // min_dbm only → emitted; max carries NaN (unchanged), min is signed.
-        backend.decodePanRange(QStringLiteral("0x40000000"),
-                               {{QStringLiteral("min_dbm"), QStringLiteral("-130")}});
-        CHECK(spy.count() == 1);
-        {
-            const QList<QVariant> a = spy.takeFirst();
-            CHECK(qFuzzyCompare(a.at(1).toDouble(), -130.0));
-            CHECK(std::isnan(a.at(2).toDouble()));
-        }
-
-        // both present → both carried (both negative — proves no numeric sentinel).
-        backend.decodePanRange(QStringLiteral("0x40000000"),
-                               {{QStringLiteral("min_dbm"), QStringLiteral("-125")},
-                                {QStringLiteral("max_dbm"), QStringLiteral("-40")}});
-        CHECK(spy.count() == 1);
-        {
-            const QList<QVariant> a = spy.takeFirst();
-            CHECK(qFuzzyCompare(a.at(1).toDouble(), -125.0));
-            CHECK(qFuzzyCompare(a.at(2).toDouble(), -40.0));
-        }
-
-        // Malformed present min_dbm → carried as NaN (unchanged), NOT 0.0 dBm
-        // (which would collapse the scale). max still parses. (#4065 review)
-        backend.decodePanRange(QStringLiteral("0x40000000"),
-                               {{QStringLiteral("min_dbm"), QStringLiteral("junk")},
-                                {QStringLiteral("max_dbm"), QStringLiteral("-40")}});
-        CHECK(spy.count() == 1);
-        {
-            const QList<QVariant> a = spy.takeFirst();
-            CHECK(std::isnan(a.at(1).toDouble()));
-            CHECK(qFuzzyCompare(a.at(2).toDouble(), -40.0));
-        }
+    for (const QString& bad : {QStringLiteral("garbage"), QStringLiteral("-1"), QStringLiteral("2")}) {
+        const auto invalid = decode({{"wide", bad}, {"loopa", bad}, {"loopb", bad}, {"band_zoom", bad},
+                                     {"segment_zoom", bad}, {"wnb", bad}, {"wnb_updating", bad}});
+        CHECK(invalid && !invalid->values.wide && !invalid->values.loopA && !invalid->values.loopB
+            && !invalid->values.bandZoom && !invalid->values.segmentZoom && !invalid->values.wnb && !invalid->values.wnbUpdating);
     }
-
-    // ---- Facet 2: EXTENSION (WNB) + the wnb_level guard ----
+    CHECK(!decode({{"weighted_average", "256"}, {"wnb_level", "101"}, {"daxiq_channel", "-1"}})->values.weightedAverage);
+    CHECK(!decode({{"wnb_level", "101"}})->values.wnbLevel);
+    CHECK(!decode({{"wnb_level", "-1"}})->values.wnbLevel);
+    CHECK(decode({{"wnb_level", "100"}})->values.wnbLevel == 100);
+    CHECK(!decode({{"daxiq_channel", "4294967295"}})->values.daxIqChannel);
+    CHECK(!decode({{"client_handle", "bogus"}}) && !decode({{"waterfall", "0x100000000"}}));
+    CHECK(decode({{"client_handle", "0"}})->ownerHandle == 0);
+    CHECK(decode({{"waterfall", "0"}})->pairedId == QString());
+    CHECK(decode({{"waterfall", "42000000"}})->pairedId == QStringLiteral("0x0280de80"));
+    CHECK(decode({{"client_handle", "4294967295"}})->ownerHandle == 0xffffffffU);
+    CHECK(!decode({{"client_handle", "4294967296"}}));
+    CHECK(!decodeFlexDisplayStatus("display pan 0x40000000junk", {}, epoch));
+    CHECK(!decodeFlexDisplayStatus("display pan 0x100000000", {}, epoch));
+    CHECK(!decodeFlexDisplayStatus("display pan 0x0", {}, epoch));
+    CHECK(!decodeFlexDisplayStatus("display pan 0x40000000 unrelated", {}, epoch));
+    CHECK(decodeFlexDisplayStatus("display pan 0x40000000 removed", {}, epoch)->removed);
+    CHECK(decode({{"removed", "1"}})->removed && !decode({{"removed", "0"}}));
+    const auto waterfall = decode({{"center", "14.2"}, {"bandwidth", "0.1"}, {"line_duration", "65"},
+                                   {"panadapter", "0xC0000001"}}, true);
+    CHECK(waterfall && waterfall->pairedId == QStringLiteral("0xc0000001")
+          && waterfall->values.centerMhz == 14.2 && waterfall->values.waterfallRate == 65);
+    CHECK(!decode({{"line_duration", "bad"}}, true)->values.waterfallRate);
+    QMap<QString, QString> oversized;
+    for (int i = 0; i < 129; ++i) { oversized[QString::number(i)] = "v"; }
+    CHECK(!decode(oversized));
+    CHECK(!decode({{"unused", QString(16385, 'a')}}));
     {
-        FlexBackend backend;
-        QSignalSpy spy(&backend, &IRadioBackend::extensionStatus);
-
-        // No WNB keys → no extension emission.
-        backend.decodePanExtensions(QStringLiteral("0x40000000"),
-                                    {{QStringLiteral("center"), QStringLiteral("7.1")}});
-        CHECK(spy.count() == 0);
-
-        // Valid wnb + wnb_level → namespaced under "flex"/"panWnb", both present.
-        backend.decodePanExtensions(QStringLiteral("0x40000000"),
-                                    {{QStringLiteral("wnb"), QStringLiteral("1")},
-                                     {QStringLiteral("wnb_level"), QStringLiteral("42")}});
-        CHECK(spy.count() == 1);
-        {
-            const QList<QVariant> a = spy.takeFirst();
-            CHECK(a.at(0).toString() == QStringLiteral("flex"));
-            CHECK(a.at(1).toString() == QStringLiteral("panWnb"));
-            const QVariantMap f = a.at(2).toMap();
-            CHECK(f.value(QStringLiteral("panId")).toString() == QStringLiteral("0x40000000"));
-            CHECK(f.value(QStringLiteral("wnb")).toBool() == true);
-            CHECK(f.contains(QStringLiteral("wnb_level")));
-            CHECK(f.value(QStringLiteral("wnb_level")).toInt() == 42);
-        }
-
-        // Malformed wnb_level → the key must be DROPPED, not applied as 0
-        // (#4063 review — Principle VII). wnb still carries.
-        backend.decodePanExtensions(QStringLiteral("0x40000000"),
-                                    {{QStringLiteral("wnb"), QStringLiteral("1")},
-                                     {QStringLiteral("wnb_level"), QStringLiteral("garbage")}});
-        CHECK(spy.count() == 1);
-        {
-            const QVariantMap f = spy.takeFirst().at(2).toMap();
-            CHECK(f.value(QStringLiteral("wnb")).toBool() == true);
-            CHECK(!f.contains(QStringLiteral("wnb_level")));   // guarded out
-        }
-
-        // #4147 audit: wnb / wnb_updating mirror FlexLib's uint.TryParse +
-        // > 1 reject (Panadapter.cs 1226/1262) — malformed AND out-of-range
-        // values are dropped from the carry, not coerced to a bool. wnb_level
-        // additionally rejects > 100 and negatives (Panadapter.cs 1244) instead
-        // of leaving them to a model-side clamp.
-        backend.decodePanExtensions(QStringLiteral("0x40000000"),
-                                    {{QStringLiteral("wnb"), QStringLiteral("bogus")},
-                                     {QStringLiteral("wnb_updating"), QStringLiteral("5")},
-                                     {QStringLiteral("wnb_level"), QStringLiteral("150")}});
-        CHECK(spy.count() == 0);   // every key rejected → nothing to carry
-
-        backend.decodePanExtensions(QStringLiteral("0x40000000"),
-                                    {{QStringLiteral("wnb"), QStringLiteral("2")},
-                                     {QStringLiteral("wnb_level"), QStringLiteral("-5")},
-                                     {QStringLiteral("wnb_updating"), QStringLiteral("1")}});
-        CHECK(spy.count() == 1);   // wnb_updating alone survives
-        {
-            const QVariantMap f = spy.takeFirst().at(2).toMap();
-            CHECK(!f.contains(QStringLiteral("wnb")));         // 2 > 1 → dropped
-            CHECK(!f.contains(QStringLiteral("wnb_level")));   // negative → dropped
-            CHECK(f.value(QStringLiteral("wnb_updating")).toBool() == true);
-        }
-
-        // Boundary values still pass: wnb_level=100 is the FlexLib max.
-        backend.decodePanExtensions(QStringLiteral("0x40000000"),
-                                    {{QStringLiteral("wnb"), QStringLiteral("0")},
-                                     {QStringLiteral("wnb_level"), QStringLiteral("100")}});
-        CHECK(spy.count() == 1);
-        {
-            const QVariantMap f = spy.takeFirst().at(2).toMap();
-            CHECK(f.value(QStringLiteral("wnb")).toBool() == false);
-            CHECK(f.value(QStringLiteral("wnb_level")).toInt() == 100);
-        }
+        PanadapterModel pan(QStringLiteral("0xc0000001"));
+        QSignalSpy fps(&pan, &PanadapterModel::fpsReported);
+        QSignalSpy waterfallRate(&pan, &PanadapterModel::waterfallLineDurationReported);
+        pan.applyDisplayValues(all->values, {});
+        CHECK(pan.fps() == 25 && pan.average() == 0 && pan.wnbLevel() == 42 && pan.weightedAverageKnown());
+        const quint64 revision = pan.fftObservationRevision();
+        pan.applyDisplayValues(all->values, {});
+        CHECK(fps.count() == 2 && pan.fftObservationRevision() == revision + 2);
+        pan.applyDisplayValues(waterfall->values, {});
+        pan.applyDisplayValues(waterfall->values, {});
+        CHECK(waterfallRate.count() == 2);
+        pan.setOwnerHandle(0);
+        CHECK(!pan.ownedByClient(0x71));
+        pan.setOwnerHandle(0x71);
+        CHECK(pan.ownedByClient(0x71) && !pan.ownedByClient(0x72));
+        applyPanReport(pan, {{"band_zoom", "1"}, {"segment_zoom", "0"}});
+        applyPanReport(pan, {{"band_zoom", "bad"}, {"segment_zoom", "2"}});
+        CHECK(pan.bandZoomOn() && !pan.segmentZoomOn());
     }
-
-    // ---- Facet 1c: DECODE (rfgain / antenna — universal) ----
-    {
-        FlexBackend backend;
-        QSignalSpy gain(&backend, &IRadioBackend::panRfGainChanged);
-        QSignalSpy rxant(&backend, &IRadioBackend::panRxAntennaChanged);
-        QSignalSpy antlist(&backend, &IRadioBackend::panAntennaListChanged);
-
-        backend.decodePanRfGain(QStringLiteral("0x40000000"),
-                                {{QStringLiteral("rfgain"), QStringLiteral("-8")}});
-        CHECK(gain.count() == 1);
-        CHECK(gain.takeFirst().at(1).toInt() == -8);   // signed gain preserved
-
-        // Malformed rfgain → dropped, not emitted as 0. (#4065 review)
-        backend.decodePanRfGain(QStringLiteral("0x40000000"),
-                                {{QStringLiteral("rfgain"), QStringLiteral("nope")}});
-        CHECK(gain.count() == 0);
-
-        backend.decodePanAntenna(QStringLiteral("0x40000000"),
-                                 {{QStringLiteral("rxant"), QStringLiteral("ANT2")},
-                                  {QStringLiteral("ant_list"), QStringLiteral("ANT1,ANT2,RX_A")}});
-        CHECK(rxant.count() == 1);
-        CHECK(rxant.takeFirst().at(1).toString() == QStringLiteral("ANT2"));
-        CHECK(antlist.count() == 1);
-        CHECK(antlist.takeFirst().at(1).toStringList().size() == 3);
-    }
-
-    // ---- Facet 2b: EXTENSION (panState bundle) + client_handle #3977 ----
-    {
-        FlexBackend backend;
-        QSignalSpy spy(&backend, &IRadioBackend::extensionStatus);
-
-        // No panState keys → no emission.
-        backend.decodePanState(QStringLiteral("0x40000000"),
-                               {{QStringLiteral("center"), QStringLiteral("7.1")}});
-        CHECK(spy.count() == 0);
-
-        backend.decodePanState(QStringLiteral("0x40000000"),
-                               {{QStringLiteral("wide"), QStringLiteral("1")},
-                                {QStringLiteral("loopa"), QStringLiteral("1")},
-                                {QStringLiteral("daxiq_channel"), QStringLiteral("3")},
-                                {QStringLiteral("client_handle"), QStringLiteral("0x5C0FFEE0")},
-                                {QStringLiteral("waterfall"), QStringLiteral("0x42000000")}});
-        CHECK(spy.count() == 1);
-        {
-            const QList<QVariant> a = spy.takeFirst();
-            CHECK(a.at(0).toString() == QStringLiteral("flex"));
-            CHECK(a.at(1).toString() == QStringLiteral("panState"));
-            const QVariantMap f = a.at(2).toMap();
-            CHECK(f.value(QStringLiteral("panId")).toString() == QStringLiteral("0x40000000"));
-            CHECK(f.contains(QStringLiteral("wide")));
-            CHECK(f.contains(QStringLiteral("client_handle")));
-            CHECK(!f.contains(QStringLiteral("fps")));   // absent key not carried
-        }
-    }
-
-    // ---- Facet 1d: DECODE (waterfall line_duration guard) ----
-    {
-        FlexBackend backend;
-        QSignalSpy spy(&backend, &IRadioBackend::panWaterfallLineDurationChanged);
-        backend.decodeWaterfallLineDuration(QStringLiteral("0x40000000"),
-                                            {{QStringLiteral("line_duration"), QStringLiteral("100")}});
-        CHECK(spy.count() == 1);
-        CHECK(spy.takeFirst().at(1).toInt() == 100);
-        // Malformed → dropped, not applied as 0.
-        backend.decodeWaterfallLineDuration(QStringLiteral("0x40000000"),
-                                            {{QStringLiteral("line_duration"), QStringLiteral("nope")}});
-        CHECK(spy.count() == 0);
-    }
-
-    // ---- Facet 3b: model sink — applyStateExtension incl. #3977 ownership ----
-    {
-        PanadapterModel pan(QStringLiteral("0x40000000"));
-        QSignalSpy wide(&pan, &PanadapterModel::wideChanged);
-        QSignalSpy dax(&pan, &PanadapterModel::daxiqChannelChanged);
-        QVariantMap st;
-        st.insert(QStringLiteral("wide"), QStringLiteral("1"));
-        st.insert(QStringLiteral("daxiq_channel"), QStringLiteral("3"));
-        st.insert(QStringLiteral("client_handle"), QStringLiteral("0x5C0FFEE0"));
-        pan.applyStateExtension(st);
-        CHECK(pan.wideActive() == true);
-        CHECK(wide.count() == 1);
-        CHECK(pan.daxiqChannel() == 3);
-        CHECK(dax.count() == 1);
-        // #3977: owner handle tracked (parsed hex, non-zero).
-        CHECK(pan.ownerHandle() == 0x5C0FFEE0u);
-        // A zero client_handle must NOT overwrite a known owner (fail-closed).
-        QVariantMap z; z.insert(QStringLiteral("client_handle"), QStringLiteral("0x0"));
-        pan.applyStateExtension(z);
-        CHECK(pan.ownerHandle() == 0x5C0FFEE0u);
-    }
-
-    // ---- Facet 2c: band/segment zoom — carry + model semantics (#4057) ----
-    {
-        // Backend: the two radio-owned zoom flags ride the panState bundle.
-        FlexBackend backend;
-        QSignalSpy spy(&backend, &IRadioBackend::extensionStatus);
-        backend.decodePanState(QStringLiteral("0x40000000"),
-                               {{QStringLiteral("band_zoom"), QStringLiteral("1")},
-                                {QStringLiteral("segment_zoom"), QStringLiteral("0")}});
-        CHECK(spy.count() == 1);
-        {
-            const QVariantMap f = spy.takeFirst().at(2).toMap();
-            CHECK(f.value(QStringLiteral("band_zoom")).toString() == QStringLiteral("1"));
-            CHECK(f.value(QStringLiteral("segment_zoom")).toString() == QStringLiteral("0"));
-        }
-
-        // Model: FlexLib parse semantics verbatim (Panadapter.cs 933/1159) —
-        // 0/1 apply with change-gated signals; >1 or non-numeric are invalid
-        // and skipped, not applied as 0 (Principle VII).
-        PanadapterModel pan(QStringLiteral("0x40000000"));
-        QSignalSpy band(&pan, &PanadapterModel::bandZoomChanged);
-        QSignalSpy seg(&pan, &PanadapterModel::segmentZoomChanged);
-        CHECK(pan.bandZoomOn() == false);      // default off
-        CHECK(pan.segmentZoomOn() == false);
-
-        QVariantMap on;
-        on.insert(QStringLiteral("band_zoom"), QStringLiteral("1"));
-        pan.applyStateExtension(on);
-        CHECK(pan.bandZoomOn() == true);
-        CHECK(band.count() == 1);
-        CHECK(band.takeFirst().at(0).toBool() == true);
-
-        // Same value again → no re-emit (change-gated, like FlexLib's
-        // continue-on-equal).
-        pan.applyStateExtension(on);
-        CHECK(band.count() == 0);
-
-        // The radio clearing band_zoom while engaging segment_zoom lands as
-        // one bundle; both flags apply independently (radio owns exclusion).
-        QVariantMap swap;
-        swap.insert(QStringLiteral("band_zoom"), QStringLiteral("0"));
-        swap.insert(QStringLiteral("segment_zoom"), QStringLiteral("1"));
-        pan.applyStateExtension(swap);
-        CHECK(pan.bandZoomOn() == false);
-        CHECK(pan.segmentZoomOn() == true);
-        CHECK(band.count() == 1);
-        CHECK(seg.count() == 1);
-        band.clear(); seg.clear();
-
-        // Invalid values (>1, non-numeric, negative) → skipped, state held.
-        QVariantMap bad;
-        bad.insert(QStringLiteral("band_zoom"), QStringLiteral("2"));
-        bad.insert(QStringLiteral("segment_zoom"), QStringLiteral("nope"));
-        pan.applyStateExtension(bad);
-        QVariantMap neg;
-        neg.insert(QStringLiteral("segment_zoom"), QStringLiteral("-1"));
-        pan.applyStateExtension(neg);
-        CHECK(pan.bandZoomOn() == false);
-        CHECK(pan.segmentZoomOn() == true);    // still on — invalids ignored
-        CHECK(band.count() == 0);
-        CHECK(seg.count() == 0);
-    }
-
+    epoch->store(false);
+    CHECK(!all->current());
     // ---- Facet 3: model sinks ----
     {
         PanadapterModel pan(QStringLiteral("0x40000000"));
@@ -389,15 +154,11 @@ int main(int argc, char** argv)
         CHECK(pan.setRange(-125.0, std::nan("")) == false);
         CHECK(lvl.count() == 0);
 
-        // applyWnbExtension applies only present keys and clamps the level.
         QSignalSpy wnbSpy(&pan, &PanadapterModel::wnbStateChanged);
-        QVariantMap ext;
-        ext.insert(QStringLiteral("wnb"), true);
-        ext.insert(QStringLiteral("wnb_level"), 250);   // out of range → clamp to 100
-        pan.applyWnbExtension(ext);
-        CHECK(pan.wnbActive() == true);
-        CHECK(pan.wnbLevel() == 100);
-        CHECK(wnbSpy.count() == 1);
+        applyPanReport(pan, {{"wnb", "1"}, {"wnb_level", "100"}});
+        applyPanReport(pan, {{"wnb_level", "250"}});
+        CHECK(pan.wnbActive() && pan.wnbLevel() == 100 && wnbSpy.count() == 1);
+
     }
 
     // ---- Facet 3c: model sink — setBandwidthLimits (the zoom clamp's source) ----
@@ -449,10 +210,10 @@ int main(int argc, char** argv)
         CHECK(limits.count() == 1);
     }
 
-    if (g_failures == 0) {
+    if (failures == 0) {
         std::printf("aetherd_pan_decode_test: all checks passed\n");
         return 0;
     }
-    std::printf("aetherd_pan_decode_test: %d failure(s)\n", g_failures);
+    std::printf("aetherd_pan_decode_test: %d failure(s)\n", failures);
     return 1;
 }

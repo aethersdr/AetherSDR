@@ -1,3 +1,4 @@
+#include "FlexDisplayStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "PanControlTestFixture.h"
 
@@ -196,7 +197,7 @@ void initializationAndReadback()
     check(!f.backend->commands().contains(QStringLiteral("display pan set 0x40000001 xpixels=1024 ypixels=700")),
           "actual dimensions outrank fallback dimensions");
     f.clear();
-    f.backend->onWrite = [pan](const QString&) { pan->applyStateExtension({{QStringLiteral("fps"), 17}}); };
+    f.backend->onWrite = [pan](const QString&) { applyPanReport(*pan, {{QStringLiteral("fps"), QStringLiteral("17")}}); };
     f.radio.requestPanDisplayRates(pan->panId(), 30, 0);
     check(pan->fps() == 17, "synchronous newer FPS observation outranks request optimism");
     f.clear();
@@ -312,6 +313,8 @@ void staleDisplayAndGainInfo()
     f.backend->answer(0, {RadioControlReply::Kind::Failed, 1, {}});
     check(f.backend->writes.size() == 1, "waterfall owner ABA cannot revive a retired fallback");
     f.clear();
+    f.status(QStringLiteral("display pan 0x40000000"),
+        {{QStringLiteral("waterfall"), QStringLiteral("0x42000000")}});
     const PanDisplayRequest components[]{
         {PanDisplayField::WaterfallColorGain, 67},
         {PanDisplayField::WaterfallBlackLevel, 19},

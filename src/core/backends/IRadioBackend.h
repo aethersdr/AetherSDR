@@ -22,6 +22,7 @@
 #include <QVariant>
 #include <QVariantMap>
 
+#include "core/backends/DisplayObservation.h"
 #include "core/backends/AmpDelta.h"
 #include "core/backends/GpsDelta.h"
 #include "core/backends/MemoryDelta.h"
@@ -348,6 +349,7 @@ public:
     // carries no argument on purpose: a backend that wants to know WHICH radio
     // already has its own channels for that, and widening this verb would make
     // every backend care about the transport it was told to ignore.
+    virtual void retireDisplayObservations() {}
     virtual void onRadioSessionEstablished() {}
 
     // ---- intents DOWN: canonical core-profile verbs (grow per burndown) ----
@@ -1099,6 +1101,7 @@ public:
                                  quint64 requestId, const QVariant& arg = {}) = 0;
 
 signals:
+    void displayObserved(const AetherSDR::DisplayObservation& observation);
     void independentTxStopped(const AetherSDR::TxStopEvidence& evidence);
     // The radio's own answer to a dispatched TransmitControlRequest whose
     // answerTicket was nonzero: applied when it accepted the setting. Emitted

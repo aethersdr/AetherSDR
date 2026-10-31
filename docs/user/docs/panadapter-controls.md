@@ -148,6 +148,7 @@ It re-uses the main panadapter's data, so it uses no extra radio panadapter or s
 - **Tools → Add Panadapter...** or the **+PAN** icon in the status bar opens a layout picker and adds a pan if the radio has room.
 - **Right-click → ↗ Pop out**, or the header's **⬈** button, moves a pan into its own window; **↩ Dock** puts it back.
 - Pan layouts, including floating pans, are restored when you reconnect.
+- On Flex radios, restored display settings come from the radio. The panadapter and its waterfall can return at different times. If another client takes ownership of a display, AetherSDR keeps the existing pane quiet and stops sending it display changes.
 - With the [Workspace Canvas](./workspace-canvas.md) on, **Import pop-outs onto canvas** places floating pans on the canvas.
 
 Opening a pan waits for the connected backend to publish its actual display.

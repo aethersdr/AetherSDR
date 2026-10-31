@@ -2685,6 +2685,7 @@ set_tests_properties(app_settings_safety_explicit-profile-path-isolation
 
 add_executable(panadapter_model_rx_antenna_test
     tests/panadapter_model_rx_antenna_test.cpp
+    src/core/backends/flex/FlexDisplayStatus.cpp
     src/models/PanadapterModel.cpp
     src/core/PerfTelemetry.cpp
     $<TARGET_OBJECTS:aether_test_log_manager>
@@ -7093,6 +7094,13 @@ target_include_directories(owned_single_shot_timer_test PRIVATE src)
 target_link_libraries(owned_single_shot_timer_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME owned_single_shot_timer_test COMMAND owned_single_shot_timer_test)
 
+# Socket-free LAN/WAN ingress, display ownership and lifecycle regressions.
+add_executable(flex_display_observation_test tests/flex_display_observation_test.cpp)
+target_include_directories(flex_display_observation_test PRIVATE src tests)
+target_link_libraries(flex_display_observation_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(flex_display_observation_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_display_observation_test COMMAND flex_display_observation_test)
+
 # aetherd RFC 2.3 template — pan decode/normalize chain (incl. wnb_level guard).
 add_executable(aetherd_pan_decode_test tests/aetherd_pan_decode_test.cpp)
 target_include_directories(aetherd_pan_decode_test PRIVATE src)
@@ -10034,6 +10042,7 @@ set(AETHER_SETTINGS_CONSUMERS
     icom_identity_test
     icom_control_profile_test
     control_resource_service_test
+    flex_display_observation_test
     control_slice_frequency_test
     control_receive_test
     control_telemetry_test

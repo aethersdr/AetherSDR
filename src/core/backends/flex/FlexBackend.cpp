@@ -20,6 +20,7 @@
 #include "core/FirmwareStager.h"    // reads FlexRadio's published release list
 #include "core/LogManager.h"
 #include "core/backends/flex/RadioConnection.h"
+#include "core/backends/flex/WanConnection.h"
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/backends/MemoryWireCodec.h"
 #include "core/backends/flex/FlexKvCarry.h"
@@ -68,6 +69,13 @@ FlexBackend::FlexBackend(QObject* parent)
     m_connection->moveToThread(m_connThread);
     connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
     m_connThread->start();
+
+    connect(m_connection, &RadioConnection::displayObserved, this,
+            [this](const DisplayObservation& observation) {
+        if (!m_displayWanConnection && observation.current()) {
+            emit displayObserved(observation);
+        }
+    });
 
     // Observe wire lifecycle and re-emit as the interface's own signals. Queued
     // (auto) connections: the connection lives on its worker thread.
@@ -856,6 +864,29 @@ void FlexBackend::disconnectRadio()
     // (handle/streamId/seq). Owned by the backend later.
 }
 
+void FlexBackend::retireDisplayObservations()
+{
+    if (m_connection) { m_connection->retireDisplayObservations(); }
+    if (m_displayWanConnection) { m_displayWanConnection->retireDisplayObservations(); }
+}
+
+void FlexBackend::setDisplayWanConnection(WanConnection* connection)
+{
+    if (m_displayWanConnection == connection) { return; }
+    retireDisplayObservations();
+    disconnect(m_displayWanBinding);
+    m_displayWanConnection = connection;
+    if (connection) {
+        const QPointer<WanConnection> source(connection);
+        m_displayWanBinding = connect(connection, &WanConnection::displayObserved, this,
+            [this, source](const DisplayObservation& observation) {
+                if (source && m_displayWanConnection == source && observation.current()) {
+                    emit displayObserved(observation);
+                }
+            });
+    }
+}
+
 bool FlexBackend::isConnected() const
 {
     return m_connection && m_connection->isConnected();
@@ -1234,190 +1265,6 @@ void FlexBackend::invokeExtension(const QString& ns, const QString& verb,
     // caller (requestId != 0) completes; our own RadioModel routes pass 0.
     if (requestId != 0)
         emit extensionResult(requestId, QVariant(true));
-}
-
-void FlexBackend::decodePanCenterBandwidth(const QString& panId,
-                                           const QMap<QString, QString>& kvs)
-{
-    // Only emit when the wire carried these fields — matches the old
-    // applyPanStatus behavior of touching center/bandwidth only when present.
-    if (!kvs.contains(QStringLiteral("center"))
-        && !kvs.contains(QStringLiteral("bandwidth"))) {
-        return;
-    }
-    // The radio may send one without the other; carry the current-or-parsed
-    // value for the missing one (RadioModel resolves against the model). A
-    // sentinel of -1 means "unchanged" for the absent field.
-    const double center = kvs.contains(QStringLiteral("center"))
-        ? kvs.value(QStringLiteral("center")).toDouble() : -1.0;
-    const double bandwidth = kvs.contains(QStringLiteral("bandwidth"))
-        ? kvs.value(QStringLiteral("bandwidth")).toDouble() : -1.0;
-    emit panCenterBandwidthChanged(panId, center, bandwidth);
-}
-
-void FlexBackend::decodePanRange(const QString& panId,
-                                 const QMap<QString, QString>& kvs)
-{
-    // Only emit when the wire carried these fields — matches the old
-    // applyPanStatus behavior of touching min/max dBm only when present.
-    if (!kvs.contains(QStringLiteral("min_dbm"))
-        && !kvs.contains(QStringLiteral("max_dbm"))) {
-        return;
-    }
-    // dBm is signed (-130…-20 typical), so a negative value can't mean
-    // "absent" the way it does for center/bandwidth. Carry NaN for the field
-    // the radio omitted; the model's setRange() treats NaN as "leave unchanged".
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    // Guard the numeric parse: a malformed *present* field must be ignored
-    // (carry NaN = "unchanged"), not applied as 0.0 dBm — setRange() only skips
-    // NaN, so a bare 0 would collapse the vertical scale via setDbmRange. Matches
-    // decodeWaterfallLineDuration's ok-guard + FlexLib's TryParseDouble+continue.
-    const auto dbm = [nan](const QString& s) {
-        bool ok = false;
-        const double v = s.toDouble(&ok);
-        return ok ? v : nan;
-    };
-    const double minDbm = kvs.contains(QStringLiteral("min_dbm"))
-        ? dbm(kvs.value(QStringLiteral("min_dbm"))) : nan;
-    const double maxDbm = kvs.contains(QStringLiteral("max_dbm"))
-        ? dbm(kvs.value(QStringLiteral("max_dbm"))) : nan;
-    emit panRangeChanged(panId, minDbm, maxDbm);
-}
-
-void FlexBackend::decodePanRfGain(const QString& panId,
-                                  const QMap<QString, QString>& kvs)
-{
-    if (!kvs.contains(QStringLiteral("rfgain"))) {
-        return;
-    }
-    // Guard the parse — a malformed rfgain must be ignored, not emitted as 0
-    // (which setRfGain would apply as a real gain). Matches FlexLib's
-    // int.TryParse+continue and the sibling decoders' ok-guards.
-    bool ok = false;
-    const int gain = kvs.value(QStringLiteral("rfgain")).toInt(&ok);
-    if (ok) {
-        emit panRfGainChanged(panId, gain);
-    }
-}
-
-void FlexBackend::decodePanAntenna(const QString& panId,
-                                   const QMap<QString, QString>& kvs)
-{
-    // Selected RX antenna and the available list arrive independently — emit
-    // each only when its wire key is present (matches the old applyPanStatus).
-    if (kvs.contains(QStringLiteral("ant_list"))) {
-        const QStringList ants =
-            kvs.value(QStringLiteral("ant_list")).split(',', Qt::SkipEmptyParts);
-        emit panAntennaListChanged(panId, ants);
-    }
-    if (kvs.contains(QStringLiteral("rxant"))) {
-        emit panRxAntennaChanged(panId, kvs.value(QStringLiteral("rxant")));
-    }
-}
-
-void FlexBackend::decodeWaterfallLineDuration(const QString& panId,
-                                              const QMap<QString, QString>& kvs)
-{
-    if (!kvs.contains(QStringLiteral("line_duration"))) {
-        return;
-    }
-    // Guard the numeric parse — a malformed line_duration must be ignored, not
-    // applied as 0 (the old applyWaterfallStatus used toInt(&ok) + if(ok)).
-    bool ok = false;
-    const int ms = kvs.value(QStringLiteral("line_duration")).toInt(&ok);
-    if (ok) {
-        emit panWaterfallLineDurationChanged(panId, ms);
-    }
-}
-
-void FlexBackend::decodePanState(const QString& panId,
-                                 const QMap<QString, QString>& kvs)
-{
-    // Bundle the remaining Flex-specific display-pan keys onto one namespaced
-    // extension event; carry only the keys the wire actually reported so the
-    // model applies exactly what changed (present-only, like the WNB group).
-    // Raw strings via the shared flexkv map-target carry — the model parses each
-    // with its existing per-field semantics (bool flags, ok-guarded fps, hex
-    // client_handle, waterfall stream-id).
-    QVariantMap st;
-    carry(kvs, "wide", st);
-    carry(kvs, "loopa", st);
-    carry(kvs, "loopb", st);
-    carry(kvs, "fps", st);
-    carry(kvs, "average", st);
-    carry(kvs, "weighted_average", st);
-    carry(kvs, "pre", st);
-    carry(kvs, "daxiq_channel", st);
-    carry(kvs, "client_handle", st);
-    carry(kvs, "waterfall", st);
-    // Radio-owned zoom-mode flags (#4057); the model mirrors FlexLib's
-    // uint-parse + >1-invalid semantics (Panadapter.cs 933/1159).
-    carry(kvs, "band_zoom", st);
-    carry(kvs, "segment_zoom", st);
-    carry(kvs, "noise_floor_range", st);
-    if (!st.isEmpty()) {
-        st.insert(QStringLiteral("panId"), panId);
-        emit extensionStatus(QStringLiteral("flex"),
-                             QStringLiteral("panState"), st);
-    }
-}
-
-void FlexBackend::decodePanExtensions(const QString& panId,
-                                      const QMap<QString, QString>& kvs)
-{
-    // WNB (wideband noise blanker) is a Flex-specific pan feature, not core
-    // profile — carry only the keys the wire reported, namespaced under "flex".
-    // All three keys mirror FlexLib's guarded parses (#4147 audit): a malformed
-    // or out-of-range value is dropped from the carry (the model keeps
-    // last-known-good), never coerced to false/0.
-    QVariantMap wnb;
-    if (kvs.contains(QStringLiteral("wnb"))) {
-        // FlexLib Panadapter.cs:1226 — uint.TryParse + reject > 1, skip on
-        // failure. Bare toInt() != 0 turned "wnb=bogus" into false and could
-        // silently switch the noise blanker indicator off.
-        bool ok = false;
-        const uint v = kvs.value(QStringLiteral("wnb")).toUInt(&ok);
-        if (ok && v <= 1) {
-            wnb.insert(QStringLiteral("wnb"), v != 0);
-        } else {
-            qCDebug(lcProtocol) << "FlexBackend: invalid wnb value"
-                                << kvs.value(QStringLiteral("wnb"));
-        }
-    }
-    if (kvs.contains(QStringLiteral("wnb_level"))) {
-        // FlexLib Panadapter.cs:1244 — uint.TryParse (negatives fail to parse)
-        // + reject > 100, skip on failure: an out-of-range level keeps the last
-        // known-good value rather than being clamped into range (the old signed
-        // toInt(&ok) accepted negatives and left > 100 to a model-side clamp,
-        // fabricating levels FlexLib refuses; Principle VII).
-        bool ok = false;
-        const uint level = kvs.value(QStringLiteral("wnb_level")).toUInt(&ok);
-        if (ok && level <= 100) {
-            wnb.insert(QStringLiteral("wnb_level"), int(level));
-        } else {
-            qCDebug(lcProtocol) << "FlexBackend: invalid wnb_level value"
-                                << kvs.value(QStringLiteral("wnb_level"));
-        }
-    }
-    if (kvs.contains(QStringLiteral("wnb_updating"))) {
-        // FlexLib v4.2.18 exposes wnb_updating on display pan status while the
-        // radio normalizes the SCU-level WNB threshold; it is distinct from the
-        // per-pan WNB enable flag ("wnb") above — keep them separate. Same
-        // guarded parse as wnb (Panadapter.cs:1262, uint.TryParse + > 1 reject).
-        bool ok = false;
-        const uint v = kvs.value(QStringLiteral("wnb_updating")).toUInt(&ok);
-        if (ok && v <= 1) {
-            wnb.insert(QStringLiteral("wnb_updating"), v != 0);
-        } else {
-            qCDebug(lcProtocol) << "FlexBackend: invalid wnb_updating value"
-                                << kvs.value(QStringLiteral("wnb_updating"));
-        }
-    }
-    if (!wnb.isEmpty()) {
-        wnb.insert(QStringLiteral("panId"), panId);
-        emit extensionStatus(QStringLiteral("flex"),
-                             QStringLiteral("panWnb"), wnb);
-    }
 }
 
 void FlexBackend::decodeMeterStatus(const QString& rawBody)

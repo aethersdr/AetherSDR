@@ -41,6 +41,7 @@ public:
     bool ownsRxAudio() const override { return true; }
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
+    void retireDisplayObservations() override;
     bool isConnected() const override;
     void setSliceFrequency(int sliceId, double hz) override;
     void setSliceMode(int sliceId, const QString& mode) override;
