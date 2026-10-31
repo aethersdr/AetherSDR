@@ -2136,10 +2136,14 @@ QWidget* RadioSetupDialog::buildRadioTab()
 
         // Update labels live if license status arrives after dialog opens
         connect(m_model, &RadioModel::infoChanged, this, [this] {
-            if (!m_model->licenseSubscription().isEmpty())
-                m_licSubscriptionLabel->setText(m_model->licenseSubscription());
-            if (!m_model->licenseExpirationDate().isEmpty())
-                m_licExpirationLabel->setText(m_model->licenseExpirationDate());
+            // Unconditional: a radio switch clears the subscription, and the
+            // previous radio's label and date must not linger.
+            m_licSubscriptionLabel->setText(
+                m_model->licenseSubscription().isEmpty()
+                    ? QStringLiteral("—") : m_model->licenseSubscription());
+            m_licExpirationLabel->setText(
+                m_model->licenseExpirationDate().isEmpty()
+                    ? QStringLiteral("—") : m_model->licenseExpirationDate());
             if (!m_model->licenseRadioId().isEmpty())
                 m_licRadioIdLabel->setText(m_model->licenseRadioId());
             if (!m_model->licenseMaxVersion().isEmpty())

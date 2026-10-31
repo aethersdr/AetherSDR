@@ -5,15 +5,8 @@
 
 namespace AetherSDR {
 
-// SmartSDR+ entitlement rules. A subscription grants every feature released
-// before it expires, and the radio keeps those features after it lapses; only
-// features released later stay locked. The radio applies that rule itself and
-// reports the result per feature as `license feature name=<n> enabled=<0|1>
-// reason=<r>`, so the feature record is the entitlement and the subscription's
-// expiration is not. FlexLib: Feature.IsPermanent treats reason PLUS/EA as
-// "retained after the subscription lapses", and IsSmartSDRPlus feeds only the
-// License Info panel and the upgrade copy (reference/FlexLib/FlexLib/
-// FeatureLicense.cs, v4.3.16.42034). Principle I.
+// The radio's feature record is authoritative, including features retained
+// after SmartSDR+ expires (FlexLib FeatureLicense.cs, v4.3.16.42034).
 
 // Whether a feature gated on SmartSDR+ can be used. The radio's feature record
 // decides once it has been seen. An active subscription is only the fallback for
