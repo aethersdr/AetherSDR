@@ -87,7 +87,7 @@ def scan():
     for f in ui_files():
         rel = f.relative_to(REPO).as_posix()
         try:
-            text = f.read_text(errors="replace")
+            text = f.read_text(encoding="utf-8", errors="replace")
         except OSError as e:
             print(f"warning: unreadable {rel}: {e}", file=sys.stderr)
             continue
@@ -105,7 +105,7 @@ def load_json(path):
     if not path.is_file():
         return {}
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, ValueError) as e:
         print(f"warning: {path.name} is not valid JSON ({e}); treating as "
               "empty", file=sys.stderr)
@@ -209,7 +209,22 @@ def main():
             print("::error::aetherd touchpoints require a valid semantic tag: "
                   + ", ".join(invalid_tags))
             return 1
-        current = MANIFEST_MD.read_text() if MANIFEST_MD.is_file() else ""
+        # Decode explicitly as utf-8 — the file is written as utf-8 below, and
+        # the locale codec must not get a say on either side.
+        #
+        # Newlines, though, are deliberately NOT read verbatim. git may
+        # materialize the committed LF as CRLF in the working tree (a
+        # core.autocrlf=true checkout on Windows, which .gitattributes does not
+        # override for this path), and that file is pristine as far as git is
+        # concerned. render() always emits LF, so comparing raw bytes would
+        # call a clean checkout stale and fail --check with nothing to fix.
+        # Universal-newline decoding (the default newline=None) folds CRLF to
+        # LF, so this compares content and ignores the checkout's line-ending
+        # convention. The writer below still pins LF, so what we commit is LF.
+        if MANIFEST_MD.is_file():
+            current = MANIFEST_MD.read_text(encoding="utf-8")
+        else:
+            current = ""
         if current != out:
             print("::error::aetherd-touchpoints.md is stale — run"
                   " `python tools/gen_touchpoint_manifest.py`")
@@ -218,7 +233,17 @@ def main():
         return 0
 
     MANIFEST_MD.parent.mkdir(parents=True, exist_ok=True)
-    MANIFEST_MD.write_text(out)
+    # encoding= and newline= are both load-bearing here.
+    #
+    # Without encoding=, the text is written in the locale codec. On a Windows
+    # console that is cp1252, which cannot represent the "gui->engine" arrow in
+    # the heading this script generates, so the write raises UnicodeEncodeError
+    # *after* truncating the file — leaving the manifest empty (#6818).
+    #
+    # Without newline="", Python translates LF to CRLF on Windows, so a
+    # regenerated manifest would differ from the committed one on every line
+    # and --check would report it stale.
+    MANIFEST_MD.write_text(out, encoding="utf-8", newline="")
     print(f"wrote {MANIFEST_MD.relative_to(REPO)}: "
           f"{len(touchpoints)} touchpoint headers")
     return 0
