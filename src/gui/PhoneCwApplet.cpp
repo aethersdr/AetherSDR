@@ -120,6 +120,39 @@ PhoneCwApplet::PhoneCwApplet(QWidget* parent)
 
 // ── Phone sub-panel (existing P/CW controls) ────────────────────────────────
 
+void PhoneCwApplet::setMonitorAvailable(bool available)
+{
+    m_monitorAvailable = available;
+    if (!m_monBtn || !m_monSlider) {
+        return;
+    }
+    // Three-state doctrine: dimmed, and the reason where a screen reader hears
+    // it (accessibleDescription), not in a tooltip alone.
+    const QString reason = QStringLiteral(
+        "Unavailable: this radio has no transmit monitor that AetherSDR can "
+        "control.");
+    if (available) {
+        m_monBtn->setToolTip(QString());
+        m_monBtn->setAccessibleDescription(
+            QStringLiteral("Toggle sidetone monitor of transmitted audio"));
+        m_monSlider->setToolTip(QString());
+        m_monSlider->setAccessibleDescription(
+            QStringLiteral("TX sidetone monitor volume"));
+    } else {
+        const QSignalBlocker blocker(m_monBtn);
+        m_monBtn->setChecked(false);
+        m_monBtn->setToolTip(reason);
+        m_monBtn->setAccessibleDescription(reason);
+        m_monSlider->setToolTip(reason);
+        m_monSlider->setAccessibleDescription(reason);
+    }
+    m_monBtn->setEnabled(available);
+    m_monSlider->setEnabled(available);
+    if (m_monLabel) {
+        m_monLabel->setEnabled(available);
+    }
+}
+
 void PhoneCwApplet::setSelectableMicInputs(bool selectable)
 {
     m_selectableMicInputs = selectable;
@@ -1302,7 +1335,7 @@ void PhoneCwApplet::syncPhoneFromModel()
     }
 
     { const QSignalBlocker b(m_daxBtn); m_daxBtn->setChecked(m_model->daxOn()); }
-    m_monBtn->setChecked(m_model->sbMonitor());
+    m_monBtn->setChecked(m_monitorAvailable && m_model->sbMonitor());
     m_monSlider->setValue(m_model->monGainSb());
     m_monLabel->setText(QString::number(m_model->monGainSb()));
 

@@ -9841,6 +9841,25 @@ add_test(NAME phone_cw_acc_availability_test
 set_tests_properties(phone_cw_acc_availability_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# MON and VOX dim with an announced reason on a radio that declares no
+# txMonitorControl / voxControl (HL2). Same link set as the +ACC test.
+add_executable(phone_mon_vox_availability_test
+    tests/phone_mon_vox_availability_test.cpp
+    src/gui/PhoneApplet.cpp
+    src/gui/PhoneCwApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
+)
+target_include_directories(phone_mon_vox_availability_test PRIVATE src)
+target_link_libraries(phone_mon_vox_availability_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(phone_mon_vox_availability_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_mon_vox_availability_test
+         COMMAND phone_mon_vox_availability_test)
+set_tests_properties(phone_mon_vox_availability_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(container_manager_test
     tests/container_manager_test.cpp
     src/gui/FramelessResizer.cpp

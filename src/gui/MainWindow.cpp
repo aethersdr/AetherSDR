@@ -7978,6 +7978,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         m_appletPanel->meterApplet()->setMainFanTelemetryState(
             connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
+        m_appletPanel->phoneCwApplet()->setMonitorAvailable(
+            !connected || caps.txMonitorControl.has_value());
         m_appletPanel->meterApplet()->setPaInstrumentTelemetryState(
             connected, caps.hasPaTemperatureTelemetry,
             caps.hasPaCurrentTelemetry);
@@ -7999,6 +8001,7 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
             phone->setDexpVisible(!connected || caps.hasDownwardExpander);
             phone->setAmCarrierAvailable(!connected || caps.hasAmCarrierLevel);
+            phone->setVoxAvailable(!connected || caps.voxControl.has_value());
             phone->setVoxDelayAvailable(
                 !connected || (caps.voxControl && caps.voxControl->hasDelay));
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
