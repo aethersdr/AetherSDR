@@ -26,21 +26,22 @@ This page walks through connecting to a FlexRadio for the first time. AetherSDR 
 
 ## Setup
 
-<img src="/img/screens/connect-dialog.png" width="760" alt="Connect to Radio window. Three cards across the top read On This Network (selected), Remote with SmartLink and Connect by IP. The Available radios list holds three entries: Hermes-Lite 2, ready on your local network, highlighted, with its address blacked out; FLEX-8600 FLX8600 KK7GWY, shared radio on your network via multiFLEX at AetherSDR, USA; and AetherSDR Demo, Simulator (not on the air), DEMO, ready on your local network at 127.0.0.1. A Connect Selected Radio button and checkboxes for the adaptive frame-rate throttle, connecting to the last radio on start-up, waking an Icom on connect and showing the demo simulator follow, with Connected and a Disconnect button at the bottom." />
-
-*The Connect to Radio window, On This Network: every radio discovery found on the LAN. The addresses are blacked out.*
+The **Connect to a radio** window keeps your saved radios together in named locations, such as Home, POTA or Cabin. The initial **Home** location preserves your current connection settings. See [Location and Operator Profiles](./station-profiles.md).
 
 The window has no title bar. It opens above the status bar; drag any empty part of it to move it, and drag an edge or corner to resize it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). **View → Frameless Window** does not apply to it, and pressing **Return** in a field (an IP address, a SmartLink password) does only what that field does.
 
 The window automatically fits its height to the available screen space, including room for a horizontal scrollbar when the contents are wider than the window. On a smaller screen, scroll the body to reach its controls; the connection status and **Disconnect** button remain below it.
 
-1. **Launch AetherSDR.** The **Connect to Radio** window opens. You can reopen it at any time with **File → Connect to Radio...**, or from the **+** button beside the title bar's radio tabs.
-2. Choose **On This Network** ("Recommended for new users when the radio and computer are on the same LAN").
-3. Your radio appears under **Available radios** within a few seconds.
-4. Select it and click **Connect Selected Radio**.
-5. The spectrum and waterfall appear, and audio starts playing through your default output device.
+<img src="/img/screens/connect-dialog.png" width="912" alt="Connect to a radio window with Locations, the Radios at Home list, selected radio details, operator selection and SmartLink accounts." />
 
-If no radio appears, the window shows "No local radios found yet" with **Retry Discovery**, **Remote with SmartLink**, **Connect by IP** and **Open Network Diagnostics** buttons. See [Troubleshooting](#troubleshooting).
+*Choose a location, select a radio and use Connect to connect to that radio.*
+
+1. **Launch AetherSDR.** The **Connect to a radio** window opens. Reopen it with **File → Connect to Radio...**, or the **+** beside the title bar's radio tabs.
+2. Select your location. If it has no saved connections, discovered radios appear directly in its list.
+3. Select your radio and click **Connect**. The connection is saved in this location.
+4. The spectrum, waterfall and receive audio start.
+
+**Nearby radios** opens the full discovery list. Select a radio and click **Save selected radio to location**, then **Back to location** to return to the launcher. Discovery continues as you browse locations. If nothing appears, use **Retry Discovery** or **Open Network Diagnostics** there.
 
 The list can also include:
 - **Hermes-Lite 2** and **ANAN-G2** radios on the same LAN, and RTL-SDR dongles plugged into this computer (on builds with the RTL-SDR backend).
@@ -61,15 +62,15 @@ Controls that the connected radio cannot use are hidden or dimmed with a reason.
 
 ### Auto-connect
 
-With **Connect to last radio on start up** checked (the default), AetherSDR reconnects to the last radio on the next launch if it is reachable. Untick it in the Connect to Radio window to choose a radio yourself each time. If startup auto-connect gives up, the Connect to Radio window opens again.
+With **Connect to last radio on start up** checked (the default), AetherSDR reconnects to the last radio on the next launch if it is reachable. Untick it under **Startup and connection preferences** in the connection window to choose a radio yourself each time. If startup auto-connect gives up, the Connect to Radio window opens again.
 
 ### Connect by IP (routed networks)
 
-If your radio is on a different subnet or behind a VPN, discovery cannot see it. Choose the **Connect by IP** card, set **Radio type:**, enter **Radio IP:** and click **Connect by IP**. See [Manual Connection](./manual-connection.md).
+If your radio is on a different subnet or behind a VPN, discovery cannot see it. Choose **+ Add radio by IP**, set **Radio type:**, enter **Radio IP:** and click **Connect by IP**. See [Manual Connection](./manual-connection.md).
 
 ### SmartLink (remote operation)
 
-Choose **Remote with SmartLink** to reach a FlexRadio over the internet. See [SmartLink Setup](./smartlink-setup.md).
+Choose **SmartLink accounts…** to reach a FlexRadio over the internet. See [SmartLink Setup](./smartlink-setup.md).
 
 ## Known issues
 
