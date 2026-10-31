@@ -151,7 +151,7 @@ The indicator can also be reached with the keyboard: Tab to it and press Enter.
 
 ### SmartSDR+ license
 
-When the Radio DVK is in use and the radio reports that the feature is not licensed, or refuses a DVK command or transfer with the SmartSDR+ error, the **DVK indicator itself is disabled** — grayed out with an arrow cursor and the tooltip "Digital Voice Keyer — not licensed on this radio (SmartSDR+)". The F1–F12 shortcuts and any open panel are gated the same way, and the panel status reads `Disabled · SmartSDR+ required`. With **Automatic by radio licence** selected, the same report switches the panel to the local keyer instead.
+When the Radio DVK is in use and the radio reports that the feature is not licensed, or refuses a DVK command or transfer with the SmartSDR+ error, the **DVK indicator itself is disabled** — grayed out with an arrow cursor and the tooltip "Digital Voice Keyer — not licensed on this radio (SmartSDR+)". The F1–F12 shortcuts and any open panel are gated the same way, and the panel status reads `Disabled · not licensed (SmartSDR+)`. With **Automatic by radio licence** selected, the same report switches the panel to the local keyer instead.
 
 A SmartSDR+ subscription licenses every feature released before it expires, and the radio keeps those features after it lapses, so AetherSDR goes by what the radio reports for the feature, never by the subscription's expiration date. AetherSDR only applies this once the radio positively says no; if the radio never reports the license, the Radio DVK stays available. If the radio later reports the license as enabled, for example after a subscription is activated mid-session, the Radio DVK becomes available again without reconnecting.
 

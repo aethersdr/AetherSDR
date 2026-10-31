@@ -269,12 +269,14 @@ public:
     QString licenseExpirationDate() const
     {
         return m_licenseSubscription.expiration.isValid()
-            ? m_licenseSubscription.expiration.toString(QStringLiteral("MM/dd/yyyy"))
+            ? m_licenseSubscription.expiration.date().toString(QStringLiteral("MM/dd/yyyy"))
             : QString();
     }
     QString licenseMaxVersion()     const { return m_licenseMaxVersion; }
-    QString licenseSubscription()   const { return m_licenseSubscription.label(); }
-    bool licenseSubscriptionActive() const { return m_licenseSubscription.active; }
+    QString licenseSubscription()   const
+    {
+        return m_licenseSubscription.label(QDateTime::currentDateTime());
+    }
     // CW Autotune (`slice auto_tune`) is a SmartSDR+ feature the radio keeps
     // after the subscription lapses; see LicenseEntitlement.h.
     bool cwAutotuneLicensed() const;
@@ -2138,6 +2140,9 @@ private:
     QString     m_region;
     std::optional<int> m_iaruRegion;
     QString     m_radioOptions;
+    // Clears every license record of the session, so the next radio inherits
+    // none of them, and emits licenseFeaturesChanged when anything was held.
+    void clearLicenseState();
     QString     m_licenseRadioId;
     QString     m_licenseMaxVersion;
     LicenseSubscriptionState m_licenseSubscription;

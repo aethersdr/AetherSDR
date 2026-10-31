@@ -1843,6 +1843,20 @@ MainWindow::MainWindow(QWidget* parent)
     // the next radio's statuses arrive.)
     connect(&m_radioModel, &RadioModel::licenseFeaturesChanged, this,
             &MainWindow::updateKeyerAvailability);
+    // The same clear withdraws the CW Autotune license from surviving VFOs.
+    connect(&m_radioModel, &RadioModel::licenseFeaturesChanged, this, [this]() {
+        // ~RadioModel's teardown clears the licenses too; never rebuild a VFO
+        // whose slice is already gone.
+        if (!m_panStack || m_shuttingDown) {
+            return;
+        }
+        const bool autotuneLicensed = m_radioModel.cwAutotuneLicensed();
+        for (auto* applet : m_panStack->allApplets()) {
+            for (auto* vfo : applet->spectrumWidget()->findChildren<VfoWidget*>()) {
+                vfo->setCwAutotuneLicensed(autotuneLicensed);
+            }
+        }
+    });
 
     // Client-side DSP buttons (NR2 / NR4 / MNR / BNR / DFNR / RN2) now
     // live only in the AetherDSP applet, which owns its own

@@ -1782,11 +1782,7 @@ void RadioModel::teardownBackend()
     const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
     discardTuneInhibit();
     resetTuneOutputControl();
-    if (!m_licenseFeatures.isEmpty()) {
-        m_licenseFeatures.clear();
-        emit licenseFeaturesChanged();
-    }
-    m_licenseSubscription = {};
+    clearLicenseState();
     m_transmitModel.invalidateControlIntents();
     for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
@@ -6990,11 +6986,7 @@ void RadioModel::onConnected()
     // would otherwise be staged below and "reclaimed" by the real status
     // replay — with the fixture set staying poisoned for the session.
     clearAutomationSliceFixtures();
-    if (!m_licenseFeatures.isEmpty()) {
-        m_licenseFeatures.clear();
-        emit licenseFeaturesChanged();
-    }
-    m_licenseSubscription = {};
+    clearLicenseState();
     stageSessionModelsForReconnect();
     // The selected discovery serial names the non-Flex session that actually
     // reached Connected. Keep it separate from m_lastInfo: a same-family radio
@@ -8461,11 +8453,7 @@ void RadioModel::onDisconnected()
     m_tnfModel.clear();
     m_flexWaveformModel.clear();
     m_dvkModel.reset();
-    if (!m_licenseFeatures.isEmpty()) {
-        m_licenseFeatures.clear();
-        emit licenseFeaturesChanged();
-    }
-    m_licenseSubscription = {};
+    clearLicenseState();
     m_memorySlotRetirements.clear();
     if (!m_memories.isEmpty()) {
         m_memories.clear();
@@ -11521,8 +11509,7 @@ void RadioModel::onStatusReceived(const QString& object,
         // with expiration=<ISO-8601 date>. A lapsed one is kept for display
         // only; feature gates read the `license feature` records.
         m_licenseSubscription = mergeLicenseSubscription(
-            m_licenseSubscription, kvs.value("name"), kvs.value("expiration"),
-            QDate::currentDate());
+            m_licenseSubscription, kvs.value("name"), kvs.value("expiration"));
         emit infoChanged();
         return;
     }
@@ -12338,8 +12325,23 @@ bool RadioModel::licenseFeatureSeen(const QString& name) const
 bool RadioModel::cwAutotuneLicensed() const
 {
     const LicenseFeatureState feature = licenseFeature(QStringLiteral("auto_tune"));
-    return smartSdrPlusFeatureUsable(feature.seen, feature.enabled,
-                                     m_licenseSubscription.active);
+    return smartSdrPlusFeatureUsable(
+        feature.seen, feature.enabled,
+        m_licenseSubscription.isActive(QDateTime::currentDateTime()));
+}
+
+void RadioModel::clearLicenseState()
+{
+    const bool held = !m_licenseFeatures.isEmpty()
+        || !m_licenseSubscription.name.isEmpty()
+        || !m_licenseRadioId.isEmpty() || !m_licenseMaxVersion.isEmpty();
+    m_licenseFeatures.clear();
+    m_licenseSubscription = {};
+    m_licenseRadioId.clear();
+    m_licenseMaxVersion.clear();
+    if (held) {
+        emit licenseFeaturesChanged();
+    }
 }
 
 bool RadioModel::licenseFeatureEnabled(const QString& name) const

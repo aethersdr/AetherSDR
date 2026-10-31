@@ -62,9 +62,17 @@ public:
     {
         radio.onStatusReceived(object, kvs);
     }
+    static bool subscriptionActive(const RadioModel& radio)
+    {
+        return radio.m_licenseSubscription.isActive(QDateTime::currentDateTime());
+    }
+    static void clearLicense(RadioModel& radio)
+    {
+        radio.clearLicenseState();
+    }
     static void expireSubscription(RadioModel& radio)
     {
-        radio.m_licenseSubscription = {QStringLiteral("SmartSDR+"), QDate(2000, 1, 1), false};
+        radio.m_licenseSubscription = {QStringLiteral("SmartSDR+"), QDate(2000, 1, 1).startOfDay()};
     }
     static void disconnectSession(RadioModel& radio)
     {
@@ -509,7 +517,7 @@ void cwAutotuneRetainedAfterLapse()
 
     check(!f.radio.cwAutotuneLicensed(), "no subscription and no feature record: Autotune locked");
     subscription(QStringLiteral("2000-01-01"));
-    check(!f.radio.licenseSubscriptionActive()
+    check(!Access::subscriptionActive(f.radio)
               && f.radio.licenseSubscription() == QStringLiteral("SmartSDR+ (expired)")
               && f.radio.licenseExpirationDate() == QStringLiteral("01/01/2000"),
           "a lapsed subscription is shown as expired with its date, not hidden");
@@ -518,11 +526,23 @@ void cwAutotuneRetainedAfterLapse()
     check(f.radio.cwAutotuneLicensed(), "Autotune the radio retained after the lapse stays usable");
     subscription(future);
     autotune(QStringLiteral("0"));
-    check(f.radio.licenseSubscriptionActive() && !f.radio.cwAutotuneLicensed(),
+    check(Access::subscriptionActive(f.radio) && !f.radio.cwAutotuneLicensed(),
           "the radio's feature record outranks an active subscription");
     subscription(QStringLiteral("2000-01-01"));
-    check(f.radio.licenseSubscriptionActive() && f.radio.licenseSubscription() == QStringLiteral("SmartSDR+"),
+    check(Access::subscriptionActive(f.radio) && f.radio.licenseSubscription() == QStringLiteral("SmartSDR+"),
           "a lapsed status line never replaces an active subscription");
+
+    Access::status(f.radio, QStringLiteral("license"),
+        {{QStringLiteral("radio_id"), QStringLiteral("abc123")},
+         {QStringLiteral("highest_major_version"), QStringLiteral("v4")}});
+    QSignalSpy cleared(&f.radio, &RadioModel::licenseFeaturesChanged);
+    Access::clearLicense(f.radio);
+    check(cleared.count() == 1 && f.radio.licenseSubscription().isEmpty()
+              && f.radio.licenseExpirationDate().isEmpty() && f.radio.licenseRadioId().isEmpty()
+              && f.radio.licenseMaxVersion().isEmpty() && !f.radio.cwAutotuneLicensed(),
+          "a radio switch clears every license record and announces it");
+    Access::clearLicense(f.radio);
+    check(cleared.count() == 1, "clearing an empty license state announces nothing");
 
     Fixture fresh;
     Access::status(fresh.radio, QStringLiteral("license subscription"),
