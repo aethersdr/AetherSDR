@@ -24,7 +24,7 @@ const QStringList& modes()
     static const QStringList kModes = {
         "USB", "LSB", "CW", "AM", "SAM", "DSB",
         "FM", "NFM", "DFM", "DIGU", "DIGL", "RTTY",
-        "FDV", "DSTR", "AME"
+        "FDVU", "FDVL", "FDV", "DSTR", "AME"
     };
     return kModes;
 }
@@ -68,6 +68,19 @@ bool isKnownMode(const QString& mode)
 {
     const QString upper = sanitizeText(mode).trimmed().toUpper();
     return modes().contains(upper);
+}
+
+bool isStorableMode(const QString& mode)
+{
+    if (sanitizeText(mode) != mode) { return false; }
+    const QString upper = mode.trimmed().toUpper();
+    static const QSet<QString> kAdditionalModes{
+        QStringLiteral("FDVU"), QStringLiteral("FDVL"), QStringLiteral("FMN"),
+        QStringLiteral("WFM"), QStringLiteral("WBFM"), QStringLiteral("CWR"),
+        QStringLiteral("CWU"), QStringLiteral("CWL"), QStringLiteral("NT"),
+        QStringLiteral("DRM"), QStringLiteral("DV"), QStringLiteral("DSTAR"),
+    };
+    return modes().contains(upper) || kAdditionalModes.contains(upper);
 }
 
 QString offsetDirToWire(const QString& any)

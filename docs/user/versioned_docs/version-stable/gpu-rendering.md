@@ -29,13 +29,13 @@ For build dependencies see [Building from Source](./building-from-source.md).
 On computers with more than one graphics adapter, the panadapter **Display** panel has a **SYSTEM → GPU:** selector.
 
 - The choice takes effect on the next launch ("Restart to apply").
-- On Windows hybrid-graphics laptops the discrete GPU is used by default. The integrated GPU is listed but greyed out ("disabled (#1921)") because it crashes when a panadapter is popped out or docked.
+- On Windows hybrid-graphics laptops the discrete GPU is used by default. The integrated GPU is listed but grayed out ("disabled (#1921)") because it crashes when a panadapter is popped out or docked.
 - Adapters whose selection path hasn't been tested on real hardware are marked "(experimental)".
 - Selecting the discrete GPU on a hybrid laptop also works under Wayland on Linux.
 
 ### Heat Map mode
 
-**Display → Heat Map** (on by default) colours the spectrum trace and fill by signal strength, so strong signals stand out. Turn it off for a single solid colour chosen with the **FFT Fill** colour button, with the fill slider setting its opacity.
+**Display → Heat Map** (on by default) colors the spectrum trace and fill by signal strength, so strong signals stand out. Turn it off for a single solid color chosen with the **FFT Fill** color button, with the fill slider setting its opacity.
 
 ### Forcing software rendering (`AETHER_NO_GPU`)
 
@@ -102,7 +102,7 @@ The GPU renderer failed to start. The card names the reason, and the failure is 
 QRhi could not start on this system: there is no usable OpenGL, Direct3D or Metal, as on some virtual machines and headless hosts.
 
 1. Launch with `AETHER_NO_GPU=1`.
-2. To see what Qt tried, launch with `QT_LOGGING_RULES="qt.rhi.*=true"` and look for the QRhi initialisation lines in the log.
+2. To see what Qt tried, launch with `QT_LOGGING_RULES="qt.rhi.*=true"` and look for the QRhi initialization lines in the log.
 
 ### The panadapter is black under remote desktop on Linux
 
@@ -116,6 +116,13 @@ The graphics adapter AetherSDR found is a software rasteriser (llvmpipe, WARP, S
 
 1. If your computer has more than one adapter, open **Display** and pick the real GPU under **SYSTEM → GPU:**.
 2. Restart AetherSDR; the choice takes effect on the next launch.
+
+### AetherSDR runs on XWayland in a Wayland session
+
+Qt could not load its Wayland platform plugin, so it fell back to the next plugin in `QT_QPA_PLATFORM`, usually `xcb` (XWayland). The log shows `Platform: Qt fell back from "wayland" to "xcb"`; the line before it names the plugin in use.
+
+1. If you built AetherSDR yourself, install your distribution's Qt 6 Wayland package. The AppImage includes the plugin.
+2. Start AetherSDR from a terminal: Qt prints why the plugin did not load there, not in AetherSDR's log.
 
 ## See also
 

@@ -74,7 +74,7 @@ Split is reported per CAT client, so every instance can use **Split Operation: F
 
 ### Decode spotting
 
-AetherSDR can listen to WSJT-X's UDP decode messages and put the stations it decodes on the panadapter. Each spot lands on the band of the WSJT-X instance that reported it. See the WSJT-X tab on the [SpotHub](./spothub.md) page for filters (CQ, CQ POTA, Calling Me) and colours.
+AetherSDR can listen to WSJT-X's UDP decode messages and put the stations it decodes on the panadapter. Each spot lands on the band of the WSJT-X instance that reported it. See the WSJT-X tab on the [SpotHub](./spothub.md) page for filters (CQ, CQ POTA, Calling Me) and colors.
 
 ## Known issues
 
@@ -82,7 +82,7 @@ AetherSDR can listen to WSJT-X's UDP decode messages and put the stations it dec
 - FT8 transmitted on slice B can show heavy ALC and be decoded far less often than the same signal on slice A ([#5340](https://github.com/aethersdr/AetherSDR/issues/5340)).
 - Over TCI, the mic profile, **MIC** level and **PROC** in the Phone/CW applet change the transmitted digital signal ([#5844](https://github.com/aethersdr/AetherSDR/issues/5844)).
 - Over TCI, the transmitted FT8 signal can show random jumps ([#5133](https://github.com/aethersdr/AetherSDR/issues/5133)).
-- TCI receive audio can stop after moving to a voice frequency with DAX off and back to a data frequency with DAX on ([#4824](https://github.com/aethersdr/AetherSDR/issues/4824)).
+- **(FlexRadio, firmware v4.3 and later)** A footswitch or other hardware PTT transmits the selected TX source, so with DAX on it sends WSJT-X's audio, not your microphone. Turn on **PTT Mic Override** to make a hardware PTT use the microphone instead. See [Hardware PTT and the TX source](./tx-controls.md#hardware-ptt-and-the-tx-source).
 - On macOS, DAX transmit can stop sending audio to the radio until AetherSDR is restarted ([#5870](https://github.com/aethersdr/AetherSDR/issues/5870)).
 
 ## Troubleshooting
@@ -129,5 +129,5 @@ WSJT-X sends to the wrong device, or the TX slice is not in a digital mode.
 - [DAX Virtual Audio](./dax-virtual-audio.md)
 - [TCI Server](./tci-server.md)
 - [SpotHub](./spothub.md)
-- [PSK Reporter Map](./psk-reporter-map.md)
+- [AetherMap](./psk-reporter-map.md)
 - [WSJT-X home page](https://wsjt.sourceforge.io/wsjtx.html)

@@ -7,7 +7,7 @@ as direction changes.
 
 For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
-## Current cycle: post-v26.10.1
+## Current cycle: post-v26.10.4
 
 ### In flight
 
@@ -41,7 +41,18 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   mute and balance, NB, NR, ANF, manual notch, APF, squelch, RX antenna and
   slice lock travel as typed backend requests, receive contracts are seeded
   across the families, and with the GUI callers rerouted the raw Flex command
-  count above the seam fell from 413 to 369. Remaining:
+  count above the seam fell from 413 to 369. v26.10.2 kept the new per-radio
+  differences in declared capability records rather than family checks — a
+  line-out control record, client-persisted FFT FPS and dBm range — and carried
+  WDSP's second noise blanker as a typed blanker kind on the receive route.
+  v26.10.3 moved the remaining slice/transmit model controls, Radio Setup, TX
+  Band, transverter and USB configuration, and profile/memory operations onto
+  typed requests, with original-session and owner fencing. v26.10.4 moved
+  spots, physical outputs, pan zoom and RX antenna, tuning step and net
+  corrections (raw Flex commands above the seam 215 → 192), then slice
+  lifecycle, split routing, TX-slice assignment and full duplex, then
+  panadapter/waterfall lifecycle and every existing display control. These are
+  scoped M4 increments, not completion of the daemon or the thin UI. Remaining:
   per-client propagation, transmit for SmartLink and the other families,
   transmit audio transport, and a replacement thin UI client — UI code still
   consumes models directly, and that remains correct until that client exists.
@@ -70,7 +81,15 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   keyed, kept an RF power change made during TUNE, stopped VOX, the monitor,
   the speech processor, CW speed and break-in raising a false drop notice, and
   corrected the IC-9700, IC-7610 and IC-785x to advertise the one panadapter
-  the backend implements. Remaining: transmit confirmation on additional Icom
+  the backend implements. v26.10.2 fixed four IC-7300MK2 control defects that
+  each had a passing backend test — COMP read back on the radio's 0–10,
+  squelch on at threshold 0, the preamp/ATT interlock shown at once, and the SQL
+  line drawn on a measured scale — and gave `radiocert` stages that catch each
+  class on any radio publishing the control. v26.10.4 runs the IC-7300MK2,
+  IC-705 and IC-9700 scope in SCROLL-F, so the panadapter scrolls and tunes in
+  place as on a Flex, with Center and Fixed on an Icom-only Scope row; it also
+  bounded the IC-705 preamp ladder above 74.8 MHz and reconnects when the radio
+  releases the current media streams. Remaining: transmit confirmation on additional Icom
   models, the per-model SET-menu item numbers the MOD Input check needs, audio
   gain/mute/pan, an automation verb making the modulation
   sources assertable without parsing Radio Health text, and the once-a-second
@@ -91,7 +110,14 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   point per screen pixel; published the S-meter; ran WDSP's noise blanker from
   the NB button; and drove the ADC step attenuator from RF Gain. v26.10.1
   applied the receiver's AF gain, mute and balance and sent receive audio to
-  the G2's own speaker and headphone jack. The codec is
+  the G2's own speaker and headphone jack. v26.10.2 restored frequency, mode,
+  tuning step, output level and dBm range per radio, widened AGC-T to
+  −20…120 dB with a working AGC-off gain, published link telemetry and the
+  supply voltage, and added WDSP's second noise blanker. v26.10.3 moved the seven
+  front-end options to Radio Setup → Radio and added discovery per distinct
+  attached IPv4 subnet. v26.10.4 delivered parts 2 and 3 of RFC #6209: the receive band-pass
+  filters can follow the tuned frequency and the speaker amplifier mutes on its
+  own, and discovery logs its bind and send failures. The codec is
   multi-DDC capable but `AnanBackend` still drives one; remaining is the
   `AnanRxDsp` fan-out, then transmit.
 - **RTL-SDR — experimental, receive-only** — `librtlsdr` discovery with one
@@ -107,9 +133,14 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   PCM. v26.10.1 landed M1: receive changes publish only after the dongle's
   readback and DSP adoption, capture browsing parks receivers outside the
   usable capture and resumes them, zoom uses a continuous 65,536-point FFT, and
-  FM/FM-N gain symmetric filters and squelch. Production still admits one
-  receiver. Remaining: WFM stereo, optional digital decoding, live PPM
-  interaction and multi-receiver delivery.
+  FM/FM-N gain symmetric filters and squelch. v26.10.2 added WFM stereo, live
+  PPM adjustment and multi-receiver delivery — per-receiver squelch, relative
+  meters, APRS on the selected receiver and receive DAX/TCI feeds — and every
+  official package now bundles the backend. v26.10.3 adds SSB/CW and AM/SAM
+  reception with accepted filter/DSP state and selected-receiver CW/Copy Assist
+  audio. The normal launch still opens one
+  receiver. Remaining: production multi-receiver capacity qualification and
+  optional digital FM reception (RFC #6079).
 - **Workspace canvas — experimental** — [RFC #4887](https://github.com/aethersdr/AetherSDR/issues/4887) landed complete in v26.8.3,
   all seven phases: pans and applets as freely placed, resizable, layered items
   on a canvas that can span several top-level windows, with named workspaces,
@@ -156,7 +187,16 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   receiver, FFT AVG computed backend-side, Black Level and NB Blank on its
   absolute-dB rows, client-side spots, the CL1 external 10 MHz reference, and
   automatic RF gain armable across the native −12…+48 dB range on the
-  bandscope law. Every control it cannot serve now refuses aloud.
+  bandscope law. Every control it cannot serve now refuses aloud. v26.10.2 made
+  the client its memory — TUNE power per band, FFT AVG, receivers B–D with each
+  receiver's setpoints, manual notches, FFT FPS and the dBm range survive a
+  restart — brought receive audio out of WDSP at unity (12 dB quieter), sent CW
+  at the TUNE carrier level, ramped the TX ALC gain inside each block and
+  discovered the radio on every local interface. v26.10.3 enables AM, DSB and
+  simplex FM/NFM through TXA, retains graphic EQ across restarts, makes Show TX
+  in Waterfall client-owned on HL2, and observes hardware PTT without keying
+  the host. v26.10.4 reads the N2ADR IO board's status registers over the
+  I2C read path. Keyed rendering and hardware-PTT validation remain outstanding.
   **The experimental → supported call itself is still open**; what remains
   before making it is the rest of panadapter/waterfall parity with the Flex
   path, arming automatic RF gain by default, and field time on the TXA chain
@@ -164,14 +204,25 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   keeps linear phase, at 4096 taps (85 ms onset) until a notch or a narrow
   passband needs 8192, and the 0.6–1.1 s pan-bandwidth rebuild is off the audio
   path but still a wait.
-- **CTR2 controller relay** ([RFC #6091](https://github.com/aethersdr/AetherSDR/issues/6091), approved) — the
-  CTR2 Proxy applet shipped in v26.10.1: an operator-enabled, byte-for-byte
-  relay that connects a CTR2-Max controller to the radio AetherSDR is connected
-  to, as an independent client outside AetherSDR's transmit paths. Wi-Fi mode
-  works with today's CTR2 firmware. USB mode's host side is complete in link
-  format v0, with AetherSDR starting the handshake, and the firmware author's
-  development firmware has received the radio's status stream over it. It
-  waits on a CTR2 USB firmware release.
+- **AetherSDR style guide — the visual canon** ([RFC #6226](https://github.com/aethersdr/AetherSDR/issues/6226), approved;
+  tracking [#6239](https://github.com/aethersdr/AetherSDR/issues/6239)) — the canon is written down in
+  `docs/style/aethersdr-style-guide.md` with its own `color.canon.*` tokens,
+  and v26.10.2 moved the first surfaces onto it: the About window, AetherRX,
+  AetherTX, AetherModem, AetherMap, AetherGPS, Connect to Radio, AGC-T
+  Calibration, the DVK panel and the panadapter header, through `CanonWindow`
+  and the new in-window `CanonSurface` classes. v26.10.3 adds SpotHub, Radio
+  Setup and AetherControl to the migrated workspaces, and v26.10.4 the multiFLEX
+  Dashboard, TX Band Settings, Icom RC-28 Button Mapping, NR2's FFTW Wisdom
+  window and the CTR2 window's message boxes. Remaining: the other surfaces,
+  one PR at a time, then a single flip of the base tokens to canon values.
+- **In-app updates** ([RFC #5304](https://github.com/aethersdr/AetherSDR/issues/5304)) — v26.10.4 shipped the
+  update check at launch with its UPDATE title-bar badge and Skip This Version, and the
+  Updates window (File → Update...) with the download built for this computer
+  and the radio's firmware lanes and install. Behind it, every release
+  publishes a signed manifest and per-file patch bundles, `UpdateStager`
+  stages a verified update into a copy of the install, and the Windows
+  `AetherSDRUpdater` swaps it in and rolls back on failure. Remaining: the
+  Install and Restart to update wiring on Windows, then the other platforms.
 - **AppSettings nested-JSON refactor** — ~460 flat call sites today;
   the new pattern is one nested-JSON value per feature (Principle V).
   The storage layer moved to SQLite and the scoped feature-document store,
@@ -184,6 +235,12 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
 ### Queued (next cycle)
 
+- **Unified client-side voice keyer** ([RFC #4214](https://github.com/aethersdr/AetherSDR/issues/4214), approved) — local
+  per-client recordings, quick-access CQ/Call, external and controller control,
+  and radio/local routing. Phase 1 shipped in v26.10.3: twelve local slots,
+  recording, preview/import/export, F1–F12 playback and Local/Radio routing.
+  Repeat/CQ automation, permanent CQ/Call chrome and external-control
+  extensions remain; the umbrella is not declared complete.
 - **KiwiSDR follow-ups** — WebSDR / OpenWebRX support on top of the shipped
   public-receiver browser (per-receiver passwords, idle-release, and
   waterfall polish landed in v26.7.2; warm audio through TX and the
@@ -247,7 +304,7 @@ Substantial features requested on the
 
 **Amplifier & tuner integrations**
 
-- **RF2K+ / RF2K-S** PA ([#1902](https://github.com/aethersdr/AetherSDR/issues/1902)),
+- **RF2K+** PA ([#1902](https://github.com/aethersdr/AetherSDR/issues/1902)),
   **Palstar HF-Auto** ([#97](https://github.com/aethersdr/AetherSDR/issues/97)),
   **LDG** USB-serial tuner ([#2092](https://github.com/aethersdr/AetherSDR/issues/2092)),
   and **Icom AH4** tuner protocol ([#542](https://github.com/aethersdr/AetherSDR/issues/542)).
@@ -261,32 +318,32 @@ implementation**. An approved RFC moves up into the cycle above. Full list:
 
 **Panadapter and display**
 
+- [#6394](https://github.com/aethersdr/AetherSDR/issues/6394) — Raw-spectrum waterfall row ownership and interval integration
+
 - [#5711](https://github.com/aethersdr/AetherSDR/issues/5711) — Per-panadapter spot marker visibility toggle
 - [#5586](https://github.com/aethersdr/AetherSDR/issues/5586) — WSJT-X Rx/Tx frequency overlay on the panadapter/waterfall
 - [#5350](https://github.com/aethersdr/AetherSDR/issues/5350) — Optional mini-waterfall for Mini-Pan
 - [#5348](https://github.com/aethersdr/AetherSDR/issues/5348) — Radio-native VFO flag layout — carry a second receiver where a second panadapter cannot go
 - [#5223](https://github.com/aethersdr/AetherSDR/issues/5223) — Decouple panadapter zoom from the radio's sample rate
 - [#4925](https://github.com/aethersdr/AetherSDR/issues/4925) — Retain Band, Segment, or custom panadapter span across tuning and restart
-- [#4764](https://github.com/aethersdr/AetherSDR/issues/4764) — Frameless window retrofit: one 52 px unified title bar with radio tabs, on all three platforms
 
 **Audio, DSP and transmit**
 
+- [#6417](https://github.com/aethersdr/AetherSDR/issues/6417) — Client-side instant replay audio and waterfall scrubbing
 - [#5704](https://github.com/aethersdr/AetherSDR/issues/5704) — Operator control of AGC position relative to noise reduction
-- [#5682](https://github.com/aethersdr/AetherSDR/issues/5682) — Isolate TCI RX/TX audio from UI scheduling across Flex, HL2 and Icom
 - [#5448](https://github.com/aethersdr/AetherSDR/issues/5448) — Audio preset workflow: quick selection, profile associations, and starting presets
-- [#4861](https://github.com/aethersdr/AetherSDR/issues/4861) — Raw (pre-noise-reduction) audio for Copy Assist ASR
 - [#4836](https://github.com/aethersdr/AetherSDR/issues/4836) — TX dynamics: CFC and leveler, with multiband limiter follow-ups
 - [#4769](https://github.com/aethersdr/AetherSDR/issues/4769) — TX Linearity Analyzer — numeric IMD/shoulder/ACPR measurement from the radio's own transmission
 - [#4334](https://github.com/aethersdr/AetherSDR/issues/4334) — On-device text-to-speech (TTS) for the voice keyer — type a message, send it on-air
-- [#4214](https://github.com/aethersdr/AetherSDR/issues/4214) — Unified client-side voice keyer: local per-client recordings, quick-access CQ/Call, external/controller control, radio/local routing
 - [#5047](https://github.com/aethersdr/AetherSDR/issues/5047) — Add a slice-aware SELCAL32 decoder for aviation monitoring
+- [#6346](https://github.com/aethersdr/AetherSDR/issues/6346) — AetherN³R (Aetherial Neural Net Noise Reduction): weak-SSB neural NR trained on HF receiver noise
 
 **Radios, protocol and devices**
 
+- [#6472](https://github.com/aethersdr/AetherSDR/issues/6472) — Client-side transverters for non-Flex radios with separate RX/TX LOs
 - [#5688](https://github.com/aethersdr/AetherSDR/issues/5688) — SIP session border controller — phone patch and two-ended SIP/RTP relay over RF
 - [#5468](https://github.com/aethersdr/AetherSDR/issues/5468) — Complete RTL-SDR receive DSP with multiple slices, independent zoom and stereo WFM
 - [#4840](https://github.com/aethersdr/AetherSDR/issues/4840) — IC-9700 support for dual VFOs / slices for satellite use
-- [#4667](https://github.com/aethersdr/AetherSDR/issues/4667) — Band plans conflate preferred mode with usage — six segments mislabelled digi-only, and the schema that caused it
 - [#3894](https://github.com/aethersdr/AetherSDR/issues/3894) — Standalone receive sessions for KiwiSDR and future receive-only providers
 - [#3869](https://github.com/aethersdr/AetherSDR/issues/3869) — HFChat: many-to-many text chat over HF RTTY (FDMA) with OTA + optional KiwiSDR reconciliation
 - [#3613](https://github.com/aethersdr/AetherSDR/issues/3613) — Remote RF-quiet receive 'antennas' — WebSDR & KiwiSDR
@@ -294,30 +351,102 @@ implementation**. An approved RFC moves up into the cycle above. Full list:
 - [#5972](https://github.com/aethersdr/AetherSDR/issues/5972) — Native Xiegu G90 backend — CI-V control and external stereo raw-IQ input
 - [#6106](https://github.com/aethersdr/AetherSDR/issues/6106) — Backend-owned hardware profiles for openHPSDR Protocol 2 radios
 - [#6079](https://github.com/aethersdr/AetherSDR/issues/6079) — Optional Digital FM reception and program metadata
+- [#6712](https://github.com/aethersdr/AetherSDR/issues/6712) — RF-KIT applet: optional TUNE button, ATU indicator, Error banner and one-click RESET
+- [#6725](https://github.com/aethersdr/AetherSDR/issues/6725) — ANAN-G2: diversity reception on the synchronized DDC0/DDC1 pair
 
 **Interface and workflow**
 
+- [#6515](https://github.com/aethersdr/AetherSDR/issues/6515) — A View → Meter Type submenu for S-Meter and SmartMTR
 - [#5616](https://github.com/aethersdr/AetherSDR/issues/5616) — Use Case Profile/Settings Manager — combine radio profiles and client presets under one switchable label
-- [#5304](https://github.com/aethersdr/AetherSDR/issues/5304) — AetherSDR In-App Update Design
 - [#5270](https://github.com/aethersdr/AetherSDR/issues/5270) — Pluggable applets and the Applet Exchange (ApX)
 - [#5234](https://github.com/aethersdr/AetherSDR/issues/5234) — Add dedicated Band Applet and BAND top-bar toggle button
 - [#5010](https://github.com/aethersdr/AetherSDR/issues/5010) — Status-bar clock display options
 - [#4287](https://github.com/aethersdr/AetherSDR/issues/4287) — Dock AetherDSP Settings inline in the slice panel, with applet-style header and popout
 - [#3689](https://github.com/aethersdr/AetherSDR/issues/3689) — Net Reminder Scheduler — post-merge follow-ups (#3684)
-- [#3184](https://github.com/aethersdr/AetherSDR/issues/3184) — meta(theme): theming system status + polish roadmap — where to help land this
 - [#1494](https://github.com/aethersdr/AetherSDR/issues/1494) — CW and RTTY tuning indicators: pitch centering and tone alignment
+- [#6212](https://github.com/aethersdr/AetherSDR/issues/6212) — Status bar: caption the supply voltage when it is the only PA reading
+- [#6677](https://github.com/aethersdr/AetherSDR/issues/6677) — Compact Memory drawer sizing and icon-revealed live search
+- [#6690](https://github.com/aethersdr/AetherSDR/issues/6690) — AetherModem instances, fixed RX assignment, and a receive-only APRS iGate
+- [#6742](https://github.com/aethersdr/AetherSDR/issues/6742) — Title bar radio tabs: the three most recent radios, every other radio in a drawer (amends RFC #4764)
 
 **Project infrastructure**
 
+- [#6435](https://github.com/aethersdr/AetherSDR/issues/6435) — Review routing, TX-path acknowledgement and red-main attribution
 - [#4496](https://github.com/aethersdr/AetherSDR/issues/4496) — In-repo multilingual user documentation generator — bridge-driven, 5 languages
-- [#4031](https://github.com/aethersdr/AetherSDR/issues/4031) — chore(warnings): eliminate all compiler warnings — GCC -Wall/-Wextra/-Wpedantic + MSVC /W3, 4 phases
 - [#2884](https://github.com/aethersdr/AetherSDR/issues/2884) — feat(smartlink): migrate Auth0 from ROPG to Authorization Code + PKCE on dedicated client
+- [#6232](https://github.com/aethersdr/AetherSDR/issues/6232) — Official Windows ARM64 build and release support
 
 ### Recently shipped
 
 Highlights from the current cycle (v26.10.x). Earlier releases and the
 complete list are in [`CHANGELOG.md`](CHANGELOG.md):
 
+- **The Updates window and an automatic update check** — a check at launch,
+  at most once a day, that only lights an UPDATE badge, Skip This Version, File → Update... with the
+  download for this computer, and radio firmware installs in the same window.
+  RFC #5304 (v26.10.4).
+- **SmartSDR 4.3 Noise Floor Range and CW profiles** — the radio-owned NF Range
+  slider and the CW profile type, with APD state, FDVU/FDVL CAT modes and
+  unsigned amplifier/tuner meter handles (v26.10.4).
+- **The CTR2 relay over USB** — Lynovation's CTR2-Max firmware v1.02.00 and
+  later relays over USB and starts automatically, with a wide-report link for
+  devices that offer it and one-click Linux download-mode access. RFC #6091
+  (v26.10.4).
+- **RF-KIT RF2K-S, the Icom SCROLL-F panadapter and ANAN-G2 band-pass filters**
+  — a REST-API amplifier applet, an Icom panadapter that scrolls instead of
+  recentering, and the G2's filter bank and speaker mute (v26.10.4).
+- **Touch gestures** — pinch-zoom, press-and-hold right-click and kinetic
+  scrolling for touch screens. RFC #6775 (v26.10.4).
+- **HTTPS back on upgraded Windows installs** — the installer clears the stale
+  Qt TLS plugin that disabled SmartLink, update checks and downloads (v26.10.4).
+- **SmartSDR 4.3 controls** — radio-owned Auto AGC-T, DSP parameter reset,
+  PTT Mic Override and per-band RCA off/TUNE, gated by firmware, hardware and
+  licence as applicable (v26.10.3).
+- **DeepCW and DeepFist** — standard RX choices beside ggmorse where ONNX
+  Runtime is available, with pinned upstream model downloads on first use
+  (v26.10.3).
+- **Auto squelch stays with its slice and pan** — twelve corrections for CW,
+  FT8/digital and multi-receiver setups: mode gates and overlays, independent
+  Auto intent/margins, own-pan noise floors and preserved manual thresholds.
+  PR #6464 (v26.10.3).
+- **Local voice recordings** — twelve 30-second slots, PC-microphone recording,
+  preview/import/export and F1–F12 playback; the radio keyer remains selectable (v26.10.3).
+- **Controller improvements** — exclusive CTR2 USB ownership, negotiated
+  CW-centered spectrum/text and variable-speed Contour shuttle tuning
+  (v26.10.3).
+- **Elecraft station panels** — KPA500, KAT500 and KXPA100/KXAT100 over serial
+  or raw TCP, with Full/Mini views and Advanced maintenance (v26.10.3).
+- **HL2 AM/DSB/FM and RTL SSB/CW/AM/SAM** — TXA adds the HL2 transmit modes;
+  RTL adds receive DSP and selected-decoder audio, retaining its normal
+  one-receiver limit (v26.10.3).
+- **More canon workspaces** — SpotHub, Radio Setup and AetherControl, plus a
+  CW Pitch slider and keyer buttons that fit (v26.10.3).
+- **One 52 px title bar with radio tabs** — the menu, brand, a tab per radio
+  with its link state, the audio cluster and the window controls in one bar on
+  every platform. RFC #4764 (v26.10.2).
+- **docs.aethersdr.com** — the user guide as docs-as-code with Stable and Next
+  versions, a signed PDF manual, real-radio screenshots and a browser-side Log
+  Analyzer, linked from the Help menu (v26.10.2).
+- **Remote operation over CGNAT** — a Tailscale node inside a FLEX-8000 or
+  Aurora radio relays AetherSDR to tailnet clients, installed and configured
+  from the Waveforms window, with the MTU capped to fit the tunnel. RFC #6271
+  (v26.10.2).
+- **The canon windows** — About, AetherRX, AetherTX, AetherModem, AetherMap,
+  AetherGPS, Connect to Radio, AGC-T Calibration and the panadapter header on
+  the AetherSDR style guide. RFC #6226 (v26.10.2).
+- **DVK Import WAV** — any WAV converted to the radio's 24 kHz mono through the
+  documented two-step upload, with slot names that keep their spaces (v26.10.2).
+- **FFT Smooth and FFT De-comb** — client-side trace shaping across frequency
+  on every radio family, off by default (v26.10.2).
+- **RTL-SDR WFM stereo and multi-receiver delivery** — stereo broadcast FM,
+  live PPM, per-receiver squelch, meters and audio feeds, and RTL in every
+  official package. RFC #5468 (v26.10.2).
+- **The Hermes-Lite 2 and ANAN-G2 remember where you left them** — receivers,
+  setpoints, TUNE power, FFT settings, frequency, mode and step restored per
+  radio (v26.10.2).
+- **Signed Windows builds and shipped firewall rules** — Authenticode on every
+  exe and DLL, inbound allow rules in the installer and a Windows Firewall page
+  in Network Diagnostics (v26.10.2).
 - **Every control works or says why not** — on a radio with no Flex command
   plane, each control either reaches the radio through a path it already has,
   is dimmed with its reason, or refuses aloud, and controls that work stop

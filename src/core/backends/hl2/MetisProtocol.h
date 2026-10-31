@@ -274,7 +274,8 @@ Cc ccTxDrive(int level, bool paEnable = false, bool atuTune = false) noexcept;
 //   C2 = DATA[23] stop at end, DATA[22:16] 7-bit chip address
 //   C3 = DATA[15:8] register;  C4 = DATA[7:0] data byte
 // One two-byte I2C write per bank. Neither address is on
-// MetisClient::requestRegister's allow-list, so RQST stays clear.
+// MetisClient::requestRegister's allow-list, so RQST stays clear on both except
+// for the IO board status read (kIoBoardStatusReadData) at 0x3d.
 // addr 0x3b is a raw AD9866 SPI write (ad9866ctrl.v, cookie 8'h06) that can
 // hit any converter register, so it has no encoder and is not allow-listed.
 inline constexpr std::uint8_t kC0Ad9866Spi = 0x76;  // addr 0x3b << 1
@@ -282,24 +283,24 @@ inline constexpr std::uint8_t kC0I2c1 = 0x78;          // addr 0x3c << 1
 inline constexpr std::uint8_t kC0I2c2 = 0x7A;          // addr 0x3d << 1
 inline constexpr std::uint8_t kI2cCookieWrite = 0x06;  // C1
 inline constexpr std::uint8_t kI2cStopAtEnd   = 0x80;  // C2 bit 7
-// AND 0x07 IS THE READ COOKIE, on both buses. Named here without an encoder,
-// because the distinction between "the protocol cannot" and "this client does
-// not" is worth keeping straight. i2c_bus2.v accepts either address on
-// `cmd_data[31:25] == 7'h03` — i.e. C1 of 0x06 or 0x07 — and then branches on
-// the low bit:
+// AND 0x07 IS THE READ COOKIE, on both buses. Its one use is the IO board
+// status read (kIoBoardStatusReadData); the distinction between "the protocol
+// cannot" and "this client does not" is worth keeping straight for the rest.
+// i2c_bus2.v accepts either address on `cmd_data[31:25] == 7'h03` — i.e. C1 of
+// 0x06 or 0x07 — and then branches on the low bit:
 //
 //     state_next = cmd_data[24] ? STATE_READ_CMDADDR : STATE_CMDADDR;
 //
 // A read walks STATE_READ_DATA0..4, assembles four bytes into `resp_data`, and
 // control.v's RESP_READ returns them as `cmd_resp_data_i2c`. So a VersaClock
-// register CAN be read back over Protocol 1; nothing here implements it.
+// register CAN be read back over Protocol 1; nothing here implements that.
 //
 // WHAT A READBACK WOULD AND WOULD NOT BE WORTH. It reads the register we wrote,
 // so it proves the write arrived — which is more than we have today. It does NOT
 // prove the PLL has locked to anything: no status bit is routed out of the part
 // to the command plane, so "locked to CL1" and "programmed for CL1 with no cable
 // attached" still look identical from here. Do not build a lock indicator on it.
-inline constexpr std::uint8_t kI2cCookieRead  = 0x07;  // C1; no encoder, see above
+inline constexpr std::uint8_t kI2cCookieRead  = 0x07;  // C1; see above
 
 // HL2 IO Board (N2ADR), I2C2 chip 0x1D: switches amplifiers, relays and
 // transverters from the TX frequency, which only the host supplies. Registers
@@ -361,6 +362,49 @@ static_assert(kIoBoardTxFreqBanks
                                               - kIoBoardRegTxFreqMsb + 1),
               "IO board frequency bank count must span Msb..Lsb exactly");
 std::array<Cc, kIoBoardTxFreqBanks> ccIoBoardTxFrequency(std::uint64_t hz) noexcept;
+
+// The IO board status read: one I2C2 read of four bytes starting at
+// REG_INPUT_PINS, so registers 6..9 arrive in reply DATA[7:0]..[31:24]. A read
+// sends only the register pointer, which the board stores without writing
+// anything. Gateware and firmware references: docs/HERMES.md, "The IO board
+// status read".
+inline constexpr std::uint8_t kIoBoardRegInputPins = 6;
+inline constexpr std::uint32_t kIoBoardStatusReadData =
+    (std::uint32_t(kI2cCookieRead) << 24)
+    | (std::uint32_t(kI2cStopAtEnd | kIoBoardI2cAddr) << 16)
+    | (std::uint32_t(kIoBoardRegInputPins) << 8);
+
+struct IoBoardStatus {
+    std::uint8_t inputPins = 0;      // REG_INPUT_PINS: bit 0 EXTTR, bits 1..5 In1..In5
+    std::uint8_t antennaTuner = 0;   // REG_ANTENNA_TUNER: 0xEE send RF, 0 tuned, >= 0xF0 failed
+    std::uint8_t fault = 0;          // REG_FAULT: 0 = none; other codes are undefined
+    std::uint8_t firmwareMajor = 0;  // REG_FIRMWARE_MAJOR
+
+    // EXTTR is high on receive, low on transmit.
+    [[nodiscard]] constexpr bool receiving() const noexcept { return (inputPins & 0x01) != 0; }
+    // In1..In5; anything else is false.
+    [[nodiscard]] constexpr bool input(int n) const noexcept
+    {
+        return n >= 1 && n <= 5 && ((inputPins >> n) & 0x01) != 0;
+    }
+    // The board leaves bits 6..7 of REG_INPUT_PINS clear (they exist only in
+    // REG_IN_PINS, 168), and every HL2IOBoard firmware reports a major version
+    // of 1 or more, so a reply that breaks either is not from a board: most
+    // likely an empty bus read as 0xFF or 0x00.
+    [[nodiscard]] constexpr bool fromBoard() const noexcept
+    {
+        return (inputPins & 0xC0) == 0 && firmwareMajor != 0;
+    }
+};
+
+[[nodiscard]] constexpr IoBoardStatus decodeIoBoardStatus(std::uint32_t replyData) noexcept
+{
+    return {static_cast<std::uint8_t>(replyData & 0xFF),
+            static_cast<std::uint8_t>((replyData >> 8) & 0xFF),
+            static_cast<std::uint8_t>((replyData >> 16) & 0xFF),
+            static_cast<std::uint8_t>((replyData >> 24) & 0xFF)};
+}
+
 // A C&C bank addressing an arbitrary six-bit register, for Hl2ControlRequest's
 // runtime-named registers. Prefer the named encoders. The address is masked to
 // 0x3F so it cannot alias into RQST or MOX.
@@ -460,12 +504,16 @@ struct Hl2Telemetry {
     int adcOverloadSamples = 0;
     int adcWindowMs = 0;
 
-    // Maximum of the publish window's non-ACK RADDR-1 DATA[15:0] (the radio
-    // re-samples forward power every other EP6 response, control.v:261, so the
-    // last value alone misses speech peaks); nullopt when the window saw none.
-    // `forwardPowerSamples` counts them; the window length is `adcWindowMs`.
+    // Maximum of the publish window's non-ACK RADDR-1 DATA[15:0] over responses
+    // that carry a measurement (ForwardPowerWindow::observe skips the rest; the
+    // radio re-samples forward power every other EP6 response, control.v:261, so
+    // the last value alone misses speech peaks); nullopt when the window saw none.
+    // `forwardPowerSamples` counts the ones kept; the window length is `adcWindowMs`.
     std::optional<int> forwardPowerPeakRaw;
     int forwardPowerSamples = 0;
+    // The window's RADDR-1 responses skipped as isNonMeasurementRaddr1(). A unit
+    // whose temperature word is always 0 has every response here and no peak.
+    int forwardPowerSkipped = 0;
 
     // Merge a decoded response in, leaving untouched fields alone. ACK
     // responses contribute only PTT: their raddr is the command address and
@@ -473,16 +521,33 @@ struct Hl2Telemetry {
     void apply(const Ep6Response& r) noexcept;
 };
 
+// A non-ACK RADDR-1 response whose temperature word, DATA[31:16], is 0 is not a
+// measurement. hl2TemperatureCelsius puts 0 C at 0.5 V, so 0 counts is 0 V,
+// which no working sensor reads. Gateware 74.2 sends a few such responses just
+// after the T/R switch-over, and their forward word can be far above the carrier.
+[[nodiscard]] constexpr bool isNonMeasurementRaddr1(const Ep6Response& r) noexcept
+{
+    return !r.ack && r.raddr == 0x01 && (r.data >> 16) == 0;
+}
+
 // Accumulator for Hl2Telemetry::forwardPowerPeakRaw: the maximum of DATA[15:0]
-// over non-ACK RADDR-1 responses. Kept here so the rule is testable without a socket.
+// over non-ACK RADDR-1 responses that carry a measurement. Kept here so the
+// rule is testable without a socket.
 struct ForwardPowerWindow {
     std::optional<int> peak;
     int samples = 0;
+    int skipped = 0;
 
     void observe(const Ep6Response& r) noexcept
     {
         if (r.ack || r.raddr != 0x01)
             return;
+        // Only this window skips it: Hl2Telemetry::apply() still takes both
+        // halves of the word as last values.
+        if (isNonMeasurementRaddr1(r)) {
+            ++skipped;
+            return;
+        }
         const int v = static_cast<int>(r.data & 0xFFFF);
         if (!peak || v > *peak)
             peak = v;
@@ -492,6 +557,7 @@ struct ForwardPowerWindow {
     {
         peak.reset();
         samples = 0;
+        skipped = 0;
     }
 };
 

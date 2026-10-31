@@ -81,6 +81,12 @@ public:
     // status visible for the whole connected session, independent of whether
     // the operator dismissed the explanatory notice.
     void setExperimentalRadioFamily(const QString& familyName);
+    // A newer AetherSDR release, or empty to clear. Non-empty shows the
+    // UPDATE pill after the wordmark; clicking it emits updateBadgeClicked().
+    void setUpdateAvailable(const QString& latestVersion);
+    // An update downloaded and ready to install (empty: none). The pill
+    // then reads RESTART TO UPDATE, whatever setUpdateAvailable() says.
+    void setUpdateStaged(const QString& version);
 
     // Status-bar transmit timer (left of the PC Audio button). Driven by
     // RadioModel::operatorTransmitChanged — runs only for operator MOX/PTT/VOX
@@ -139,6 +145,7 @@ signals:
     void minimalModeRequested();
     void minimalModeWindowedExitRequested();
     void multiFlexClicked();
+    void updateBadgeClicked();
     // Emitted when the blink setting changes (e.g. via right-click) so the
     // View menu checkbox can stay in sync.
     void blinkEnabledChanged(bool enabled);
@@ -198,6 +205,10 @@ private:
     BrandMark*   m_brand{nullptr};
     RadioTabBar* m_radioTabs{nullptr};
     QLabel*      m_experimentalRadioLabel{nullptr};
+    QPushButton* m_updateBadge{nullptr};
+    QString m_stagedVersion;
+    QString      m_updateVersion;
+    void refreshUpdateBadge();
     QLabel*      m_otherTxLabel{nullptr};
     QPushButton* m_mfBtn{nullptr};
     QPushButton* m_pcBtn{nullptr};
@@ -237,6 +248,7 @@ private:
     static constexpr int kHeartbeatAlarmThreshold = 3;
     int          m_missedBeats{0};
     bool         m_blinkEnabled{true};  // persisted via AppSettings "HeartbeatBlinkEnabled"
+    QList<QString> m_connectedRadioIds;
     bool         m_discovering{false};  // solid amber while waiting for connection
     QString      m_throttleFlashColor; // empty = default green; set while adaptive throttle is active
     QString      m_pcAudioInputDevice;

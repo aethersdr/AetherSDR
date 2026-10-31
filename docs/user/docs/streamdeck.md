@@ -61,6 +61,8 @@ None, Toggle TX (MOX), Toggle Tune, Toggle RIT on/off, Toggle XIT on/off, Clear 
 
 Other choices: Slice Audio Volume, Headphone Volume, AGC Threshold, APF Level, CW Speed, RF Power, None.
 
+**Master Volume** and the **Volume Up (+5)** / **Volume Down (−5)** keys move the level you are hearing: this computer's audio with PC Audio on, the radio's own output (line out) with PC Audio off.
+
 ### Dial push actions
 
 | Dial | Default |
@@ -71,10 +73,6 @@ Other choices: Slice Audio Volume, Headphone Volume, AGC Threshold, APF Level, C
 | Encoder 4 push | None |
 
 Other choices: Toggle TX (MOX), Toggle Mute, Lock Slice.
-
-## Known issues
-
-- Volume up/down actions start from the saved master volume, not the level of the audio path you are hearing, so the first step can jump ([#6132](https://github.com/aethersdr/AetherSDR/issues/6132)).
 
 ## Troubleshooting
 

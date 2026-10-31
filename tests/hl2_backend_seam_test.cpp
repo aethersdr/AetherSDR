@@ -12,6 +12,9 @@
 #include "gui/ClientFftSmoothingGate.h"
 #include "core/AppSettings.h"
 
+#include "core/backends/hl2/Hl2TxLevelPolicy.h"
+
+#include "Hl2KeyOnRaddr1Fixture.h"
 #include "TestSettingsProfile.h"
 #include "TxTestAuthority.h"
 
@@ -20,14 +23,26 @@
 #include <QSignalSpy>
 #include <QStringList>
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <optional>
+#include <span>
 #include <string>
+#include <vector>
 
 namespace AetherSDR::hl2 {
 struct MetisClientTestAccess {
     static void setStreaming(MetisClient& c) { c.m_running = true; }
+    static void feedDatagram(MetisClient& c, std::span<const std::uint8_t> bytes)
+    {
+        c.handleDatagram(bytes);
+    }
+    static void holdEmit(MetisClient& c) { c.m_telemetryEmitClock.restart(); }
+    static void dueEmit(MetisClient& c) { c.m_telemetryEmitClock.invalidate(); }
+    static qint64 emitIntervalMs() { return MetisClient::kTelemetryMinIntervalMs; }
 };
 struct Hl2TxGateTestAccess {
     // Emit a MetisClient signal on its own thread, then deliver the backend's
@@ -76,6 +91,7 @@ struct Hl2TxGateTestAccess {
     static bool keyed(const Hl2Backend& b) { return b.m_keyed; }
     static void setKeyedFlag(Hl2Backend& b, bool keyed) { b.m_keyed = keyed; }
     static void publish(Hl2Backend& b, const Hl2Telemetry& t) { b.publishTelemetry(t); }
+    static double fwdPeakReleaseAlpha() { return Hl2Backend::kFwdPeakReleaseAlpha; }
     static bool hangArmed(const Hl2Backend& b) { return b.m_cwHangTimer->isActive(); }
     // Stops the timer first, so this proves what the callback decides, not
     // whether the timer was stopped.
@@ -471,6 +487,225 @@ static void forwardPowerWindowPeakWhileKeyed()
     Access::setKeyedFlag(b, false);
 }
 
+// The Radio Health row for responses the peak window skipped: a session total,
+// absent until a RADDR-1 response arrived. No radio: telemetry is handed in.
+static void forwardPowerSkippedHealthRow()
+{
+    static const char* const kRow = "forwardPowerSkippedTotal";
+    const auto publish = [](Hl2Backend& b, int kept, int skipped) {
+        hl2::Hl2Telemetry t;
+        t.forwardPowerRaw = 1200;
+        if (kept > 0)
+            t.forwardPowerPeakRaw = 1300;
+        t.forwardPowerSamples = kept;
+        t.forwardPowerSkipped = skipped;
+        Access::publish(b, t);
+    };
+    Hl2Backend b;
+    check(b.healthSnapshot().order.contains(QString::fromLatin1(kRow))
+              && !health(b, kRow).isValid(),
+          "skipped row: declared, and not reported before any RADDR-1 response");
+    Access::publish(b, hl2::Hl2Telemetry{});
+    check(!health(b, kRow).isValid(),
+          "skipped row: telemetry without a RADDR-1 response leaves it not reported");
+    publish(b, 19, 0);
+    check(health(b, kRow).isValid() && health(b, kRow).toULongLong() == 0,
+          "skipped row: 0 once responses arrived and none was skipped");
+    publish(b, 17, 2);
+    check(health(b, kRow).toULongLong() == 2, "skipped row: counts a window's skipped responses");
+    publish(b, 19, 0);
+    check(health(b, kRow).toULongLong() == 2,
+          "skipped row: a session total, kept across a window that skipped nothing");
+    publish(b, 0, 19);
+    check(health(b, kRow).toULongLong() == 21,
+          "skipped row: a window of skipped responses only adds all of them");
+
+    // A unit whose temperature word reads 0 from the first response on.
+    Hl2Backend dead;
+    publish(dead, 0, 19);
+    check(health(dead, kRow).isValid() && health(dead, kRow).toULongLong() == 19,
+          "skipped row: reported when every response so far was skipped");
+}
+
+// What one key-on replay published, window by window.
+struct KeyOnReplay {
+    int windows = 0;
+    int peakDiffersFromPlainMax = 0;   // windows whose peak is not the plain maximum
+    int plainTop = -1;                 // highest forward word fed, before any skip
+    double shownMaxW = 0.0;            // highest TX:FWDPWR of the over
+    double shownLastW = 0.0;
+    double plainMaxHeldW = 0.0;        // the same over through a plain window maximum
+    qulonglong skippedShown = 0;       // Radio Health's skipped total after the replay
+    bool skippedReported = false;
+};
+
+// Recorded RADDR-1 responses through MetisClient's receive loop and
+// Hl2Backend::publishTelemetry, keyed, with the first emit `phaseMs` after
+// key-on and one every publish interval after it. No socket, no transmitter.
+static KeyOnReplay replayKeyOn(std::span<const Hl2KeyOnRaddr1> rows, int phaseMs)
+{
+    using MetisAccess = hl2::MetisClientTestAccess;
+    hl2::MetisClient client;
+    MetisAccess::setStreaming(client);
+    Hl2Backend b;
+    Access::setKeyedFlag(b, true);
+    QSignalSpy meters(&b, &IRadioBackend::meterUpdate);
+
+    KeyOnReplay out;
+    int plainMax = -1;
+    double plainHeldW = 0.0;
+    QObject::connect(&client, &hl2::MetisClient::telemetryUpdated,
+                     [&](const hl2::Hl2Telemetry& t) {
+        ++out.windows;
+        if (t.forwardPowerPeakRaw.value_or(-1) != plainMax)
+            ++out.peakDiffersFromPlainMax;
+        out.plainTop = std::max(out.plainTop, plainMax);
+        meters.clear();
+        Access::publish(b, t);
+        for (const QList<QVariant>& args : meters) {
+            if (args.at(0).toString() == QStringLiteral("TX:FWDPWR"))
+                out.shownLastW = std::pow(10.0, args.at(1).toDouble() / 10.0) / 1000.0;
+        }
+        out.shownMaxW = std::max(out.shownMaxW, out.shownLastW);
+        plainHeldW = hl2::fwdPeakHoldStep(plainHeldW, hl2::directionalWatts(plainMax),
+                                          /*keyed=*/true, Access::fwdPeakReleaseAlpha());
+        out.plainMaxHeldW = std::max(out.plainMaxHeldW, plainHeldW);
+        plainMax = -1;
+    });
+
+    const std::int64_t intervalUs = MetisAccess::emitIntervalMs() * 1000;
+    std::int64_t dueUs = std::int64_t{phaseMs} * 1000;
+    std::uint32_t seq = 0;
+    for (const Hl2KeyOnRaddr1& row : rows) {
+        std::vector<std::uint8_t> pkt(hl2::kUsbPacketSize, 0);
+        pkt[0] = 0xEF; pkt[1] = 0xFE; pkt[2] = 0x01; pkt[3] = 0x06;
+        pkt[6] = static_cast<std::uint8_t>((seq >> 8) & 0xFF);
+        pkt[7] = static_cast<std::uint8_t>(seq & 0xFF);
+        ++seq;
+        // Frame 1 carries the RADDR-1 response, frame 2 an empty RADDR-3 slot.
+        const std::size_t f1 = 8;
+        const std::size_t f2 = 8 + hl2::kFrameSize;
+        pkt[f1] = pkt[f1 + 1] = pkt[f1 + 2] = 0x7F;
+        pkt[f1 + 3] = 0x01 << 3;
+        pkt[f1 + 4] = static_cast<std::uint8_t>(row.temperature >> 8);
+        pkt[f1 + 5] = static_cast<std::uint8_t>(row.temperature & 0xFF);
+        pkt[f1 + 6] = static_cast<std::uint8_t>(row.forward >> 8);
+        pkt[f1 + 7] = static_cast<std::uint8_t>(row.forward & 0xFF);
+        pkt[f2] = pkt[f2 + 1] = pkt[f2 + 2] = 0x7F;
+        pkt[f2 + 3] = 0x03 << 3;
+
+        plainMax = std::max(plainMax, static_cast<int>(row.forward));
+        if (row.usAfterMox >= dueUs) {
+            while (row.usAfterMox >= dueUs)
+                dueUs += intervalUs;
+            MetisAccess::dueEmit(client);
+        } else {
+            MetisAccess::holdEmit(client);
+        }
+        MetisAccess::feedDatagram(client, pkt);
+    }
+    Access::setKeyedFlag(b, false);
+    const QVariant skipped = health(b, "forwardPowerSkippedTotal");
+    out.skippedReported = skipped.isValid();
+    out.skippedShown = skipped.toULongLong();
+    return out;
+}
+
+// TX:FWDPWR at key-on, replayed from recorded RADDR-1 words (Hl2KeyOnRaddr1Fixture.h)
+// at ten phases of the publish window. No transmitter, no radio: replayKeyOn
+// sets only the backend's keyed flag, which selects the window-peak branch.
+static void forwardPowerKeyOnReplay()
+{
+    static constexpr int kPhasesMs[] = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
+
+    // 1. The 40 % tone over holds one forward word, 3.2 ms after key-on, far
+    // above anything the carrier reaches. The gauge must show the carrier.
+    {
+        int carrierMax = 0;
+        int headMax = 0;
+        for (const Hl2KeyOnRaddr1& row : kHl2KeyOnTone40Lone) {
+            if (row.usAfterMox >= 100'000)
+                carrierMax = std::max(carrierMax, static_cast<int>(row.forward));
+            else if (row.usAfterMox >= 0 && row.usAfterMox < 10'000)
+                headMax = std::max(headMax, static_cast<int>(row.forward));
+        }
+        qulonglong marked = 0;
+        for (const Hl2KeyOnRaddr1& row : kHl2KeyOnTone40Lone)
+            marked += row.temperature == 0 ? 1 : 0;
+        const double carrierW = hl2::directionalWatts(carrierMax);
+        check(carrierMax > 1000 && headMax > carrierMax + 1000,
+              "control: the recording holds a forward word in the first 10 ms far above its carrier");
+        bool shownIsCarrier = true;
+        bool plainMaxShowsIt = true;
+        bool gaugeAlive = true;
+        bool skippedCounted = true;
+        double worstShownW = 0.0;
+        double worstPlainW = 0.0;
+        for (const int phase : kPhasesMs) {
+            const KeyOnReplay r = replayKeyOn(kHl2KeyOnTone40Lone, phase);
+            shownIsCarrier = shownIsCarrier && r.windows >= 9 && r.shownMaxW <= carrierW + 1e-9;
+            plainMaxShowsIt = plainMaxShowsIt && r.plainMaxHeldW > 2.0 * carrierW;
+            gaugeAlive = gaugeAlive && r.shownLastW > 0.9 * carrierW;
+            skippedCounted = skippedCounted && r.skippedReported && r.skippedShown == marked;
+            worstShownW = std::max(worstShownW, r.shownMaxW);
+            worstPlainW = std::max(worstPlainW, r.plainMaxHeldW);
+        }
+        std::fprintf(stderr, "       tone 40 %%: carrier maximum %.3f W; shown at most %.3f W;"
+                             " a plain window maximum shows %.3f W\n",
+                     carrierW, worstShownW, worstPlainW);
+        check(plainMaxShowsIt,
+              "control: a plain window maximum displays that word, over twice the carrier");
+        check(shownIsCarrier,
+              "key-on replay, tone 40 %: TX:FWDPWR never exceeds the carrier's own maximum");
+        check(gaugeAlive, "key-on replay, tone 40 %: the gauge ends the first second on the carrier");
+        check(marked > 0 && skippedCounted,
+              "key-on replay, tone 40 %: Radio Health counts the recording's marked responses, no more");
+    }
+
+    // 2. TUNE at 100 % and at 10 %: every window publishes the plain maximum,
+    // so the rise and the level are what they were, window for window.
+    const auto unchanged = [&](std::span<const Hl2KeyOnRaddr1> rows, const char* what) {
+        bool same = true;
+        double shownW = 0.0;
+        for (const int phase : kPhasesMs) {
+            const KeyOnReplay r = replayKeyOn(rows, phase);
+            same = same && r.windows >= 3 && r.peakDiffersFromPlainMax == 0
+                && std::abs(r.shownMaxW - hl2::directionalWatts(r.plainTop)) < 1e-9
+                && std::abs(r.shownMaxW - r.plainMaxHeldW) < 1e-9;
+            shownW = std::max(shownW, r.shownMaxW);
+        }
+        std::fprintf(stderr, "       %s: shown at most %.3f W\n", what, shownW);
+        check(same, what);
+    };
+    unchanged(kHl2KeyOnTune100,
+              "key-on replay, TUNE 100 %: every window is the plain maximum, at every phase");
+    unchanged(kHl2KeyOnTune10,
+              "key-on replay, TUNE 10 %: every window is the plain maximum, at every phase");
+
+    // 3. SYNTHETIC, not a recording: a speech-like envelope at 190 responses a
+    // second with one-sample peaks between quiet neighbours, and a live
+    // temperature word. Every such peak must still win its window.
+    {
+        std::vector<Hl2KeyOnRaddr1> speech;
+        for (int i = 0; i < 380; ++i) {
+            const bool peak = (i % 23) == 11;
+            const int forward = peak ? 2200 + (i * 37) % 1200 : 150 + (i * 53) % 200;
+            speech.push_back({i * 5263, 1050, static_cast<std::uint16_t>(forward)});
+        }
+        bool caught = true;
+        bool noneSkipped = true;
+        for (const int phase : kPhasesMs) {
+            const KeyOnReplay r = replayKeyOn(speech, phase);
+            noneSkipped = noneSkipped && r.skippedReported && r.skippedShown == 0;
+            caught = caught && r.windows >= 19 && r.peakDiffersFromPlainMax == 0
+                && r.plainTop >= 2200
+                && std::abs(r.shownMaxW - hl2::directionalWatts(r.plainTop)) < 1e-9;
+        }
+        check(caught, "synthetic speech: every one-sample peak between polls still wins its window");
+        check(noneSkipped, "synthetic speech: Radio Health reports 0 skipped responses");
+    }
+}
+
 static void panAveragingSeam()
 {
     // FFT AVG through the seam verbs RadioModel calls (RFC #5782 q2): stored
@@ -524,6 +759,8 @@ int main(int argc, char** argv)
     driveGateHealthRows();
     notchIdsAreNeverReused();
     forwardPowerWindowPeakWhileKeyed();
+    forwardPowerSkippedHealthRow();
+    forwardPowerKeyOnReplay();
     panAveragingSeam();
 
     std::fprintf(stderr, "hl2_backend_seam_test: %s\n",

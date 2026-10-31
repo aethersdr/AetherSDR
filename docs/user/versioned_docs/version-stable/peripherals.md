@@ -10,7 +10,7 @@ description: "the station accessories it talks to directly, over the network or 
 the station accessories it talks to directly, over the network or a serial
 port, rather than through the radio. It covers the 4O3A Tuner Genius XL
 (TGXL), Power Genius XL (PGXL) and Antenna Genius (AG), the ShackSwitch, ACOM,
-SPE Expert, VK3AMP and Elecraft KPA1500 amplifiers, and the TelePost LP-100A
+SPE Expert, VK3AMP, Elecraft KPA1500 and RF-KIT amplifiers, the Elecraft KAT500 tuner, and the TelePost LP-100A
 wattmeter.
 
 Each device has its own applet once it is connected. Those are described on
@@ -29,11 +29,19 @@ The **Devices** list sits on the left and the selected device's settings on
 the right. Each row shows the device name, its address, and where its data is
 coming from:
 
+<img src="/img/screens/radio-setup-peripherals.png" width="679" alt="Peripherals page. The Devices list is empty, with Add and a dimmed Remove button below it, a Reconnect automatically checkbox and a Connection Help button. The right side reads No peripherals added. Choose Add to configure a device." />
+
+*Radio Setup, Peripherals page, before any device is added.*
+
+<img src="/img/screens/radio-setup-peripherals-add.png" width="180" alt="Peripherals Add menu: Tuner Genius XL, Power Genius XL, Antenna Genius, ShackSwitch, ACOM Amplifier, SPE Expert Amplifier, VK3AMP Amplifier, Elecraft KPA1500 and LP-100A Meter." />
+
+*The Add menu on the Peripherals page: every device type AetherSDR can configure.*
+
 | Word | Meaning |
 |---|---|
-| `● DIRECT` | Connected directly to the device |
-| `● RADIO` | Not connected directly, but the radio relays the device (TGXL and PGXL only) |
-| `● OFFLINE` | No connection |
+| `● DIRECT` | Connected directly to the device (green dot) |
+| `● RADIO` | Not connected directly, but the radio relays the device (TGXL and PGXL only; yellow dot) |
+| `● OFFLINE` | No connection (orange dot) |
 | `Connecting…` | A connection attempt is in progress |
 
 The TGXL, PGXL and Antenna Genius applets use the same words. A device that
@@ -47,7 +55,7 @@ that is always visible.
 ### Adding a device
 
 1. Click **Add** and pick a device type. A type already in the list stays in
-   the menu, greyed, marked "(already added)".
+   the menu, grayed, marked "(already added)".
 2. Add only creates the entry and selects it. Nothing connects yet.
 3. Enter the address (and port, or serial port) and click **Connect**.
 
@@ -64,6 +72,9 @@ Serial-capable devices have a **Connection Type** choice, an
 Ports**. The ShackSwitch page has a **⚙ Web UI** button that opens the
 device's own web interface. Connection defaults for every device type are
 under [Reference](#reference).
+
+
+The **Elecraft KXPA100** page combines amplifier and optional tuner controls. Click **Use with current radio** to associate it explicitly; this enables its VU/PWR metering and applet frequency context for that radio. TX Controls remains radio-side. The **Advanced** section provides antenna configuration, native backup/restore, faults and memory tools. See [KXPA100 Amplifier and Tuner](./kxpa100-amplifier-control.md).
 
 ### Connecting automatically
 
@@ -102,7 +113,7 @@ device accepts it.
   ("Code for this session only").
 - The code is hidden unless you click **Show**, is concealed again when you
   change page, and is kept out of logs, the automation bridge and widget
-  grabs. **Clear code** deletes the saved code.
+  grabs. **Clear Code** deletes the saved code.
 - After repeated failures with a saved code, the device is blocked:
   "Authorization blocked; enter a code and click Connect to retry".
 - If direct authentication fails, a TGXL or PGXL falls back to the radio
@@ -148,9 +159,9 @@ Docked in the applet panel it is a compact tile:
 
 Popped out, or placed on the [Workspace Canvas](./workspace-canvas.md), the applet lays itself out
 like the amplifier's front panel: larger meters, a status strip for each RF
-port showing its band, bias profile and the radio feeding it, a **STBY** key,
-and a fan key that cycles `S` / `C` / `B`. The port carrying transmit is
-outlined. In standby a single banner replaces both strips. A port with no band
+port showing its band, bias profile and the radio feeding it, **STBY** and
+**MEffA** keys, and a fan key that cycles `S` / `C` / `B`. The port carrying
+transmit is outlined. In standby a single banner replaces both strips. A port with no band
 reads `N/A`, meaning nothing is driving it.
 
 The fan control, MEffA, port detail and the voltages need the **direct**
@@ -159,7 +170,12 @@ operate state. Meters update at about 60 Hz while transmitting and 4 Hz while
 receiving.
 
 **MEffA** is the amplifier's Maximum Efficiency Algorithm: lit while it is
-optimising, shown in a standby style while the PA idles in class AAB.
+optimizing, shown in a standby style while the PA idles in class AAB.
+
+While a PGXL is present, the **AMP** indicator in the status bar shows its
+state and switches it between OPERATE and STANDBY. Click it, or Tab to it and
+press Return or Enter. Screen readers announce it as a button with its
+state.
 
 ## Using the Antenna Genius applet (AG)
 
@@ -191,6 +207,7 @@ The **AG** applet (Antennas & Switching) controls a 4O3A Antenna Genius.
 | SPE Expert Amplifier | Serial (115200 8N1) or a ser2net host | 7000 |
 | VK3AMP Amplifier | TCP control, UDP telemetry | 5005 (UDP 5010) |
 | Elecraft KPA1500 | TCP | 1500 |
+| RF-KIT Amplifier | HTTP (REST/JSON) | 8080 |
 | LP-100A Meter | Serial (115200 8N1) or a ser2net host in raw mode | 2000 |
 
 ### Settings
@@ -199,14 +216,13 @@ The TGXL, PGXL, Antenna Genius and ShackSwitch addresses keep their own keys
 (`TGXL_ManualIp`, `PGXL_ManualIp`, `AG_ManualIp`, `SS_ManualIp` and the
 matching port keys). The device list, **Reconnect automatically**, the
 per-device toggles (`Peripherals.<id>.AutoConnect`, ids `tgxl`, `pgxl`, `ag`,
-`shackswitch`) and the ACOM, SPE, VK3AMP, KPA1500 and LP-100A connection
+`shackswitch`) and the ACOM, SPE, VK3AMP, KPA1500, RF-KIT and LP-100A connection
 settings live in the `Peripherals` document in `AetherSDR.db`. Access codes
 live only in the OS keychain. See [Settings and Backups](./settings-and-backups.md).
 
 ## Known issues
 
 - The AMP applet stays hidden for a PGXL connected directly by its IP address unless the radio also reports the amplifier ([#6010](https://github.com/aethersdr/AetherSDR/issues/6010)).
-- With a PGXL and TGXL on the local network, the AMP applet can show no PWR or SWR while transmitting, although Id is shown ([#4805](https://github.com/aethersdr/AetherSDR/issues/4805)).
 - A PGXL reached directly over the internet accepts its access code, shows Connected, then drops straight away ([#6222](https://github.com/aethersdr/AetherSDR/issues/6222)).
 - TUNE can fail on a remote FLEX-8600 while the Genius peripherals are connected in AetherSDR ([#6001](https://github.com/aethersdr/AetherSDR/issues/6001)).
 - MEffA is not restored when AetherSDR starts; turn it on again each session ([#5956](https://github.com/aethersdr/AetherSDR/issues/5956)).
@@ -254,6 +270,8 @@ The fields are locked while the device is connected.
 - [Radio Setup](./radio-setup.md)
 - [Amplifiers](./amplifiers.md)
 - [TGXL Tuner Control](./tgxl-tuner-control.md)
+- [KAT500 Tuner Control](./kat500-tuner-control.md)
+- [KXPA100 Amplifier and Tuner](./kxpa100-amplifier-control.md)
 - [ShackSwitch](./shackswitch.md)
 - [Green Heron Everyware](./green-heron-everyware.md)
 - [AetherSweep](./aethersweep.md)

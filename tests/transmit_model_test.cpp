@@ -1,3 +1,4 @@
+#include "ModelControlWireSpy.h"
 #include "models/TransmitModel.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/ClientQuindarTone.h"
@@ -38,8 +39,7 @@ int main(int argc, char** argv)
     TransmitModel tx;
     QStringList commands;
     QStringList blockedMessages;
-    QObject::connect(&tx, &TransmitModel::commandReady,
-                     [&commands](const QString& cmd) { commands.append(cmd); });
+    const auto wireEncoder1 = modelControlEncoder(&tx, [&commands](const QString& cmd) { commands.append(cmd); });
     QObject::connect(&tx, &TransmitModel::tuneCommandIssued,
                      [&commands](bool on) { commands.append(on ? "intent:tune:on" : "intent:tune:off"); });
     QObject::connect(&tx, &TransmitModel::moxCommandIssued,
@@ -448,8 +448,7 @@ int main(int argc, char** argv)
     {
         TransmitModel cw;
         QStringList cwCmds;
-        QObject::connect(&cw, &TransmitModel::commandReady,
-                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+        const auto wireEncoder2 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
 
         // Hold off (default): the radio walks break_in_delay down on a speed
         // change and the status path adopts it verbatim — nothing on the wire.
@@ -478,8 +477,7 @@ int main(int argc, char** argv)
     {
         TransmitModel cw;
         QStringList cwCmds;
-        QObject::connect(&cw, &TransmitModel::commandReady,
-                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+        const auto wireEncoder3 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
 
         cw.setCwDelay(48);                 // operator commits a delay above QSK
         cw.setHoldBreakInDelay(true);
@@ -535,8 +533,7 @@ int main(int argc, char** argv)
     {
         TransmitModel cw;
         QStringList cwCmds;
-        QObject::connect(&cw, &TransmitModel::commandReady,
-                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+        const auto wireEncoder4 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
 
         cw.setHoldBreakInDelay(true);
         cw.setCwDelay(0);
@@ -552,8 +549,7 @@ int main(int argc, char** argv)
     {
         TransmitModel cw;
         QStringList cwCmds;
-        QObject::connect(&cw, &TransmitModel::commandReady,
-                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+        const auto wireEncoder5 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
         QList<bool> holdEdges;
         QObject::connect(&cw, &TransmitModel::holdBreakInDelayChanged,
                          [&holdEdges](bool on) { holdEdges.append(on); });
@@ -662,8 +658,7 @@ int main(int argc, char** argv)
     {
         TransmitModel cw;
         QStringList cwCmds;
-        QObject::connect(&cw, &TransmitModel::commandReady,
-                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+        const auto wireEncoder6 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
 
         cw.setHoldBreakInDelay(true);
         cw.setCwDelay(300);               // committed for radio A's session
@@ -753,6 +748,53 @@ int main(int argc, char** argv)
         freshTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_FAIL_BYPASS"); }));
         ok &= expect(failures.isEmpty(),
                      "Initial status FailBypass without InProgress does not emit atuTuneFailed");
+    }
+
+    // PTT Mic Override (#6442): v4.3 firmware reports it, earlier firmware never
+    // does. The presence latch is what tells the two apart, so it must fire on
+    // the 0 default even though the value does not change.
+    {
+        TransmitModel pttTx;
+        int stateEdges = 0;
+        QObject::connect(&pttTx, &TransmitModel::stateChanged, [&stateEdges] { ++stateEdges; });
+        ok &= expect(!pttTx.havePttMicOverride() && !pttTx.pttMicOverride(),
+                     "PTT mic override is unreported before any transmit status");
+        pttTx.applyChanges(td([](TransmitDelta& d) { d.rfPower = 50; }));
+        ok &= expect(!pttTx.havePttMicOverride(),
+                     "pre-4.3 transmit status without the key leaves it unreported");
+        stateEdges = 0;
+        pttTx.applyChanges(td([](TransmitDelta& d) { d.pttMicOverride = false; }));
+        ok &= expect(pttTx.havePttMicOverride() && !pttTx.pttMicOverride() && stateEdges == 1,
+                     "a reported 0 default latches the key and announces it");
+        pttTx.applyChanges(td([](TransmitDelta& d) { d.pttMicOverride = true; }));
+        ok &= expect(pttTx.pttMicOverride(), "the radio's echo is adopted");
+        pttTx.resetState();
+        ok &= expect(!pttTx.havePttMicOverride() && !pttTx.pttMicOverride(),
+                     "a session reset forgets the radio's PTT mic override");
+    }
+
+    // An applied CW pitch announces cwPitchReported before cwPitchChanged, and a
+    // repeat of the held value is still announced; the CW decoder's range rule
+    // depends on both. A local setter announces only the change.
+    {
+        TransmitModel pitchTx;
+        QStringList order;
+        QObject::connect(&pitchTx, &TransmitModel::cwPitchReported,
+                         [&order](int hz) { order.append(QStringLiteral("reported:%1").arg(hz)); });
+        QObject::connect(&pitchTx, &TransmitModel::cwPitchChanged,
+                         [&order](int hz) { order.append(QStringLiteral("changed:%1").arg(hz)); });
+        // CONSTRUCTED pitches: they exercise the signal order only.
+        pitchTx.applyChanges(td([](TransmitDelta& d) { d.cwPitch = 800; }));
+        ok &= expect(order == QStringList{"reported:800", "changed:800"},
+                     "an applied CW pitch announces the report before the change");
+        order.clear();
+        pitchTx.applyChanges(td([](TransmitDelta& d) { d.cwPitch = 800; }));
+        ok &= expect(order == QStringList{"reported:800"},
+                     "a repeated CW pitch is announced as a report without a change");
+        order.clear();
+        pitchTx.setCwPitch(700);
+        ok &= expect(order == QStringList{"changed:700"},
+                     "a local CW pitch change is not announced as a report");
     }
 
     return ok ? 0 : 1;

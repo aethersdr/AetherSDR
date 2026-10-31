@@ -31,6 +31,10 @@ If no runtime pack has been published for your GPU's architecture, BNR disables 
 
 ## Setup
 
+<img src="/img/screens/bnr-panel.png" width="720" alt="AetherRX window with the BNR tab open. The NVIDIA AFX panel describes GPU-accelerated AI noise removal, shows Status Not installed, an Intensity slider at 100 and a Download (~1 GB) button, with an empty Installed Components list below and the status line No method running." />
+
+*AetherRX with BNR selected on a computer without the NVIDIA AFX runtime installed.*
+
 1. Open **Settings → AetherRX...** (or click the **AetherRX** button on the VFO flag's DSP tab) and go to the **AetherNR** tab.
 2. Select **BNR** in the method row. The BNR page shows the **NVIDIA AFX** panel.
 3. Click **Download (~1 GB)**. AetherSDR detects your GPU's architecture and fetches the matching pack, verifying every file by SHA-256. The **Installed components** list shows progress, then the installed versions.
@@ -71,13 +75,13 @@ BNR uses NVIDIA software and an NVIDIA denoiser model, governed by the NVIDIA So
 
 ## Troubleshooting
 
-### BNR is greyed out: "BNR requires an NVIDIA RTX 40-series or later GPU"
+### BNR is grayed out: "BNR requires an NVIDIA RTX 40-series or later GPU"
 
 Your computer has no NVIDIA GPU, or the GPU is older than the RTX 40-series.
 
 1. Use **DFNR** instead; it runs on any CPU.
 
-### BNR is greyed out: "No BNR pack for your GPU … yet"
+### BNR is grayed out: "No BNR pack for your GPU … yet"
 
 Your GPU is new enough, but no runtime pack has been published for its architecture.
 
@@ -91,9 +95,24 @@ You are on macOS, or using a build compiled without BNR (`-DENABLE_NVIDIA_AFX=OF
 
 ### The download fails
 
-The connection dropped, or there isn't enough free disk space for the pack.
+The connection dropped or stalled for 30 seconds, or there isn't enough free disk space for the pack. The log shows `NvidiaAfxPack: install failed:` with the reason.
 
 1. Check your internet connection.
+2. Make sure about 1 GB of disk space is free.
+3. Click the **Download** button again. Components that finished downloading are kept, so the download resumes.
+
+### The download fails with "checksum mismatch"
+
+A downloaded file is not the one this version of AetherSDR expects: it was altered on the way, or the server holds a different file. Downloading it again fetches the same file.
+
+1. Try again from a different network; a proxy or security software can alter downloads.
+2. If it still fails, file a bug report with your log.
+
+### The download finishes but BNR is not installed
+
+AetherSDR could not unpack the files, or the unpacked pack is incomplete. The log shows `NvidiaAfxPack: install failed:` followed by `extract failed`, `assembled pack missing`, `could not install into` or `install verification failed`.
+
+1. On Linux, install `unzip` and `zstd`: AetherSDR unpacks the pack with `unzip` and `tar --zstd`.
 2. Make sure about 1 GB of disk space is free.
 3. Click the **Download** button again.
 
@@ -105,7 +124,7 @@ This is expected. BNR is voice-only and switches off in CW, CWL, RTTY and DIGU/D
 
 ### Audio sounds hollow or robotic
 
-BNR is denoising too hard, or a radio-side NR stacked with it is adding its own artefacts.
+BNR is denoising too hard, or a radio-side NR stacked with it is adding its own artifacts.
 
 1. Lower **Intensity**.
 2. Lighten any radio-side NR stacked with BNR.

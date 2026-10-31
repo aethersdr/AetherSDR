@@ -1,20 +1,26 @@
 ---
-title: "PSK Reporter Map"
+title: "AetherMap"
 slug: "/psk-reporter-map"
-description: "The PSK Reporter map shows who is hearing your signal, and who you are hearing, using live reports from PSK Reporter."
+description: "AetherMap, the PSK Reporter map, shows who is hearing your signal, and who you are hearing, using live reports from PSK Reporter."
 ---
 
-The PSK Reporter map shows who is hearing your signal, and who you are hearing, using live reports from [PSK Reporter](https://pskreporter.info/). Reports are drawn on an OpenStreetMap world map or a 3D globe, coloured by mode, with optional great-circle paths, a day/night terminator, NASA night lights and weather radar. The same window also has a one-shot **WSPR beacon**.
+AetherMap, the PSK Reporter map, shows who is hearing your signal, and who you are hearing, using live reports from [PSK Reporter](https://pskreporter.info/). Reports are drawn on an OpenStreetMap world map or a 3D globe, colored by mode, with optional great-circle paths, a day/night terminator, NASA night lights and weather radar. The same window also has a one-shot **WSPR beacon**.
 
 ## Setup
 
-Open the map from **Tools → PSK Reporter…** Type your callsign in **Call:** to see who is hearing you and who you are hearing.
+Open the map from **Tools → AetherMap...** Type your callsign in **Call:** to see who is hearing you and who you are hearing.
+
+The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). It's a window of its own, with its own taskbar entry, so you can minimize it from the taskbar or park it on another monitor. **View → Frameless Window** does not apply to it. However you close it, the map stops fetching reports and weather radar, and a WSPR beacon that is armed or transmitting is canceled.
 
 ## Using the map
 
 ### Choosing reports
 
 The **Reports** group at the top of the left sidebar chooses what is shown:
+
+<img src="/img/screens/psk-reporter-sidebar.png" width="300" alt="AetherMap sidebar. WSPR beacon: TX call KK7GWY, Grid (blacked out), Band 20m, Reported 30 dBm, Offset 1500.0 Hz, Level -20 dBFS, a Transmit once button and an Idle status. Reports: Call KK7GWY, Band All, Mode All, Lookback 1 hour, All Callsigns unticked and Active monitors ticked. Band conditions: 80-40m Good, 30-20m Good, 17-15m Fair, 12-10m Poor. Map: Globe, Paths, Day/night (ticked), Dark map and a Map brightness slider at 100%, then City lights." />
+
+*AetherMap's sidebar: WSPR beacon, report filters, band conditions and map options. The grid square is blacked out.*
 
 | Control | What it does |
 |---|---|
@@ -28,7 +34,7 @@ The **Reports** group at the top of the left sidebar chooses what is shown:
 | **Paths** | Draw great-circle paths between the stations in each report |
 | **Day/night** | Shade the part of the world that is in darkness |
 
-Reports arrive from PSK Reporter's live feed, backed up by periodic polling, and are cached so the map is not empty when you reopen it. Markers are coloured by mode; the legend is in the status bar at the bottom. Hover or click a marker for a card with the station's details.
+Reports arrive from PSK Reporter's live feed, backed up by periodic polling, and are cached so the map is not empty when you reopen it. Markers are colored by mode; the legend is in the status bar at the bottom. Hover or click a marker for a card with the station's details.
 
 When a band-conditions forecast is available, a **Band conditions** group appears below Reports.
 
@@ -66,7 +72,7 @@ Tick **Weather overlay** to show precipitation on the map or globe. It is off by
 LibreWXR is the primary source. Each regional backup has its own checkbox and is used when LibreWXR is turned off or unavailable; turn LibreWXR off to see the regional radar feeds directly.
 
 - **Radar coverage** shades the radar sites and their nominal range.
-- **Intensity legend** shows the colour scale, with **Position at top** to move it.
+- **Intensity legend** shows the color scale, with **Position at top** to move it.
 - **Sources & licenses** explains each source and its terms.
 
 #### Playback
@@ -80,7 +86,7 @@ Press the play button to loop through past observations.
 
 Radar can be delayed or missing. **This overlay is not a substitute for official weather warnings.**
 
-If a weather or NASA server fails, AetherSDR backs off (60 seconds, then longer) and honours the server's `Retry-After`, so a busy map does not hammer a public service.
+If a weather or NASA server fails, AetherSDR backs off (60 seconds, then longer) and honors the server's `Retry-After`, so a busy map does not hammer a public service.
 
 ## Using the WSPR beacon
 

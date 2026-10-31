@@ -1,5 +1,6 @@
 #include "PanadapterApplet.h"
 #include "PanSliceTitle.h"
+#include "PanadapterHeader.h"
 #include "models/CwRxModel.h"
 #include "RttyDecodeSettings.h"
 #include "RttyDecoderSensitivity.h"
@@ -17,6 +18,7 @@
 #include "gui/CopyAssistSettings.h"
 #include "core/SettingsHelpers.h"
 
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QComboBox>
@@ -26,6 +28,7 @@
 #include <QLabel>
 #include <QDateTime>
 #include <QMenu>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QTextEdit>
@@ -71,56 +74,40 @@ void setDecoderInputHint(QLabel* label, const QString& hint, const QString& reas
 } // namespace
 
 PanadapterApplet::PanadapterApplet(QWidget* parent)
-    : QWidget(parent)
+    : CanonPan(parent)
 {
     theme::setContainer(this, QStringLiteral("applet/panadapter"));
-    auto* layout = new QVBoxLayout(this);
+    // Everything lives in the canon body, inside the hairline. Children are
+    // created there rather than reparented into it: the GPU SpectrumWidget
+    // (QRhiWidget) must never change parents.
+    QWidget* body = bodyWidget();
+    auto* layout = new QVBoxLayout(body);
     m_mainLayout = layout;
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // ── Title bar (16px gradient, matching applet style) ─────────────────
-    m_titleBar = new QWidget;
-    m_titleBar->setFixedHeight(16);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleBar, "QWidget { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-        "stop:0 {{color.text.disabled}}, stop:0.5 {{color.background.1}}, stop:1 #1a2a38); "
-        "border-bottom: 1px solid #0a1a28; }");
-    m_titleBar->installEventFilter(this);  // drag-to-move when floating
-    // Addressable for the automation bridge (#3646/#4864 pattern): the
-    // canvas live-move stream starts here, and a drag the bridge cannot
-    // aim at is a drag no smoke can regress-test.
-    m_titleBar->setAccessibleName(QStringLiteral("panTitleBar"));
-    auto* titleBar = m_titleBar;
+    // ── Spectrum widget (FFT + waterfall) ────────────────────────────────
+    // It runs to the top of the pan: the header below lies over its top
+    // PanadapterHeader::kHeight px, and the spectrum moves the overlay menu,
+    // dBm arrows and CW / RIT / XIT labels below it. The slice flags and the
+    // top-right readouts stay at the top and ride over the header.
+    m_spectrum = new SpectrumWidget(body);
+    m_spectrum->installEventFilter(this);  // pan activation; header placement
+    m_spectrum->setTopInset(PanadapterHeader::kHeight);
+    layout->addWidget(m_spectrum, 1);
 
-    auto* barLayout = new QHBoxLayout(titleBar);
-    barLayout->setContentsMargins(6, 1, 4, 1);
-    barLayout->setSpacing(2);
+    // ── Canon header over the spectrum: grip, slice title, pop-out, ─────
+    // ── maximize, close ──────────────────────────────────────────────────
+    // Transparent, so the spectrum renders underneath; see PanadapterHeader.
+    const PanadapterHeader header = PanadapterHeader::build(m_spectrum);
+    m_titleBar = header.titleBar;
+    m_titleBar->installEventFilter(this);  // drag-to-move when floating; placement
+    m_titleLabel = header.title;
+    m_headerButtons = header.buttons;
+    m_headerButtons->installEventFilter(this);  // placement
+    auto* buttonLayout = header.buttonRow;
 
-    // Drag grip dots (matching applet title bar style)
-    auto* grip = new QLabel(QString::fromUtf8("\xe2\x8b\xae\xe2\x8b\xae"));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(grip, "QLabel { background: transparent; color: {{color.text.label}}; font-size: 10px; }");
-    barLayout->addWidget(grip);
-
-    m_titleLabel = new QLabel;
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleLabel, "QLabel { background: transparent; color: {{color.text.secondary}}; "
-                                "font-size: 10px; font-weight: bold; }");
-    m_titleLabel->setTextFormat(Qt::RichText);  // slice letter may be HTML (#2606)
-    barLayout->addWidget(m_titleLabel);
-    barLayout->addStretch();
-
-    const QString btnStyle = QStringLiteral(
-        "QPushButton { background: transparent; color: #6a8090; "
-        "border: none; font-size: 9px; padding: 0; }"
-        "QPushButton:hover { color: #c8d8e8; }");
-
-    // Pop-out / Dock button (⬈ when docked, ↩ when floating)
-    m_popOutBtn = new QPushButton("\u2b08");  // ⬈
-    m_popOutBtn->setObjectName(QStringLiteral("panFloatToggle"));
-    m_popOutBtn->setAccessibleName(tr("Pop out panadapter"));
-    m_popOutBtn->setFixedSize(16, 14);
-    m_popOutBtn->setStyleSheet(btnStyle + "QPushButton { font-size: 11px; }");
-    m_popOutBtn->setToolTip(tr("Pop out panadapter"));
-    m_popOutBtn->hide();  // hidden in single-pan mode
+    m_popOutBtn = header.popOut;  // hidden in single-pan mode
     connect(m_popOutBtn, &QPushButton::clicked, this, [this]() {
         if (m_isFloating) {
             emit dockClicked();
@@ -128,36 +115,24 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
             emit popOutClicked();
         }
     });
-    barLayout->addWidget(m_popOutBtn);
-
-    // Maximize button (□)
-    m_maxBtn = new QPushButton("\u25a1");  // □
-    m_maxBtn->setFixedSize(16, 14);
-    m_maxBtn->setStyleSheet(btnStyle + "QPushButton { font-size: 11px; }");
-    m_maxBtn->setToolTip("Maximize panadapter");
-    m_maxBtn->hide();  // hidden in single-pan mode
+    m_maxBtn = header.maximize;   // hidden in single-pan mode
     connect(m_maxBtn, &QPushButton::clicked, this, [this]() {
         emit maximizeRequested(m_panId);
     });
-    barLayout->addWidget(m_maxBtn);
 
-    // Close button (×)
-    m_closeBtn = new QPushButton("\u00D7");
-    m_closeBtn->setFixedSize(16, 14);
-    m_closeBtn->setStyleSheet(btnStyle + "QPushButton { font-size: 11px; } QPushButton:hover { color: #ff4040; }");
-    m_closeBtn->setToolTip("Close panadapter");
-    m_closeBtn->hide();  // hidden in single-pan mode
-    connect(m_closeBtn, &QPushButton::clicked, this, [this]() {
+    // The canon close button, moved into the header at its 18 px (it is
+    // 26 px in a corner); hidden in single-pan mode.
+    placeCloseButtonIn(buttonLayout);
+    closeButton()->setFixedSize(18, 18);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(closeButton(),
+                                                        PanadapterHeader::styleSheet());
+    closeButton()->setAccessibleName(tr("Close panadapter"));
+    closeButton()->setToolTip(tr("Close panadapter"));
+    setCloseButtonVisible(false);
+    connect(this, &CanonSurface::closeRequested, this, [this]() {
         emit closeRequested(m_panId);
     });
-    barLayout->addWidget(m_closeBtn);
-
-    layout->addWidget(titleBar);
-
-    // ── Spectrum widget (FFT + waterfall) ────────────────────────────────
-    m_spectrum = new SpectrumWidget(this);
-    m_spectrum->installEventFilter(this);  // detect clicks for pan activation
-    layout->addWidget(m_spectrum, 1);
+    layoutHeader();
 
     // ── CW decode panel (hidden by default, shown in CW mode) ─────────
     // Restore persisted display preferences (#3628): font size and panel
@@ -165,7 +140,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_cwFontPx     = std::clamp(CwDecodeSettings::fontPx(), 8, 32);
     m_cwPanelHeight = std::clamp(CwDecodeSettings::panelHeight(), 60, 600);
 
-    m_cwPanel = new QWidget(this);
+    m_cwPanel = new QWidget(body);
     m_cwPanel->setObjectName("cwDecodePanel");  // addressable for automation (#3628/#3646)
     m_cwPanel->setCursor(Qt::ArrowCursor);  // prevent invisible cursor from native-window parent (#1096)
     m_cwPanel->setFixedHeight(m_cwPanelHeight);
@@ -229,13 +204,15 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         });
     cwBar->addWidget(m_cwSensSlider);
 
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
     m_cwEngineCombo = new GuardedComboBox(this);
     m_cwEngineCombo->setObjectName("cwRxEngine");
     m_cwEngineCombo->setAccessibleName(tr("CW receive decoder"));
-    m_cwEngineCombo->setAccessibleDescription(tr("Select ggmorse or the experimental DeepFist decoder for the selected slice"));
+    m_cwEngineCombo->setAccessibleDescription(tr("Select ggmorse or a neural decoder for the selected slice"));
     for (const QString& key : CwRxModel::availableBackends()) {
-        m_cwEngineCombo->addItem(key == "deepfist" ? tr("DeepFist") : key, key);
+        const QString label = key == "deepfist" ? tr("DeepFist")
+                            : key == "deepcw"   ? tr("DeepCW") : key;
+        m_cwEngineCombo->addItem(label, key);
     }
     m_cwEngineCombo->setToolTip(tr("Receive decoder; transmit sidetone continues to use ggmorse"));
     cwBar->addWidget(m_cwEngineCombo);
@@ -271,18 +248,28 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     cwBar->addWidget(m_lockSpeedBtn);
 
     // Pitch range — double-handle slider, label embedded in widget
-    m_pitchRangeSlider = new RangeSlider(300, 1200, 500, 700, "Pitch", {}, this);
+    // Both ranges start from the shared saved values and are saved again when a
+    // drag or key press ends (see eventFilter), not on every step of it.
+    const auto pitch = CwDecodeSettings::pitchRange();
+    m_pitchRangeSlider = new RangeSlider(CwDecodeSettings::kPitchSpan.low,
+                                         CwDecodeSettings::kPitchSpan.high,
+                                         pitch.low, pitch.high, "Pitch", {}, this);
     m_pitchRangeSlider->setFixedWidth(195);
     m_pitchRangeSlider->setToolTip("Decoder pitch search range (Hz)");
+    m_pitchRangeSlider->installEventFilter(this);
     cwBar->addWidget(m_pitchRangeSlider);
     connect(m_pitchRangeSlider, &RangeSlider::rangeChanged, this, [this](int lo, int hi) {
         emit pitchRangeChanged(lo, hi);
     });
 
     // WPM range — double-handle slider, label embedded in widget
-    m_speedRangeSlider = new RangeSlider(5, 60, 15, 40, "WPM", {}, this);
+    const auto speed = CwDecodeSettings::speedRange();
+    m_speedRangeSlider = new RangeSlider(CwDecodeSettings::kSpeedSpan.low,
+                                         CwDecodeSettings::kSpeedSpan.high,
+                                         speed.low, speed.high, "WPM", {}, this);
     m_speedRangeSlider->setFixedWidth(195);
     m_speedRangeSlider->setToolTip("Decoder speed search range (WPM)");
+    m_speedRangeSlider->installEventFilter(this);
     cwBar->addWidget(m_speedRangeSlider);
     connect(m_speedRangeSlider, &RangeSlider::rangeChanged, this, [this](int lo, int hi) {
         emit speedRangeChanged(lo, hi);
@@ -376,7 +363,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     layout->addWidget(m_cwPanel);
 
     // ── RTTY decode panel (hidden by default, shown in RTTY/DIGL mode) ───
-    m_rttyPanel = new QWidget(this);
+    m_rttyPanel = new QWidget(bodyWidget());
     m_rttyPanel->setCursor(Qt::ArrowCursor);
     m_rttyPanel->setFixedHeight(90);
     m_rttyPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -624,7 +611,7 @@ void PanadapterApplet::setMultiPanMode(bool multi)
     // In single-pan mode, hide all decorations — nothing to pop out, maximize, or close
     if (m_popOutBtn) m_popOutBtn->setVisible(multi);
     if (m_maxBtn) m_maxBtn->setVisible(multi);
-    if (m_closeBtn) m_closeBtn->setVisible(multi);
+    setCloseButtonVisible(multi);
 }
 
 void PanadapterApplet::setOnCanvas(bool on)
@@ -653,7 +640,7 @@ void PanadapterApplet::setFloatingState(bool floating)
         m_popOutBtn->setVisible(true);  // always visible when floating
     }
     // When floating, always show close (to dock via window close)
-    if (m_closeBtn && floating) m_closeBtn->setVisible(true);
+    if (floating) setCloseButtonVisible(true);
 }
 
 void PanadapterApplet::setSliceId(int id, const QString& perClientLetter)
@@ -716,7 +703,7 @@ CopyAssistPanel* PanadapterApplet::copyAssistPanel()
 
     // Dock container styled like the CW decode panel — a top border separating
     // it from the waterfall, fixed height, resizable via a top grip.
-    m_copyAssistDock = new QWidget(this);
+    m_copyAssistDock = new QWidget(bodyWidget());
     m_copyAssistDock->setObjectName("copyAssistDock");
     m_copyAssistDock->setCursor(Qt::ArrowCursor);
     m_copyAssistDock->setFixedHeight(m_copyAssistHeight);
@@ -813,22 +800,44 @@ void PanadapterApplet::setCwPanelHeight(int h)
 
 int PanadapterApplet::speedRangeLow()  const
 {
-    return m_speedRangeSlider ? m_speedRangeSlider->low() : 15;
+    return m_speedRangeSlider ? m_speedRangeSlider->low() : CwDecodeSettings::kSpeedDefault.low;
 }
 
 int PanadapterApplet::speedRangeHigh() const
 {
-    return m_speedRangeSlider ? m_speedRangeSlider->high() : 40;
+    return m_speedRangeSlider ? m_speedRangeSlider->high() : CwDecodeSettings::kSpeedDefault.high;
 }
 
 int PanadapterApplet::pitchRangeLow()  const
 {
-    return m_pitchRangeSlider ? m_pitchRangeSlider->low() : 500;
+    return m_pitchRangeSlider ? m_pitchRangeSlider->low() : CwDecodeSettings::kPitchDefault.low;
 }
 
 int PanadapterApplet::pitchRangeHigh() const
 {
-    return m_pitchRangeSlider ? m_pitchRangeSlider->high() : 700;
+    return m_pitchRangeSlider ? m_pitchRangeSlider->high() : CwDecodeSettings::kPitchDefault.high;
+}
+
+namespace {
+// Moves the handle that keeps low <= high first, so neither setter clamps
+// against the slider's previous range.
+void applyRange(RangeSlider* slider, CwDecodeSettings::Range range)
+{
+    if (!slider) { return; }
+    if (range.low > slider->high()) {
+        slider->setHigh(range.high);
+        slider->setLow(range.low);
+    } else {
+        slider->setLow(range.low);
+        slider->setHigh(range.high);
+    }
+}
+} // namespace
+
+void PanadapterApplet::restoreCwRanges()
+{
+    applyRange(m_pitchRangeSlider, CwDecodeSettings::pitchRange());
+    applyRange(m_speedRangeSlider, CwDecodeSettings::speedRange());
 }
 
 QString PanadapterApplet::cwCostColor(float cost)
@@ -846,8 +855,8 @@ QString PanadapterApplet::cwCostColor(float cost)
 
 void PanadapterApplet::appendCwText(const QString& text, float cost)
 {
-#ifdef HAVE_DEEPFIST
-    if (deepFistEngineSelected()) { return; }
+#ifdef HAVE_CW_RX_BACKENDS
+    if (neuralEngineSelected()) { return; }
 #endif
     // Filter by sensitivity threshold — drop low-confidence decodes
     if (cost >= m_cwCostThreshold) return;
@@ -872,14 +881,15 @@ void PanadapterApplet::appendCwText(const QString& text, float cost)
     emit cwRxTextDisplayed(clean);
 }
 
-#ifdef HAVE_DEEPFIST
-bool PanadapterApplet::deepFistEngineSelected() const
+#ifdef HAVE_CW_RX_BACKENDS
+bool PanadapterApplet::neuralEngineSelected() const
 {
+    // Every backend other than ggmorse is a neural one with its own text path.
     // Compare the stored key, never the row: findData() returns -1 for a key
     // this build does not offer, and the catalog is meant to grow.
-    return m_cwEngineCombo
-        && m_cwEngineCombo->itemData(m_cwEngineCombo->currentIndex()).toString()
-               == QLatin1String("deepfist");
+    if (!m_cwEngineCombo || m_cwEngineCombo->currentIndex() < 0) { return false; }
+    return m_cwEngineCombo->itemData(m_cwEngineCombo->currentIndex()).toString()
+           != QLatin1String("ggmorse");
 }
 void PanadapterApplet::setCwBackendState(const QString& key, bool tuning, const QString& status,
     bool preparing, bool canRetry, const QString& detail)
@@ -981,9 +991,9 @@ void PanadapterApplet::setCwInputHint(const QString& hint, const QString& reason
 
 void PanadapterApplet::setCwStats(float pitchHz, float speedWpm)
 {
-#ifdef HAVE_DEEPFIST
+#ifdef HAVE_CW_RX_BACKENDS
     // ggmorse may still have queued deliveries after the engine selector changes.
-    if (deepFistEngineSelected()) { return; }
+    if (neuralEngineSelected()) { return; }
 #endif
     if (pitchHz > 0 && speedWpm > 0)
         m_cwStatsLabel->setText(QString("%1 Hz  %2 WPM").arg(pitchHz, 0, 'f', 0).arg(speedWpm, 0, 'f', 0));
@@ -997,8 +1007,43 @@ void PanadapterApplet::clearCwText()
     m_lastCwTextSource = CwTextSource::None;
 }
 
+void PanadapterApplet::layoutHeader()
+{
+    if (!m_titleBar || !m_headerButtons) {
+        return;
+    }
+    const PanadapterHeader header{m_titleBar, m_titleLabel, m_headerButtons,
+                                  static_cast<QHBoxLayout*>(m_headerButtons->layout()),
+                                  m_popOutBtn, m_maxBtn};
+    // The spectrum's top-right readouts ride the top beside the buttons, so
+    // they end where the visible buttons begin. Not raised: built after the
+    // spectrum's overlay menu, the header sits above it, while the slice
+    // flags, created and raised later, ride over the header.
+    m_spectrum->setTopRightReserve(header.place(m_spectrum->width()));
+}
+
 bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
 {
+    // The header pieces size themselves to their content: a new title, or a
+    // button shown or hidden, asks for a layout, and the spectrum's width
+    // places the buttons.
+    if ((obj == m_spectrum && ev->type() == QEvent::Resize)
+        || ((obj == m_titleBar || obj == m_headerButtons)
+            && ev->type() == QEvent::LayoutRequest)) {
+        layoutHeader();
+    }
+    // A decoder range is saved once the drag or key press that set it ends.
+    // Observe only: the slider still handles the event itself.
+    if ((obj == m_pitchRangeSlider || obj == m_speedRangeSlider)
+        && (ev->type() == QEvent::MouseButtonRelease
+            || (ev->type() == QEvent::KeyRelease
+                && !static_cast<QKeyEvent*>(ev)->isAutoRepeat()))) {
+        if (obj == m_pitchRangeSlider) {
+            CwDecodeSettings::setPitchRange(m_pitchRangeSlider->low(), m_pitchRangeSlider->high());
+        } else {
+            CwDecodeSettings::setSpeedRange(m_speedRangeSlider->low(), m_speedRangeSlider->high());
+        }
+    }
     // CW panel resize grip — drag the top edge to grow/shrink the decode
     // panel (and reveal more decoded-text history) (#3628).
     if (obj == m_cwGrip) {
@@ -1113,7 +1158,7 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
     }
     if (ev->type() == QEvent::MouseButtonPress)
         emit activated(m_panId);
-    return QWidget::eventFilter(obj, ev);
+    return CanonPan::eventFilter(obj, ev);
 }
 
 // ── RTTY panel ───────────────────────────────────────────────────────────────

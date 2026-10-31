@@ -10,11 +10,14 @@
 // .github/workflows/static-checks.yml, on every pull request, without a build.
 
 AETHER_SEAM_PROBE(independentTxStopped);
+AETHER_SEAM_PROBE(transmitControlAnswered);
 AETHER_SEAM_PROBE(connected);
 AETHER_SEAM_PROBE(disconnected);
 AETHER_SEAM_PROBE(connectionError);
 AETHER_SEAM_PROBE(configurationWarning);
 AETHER_SEAM_PROBE(capabilitiesChanged);
+AETHER_SEAM_PROBE(tuneOutputSuppressionObserved);
+AETHER_SEAM_PROBE(tuneOutputSuppressionCommandFinished);
 AETHER_SEAM_PROBE(transmitFrequencyCheckChanged);
 AETHER_SEAM_PROBE(radioDialLockChanged);
 AETHER_SEAM_PROBE(linkStatsUpdated);
@@ -54,6 +57,8 @@ AETHER_SEAM_PROBE(panPreampInfoChanged);
 AETHER_SEAM_PROBE(panPreampChanged);
 AETHER_SEAM_PROBE(panAttenuatorInfoChanged);
 AETHER_SEAM_PROBE(panAttenuatorChanged);
+AETHER_SEAM_PROBE(panScopeModesChanged);
+AETHER_SEAM_PROBE(panScopeModeChanged);
 AETHER_SEAM_PROBE(panRxAntennaChanged);
 AETHER_SEAM_PROBE(panAntennaListChanged);
 AETHER_SEAM_PROBE(panWaterfallLineDurationChanged);

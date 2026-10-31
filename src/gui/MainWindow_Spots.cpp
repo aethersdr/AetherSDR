@@ -496,42 +496,27 @@ void MainWindow::wireSpotSubsystem()
             return;
         }
 
-        QString call = QString(spot.dxCall).replace(' ', QChar(0x7f));
-        QString freq = QString::number(spot.freqMhz, 'f', 6);
         // trigger_action=none disables the radio's internal tune/mode-set on
         // spot click. AetherSDR handles freq via frequencyClicked and mode
         // via SpotAutoSwitchMode client-side, so the radio's stored-mode
         // path (which mishandles non-Flex tokens like "SSB") never fires.
         // Clicks still emit SpotTriggered for external loggers (#341, #1846).
-        QString cmd = "spot add callsign=" + call + " rx_freq=" + freq
-                     + " tx_freq=" + freq
-                     + " source=" + source
-                     + " spotter_callsign=" + spot.spotterCall
-                     + " trigger_action=none"
-                     + " lifetime_seconds=" + QString::number(lifetimeSec);
-        if (!spot.comment.isEmpty())
-            cmd += " comment=" + QString(spot.comment).replace(' ', QChar(0x7f));
-        if (!spotColor.isEmpty())
-            cmd += " color=" + spotColor;
-        m_spotCmdBatch.append(cmd);
+        m_radioModel.queueSpot({SpotAction::Add, spot.dxCall, source, spot.spotterCall,
+                                spot.comment, spotColor, spot.freqMhz, lifetimeSec});
     };
 
     // Flush batch: send queued spot commands to radio (1/sec)
     auto* spotCmdTimer = new QTimer(this);
     spotCmdTimer->start(1000);
     connect(spotCmdTimer, &QTimer::timeout, this, [this] {
-        if (m_spotCmdBatch.isEmpty() || !m_radioModel.isConnected()) return;
-        if (!SpotCommandPolicy::shouldSendSpotAddCommands(
+        if (!m_radioModel.isConnected() || !SpotCommandPolicy::shouldSendSpotAddCommands(
                 m_radioModel.backendCapabilities().alwaysUseClientSideSpots)) {
-            m_spotCmdBatch.clear();
+            m_radioModel.clearQueuedSpots();
             return;
         }
         // Send up to RbnRateLimit commands per tick
-        int limit = AppSettings::instance().value("RbnRateLimit", 10).toInt();
-        int count = std::min(static_cast<int>(m_spotCmdBatch.size()), limit);
-        for (int i = 0; i < count; ++i)
-            m_radioModel.sendCommand(m_spotCmdBatch[i]);
-        m_spotCmdBatch.remove(0, count);
+        const int limit = AppSettings::instance().value("RbnRateLimit", 10).toInt();
+        m_radioModel.flushQueuedSpots(limit);
     });
 
     auto* passiveSpotExpiryTimer = new QTimer(this);
@@ -760,26 +745,15 @@ void MainWindow::wireSpotSubsystem()
         if (colored.color.length() == 7)  // #RRGGBB → #AARRGGBB
             colored.color = QString("#%1%2").arg(alpha, 2, 16, QChar('0')).arg(colored.color.mid(1));
 
-        QString call = QString(colored.dxCall).replace(' ', QChar(0x7f));
-        QString freq = QString::number(colored.freqMhz, 'f', 6);
-        QString cmd = "spot add callsign=" + call + " rx_freq=" + freq
-                     + " tx_freq=" + freq
-                     + " source=WSJT-X"
-                     + " spotter_callsign=" + colored.spotterCall
-                     + " trigger_action=none"  // see comment at queueSpotCmd (#1846)
-                     + " lifetime_seconds=" + QString::number(
-                           spotLifetimeSeconds(colored, "WSJT-X"));
-        if (!colored.comment.isEmpty())
-            cmd += " comment=" + QString(colored.comment).replace(' ', QChar(0x7f));
-        if (!colored.color.isEmpty())
-            cmd += " color=" + colored.color;
         if (!SpotCommandPolicy::shouldSendSpotAddCommands(
                 m_radioModel.backendCapabilities().alwaysUseClientSideSpots)) {
             addPassiveSpotToModel(colored, "WSJT-X", colored.color,
                                   spotLifetimeSeconds(colored, "WSJT-X"));
             return;
         }
-        m_spotCmdBatch.append(cmd);
+        m_radioModel.queueSpot({SpotAction::Add, colored.dxCall, QStringLiteral("WSJT-X"),
+                                colored.spotterCall, colored.comment, colored.color,
+                                colored.freqMhz, spotLifetimeSeconds(colored, "WSJT-X")});
     });
 
     connect(m_spotCollectorClient, &SpotCollectorClient::spotReceived,

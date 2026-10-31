@@ -15,7 +15,7 @@
 
 int main(int argc, char* argv[])
 {
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     // QtKeychain's Apple backend delivers completions on the native main
     // dispatch queue. Qt's default QCoreApplication UNIX dispatcher does not
     // service that queue. Select CoreFoundation only for credential runs;
@@ -28,7 +28,7 @@ int main(int argc, char* argv[])
     }
 #endif
     QCoreApplication app(argc, argv);
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     if (credentialDispatcher) {
         if (hadDispatcherSetting) {
             qputenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION", dispatcherSetting);

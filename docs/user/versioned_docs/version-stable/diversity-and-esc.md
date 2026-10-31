@@ -50,6 +50,10 @@ The child slice appears in AetherSDR with its own VFO overlay (showing a differe
 
 When DIV is active on a slice, the **ESC panel** appears below the DIV button in the VFO audio tab. ESC is only shown on the **parent** slice — the child slice shows DIV but not ESC controls.
 
+<img src="/img/screens/diversity-esc.png" width="612" alt="Two VFO flags. Slice A has its audio tab open, with DIV and ESC lit green, a phase slider at 0° with a +180 button, a gain slider at 1.00, a polar display of the ESC phase and gain, and an ESC level meter. To its right, the diversity child slice D on ANT2 shows the same frequency, 14.250.000." />
+
+*Diversity on a FLEX-8600: the DIV button adds a child slice on the second antenna, and ESC opens the beam-steering controls.*
+
 #### ESC Toggle
 
 Click **ESC** to enable Enhanced Signal Clarity beamforming. Without ESC enabled, diversity simply combines both antennas with default settings. With ESC, you can steer the combination.
@@ -68,7 +72,7 @@ The vertical gain slider adjusts the amplitude balance between antennas:
 
 - **Range:** 0.0 to 2.0
 - **Default:** 1.0 (equal balance)
-- **Effect:** Values below 1.0 favour the primary antenna, above 1.0 favours the secondary
+- **Effect:** Values below 1.0 favor the primary antenna, above 1.0 favors the secondary
 - **Use case:** When one antenna picks up more noise than signal, reduce its contribution
 
 #### Polar Display
@@ -76,7 +80,7 @@ The vertical gain slider adjusts the amplitude balance between antennas:
 The circular display shows the current phase and gain as a dot on a polar plot:
 
 - **Angle** = phase (0° at top, clockwise)
-- **Distance from centre** = gain (centre = 0.0, edge = 2.0)
+- **Distance from center** = gain (center = 0.0, edge = 2.0)
 - **Crosshairs** mark 0°/90°/180°/270° and the mid-gain reference circle (gain = 1.0)
 
 As you adjust the phase and gain sliders, the dot moves in real time. You can also **click anywhere on the polar plot** to set phase and gain directly at that point.
@@ -96,8 +100,8 @@ The goal is usually to find the phase angle where the ESC meter shows the most i
 2. Listen to the signal with interference
 3. Slowly sweep the phase slider from 0° to 360°
 4. Watch the ESC meter — you'll hear interference peak and null as you rotate
-5. Stop at the phase angle where interference is minimised
-6. Fine-tune the gain slider to optimise further
+5. Stop at the phase angle where interference is minimized
+6. Fine-tune the gain slider to optimize further
 
 ### Band Noise Reduction
 

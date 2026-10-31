@@ -19,7 +19,7 @@ struct ParsedMessage {
     MessageType type{MessageType::Unknown};
     quint32 sequence{0};         // for R messages
     quint32 handle{0};           // for S/M messages
-    int     resultCode{0};       // for R messages
+    int     resultCode{-1};      // R messages fail until a valid result code is parsed
     QString object;              // e.g. "slice 0"
     QString raw;                 // full raw line
     QMap<QString, QString> kvs;  // parsed key=value pairs from status/response body

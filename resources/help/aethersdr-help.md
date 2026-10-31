@@ -103,7 +103,7 @@ This is the everyday operations menu. Items appear or enable themselves accordin
 - `Start SWR Scan...`, `Pre-tune ATU Bands...`, and `Clear ATU Memories...` provide guarded tuner operations on supported radios.
 - `Callsign Lookup...`, `PSK Reporter...`, and `FreeDV Reporter...` open lookup and reporting tools.
 - `Net Scheduler...`, `Memory...`, and `Waveforms...` open their operating managers.
-- `Radio Health...`, `GPS Dashboard...`, `Network Diagnostics...`, and `Runtime Monitor...` expose live station and application diagnostics.
+- `Radio Health...`, `AetherGPS...`, `Network Diagnostics...`, and `Runtime Monitor...` expose live station and application diagnostics.
 
 ### `View`
 
@@ -265,7 +265,7 @@ Default applet order is:
 - `P/CW` — Phone/CW
 - `EQ` — Equalizer
 - `WAVE` — Waveform (tray button `WAV`)
-- `TXDSP` — Channel Strip
+- `TXDSP` — Aetherial Audio (tray button `VUDU`)
 - `CAT` — CAT Control
 - `DAX` — DAX Audio
 - `TCI` — TCI Server

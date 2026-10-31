@@ -6,7 +6,7 @@ description: "AetherSDR is an open-source client for FlexRadio transceivers with
 
 *Native. Open. Yours.*
 
-AetherSDR is an open-source client for **FlexRadio** transceivers with native builds for Linux, macOS and Windows, including an aarch64 build for the Raspberry Pi. FlexRadio is the supported target; the Hermes-Lite 2, networked Icom radios, the ANAN-G2 and RTL-SDR dongles are also supported at an earlier stage, each labelled with its status. No radio? [Demo Mode](./demo-mode.md) runs the full interface against a built-in simulator.
+AetherSDR is an open-source client for **FlexRadio** transceivers with native builds for Linux, macOS and Windows, including an aarch64 build for the Raspberry Pi. FlexRadio is the supported target; the Hermes-Lite 2, networked Icom radios, the ANAN-G2 and RTL-SDR dongles are also supported at an earlier stage, each labeled with its status. No radio? [Demo Mode](./demo-mode.md) runs the full interface against a built-in simulator.
 
 These docs come in two versions, chosen from the version menu at the top of every page. **Stable**, the default, describes the latest release. **Next (main)** tracks `main`: it describes what has landed since that release and will ship in the next one. Release notes for every version are in the [CHANGELOG](https://github.com/aethersdr/AetherSDR/blob/main/CHANGELOG.md).
 
@@ -90,16 +90,16 @@ Prefer paper? Download the [printable manual](pathname:///AetherSDR-Manual.pdf) 
 ## Spotting & Tools
 
 - [SpotHub](./spothub.md) — DX Cluster, RBN, WSJT-X, POTA, FreeDV Reporter, N1MM, EiBi, SpotCollector, Smart Spot Filtering
-- [PSK Reporter Map](./psk-reporter-map.md) — Who hears you: 2D map or 3D globe, weather radar, night lights
+- [AetherMap](./psk-reporter-map.md) — Who hears you: 2D map or 3D globe, weather radar, night lights
 - [AetherSweep](./aethersweep.md) — In-panadapter SWR analyzer with CSV export
 - [Net Scheduler](./net-scheduler.md) — Recurring net reminders with one-click Tune Now
-- [AetherClock and GPS](./aetherclock-and-gps.md) — WWV/WWVB time-signal decoder and the GPS & Station Location dashboard
-- [Callsign Lookup](./callsign-lookup.md) — QRZ.com lookups, cache and CW-decoder contact cards
+- [AetherClock and GPS](./aetherclock-and-gps.md) — WWV/WWVB time-signal decoder and the AetherGPS dashboard
+- [Callsign Lookup](./callsign-lookup.md) — QRZ.com lookups, cache and the live CW contacts window
 
 ## Station Accessories
 
 - [Peripherals](./peripherals.md) — Add, remove and auto-connect station accessories; 4O3A access codes; PGXL and Antenna Genius
-- [Amplifiers](./amplifiers.md) — ACOM, SPE Expert, VK3AMP and KPA1500 amplifiers; LP-100A wattmeter
+- [Amplifiers](./amplifiers.md) — ACOM, SPE Expert, VK3AMP, KPA1500 and RF-KIT amplifiers; LP-100A wattmeter
 - [TGXL Tuner Control](./tgxl-tuner-control.md) — 4O3A Tuner Genius XL: direct or relayed, autotune, antenna switch
 - [ShackSwitch](./shackswitch.md) — Network antenna switch with dummy-load protection
 - [Green Heron Everyware](./green-heron-everyware.md) — Green Heron Everyware antenna switch and rotator control
@@ -112,7 +112,7 @@ Prefer paper? Download the [printable manual](pathname:///AetherSDR-Manual.pdf) 
 - [Ulanzi Dial](./ulanzi-dial.md) — Ulanzi Dial knob and keys: wheel actions, key mapping, PTT and CW keying
 - [USB Control Surfaces](./usb-control-surfaces.md) — RC-28, PowerMate, Contour Shuttle, Stream Deck+ and serial PTT/CW interfaces
 - [MIDI Controller Mapping](./midi-controller-mapping.md) — Map any MIDI controller, with Learn mode and profile import/export
-- [CTR2 Proxy](./ctr2-proxy.md) — Relay a CTR2-Max controller to the radio over Wi-Fi (USB pending CTR2 firmware)
+- [CTR2 Proxy](./ctr2-proxy.md) — Relay a CTR2-Max controller to the radio over Wi-Fi or USB, and install AetherCTR2 on it
 
 ## Remote Operation
 
@@ -129,7 +129,7 @@ Prefer paper? Download the [printable manual](pathname:///AetherSDR-Manual.pdf) 
 - [Settings and Backups](./settings-and-backups.md) — Where settings live, keychain credentials, backups, `--config`, resetting properly
 - [Keyboard Shortcuts](./keyboard-shortcuts.md) — Operating shortcuts (off by default), PTT hold, editor, Minimal Mode
 - [Themes and Theme Editor](./themes-and-theme-editor.md) — Switch themes live, edit tokens, import and export `.aethertheme` files
-- [Slice Colors](./slice-colors.md) — Per-slice colours for VFOs, panadapter overlays and meters
+- [Slice Colors](./slice-colors.md) — Per-slice colors for VFOs, panadapter overlays and meters
 - [Accessibility](./accessibility.md) — Screen readers, keyboard navigation, announced reasons for dimmed controls
 - [Firmware Update](./firmware-update.md) — Upload FlexRadio firmware from AetherSDR
 

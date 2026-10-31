@@ -50,6 +50,18 @@ cmake --build build -j$(nproc)
 ./build/AetherSDR
 ```
 
+### macOS development identity
+
+A locally built app can use its own macOS permission identity while a downloaded release remains installed. Add `-DAETHER_MACOS_ADHOC_SIGN=ON -DAETHER_MACOS_BUNDLE_IDENTIFIER=com.aethersdr.AetherSDR.dev` when configuring your development build. Use a different identifier for each build you want macOS to treat as a separate app.
+
+With development signing enabled, the complete **AetherSDR** target signs bundled helpers and libraries first, then signs and verifies the finished app bundle. Launch that `.app` with `open -n /path/to/AetherSDR.app`, then allow its **Local Network** request. The downloaded release keeps its own permissions. See [macOS](./macos.md#allowing-local-network-access).
+
+This option defaults to **OFF** and is only for ad-hoc local development signing. Production Apple signing, notarization and release CI use their existing workflow with this option disabled. Xcode retains its own signing path.
+
+This uses an ad-hoc signature. macOS may ask for privacy or Keychain approval again after a rebuild; this does not provide a stable signing identity across builds. See [Apple’s code-signing requirements](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
+
+The signing hook runs when the app links. If you change only bundle metadata or rebuild a bundled helper, force a full relink or re-sign the complete app before launching it.
+
 ### Build on Windows 11
 
 From an MSVC developer prompt:
@@ -69,7 +81,7 @@ See [docs/BUILDING.md § Windows 11](https://github.com/aethersdr/AetherSDR/blob
 sudo cmake --install build
 ```
 
-This installs the binary, a desktop entry and the icon.
+This installs the binary, a desktop entry and the icon. The installed binary keeps using the Qt it was built with. `setup-qt.sh` keeps older Qt installs until you run it with `--prune`, so rebuild and reinstall AetherSDR before pruning.
 
 ## Developing AetherSDR
 
@@ -102,7 +114,7 @@ Start with [AGENTS.md](https://github.com/aethersdr/AetherSDR/blob/main/AGENTS.m
 
 Digital FM evaluation supports Linux/GNU C, macOS/AppleClang and Windows x64/MSVC with installed `clang-cl` and matching LLVM compiler-rt builtins. Other toolchains fail configure when the option is ON. Dependencies are pinned in the source tree; configure does not download a decoder or toolchain. See the [experimental build guide](https://github.com/aethersdr/AetherSDR/blob/main/docs/rtl-hd-fm-experimental.md).
 
-Builds honour `SOURCE_DATE_EPOCH` for reproducible output.
+Builds honor `SOURCE_DATE_EPOCH` for reproducible output.
 
 ## Troubleshooting
 

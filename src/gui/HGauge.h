@@ -6,6 +6,7 @@
 
 #include <QAccessible>
 #include <QAccessibleWidget>
+#include <QColor>
 #include <QCursor>
 #include <QEnterEvent>
 #include <QEvent>
@@ -266,6 +267,19 @@ public:
         update();
     }
 
+    // Colour of the middle (caution) zone and its tick labels; default olive.
+    void setCautionColor(const QColor& color) {
+        m_cautionColor = color;
+        update();
+    }
+
+    // Optional scale strokes: labeled ticks are major, empty labels are minor.
+    // An invalid colour preserves the label-only scale used by other applets.
+    void setTickMarkColor(const QColor& color) {
+        m_tickMarkColor = color;
+        update();
+    }
+
     // Scale the gauge's internal metrics — the tick strip above the bar and
     // both font sizes — so a gauge given more height grows its lettering
     // instead of just a taller bar. Opt-in, defaulting to 1.0, which
@@ -299,6 +313,18 @@ public:
         // callback would stop the timer on its own next tick. Stopping here
         // just saves that tick and its repaint — no case depends on it.
         if (m_animTimer.isActive()) m_animTimer.stop();
+        publishAutomationState();
+        update();
+    }
+
+    // Move only the yellow/red zone starts on an unchanged axis. Unlike
+    // setRange() this leaves the smoother alone, so a caller that tracks the
+    // zones to a live reading (RF-KIT's SWR zones follow forward power) does
+    // not snap the bar several times a second.
+    void setZones(float redStart, float yellowStart) {
+        if (redStart == m_redStart && yellowStart == m_yellowStart) return;
+        m_redStart = redStart;
+        m_yellowStart = yellowStart;
         publishAutomationState();
         update();
     }
@@ -428,7 +454,7 @@ protected:
                 if (fillW > yellowX && yellowX < redX) {
                     int yw = qMin(fillW, redX) - yellowX;
                     if (yw > 0)
-                        p.fillRect(barX + yellowX + 1, barY + 1, yw, barH - 2, QColor(0x99, 0x88, 0x00));
+                        p.fillRect(barX + yellowX + 1, barY + 1, yw, barH - 2, m_cautionColor);
                 }
 
                 // Red portion (above red zone)
@@ -462,7 +488,7 @@ protected:
             float tf = (tick.value - m_min) / (m_max - m_min);
             int tx = barX + static_cast<int>(tf * barW);
             QColor tickColor = (tick.value >= m_redStart) ? QColor(0xcc, 0x33, 0x33)
-                             : (tick.value >= m_yellowStart) ? QColor(0x99, 0x88, 0x00)
+                             : (tick.value >= m_yellowStart) ? m_cautionColor
                              : QColor(0xc8, 0xd8, 0xe8);
             p.setPen(tickColor);
             const QFontMetrics fm(tickFont);
@@ -471,6 +497,12 @@ protected:
             // Leave a small right margin so the last tick isn't flush to the edge
             int lx = qBound(2, tx - tw / 2, w - tw - 4);
             p.drawText(lx, qRound(10 * m_metricScale), tick.label);
+            if (m_tickMarkColor.isValid()) {
+                const int length = qMax(2, qRound((tick.label.isEmpty() ? 3 : 7) * m_metricScale));
+                const int x = qBound(barX + 1, tx, barX + barW - 2);
+                p.setPen(m_tickMarkColor);
+                p.drawLine(x, barY + 1, x, qMin(barY + length, barY + barH - 2));
+            }
         }
 
         // Label in center of bar
@@ -709,6 +741,8 @@ private:
     qreal m_metricScale{1.0};      // 1.0 = the original fixed metrics
     QString m_label, m_unit;
     QVector<Tick> m_ticks;
+    QColor m_tickMarkColor;
+    QColor m_cautionColor{0x99, 0x88, 0x00};
 
     // Hover value readout state (see setHoverValuePopupEnabled).
     //

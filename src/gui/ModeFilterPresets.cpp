@@ -22,6 +22,15 @@ QString canonicalFmMode(const QString& mode)
     return mode;
 }
 
+bool withinRange(const ReceiveFilterMode& range, Edges edges)
+{
+    const qint64 width = qint64(edges.hi) - edges.lo;
+    return edges.lo < edges.hi
+        && edges.lo >= range.minimumLowHz && edges.lo <= range.maximumLowHz
+        && edges.hi >= range.minimumHighHz && edges.hi <= range.maximumHighHz
+        && width >= range.minimumWidthHz && width <= range.maximumWidthHz;
+}
+
 const ReceiveFilterMode* fmControlFor(const QString& mode, const ReceiveFilterControl* control)
 {
     if (!control || !isFmMode(mode)) {
@@ -44,11 +53,7 @@ bool acceptsFmEdges(const QString& mode, const ReceiveFilterControl* control, Ed
     if (!range) {
         return false;
     }
-    const qint64 width = qint64(edges.hi) - edges.lo;
-    return edges.lo < edges.hi
-        && edges.lo >= range->minimumLowHz && edges.lo <= range->maximumLowHz
-        && edges.hi >= range->minimumHighHz && edges.hi <= range->maximumHighHz
-        && width >= range->minimumWidthHz && width <= range->maximumWidthHz;
+    return withinRange(*range, edges);
 }
 
 bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control,
@@ -71,18 +76,29 @@ bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control
 bool acceptsFilterEdges(const QString& mode, const ReceiveFilterControl* control,
                         bool radioPublishesWidths, Edges edges)
 {
-    if (!isFmMode(mode) || radioPublishesWidths) {
+    if (!isFmMode(mode)) {
+        if (control) {
+            for (const ReceiveFilterMode& range : control->modes) {
+                if (range.mode == mode) { return withinRange(range, edges); }
+            }
+        }
         return true;
     }
+    if (radioPublishesWidths) { return true; }
     return fmControlFor(mode, control) ? acceptsFmEdges(mode, control, edges)
                                        : fmFilterAdjustable(mode, control, false);
 }
 
-bool squelchAvailableInMode(const QString& mode, const SquelchLevelScale* exclusive,
+bool squelchAvailableInMode(const QString& mode, const SquelchLevelScale* scale,
                             bool modeIndependentSquelch, bool externalReplacement)
 {
-    if (exclusive && !externalReplacement) {
-        return exclusive->appliesTo(mode);
+    if (scale && !externalReplacement) {
+        if (scale->controlUnavailableModes.contains(mode, Qt::CaseInsensitive)) {
+            return false;
+        }
+        if (scale->modesExclusive) {
+            return scale->appliesTo(mode);
+        }
     }
     // Digital/RTTY feed decoders and SQL gates weak FSK (#2504); a radio holds
     // CW squelch itself. Only an all-mode radio squelch lifts that rule.
@@ -185,13 +201,8 @@ Edges edgesForWidth(const QString& mode, int widthHz, const SliceContext& ctx)
         int mid = -shift / 2;
         lo = mid - widthHz / 2;
         hi = mid + widthHz / 2;
-    } else if (mode == "CW" || mode == "CWL" || mode == "CWU") {
-        // Centered on carrier — radio's BFO handles pitch offset.
-        // CWU belongs with the other two spellings: it was falling through to
-        // the final else and getting a USB-shaped {95, width} with no carrier
-        // in it. It is reachable — NetSchedulerDialog lists it as a schedulable
-        // mode and RadioSetupDialog has it as the CWU/CWL sideband toggle — and
-        // it was wrong under the old passband convention too, just less visibly.
+    } else if (isCwMode(mode)) {
+        // Carrier-relative on both sidebands; the receiver's BFO owns pitch.
         lo = -widthHz / 2;
         hi =  widthHz / 2;
     } else if (mode == "AM" || mode == "SAM" || mode == "DSB"

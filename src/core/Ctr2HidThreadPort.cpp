@@ -60,8 +60,10 @@ class Ctr2HidIoWorker : public QObject {
 public:
     Ctr2HidIoWorker(Ctr2HidDeviceIo io, Ctr2HidThreadPort* port,
                     std::shared_ptr<std::atomic<quint64>> generation,
-                    std::shared_ptr<std::atomic<bool>> cancelled, const QString& deviceKey)
+                    std::shared_ptr<std::atomic<bool>> cancelled, const QString& deviceKey,
+                    quint32 hostCapabilities)
         : m_io(std::move(io))
+        , m_hostCapabilities(hostCapabilities)
         , m_port(port)
         , m_sharedGeneration(std::move(generation))
         , m_cancelled(std::move(cancelled))
@@ -78,6 +80,7 @@ public:
         if (m_previousRelease.valid()) {
             m_previousRelease.wait_for(kPreviousReleaseWait);
         }
+        negotiate();
         m_timer = new QTimer(this);
         m_timer->setTimerType(Qt::PreciseTimer);
         m_timer->setInterval(kPollIntervalMs);
@@ -106,23 +109,113 @@ public:
             m_timer->stop();
         }
         m_outbox.clear();
-        for (qsizetype off = 0; m_open && off + ctr2hid::kReportBytes <= finalReports.size();
-             off += ctr2hid::kReportBytes) {
-            if (!writeReport(finalReports.constData() + off)) {
+        for (qsizetype off = 0; m_open && off + ctr2hid::kReportBytes <= finalReports.size();) {
+            const int n = writeReports(finalReports, off);
+            if (n <= 0) {
                 break;
             }
+            off += qsizetype(n) * ctr2hid::kReportBytes;
         }
         closeDevice();
         QThread::currentThread()->quit();
     }
 
 private:
-    bool writeReport(const char* report)
+    // Asks the device which link extensions it offers (Feature report 0x02)
+    // and tells it the ones this host will use, and reads its firmware
+    // version (Feature report 0x03). A device without those reports (any
+    // stock CTR2) fails the Gets and stays plain link version 0. Runs before
+    // the first read, so the result reaches the port before any report.
+    void negotiate()
     {
-        std::array<unsigned char, 1 + ctr2hid::kReportBytes> out{};
-        out[0] = ctr2hid::kReportId;
-        std::copy(report, report + ctr2hid::kReportBytes, out.begin() + 1);
-        return m_io.write(out.data(), static_cast<int>(out.size())) >= 0;
+        quint32 enabled = 0;
+        quint32 offered = 0;
+        std::optional<ctr2hid::deviceinfo::Info> info;
+        if (m_io.getFeature) {
+            std::array<unsigned char, 1 + ctr2hid::deviceinfo::kBytes> buf{};
+            buf[0] = ctr2hid::deviceinfo::kReportId;
+            const int n = m_io.getFeature(buf.data(), static_cast<int>(buf.size()));
+            ctr2hid::deviceinfo::Info decoded;
+            if (n == static_cast<int>(buf.size()) && buf[0] == ctr2hid::deviceinfo::kReportId
+                && ctr2hid::deviceinfo::decode(
+                    QByteArray(reinterpret_cast<const char*>(buf.data() + 1),
+                               ctr2hid::deviceinfo::kBytes), &decoded)) {
+                info = decoded;
+            }
+        }
+        if (m_io.getFeature && m_io.setFeature) {
+            std::array<unsigned char, 1 + ctr2hid::capabilities::kBytes> buf{};
+            buf[0] = ctr2hid::capabilities::kReportId;
+            const int n = m_io.getFeature(buf.data(), static_cast<int>(buf.size()));
+            if (n == static_cast<int>(buf.size()) && buf[0] == ctr2hid::capabilities::kReportId) {
+                const QByteArray offer(reinterpret_cast<const char*>(buf.data() + 1),
+                                       ctr2hid::capabilities::kBytes);
+                offered = ctr2hid::capabilities::decode(offer);
+                enabled = offered & m_hostCapabilities;
+            }
+            if (enabled) {
+                const QByteArray accept = ctr2hid::capabilities::encode(enabled);
+                buf[0] = ctr2hid::capabilities::kReportId;
+                std::copy(accept.begin(), accept.end(), buf.begin() + 1);
+                if (m_io.setFeature(buf.data(), static_cast<int>(buf.size())) < 0) {
+                    enabled = 0;   // the device was not told, so use nothing
+                }
+            }
+        }
+        m_wide = enabled & ctr2hid::kWideReportsBit;
+        QMetaObject::invokeMethod(m_port, [port = m_port, enabled, info, offered] {
+            port->deliverExtensions(enabled, info, offered);
+        }, Qt::QueuedConnection);
+    }
+
+    // Writes the reports at `off` in `reports`: one in report 0x01, or with
+    // wide reports up to kReportsPerWideReport bundled in report 0x04.
+    // Returns how many were written, or -1 on error.
+    int writeReports(const QByteArray& reports, qsizetype off)
+    {
+        const int available = static_cast<int>((reports.size() - off) / ctr2hid::kReportBytes);
+        const char* first = reports.constData() + off;
+        if (!m_wide) {
+            std::array<unsigned char, 1 + ctr2hid::kReportBytes> out{};
+            out[0] = ctr2hid::kReportId;
+            std::copy(first, first + ctr2hid::kReportBytes, out.begin() + 1);
+            return m_io.write(out.data(), static_cast<int>(out.size())) >= 0 ? 1 : -1;
+        }
+        const int n = std::min(available, ctr2hid::kReportsPerWideReport);
+        std::array<unsigned char, 1 + ctr2hid::kWideReportBytes> out{};
+        out[0] = ctr2hid::kWideReportId;
+        out[1] = static_cast<unsigned char>(n);
+        std::copy(first, first + n * ctr2hid::kReportBytes, out.begin() + 2);
+        return m_io.write(out.data(), static_cast<int>(out.size())) >= 0 ? n : -1;
+    }
+
+    // One read: the 8-byte reports it carries, appended to *received.
+    bool unpack(const unsigned char* buf, int n, QByteArray* received)
+    {
+        // Numbered reports arrive with the report ID first on hidraw,
+        // IOHIDManager and Windows; on a plain link, tolerate a backend that
+        // strips it. Windows pads every report to the device's largest, so
+        // report 0x01 may arrive longer than 9 bytes from a device with report
+        // 0x04. With wide reports every read must carry its ID: a short read
+        // starting 0x04 would otherwise pass as link data.
+        if (n >= 1 + ctr2hid::kReportBytes && buf[0] == ctr2hid::kReportId) {
+            received->append(reinterpret_cast<const char*>(buf + 1), ctr2hid::kReportBytes);
+            return true;
+        }
+        if (!m_wide && n == ctr2hid::kReportBytes) {
+            received->append(reinterpret_cast<const char*>(buf), ctr2hid::kReportBytes);
+            return true;
+        }
+        if (m_wide && n >= 2 && buf[0] == ctr2hid::kWideReportId) {
+            const int count = buf[1];
+            if (count < 1 || count > ctr2hid::kReportsPerWideReport
+                || n < 2 + count * ctr2hid::kReportBytes) {
+                return false;
+            }
+            received->append(reinterpret_cast<const char*>(buf + 2), count * ctr2hid::kReportBytes);
+            return true;
+        }
+        return false;
     }
 
     void poll()
@@ -141,13 +234,7 @@ private:
                 fail(QStringLiteral("CTR2 USB read failed: %1").arg(errorText()));
                 return;
             }
-            // Numbered reports arrive with the report ID first on hidraw,
-            // IOHIDManager and Windows; tolerate a backend that strips it.
-            if (n == 1 + ctr2hid::kReportBytes && buf[0] == ctr2hid::kReportId) {
-                received.append(reinterpret_cast<const char*>(buf.data() + 1), ctr2hid::kReportBytes);
-            } else if (n == ctr2hid::kReportBytes) {
-                received.append(reinterpret_cast<const char*>(buf.data()), ctr2hid::kReportBytes);
-            } else {
+            if (!unpack(buf.data(), n, &received)) {
                 fail(QStringLiteral("Unexpected %1-byte HID report from the CTR2").arg(n));
                 return;
             }
@@ -160,17 +247,26 @@ private:
 
         int sent = 0;
         const quint64 generation = m_generation;
-        while (sent < kMaxWritesPerTick && m_outbox.size() >= ctr2hid::kReportBytes) {
+        for (int writes = 0; writes < kMaxWritesPerTick && m_outbox.size() >= ctr2hid::kReportBytes;
+             ++writes) {
             // A fence or shutdown requested mid-batch stops before the next write.
             if (m_cancelled->load() || m_sharedGeneration->load() != generation) {
                 break;
             }
-            if (!writeReport(m_outbox.constData())) {
+            const int n = writeReports(m_outbox, 0);
+            if (n < 0) {
+                // What this tick did write reached the device: count it
+                // before the failure, which arrives after it.
+                if (sent > 0) {
+                    QMetaObject::invokeMethod(m_port, [port = m_port, sent, generation] {
+                        port->deliverSent(sent, generation);
+                    }, Qt::QueuedConnection);
+                }
                 fail(QStringLiteral("CTR2 USB write failed: %1").arg(errorText()));
                 return;
             }
-            m_outbox.remove(0, ctr2hid::kReportBytes);
-            ++sent;
+            m_outbox.remove(0, qsizetype(n) * ctr2hid::kReportBytes);
+            sent += n;
         }
         if (sent > 0) {
             QMetaObject::invokeMethod(m_port, [port = m_port, sent, generation] {
@@ -217,12 +313,14 @@ private:
     }
 
     Ctr2HidDeviceIo m_io;
+    quint32 m_hostCapabilities;
     Ctr2HidThreadPort* m_port;
     std::shared_ptr<std::atomic<quint64>> m_sharedGeneration;
     std::shared_ptr<std::atomic<bool>> m_cancelled;
     quint64 m_generation;
     QTimer* m_timer{nullptr};
     QByteArray m_outbox;
+    bool m_wide{false};          // wide reports negotiated: report 0x04 bundles
     bool m_open{true};
     std::promise<void> m_release;
     bool m_released{false};
@@ -232,7 +330,8 @@ private:
 } // namespace detail
 
 Ctr2HidThreadPort::Ctr2HidThreadPort(Ctr2HidDeviceIo io, const QString& description,
-                                     const QString& deviceKey, QObject* parent)
+                                     const QString& deviceKey, QObject* parent,
+                                     quint32 hostCapabilities)
     : Ctr2HidPort(parent)
     , m_generation(std::make_shared<std::atomic<quint64>>(0))
     , m_cancelled(std::make_shared<std::atomic<bool>>(false))
@@ -240,7 +339,8 @@ Ctr2HidThreadPort::Ctr2HidThreadPort(Ctr2HidDeviceIo io, const QString& descript
 {
     m_thread = new QThread(this);
     m_thread->setObjectName(QStringLiteral("Ctr2HidIo"));
-    m_worker = new detail::Ctr2HidIoWorker(std::move(io), this, m_generation, m_cancelled, deviceKey);
+    m_worker = new detail::Ctr2HidIoWorker(std::move(io), this, m_generation, m_cancelled, deviceKey,
+                                           hostCapabilities);
     m_worker->moveToThread(m_thread);
     connect(m_thread, &QThread::finished, m_worker, &QObject::deleteLater);
     m_thread->start();
@@ -303,6 +403,15 @@ void Ctr2HidThreadPort::deliverReceived(const QByteArray& reports)
 {
     if (m_open) {
         emit reportsReceived(reports);
+    }
+}
+
+void Ctr2HidThreadPort::deliverExtensions(quint32 extensions,
+                                          std::optional<ctr2hid::deviceinfo::Info> info,
+                                          quint32 offered)
+{
+    if (m_open) {
+        setExtensions(extensions, std::move(info), offered);
     }
 }
 

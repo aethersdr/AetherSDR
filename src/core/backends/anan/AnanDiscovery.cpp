@@ -1,6 +1,7 @@
 #include "core/backends/anan/AnanDiscovery.h"
 
 #include "core/AppSettings.h"
+#include "core/LogManager.h"   // lcDiscovery
 #include "core/backends/anan/P2Protocol.h"
 
 #include <QJsonObject>
@@ -8,6 +9,8 @@
 #include <QStringList>
 #include <QTimer>
 #include <QUdpSocket>
+
+#include <utility>
 
 #ifdef Q_OS_WIN
 // winsock2.h pulls in windows.h, whose min/max function-like macros otherwise
@@ -43,10 +46,146 @@ void enableBroadcast(QUdpSocket& s) noexcept
 #endif
 }
 
+// Every address entry on an interface that is actually carrying traffic.
+// NOT testable, which is why it is the only part of the sweep that lives here:
+// QNetworkInterface has no public constructor to synthesise one with. The flag
+// test is the same one NetworkPathResolver::enumerateIpv4Candidates() applies,
+// minus its IsLoopBack check -- broadcastTargets() drops loopback by address,
+// which also catches a loopback address on an interface not flagged as one.
+QList<QNetworkAddressEntry> liveAddressEntries()
+{
+    QList<QNetworkAddressEntry> entries;
+    for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
+        const auto flags = iface.flags();
+        if (!(flags & QNetworkInterface::IsUp) || !(flags & QNetworkInterface::IsRunning))
+            continue;
+        entries.append(iface.addressEntries());
+    }
+    return entries;
+}
+
 constexpr char kIdentityFeature[] = "Identity";
 constexpr char kNicknameField[] = "nickname";
 
+// How a probe target reads in the log. The global broadcast is named, not
+// printed: the log file keeps only an address's last octet, and
+// 255.255.255.255 would read like any /24's directed broadcast.
+QString targetName(const QHostAddress& target)
+{
+    return target == QHostAddress(QHostAddress::Broadcast)
+               ? QStringLiteral("the global broadcast")
+               : target.toString();
+}
+
 }  // namespace
+
+void AnanDiscoveryLog::bindFailed(const QString& error)
+{
+    if (m_bindFailureReported) {
+        return;   // already reported, and no bind has succeeded since
+    }
+    m_bindFailureReported = true;
+    qCWarning(lcDiscovery).noquote()
+        << QStringLiteral("ANAN discovery: cannot bind a UDP socket: %1").arg(error);
+}
+
+void AnanDiscoveryLog::bindSucceeded()
+{
+    m_bindFailureReported = false;
+}
+
+void AnanDiscoveryLog::targetsListed(const QList<QHostAddress>& targets)
+{
+    // broadcastTargets() puts the global broadcast first; anything after it
+    // is a subnet's directed broadcast.
+    if (targets.size() > 1) {
+        m_noSubnetReported = false;
+    } else if (!m_noSubnetReported) {
+        m_noSubnetReported = true;
+        qCWarning(lcDiscovery).noquote()
+            << QStringLiteral("ANAN discovery: no IPv4 interface has a broadcast address; probing the global broadcast only");
+    }
+}
+
+void AnanDiscoveryLog::sendFailed(const QHostAddress& target, const QString& error)
+{
+    const QString key = target.toString();
+    if (m_sendFailures.contains(key)) {
+        return;   // already reported, and no probe has left for it since
+    }
+    m_sendFailures.insert(key);
+    qCWarning(lcDiscovery).noquote()
+        << QStringLiteral("ANAN discovery: cannot send a probe to %1: %2")
+               .arg(targetName(target), error);
+}
+
+void AnanDiscoveryLog::sendSucceeded(const QHostAddress& target)
+{
+    const QString key = target.toString();
+    m_sendFailures.remove(key);
+    m_sentTargets.insert(key);
+}
+
+void AnanDiscoveryLog::replyListed()
+{
+    m_answered = true;
+}
+
+void AnanDiscoveryLog::sweepClosed()
+{
+    // Both marks belong to the sweep being closed, answered or not.
+    const int sentTo = static_cast<int>(std::exchange(m_sentTargets, {}).size());
+    if (std::exchange(m_answered, false)) {
+        m_silentSweeps = 0;
+        return;
+    }
+    if (sentTo == 0) {
+        return;   // nothing was asked, so nothing went unanswered
+    }
+    if (++m_silentSweeps != kSilentSweepsBeforeNotice) {
+        return;
+    }
+    // Info, not a warning: every install looks for an ANAN-G2, and most have none.
+    qCInfo(lcDiscovery).noquote()
+        << QStringLiteral("ANAN discovery: no ANAN-G2 answered %1 sweeps to %2 %3")
+               .arg(kSilentSweepsBeforeNotice)
+               .arg(sentTo)
+               .arg(sentTo == 1 ? QStringLiteral("address")
+                                : QStringLiteral("addresses"));
+}
+
+void AnanDiscoveryLog::reset()
+{
+    *this = AnanDiscoveryLog{};
+}
+
+QList<QHostAddress> AnanDiscovery::broadcastTargets(
+    const QList<QNetworkAddressEntry>& entries)
+{
+    // The global broadcast goes first and unconditionally -- see this function's
+    // declaration comment for why it is kept rather than replaced.
+    QList<QHostAddress> targets{QHostAddress(QHostAddress::Broadcast)};
+    for (const QNetworkAddressEntry& entry : entries) {
+        const QHostAddress broadcast = entry.broadcast();
+        // Protocol 2 discovery is IPv4-only; absent broadcast addresses are
+        // not valid datagram destinations.
+        if (broadcast.isNull() || broadcast.protocol() != QAbstractSocket::IPv4Protocol) {
+            continue;
+        }
+        // /31 and /32 links have no broadcast domain. Qt can still synthesize
+        // ip | ~netmask for them, including this host's own address for a /32.
+        if (entry.prefixLength() >= 31) {
+            continue;
+        }
+        // The loopback subnet broadcasts to this host only; the radio is not
+        // there, and p2app on the same machine would be a different setup.
+        if (entry.ip().isLoopback())
+            continue;
+        if (!targets.contains(broadcast))
+            targets.append(broadcast);
+    }
+    return targets;
+}
 
 QString AnanDiscovery::macToSerial(const std::array<std::uint8_t, 6>& mac)
 {
@@ -100,16 +239,8 @@ bool AnanDiscovery::isRunning() const noexcept
 
 void AnanDiscovery::start(int intervalMs)
 {
-    if (!m_socket) {
-        m_socket = new QUdpSocket(this);
-        if (!m_socket->bind(QHostAddress::AnyIPv4, 0)) {
-            m_socket->deleteLater();
-            m_socket = nullptr;
-            return;   // no socket: stay silent rather than half-running
-        }
-        enableBroadcast(*m_socket);
-        connect(m_socket, &QUdpSocket::readyRead, this, &AnanDiscovery::onReadyRead);
-    }
+    // The timer starts even if sweepNow()'s bind fails: every sweep retries
+    // it, so discovery recovers without a restart.
     m_timer->start(intervalMs);
     sweepNow();   // don't make the operator wait a full interval for the first sweep
 }
@@ -123,20 +254,59 @@ void AnanDiscovery::stop()
         m_socket = nullptr;
     }
     m_seen.clear();
+    m_log.reset();
+}
+
+bool AnanDiscovery::openSocket()
+{
+    auto* socket = new QUdpSocket(this);
+    if (!socket->bind(QHostAddress::AnyIPv4, 0)) {
+        m_log.bindFailed(socket->errorString());
+        socket->deleteLater();
+        return false;
+    }
+    m_log.bindSucceeded();
+    enableBroadcast(*socket);
+    connect(socket, &QUdpSocket::readyRead, this, &AnanDiscovery::onReadyRead);
+    m_socket = socket;
+    return true;
 }
 
 void AnanDiscovery::sweepNow()
 {
-    if (!m_socket)
+    // start() starts the timer before its first sweep, and stop() stops it,
+    // so this is also the stopped case.
+    if (!isRunning()) {
         return;
+    }
+    // One socket for the session: a wildcard bind does not depend on which
+    // interfaces are up, so it is made once, when there is none.
+    if (!m_socket && !openSocket()) {
+        return;
+    }
     const auto pkt = buildDiscovery();
-    m_socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
-                            static_cast<qint64>(pkt.size()),
-                            QHostAddress::Broadcast, kRadioPort);
+    // The kernel routes each directed broadcast from this wildcard socket.
+    // This reaches a second NIC on a distinct subnet; two NICs on the same
+    // subnet still follow the preferred route rather than each being swept.
+    // Replies return to this socket and are de-duplicated by MAC in onReadyRead().
+    const QList<QHostAddress> targets = broadcastTargets(liveAddressEntries());
+    m_log.targetsListed(targets);
+    for (const QHostAddress& target : targets) {
+        if (m_socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
+                                    static_cast<qint64>(pkt.size()),
+                                    target, kRadioPort) >= 0) {
+            m_log.sendSucceeded(target);
+        } else {
+            m_log.sendFailed(target, m_socket->errorString());
+        }
+    }
 }
 
 void AnanDiscovery::onSweepTimer()
 {
+    // The previous sweep's reply window ends here.
+    m_log.sweepClosed();
+
     // Age out anything that missed too many consecutive sweeps before
     // probing again, so a radio that is unplugged disappears from the picker.
     for (auto it = m_seen.begin(); it != m_seen.end();) {
@@ -161,6 +331,7 @@ void AnanDiscovery::onReadyRead()
              static_cast<std::size_t>(data.size())});
         if (!reply || !reply->isSaturn())
             continue;   // not an ANAN-G2 (or not a discovery reply at all)
+        m_log.replyListed();
 
         RadioInfo info;
         info.family   = QStringLiteral("anan");

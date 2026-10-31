@@ -1,12 +1,15 @@
 #include "TitleBar.h"
+#include "AudioButtonIcon.h"
 #include "RoundedMenu.h"
 #include "BrandMark.h"
 #include "FramelessMessageBox.h"
 #include "FramelessMoveHelper.h"
 #include "WindowChrome.h"
 #include "GuardedSlider.h"
+#include "MixerControlAvailability.h"
 #include "PersistentDialog.h"
 #include "RadioTabBar.h"
+#include "ReleaseTagText.h"
 #include "WindowCaptionButtons.h"
 #include "core/NetworkDiagnostics.h"
 #include "core/AppSettings.h"
@@ -46,6 +49,7 @@
 #include <QNetworkReply>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <utility>
 #include "core/VersionNumber.h"
 #include "core/ThemeManager.h"
 
@@ -137,73 +141,7 @@ QPixmap buildPopOutIcon(const QWidget* widget, bool active)
 }
 
 // ── Audio-cluster icons ─────────────────────────────────────────────────────
-// Thin-line marks in the house style (1.8 px stroke, no fill), replacing the
-// speaker/headphone emoji the strip used to carry: emoji render in the
-// platform's own colour and weight, so they never matched the bar around them
-// and could not follow the theme.
-enum class AudioIcon { Speaker, Headphone };
 
-QPixmap buildAudioIcon(AudioIcon kind, bool muted, const QColor& stroke, qreal dpr)
-{
-    constexpr int kBox = 20;
-    QPixmap pm(int(kBox * dpr), int(kBox * dpr));
-    pm.setDevicePixelRatio(dpr);
-    pm.fill(Qt::transparent);
-
-    QPainter p(&pm);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    QPen pen(stroke, 1.8);
-    pen.setCapStyle(Qt::RoundCap);
-    pen.setJoinStyle(Qt::RoundJoin);
-    p.setPen(pen);
-    p.setBrush(Qt::NoBrush);
-
-    if (kind == AudioIcon::Speaker) {
-        // Cone: a small rectangle at the pivot with a flared face.
-        QPainterPath cone;
-        cone.moveTo(3.0, 8.0);
-        cone.lineTo(6.5, 8.0);
-        cone.lineTo(10.5, 4.5);
-        cone.lineTo(10.5, 15.5);
-        cone.lineTo(6.5, 12.0);
-        cone.lineTo(3.0, 12.0);
-        cone.closeSubpath();
-        p.drawPath(cone);
-        if (!muted) {
-            // Two radiating arcs.  QPainter angles are sixteenths of a degree.
-            p.drawArc(QRectF(9.0, 5.5, 6.0, 9.0), -60 * 16, 120 * 16);
-            p.drawArc(QRectF(9.0, 2.5, 9.0, 15.0), -55 * 16, 110 * 16);
-        } else {
-            p.drawLine(QPointF(13.0, 7.0), QPointF(17.5, 13.0));
-            p.drawLine(QPointF(17.5, 7.0), QPointF(13.0, 13.0));
-        }
-    } else {
-        // Headband arc plus two ear cups.
-        p.drawArc(QRectF(3.5, 3.5, 13.0, 13.0), 0, 180 * 16);
-        p.drawRoundedRect(QRectF(3.0, 10.0, 3.6, 6.5), 1.6, 1.6);
-        p.drawRoundedRect(QRectF(13.4, 10.0, 3.6, 6.5), 1.6, 1.6);
-        if (muted) {
-            p.drawLine(QPointF(3.5, 16.5), QPointF(16.5, 3.5));
-        }
-    }
-    p.end();
-    return pm;
-}
-
-// Set (or re-set) an audio button's icon at the current DPR and theme colour.
-// Called on construction, on every mute toggle, and on theme change.
-void applyAudioIcon(QPushButton* button, AudioIcon kind, bool muted)
-{
-    if (!button) {
-        return;
-    }
-    const QColor stroke =
-        AetherSDR::ThemeManager::instance().color(button,
-                                                  QStringLiteral("color.text.secondary"));
-    button->setIcon(QIcon(buildAudioIcon(kind, muted, stroke,
-                                         button->devicePixelRatioF())));
-    button->setIconSize(QSize(20, 20));
-}
 }
 
 TitleBar::TitleBar(QWidget* parent)
@@ -263,8 +201,26 @@ TitleBar::TitleBar(QWidget* parent)
     markDragHandle(m_brand);
     m_hbox->addWidget(m_brand);
 
+    // Hidden until UpdateChecker finds a newer release (RFC #5304).
+    m_updateBadge = new QPushButton(QStringLiteral("UPDATE"), this);
+    m_updateBadge->setObjectName(QStringLiteral("updateAvailableBadge"));
+    m_updateBadge->setFlat(true);
+    m_updateBadge->setFixedHeight(20);
+    m_updateBadge->setCursor(Qt::PointingHandCursor);
+    ThemeManager::instance().applyStyleSheet(
+        m_updateBadge,
+        QStringLiteral(
+            "QPushButton { color: {{color.accent}}; border: 1px solid {{color.accent}};"
+            " border-radius: 3px; background: transparent; font-size: 9px;"
+            " font-weight: bold; padding: 0px 5px; }"
+            "QPushButton:hover { background: {{color.titlebar.tab.active.background}}; }"));
+    m_updateBadge->setAccessibleName(QStringLiteral("AetherSDR update available"));
+    m_updateBadge->hide();
+    connect(m_updateBadge, &QPushButton::clicked, this, &TitleBar::updateBadgeClicked);
+    m_hbox->addWidget(m_updateBadge);
+
     // The menu bar (Linux/Windows only — macOS puts it in the system bar) is
-    // inserted here by setMenuBar(), between the brand and the radio tabs.
+    // inserted here by setMenuBar(), after the brand and the UPDATE badge.
     m_menuBarSlot = m_hbox->count();
 
     // ── 3. Radio tabs ───────────────────────────────────────────────────────
@@ -339,6 +295,7 @@ TitleBar::TitleBar(QWidget* parent)
     auto* audio = new QHBoxLayout(audioCluster);
     audio->setContentsMargins(0, 0, 0, 0);
     audio->setSpacing(8);
+    markDragHandle(audioCluster);   // the reserved timer band keeps the open-hand cursor
 
     m_otherTxLabel = new QLabel();
     ThemeManager::instance().applyStyleSheet(
@@ -382,8 +339,21 @@ TitleBar::TitleBar(QWidget* parent)
     m_txTimerOpacity = new QGraphicsOpacityEffect(m_txTimerLabel);
     m_txTimerOpacity->setOpacity(1.0);
     m_txTimerLabel->setGraphicsEffect(m_txTimerOpacity);
+    // Keep the slot reserved while idle so the cluster's size hint never
+    // changes.  The settled row does not move (the drag gutter absorbs the
+    // 52+8 px), but hiding the label made the nested cluster re-lay its
+    // children inside its old rect for one pass, flicking PC Audio and
+    // everything right of it left for a frame before m_hbox caught up (#6455).
+    {
+        QSizePolicy sp = m_txTimerLabel->sizePolicy();
+        sp.setRetainSizeWhenHidden(true);
+        m_txTimerLabel->setSizePolicy(sp);
+    }
     m_txTimerLabel->setVisible(false);   // idle: not displayed
     audio->addWidget(m_txTimerLabel);
+    // The speaker icon sits inset in its 22 px button, so the gap to its right
+    // reads ~3 px wider than the layout's 8 px; match it on the timer side.
+    audio->addSpacing(3);
 
     // 5 Hz tick that repaints the elapsed time while keyed.
     m_txTimerTick = new QTimer(this);
@@ -407,8 +377,12 @@ TitleBar::TitleBar(QWidget* parent)
     m_txTimerFade = new QPropertyAnimation(m_txTimerOpacity, "opacity", this);
     m_txTimerFade->setDuration(800);
     connect(m_txTimerFade, &QPropertyAnimation::finished, this, [this]() {
-        if (m_txTimerOpacity->opacity() <= 0.01)
+        if (m_txTimerOpacity->opacity() <= 0.01) {
             m_txTimerLabel->setVisible(false);
+            // Reset so the retained slot returns to its normal width after an
+            // over longer than an hour (H:MM:SS).
+            m_txTimerLabel->setText(QStringLiteral("0:00"));
+        }
     });
 
     // PC Audio pill
@@ -484,6 +458,7 @@ TitleBar::TitleBar(QWidget* parent)
     m_masterSlider->setValue(savedVol);
     m_masterSlider->setFixedWidth(64);
     m_masterSlider->setFixedHeight(16);
+    m_masterSlider->setCursor(Qt::ArrowCursor);   // not the cluster's drag hand
     m_masterSlider->setAccessibleName("Master volume");
     m_masterSlider->setAccessibleDescription("Line out volume level, 0 to 100 percent");
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_masterSlider, barSliderStyle);
@@ -524,6 +499,7 @@ TitleBar::TitleBar(QWidget* parent)
     m_hpSlider->setValue(50);
     m_hpSlider->setFixedWidth(64);
     m_hpSlider->setFixedHeight(16);
+    m_hpSlider->setCursor(Qt::ArrowCursor);   // not the cluster's drag hand
     m_hpSlider->setAccessibleName("Headphone volume");
     m_hpSlider->setAccessibleDescription("Headphone volume level, 0 to 100 percent");
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_hpSlider, barSliderStyle);
@@ -706,7 +682,7 @@ void TitleBar::updateChromeLayout()
     }
     const QScopedValueRollback<bool> updating(m_updatingChromeLayout, true);
     QWidget* host = window();
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     mac::updateNativeTitleVisibility(host);
 #endif
     const QMargins insets = WindowChrome::contentInsets(host);
@@ -721,6 +697,18 @@ void TitleBar::setRadioTabs(const QList<RadioTabEntry>& radios)
     if (m_radioTabs) {
         m_radioTabs->setRadios(radios);
     }
+    // A new connection finishes discovery without requiring a heartbeat.
+    // Repeated snapshots must not cancel a rescan begun while already connected.
+    QList<QString> connectedIds;
+    for (const RadioTabEntry& radio : radios) {
+        if (radio.status == RadioTabStatus::Connected) {
+            connectedIds.append(radio.id);
+            if (!m_connectedRadioIds.contains(radio.id)) {
+                setDiscovering(false);
+            }
+        }
+    }
+    m_connectedRadioIds = std::move(connectedIds);
 }
 
 void TitleBar::setActiveRadio(const QString& id)
@@ -761,7 +749,7 @@ QVariantMap TitleBar::barState() const
     if (m_captionButtons) {
         chrome.insert(QStringLiteral("captionButtons"), m_captionButtons->state());
     }
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     const QRectF nativeBounds = mac::nativeCaptionBounds(window());
     chrome.insert(QStringLiteral("nativeCaptionRect"),
                   QVariantList{nativeBounds.x(), nativeBounds.y(), nativeBounds.width(), nativeBounds.height()});
@@ -789,6 +777,12 @@ QVariantMap TitleBar::barState() const
              {QStringLiteral("rect"), m_brand
                   ? QVariantList{m_brand->x(), m_brand->y(), m_brand->width(), m_brand->height()}
                   : QVariantList{}},
+         }},
+        {QStringLiteral("update"),
+         QVariantMap{
+             {QStringLiteral("version"), m_updateVersion},
+             {QStringLiteral("staged"), m_stagedVersion},
+             {QStringLiteral("visible"), m_updateBadge && m_updateBadge->isVisible()},
          }},
         {QStringLiteral("appMenu"),
          QVariantMap{
@@ -1294,12 +1288,8 @@ void TitleBar::setHeadphoneAvailable(bool available)
             QStringLiteral("Headphone volume level, 0 to 100 percent"));
         return;
     }
-    const QString muteReason = QStringLiteral(
-        "Unavailable: this radio has no headphone output. Its audio plays on "
-        "this computer; mute it with the speaker button.");
-    const QString volumeReason = QStringLiteral(
-        "Unavailable: this radio has no headphone output. Its audio plays on "
-        "this computer; set its level with the master volume slider.");
+    const QString muteReason = QString::fromLatin1(kHeadphoneMuteUnavailableReason);
+    const QString volumeReason = QString::fromLatin1(kHeadphoneLevelUnavailableReason);
     m_headphoneBtn->setToolTip(muteReason);
     m_headphoneBtn->setAccessibleDescription(muteReason);
     m_hpSlider->setToolTip(volumeReason);
@@ -1349,6 +1339,42 @@ void TitleBar::setExperimentalRadioFamily(const QString& familyName)
                   .arg(trimmed)
             : QString());
     m_experimentalRadioLabel->setVisible(experimental);
+}
+
+void TitleBar::setUpdateAvailable(const QString& latestVersion)
+{
+    // The release tag is network text, so only the parsed digits reach the
+    // tooltip (which Qt may render as rich text).
+    const VersionNumber parsed = VersionNumber::parse(latestVersion);
+    m_updateVersion = parsed.isNull() ? QString() : parsed.toString();
+    refreshUpdateBadge();
+}
+
+void TitleBar::setUpdateStaged(const QString& version)
+{
+    const VersionNumber parsed = VersionNumber::parse(version);
+    m_stagedVersion = parsed.isNull() ? QString() : parsed.toString();
+    refreshUpdateBadge();
+}
+
+void TitleBar::refreshUpdateBadge()
+{
+    if (!m_updateBadge) {
+        return;
+    }
+    const bool staged = !m_stagedVersion.isEmpty();
+    const QString version = staged ? m_stagedVersion : m_updateVersion;
+    m_updateBadge->setText(staged ? QStringLiteral("RESTART TO UPDATE") : QStringLiteral("UPDATE"));
+    m_updateBadge->setAccessibleName(staged ? QStringLiteral("AetherSDR update ready to install")
+                                            : QStringLiteral("AetherSDR update available"));
+    const QString tip = version.isEmpty() ? QString()
+                        : staged ? QStringLiteral("AetherSDR v%1 is ready. It installs when you quit. "
+                                                  "Click to restart and install it now from Updates.")
+                                       .arg(version)
+                                 : QStringLiteral("AetherSDR v%1 is available. Click for details.").arg(version);
+    m_updateBadge->setToolTip(tip);
+    m_updateBadge->setAccessibleDescription(tip);
+    m_updateBadge->setVisible(!version.isEmpty() && !m_minimalMode);
 }
 
 QString TitleBar::formatTxElapsed(qint64 ms) const
@@ -1448,11 +1474,7 @@ void TitleBar::showFeatureRequestDialog()
             auto currentVer = VersionNumber::parse(QCoreApplication::applicationVersion());
             if (!latestVer.isNull() && currentVer < latestVer) {
                 auto answer = FramelessMessageBox::warning(this, "Outdated Version",
-                    QString("<p>You are running <b>v%1</b> but <b>v%2</b> is available.</p>"
-                            "<p>Your issue may already be fixed in the latest release. "
-                            "Please update before filing a bug report.</p>"
-                            "<p>Continue anyway?</p>")
-                        .arg(QCoreApplication::applicationVersion(), latest),
+                    outdatedVersionPromptHtml(QCoreApplication::applicationVersion(), latest),
                     QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
                 if (answer != QMessageBox::Yes) return;
             }
@@ -1726,6 +1748,7 @@ void TitleBar::setMinimalMode(bool on)
     if (m_appMenuBtn) m_appMenuBtn->setVisible(!on);
     else if (m_menuBar) m_menuBar->setVisible(!on);
     if (m_brand) m_brand->setVisible(!on);
+    refreshUpdateBadge();
     // The radio strip stays, compacted to the active tab: its dot is the
     // radio-link indicator now, and minimal mode is exactly when an operator
     // has nothing else on screen that would show them a dropped link.
@@ -1743,6 +1766,13 @@ void TitleBar::setMinimalMode(bool on)
     if (m_dockRightLbl) m_dockRightLbl->setVisible(!on);
     if (m_popOutLbl)    m_popOutLbl->setVisible(!on);
     if (m_dockSep)      m_dockSep->setVisible(!on);
+    // Minimal mode hides the audio row to free the strip; don't let the idle
+    // timer's retained slot hold 52 px of it.
+    if (m_txTimerLabel) {
+        QSizePolicy sp = m_txTimerLabel->sizePolicy();
+        sp.setRetainSizeWhenHidden(!on);
+        m_txTimerLabel->setSizePolicy(sp);
+    }
     // Don't touch m_otherTxLabel or m_mfBtn — their visibility is
     // managed by setOtherClientTx() and setMultiFlexStatus() respectively
     updateMaximizeIcon();

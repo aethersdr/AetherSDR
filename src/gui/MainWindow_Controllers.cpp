@@ -22,6 +22,7 @@
 #include "core/UlanziDialMappings.h"
 #include "AppletPanel.h"
 #include "core/IambicKeyer.h"
+#include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "RC28MappingDialog.h"
 #include "RadioSetupDialog.h"
@@ -31,7 +32,8 @@
 #include "PanadapterMessageOverlay.h"
 #include "TitleBar.h"
 #include "models/SliceModel.h"
-#include "Ctr2ProxyApplet.h"
+#include "FirmwareInstallDialog.h"
+#include "Ctr2AudioSpectrumFeeder.h"
 #include "models/Ctr2ProxyModel.h"
 
 #include <QHostAddress>
@@ -264,8 +266,17 @@ QString flexControlButtonAction(int button, int action)
 void MainWindow::showFlexControlDialog()
 {
     // No capability check: the knob is a host serial device (#5778).
+    // A canon workspace window: created directly rather than through
+    // showOrRaisePersistent(), which would apply View → Frameless Window.
     const bool wasFresh = !m_flexControlDialog;
-    showOrRaisePersistent(m_flexControlDialog);
+    if (wasFresh) {
+        auto* dialog = new FlexControlDialog(this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        m_flexControlDialog = dialog;
+    }
+    m_flexControlDialog->show();
+    m_flexControlDialog->raise();
+    m_flexControlDialog->activateWindow();
     if (wasFresh && m_flexControlDialog) {
         connect(m_flexControlDialog, &FlexControlDialog::virtualWheelSteps,
                 this, &MainWindow::handleVirtualFlexControlWheel);
@@ -583,32 +594,7 @@ void MainWindow::handleFlexControlButton(int button, int action,
         else                      beginSplitMonitor();
     } else if (actionName == "SplitActiveSlice") {
         if (!m_splitActive) {
-            // Same gate the CwxF* macros carry below: split creates its TX
-            // slice with Flex wire text, which a backend with no command plane
-            // drops — a hardware button that silently does nothing. Refuse and
-            // log; the binding stays assignable (M0, #5263).
-            if (!m_radioModel.hasCommandPlane()) {
-                qCDebug(lcDevices) << "SplitActiveSlice ignored:"
-                                   << "this backend takes no Flex slice-create command";
-                // A log line alone is a hardware button that silently does
-                // nothing. Say so the way the keyboard split_toggle refusal
-                // does (MainWindow_Shortcuts.cpp); one notice per session.
-                showUnsupportedControlNotice();
-                return;
-            }
-            if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) return;
-            auto* s = activeSlice();
-            if (!s) return;
-            QString panId = s->panId();
-            if (panId.isEmpty())
-                panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
-            const bool isCw = isCwMode(s->mode());
-            const double txFreq = s->frequency() + (isCw ? 0.001 : 0.005);
-            m_splitActive = true;
-            m_splitRxSliceId = s->sliceId();
-            m_splitRxFrequencyMhz = s->reportedFrequency();
-            m_radioModel.sendCommand(
-                QString("slice create pan=%1 freq=%2").arg(panId).arg(txFreq, 0, 'f', 6));
+            if (SliceModel* source = activeSlice()) { enterSplit(source->sliceId()); }
         } else {
             disableSplit();
         }
@@ -640,6 +626,93 @@ void MainWindow::handleVirtualFlexControlWheel(const QString& actionId, int step
 }
 
 #ifdef HAVE_HIDAPI
+// Contour shuttle ring (#5928)
+
+void MainWindow::onShuttleChanged(int position)
+{
+    if (position == 0) {
+        stopShuttle();
+        return;
+    }
+    const bool starting = (m_shuttleRate.position() == 0);
+    m_shuttleRate.setPosition(position);
+    if (!starting)
+        return;
+
+    // Read the settings once per deflection rather than on every tick.
+    m_shuttleAction =
+        HidEncoderManager::shuttleMappingField("action", QStringLiteral("WheelFrequency"));
+    const QString speed =
+        HidEncoderManager::shuttleMappingField("speed", QStringLiteral("Normal"));
+    m_shuttleSpeed = speed == QLatin1String("Slow") ? 0.5
+                   : speed == QLatin1String("Fast") ? 2.0 : 1.0;
+    m_shuttleLockNotified = false;
+    m_shuttleClock.start();
+    m_shuttleTimer->start();
+}
+
+void MainWindow::stopShuttle()
+{
+    if (m_shuttleTimer)
+        m_shuttleTimer->stop();
+    m_shuttleRate.reset();
+    m_shuttleLockNotified = false;
+}
+
+void MainWindow::onShuttleTick()
+{
+    // Real elapsed time, so a late tick does not slow the sweep; capped so a
+    // stalled event loop cannot turn into one huge jump.
+    const double dt = std::min(m_shuttleClock.restart() / 1000.0, 0.2);
+
+    auto* s = activeSlice();
+    if (!s)
+        return;
+
+    int unitHz = 0;
+    double maxRateHz = 0.0;
+    if (m_shuttleAction == QLatin1String("WheelFrequency")) {
+        if (s->isLocked()) {
+            // Once per deflection: notifyTuneBlockedByLock() also cancels
+            // direct frequency entry, so repeating it every tick would stop
+            // the operator typing a frequency while the ring is held.
+            if (!m_shuttleLockNotified) {
+                s->notifyTuneBlockedByLock();
+                m_shuttleLockNotified = true;
+            }
+            m_flexTargetMhz = -1.0;
+            m_shuttleRate.resetRemainder();
+            return;
+        }
+        auto* sw = spectrumForSlice(s);
+        unitHz = sw ? sw->stepSize() : (s->stepHz() > 0 ? s->stepHz() : 100);
+        maxRateHz = 200'000.0;
+    } else if (m_shuttleAction == QLatin1String("WheelRit")
+               || m_shuttleAction == QLatin1String("WheelXit")) {
+        // applyFlexControlWheelAction moves RIT/XIT 10 Hz per step, within
+        // +/-9999 Hz: keep the top speed low enough to stay controllable.
+        unitHz = 10;
+        maxRateHz = 1'000.0;
+    } else {
+        return;  // None, or an unknown value
+    }
+
+    const int steps = m_shuttleRate.tick(dt, unitHz, m_shuttleSpeed, maxRateHz);
+    if (steps == 0) {
+        return;
+    }
+    // A held ring must not resend an unchanged offset on every timer tick.
+    if (m_shuttleAction == QLatin1String("WheelRit") && s->ritOn()
+        && std::clamp(s->ritFreq() + steps * 10, -9999, 9999) == s->ritFreq()) {
+        return;
+    }
+    if (m_shuttleAction == QLatin1String("WheelXit") && s->xitOn()
+        && std::clamp(s->xitFreq() + steps * 10, -9999, 9999) == s->xitFreq()) {
+        return;
+    }
+    applyFlexControlWheelAction(m_shuttleAction, steps);
+}
+
 // static
 QString MainWindow::hidEncoderDefaultAction(int encoderIndex)
 {
@@ -1120,28 +1193,7 @@ void MainWindow::dispatchHidAction(const QString& actionName,
         else                      beginSplitMonitor();
     } else if (actionName == "SplitActiveSlice") {
         if (!m_splitActive) {
-            // Same refusal as the FlexControl split above: no command plane,
-            // no Flex slice-create — refuse loudly instead of a dead hardware
-            // button (M0, #5263).
-            if (!m_radioModel.hasCommandPlane()) {
-                qCDebug(lcDevices) << "SplitActiveSlice (HID) ignored:"
-                                   << "this backend takes no Flex slice-create command";
-                showUnsupportedControlNotice();
-                return;
-            }
-            auto* s = activeSlice();
-            if (s && m_radioModel.slices().size() < m_radioModel.maxSlices()) {
-                QString panId = s->panId().isEmpty()
-                    ? (m_panStack ? m_panStack->activePanId() : m_radioModel.panId())
-                    : s->panId();
-                const bool isCw = isCwMode(s->mode());
-                m_splitActive    = true;
-                m_splitRxSliceId = s->sliceId();
-                m_splitRxFrequencyMhz = s->reportedFrequency();
-                m_radioModel.sendCommand(
-                    QString("slice create pan=%1 freq=%2")
-                    .arg(panId).arg(s->frequency() + (isCw ? 0.001 : 0.005), 0, 'f', 6));
-            }
+            if (SliceModel* source = activeSlice()) { enterSplit(source->sliceId()); }
         } else {
             disableSplit();
         }
@@ -2307,7 +2359,7 @@ void MainWindow::registerMidiParams()
     reg("global.masterVolume", "Master Volume", "Global", P::Slider, 0, 100,
         [this](float v) {
             if (m_radioModel.hasCommandPlane()) {
-                m_radioModel.sendCommand(QString("mixer lineout gain %1").arg(static_cast<int>(v)));
+                m_radioModel.requestRadioSetup({RadioSetupField::LineoutGain, static_cast<int>(v)});
                 return;
             }
             if (!m_radioModel.isConnected()) {
@@ -2350,7 +2402,7 @@ void MainWindow::registerMidiParams()
                                    << "radio mixer verbs need a Flex command plane";
                 return;
             }
-            m_radioModel.sendCommand(QString("mixer headphone gain %1").arg(static_cast<int>(v)));
+            m_radioModel.requestRadioSetup({RadioSetupField::HeadphoneGain, static_cast<int>(v)});
         },
         [this]() -> float { return m_radioModel.headphoneGain(); });
 
@@ -2630,11 +2682,44 @@ void MainWindow::setupCtr2Proxy()
             [pushRadio](bool) { pushRadio(); });
     connect(&m_radioModel, &RadioModel::infoChanged, m_ctr2ProxyModel, pushRadio);
     pushRadio();
-    if (m_appletPanel) {
-        if (auto* applet = m_appletPanel->ctr2ProxyApplet()) {
-            applet->setModel(m_ctr2ProxyModel);
+    // Controllers that negotiate it get the audio spectrum: the TX audio over
+    // the TX filter while transmitting, else the RX audio over the active
+    // slice's passband (in CW, centered on the pitch to show zero beat).
+    new Ctr2AudioSpectrumFeeder(m_ctr2ProxyModel, m_audio, [this] {
+        Ctr2AudioSpectrumFeeder::Source src;
+        const TransmitModel& tx = m_radioModel.transmitModel();
+        if (tx.isTransmitting()) {
+            src.transmitting = true;
+            src.filterLow = tx.txFilterLow();
+            src.filterHigh = tx.txFilterHigh();
+        } else if (const SliceModel* s = activeSlice()) {
+            src.filterLow = s->filterLow();
+            src.filterHigh = s->filterHigh();
+            if (isCwMode(s->mode())) {
+                src.cwPitch = tx.cwPitch();
+            }
         }
-    }
+        return src;
+    }, this);
+    // Controllers that negotiate it get the decoded CW, filtered as the CW
+    // panel filters it (its sensitivity threshold); no panel, nothing shown.
+    connect(&m_cwDecoder, &CwRxModel::textDecoded, m_ctr2ProxyModel,
+            [this](const QString& text, float cost) {
+        if (m_cwDecoderApplet && cost < m_cwDecoderApplet->cwCostThreshold()) {
+            m_ctr2ProxyModel->sendCwText(text, cost);
+        }
+    });
+}
+
+void MainWindow::showCtr2Window()
+{
+    // The relay keeps running when the window closes; reopening shows it as
+    // it is.
+    if (!m_ctr2Window)
+        m_ctr2Window = new FirmwareInstallDialog(m_ctr2ProxyModel, this);
+    m_ctr2Window->show();
+    m_ctr2Window->raise();
+    m_ctr2Window->activateWindow();
 }
 
 void MainWindow::wireExternalControllers()
@@ -2961,6 +3046,22 @@ void MainWindow::wireExternalControllers()
         applyFlexControlWheelAction(actionId, steps);
     });
 
+    // Contour shuttle ring (#5928). The ring reports its position only when
+    // it moves, so a timer integrates the held position into steps.
+    m_shuttleTimer = new QTimer(this);
+    m_shuttleTimer->setInterval(40);
+    connect(m_shuttleTimer, &QTimer::timeout, this, &MainWindow::onShuttleTick);
+    connect(m_hidEncoder, &HidEncoderManager::shuttleChanged,
+            this, &MainWindow::onShuttleChanged);
+    // Second line of defence: the manager returns the ring to 0 in close(),
+    // but a teardown of the controller thread that bypasses close() must not
+    // leave the radio tuning either.
+    connect(m_hidEncoder, &HidEncoderManager::connectionChanged,
+            this, [this](bool connected, const QString&) {
+        if (!connected)
+            stopShuttle();
+    });
+
     connectDeviceInput(m_hidEncoder, &HidEncoderManager::buttonPressed, this, hidController,
             [this](int button, int action, const std::shared_ptr<TxController>& controller) {
 
@@ -3144,7 +3245,7 @@ void MainWindow::wireExternalControllers()
     m_dialBackend = new UlanziDialBackend;
     const auto dialController = TxController::forNativeDevice(&m_radioModel, m_dialBackend);
     fenceDeviceDisconnect(m_dialBackend, &UlanziDialBackend::connectionChanged, this, dialController);
-#ifndef Q_OS_MAC
+#ifndef Q_OS_MACOS
     // macOS keeps the backend on the main thread: IOHIDManager schedules
     // its callbacks on a CFRunLoop, and only the main thread has one
     // integrated with Qt's event loop on macOS.  Linux + Windows

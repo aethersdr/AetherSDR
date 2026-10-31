@@ -12,6 +12,7 @@ struct AetherDspSliceAudioState {
     QString mode;
     bool muted{false};
     float gain{0.0f};
+    bool receiving{true};
 };
 
 bool aetherDspMixRequiresDisable(const QList<AetherDspSliceAudioState>& slices);

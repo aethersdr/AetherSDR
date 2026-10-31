@@ -12,17 +12,19 @@ applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)", "Networked Icom (early
 
 :::
 
-SpotHub is AetherSDR's spot manager. It gathers spots from DX clusters, the Reverse Beacon Network, WSJT-X, DXLab SpotCollector, POTA, N1MM+/DXLog, the EiBi shortwave schedule and FreeDV Reporter, and draws them on the panadapter as colour-coded callsign labels. It also has a sortable spot list with band filters, and a Display tab that controls how spots look. The **Kiwi DX** overlay and the panadapter-driven **Signal History** markers are switched on from the same Display tab.
+SpotHub is AetherSDR's spot manager. It gathers spots from DX clusters, the Reverse Beacon Network, WSJT-X, DXLab SpotCollector, POTA, N1MM+/DXLog, the EiBi shortwave schedule and FreeDV Reporter, and draws them on the panadapter as color-coded callsign labels. It also has a sortable spot list with band filters, and a Display tab that controls how spots look. The **Kiwi DX** overlay and the panadapter-driven **Signal History** markers are switched on from the same Display tab.
 
 All spot sources run on a worker thread, and spots are forwarded to the radio in batches once a second.
 
-![SpotHub window with tabs Cluster, RBN, WSJT-X, SpotCollector, POTA, EiBi, N1MM, FreeDV and Spot List, with Cluster selected. The Connection group has Server, Port and Callsign fields, Auto-Connect and Startup Commands buttons, a Disconnected status and a Connect button. Below is an empty Cluster Console with a spot colour swatch, and a command field with Send and Clear buttons.](/img/screens/spothub.png)
+<img src="/img/screens/spothub.png" width="760" alt="SpotHub window with tabs Cluster, RBN, WSJT-X, SpotCollector, POTA, EiBi, N1MM, FreeDV and Spot List, with Cluster selected. The Connection group has Server dxc.nc7j.com, Port 7300, an empty Callsign field, Auto-Connect: OFF, Startup Commands… and Hide Unverified: OFF buttons, a Disconnected status and a Connect button. Below is an empty Cluster Console with a spot color swatch, and a command field with Send and Clear buttons." />
 
 *SpotHub, open on the Cluster tab. Each tab is one spot source.*
 
 ## Setup
 
-Open SpotHub from **Settings → SpotHub…**
+Open SpotHub from **Settings → SpotHub...**
+
+The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it; it reopens at the size and place you left it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). It's a window of its own, with its own taskbar entry, so you can minimize it from the taskbar or park it on another monitor. **View → Frameless Window** does not apply to it.
 
 SpotHub has ten tabs: **Cluster**, **RBN**, **WSJT-X**, **SpotCollector**, **POTA**, **EiBi**, **N1MM**, **FreeDV**, **Spot List** and **Display**. The FreeDV tab is only present in builds with Qt WebSockets.
 
@@ -32,13 +34,16 @@ Every source tab has an **Auto-Start** (or **Auto-Connect**) toggle that starts 
 
 ### Cluster (DX Cluster)
 
-Connects to a DX cluster node over telnet (DX Spider, AR-Cluster, CC Cluster).
+Connects to a DX cluster node over telnet (DX Spider, AR-Cluster, CC Cluster, GoCluster).
 
 - **Server / Port / Callsign** — default `dxc.nc7j.com:7300`
 - **Auto-Connect** — connect when the radio connects
 - **Startup Commands…** — cluster commands sent automatically after every login, one per line (for example `SET/NAME`, `SET/QTH`, `ACCEPT/SPOT`)
+- **Hide Unverified** — on a GoCluster node, hides spots whose callsign GoCluster tags `?` (little supporting evidence, often a busted call). It applies to spots that arrive after you switch it on, without reconnecting; spots already listed stay until they expire. Other servers send no confidence tag, so it has no effect on them
 - **Cluster Console** — live output with a command line (`sh/dx 20`, `set/filter`, `bye` …)
 - **Spot Color** — default tan
+
+On a GoCluster node, AetherSDR recognizes the server from its login banner and removes the grid, confidence and path symbols from the end of each spot, so the comment reads `FT8 -12 dB` rather than `FT8 -12 dB > FN31 V`. The console still shows the full line. A node whose operator has removed "GoCluster" from the banner keeps those symbols in the comment.
 
 ### RBN (Reverse Beacon Network)
 
@@ -47,18 +52,23 @@ Skimmer spots from the Reverse Beacon Network, over the same telnet protocol.
 - **Server / Port** — default `telnet.reversebeacon.net:7000`
 - **Callsign** — falls back to the cluster callsign when empty
 - **Rate Limit** — maximum spots per second sent to the radio (default 10), so contests don't flood the display. Extra spots are queued for the next batch.
-- **Startup Commands…**, **Auto-Connect**, **RBN Console** and **Spot Color** (default blue) as on the Cluster tab
+- **Startup Commands…**, **Auto-Connect**, **Hide Unverified**, **RBN Console** and **Spot Color** (default blue) as on the Cluster tab
+
+Queued radio-bound spots belong to the current connection. Disconnecting or
+pressing **Clear All** discards the older queue, so it cannot refill the radio's
+spot list after a clear or carry into a replacement session. New arrivals can
+populate the list again.
 
 ### WSJT-X (decode spotter)
 
 Listens for WSJT-X decode messages over UDP and spots the stations you are hearing.
 
 - **Address / Port** — default `224.0.0.1:2237` (multicast). Use `0.0.0.0` for unicast.
-- **Spot Filter** — which decodes are spotted, each with its own colour:
+- **Spot Filter** — which decodes are spotted, each with its own color:
   - **CQ** (default green)
   - **CQ POTA** (default cyan)
   - **Calling Me** (default red). Your callsign comes from the cluster login, or the station callsign if no cluster login is set.
-  - **Default** colour (white) for anything else
+  - **Default** color (white) for anything else
 - Label opacity follows signal strength: weak decodes are faint, strong ones solid.
 - **Spot Life** — 30–300 s (default 120 s), separate from the cluster lifetime
 - **WSJT-X Decodes** console — callsign, frequency, SNR and the decoded message
@@ -115,7 +125,7 @@ Connects to the FreeDV QSO Reporter (`qso.freedv.org`) and spots active FreeDV s
 - **Station Reporting** group:
   - **Enable FreeDV Reporter reporting when RADE is active** — reports your own station while you run RADE. Reporting needs a callsign and a grid square, because FreeDV Reporter is a public map.
   - **Callsign** (with **Use radio**), **Grid Square** (with **Use GPS**)
-  - **Station Msg:** — the same message as the **Message** field in **Tools → FreeDV Reporter…**; the two stay in sync.
+  - **Station Msg:** — the same message as the **Message** field in **Tools → FreeDV Reporter...**; the two stay in sync.
 
 See also [RADE Digital Voice](./rade-digital-voice.md).
 
@@ -146,6 +156,10 @@ A sortable table of every spot from every source.
 
 Controls how spots look on the panadapter. A row of toggle buttons sits at the top:
 
+<img src="/img/screens/spothub-display-tab.png" width="760" alt="SpotHub window on the Display tab. Toggle buttons across the top read Spots, Passive, Memories, Kiwi DX, Auto, Signals, QRM and Clear All. Sliders set Levels, Position, Font Size and Spot Lifetime, followed by Override Colors, Override Background, Background Opacity, Spot Lines and a Total Spots count. DXCC Coloring and Signal History groups sit side by side at the bottom." />
+
+*SpotHub's Display tab: how spots are drawn on the panadapter.*
+
 ```
 [Spots] [Passive] [Memories] [Kiwi DX] [Auto] [Signals] [QRM] [Clear All]
 ```
@@ -167,8 +181,8 @@ Controls how spots look on the panadapter. A row of toggle buttons sits at the t
 - **Position** — vertical starting position, % from the top of the spectrum
 - **Font Size** — label size (8–32 px)
 - **Spot Lifetime** — 10 seconds to 1 day (applies to cluster and RBN spots)
-- **Override Colors** — draw every spot in one colour
-- **Override Background** — label background colour, with an **Auto** contrast option
+- **Override Colors** — draw every spot in one color
+- **Override Background** — label background color, with an **Auto** contrast option
 - **Background Opacity** — 0–100 %
 - **Spot Lines** — vertical lines from each label down to the spectrum
 - **Total Spots** — how many spots are on the panadapter
@@ -179,7 +193,7 @@ The KiwiSDR DX Community database ships with AetherSDR, so no download is needed
 
 ### DXCC Coloring
 
-Imports an ADIF log and colours spot labels by worked status: **New DXCC**, **New Band**, **New Mode** or **Worked**. The log file is watched, so colours update whenever your logger writes a QSO.
+Imports an ADIF log and colors spot labels by worked status: **New DXCC**, **New Band**, **New Mode** or **Worked**. The log file is watched, so colors update whenever your logger writes a QSO.
 
 - **DXCC Colors** — Enabled / Disabled
 - **Log File (ADIF)** — **Browse…**
@@ -221,6 +235,10 @@ When more spots overlap than **Levels** allows, they collapse into an amber **+N
 
 ### Adding a spot by hand
 
+<img src="/img/screens/spothub-add-spot.png" width="318" alt="Add Spot dialog: Frequency (MHz) 14.288000 MHz, an empty Callsign (required) field, an empty Optional comment field, Lifetime 30 minutes, a Forward to DX Cluster checkbox, unticked, and OK and Cancel buttons." />
+
+*The Add Spot dialog, opened from the panadapter's right-click menu.*
+
 1. Right-click an empty part of the panadapter and choose **Add Spot at X.XXX MHz…**
 2. Fill in **Frequency (MHz)** (pre-filled and snapped to the tuning step), **Callsign** (required), **Comment** (optional) and **Lifetime** (5 minutes to 2 hours).
 3. Tick **Forward to DX Cluster** to send it to the connected cluster as a standard `DX` command. AetherSDR confirms when it forwards.
@@ -241,7 +259,7 @@ Spots drawn on the panadapter are deduplicated by callsign and frequency across 
 
 SpotHub settings are stored with the rest of AetherSDR's settings in `AetherSDR.db` (see [Settings and Backups](./settings-and-backups.md)). Source logs (`dxcluster.log`, `rbn.log`, `wsjtx.log`, `pota.log`, `freedv.log`, `spotcollector.log`) are in the `spothub` folder of AetherSDR's configuration directory (`~/.config/AetherSDR/spothub/` on Linux).
 
-Some useful setting keys, for the **Settings Browser** (**Settings → Settings Browser…**):
+Some useful setting keys, for the **Settings Browser** (**Settings → Settings Browser...**):
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -256,13 +274,14 @@ Some useful setting keys, for the **Settings Browser** (**Settings → Settings 
 | `N1MMSpotLifetimeSec` | `10800` | N1MM spot lifetime (s); 0 = never expire |
 | `N1MMSpotAutoStart` | `False` | Start N1MM listener on connect |
 | `EiBiAutoStart` | `False` | Start EiBi feed on connect |
-| `EiBiSpotColor` | `#8aa8c0` | EiBi marker colour |
+| `EiBiSpotColor` | `#8aa8c0` | EiBi marker color |
 | `ShowKiwiDxSpots` | `False` | Kiwi DX overlay |
 | `SmartSpotFilterOpacity` | `80` | Smart Spot Filtering opacity |
 | `SmartSpotFilterDelayS` | `30` | Smart Spot Filtering delay (s) |
 | `SmartSpotFilterMatchHz` | `1000` | Smart Spot Filtering match window (Hz) |
 | `ManualSpotLifetime` | `1800` | Default lifetime of hand-added spots (s) |
 | `SpotForwardToCluster` | `False` | Forward hand-added spots to the cluster |
+| `GoCluster` | `{}` | GoCluster options: `{"hideUnverified": {"cluster": false, "rbn": false}}` is **Hide Unverified** on the Cluster / RBN tab |
 
 ## Known issues
 
@@ -310,7 +329,7 @@ The list is sorted by a column other than **Time**, which stops auto-scroll.
 
 - [Panadapter Controls](./panadapter-controls.md)
 - [WSJT-X Integration](./wsjt-x-integration.md)
-- [PSK Reporter Map](./psk-reporter-map.md)
+- [AetherMap](./psk-reporter-map.md)
 - [Callsign Lookup](./callsign-lookup.md)
 - [TCI Server](./tci-server.md)
 - [RADE Digital Voice](./rade-digital-voice.md)

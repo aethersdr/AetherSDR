@@ -177,7 +177,7 @@ ClientChainApplet::ClientChainApplet(QWidget* parent) : QWidget(parent)
             "Disable every stage in the selected chain (including RN2).  "
             "Click again to restore the stages that were on before.  "
             "Scope is global (per audio engine), not per-profile — the "
-            "button stays pressed across Channel Strip profile switches.");
+            "button stays pressed across profile switches.");
         connect(m_bypassBtn, &QPushButton::toggled,
                 this, &ClientChainApplet::onBypassToggled);
         row->addWidget(m_bypassBtn);

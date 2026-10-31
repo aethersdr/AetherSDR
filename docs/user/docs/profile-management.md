@@ -12,7 +12,7 @@ applies_to: ["FlexRadio"]
 
 :::
 
-Profiles save and restore FlexRadio state. AetherSDR supports all three SmartSDR profile types, and profiles are stored **on the radio**, so they are shared with SmartSDR and other clients.
+Profiles save and restore FlexRadio state. AetherSDR supports the SmartSDR profile types (global, transmit, microphone and, from SmartSDR v4.3.16, CW), and profiles are stored **on the radio**, so they are shared with SmartSDR and other clients.
 
 AetherSDR's own preferences (layout, display, controllers) are separate and stay on your computer. See [Settings and Backups](./settings-and-backups.md).
 
@@ -35,6 +35,10 @@ TX settings: power, EQ, compressor, mic settings. Keep several for different ope
 
 Mic input settings: source, gain, bias, boost and compander level. Useful when you switch microphones.
 
+### CW profiles
+
+CW settings, kept as named profiles on radios running SmartSDR v4.3.16 or later. On older firmware the contents of the **CW** tab are dimmed; hover over them (or use a screen reader) to see why.
+
 ## Using the Profiles menu
 
 **Profiles** in the menu bar:
@@ -45,7 +49,7 @@ Mic input settings: source, gain, bias, boost and compander level. Useful when y
 
 ## Using the Profile Manager
 
-**Profiles → Profile Manager...** opens a non-modal window that remembers its size and position. Tabs: **Global**, **Transmit**, **Microphone**, **Auto-Save**.
+**Profiles → Profile Manager...** opens a non-modal window that remembers its size and position. Tabs: **Global**, **Transmit**, **Microphone**, **CW**, **Auto-Save**.
 
 On each profile tab:
 
@@ -57,9 +61,15 @@ On each profile tab:
 - **Load** (or double-click): apply the selected profile
 - **Save** (Global tab): save the current state to the selected profile, or to a new one using the name field
 - **Create** (Transmit and Microphone tabs): create a new profile. The radio cannot overwrite an existing TX or Mic profile directly; changes to the active one are captured by Auto-Save. If you try to create a name that already exists, AetherSDR tells you so and, if Auto-Save is off, offers **Enable Auto-Save**.
+- **Create** (CW tab): create a new CW profile. A name that already exists is refused with a status line.
+- **Reset** (CW tab): after confirmation, return the selected CW profile to the radio's built-in CW values. It does not copy the settings of the `Default` profile.
 - **Delete**: remove the selected profile, after confirmation
 
+When the radio reports edits to the active CW profile that are not saved yet, the CW tab shows **The active CW profile has unsaved changes.** The line clears when the profile is saved, or when the changed settings are put back to their saved values.
+
 A status line reports what the radio did: `Saving "<name>"…`, `Saved profile "<name>".`, "Radio refused save of …", "Not connected — cannot save …", or "No response from the radio …". A blank name field never overwrites the highlighted profile.
+
+Profile names must contain printable text, at most 256 characters, without double quotes, backslashes or `|`. An invalid name is not sent to the radio. If the connection changes during a save or confirmation, the operation is cancelled; your name remains available to retry. A successful save reply does not replace the radio's active-profile status.
 
 ### Auto-Save
 
@@ -107,6 +117,7 @@ Profile operations are carried out by the radio with these commands:
 - `profile global save "name"` / `load` / `delete`
 - `profile transmit create "name"` / `save` / `delete`
 - `profile mic create "name"` / `save` / `delete`
+- `profile cw load "name"` / `create` / `delete` / `reset` (SmartSDR v4.3.16 or later)
 
 ## Known issues
 

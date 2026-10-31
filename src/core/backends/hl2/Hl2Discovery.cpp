@@ -1,6 +1,7 @@
 #include "core/backends/hl2/Hl2Discovery.h"
 
 #include "core/AppSettings.h"
+#include "core/LogManager.h"   // lcDiscovery
 
 #include <QJsonObject>
 #include "core/backends/hl2/MetisProtocol.h"
@@ -46,6 +47,80 @@ void enableBroadcast(QUdpSocket& s) noexcept
 }
 
 }  // namespace
+
+void DiscoveryNotices::bindFailed(const QString& interfaceName,
+                                  const QHostAddress& address,
+                                  const QString& error)
+{
+    const QString key = interfaceName + QLatin1Char(' ') + address.toString();
+    if (m_bindFailures.contains(key))
+        return;   // already reported, and it has not bound since
+    m_bindFailures.insert(key);
+    qCWarning(lcDiscovery).noquote()
+        << QStringLiteral("HL2 discovery: cannot bind %1 %2: %3")
+               .arg(interfaceName, address.toString(), error);
+}
+
+void DiscoveryNotices::bindSucceeded(const QString& interfaceName,
+                                     const QHostAddress& address)
+{
+    m_bindFailures.remove(interfaceName + QLatin1Char(' ') + address.toString());
+    m_interfaceOf.insert(address.toString(), interfaceName);
+}
+
+void DiscoveryNotices::endRefresh(int socketCount)
+{
+    if (socketCount > 0) {
+        m_noSocketReported = false;
+    } else if (!m_noSocketReported) {
+        m_noSocketReported = true;
+        qCWarning(lcDiscovery).noquote()
+            << QStringLiteral("HL2 discovery: no usable IPv4 interface; no probe can be sent");
+    }
+}
+
+void DiscoveryNotices::sendFailed(const QHostAddress& local, const QString& error)
+{
+    const QString key = local.toString();
+    if (m_sendFailures.contains(key))
+        return;   // already reported, and nothing has left this address since
+    m_sendFailures.insert(key);
+    qCWarning(lcDiscovery).noquote()
+        << QStringLiteral("HL2 discovery: cannot send a probe from %1: %2").arg(key, error);
+}
+
+void DiscoveryNotices::sendSucceeded(const QHostAddress& local)
+{
+    const QString key = local.toString();
+    m_sendFailures.remove(key);
+    // An address no refresh bound stands for itself.
+    m_sentInterfaces.insert(m_interfaceOf.value(key, key));
+}
+
+void DiscoveryNotices::sweepClosed(bool answered)
+{
+    const int sentFrom = static_cast<int>(std::exchange(m_sentInterfaces, {}).size());
+    if (answered) {
+        m_silentSweeps = 0;
+        return;
+    }
+    if (sentFrom == 0)
+        return;   // nothing was asked, so nothing went unanswered
+    if (++m_silentSweeps != kSilentSweepsBeforeWarning)
+        return;
+    // Info, not a warning: an install without an HL2 is silent by design.
+    qCInfo(lcDiscovery).noquote()
+        << QStringLiteral("HL2 discovery: no Hermes-Lite 2 answered %1 sweeps on %2 %3")
+               .arg(kSilentSweepsBeforeWarning)
+               .arg(sentFrom)
+               .arg(sentFrom == 1 ? QStringLiteral("interface")
+                                  : QStringLiteral("interfaces"));
+}
+
+void DiscoveryNotices::reset()
+{
+    *this = DiscoveryNotices{};
+}
 
 QString Hl2Discovery::macToSerial(const std::array<std::uint8_t, 6>& mac)
 {
@@ -169,6 +244,8 @@ void Hl2Discovery::stop()
     }
     m_sockets.clear();
     m_seen.clear();
+    m_notices.reset();
+    m_answered = false;
 }
 
 void Hl2Discovery::sweepNow()
@@ -194,17 +271,30 @@ void Hl2Discovery::sweepNow()
                 break;
         }
 
+        bool sent = false;
+        QString error;
+        const auto probe = [&](const QHostAddress& to) {
+            if (socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
+                                      static_cast<qint64>(pkt.size()),
+                                      to, kMetisPort) >= 0) {
+                sent = true;
+            } else {
+                error = socket->errorString();
+            }
+        };
         if (!directedBroadcast.isNull()) {
-            socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
-                                  static_cast<qint64>(pkt.size()),
-                                  directedBroadcast, kMetisPort);
+            probe(directedBroadcast);
         }
         // Keep the global broadcast as a compatibility fallback for networks
         // whose interface does not expose a usable directed broadcast.
         if (directedBroadcast != QHostAddress::Broadcast) {
-            socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
-                                  static_cast<qint64>(pkt.size()),
-                                  QHostAddress::Broadcast, kMetisPort);
+            probe(QHostAddress::Broadcast);
+        }
+        // One of the two reaching the wire is a sent probe.
+        if (sent) {
+            m_notices.sendSucceeded(local);
+        } else {
+            m_notices.sendFailed(local, error);
         }
     }
 }
@@ -232,6 +322,8 @@ void Hl2Discovery::refreshSockets()
 
             auto* socket = new QUdpSocket(this);
             if (!socket->bind(local, 0)) {
+                m_notices.bindFailed(iface.humanReadableName(), local,
+                                     socket->errorString());
                 socket->deleteLater();
                 continue;
             }
@@ -239,12 +331,19 @@ void Hl2Discovery::refreshSockets()
             connect(socket, &QUdpSocket::readyRead,
                     this, &Hl2Discovery::onReadyRead);
             m_sockets.append(socket);
+            m_notices.bindSucceeded(iface.humanReadableName(), local);
         }
     }
+    m_notices.endRefresh(static_cast<int>(m_sockets.size()));
 }
 
 void Hl2Discovery::onSweepTimer()
 {
+    // The previous sweep's reply window ends here. DiscoveryNotices does not
+    // count a sweep no probe left: no socket, or every send failed.
+    m_notices.sweepClosed(m_answered);
+    m_answered = false;
+
     // Age out anything that missed too many consecutive sweeps before probing
     // again, so a radio that is unplugged disappears from the picker.
     for (auto it = m_seen.begin(); it != m_seen.end();) {
@@ -273,6 +372,7 @@ void Hl2Discovery::onReadyRead()
              static_cast<std::size_t>(data.size())});
         if (!reply || !reply->isHermesLite2())
             continue;   // not an HL2 (or not a discovery reply at all)
+        m_answered = true;
 
         RadioInfo info;
         info.family   = QStringLiteral("hl2");

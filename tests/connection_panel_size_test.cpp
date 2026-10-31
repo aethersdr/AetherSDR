@@ -295,8 +295,7 @@ void checkFooterReachable(QApplication& app,
         return;
     }
 
-    ConnectionPanel panel;
-    panel.setFramelessMode(frameless);
+    ConnectionPanel panel;   // a CanonWindow: always frameless
     panel.setMinimumSize(ConnectionPanel::kSafeMinimumWidth,
                          ConnectionPanel::kSafeMinimumHeight);
     panel.resize(ConnectionPanel::kSafeMinimumWidth,
@@ -548,14 +547,11 @@ int main(int argc, char** argv)
 
     const QFont originalFont = app.font();
     for (const qreal scale : {1.0, 1.25, 1.5}) {
-        for (const bool frameless : {true, false}) {
-            checkFooterReachable(app, originalFont, scale, frameless);
-        }
+        checkFooterReachable(app, originalFont, scale, true);
     }
     app.setFont(originalFont);
 
     ConnectionPanel oversizedPanel;
-    oversizedPanel.setFramelessMode(false);
     oversizedPanel.setMinimumSize(ConnectionPanel::kSafeMinimumWidth,
                                   ConnectionPanel::kSafeMinimumHeight);
     oversizedPanel.resize(760, 10000);
@@ -575,20 +571,9 @@ int main(int argc, char** argv)
     // there proves nothing about the branch that runs before the native window
     // exists, which is the one the first open on Windows depends on.
     {
-        ConnectionPanel unshownPanel;
-        unshownPanel.setFramelessMode(false);
-        const QMargins estimate = unshownPanel.screenFitFrameMargins();
-        const int titleBarHeight = unshownPanel.style()->pixelMetric(
-            QStyle::PM_TitleBarHeight, nullptr, &unshownPanel);
-        report("pre-show frame estimate reserves a title bar, not a border",
-               estimate.top() >= titleBarHeight && estimate.top() > estimate.bottom(),
-               "top=" + std::to_string(estimate.top())
-                   + " bottom=" + std::to_string(estimate.bottom())
-                   + " PM_TitleBarHeight=" + std::to_string(titleBarHeight));
-
+        // A CanonWindow has no native frame, so nothing is reserved for one.
         ConnectionPanel unshownFrameless;
-        unshownFrameless.setFramelessMode(true);
-        report("frameless mode reserves no frame at all",
+        report("a frameless panel reserves no frame at all",
                unshownFrameless.screenFitFrameMargins().isNull(),
                "top=" + std::to_string(
                             unshownFrameless.screenFitFrameMargins().top()));
@@ -600,7 +585,7 @@ int main(int argc, char** argv)
         const QPoint constrained =
             oversizedPanel.constrainedFrameTopLeft(preferred, available);
         const QSize frameSize = oversizedPanel.screenFitFrameSize();
-        report("constrained native frame remains inside available geometry",
+        report("constrained frame remains inside available geometry",
                available.contains(QRect(constrained, frameSize)),
                "frameX=" + std::to_string(constrained.x())
                    + " frameY=" + std::to_string(constrained.y())
@@ -608,11 +593,10 @@ int main(int argc, char** argv)
                    + " frameH=" + std::to_string(frameSize.height()));
 
         // fitAndClampToScreen() is the show path ConnectionPanel owns itself:
-        // the frameless toggle, the automation bridge, and the deferred re-fit
+        // the automation bridge and the deferred re-fit
         // after a screen/DPI/font change all land here. It must pull a window
         // back inside the work area without otherwise relocating it.
         ConnectionPanel strayPanel;
-        strayPanel.setFramelessMode(false);
         strayPanel.show();
         QApplication::processEvents();
         strayPanel.move(available.right() - 40, available.bottom() - 40);
@@ -641,7 +625,6 @@ int main(int argc, char** argv)
     // goes away — rather than assumed from a particular metric.
     {
         ConnectionPanel growPanel;
-        growPanel.setFramelessMode(true);
         growPanel.show();
         QApplication::processEvents();
         growPanel.fitToScreen(screen);
@@ -653,32 +636,46 @@ int main(int argc, char** argv)
             QStringLiteral("connectionBodyContent"));
 
         // Forcing growth needs room above the height fitToScreen() just chose.
-        // Offscreen — what CTest runs, and what #4679 was reported from — has
-        // hundreds of pixels spare; a hand run against a work area already
-        // clamping the panel has none, and there the branch is unreachable
-        // rather than broken.
-        constexpr int kGrowthHeadroom = 40;
+        // Offscreen — what CTest runs, and what #4679 was reported from — is
+        // 800 px tall, and how much of that the auto-fit leaves is a
+        // font-metrics accident (31 px on Windows, where the body also needs
+        // room for a horizontal scrollbar). Any overflow at all proves the
+        // branch, so take what is there up to 40 px. A hand run against a work
+        // area already clamping the panel has none, and there the branch is
+        // unreachable rather than broken.
+        constexpr int kMinGrowthHeadroom = 8;
         const int growthWorkAreaHeight =
             screen ? screen->availableGeometry().height() : 0;
+        const int growthHeadroom =
+            qMin(40, growthWorkAreaHeight - initialAutoHeight);
 
-        if (growthWorkAreaHeight - initialAutoHeight < kGrowthHeadroom) {
+        if (growthHeadroom < kMinGrowthHeadroom) {
             reportSkipped("growth proof needs headroom above the auto-fit height",
                           "autoHeight=" + std::to_string(initialAutoHeight)
                               + " workAreaH=" + std::to_string(growthWorkAreaHeight));
         } else {
-            const int forcedPreferredHeight = initialAutoHeight + kGrowthHeadroom;
+            const int forcedPreferredHeight = initialAutoHeight + growthHeadroom;
             QSpacerItem* spacer = nullptr;
             if (body && bodyContent && bodyContent->layout()) {
                 const int chromeHeight =
                     growPanel.sizeHint().height() - body->sizeHint().height();
+                // A showing horizontal bar is part of what the body needs
+                // (#5811); leave it out and the target overshoots by a bar.
                 const int naturalPreferredHeight =
-                    chromeHeight + bodyContent->sizeHint().height();
+                    chromeHeight + bodyContent->sizeHint().height()
+                    + (body->horizontalScrollBar()->isVisible()
+                           ? body->horizontalScrollBar()->height()
+                           : 0);
                 spacer = new QSpacerItem(
                     0,
                     qMax(1, forcedPreferredHeight - naturalPreferredHeight),
                     QSizePolicy::Minimum,
                     QSizePolicy::Fixed);
                 bodyContent->layout()->addItem(spacer);
+                // Two turns: the body sits inside CanonWindow's own body
+                // widget, one layout deeper, so the scroll area hears about
+                // the new minimum a turn later.
+                QApplication::processEvents();
                 QApplication::processEvents();
             }
             report("growth setup overflows an auto-fit-owned height",
@@ -708,6 +705,7 @@ int main(int argc, char** argv)
             if (spacer && bodyContent && bodyContent->layout()) {
                 bodyContent->layout()->removeItem(spacer);
                 delete spacer;
+                QApplication::processEvents();   // two turns, as above
                 QApplication::processEvents();
             }
             growPanel.fitToScreen(screen);
@@ -725,6 +723,90 @@ int main(int argc, char** argv)
         report("a height the operator chose survives a re-fit",
                growPanel.height() == ConnectionPanel::kSafeMinimumHeight,
                "height=" + std::to_string(growPanel.height()));
+    }
+
+    // A body wider than the window shows a horizontal scrollbar, and that bar
+    // takes its height out of the viewport, so the fit has to leave room for it
+    // or the panel opens one bar short of its body (#5811). Whether the shipped
+    // body is wider than the window is a font-metrics accident — it is on
+    // Windows, it is not on the Linux CI image — so force the overflow with a
+    // harness-only minimum width rather than depend on either. The body must
+    // also want more than the kPreferredHeight floor, or the floor hands out
+    // the missing pixels by luck and the check passes with the fix deleted.
+    {
+        ConnectionPanel widePanel;
+        widePanel.show();
+        QApplication::processEvents();
+        widePanel.fitToScreen(screen);
+        QApplication::processEvents();
+        QScrollArea* body = widePanel.findChild<QScrollArea*>(
+            QStringLiteral("connectionBodyScrollArea"));
+        QWidget* bodyContent = widePanel.findChild<QWidget*>(
+            QStringLiteral("connectionBodyContent"));
+
+        if (!body || !bodyContent || !bodyContent->layout()) {
+            report("wide-body fixture finds the scrolling body", false);
+        } else {
+            bodyContent->setMinimumWidth(widePanel.width() + 200);
+            // Settle before measuring: a wider body re-wraps its labels and
+            // gets shorter, and a height read before that lands the spacer
+            // short of the floor margin it is meant to clear.
+            QApplication::processEvents();
+            QApplication::processEvents();
+            const int barHeight = body->horizontalScrollBar()->sizeHint().height();
+            const int chromeHeight =
+                widePanel.sizeHint().height() - body->sizeHint().height();
+            const int naturalPreferredHeight =
+                chromeHeight + bodyContent->sizeHint().height();
+            // Clear the floor by more than a bar, so a fit that leaves the bar
+            // out cannot land on the floor and pass anyway.
+            const int floorClearing =
+                ConnectionPanel::kPreferredHeight + 2 * barHeight;
+            if (naturalPreferredHeight < floorClearing) {
+                bodyContent->layout()->addItem(new QSpacerItem(
+                    0,
+                    floorClearing - naturalPreferredHeight,
+                    QSizePolicy::Minimum,
+                    QSizePolicy::Fixed));
+            }
+            QApplication::processEvents();   // two turns, as above
+            QApplication::processEvents();
+            const int wantedHeight =
+                qMax(naturalPreferredHeight, floorClearing) + barHeight;
+            const int wideWorkAreaHeight =
+                screen ? screen->availableGeometry().height() : 0;
+
+            report("wide-body setup shows a horizontal scrollbar",
+                   body->horizontalScrollBar()->maximum() > 0,
+                   "hbarMax=" + std::to_string(body->horizontalScrollBar()->maximum())
+                       + " panelW=" + std::to_string(widePanel.width()));
+
+            if (wantedHeight > wideWorkAreaHeight) {
+                reportSkipped("wide-body proof needs body and bar to fit the work area",
+                              "wanted=" + std::to_string(wantedHeight)
+                                  + " workAreaH=" + std::to_string(wideWorkAreaHeight));
+            } else {
+                widePanel.fitToScreen(screen);
+                QApplication::processEvents();
+                // The discriminating read: the viewport against the body's
+                // preferred height, which is what the fit aims for. A fit that
+                // leaves the bar out misses it by exactly one bar on every
+                // platform. The scrollbar check alone does not discriminate —
+                // its range runs off the body's minimum height, and the slack
+                // between that and the preferred height can hide the bar.
+                report("auto-fit gives the body its preferred height beside the bar",
+                       body->viewport()->height() >= bodyContent->sizeHint().height(),
+                       "viewportH=" + std::to_string(body->viewport()->height())
+                           + " bodyWantsH="
+                           + std::to_string(bodyContent->sizeHint().height()));
+                report("auto-fit leaves room for the horizontal scrollbar",
+                       body->verticalScrollBar()->maximum() == 0,
+                       "height=" + std::to_string(widePanel.height()) + " vbarMax="
+                           + std::to_string(body->verticalScrollBar()->maximum())
+                           + " hbarH="
+                           + std::to_string(body->horizontalScrollBar()->height()));
+            }
+        }
     }
 
     app.setFont(originalFont);

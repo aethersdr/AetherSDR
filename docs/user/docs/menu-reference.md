@@ -11,7 +11,7 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 - **Windows and Linux:** the menus sit behind the **☰** button at the far left of the title bar. Alt+letter mnemonics (Alt+F, Alt+S, …) still open each menu under the button, and every menu shortcut keeps working.
 - **macOS:** the menus are in the system menu bar at the top of the screen. **Radio Setup…** appears as **AetherSDR → Preferences…**.
 
-<img src="/img/screens/title-bar.png" width="1600" alt="The AetherSDR title bar. From left: the menu button, the AetherSDR logo, three radio tabs reading Hermes-Lite 2 available, FLX8600 FLEX-8600 connected KK7GWY (highlighted, with a green dot) and Simulator (not on the air) AetherSDR Demo available DEMO, and a plus button. On the right: a green PC Audio button, a speaker icon and slider at 100, a headphone icon and slider at 100, three panel layout buttons, and minimise, maximise and close buttons." />
+<img src="/img/screens/title-bar.png" width="1600" alt="The AetherSDR title bar. From left: the menu button, the AetherSDR logo, three radio tabs reading Hermes-Lite 2 available, FLX8600 FLEX-8600 connected KK7GWY (highlighted, with a green dot) and Simulator (not on the air) AetherSDR Demo available DEMO, and a plus button. On the right: a green PC Audio button, a speaker icon and slider at 100, a headphone icon and slider at 100, three panel layout buttons, and minimize, maximize and close buttons." />
 
 *The title bar: the menu button, one tab per radio, PC Audio and volume controls, panel layout buttons and window controls.*
 
@@ -21,6 +21,7 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 |------|-------------|
 | **Connect to Radio...** | Opens the connection panel (LAN radios, SmartLink, manual IP). See [First Connection](./first-connection.md) and [Manual Connection](./manual-connection.md). |
 | **Disconnect** | Ends the radio session without closing AetherSDR. |
+| **Update...** | The Updates window: the newest AetherSDR release, what is in it, and the download for this computer. See [Updates](./updates.md). |
 | **Quit** | Closes the application. |
 
 ## Settings
@@ -28,20 +29,16 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 | Item | What it does |
 |------|-------------|
 | **Radio Setup...** | The main multi-page configuration dialog. See [Radio Setup](./radio-setup.md). On macOS: AetherSDR → Preferences…. |
-| **AetherControl...** | Opens the AetherControl controller window. |
-| **FlexControl Knob & Buttons...** | Jumps to the FlexControl section of Radio Setup → Serial & Controllers. See [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md). |
+| **Controllers ▸** | Every controller's settings: **CTR2...** (the CTR2 relay and CTR2-Max firmware; see [CTR2 Proxy](./ctr2-proxy.md)), **AetherControl...** (the on-screen AetherControl window), **FlexControl Knob & Buttons...** (the FlexControl section of Radio Setup → Serial & Controllers; see [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md)), **MIDI Mapping...** (see [MIDI Controller Mapping](./midi-controller-mapping.md)), **Icom RC-28 Remote Encoder...** (see [USB Control Surfaces](./usb-control-surfaces.md)) and **Ulanzi Dial Mapping...** (see [Ulanzi Dial](./ulanzi-dial.md)). Some appear only in builds with MIDI, USB HID or serial-port support. |
 | **Receive Sync ▸** | Timing alignment between the radio and a KiwiSDR receiver: Sync Kiwi Audio & Display, **Manual Offset** / **Auto Assist**, Delay KiwiSDR 50 ms, Delay Flex 50 ms, Reset Offset, and **Latency ▸** Normal (360 ms) / More Stable (520 ms) / High Jitter (1000 ms). See [KiwiSDR and Web-888](./kiwisdr-and-web-888.md). |
 | **MQTT...** | Broker, subscriptions and publish buttons. See [MQTT Station Automation](./mqtt-station-automation.md). |
-| **MIDI Mapping...** | See [MIDI Controller Mapping](./midi-controller-mapping.md). |
-| **Icom RC-28 Remote Encoder...** | See [USB Control Surfaces](./usb-control-surfaces.md). |
-| **Ulanzi Dial Mapping...** | See [Ulanzi Dial](./ulanzi-dial.md). |
 | **USB Cables...** | See [USB Cable Management](./usb-cable-management.md). |
 | **Keyboard Shortcuts** | Checkable. Turns operating shortcuts on or off; **off by default**. See [Keyboard Shortcuts](./keyboard-shortcuts.md). |
 | **Configure Shortcuts...** | The shortcut editor. |
 | **SpotHub...** | See [SpotHub](./spothub.md). |
 | **multiFLEX...** | The multi-client dashboard. See [Multi-Flex](./multi-flex.md). |
 | **TX Band Settings...** | Per-band RF power, tune power and inhibit choices. |
-| **Inhibit during TUNE ▸** | Picks which integrations are held while the radio tunes. |
+| **Inhibit during TUNE ▸** | Selects ACC TX inhibition during TUNE. On Flex firmware 4.2 and older, also selects TX1/TX2/TX3. On 4.3 and later, the submenu contains **ACC TX** and **Configure RCA suppression…**, which opens **TX Band Settings** directly for per-band RCA suppression. |
 | **AetherRX...** | The receive audio chain. See [Aetherial Audio](./aetherial-audio.md). |
 | **Settings Browser...** | Browse and edit stored settings. See [Settings and Backups](./settings-and-backups.md). |
 | **Autostart CAT with AetherSDR** / **Autostart TCI…** / **Autostart DAX…** | Start those services automatically. |
@@ -61,7 +58,7 @@ See [Profile Management](./profile-management.md).
 
 ## Tools
 
-<img src="/img/screens/menu-tools.png" width="285" alt="Tools menu: Add Panadapter..., AetherTX..., CW Keyer, Copy Assist, AetherModem..., Configure KiwiSDR...; Start SWR Scan..., Pre-tune ATU Bands..., Clear ATU Memories..., Calibrate AGC-T...; Callsign Lookup... (Ctrl+Shift+L), PSK Reporter..., FreeDV Reporter...; Net Scheduler..., Memory..., Waveforms..., Wideband Bandscope...; Radio Health..., GPS Dashboard..., Network Diagnostics... and Runtime Monitor...." />
+<img src="/img/screens/menu-tools.png" width="285" alt="Tools menu: Add Panadapter..., AetherTX..., CW Keyer, Copy Assist, AetherModem..., Configure KiwiSDR...; Start SWR Scan..., Pre-tune ATU Bands..., Clear ATU Memories..., Calibrate AGC-T...; Callsign Lookup... (Ctrl+Shift+L), AetherMap..., FreeDV Reporter...; Net Scheduler..., Memory..., Waveforms..., Wideband Bandscope...; Radio Health..., AetherGPS..., Network Diagnostics... and Runtime Monitor...." />
 
 *The Tools menu, connected to a FLEX-8600.*
 
@@ -78,14 +75,14 @@ See [Profile Management](./profile-management.md).
 | **Clear ATU Memories...** | Clears the radio's ATU memories after confirmation. |
 | **Calibrate AGC-T...** | Noise-floor AGC-T calibration for the active slice. It listens only; it does not transmit. The same calibration is on the AGC-T slider's right-click menu. |
 | **Callsign Lookup...** | QRZ lookup (Ctrl+Shift+L). See [Callsign Lookup](./callsign-lookup.md). |
-| **PSK Reporter...** | See [PSK Reporter Map](./psk-reporter-map.md). |
+| **AetherMap...** | See [AetherMap](./psk-reporter-map.md). |
 | **FreeDV Reporter...** | FreeDV Reporter station list. |
 | **Net Scheduler...** | See [Net Scheduler](./net-scheduler.md). |
 | **Memory...** | See [Memory Channels](./memory-channels.md). |
 | **Waveforms...** | Install and manage radio waveforms (radios with installable waveforms only). |
 | **Wideband Bandscope...** | The radio's converter view before tuning; dimmed on radios without one. See [Hermes-Lite 2](./hermes-lite-2.md). |
 | **Radio Health...** | Reachability, other clients holding the radio, PA temperature — works even with no session. |
-| **GPS Dashboard...** | See [AetherClock and GPS](./aetherclock-and-gps.md). |
+| **AetherGPS...** | See [AetherClock and GPS](./aetherclock-and-gps.md). |
 | **Network Diagnostics...** | Link quality, trends and logs. See [Troubleshooting](./troubleshooting.md). |
 | **Runtime Monitor...** | CPU, memory, threads and logs for the app itself. See [Runtime Monitor](./runtime-monitor.md). |
 
@@ -107,6 +104,7 @@ See [Profile Management](./profile-management.md).
 | **Frameless Window** | Ctrl+Shift+F. On by default. Turn it off to return the main window to the operating system's own title bar and borders. |
 | **Propagation Conditions** | Shows the propagation forecast on the panadapters. Off by default. |
 | **Smart Spot Filtering** | Dims SSB spots with no detected voice signal nearby. Off by default; needs SpotHub Signal History. |
+| **Show live CW contacts** | Shows station information for callsigns the CW decoder hears in a separate **Live CW contacts** window, so it never covers decoded text. Off by default; closing the window turns it off. See [Callsign Lookup](./callsign-lookup.md). |
 | **FPS Meters** | Ctrl+F. Shows spectrum and waterfall frame rates on each pan. Off by default. |
 | **Blink Status Indicator** | Pulses the radio-link dot on the radio tab. On by default. |
 
@@ -134,9 +132,9 @@ The Minimize and Full Screen keys can be rebound in **Settings → Configure Sho
 | Item | What it does |
 |------|-------------|
 | **AetherSDR Documentation** | Opens this documentation site in your browser. |
-| **Printable Manual (PDF)** | Opens the [printable manual](pathname:///AetherSDR-Manual.pdf), all of these pages in one PDF. |
+| **Printable Manual (PDF)** | Downloads the [printable manual](pathname:///AetherSDR-Manual.pdf), all of these pages in one PDF. |
 | **Log Analyzer** | Opens the [Log Analyzer](/log-analyzer), which checks a log or support bundle for known problems in your browser. |
-| **Getting Started...**, **AetherSDR Help...**, **What's New...** | Built-in guides, each in its own window. They work offline, and each guide links its page on this site. |
+| **Getting Started...**, **AetherSDR Help...**, **What's New...** | Built-in guides, each in its own window. They work offline, and each guide links its page on this site. In **What's New...**, only web links (http and https) open; any other kind of link in the release notes is ignored. |
 | **Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...** | Topic guides, also offline. |
 | **AetherSDR Website**, **Donate to AetherSDR** | Open the web pages. |
 | **Submit your Idea... 💡** | The AI-assisted feature-request helper. |
@@ -144,7 +142,8 @@ The Minimize and Full Screen keys can be rebound in **Settings → Configure Sho
 | **Contributing to AetherSDR...** | See [Contributing Guide](./contributing-guide.md). |
 | **Support & Diagnostics...** | Logging categories and support bundles. See [Support and Logging](./support-and-logging.md). |
 | **Slice Troubleshooting...** | A diagnostics window for slice, audio and display state. |
-| **Check for Updates...** | Checks for a newer release now. |
+| **Check for Updates...** | Opens the Updates window and checks again now. See [Updates](./updates.md). |
+| **Check for Updates Automatically** | On by default. Checks for a newer release at startup, at most once a day, and shows **UPDATE** in the title bar when there is one. The same setting as **Check daily** in the Updates window; turning it off also removes the badge. Dimmed on store-managed installs (the Microsoft Store, or a Flatpak build), which update themselves. |
 | **About AetherSDR** | The About window (below). |
 
 ## The Title Bar
@@ -155,6 +154,7 @@ The main window has one 52 px title bar. From left to right:
 |------|-----------|
 | **☰** | The application menu (Windows and Linux only). |
 | **AetherSDR** brand mark | Drag the bar here to move the window. |
+| **UPDATE** badge | Shown when a newer AetherSDR release is available; hover names it, click opens the Updates window. See [Updates](./updates.md). |
 | **Radio tabs** | One tab per known radio (LAN, SmartLink or routed). See below. |
 | **EXPERIMENTAL** badge | Shown when the connected radio family's support is experimental. |
 | **multiFLEX** | Appears when other clients share the radio; hover lists them, click opens the dashboard. |
@@ -166,20 +166,26 @@ The main window has one 52 px title bar. From left to right:
 | **Dock left / Dock right / Pop out** | Move the applet panel to the left or right of the panadapters (click the active side again to hide it), or float it in its own window. **Ctrl+Shift+S** also pops it out. |
 | **Window controls** | Minimize, maximize and close (see "Per platform"). |
 
+### Updates
+
+The **UPDATE** badge appears when a newer AetherSDR release is available; click it for the Updates window. See [Updates](./updates.md).
+
 ### Radio tabs
 
 <img src="/img/screens/radio-list-popup.png" width="380" alt="Discovered radios popup with a Search name, address, or status field. Three rows, each with an Actions button: FLX8600, connected; Hermes-Lite 2, available; and Simulator (not on the air), 127.0.0.1, available, with the first two addresses blacked out. Connect manually... and Rescan radios sit at the bottom." />
 
 *The radio list, opened from the plus button beside the radio tabs. Addresses are blacked out.*
 
-- Line one is the radio's name; line two is its state in words (for example "link lost"), so colour is never the only signal.
+- Line one is the radio's name; line two is its state in words (for example "Link lost"), so color is never the only signal.
 - The dot on the active tab is the **radio-link indicator**. It pulses once per discovery heartbeat, turns amber while discovering and red after three missed heartbeats (blinking, or solid if **View → Blink Status Indicator** is off). The alarm stays on the radio that dropped until you disconnect on purpose, start a new session or remove the tab. A deliberate disconnect never raises it. Right-click the tabs to toggle blinking.
 - When the tabs no longer fit, scroll them with the mouse wheel or drag them sideways.
 - **"+"** opens the radio list: search by name, model, address or status; a per-radio **Actions** menu (Disconnect, Rename…, Radio setup…, Remove from tabs / Add to tabs); **Connect manually…**; **Rescan radios**. Removing a tab only hides it; it does not forget the radio or its credentials. Selecting a radio opens the connection panel on it; nothing connects without your confirmation.
 
 ### Transmit timer
 
-A green outlined `M:SS` readout (`H:MM:SS` past an hour) just left of **PC Audio**. It appears when you key up, starts from 0:00 for each transmission, holds the final time for 15 seconds after you unkey, then fades out. It counts operator transmissions only (MOX, PTT, footswitch, VOX, CW, tune) and never TCI or DAX transmissions from other programs.
+A green outlined `M:SS` readout (`H:MM:SS` past an hour) just left of **PC Audio**. It appears when you key up, starts from 0:00 for each transmission, holds the final time for 15 seconds after you unkey, then fades out. It counts transmissions you key yourself (MOX, PTT, footswitch, VOX, including digital modes keyed with MOX). CW, TUNE/ATU, a TGXL autotune, and transmissions keyed by other programs through TCI, DAX or CAT are excluded.
+
+The audio controls stay in place as the timer appears and fades. In minimal mode, the hidden timer reserves no space.
 
 ### Speaker and master slider
 
@@ -191,6 +197,8 @@ The speaker icon and master slider show the path you are actually hearing:
 | Off | The radio's Line Out mute | The radio's Line Out level |
 
 With PC Audio off, a Line Out change made by another client (or in Radio Setup) shows up here too. See [Audio Settings](./audio-settings.md).
+
+On a radio with no Line Out AetherSDR can control (Hermes-Lite 2, Icom, RTL-SDR), the speaker mutes only this computer's output; with PC Audio off too, the click is refused with a notice.
 
 ### Per platform
 
@@ -208,7 +216,7 @@ In **Minimal Mode** the bar shrinks to the active radio tab and status badges; t
 
 **Help → About AetherSDR** opens a rounded, borderless window showing:
 
-<img src="/img/screens/about-window.png" width="400" alt="About AetherSDR window. Below the AetherSDR logo it shows the version v26.10.1 and commit, the tagline Cross-platform SmartSDR-compatible client for FlexRadio transceivers, and a box listing Built with Qt 6.12.0 and C++20, the compile date and the GPU QRhi (OpenGL) renderer. A Contributor Logbook button, the copyright and GPLv3 licence, the GitHub link, trademark notices and an OK button follow." />
+<img src="/img/screens/about-window.png" width="400" alt="About AetherSDR window. Below the AetherSDR logo it shows the version v26.10.1 and commit, the tagline Cross-platform SmartSDR-compatible client for FlexRadio transceivers, and a box listing Built with Qt 6.12.0 and C++20, the compile date and the GPU QRhi (OpenGL) renderer. A Contributor Logbook button, the copyright and GPLv3 license, the GitHub link, trademark notices and an OK button follow." />
 
 *The About AetherSDR window: version, build and renderer details.*
 
@@ -220,9 +228,7 @@ Drag anywhere in the window to move it. **Esc** or **Ctrl+W** (Cmd+W) closes it,
 
 ## Known issues
 
-- On Windows 10 with **Frameless Window** on, the **☰** menu and the panadapter's right-click menu flash and close straight away, and click-to-tune does nothing ([#6272](https://github.com/aethersdr/AetherSDR/issues/6272)).
-- On Windows 10, a thin white strip shows along the left, right and bottom edges of the main window ([#6266](https://github.com/aethersdr/AetherSDR/issues/6266)).
-- **View → Pan Follows VFO** has no visible effect for most tuning; it does not keep the slice centred the way Center Lock does ([#5622](https://github.com/aethersdr/AetherSDR/issues/5622)).
+- **View → Pan Follows VFO** has no visible effect for most tuning; it does not keep the slice centered the way Center Lock does ([#5622](https://github.com/aethersdr/AetherSDR/issues/5622)).
 
 ## Troubleshooting
 

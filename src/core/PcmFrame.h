@@ -293,3 +293,4 @@ private:
 } // namespace AetherSDR
 
 Q_DECLARE_METATYPE(AetherSDR::PcmFrame)
+Q_DECLARE_METATYPE(AetherSDR::PcmEpochLease)

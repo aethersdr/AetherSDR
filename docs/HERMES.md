@@ -395,8 +395,8 @@ after a timeout is asking for a reply byte-for-byte equal to the one it
 abandoned, and a wire with no transaction id cannot separate those two.
 `hl2_rqst_ack_test` pins that residual rather than hiding it. `Echo::
 SubsystemRead`, which matches on the six-bit address alone, is weaker still —
-so `requestRegister` refuses it outright today, no allow-listed address being of
-that shape.
+so `requestRegister` refuses it outright, no allow-listed address being of that
+shape. Its one caller is the IO board status read below.
 
 **No radio has ever answered this code.** Every test behind item 13 is synthetic
 — a hand-built `Ep6Response` fed straight to `ingestControlResponse`. That is
@@ -407,7 +407,115 @@ flagged request will be answered; nothing here is evidence that one was. First
 hardware run: arm a read-back at `0x0a` on a streaming radio and watch
 `staleAcks()` stay at zero while `answered()` moves. Until then, treat the
 `Answered` path as unexercised on real hardware and say so in anything built on
-it.
+it. The `SubsystemRead` path has since been answered by a radio (the IO board
+status read below, with its numbers); the echo path at `0x0a`/`0x0e` has not.
+
+### The IO board status read
+
+`MetisClient::requestIoBoardStatus()`, reached as verb `hl2` / `ioboard.status`,
+reads the N2ADR IO board's status registers. It is the only request that reaches
+`0x3d`; `requestRegister` still refuses that address, so this adds no write path
+to the companion bus. The C&C data is `0x079D0600`: cookie `0x07`, stop | chip
+`0x1D`, register 6. `i2c_bus2.v` takes the cookie's low bit as "read":
+
+```verilog
+            state_next = cmd_data[24] ? STATE_READ_CMDADDR : STATE_CMDADDR;
+```
+
+It takes the chip from `cmd_data[22:16]` and never reads the stop bit, which is
+set only to match the write path. `STATE_READ_CMDADDR` and `STATE_READ_DATA0`
+write only the register pointer, then stop; `STATE_READ_DATA1..4` read four
+bytes, the first into `resp_data[7:0]`, and `RESP_READ` returns them as the
+reply's C1..C4. On the board (HL2IOBoard `n2adr_lib/i2c_slave_handler.c`, commit
+`bbf0a2c`), the first byte a write delivers is stored as the register number and
+nothing is written; each requested byte returns one register and advances. So
+one read returns registers 6..9:
+
+| Reply DATA | Register | Meaning (HL2IOBoard README) | Reply key |
+|---|---|---|---|
+| `[7:0]` | 6 `REG_INPUT_PINS` | bit 0 EXTTR (1 = receive), bits 1..5 In1..In5 | `inputPins`, `receiving`, `in1`..`in5` |
+| `[15:8]` | 7 `REG_ANTENNA_TUNER` | ATU progress: `0xEE` send RF, `0` tuned, `>= 0xF0` failed | `antennaTuner` |
+| `[23:16]` | 8 `REG_FAULT` | `0` = no fault; other codes are undefined | `fault` |
+| `[31:24]` | 9 `REG_FIRMWARE_MAJOR` | firmware major version | `firmwareMajor` |
+
+None of the four has a read side effect (the ADC registers from 25 up do, and
+the read stops short of them); the pointer write flashes the board's LED.
+
+Matching on the address alone is sound here for a reason particular to `0x3d`:
+nothing else sets RQST there, so a reply at `0x3d` answers an IO board read. The
+residual is the one the paragraph above describes, a late reply to an abandoned
+read landing on the next, and that reply carries the same four registers, at
+most a deadline plus a quarantine old.
+
+The bus can be busy in three ways, and none gives a reading. `i2c_bus2.v` looks
+at a command only in `STATE_IDLE`:
+- In `STATE_IDLE` with the I2C master still busy, the command is refused with
+  `0x3F` (`cmd_ack_next = 1'b0; // Missed`).
+- During another read (`STATE_READ_*` holds `cmd_ack` low), `control.v`'s
+  `RESP_ACK` sees the low ack and also answers `0x3F`.
+- During a write (`STATE_CMDADDR`, `STATE_FCMDADDR` and their data states, where
+  `cmd_ack` stays high), the command is ignored outright, and `control.v` answers
+  at `0x3d` with the request's own DATA, `0x079D0600`. A board could in principle
+  read back those exact bytes (pins `0x00`, ATU 6, fault `0x9D`, firmware 7), but
+  only while transmitting with an undefined fault code.
+
+`ioboard.status` reports all three as "the radio's I2C bus was busy" rather than
+retrying.
+
+The bus runs at 312.5 kHz (`clk_ctrl` 2.5 MHz, `prescale` 2), so a read or a
+write holds it for about 0.1–0.2 ms. EP2 packets are 2.6 ms apart on average,
+but the 2 ms pacer catches up in bursts microseconds apart, and an IO board
+TX-frequency bank that reaches a busy bus is ignored with nothing to report it,
+because writes carry no RQST. So `MetisClient::buildNextControlPacket()` spaces
+bus 2 around the read:
+- a config bank whose filter, RX-antenna or AK4951 speaker bits changed since
+  the last packet sent counts as a bus-2 write, because frame A's change starts
+  one ahead of frame B, and the read never shares its packet;
+- the read waits until 2 ms (by the millisecond clock, so more than 1 ms) after
+  the last bus-2 write sent;
+- an I2C write waits until 2 ms after the read, keeping its place in the queue.
+
+A held bank costs at most one packet. Writes are not spaced from each other:
+back-to-back I2C writes in a burst, and an IO board bank in the same packet as
+a filter change, share the bus as they did before the read existed.
+
+With no board fitted the read should still complete, not be refused:
+`i2c_master.v` strobes `missed_ack` when no chip acknowledges and carries on, and
+`i2c_bus2.v` never consults it. The bytes are then whatever the idle bus reads,
+`0xFF` with pull-ups; the gateware sets none on `io_scl2`/`io_sda2`. The board
+never sets bits 6..7 of register 6 (the README gives them to `REG_IN_PINS`, 168,
+only), and every firmware build reports a major version of 1 or more, so
+`ioboard.status` answers a reply with either bit set, or with firmware 0, with
+the error "No IO board answered", not a reading; a read that never completes
+times out.
+Unverified on hardware: no run yet has had the board unplugged.
+
+**On hardware** (2026-10-23; HL2 gateware 74.2, N2ADR IO board firmware major
+1, host on Wi-Fi, 48 kHz, one receiver, receive only): two runs, polling every
+2 s.
+- **Answers.** 285 reads were answered, every one with the same registers:
+  `inputPins 0x01` (EXTTR receiving), ATU 0, fault 0, firmware 1. That is the
+  value read, not an echo: an echo of `0x079D0600` would decode as pins `0x00`,
+  firmware 7. With the link healthy, the run that timed it saw round trips of
+  4–36 ms, median 9 ms.
+- **Byte order, from a second board.** The reply above, `01 00 00 01`, reads
+  the same either way round, so it cannot show the order. ON8ST's board
+  (firmware 2.11, on #6703), read through the port-1025 command path into the
+  same `i2c_bus2.v` read states, can: `0x02000001` from register 6 (firmware 2
+  in `[31:24]`), and bytes `00 00 02 0B` in `[7:0]..[31:24]` from register 7,
+  which also confirms the auto-increment.
+- **No bus-busy refusals**, including through a six-band sweep whose IO board
+  frequency pushes shared the bus.
+- **Timeouts followed Wi-Fi delay or loss past the 42 ms deadline.** Of 65
+  failures, 57 fell inside two minutes in which `MetisClient` recovered a 2 s
+  EP6 silence and counted 29,731 dropped EP6 packets.
+- **The quarantine did its job on the late replies it saw.** In the run that
+  counted them, 19 late replies arrived during the quarantine and were counted
+  as `staleAcks()` rather than paired. The registers never changed, so a reply
+  that outlived the quarantine would have looked like a fresh one; these runs
+  cannot rule that residual out.
+- **"The radio did not answer" is retryable.** A consumer should poll again
+  rather than report the board missing.
 
 **Bonus, for §13 item 14.** `clip_cnt` is a 2-bit saturating counter cleared on
 **every** `resp_rqst`, and the ADC-overload bit in RADDR 0 is `(&clip_cnt)` —
@@ -539,6 +647,15 @@ in `third_party/wdsp/upstream/` and were **not** confirmed on the air.
   TXA's bandpass both reach it through `CalcBandpassFilter`/`fir_bandpass` with
   `rtype = 1`, so this one function is the mechanism behind both the RX bullet
   above and the TX correction here.
+- **TX AM, DSB and FM (TXA build only; the phasing build refuses to key them)
+  take a SYMMETRIC passband, and that is not a sideband rule.** For `TXA_AM`, `TXA_DSB`, `TXA_SAM` and `TXA_FM`, `TXASetupBPFilters`
+  runs `bp0` *before* `xammod`/`xfmmod`, and both modulators read only the I
+  output — so the band is an audio low-pass. `Hl2TxDsp::txaPassband()` maps the
+  positive `{100, 3000}` to `[-3000, +3000]` (piHPSDR's `tx_set_filter` uses the
+  same `(-high, high)` for AM and DSB); a one-sided band there halves the
+  modulation. `WdspChannel::open()` also turns off the CTCSS encoder
+  `create_txa` builds switched **on** (100 Hz, level 0.10), and pushes the AM
+  carrier (0.5) and FM deviation (5000 Hz) from `Hl2TxLevelPolicy.h`.
 
 The trap: RXA and the phasing modulator use **opposite conventions**, and both look
 plausible. A table written for one and reused for the other is silently wrong on
@@ -606,6 +723,10 @@ convergence must be verified on real hardware through the automation bridge.
 - `SetRXAAGCTop` is the **maximum gain in dB**, and 120 dB is the top of WDSP's
   range. Inheriting that default ran the HL2 wide open: peak 3.186, **10.31% of
   samples at or beyond full scale**. At a 65 dB ceiling: peak 2.664, 0.27%.
+- Both peaks include RXA's panel gain of 4.0 after the AGC. The HL2 now opens
+  it at unity (`Hl2RxDsp::kRxPanelGain`, #5942): 12.04 dB quieter. The second
+  bandpass pass, speak and mpeak run between the AGC and the panel, so the
+  AGC's ceiling is not a bound on the output.
 - Mode vocabulary: `off/slow/med/fast` → WDSP RXA 0/2/3/4. WDSP's "long" (1)
   has no representation in the four-way UI control.
 - **The AGC is client-owned state and nothing on the radio can be asked for
@@ -2195,8 +2316,8 @@ The Display panel's FPS slider, Clone to all Pans and Reset to Defaults save;
 `MainWindow::wirePanDisplayStatus` restores into the widget before it seeds the
 shaper. FFT AVG and Wt Avg have a table of their own in that document
 (`fftAverages`), kept only for a backend that declares
-`BackendPanAveraging::clientPersistsAveraging`. The HL2 declares it false, so on
-this radio those two are not remembered.
+`BackendPanAveraging::clientPersistsAveraging`. The HL2 declares it, so the
+Display panel's FFT AVG slider and Wt Avg toggle are remembered per pan slot too.
 
 The dBm range is the odd one: the pan model, not the widget, is what every
 re-seed reads, so a scale the operator moves is put into the model
@@ -2212,8 +2333,12 @@ alike through `RadioCapabilities::clientPersistsPanFrameRate()` and
 `clientPersistsDbmRange()`. The HL2 declares both and no other family does;
 another family opts in with one declaration in its own backend. The range
 declaration counts only with absolute bins, because the client writes the range
-into the pan model. The waterfall rate keeps its own gate,
-`RadioModel::shapesDisplayRatesLocally()`.
+into the pan model. The waterfall rate has a declared owner too,
+`PanWaterfallRateShaping::clientPersistsWaterfallRate`, read by its save and its
+restore through `RadioCapabilities::clientPersistsPanWaterfallRate()`, together
+with `RadioModel::shapesDisplayRatesLocally()`: both must hold. The HL2,
+ANAN, Icom, RTL and demo backends each declare it, a Flex does not, and a family
+stops storing the rate with one edit in its own backend.
 
 ### 15.2.3 There is no hardware black level to select
 
@@ -2286,6 +2411,39 @@ backwards for the input period. A 33 ms target producing 20 fps and a 100 ms
 target producing 9 fps are only consistent with frames arriving every ~25 ms —
 40 fps, not the 375 the sample rate implied. The simulator was reporting a
 384 kHz span while delivering a 48 kHz stream.
+
+### 15.3.1 Show TX in Waterfall is a client flag here
+
+Radio Setup's **Show TX in Waterfall** is one setting on a Flex: `transmit set
+show_tx_in_waterfall=`, stored by the radio and echoed in its transmit status.
+The echo is the only thing that sets `TransmitModel::showTxInWaterfall()`, and
+that flag is what `SpectrumWidget` reads while keyed: true, the pane holding the
+TX passband draws its pan frames as waterfall rows; false, it drops every row
+for the whole over.
+
+The HL2 has no command plane and no display engine: the command has nowhere to
+go and nothing echoes. There is something to draw: `Hl2RxDsp::setAudioMuted`
+mutes the demodulator while keyed and the spectrum keeps running on real IQ, so
+pan frames keep arriving.
+
+The HL2 backend says so in its capabilities:
+`RadioCapabilities::txWaterfallClientFlag` is engaged with `clientPersistsFlag`
+true, which declares the client the owner of the flag. One accessor,
+`clientPersistsShowTxInWaterfall()`, reads it for the request, the store and
+the restore. `RadioModel::requestLocalShowTxInWaterfall` takes the flag only on
+that declaration: it writes the transmit model through the path an echo would
+take, and stores the value per radio in the `ClientDisplay` document, because a
+disconnect clears the model and nothing will report it again. `onConnected()`
+puts it back, on the same declaration.
+
+The HL2 is the only radio that declares it. A Flex owns the flag in the radio;
+ANAN, Icom, RTL-SDR and the demo simulator leave the record absent. On all of
+those the request declines, the caller sends the wire text, and nothing is
+stored or restored by the client.
+
+**Not measured:** what the HL2's own receive path reads while keyed, and
+therefore what colour those rows take. The keyed rows are coloured by
+`SpectrumWidget::dbmToWaterfallLevel`, the same law a Flex's keyed rows use.
 
 ### 15.4 Killing the client wedges the radio
 
@@ -3696,7 +3854,10 @@ behavior is unchanged.
 
 The count was fixed at connect, from a persisted setting. It is now the
 operator's, at runtime: "Add Panadapter" and the pane close button. Connect
-always comes up with ONE receiver.
+always comes up with ONE receiver; the ones the operator had open come back
+after link-up through that same add (`Hl2Backend::replayRestoredSession`, from
+the `receivers` list of the `OperatingState` document), so the receiver
+ceiling at the current span still decides how many return (#5777).
 
 Retiring the persisted count mattered for a reason beyond tidiness: it made
 connect the only place the count could change, and a saved 4 was re-imposed on

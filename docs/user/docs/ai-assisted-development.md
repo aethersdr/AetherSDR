@@ -4,7 +4,7 @@ slug: "/ai-assisted-development"
 description: "AetherSDR is developed through an AI-augmented open-source workflow."
 ---
 
-AetherSDR is developed through an AI-augmented open-source workflow. The project lead (Jeremy, KK7GWY) and the core contributors work mainly through [Claude Code](https://claude.com/claude-code); other contributors use Codex, Copilot, Cursor, Gemini, Aider and more; and the [AetherClaude](https://github.com/aethersdr/aetherclaude) bot triages issues, drafts implementation plans and opens PRs for issues labelled `aetherclaude-eligible`.
+AetherSDR is developed through an AI-augmented open-source workflow. The project lead (Jeremy, KK7GWY) and the core contributors work mainly through [Claude Code](https://claude.com/claude-code); other contributors use Codex, Copilot, Cursor, Gemini, Aider and more; and the [AetherClaude](https://github.com/aethersdr/aetherclaude) bot triages issues, drafts implementation plans and opens PRs for issues labeled `aetherclaude-eligible`.
 
 Every change passes the same gate whichever tool (or person) produced it: signed commits, green CI and human code-owner review before anything reaches `main`.
 
@@ -46,11 +46,11 @@ Plan the implementation before writing code.
 AGENTS.md has the full list. The ones that catch people most often:
 
 1. Use `AppSettings`, never `QSettings`.
-2. Every colour is a ThemeManager token, with no hard-coded hex.
+2. Every color is a ThemeManager token, with no hard-coded hex.
 3. A control the radio cannot use is dimmed with a reason, never hidden.
 4. Use `QSignalBlocker` when updating the UI from model signals.
 5. Filter radio data by `client_handle` for Multi-Flex safety.
-6. Sign every commit, and end the commit subject with the principle it honours (`Principle <N>.`).
+6. Sign every commit, and end the commit subject with the principle it honors (`Principle <N>.`).
 7. The core RX path (discovery → connect → FFT → audio) must still work.
 
 ## Letting an AI drive AetherSDR

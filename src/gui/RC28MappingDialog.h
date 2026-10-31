@@ -1,7 +1,7 @@
 #pragma once
 #ifdef HAVE_HIDAPI
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 
 #include <QPointer>
 
@@ -17,9 +17,10 @@ namespace AetherSDR {
 class HidEncoderManager;
 
 // RC-28 Button Mapping dialog — configure TX bar PTT mode, F1/F2 press and
-// hold actions, and view live device info + button activity.
-// Opened from Settings → Icom RC-28 Remote Encoder...   (#3323)
-class RC28MappingDialog : public PersistentDialog {
+// hold actions, and view live device info + button activity. A canon dialog
+// (style guide, RFC #6226), opened from Settings → Controllers → Icom RC-28
+// Remote Encoder... (#3323).
+class RC28MappingDialog : public CanonWindow {
     Q_OBJECT
 
 public:
@@ -48,6 +49,9 @@ private:
     void refreshDeviceInfo();
     void populateActionCombo(QComboBox* combo, const QString& field,
                              const QString& defaultId, bool holdOnly = false);
+    // Connected, idle or warning: the dot and status line restyle from the
+    // rc28State property.
+    void setStatusState(const QString& state);
 
     QPointer<HidEncoderManager> m_encoder;
     QString m_knownDeviceName;

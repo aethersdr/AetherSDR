@@ -77,13 +77,14 @@ bool Hl2TxDsp::buildModulator(std::string* error)
     // fexchange2's underrun report unreachable; fix underruns by pacing.
     c.blockForOutput = false;
 
-    // Signed, from the mode. See applyModeAndFilter().
-    const double lo = std::min(std::abs(m_config.filterLowHz),
-                               std::abs(m_config.filterHighHz));
-    const double hi = std::max(std::abs(m_config.filterLowHz),
-                               std::abs(m_config.filterHighHz));
-    c.filterLowHz = isLowerSideband() ? -hi : lo;
-    c.filterHighHz = isLowerSideband() ? -lo : hi;
+    // Signed, from the mode. See txaPassband().
+    const auto [signedLow, signedHigh] =
+        txaPassband(m_config.mode, m_config.filterLowHz, m_config.filterHighHz);
+    c.filterLowHz = signedLow;
+    c.filterHighHz = signedHigh;
+    // WdspChannel::open() pushes both, and turns TXA's default-on CTCSS off.
+    c.txAmCarrierLevel = m_config.amCarrierLevel;
+    c.txFmDeviationHz = m_config.fmDeviationHz;
 
     std::string err;
     m_channel = WdspChannel::create(c, &err);
@@ -117,12 +118,8 @@ void Hl2TxDsp::applyModeAndFilter()
     }
     // Both calls, every time: SetTXAMode does not pick an SSB sideband (the
     // passband sign does), so a mode-only USB->LSB change would stay on USB.
-    const double lo = std::min(std::abs(m_config.filterLowHz),
-                               std::abs(m_config.filterHighHz));
-    const double hi = std::max(std::abs(m_config.filterLowHz),
-                               std::abs(m_config.filterHighHz));
-    const double lowHz = isLowerSideband() ? -hi : lo;
-    const double highHz = isLowerSideband() ? -lo : hi;
+    const auto [lowHz, highHz] =
+        txaPassband(m_config.mode, m_config.filterLowHz, m_config.filterHighHz);
 
     if (!m_channel->setMode(m_config.mode)) {
         qCWarning(lcTxMod) << "HL2 TXA modulator: mode change refused";
@@ -468,6 +465,18 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
     }
 }
 
+bool Hl2TxDsp::isLowerSideband() const
+{
+    switch (m_config.mode) {
+    case WdspChannel::Mode::Lsb:
+    case WdspChannel::Mode::Cwl:
+    case WdspChannel::Mode::Digl:
+        return true;
+    default:
+        return false;
+    }
+}
+
 const char* Hl2TxDsp::modulatorName() noexcept { return "phasing"; }
 int Hl2TxDsp::wdspChannelId() const noexcept { return -1; }
 const WdspChannel::Config* Hl2TxDsp::channelConfig() const noexcept { return nullptr; }
@@ -538,15 +547,14 @@ void Hl2TxDsp::setMicGain(double linear)
 
 double Hl2TxDsp::alcGainDb() const noexcept
 {
-    return 20.0 * std::log10(std::max(1e-9, m_alcGain));
+    return 20.0 * std::log10(std::max(1e-9, m_alc.gain()));
 }
 
 void Hl2TxDsp::reset()
 {
     // A new transmission starts from unity. It does not TRANSMIT at unity: the
-    // first block that needs reduction takes it straight there, because
-    // reduction in this stage is instantaneous.
-    m_alcGain = 1.0;
+    // first sample that needs reduction has it, with no attack constant.
+    m_alc.reset();
     m_inBuffer.clear();
     // Re-arm the mid-buffer source-change warning for the next transmission.
     m_sourceChangeWarned = false;
@@ -556,15 +564,26 @@ void Hl2TxDsp::reset()
     resetModulatorState();
 }
 
-bool Hl2TxDsp::isLowerSideband() const
+std::pair<double, double> Hl2TxDsp::txaPassband(WdspChannel::Mode mode,
+                                                double lowHz,
+                                                double highHz) noexcept
 {
-    switch (m_config.mode) {
+    const double lo = std::min(std::abs(lowHz), std::abs(highHz));
+    const double hi = std::max(std::abs(lowHz), std::abs(highHz));
+    switch (mode) {
     case WdspChannel::Mode::Lsb:
     case WdspChannel::Mode::Cwl:
     case WdspChannel::Mode::Digl:
-        return true;
+        return {-hi, -lo};
+    // TXASetupBPFilters runs bp0 on these edges before the modulator, so they
+    // are an audio low-pass and must straddle zero. See the header.
+    case WdspChannel::Mode::Am:
+    case WdspChannel::Mode::Sam:
+    case WdspChannel::Mode::Dsb:
+    case WdspChannel::Mode::Fm:
+        return {-hi, hi};
     default:
-        return false;
+        return {lo, hi};
     }
 }
 
@@ -619,10 +638,7 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     m_iq.reserve(consumed * static_cast<std::size_t>(m_upsample));
     if (m_levelled.size() < consumed)
         m_levelled.resize(consumed);
-    float peak = 0.0f;
-    float postAlcPeak = 0.0f;
-
-    // ALC, protection only: peak tracking, instantaneous reduction, smoothed
+    // ALC, protection only: peak tracking, no attack constant, smoothed
     // release, unity ceiling on every path, then a hard limit below full scale.
     // No makeup gain and no hold: the operator's mic gain (+40 dB,
     // Hl2TxLevelPolicy.h) closes the speech gap, as WDSP's create_txa runs
@@ -632,54 +648,23 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     const double micGain =
         (source == TxAudioSource::EngineGenerated) ? 1.0 : m_micGain;
 
-    if (m_config.alcEnabled) {
-        float blockPeak = 0.0f;
-        for (std::size_t s = 0; s < consumed; ++s)
-            blockPeak = std::max(blockPeak, std::fabs(
-                static_cast<float>(m_inBuffer[s] * micGain)));
-
-        if (blockPeak > 1e-6f) {
-            const double wanted = m_config.alcTargetPeak / blockPeak;
-            // The unity ceiling, and the whole of what this stage promises.
-            const double target = std::min(wanted, 1.0);
-            const double blockSec = static_cast<double>(consumed)
-                                  / static_cast<double>(m_config.inputSampleRateHz);
-            // Reduction is instantaneous; only the release is smoothed. Any
-            // attack constant leaves part of a step above the hard clamp, and
-            // whether it is short enough depends on dspBlockSize and the input
-            // rate. hl2_txdsp_test pins speech shapes settling at 0.859 with
-            // nothing clipped. The slow release keeps it from pumping.
-            const bool reducing = target < m_alcGain;
-            if (reducing) {
-                m_alcGain = target;
-            } else {
-                const double a = 1.0 - std::exp(-blockSec
-                                    / std::max(1e-6, m_config.alcReleaseSec));
-                m_alcGain += a * (target - m_alcGain);
-            }
-        }
-    } else {
-        // ALC off: unity, and the hard clamp is the only over-level backstop.
-        m_alcGain = 1.0;
-    }
+    // One decision per call, applied as a path inside it (Hl2TxAlc.h) so a
+    // moving gain does not step at the block rate (#5912).
+    Hl2TxAlc::Settings alc;
+    alc.enabled = m_config.alcEnabled;
+    alc.targetPeak = m_config.alcTargetPeak;
+    alc.releaseSec = m_config.alcReleaseSec;
+    alc.sampleRateHz = static_cast<double>(m_config.inputSampleRateHz);
+    const Hl2TxAlc::Levels levels = m_alc.process(
+        std::span<const float>(m_inBuffer.data(), consumed), micGain, alc,
+        std::span<float>(m_levelled.data(), consumed));
+    // Mic peak is pre-ALC: a post-ALC meter would sit at the target. ALC
+    // effort is reported separately (TX:ALCGAIN).
+    const float peak = levels.micPeak;
+    const float postAlcPeak = levels.postPeak;
     // Published unconditionally (even a flat 0 dB) so TX:ALCGAIN never looks
     // stuck. TX:ALC is the post-ALC level, from alcPeak below.
     emit alcGain(static_cast<float>(alcGainDb()));
-
-    for (std::size_t s = 0; s < consumed; ++s) {
-        // Mic peak is pre-ALC: a post-ALC meter would sit at the target. ALC
-        // effort is reported separately (TX:ALCGAIN).
-        const float preAlc = static_cast<float>(m_inBuffer[s] * micGain);
-        peak = std::max(peak, std::fabs(preAlc));
-
-        // Hard limit after the ALC. With the ALC on, instantaneous reduction
-        // keeps the level at or below alcTargetPeak; this clamp is the backstop
-        // for the ALC-off path.
-        const float in = std::clamp(static_cast<float>(preAlc * m_alcGain),
-                                    -1.0f, 1.0f);
-        postAlcPeak = std::max(postAlcPeak, std::fabs(in));
-        m_levelled[s] = in;
-    }
 
     // Everything above is the level chain (mic gain, ALC, hard clamp, meters),
     // shared by both builds; the modulator below is the only thing
@@ -694,8 +679,8 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     // PRE-modulation level: this is what a mic-gain control acts on, so it is
     // the number that tells an operator whether they are overdriving.
     emit micPeak(peak > 0.0f ? 20.0f * std::log10(peak) : -140.0f);
-    // POST-ALC level, which is a different question and needs its own meter:
-    // how close to full modulation the signal reaching the wire actually is.
+    // POST-ALC audio peak, before the modulator: it sits at the ALC target while
+    // the ALC reduces. The envelope of the modulated IQ is not measured here.
     emit alcPeak(postAlcPeak > 0.0f ? 20.0f * std::log10(postAlcPeak) : -140.0f);
 }
 

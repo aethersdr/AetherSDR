@@ -356,7 +356,7 @@ jobs:
   # Cross-platform build check — runs on every PR (no path gating).
   #
   # History: previously gated by a `check-paths` job on a hand-maintained
-  # allow-list of files known to carry `#ifdef Q_OS_WIN` / `Q_OS_MAC`
+  # allow-list of files known to carry `#ifdef Q_OS_WIN` / `Q_OS_MACOS`
   # branches (CMakeLists, third_party/, workflows, MainWindow,
   # AudioEngine).  The allow-list was a chronic leaker — every time a
   # new platform-guarded path got added to a different file, the gap
@@ -876,7 +876,7 @@ jobs:
           key: sccache-windows-${{ github.run_id }}
 
   # macOS build check — runs on every PR (no path gating), same rationale
-  # as check-windows above.  Catches Q_OS_MAC / CoreAudio / Cocoa-bridge
+  # as check-windows above.  Catches Q_OS_MACOS / CoreAudio / Cocoa-bridge
   # breakage that Linux clang misses, which is otherwise only discovered
   # at release tag time by macos-dmg.yml.  Build-only (no code signing,
   # no DMG, no notarization — those stay in macos-dmg.yml on tag push).

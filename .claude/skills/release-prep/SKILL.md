@@ -337,9 +337,10 @@ time:
   that shipped in v26.8.2 and was only removed by the next prep.
 - **The Stable docs snapshot.** docs.aethersdr.com serves two versions:
   **Stable** at `/` from `docs/user/versioned_docs/version-stable/`, and
-  **Next (main)** at `/next/` from `docs/user/docs/`. The release makes
-  today's Next the new Stable, so run, after `git merge origin/main` brings
-  the docs current:
+  **Next** at `/next/` from `docs/user/docs/`. The site is deployed when the
+  release is published, not on merge, so Next shows `main` as of the last
+  deploy. The release makes today's Next the new Stable, so run, after
+  `git merge origin/main` brings the docs current:
 
   ```sh
   python3 tools/docs/snapshot_stable.py X.Y.Z
@@ -412,8 +413,8 @@ one. Never claim a build, test or hardware result the pass did not produce.
   reason), Validation (the step-5 output), `After merge: tag the resulting
   **main** commit, not this branch.`, then the Claude Code attribution line.
 - **Ready or draft** is a gate question. Request review from
-  `@aethersdr/infrastructure`; the author cannot approve. Assign yourself
-  (`AGENTS.md` § "Issue / PR Claim Protocol").
+  `@aethersdr/infrastructure`; the author cannot approve. Do not claim
+  your own prep PR (`AGENTS.md` § "Issue / PR Claim Protocol").
 - **While the PR is open, watch `main`.** Every merge after the cutoff must
   be folded in before the tag: v26.7.2 missed #4211 and nobody caught it;
   v26.8.1's reviewer caught #4718; #5673 folded #5595 in mid-review with a

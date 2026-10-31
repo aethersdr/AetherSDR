@@ -1,15 +1,23 @@
 #include "FirmwareStager.h"
 #include "CabExtractor.h"
+#include "FirmwareCurrency.h"   // compareReleases() — one definition of "newer"
 #include "LogManager.h"
 #include "OleCompoundFile.h"
+#include "MsiFirmwareMetadata.h"
 #include "models/ModelCapabilities.h"   // RadioPlatform for firmware-family routing
 
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QNetworkRequest>
 #include <QRegularExpression>
+#include <QSaveFile>
+#include <QVersionNumber>
 #include <QStandardPaths>
 #include <QUrl>
 
@@ -20,10 +28,21 @@ namespace {
 // 30 s rather than 15: the installer is a large download and this clock resets
 // on every byte, so it only fires on a genuinely dead transfer.
 constexpr int kTransferTimeoutMs = 30000;
+
+QString stagedFirmwareStatus(const QString& fileName, qint64 fileSize,
+                             const QString& md5, const QString& family)
+{
+    QString status = QStringLiteral("Firmware staged and ready ✓\n%1 (%2 MB)")
+                         .arg(fileName).arg(fileSize / (1024 * 1024));
+    if (family == QStringLiteral("9600")) {
+        status += QStringLiteral("\nFLEX-8000 and Aurora radios use FLEX-9600 firmware.");
+    }
+    return status + QStringLiteral("\nMD5: %1").arg(md5);
+}
 } // namespace
 
-FirmwareStager::FirmwareStager(QObject* parent)
-    : QObject(parent)
+FirmwareStager::FirmwareStager(QObject* parent, const QString& stagingDirectory)
+    : QObject(parent), m_stagingDirectory(stagingDirectory)
 {
     m_nam.setTransferTimeout(kTransferTimeoutMs);
 }
@@ -39,20 +58,31 @@ QString FirmwareStager::stagingDir()
     return dir;
 }
 
+QString FirmwareStager::stagingDirectory() const
+{
+    if (m_stagingDirectory.isEmpty()) {
+        return stagingDir();
+    }
+    QDir().mkpath(m_stagingDirectory);
+    return m_stagingDirectory;
+}
+
 QString FirmwareStager::modelToFamily(const QString& model)
 {
-    // Firmware family follows the FlexLib RadioPlatform (Principle I), NOT a
-    // model-string substring:
-    //   Microburst / DeepEddy / BigBend  -> FLEX-6x00 firmware (all consumer
-    //     radios, including 8400/8600 and the AU-/ML-/MLS-/CL-/CLS- series)
-    //   DragonFire (RT-2122, government)  -> FLEX-9600 firmware
-    //
-    // The old contains("9600") test misrouted both directions: ML-9600 /
-    // ML-9600W (BigBend) were sent to the government 9600 family, while RT-2122
-    // (the actual DragonFire radio) fell through to the 6x00 family.
-    if (capabilitiesFor(model).platform == RadioPlatform::DragonFire)
+    // SmartSDR 4.2/4.3 MSI package names follow the hardware platform:
+    // FLEX-6x00 is Microburst/DeepEddy; FLEX-9600 is BigBend (8000/Aurora).
+    // DragonFire has no verified mapping in these public installers.
+    switch (capabilitiesFor(model).platform) {
+    case RadioPlatform::BigBend:
         return "9600";
-    return "6x00";
+    case RadioPlatform::Microburst:
+    case RadioPlatform::DeepEddy:
+        return "6x00";
+    case RadioPlatform::DragonFire:
+    case RadioPlatform::Unknown:
+        return {};
+    }
+    return {};
 }
 
 bool FirmwareStager::versionUsesMsi(const QString& version)
@@ -67,51 +97,195 @@ bool FirmwareStager::versionUsesMsi(const QString& version)
     return (major > 4) || (major == 4 && minor >= 2);
 }
 
+// ─── Step 0: What does FlexRadio publish? ───────────────────────────────────
+
+// The index lists several SmartSDR releases side by side, so the order is
+// computed rather than trusted. NUMERICALLY: as text, "4.2.5" sorts
+// after "4.2.20" and "3.9.19" after "3.10.15", so a string maximum silently
+// picks an older release whenever a one-digit component meets a two-digit one.
+// The page happens not to contain such a pair today, which is exactly the kind
+// of luck an indicator should not be built on.
+//
+// Only major.minor.patch is published anywhere on the site; the fourth
+// component of a radio's reported version (the build, "4.2.20.41343") appears
+// only inside a downloaded installer, so nothing here can produce one.
+QStringList FirmwareStager::parseAllReleases(const QByteArray& json)
+{
+    QJsonParseError parseError{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json, &parseError);
+    // Untrusted input, validated at the boundary (Principle VII). Everything
+    // below asks what a value IS before using it: the top level must be an
+    // array, each record an object, each title or slug a string. A record that
+    // is not what it claims is skipped, never coerced.
+    if (parseError.error != QJsonParseError::NoError || !doc.isArray())
+        return {};
+
+    // The release title, e.g. "SmartSDR v4.2.20". ANCHORED, because the index
+    // also carries "SmartSDR v4 Changelog", "SmartSDR v2.5.1+ Changelog" and
+    // "SmartSDR v4.x API (FlexLib)" -- an unanchored search would read the
+    // 2.5.1 out of a changelog's name and publish it as a release.
+    static const QRegularExpression titleRe(
+        QStringLiteral(R"(^SmartSDR v(\d+\.\d+\.\d+)$)"),
+        QRegularExpression::CaseInsensitiveOption);
+    // The same release as a slug, e.g. "smartsdr-v4-2-20". Read only when the
+    // title does not match, so an edited title ("SmartSDR v4.2.20 (Windows)")
+    // costs us a release only if BOTH spellings have drifted. The changelogs
+    // spell their slugs with underscores, so they do not collide here.
+    static const QRegularExpression slugRe(
+        QStringLiteral(R"(^smartsdr-v(\d+)-(\d+)-(\d+)$)"),
+        QRegularExpression::CaseInsensitiveOption);
+
+    QList<QVersionNumber> found;
+    const QJsonArray records = doc.array();
+    for (const QJsonValue& value : records) {
+        if (!value.isObject())
+            continue;
+        const QJsonObject record = value.toObject();
+
+        QString text;
+        const QRegularExpressionMatch byTitle = titleRe.match(
+            record.value(QLatin1String("title"))
+                .toObject()
+                .value(QLatin1String("rendered"))
+                .toString());
+        if (byTitle.hasMatch()) {
+            text = byTitle.captured(1);
+        } else {
+            const QRegularExpressionMatch bySlug =
+                slugRe.match(record.value(QLatin1String("slug")).toString());
+            if (!bySlug.hasMatch())
+                continue;
+            text = QStringLiteral("%1.%2.%3").arg(bySlug.captured(1),
+                                                  bySlug.captured(2),
+                                                  bySlug.captured(3));
+        }
+
+        const QVersionNumber v = QVersionNumber::fromString(text);
+        // An int-overflowing component does not parse to nothing: fromString()
+        // stops at it and returns the PREFIX before it, so "99.2147483648.0"
+        // becomes QVersionNumber(99) -- not null, and it outranks 4.2.20. The
+        // patterns guarantee three components, so anything shorter is an
+        // overflow and must be discarded, not merely a null (Principle VII).
+        if (v.isNull() || v.segmentCount() != 3)
+            continue;
+
+        if (!found.contains(v))
+            found.append(v);
+    }
+
+    // NEWEST FIRST, numerically. Every caller depends on this order:
+    // parsePublishedReleases() takes the first entry it sees per major, and
+    // Radio Setup's list shows the newest release at the top.
+    std::sort(found.begin(), found.end(),
+              [](const QVersionNumber& a, const QVersionNumber& b) {
+                  return QVersionNumber::compare(a, b) > 0;
+              });
+
+    QStringList releases;
+    releases.reserve(found.size());
+    for (const QVersionNumber& v : std::as_const(found))
+        releases.append(v.toString());
+    return releases;
+}
+
+// Derived from parseAllReleases() rather than parsed again, so there is exactly
+// one place that decides what counts as a release.
+//
+// GROUPED BY MAJOR, not reduced to one maximum. FlexRadio offers several lines
+// side by side -- today 2.10.1, 3.10.15 and 4.1.5/4.2.18/4.2.20 -- and a radio
+// must be judged against the newest release of the line it is actually running.
+// Taking a single maximum tells a v3 radio it is behind 4.2.20 and links
+// release notes for a line it is not on.
+QMap<int, QString> FirmwareStager::parsePublishedReleases(const QByteArray& json)
+{
+    QMap<int, QString> newestByMajor;
+    const QStringList all = parseAllReleases(json);
+    for (const QString& release : all) {
+        // The list is newest-first, so the first entry for a major IS its
+        // newest and later ones must not displace it.
+        const int major = QVersionNumber::fromString(release).majorVersion();
+        if (!newestByMajor.contains(major))
+            newestByMajor.insert(major, release);
+    }
+    return newestByMajor;
+}
+
+void FirmwareStager::requestPublishedReleases(
+    std::function<void(const QMap<int, QString>&, const QStringList&,
+                       const QString&)> done)
+{
+    auto* reply = m_nam.get(QNetworkRequest(QUrl(SOFTWARE_INDEX_URL)));
+    connect(reply, &QNetworkReply::finished, this,
+            // `this` is the connect context (lifetime), not a capture: every
+            // member this lambda touches is static.
+            [reply, done = std::move(done)]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            done({}, {}, "Cannot reach FlexRadio: " + reply->errorString());
+            return;
+        }
+
+        // Untrusted input, validated at the boundary (Principle VII): this is a
+        // public endpoint over which we have no control, so an implausibly
+        // large answer is refused before it is parsed at all.
+        if (reply->bytesAvailable() > kMaxSoftwareIndexBytes) {
+            done({}, {}, "FlexRadio's software index is implausibly large; ignoring it.");
+            return;
+        }
+
+        const QByteArray body = reply->readAll();
+        const QStringList all = parseAllReleases(body);
+        const QMap<int, QString> releases = parsePublishedReleases(body);
+        if (releases.isEmpty()) {
+            done({}, {}, "Could not determine any SmartSDR release from FlexRadio's software index.");
+            return;
+        }
+        done(releases, all, {});
+    });
+}
+
+void FirmwareStager::fetchLatestVersion()
+{
+    requestPublishedReleases([this](const QMap<int, QString>& releases,
+                                    const QStringList&, const QString& error) {
+        if (releases.isEmpty())
+            emit latestVersionUnavailable(error);
+        else
+            emit publishedReleasesKnown(releases);
+    });
+}
+
 // ─── Step 1: Check for update ────────────────────────────────────────────────
 
 void FirmwareStager::checkForUpdate(const QString& currentVersion)
 {
     emit stageProgress(0, "Checking for updates...");
 
-    auto* reply = m_nam.get(QNetworkRequest(QUrl(SOFTWARE_PAGE)));
-    connect(reply, &QNetworkReply::finished, this, [this, reply, currentVersion]() {
-        reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) {
-            emit updateCheckFailed("Cannot reach FlexRadio: " + reply->errorString());
+    requestPublishedReleases([this, currentVersion](const QMap<int, QString>& releases,
+                                                    const QStringList& all,
+                                                    const QString& error) {
+        if (releases.isEmpty()) {
+            emit updateCheckFailed(error);
             return;
         }
+        // Radio Setup's button asks a DIFFERENT question from the status bar:
+        // "is there a newer SmartSDR I could stage and upload?", which is not
+        // line-scoped. So it keeps using the highest release across all lines.
+        const QString latest = std::max_element(
+            releases.constBegin(), releases.constEnd(),
+            [](const QString& a, const QString& b) {
+                return QVersionNumber::compare(QVersionNumber::fromString(a),
+                                               QVersionNumber::fromString(b)) < 0;
+            }).value();
 
-        const QString html = QString::fromUtf8(reply->readAll());
-
-        // Find latest version from the software page
-        // Pattern: SmartSDR v4.1.5 or smartsdr-v4-1-5
-        QRegularExpression re(R"(SmartSDR[- _]v?(\d+\.\d+\.\d+))",
-                              QRegularExpression::CaseInsensitiveOption);
-        QString latest;
-        auto it = re.globalMatch(html);
-        while (it.hasNext()) {
-            auto m = it.next();
-            const QString v = m.captured(1);
-            if (latest.isEmpty() || v > latest)
-                latest = v;
-        }
-
-        if (latest.isEmpty()) {
-            emit updateCheckFailed("Could not determine latest version from FlexRadio website.");
-            return;
-        }
-
-        // Compare major.minor.patch only (ignore build number like .39794)
-        auto normalize = [](const QString& v) {
-            const auto parts = v.split('.');
-            if (parts.size() >= 3)
-                return QString("%1.%2.%3").arg(parts[0], parts[1], parts[2]);
-            return v;
-        };
-        const QString normLatest  = normalize(latest);
-        const QString normCurrent = normalize(currentVersion);
-        const bool updateAvailable = (normLatest > normCurrent);
-        emit updateCheckComplete(latest, updateAvailable);
+        // Compare major.minor.patch only: the build number is not published, so
+        // the radio's fourth component has nothing on the other side to meet.
+        const bool updateAvailable =
+            FirmwareCurrency::compareReleases(latest, currentVersion) > 0;
+        // The full list goes with the verdict: Radio Setup shows every release
+        // FlexRadio offers, not just the newest, so an operator can see which
+        // line they are on and what else exists.
+        emit updateCheckComplete(latest, updateAvailable, all);
     });
 }
 
@@ -126,6 +300,12 @@ void FirmwareStager::stageFromLocalFile(const QString& installerPath,
     m_stagedVersion.clear();
     m_installerPath = installerPath;
     m_expectedMd5.clear();   // user's responsibility — we don't have an authoritative source
+    m_stagedVerified = false;
+
+    if (modelFamily != QStringLiteral("6x00") && modelFamily != QStringLiteral("9600")) {
+        emit stageFailed("Cannot determine the firmware family for this radio.");
+        return;
+    }
 
     QFileInfo fi(installerPath);
     if (!fi.exists() || !fi.isReadable()) {
@@ -143,9 +323,17 @@ void FirmwareStager::stageFromLocalFile(const QString& installerPath,
     auto m = verRe.match(fi.fileName());
     m_targetVersion = m.hasMatch() ? m.captured(1) : QStringLiteral("unknown");
 
-    // If the user picked a pre-extracted .ssdr, no extraction needed —
-    // copy it into the staging dir under our canonical name and we're done.
+    // Pre-extracted firmware keeps the selected filename. Atomic replacement
+    // also permits selecting a file that is already in the staging directory.
     if (fi.suffix().compare("ssdr", Qt::CaseInsensitive) == 0) {
+        const QRegularExpression familyPattern(QStringLiteral(R"(^FLEX-(6x00|9600)_v)"),
+                                               QRegularExpression::CaseInsensitiveOption);
+        const QRegularExpressionMatch family = familyPattern.match(fi.fileName());
+        if (family.hasMatch() && family.captured(1).compare(modelFamily, Qt::CaseInsensitive) != 0) {
+            emit stageFailed(QString("Selected .ssdr file is for FLEX-%1, not FLEX-%2.")
+                                 .arg(family.captured(1), modelFamily));
+            return;
+        }
         emit stageProgress(20, "Validating .ssdr file...");
         QFile probe(installerPath);
         if (!probe.open(QIODevice::ReadOnly)) {
@@ -160,10 +348,23 @@ void FirmwareStager::stageFromLocalFile(const QString& installerPath,
         }
 
         emit stageProgress(60, "Staging firmware...");
-        const QString outName = "FLEX-" + m_modelFamily + "_v" + m_targetVersion + ".ssdr";
-        const QString outPath = stagingDir() + "/" + outName;
-        QFile::remove(outPath);
-        if (!QFile::copy(installerPath, outPath)) {
+        const QString outName = fi.fileName();
+        const QString outPath = stagingDirectory() + "/" + outName;
+        QSaveFile staged(outPath);
+        if (!probe.open(QIODevice::ReadOnly) || !staged.open(QIODevice::WriteOnly)) {
+            emit stageFailed("Failed to copy .ssdr into staging directory.");
+            return;
+        }
+        while (!probe.atEnd()) {
+            const QByteArray chunk = probe.read(1024 * 1024);
+            if (chunk.isEmpty() || staged.write(chunk) != chunk.size()) {
+                emit stageFailed("Failed to copy .ssdr into staging directory.");
+                return;
+            }
+        }
+        const bool readOk = probe.error() == QFileDevice::NoError;
+        probe.close();
+        if (!readOk || !staged.commit()) {
             emit stageFailed("Failed to copy .ssdr into staging directory.");
             return;
         }
@@ -181,8 +382,9 @@ void FirmwareStager::stageFromLocalFile(const QString& installerPath,
 
         m_stagedPath = outPath;
         m_stagedVersion = m_targetVersion;
-        emit stageProgress(100, QString("Firmware staged and ready ✓\n"
-            "%1 (%2 MB)\nMD5: %3").arg(outName).arg(fwSize / (1024*1024)).arg(fwMd5));
+        qCInfo(lcFirmware) << "FirmwareStager: staged" << outName
+                          << "bytes=" << fwSize << "MD5=" << fwMd5;
+        emit stageProgress(100, stagedFirmwareStatus(outName, fwSize, fwMd5, m_modelFamily));
         emit stageComplete(outPath, m_targetVersion);
         return;
     }
@@ -199,8 +401,15 @@ void FirmwareStager::downloadAndStage(const QString& version, const QString& mod
     m_targetVersion = version;
     m_modelFamily = modelFamily;
     m_cancelled = false;
+    m_stagedVerified = false;
+    m_expectedMd5.clear();   // never verify one release against another's hash
     m_stagedPath.clear();
     m_stagedVersion.clear();
+
+    if (modelFamily != QStringLiteral("6x00") && modelFamily != QStringLiteral("9600")) {
+        emit stageFailed("Cannot determine the firmware family for this radio.");
+        return;
+    }
 
     // First, fetch the MD5 hash file
     emit stageProgress(0, "Fetching integrity hash...");
@@ -233,7 +442,7 @@ void FirmwareStager::downloadAndStage(const QString& version, const QString& mod
         const QString installerUrl = useMsi
             ? QString(INSTALLER_URL_FMT_MSI).arg(version)
             : QString(INSTALLER_URL_FMT_EXE).arg(version);
-        m_installerPath = stagingDir()
+        m_installerPath = stagingDirectory()
             + (useMsi ? "/SmartSDR_v" + version + "_x64.msi"
                       : "/SmartSDR_v" + version + "_Installer.exe");
 
@@ -343,8 +552,10 @@ void FirmwareStager::verifyAndExtract()
             QFile::remove(m_installerPath);
             return;
         }
+        m_stagedVerified = true;
         emit stageProgress(65, "Installer integrity verified ✓");
     } else {
+        m_stagedVerified = false;
         emit stageProgress(65, "MD5 hash not available — skipping verification.");
     }
 
@@ -365,14 +576,20 @@ void FirmwareStager::verifyAndExtract()
     const QByteArray oleMagic("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", 8);
     const bool isMsi = (header == oleMagic);
 
-    // Compute output path early so both extractors can target the same place.
-    const QString targetName = "FLEX-" + m_modelFamily + "_v" + m_targetVersion + ".ssdr";
-    const QString outPath = stagingDir() + "/" + targetName;
-    QFile::remove(outPath);
+    // Legacy installers use a generated name; MSI metadata supplies its name.
+    QString targetName = "FLEX-" + m_modelFamily + "_v" + m_targetVersion + ".ssdr";
+    QString outPath = stagingDirectory() + "/" + targetName;
 
     bool ok = false;
     if (isMsi) {
-        ok = extractFromMsi(m_installerPath, outPath);
+        ok = extractFromMsi(m_installerPath, stagingDirectory(), outPath);
+        if (ok) {
+            targetName = QFileInfo(outPath).fileName();
+            const QRegularExpression versionPattern(
+                QStringLiteral(R"(_v([0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?)\.ssdr$)"),
+                QRegularExpression::CaseInsensitiveOption);
+            m_targetVersion = versionPattern.match(targetName).captured(1);
+        }
     } else {
         QFile installer(m_installerPath);
         if (!installer.open(QIODevice::ReadOnly)) {
@@ -418,12 +635,10 @@ void FirmwareStager::verifyAndExtract()
 
     m_stagedPath = outPath;
     m_stagedVersion = m_targetVersion;
+    qCInfo(lcFirmware) << "FirmwareStager: staged" << targetName
+                      << "bytes=" << fwSize << "MD5=" << fwMd5;
 
-    emit stageProgress(100, QString("Firmware staged and ready ✓\n"
-        "%1 (%2 MB)\nMD5: %3")
-        .arg(targetName)
-        .arg(fwSize / (1024*1024))
-        .arg(fwMd5));
+    emit stageProgress(100, stagedFirmwareStatus(targetName, fwSize, fwMd5, m_modelFamily));
     emit stageComplete(outPath, m_targetVersion);
 }
 
@@ -478,7 +693,7 @@ bool FirmwareStager::extractFromInnoSetup(const QByteArray& data, const QString&
                               << size2 << "bytes";
     }
 
-    // File 1 is FLEX-6x00 (consumer multi-platform), File 2 is FLEX-9600.
+    // SmartSDR 4.1.5 stores FLEX-6x00 first, then the BigBend FLEX-9600 image.
     const qint64 offset = (m_modelFamily == "9600") ? off2  : off1;
     const qint64 size   = (m_modelFamily == "9600") ? size2 : size1;
 
@@ -494,106 +709,58 @@ bool FirmwareStager::extractFromInnoSetup(const QByteArray& data, const QString&
     return true;
 }
 
-bool FirmwareStager::extractFromMsi(const QString& msiPath, const QString& outPath)
+bool FirmwareStager::extractFromMsi(const QString& msiPath, const QString& outputDirectory,
+                                   QString& extractedPath)
 {
-    // v4.2+: WiX MSI (OLE Compound File) with `.ssdr` blobs hidden inside
-    // LZX-compressed CAB streams (cab1.cab, cab2.cab, ...). Native pipeline:
-    //
-    //   OleCompoundFile → all cab*.cab streams (in memory)
-    //   CabExtractor (libmspack) → all files inside each cab (in memory)
-    //   Filter for Salted__ magic → list of firmware blobs
-    //   Sort by size desc, pick by family, write to outPath
-    //
-    // No external tools, no temp files.
-
+    extractedPath.clear();
+    // MSI FileName identifies the family; File.Sequence selects the Media row.
+    // Its embedded Cabinet contains a member named by the File primary key.
+    // https://learn.microsoft.com/en-us/windows/win32/msi/cabinet-files
     OleCompoundFile cfb;
     if (!cfb.open(msiPath)) {
         emit stageFailed("Could not open MSI: " + cfb.lastError());
         return false;
     }
 
-    emit stageProgress(72, "Reading installer streams...");
-    const auto cabStreams = cfb.readMsiStreamsByPrefixSuffix("cab", ".cab");
-    if (cabStreams.isEmpty()) {
-        emit stageFailed("No CAB streams found in MSI.");
+    emit stageProgress(72, "Reading installer firmware metadata...");
+    const MsiFirmwareMetadata::Streams streams{
+        cfb.readMsiTable("_StringPool", MsiFirmwareMetadata::kMaxMetadataBytes),
+        cfb.readMsiTable("_StringData", MsiFirmwareMetadata::kMaxMetadataBytes),
+        cfb.readMsiTable("_Columns", MsiFirmwareMetadata::kMaxMetadataBytes),
+        cfb.readMsiTable("File", MsiFirmwareMetadata::kMaxMetadataBytes),
+        cfb.readMsiTable("Media", MsiFirmwareMetadata::kMaxMetadataBytes)};
+    QString error;
+    const std::optional<MsiFirmwareImage> image = MsiFirmwareMetadata::resolve(streams, m_modelFamily, error);
+    if (!image) {
+        emit stageFailed("Cannot select firmware from MSI: " + error);
         return false;
     }
-
-    emit stageProgress(78,
-        QString("Decompressing %1 CAB streams...").arg(cabStreams.size()));
-
-    struct Blob {
-        QString cabName;
-        QByteArray data;
-    };
-    QList<Blob> blobs;
-
-    CabExtractor cx;
-    int progressBase = 78;
-    int progressSpan = 12;  // 78..90
-    int idx = 0;
-    for (const auto& [cabName, cabBytes] : cabStreams) {
-        QByteArray ssdr;
-        if (!cx.extractFirstMatchingMagic(cabBytes,
-                                          QByteArrayLiteral("Salted__"),
-                                          ssdr)) {
-            // No firmware in this cab — that's expected for cabs that
-            // hold drivers/installer support files. Move on.
-            ++idx;
-            const int pct = progressBase + (progressSpan * idx) / cabStreams.size();
-            emit stageProgress(pct,
-                QString("Scanning %1 (no firmware)...").arg(cabName));
-            continue;
-        }
-        blobs.append({cabName, std::move(ssdr)});
-        ++idx;
-        const int pct = progressBase + (progressSpan * idx) / cabStreams.size();
-        emit stageProgress(pct,
-            QString("Found firmware in %1 (%2 MB)...")
-                .arg(cabName).arg(blobs.last().data.size() / (1024*1024)));
-    }
-
-    if (blobs.isEmpty()) {
-        emit stageFailed(
-            "No firmware blobs (Salted__ header) found in any MSI cabinet.");
+    constexpr qint64 kMaxCabinetBytes = 512LL * 1024LL * 1024LL;
+    const QByteArray cabinet = cfb.readMsiStream(image->cabinet, kMaxCabinetBytes);
+    if (cabinet.isEmpty()) {
+        emit stageFailed("Cannot read firmware cabinet: " + cfb.lastError());
         return false;
     }
-
-    // FLEX-6x00 consumer firmware bundles every consumer platform and is
-    // significantly larger than the FLEX-9600 government build, so size
-    // order gives us the family mapping reliably.
-    std::sort(blobs.begin(), blobs.end(),
-              [](const Blob& a, const Blob& b) {
-                  return a.data.size() > b.data.size();
-              });
-
-    const Blob* target = nullptr;
-    if (m_modelFamily == "9600") {
-        if (blobs.size() < 2) {
-            emit stageFailed("FLEX-9600 firmware not present in this installer.");
-            return false;
-        }
-        target = &blobs.last();   // smallest = government 9600 build
-    } else {
-        target = &blobs.first();  // largest = multi-platform consumer
+    emit stageProgress(78, QString("Extracting %1...").arg(image->fileName));
+    CabExtractor extractor;
+    QByteArray firmware;
+    if (!extractor.extractFile(cabinet, image->memberName, image->size, firmware)) {
+        emit stageFailed("Cannot extract firmware: " + extractor.lastError());
+        return false;
     }
-
-    emit stageProgress(92,
-        QString("Staging firmware (%1 MB)...").arg(target->data.size() / (1024*1024)));
-
-    QFile out(outPath);
+    emit stageProgress(92, QString("Staging %1 (%2 MB)...")
+                              .arg(image->fileName).arg(firmware.size() / (1024 * 1024)));
+    const QString outPath = QDir(outputDirectory).filePath(image->fileName);
+    QSaveFile out(outPath);
     if (!out.open(QIODevice::WriteOnly)) {
         emit stageFailed("Cannot write firmware file: " + out.errorString());
         return false;
     }
-    const qint64 written = out.write(target->data);
-    out.close();
-    if (written != target->data.size()) {
-        emit stageFailed(
-            QString("Short write: %1 of %2 bytes").arg(written).arg(target->data.size()));
-        QFile::remove(outPath);
+    if (out.write(firmware) != firmware.size() || !out.commit()) {
+        emit stageFailed("Cannot save extracted firmware: " + out.errorString());
         return false;
     }
+    extractedPath = outPath;
     return true;
 }
 

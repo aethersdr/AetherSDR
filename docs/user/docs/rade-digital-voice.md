@@ -36,11 +36,14 @@ Select **RADE** from the mode dropdown in either the RX applet or the VFO widget
 
 - sets the radio to **DIGU** or **DIGL** using the band's usual sideband (LSB bands get DIGL; 60 m uses DIGU);
 - sets the filter to **750–2250 Hz** (mirrored for DIGL);
-- makes the RADE slice the **TX slice**.
+- makes the RADE slice the **TX slice**;
+- turns on the radio's **DAX** transmit input, which carries RADE's modem audio. On Windows (and Linux builds without PipeWire), turning RADE off or moving TX to another slice puts DAX back the way it was. On macOS and PipeWire builds, DAX follows the slice's mode instead, so it stays on while the slice is still in DIGU/DIGL ([#6595](https://github.com/aethersdr/AetherSDR/issues/6595)).
 
 RADE stays active across PTT cycles. It switches itself off if the radio or another client changes the slice to a mode other than DIGU/DIGL. If the RADE engine fails to start, the slice's previous mode, filter and TX assignment are restored.
 
 You can also start RADE from **Tools → FreeDV Reporter...**: double-clicking a station tunes to it and switches the slice to RADE.
+
+A MIDI controller or [Ulanzi Dial](./ulanzi-dial.md) button mapped to **RADE Modem** turns RADE on and off on the active slice. Turning it off leaves the slice in DIGU/DIGL. See [MIDI Controller Mapping](./midi-controller-mapping.md).
 
 ### Read sync and SNR
 
@@ -50,12 +53,12 @@ While RADE is active, the VFO flag shows:
 
 *A slice in RADE, before any RADE signal is decoded: the sync dot is hollow and the SNR reads ---.*
 
-- a **RADE** badge with a sync LED next to the frequency — **green ●** when the modem is synchronised, grey ○ when it is not;
+- a **RADE** badge with a sync LED next to the frequency — **green ●** when the modem is synchronized, gray ○ when it is not;
 - a **RADE info row** below the frequency with the far-end **callsign** (when received), the decoded **SNR** and the **frequency offset**.
 
 The same readouts are in the **RADE Status** applet (button **RADE**, in the applet drawer, closed by default), which shows "RADE inactive" when RADE is off.
 
-The RADE modem uses pilot symbols for synchronisation and can acquire signals down to approximately 0 dB SNR.
+The RADE modem uses pilot symbols for synchronization and can acquire signals down to approximately 0 dB SNR. Its receive filter and frequency tracking hold their level for as long as RADE runs, so the SNR readout does not fall away over a long session.
 
 ### End-of-over callsign
 

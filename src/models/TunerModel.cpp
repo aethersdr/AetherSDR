@@ -175,6 +175,7 @@ void TunerModel::autoTune()
     // need to key the radio from the client.
     if (m_directConn && m_directConn->isConnected()) {
         qCDebug(lcTuner) << "TunerModel::autoTune: using direct TGXL path";
+        emit directAutotuneStarted();
         m_directConn->requestAutotune();
         return;
     }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CanonWindow.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/flex/SmartLinkClient.h"
 #include "core/IConnectionAutomation.h"
@@ -27,8 +28,10 @@ class QSpinBox;
 
 namespace AetherSDR {
 
-// Novice-first dialog for local, SmartLink, and manual/VPN radio connections.
-class ConnectionPanel : public QWidget, public IConnectionAutomation {
+// Novice-first dialog for local, SmartLink, and manual/VPN radio connections:
+// a CanonWindow dialog (style guide, RFC #6226) that MainWindow places itself,
+// above the status bar.
+class ConnectionPanel : public CanonWindow, public IConnectionAutomation {
     Q_OBJECT
 
 public:
@@ -39,7 +42,6 @@ public:
     static constexpr int kPreferredWidth = 760;
     static constexpr int kPreferredHeight = 660;
 
-    void setFramelessMode(bool on);
     bool selectRadio(const QString& serial);
     void selectManualConnection();
     bool canRenameRadio(const QString& serial) const;
@@ -54,7 +56,7 @@ public:
     // Fit, then pull the frame back inside the work area without otherwise
     // moving the window. The placement-preserving counterpart to
     // MainWindow::showConnectionDialog(), for the show paths this class owns
-    // (the frameless toggle, the automation bridge) and for the screen/DPI/font
+    // (the automation bridge) and for the screen/DPI/font
     // changes that can invalidate a fit made earlier (#4515).
     void fitAndClampToScreen(QScreen* preferredScreen = nullptr);
     QMargins screenFitFrameMargins() const;
@@ -110,7 +112,6 @@ public:
     QObject* asQObject() override { return this; }
 
 protected:
-    void paintEvent(QPaintEvent* event) override;
     bool event(QEvent* e) override;
 
 public slots:
@@ -170,6 +171,12 @@ private:
     void setCurrentMode(ConnectionMode mode);
     void updateLocalPageState();
     void updateSmartLinkUi();
+    // The SmartLink account line: a sign-in hint, the signed-in account, or a
+    // sign-in error. Its tone is kept here, not read back from the label's
+    // stylesheet, which holds the theme-resolved colors.
+    enum class AccountTone { Hint, Info, Error };
+    void setAccountLine(const QString& text, AccountTone tone);
+    friend struct ConnectionPanelSmartLinkTestAccess;
     // Right-click menu on a discovered radio row: set/clear a client-side
     // nickname (non-Flex families only). pos is in m_radioList viewport coords.
     void showRadioContextMenu(const QPoint& pos);
@@ -215,6 +222,10 @@ private:
     };
     AnanProbeResult probeAnan(const QString& ip, const RadioBindSettings& bindSettings);
     void probeFlexRadio(const QString& ip, const RadioBindSettings& bindSettings);
+    // For an explicit path and a host name with only IPv6 addresses, moves
+    // `bind` to its interface's IPv6 address. False (with the message shown)
+    // when that interface has none.
+    bool resolveNamedSourceFamily(const QString& host, RadioBindSettings* bind);
     // Reports early startup credential/configuration or directed-probe failures.
     // Session authentication failures and broadcast discovery are separate paths.
     // Interactive/automation attempts are silent once the startup probe ends.
@@ -231,8 +242,10 @@ private:
     void refitToContent();
     // Height the body would like if the screen allows it. The panel's own
     // sizeHint() cannot answer this — QScrollArea caps its hint by design, so
-    // it under-reports the body it is scrolling.
-    int preferredClientHeight() const;
+    // it under-reports the body it is scrolling. Taken at the client width the
+    // caller is about to apply, because that width decides whether a
+    // horizontal scrollbar takes its height out of the viewport.
+    int preferredClientHeight(int clientWidth) const;
     QScreen* screenFitTarget(QScreen* preferredScreen) const;
     void saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,
@@ -243,7 +256,6 @@ private:
     QString formatLocalRadioLabel(const RadioInfo& radio) const;
     QString formatWanRadioLabel(const WanRadioInfo& radio) const;
 
-    QWidget*     m_titleBar{nullptr};
     QVBoxLayout* m_rootLayout{nullptr};
     QScrollArea* m_bodyScroll{nullptr};
     QWidget*     m_bodyContent{nullptr};
@@ -278,6 +290,7 @@ private:
     QPushButton* m_loginBtn{nullptr};
     QPushButton* m_logoutBtn{nullptr};
     QLabel*      m_slUserLabel{nullptr};
+    AccountTone  m_slUserTone{AccountTone::Hint};
     QListWidget* m_wanList{nullptr};
     QLabel*      m_smartLinkEmptyLabel{nullptr};
     QPushButton* m_wanDisconnectClientsBtn{nullptr};
@@ -314,25 +327,11 @@ private:
     void         syncIcomCivCustomRow();
     void         syncIcomPortCustomRow();
     quint16      selectedIcomBasePort() const;
-    // ANAN-G2 connect-time settings. Shown only for family "anan" -- the row
-    // containers are held (matching the Icom rows above) so each hides as a
-    // unit. Selections persist via AnanSettings (Principle V) and reach the
-    // backend through populateFamilyParams() the same way Icom's CI-V
-    // address does, not through RadioInfo -- see that function's own comment.
-    QWidget*     m_manualAnanRateRow{nullptr};
-    QComboBox*   m_manualAnanRateCombo{nullptr};
-    QWidget*     m_manualAnanAdcRow{nullptr};
-    QComboBox*   m_manualAnanAdcCombo{nullptr};
-    QWidget*     m_manualAnanDitherRow{nullptr};
-    QCheckBox*   m_manualAnanDitherCheck{nullptr};
-    QWidget*     m_manualAnanRandomRow{nullptr};
-    QCheckBox*   m_manualAnanRandomCheck{nullptr};
-    QWidget*     m_manualAnanBypassAdc0Row{nullptr};
-    QCheckBox*   m_manualAnanBypassAdc0Check{nullptr};
-    QWidget*     m_manualAnanBypassAdc1Row{nullptr};
-    QCheckBox*   m_manualAnanBypassAdc1Check{nullptr};
-    QWidget*     m_manualAnanSpeakerAudioRow{nullptr};
-    QCheckBox*   m_manualAnanSpeakerAudioCheck{nullptr};
+    // Points at Radio Setup's "ANAN Front End" page, where this family's
+    // front-end options are set. Shown only for family "anan", like the Icom
+    // rows above, and held as a row container for the same reason -- it hides
+    // as a unit.
+    QWidget*     m_manualAnanHintRow{nullptr};
     // Staged by probeRadio(), committed by setConnected(true), discarded on
     // failure. A password is only worth persisting once the radio has said it
     // is the right one.
@@ -354,6 +353,10 @@ private:
     QLabel*      m_manualSourceWarningLabel{nullptr};
     QPushButton* m_manualConnectBtn{nullptr};
     QString      m_manualProfileIp;
+    // The source path the operator last chose themselves. Editing the address
+    // can flip the list's family on the way; the pick survives so the exact
+    // address comes back when the family does.
+    RadioBindSettings m_manualSourcePick;
     bool         m_manualConnectPending{false};
     // Set for the duration of a startup probe (probeRadio's restoreSavedFamily
     // call), which is the one probe with no operator watching the manual page.

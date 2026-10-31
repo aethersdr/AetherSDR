@@ -46,12 +46,19 @@ public:
     using EngagedPredicate = std::function<bool()>;
 
     explicit ControlAvailabilityRegistry(RadioModel& model, QObject* parent = nullptr);
+    ~ControlAvailabilityRegistry() override;
 
-    // Register a widget. `reason` is shown when unavailable and becomes both the
-    // tooltip and the accessibleDescription — REQUIRED, because a dimmed control
-    // with no reason is the accessibility defect this milestone exists to close
-    // (#4896). Applied immediately, so a widget built after connect is correct
-    // without a second push.
+    // Gate an existing control without taking over its available presentation.
+    // Optional capability records use this so legacy controls retain their own
+    // checked styling, tooltips and accessibility descriptions.
+    void registerRestriction(QWidget* widget, QString reason,
+                             AvailabilityPredicate available);
+
+    // Register a widget. `reason` is REQUIRED: while unavailable it replaces the
+    // tooltip and accessibleDescription, because a dimmed control with no reason
+    // is the defect this milestone closes (#4896). The widget's own texts are
+    // restored once it is available again. Applied immediately, so a widget
+    // built after connect is correct without a second push.
     // Pass availableWhenDisconnected=false for controls requiring a live
     // receiver; existing controls retain their permissive disconnected state.
     void registerWidget(QWidget* widget,
@@ -86,11 +93,17 @@ private:
         EngagedPredicate engaged;
         ControlAvailability state{ControlAvailability::Unavailable};
         bool availableWhenDisconnected = true;
+        bool restrictionOnly = false;
+        bool restricted = false;
+        bool previouslyEnabled = true;
+        QString previousToolTip;
+        QString previousDescription;
     };
 
     void applyAll(bool connected, const RadioCapabilities& caps);
     void applyOne(Entry& entry, bool connected, const RadioCapabilities& caps);
     void pruneDead();
+    void restoreRestriction(Entry& entry);
 
     RadioModel& m_model;
     QVector<Entry> m_entries;

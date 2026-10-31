@@ -30,6 +30,29 @@ The panadapter is the main display: the FFT spectrum on top and the scrolling wa
 - If the wheel tunes the wrong way for your mouse or trackball, turn on **Radio Setup → Appearance & Behavior → Reverse mouse-wheel tuning direction**.
 - Dragging any slider shows its value in a small popup.
 
+### Touch controls
+
+On a touchscreen the panadapter and the rest of the app are fully operable by touch:
+
+| Gesture | Does |
+|--------|------|
+| **Tap** | Same as a click — double-tap to tune (or single-tap with **Single-Click to Tune** on) |
+| **Drag** on the spectrum / waterfall | Pan the display |
+| **Two-finger pinch** | Zoom the span, anchored under your fingers |
+| **Press and hold** (about ⅔ of a second) | Acts as a right-click — opens the context menu |
+| **Drag** in a list or menu | Flick-scroll it, with momentum; a tap still selects the item |
+
+Touch-scroll works in every scrollable list and menu. The exception is the drag-to-rearrange lists — the applet panel down the left edge and the favorites picker — where a drag moves items instead of scrolling.
+
+### The header
+
+A thin header runs across the top of each panadapter, drawn over the spectrum so the trace and grid show through it.
+
+- **At the left:** the **⋮⋮** grip and the pan's name (its slice, or the pan's ID when it has no slice). On a popped-out pan, drag the grip or the name to move the window. Clicking them never tunes.
+- **At the right:** **⬈ Pop out** (**↩ Dock** on a popped-out pan), **□ Maximize** and **✕ Close**, which closes that pan. They show when more than one pan is open, and always on a popped-out pan.
+- **In between,** the header is part of the spectrum: click, double-click to tune, drag and scroll there as anywhere else.
+- The overlay menu (←, +RX, Band…) and the dBm scale's ▲▼ arrows start just below the header. The VFO flags and the readouts at the top right (WNB, RF gain, propagation) sit at the very top, over it.
+
 ### Right-click menu
 
 Right-click the spectrum or waterfall:
@@ -44,7 +67,7 @@ Right-click the spectrum or waterfall:
 | **Add TNF at X MHz** | Places a tracking notch. See [TNF (Tracking Notch Filters)](./tnf-tracking-notch-filters.md). |
 | **Add Spot at X MHz…** | Adds your own spot. |
 | **Close Slice X** | Closes the slice under the pointer. |
-| **Center Lock** | Keeps this pan centred on a slice (below). |
+| **Center Lock** | Keeps this pan centered on a slice (below). |
 | **Link Slice ▸** | Links two slices so tuning one retunes the other. See [Multi-Slice Operation](./multi-slice-operation.md). |
 | **Waterfall Time Markers ▸** | Off, 15 seconds, 30 seconds, 1, 5, 10 or 15 minutes (below). |
 | **Show Tune Guides** | Checkable display option. |
@@ -58,7 +81,7 @@ Right-click a **TNF marker** for Remove TNF, Width ▸, Depth ▸, Extended TNF 
 
 #### Center Lock
 
-Center Lock keeps a panadapter centred on one slice as it tunes, independently for each pan.
+Center Lock keeps a panadapter centered on one slice as it tunes, independently for each pan.
 
 - With one slice on the pan, the menu item reads **Center Lock Slice A** (checkable).
 - With several slices, a **Center Lock** submenu lists them, active slice first.
@@ -69,7 +92,7 @@ Center Lock keeps a panadapter centred on one slice as it tunes, independently f
 
 #### Waterfall Time Markers
 
-Thin lines across the waterfall at clock boundaries, each labelled with its UTC time. They stay pinned to their rows as the waterfall scrolls, pauses or resizes. Off by default; the choice is remembered per panadapter.
+Thin lines across the waterfall at clock boundaries, each labeled with its UTC time. They stay pinned to their rows as the waterfall scrolls, pauses or resizes. Off by default; the choice is remembered per panadapter.
 
 ### FFT/waterfall split
 
@@ -84,7 +107,7 @@ Drag the divider between the spectrum and the waterfall to resize them. The spli
 
 ### 3D Stacked Trace
 
-**Display → 3D VIEW → Spectrum: 3D Stacked Trace** turns the spectrum into a perspective surface built from recent traces receding into the distance. Ridge height is measured from the noise floor and coloured from floor to peak, and single-frame impulse bursts are rejected. The waterfall, scales and every overlay (spots, memories, markers, band plan) still draw as normal, and the dBm scale stays on the right as a full-height axis. It works on KiwiSDR sources too, and uses the GPU where available (see [GPU Rendering](./gpu-rendering.md)).
+**Display → 3D VIEW → Spectrum: 3D Stacked Trace** turns the spectrum into a perspective surface built from recent traces receding into the distance. Ridge height is measured from the noise floor and colored from floor to peak, and single-frame impulse bursts are rejected. The waterfall, scales and every overlay (spots, memories, markers, band plan) still draw as normal, and the dBm scale stays on the right as a full-height axis. It works on KiwiSDR sources too, and uses the GPU where available (see [GPU Rendering](./gpu-rendering.md)).
 
 <img src="/img/screens/pan-3d-stacked-trace.png" width="1340" alt="Panadapter in 3D Stacked Trace mode. Above the frequency scale from 14.150 to 14.350 MHz, successive spectrum traces are stacked into a blue landscape that recedes towards the top, with SSB signals standing out as green ridges running back in time. The slice A VFO flag sits at 14.250.000." />
 
@@ -92,7 +115,7 @@ Drag the divider between the spectrum and the waterfall to resize them. The spli
 
 ### Band plan overlay
 
-The strip along the bottom of the spectrum shows band segments, coloured by use. In the ARRL (US) plan, for example: blue for CW, red for data, orange for phone/SSB, cyan for beacons, purple for satellite, green for weak-signal SSB, and yellow for mixed or experimental segments. Dots mark spot frequencies (FT8, WSPR, QRP calling and so on); hover for a tooltip.
+The strip along the bottom of the spectrum shows band segments, colored by use. In the ARRL (US) plan, for example: blue for CW, red for data, orange for phone/SSB, cyan for beacons, purple for satellite, green for weak-signal SSB, and yellow for mixed or experimental segments. Dots mark spot frequencies (FT8, WSPR, QRP calling and so on); hover for a tooltip. Some segments also carry a usage note from the published band plan, such as "Digimodes, automatically controlled data stations (unattended)" or "All modes except SSB". Hover over the segment to read it. The IARU Region 1 and SSA (Sweden) plans have these notes.
 
 **View → Band Plan** sets:
 
@@ -100,7 +123,7 @@ The strip along the bottom of the spectrum shows band segments, coloured by use.
 - **Show Spots:** turns the spot dots on or off.
 - **Region:** ARRL (US), IARU Region 1, IARU Region 2, IARU Region 3, RAC (Canada) or SSA (Sweden).
 
-The ARRL and RAC plans mark licence classes by brightness. The ARRL plan's 60 m band follows the FCC order effective 13 February 2026. The selected plan is remembered.
+The ARRL and RAC plans mark license classes by brightness. The ARRL plan's 60 m band follows the FCC order effective 13 February 2026. The selected plan is remembered.
 
 ### Off-screen VFO indicator
 
@@ -112,7 +135,7 @@ When a slice is outside the visible span, an indicator at the edge shows its let
 
 ### Mini-Pan
 
-**Mini-Pan** is a narrow, K4-style spectrum of the active slice in an applet (button **MINI**, off by default). It shows a ±5 kHz window by default, or ±10 kHz; right-click it to choose. The window is centred on the slice's passband (on SSB that is offset from the carrier); a hairline and readout mark the carrier.
+**Mini-Pan** is a narrow, K4-style spectrum of the active slice in an applet (button **MINI**, off by default). It shows a ±5 kHz window by default, or ±10 kHz; right-click it to choose. The window is centered on the slice's passband (on SSB that is offset from the carrier); a hairline and readout mark the carrier.
 
 It re-uses the main panadapter's data, so it uses no extra radio panadapter or slice, and its detail follows the main pan's zoom. It is an applet rather than a menu item so it is available in Minimal Mode; float it from its title bar to keep it on top of a logging program.
 
@@ -123,9 +146,16 @@ It re-uses the main panadapter's data, so it uses no extra radio panadapter or s
 ### Multiple and detached panadapters
 
 - **Tools → Add Panadapter...** or the **+PAN** icon in the status bar opens a layout picker and adds a pan if the radio has room.
-- **Right-click → ↗ Pop out** moves a pan into its own window; **↩ Dock** puts it back.
+- **Right-click → ↗ Pop out**, or the header's **⬈** button, moves a pan into its own window; **↩ Dock** puts it back.
 - Pan layouts, including floating pans, are restored when you reconnect.
 - With the [Workspace Canvas](./workspace-canvas.md) on, **Import pop-outs onto canvas** places floating pans on the canvas.
+
+Opening a pan waits for the connected backend to publish its actual display.
+The waterfall may arrive afterward. If creation remains unconfirmed, AetherSDR
+does not automatically retry: another request could allocate a second display.
+Closing a pan requests cleanup; the pan disappears when the backend reports its
+removal. The normal close action preserves the last pan, and a backend may
+refuse a close because it still needs that receiver.
 
 ### Panadapter messages
 
@@ -133,7 +163,11 @@ Status cards appear over the spectrum for things like "Center Lock released", a 
 
 ### Status bar
 
-The status bar at the bottom of the window starts with the band-stack indicator and **+PAN** (add a panadapter), followed by indicators such as **TNF**, **CWX**, **ASR**, **DVK** and **FDX** (each only on radios and builds that support it). Click an indicator to toggle it.
+The status bar at the bottom of the window starts with the band-stack indicator and **+PAN** (add a panadapter), followed by indicators such as **TNF**, **CWX**, **ASR**, **DVK** and **FDX** (each only on radios and builds that support it). Click an indicator to toggle it, or press **Tab** to reach it and **Return** or **Enter** to activate it.
+
+**FDX** requests full duplex through the connected radio. A refusal leaves its
+state unchanged; a delayed reply cannot overwrite a newer request or a newer
+radio status. Enabling full duplex does not start a transmission.
 
 **View → FPS Meters** (Ctrl+F) adds spectrum and waterfall frame-rate readouts to each pan.
 
@@ -152,13 +186,15 @@ Use the icons at the right of the title bar:
 - **Dock left** / **Dock right** — put the panel on that side of the panadapters. Clicking the side it is already on hides it.
 - **Pop out** — float the panel in its own window (also **Ctrl+Shift+S**). Popped-out applets have a pin for always-on-top.
 
+The dock side is remembered when you restart AetherSDR.
+
 ### The button bar
 
-The top row of the panel holds **five favourite buttons** (by default VU, PWR, RX, TX and P/CW) and a **▼/▲** drawer button that shows the rest. Right-click the bar (or the drawer button) and choose **Customize Button Bar** to pick your favourites and hide buttons you don't use; the first five active entries fill the bar and the rest go in the drawer. Hiding a button also closes its applet. Buttons for accessories you don't have (tuner, amplifier, Antenna Genius and so on) appear only when that hardware is present.
+The top row of the panel holds **five favorite buttons** (by default VU, PWR, RX, TX and P/CW) and a **▼/▲** drawer button that shows the rest. Right-click the bar (or the drawer button) and choose **Customize Button Bar** to pick your favorites and hide buttons you don't use; the first five active entries fill the bar and the rest go in the drawer. Hiding a button also closes its applet. Buttons for accessories you don't have (tuner, amplifier, Antenna Genius and so on) appear only when that hardware is present.
 
 <img src="/img/screens/customize-button-bar.png" width="440" alt="Customize Button Bar dialog. A note explains that the top five active buttons fill the row and the rest live in the drawer, while hidden buttons and their applets are disabled. The Active list holds VU, PWR, RX, TX and P/CW, a Favorites divider, then LOCK, PHN, EQ, WAV, VUDU, CAT, DAX, TCI, IQ, MTR, PROF, SS, MQTT and CTR2. The Hidden list is empty, with arrow buttons between the lists and OK and Cancel at the bottom." />
 
-*Customize Button Bar: choose which applet buttons are favourites and which go in the drawer.*
+*Customize Button Bar: choose which applet buttons are favorites and which go in the drawer.*
 
 <img src="/img/screens/applet-button-bar-drawer.png" width="260" alt="The top of the applet panel. The first row holds VU, PWR, RX, TX, P/CW and the drawer button, now an up arrow. The open drawer below lists LOCK, PHN, EQ, WAV, VUDU, CAT, DAX, TCI, IQ, MTR, PROF, MQTT, CTR2, CLK, MINI, KSDR, RADE, HLTH, GHE, AG and TUN, with VU, RX, TX, P/CW, PHN, EQ and WAV lit." />
 
@@ -179,15 +215,15 @@ Drag an applet by its title bar (⋮⋮ grip) to reorder it. The order is rememb
 - **Frequency scale** — between spectrum and waterfall, in MHz
 - **Waterfall** — scrolling time-versus-frequency history
 - **dBm scale** — right edge of the spectrum
-- **Time scale** — right edge of the waterfall
-- **Band plan** — coloured strip along the bottom of the spectrum
+- **Time scale** — right edge of the waterfall. It is measured from the rows as they arrive and then held steady, so jitter between rows does not move the labels. If the rows settle at a different pace for a sustained stretch (after a slow start, or a change of **FPS** on a radio whose rows follow it), the scale recalibrates once to the new pace. At slow **WtrFall Rate** settings that takes longer, up to most of a minute at one row per second.
+- **Band plan** — colored strip along the bottom of the spectrum
 - **Overlay menu** — the button column at the left: **+RX**, **+TNF**, **Band**, **ANT**, **Display**, **Memory**, **DAX** (the DAX flyout holds the **IQ Ch** selector and the **WFM** demodulator, and only appears on radios with DAX)
 
 ### Display panel
 
 Click **Display** in the overlay menu. The panel is divided into sections and scrolls when the window is short. Settings apply to the panadapter you opened it from.
 
-<img src="/img/screens/display-panel.png" width="381" alt="The Display panel open beside the overlay menu, with the Display button lit. It has sections Panadapter (Heat Map and Grid on, Wt Avg off, FFT averaging, FPS, line and fill colours and floor), Waterfall (NB blanker, black level, gain and rate), Background (Choose, Clear, Off, opacity and colour), Appearance (grid, scale text and scheme), 3D View (Spectrum set to 2D Waterfall, 3D floor, gain and span), and System (GPU set to Auto (system default)), with Clone to all Pans and Reset to Defaults buttons at the bottom." />
+<img src="/img/screens/display-panel.png" width="381" alt="The Display panel open beside the overlay menu, with the Display button lit. It has sections Panadapter (Heat Map and Grid on, Wt Avg off, FFT averaging, FPS, line and fill colors and floor), Waterfall (NB blanker, black level, gain and rate), Background (Choose, Clear, Off, opacity and color), Appearance (grid, scale text and scheme), 3D View (Spectrum set to 2D Waterfall, 3D floor, gain and span), and System (GPU set to Auto (system default)), with Clone to all Pans and Reset to Defaults buttons at the bottom." />
 
 *The Display panel, opened from the Display button on the panadapter overlay menu.*
 
@@ -195,14 +231,17 @@ Click **Display** in the overlay menu. The panel is divided into sections and sc
 
 | Control | Range / default | What it does |
 |---------|-----------------|-------------|
-| **Heat Map** | On by default | Colours the spectrum trace by signal strength instead of one colour. |
+| **Heat Map** | On by default | Colors the spectrum trace by signal strength instead of one color. |
 | **Grid** | On by default | Frequency and dB grid lines. |
-| **Wt Avg** | Off by default | Weighted averaging that favours recent frames. |
+| **Wt Avg** | Off by default | Weighted averaging that favors recent frames. |
 | **FFT AVG** | 0–100 | Frame averaging. Higher is smoother but slower to react; 0 is unaveraged. |
 | **FFT FPS** | 5–60, default 25 | Spectrum frame rate. |
-| **FFT Line** | Off–5.0 px, default 1.0 px | Trace thickness, with its own colour button. |
-| **FFT Fill** | 0–100, default 70 | Fill opacity under the trace, with its own colour button. |
+| **FFT Smooth** | Off–16 px, default Off | Smooths the trace across frequency by averaging each point with its neighbors this many pixels either side, in linear power, so a dB average doesn't drag the noise floor down; the smoothed floor reads its true average power, about 1–1.5 dB above the middle of the unsmoothed noise. FFT AVG smooths over time; this smooths across the band. Only the trace is affected, not the waterfall. |
+| **De-comb Hz** | Off–600 Hz, default Off | Zoomed in on SSB, the trace and waterfall show each voice as a comb of its pitch harmonics, 100–250 Hz apart. De-comb draws a smooth curve over that comb (a cepstral envelope), keeping the signal's outline and peak level. The value is the widest harmonic spacing it removes: about 300 Hz covers most voices; raise it if a high voice still shows a comb. It rounds a signal's steep edges by about half this width, and carriers closer together than it blur into one. It works on signals more than about 8 dB above the noise; the noise floor itself is left as drawn, and the waterfall is not changed. At wide spans, where the comb isn't resolved, it does nothing. |
+| **FFT Line** | Off–5.0 px, default 1.0 px | Trace thickness, with its own color button. |
+| **FFT Fill** | 0–100, default 70 | Fill opacity under the trace, with its own color button. |
 | **FFT Floor** + **Auto** | 1–99, default 75 | With **Auto** on, the dBm scale follows the noise floor and keeps it at this height (% from top). Off by default. |
+| **NF Range** | 0–10 dB in 0.5 dB steps; the radio's default is 1.5 | How far the measured noise floor may move before **Auto** repositions the scale. A larger range steadies the display at high zoom. The radio stores it. Needs SmartSDR+ on a FLEX-8000 series or Aurora radio with firmware 4.3.16 or later; otherwise it is dimmed and its tooltip says why. |
 
 #### WATERFALL
 
@@ -210,7 +249,7 @@ Click **Display** in the overlay menu. The panel is divided into sections and sc
 |---------|-----------------|-------------|
 | **NB Blank** + **Off/On** | 5–95, default 15 | Suppresses impulse-noise stripes in the waterfall. Higher values blank less. |
 | **Black Level** + **Off / SW / HW** | 0–100, default 50 | Waterfall black point. The button cycles automatic black level: **SW** estimates the noise floor in AetherSDR and the slider sets the offset from it; **HW** uses the radio's own level (FlexRadio only; other radios cycle Off ↔ SW); **Off** is manual. |
-| **WtrFall Gain** | 0–100, default 50 | Waterfall colour gain. |
+| **WtrFall Gain** | 0–100, default 50 | Waterfall color gain. |
 | **WtrFall Rate** | 1–100, default 100 | Scroll speed: 1 is slowest, 100 fastest. |
 
 #### BACKGROUND
@@ -221,7 +260,7 @@ Click **Display** in the overlay menu. The panel is divided into sections and sc
 | **Clear** | Back to the default logo background. |
 | **Off** | No background image. |
 | **BG Opacity** | 0–100, default 80. |
-| **Color** | Solid colour painted beneath the image. |
+| **Color** | Solid color painted beneath the image. |
 
 #### APPEARANCE
 
@@ -229,7 +268,7 @@ Click **Display** in the overlay menu. The panel is divided into sections and sc
 |---------|-------------|
 | **Grid** | Frequency grid spacing (Auto adapts to the span). |
 | **Scale text** | Size of the frequency-scale labels. |
-| **Scheme** | Waterfall palette: Default, Grayscale, Blue-Green, Fire, Plasma, Purple, Glacier. Changing it recolours the waterfall already on screen, including scrollback. |
+| **Scheme** | Waterfall palette: Default, Grayscale, Blue-Green, Fire, Plasma, Purple, Glacier. Changing it recolors the waterfall already on screen, including scrollback. |
 
 #### 3D VIEW
 
@@ -245,16 +284,14 @@ Click **Display** in the overlay menu. The panel is divided into sections and sc
 | Control | What it does |
 |---------|-------------|
 | **GPU:** | Which graphics adapter draws the spectrum. Only shown on computers with more than one GPU; takes effect after a restart ("Restart to apply"). See [GPU Rendering](./gpu-rendering.md). |
-| **Clone to all Pans** | Copies every Display setting from this pan to all other open pans: colours, fill, scheme, floor, 3D settings, background, and the radio-side values (FFT AVG, FPS, weighted average, waterfall rate, gain, black level). |
+| **Clone to all Pans** | Copies every Display setting from this pan to all other open pans: colors, fill, scheme, floor, 3D settings, background, and the radio-side values (FFT AVG, FPS, weighted average, waterfall rate, gain, black level). |
 | **Reset to Defaults** | Resets this pan's display settings, including turning the grid back on and the line width to 1.0 px. |
 
 ## Known issues
 
-- Strong signals can show flat-topped, clipped peaks on the spectrum ([#5685](https://github.com/aethersdr/AetherSDR/issues/5685)).
 - With **FFT Floor Auto** off, the reference level can jump on its own when you tune to another frequency ([#5525](https://github.com/aethersdr/AetherSDR/issues/5525)).
 - After switching profiles several times, **FFT Floor Auto** can stay highlighted but stop following the noise floor until you turn it off and on ([#3186](https://github.com/aethersdr/AetherSDR/issues/3186)).
 - At a fractional UI scale (for example 85 %), mouse-wheel tuning can leave a stale, doubled strip along the top of the panadapter for about 15 seconds ([#6270](https://github.com/aethersdr/AetherSDR/issues/6270)).
-- With **Frameless Window** off, a popped-out panadapter's window title shows raw markup such as `Slice A<sub>1</sub>` ([#6274](https://github.com/aethersdr/AetherSDR/issues/6274)).
 - The S-Meter applet can't be dragged to a new place in the applet panel ([#4347](https://github.com/aethersdr/AetherSDR/issues/4347)).
 
 ## Troubleshooting

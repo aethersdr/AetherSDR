@@ -38,7 +38,7 @@ and removal.
 | **Settings ⚙** | Opens the device's web interface |
 
 Click **A** or **B** on a row to put that input on that antenna. The selected
-button is lit in that input's colour (cyan for A, orange for B).
+button is lit in that input's color (cyan for A, orange for B).
 
 ### Two-input (SO2R) mode
 
@@ -74,7 +74,7 @@ The ShackSwitch is not connected.
 2. Confirm the address in the device's web UI, and that this PC can reach port
    9007 on it.
 
-### Buttons are greyed out
+### Buttons are grayed out
 
 The applet enables its buttons only after a successful connection.
 

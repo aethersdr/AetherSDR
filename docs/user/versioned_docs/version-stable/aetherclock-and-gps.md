@@ -4,18 +4,22 @@ slug: "/aetherclock-and-gps"
 description: "Two tools help you know where you are and what time it is."
 ---
 
-Two tools help you know where you are and what time it is. **AetherClock** decodes the WWV/WWVH and WWVB time signals off the air and shows how far your computer's clock is from them. The **GPS & Station Location** window shows what a GPS-equipped radio knows: position, satellites, frequency reference and time.
+Two tools help you know where you are and what time it is. **AetherClock** decodes the WWV/WWVH and WWVB time signals off the air and shows how far your computer's clock is from them. **AetherGPS** shows what a GPS-equipped radio knows: position, satellites, frequency reference and time.
 
 ## Requirements
 
 - **AetherClock** needs a receiver tuned to WWV, WWVH or WWVB. On a FlexRadio it listens through a DAX channel; on radios without DAX (Hermes-Lite 2 and others) it uses the slice's own audio.
-- **GPS & Station Location** needs a radio that reports GPS hardware, for example a FlexRadio fitted with the GPSDO option, or an IC-705. A radio without GPS shows no GPS window, indicators or controls.
+- **AetherGPS** needs a radio that reports GPS hardware, for example a FlexRadio fitted with the GPSDO option, or an IC-705. A radio without GPS shows no GPS window, indicators or controls.
 
 ## Setup
 
 ### Setting up AetherClock
 
 AetherClock is an applet (applet-tray button **CLK**, title **AetherClock**, Station category). It is off by default.
+
+<img src="/img/screens/aetherclock-applet.png" width="248" alt="AetherClock applet. An empty display reads no signal, above a status row with placeholder time fields. Below are Enable, Settings (expanded) and a DAX 1 selector, then the settings drawer with Station: WWV 10 MHz, a Tune slice → WWV 10 MHz button, the note dial 9.999 MHz USB, 1 kHz below carrier, and a Debug expander." />
+
+*The AetherClock applet with its settings drawer open, before it is enabled.*
 
 1. Open the applet and its settings drawer.
 2. Pick a **Station:** preset: **WWV 2.5 / 5 / 10 / 15 / 20 MHz** or **WWVB 60 kHz**.
@@ -40,21 +44,29 @@ On a FlexRadio with a DAX channel assigned, AetherClock decodes that slice alone
 
 A debug log in the settings drawer shows the decoder's internal steps, useful when reporting a problem.
 
-## Using the GPS dashboard
+## Using AetherGPS
 
-Open it from **Tools → GPS Dashboard…**, or click the GPS indicator in the status bar.
+Open it from **Tools → AetherGPS…**, or click the GPS indicator in the status bar.
+
+The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). It's a window of its own, with its own taskbar entry, so you can minimize it from the taskbar or park it on another monitor. **View → Frameless Window** does not apply to it.
 
 ### Header cards
 
 **GPS FIX**, **SATELLITES**, **10 MHz REFERENCE** and **TELEMETRY** (the age of the latest GPS report).
 
+On FlexRadio firmware that reports fix state, **GPS FIX** shows **3D**, **2D**, **Time only** or **No fix**. **Unknown** means the radio has not reported a recognized fix state, including older firmware and other radio feeds that do not supply it. It does not mean **No fix**. A partial GPS report keeps the last reported fix state; a new connection starts at **Unknown**.
+
+**Time only** means the receiver reports timing mode without a position fix. Time validity, receiver status (available in the **GPS FIX** tooltip) and **10 MHz REFERENCE** lock are separate readings. A fix label alone does not establish usable time, position or frequency-reference lock. **Time only** and **No fix** prevent use of the reported coordinates as a current position; older feeds continue to use their existing position-validity report. With **No fix**, the status-bar UTC clock uses the computer clock even if the frequency reference remains locked. Hover over **GPS FIX** for the receiver status and an explanation of the fix state.
+
 ### Current Location
 
 Position source, **Grid square**, **Latitude**, **Longitude**, the coordinates in the radio's own format, **Altitude**, **Speed** and **Course**, plus the nearest mapped address (an online OpenStreetMap lookup). Buttons: **Copy gridsquare**, **Copy address** and **Refresh address**.
 
+When a valid position returns after **Time only** or **No fix**, the address lookup resumes even if the coordinates have not changed.
+
 ### Station Map
 
-A map of the radio's position. Use the arrow keys to pan, plus and minus to zoom, and Home to re-centre.
+A map of the radio's position. Use the arrow keys to pan, plus and minus to zoom, and Home to re-center.
 
 ### Satellite Reception and Frequency Reference
 
@@ -62,7 +74,7 @@ Satellites **Tracked** and **Visible**, the tracking ratio, the GPS **Frequency 
 
 ### Satellite Time
 
-UTC, local time and time zone, the radio's GPS UTC, and **Clock agreement** between the radio's GPS time and your computer. The radio's GPS supplies the time of day but not the date, so dates come from your computer. Use Clock agreement as a rough guide when looking at FT8 DT, and keep the computer synchronised with NTP for precise work.
+UTC, local time and time zone, the radio's GPS UTC, and **Clock agreement** between the radio's GPS time and your computer. The radio's GPS supplies the time of day but not the date, so dates come from your computer. Use Clock agreement as a rough guide when looking at FT8 DT, and keep the computer synchronized with NTP for precise work.
 
 ### Radio Clock Synchronization
 
@@ -70,7 +82,7 @@ On radios that support it, this group shows and changes clock settings stored in
 
 ### Where your position is used
 
-The GPS page in **Radio Setup** holds the radio's GPS settings. Your position also feeds the [PSK Reporter Map](./psk-reporter-map.md) home location, the APRS beacon in [AetherModem Packet Radio](./aethermodem-packet-radio.md) and the distance and bearing on [Callsign Lookup](./callsign-lookup.md) cards.
+The GPS page in **Radio Setup** holds the radio's GPS settings. Your position also feeds the [AetherMap](./psk-reporter-map.md) home location, the APRS beacon in [AetherModem Packet Radio](./aethermodem-packet-radio.md) and the distance and bearing on [Callsign Lookup](./callsign-lookup.md) cards.
 
 ## Troubleshooting
 
@@ -102,6 +114,6 @@ The connected radio does not report GPS hardware. The GPS window only appears fo
 
 - [Radio Setup](./radio-setup.md)
 - [DAX Virtual Audio](./dax-virtual-audio.md)
-- [PSK Reporter Map](./psk-reporter-map.md)
+- [AetherMap](./psk-reporter-map.md)
 - [AetherModem Packet Radio](./aethermodem-packet-radio.md)
 - [Callsign Lookup](./callsign-lookup.md)

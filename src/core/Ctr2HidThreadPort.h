@@ -23,6 +23,10 @@ class Ctr2HidIoWorker;
 struct Ctr2HidDeviceIo {
     std::function<int(unsigned char* buffer, int size)> read;
     std::function<int(const unsigned char* buffer, int size)> write;
+    // Feature reports, report ID first in the buffer; <0 on error. Optional:
+    // without them the device is never asked for extensions.
+    std::function<int(unsigned char* buffer, int size)> getFeature;
+    std::function<int(const unsigned char* buffer, int size)> setFeature;
     std::function<void()> close;
     std::function<QString()> lastError;
 };
@@ -41,8 +45,12 @@ class Ctr2HidThreadPort final : public Ctr2HidPort {
     Q_OBJECT
 
 public:
+    // hostCapabilities: the link extensions to accept from the device's
+    // offer. The relay uses kHostCapabilities; the firmware updater uses
+    // Firmware and wide reports.
     Ctr2HidThreadPort(Ctr2HidDeviceIo io, const QString& description,
-                      const QString& deviceKey = {}, QObject* parent = nullptr);
+                      const QString& deviceKey = {}, QObject* parent = nullptr,
+                      quint32 hostCapabilities = ctr2hid::kHostCapabilities);
     // Only reached when shutdown() was never called; waits for an idle thread.
     ~Ctr2HidThreadPort() override;
 
@@ -56,6 +64,8 @@ private:
     friend class detail::Ctr2HidIoWorker;
 
     void deliverReceived(const QByteArray& reports);
+    void deliverExtensions(quint32 extensions, std::optional<ctr2hid::deviceinfo::Info> info,
+                           quint32 offered);
     void deliverSent(int count, quint64 generation);
     void deliverFailure(const QString& message);
 

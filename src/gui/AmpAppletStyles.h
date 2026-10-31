@@ -63,4 +63,27 @@ inline QString ampNeutralBtnStyle()
         "QPushButton:hover { background: {{color.background.1}}; }");
 }
 
+// Standby-state key — amber via theme tokens, matching AmpApplet's
+// kPanelKeyStandbyStyle. Used when the amp is connected, responding,
+// and in standby (not operate).
+inline QString ampStandbyBtnStyle()
+{
+    return QStringLiteral(
+        "QPushButton { background: {{color.accessory.key.standby.background}}; "
+        "border: 1px solid {{color.accessory.key.standby.foreground}}; border-radius: 3px; "
+        "color: {{color.accessory.key.standby.foreground}}; font-size: 10px; font-weight: bold; }"
+        "QPushButton:hover { background: {{color.background.1}}; }");
+}
+
+// Compact CLEAR FAULT button — amber-on-dark, sized to sit in-grid rather
+// than the full button row. Used by AcomApplet and Kpa500Applet.
+inline QString ampClearFaultBtnStyle()
+{
+    return QStringLiteral(
+        "QPushButton { background: #2a2210; border: 1px solid #5a4a1a; "
+        "border-radius: 3px; color: #ffb84d; font-size: 9px; font-weight: bold; padding: 1px 4px; }"
+        "QPushButton:hover { background: #3a2e14; }"
+        "QPushButton:disabled { background: #181c22; border: 1px solid #232a33; color: #3a4552; }");
+}
+
 }  // namespace AetherSDR

@@ -262,6 +262,21 @@ int main(int argc, char** argv)
         const IcomModel* ic705 = modelForName("IC-705");
         check(ic705 != nullptr, "the IC-705 resolves from the Icom model table");
         if (ic705) {
+            for (const std::uint64_t hz : {3'668'000ULL, 50'000'000ULL, 70'000'000ULL, 74'799'999ULL}) {
+                const auto labels = preampLabelsFor(*ic705, hz);
+                check(labels.size() == 3 && labels[2] == "P.AMP2",
+                      "IC-705 retains both preamps below 74.800 MHz");
+            }
+            for (const std::uint64_t hz : {0ULL, 74'800'000ULL, 144'300'000ULL, 442'000'000ULL}) {
+                const auto labels = preampLabelsFor(*ic705, hz);
+                check(labels.size() == 2 && labels[0] == "OFF" && labels[1] == "P.AMP1",
+                      "IC-705 offers only shared stages at unknown or higher frequency");
+            }
+            for (const char* name : {"IC-9700", "IC-7300MK2"}) {
+                const auto& model = *modelForName(name);
+                check(std::ranges::equal(preampLabelsFor(model, 14'100'000), preampLabelsFor(model, 442'000'000)),
+                      "other verified model ladders remain frequency independent");
+            }
             int pitch = -1;
             IcomCivBackend backend;
             IcomCivBackendTestAccess::selectModel(backend, *ic705);

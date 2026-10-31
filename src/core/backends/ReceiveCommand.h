@@ -25,9 +25,13 @@ struct SliceFilterRequest {
     Origin origin{Origin::Operator};
 };
 
+enum class AgcThresholdMode { Manual, Automatic };
+
 struct SliceAgcRequest {
     // Preserve which field the operator changed: Flex has three independent
-    // fields, whereas host DSP needs the mode/threshold pair for either edit.
+    // fields, whereas optimistic host DSP uses the pair for either edit.
+    // Confirmed engines apply only the selected field to their pending recipe;
+    // companion values describe the last observation, not a newer pending edit.
     enum class Field { Mode, Threshold, OffLevel };
     // A recall replays a stored value. A radio with its own per-mode AGC
     // default must not receive that replay as an operator edit.
@@ -50,13 +54,13 @@ struct SliceDspRequest {
     // remember a half of it (see IRadioBackend::setSliceNoiseBlanker). A change
     // of blanker is an Enabled request: `enabled` says whether one runs, `kind`
     // says which, so a backend with one blanker reads `enabled` and is right.
+    // Confirmed engines merge only `field` into their pending recipe, preserving
+    // independently queued companion edits until their adoption is observed.
     enum class Field { Enabled, Level, Fill };
-    enum class Origin { Operator, ProfileRestore };
     Feature feature{Feature::Nb};
     Field field{Field::Enabled};
     bool enabled{false};
     int level{0};
-    Origin origin{Origin::Operator};
     NoiseBlankerKind kind{NoiseBlankerKind::Off};
     NoiseBlankerFill fill{NoiseBlankerFill::Zero};
 
@@ -76,10 +80,7 @@ struct SliceDspRequest {
                 || (feature == Feature::Nb && field == Field::Fill))
             && level >= 0 && level <= 100
             && isValidNoiseBlankerKind(static_cast<int>(kind))
-            && isValidNoiseBlankerFill(static_cast<int>(fill))
-            && (origin == Origin::Operator
-                || (origin == Origin::ProfileRestore && feature == Feature::Nrs
-                    && field == Field::Level));
+            && isValidNoiseBlankerFill(static_cast<int>(fill));
     }
 };
 
@@ -134,6 +135,7 @@ struct SliceSquelchRequest {
 
 Q_DECLARE_METATYPE(AetherSDR::SliceTuneRequest)
 Q_DECLARE_METATYPE(AetherSDR::SliceFilterRequest)
+Q_DECLARE_METATYPE(AetherSDR::AgcThresholdMode)
 Q_DECLARE_METATYPE(AetherSDR::SliceAgcRequest)
 Q_DECLARE_METATYPE(AetherSDR::SliceDspRequest)
 Q_DECLARE_METATYPE(AetherSDR::SliceAudioRequest)

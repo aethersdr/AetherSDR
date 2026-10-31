@@ -3,6 +3,7 @@
 #include "asr/AsrCrashMarker.h"
 
 #include <QObject>
+#include <QPointer>
 #include <QString>
 
 #include <vector>
@@ -10,6 +11,10 @@
 namespace AetherSDR {
 
 class AudioEngine;
+class RadioModel;
+class SliceModel;
+class DecoderAudioModel;
+class ControlAvailabilityRegistry;
 class CopyAssistPanel;
 class CopyAssistSettingsDialog;
 class PersistentDialog;
@@ -97,6 +102,8 @@ public:
     // Seed the current frequency without side effects (used right after the
     // controller is created, before any retune event fires).
     void setCurrentFrequency(double freqMhz);
+    void setReceiver(RadioModel& radio, SliceModel* slice);
+    void setSelectedSlice(SliceModel* slice);
 
 private slots:
     void onEnableToggled(bool on);
@@ -104,6 +111,12 @@ private slots:
 
 private:
     void startGpuDiscovery();
+    void refreshNativeInput();
+    QString listeningStatus() const;
+    QPointer<RadioModel> m_radio;
+    QPointer<SliceModel> m_selectedSlice;
+    DecoderAudioModel* m_nativeAudio = nullptr;
+    ControlAvailabilityRegistry* m_audioAvailability = nullptr;
     // Surviving an uncatchable ASR fault (#5190) — see asr/AsrCrashMarker.h.
     // All settings writes here happen on the GUI thread: CopyAssistSettings'
     // setValue() is a whole-document read-modify-write.
@@ -124,6 +137,7 @@ private:
     void reconcileAfterGpuFallback();
     void buildEngine();  // (re)create the engine+tap for the current backend
     void applyTuning();  // push saved VAD tuning into the engine
+    void abandonEnable(const QString& reason);
     void requestEnable(); // defer local Whisper until async GPU discovery finishes
     void beginEnable();
     void requestModel(const QString& tierId);

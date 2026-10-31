@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 
 #include <QElapsedTimer>
 #include <QString>
@@ -20,11 +20,12 @@ class LocationAddressResolver;
 class MapView;
 class RadioModel;
 
-// Live, non-modal GPS / station-location dashboard. The radio remains the
-// sole authority for every GPS and oscillator field; the dialog only derives
-// presentation values such as decimal coordinates, report age, local time,
-// and a transient reverse-geocoded address.
-class GpsLocationDialog : public PersistentDialog {
+// AetherGPS: the live, non-modal GPS / station-location dashboard, a canon
+// workspace window. The radio remains the sole authority for every GPS and
+// oscillator field; the window only derives presentation values such as
+// decimal coordinates, report age, local time, and a transient
+// reverse-geocoded address.
+class GpsLocationDialog : public CanonWindow {
     Q_OBJECT
 
 public:

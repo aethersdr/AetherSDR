@@ -1,15 +1,23 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 
 #include <QMap>
+#include <QSet>
 #include <QString>
 
 #include "core/backends/IRadioBackend.h"
 
 class QThread;
+class QVersionNumber;
 
 namespace AetherSDR {
+
+// Reads FlexRadio's published release list. Forward-declared rather than
+// included: this header is scanned above the radio seam, and the include
+// belongs in the .cpp with the rest of the family's wire knowledge.
+class FirmwareStager;
 
 class RadioConnection;
 class PanadapterStream;
@@ -21,6 +29,8 @@ class PanadapterStream;
 // RadioModel holds non-owning pointers via connection()/panStream() and keeps
 // the command/WAN orchestration and sub-models. Core verbs build SmartSDR
 // command strings and emit them through the model-provided command sink.
+class FlexBackendTestAccess;
+
 class FlexBackend : public IRadioBackend {
     Q_OBJECT
 
@@ -34,9 +44,22 @@ public:
     RadioConnection*  connection() const { return m_connection; }
     PanadapterStream* panStream()  const { return m_panStream; }
 
-    // Where the core verbs emit their SmartSDR command strings — RadioModel's
-    // existing sendCommand() funnel, so verbs reuse the one wire-write path.
+    // Core verbs share RadioModel's guarded command funnel and wire-write path.
+    using CommandReply = std::function<void(int, const QString&)>;
+    void setCommandSink(std::function<bool(const QString&, CommandReply)> sink);
+    // Encoding-only observers cannot dispatch requests that need a radio reply.
     void setCommandSink(std::function<void(const QString&)> sink);
+    // The same funnel for a write whose caller waits on the radio's answer
+    // (TransmitControlRequest::answerTicket). The sink reports the reply code;
+    // with none installed, such a request goes out unanswered.
+    using AnsweredCommandSink =
+        std::function<void(const QString&, std::function<void(bool applied)>)>;
+    void setAnsweredCommandSink(AnsweredCommandSink sink) { m_answeredSink = std::move(sink); }
+    bool answersTransmitControl() const override { return bool(m_answeredSink); }
+    // Configuration writes share LAN/WAN sequencing and report actual dispatch.
+    void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
+    void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId) override;
+    void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
     // Primary keying verbs use an operation-fenced writer, never the generic
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
@@ -50,6 +73,10 @@ public:
     // where RadioModel lives — capabilities() is not thread-safe (no off-thread
     // caller exists yet; this documents the assumption).
     void setModelProvider(std::function<QString()> provider);
+    void setFirmwareVersionProvider(std::function<QString()> provider);
+    void refreshFirmwareCapabilities();
+    void setAutoAgcThresholdLicenseProvider(std::function<bool()> provider);
+    void setDspResetLicenseProvider(std::function<std::optional<bool>()> provider);
     void setIndependentTxSequenceProvider(std::function<quint32()> sequence);
     IndependentTxControl independentTxControl() const override;
     bool independentTxReady() const override;
@@ -65,13 +92,55 @@ public:
 
     // ---- IRadioBackend ----
     RadioCapabilities capabilities() const override;
+    void onRadioSessionEstablished() override;
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     bool isConnected() const override;
+    ReceiveDispatch requestRadioNickname(const QString& nickname,
+                                         NicknameCompletion completion = {}) override;
+    ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
+    ReceiveDispatch requestSliceCreate(const SliceCreateRequest& request,
+                                       const SliceCreateCompletion& completion = {},
+                                       const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestSliceRemove(int sliceId, const RadioControlCompletion& completion = {},
+                                       const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestTxSlice(int sliceId, bool enabled,
+                                   const RadioControlCompletion& completion = {},
+                                   const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestFullDuplex(bool enabled, const RadioControlCompletion& completion = {},
+                                      const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestSliceInventoryRefresh(const RadioControlCompletion& completion = {},
+                                                 const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestTransmitControl(const TransmitControlRequest& request,
+        TunePowerContext context = TunePowerContext::Deferred) override;
+    ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
+                                      const RadioSetupCompletion& completion = {},
+                                      const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestTxBand(const TxBandRequest& request,
+                                  const RadioSetupCompletion& completion = {}) override;
+    ReceiveDispatch requestSpot(const SpotRequest& request, const QString& panId = {}) override;
+    ReceiveDispatch requestPanControl(const QString& panId, const PanControlRequest& request) override;
+    ReceiveDispatch requestSlicePreset(int sliceId, const SlicePresetRequest& request) override;
+    ReceiveDispatch requestPanDisplay(const QString& panId, const QString& waterfallId,
+        const PanDisplayRequest& request, const RadioControlCompletion& completion = {},
+        const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestPanLifecycle(const PanLifecycleRequest& request,
+        const PanLifecycleCompletion& completion = {}, const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestProfile(const ProfileRequest& request,
+                                   const RadioControlCompletion& completion = {},
+                                   const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestMemory(const MemoryRequest& request,
+                                  const RadioControlCompletion& completion = {},
+                                  const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestUsbCable(const UsbCableRequest& request) override;
+    ReceiveDispatch requestTransverter(const TransverterRequest& request,
+                                       const RadioSetupCompletion& completion = {}) override;
     void requestSliceTune(int sliceId, const SliceTuneRequest& request) override;
     void requestSliceFilter(int sliceId, const SliceFilterRequest& request) override;
     void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override;
+    ReceiveDispatch requestSliceAgcThresholdMode(int sliceId, AgcThresholdMode mode) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    ReceiveDispatch requestDspParameterReset(int sliceId, DspParameterResetTarget target) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
     ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
     ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
@@ -148,6 +217,8 @@ public:
     // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel
     // residual). Present-only, ok-guarded numeric parses.
     void decodeRadioStatus(const QMap<QString, QString>& kvs);
+    // Full info reply: missing/invalid region clears the observation.
+    void decodeRadioInfoMetadata(const QString& body);
     void decodeInterlockStatus(const QMap<QString, QString>& kvs);
     void decodeAtuStatus(const QMap<QString, QString>& kvs);
     void decodeApdStatus(const QMap<QString, QString>& kvs);
@@ -199,10 +270,25 @@ private:
     QThread*          m_connThread{nullptr};    // owned (this-parented)
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
-    std::function<void(const QString&)> m_sink;
+    std::function<bool(const QString&, CommandReply)> m_sink;
+    AnsweredCommandSink m_answeredSink;
+    std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;
+    quint64 m_nicknameSession{0};
+    quint64 m_nicknameRequest{0};
+    quint64 m_nicknameAppliedRequest{0};
+    quint64 m_tuneOutputSession = 0;
+    QMap<int, quint64> m_tuneOutputRequests;
+    QSet<int> m_tuneOutputKnownBands;
     std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
     std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;
+    bool firmwareAtLeast(const QVersionNumber& minimum) const;
+    int nrsLevelMaximum() const;
+    int m_announcedNrsLevelMaximum = 100;
+    bool m_announcedCwProfiles = false;
+    std::function<QString()> m_firmwareVersionProvider;
+    std::function<bool()> m_autoAgcThresholdLicenseProvider;
+    std::function<std::optional<bool>()> m_dspResetLicenseProvider;
     std::function<quint32()> m_sequenceProvider;
 
     // Decode-side handle state (#4198). Captured from the amplifier/tgxl status
@@ -229,6 +315,45 @@ private:
     // Cleared by clearExtensionHandles() on disconnect: a reconnect to a
     // DIFFERENT radio must announce again.
     QString m_announcedModel;
+
+    // Lets a test drive a completed lookup without a network peer; the schema
+    // re-read in applyPublishedReleases() cannot be pinned any other way.
+    friend class FlexBackendTestAccess;
+
+    // The newest SmartSDR release FlexRadio publishes, empty until known.
+    // Reported through capabilities() so the status bar can say whether the
+    // connected radio is behind without any code above the seam knowing where
+    // SmartSDR releases are listed.
+    //
+    // ASKED ONLY ON CONNECT TO A FLEX. flexradio.com is contacted when this
+    // backend reaches a radio — never at launch, never for a station that
+    // connects to something else, never for one that only opens the app. A
+    // SUCCESSFUL answer is cached in AppSettings as one family-wide feature
+    // document, so for a day a disconnect and reconnect, a switch between
+    // radios, and a later launch all reuse it instead of asking.
+    //
+    // What this does NOT bound: a failed lookup writes nothing, so no window
+    // starts and every later connect asks again until one succeeds. And a
+    // cached answer older than a day is still adopted (and drawn) while the
+    // refresh runs, and stays if that refresh fails — so an offline station
+    // keeps showing its last verdict, however old.
+    QMap<int, QString> m_publishedReleases;
+    FirmwareStager* m_firmwareVersions{nullptr};
+    bool m_firmwareLookupInFlight{false};
+
+    // Records a completed lookup: caches it under the schema read at that
+    // moment, and publishes it if it changed. Split out of the completion
+    // lambda so a test can drive it without a live HTTP peer.
+    void applyPublishedReleases(const QMap<int, QString>& releases);
+
+    // Loads the cached published releases, and looks them up again only if that
+    // cache is missing or stale. Driven by onRadioSessionEstablished(), so it
+    // covers a SmartLink session as well as a LAN one.
+    void refreshPublishedFirmwareVersion();
+
+    // The family-wide AppSettings feature document holding that cache.
+    static constexpr const char* kPublishedFirmwareFeature = "publishedFirmware";
+    static constexpr int kPublishedFirmwareSchema = 2;
 };
 
 }  // namespace AetherSDR

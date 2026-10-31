@@ -41,8 +41,38 @@ Tokens can also be **scoped**: the theme JSON can override a token for
 a widget subtree (for example, the `applet/tx` scope turns the
 checked-toggle accent red where the root theme has it blue — scope
 paths are slash-joined, and a widget opts in by carrying the path in
-its `themeContainer` property). The widget-aware accessors below
-resolve scope automatically — prefer them inside applets.
+its `themeContainer` property). The `canon` scope does the same for
+whole windows: AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Radio Setup,
+TX Band Settings, Callsign Lookup, Connect to Radio, AGC-T Calibration, Icom RC-28 Button Mapping, FFTW Wisdom, MQTT Settings and Keyboard Shortcuts sit under `canon/aetherRx`, `canon/aetherTx`, `canon/aetherModem`,
+`canon/aetherMap`, `canon/aetherGps`, `canon/spotHub`, `canon/freedvReporter`, `canon/aetherControl`, `canon/multiFlex`, `canon/radioSetup`, `canon/txBand`, `canon/callsignLookup`, `canon/connection`, `canon/agcCalibration`, `canon/rc28Mapping`, `canon/nr2Wisdom`, `canon/mqttSettings` and `canon/shortcuts`, and it maps the base tokens onto the canon palette
+there (see [`aethersdr-style-guide.md`](aethersdr-style-guide.md)). The
+widget-aware accessors below resolve scope automatically — prefer them
+inside applets and anything painted inside a scoped window.
+
+A large canon window styles its pages from one sheet on its body rather than
+a sheet per widget. Radio Setup's widgets carry a role the sheet selects on
+(`RadioSetupDialogCommon.h`): a label's tone (`rsTone`: caption, value, hint,
+heading, title, accent for a status in progress, and ok, warn, error), a status chip (`rsChip`) and a button role
+(`rsButton`: select, mute, danger, success). A plain checkable button is an
+on/off toggle, filled `color.toggle.success.*` when on; a Select button is one
+of a set, filled canon cyan when chosen. A disabled control takes
+`color.control.unavailable`, checked or not. Changing a role on a live widget
+re-polishes it, so a status that turns to an error restyles at once.
+
+A canon table takes its rules from `canonTableRules()` (`CanonTableStyle.h`):
+`color.canon.nested` cells with `color.canon.line` rules and border, a
+`color.canon.control` selection band and cyan header text on
+`color.canon.raised`. SpotHub and the multiFLEX Dashboard append their own
+sizes and paddings after it. The selection rule sets no text color, so a
+window that colors items (the dashboard's PTT tick and its own station) keeps
+those colors on a selected row through a delegate, and a window that wants
+plain ink there adds it, as SpotHub does.
+
+Its scroll bars take `canonScrollBarRules()` (`CanonScrollBarStyle.h`): a
+12 px transparent track and a `color.canon.lineHi` handle with no step
+arrows, both orientations. AetherModem, AetherGPS, AetherMap, SpotHub,
+Network Diagnostics, Radio Setup and Icom RC-28 Button Mapping append it to
+their sheets.
 
 ### Consuming tokens
 
@@ -82,6 +112,7 @@ a token for a role it does not name.
 |---|---|
 | **Error / fault / danger / destructive action** | `color.accent.danger` (foreground); `color.button.danger.*.disabled` for a destructive button's disabled state — enabled-state button colours are not tokenised yet, so an enabled destructive button takes its colour from `color.accent.danger` |
 | **Warning / caution / approaching a limit** | `color.accent.warning` (foreground); `color.background.warning` (panel tint); `color.toggle.warning.*` (checked warning toggles) |
+| **A link that is down, not failed (a peripheral OFFLINE)** | `color.accent.offline` — orange, apart from the warning amber and from red, which reads as transmit |
 | **Success / OK / enabled-and-healthy** | `color.accent.success` (foreground); `color.background.success` (panel tint); `color.toggle.success.*` (checked success toggles) |
 | **Notification / message / attention ping** | `color.highlight.message`, with `color.highlight.fg` for text drawn on top |
 | **Transmit-active** | `color.background.tx` + `color.border.tx` (panel), `color.highlight.tx` (marker), `color.slice.tx` (slice flag), `color.tx.mox.*` (MOX button) |
@@ -181,6 +212,10 @@ a radio-specific cluster moves to its own applet, which hides wholesale.
 | **unavailable** | this radio lacks the capability | `color.control.unavailable` | the reason, verbatim |
 | **inactive** | supported here, not engaged now | `color.control.inactive` | "Available, not currently active" |
 | **active** | engaged | normal text colour | nothing extra |
+
+The reason replaces a control's own tooltip and description only while it is
+unavailable; the control's own texts come back when it is available again. The
+inactive announcement is appended to the control's own description.
 
 ### Why dim rather than hide
 

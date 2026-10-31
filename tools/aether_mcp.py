@@ -498,7 +498,9 @@ TOOLS = [
             "Drive a control deterministically: actions click, toggle, "
             "setChecked, setValue, setText, setCurrentText, "
             "setCurrentIndex, selectRow, submit (QLineEdit: setText + "
-            "returnPressed), trigger (QAction/menu item, works while "
+            "returnPressed), editText / commit (opted-in QLineEdit: "
+            "mark a changed value modified, then emit editingFinished; "
+            "currently Radio nickname only), trigger (QAction/menu item, works while "
             "the menu is closed), showPopup / hidePopup (QComboBox: hold "
             "the drop-down open; the open list is named aetherComboPopup "
             "for grab_widget/dump_tree — valid only while open). "
@@ -509,7 +511,7 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {
             "target": {"type": "string"},
             "action": {"type": "string"},
-            "value": {"type": "string", "description": "for set* / submit actions"},
+            "value": {"type": "string", "description": "for set* / submit / editText actions; commit takes no value"},
         }, "required": ["target", "action"]},
     },
     {
@@ -755,8 +757,9 @@ TOOLS = [
             "widget verbs (hover, tooltip, hitTest, clickAt, doubleClick, "
             "doubleClickAt, rightClick, "
             "contextMenu, close, scrollTo, drag, showMenu), the "
-            "transmit-keying verbs (key, txtest, atu, cwx, testtone, "
-            "txwaterfall — gated by AETHER_AUTOMATION_ALLOW_TX), and the "
+            "transmit-keying verbs (key, txtest, atu, cwx, testtone — "
+            "gated by AETHER_AUTOMATION_ALLOW_TX), the non-keying "
+            "txwaterfall display toggle, and the "
             "niche ones (dss deterministic spectrum injection, resize, "
             "scale, layout, panmessage, tci, station, qrz). Full verb "
             "reference: src/core/AutomationServer.h header comment."),

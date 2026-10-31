@@ -19,13 +19,17 @@ bandwidth marked.
   Genius XL** is in OPERATE.
 
 > **Other amplifiers are not checked.** AetherSweep only knows about the
-> PGXL. If you have an ACOM, SPE, VK3AMP, KPA1500 or any other amplifier in
+> PGXL. If you have an ACOM, SPE, VK3AMP, RF-KIT, KPA1500 or any other amplifier in
 > line, put it in standby or bypass yourself before sweeping. See
 > [Amplifiers](./amplifiers.md).
 
 ## Using AetherSweep
 
 ### Running a sweep
+
+<img src="/img/screens/ant-panel-sweep.png" width="292" alt="The ANT panel open beside the overlay menu, with the ANT button lit. It shows RX ANT: ANT1, an RF Gain slider at 8 dB, a WNB button with its level at 90, then the AetherSweep buttons Start Sweep, Clear Sweep and Save CSV in amber, and a Limit range option with From and To frequency fields." />
+
+*The ANT panel: receive antenna, RF gain and wideband noise blanker, with the AetherSweep controls below.*
 
 1. Make the slice on the band you want to sweep the **TX slice**, with its
    panadapter visible.
@@ -38,16 +42,16 @@ bandwidth marked.
    put back as they were.
 6. **Save CSV** exports the result; **Clear Sweep** removes the overlay.
 
-The sweep can also be started from **Tools → Start SWR Scan…**, which sweeps
+The sweep can also be started from **Tools → Start SWR Scan...**, which sweeps
 the whole band on the TX slice.
 
-### Licence confirmation
+### License confirmation
 
 Before a sweep transmits, a modal "Antenna SWR Sweep — License Confirmation"
 explains that it sends a 1 W tune carrier at several frequencies across the
 band, and that you are responsible for checking the band is clear and for
-complying with your licence. Tick **Remember my answer** to skip it next time
-from the ANT panel. **Tools → Start SWR Scan…** always shows it.
+complying with your license. Tick **Remember my answer** to skip it next time
+from the ANT panel. **Tools → Start SWR Scan...** always shows it.
 
 ### What gets swept
 
@@ -106,7 +110,7 @@ transmitting.
 
 | Key | Description |
 |---|---|
-| `SwrSweepLicenseConfirmed` | Set when you accept the licence confirmation with **Remember my answer** |
+| `SwrSweepLicenseConfirmed` | Set when you accept the license confirmation with **Remember my answer** |
 
 ## Troubleshooting
 

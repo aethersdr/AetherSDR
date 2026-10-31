@@ -6,6 +6,8 @@
  */
 #include "ctr2_link.h"
 
+#include <math.h>
+
 static uint16_t packets_for(uint16_t len)
 {
     return (uint16_t)(1u + (len + CTR2_DATA_PER_REPORT - 1u) / CTR2_DATA_PER_REPORT);
@@ -83,6 +85,150 @@ size_t ctr2_tx_send_datagram(ctr2_tx *tx, uint16_t port, const uint8_t *data, ui
     return tx_emit(tx, CTR2_TYPE_DATAGRAM, prefix, 2, data, len, sink, ctx);
 }
 
+size_t ctr2_tx_send_extension(ctr2_tx *tx, uint8_t type, const uint8_t *payload, uint16_t len,
+                              ctr2_report_sink sink, void *ctx)
+{
+    if (type < CTR2_EXT_FIRST || type > CTR2_EXT_LAST || len == 0
+        || len > ctr2_ext_max_length(type)) {
+        return 0;
+    }
+    return tx_emit(tx, type, NULL, 0, payload, len, sink, ctx);
+}
+
+void ctr2_caps_encode(uint32_t caps, uint8_t out[CTR2_FEATURE_BYTES])
+{
+    out[0] = 'C';
+    out[1] = 'X';
+    out[2] = CTR2_EXT_VERSION;
+    out[3] = 0x00u;
+    out[4] = (uint8_t)(caps >> 24);
+    out[5] = (uint8_t)(caps >> 16);
+    out[6] = (uint8_t)(caps >> 8);
+    out[7] = (uint8_t)caps;
+}
+
+int ctr2_caps_decode(const uint8_t *in, size_t len, uint32_t *caps)
+{
+    if (len != CTR2_FEATURE_BYTES || in[0] != 'C' || in[1] != 'X' || in[2] != CTR2_EXT_VERSION
+        || in[3] != 0) {
+        return 0;
+    }
+    *caps = ((uint32_t)in[4] << 24) | ((uint32_t)in[5] << 16) | ((uint32_t)in[6] << 8) | in[7];
+    return 1;
+}
+
+void ctr2_info_encode(const ctr2_info *info, uint8_t out[CTR2_INFO_BYTES])
+{
+    uint8_t i;
+    out[0] = 'F';
+    out[1] = 'W';
+    out[2] = CTR2_INFO_LAYOUT;
+    out[3] = info->major;
+    out[4] = info->minor;
+    out[5] = info->patch;
+    out[6] = info->flags;
+    out[7] = 0x00u;
+    for (i = 0; i < CTR2_INFO_BUILD_LEN; ++i) {
+        const char c = info->build[i];
+        out[8 + i] = (uint8_t)c;
+        if (c == '\0') {
+            break;
+        }
+    }
+    for (; i < CTR2_INFO_BUILD_LEN; ++i) {
+        out[8 + i] = 0x00u;
+    }
+}
+
+int ctr2_info_decode(const uint8_t *in, size_t len, ctr2_info *info)
+{
+    uint8_t i;
+    if (len != CTR2_INFO_BYTES || in[0] != 'F' || in[1] != 'W' || in[2] != CTR2_INFO_LAYOUT) {
+        return 0;
+    }
+    info->major = in[3];
+    info->minor = in[4];
+    info->patch = in[5];
+    info->flags = in[6];
+    for (i = 0; i < CTR2_INFO_BUILD_LEN && in[8 + i] != 0; ++i) {
+        if (in[8 + i] < 0x20u || in[8 + i] > 0x7Eu) {
+            return 0;
+        }
+        info->build[i] = (char)in[8 + i];
+    }
+    info->build[i] = '\0';
+    return 1;
+}
+
+float ctr2_spectrum_band_edge(uint16_t low_hz, uint16_t span_hz, uint8_t n, uint8_t i)
+{
+    if (n == 0 || i == 0) {
+        return (float)low_hz;
+    }
+    if (i >= n) {
+        return (float)span_hz;
+    }
+    if (low_hz == 0 || low_hz >= span_hz) {
+        return (float)span_hz * (float)i / (float)n;
+    }
+    return (float)low_hz * powf((float)span_hz / (float)low_hz, (float)i / (float)n);
+}
+
+float ctr2_spectrum_linear_edge(uint16_t low_hz, uint16_t span_hz, uint8_t n, uint8_t i)
+{
+    if (n == 0 || i == 0) {
+        return (float)low_hz;
+    }
+    if (i >= n) {
+        return (float)span_hz;
+    }
+    return (float)low_hz + ((float)span_hz - (float)low_hz) * (float)i / (float)n;
+}
+
+uint16_t ctr2_ext_max_length(uint8_t type)
+{
+    switch (type) {
+    case CTR2_EXT_AUDIO_SPECTRUM:
+    case CTR2_EXT_AUDIO_SPECTRUM_LINEAR:
+        return (uint16_t)(CTR2_SPECTRUM_HEADER + CTR2_SPECTRUM_MAX_BARS);
+    case CTR2_EXT_RELAY_UDP_PORT:
+        return 2u;
+    case CTR2_EXT_CW_TEXT:
+        return (uint16_t)(1u + CTR2_CW_TEXT_MAX);
+    case CTR2_EXT_FIRMWARE:
+        return (uint16_t)(CTR2_FW_DATA_HEADER + CTR2_FW_CHUNK);
+    default:
+        return 0;
+    }
+}
+
+size_t ctr2_wide_count(const uint8_t *in, size_t len)
+{
+    if (!in || len < 1 || in[0] < 1 || in[0] > CTR2_WIDE_REPORTS
+        || len < 1 + (size_t)in[0] * CTR2_REPORT_BYTES) {
+        return 0;
+    }
+    return in[0];
+}
+
+void ctr2_rx_set_extensions(ctr2_rx *rx, uint32_t caps)
+{
+    uint32_t defined = 0;
+    uint8_t t;
+    for (t = CTR2_EXT_FIRST; t <= CTR2_EXT_LAST; ++t) {
+        if (ctr2_ext_max_length(t)) {
+            defined |= CTR2_CAP(t);
+        }
+    }
+    rx->extensions = caps & defined;
+}
+
+void ctr2_rx_init(ctr2_rx *rx)
+{
+    rx->extensions = 0;
+    ctr2_rx_reset(rx);
+}
+
 void ctr2_rx_reset(ctr2_rx *rx)
 {
     rx->started = 0;
@@ -93,6 +239,12 @@ void ctr2_rx_reset(ctr2_rx *rx)
     rx->length = 0;
     rx->received = 0;
     rx->error = CTR2_ERR_NONE;
+}
+
+void ctr2_rx_start(ctr2_rx *rx, uint8_t counter)
+{
+    rx->started = 1;
+    rx->expected = (uint8_t)(counter & CTR2_COUNTER_MASK);
 }
 
 static ctr2_rx_result rx_fail(ctr2_rx *rx, ctr2_rx_error error)
@@ -141,12 +293,18 @@ ctr2_rx_result ctr2_rx_feed(ctr2_rx *rx, const uint8_t report[CTR2_REPORT_BYTES]
     if (report[2] > CTR2_COUNTER_MASK) {
         return rx_fail(rx, CTR2_ERR_BAD_COUNTER);
     }
-    if (report[3] > CTR2_TYPE_DATAGRAM) {
+    if (report[3] > CTR2_TYPE_DATAGRAM
+        && (report[3] < CTR2_EXT_FIRST || report[3] > CTR2_EXT_LAST
+            || !(rx->extensions & CTR2_CAP(report[3])))) {
         return rx_fail(rx, CTR2_ERR_BAD_TYPE);
     }
     packets = (uint16_t)((report[4] << 8) | report[5]);
     length = (uint16_t)((report[6] << 8) | report[7]);
-    if (report[3] == CTR2_TYPE_DATA) {
+    if (report[3] >= CTR2_EXT_FIRST) {
+        if (length == 0 || length > ctr2_ext_max_length(report[3])) {
+            return rx_fail(rx, CTR2_ERR_BAD_LENGTH);
+        }
+    } else if (report[3] == CTR2_TYPE_DATA) {
         if (length == 0 || length > CTR2_MAX_PAYLOAD) {
             return rx_fail(rx, CTR2_ERR_BAD_LENGTH);
         }
@@ -161,7 +319,7 @@ ctr2_rx_result ctr2_rx_feed(ctr2_rx *rx, const uint8_t report[CTR2_REPORT_BYTES]
         return rx_fail(rx, CTR2_ERR_PACKET_COUNT);
     }
 
-    if (report[3] != CTR2_TYPE_DATA && report[3] != CTR2_TYPE_DATAGRAM) {
+    if (report[3] >= CTR2_TYPE_HELLO && report[3] <= CTR2_TYPE_CLOSED) {
         /* Control messages (re)synchronize the counter. */
         rx->started = 1;
         rx->expected = (uint8_t)((report[2] + 1u) & CTR2_COUNTER_MASK);

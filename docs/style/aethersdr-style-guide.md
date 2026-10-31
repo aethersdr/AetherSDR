@@ -63,6 +63,7 @@ live in the `color.canon.*` token group of
 | Blooms | `color.canon.bloom.blue` / `bloom.teal` | blue 16 % top-right, teal 10 % top-left |
 | Grid | `color.canon.grid` | 64 px grid at 3.5 %, fading out |
 | Brand gradient | `color.brand.gradient` | `#3aa7ff → #5de3ff → #8ef7e6` at 100° |
+| Categories (marks only: chip dots, card edges) | `color.canon.category.{cyan,aqua,blue,amber,violet,rose,teal}` | aethersdr.com's category palette; 3:1 on the ground and raised cards in both themes |
 
 The theme JSON writes alpha colours in Qt's `#AARRGGBB` order
 (`#1f78a5d2` is the hairline above).
@@ -88,12 +89,17 @@ The canon does not change control geometry.
 | You want | Use |
 |---|---|
 | A window in the canon (no title bar, 16 px rounded corners, ambient ground, round close button, drag to move, Escape or ⌘W / Ctrl+W to close) | `CanonWindow`; put content in `bodyWidget()` |
+| A surface in the canon inside the main window: an applet, a panadapter, a canvas (the same ground, hairline and round close button, square corners) | `CanonApplet`, `CanonPan` or `CanonCanvas` from `gui/CanonSurface.h`; put content in `bodyWidget()` |
+| A confirmation inside a canon window (instead of a `QMessageBox`) | `CanonPrompt` from `gui/CanonPrompt.h`: a small `CanonWindow` with a `color.accent.warning` eyebrow, the question in `ink`, and Cancel (secondary, the default) beside a confirm button named for the action, outlined in `color.accent.warning`. Return, Escape and the corner button decline; `exec()` returns `Accepted` only for the confirm button |
 | A logo or avatar with a contrast ring and a cyan spark | `SparkRing` |
 | A recognition control (gold spark around a button) | `SparkBorder` |
 | The "AetherSDR" wordmark ("Aether" in ink, "SDR" in the gradient) | `BrandMark::paintWordmark` |
 | A primary action | `color.brand.gradient` fill with `color.canon.onAccent` text. Dark clears 4.5:1 on every gradient stop (7.5–15.2:1). Light measures 3.7:1 and 3.3:1 at the middle and teal stops; that is accepted for About's OK per the RFC approval. Get a ruling before using it on another surface (#6239). `theme_manager_test` checks both |
 | A secondary control | `color.canon.control` fill, `color.canon.lineHi` border, `color.canon.cyan` text; `color.canon.nested` + `color.canon.aqua` on hover |
 | A card of label / value rows | `color.canon.nested` fill, `color.canon.line` border, 12 px radius; keys in `muted`, values in `inkSoft` |
+| A check box or radio button | The canon indicators: `canonIndicatorRules()` from `gui/CanonIndicators.h`, appended to the window's sheet and applied with `applyCanonSheet()` so they follow a theme change. 18 px, `color.canon.control` fill and `lineHi` edge; a checked box is `cyan` with an `onAccent` tick, a selected radio a `cyan` ring with a centre dot; muted when disabled. Never a fill or ring alone: the operator must be able to see what is selected. They are painted images, because a stylesheet border can draw neither a tick nor a clean circle in a translucent hairline |
+| Modem-chrome content (the AetherNR page, AetherRX/AetherTX's stage column) inside a canon window | `ModemChrome::styleSheet(scale, ModemChrome::Look::Canon)`: the same sheet in canon colours, with the canon indicators. The default `Look::Modem` is unchanged for the docked applets |
+| Canon colours on content that other, non-canon surfaces share (AetherRX's AetherNR page is the docked applet's widget) | Put the window under the `canon` theme scope (`theme::setContainer(this, "canon/<name>")`): it remaps the base `color.background.*`, `color.text.*`, `color.border.*`, `color.accent*`, `color.knob.*` and `color.slider.*` tokens to the canon palette inside that window only. Painted code must use the widget-aware lookups (`color(this, …)`, `theme::withAlpha(this, …)`) to see it |
 
 ### `CanonWindow` is a deliberate exception to the dialog pattern
 
@@ -108,12 +114,47 @@ windows" lists what it keeps (the `FramelessMoveHelper` drag, Escape and
 ⌘W, `WA_DeleteOnClose` plus a `QPointer` so a second open raises it).
 Which windows the canon covers: short-lived, informational windows (About,
 Remote Access, and the candidates listed on #6239, once the maintainer picks
-them), and the tool windows the maintainer has moved to it (Waveforms,
-Network Diagnostics). Other tool and workspace dialogs keep
+them), and the tool windows the maintainer has moved to it (Updates, Waveforms,
+Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Radio Setup, TX Band Settings, Callsign Lookup, Connect to Radio, AGC-T Calibration, Icom RC-28 Button Mapping, FFTW Wisdom, MQTT Settings, Keyboard Shortcuts). Other tool and workspace dialogs keep
 `PersistentDialog` and `FramelessWindowTitleBar` as `docs/agents/gui.md`
 describes. For windows the canon covers,
 `FramelessWindowTitleBar` is deprecated: those dialogs move to
 `CanonWindow` one at a time, each in its own PR.
+
+### `CanonApplet`, `CanonPan` and `CanonCanvas`: the canon inside the main window
+
+Applets, panadapters and canvases live inside the main window's frame, so
+they are not windows. They share one base, `CanonSurface`, which paints the
+same ground as `CanonWindow` (`paintCanonGround()`: fill, blooms, fading
+grid, `color.canon.lineHi` hairline) with **square corners**, and carries
+the same round close button. What stays with `CanonWindow` is window
+behavior: a surface does not move when dragged, and Escape and ⌘W / Ctrl+W
+do not close it. Its close button only emits `closeRequested()`; the owner
+decides what closing means and hides the button with
+`setCloseButtonVisible(false)` where closing is not allowed, as the
+container and panadapter title bars do today. Pick the class by what the
+surface is, not by what it looks like today: the three are separate types
+so each can grow its own chrome. Surfaces move to them one at a time, each
+in its own PR.
+
+The panadapter (`PanadapterApplet`) is the first `CanonPan`. The GPU
+`SpectrumWidget` sits in its body unchanged (spectrum black, trace and
+waterfall stay as they are) and runs to the top of the pan. The pan's
+22 px canon header lies over the spectrum with a transparent background, so
+the spectrum renders underneath it: the grip and slice title (in
+`color.canon.ink`) at the left, and pop-out, maximize and close as 18 px
+round canon buttons at the right, the close button moved there with
+`placeCloseButtonIn()`. The empty middle belongs to the spectrum, so clicks
+there tune as anywhere else; the grip, title and buttons keep their own
+input (`PanadapterHeader`), so clicking them never tunes. `SpectrumWidget::setTopInset()` moves the
+spectrum's own top-anchored controls (overlay menu and its panels, CW and
+RIT/XIT marker labels, dBm arrows) below the header. The slice flags, the
+marks drawn with them (VFO triangle, center-lock target, slice-link label)
+and the top-right text (WNB, RF gain, propagation, MQTT values) stay at the
+very top and ride over the header; `setTopRightReserve()` ends that text
+left of the header's buttons when they show. The close button shows with more than one pan, and on a floating
+pan. These rules are the pan's own; `CanonApplet` and `CanonCanvas` keep
+the plain `CanonSurface` chrome.
 
 ### Motion
 
@@ -123,6 +164,10 @@ border, once every 7 s for the brand (cyan) and every 3 s for recognition
 exposed, and **hold still when the OS asks for reduced motion**
 (`QAccessibilityHints::motionPreference`). Do not add other animation
 without an RFC.
+
+**The Updates window's** primary action (File → Update..., RFC #5304),
+**Get AetherSDR x**, uses the brand gradient under the same accepted
+light-theme exception as About's OK (#6239).
 
 ## Migrating a surface
 

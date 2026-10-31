@@ -13,6 +13,7 @@
 #include "models/TransmitModel.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/icom/IcomCivBackend.h"
+#include "core/backends/icom/IcomSession.h"
 #include "core/backends/icom/IcomControls.h"
 #include "core/backends/icom/IcomModels.h"
 #include "core/backends/icom/CivCodec.h"
@@ -25,6 +26,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -43,6 +45,19 @@ struct IcomCivBackendTestAccess {
         const IcomCivBackend& backend, const std::vector<std::uint8_t>& frame)
     {
         return backend.confirmationFor(frame);
+    }
+
+    // Typed model controls dispatch only while the radio is up. An unstarted
+    // IcomSession constructs no streams or sockets, so the frame is scheduled
+    // and then dropped by the unconnected transport.
+    static void setConnected(IcomCivBackend& backend, bool connected)
+    {
+        backend.m_connected = connected;
+        if (connected) {
+            backend.m_session = std::make_unique<IcomSession>();
+        } else {
+            backend.m_session.reset();
+        }
     }
 
     static void injectConnectedFrame(IcomCivBackend& backend, const CivFrame& frame)
@@ -999,11 +1014,22 @@ int main(int argc, char** argv)
             // phoneLevelFollowsNetworkInput, this would fail on the
             // m_networkModLevelPercent < 0 refusal — a reason that has nothing
             // to do with the gate this section pins (PR #5643 review).
+            //
+            // Operator TX intent is dispatched only to a connected radio with an
+            // open TX session. The connect attempt above never completes, so
+            // reopen admission the socket-free way and mark the link up.
+        }
+        check(model.rebuildBackendForTest(QStringLiteral("icom")),
+              "a socket-free Icom backend replaces the unconnected one");
+        auto* live = dynamic_cast<icom::IcomCivBackend*>(model.backend());
+        if (live) {
+            icom::IcomCivBackendTestAccess::setConnected(*live, true);
             model.transmitModel().setMicLevel(70);
-            check(icom::IcomCivBackendTestAccess::micGainReported(*rebuilt)
-                      && icom::IcomCivBackendTestAccess::micGainPercent(*rebuilt)
+            check(icom::IcomCivBackendTestAccess::micGainReported(*live)
+                      && icom::IcomCivBackendTestAccess::micGainPercent(*live)
                              == 70,
                   "the operator moving the slider still reaches the Icom mic gain");
+            icom::IcomCivBackendTestAccess::setConnected(*live, false);
         }
     }
 

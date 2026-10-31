@@ -74,6 +74,8 @@ Both carry the Microsoft Visual C++ runtime with the application. **No Visual C+
 
 The Windows builds are Authenticode-signed: the setup, `AetherSDR.exe` and the other AetherSDR files by Jeremy Fielder, and bundled components such as Qt and the Microsoft Visual C++ runtime by their own makers. The downloads are also GPG-signed. SmartScreen may still warn about a new release until it has built download reputation; verifying the signature (below) confirms the download is genuine.
 
+The installer also adds Windows Defender Firewall rules so radio discovery and streams are not blocked; see [Windows Firewall](./windows.md#windows-firewall).
+
 Your settings live in `%LOCALAPPDATA%\AetherSDR\` whichever package you use. See [Settings and Backups](./settings-and-backups.md).
 
 ## After installing

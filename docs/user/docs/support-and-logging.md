@@ -12,9 +12,16 @@ When something isn't working, AetherSDR has several built-in tools for capturing
 - **Help → Slice Troubleshooting...**: a guided check for slice problems
 - **Tools → Runtime Monitor...**, **Tools → Network Diagnostics...** and **Tools → Radio Health...**: see [Runtime Monitor](./runtime-monitor.md)
 
+The JSON view in **Help → Slice Troubleshooting...** includes read-only FlexRadio metadata when the
+radio reports it: `radio.iaru_region` (1–3) and each slice's `chain_mode`.
+Unknown, unsupported or invalid observations appear as `null`. The processing
+chain is separate from the selected mode; a waveform slice can have mode `FDVU`
+and chain `DIGU`. The reported IARU region does not select your client band plan
+or grant transmit permission. Select your display plan under **View → Band Plan**.
+
 Before you file a report, drop your log or support bundle on the [Log Analyzer](/log-analyzer). It checks for known problems and links the fix for each one it finds. It runs in your browser; the file is never uploaded. **Help → Log Analyzer** and the **Log Analyzer** button in **Help → Support & Diagnostics...** open it.
 
-The Help menu starts with **AetherSDR Documentation** (this site), **Printable Manual (PDF)** and **Log Analyzer**, which open in your browser. It also has **Getting Started...**, **AetherSDR Help...**, **What's New...**, three how-to guides (**Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...**), **AetherSDR Website**, **Donate to AetherSDR**, **Contributing to AetherSDR...**, **Check for Updates...** and **About AetherSDR**. On Windows and Linux the menus are behind the **☰** button at the left of the title bar; on macOS they are in the system menu bar.
+The Help menu starts with **AetherSDR Documentation** (this site), **Printable Manual (PDF)** and **Log Analyzer**, which open in your browser. It also has **Getting Started...**, **AetherSDR Help...**, **What's New...**, three how-to guides (**Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...**), **AetherSDR Website**, **Donate to AetherSDR**, **Contributing to AetherSDR...**, **Check for Updates...**, **Check for Updates Automatically** and **About AetherSDR**. On Windows and Linux the menus are behind the **☰** button at the left of the title bar; on macOS they are in the system menu bar.
 
 ## Using Support & Diagnostics
 
@@ -29,6 +36,8 @@ The Help menu starts with **AetherSDR Documentation** (this site), **Printable M
 A grid of checkboxes, one per log category. Hover a box for what it covers. Turn on the categories relevant to your problem, then reproduce it. The dialog advises restarting AetherSDR after changing categories so the new settings are in effect from startup.
 
 **Enable All** / **Disable All** toggle every category at once. The categories, and which are on by default, are listed under [Log categories](#log-categories).
+
+For refused audio-output or **Show TX in Waterfall** edits, the Protocol / Status log names the requested setting and value, such as `Backend refused operation line output gain 30`. This records a request that was not dispatched; it does not confirm a radio state change.
 
 ### Log viewer
 
@@ -73,7 +82,7 @@ For a crash, also attach the crash report your operating system kept: `coredumpc
 
 | Situation | Use |
 |---|---|
-| Crash or wrong behaviour while operating | Enable the relevant categories → reproduce → **Help → File an Issue...** |
+| Crash or wrong behavior while operating | Enable the relevant categories → reproduce → **Help → File an Issue...** |
 | Audio glitch, spectrum freeze, DAX problem | **Support & Diagnostics...** with *Audio*, *VITA-49* or *DAX*; **Tools → Network Diagnostics...** |
 | App feels slow or freezes | **Tools → Runtime Monitor...**; *Performance* and *Render* categories |
 | Connection or discovery problem | *Discovery* + *Connection / Commands* |
@@ -85,12 +94,12 @@ For a crash, also attach the crash report your operating system kept: `coredumpc
 
 | Label | Category | Covers |
 |---|---|---|
-| **Discovery** | `aether.discovery` | UDP radio discovery broadcasts |
+| **Discovery** | `aether.discovery` | UDP radio discovery broadcasts, including Hermes-Lite 2 interfaces that cannot be used and sweeps no HL2 answered |
 | **Connection / Commands** | `aether.connection` | Raw TCP command channel: commands sent, responses, socket state |
 | **Protocol / Status** | `aether.protocol` | Parsed SmartSDR protocol handling and status updates |
 | **Audio** | `aether.audio` | RX/TX audio, device negotiation, volume |
 | **Audio Summary** | `aether.audio.summary` | Audio routing and device summaries for support logs |
-| **VITA-49** | `aether.vita49` | UDP packet routing: FFT, waterfall, meters, DAX |
+| **VITA-49** | `aether.vita49` | UDP packet routing: FFT, waterfall, meters, DAX. Lost or out-of-order packets are logged as `VITA-49 sequence errors`, at most once every 10 seconds per stream. |
 | **DSP** | `aether.dsp` | Client noise reduction and CW decoder processing |
 | **RADE** | `aether.rade` | FreeDV RADE digital voice |
 | **SmartLink** | `aether.smartlink` | SmartLink sign-in, TLS tunnel, WAN streaming |
@@ -115,14 +124,16 @@ For a crash, also attach the crash report your operating system kept: `coredumpc
 | **Waveform** | `aether.waveform` | Waveform install upload and the local waveform helper (D-STAR) |
 | **KiwiSDR** / **KiwiSDR Audio/DSP** | `aether.kiwisdr`, `aether.kiwisdr.audio` | KiwiSDR receivers; the audio category is high-rate |
 | **Automation Bridge** | `aether.automation` | The agent automation bridge |
+| **External Services** | `aether.network` | Failed requests to external services (update check, QRZ, maps, propagation, radar, KiwiSDR list), once per service, host, error and HTTP status, with any TLS errors. Addresses are logged as `scheme://host` only. |
 | **QRZ Lookup** | `aether.qrz` | QRZ.com lookups and cache |
 | **AetherClock** | `aether.clock` | WWV/WWVB time-signal decoder |
 | **Hermes-Lite 2** / **Hermes-Lite 2 TX** | `aether.hl2`, `aether.hl2.tx` | HL2 backend; the TX category is high-rate transmit telemetry |
 | **ANAN Protocol 2** | `aether.anan.p2` | ANAN-G2 Protocol 2 session |
 | **Icom Session / Streams / CI-V / Scope / Link / Credentials** | `aether.icom.*` | Networked Icom backend; **Icom CI-V** logs every frame and is high-rate |
+| **BNR (NVIDIA AFX)** | `aether.nvafx` | BNR runtime download and install failures, and filter load errors |
 | **System Info** | `aether.sysinfo` | Startup hardware inventory: OS, CPU and SIMD features, RAM, GPU |
 
-**On by default:** Discovery, Connection / Commands, Protocol / Status, Audio Summary, KiwiSDR and System Info. Everything else is off until you turn it on. A category that is off still records its warnings and errors.
+**On by default:** Discovery, Connection / Commands, Protocol / Status, Audio Summary, KiwiSDR and System Info. Everything else is off until you turn it on. A category that is off still records its warnings and errors, so failures such as External Services and BNR download errors always reach the log. The [Log Categories](./generated/log-categories.md) reference lists every category with the description the app shows.
 
 ### Log files
 

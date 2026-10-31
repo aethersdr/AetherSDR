@@ -20,6 +20,7 @@
 #include "SpotLabelPolicy.h"        // spot ID bases, isPassiveLocalSpotId()
 
 class QKeyEvent;
+class QLabel;
 
 namespace AetherSDR {
 
@@ -37,7 +38,7 @@ bool requestSlicePanCenter(RadioModel& model, int sliceId, double centerMhz);
 // ─── Platform checks ─────────────────────────────────────────────────────────
 
 // True when the macOS DAX HAL driver bundle is installed (always true on
-// non-mac platforms; the caller is itself #ifdef Q_OS_MAC-gated).
+// non-mac platforms; the caller is itself #ifdef Q_OS_MACOS-gated).
 bool macDaxDriverInstalled();
 
 // ─── Band admissibility ──────────────────────────────────────────────────────
@@ -173,6 +174,14 @@ int panXpixelsFor(const SpectrumWidget* spectrum);
 int panLocalSpectrumPointsFor(const SpectrumWidget* spectrum);
 int panYpixelsFor(const SpectrumWidget* spectrum);
 bool panPixelDimensionsReady(const SpectrumWidget* spectrum);
+
+// ─── Status-bar compact labels ──────────────────────────────────────────────
+
+// The small 12 px labels of the status bar's stacked rows (model, version, GPS,
+// CPU, …). `color` is a ThemeManager token or literal. Bold is carried in the
+// stylesheet rather than QFont so a width recalculation sees the wider text.
+QString statusBarCompactLabelStyle(const QString& color, bool bold = false);
+void applyStatusBarCompactLabelStyle(QLabel* label, const QString& color, bool bold = false);
 
 // ─── Misc UI ─────────────────────────────────────────────────────────────────
 

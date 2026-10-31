@@ -173,7 +173,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
@@ -249,6 +249,14 @@ jobs:
       - name: Log Analyzer rules cite live log messages
         if: ${{ !cancelled() }}
         run: node tools/docs/test_log_rules.mjs
+
+      # ── full-suite.yml's red-main attribution only runs when main is red, so
+      # a regression in it would surface as a wrong verdict on a red main.
+      # This runs that step's script against stubbed GitHub data, plus the
+      # failed-list producer against a CTest summary. Stdlib-only, no network.
+      - name: Red-main attribution
+        if: ${{ !cancelled() }}
+        run: node tools/test_full_suite_attribution.mjs
 
       # ── Test registration stays in tests/tests.cmake. The root CMakeLists.txt
       # was 6,357 lines, over half of it 300+ test-target declarations; the split
@@ -364,6 +372,20 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/check_qsettings.py --strict
 
+      # Qt 6.12 deprecates Q_OS_MAC (#6354); Q_OS_MACOS is the spelling for
+      # macOS-only code. Only a macOS build warns, so without this a re-added
+      # Q_OS_MAC goes unseen by the Linux and Windows lanes. Source files only.
+      - name: No deprecated Q_OS_MAC
+        if: ${{ !cancelled() }}
+        run: |
+          rc=0
+          hits=$(git grep -nw Q_OS_MAC -- '*.cpp' '*.h' '*.hpp' '*.mm' '*.m' ':!third_party') || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "$hits" | awk -F: '{print "::error file="$1",line="$2"::Q_OS_MAC is deprecated in Qt 6.12; use Q_OS_MACOS"}'
+            exit 1
+          fi
+          [ "$rc" -eq 1 ] || { echo "::error::git grep failed (exit $rc)"; exit "$rc"; }
+
       # ── ThemeManager::seedBuiltinDefaults() compiles a copy of the default
       # theme into the binary. It is GENERATED (tools/gen_theme_seed.py emits
       # src/core/ThemeSeedGenerated.cpp from resources/themes/default-dark.json),
@@ -423,6 +445,21 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/test_check_build_options.py
 
+      # The release workflow's update-manifest builder (RFC #5304), tested
+      # here because a release is its only other run. A reference applier
+      # written from docs/architecture/update-manifest.md must rebuild the new
+      # tree from the old one and each bundle. Needs zstd, which the runner
+      # image ships.
+      - name: Update manifest builder
+        if: ${{ !cancelled() }}
+        run: python tools/test_build_update_manifest.py
+
+      # Its publisher: a partial upload is not a publication, and latest/
+      # never moves to an older release (in-memory store, ephemeral key).
+      - name: Update manifest publisher
+        if: ${{ !cancelled() }}
+        run: python tools/test_publish_update_manifest.py
+
       # ── Hardcoded-colour ratchet (#4569, RFC #3076). Counts may not rise
       # above the PR's base. The gate is a DELTA rather than a stored constant:
       # main gains colours from unrelated UI merges, so a frozen baseline goes
@@ -455,8 +492,10 @@ jobs:
       # silently pass an empty base to `git worktree add`.
       - name: Hardcoded-colour ratchet
         if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          BASE=$(git merge-base HEAD "origin/${{ github.base_ref }}")
+          BASE=$(git merge-base HEAD "origin/${BASE_REF}")
           git worktree add /tmp/colour-base "$BASE"
           python tools/audit_colours.py \
             --src src \
@@ -468,8 +507,10 @@ jobs:
       # Scoped to src/gui/ files changed by this PR rather than the whole tree.
       - name: Get changed src/gui/ files
         if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          git diff --name-only origin/${{ github.base_ref }}...HEAD \
+          git diff --name-only "origin/${BASE_REF}...HEAD" \
             | grep -E '^src/gui/.*\.(cpp|h)$' \
             > /tmp/changed_gui_files.txt || true
           echo "Changed src/gui files:"
@@ -479,13 +520,14 @@ jobs:
         id: a11y
         if: ${{ !cancelled() }}
         run: |
-          FILES=$(cat /tmp/changed_gui_files.txt | tr '\n' ' ')
-          if [ -z "$FILES" ]; then
+          FILES=()
+          while IFS= read -r f; do FILES+=("$f"); done < /tmp/changed_gui_files.txt
+          if [ "${#FILES[@]}" -eq 0 ]; then
             echo "No src/gui/ files changed -- skipping."
             echo "findings=0" >> $GITHUB_OUTPUT
             exit 0
           fi
-          python tools/check_a11y.py $FILES | tee /tmp/a11y_output.txt
+          python tools/check_a11y.py "${FILES[@]}" | tee /tmp/a11y_output.txt
           COUNT=$(grep -c "^::warning" /tmp/a11y_output.txt || true)
           echo "findings=$COUNT" >> $GITHUB_OUTPUT
 

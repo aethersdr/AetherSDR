@@ -10,6 +10,11 @@ on:
         required: false
         default: false
         type: boolean
+      dev_overrides:
+        description: 'Testing only: honor the AETHER_UPDATE_* updater overrides (BUILD-OPTIONS.md). Refused on a tag or with the Store flight.'
+        required: false
+        default: false
+        type: boolean
 
 # Each job grants itself what it needs. Only package-windows can mint the
 # Azure token that signs as the AetherSDR publisher (#6288), and it runs no
@@ -64,6 +69,7 @@ jobs:
         id: store-plan
         env:
           STORE_REQUESTED_FLIGHT: ${{ inputs.publish_store_flight }}
+          STORE_DEV_OVERRIDES: ${{ inputs.dev_overrides }}
           STORE_EVENT: ${{ github.event_name }}
           STORE_REF: ${{ github.ref }}
           STORE_REPOSITORY: ${{ github.repository }}
@@ -75,6 +81,7 @@ jobs:
             -EventName $env:STORE_EVENT -Ref $env:STORE_REF `
             -Repository $env:STORE_REPOSITORY -RunNumber $env:STORE_RUN_NUMBER `
             -RequestFlight ($env:STORE_REQUESTED_FLIGHT -eq 'true') `
+            -DevOverrides ($env:STORE_DEV_OVERRIDES -eq 'true') `
             -ProductId $env:AETHERSDR_STORE_PRODUCT_ID -FlightId $env:AETHERSDR_STORE_FLIGHT_ID
           foreach ($name in @('releaseArtifacts', 'productionDraft', 'publishFlight', 'storeEligible')) {
             "$name=$($plan.$name.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
@@ -246,6 +253,9 @@ jobs:
         run: pwsh scripts/setup/setup-vulkan-sdk.ps1
 
       - name: Configure
+        env:
+          # Empty except on a manual dispatch that asked for it.
+          DEV_OVERRIDES: ${{ inputs.dev_overrides }}
         run: |
           # RelWithDebInfo (not Release): MSVC's Release config omits /Zi and
           # /DEBUG, so build/AetherSDR.pdb never gets produced and the
@@ -290,7 +300,16 @@ jobs:
           # native command), so a configure failure still fails this step —
           # the reason the bash legs need `set -o pipefail` and this one does
           # not.
-          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_HD_FM=OFF -DENABLE_RTL=ON -DREQUIRE_RTL=ON -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON -DAETHER_GPU_SPECTRUM=ON -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK" -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET" | Tee-Object -FilePath configure.log
+          # A dev-overrides build trusts test update keys and manifests from
+          # its environment. "Plan Store build" has already refused it on a
+          # tag or with the Store flight (get-store-build-plan.ps1), so it is
+          # only ever a downloadable test artifact.
+          $devOverrides = @()
+          if ($env:DEV_OVERRIDES -eq 'true') {
+            Write-Host "Building with AETHER_UPDATE_DEV_OVERRIDES=ON (testing only)"
+            $devOverrides = @('-DAETHER_UPDATE_DEV_OVERRIDES=ON')
+          }
+          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_HD_FM=OFF -DENABLE_RTL=ON -DREQUIRE_RTL=ON -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON -DAETHER_GPU_SPECTRUM=ON -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK" -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET" @devOverrides | Tee-Object -FilePath configure.log
 
       # AETHER_GPU_SPECTRUM=ON is a request, not a guarantee: CMake flips it
       # back OFF without failing when Qt6GuiPrivate can't be located, and
@@ -383,12 +402,13 @@ jobs:
         # finally diagnosable; the job-level NINJA_STATUS stamps elapsed
         # seconds per line to expose the long-pole targets.
         timeout-minutes: 240
-        # Only --target AetherSDR (+ its aether-dv-waveform helper dependency)
+        # Only --target AetherSDR (+ its aether-dv-waveform and AetherSDRUpdater
+        # helper dependencies)
         # ships; the default `all` also built ~200 unit-test exes the installer
         # never packages or runs — wasted time, and their links contend with the
         # whisper-heavy app link on the 16 GB runner (same starvation we hit in
         # check-windows). Narrowing removes that risk too.
-        run: cmake --build build -j 2 --target AetherSDR aether-dv-waveform
+        run: cmake --build build -j 2 --target AetherSDR aether-dv-waveform AetherSDRUpdater
 
       - name: Deploy Qt
         run: |
@@ -402,6 +422,12 @@ jobs:
           }
           copy build\aether-dv-waveform.exe deploy\
           copy build\AetherDV.cfg deploy\
+          # The in-app updater (RFC #5304 Phase 3): it swaps a staged release
+          # into place after AetherSDR exits. Static runtime, no Qt.
+          if (-not (Test-Path "build\AetherSDRUpdater.exe")) {
+            throw "Required updater build\AetherSDRUpdater.exe is missing"
+          }
+          copy build\AetherSDRUpdater.exe deploy\
           # windeployqt treats any Qt6* DLL as an official Qt module and looks for
           # it in the Qt bin directory to scan its transitive dependencies. Copy
           # qt6keychain.dll there before invoking windeployqt so it can resolve it.
@@ -507,7 +533,7 @@ jobs:
       # maintainers can symbolize local dumps without unpacking Store assets.
       - name: Upload debug symbols
         if: hashFiles('symbols/AetherSDR.pdb') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: Windows-Symbols
           path: symbols/
@@ -528,6 +554,9 @@ jobs:
           $archive = "AetherSDR-$safeRefName-Windows-x64-symbols.tar.xz"
           New-Item -ItemType Directory -Force symbols-release | Out-Null
           Copy-Item symbols\* symbols-release\ -Recurse -Force
+          if (Test-Path build\AetherSDRUpdater.pdb) {
+            Copy-Item build\AetherSDRUpdater.pdb symbols-release\
+          }
           if (Test-Path build\aether-dv-waveform.pdb) {
             Copy-Item build\aether-dv-waveform.pdb symbols-release\
           }
@@ -540,7 +569,7 @@ jobs:
 
       - name: Upload symbol archive
         if: hashFiles('AetherSDR-*-symbols.tar.xz') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: Windows-Symbols-archive
           path: AetherSDR-*-symbols.tar.xz
@@ -549,7 +578,7 @@ jobs:
       # boundary: nothing in this job can sign, and nothing in package-windows
       # builds or fetches third-party code.
       - name: Upload unsigned payload for packaging
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: Windows-Payload
           path: |
@@ -587,7 +616,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Download unsigned payload
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: Windows-Payload
           path: .
@@ -595,7 +624,7 @@ jobs:
       # The MSIX's .appxsym needs the PDBs, which build-windows already
       # uploads on their own.
       - name: Download debug symbols
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: Windows-Symbols
           path: symbols
@@ -671,10 +700,10 @@ jobs:
           # have no publisher identity at all. The check reads the embedded
           # signature (authenticode.ps1 says why Get-AuthenticodeSignature
           # can't), so a Microsoft DLL also listed in a system catalog keeps
-          # Microsoft's signature. Our own two programs are always signed, so
+          # Microsoft's signature. Our own three programs are always signed, so
           # they carry the AetherSDR description.
           . .\packaging\windows\authenticode.ps1
-          $ours = @('AetherSDR.exe', 'aether-dv-waveform.exe')
+          $ours = @('AetherSDR.exe', 'aether-dv-waveform.exe', 'AetherSDRUpdater.exe')
           $oursToSign = @(); $othersToSign = @()
           foreach ($f in Get-AuthenticodeTargets) {
             $state = Get-EmbeddedSignatureState -SignTool $env:AETHER_SIGNTOOL -Path $f.FullName
@@ -786,6 +815,7 @@ jobs:
           $ours = @(
             (Get-Item deploy\AetherSDR.exe),
             (Get-Item deploy\aether-dv-waveform.exe),
+            (Get-Item deploy\AetherSDRUpdater.exe),
             $setup[0]
           )
           # A subject name alone is not unique, so the issuer is pinned too:
@@ -826,7 +856,7 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\check-symbol-package.ps1 -AppxSymPath $appxSymPath -MsixUploadPath $msixUploadPath
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: Windows-Installer
           path: |
@@ -837,19 +867,21 @@ jobs:
             AetherSDR-*.appxsym
 
   # Publishing, apart from the signing identity: attaching to the GitHub
-  # release needs contents: write, and the Store CLI is a third-party action.
+  # release needs contents: write. The Store submission is its own job below.
   release-windows:
     needs: [build-windows, package-windows]
-    if: needs.build-windows.outputs.release-artifacts == 'true' || needs.build-windows.outputs.production-draft == 'true'
+    if: needs.build-windows.outputs.release-artifacts == 'true'
     runs-on: windows-latest
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
       - name: Download signed packages
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: Windows-Installer
           path: .
@@ -858,13 +890,12 @@ jobs:
       # exist; a missing one is /tag-release's WARN, not a failed release.
       - name: Download symbol archive
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: Windows-Symbols-archive
           path: .
 
       - name: Attach to release
-        if: needs.build-windows.outputs.release-artifacts == 'true'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           # .msixupload is the Partner Center upload artifact (manual Store
@@ -882,30 +913,48 @@ jobs:
             AetherSDR-*.msixupload
             AetherSDR-*-symbols.tar.xz
 
-      # ----------------------------------------------------------------------
-      # Automated Microsoft Store submission (weekly release cycle).
-      #
-      # Runs ONLY on a v* tag push, and ONLY when the AETHERSDR_STORE_PRODUCT_ID
-      # repository VARIABLE is set. The plan rejects manual tag dispatches and
-      # forks for this path; manual flight requests have their own job below.
-      #
-      # The submission is staged as a DRAFT (publish-store.ps1 passes
-      # --noCommit): the package uploads to Partner Center but certification is
-      # NOT started. A maintainer reviews the pending submission and clicks
-      # "Submit to Store". CI never publishes to the live channel on its own.
-      #
-      # Free-product only (AetherSDR qualifies). The app must already be live in
-      # the Store. One-time Entra/Partner Center setup is in
-      # docs/WINDOWS-STORE-MSIX.md.
-      # ----------------------------------------------------------------------
+  # ----------------------------------------------------------------------
+  # Automated Microsoft Store submission (weekly release cycle).
+  #
+  # Runs ONLY on a v* tag push, and ONLY when the AETHERSDR_STORE_PRODUCT_ID
+  # repository VARIABLE is set. The plan rejects manual tag dispatches and
+  # forks for this path; manual flight requests have their own job below.
+  #
+  # The submission is staged as a DRAFT (publish-store.ps1 passes
+  # --noCommit): the package uploads to Partner Center but certification is
+  # NOT started. A maintainer reviews the pending submission and clicks
+  # "Submit to Store". CI never publishes to the live channel on its own.
+  #
+  # Free-product only (AetherSDR qualifies). The app must already be live in
+  # the Store. One-time Entra/Partner Center setup is in
+  # docs/WINDOWS-STORE-MSIX.md.
+  # ----------------------------------------------------------------------
+  stage-store-draft:
+    name: Stage Microsoft Store submission
+    needs: [build-windows, package-windows]
+    if: needs.build-windows.outputs.production-draft == 'true'
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Download signed packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: Windows-Installer
+          path: .
+
       - name: Setup Microsoft Store Developer CLI
-        if: needs.build-windows.outputs.production-draft == 'true'
         uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0
         with:
           version: v0.4.2
 
       - name: Stage Microsoft Store submission (draft)
-        if: needs.build-windows.outputs.production-draft == 'true'
         env:
           AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
           AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
@@ -921,6 +970,20 @@ jobs:
             --clientSecret $env:AZURE_AD_APPLICATION_SECRET
           powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\publish-store.ps1 -ProductId $env:AETHERSDR_STORE_PRODUCT_ID -UploadTimeoutSeconds 300
 
+      # msstore keeps the client secret in Windows Credential Manager and its
+      # settings under LocalAppData; `msstore reconfigure --reset` needs an
+      # interactive confirmation, so remove both directly.
+      - name: Remove Microsoft Store CLI credentials
+        if: always()
+        env:
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+        run: |
+          if ($env:AZURE_AD_APPLICATION_CLIENT_ID) {
+            cmdkey "/delete:MicrosoftStoreCli:user=$env:AZURE_AD_APPLICATION_CLIENT_ID" | Out-Null
+          }
+          Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA 'Microsoft\MSStore.CLI') -ErrorAction SilentlyContinue
+          $global:LASTEXITCODE = 0
+
   # A manually requested build can be committed to the restricted developer
   # package flight. This job is isolated from the tag-only production path:
   # it requires an explicit workflow_dispatch checkbox and a nonempty flight
@@ -930,6 +993,7 @@ jobs:
     needs: [build-windows, package-windows]
     if: needs.build-windows.outputs.publish-flight == 'true'
     runs-on: windows-latest
+    environment: store-flight
     permissions:
       contents: read
 
@@ -942,9 +1006,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
       - name: Download verified Windows package
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: Windows-Installer
           path: flight-package
@@ -992,3 +1058,17 @@ jobs:
             -SearchDir flight-package `
             -UploadTimeoutSeconds 300 `
             -Commit
+
+      # msstore keeps the client secret in Windows Credential Manager and its
+      # settings under LocalAppData; `msstore reconfigure --reset` needs an
+      # interactive confirmation, so remove both directly.
+      - name: Remove Microsoft Store CLI credentials
+        if: always()
+        env:
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+        run: |
+          if ($env:AZURE_AD_APPLICATION_CLIENT_ID) {
+            cmdkey "/delete:MicrosoftStoreCli:user=$env:AZURE_AD_APPLICATION_CLIENT_ID" | Out-Null
+          }
+          Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA 'Microsoft\MSStore.CLI') -ErrorAction SilentlyContinue
+          $global:LASTEXITCODE = 0

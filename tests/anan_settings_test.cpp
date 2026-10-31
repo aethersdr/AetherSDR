@@ -77,6 +77,31 @@ int main(int argc, char** argv)
                                      QStringLiteral(R"({"ddc0AdcIndex":7})"));
     check(AnanSettings::ddc0AdcIndex() == 0, "an out-of-range ADC index falls back to ADC0");
 
+    // ---- live options ----------------------------------------------------
+    // Absent keys describe the bytes sent before either option existed: banks
+    // bypassed, amplifier live.
+    AnanSettings::reset();
+    check(!AnanSettings::bandFiltersEnabled(), "band filters default off");
+    check(!AnanSettings::speakerAmpMuted(), "the speaker amplifier defaults unmuted");
+    AnanSettings::setBandFiltersEnabled(true);
+    check(AnanSettings::bandFiltersEnabled() && !AnanSettings::speakerAmpMuted(),
+          "band filters round-trip on, and leave the mute alone");
+    AnanSettings::setSpeakerAmpMuted(true);
+    check(AnanSettings::bandFiltersEnabled() && AnanSettings::speakerAmpMuted(),
+          "the mute round-trips on, and leaves the band filters alone");
+    AnanSettings::setBandFiltersEnabled(false);
+    AnanSettings::setSpeakerAmpMuted(false);
+    check(!AnanSettings::bandFiltersEnabled() && !AnanSettings::speakerAmpMuted(),
+          "both round-trip off");
+
+    // The rate list a setup page offers. It exists on this header because a
+    // page above the radio seam may not include the protocol header that owns
+    // the constant.
+    const QList<int> rates = AnanSettings::validDdc0RatesKsps();
+    check(rates.size() == 6, "six DDC0 rates, as the protocol defines");
+    check(rates.contains(48) && rates.contains(1536),
+          "including both ends of the range");
+
     if (g_failures == 0)
         std::printf("anan_settings_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

@@ -22,12 +22,38 @@ The in-app guide **Help → Understanding Noise Cancellation...** covers the sam
 
 ## Using the radio-side filters (FPGA)
 
-These run on the radio's FPGA — zero CPU cost to your PC. All use preset, optimized parameters with no user adjustments required — just toggle on/off. We did, however, add "amount" sliders in the DSP slide bar menu if you're feeling adventurous.
+On a FlexRadio these run on the radio's FPGA — zero CPU cost to your PC (the noise blanker on the Hermes-Lite 2 and ANAN-G2 is the exception; see [NB](#nb--noise-blanker)). All use preset, optimized parameters with no user adjustments required — just toggle on/off. We did, however, add "amount" sliders in the DSP slide bar menu if you're feeling adventurous.
 
 The radio-side buttons are on the VFO flag's **DSP** tab: NR, NB, ANF and APF on the first row; NRL, NRS, RNN and NRF on the second.
 
+The **NRL**, **NRS** and **ANFL** amount controls show the radio's reported levels. Profile recalls and changes made by another client update the displayed values. AetherSDR accepts the NRS readback without restoring a previously selected amount over it.
+
 ### NB — Noise Blanker
 Blanks short impulse noise (ignition interference, switching power supplies). Has an adjustable level (0-100) in the DSP side panel.
+
+On the [Hermes-Lite 2](./hermes-lite-2.md) and the [ANAN-G2](./anan-g2.md), AetherSDR runs the noise blanker on the computer, and the NB button cycles **Off → NB → NB2 → Off**; its label shows which blanker is running. NB blanks each impulse to silence. NB2 instead reconstructs the blanked window from the samples either side, which sounds better when the impulse lands on a signal and worse when the noise is dense. While NB2 runs, an **NB2** fill row appears under the DSP buttons: **Zero** (silence, as NB does), **Sample hold**, **Mean hold**, **Hold sample** or **Interpolate**. On other radios the blanker is the radio's own and NB is a plain on/off toggle.
+
+### Resetting radio DSP parameters
+
+In the slice's **DSP** tab, choose a **Parameters:** target and press **Reset**.
+Selecting a target does not send a reset. Reset is unavailable when no valid
+target is selected. The radio chooses the defaults and reports the resulting
+levels; every algorithm's on/off state stays unchanged.
+**All** resets every DSP block's parameters, including NB and APF levels.
+It does not reset AetherRX processing or WNB.
+
+Parameter reset requires FlexRadio SmartSDR **4.3.16 or later**, a connected
+slice owned by this client, and a supported receive mode. It is unavailable
+in FM modes. ANF, ANFL and ANFT resets are unavailable in CW, RTTY, DIGU,
+DIGL and FreeDV modes. Unsupported reset actions remain visible and dimmed;
+the Reset button's tooltip explains the reason.
+
+**All** and **NRS** parameter resets are Basic controls. Individual **NR**,
+**ANF**, **NRL**, **ANFL**, **NRF** and **ANFT** resets require the radio to
+report Advanced Noise Mitigation entitlement. Retained entitlement works
+even when a SmartSDR+ subscription has expired. **NRS** and **NRF** additionally
+require a FLEX-8000 or Aurora platform. NRS resets its level only; it has no
+advanced parameters.
 
 ### NR — Noise Reduction
 General-purpose noise reduction. Adjustable level (0-100). Good starting point for noisy bands.
@@ -68,6 +94,8 @@ Spectral subtraction estimates and removes broadband noise from each frequency b
 
 Spectral subtraction combined with Voice Activity Detection (VAD). Best for SSB/AM voice operation in consistent noise environments.
 
+The **NRS** amount slider ranges from **0 to 50** on SmartSDR **4.3.16 and later**, and **0 to 100** on older firmware. AetherSDR updates the range when the radio identifies its firmware. Unknown firmware uses 0 to 100 until the radio's information reply identifies it. Automatic LAN reconnects retain the selected radio's last known firmware range. Radio-reported levels remain authoritative; a range update does not change the radio's level. If the radio reports a level above the slider's maximum, the numeric readout retains that level; activating the slider's maximum with the mouse or **End** requests the permitted maximum.
+
 *Available on FLEX-8000 (BigBend) and Aurora series only.*
 
 ### RNN — Recurrent Neural Network Suppression
@@ -82,6 +110,8 @@ Narrow bandpass filter centered on the CW pitch frequency. Enhances CW signals b
 
 ### WNB — Wideband Noise Blanker
 Wideband impulse noise blanker. Controlled via the ANT sub-menu on the left sidebar. Has an adjustable level (0-100) and appears as a "WNB" indicator on the FFT display when active. WNB belongs to the radio: AetherSDR uses whatever state the radio reports on connect and does not replay a saved state of its own.
+
+When you recall a band-stack bookmark, saved WNB values are applied only if the radio supports them. Unsupported WNB values are skipped without a dropped-command notice.
 
 ## Using the client-side methods
 
@@ -136,7 +166,7 @@ RN2 is also available on the transmit side, in AetherTX's Gate toolbar; the Nois
 ### NR4 — SpecBleach Spectral Denoiser
 **Purpose:** Advanced spectral noise reduction with psychoacoustic masking and a learned noise profile.
 
-NR4 is powered by Luciano Dato's open-source `libspecbleach` library. It spends about one second learning a noise profile (passing audio through untouched meanwhile), then uses spectral masking to suppress the noise without the "musical" artefacts classical spectral subtraction can produce.
+NR4 is powered by Luciano Dato's open-source `libspecbleach` library. It spends about one second learning a noise profile (passing audio through untouched meanwhile), then uses spectral masking to suppress the noise without the "musical" artifacts classical spectral subtraction can produce.
 
 **Settings:** Reduction Amount (0–40 dB), Smoothing, Whitening, Adaptive Noise, Noise Estimation method (SPP-MMSE, Brandt or Martin), Masking Depth and Suppression Strength.
 
@@ -249,7 +279,7 @@ The seven client-side methods are voice-only: they switch themselves off in CW, 
 
 ## Known issues
 
-- NR2 can sound scratchy or produce clicks and artefacts on voice ([#632](https://github.com/aethersdr/AetherSDR/issues/632)).
+- NR2 can sound scratchy or produce clicks and artifacts on voice ([#632](https://github.com/aethersdr/AetherSDR/issues/632)).
 - NNR's **Premium** model makes receive audio choppy and broken up; the **Standard** model does not ([#5989](https://github.com/aethersdr/AetherSDR/issues/5989)).
 - DFNR can switch itself back on in every profile after you turn it off and save the profile ([#4018](https://github.com/aethersdr/AetherSDR/issues/4018)).
 - The client-side methods stay on in the digital-voice and data modes DSTR, FDV, FDVU and DRM, where they can corrupt the decoder's input ([#5701](https://github.com/aethersdr/AetherSDR/issues/5701)).

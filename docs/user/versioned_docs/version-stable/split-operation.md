@@ -21,6 +21,10 @@ panadapter.
 
 ### Starting and ending a split
 
+<img src="/img/screens/split-pair.png" width="760" alt="Two VFO flags on one panadapter. Slice A at 14.250.000 has a red SPLIT badge and a dimmed TX badge. Slice B at 14.255.000, 5 kHz up, has a SWAP badge, the red TX badge and a magenta B, with its own magenta marker line in the spectrum." />
+
+*A split pair: the receive slice's SPLIT badge turns red and the new transmit slice shows SWAP and TX.*
+
 1. On the slice you are listening with, click **SPLIT** on its VFO flag.
 2. AetherSDR makes that slice the **receive** slice and creates a **transmit**
    slice on the same panadapter, **1 kHz up in CW** and **5 kHz up** in other
@@ -33,6 +37,11 @@ panadapter.
 - Click the red **SPLIT** badge again to end the split. The transmit slice is
   removed.
 
+AetherSDR waits for the radio to identify and publish the new slice before
+assigning it as the split transmitter. Ending split while creation is pending
+cancels that setup. Cleanup applies only to the slice created for that split,
+not another client's receiver or a new receiver reusing its number.
+
 The two VFO panels of a split pair stay on opposite sides of the dual-VFO
 layout so they never cover each other. The SPLIT/SWAP badges follow each
 slice's actual role, so a diversity child slice is never mistaken for a split
@@ -42,6 +51,10 @@ partner (see [Diversity and ESC](./diversity-and-esc.md)).
 
 **Right-click either badge** (SPLIT or SWAP) for the controls that go with
 split operation.
+
+<img src="/img/screens/split-badge-menu.png" width="212" alt="SPLIT badge context menu: Split Up 1 kHz, Split Up 5 kHz, Split Up 10 kHz, Split QSY Option (submenu), Monitor TX (submenu), Nothing remembered yet and Forget remembered audio." />
+
+*Right-clicking the SPLIT badge: preset offsets and the split options.*
 
 #### Split Up 1 / 5 / 10 kHz
 
@@ -105,7 +118,7 @@ comes back the same way, and keeps doing so until you change it.
 - Only your own edits teach it: the VFO flag, applets, keyboard and
   controllers. Changes arriving over CAT, TCI or from the radio do not.
 - If you mute the transmit slice yourself before ending a split, the remembered
-  arrangement is cleared, so muting it once returns to the original behaviour.
+  arrangement is cleared, so muting it once returns to the original behavior.
 - Splits started by a logging program or another client over CAT, Hamlib or
   TCI are left alone.
 
@@ -136,7 +149,19 @@ with a notice instead of silently doing nothing.
 
 The connected radio can't do split, so AetherSDR refuses rather than doing nothing silently.
 
-1. Use split on a FlexRadio (or in Demo mode). Other radio families don't offer it.
+1. Use split on a FlexRadio with a free slice. Demo is receive-only and cannot
+   create a split transmitter. Other radio families do not offer independent
+   same-pan split creation through this control.
+
+### Split setup failed
+
+The radio refused the new slice, did not confirm it in time, or the original
+receiver changed before setup finished. AetherSDR leaves the split disabled
+when it cannot safely identify the new transmit slice.
+
+1. Check that the original receiver is still connected and a slice is free.
+2. Check the radio's current slices before retrying; an unconfirmed request
+   may still have created a slice.
 
 ### The split closed on its own after my logger changed frequency
 

@@ -1,10 +1,13 @@
 #include "SpectrumWidget.h"
+#include "SpectrumChromeGeometry.h"
 #include "SpectrumSquelchLogic.h"
 #include "ScopedChildWidget.h"
 
 #include "SliceToneCues.h"
 #include "gui/FftHeatMap.h"
 #include "gui/FftLineWidth.h"
+#include "gui/FftTraceDecomb.h"
+#include "gui/FftTraceSmoothing.h"
 #include "gui/SpectrumGrid.h"
 #include "DbmRangeTransition.h"
 #include "DssDcEdgeMath.h"
@@ -43,6 +46,8 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QNativeGestureEvent>
+#include <QGestureEvent>
+#include <QPinchGesture>
 #include <QMenu>
 #include <QActionGroup>
 #include <QToolTip>
@@ -503,7 +508,7 @@ static FftFloorClipStats fftFloorClipStats(const QVector<float>& bins)
 
 static Qt::CursorShape normalizedSpectrumCursorShape(Qt::CursorShape shape)
 {
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     // Preserve SpectrumWidget's established vertical split appearance.
     if (shape == Qt::SplitVCursor) {
         return Qt::SizeVerCursor;
@@ -960,7 +965,7 @@ QVariantMap SpectrumWidget::automationRhiSnapshot() const
     m[QStringLiteral("widthPx")] = width();
     m[QStringLiteral("heightPx")] = height();
     m[QStringLiteral("dpr")] = dpr;
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     appendNativeWidgetTopology(m, *this);
 #endif
 #ifdef AETHER_GPU_SPECTRUM
@@ -1031,6 +1036,8 @@ QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
     m[QStringLiteral("fftAverage")] = m_fftAverage;
     m[QStringLiteral("fftFps")] = m_fftFps;
     m[QStringLiteral("fftWeightedAverage")] = m_fftWeightedAvg;
+    m[QStringLiteral("fftSmoothing")] = m_fftSmoothing;
+    m[QStringLiteral("fftDecombHz")] = m_fftDecombHz;
     // The 1..100 rate control value, not milliseconds — the key used to say
     // Ms and carried a rate, which is the misreport #4606 exists to end.
     m[QStringLiteral("waterfallRate")] = m_wfLineDuration;
@@ -1762,6 +1769,8 @@ QVariantMap SpectrumWidget::automationDisplaySettingsSnapshot() const
     snap[QStringLiteral("fftHeatMap")] = m_fftHeatMap;
     snap[QStringLiteral("showGrid")] = m_showGrid;
     snap[QStringLiteral("fftLineWidth")] = m_fftLineWidth;
+    snap[QStringLiteral("fftSmoothing")] = m_fftSmoothing;
+    snap[QStringLiteral("fftDecombHz")] = m_fftDecombHz;
     snap[QStringLiteral("fftLineColor")] = m_fftLineColor.name();
     snap[QStringLiteral("fftFillAlpha")] = m_fftFillAlpha;
     snap[QStringLiteral("fftFillColor")] = m_fftFillColor.name();
@@ -1934,7 +1943,7 @@ QVariantMap SpectrumWidget::traceDebugSnapshot()
 
 void SpectrumWidget::applyNativeWindowIsolationPolicy()
 {
-#if defined(AETHER_GPU_SPECTRUM) && defined(Q_OS_MAC)
+#if defined(AETHER_GPU_SPECTRUM) && defined(Q_OS_MACOS)
     if (nativeWindowPreferred()) {
         // Order matters: block ancestor promotion *before* requesting the native
         // window, so realizing the leaf's NSView can't drag its QWidget tree
@@ -1969,6 +1978,11 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // this QRhiWidget whenever a 60 Hz data/preview frame is presented.
     setAttribute(Qt::WA_OpaquePaintEvent);
     setAccessibleName(tr("Panadapter spectrum display"));
+    // Touch pinch-to-zoom on the pan, delivered as QEvent::Gesture and handled
+    // in event() alongside the macOS trackpad ZoomNativeGesture. Both funnel
+    // through applyAnchoredZoom() so a two-finger pinch on the Maestro panel
+    // zooms the spectrum exactly as a trackpad pinch does on a laptop.
+    grabGesture(Qt::PinchGesture);
 #ifdef AETHER_GPU_SPECTRUM
     m_rhiFailureForcedForAutomation = rhiFailureForcedForAutomation();
     connect(this, &QRhiWidget::renderFailed, this, [this]() {
@@ -1976,7 +1990,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     });
 
     // Explicitly request Metal on macOS.
-#  ifdef Q_OS_MAC
+#  ifdef Q_OS_MACOS
     setApi(QRhiWidget::Api::Metal);
     // WA_NativeWindow gives this widget its own NSView; without it QRhiWidget
     // can't get a Metal QRhi when the parent's surface is RasterSurface (#714).
@@ -2399,7 +2413,7 @@ void SpectrumWidget::prepareForShutdown()
 
 #ifdef AETHER_GPU_SPECTRUM
     releaseResources();
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     // Drop the native child window while its parent backing store is still
     // alive, so any remaining platform resources are gone before QWidgetWindow
     // destruction runs on app exit.
@@ -2550,6 +2564,7 @@ void SpectrumWidget::loadSettings()
     m_freqScaleFontPt = std::clamp(
         s.value(settingsKey("DisplayFreqScaleFontPt"), "8").toInt(), 8, 14);
     m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "1.0").toFloat();
+    loadFftTraceShaping();
     m_noiseFloorEnable = s.value(settingsKey("DisplayNoiseFloorEnable"), "False").toString() == "True";
     const int legacyNoiseFloorPosition = std::clamp(
         s.value(settingsKey("DisplayNoiseFloorPosition"), "75").toInt(), 1, 99);
@@ -2610,7 +2625,7 @@ void SpectrumWidget::loadSettings()
             m_dssGain, m_fftLineColor, m_dssRowSpanPct);
         m_overlayMenu->syncExtraDisplaySettings(m_wfBlankerEnabled,
             m_wfBlankerThreshold, m_bgOpacity, m_freqGridSpacingKhz, m_bgFillColor,
-            m_freqScaleFontPt);
+            m_freqScaleFontPt, m_fftSmoothing, m_fftDecombHz);
     }
     // Refresh the noise-floor target so the slider position takes effect
     // even when the overlay menu is built but not yet shown.
@@ -2796,6 +2811,53 @@ void SpectrumWidget::setFftAverage(int frames) {
         m_overlayMenu->syncPanProcessingSettings(
             m_fftAverage, m_fftFps, m_fftWeightedAvg);
     }
+}
+
+QString SpectrumWidget::fftTraceShapingKey() const
+{
+    return settingsKey(QStringLiteral("DisplayFftTraceShaping"));
+}
+
+void SpectrumWidget::loadFftTraceShaping()
+{
+    // Defaults first: both off, so an absent or unreadable object leaves the
+    // trace exactly as drawn without them.
+    m_fftSmoothing = 0;
+    m_fftDecombHz = 0;
+
+    const QString raw = AppSettings::instance()
+        .value(fftTraceShapingKey(), QString()).toString();
+    if (raw.trimmed().isEmpty()) {
+        return;
+    }
+    QJsonParseError error;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError || !doc.isObject()) {
+        // Keep the defaults and do not overwrite: see loadDisplay3DSettings().
+        qCWarning(lcGui).noquote()
+            << "SpectrumWidget: ignoring invalid DisplayFftTraceShaping"
+            << fftTraceShapingKey() << error.errorString();
+        return;
+    }
+    const QJsonObject obj = doc.object();
+    m_fftSmoothing = std::clamp(obj.value(QStringLiteral("smoothPx")).toInt(0),
+                                0, AetherSDR::kFftSmoothingMaxHalfWidthPx);
+    m_fftDecombHz = std::clamp(obj.value(QStringLiteral("decombHz")).toInt(0),
+                               0, AetherSDR::kFftDecombMaxHz);
+}
+
+void SpectrumWidget::saveFftTraceShaping()
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("version"), 1);
+    obj.insert(QStringLiteral("smoothPx"), m_fftSmoothing);
+    obj.insert(QStringLiteral("decombHz"), m_fftDecombHz);
+
+    // One setValue + save for the whole object (Principle XIV).
+    auto& s = AppSettings::instance();
+    s.setValue(fftTraceShapingKey(), QString::fromUtf8(
+        QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    s.save();
 }
 
 QString SpectrumWidget::display3DSettingsKey() const
@@ -4369,6 +4431,24 @@ void SpectrumWidget::setFftLineWidth(float w) {
     s.save();
     update();
 }
+void SpectrumWidget::setFftSmoothing(int halfWidthPx) {
+    const int clamped = std::clamp(halfWidthPx, 0, AetherSDR::kFftSmoothingMaxHalfWidthPx);
+    if (clamped == m_fftSmoothing) {
+        return;
+    }
+    m_fftSmoothing = clamped;
+    saveFftTraceShaping();
+    update();
+}
+void SpectrumWidget::setFftDecombHz(int hz) {
+    const int clamped = std::clamp(hz, 0, AetherSDR::kFftDecombMaxHz);
+    if (clamped == m_fftDecombHz) {
+        return;
+    }
+    m_fftDecombHz = clamped;
+    saveFftTraceShaping();
+    update();
+}
 void SpectrumWidget::setFftFillAlpha(float a) {
     m_fftFillAlpha = std::clamp(a, 0.0f, 1.0f);
     auto& s = AppSettings::instance();
@@ -4509,7 +4589,8 @@ void SpectrumWidget::setSquelchLine(bool visible, int level)
     // Manual SQL: 3 s auto-hide; each slider adjustment restarts the timer.
     // Auto SQL: line stays pinned to the tracked floor level — no timer.
     if (m_squelchLineHideTimer) {
-        if (visible && !m_autoSquelchEnabled && !m_kiwiSdrWaterfallActive) {
+        if (visible && !(m_autoSquelchEnabled && m_autoSquelchFloorVisible)
+            && !m_kiwiSdrWaterfallActive) {
             m_squelchLineHideTimer->start();
         } else if (!m_kiwiSdrWaterfallActive) {
             m_squelchLineHideTimer->stop();
@@ -4640,7 +4721,7 @@ void SpectrumWidget::drawAutoSqlFloor(QPainter& p, const QRect& specRect)
     const float floorDbm = useKiwiFloor
         ? m_kiwiSdrSquelchLiveFloorDbm
         : m_sqlNoiseFloorDbm;
-    if (!m_autoSquelchEnabled || floorDbm <= -500.0f) { return; }
+    if (!m_autoSquelchEnabled || !m_autoSquelchFloorVisible || floorDbm <= -500.0f) { return; }
     const float norm = (m_refLevel - floorDbm) / m_dynamicRange;
     const int y = specRect.top()
         + static_cast<int>(std::clamp(norm, 0.0f, 1.0f) * specRect.height());
@@ -4661,6 +4742,10 @@ void SpectrumWidget::setSquelchScale(std::optional<SquelchLevelScale> scale)
         return;
     }
     m_squelchScale = std::move(scale);
+    if (!m_squelchScale) {
+        setAutoSquelchEnable(false);
+        setSquelchLine(false, 0);
+    }
     // A new scale can mean new bin units (dBm vs RTL's dBFS/bin): restart the
     // Auto floor rather than blend one unit into the other.
     m_sqlNoiseFloorDbm = -999.0f;
@@ -4724,8 +4809,12 @@ void SpectrumWidget::drawSquelchLine(QPainter& p, const QRect& specRect)
     p.drawText(4, y - 2, label);
 }
 
-void SpectrumWidget::setAutoSquelchEnable(bool on)
+void SpectrumWidget::setAutoSquelchEnable(bool on, bool showFloor)
 {
+    if (m_autoSquelchFloorVisible != showFloor) {
+        m_autoSquelchFloorVisible = showFloor;
+        markOverlayDirty();
+    }
     if (m_autoSquelchEnabled == on) {
         return;
     }
@@ -4735,8 +4824,12 @@ void SpectrumWidget::setAutoSquelchEnable(bool on)
         m_sqlNoiseFloorDbm = -999.0f;  // cold-start the floor EWMA on enable
         m_lastAutoSquelchLevel = -1;
     }
-    if (on && m_squelchLineHideTimer) {
-        // Auto pins the line — cancel any pending manual auto-hide.
+    if (!on) {
+        m_sqlNoiseFloorDbm = -999.0f;
+        setSquelchLine(false, 0);
+        markOverlayDirty();
+    }
+    if (on && showFloor && m_squelchLineHideTimer) {
         m_squelchLineHideTimer->stop();
     }
 }
@@ -4772,6 +4865,7 @@ void SpectrumWidget::updateAutoSquelchFromBins(const QVector<float>& binsDbm)
         std::span(binsDbm.constData(), binsDbm.size()), m_sqlNoiseFloorDbm,
         m_squelchScale->offsetDb, m_squelchScale->dbPerStep, m_autoSqlMarginDb);
     if (!suggestion) { return; }
+    emit autoSquelchNoiseFloorChanged(m_sqlNoiseFloorDbm);
     const int level = *suggestion;
     if (level != m_lastAutoSquelchLevel) {
         m_lastAutoSquelchLevel = level;
@@ -4992,6 +5086,7 @@ void SpectrumWidget::resetWfTimeScale() {
     m_wfPrevTimecodeMs = 0;
     m_wfCalibrationCount = 0;
     m_wfTimeScaleLocked = false;
+    m_wfTimeScaleDriftSamples = 0;
     m_wfRowsSinceRateChange = 0;
     m_wfCalibrationResumeMs = nowMs + 500;
     m_nextFallbackWaterfallRowMs = 0;
@@ -5065,13 +5160,9 @@ void SpectrumWidget::updateWaterfallMsPerRowFromHistory()
         return;
     }
 
-    constexpr int kSampleRows = 24;
-    constexpr int kMinSampleRows = 8;
-    constexpr int kSamplesBeforeVisibleUpdate = 3;
-    const int maxAgeRows = std::min({kSampleRows,
-                                     m_wfHistoryRowCount - 1,
-                                     m_wfRowsSinceRateChange - 1});
-    if (maxAgeRows < kMinSampleRows) {
+    const int maxAgeRows = waterfallTimeScaleSampleSpanRows(
+        m_wfHistoryRowCount, m_wfRowsSinceRateChange);
+    if (maxAgeRows <= 0) {
         return;
     }
 
@@ -5101,23 +5192,30 @@ void SpectrumWidget::updateWaterfallMsPerRowFromHistory()
         const int lineDuration = std::clamp(m_wfLineDuration,
                                             kWaterfallRateMin,
                                             kWaterfallRateMax);
-        const int previousSamples =
-            m_wfMeasuredSampleCountByLineDuration.value(lineDuration, 0);
-        const float previousMeasured =
-            m_wfMeasuredMsPerRowByLineDuration.value(lineDuration, measured);
-        const float updatedMeasured = previousSamples > 0
-            ? (0.85f * previousMeasured + 0.15f * measured)
-            : measured;
-        const int updatedSamples = std::min(previousSamples + 1, 1000);
+        const WaterfallTimeScaleEstimate estimate = foldWaterfallTimeScaleSample(
+            {m_wfMeasuredMsPerRowByLineDuration.value(lineDuration, measured),
+             m_wfMeasuredSampleCountByLineDuration.value(lineDuration, 0)},
+            measured);
 
-        m_wfMeasuredMsPerRowByLineDuration.insert(lineDuration, updatedMeasured);
-        m_wfMeasuredSampleCountByLineDuration.insert(lineDuration, updatedSamples);
+        m_wfMeasuredMsPerRowByLineDuration.insert(lineDuration, estimate.msPerRow);
+        m_wfMeasuredSampleCountByLineDuration.insert(lineDuration, estimate.samples);
         m_wfHasMeasuredMsPerRow = true;
         m_wfLastMeasuredLineDurationMs = lineDuration;
-        m_wfLastMeasuredMsPerRow = updatedMeasured;
-        if (!m_wfTimeScaleLocked && updatedSamples >= kSamplesBeforeVisibleUpdate) {
-            m_wfMsPerRow = updatedMeasured;
-            m_wfTimeScaleLocked = true;
+        m_wfLastMeasuredMsPerRow = estimate.msPerRow;
+        // The lock keeps per-row jitter off the scale (#106). It is not final:
+        // an estimate that has settled away from the visible value replaces it
+        // (WaterfallTimeScaleLock.h). Fallback and TX rows are paced from
+        // m_wfMsPerRow itself, so re-locking waits while fallback or TX pacing
+        // is active. Backend-derived rows delivered by updateWaterfallRow()
+        // use the independent row cadence, just like Flex tiles.
+        const bool rowsPacedByScale = m_transmitting || m_waterfallFallbackActive;
+        WaterfallTimeScaleLock lock{m_wfTimeScaleLocked, m_wfTimeScaleDriftSamples};
+        const bool adopt = waterfallTimeScaleShouldAdopt(
+            lock, m_wfMsPerRow, measured, estimate, rowsPacedByScale);
+        m_wfTimeScaleLocked = lock.locked;
+        m_wfTimeScaleDriftSamples = lock.driftSamples;
+        if (adopt) {
+            m_wfMsPerRow = estimate.msPerRow;
             markOverlayDirty();
         }
         return;
@@ -6673,6 +6771,7 @@ void SpectrumWidget::clearCurrentWaterfallRows()
     m_wfVisiblePaletteToken = waterfallPaletteToken();
     m_wfLive = true;
     m_wfRowsSinceRateChange = 0;
+    m_wfTimeScaleDriftSamples = 0;
     m_prevTileLevels.clear();
     resetWfBlankerState();
     m_kiwiSdrFftTrace.clear();
@@ -9264,8 +9363,52 @@ const QVector<float>& SpectrumWidget::displaySpectrumBins() const
     return m_kiwiSdrWaterfallActive ? m_kiwiSdrFftTrace : m_smoothed;
 }
 
+void SpectrumWidget::shapeFftTrace(std::span<float> bins, double hzPerBin,
+                                   double hzPerPx) const
+{
+    // FFT De-comb, then FFT Smooth, on source bins: the source resolution is
+    // what can or cannot hold a comb, and shaping the source rather than the
+    // up-to-4x oversampled drawn trace keeps the per-frame UI-thread cost
+    // down. De-comb's width is in Hz -- the voice comb is a fixed spacing in Hz
+    // at any zoom; FFT Smooth's is in the main trace's logical pixels.
+    if (bins.size() < 4 || !(hzPerBin > 0.0)) {
+        return;
+    }
+    const double windowPoints = AetherSDR::decombWindowPoints(hzPerBin, m_fftDecombHz);
+    if (windowPoints > 0.0) {
+        if (!m_fftDecombEnvelope) {
+            m_fftDecombEnvelope = std::make_unique<AetherSDR::SpectralEnvelope>();
+            m_fftDecombScratch = std::make_unique<AetherSDR::DecombScratch>();
+        }
+        // At an uncached length, frames draw without De-comb until the planner
+        // lock becomes available; each frame retries.
+        AetherSDR::decombTrace(bins, windowPoints, *m_fftDecombEnvelope, *m_fftDecombScratch);
+    }
+    if (m_fftSmoothing > 0) {
+        const int halfPoints = static_cast<int>(
+            std::lround(static_cast<double>(m_fftSmoothing) * hzPerPx / hzPerBin));
+        AetherSDR::smoothFftTraceLinearPower(bins, bins, halfPoints, m_fftSmoothLinearScratch);
+    }
+}
+
+void SpectrumWidget::shapeFftTraceForMirror(QVector<float>& bins, double spanHz) const
+{
+    if ((m_fftDecombHz <= 0 && m_fftSmoothing <= 0) || bins.size() < 4) {
+        return;
+    }
+    // FFT Smooth is sized in the main trace's pixels; until the main pan has
+    // a width there is no pixel to size it by, so only De-comb runs.
+    const int widthPx = contentWidth();
+    const double hzPerPx = widthPx >= 2
+        ? effectiveBandwidthMhz() * 1.0e6 / static_cast<double>(widthPx)
+        : 0.0;
+    shapeFftTrace(std::span<float>(bins.data(), static_cast<std::size_t>(bins.size())),
+                  spanHz / static_cast<double>(bins.size() - 1), hzPerPx);
+}
+
 const QVector<float>& SpectrumWidget::buildFftDisplayTrace(const QVector<float>& bins,
-                                                           int targetPoints) const
+                                                           int targetPoints,
+                                                           int logicalWidthPx) const
 {
     const int srcCount = bins.size();
     if (srcCount < 2) {
@@ -9302,6 +9445,14 @@ const QVector<float>& SpectrumWidget::buildFftDisplayTrace(const QVector<float>&
             displayBins[i] = bins[i] * (1.0f - smoothBlend)
                 + localSmooth * smoothBlend;
         }
+    }
+
+    // FFT De-comb and FFT Smooth on the source bins, before the resample.
+    if (m_fftDecombHz > 0 || m_fftSmoothing > 0) {
+        const double spanHz = effectiveBandwidthMhz() * 1.0e6;
+        shapeFftTrace(std::span<float>(displayBins.data(), static_cast<std::size_t>(srcCount)),
+                      spanHz / static_cast<double>(srcCount - 1),
+                      spanHz / static_cast<double>(std::max(1, logicalWidthPx)));
     }
 
     int dstCount = std::max(targetPoints, srcCount);
@@ -9715,7 +9866,7 @@ bool SpectrumWidget::sliceCursorShapeAt(const QPoint& localPos,
             return true;
         }
 
-        if ((mx >= sliceX - 8 && mx <= sliceX + 35 && y <= 25)
+        if ((mx >= sliceX - 8 && mx <= sliceX + 35 && y <= flagTopPad() + 25)
             || std::abs(mx - sliceX) <= 8) {
             shape = Qt::PointingHandCursor;
             return true;
@@ -9937,7 +10088,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         const QPoint pos = ev->position().toPoint();
         const Qt::KeyboardModifiers modifiers =
             ev->modifiers() | QGuiApplication::keyboardModifiers();
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         const bool rateModifier = modifiers.testFlag(Qt::ControlModifier)
             || modifiers.testFlag(Qt::MetaModifier);
         const bool rateClick = rateModifier
@@ -9998,7 +10149,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 ev->modifiers() | QGuiApplication::keyboardModifiers();
             const bool primaryClick = ev->button() == Qt::LeftButton;
             const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
             const bool rangeDrag = modifiers.testFlag(Qt::ControlModifier)
                 || modifiers.testFlag(Qt::MetaModifier);
             const bool controlClick = rangeDrag
@@ -10027,7 +10178,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 
             if (primaryClick) {
                 // Arrow row (side by side: left = up, right = down)
-                if (y < DBM_ARROW_H) {
+                const int arrowRowTop = dbmArrowRowTop(m_topInset, specH, DBM_ARROW_H);
+                if (y >= arrowRowTop && y < arrowRowTop + DBM_ARROW_H) {
                     const float bottom =
                         clampDbmBottom(m_refLevel - m_dynamicRange);
                     const float oldRefLevel = m_refLevel;
@@ -10574,7 +10726,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 return;
             }
             // Slice badge area in top 25px
-            if (mx >= sliceX - 8 && mx <= sliceX + 35 && y <= 25) {
+            if (mx >= sliceX - 8 && mx <= sliceX + 35 && y <= flagTopPad() + 25) {
                 emit sliceClicked(so.sliceId);
                 ev->accept();
                 return;
@@ -10957,18 +11109,24 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const int newWidthHz = std::clamp(
             static_cast<int>(std::lround(static_cast<double>(m_dragTnfOrigWidthHz) * widthScale)),
             m_notchMinWidthHz, m_notchMaxWidthHz);
-        for (auto& t : m_tnfMarkers) {
-            if (t.id == m_draggingTnfId) {
-                t.freqMhz = newFreq;
-                t.widthHz = newWidthHz;
-                break;
+        const bool frequencyChanged = !qFuzzyCompare(newFreq + 1.0, m_dragTnfLastFreq + 1.0);
+        const bool widthChanged = newWidthHz != m_dragTnfLastWidthHz;
+        // Every preview mutation must dispatch an intent so a confirmed-state
+        // binding can restore the accepted marker, including repeated motion.
+        if (frequencyChanged || widthChanged) {
+            for (auto& t : m_tnfMarkers) {
+                if (t.id == m_draggingTnfId) {
+                    t.freqMhz = newFreq;
+                    t.widthHz = newWidthHz;
+                    break;
+                }
             }
         }
-        if (!qFuzzyCompare(newFreq + 1.0, m_dragTnfLastFreq + 1.0)) {
+        if (frequencyChanged) {
             m_dragTnfLastFreq = newFreq;
             emit tnfMoveRequested(m_draggingTnfId, newFreq);
         }
-        if (newWidthHz != m_dragTnfLastWidthHz) {
+        if (widthChanged) {
             m_dragTnfLastWidthHz = newWidthHz;
             emit tnfWidthRequested(m_draggingTnfId, newWidthHz);
         }
@@ -11263,7 +11421,8 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
 
             // Hovering over dBm scale strip
             if (mx >= stripX) {
-                if (y < DBM_ARROW_H)
+                const int arrowRowTop = dbmArrowRowTop(m_topInset, specH, DBM_ARROW_H);
+                if (y >= arrowRowTop && y < arrowRowTop + DBM_ARROW_H)
                     setSpectrumCursor(Qt::PointingHandCursor);
                 else
                     setSpectrumCursor(Qt::SizeVerCursor);
@@ -11274,7 +11433,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                 // rejects preprocessor directives inside macro arguments.
                 const QRect stripRect(stripX, 0, DBM_STRIP_W, specH);
                 const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
                 const QString rangeDragTip =
                     "Ctrl-drag or &#8984;-drag &mdash; zoom span (anchor at bottom)<br>";
 #else
@@ -11401,6 +11560,25 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                         tip, this, QRect(sx - 5, bandBarTop, 11, specH2 - bandBarTop));
                     return;
                 }
+            }
+        }
+        // Fall back to the segment's usage note, when the plan carries one.
+        // Segments without `usage` keep the previous behaviour (no tooltip). (#4667)
+        if (m_bandPlanFontSize > 0 && m_bandPlanMgr) {
+            const double cursorMhz = xToMhz(mx2);
+            for (const auto& seg : m_bandPlanMgr->segments()) {
+                if (seg.usage.isEmpty() || cursorMhz < seg.lowMhz || cursorMhz >= seg.highMhz) {
+                    continue;
+                }
+                const int x1 = mhzToX(seg.lowMhz);
+                const int x2 = mhzToX(seg.highMhz);
+                const QString tip = QString("<b>%1–%2 MHz — %3</b><br>%4")
+                    .arg(seg.lowMhz, 0, 'f', 3)
+                    .arg(seg.highMhz, 0, 'f', 3)
+                    .arg(seg.label.toHtmlEscaped(), seg.usage.toHtmlEscaped());
+                QToolTip::showText(ev->globalPosition().toPoint() + QPoint(0, 20),
+                    tip, this, QRect(x1, bandBarTop, std::max(1, x2 - x1), specH2 - bandBarTop));
+                return;
             }
         }
         QToolTip::hideText();
@@ -11837,55 +12015,87 @@ bool SpectrumWidget::event(QEvent* ev)
         if (ge->gestureType() == Qt::ZoomNativeGesture) {
             // value > 0 = pinch out (zoom in = narrower BW)
             // value < 0 = pinch in  (zoom out = wider BW)
-            // Zoom anchored on the frequency under the cursor: the frequency
-            // at the mouse position stays at that pixel after the zoom.
             const double delta = ge->value();
             if (qFuzzyIsNull(delta)) { return true; }
-            const double factor = 1.0 / (1.0 + delta);  // invert: pinch-out narrows BW
-            const double newBw = m_bandwidthMhz * factor;
-            if (newBw < m_minBwMhz || newBw > m_maxBwMhz) { return true; }  // at limit
-            // Anchor: keep the frequency under the cursor at the same pixel.
-            const double mouseXFrac = frequencyCanvasFractionAtGlobal(
-                ge->globalPosition());
-            // Effective (cropped) bandwidth for the anchor -- see the
-            // matching comment at the bandwidth-drag-start anchor above.
-            // newBw itself stays on the raw bandwidth.
-            const double anchorMhz = frequencyAtFraction(
-                FrequencyFrame{m_centerMhz, effectiveBandwidthMhz()}, mouseXFrac);
-            const double newCenter = std::max(
-                centerForAnchoredPanBandwidth(
-                    anchorMhz, mouseXFrac, newBw, panEdgeCropActive()),
-                newBw / 2.0);
-            if (panGeometryConfirmationRequired()) {
-                scheduleFrequencyRangeSettleUpdate(newCenter, newBw);
-                requestFrequencyRangeChange(newCenter, newBw);
-                return true;
+            // invert: pinch-out (delta > 0) narrows the bandwidth.
+            return applyAnchoredZoom(1.0 / (1.0 + delta), ge->globalPosition());
+        }
+    } else if (ev->type() == QEvent::Gesture) {
+        // Touch pinch (grabGesture(Qt::PinchGesture) in the ctor). Delivered on
+        // the Maestro panel and any Qt touchscreen; it funnels through the same
+        // anchored zoom as the macOS trackpad ZoomNativeGesture above.
+        auto* gestureEvent = static_cast<QGestureEvent*>(ev);
+        if (auto* pinch = static_cast<QPinchGesture*>(
+                gestureEvent->gesture(Qt::PinchGesture))) {
+            // scaleFactor() is the incremental scale since the previous update:
+            // > 1 = fingers apart = zoom in = narrower BW, so the bandwidth
+            // multiplier is its reciprocal. centerPoint() is in global/screen
+            // coordinates, matching frequencyCanvasFractionAtGlobal().
+            // Only act on Started/Updated with a real scale change: Qt's
+            // recognizer re-delivers the last incremental scaleFactor() on the
+            // terminal GestureFinished/Canceled event, which would otherwise
+            // apply the final pinch step a second time on finger-lift.
+            const qreal scale = pinch->scaleFactor();
+            if ((pinch->state() == Qt::GestureStarted
+                 || pinch->state() == Qt::GestureUpdated)
+                && pinch->changeFlags().testFlag(QPinchGesture::ScaleFactorChanged)
+                && scale > 0.0 && !qFuzzyCompare(scale, qreal(1.0))) {
+                applyAnchoredZoom(1.0 / static_cast<double>(scale),
+                                  pinch->centerPoint());
             }
-            const bool previewed = updateFrequencyPreview(
-                m_centerMhz, m_bandwidthMhz, newCenter, newBw);
-            if (!previewed) {
-                handleWaterfallFrequencyFrameChange(m_centerMhz, m_bandwidthMhz,
-                                                    newCenter, newBw);
-            }
-            if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
-                m_bins.clear();
-                m_smoothed.clear();
-                m_resetFftSmoothingOnNextFrame = true;
-            }
-            m_bandwidthMhz = newBw;
-            m_centerMhz = newCenter;
-            resetNoiseFloorBaseline();
-            if (previewed) {
-                scheduleFrequencyPreviewFrame();
-            } else {
-                markOverlayDirty();
-            }
-            scheduleFrequencyRangeSettleUpdate(newCenter, newBw);
-            requestFrequencyRangeChange(newCenter, newBw);
+            gestureEvent->accept(pinch);
             return true;
         }
     }
     return SPECTRUM_BASE_CLASS::event(ev);
+}
+
+bool SpectrumWidget::applyAnchoredZoom(double bandwidthFactor,
+                                       const QPointF& globalPosition)
+{
+    // No-op (and NaN/non-positive) factors are consumed but change nothing.
+    if (!(bandwidthFactor > 0.0) || qFuzzyCompare(bandwidthFactor, 1.0)) {
+        return true;
+    }
+    const double newBw = m_bandwidthMhz * bandwidthFactor;
+    if (newBw < m_minBwMhz || newBw > m_maxBwMhz) { return true; }  // at limit
+    // Anchor: keep the frequency under the cursor/pinch-center at the same pixel.
+    const double mouseXFrac = frequencyCanvasFractionAtGlobal(globalPosition);
+    // Effective (cropped) bandwidth for the anchor -- see the matching comment
+    // at the bandwidth-drag-start anchor. newBw itself stays on the raw bandwidth.
+    const double anchorMhz = frequencyAtFraction(
+        FrequencyFrame{m_centerMhz, effectiveBandwidthMhz()}, mouseXFrac);
+    const double newCenter = std::max(
+        centerForAnchoredPanBandwidth(
+            anchorMhz, mouseXFrac, newBw, panEdgeCropActive()),
+        newBw / 2.0);
+    if (panGeometryConfirmationRequired()) {
+        scheduleFrequencyRangeSettleUpdate(newCenter, newBw);
+        requestFrequencyRangeChange(newCenter, newBw);
+        return true;
+    }
+    const bool previewed = updateFrequencyPreview(
+        m_centerMhz, m_bandwidthMhz, newCenter, newBw);
+    if (!previewed) {
+        handleWaterfallFrequencyFrameChange(m_centerMhz, m_bandwidthMhz,
+                                            newCenter, newBw);
+    }
+    if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
+        m_bins.clear();
+        m_smoothed.clear();
+        m_resetFftSmoothingOnNextFrame = true;
+    }
+    m_bandwidthMhz = newBw;
+    m_centerMhz = newCenter;
+    resetNoiseFloorBaseline();
+    if (previewed) {
+        scheduleFrequencyPreviewFrame();
+    } else {
+        markOverlayDirty();
+    }
+    scheduleFrequencyRangeSettleUpdate(newCenter, newBw);
+    requestFrequencyRangeChange(newCenter, newBw);
+    return true;
 }
 
 bool SpectrumWidget::eventFilter(QObject* watched, QEvent* event)
@@ -13057,7 +13267,7 @@ void SpectrumWidget::reportRhiFailure(const QString& reason)
 
     qCWarning(lcGui) << "SpectrumWidget: QRhi failure:" << detail;
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     const QString messageDetail =
         tr("%1 Rebuild with -DAETHER_GPU_SPECTRUM=OFF.").arg(detail);
 #else
@@ -14491,7 +14701,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     const QColor wnbDimColor(0xc8, 0xd8, 0xe8, 84);
                     const QFontMetrics fm(indFont);
                     const int y = specRect.top() + fm.ascent() + 4;
-                    const int rightEdge = specRect.right() - DBM_STRIP_W - 8;
+                    const int rightEdge = specRect.right()
+                        - std::max(DBM_STRIP_W, m_topRightReserve) - 8;
                     int x = rightEdge;
                     int leftEdge = rightEdge;
                     auto drawSegment = [&](const QString& text, const QColor& color) {
@@ -14584,7 +14795,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 // Flip at the content edge — the strip is opaque now (#3482).
                 if (lx + tw > w - DBM_STRIP_W) lx = m_cursorPos.x() - tw - 4;
                 int ly = m_cursorPos.y() - th - 4;
-                if (ly < 0) ly = m_cursorPos.y() + 16;
+                if (ly < m_topInset) ly = m_cursorPos.y() + 16;
                 p.fillRect(lx, ly, tw, th, AetherSDR::theme::withAlpha("color.background.0", 200));
                 p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
                 p.drawText(lx + 4, ly + fm.ascent() + 2, label);
@@ -14615,7 +14826,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 int lx = cx + 12;
                 if (lx + tw > w - DBM_STRIP_W) { lx = cx - tw - 4; }  // content edge (#3482)
                 int ly = m_cursorPos.y() - th - 4;
-                if (ly < 0) { ly = m_cursorPos.y() + 16; }
+                if (ly < m_topInset) { ly = m_cursorPos.y() + 16; }
                 p.fillRect(lx, ly, tw, th, AetherSDR::theme::withAlpha("color.background.0", 200));
                 p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
                 p.drawText(lx + 4, ly + fm.ascent() + 2, label);
@@ -15126,7 +15337,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             const QVector<float> croppedBins =
                 croppedBinsForDisplay(displaySpectrumBins());
             const QVector<float>& trace =
-                buildFftDisplayTrace(croppedBins, cols);
+                buildFftDisplayTrace(croppedBins, cols, specContentW);
             const int n = trace.size();
             if (n >= 2) {
                 fftTracePointCount = n;
@@ -15671,7 +15882,8 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
             const QColor wnbDimColor(0xc8, 0xd8, 0xe8, 84);
 
             const QFontMetrics fm(indFont);
-            const int rightEdge = specRect.right() - DBM_STRIP_W - 6;
+            const int rightEdge = specRect.right()
+                - std::max(DBM_STRIP_W, m_topRightReserve) - 6;
             const int topY = specRect.top() + fm.ascent() + 2;
 
             int x = rightEdge;
@@ -15757,7 +15969,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         // Flip at the content edge — the strip is opaque now (#3482).
         if (lx + tw > contentWidth()) lx = m_cursorPos.x() - tw - 4;
         int ly = m_cursorPos.y() - th - 4;
-        if (ly < 0) ly = m_cursorPos.y() + 16;
+        if (ly < m_topInset) ly = m_cursorPos.y() + 16;
         p.fillRect(lx, ly, tw, th, AetherSDR::theme::withAlpha("color.background.0", 200));
         p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
         p.drawText(lx + 4, ly + fm.ascent() + 2, label);
@@ -15788,7 +16000,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         int lx = cx + 12;
         if (lx + tw > contentWidth()) { lx = cx - tw - 4; }  // content edge (#3482)
         int ly = m_cursorPos.y() - th - 4;
-        if (ly < 0) { ly = m_cursorPos.y() + 16; }
+        if (ly < m_topInset) { ly = m_cursorPos.y() + 16; }
         p.fillRect(lx, ly, tw, th, AetherSDR::theme::withAlpha("color.background.0", 200));
         p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
         p.drawText(lx + 4, ly + fm.ascent() + 2, label);
@@ -15851,7 +16063,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
                 *vfos[0].overlay, vfos[0].w, vfos[0].x, specW);
         }
         vfos[0].w->updatePosition(
-            vfos[0].x, specRect.top(), direction);
+            vfos[0].x, specRect.top() + flagTopPad(), direction);
         return;
     }
 
@@ -15864,7 +16076,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
                 deconflictedVfoFlagDirection(vfos, index, panelW, specW);
         }
         vfos[index].w->updatePosition(
-            vfos[index].x, specRect.top(), direction);
+            vfos[index].x, specRect.top() + flagTopPad(), direction);
     }
 }
 
@@ -15932,7 +16144,8 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
     const QVector<float> croppedBins = croppedBinsForDisplay(displaySpectrumBins());
     const QVector<float>& fftBins =
         buildFftDisplayTrace(croppedBins,
-                             qMax(2, r.width() * kFftDisplayOversample));
+                             qMax(2, r.width() * kFftDisplayOversample),
+                             r.width());
     if (fftBins.isEmpty()) {
         p.setPen(AetherSDR::ThemeManager::instance().color("color.accent.dim"));
         p.drawText(r, Qt::AlignCenter, "No panadapter data — waiting for radio stream");
@@ -16430,7 +16643,7 @@ void SpectrumWidget::updateTnfHoverPopup()
         left = m_cursorPos.x() - boxSize.width() - 4;
     }
     int top = m_cursorPos.y() - boxSize.height() - 4;
-    if (top < 0) {
+    if (top < m_topInset) {
         top = std::min(height() - boxSize.height(), m_cursorPos.y() + 16);
     }
     m_tnfHoverPopup->move(left, top);
@@ -16913,7 +17126,7 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
     const int plotLeft = specRect.left() + 8;
     const int plotHeight = qBound(42, specRect.height() / 5, 64);
 
-    int wantedTop = specRect.top() + 6;
+    int wantedTop = specRect.top() + m_topInset + 6;
     bool sawVfo = false;
     for (auto it = m_vfoWidgets.cbegin(); it != m_vfoWidgets.cend(); ++it) {
         auto* vfo = it.value();
@@ -16923,9 +17136,9 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
         wantedTop = qMax(wantedTop, vfo->geometry().bottom() + 8);
     }
     if (!sawVfo && !m_sliceOverlays.isEmpty())
-        wantedTop = specRect.top() + 96;
+        wantedTop = specRect.top() + m_topInset + 96;
 
-    const int minTop = specRect.top() + 6;
+    const int minTop = specRect.top() + m_topInset + 6;
     const int maxTop = qMax(minTop, specRect.bottom() - plotHeight - 8);
     const int plotTop = qBound(minTop, wantedTop, maxTop);
     const QRect plotRect(plotLeft, plotTop,
@@ -17202,7 +17415,7 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
     const int labelH = fm.lineSpacing() * labelLines.size() + 4;
     int labelX = plotRect.left() + 4;
     int labelY = plotRect.top() - labelH - 3;
-    if (labelY < specRect.top() + 3)
+    if (labelY < specRect.top() + m_topInset + 3)
         labelY = plotRect.top() + 3;
 
     QRect labelRect(labelX, labelY, labelW, labelH);
@@ -17764,7 +17977,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         // visible affordance stays attached to the locked slice rather than
         // adding another mouse control to the pan chrome.
         if (so.sliceId == m_centerLockSliceId) {
-            const QPoint targetCenter(vfoX, specRect.top() + 18);
+            const QPoint targetCenter(vfoX, specRect.top() + flagTopPad() + 18);
             p.setBrush(AetherSDR::theme::withAlpha("color.background.0", 190));
             p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 240), 2));
             p.drawEllipse(targetCenter, 6, 6);
@@ -17804,7 +18017,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             p.setPen(sliceLink->suspended
                          ? QColor(0x80, 0x80, 0x80, 220)
                          : QColor(col.red(), col.green(), col.blue(), 220));
-            p.drawText(vfoX + 12, specRect.top() + 24,
+            p.drawText(vfoX + 12, specRect.top() + flagTopPad() + 24,
                        QStringLiteral("⇄ %1").arg(peerName));
         }
 
@@ -17854,9 +18067,9 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             f.setBold(true);
             p.setFont(f);
             p.setPen(AetherSDR::theme::withAlpha("color.accent.success", 240));
-            p.drawText(markX + 2, specRect.top() + 12, "M");
+            p.drawText(markX + 2, specRect.top() + m_topInset + 12, "M");
             p.setPen(AetherSDR::theme::withAlpha("color.accent.danger", 240));
-            p.drawText(spaceX + 2, specRect.top() + 12, "S");
+            p.drawText(spaceX + 2, specRect.top() + m_topInset + 12, "S");
         } else if (so.markerWidth > 0) {
             // ── Standard VFO center line ─────────────────────────────────
             // Skipped entirely when markerWidth == 0 (user chose
@@ -17874,9 +18087,9 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             p.setPen(Qt::NoPen);
             p.setBrush(col);
             QPolygon tri;
-            tri << QPoint(markerX - triHalf, specRect.top())
-                << QPoint(markerX + triHalf, specRect.top())
-                << QPoint(markerX, specRect.top() + triH);
+            tri << QPoint(markerX - triHalf, specRect.top() + flagTopPad())
+                << QPoint(markerX + triHalf, specRect.top() + flagTopPad())
+                << QPoint(markerX, specRect.top() + flagTopPad() + triH);
             p.drawPolygon(tri);
         }
 
@@ -17891,7 +18104,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             f.setBold(true);
             p.setFont(f);
             p.setPen(QColor(col.red(), col.green(), col.blue(), 200));
-            p.drawText(ritX + 2, specRect.top() + 12, "R");
+            p.drawText(ritX + 2, specRect.top() + m_topInset + 12, "R");
         }
         if (so.xitOn && so.xitFreq != 0) {
             const int xitX = mhzToX(so.freqMhz + so.xitFreq / 1.0e6);
@@ -17903,7 +18116,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             f.setBold(true);
             p.setFont(f);
             p.setPen(AetherSDR::theme::withAlpha("color.accent.danger", 220));
-            p.drawText(xitX + 2, specRect.top() + 12, "X");
+            p.drawText(xitX + 2, specRect.top() + m_topInset + 12, "X");
         }
 
         // ── Adaptive RX filter edge markers (RFC #3878) ──────────────────
@@ -18065,6 +18278,32 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
 
 // ─── dBm scale strip (right edge of FFT area) ────────────────────────────────
 
+void SpectrumWidget::setTopInset(int px)
+{
+    px = std::max(0, px);
+    if (px == m_topInset) {
+        return;
+    }
+    m_topInset = px;
+    if (m_overlayMenu) {
+        m_overlayMenu->move(m_overlayMenu->x(), px);
+        m_overlayMenu->setTopLimit(px);
+    }
+    markOverlayDirty("topInset");
+    update();
+}
+
+void SpectrumWidget::setTopRightReserve(int px)
+{
+    px = std::max(0, px);
+    if (px == m_topRightReserve) {
+        return;
+    }
+    m_topRightReserve = px;
+    markOverlayDirty("topRightReserve");
+    update();
+}
+
 void SpectrumWidget::drawDbmScaleChrome(QPainter& p, const QRect& specRect)
 {
     const int stripX = specRect.right() - DBM_STRIP_W + 1;
@@ -18084,8 +18323,10 @@ void SpectrumWidget::drawDbmScaleChrome(QPainter& p, const QRect& specRect)
     const int halfW = DBM_STRIP_W / 2;
     const int upCx  = stripX + halfW / 2;       // left half center
     const int dnCx  = stripX + halfW + halfW / 2; // right half center
-    const int arrowTop = specRect.top() + 2;
-    const int arrowBot = specRect.top() + DBM_ARROW_H - 2;
+    const int arrowRowTop =
+        specRect.top() + dbmArrowRowTop(m_topInset, specRect.height(), DBM_ARROW_H);
+    const int arrowTop = arrowRowTop + 2;
+    const int arrowBot = arrowRowTop + DBM_ARROW_H - 2;
 
     p.setPen(Qt::NoPen);
     p.setBrush(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
@@ -18120,7 +18361,8 @@ void SpectrumWidget::drawDbmScaleLabels(QPainter& p, const QRect& specRect,
     p.setFont(f);
     const QFontMetrics fm(f);
 
-    const int labelTop = specRect.top() + DBM_ARROW_H + 4;
+    const int labelTop = specRect.top()
+        + dbmArrowRowTop(m_topInset, specRect.height(), DBM_ARROW_H) + DBM_ARROW_H + 4;
 
     // Use adaptive step: aim for ~4-6 labels
     float rawStep = rangeDb / 5.0f;
@@ -18304,7 +18546,7 @@ void SpectrumWidget::drawOffScreenSlices(QPainter& p, const QRect& specRect)
     const double endMhz   = m_centerMhz + effectiveBandwidthMhz() / 2.0;
 
     m_offScreenRects.resize(m_sliceOverlays.size());
-    int leftNextY = specRect.top() + 20;
+    int leftNextY = specRect.top() + m_topInset + 20;
     int rightNextY = leftNextY;
 
     for (int oi = 0; oi < m_sliceOverlays.size(); ++oi) {

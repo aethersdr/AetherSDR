@@ -14,6 +14,8 @@
 //   * Sent bytes are counted through sendTo(), which every send but the speaker
 //     stream uses. The speaker path counts its own and is not pinned here.
 //   * start() resets the session, so a reconnect does not inherit totals.
+//   * Each Status packet's supply-rail count is emitted raw, once; AnanBackend
+//     averages it (anan_backend_test).
 //
 // The last block BINDS A UDP SOCKET (AnyIPv4, ephemeral port) and sends the
 // startup sequence to 127.0.0.1; nothing listens and no radio is involved. It
@@ -196,6 +198,19 @@ int main(int argc, char** argv)
                   " them");
             check(counters.drops == 0, "and the drop total alongside them");
         }
+    }
+
+    // ---- each Status packet's supply-rail count is handed on, raw ----
+    {
+        P2Client client;
+        QSignalSpy rail(&client, &P2Client::supplyRailSampled);
+        std::vector<std::uint8_t> status(kHighPriorityStatusBytes, 0);
+        status[57] = 0x02; status[58] = 0x18;   // 536 counts, the bench median
+        P2ClientTestAccess::feedDatagram(client, status, 1025);
+        check(rail.count() == 1 && rail.at(0).at(0).toInt() == 536,
+              "a Status packet hands on its supply-rail count, unsmoothed, once");
+        P2ClientTestAccess::feedDatagram(client, ddcFrame(1), kDdc0DefaultPort);
+        check(rail.count() == 1, "a DDC frame carries no rail reading");
     }
 
     // ---- sent bytes are counted, and start() resets the session ----

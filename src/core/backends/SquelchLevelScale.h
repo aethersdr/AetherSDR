@@ -35,6 +35,9 @@ struct SquelchLevelScale {
     bool automaticInEngine = false;
     // False when detector and display use different measurement bandwidths.
     bool spectrumComparable = true;
+    // Modes where the receiver control is unavailable, independently of the
+    // pan-axis mapping. Empty retains the existing family mode policy.
+    QStringList controlUnavailableModes = {};
 
     bool operator==(const SquelchLevelScale&) const = default;
 
@@ -64,7 +67,9 @@ struct SquelchLevelScale {
 // line and Auto SQL keep the behaviour they always had (#6127).
 [[nodiscard]] inline SquelchLevelScale legacyDbmSquelchScale()
 {
-    return SquelchLevelScale{-160.0, 1.0, {}, true};
+    // Explicitly initialize unit: omitting it repeats a Clang warning in
+    // translation units built with -Wextra.
+    return SquelchLevelScale{-160.0, 1.0, {}, true, {}, false};
 }
 
 // The published record as it applies to a slice in `mode`: nullopt when the

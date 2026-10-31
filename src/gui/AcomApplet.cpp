@@ -215,10 +215,7 @@ AcomApplet::AcomApplet(QWidget* parent)
     m_clearFaultBtn = new QPushButton("CLEAR", this);
     m_clearFaultBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_clearFaultBtn,
-        "QPushButton { background: #2a2210; border: 1px solid #5a4a1a; "
-        "border-radius: 3px; color: #ffb84d; font-size: 9px; font-weight: bold; padding: 1px 4px; }"
-        "QPushButton:hover { background: #3a2e14; }"
-        "QPushButton:disabled { background: #181c22; border: 1px solid #232a33; color: #3a4552; }");
+        ampClearFaultBtnStyle());
     m_clearFaultBtn->setEnabled(false);
     connect(m_clearFaultBtn, &QPushButton::clicked, this, &AcomApplet::clearFaultClicked);
 

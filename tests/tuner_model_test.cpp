@@ -11,6 +11,15 @@
 #include <QStringList>
 #include <cstdio>
 
+namespace AetherSDR {
+struct PeripheralConnectionTestAccess {
+    static void makeReady(TgxlConnection& connection)
+    {
+        connection.m_connected = true; // inert transport: no connection or peer
+    }
+};
+}
+
 using namespace AetherSDR;
 
 static int g_failures = 0;
@@ -113,10 +122,12 @@ int main(int argc, char** argv)
         QSignalSpy op(&t, &TunerModel::operateRequested);
         QSignalSpy by(&t, &TunerModel::bypassRequested);
         QSignalSpy at(&t, &TunerModel::autotuneRequested);
+        QSignalSpy direct(&t, &TunerModel::directAutotuneStarted);
 
         // No handle yet (no direct conn) → every relay verb is a no-op.
         t.setOperate(true); t.setBypass(true); t.autoTune();
         CHECK(op.count() == 0 && by.count() == 0 && at.count() == 0);
+        CHECK(direct.count() == 0);   // neither path fires without a handle or link
 
         t.setHandle("0x2000");
         QSignalSpy st(&t, &TunerModel::stateChanged);
@@ -129,6 +140,24 @@ int main(int argc, char** argv)
         CHECK(t.isBypass() && st.count() == 2);
         t.autoTune();                                      // no direct conn → relay intent
         CHECK(at.count() == 1);
+        CHECK(direct.count() == 0);   // relayed start never reports a direct tune
+    }
+
+    // A ready direct transport emits the start edge once; abort never re-arms.
+    {
+        TgxlConnection direct;
+        PeripheralConnectionTestAccess::makeReady(direct);
+        TunerModel t;
+        t.setDirectConnection(&direct);
+        QSignalSpy started(&t, &TunerModel::directAutotuneStarted);
+        QSignalSpy relayed(&t, &TunerModel::autotuneRequested);
+        t.autoTune();
+        CHECK(started.count() == 1 && relayed.count() == 0);
+        TunerDelta tuning;
+        tuning.tuning = true;
+        t.applyChanges(tuning);
+        t.abortTune();
+        CHECK(started.count() == 1 && relayed.count() == 0);
     }
 
     // ---- OPERATE / BYPASS on a TGXL reached by manual IP only REFUSE ALOUD ----

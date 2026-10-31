@@ -31,7 +31,7 @@ On a home LAN this is fine. Over a cellular or VPN link the combined 2–3 Mbit/
 
 **Location:** **Settings → Radio Setup... → Audio → Audio Compression (SmartLink / tailnet)**
 
-| Setting | Behaviour |
+| Setting | Behavior |
 |---------|-----------|
 | **Uncompressed** (default) | Uncompressed on every connection |
 | **Auto** | Opus on SmartLink and on a radio reached over a tailnet, uncompressed on the local network |
@@ -74,6 +74,15 @@ VITA-49 FFT and waterfall packets are about 1436 bytes at an MTU of 1500. Tunnel
 
 AetherSDR sends `client set enforce_network_mtu=1 network_mtu=<value>` to the radio on each connect. It applies to this client's session only and does not permanently change the radio or affect other clients.
 
+**Over Tailscale, AetherSDR sends at most 1200 bytes**, whatever the setting says. A tailnet carries 1280-byte packets, so larger VITA-49 packets can't cross it. AetherSDR does this automatically when either end of the connection has a Tailscale address:
+
+- the radio is at a tailnet address (see [Tailscale Remote Access](./tailscale-remote-access.md)), or
+- your computer runs Tailscale and reaches the radio's LAN address through a Tailscale subnet router.
+
+A smaller setting is kept. The setting itself doesn't change, so a LAN connection still uses the full value.
+
+If Tailscale runs only on routers at each end (site to site), or you reach the radio through a proxy, neither end has a Tailscale address and AetherSDR can't tell. Set **Network MTU** to 1200 yourself.
+
 ### VITA-49 RX buffer
 
 **Location:** **Settings → Radio Setup... → Network → Advanced → VITA-49 RX buffer**
@@ -104,6 +113,14 @@ You can reduce traffic further from the panadapter's **Display** panel (right-cl
 
 **Tools → Network Diagnostics...** shows latency, jitter, packet loss by stream, stream rates and audio-buffer health over time, with symptom search. See [Runtime Monitor](./runtime-monitor.md).
 
+### Network priority (DSCP EF)
+
+AetherSDR automatically requests **DSCP EF (46)** for outgoing traffic from the FlexRadio streaming socket on macOS, Linux and Windows. This includes transmit audio, UDP registration and keepalives on LAN and SmartLink connections. The separate CTR2 USB controller relay socket is not marked. There is no AetherSDR setting to disable marking.
+
+This is best effort: if the operating system does not support or allow marking, the connection and streaming continue. The log reports either `VITA UDP DSCP EF configured` or `VITA UDP DSCP EF unavailable; streaming continues`. Windows uses its native QoS API; requesting the exact EF value may be denied by account privileges or system policy. An administrator can configure a Windows QoS policy for the relevant outgoing UDP traffic if needed.
+
+EF marking can help on a congested network that honors DSCP. Switches, routers, VPNs and Wi-Fi equipment may ignore or rewrite it, and Wi-Fi priority also depends on the operating system and access point. It does not reduce bandwidth or change the markings of incoming radio audio, spectrum or waterfall packets. If your network handles EF traffic poorly, ask your network administrator to remark this outgoing UDP traffic to best effort at the network boundary.
+
 ## Reference
 
 ### Recommended settings by connection type
@@ -125,7 +142,7 @@ You can reduce traffic further from the panadapter's **Display** panel (right-cl
 | OpenVPN (UDP) | 1400 bytes |
 | Cisco SD-WAN | 1400–1450 bytes |
 | ZeroTier | ~1400 bytes |
-| Tailscale | 1280–1420 bytes |
+| Tailscale | 1280 bytes (AetherSDR caps the MTU at 1200 automatically) |
 
 ### Recommended MTU settings
 
@@ -133,6 +150,8 @@ You can reduce traffic further from the panadapter's **Display** panel (right-cl
 |------------|-------------|
 | Home LAN | 1500 (or leave at 1450) |
 | VPN / SD-WAN | 1450 (default) |
+| Tailscale on this computer or the radio | Any; AetherSDR sends at most 1200 |
+| Tailscale on routers only (site to site) | 1200 |
 | Satellite / high-overhead tunnels | 1300–1400 |
 
 ## Known issues
@@ -147,7 +166,7 @@ You can reduce traffic further from the panadapter's **Display** panel (right-cl
 Spectrum and waterfall packets are larger than the tunnel's MTU, so they are dropped while the smaller audio packets get through.
 
 1. Open **Settings → Radio Setup... → Network → Advanced**.
-2. Lower **Network MTU** to suit your tunnel (see [Recommended MTU settings](#recommended-mtu-settings)).
+2. Lower **Network MTU** to suit your tunnel (see [Recommended MTU settings](#recommended-mtu-settings)). This is automatic when this computer or the radio has a Tailscale address.
 3. Reconnect; AetherSDR sends the MTU to the radio on each connect.
 
 ### The VITA-49 RX buffer says it was capped
@@ -164,6 +183,15 @@ Network jitter or lost packets are reaching the audio buffer.
 1. Raise **Audio Buffer** in **Settings → Radio Setup... → Audio** a little at a time.
 2. Leave **Smooth packet loss** on.
 3. Use Opus compression and low bandwidth mode.
+
+### Audio drops out or the waterfall has gaps
+
+Packets from the radio are lost, or arrive out of order, on the way to the computer. Wi-Fi, a busy switch or a VPN are the usual causes. The log then shows `PanadapterStream: VITA-49 sequence errors on <stream> stream`, at most once every 10 seconds for each stream.
+
+1. Open **Tools → Network Diagnostics...** to see which streams lose packets.
+2. Connect the computer to the network by cable instead of Wi-Fi.
+3. If the VITA-49 RX buffer says it was capped, raise `net.core.rmem_max` (see [The VITA-49 RX buffer says it was capped](#the-vita-49-rx-buffer-says-it-was-capped)).
+4. On a remote link, use Opus compression and low bandwidth mode.
 
 ### Low bandwidth mode has no effect
 

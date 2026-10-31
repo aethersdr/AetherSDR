@@ -2,6 +2,7 @@
 #if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
 
 #include "UlanziDialWindowsManager.h"
+#include "HidDiscovery.h"
 #include "core/LogManager.h"
 #include "core/UlanziChordDecoder.h"
 #include "core/UlanziDialIds.h"
@@ -51,7 +52,7 @@ constexpr const wchar_t* kProductMatch = L"Ulanzi Dial";
 UlanziDialWindowsManager::UlanziDialWindowsManager(QObject* parent)
     : QObject(parent)
 {
-    hid_init();
+    HidDiscovery::init();
     m_pollTimer = new QTimer(this);
     m_pollTimer->setInterval(POLL_INTERVAL_MS);
     connect(m_pollTimer, &QTimer::timeout, this, &UlanziDialWindowsManager::poll);
@@ -65,7 +66,6 @@ UlanziDialWindowsManager::UlanziDialWindowsManager(QObject* parent)
 UlanziDialWindowsManager::~UlanziDialWindowsManager()
 {
     stop();
-    hid_exit();
 }
 
 void UlanziDialWindowsManager::start()
@@ -104,7 +104,7 @@ bool UlanziDialWindowsManager::rescan()
     // strings and descriptor on each hotplug tick, on the thread that also
     // polls the RC-28 (#6225, #6204).
     struct hid_device_info* infos =
-        hid_enumerate(static_cast<unsigned short>(kUlanziVendorId),
+        HidDiscovery::enumerate(static_cast<unsigned short>(kUlanziVendorId),
                       static_cast<unsigned short>(kUlanziProductId));
     for (auto* info = infos; info; info = info->next) {
         if (!info->product_string) continue;
@@ -114,7 +114,7 @@ bool UlanziDialWindowsManager::rescan()
                                << "at the dial's VID/PID (#3485)";
             continue;
         }
-        hid_device* h = hid_open_path(info->path);
+        hid_device* h = HidDiscovery::openPath(info->path);
         if (!h) continue;
         hid_set_nonblocking(h, 1);
         OpenDevice dev;

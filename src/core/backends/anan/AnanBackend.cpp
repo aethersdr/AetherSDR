@@ -54,6 +54,18 @@ QByteArray floatBytes(const std::vector<float>& v)
            static_cast<qsizetype>(v.size() * sizeof(float))};
 }
 
+// The slice model's name for a WDSP AGC mode, the inverse of setSliceAgc()'s
+// parse. WDSP's "long" (1) is never set here.
+QString agcModeName(int wdspMode)
+{
+    switch (wdspMode) {
+    case 0: return QStringLiteral("off");
+    case 2: return QStringLiteral("slow");
+    case 4: return QStringLiteral("fast");
+    default: return QStringLiteral("med");
+    }
+}
+
 }  // namespace
 
 WdspChannel::Mode AnanBackend::modeFromString(const QString& mode) noexcept
@@ -238,6 +250,9 @@ AnanBackend::AnanBackend(QObject* parent)
             // A new session's needle starts from its first reading, not from
             // where the last session's left off.
             m_sMeter.reset();
+            // Likewise the rail's window: counts from before this session
+            // must not ride into its first published voltage.
+            resetSupplyRailWindow();
         }
         emitSliceState();
         emitPanState();
@@ -288,6 +303,10 @@ AnanBackend::AnanBackend(QObject* parent)
     // link that has gone silent still reports.
     connect(m_client, &P2Client::linkCountersUpdated, this,
             &AnanBackend::onLinkCounters);
+    // Queued onto this thread, like the snapshot above: the meter seam's
+    // signals are emitted from the backend's own thread.
+    connect(m_client, &P2Client::supplyRailSampled, this,
+            &AnanBackend::onSupplyRailCounts);
     // Only DDC0 feeds this DSP. Like ddc0IqReady above, notification and
     // processing run directly on the I/O thread, with the DSP as context.
     // Invalidate its partial FFT before the discontinuous block arrives.
@@ -401,14 +420,25 @@ RadioCapabilities AnanBackend::capabilities() const
     RadioCapabilities c;
     c.broadcastFmReceive = std::nullopt;
     c.family = QStringLiteral("anan");
+    c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
+        PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage,
+        PanDisplayField::SpectrumPoints}, {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove
     // No setTune() implementation, so no tune generator to select a mode on.
     c.twoToneGenerator = std::nullopt;
+    c.firmwareUpdateSource = std::nullopt;  // gateware number; no published list covers it.
     // No VOX, monitor or speech-processor setters. PROC would be the host
     // ClientComp, but canTransmit is false below, so nothing serves it and the
     // drop notice correctly stands.
     c.voxControl = std::nullopt;
     c.speechProcessorControl = std::nullopt;
     c.txMonitorControl = std::nullopt;
+    // The radio's speaker output: setLineoutMute() sends it silence and
+    // setLineoutGain() scales the samples this host feeds it.
+    c.lineoutControl = RadioCapabilities::LineoutControl{};
+    c.radioSetupControl = RadioSetupControl{{RadioSetupField::LineoutGain, RadioSetupField::LineoutMute}};
+    // No client owner is declared for "Show TX in Waterfall" on an ANAN.
+    c.txWaterfallClientFlag = std::nullopt;
     // The panadapter dBm axis is dBFS with a dBm label: kUncalibratedDbfsToDbmOffset
     // is 0.0f and bin levels depend on window/normalisation, unverified against a
     // known input. Internally consistent, but not comparable: never publish as a
@@ -436,12 +466,16 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");
+    // The session takes its receive front-end options from AnanSettings
+    // (populateFamilyParams()), so the setup page that edits them applies.
+    c.adcFrontEnd = RadioCapabilities::AdcFrontEnd{};
+
     // ---- PA telemetry ----
-    // hasSupplyVoltageTelemetry stays FALSE although the radio sends a
-    // supply-rail count (P2Protocol decodes it): no known scale fits it. On a
-    // G2 bench the 5 V-reference scale read a 13.8 V rail as ~40 V, 2.9x high,
-    // and the 3.3 V board's scale differs from it by only 1.5x, so no board
-    // choice fixes it. A volts readout waits for an operator calibration.
+    // The DC supply rail, published as RAD:+13.8A from every status packet's
+    // count (onSupplyRailCounts()). Claimed on a bench measurement, not on the
+    // input's label: see kSupplyRailVoltsPerCount for the reading and for why
+    // the input is not the one the spec calls "supply voltage".
+    c.hasSupplyVoltageTelemetry = true;
     //
     // There is NO PA temperature in this protocol. The radio's whole analog
     // payload is six fields and none of them is a temperature, so the readout
@@ -469,6 +503,7 @@ RadioCapabilities AnanBackend::capabilities() const
     // ours, the radio echoes nothing back, and there is no register to read.
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = std::nullopt; // center also retunes the slice
     c.receivePanBandwidthControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
                                                          48'000, 1'536'000};
@@ -483,6 +518,7 @@ RadioCapabilities AnanBackend::capabilities() const
     c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
         SliceFrequencyControl::Authority::Engine, /*tunePowerAppliesLive=*/false};
     c.hasRadioPttReadback = false; // no PTT at all, so no readback either
+    c.radioPttObservation = std::nullopt;
     c.hasTuner = false;            // G2 has no internal ATU (Apache Labs spec)
     c.hasTunerMemories = false;    // no internal ATU, so no tuner-memory surface
     c.hasAmplifier = false;
@@ -493,6 +529,9 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasDdcPanEdgeRolloff = true; // see RadioCapabilities.h's own comment
     c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep, false, {}, {}}; // AnanPanAnalyzer
     c.panFrameRateShaping = std::nullopt;  // no client owner is declared for FFT FPS
+    // No protocol field holds a waterfall rate: the client keeps it.
+    c.panWaterfallRateShaping =
+        PanWaterfallRateShaping{/*clientPersistsWaterfallRate*/ true};
     // No band/segment zoom: the protocol carries no per-pan zoom flag.
     c.panZoomModes = std::nullopt;
     c.persistsMemories = false;    // default; stated explicitly
@@ -503,7 +542,7 @@ RadioCapabilities AnanBackend::capabilities() const
                               | RadioCapabilities::ClientSettingsDomain::ReceiveOutputLevel;
     c.hostDroopCalibration = true; // AnanDroopCorrection.h -- real DDC0 roll-off,
                                     // corrected client-side via AnanDroopCalibrator
-    c.extensionNamespaces = {QStringLiteral("anan")};  // "droop.apply" -- see invokeExtension()
+    c.extensionNamespaces = {QStringLiteral("anan")};  // "frontend.set", "droop.apply" -- see invokeExtension()
     // From this session's own Discovery reply (P2Client::discoveryInfoReceived()).
     // Absent until it lands ("not reported yet", like tuningMinHz/MaxHz);
     // capabilitiesChanged() fires when it does. numDdc is informational:
@@ -636,6 +675,14 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     // populated this param must not start one.
     m_pendingParams.speakerAudioEnabled =
         request.params.value(QStringLiteral("anan.speakerAudioEnabled"), false).toBool();
+    // Live once connected ("frontend.set" below), and seeded here so the
+    // session's first High Priority packet already carries them. FALSE by
+    // default: both defaults are the bytes this client sent before either
+    // option existed.
+    m_pendingParams.bandFiltersEnabled =
+        request.params.value(QStringLiteral("anan.bandFiltersEnabled"), false).toBool();
+    m_pendingParams.speakerAmpMuted =
+        request.params.value(QStringLiteral("anan.speakerAmpMuted"), false).toBool();
     // applyRestoredState() seeds both ADC values before this connect.
     m_attenuationDb = m_pendingParams.ddc0AdcIndex == 1
         ? m_pendingParams.adc1AttenuationDb
@@ -673,23 +720,26 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     // default until RadioModel pushes the operator's rate through
     // setPanFrameRate().
     m_pendingDspConfig.panPoints = m_panPoints;
-    m_pendingDspConfig.mode = modeFromString(m_mode);
-    m_pendingDspConfig.filterLowHz = static_cast<double>(m_filterLowHz) + cwBfoHz();
-    m_pendingDspConfig.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
-    m_pendingDspConfig.agcMode = 3;
-    // 60 dB, not Hl2RxDsp's 39 dB: on the G2 bench audio was too quiet until the
-    // ceiling slider reached 100 (= 60 dB via setSliceAgc()'s *0.6 mapping); this
-    // chain's uncalibrated gain sits lower than the HL2's. AGC only applies up to
-    // the ceiling on weak signals, so this cannot clip a strong one.
-    m_pendingDspConfig.maximumAgcGainDb = 60.0;
-    // This backend retains the NB request across reconnects. emitSliceState()
-    // also supplies that pair if a different radio requires a fresh slice.
-    m_pendingDspConfig.noiseBlanker = AetherSDR::toWdsp(m_nbKind);
-    m_pendingDspConfig.noiseBlankerLevel = m_nbLevel;
-    m_pendingDspConfig.noiseBlankerFill = AetherSDR::toWdsp(m_nbFill);
+    // This backend retains the AGC and NB requests across reconnects.
+    // emitSliceState() also supplies them if a different radio requires a
+    // fresh slice.
+    applyLiveRxState(m_pendingDspConfig);
 
     ++m_connectGeneration;
     beginDspSetup();
+}
+
+void AnanBackend::applyLiveRxState(AnanRxDsp::Config& config) const
+{
+    config.mode = modeFromString(m_mode);
+    config.filterLowHz = static_cast<double>(m_filterLowHz) + cwBfoHz();
+    config.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
+    config.agcMode = m_agcMode;
+    config.maximumAgcGainDb = agcKnobDb(m_agcThreshold);
+    config.agcFixedGainDb = agcKnobDb(m_agcOffLevel);
+    config.noiseBlanker = AetherSDR::toWdsp(m_nbKind);
+    config.noiseBlankerLevel = m_nbLevel;
+    config.noiseBlankerFill = AetherSDR::toWdsp(m_nbFill);
 }
 
 void AnanBackend::beginDspSetup()
@@ -817,6 +867,9 @@ void AnanBackend::disconnectRadio()
     m_linkCounters = {};
     m_linkCountersSeen = false;
     m_lastSnapshotRxBytes = 0;
+    // A status packet can arrive before the next session's linkUp, so the
+    // rail's window is emptied here as well as there.
+    resetSupplyRailWindow();
     // A genuine operator-initiated disconnect always fires disconnected(),
     // even one that lands mid-rate-change -- this is not the zoom case
     // m_rateChanging exists to hide.
@@ -916,23 +969,35 @@ void AnanBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
 void AnanBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
 {
     Q_UNUSED(sliceId);
-    // 0..100 operator units -> 0..60 dB ceiling, same map the HL2 uses
-    // (Hl2DbReference::kAgcCeilingDbPerUnit = 0.6) -- a WDSP-range fact, not an
-    // HL2 fact. The HL2 additionally REFERS this ceiling to its LNA gain, which
-    // is an HL2 fact and deliberately not copied here.
+    // thresholdDb is the AGC-T knob's 0..100, not dB: agcKnobDb() maps it.
     const QString m = mode.trimmed().toLower();
     int wdspMode = 3;   // medium, WDSP's own default
     if (m == QLatin1String("off"))  wdspMode = 0;
     else if (m == QLatin1String("slow")) wdspMode = 2;
     else if (m == QLatin1String("fast")) wdspMode = 4;
-    const double ceilingDb = static_cast<double>(thresholdDb) * 0.6;
-    // Live state for beginRateChange() to refresh m_pendingDspConfig from --
-    // see the member declaration comment.
+    // Live state for connectRadio() and beginRateChange() -- see the member
+    // declaration comment.
     m_agcMode = wdspMode;
-    m_agcCeilingDb = ceilingDb;
+    m_agcThreshold = std::clamp(thresholdDb, 0, 100);
     if (m_dsp) {
         QMetaObject::invokeMethod(m_dsp, "setAgc", Qt::QueuedConnection,
-            Q_ARG(int, wdspMode), Q_ARG(double, ceilingDb));
+            Q_ARG(int, wdspMode), Q_ARG(double, agcKnobDb(m_agcThreshold)));
+    }
+    emitSliceState();
+}
+
+void AnanBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
+{
+    if (request.field != SliceAgcRequest::Field::OffLevel) {
+        IRadioBackend::requestSliceAgc(sliceId, request);
+        return;
+    }
+    // Sent in every AGC mode: WDSP applies the fixed gain only with AGC off
+    // (wcpAGC.c xwcpagc), so a level set first takes effect when AGC goes off.
+    m_agcOffLevel = std::clamp(request.offLevel, 0, 100);
+    if (m_dsp) {
+        QMetaObject::invokeMethod(m_dsp, "setAgcFixedGain", Qt::QueuedConnection,
+            Q_ARG(double, agcKnobDb(m_agcOffLevel)));
     }
     emitSliceState();
 }
@@ -1118,14 +1183,7 @@ void AnanBackend::beginRateChange(int newRateKsps)
     // rate touched here, so a rate change silently reverted mode/filter/AGC
     // to whatever they were at connect. m_shiftHz is not part of Config --
     // AnanRxDsp::installChannel() re-applies it separately, after the swap.
-    m_pendingDspConfig.mode = modeFromString(m_mode);
-    m_pendingDspConfig.filterLowHz = static_cast<double>(m_filterLowHz) + cwBfoHz();
-    m_pendingDspConfig.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
-    m_pendingDspConfig.agcMode = m_agcMode;
-    m_pendingDspConfig.maximumAgcGainDb = m_agcCeilingDb;
-    m_pendingDspConfig.noiseBlanker = AetherSDR::toWdsp(m_nbKind);
-    m_pendingDspConfig.noiseBlankerLevel = m_nbLevel;
-    m_pendingDspConfig.noiseBlankerFill = AetherSDR::toWdsp(m_nbFill);
+    applyLiveRxState(m_pendingDspConfig);
 
     m_rateChanging = true;
     ++m_connectGeneration;   // orphans any in-flight prior connect/reconfigure/rebuild
@@ -1415,7 +1473,38 @@ QString AnanBackend::applyDroopTables(const QMap<int, DroopCorrectionTable>& tab
 void AnanBackend::invokeExtension(const QString& ns, const QString& verb,
                                   quint64 requestId, const QVariant& arg)
 {
-    Q_UNUSED(arg);
+    if (ns == QLatin1String("anan") && verb == QLatin1String("frontend.set")) {
+        // The live front-end options. Partial: only the named fields move,
+        // so one control cannot overwrite another. A change reaches the radio
+        // on the next High Priority packet, within 100 ms.
+        //
+        // This persists nothing. The ANAN Front End page writes AnanSettings
+        // and then invokes this; a caller that only invokes it gets a change
+        // that reverts at the next connect, which reads AnanSettings.
+        const QVariantMap fields = arg.toMap();
+        if (fields.contains(QStringLiteral("bandFiltersEnabled"))) {
+            m_pendingParams.bandFiltersEnabled =
+                fields.value(QStringLiteral("bandFiltersEnabled")).toBool();
+            if (m_client) {
+                QMetaObject::invokeMethod(m_client, "setBandFiltersEnabled",
+                                          Qt::QueuedConnection,
+                                          Q_ARG(bool, m_pendingParams.bandFiltersEnabled));
+            }
+        }
+        if (fields.contains(QStringLiteral("speakerAmpMuted"))) {
+            m_pendingParams.speakerAmpMuted =
+                fields.value(QStringLiteral("speakerAmpMuted")).toBool();
+            if (m_client) {
+                QMetaObject::invokeMethod(m_client, "setSpeakerAmpMuted",
+                                          Qt::QueuedConnection,
+                                          Q_ARG(bool, m_pendingParams.speakerAmpMuted));
+            }
+        }
+        if (requestId != 0) {
+            emit extensionResult(requestId, QVariantMap{{QStringLiteral("ok"), true}});
+        }
+        return;
+    }
     if (ns == QLatin1String("anan") && verb == QLatin1String("nb.get")) {
         if (requestId != 0) {
             const AnanRxDsp::NoiseBlankerState applied = m_dsp
@@ -1509,6 +1598,19 @@ void AnanBackend::defineMeters()
     d.high = 0.0;
     d.description = QStringLiteral("Receive signal level");
     emit meterDefined(d);
+
+    // The supply rail. "+13.8A" is the name MeterModel binds to the status bar
+    // and Meter applet voltage readouts, whatever the radio; unit and range as
+    // IcomMeters declares the same meter.
+    MeterDef rail;
+    rail.index = 2;
+    rail.source = QStringLiteral("RAD");
+    rail.name = QStringLiteral("+13.8A");
+    rail.unit = QStringLiteral("Volts");
+    rail.low = 0.0;
+    rail.high = 16.0;
+    rail.description = QStringLiteral("DC supply voltage");
+    emit meterDefined(rail);
 }
 
 IRadioBackend::LinkStats AnanBackend::linkStats() const
@@ -1560,6 +1662,43 @@ void AnanBackend::onDspMeter(float dbfs)
         emit meterUpdate(QStringLiteral("SLC:LEVEL"), *out);
 }
 
+void AnanBackend::onSupplyRailCounts(int counts)
+{
+    if (!m_supplyRailClock.isValid())
+        m_supplyRailClock.start();
+    onSupplyRailCountsAt(counts, m_supplyRailClock.elapsed());
+}
+
+void AnanBackend::onSupplyRailCountsAt(int counts, qint64 nowMs)
+{
+    // A 12-bit ADC reads 0..4095. Anything else means the field is not this
+    // input, and no reading is better than a plausible wrong voltage.
+    if (counts < 0 || counts > 4095)
+        return;
+    m_supplyRailCountSum += counts;
+    ++m_supplyRailSamples;
+    // The first window opens on its first count; each later one opens where the
+    // last closed, so publications stay a fixed window apart rather than
+    // drifting by a packet interval each time.
+    if (m_supplyRailWindowStartMs < 0)
+        m_supplyRailWindowStartMs = nowMs;
+    if (nowMs - m_supplyRailWindowStartMs < kSupplyRailWindowMs)
+        return;
+    const double meanCounts =
+        static_cast<double>(m_supplyRailCountSum) / m_supplyRailSamples;
+    m_supplyRailCountSum = 0;
+    m_supplyRailSamples = 0;
+    m_supplyRailWindowStartMs = nowMs;
+    emit meterUpdate(QStringLiteral("RAD:+13.8A"), meanCounts * kSupplyRailVoltsPerCount);
+}
+
+void AnanBackend::resetSupplyRailWindow()
+{
+    m_supplyRailWindowStartMs = -1;
+    m_supplyRailCountSum = 0;
+    m_supplyRailSamples = 0;
+}
+
 void AnanBackend::emitSliceState()
 {
     SliceDelta d;
@@ -1574,6 +1713,11 @@ void AnanBackend::emitSliceState()
     d.nbKind = m_nbKind;
     d.nbLevel = m_nbLevel;
     d.nbFill = m_nbFill;
+    // The AGC as the DSP runs it, so the slice's knob starts from this
+    // backend's values, not SliceModel's defaults.
+    d.agcMode = agcModeName(m_agcMode);
+    d.agcThreshold = m_agcThreshold;
+    d.agcOffLevel = m_agcOffLevel;
     // The audio stage as APPLIED. Both are required, not cosmetic: the receive
     // control gate refuses an operation whose observation is absent, so without
     // these two the mute and the fader are offered and then rejected.

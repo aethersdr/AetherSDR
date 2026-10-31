@@ -1,7 +1,14 @@
 #pragma once
+#include "RadioSetupControl.h"
+#include "SpotRequest.h"
+#include "PanControlRequest.h"
+#include "SlicePresetRequest.h"
+#include "PanDisplayRequest.h"
+#include "PanLifecycleRequest.h"
 
 #include <QFlags>
 #include <QList>
+#include <QMap>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -9,8 +16,16 @@
 #include <optional>
 
 #include "core/backends/SquelchLevelScale.h"
+#include "core/backends/DspParameterReset.h"
 
 namespace AetherSDR {
+
+// Radio-owned TUNE RCA output suppression, independently persisted per band.
+struct TuneOutputSuppressionControl {
+    enum class Scope { PerBand };
+    Scope scope = Scope::PerBand;
+    int maximumBandId = 255;
+};
 
 struct TxPowerBand {
     double lowHz = 0.0;
@@ -58,6 +73,30 @@ struct ReceiveFilterMode {
 struct ReceiveFilterControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     QList<ReceiveFilterMode> modes;
+};
+// Supported host receive signal controls and their qualified mode family.
+// An absent record preserves existing radio-side capability semantics.
+struct ReceiveDspControl {
+    enum class Feature { Agc, Nb, Nr, Anf, ManualNotch, Apf, Rit };
+    QStringList modes;
+    QList<Feature> features;
+    // An entry narrows a declared feature to a subset of the qualified modes.
+    // An absent entry uses all modes; an empty entry disables that feature.
+    QMap<Feature, QStringList> featureModes;
+    bool supports(Feature feature, const QString& mode) const
+    {
+        const auto restriction = featureModes.constFind(feature);
+        return features.contains(feature) && modes.contains(mode)
+            && (restriction == featureModes.cend() || restriction.value().contains(mode));
+    }
+};
+
+// Session-wide receive BFO pitch, dispatched through setCwPitch and confirmed
+// through TransmitDelta::cwPitch. Presence grants no transmit or microphone path.
+struct ReceiveCwPitchControl {
+    int minimumHz = 100;
+    int maximumHz = 6000;
+    int stepHz = 10;
 };
 struct ReceiveAudioControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
@@ -121,6 +160,15 @@ struct PanFrameRateShaping {
     // a family's existing settings behavior. No default: an engaging backend
     // must state its own value.
     bool clientPersistsFrameRate;
+};
+
+// The waterfall rate of a pan whose rows this engine paces (Display, Rate).
+// Absent: no owner is declared for it and the client stores nothing (a Flex
+// stores and reports its own line duration).
+struct PanWaterfallRateShaping {
+    // Explicit client persistence owner for the waterfall rate. No default: an
+    // engaging backend must state its own value.
+    bool clientPersistsWaterfallRate;
 };
 
 // Engaged when the backend averages its own pan frames per the operator's FFT
@@ -190,6 +238,62 @@ struct WidebandConverterView {
     QString frameVerb;
 };
 
+// WHERE THIS RADIO'S FIRMWARE VERSIONS ARE PUBLISHED: declared by a backend
+// whose firmware version can be compared against a vendor's published release
+// list, and which can therefore be reported as out of date.
+//
+// Declared so that the shared chrome can tell an operator their firmware is
+// behind WITHOUT naming a family. The status bar already prints whatever
+// version word the connected backend reports, but those words are not on one
+// scale — a Flex reports a SmartSDR version, an HL2 or ANAN a gateware number,
+// an Icom nothing at all — so a consumer that measured them all against one
+// published list would be wrong about every radio but one.
+//
+// CONSTRAINT FOR WHOEVER DECLARES THE SECOND ONE: presence of this record
+// currently also means "compare me against the SmartSDR software page", because
+// that is the only published list AetherSDR reads. A backend from another
+// vendor must not simply declare a template — it needs its own fetch, and this
+// record then needs a field naming which list it belongs to. Absence is the
+// default and means "nobody has said"; it is not a claim the firmware is
+// current, nor that it cannot be checked.
+struct FirmwareUpdateSource {
+    // Release-notes page for a given release, with "%1" standing in for the
+    // release with its dots as dashes — "4.2.20" becomes "4-2-20". Verified
+    // against published releases from 3.8.23 to 4.2.20. Empty means the
+    // operator is shown the verdict with nowhere to click.
+    QString releaseNotesUrlTemplate;
+
+    // The newest release the vendor publishes FOR EACH MAJOR LINE, keyed by
+    // major: {2: "2.10.1", 3: "3.10.15", 4: "4.2.20"}. Empty when nobody has
+    // found out yet — nothing has asked, the ask failed, or the answer did not
+    // parse. Empty is the honest default and yields no verdict at all; it is
+    // NOT a claim that the connected radio is current.
+    //
+    // PER LINE, NOT ONE "LATEST", and this is the shape to keep. A vendor can
+    // offer several lines for download at once, and a radio belongs to exactly
+    // one of them: measuring it against the global maximum tells an operator on
+    // an older line to install a release from a line they are not on, and links
+    // release notes they cannot use. The consumer compares against the entry
+    // whose major matches the radio's own reported version, and shows nothing
+    // when the radio's line is not listed.
+    //
+    // DELIBERATELY NOT THE RADIO'S LICENSED VERSION. A radio's license fields
+    // cannot carry this: measured on a FLEX-6500 running 4.2.20.41343, the
+    // discovery broadcast and the connected `license` status both reported a
+    // ceiling BELOW the firmware actually running, and disagreed with
+    // FlexRadio's own SmartLink record for the same radio. The line the radio
+    // is running is observable and self-consistent; what it is licensed for is
+    // not.
+    //
+    // FILLED IN BY THE BACKEND, not by whoever displays it. Finding out is
+    // family work: it means knowing which page lists this vendor's releases and
+    // how to read it, which is exactly the knowledge that must not climb above
+    // the radio seam (docs/HERMES.md §"For coding agents"; the engine-boundary
+    // gate enforces it). A consumer above the seam reads this record and asks
+    // no further questions.
+    QMap<int, QString> publishedReleases;
+};
+
 // A stable, radio-owned receive-filter preset. `id` is the identity used on
 // the wire (for example Icom FIL1/FIL2/FIL3); widthHz is mutable content of
 // that preset and must never be used as its identity.
@@ -256,14 +360,16 @@ struct RadioCapabilities {
     QString manufacturer;
 
     // Receive
-    // Independent slice creation on an existing pan through the neutral backend
-    // hook. RadioModel consults this only without a command plane; Flex and Sim
-    // retain their command adapters regardless of this value. Do not use this
-    // field alone to gate +RX in the UI. Separate from maxSlices: a paired
-    // receiver/pan topology can support several slices but not this operation.
+    // Independent creation on an existing pan through the typed backend route.
+    // Separate from maxSlices: a paired receiver/pan topology can support several
+    // receivers but not independent slice creation. Transient split creation also
+    // needs TX support and an answered identity, not merely this declaration.
     bool canCreateSlices = false;
     int maxSlices = 1;             // independent demod slices the radio supports
     int maxPanadapters = 1;        // simultaneous panadapters
+    // Desktop requests only; these do not widen the daemon capability catalogue.
+    std::optional<PanDisplayControl> panDisplayControl;
+    std::optional<PanLifecycleControl> panLifecycleControl;
     QVector<int> sampleRatesHz;    // supported per-receiver sample rates (Hz)
 
     // What this radio's panadapter span and vertical axis are made of, as two
@@ -278,6 +384,8 @@ struct RadioCapabilities {
     std::optional<BackendPanAveraging> backendPanAveraging;
     // See PanFrameRateShaping. Absent = the client keeps no FFT frame rate.
     std::optional<PanFrameRateShaping> panFrameRateShaping;
+    // See PanWaterfallRateShaping. Absent = the client keeps no waterfall rate.
+    std::optional<PanWaterfallRateShaping> panWaterfallRateShaping;
 
     // A backend nobody has read labelled its axis dBm and was consumed as
     // though it meant it. ABSENT KEEPS THAT CLAIM, so this is the legacy shape
@@ -302,6 +410,14 @@ struct RadioCapabilities {
     [[nodiscard]] bool clientPersistsPanFrameRate() const
     {
         return panFrameRateShaping && panFrameRateShaping->clientPersistsFrameRate;
+    }
+
+    // The one predicate for storing and for restoring the waterfall rate.
+    // Absent is "not declared", and an undeclared backend owns nothing here.
+    [[nodiscard]] bool clientPersistsPanWaterfallRate() const
+    {
+        return panWaterfallRateShaping
+            && panWaterfallRateShaping->clientPersistsWaterfallRate;
     }
 
     // The one predicate for storing and for restoring the pan's dBm range. The
@@ -337,6 +453,8 @@ struct RadioCapabilities {
     std::optional<ReceiveModeControl> receiveModeControl;
     std::optional<ReceiveFilterControl> receiveFilterControl;
     std::optional<ReceiveAudioControl> receiveAudioControl;
+    std::optional<ReceiveCwPitchControl> receiveCwPitchControl;
+    std::optional<ReceiveDspControl> receiveDspControl;
     std::optional<ReceiveAudioExport> receiveAudioExport;
     std::optional<BroadcastFmReceive> broadcastFmReceive;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
@@ -344,6 +462,10 @@ struct RadioCapabilities {
     // Engaged when the radio can deliver a wideband converter view; see the
     // struct above for why absence is the right default and what it means.
     std::optional<WidebandConverterView> widebandConverterView;
+    // Where this radio's firmware versions are published, for the status bar's
+    // out-of-date indication. See the struct above for why a consumer asks for
+    // this record rather than testing the family name.
+    std::optional<FirmwareUpdateSource> firmwareUpdateSource;
 
     // Optional per-band native coverage. Empty means "not reported" and keeps
     // canonical band labels. This is distinct from txPowerBands: receive-only
@@ -390,6 +512,27 @@ struct RadioCapabilities {
         bool tunePowerAppliesLive = false;
     };
     std::optional<TransmitDriveControl> transmitDriveControl;
+    std::optional<TuneOutputSuppressionControl> tuneOutputSuppression;
+
+    // "Show TX in Waterfall" on a radio that neither stores nor echoes it.
+    // Absent: `transmit set show_tx_in_waterfall=` and its status echo own the
+    // flag (Flex), or no owner is declared and the client sets and stores
+    // nothing, which is every other family's existing behavior.
+    struct TxWaterfallClientFlag {
+        // Explicit client persistence owner for the flag: RadioModel applies
+        // it with no radio echo, stores it per radio and restores it on
+        // connect. False preserves a family's existing settings behavior. No
+        // default: an engaging backend must state its own value.
+        bool clientPersistsFlag;
+    };
+    std::optional<TxWaterfallClientFlag> txWaterfallClientFlag;
+
+    // The one predicate for the request, its store and the connect-time
+    // restore. Absent is "not declared", and an undeclared backend owns nothing.
+    [[nodiscard]] bool clientPersistsShowTxInWaterfall() const
+    {
+        return txWaterfallClientFlag && txWaterfallClientFlag->clientPersistsFlag;
+    }
 
     // Whether forward-power telemetry needs client-side attack/decay
     // ballistics. True preserves the established Flex presentation. A backend
@@ -496,6 +639,10 @@ struct RadioCapabilities {
         // The radio's own receive output level. Not the PC sink's, which is
         // app-global and stays the flat MasterVolume key.
         ReceiveOutputLevel = 1u << 9,
+        // Each receiver's own setpoints (blanker, APF, squelch, RIT/XIT, audio,
+        // pan centre) and how many receivers run; the backend replays the set.
+        Receivers   = 1u << 10,
+        Notches     = 1u << 11,  // host-side manual notches (centre, width, active)
     };
     Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)
     ClientSettingsDomains clientSettingsDomains;   // default: empty — restore nothing
@@ -525,6 +672,17 @@ struct RadioCapabilities {
     bool hasFlexControlIntegration = false; // FlexControl/AetherControl verbs are supported
     bool hasAudioCompression = false; // selectable compressed radio-audio transport
     bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
+    std::optional<RadioSetupControl> radioSetupControl;
+    // Desktop utility verbs only; neither record adds daemon permissions.
+    std::optional<SpotControl> spotControl;
+    std::optional<PanControl> panControl;
+    // PanControlField::NoiseFloorRange, separate from panControl because it
+    // needs a license the radio reports. Absent refuses the field.
+    struct NoiseFloorRangeControl {
+        QString requiredLicenseFeature;
+    };
+    std::optional<NoiseFloorRangeControl> noiseFloorRangeControl;
+    std::optional<SlicePresetControl> slicePresetControl;
     // The radio's streaming data plane uses VITA-49. This currently gates the
     // receive-socket buffer and network MTU controls; it describes the transport,
     // not the vendor or only one stream direction.
@@ -536,6 +694,14 @@ struct RadioCapabilities {
     bool hasTuner = false;         // antenna tuner / ATU matching control
     bool hasTunerMemories = false; // radio-side ATU memory recall/database
     bool hasAmplifier = false;     // integrated or controllable PA
+    // Shape of the existing desktop NRS level verb. Absent preserves the
+    // legacy 0..100 request range; this grants no additional daemon method.
+    struct NrsLevelControl {
+        int levelMaximum = 100;
+    };
+    std::optional<NrsLevelControl> nrsLevelControl;
+
+    std::optional<DspParameterResetControl> dspParameterReset;
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)
 
     // WDSP LMS/FFT filter family: NRL, ANFL, ANFT. Narrower than hasRadioSideDsp and
@@ -620,6 +786,22 @@ struct RadioCapabilities {
     };
     std::optional<PaTelemetryAudit> paTelemetryAudit;
 
+    // Engaged means this radio's session takes its receive front-end options
+    // (sample rate, ADC, dither, randomization, filter-bank bypass, the
+    // radio-speaker stream) from the settings the "ANAN Front End" setup page
+    // edits, so that page applies to it. std::nullopt (the default) means NO
+    // SUCH PAGE for this radio, which is what every family that has not made
+    // the claim keeps.
+    //
+    // NO FIELDS, ON PURPOSE: the page offers all of its controls or none, so a
+    // per-control field would be a claim nothing reads (#5554). A field arrives
+    // together with the consumer that leaves a control out for some radio.
+    //
+    // A record rather than a bool for the same reason as PaTelemetryAudit
+    // above: RadioCapabilities is at its frozen boolean count (#5262 M2).
+    struct AdcFrontEnd {};
+    std::optional<AdcFrontEnd> adcFrontEnd;
+
     // The radio reports main-fan speed as live telemetry. False means the
     // Radio Vitals applet omits the fan gauge instead of presenting an
     // instrument that can never receive a sample. This is independent of PA
@@ -646,6 +828,10 @@ struct RadioCapabilities {
     // Independent controls require an implemented command or host DSP path.
     // AGC mode selection alone does not imply a writable threshold/off level.
     bool hasAgcThreshold = false;
+    struct AutoAgcThresholdControl {
+        QString requiredLicenseFeature;
+    };
+    std::optional<AutoAgcThresholdControl> autoAgcThresholdControl;
     // Modes the implemented selector can honor. A native OFF time-constant
     // editor is a different contract from selecting a fast/medium/slow bank.
     QStringList agcModes{QStringLiteral("off"), QStringLiteral("slow"),
@@ -667,6 +853,11 @@ struct RadioCapabilities {
     std::optional<VoxControl> voxControl;
     struct TxMonitorControl {};
     std::optional<TxMonitorControl> txMonitorControl;
+    // The radio's own line-out mixer (Flex by its command plane; otherwise
+    // IRadioBackend::setLineoutGain / setLineoutMute must apply it). Absent: the
+    // radio has no line out, so `mixer lineout` text reaches nothing (#4665).
+    struct LineoutControl {};
+    std::optional<LineoutControl> lineoutControl;
 
 
     // TX audio reaches this backend through IRadioBackend::submitTxAudio rather than
@@ -682,6 +873,14 @@ struct RadioCapabilities {
     // RadioModel synthesises no command-edge fallback. False for HL2 (no readback)
     // and Flex (interlock decoded by RadioModel). Icom: CI-V `1C 00`.
     bool hasRadioPttReadback = false;
+
+    // The backend also publishes on transmitChanged the keying the radio did by
+    // itself (its PTT or key input), which setKeying() never commanded. Observed
+    // state: it reaches radioTransmittingChanged and nothing that keys. setKeying()
+    // stays the authority for host keying, so RadioModel keeps the command-edge
+    // fallback and ORs the two. HL2: EP6 ptt_resp, which host MOX never raises.
+    struct RadioPttObservation {};
+    std::optional<RadioPttObservation> radioPttObservation;
 
     // Reachable RX filter widths in Hz; empty = continuous or unknown (the UI keeps
     // its configurable list). Set by radios with a short fixed IF set (IC-705
@@ -712,11 +911,20 @@ struct RadioCapabilities {
     // applet, the Profile Manager, import/export, the Profiles menu — goes away,
     // rather than offering an empty list the operator cannot populate.
     bool hasProfiles = false;
+    // The radio also stores named CW profiles (Flex `profile cw …`, SmartSDR
+    // 4.3.16+) that a client can list, load, create, delete and reset. Engaged
+    // gates ProfileRequest::Kind::Cw and the Profile Manager CW tab; meaningless
+    // unless hasProfiles is also true.
+    struct CwProfileControl {};
+    std::optional<CwProfileControl> cwProfileControl;
 
     // Per-slice RX audio and per-pan IQ as separate streams routed to virtual audio
     // devices for external decoders (Flex DAX). UI visibility only; the crash guard
     // is the separate panStream() null-check in MainWindow::startDax().
     bool hasDaxStreams = false;
+    // Discrete DAX IQ request rates in Hz. Empty means unsupported or unknown.
+    // Applied by the existing DaxIqModel command path, including stream restore.
+    QList<int> daxIqSampleRates;
 
     // Audio DSP runs inside the radio via command-plane verbs (Flex: NR/NB/ANF/NRL/
     // ANFL/ANFT, APD, wideband NB, 8-band hardware EQ `eq RXsc`/`eq TXsc`). False for

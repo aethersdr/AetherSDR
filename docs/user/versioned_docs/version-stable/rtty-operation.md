@@ -36,9 +36,13 @@ The shift is set per slice via `rtty_shift` in the radio's slice status.
 
 RTTY transmits binary data by switching between two audio frequencies, Mark and Space (see [Mark and Space tones](#mark-and-space-tones)). The difference between them is the **Shift** — by default 170 Hz, the standard amateur RTTY shift.
 
-When you switch to RTTY mode, AetherSDR displays two dashed vertical lines on the panadapter labelled **M** (Mark) and **S** (Space). These lines show exactly where the two RTTY tones sit in the audio passband, and they move with your VFO frequency.
+When you switch to RTTY mode, AetherSDR displays two dashed vertical lines on the panadapter labeled **M** (Mark) and **S** (Space). These lines show exactly where the two RTTY tones sit in the audio passband, and they move with your VFO frequency.
 
 When you tune to an RTTY signal, position the two dashed lines so that the Mark line sits on the higher-frequency tone and the Space line sits on the lower-frequency tone. When both tones fall on their respective lines, the signal is properly tuned and can be decoded.
+
+<img src="/img/screens/rtty-ms-lines.png" width="680" alt="Panadapter zoomed to a few kilohertz in RTTY mode. A shaded passband holds a dashed red line marked S and a dashed green line marked M, 170 Hz apart, beside the VFO flag reading 14.083.500 in RTTY mode." />
+
+*RTTY mode on a narrow span: the red S (space) and green M (mark) lines sit inside the passband.*
 
 ```
 Panadapter view (RTTY mode):
@@ -63,6 +67,10 @@ The M/S lines appear only in **RTTY** mode. A DIGL slice shows the normal carrie
 When the selected slice is in **RTTY**, a decoder pane opens below the waterfall and shows the decoded text (Baudot/ITA2, with LTRS/FIGS shift tracking). Its controls are listed under [Decoder controls](#decoder-controls).
 
 The stats bar updates about twice a second with the mark and space levels, the SNR and **LOCKED** / **UNLOCK**. Mark, Shift, Baud, REV and Sens are remembered.
+
+<img src="/img/screens/rtty-decoder-pane.png" width="1331" alt="The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: Auto, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area." />
+
+*The RTTY decoder pane under the waterfall.*
 
 #### Which audio is decoded
 
@@ -126,9 +134,9 @@ See [DAX Virtual Audio](./dax-virtual-audio.md) and [CAT Control](./cat-control.
 | Band | Frequency range | Notes |
 |------|----------------|-------|
 | 80m | 3.580 – 3.600 MHz | RTTY/Data segment |
-| 40m | 7.040 – 7.080 MHz | RTTY activity centre ~7.080 |
+| 40m | 7.040 – 7.080 MHz | RTTY activity center ~7.080 |
 | 30m | 10.130 – 10.150 MHz | RTTY ~10.143 |
-| 20m | 14.080 – 14.100 MHz | RTTY activity centre ~14.085 |
+| 20m | 14.080 – 14.100 MHz | RTTY activity center ~14.085 |
 | 15m | 21.080 – 21.100 MHz | RTTY ~21.085 |
 | 10m | 28.080 – 28.100 MHz | RTTY ~28.085 |
 

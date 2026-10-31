@@ -1,6 +1,6 @@
 ---
 title: "TCI Commands"
-description: "The TCI command names AetherSDR's TCI server recognises, generated from the source."
+description: "The TCI command names AetherSDR's TCI server recognizes, generated from the source."
 sidebar_position: 8
 custom_edit_url: null
 generated_by: "tools/docs/gen_reference.py"
@@ -13,7 +13,7 @@ This page is generated from `src/core/TciProtocol.cpp`, `src/core/TciServer.cpp`
 
 :::
 
-These are the command names the TCI server recognises from a client. Names are case-insensitive. A command the server does not recognise is ignored, as the TCI specification requires. Recognising a command does not mean every radio supports every value of it; see the TCI Server page for behaviour.
+These are the command names the TCI server recognizes from a client. Names are case-insensitive. A command the server does not recognize is ignored, as the TCI specification requires. Recognizing a command does not mean every radio supports every value of it; see the TCI Server page for behavior.
 
 ## Audio, IQ and session commands
 

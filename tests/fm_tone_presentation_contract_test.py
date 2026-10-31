@@ -67,13 +67,17 @@ def main() -> int:
         ("m_fmToneValueCmb", "m_fmToneRxValueCmb"),
     )
     rx_source = rx_path.read_text(encoding="utf-8")
-    radio_model_source = (source_root / "src/models/RadioModel.cpp").read_text(
+    slice_model_source = (source_root / "src/models/SliceModel.cpp").read_text(
         encoding="utf-8"
     )
-    if "&SliceModel::fmDtcsCommandIssued" not in radio_model_source:
-        fail("RadioModel no longer forwards normalized DTCS operator intent")
-    if "m_backend->setSliceFmDtcs(" not in radio_model_source:
-        fail("RadioModel no longer sends DTCS intent through IRadioBackend")
+    if "controlRequested({field, DtcsSetting{" not in slice_model_source:
+        fail("SliceModel no longer publishes normalized DTCS operator intent")
+    icom_source = (source_root / "src/core/backends/icom/IcomCivBackend.cpp").read_text(
+        encoding="utf-8"
+    )
+    dtcs_dispatch = re.compile(r"case Field::FmDtcs: \{(?:(?!case Field::).)*setSliceFmDtcs\(", re.S)
+    if not dtcs_dispatch.search(icom_source):
+        fail("the Icom backend no longer applies the typed DTCS request")
     mode_visibility_edge = re.compile(
         r"m_fmContainer->setVisible\(isFM\);\s*"
         r"(?:\s*//[^\n]*\n)*\s*configureFmToneControls\(\);"

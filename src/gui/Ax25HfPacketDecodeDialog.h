@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include "models/RadioModel.h"
 #include "models/TxController.h"
 #include <array>
@@ -129,7 +129,10 @@ struct TerminalSettings {
     static void migrateLegacy();
 };
 
-class Ax25HfPacketDecodeDialog : public PersistentDialog {
+// AetherModem: a CanonWindow workspace (style guide, RFC #6226), and a service
+// host as much as a window. MainWindow keeps one alive for the session, since
+// it owns the KISS TCP server and the APRS modem; closing it only hides it.
+class Ax25HfPacketDecodeDialog : public CanonWindow {
     Q_OBJECT
 
 public:
@@ -373,9 +376,7 @@ private:
     bool m_txAwaitingAudioFinish{false};
     bool m_txPendingStream{false};
     bool m_txRestoreAudioDaxMode{false};
-    bool m_txRestoreTransmitDax{false};
     bool m_txPreviousAudioDaxMode{false};
-    bool m_txPreviousTransmitDax{false};
     bool m_txFromKiss{false};
     // Identifies the current transmission so deferred work armed on its behalf
     // (the DAX stream-wait timeout) cannot act on a later one.

@@ -69,7 +69,11 @@ Choose **Remote server…** in the model picker and enter the endpoint URL (for 
 
 ### Opening Copy Assist
 
-- Click the **ASR** toggle in the status bar (between **CWX** and **DVK**), or
+<img src="/img/screens/copy-assist-panel.png" width="1340" alt="The bottom of the panadapter with the Copy Assist panel open below the waterfall. Its control row has a Disabled button, a settings gear, Buffer 20 s, Sens 80% and Silence 300 ms sliders, and A-, A+, a line-break button, Context and Clear. The transcript area is empty, with Disabled and Queue: 0.0 s at the bottom." />
+
+*The Copy Assist panel under the waterfall, before it is enabled.*
+
+- Click the **ASR** toggle in the status bar (between **CWX** and **DVK**), or Tab to it and press Enter, or
 - **Tools → Copy Assist**.
 
 Either one shows or hides the panel, which docks under the waterfall of the active panadapter. Drag the panel's grip to resize it; the height is remembered.
@@ -82,22 +86,29 @@ Either one shows or hides the panel, which docks under the waterfall of the acti
 - A band-stack recall or a disconnect does **not** close an open panel, so transcription survives a band change.
 - Whenever the panel is open, the ASR toggle is lit and clickable, so you can always close it by hand.
 
+### Which receiver is transcribed
+
+On RTL-SDR, Copy Assist uses the selected slice's independent audio before speaker volume, mute and client DSP. Other audible slices do not enter that feed. **Transcribe from unprocessed audio (bypasses NR and RX effects)** is unavailable for this route and explains why; its saved preference is retained for radios that use the presentation stream. Retuning, switching slices or parking the receiver starts a fresh transcription context. A parked receiver supplies no audio until it returns to capture.
+
+Other radios retain their existing presentation-audio route and pre/post-DSP choice. Selecting a slice controls mode availability; it does not isolate that slice from a shared presentation mix.
+
 ### Transcribing
 
 1. Open the panel and click **Disabled** so it reads **Enabled**.
 2. The first time, the selected model downloads, is verified and loads. A loading indicator shows progress.
 3. Transcribed text streams into the panel.
 
-Text is **coloured by recognition confidence**, the same way as the [CW Decoder](./cw-decoder.md):
+Text is **colored by recognition confidence**, the same way as the [CW Decoder](./cw-decoder.md):
 
-| Colour | Confidence |
+| Color | Confidence |
 |---|---|
 | Green | High |
 | Yellow | Medium |
 | Orange | Questionable |
 | Red | Low |
 
-Copy Assist hears the audio after client-side noise reduction, so a suitable [DSP Noise Mitigation](./dsp-noise-mitigation.md) setting can improve the transcript as well as your own listening.
+On radios using the presentation stream, the default processed-audio setting hears client-side [DSP Noise Mitigation](./dsp-noise-mitigation.md), which can affect transcription as well as listening. The unprocessed setting and RTL's independent receiver feed bypass those client effects.
+Noise-reduction artifacts can confuse the speech model more than noise does. On presentation-stream radios, turn on **Transcribe from unprocessed audio (bypasses NR and RX effects)** in Copy Assist Settings to bypass those effects for transcription. What you hear is unchanged.
 
 ### Context
 
@@ -105,7 +116,7 @@ Copy Assist hears the audio after client-side noise reduction, so a suitable [DS
 
 - A low-confidence segment is not carried forward, so one garbled over cannot poison the next.
 - A real pause, **Clear**, or a retune starts fresh.
-- Context works with the whisper models only. It is greyed out on the sherpa-onnx and remote backends.
+- Context works with the whisper models only. It is grayed out on the sherpa-onnx and remote backends.
 
 ### The Queue readout
 
@@ -141,15 +152,12 @@ The ⚙ button opens a small modeless settings window that can stay open while y
 | **Compute** | Which device runs the model: a GPU or the CPU. Shows **Detecting…** while GPU discovery runs in the background. |
 | **Language** | The spoken language to transcribe (multilingual models only). |
 | **Save transcript to a file** | Appends each finished utterance as a timestamped line. A date is inserted before the extension, so `net.txt` writes to `net-2026-07-21.txt` and rolls over daily. A frequency marker line is written when ASR starts, on every retune, and at the top of each day's file. |
+| **Transcribe from unprocessed audio (bypasses NR and RX effects)** | Off by default. Transcribes the receive audio before AetherSDR's noise reduction and RX effects instead of after them. What you hear is unchanged, and processing done by the radio itself still applies. On a noisy band the unprocessed audio has little level difference between speech and noise, so leave **Sens** high; Silero VAD rejects most real speech on a noisy HF signal. Switching starts the transcription over. |
 | **Use Silero VAD (ONNX)** | Replaces the built-in energy detector with the small Silero neural voice-activity model, which segments real speech far better in HF noise. Downloads on demand; **Browse…** lets you use your own `.onnx`. |
 | **Label speakers (A/B/C…)** | Tags each utterance with a speaker label (`[A] …`, `[B] …`) using a downloaded speaker-embedding model. **Match threshold** (0.00–1.00) sets how strict the matching is: higher splits voices more finely, lower merges them. Labels reset on retune or re-enable. |
 | **Boundary overlap** | 0–2000 ms, **Off** by default. When a long over is cut at the Buffer limit, the last N ms carry into the next segment so a word split at the cut is decoded whole, and the repeated words are removed. A few hundred ms is the practical setting. It does nothing useful for languages written without spaces (Chinese, Japanese, Thai). |
 
 Silero VAD and speaker labels need an ONNX Runtime build; the release builds include it.
-
-## Known issues
-
-- On Apple Silicon, transcribing in heavy noise can freeze the whole app for several seconds at a time, worse with MNR on ([#5107](https://github.com/aethersdr/AetherSDR/issues/5107)).
 
 ## Troubleshooting
 
@@ -190,6 +198,14 @@ The speech engine faulted while starting or while loading on the CPU, so local C
 2. Click **Try again next launch** and restart AetherSDR.
 3. In the meantime, a **Remote server…** still works.
 
+### Transcription turns off immediately
+
+Read the status below the transcript. If startup, model download, or model loading fails, the button returns to **Disabled** and the explanation stays visible. The same reason is written to the application log.
+
+1. For a missing custom model file or sherpa-onnx folder, select it again in **⚙ → Model**.
+2. For a download or load failure, use the displayed reason to check the network connection or model file, then click **Disabled** to retry.
+3. If local Copy Assist is off for the session after an earlier crash, follow the startup-fault steps above.
+
 ### The model will not download
 
 The computer has no internet access, for example in an air-gapped shack.
@@ -199,7 +215,7 @@ The computer has no internet access, for example in an air-gapped shack.
 
 ## See also
 
-- [DSP Noise Mitigation](./dsp-noise-mitigation.md) — clean up the audio Copy Assist hears
+- [DSP Noise Mitigation](./dsp-noise-mitigation.md) — clean up the audio you and Copy Assist hear
 - [CW Decoder](./cw-decoder.md)
 - [Accessibility](./accessibility.md)
 - Primary reference: [docs/asr-copy-assist.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/asr-copy-assist.md)

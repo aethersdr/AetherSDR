@@ -1,12 +1,12 @@
 ---
 title: "Callsign Lookup"
 slug: "/callsign-lookup"
-description: "AetherSDR can look up a station's name, location, grid square, licence class and photo on QRZ.com."
+description: "AetherSDR can look up a station's name, location, grid square, license class and photo on QRZ.com."
 ---
 
-AetherSDR can look up a station's name, location, grid square, licence class and photo on [QRZ.com](https://www.qrz.com/). Lookups appear in two places: the **Callsign Lookup** window, and a contact card that pops up in the CW decoder when it copies a station signing `DE <call>`.
+AetherSDR can look up a station's name, location, grid square, license class and photo on [QRZ.com](https://www.qrz.com/). Lookups appear in two places: the **Callsign Lookup** window, and the optional **Live CW contacts** window, which shows the station the CW decoder copies signing `DE <call>`.
 
-Without a QRZ.com account, lookups still work at country level, using the prefix data AetherSDR ships for DXCC spot colouring.
+Without a QRZ.com account, lookups still work at country level, using the prefix data AetherSDR ships for DXCC spot coloring.
 
 ## Requirements
 
@@ -18,6 +18,10 @@ Without a QRZ.com account, lookups still work at country level, using the prefix
 Open **Radio Setup → QRZ & Callsigns** (in the **ONLINE & APPEARANCE** group).
 
 ### QRZ.com Account
+
+<img src="/img/screens/radio-setup-qrz.png" width="679" alt="QRZ &amp; Callsigns page. The QRZ.com Account group explains what an account adds, with Enable QRZ callsign lookups ticked, empty Username (callsign) and Password fields and a Test Login button. The Lookup Cache group explains that looked-up callsigns are cached for 7 days and shows 0 cached callsign(s) with a Clear Cache button." />
+
+*Radio Setup, QRZ & Callsigns page, with no account entered.*
 
 - **Enable QRZ callsign lookups**
 - **Username (callsign):** and **Password:**
@@ -33,17 +37,23 @@ Looked-up callsigns are cached for **7 days**, together with station photos, so 
 
 ### The Callsign Lookup window
 
-Open it from **Tools → Callsign Lookup…** or press **Ctrl+Shift+L**.
+Open it from **Tools → Callsign Lookup...** or press **Ctrl+Shift+L**.
 
-Type a callsign and press **Lookup**. The card shows the callsign, licence class, name, location, grid, county, QSL methods (LoTW, eQSL, QSL) and the distance and bearing from your station, plus the station photo. Click the callsign to open its QRZ.com page.
+Type a callsign and press **Lookup**. The card shows the callsign, license class, name, location, grid, county, QSL methods (LoTW, eQSL, QSL) and the distance and bearing from your station, plus the station photo. Click the callsign to open its QRZ.com page.
 
 The status line says where the answer came from: "Fetched from QRZ.com", or "From cache — fetched *n* day(s) ago". **Refresh** fetches fresh data from QRZ.com even if the callsign is cached.
 
 If QRZ.com is not configured or doesn't answer, the card shows **prefix** data instead (country, continent and CQ zone) and says so.
 
-### Contact card in the CW decoder
+<img src="/img/screens/callsign-lookup-prefix.png" width="420" alt="Callsign Lookup window with N0CALL in the search field beside Lookup and Refresh buttons. The result card shows a placeholder silhouette, N0CALL marked prefix, United States, and NA, CQ 5 with a distance and bearing. A note below reads QRZ.com unavailable, showing country-level prefix data (cty.dat); full details will replace this if QRZ answers." />
 
-When the [CW Decoder](./cw-decoder.md) copies `DE <call>`, a compact contact card for that station appears beside the decoded text. It shows the name, location, grid and distance; click the callsign to open its QRZ.com page, and **✕** hides the card.
+*The Callsign Lookup window without a QRZ account: the card shows country-level prefix data.*
+
+### Live CW contacts
+
+Turn on **View → Show live CW contacts** (off by default) to open the **Live CW contacts** window. It reads "Waiting for a callsign in decoded CW…" until the [CW Decoder](./cw-decoder.md) copies `DE <call>`, then shows a contact card for that station: name, location, grid and distance. Click the callsign to open its QRZ.com page. A new station updates the card in place, without raising the window.
+
+The window is separate from the decoder, so it never covers the decoded text. Move it where you like; its position is remembered. **Close live contacts**, closing the window, or unchecking the menu item turns the option off, and later callsigns don't reopen it. The choice survives a restart.
 
 ### Looking up a spot
 
@@ -54,10 +64,6 @@ Right-click any spot on the panadapter and choose **Lookup on QRZ** to open that
 ### Distance and bearing
 
 Distance and bearing are measured from your own position: the radio's GPS fix when it has one, otherwise a grid square (the radio's, or the one on your own QRZ.com record). See [AetherClock and GPS](./aetherclock-and-gps.md).
-
-## Known issues
-
-- The CW decoder's contact card has no setting to turn it off; **✕** only hides the current card ([#5454](https://github.com/aethersdr/AetherSDR/issues/5454)).
 
 ## Troubleshooting
 

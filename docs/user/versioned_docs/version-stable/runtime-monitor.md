@@ -18,6 +18,10 @@ A **Timeframe** selector in the window header (1 minute, 5 minutes (default), 15
 
 Four cards across the top, each with a chart below:
 
+<img src="/img/screens/runtime-monitor-overview.png" width="900" alt="Runtime Monitor window on the Overview tab, with a 5 minutes timeframe. Four summary cards show CPU Total, Max Thread, Memory and GUI Tick Lag. Below are line charts of CPU (process and busiest thread), Memory (resident and peak), Top threads and GUI tick lag, each over the last 5 minutes." />
+
+*The Runtime Monitor's Overview tab after a few minutes of running.*
+
 | Card | Meaning |
 |------|---------|
 | **CPU Total** | AetherSDR's share of the whole machine |
@@ -34,6 +38,10 @@ The charts show CPU (process and busiest thread), memory (resident and peak), th
 A live table of every AetherSDR thread with **Thread**, **TID**, **State**, **CPU %** (share of one core), **Peak 60 s**, **Total CPU (s)** and a **Last 60 s** sparkline. The summary line above the table turns red when any thread crosses 90 % of a core.
 
 Windows does not report per-thread state, so the State column shows a dash there.
+
+<img src="/img/screens/runtime-monitor-threads.png" width="900" alt="Runtime Monitor window on the Threads tab. A summary line gives the thread count and the busiest thread. The table lists threads with columns Thread, TID, State, CPU %, Peak 60 s, Total CPU (s) and a sparkline, led by AetherSDR, SystemInfoCollector, AudioEngine, PanadapterStream and several data-loop threads." />
+
+*The Runtime Monitor's Threads tab: every thread with its CPU use.*
 
 ### Memory
 
@@ -57,7 +65,7 @@ What appears depends on the radio:
 - **FlexRadio:** Flex radios do not publish health registers through this window, so it reads "This radio reports no health registers." Use the **MTR** (Radio Vitals) applet for PA temperature, fan speed and supply voltage. See [Meters](./meters.md).
 - **[Hermes-Lite 2](./hermes-lite-2.md):** link, temperature, supply, PA current and gateware, a transmit voice-chain section (mic level and gain, ALC, forward power) and converter (ADC) rows. Some rows, such as whether another client is holding the radio, whether it is reachable and its PA temperature, are available even before you connect.
 - **[Networked Icom](./networked-icom.md):** includes the DATA OFF MOD and DATA MOD input selections and the MIC/USB/ACC/WLAN/LAN levels.
-- **[RTL-SDR](./rtl-sdr.md):** the capture window (centre, rate and edges) and receive-pipeline counters such as queue drops and late frames.
+- **[RTL-SDR](./rtl-sdr.md):** the capture window (center, rate and edges) and receive-pipeline counters such as queue drops and late frames.
 
 Radio Health is a different thing from the **HLTH** (Antenna Health) applet, which trends SWR and forward power for your antenna system.
 
@@ -65,11 +73,17 @@ Radio Health is a different thing from the **HLTH** (Antenna Health) applet, whi
 
 **Tools → Network Diagnostics...** shows the health of the link between AetherSDR and the radio. A **Connect by IP** connection also has a **Network Diagnostics** button beside the connect button.
 
+In the status bar, hover anywhere over the **Network:** block, including its heading and quality readout, for live link statistics. Double-click anywhere in that block to open or raise **Network Diagnostics**. You can also Tab to **Network diagnostics** and press Return or Enter, or use your screen reader's Press action.
+
 Pages are grouped in a tree on the left:
+
+<img src="/img/screens/network-diagnostics.png" width="1200" alt="Network Diagnostics window. A sidebar lists Status (Overview, Connection Details), Trends (Latency &amp; Jitter, Stream Rates, Packet Loss, Audio Health) and Support (Application Logs, TCI Clients). The Overview page shows cards for Status Excellent, Latency in ms, Packet Loss 0.00% and Audio Buffer, above charts of Latency and Jitter, Recent Packet Loss, Total Stream Rates and RX Audio Timing over the last minute." />
+
+*Network Diagnostics, Overview page, on a local-network connection.*
 
 | Group | Pages |
 |-------|-------|
-| **STATUS** | **Overview** (status, latency, packet loss and audio-buffer cards with summary charts), **Connection Details** |
+| **STATUS** | **Overview** (status, latency, packet loss and audio-buffer cards with summary charts), **Connection Details** (with a **Remote Link (Tailscale)** section when the radio is reached through the in-radio Tailscale container; see [Tailscale Remote Access](./tailscale-remote-access.md#network-diagnostics)), **Windows Firewall** (Windows only: whether the firewall allows AetherSDR, with **Fix…**; see [Windows](./windows.md#windows-firewall)) |
 | **TRENDS** | **Latency & Jitter**, **Stream Rates** (including the *Adaptive Throttle — FPS Cap* chart when the throttle is on), **Packet Loss**, **Audio Health** (RX audio buffer and timing, per-stream delivery table), **Digital Voice** (when a digital-voice waveform is active) |
 | **SUPPORT** | **Application Logs** (category filters, Live/Paused), **TCI Clients** (when the TCI server is running: connected clients, their likely role, and a TCI message monitor you can pause, clear, filter and save) |
 

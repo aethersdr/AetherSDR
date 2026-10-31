@@ -75,13 +75,13 @@ BNR uses NVIDIA software and an NVIDIA denoiser model, governed by the NVIDIA So
 
 ## Troubleshooting
 
-### BNR is greyed out: "BNR requires an NVIDIA RTX 40-series or later GPU"
+### BNR is grayed out: "BNR requires an NVIDIA RTX 40-series or later GPU"
 
 Your computer has no NVIDIA GPU, or the GPU is older than the RTX 40-series.
 
 1. Use **DFNR** instead; it runs on any CPU.
 
-### BNR is greyed out: "No BNR pack for your GPU … yet"
+### BNR is grayed out: "No BNR pack for your GPU … yet"
 
 Your GPU is new enough, but no runtime pack has been published for its architecture.
 
@@ -124,7 +124,7 @@ This is expected. BNR is voice-only and switches off in CW, CWL, RTTY and DIGU/D
 
 ### Audio sounds hollow or robotic
 
-BNR is denoising too hard, or a radio-side NR stacked with it is adding its own artefacts.
+BNR is denoising too hard, or a radio-side NR stacked with it is adding its own artifacts.
 
 1. Lower **Intensity**.
 2. Lighten any radio-side NR stacked with BNR.

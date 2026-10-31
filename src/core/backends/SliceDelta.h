@@ -5,6 +5,7 @@
 #include "core/HdFmReception.h"
 
 #include "core/backends/NoiseBlankerKind.h"
+#include "core/backends/ReceiveCommand.h"
 
 #include <QMetaType>
 #include <QString>
@@ -32,6 +33,7 @@ struct SliceDelta {
     std::optional<QString>     letter;
     std::optional<double>      frequency;      // MHz
     std::optional<QString>     mode;
+    std::optional<QString>     chainMode;      // empty = unknown; absent = unchanged
     std::optional<int>         filterLow;      // Hz
     std::optional<int>         filterHigh;     // Hz
     std::optional<QStringList> modeList;
@@ -105,6 +107,7 @@ struct SliceDelta {
     // AGC / squelch / RIT / XIT
     std::optional<QString>     agcMode;
     std::optional<int>         agcThreshold;
+    std::optional<AgcThresholdMode> agcThresholdMode;
     std::optional<int>         agcOffLevel;
     std::optional<bool>        squelchOn;
     std::optional<int>         squelchLevel;

@@ -98,6 +98,16 @@ int main(int argc, char** argv)
     check(headphoneControlsAvailable(false, true),
           "disconnected with a stale command plane -> available");
 
+    // ── 1b. The line-out predicate ──────────────────────────────────────────
+    check(!lineoutControlsAvailable(true, false, false),
+          "connected, no command plane, no declared line out -> unavailable (HL2)");
+    check(lineoutControlsAvailable(true, false, true),
+          "a declared line out with no command plane -> available (ANAN)");
+    check(lineoutControlsAvailable(true, true, false),
+          "a command plane -> available (Flex)");
+    check(lineoutControlsAvailable(false, false, false),
+          "disconnected -> available, not dimmed");
+
     // ── 2. The master-knob predicate ────────────────────────────────────────
     check(masterKnobDrivesLocalOutput(true, false, true),
           "no command plane, PC Audio on -> master knob drives this computer's output");
@@ -153,6 +163,12 @@ int main(int argc, char** argv)
           "slider's accessibleDescription names the master volume as this computer's level");
     check(slider->toolTip() == slider->accessibleDescription(),
           "slider's tooltip and accessibleDescription say the same thing");
+    check(mute->accessibleDescription()
+              == QString::fromLatin1(kHeadphoneMuteUnavailableReason),
+          "mute's reason is the header's mute sentence");
+    check(slider->accessibleDescription()
+              == QString::fromLatin1(kHeadphoneLevelUnavailableReason),
+          "slider's reason is the header's level sentence");
     check(slider->value() == 37 && mute->isChecked(),
           "dimming leaves the slider value and the mute state alone");
     check(emitted == 0, "dimming emits no command");

@@ -201,7 +201,10 @@ VENDOR_INCLUDE_RE = re.compile(
 # include OR a lateral swap that keeps the count flat) fails --strict. Decouple
 # a file by routing its radio access through IRadioBackend, then delete the
 # dropped stem(s) from its row; delete the row when it empties. NEVER add a stem
-# or a row merely to make a build pass. The only permitted re-baseline is an
+# or a row merely to make a build pass. A maintainer-ruled relocation may move
+# existing stems from one row to another when the code moves, the old row
+# shrinking by exactly what the new one gains (docs/agents/backends.md, item 4).
+# The only other permitted re-baseline is an
 # intentional vendor-vocabulary classification change: every added include
 # must be proven to predate the classification against the merge base, the
 # change must document that evidence, and it requires explicit maintainer
@@ -221,7 +224,8 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/ConnectionPanel.h": ["SmartLinkClient"],
     "src/gui/DaxIqApplet.cpp": ["DaxIqModel"],
     "src/gui/DemoApplet.cpp": ["NoiseMixer"],
-    "src/gui/DvkPanel.cpp": ["DvkWavTransfer"],
+    # Relocated from RadioSetupDialog.cpp with the firmware flow (#6718).
+    "src/gui/FirmwareUpdateCard.cpp": ["FirmwareStager", "FirmwareUploader"],
     "src/gui/KiwiPublicReceiverPicker.h": ["KiwiPublicDirectory"],
     "src/gui/KiwiSdrApplet.h": ["KiwiSdrClient"],
     "src/gui/MainWindow.cpp": ["DvkWavTransfer", "Hl2Backend", "KiwiSdrManager", "PanadapterStream", "RadioStatusOwnership", "SimBackend", "StreamStatus"],
@@ -236,7 +240,7 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/MemoryDialog.cpp": ["MemoryCsvCompat", "RadioConnection"],
     "src/gui/NetworkDiagnosticsDialog.h": ["PanadapterStream"],
     "src/gui/ProfileImportExportDialog.h": ["ProfileTransfer"],
-    "src/gui/RadioSetupDialog.cpp": ["FirmwareStager", "FirmwareUploader", "Hl2Discovery", "KiwiSdrManager", "PanadapterStream", "WanConnection"],
+    "src/gui/RadioSetupDialog.cpp": ["Hl2Discovery", "KiwiSdrManager", "PanadapterStream", "WanConnection"],
     "src/gui/RxApplet.cpp": ["KiwiSdrManager", "KiwiSdrProtocol"],
     "src/gui/SMeterWidget.h": ["KiwiSdrProtocol"],
     "src/gui/SpectrumOverlayMenu.cpp": ["KiwiSdrManager"],

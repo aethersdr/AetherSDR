@@ -550,6 +550,16 @@ inline QColor withAlpha(const QString& token, int alpha)
     return c;
 }
 
+// The same, resolved through `widget`'s container scope, for paint code in a
+// widget that can sit inside a scoped window (the canon scope's AetherRX and
+// AetherTX). Outside any scope it returns what the bare-token form does.
+inline QColor withAlpha(const QWidget* widget, const QString& token, int alpha)
+{
+    QColor c = ThemeManager::instance().color(widget, token);
+    c.setAlpha(alpha);
+    return c;
+}
+
 // Declare a widget's container scope (dynamic property "themeContainer");
 // children inherit it via containerPathFor()'s parent walk.
 //   theme::setContainer(spectrumWidget, "spectrum");

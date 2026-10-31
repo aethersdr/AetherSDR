@@ -16,6 +16,10 @@
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
 #include "gui/AsrAudioTap.h"
+#include "gui/ControlAvailabilityRegistry.h"
+#include "models/DecoderAudioModel.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include <QPushButton>
 
@@ -438,6 +442,10 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
                 .toString())
         == AsrTapPoint::PreDsp);
     connect(m_settings, &CopyAssistSettingsDialog::rawAudioToggled, this, [this](bool raw) {
+        if (m_tap && m_tap->usesNativeInput()) {
+            m_settings->setNativeAudioRoute(true);
+            return;
+        }
         const AsrTapPoint point = raw ? AsrTapPoint::PreDsp : AsrTapPoint::PostDsp;
         CopyAssistSettings::setValue(QStringLiteral("AsrTapPoint"), asrTapPointToSetting(point));
         if (m_tap) {
@@ -468,10 +476,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         m_asr->setModelPath(path);
     });
     connect(m_models, &AsrModelManager::failed, this, [this](const QString& err) {
-        m_panel->setBusy(false);
-        m_gpuFallbackNotice.clear(); // the fallback reload never got a model
-        m_panel->setStatus(tr("Model download failed: %1").arg(err));
-        m_panel->setAsrEnabled(false);
+        abandonEnable(tr("Model download failed: %1").arg(err));
     });
 
     // Live VAD tuning (reads m_asr at call time → survives engine rebuild).
@@ -766,10 +771,66 @@ PersistentDialog* CopyAssistController::settingsDialog() const
     return m_settings;
 }
 
+void CopyAssistController::setReceiver(RadioModel& radio, SliceModel* slice)
+{
+    if (m_radio != &radio) {
+        if (m_radio) { disconnect(m_radio, nullptr, this, nullptr); }
+        if (m_tap) { m_tap->setNativeInput(nullptr); }
+        delete m_nativeAudio;
+        m_radio = &radio;
+        delete m_audioAvailability;
+        m_audioAvailability = new ControlAvailabilityRegistry(radio, this);
+        m_audioAvailability->registerWidget(m_settings->rawAudioControl(),
+            tr("The selected receiver supplies independent audio before speaker gain, mute, "
+               "client noise reduction and RX effects. Post-effects audio is not available for this route."),
+            [](bool, const RadioCapabilities& caps) { return !caps.receiveAudioExport.has_value(); });
+        m_nativeAudio = new DecoderAudioModel(radio, DecoderAudioModel::Consumer::NativeAsr, this);
+        connect(&radio, &RadioModel::capabilitiesChanged, this, [this] { refreshNativeInput(); });
+        connect(m_nativeAudio, &DecoderAudioModel::routeStatusChanged, this, [this] {
+            if (m_tap && m_tap->isEnabled() && m_tap->usesNativeInput()) {
+                m_panel->setStatus(listeningStatus());
+            }
+        });
+    }
+    setSelectedSlice(slice);
+    refreshNativeInput();
+}
+
+void CopyAssistController::setSelectedSlice(SliceModel* slice)
+{
+    m_selectedSlice = slice;
+    if (m_nativeAudio) { m_nativeAudio->setSlice(slice); }
+}
+
+void CopyAssistController::refreshNativeInput()
+{
+    const bool native = m_radio && m_radio->backendCapabilities().receiveAudioExport.has_value();
+    m_settings->setNativeAudioRoute(native);
+    if (!native) {
+        m_settings->setRawAudio(asrTapPointFromSetting(CopyAssistSettings::value(
+            QStringLiteral("AsrTapPoint"), asrTapPointToSetting(AsrTapPoint::PostDsp)).toString())
+            == AsrTapPoint::PreDsp);
+    }
+    if (m_tap) { m_tap->setNativeInput(native ? m_nativeAudio : nullptr); }
+}
+
+QString CopyAssistController::listeningStatus() const
+{
+    if (m_tap && m_tap->usesNativeInput()) {
+        if (!m_nativeAudio || m_nativeAudio->routeStatus() != DecoderAudioModel::RouteStatus::Bound) {
+            return tr("Waiting for selected receiver — audio before RX effects");
+        }
+        return m_backend == AsrBackendKind::Remote
+            ? tr("Listening (remote) — selected receiver before RX effects")
+            : tr("Listening — selected receiver before RX effects");
+    }
+    return m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…") : tr("Listening…");
+}
+
 void CopyAssistController::clearDecode()
 {
     m_panel->clearText();
-    m_asr->reset(); // drop any half-built utterance so it doesn't cross frequencies
+    m_asr->restartSession(); // retire queued audio and results from the previous context
 }
 
 void CopyAssistController::onRetune(double freqMhz)
@@ -1058,6 +1119,7 @@ void CopyAssistController::buildEngine()
         break;
     }
     m_tap = new AsrAudioTap(m_audio, m_asr, this);
+    refreshNativeInput();
     // Before any enable, so the first connection is already the right signal.
     m_tap->setTapPoint(asrTapPointFromSetting(
         CopyAssistSettings::value(QStringLiteral("AsrTapPoint"),
@@ -1077,8 +1139,7 @@ void CopyAssistController::buildEngine()
                 m_panel->setStatus(m_gpuFallbackNotice);
                 m_gpuFallbackNotice.clear();
             } else {
-                m_panel->setStatus(m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…")
-                                                                       : tr("Listening…"));
+                m_panel->setStatus(listeningStatus());
             }
             writeFreqMarkerIfNeeded(); // "on start": head the log with the frequency
         }
@@ -1095,10 +1156,7 @@ void CopyAssistController::buildEngine()
     });
     connect(m_asr, &AsrEngine::loadFailed, this, [this](const QString& err) {
         loadSettled(); // a failure that reports is not a fault
-        m_panel->setBusy(false);
-        m_gpuFallbackNotice.clear(); // failed reload: this message wins instead
-        m_panel->setStatus(tr("Model load failed: %1").arg(err));
-        m_panel->setAsrEnabled(false);
+        abandonEnable(tr("Model load failed: %1").arg(err));
     });
     connect(m_asr, &AsrEngine::finalText, this,
             [this](const QString& text, float confidence, int speaker) {
@@ -1269,15 +1327,24 @@ void CopyAssistController::setBackend(AsrBackendKind kind, const QString& tierId
     }
 }
 
+void CopyAssistController::abandonEnable(const QString& reason)
+{
+    // The toggle synchronously runs normal shutdown, including its "Disabled"
+    // status. Publish the failure afterward so that shutdown cannot erase it.
+    m_panel->setAsrEnabled(false);
+    m_enableAfterGpuDiscovery = false;
+    m_panel->setBusy(false);
+    m_gpuFallbackNotice.clear();
+    m_panel->setStatus(reason);
+    qCWarning(lcGui).noquote() << "Copy Assist: enable abandoned —" << reason;
+}
+
 void CopyAssistController::requestEnable()
 {
     if (m_localEngineStoodDown && m_backend == AsrBackendKind::Whisper) {
         // ggml could not run here last time (#5190); entering it again would
         // only repeat the death. Remote/sherpa tiers remain selectable.
-        m_enableAfterGpuDiscovery = false;
-        m_panel->setBusy(false);
-        m_panel->setStatus(m_standDownReason);
-        m_panel->setAsrEnabled(false);
+        abandonEnable(m_standDownReason);
         return;
     }
     if (m_backend == AsrBackendKind::Whisper && m_gpuDiscoveryPending) {
@@ -1316,10 +1383,7 @@ void CopyAssistController::beginEnable()
         // User-supplied model: load the picked file directly, bypassing the
         // catalog download + SHA verification (we don't know its checksum).
         if (m_customModelPath.isEmpty() || !QFileInfo::exists(m_customModelPath)) {
-            m_panel->setBusy(false);
-            m_gpuFallbackNotice.clear(); // no reload will arrive to show it
-            m_panel->setStatus(tr("Custom model file not found — pick it again."));
-            m_panel->setAsrEnabled(false);
+            abandonEnable(tr("Custom model file not found — pick it again."));
             return;
         }
         m_panel->setStatus(tr("Loading model…"));
@@ -1329,10 +1393,7 @@ void CopyAssistController::beginEnable()
         // sherpa-onnx model: load the picked directory directly (the backend
         // discovers the bundle's files). No download/verify.
         if (m_sherpaModelDir.isEmpty() || !QDir(m_sherpaModelDir).exists()) {
-            m_panel->setBusy(false);
-            m_gpuFallbackNotice.clear(); // no reload will arrive to show it
-            m_panel->setStatus(tr("sherpa-onnx model folder not found — pick it again."));
-            m_panel->setAsrEnabled(false);
+            abandonEnable(tr("sherpa-onnx model folder not found — pick it again."));
             return;
         }
         m_panel->setStatus(tr("Loading model…"));
@@ -1347,8 +1408,7 @@ void CopyAssistController::requestModel(const QString& tierId)
 {
     const AsrModelTier* tier = AsrModelCatalog::tierById(tierId);
     if (tier == nullptr) {
-        m_panel->setStatus(tr("Unknown model tier: %1").arg(tierId));
-        m_panel->setAsrEnabled(false);
+        abandonEnable(tr("Unknown model tier: %1").arg(tierId));
         return;
     }
     m_models->ensure(*tier); // emits alreadyPresent / finished / failed
@@ -1614,8 +1674,7 @@ void CopyAssistController::restoreListeningStatus()
     if (!m_enabled || !m_asr->isReady()) {
         return; // not listening — leave "Disabled"/"Loading model…" alone
     }
-    m_panel->setStatus(m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…")
-                                                           : tr("Listening…"));
+    m_panel->setStatus(listeningStatus());
     // The ready() lambda skips its whole body while a speaker load is pending,
     // so this resume point owes the log the same "on start" frequency header it
     // would have written. writeFreqMarkerIfNeeded() dedups, so the ordinary

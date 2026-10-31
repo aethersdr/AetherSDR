@@ -58,16 +58,17 @@ alone. MSVC flags and `Release` builds are unaffected.
 
 | Option | Default | Purpose and prerequisites |
 |---|---|---|
-| `ENABLE_DEEPFIST_EXPERIMENT` | OFF | Build the experimental DeepFist CW receive decoder. Requires ONNX Runtime at configure time (configuration fails without it) and a separate verified model bundle at runtime; see below. |
 | `ENABLE_RTL` | ON | Build the experimental receive-only RTL-SDR USB backend when both `librtlsdr` and single-precision FFTW (`fftw3f`) are found. Missing either disables the backend unless `REQUIRE_RTL=ON`. |
 | `ENABLE_HD_FM` | OFF | Build experimental embedded Digital FM using the pinned nrsc5 and FAAD HDC sources. Requires the RTL backend, librtlsdr and float FFTW; qualified build paths are Linux/GNU, macOS/AppleClang and Windows/MSVC x64 (with LLVM compiler-rt builtins). Official release workflows explicitly keep it OFF. See [the experimental guide](docs/rtl-hd-fm-experimental.md). |
-| `AETHER_HL2_TX_TXA` | ON | Select WDSP's TXA chain for the Hermes-Lite 2 SSB transmit modulator. OFF builds the in-tree phasing modulator. This choice has no runtime toggle. |
+| `AETHER_HL2_TX_TXA` | ON | Select WDSP's TXA chain as the Hermes-Lite 2 transmit modulator: SSB, AM, DSB and FM. OFF builds the in-tree phasing modulator, which is SSB only; AM, DSB and FM then stay receive-only. This choice has no runtime toggle. |
 
-**DeepFist:** enabling `-DENABLE_DEEPFIST_EXPERIMENT=ON` alone does not supply its
-model. The configured model-download URL defaults to empty. For developer
-qualification, the runtime environment variable `AETHER_DEEPFIST_MODEL_DIR`
-can point to the exact verified bundle; it is not a CMake switch. The required
-assets and distribution prerequisite are described in
+**Neural CW decoders:** DeepFist and DeepCW build whenever ONNX Runtime is
+found at configure time (Apple Silicon macOS, Linux and Windows; the pinned
+runtime has no Intel-macOS build), with no separate option. Neither model is
+bundled: each downloads on first use from its upstream source at a pinned size
+and SHA-256. For developer qualification, the runtime environment variables
+`AETHER_DEEPFIST_MODEL_DIR` and `AETHER_DEEPCW_MODEL_DIR` point at a local
+copy instead; they are not CMake switches. See
 [the DeepFist guide](docs/deepfist-cw-backend.md). ggmorse remains the default
 CW receive decoder.
 
@@ -150,7 +151,7 @@ the ASR library (`aetherasr`) sees.
 | `HAVE_NVIDIA_AFX` | `ENABLE_NVIDIA_AFX` on x86-64 Linux or Windows. |
 | `HAVE_MQTT` | `ENABLE_MQTT`. |
 | `HAVE_MQTT_TLS` | `MQTT_TLS`, and for the bundled library OpenSSL is found. |
-| `HAVE_DEEPFIST` | `ENABLE_DEEPFIST_EXPERIMENT`. |
+| `HAVE_DEEPFIST`, `HAVE_DEEPCW`, `HAVE_CW_RX_BACKENDS` | ONNX Runtime is found. |
 | `HAVE_MIDI` | Always; RtMidi is bundled. |
 | `HAVE_SERIALPORT`, `HAVE_WEBSOCKETS`, `HAVE_KEYCHAIN` | The Qt SerialPort, Qt WebSockets or QtKeychain package is found. |
 | `HAVE_DBUS` | Qt DBus is found on Linux or another non-Apple Unix; it is never looked for on macOS or Windows. |
@@ -166,27 +167,50 @@ These options are for development and qualification.
 | Option | Default | Purpose and prerequisites |
 |---|---|---|
 | `RADE_WAV_TAP` | OFF | Write diagnostic WAV files at RADE transmit tap points when RADE is built. Output directory: `RADE_TAP_DIR`. |
+| `AETHER_ENABLE_FLEX_RETRY_SOCKET_TEST` | OFF | Build/register the Flex TCP retry diagnostic. Uses an ephemeral localhost TCP listener to check recovery after source-bound connection refusal; no radio is required. |
 | `AETHER_ENABLE_HL2_RECEIVER_CHURN_TEST` | OFF | Build/register the fake-EP6 receiver-churn test used by sanitizer runs. |
 | `AETHER_ENABLE_HL2_TX_LOOPBACK_TEST` | OFF | Build/register HL2 transmit-loopback and DSP-readback tests against an external `hpsdrsim` peer. The loopback test keys the simulated transmitter; a missing simulator produces a skip. |
 | `AETHER_ENABLE_HL2_SIGNAL_STOP_TEST` | OFF | Build the HL2 signal-stop child process. The loopback-UDP process test is registered on non-Windows hosts with Python 3. |
 | `AETHER_ENABLE_RADAR_GL_TEST` | OFF | Build/register the native-GPU weather-radar texture test. Needs a real OpenGL 3.2 context. |
-| `AETHER_BUILD_SPECTRUM_GESTURE_TEST` | OFF | Build/register `spectrum_confirmed_geometry_test`, which compiles the desktop application sources into a test binary to exercise the real `SpectrumWidget` gestures offscreen. |
+| `AETHER_BUILD_SPECTRUM_GESTURE_TEST` | OFF | Build/register `spectrum_confirmed_geometry_test`, which compiles the desktop application sources into a test binary to exercise the real `SpectrumWidget` gestures offscreen, and `spectrum_pan_pixels_retina_test`, the same binary at a Retina scale factor pinning the Flex pan `xpixels` cap. |
 | `AETHER_SHARED_CORE` | OFF | Build `libaethercore` as a shared library so the sanitizer lane's test binaries fit on a hosted runner. For the sanitizer lane and local review builds (`/pr-review` step 7), never for releases; configuration fails on Windows. |
+| `AETHER_FIRMWARE_DEV_OVERRIDES` | OFF | Honor the `AETHER_FIRMWARE_CATALOG` (another firmware catalog URL) and `AETHER_FIRMWARE_TRUST_KEYS` (extra Ed25519 firmware-signing keys, hex, comma-separated) environment variables, for testing a firmware publisher's own builds. Each override is logged when used. Never for releases: a release build installs only firmware listed at aethersdr.com and signed by a key built into it. |
+| `AETHER_UPDATE_DEV_OVERRIDES` | OFF | Honor four environment variables of the in-app updater, for trying an update end to end before there is a release to update to: `AETHER_UPDATE_MANIFEST_URL` (another signed manifest), `AETHER_UPDATE_TRUST_KEYS` (extra Ed25519 update-signing keys, hex, comma-separated), `AETHER_UPDATE_DOWNLOAD_BASE` (fetch release files from `<base>/<tag>/<asset>`; the URLs the manifest signs are still checked) and `AETHER_UPDATE_PRETEND_VERSION` (run as an older version; never passed on to the self-test or a restart). Each override is logged when used. `windows-installer.yml`'s `dev_overrides` dispatch input builds one, refused on a tag or with the Store flight. Never for releases. |
 
 Additional cache values accept a value rather than ON/OFF:
 
 | Setting | Default | Values and purpose |
 |---|---|---|
 | `AETHERSDR_SANITIZER` | `none` | `none`, `address`, `undefined`, `address,undefined`, or `thread`. Instruments the main CMake tree with a GNU-driver GCC/Clang build; MSVC and clang-cl are rejected, and so is combining `address` with `thread`. Adds `-g3 -fno-omit-frame-pointer` to every configuration, Release included. ExternalProject children need separate sanitizer flags. |
-| `DEEPFIST_MODEL_BASE_URL` | Empty | Published, versioned HTTPS directory for the exact DeepFist assets. See the distribution prerequisite in [the DeepFist guide](docs/deepfist-cw-backend.md). |
+| `DEEPFIST_MODEL_BASE_URL` | Empty (N9BC's `exp27_bt-champion` release) | Replaces the HTTPS directory holding the exact DeepFist model assets; empty uses the published release. The LICENSE asset carries its own pinned source. See [the DeepFist guide](docs/deepfist-cw-backend.md). |
 | `RADE_TAP_DIR` | `<build-directory>/rade_taps` | Directory for RADE WAV diagnostics; available when RADE and its taps are enabled. |
 | `AETHER_TEST_FFTW_TIMELIMIT` | `0.001` | Seconds FFTW may spend measuring each plan under test; an empty value allows unbounded measurement. |
 | `AETHER_SANITIZER_TIMEOUT_SCALE` | `4` | Positive integer. Multiplier applied to every test `TIMEOUT` when the build is sanitizer-instrumented (`AETHERSDR_SANITIZER` set, or `-fsanitize=` in the global C/C++ flags or in any configuration's `CMAKE_<LANG>_FLAGS_<CONFIG>`). An uninstrumented build keeps every limit exactly as written. |
 
+## macOS application identity
+
+| Option | Default | Purpose |
+|---|---|---|
+| `AETHER_MACOS_ADHOC_SIGN` | OFF | Opt in to ad-hoc signing for local non-Xcode macOS development builds. Signs nested code before the complete app bundle. Leave OFF for production/distribution builds. |
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `AETHER_MACOS_BUNDLE_IDENTIFIER` | `com.aethersdr.AetherSDR` | macOS only. Set a distinct reverse-DNS identifier, such as `com.aethersdr.AetherSDR.dev`, to give a local development build its own privacy permissions alongside an installed release. |
+
+With `AETHER_MACOS_ADHOC_SIGN=ON`, non-Xcode macOS builds sign nested code,
+then sign and verify the complete app bundle after copying resources and helpers.
+This is local development signing only: ad-hoc signatures, not an Apple
+distribution identity or a persistent self-signed certificate.
+The option defaults to OFF; production Apple signing, notarization and release CI
+keep their existing workflow and do not enable it. Xcode handles signing itself.
+An ad-hoc signature does not guarantee that privacy or Keychain approvals
+survive a rebuild; persistent development signing is a separate workflow.
+
 ## Keeping this reference current
 
 Option definitions live in [CMakeLists.txt](CMakeLists.txt),
-[cmake/AetherQtPin.cmake](cmake/AetherQtPin.cmake) and
+[cmake/AetherQtPin.cmake](cmake/AetherQtPin.cmake),
+[cmake/MacOSDevelopmentSigning.cmake](cmake/MacOSDevelopmentSigning.cmake), and
 [tests/tests.cmake](tests/tests.cmake). Update this reference in the same change
 that adds, removes or changes a project option or its default.
 `tools/check_build_options.py --strict` runs in Static checks and fails when an

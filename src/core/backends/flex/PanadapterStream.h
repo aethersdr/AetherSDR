@@ -7,6 +7,7 @@
 #include "core/PacketLossConcealment.h"
 #include "core/VitaBinCoverage.h"
 #include "core/backends/flex/VitaSequenceLossReport.h"
+#include "VitaDscpMarker.h"
 
 #include <QObject>
 #include <QUdpSocket>
@@ -21,6 +22,9 @@
 #include <QMutexLocker>
 #include <atomic>
 #include <functional>
+#include <initializer_list>
+
+class QNetworkDatagram;
 
 namespace AetherSDR {
 
@@ -38,6 +42,10 @@ class OpusCodec;
 class PanadapterStream : public QObject {
     Q_OBJECT
     friend class TxOperationIntegrationTestAccess;
+    friend class VitaDscpStreamTestAccess;
+    friend class WanUdpKeepaliveTestAccess;
+    friend class WanUdpKeepaliveSocketTestAccess;
+    friend class LanUdpKeepaliveTestAccess;
     // Inject the terminal transport in socket-free queue/cancellation tests.
     std::function<void(const QByteArray&)> m_packetSinkForTest;
 
@@ -61,8 +69,8 @@ public:
     Q_INVOKABLE bool startWan(const QHostAddress& radioAddr, quint16 radioUdpPort);
 
     // Begin WAN UDP registration: sends "client udp_register handle=0x<handle>"
-    // via UDP every 50ms until VITA-49 packets arrive, then switches to
-    // "client ping handle=0x<handle>" keepalive every 5 seconds.
+    // via UDP every 50ms until a valid Flex VITA-49 packet arrives from the
+    // radio, then keeps sending udp_register every 5 seconds.
     Q_INVOKABLE void startWanUdpRegister(quint32 clientHandle);
     Q_INVOKABLE void stop();
 
@@ -224,21 +232,29 @@ signals:
 
 private slots:
     void onDatagramReady();
+    void sendWanUdpRegister();
+    void sendLanKeepalive();
 
 private:
     friend class PcmCompatibilityTestAccess;
     friend class VitaSequenceLossLogTestAccess;
     friend struct PanadapterDbmRangeTestAccess;
+    friend struct PanadapterLatePacketTestAccess;
     PcmProducer m_pcmProducer;
     std::map<quint32, std::unique_ptr<PcmProducer>> m_daxPcm;
     void publishLegacyDaxAudio(quint32 streamId, int channel, const QByteArray& pcm);
     void publishLegacyAudio(const QByteArray& pcm);
     void processDatagram(const QByteArray& data);
+    void handleReceivedDatagram(const QNetworkDatagram& dg);
+    void startLanKeepalive();
+    qint64 writeLanDatagram(const QByteArray& data, const QHostAddress& to, quint16 port);
+    void confirmWanRegistration(const QByteArray& data);
     // Raise the kernel receive buffer (SO_RCVBUF) on the bound VITA-49 socket so
     // bursts / brief drain stalls don't overflow it and surface as false
     // sequence-loss (which the adaptive throttle would react to). Logs the
     // granted size — the kernel caps the request at net.core.rmem_max. (#3810)
     void applyReceiveBufferSize();
+    void applyDscpEf(const QHostAddress& destination, std::initializer_list<quint16> ports);
     void decodeFFT(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
     void decodeWaterfallTile(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
     void decodeNarrowAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
@@ -310,6 +326,10 @@ private:
         bool isComplete() const { return coverage.isComplete(); }
     };
 
+    // m_frameMutex guards m_frames and m_wfFrames: assembled on the network
+    // worker thread, removed from the main thread on pan/session teardown.
+    // Never nested with m_streamMutex, and released before any emit.
+    mutable QMutex m_frameMutex;
     QMap<quint32, WaterfallFrame> m_wfFrames;  // per-stream waterfall frame assembly
 
     // Per-stream packet sequence tracking (4-bit count in VITA-49 word0 bits 19:16)
@@ -335,6 +355,7 @@ public:
         qint64 bytes{0};
         int    packets{0};
         int    errors{0};
+        int    late{0};    // FFT/waterfall packets discarded as late (#6883)
     };
     struct AudioStreamDiagnostics {
         quint32 streamId{0};
@@ -377,6 +398,9 @@ private:
     QHash<quint32, OrphanRec> m_orphanStreams;
     QElapsedTimer             m_orphanClock;   // monotonic source for lastSeenMs
     QUdpSocket*     m_socket{nullptr};
+    VitaDscpMarker m_dscpMarker;
+    // Inject only the marking attempt; bind/send/teardown remain production.
+    std::function<VitaDscpResult(qintptr, const QHostAddress&, std::initializer_list<quint16>)> m_dscpApplyForTest;
     quint16         m_localPort{0};
 
     QMap<quint32, QPair<float,float>> m_dbmRanges;  // streamId → (min, max)
@@ -385,12 +409,13 @@ private:
     QMap<quint32, QPair<float,float>> m_pendingDbmRanges;  // streamId → pending echoed range
     QMap<quint32, int> m_yPixels;  // streamId → ypixels for FFT bin scaling
     RadioConnection* m_conn{nullptr};
-    QMap<quint32, FrameAssembler> m_frames;  // per-stream FFT frame assembly
+    QMap<quint32, FrameAssembler> m_frames;  // per-stream FFT frame assembly; m_frameMutex
     QMap<quint32, StreamStats> m_streamStats;  // keyed by stream ID
     mutable QMutex m_statsMutex;
     QElapsedTimer m_seqLossClock;  // time base for StreamStats::lossLog; read only on new streams and errors
     VitaSequenceLossBudget m_seqLossBudget;  // all streams' lines together; under m_statsMutex
     CategoryStats m_catStats[CatCount]{};
+    void recordLatePacket(StreamCategory cat);
 
     struct AudioStreamTracker {
         quint16 packetClassCode{0};
@@ -471,10 +496,20 @@ private:
     // reason RadioConnection::m_syntheticDemo is.
     std::atomic<bool> m_hasReceivedPacket{false};
 
+    // Inject only the terminal WAN bind/write in socket-free lifecycle tests.
+    std::function<bool()> m_wanBindForTest;
+    std::function<qint64(const QByteArray&, const QHostAddress&, quint16)> m_wanWriteForTest;
+    bool m_wanBoundForTest{false};
+    // Inject only the terminal LAN bind/write in socket-free lifecycle tests.
+    std::function<bool()> m_lanBindForTest;
+    std::function<qint64(const QByteArray&, const QHostAddress&, quint16)> m_lanWriteForTest;
+    bool m_lanBoundForTest{false};
+
     // WAN UDP registration and keepalive
-    QTimer*  m_wanRegisterTimer{nullptr};   // 50ms: "client udp_register" until first packet
-    QTimer*  m_wanPingTimer{nullptr};       // 5s: "client ping" keepalive after registration
+    QTimer*  m_wanRegisterTimer{nullptr};   // udp_register: 50 ms until VITA, then 5 s
     QTimer*  m_routedPrimeTimer{nullptr};   // 250ms: non-WAN UDP prime retry until first packet
+    QTimer*  m_lanKeepaliveTimer{nullptr};  // 5 s: non-WAN keepalive for the whole session
+    bool     m_lanKeepaliveFailed{false};   // warn once per session, not every 5 s
     bool     m_isWanMode{false};
     bool     m_wanRegistered{false};
     quint32  m_wanClientHandle{0};

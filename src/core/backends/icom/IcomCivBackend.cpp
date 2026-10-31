@@ -14,9 +14,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <limits>
 #include <optional>
+#include <utility>
 #include <span>
 
 #include "core/backends/icom/IcomControls.h"
@@ -91,6 +93,73 @@ constexpr int kLinkTickMs = 1000;
 // zone is needed at all: a click with a pixel of hand movement arrives as a
 // centre request, and without this every stray click moved the dial.
 constexpr double kPanDragDeadZoneFraction = 0.01;
+// Fixed / SCROLL-F windows are stored presets (27 1E), so gestures write at
+// most this often; the latest target always wins.
+constexpr int kScopeEdgeWriteIntervalMs = 200;
+// How long the view holds a written window, from the moment the write goes on
+// the wire, before believing sweeps again; and the bound while it is queued.
+constexpr int kScopeEdgeHoldMs = 1000;
+constexpr int kScopeEdgeQueuedHoldMs = 8000;
+// A sweep within this of the written edges has arrived (whole-kHz edges).
+constexpr std::int64_t kScopeEdgeMatchHz = 1000;
+// The all-zero sweep that answers a 27 1E arrives within this.
+constexpr int kScopeBlankSweepMs = 300;
+// Sweeps still carry the old mode this long after the operator picks one.
+constexpr int kScopeModeRequestGraceMs = 1500;
+// IC-9700 Dual scope interleaves MAIN and SUB sweeps; the other scope's selector
+// is a MAIN/SUB switch only once ours has been silent this long.
+constexpr int kScopeSelectorSwitchMs = 1000;
+// The menu's choices, by index: the order is the contract with the menu.
+constexpr int kScopeModeIndexCenter = 0;
+constexpr int kScopeModeIndexScrollF = 1;
+constexpr int kScopeModeIndexFixed = 2;
+// Follow for VFO moves AetherSDR did not command: entering the outer zone pans
+// so the VFO sits the inset inside that edge. SCROLL-F itself waits until the
+// VFO is off screen and then jumps a whole width.
+constexpr double kScopeFollowZoneFraction = 0.10;
+constexpr double kScopeFollowInsetFraction = 0.25;
+// In SCROLL-F the radio pages straight back when a drag leaves the VFO off
+// screen, so a drag stops with the VFO this far inside the window.
+constexpr double kScopeDragVfoMarginFraction = 0.02;
+constexpr double kScopeDragVfoMarginMinHz = 2000.0;
+// A frequency echo matching one of our tunes this recent is ours, not the dial.
+constexpr qint64 kScopeCommandedTuneMs = 2000;
+// The newest tune's echo can trail a fast spin by seconds on the 03 poll.
+constexpr qint64 kScopeCommandedTuneEchoMs = 10000;
+// A Drag centre this soon after one of our tunes is an edge-pan tracking the VFO.
+constexpr qint64 kScopeEdgePanTrackMs = 500;
+constexpr std::size_t kScopeCommandedTuneRing = 32;
+
+AetherSDR::icom::ScopeMode scopeWireModeFor(AetherSDR::icom::IcomCivBackend::ScopeView view)
+{
+        using AetherSDR::icom::ScopeMode;
+    switch (view) {
+    case IcomCivBackend::ScopeView::Center:  return ScopeMode::Centre;
+    case IcomCivBackend::ScopeView::Fixed:   return ScopeMode::Fixed;
+    case IcomCivBackend::ScopeView::ScrollF: break;
+    }
+    return ScopeMode::ScrollF;
+}
+
+int scopeModeIndexFor(AetherSDR::icom::IcomCivBackend::ScopeView view)
+{
+        switch (view) {
+    case IcomCivBackend::ScopeView::Center:  return kScopeModeIndexCenter;
+    case IcomCivBackend::ScopeView::Fixed:   return kScopeModeIndexFixed;
+    case IcomCivBackend::ScopeView::ScrollF: break;
+    }
+    return kScopeModeIndexScrollF;
+}
+
+const char* scopeViewName(AetherSDR::icom::IcomCivBackend::ScopeView view)
+{
+        switch (view) {
+    case IcomCivBackend::ScopeView::Center:  return "Center";
+    case IcomCivBackend::ScopeView::Fixed:   return "Fixed";
+    case IcomCivBackend::ScopeView::ScrollF: break;
+    }
+    return "SCROLL-F";
+}
 
 QString priorityName(IcomCivScheduler::Priority priority)
 {
@@ -292,6 +361,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.broadcastFmReceive = std::nullopt;
     c.fmDtcsCodes = {};
     c.family = QStringLiteral("icom");
+    c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain},
+        {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove
     c.manufacturer = QStringLiteral("Icom");
     c.model = QString::fromUtf8(m.name.data(), static_cast<int>(m.name.size()));
 
@@ -312,6 +384,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.receiveFilterControl = std::nullopt;
     c.receiveAudioControl = std::nullopt;
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = std::nullopt;
     c.receivePanBandwidthControl = std::nullopt;
 
@@ -330,6 +403,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // state. AetherModem waits for that edge before releasing sample zero, and
     // RadioModel does not synthesise a command-edge fallback here.
     c.hasRadioPttReadback = true;
+    c.radioPttObservation = std::nullopt;   // the full readback above covers it
     // Official CI-V guides for both network targets define command 17 text
     // keying and 17 FF abort. Keep other model profiles dark until verified.
     c.hasRadioSideCwKeyer = profile.cwTextKeyer.has_value();
@@ -466,6 +540,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // directly, not by a radio-owned flag.
     c.panZoomModes = std::nullopt;
     c.panFrameRateShaping = std::nullopt;  // no client owner is declared for FFT FPS
+    // CI-V carries no waterfall rate: the client is the only memory it has.
+    c.panWaterfallRateShaping =
+        PanWaterfallRateShaping{/*clientPersistsWaterfallRate*/ true};
 
     // NO IQ, on any networked Icom. Not deferred — absent. See icom-oracle §8.1.
     c.hasDaxStreams = false;
@@ -532,6 +609,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // setTune() drives the ordinary TUNE producer: one sine wave. There is no
     // CI-V route for a two-tone selection on any profiled model.
     c.twoToneGenerator = std::nullopt;
+    c.firmwareUpdateSource = std::nullopt;  // reports no firmware version to compare.
     c.hasAmCarrierLevel = false; // RF power is separate; no AM carrier setter.
     // setVox implements enable/gain only; setTxMonitor writes MON and its level.
     c.voxControl = m.hasTransmit
@@ -540,6 +618,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.txMonitorControl = m.hasTransmit
         ? std::optional(RadioCapabilities::TxMonitorControl{})
         : std::nullopt;
+    c.lineoutControl = std::nullopt;
+    // No client owner is declared for "Show TX in Waterfall" on an Icom.
+    c.txWaterfallClientFlag = std::nullopt;
 
     // THREE, and only three — and WHICH three depends on the mode. FIL1 is
     // 3.0 kHz in SSB, 1.2 kHz in CW, 9 kHz in AM and 15 kHz in FM, so a single
@@ -1017,6 +1098,7 @@ void IcomCivBackend::disconnectRadio()
     m_civUnexpectedResponderWarned = false;
     m_civDetectAttempts = 0;
     m_scopeStarted = false;
+    resetScopeEdgeState();
     m_tuning = false;
     m_tuneOperation = {};
     m_cwBreakInMode = 1;
@@ -1340,6 +1422,7 @@ bool IcomCivBackend::adoptCivIdentity(std::uint8_t address, std::uint8_t modelId
             m_meterTimer->stop();
         }
         m_scopeStarted = false;
+        resetScopeEdgeState();
         publishCapabilities();
         publishMeterDefs();
         publishModeList();
@@ -1360,6 +1443,7 @@ bool IcomCivBackend::adoptCivIdentity(std::uint8_t address, std::uint8_t modelId
                        SchedulerWaiterOutcome::Cancelled);
     m_session->setCivAddress(address);
     m_scopeStarted = false;
+    resetScopeEdgeState();
     sendConnectReadBurst();
     qCInfo(lcIcomAddr) << "CI-V identity: model ID" << Qt::hex << modelId
                      << "at address" << address;
@@ -1425,6 +1509,7 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     }
     m_connected = true;
     m_connectedAtMs = nowMs();
+    m_frequencyHz = 0; // A new session must establish its own receive frequency.
     m_lastIncident.clear();
     m_civScheduler.clearTransactionHistory();
     m_pttIncidentReported = false;
@@ -1534,18 +1619,7 @@ void IcomCivBackend::publishModelControls()
         // the construction default or a client-side saved antenna.
     }
     emit sliceChanged(sliceId(), s);
-    // Preamp and attenuator published as per-model named positions; a model
-    // with no verified ladder publishes nothing (same rule as powerCurveFor).
-    // The HF preamp ladder is published even on VHF/UHF (00/01 only there):
-    // the radio refuses P.AMP2 and reports what it did, and republishing per
-    // band would rewrite the control under the operator.
-    const auto preampLabels = preampLabelsFor(*m_model);
-    if (!preampLabels.empty()) {
-        QStringList labels;
-        for (std::string_view l : preampLabels)
-            labels << QString::fromUtf8(l.data(), static_cast<int>(l.size()));
-        emit panPreampInfoChanged(panId(), labels);
-    }
+    publishPreampControls();
     // ONE step, and naming it in dB is honest here where it was not for the
     // preamp: the guide gives this attenuator an actual figure. HF and 50 MHz
     // only — on higher bands the radio ignores the request and reports OFF.
@@ -1557,6 +1631,19 @@ void IcomCivBackend::publishModelControls()
         emit panAttenuatorInfoChanged(panId(), labels);
     }
 
+}
+
+void IcomCivBackend::publishPreampControls()
+{
+    const auto preampLabels = preampLabelsFor(*m_model, m_frequencyHz);
+    if (preampLabels.empty()) {
+        return;
+    }
+    QStringList labels;
+    for (std::string_view label : preampLabels) {
+        labels << QString::fromUtf8(label.data(), static_cast<int>(label.size()));
+    }
+    emit panPreampInfoChanged(panId(), labels);
 }
 
 void IcomCivBackend::onSessionDisconnected(const QString& reason)
@@ -1707,6 +1794,642 @@ void IcomCivBackend::applyScopeStartup()
                IcomCivScheduler::Priority::Maintenance, false);
     queueWrite(cmdScopeDataOutput(m_session->civAddress(), true), "scope.output",
                IcomCivScheduler::Priority::Maintenance, false);
+
+    // The radio owns its scope mode: read it, then initialise the panadapter
+    // from the reply (initialiseScopeMode). Old firmware answers FA to the
+    // read; see handleScopeRefusal().
+    publishScopeModes();
+    if (scopeModesOffered()) {
+        m_scopeInitPending = true;
+        queueScopeStartupReads();
+    }
+}
+
+// The edge slot first, then the mode: a Fixed reply is judged against the slot
+// the radio is showing (ours, or one of the operator's presets). An FA to the
+// slot read leaves the slot unknown; only the mode read decides the firmware.
+void IcomCivBackend::queueScopeStartupReads()
+{
+    queueRead(cmdReadScopeEdgeNumber(m_session->civAddress(), m_scopeSelector), "scope.edge.read",
+              IcomCivScheduler::Priority::Maintenance);
+    queueRead(cmdReadScopeMode(m_session->civAddress(), m_scopeSelector), "scope.mode.read",
+              IcomCivScheduler::Priority::Maintenance);
+}
+
+// The first mode the radio reports this session. Center is the one mode no
+// panadapter should start in (the window is slaved to the VFO), so it is
+// initialised to SCROLL-F; SCROLL-F and Fixed are the operator's and are kept.
+void IcomCivBackend::initialiseScopeMode(ScopeMode reported)
+{
+    if (!m_scopeInitPending) {
+        return;
+    }
+    m_scopeInitPending = false;
+    if (!m_session || !scopeModesOffered()) {
+        return;
+    }
+    if (reported != ScopeMode::Centre) {
+        // Kept as found, slot included: a front-panel Fixed on slot 1-3 is the
+        // operator's preset (gestures are refused on it, see setPanCenter), and
+        // in SCROLL-F the first gesture here moves the radio to our slot 4.
+        // Nothing is written until the operator does something.
+        qCInfo(lcIcomPan).noquote()
+            << "scope mode at startup: radio is in"
+            << (reported == ScopeMode::Fixed ? "Fixed"
+                : reported == ScopeMode::ScrollF ? "SCROLL-F" : "SCROLL-C")
+            << "on edge slot"
+            << (m_scopeEdgeNumber > 0 ? QString::number(m_scopeEdgeNumber)
+                                      : QStringLiteral("(not yet read)"))
+            << "- kept, nothing written";
+        return;
+    }
+    qCInfo(lcIcomPan) << "scope mode at startup: radio is in Center - initialising SCROLL-F";
+    m_scopeView = ScopeView::ScrollF;
+    m_scopeModeRequestedAtMs = nowMs();
+    m_scopePublishedModeIndex = scopeModeIndexFor(m_scopeView);
+    emit panScopeModeChanged(panId(), m_scopePublishedModeIndex);
+    selectScopeEdgeSlot(IcomCivScheduler::Priority::Maintenance);
+    queueWrite(cmdScopeMode(m_session->civAddress(),
+                            static_cast<std::uint8_t>(ScopeMode::ScrollF), m_scopeSelector),
+               "scope.mode", IcomCivScheduler::Priority::Maintenance, false);
+    m_scopeEnsureVfoVisible = true;
+}
+
+bool IcomCivBackend::scopeModesOffered() const
+{
+    if (!m_model || !m_model->hasScope || m_scopeScrollRefused) {
+        return false;
+    }
+    const ScopeCommandProfile& scope = profileFor(*m_model).scope;
+    return scope.center && scope.scrollFixed && scope.dedicatedEdgeSlot > 0
+        && scope.edgeTable != ScopeEdgeTable::None;
+}
+
+// SCROLL-F always; Fixed only when chosen here and showing our slot, because a
+// front-panel Fixed shows one of the operator's presets, which we never write.
+// A mode just commanded here counts before the radio's sweeps catch up.
+bool IcomCivBackend::scopeWindowIsEdgeDriven() const
+{
+    if (!scopeModesOffered()) {
+        return false;
+    }
+    if (scopeModeChangeInFlight()) {
+        return scopeViewUsesEdgeSlot() && m_scopeUpperHz > m_scopeLowerHz;
+    }
+    if (!m_scopeReportedMode) {
+        return false;
+    }
+    if (*m_scopeReportedMode == ScopeMode::ScrollF) {
+        return true;
+    }
+    // An unread slot (before the startup 27 16 reply) is not ours.
+    return *m_scopeReportedMode == ScopeMode::Fixed
+        && m_scopeView == IcomCivBackend::ScopeView::Fixed
+        && m_scopeEdgeNumber == scopeEdgeSlot();
+}
+
+bool IcomCivBackend::scopeViewUsesEdgeSlot() const
+{
+    return scopeModesOffered() && m_scopeView != IcomCivBackend::ScopeView::Center;
+}
+
+std::span<const ScopeEdgeRange> IcomCivBackend::scopeEdgeRanges() const
+{
+    if (!m_model) {
+        return {};
+    }
+    switch (profileFor(*m_model).scope.edgeTable) {
+    case ScopeEdgeTable::Hf:     return kScopeEdgeRangesHf;
+    case ScopeEdgeTable::Ic705:  return kScopeEdgeRangesIc705;
+    case ScopeEdgeTable::Ic9700: return kScopeEdgeRangesIc9700;
+    case ScopeEdgeTable::None:   break;
+    }
+    return {};
+}
+
+std::optional<ScopeEdgeRange> IcomCivBackend::scopeEdgeRangeAt(std::uint64_t hz) const
+{
+    if (hz == 0) {
+        return std::nullopt;
+    }
+    return scopeEdgeRangeFor(scopeEdgeRanges(), hz);
+}
+
+// The window on screen: the one in flight if any, else the last sweep's.
+std::optional<ScopeEdgeWindow> IcomCivBackend::scopeShownWindow() const
+{
+    if (m_scopeEdgeTarget) {
+        return m_scopeEdgeTarget;
+    }
+    if (m_scopeUpperHz > m_scopeLowerHz && m_scopeLowerHz >= 0) {
+        return ScopeEdgeWindow{static_cast<std::uint64_t>(m_scopeLowerHz),
+                               static_cast<std::uint64_t>(m_scopeUpperHz)};
+    }
+    return std::nullopt;
+}
+
+std::optional<ScopeEdgeRange> IcomCivBackend::scopeShownRange() const
+{
+    if (m_scopeEdgeTarget && m_scopeEdgeTargetRange > 0) {
+        for (const ScopeEdgeRange& r : scopeEdgeRanges()) {
+            if (r.number == m_scopeEdgeTargetRange) {
+                return r;
+            }
+        }
+    }
+    if (const auto w = scopeShownWindow()) {
+        return scopeEdgeRangeAt((w->lowerHz + w->upperHz) / 2);
+    }
+    return scopeEdgeRangeAt(m_frequencyHz);
+}
+
+// The VFO a window must hold: our newest tune while its echo is outstanding,
+// else the radio's last report. The GUI tunes before it reveals, so this is
+// the frequency a reveal or a band change is about.
+std::uint64_t IcomCivBackend::scopeVfoHz() const
+{
+    if (!m_scopeRecentTunes.empty()
+        && nowMs() - m_scopeRecentTunes.back().atMs < kScopeCommandedTuneMs) {
+        return m_scopeRecentTunes.back().hz;
+    }
+    return m_frequencyHz;
+}
+
+void IcomCivBackend::noteCommandedTune(std::uint64_t hz)
+{
+    const qint64 now = nowMs();
+    while (!m_scopeRecentTunes.empty()
+           && (now - m_scopeRecentTunes.front().atMs >= kScopeCommandedTuneMs
+               || m_scopeRecentTunes.size() >= kScopeCommandedTuneRing)) {
+        m_scopeRecentTunes.pop_front();
+    }
+    m_scopeRecentTunes.push_back({hz, now});
+}
+
+// The newest tune stays ours until we command another: its echo can arrive
+// seconds later, on the next 03 poll, after a fast spin.
+bool IcomCivBackend::wasCommandedTune(std::uint64_t hz) const
+{
+    if (m_scopeRecentTunes.empty()) {
+        return false;
+    }
+    const qint64 now = nowMs();
+    // The newest tune stays ours until its echo lands or the bound lapses;
+    // after that a dial move onto the same frequency is the operator's.
+    if (m_scopeRecentTunes.back().hz == hz
+        && now - m_scopeRecentTunes.back().atMs < kScopeCommandedTuneEchoMs) {
+        return true;
+    }
+    return std::ranges::any_of(m_scopeRecentTunes, [&](const CommandedTune& t) {
+        return t.hz == hz && now - t.atMs < kScopeCommandedTuneMs;
+    });
+}
+
+// Every radio-reported VFO move. A new range brings back the radio's own slot
+// for that band, so ours is re-selected when ours is what the radio was
+// showing; on an operator's slot (or before the startup read) nothing is
+// touched. A move AetherSDR did not command (the dial, a front-panel recall,
+// another CI-V client) is followed here; the GUI already placed the window for
+// the tunes it sent. The session's first report is a reading, not a move.
+void IcomCivBackend::onScopeVfoMoved(std::uint64_t previousHz, std::uint64_t hz)
+{
+    if (!scopeViewUsesEdgeSlot() || !m_connected || hz == 0 || previousHz == 0
+        || previousHz == hz) {
+        return;
+    }
+    const auto after = scopeEdgeRangeAt(hz);
+    const auto before = scopeEdgeRangeAt(previousHz);
+    if (after && (!before || before->number != after->number)) {
+        if (m_scopeEdgeNumber != scopeEdgeSlot()) {
+            return;
+        }
+        qCInfo(lcIcomPan) << "VFO entered edge range" << after->number
+                          << "- re-selecting slot" << scopeEdgeSlot();
+        selectScopeEdgeSlot(IcomCivScheduler::Priority::Operator);
+        pumpCiv(nowMs());
+        if (!m_scopeEdgeTarget || m_scopeEdgeTargetRange != after->number) {
+            resetScopeEdgeState();
+            m_scopeEnsureVfoVisible = true;
+        }
+        return;
+    }
+    if (wasCommandedTune(hz) || !scopeWindowIsEdgeDriven()) {
+        return;
+    }
+    const auto window = scopeShownWindow();
+    const auto shownRange = scopeShownRange();
+    if (!window || !after || !shownRange || shownRange->number != after->number) {
+        return;
+    }
+    if (const auto centre = scopeFollowCentre(
+            static_cast<double>(window->lowerHz), static_cast<double>(window->upperHz),
+            static_cast<double>(previousHz), static_cast<double>(hz),
+            kScopeFollowZoneFraction, kScopeFollowInsetFraction)) {
+        requestScopeEdgeWindow(*centre, static_cast<double>(window->upperHz - window->lowerHz),
+                               "follow");
+    }
+}
+
+// In SCROLL-F every window keeps the VFO a margin inside, because the radio
+// pages straight away from any window that loses it. Fixed never pages.
+double IcomCivBackend::scopeDragCentre(double requestedHz, double widthHz) const
+{
+    const std::uint64_t vfoHz = scopeVfoHz();
+    const bool scrollF = scopeModeChangeInFlight()
+        ? m_scopeView == IcomCivBackend::ScopeView::ScrollF
+        : m_scopeReportedMode && *m_scopeReportedMode == ScopeMode::ScrollF;
+    if (!scrollF || vfoHz == 0) {
+        return requestedHz;
+    }
+    return scopeCentreHoldingVfo(requestedHz, widthHz, static_cast<double>(vfoHz),
+                                 std::max(widthHz * kScopeDragVfoMarginFraction,
+                                          kScopeDragVfoMarginMinHz));
+}
+
+int IcomCivBackend::scopeEdgeSlot() const
+{
+    return m_model ? profileFor(*m_model).scope.dedicatedEdgeSlot : 0;
+}
+
+bool IcomCivBackend::scopeModeChangeInFlight() const
+{
+    return m_scopeModeRequestedAtMs > 0
+        && nowMs() - m_scopeModeRequestedAtMs < kScopeModeRequestGraceMs;
+}
+
+// Queued: RadioModel writes the requested centre into the pan model after the
+// refusing call returns, so a direct emit would be overwritten.
+void IcomCivBackend::putBackScopeView()
+{
+    if (m_scopeSpanHz <= 0) {
+        return;
+    }
+    const double centreMhz = static_cast<double>(m_scopeCentreHz) / 1e6;
+    const double widthMhz = static_cast<double>(m_scopeSpanHz * 2) / 1e6;
+    QMetaObject::invokeMethod(this, [this, centreMhz, widthMhz] {
+        emit panCenterBandwidthChanged(panId(), centreMhz, widthMhz);
+    }, Qt::QueuedConnection);
+}
+
+void IcomCivBackend::selectScopeEdgeSlot(IcomCivScheduler::Priority priority)
+{
+    if (!m_session || scopeEdgeSlot() < 1) {
+        return;
+    }
+    queueWrite(cmdScopeEdgeNumber(m_session->civAddress(), scopeEdgeSlot(), m_scopeSelector),
+               "scope.edge", priority, true);
+    // Optimistic; a front-panel change is caught by the hold-expiry re-read.
+    m_scopeEdgeNumber = scopeEdgeSlot();
+}
+
+void IcomCivBackend::publishScopeModes()
+{
+    if (!scopeModesOffered()) {
+        // An Icom scope without a choice (model or firmware) publishes its one
+        // mode; no scope publishes none. The row shows dimmed either way.
+        const bool hasScope = m_model && m_model->hasScope;
+        emit panScopeModesChanged(panId(), hasScope ? QStringList{QStringLiteral("Center")}
+                                                    : QStringList{});
+        if (hasScope) {
+            emit panScopeModeChanged(panId(), kScopeModeIndexCenter);
+        }
+        return;
+    }
+    emit panScopeModesChanged(panId(), {QStringLiteral("Center"), QStringLiteral("Scroll-F"),
+                                        QStringLiteral("Fixed")});
+    // Published optimistically, like the preamp; the grace window that lets a
+    // commanded mode count before its sweeps arrive is armed only by a write.
+    m_scopePublishedModeIndex = scopeModeIndexFor(m_scopeView);
+    emit panScopeModeChanged(panId(), m_scopePublishedModeIndex);
+}
+
+void IcomCivBackend::noteSweepScopeMode(ScopeMode mode)
+{
+    const bool changed = !m_scopeReportedMode || *m_scopeReportedMode != mode;
+    m_scopeReportedMode = mode;
+    // The radio's mode is the mirror's source, except while our own change is
+    // still in flight (sweeps queued before it carry the old mode).
+    if (!scopeModeChangeInFlight()) {
+        if (mode == ScopeMode::Centre) {
+            m_scopeView = ScopeView::Center;
+        } else if (mode == ScopeMode::Fixed) {
+            m_scopeView = ScopeView::Fixed;
+        } else if (mode == ScopeMode::ScrollF) {
+            m_scopeView = ScopeView::ScrollF;
+        } else {
+            // SCROLL-C is span-based like Center and uses no edge slot.
+            m_scopeView = ScopeView::Center;
+        }
+    }
+    initialiseScopeMode(mode);
+    if (changed && !scopeWindowIsEdgeDriven()) {
+        resetScopeEdgeState();
+    }
+    publishReportedScopeMode();
+}
+
+// The Scope row lights the radio's reported mode. Fixed lights only on our
+// slot: a front-panel Fixed on slot 1-3 shows the operator's preset, not the
+// Fixed this menu offers, so nothing lights (like SCROLL-C) and a click on
+// Fixed reclaims slot 4 through setPanScopeMode instead of being swallowed
+// as "already selected". Re-run when the slot changes, not only the mode.
+void IcomCivBackend::publishReportedScopeMode()
+{
+    if (!scopeModesOffered() || !m_scopeReportedMode) {
+        return;
+    }
+    const ScopeMode mode = *m_scopeReportedMode;
+    const int index = mode == ScopeMode::Centre  ? kScopeModeIndexCenter
+                    : mode == ScopeMode::ScrollF ? kScopeModeIndexScrollF
+                    : (mode == ScopeMode::Fixed && m_scopeEdgeNumber == scopeEdgeSlot())
+                        ? kScopeModeIndexFixed : -1;
+    if (index == m_scopePublishedModeIndex || scopeModeChangeInFlight()) {
+        return;
+    }
+    qCInfo(lcIcomPan) << "radio reports scope mode" << static_cast<int>(mode)
+                      << "on edge slot" << m_scopeEdgeNumber;
+    m_scopePublishedModeIndex = index;
+    emit panScopeModeChanged(panId(), index);
+}
+
+void IcomCivBackend::setPanScopeMode(const QString&, int index)
+{
+    if (!scopeModesOffered()) {
+        return;
+    }
+    const IcomCivBackend::ScopeView view = index == kScopeModeIndexFixed
+        ? IcomCivBackend::ScopeView::Fixed
+        : index == kScopeModeIndexScrollF ? IcomCivBackend::ScopeView::ScrollF
+                                          : IcomCivBackend::ScopeView::Center;
+    // Seed our slot from the window on screen, so an edge mode starts where the
+    // operator is looking (the radio's own SCROLL-F paging is never stored).
+    const auto seedWindow = scopeShownWindow();
+    m_scopeView = view;
+    resetScopeEdgeState();
+    // The operator's pick is the mode now; a startup report still in flight
+    // must not initialize over it.
+    m_scopeInitPending = false;
+    m_scopeModeRequestedAtMs = nowMs();
+    m_scopePublishedModeIndex = scopeModeIndexFor(view);
+    emit panScopeModeChanged(panId(), m_scopePublishedModeIndex);
+    if (!m_session || !m_connected) {
+        return;
+    }
+    qCInfo(lcIcomPan) << "operator selects scope mode" << scopeViewName(view);
+    const bool usesSlot = scopeViewUsesEdgeSlot();
+    // Preset, then slot, then mode: the first sweep in the new mode is already
+    // the seeded window rather than a flash of the slot's old one.
+    bool seeded = false;
+    if (usesSlot && seedWindow) {
+        if (const auto range = scopeEdgeRangeAt(scopeVfoHz())) {
+            const double width = static_cast<double>(seedWindow->upperHz - seedWindow->lowerHz);
+            double centre = (static_cast<double>(seedWindow->lowerHz) + seedWindow->upperHz) / 2.0;
+            // A Fixed window the VFO was dragged off would make the radio page
+            // as soon as SCROLL-F lands, so it keeps the VFO inside like a drag.
+            if (view == IcomCivBackend::ScopeView::ScrollF && scopeVfoHz() > 0) {
+                centre = scopeCentreHoldingVfo(centre, width, static_cast<double>(scopeVfoHz()),
+                                               std::max(width * kScopeDragVfoMarginFraction,
+                                                        kScopeDragVfoMarginMinHz));
+            }
+            const ScopeEdgeWindow w = clampScopeEdgeWindow(*range, centre, width);
+            writeScopeEdgeWindow(range->number, w);
+            seeded = true;
+        }
+    }
+    if (usesSlot) {
+        selectScopeEdgeSlot(IcomCivScheduler::Priority::Operator);
+    }
+    queueWrite(cmdScopeMode(m_session->civAddress(),
+                            static_cast<std::uint8_t>(scopeWireModeFor(view)), m_scopeSelector),
+               "scope.mode", IcomCivScheduler::Priority::Operator, true);
+    pumpCiv(nowMs());
+    m_scopeEnsureVfoVisible = usesSlot && !seeded;
+}
+
+void IcomCivBackend::handleScopeReply(const CivFrame& frame)
+{
+    if (!frame.hasSub || frame.data.size() < 2 || frame.data[0] != m_scopeSelector) {
+        return;
+    }
+    if (frame.sub == scope::kEdgeNumber) {
+        const int edge = decodeBcdByte(frame.data[1]);
+        // A read answered before our queued select went out describes the
+        // slot that select is replacing.
+        if (m_civScheduler.hasQueuedOrInFlight("scope.edge")) {
+            return;
+        }
+        if (edge >= 1 && edge <= 4) {
+            if (edge != m_scopeEdgeNumber) {
+                qCInfo(lcIcomPan) << "scope edge slot" << edge;
+            }
+            m_scopeEdgeNumber = edge;
+            publishReportedScopeMode();
+        }
+    } else if (frame.sub == scope::kMode) {
+        const int mode = decodeBcdByte(frame.data[1]);
+        if (mode >= 0 && mode <= static_cast<int>(ScopeMode::ScrollF)) {
+            noteSweepScopeMode(static_cast<ScopeMode>(mode));
+        }
+    }
+}
+
+// FA to a scope write or mode read. "scope.mode"/"scope.edge" mean firmware without
+// SCROLL-F or slot 4 (IC-705 < 1.20, IC-9700 < 1.30): fall back to Center for
+// the session and say so. "scope.edgewin" is a refused window: show the
+// radio's own.
+void IcomCivBackend::handleScopeRefusal(const std::string& key)
+{
+    if (key == "scope.edgewin") {
+        qCWarning(lcIcomPan) << "radio refused the scope edge window (CI-V FA)";
+        resetScopeEdgeState();
+        if (m_scopeUpperHz > m_scopeLowerHz) {
+            emit panCenterBandwidthChanged(panId(), static_cast<double>(m_scopeCentreHz) / 1e6,
+                                           static_cast<double>(m_scopeUpperHz - m_scopeLowerHz)
+                                               / 1e6);
+        }
+        return;
+    }
+    if ((key != "scope.mode" && key != "scope.mode.read" && key != "scope.edge")
+        || m_scopeScrollRefused) {
+        return;
+    }
+    m_scopeInitPending = false;
+    qCWarning(lcIcomPan) << "radio refused" << QString::fromStdString(key)
+                         << "- no SCROLL-F on this firmware; keeping Center";
+    m_scopeScrollRefused = true;
+    resetScopeEdgeState();
+    publishScopeModes();
+    if (m_session) {
+        // A SCROLL-F write still queued behind the refused one must not follow it.
+        m_civScheduler.cancelQueued("scope.mode");
+        queueWrite(cmdScopeMode(m_session->civAddress(),
+                                static_cast<std::uint8_t>(ScopeMode::Centre), m_scopeSelector),
+                   "scope.centre", IcomCivScheduler::Priority::Operator, true);
+        pumpCiv(nowMs());
+    }
+    emit configurationWarning(
+        tr("This radio's firmware has no SCROLL-F scope mode, so the panadapter stays "
+           "centered on the VFO. Updating the radio's firmware (IC-705 1.20 or later, "
+           "IC-9700 1.30 or later) adds it."));
+}
+
+void IcomCivBackend::resetScopeEdgeState()
+{
+    m_scopeEdgeTarget.reset();
+    m_scopeEdgeWritten.reset();
+    m_scopeEdgeTargetRange = 0;
+    m_scopeEdgeWrittenRange = 0;
+    m_scopeEdgeHoldUntilMs = 0;
+    m_scopePendingCentreHz.reset();
+    if (m_scopeEdgeWriteTimer) {
+        m_scopeEdgeWriteTimer->stop();
+    }
+    if (!m_connected || !m_scopeStarted) {
+        // A new session (or a new radio) re-reads all of this.
+        m_scopeReportedMode.reset();
+        m_scopePublishedModeIndex = -2;
+        m_scopeModeRequestedAtMs = 0;
+        m_scopeEdgeNumber = 0;
+        m_scopeLowerHz = 0;
+        m_scopeUpperHz = 0;
+        m_scopeEnsureVfoVisible = false;
+        m_scopeScrollRefused = false;
+        m_scopeInitPending = false;
+        m_scopeView = ScopeView::ScrollF;
+        m_scopeSelector = 0;
+        m_scopeSelectorSeenAtMs.reset();
+        m_scopeLastEdgeWriteMs.reset();
+        m_scopeBlankSweepUntilMs = 0;
+        m_scopeRecentTunes.clear();
+    }
+}
+
+// Every Fixed / SCROLL-F window change comes through here. The window is made
+// legal for `range` (default: the one on screen) and becomes the view's target
+// at once; the write goes out on the next event-loop turn at most every
+// kScopeEdgeWriteIntervalMs, carrying the latest target, so a zoom's centre
+// and width cost one write and a drag of any length a handful.
+void IcomCivBackend::requestScopeEdgeWindow(double centreHz, double widthHz, const char* why,
+                                            std::optional<ScopeEdgeRange> range)
+{
+    if (!m_session || !m_connected || scopeEdgeSlot() < 1) {
+        return;
+    }
+    if (!range) {
+        range = scopeShownRange();
+    }
+    if (!range) {
+        qCDebug(lcIcomPan) << "scope edge request (" << why << ") outside every edge range";
+        return;
+    }
+    const auto before = scopeShownWindow();
+    double heldCentre = centreHz;
+    if (const auto vfoRange = scopeEdgeRangeAt(scopeVfoHz());
+        vfoRange && vfoRange->number == range->number) {
+        heldCentre = scopeDragCentre(centreHz, widthHz);
+    }
+    const ScopeEdgeWindow w = clampScopeEdgeWindow(*range, heldCentre, widthHz);
+    const double gotCentre = (static_cast<double>(w.lowerHz) + static_cast<double>(w.upperHz)) / 2.0;
+    const double gotWidth = static_cast<double>(w.upperHz - w.lowerHz);
+    const double beforeWidth = before ? static_cast<double>(before->upperHz - before->lowerHz) : 0.0;
+    m_scopeEdgeTarget = w;
+    m_scopeEdgeTargetRange = range->number;
+    m_scopeEdgeHoldUntilMs = nowMs() + kScopeEdgeHoldMs;
+    qCDebug(lcIcomPan) << "scope edge target (" << why << "):" << w.lowerHz << "-" << w.upperHz
+                       << "Hz, range" << range->number << "slot" << scopeEdgeSlot();
+
+    // A new width is announced now: RadioModel then writes only the centre,
+    // keeping the width, so the view never sees the old width again. A centre
+    // the limits moved is re-asserted queued, after RadioModel's own write.
+    // Re-asserting a kHz-rounded centre on every drag event would fight a slow drag.
+    const double centreMhz = gotCentre / 1e6;
+    const double widthMhz = gotWidth / 1e6;
+    if (std::abs(gotWidth - beforeWidth) > kScopeEdgeMatchHz) {
+        emit panCenterBandwidthChanged(panId(), centreMhz, widthMhz);
+    }
+    if (std::abs(gotCentre - centreHz) > kScopeEdgeMatchHz) {
+        QMetaObject::invokeMethod(this, [this, centreMhz, widthMhz] {
+            emit panCenterBandwidthChanged(panId(), centreMhz, widthMhz);
+        }, Qt::QueuedConnection);
+    }
+
+    if (!m_scopeEdgeWriteTimer) {
+        m_scopeEdgeWriteTimer = new QTimer(this);
+        m_scopeEdgeWriteTimer->setSingleShot(true);
+        connect(m_scopeEdgeWriteTimer, &QTimer::timeout, this,
+                &IcomCivBackend::flushScopeEdgeWrite);
+    }
+    if (m_scopeEdgeWriteTimer->isActive()) {
+        return;   // the pending flush carries this target
+    }
+    const qint64 wait = m_scopeLastEdgeWriteMs
+        ? std::max<qint64>(0, kScopeEdgeWriteIntervalMs - (nowMs() - *m_scopeLastEdgeWriteMs))
+        : 0;
+    m_scopeEdgeWriteTimer->start(static_cast<int>(wait));
+}
+
+void IcomCivBackend::flushScopeEdgeWrite()
+{
+    if (!m_scopeEdgeTarget || !m_session || !m_connected || scopeEdgeSlot() < 1) {
+        return;
+    }
+    const ScopeEdgeWindow t = *m_scopeEdgeTarget;
+    const bool alreadyShown = static_cast<std::int64_t>(t.lowerHz) == m_scopeLowerHz
+        && static_cast<std::int64_t>(t.upperHz) == m_scopeUpperHz;
+    const bool alreadyWritten = m_scopeEdgeWritten
+        && m_scopeEdgeWrittenRange == m_scopeEdgeTargetRange
+        && m_scopeEdgeWritten->lowerHz == t.lowerHz && m_scopeEdgeWritten->upperHz == t.upperHz;
+    // A write still awaiting its sweep makes the shown geometry stale: a
+    // gesture back to what is on screen must still go out, or the scope
+    // settles on the earlier gesture once that write's sweep lands.
+    const bool writeUnconfirmed = m_scopeEdgeWritten
+        && (static_cast<std::int64_t>(m_scopeEdgeWritten->lowerHz) != m_scopeLowerHz
+            || static_cast<std::int64_t>(m_scopeEdgeWritten->upperHz) != m_scopeUpperHz);
+    if ((alreadyShown && !writeUnconfirmed) || alreadyWritten) {
+        return;
+    }
+    writeScopeEdgeWindow(m_scopeEdgeTargetRange, t);
+    // Our slot, never the one the radio happens to show: a gesture here asks
+    // to move THIS view, so the slot is re-selected rather than theirs rewritten.
+    if (m_scopeEdgeNumber != scopeEdgeSlot()) {
+        selectScopeEdgeSlot(IcomCivScheduler::Priority::Operator);
+    }
+}
+
+void IcomCivBackend::writeScopeEdgeWindow(int rangeNumber, const ScopeEdgeWindow& w)
+{
+    qCInfo(lcIcomPan) << "scope edge write: range" << rangeNumber << "slot" << scopeEdgeSlot()
+                      << w.lowerHz << "-" << w.upperHz << "Hz";
+    const qint64 now = nowMs();
+    // Bound the wait while queued; pumpCiv replaces it with the wire-time hold
+    // the moment the frame goes out, so this must be set before pumping.
+    m_scopeEdgeHoldUntilMs = std::max(m_scopeEdgeHoldUntilMs, now + kScopeEdgeQueuedHoldMs);
+    queueWrite(cmdScopeFixedEdge(m_session->civAddress(), rangeNumber, scopeEdgeSlot(),
+                                 w.lowerHz, w.upperHz),
+               "scope.edgewin", IcomCivScheduler::Priority::Operator, true);
+    pumpCiv(now);
+    m_scopeEdgeWritten = w;
+    m_scopeEdgeWrittenRange = rangeNumber;
+    m_scopeLastEdgeWriteMs = now;
+}
+
+// The radio now streams the other scope (IC-9700 MAIN/SUB). That scope has
+// its own persisted mode, so this re-enters the startup path: read it and
+// let initialiseScopeMode keep or initialise it. Never assert our mirror.
+void IcomCivBackend::onScopeSelectorChanged(std::uint8_t selector)
+{
+    qCInfo(lcIcomPan) << "radio now streams scope" << (selector == 0 ? "MAIN" : "SUB");
+    m_scopeSelector = selector;
+    resetScopeEdgeState();
+    m_scopeReportedMode.reset();
+    m_scopeModeRequestedAtMs = 0;
+    // The other scope's slot is unknown until its 27 16 reply: not ours.
+    m_scopeEdgeNumber = 0;
+    if (!m_session || !scopeModesOffered()) {
+        return;
+    }
+    m_scopeInitPending = true;
+    queueScopeStartupReads();
 }
 
 // ---------------------------------------------------------------------------
@@ -1759,14 +2482,104 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         // true to reason against. Both of them need it: a zoom step has to know
         // which of the eight spans it is leaving, and a centre request has to
         // know what to snap the view back to.
+        if (profileFor(*m_model).scope.mainSubSelector && sweep->selector != m_scopeSelector) {
+            if (m_scopeSelectorSeenAtMs
+                && nowMs() - *m_scopeSelectorSeenAtMs < kScopeSelectorSwitchMs) {
+                return;   // Dual scope: the other scope's sweep; the pan follows one.
+            }
+            onScopeSelectorChanged(sweep->selector);
+        }
+        m_scopeSelectorSeenAtMs = nowMs();
+        // The radio answers each 27 1E with one sweep of all-zero bins at the
+        // new edges (IC-7300MK2, 20-50 ms later). Drawn, it dips the noise
+        // floor on every drag step.
+        if (m_scopeBlankSweepUntilMs > 0 && nowMs() < m_scopeBlankSweepUntilMs
+            && !sweep->outOfRange && !sweep->raw.empty()
+            && std::ranges::all_of(sweep->raw, [](std::uint8_t v) { return v == 0; })) {
+            m_scopeBlankSweepUntilMs = 0;
+            qCDebug(lcIcomPan) << "dropped the blank sweep after an edge write";
+            return;
+        }
+        noteSweepScopeMode(sweep->mode);
+        if (sweep->bandwidthHz() > 0
+            && (sweep->startHz != m_scopeLowerHz || sweep->endHz != m_scopeUpperHz)) {
+            qCDebug(lcIcomPan) << "sweep window" << sweep->startHz << "-" << sweep->endHz
+                               << "mode" << static_cast<int>(sweep->mode) << "last edge write"
+                               << (m_scopeLastEdgeWriteMs ? nowMs() - *m_scopeLastEdgeWriteMs : -1)
+                               << "ms ago";
+        }
         if (sweep->bandwidthHz() > 0) {
             m_scopeCentreHz = sweep->centreHz();
             m_scopeSpanHz   = sweep->bandwidthHz() / 2;
+            m_scopeLowerHz  = sweep->startHz;
+            m_scopeUpperHz  = sweep->endHz;
         }
+        std::vector<float> dbm = toDbm(*sweep, geom, m_scopeCal);
+
+        // A window change in flight: the view already shows the requested
+        // window, so until a sweep arrives with those edges, draw this one's
+        // spectrum where it was measured (see remapToWindow) instead of
+        // snapping the view back to the old edges.
+        if (m_scopeEdgeTarget && m_scopeEdgeHoldUntilMs > 0) {
+            const ScopeEdgeWindow t = *m_scopeEdgeTarget;
+            const bool arrived =
+                std::llabs(sweep->startHz - static_cast<std::int64_t>(t.lowerHz)) <= kScopeEdgeMatchHz
+                && std::llabs(sweep->endHz - static_cast<std::int64_t>(t.upperHz)) <= kScopeEdgeMatchHz;
+            const bool holding = scopeWindowIsEdgeDriven() && nowMs() < m_scopeEdgeHoldUntilMs;
+            if (!arrived && holding) {
+                // A sweep with no window (out-of-range flag) says nothing about the write.
+                if (sweep->bandwidthHz() > 0) {
+                    const float fill =
+                        static_cast<float>(m_scopeCal.floorDbm - m_scopeCal.referenceDb);
+                    emit spectrumFrameReady(0, floatBytes(remapToWindow(
+                        dbm, sweep->startHz, sweep->endHz, static_cast<std::int64_t>(t.lowerHz),
+                        static_cast<std::int64_t>(t.upperHz), fill)));
+                }
+                return;
+            }
+            if (!arrived && m_session) {
+                // Not shown in time: the operator changed slot on the radio,
+                // or the radio paged away. Believe the sweep and re-read the slot.
+                qCInfo(lcIcomPan) << "scope edge write not reflected after hold; radio shows"
+                                  << sweep->startHz << "-" << sweep->endHz;
+                queueRead(cmdReadScopeEdgeNumber(m_session->civAddress(), m_scopeSelector),
+                          "scope.edge.read", IcomCivScheduler::Priority::Maintenance);
+            }
+            m_scopeEdgeTarget.reset();
+            m_scopeEdgeWritten.reset();
+            m_scopeEdgeTargetRange = 0;
+            m_scopeEdgeWrittenRange = 0;
+            m_scopeEdgeHoldUntilMs = 0;
+        }
+
+        // After startup, a mode switch, or a range change the radio shows our
+        // slot's stored window for this range, which may not hold the VFO.
+        // Same range only: right after a band change a sweep or two of the old
+        // band's window still arrive.
+        const auto sweepRange = sweep->centreHz() > 0
+            ? scopeEdgeRangeAt(static_cast<std::uint64_t>(sweep->centreHz()))
+            : std::nullopt;
+        const auto vfoRange = scopeEdgeRangeAt(m_frequencyHz);
+        if (m_scopeEnsureVfoVisible && scopeWindowIsEdgeDriven()
+            && sweep->bandwidthHz() > 0 && sweep->startHz >= 0 && sweepRange && vfoRange
+            && sweepRange->number == vfoRange->number) {
+            m_scopeEnsureVfoVisible = false;
+            const ScopeEdgeWindow shown{static_cast<std::uint64_t>(sweep->startHz),
+                                        static_cast<std::uint64_t>(sweep->endHz)};
+            const double width = static_cast<double>(sweep->bandwidthHz());
+            const double zone = width * kScopeFollowZoneFraction;
+            const double vfo = static_cast<double>(m_frequencyHz);
+            if (vfo < static_cast<double>(shown.lowerHz) + zone
+                || vfo > static_cast<double>(shown.upperHz) - zone) {
+                requestScopeEdgeWindow(vfo, width, "vfo outside the slot's stored window",
+                                       vfoRange);
+            }
+        }
+
         emit panCenterBandwidthChanged(panId(),
                                        static_cast<double>(sweep->centreHz()) / 1e6,
                                        static_cast<double>(sweep->bandwidthHz()) / 1e6);
-        emit spectrumFrameReady(0, floatBytes(toDbm(*sweep, geom, m_scopeCal)));
+        emit spectrumFrameReady(0, floatBytes(dbm));
         return;
     }
 
@@ -1819,6 +2632,35 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     // queued startup frame until adoptCivIdentity() has either confirmed
     // the address or discarded all work aimed at the old one.
     const bool identityReply = frame.cmd == cmd::kReadId;
+    // FA (NG) to a cmd 05 frequency write means the tune did not take (e.g.
+    // IC-9700 refuses a band the other receiver holds, #4840). Decided BEFORE
+    // the pump: a window placed for that tune (an AllowRecenter tune outside
+    // the span queues its 27 1E behind the 05) would otherwise be the next
+    // frame out, and would put the refused destination's window on the radio.
+    // Every clause is needed: Accepted means THIS frame retired the in-flight
+    // transaction (an Unmatched NG leaves a stale lastCompletedKey), and the
+    // cmd must be 05 because 03 reads share the "frequency" semantic key.
+    const bool refusedTune = frame.isNg()
+        && observation == IcomCivScheduler::Observation::Accepted
+        && m_civScheduler.stats().lastCompletedKey == "frequency"
+        && m_civScheduler.stats().lastCompletedCmd == cmd::kSetFreq
+        && m_frequencyHz != 0;
+    if (refusedTune) {
+        if (const std::size_t dropped = m_civScheduler.cancelQueued("scope.edgewin");
+            dropped > 0) {
+            qCInfo(lcIcomPan) << "dropped" << dropped
+                              << "scope window write(s) queued for the refused tune";
+        }
+        // So is the slot select that rode with it (radio on an operator slot),
+        // and the slot it optimistically recorded is re-read from the radio.
+        if (m_civScheduler.cancelQueued("scope.edge") > 0 && m_session) {
+            m_scopeEdgeNumber = 0;
+            queueRead(cmdReadScopeEdgeNumber(m_session->civAddress(), m_scopeSelector),
+                      "scope.edge.read", IcomCivScheduler::Priority::Maintenance);
+        }
+        // A window placed for the refused tune must not stay on screen either.
+        resetScopeEdgeState();
+    }
     if (!identityReply)
         pumpCiv(frameAtMs);
     const bool isPttState = frame.cmd == cmd::kControl && frame.hasSub
@@ -1831,17 +2673,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         return;
     }
 
-    // FA (NG) to a cmd 05 frequency write means the tune did not take, so the
-    // radio-authoritative m_frequencyHz is restored (e.g. IC-9700 refuses a
-    // band the other receiver holds, #4840). Only frequency writes are handled.
-    // Every clause is needed: Accepted means THIS frame retired the in-flight
-    // transaction (an Unmatched NG leaves a stale lastCompletedKey), and the
-    // cmd must be 05 because 03 reads share the "frequency" semantic key.
-    if (frame.isNg()
-        && observation == IcomCivScheduler::Observation::Accepted
-        && m_civScheduler.stats().lastCompletedKey == "frequency"
-        && m_civScheduler.stats().lastCompletedCmd == cmd::kSetFreq
-        && m_frequencyHz != 0) {
+    // The refused tune (decided above, before the pump): restore the
+    // radio-authoritative m_frequencyHz. Only frequency writes are handled.
+    if (refusedTune) {
         // Re-assert the radio's real VFO one event-loop turn later, exactly as
         // the out-of-band gate in setSliceFrequency() and the refused mode in
         // setSliceMode() already do: SliceModel has accepted and announced the
@@ -1865,6 +2699,11 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                       "other receiver already holds.");
         }
         emit configurationWarning(why);
+    }
+
+    if (frame.isNg() && observation == IcomCivScheduler::Observation::Accepted
+        && m_civScheduler.stats().lastCompletedCmd == cmd::kScope) {
+        handleScopeRefusal(m_civScheduler.stats().lastCompletedKey);
     }
 
     noteControlSeen(frame.cmd, frame.sub, frame.hasSub);
@@ -1897,7 +2736,21 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         // and both are the truth — which is why they share a case.
         if (auto hz = decodeFreq(frame.data)) {
             confirmState(QStringLiteral("frequency"), QVariant::fromValue<qulonglong>(*hz));
+            const std::uint64_t previousHz = m_frequencyHz;
+            const auto oldPreampLabels = preampLabelsFor(*m_model, m_frequencyHz);
             m_frequencyHz = *hz;
+            m_frequencyEchoAtMs = nowMs();
+            onScopeVfoMoved(previousHz, *hz);
+            if (!std::ranges::equal(oldPreampLabels, preampLabelsFor(*m_model, m_frequencyHz))) {
+                publishPreampControls();
+                // A range change changes the choices, never the radio setting.
+                // Read back the current stage after publishing its new ladder.
+                if (m_session) {
+                    const auto read = cmdReadFunction(m_session->civAddress(), func::kPreamp);
+                    queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Operator);
+                    pumpCiv(frameAtMs);
+                }
+            }
             SliceDelta s;
             s.frequency = static_cast<double>(*hz) / 1e6;
             emit sliceChanged(sliceId(), s);
@@ -2835,6 +3688,11 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
 
         const qint64 answeredAtMs = nowMs();
         m_meters.markAnswered(spec->id, answeredAtMs);
+        // S-meter dBm needs the radio's band-dependent S9 reference. A new
+        // session has no receive frequency until the radio reports it.
+        if (spec->id == MeterId::SMeter && m_frequencyHz == 0) {
+            return;
+        }
         const MeterCalibrationProfile meterProfile = m_model
             ? profileFor(*m_model).meters : MeterCalibrationProfile{};
         const std::span<const CurvePoint> powerCurve = m_model
@@ -3115,6 +3973,10 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         }
         return;
     }
+
+    case cmd::kScope:
+        handleScopeReply(frame);
+        return;
 
     default:
         return;
@@ -3569,6 +4431,12 @@ void IcomCivBackend::pumpCiv(qint64 nowMs)
         m_lastOutboundCivAtMs = nowMs;
     }
     m_session->sendCiv(dispatch->frame, dispatch->txCommand);
+    if (dispatch->key == "scope.edgewin") {
+        // The hold and the blank-sweep drop run from the wire, not the queue:
+        // behind a memory recall's writes an edge write can wait seconds.
+        m_scopeEdgeHoldUntilMs = nowMs + kScopeEdgeHoldMs;
+        m_scopeBlankSweepUntilMs = nowMs + kScopeBlankSweepMs;
+    }
     serviceSchedulerWaiters(nowMs);
 }
 
@@ -3975,8 +4843,28 @@ void IcomCivBackend::setSliceFrequency(int, double hz)
         scheduleFrequencyRestore();
         return;
     }
+    noteCommandedTune(roundedHz);
     sendUserCommand(cmdSetFrequency(m_session ? m_session->civAddress() : 0xA4,
                                     roundedHz));
+}
+
+// AllowRecenter (a CAT or TCI tune outside the span) re-centres the window like
+// Go To Frequency; in SCROLL-F the radio would only page to it.
+void IcomCivBackend::requestSliceTune(int sliceId, const SliceTuneRequest& request)
+{
+    setSliceFrequency(sliceId, request.frequencyHz);
+    if (request.panIntent != SliceTuneRequest::PanIntent::AllowRecenter
+        || !scopeWindowIsEdgeDriven() || !std::isfinite(request.frequencyHz)
+        || request.frequencyHz <= 0.0) {
+        return;
+    }
+    const auto shown = scopeShownWindow();
+    const auto range = scopeEdgeRangeAt(static_cast<std::uint64_t>(std::llround(request.frequencyHz)));
+    if (shown && range) {
+        requestScopeEdgeWindow(request.frequencyHz,
+                               static_cast<double>(shown->upperHz - shown->lowerHz),
+                               "tune recentre", range);
+    }
 }
 
 void IcomCivBackend::setSliceMode(int, const QString& mode)
@@ -4218,6 +5106,55 @@ void IcomCivBackend::setPanCenter(const QString&, double hz, PanCenterIntent int
     if (m_scopeSpanHz <= 0)
         return;
 
+    // Fixed / SCROLL-F: the window is free, so a drag scrolls it and never
+    // tunes, and a range change (reveal, follow, band, zoom anchor) is honoured
+    // in the range of the VFO it is about. Everything below this is Center.
+    if (scopeWindowIsEdgeDriven() && std::isfinite(hz)) {
+        const auto shown = scopeShownWindow();
+        if (!shown) {
+            return;
+        }
+        const double curCentre = (static_cast<double>(shown->lowerHz) + shown->upperHz) / 2.0;
+        const double curWidth = static_cast<double>(shown->upperHz - shown->lowerHz);
+        if (intent == PanCenterIntent::Drag) {
+            if (std::abs(hz - curCentre) < curWidth / 2.0 * kPanDragDeadZoneFraction) {
+                return;
+            }
+            // An edge-pan drags the VFO with it (the GUI tunes, then asks for
+            // the centre), so its window lives in the VFO's range, which may be
+            // the next one over; a pan drag tracks no VFO and stays in the
+            // range on screen, where it stops at the boundary.
+            // "Tracking" holds while the radio's last echo agrees with (or has
+            // not yet answered) our newest tune; an echo elsewhere means the
+            // VFO is not where the drag is taking it.
+            const bool trackingVfo = !m_scopeRecentTunes.empty()
+                && nowMs() - m_scopeRecentTunes.back().atMs < kScopeEdgePanTrackMs
+                && (m_frequencyHz == m_scopeRecentTunes.back().hz
+                    || m_frequencyEchoAtMs <= m_scopeRecentTunes.back().atMs);
+            requestScopeEdgeWindow(hz, curWidth, "drag",
+                                   trackingVfo ? scopeEdgeRangeAt(scopeVfoHz()) : std::nullopt);
+            return;
+        }
+        // One turn later: a reveal arrives before the tune it reveals (the
+        // slice announces its new frequency first), and the window belongs in
+        // the range of that tune. A zoom in the same turn absorbs it.
+        const bool scheduled = m_scopePendingCentreHz.has_value();
+        m_scopePendingCentreHz = hz;
+        if (!scheduled) {
+            QTimer::singleShot(0, this, &IcomCivBackend::applyPendingScopeCentre);
+        }
+        return;
+    }
+
+    // Fixed that is not ours (an operator slot, picked on the radio) shows a
+    // preset we never rewrite, and a retune would not move it: refuse and
+    // re-assert. Our own Fixed returned above as edge-driven.
+    if (scopeModesOffered() && m_scopeReportedMode
+        && *m_scopeReportedMode == ScopeMode::Fixed) {
+        putBackScopeView();
+        return;
+    }
+
     const double centreMhz = static_cast<double>(m_scopeCentreHz) / 1e6;
     const double widthMhz  = static_cast<double>(m_scopeSpanHz * 2) / 1e6;
 
@@ -4234,10 +5171,8 @@ void IcomCivBackend::setPanCenter(const QString&, double hz, PanCenterIntent int
         return;
     }
 
-    // A drag retunes. In centre mode the scope window is the operating
-    // frequency, and FIXED mode is three saved edge presets per band (0x27 0x1E)
-    // that a drag must not overwrite, so tuning is the only way to follow it.
-    // The dead zone (kPanDragDeadZoneFraction of the span) keeps a click with a
+    // Center mode: the scope window is the operating frequency, so a drag
+    // retunes. The dead zone (kPanDragDeadZoneFraction of the span) keeps a click with a
     // pixel of hand movement from moving the dial.
     const double requestedHz = hz;
     const double deltaHz = requestedHz - static_cast<double>(m_scopeCentreHz);
@@ -4261,10 +5196,48 @@ void IcomCivBackend::setPanCenter(const QString&, double hz, PanCenterIntent int
     setSliceFrequency(sliceId(), tuneHz);
 }
 
+void IcomCivBackend::applyPendingScopeCentre()
+{
+    const auto hz = std::exchange(m_scopePendingCentreHz, std::nullopt);
+    const auto shown = scopeShownWindow();
+    if (!hz || !shown || !scopeWindowIsEdgeDriven()) {
+        return;
+    }
+    const auto vfoRange = scopeEdgeRangeAt(scopeVfoHz());
+    if (!vfoRange) {
+        qCDebug(lcIcomPan) << "range-change centre" << *hz << "Hz: VFO outside every edge range";
+        return;
+    }
+    requestScopeEdgeWindow(*hz, static_cast<double>(shown->upperHz - shown->lowerHz), "range",
+                           vfoRange);
+}
+
 void IcomCivBackend::setPanBandwidth(const QString&, double hz)
 {
     if (hz <= 0.0 || !m_model->hasScope)
         return;
+    // Fixed / SCROLL-F: the width is the edge preset's (27 15 does nothing
+    // here), continuous to the kHz up to 1 MHz, centred on the pending target.
+    if (scopeWindowIsEdgeDriven()) {
+        const auto shown = scopeShownWindow();
+        if (!shown) {
+            return;
+        }
+        const bool absorbed = m_scopePendingCentreHz.has_value();
+        const double centre = absorbed
+            ? *std::exchange(m_scopePendingCentreHz, std::nullopt)
+            : (static_cast<double>(shown->lowerHz) + shown->upperHz) / 2.0;
+        requestScopeEdgeWindow(centre, hz, "zoom",
+                               absorbed ? scopeEdgeRangeAt(scopeVfoHz()) : std::nullopt);
+        return;
+    }
+    // Fixed that is not ours: 27 15 does nothing there and the edges are the
+    // operator's preset, so put the view back rather than send a dead span.
+    if (scopeModesOffered() && m_scopeReportedMode
+        && *m_scopeReportedMode == ScopeMode::Fixed) {
+        putBackScopeView();
+        return;
+    }
     // hz is a TOTAL width and Icom's span is a HALF-width, so the conversion is
     // not a rename. It also SNAPS to one of eight values — what was actually
     // taken comes back with the next sweep, via panCenterBandwidthChanged.
@@ -4322,8 +5295,7 @@ void IcomCivBackend::queueFrontEndInterlockRead(const std::vector<std::uint8_t>&
 
 // Publish the requested step optimistically: a set is answered with a bare FB,
 // never an echo of the new value, so waiting would leave the widget stuck. If
-// the radio refused (the IC-705 has no P.AMP2 and no attenuator above 50 MHz),
-// the write's confirmation read corrects it.
+// the radio refused, the write's confirmation read corrects it.
 void IcomCivBackend::setPanPreamp(const QString&, int step)
 {
     // Operator intent is bounded by the model's verified presentation ladder.
@@ -4331,7 +5303,7 @@ void IcomCivBackend::setPanPreamp(const QString&, int step)
     // P.AMP states while still allowing radio-originated state 02 to be
     // mirrored and reasserted unchanged by the diagnostic scrub path below.
     const int maxStep = std::max(
-        0, static_cast<int>(preampLabelsFor(*m_model).size()) - 1);
+        0, static_cast<int>(preampLabelsFor(*m_model, m_frequencyHz).size()) - 1);
     const int wanted = std::clamp(step, 0, maxStep);
     m_preampStep = wanted;
     sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
@@ -4371,10 +5343,158 @@ void IcomCivBackend::setPanAttenuator(const QString&, int step)
     }
 }
 
+ReceiveDispatch IcomCivBackend::requestSliceControl(int sliceId, const SliceControlRequest& request)
+{
+    using Field = SliceControlRequest::Field;
+    if (!m_connected || !m_session || !m_model || sliceId != 0 || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
+    switch (request.field) {
+    case Field::Rit: case Field::Xit: {
+        const IncrementalTuning tuning = std::get<IncrementalTuning>(request.value);
+        if (request.field == Field::Rit) { setSliceRitEnabled(sliceId, tuning.enabled); }
+        else { setSliceXitEnabled(sliceId, tuning.enabled); }
+        setSliceRitOffset(sliceId, tuning.hz); // one register shared by RX and TX
+        break;
+    }
+    case Field::FmToneMode: {
+        const QString mode = std::get<QString>(request.value).trimmed().toLower();
+        if (!fm || !fm->hasTxCtcss || !capabilities().fmToneModes.contains(mode)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceFmToneMode(sliceId, mode); break;
+    }
+    case Field::FmToneValue: {
+        const double hz = std::get<double>(request.value);
+        if (!fm || !fm->hasTxCtcss
+            || (ctcssRxProfileFor(m_model) ? !isCanonicalCtcssTone(hz) : hz > 299.9)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceFmToneValue(sliceId, hz); break;
+    }
+    case Field::FmRxToneValue: {
+        const double hz = std::get<double>(request.value);
+        if (!ctcssRxProfileFor(m_model) || !isCanonicalCtcssTone(hz)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceFmToneRxValue(sliceId, hz); break;
+    }
+    case Field::FmDtcs: {
+        const DtcsSetting setting = std::get<DtcsSetting>(request.value);
+        const FmRepeaterProfile* extended = extendedFmReadbackProfileFor(m_model);
+        if (!extended || !extended->hasDtcs || !isCanonicalDtcsCode(setting.code)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceFmDtcs(sliceId, setting.code, setting.txReverse, setting.rxReverse); break;
+    }
+    case Field::RepeaterDirection: {
+        const QString direction = std::get<QString>(request.value).trimmed().toLower();
+        if (!fm || !fm->hasDuplex || (direction != QLatin1String("simplex")
+            && direction != QLatin1String("up") && direction != QLatin1String("down"))) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceRepeaterOffsetDir(sliceId, direction); break;
+    }
+    case Field::RepeaterOffset:
+        if (!fm || !fm->hasDuplex || std::get<double>(request.value) < 0
+            || std::get<double>(request.value) > 99'999'900.0) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceFmRepeaterOffset(sliceId, std::get<double>(request.value)); break;
+    case Field::RepeaterRecall: {
+        if (!fm || !fm->hasDuplex || !fm->hasTxCtcss) { return ReceiveDispatch::Unsupported; }
+        const RepeaterSetting setting = std::get<RepeaterSetting>(request.value);
+        const QString direction = setting.direction.trimmed().toLower();
+        const QString mode = setting.toneMode.trimmed().toLower();
+        // Validate the whole recall before the first write of its four parts.
+        if ((direction != QLatin1String("simplex") && direction != QLatin1String("up")
+             && direction != QLatin1String("down")) || setting.offsetHz < 0
+            || setting.offsetHz > 99'999'900.0 || !capabilities().fmToneModes.contains(mode)
+            || (ctcssRxProfileFor(m_model) ? !isCanonicalCtcssTone(setting.toneHz)
+                                         : setting.toneHz > 299.9)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceFmRepeater(sliceId, direction, setting.offsetHz, mode, setting.toneHz);
+        break;
+    }
+    case Field::ActiveSlice: case Field::TxSlice:
+        return ReceiveDispatch::LocalOnly; // the existing sole selected VFO
+    case Field::TxAntenna: case Field::DaxChannel: case Field::RttyMark:
+    case Field::RttyShift: case Field::DiglOffset: case Field::DiguOffset:
+    case Field::Record: case Field::Play: case Field::TxOffset:
+    case Field::FmDeviation: case Field::RfGain: case Field::Diversity:
+    case Field::EscEnabled: case Field::EscGain: case Field::EscPhase: case Field::Count:
+        return ReceiveDispatch::Unsupported;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch IcomCivBackend::requestTransmitControl(const TransmitControlRequest& request,
+                                               TunePowerContext context)
+{
+    using Field = TransmitControlRequest::Field;
+    if (!m_connected || !m_session || !m_model || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    const RadioCapabilities caps = capabilities();
+    switch (request.field) {
+    case Field::RfPower: setTxPower(std::get<int>(request.value)); break;
+    case Field::TunePower:
+        if (context == TunePowerContext::Deferred) { return ReceiveDispatch::LocalOnly; }
+        if (context != TunePowerContext::LiveLocalCarrier || !m_tuning
+            || !TxCoordinator::Command{m_tuneOperation, true}.permitsDispatch(TxCoordinator::monotonicMs())
+            || !transmitContext().permitsDispatch(TxCoordinator::monotonicMs())) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setTunePower(std::get<int>(request.value)); break;
+    case Field::MicGain: setMicGain(std::get<int>(request.value)); break;
+    case Field::CwPitch: case Field::CwSpeed: case Field::CwBreakIn:
+        // Preserve the current capability gate until #6110 defines its replacement.
+        if (!caps.hasRadioSideCwKeyer) { return ReceiveDispatch::Unsupported; }
+        if (request.field == Field::CwPitch) { setCwPitch(std::get<int>(request.value)); }
+        else if (request.field == Field::CwSpeed) { setCwSpeed(std::get<int>(request.value)); }
+        else { setCwBreakIn(std::get<bool>(request.value)); }
+        break;
+    case Field::Filter: {
+        if (!caps.hasTxFilterControls || activeTxBandwidthItem() < 0) {
+            return ReceiveDispatch::Unsupported;
+        }
+        const TxPassband filter = std::get<TxPassband>(request.value);
+        setTxFilter(filter.lowHz, filter.highHz); break;
+    }
+    case Field::ProcessorEnabled: case Field::ProcessorLevel: {
+        if (!caps.speechProcessorControl) { return ReceiveDispatch::Unsupported; }
+        const ProcessorSetting setting = std::get<ProcessorSetting>(request.value);
+        setSpeechProcessor(setting.enabled, setting.level); break;
+    }
+    case Field::VoxEnabled: case Field::VoxLevel: {
+        if (!caps.voxControl) { return ReceiveDispatch::Unsupported; }
+        const VoxSetting setting = std::get<VoxSetting>(request.value);
+        setVox(setting.enabled, setting.level, setting.delay); break;
+    }
+    case Field::MonitorEnabled: case Field::MonitorLevel: {
+        if (!caps.txMonitorControl) { return ReceiveDispatch::Unsupported; }
+        const MonitorSetting setting = std::get<MonitorSetting>(request.value);
+        setTxMonitor(setting.enabled, setting.level); break;
+    }
+    case Field::TuneMode: case Field::MicInput: case Field::MicAccessory:
+    case Field::Dax: case Field::VoxDelay: case Field::MicBoost: case Field::MicBias:
+    case Field::AmCarrier: case Field::ExpanderEnabled: case Field::ExpanderLevel:
+    case Field::CwDelay: case Field::CwSidetone: case Field::CwIambic:
+    case Field::CwIambicMode: case Field::CwSwap: case Field::CwlEnabled:
+    case Field::CwMonitorGain: case Field::CwMonitorPan: case Field::TxProfile:
+    case Field::MicProfile: case Field::ApdEnabled: case Field::ApdSampler:
+    case Field::ApdReset: case Field::AtuMemories: case Field::AtuClear:
+    case Field::PttMicOverride: case Field::Count:
+        return ReceiveDispatch::Unsupported;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
 ReceiveDispatch IcomCivBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
 {
-    if (!m_connected || !m_session || !m_model || sliceId != 0 || !request.valid()
-        || request.origin != SliceDspRequest::Origin::Operator) {
+    if (!m_connected || !m_session || !m_model || sliceId != 0 || !request.valid()) {
         return ReceiveDispatch::Unsupported;
     }
     switch (request.feature) {

@@ -19,7 +19,7 @@ The FlexControl is a USB serial device (VID `0x2192`, PID `0x0010`) running at 9
 
 ## Setup
 
-Open **Settings → Radio Setup... → Serial & Controllers** and find the **FlexControl Tuning Knob** group. Shortcuts straight to it: **Settings → FlexControl Knob & Buttons...**, or the **Settings…** button in the AetherControl window.
+Open **Settings → Radio Setup... → Serial & Controllers** and find the **FlexControl Tuning Knob** group. Shortcuts straight to it: **Settings → Controllers → FlexControl Knob & Buttons...**, or the **Settings…** button in the AetherControl window.
 
 | Control | What it does |
 |---------|--------------|
@@ -39,13 +39,17 @@ The encoder reports its own acceleration (1–6 steps per detent depending on ho
 
 Actions whose name starts with **Wheel** do not fire once: they change what the knob does. Tap a button bound to, say, `WheelRit`, and turning the knob now adjusts RIT; the button's LED shows which mode is active. Press the knob, or tap a button bound to an ordinary action, to return the knob to tuning.
 
+**Master Volume** is the level you are hearing: with PC Audio on it is this computer's audio level, and with PC Audio off it is the radio's own output (line out). `WheelVolume`, `VolumeUp` and `VolumeDown` step from that level, the same one the title-bar master slider shows.
+
 > **Upgrading from an older version:** the FlexControl volume action drives **Master Volume**, not the active slice's volume. The older `WheelMasterAf` action has been merged into it, and saved bindings that use it keep working as Master Volume. Use `WheelSliceAudio` for per-slice volume ([#2925](https://github.com/aethersdr/AetherSDR/issues/2925), [#2986](https://github.com/aethersdr/AetherSDR/issues/2986)).
 
 ## Using AetherControl (virtual FlexControl)
 
-**Settings → AetherControl...** opens **AetherControl**, a "Virtual Tuning Controller" window laid out like the FlexControl. It shares its button assignments with the physical knob and mirrors it when one is connected.
+**Settings → Controllers → AetherControl...** opens **AetherControl**, an on-screen tuning controller laid out like the FlexControl. It shares its button assignments with the physical knob and mirrors it when one is connected.
 
-<img src="/img/screens/aethercontrol-window.png" width="515" alt="AetherControl window headed Virtual Tuning Controller, with Detect, Settings… and Compact buttons. MODE, ON/OFF and TOGGLE indicators sit above three buttons Aux1, Aux2 and Aux3, with their Single Tap actions Step Up, MOX and Toggle Mute and Double Tap actions Step Down, Toggle Tune and Toggle Lock. A large tuning knob fills the bottom." />
+The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it; it reopens at the size and place you left it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS); while the knob has the mouse captured, **Esc** releases it instead. It's a window of its own, with its own taskbar entry, so you can minimize it from the taskbar or park it on another monitor. **View → Frameless Window** does not apply to it.
+
+<img src="/img/screens/aethercontrol-window.png" width="515" alt="AetherControl window with Detect, Settings… and Compact buttons under its header. MODE, ON/OFF and TOGGLE indicators sit above three buttons Aux1, Aux2 and Aux3, with their Single Tap actions Step Up, MOX and Toggle Mute and Double Tap actions Step Down, Toggle Tune and Toggle Lock. A large tuning knob fills the bottom." />
 
 *AetherControl, the on-screen FlexControl knob.*
 
@@ -85,7 +89,7 @@ Radio Setup lists actions by their internal names:
 | SplitMonitorTx | Monitor the TX frequency |
 | ToggleAgc | Cycle AGC mode |
 | ToggleApf | APF on/off |
-| VolumeUp / VolumeDown | Slice audio up / down |
+| VolumeUp / VolumeDown | **Master Volume** up / down by 5 |
 | ClearRit / ClearXit | Zero the RIT / XIT offset |
 | CwxF1 … CwxF12 | CWX macro 1–12; follows the active slice's mode, so in voice modes it fires the matching DVK slot |
 | WheelFrequency | Knob tunes the slice |
@@ -102,7 +106,6 @@ Radio Setup lists actions by their internal names:
 
 - Pressing the knob always returns it to tuning, even when the knob button is bound to another action such as MOX ([#2350](https://github.com/aethersdr/AetherSDR/issues/2350)).
 - On Windows the FlexControl is sometimes not detected until it is unplugged and plugged back in ([#4276](https://github.com/aethersdr/AetherSDR/issues/4276)).
-- Volume up/down and the volume wheel start from the saved master volume, not the level of the audio path you are hearing, so the first step can jump ([#6132](https://github.com/aethersdr/AetherSDR/issues/6132)).
 
 ## Troubleshooting
 

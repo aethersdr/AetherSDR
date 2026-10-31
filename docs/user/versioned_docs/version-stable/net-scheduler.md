@@ -20,6 +20,10 @@ Open it from **Tools → Net Scheduler...**
 
 Click **Add…** and fill in (a new net starts as Weekly on today's weekday):
 
+<img src="/img/screens/net-scheduler-add-net.png" width="488" alt="Add Net dialog. Name: Tuesday 20 m Net. Repeats Weekly every 1 week(s), On with day buttons M, T, W, T, F, S, S. At 8:00 PM, Etc/UTC. Remind me 10 minutes before. Frequency 14.250000 MHz, USB, with a Capture current VFO button. Filter 100 Hz to 2800 Hz, an empty Notes field, the next occurrence in blue, and OK and Cancel buttons." />
+
+*Adding a net: name, repeat pattern, time, reminder and frequency.*
+
 - **Name**
 - **Repeats:** **Once (no repeat)**, **Daily**, **Weekly** or **Monthly**,
   with **every N** days, weeks or months (1–52).
@@ -51,6 +55,10 @@ At reminder time a banner appears in the main window with:
 
 AetherSDR also tries to show a desktop notification.
 
+On a supported radio, a captured preset also reapplies its tuning step and any
+saved repeater offset or tone fields. Fields absent from the preset are left
+unchanged. The net is not a radio memory slot, and applying it does not key TX.
+
 ### Import and export
 
 **Export…** saves the schedule as a JSON file; **Import…** reads one back,
@@ -66,6 +74,10 @@ When an imported net matches one you already have, choose:
 ### The schedule list
 
 The window lists your nets with these columns:
+
+<img src="/img/screens/net-scheduler-window.png" width="640" alt="Net Scheduler window. A table with columns On, Name, Repeats, Next, Frequency and Mode lists two nets: Tuesday 20 m Net, weekly, 14.2500 MHz USB, and Sunday 20 m Net, weekly, 14.3000 MHz USB, the second selected. Add…, Edit…, Remove, Disable, Tune Now, Import… and Export… buttons run along the bottom." />
+
+*The Net Scheduler with two weekly nets added.*
 
 | Column | Meaning |
 |---|---|

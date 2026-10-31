@@ -10,6 +10,8 @@
 #include "SpectrumOverlayWheelGuard.h"
 #include "AutoBlackMode.h"
 #include "GuardedSlider.h"
+#include "FftTraceDecomb.h"
+#include "FftTraceSmoothing.h"
 #include "ComboStyle.h"
 #include "Theme.h"
 #include "core/GpuSelector.h"
@@ -45,6 +47,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <QPointer>
 
 #include "core/ThemeManager.h"
 
@@ -81,6 +84,12 @@ SliceModel* antennaTargetSliceForPan(RadioModel* radioModel,
     }
 
     return currentSlice;
+}
+
+// FFT Smooth / De-comb value label: 0 is "Off", anything else the number.
+static QString offOrValueText(int value)
+{
+    return value == 0 ? SpectrumOverlayMenu::tr("Off") : QString::number(value);
 }
 
 static QString rateSliderLabelText(int sliderValue)
@@ -248,12 +257,15 @@ static void applyPanelStyle(QWidget* panel, const QString& objectName)
 // (label+control rows, the Display scroll area/viewport/content). Scoped
 // because an unscoped "QWidget { … }" cascades onto children and their tooltip
 // labels. QWidget# even for the QScrollArea: the name already pins one widget.
-static void applyTransparentStyle(QWidget* widget, const QString& objectName)
+// `childRules` styles the row's children through this one call (already scoped).
+static void applyTransparentStyle(QWidget* widget, const QString& objectName,
+                                  const QString& childRules = {})
 {
     widget->setObjectName(objectName);
     widget->setStyleSheet(
         QStringLiteral("QWidget#%1 { background: transparent; border: none; }")
-            .arg(objectName));
+            .arg(objectName)
+        + childRules);
 }
 
 static const QString kLabelStyle =
@@ -667,24 +679,30 @@ void SpectrumOverlayMenu::buildAntPanel()
                 return;
             }
         }
+        const QPointer<SpectrumOverlayMenu> alive(this);
+        const QPointer<RadioModel> radio(m_radioModel);
+        if (!radio) { return; }
+        const QPointer<PanadapterModel> pan(radio->panadapter(m_panId));
+        const QPointer<SliceModel> originalSlice(targetSlice);
+        const RadioControlSession session = radio->controlSession();
         if (targetSlice) {
             emit flexRxAntennaSelected(targetSlice->sliceId());
         }
-        if (m_radioModel && !m_panId.isEmpty()
-            && m_radioModel->usesFlexCommandPlane()) {
+        if (!alive || !radio || radio->controlSession() != session) { return; }
+        const std::optional<PanControl> control = radio->backendCapabilities().panControl;
+        if (!m_panId.isEmpty() && control && control->supports(PanControlField::ReceiveAntenna)) {
             // Flex assigns receive antenna on the panadapter.  SliceModel's
             // command targets a different object and was never equivalent.
             // The empty-id check is not decoration: a pan applet exists before
             // the radio hands back its id, and without it a click landing in
             // that window puts `display pan set  rxant=ANT1` — no id, double
             // space — on the wire. Same defect the clone path hit in #4881.
-            m_radioModel->sendCommand(
-                QStringLiteral("display pan set %1 rxant=%2")
-                    .arg(m_panId, ant));
-        } else if (targetSlice) {
-            targetSlice->setRxAntenna(ant);
+            radio->requestPanControl(pan,
+                {PanControlField::ReceiveAntenna, ant});
+        } else if (originalSlice && radio->slice(originalSlice->sliceId()) == originalSlice) {
+            originalSlice->setRxAntenna(ant);
         }
-        updateLoopButtonVisibility();
+        if (alive) { updateLoopButtonVisibility(); }
     });
 
     // Loop row — SmartSDR exposes this directly below RX ANT on models
@@ -1138,9 +1156,12 @@ void SpectrumOverlayMenu::setPanSlotIndex(int idx)
 
 void SpectrumOverlayMenu::setRadioModel(RadioModel* model)
 {
-    if (m_radioModel)
+    if (m_radioModel) {
         disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
                    this, &SpectrumOverlayMenu::refreshAntennaCombo);
+        disconnect(m_radioModel, &RadioModel::panNoiseFloorRangeAvailabilityChanged,
+                   this, &SpectrumOverlayMenu::syncNoiseFloorRange);
+    }
     if (m_panRxAntennaConnection) {
         disconnect(m_panRxAntennaConnection);
         m_panRxAntennaConnection = {};
@@ -1154,6 +1175,8 @@ void SpectrumOverlayMenu::setRadioModel(RadioModel* model)
     if (m_radioModel) {
         connect(m_radioModel, &RadioModel::antennaAliasesChanged,
                 this, &SpectrumOverlayMenu::refreshAntennaCombo);
+        connect(m_radioModel, &RadioModel::panNoiseFloorRangeAvailabilityChanged,
+                this, &SpectrumOverlayMenu::syncNoiseFloorRange);
     }
     wirePanadapterRxAntenna();
     refreshAntennaCombo();
@@ -1169,7 +1192,12 @@ void SpectrumOverlayMenu::wirePanadapterRxAntenna()
         disconnect(m_panLoopConnection);
         m_panLoopConnection = {};
     }
+    if (m_panNoiseFloorRangeConnection) {
+        disconnect(m_panNoiseFloorRangeConnection);
+        m_panNoiseFloorRangeConnection = {};
+    }
     m_panadapter = nullptr;
+    syncNoiseFloorRange();
 
     if (!m_radioModel || m_panId.isEmpty())
         return;
@@ -1177,6 +1205,11 @@ void SpectrumOverlayMenu::wirePanadapterRxAntenna()
     m_panadapter = m_radioModel->panadapter(m_panId);
     if (!m_panadapter)
         return;
+
+    m_panNoiseFloorRangeConnection =
+        connect(m_panadapter, &PanadapterModel::noiseFloorRangeChanged,
+                this, &SpectrumOverlayMenu::syncNoiseFloorRange);
+    syncNoiseFloorRange();
 
     m_panRxAntennaConnection =
         connect(m_panadapter, &PanadapterModel::rxAntennaChanged,
@@ -1190,6 +1223,50 @@ void SpectrumOverlayMenu::wirePanadapterRxAntenna()
         connect(m_panadapter, &PanadapterModel::loopChanged,
                 this, &SpectrumOverlayMenu::setLoopState);
     setLoopState(m_panadapter->loopA(), m_panadapter->loopB());
+}
+
+void SpectrumOverlayMenu::syncNoiseFloorRange()
+{
+    if (!m_floorRangeSlider) {
+        return;
+    }
+    const std::optional<double> db = m_panadapter ? m_panadapter->noiseFloorRange()
+                                                   : std::nullopt;
+    QString reason = m_radioModel ? m_radioModel->panNoiseFloorRangeUnavailableReason()
+                                  : tr("Connect to a radio to use Noise Floor Range.");
+    if (reason.isEmpty() && !db) {
+        reason = tr("Waiting for the radio to report this panadapter's noise floor range.");
+    }
+    if (db) {
+        const QSignalBlocker blocker(m_floorRangeSlider);
+        m_floorRangeSlider->setValue(qRound(*db / kNoiseFloorRangeStepDb));
+        m_floorRangeLabel->setText(QString::number(*db, 'f', 1));
+    } else {
+        m_floorRangeLabel->setText(QStringLiteral("-"));
+    }
+    m_floorRangeSlider->setEnabled(reason.isEmpty());
+    const QString description = reason.isEmpty()
+        ? tr("How far the measured noise floor may move, in dB, before the radio "
+             "repositions this panadapter. A larger range steadies the display at "
+             "high zoom. Applies while FFT Floor is on Auto.")
+        : reason;
+    m_floorRangeSlider->setToolTip(description);
+    m_floorRangeSlider->setAccessibleDescription(description);
+}
+
+void SpectrumOverlayMenu::requestNoiseFloorRange()
+{
+    if (!m_radioModel || !m_panadapter || !m_floorRangeSlider) {
+        return;
+    }
+    const double db = m_floorRangeSlider->value() * kNoiseFloorRangeStepDb;
+    if (m_panadapter->noiseFloorRange() == db) {
+        return;
+    }
+    if (m_radioModel->requestPanControl(m_panadapter, {PanControlField::NoiseFloorRange, db})
+        != ReceiveDispatch::Dispatched) {
+        syncNoiseFloorRange();   // refused: show the radio's value again
+    }
 }
 
 QString SpectrumOverlayMenu::currentRxAntennaToken() const
@@ -1229,18 +1306,23 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
             append(token);
         }
     }
-    for (const QString& token : m_antList) {
-        append(token);
-    }
-    if (m_radioModel) {
-        for (const QString& token : m_radioModel->knownAntennaTokens()) {
+    const bool publishedReceiveOnly = targetSlice && !targetSlice->rxAntennaList().isEmpty()
+        && m_radioModel && m_radioModel->isConnected()
+        && !m_radioModel->backendCapabilities().canTransmit;
+    if (!publishedReceiveOnly) {
+        for (const QString& token : m_antList) {
             append(token);
         }
-    }
-    append(cur);
-    if (options.isEmpty()) {
-        append(QStringLiteral("ANT1"));
-        append(QStringLiteral("ANT2"));
+        if (m_radioModel) {
+            for (const QString& token : m_radioModel->knownAntennaTokens()) {
+                append(token);
+            }
+        }
+        append(cur);
+        if (options.isEmpty()) {
+            append(QStringLiteral("ANT1"));
+            append(QStringLiteral("ANT2"));
+        }
     }
     if (m_kiwiSdrManager) {
         for (const QString& token : m_kiwiSdrManager->virtualAntennaTokens()) {
@@ -1459,7 +1541,7 @@ void SpectrumOverlayMenu::toggleDaxPanel()
         m_daxPanelVisible = true;
         int btnCenterY = m_menuBtns[kBtnDax]->y() + m_menuBtns[kBtnDax]->height() / 2;
         int panelY = y() + btnCenterY - m_daxPanel->sizeHint().height() / 2;
-        m_daxPanel->move(x() + width(), std::max(0, panelY));
+        m_daxPanel->move(x() + width(), std::max(m_topLimit, panelY));
         m_daxPanel->raise();
         m_daxPanel->show();
         m_menuBtns[kBtnDax]->setStyleSheet(kMenuBtnActive);
@@ -1490,9 +1572,10 @@ void SpectrumOverlayMenu::toggleMemoryPanel()
         const int panelH = m_memoryPanel->sizeHint().height();
         int panelY = y();
         if (auto* parent = parentWidget())
-            panelY = std::clamp(panelY, 0, qMax(0, parent->height() - panelH));
+            panelY = std::clamp(panelY, m_topLimit,
+                                qMax(m_topLimit, parent->height() - panelH));
         else
-            panelY = std::max(0, panelY);
+            panelY = std::max(m_topLimit, panelY);
         m_memoryPanel->move(x() + width(), panelY);
         m_memoryPanel->raise();
         m_memoryPanel->show();
@@ -1554,7 +1637,7 @@ void SpectrumOverlayMenu::toggleAntPanel()
         m_antPanelVisible = true;
         int antBtnCenterY = m_menuBtns[kBtnAnt]->y() + m_menuBtns[kBtnAnt]->height() / 2;
         int panelY = y() + antBtnCenterY - m_antPanel->sizeHint().height() / 2;
-        m_antPanel->move(x() + width(), std::max(0, panelY));
+        m_antPanel->move(x() + width(), std::max(m_topLimit, panelY));
         m_antPanel->raise();
         m_antPanel->show();
         m_menuBtns[kBtnAnt]->setStyleSheet(kMenuBtnActive);
@@ -1803,6 +1886,39 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
     }
 
+    // Scope mode, for a radio whose panadapter is its own scope (Icom). First in
+    // the group because it changes what every spectrum gesture does. An
+    // Icom-only cluster: built for that family alone (setRadioFamily), and
+    // dimmed with a reason on an Icom whose model or firmware has no choice.
+    {
+        m_scopeModeRow = new QWidget;
+        // The label and the buttons rebuilt per radio share the row's one
+        // stylesheet, scoped to it, with the panel's label and button looks.
+        const QString scoped = QStringLiteral("QWidget#displayScopeModeRow ");
+        applyTransparentStyle(m_scopeModeRow, QStringLiteral("displayScopeModeRow"),
+                              QString(labelStyle).replace(QStringLiteral("QLabel"),
+                                                          scoped + QStringLiteral("QLabel"))
+                                  + QString(btnStyle).replace(
+                                      QStringLiteral("QPushButton"),
+                                      scoped + QStringLiteral("QPushButton")));
+        m_scopeModeLayout = new QHBoxLayout(m_scopeModeRow);
+        m_scopeModeLayout->setContentsMargins(0, 2, 0, 2);
+        m_scopeModeLayout->setSpacing(3);
+        m_scopeModeLayout->addWidget(new QLabel(tr("Scope:")));
+        m_scopeModeRow->setToolTip(tr(
+            "How the radio's scope window follows the VFO.\n"
+            "Center: the window is centered on the VFO; dragging retunes.\n"
+            "Scroll-F: the window stays put; click to tune, drag to scroll.\n"
+            "  A drag stops before the VFO leaves the screen.\n"
+            "Fixed: as Scroll-F, but the window can be dragged away from\n"
+            "  the VFO; AetherSDR follows the VFO when you tune off-screen.\n"
+            "Scroll-F and Fixed rewrite the radio's stored Fixed Edges\n"
+            "preset 4; presets 1-3 are left as you set them."));
+        rebuildScopeModeButtons();
+        grid->addWidget(m_scopeModeRow, row, 0, 1, 4);
+        ++row;
+    }
+
     // ── Sliders ───────────────────────────────────────────────────────────
 
     // AVG
@@ -1821,6 +1937,55 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     connect(m_fpsSlider, &QSlider::valueChanged, this, [this](int v) {
         m_fpsLabel->setText(QString::number(v));
         emit fftFpsChanged(v);
+    });
+
+    // Smooth — display-only smoothing across frequency, in linear power (the
+    // panadapter's counterpart of the AetherRX/TX EQ's Smoothing). The value
+    // is the half-width in pixels; the client applies it to every radio.
+    makeRow("FFT Smooth:", 0, AetherSDR::kFftSmoothingMaxHalfWidthPx, 0,
+            m_smoothSlider, m_smoothLabel);
+    m_smoothSlider->setObjectName("displayFftSmoothSlider");
+    m_smoothSlider->setAccessibleName(tr("FFT smoothing"));
+    m_smoothSlider->setToolTip(
+        tr("Smooths the spectrum trace across frequency, averaging each point "
+           "with its neighbors up to this many pixels either side.\n"
+           "Averages in linear power, so the floor reads its true average "
+           "power, about 1-1.5 dB above the unsmoothed trace's middle. "
+           "Waterfall and noise-floor readings are not affected. 0 = off."));
+    m_smoothSlider->setAccessibleDescription(
+        tr("Averages the spectrum trace across this many pixels either side. "
+           "Zero is off. The waterfall is not affected."));
+    m_smoothLabel->setText(offOrValueText(0));
+    connect(m_smoothSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_smoothLabel->setText(offOrValueText(v));
+        emit fftSmoothingChanged(v);
+    });
+
+    // De-comb — replaces the trace with its cepstral true envelope, a smooth
+    // curve over the comb a zoomed-in pan draws across SSB voice (the
+    // speaker's pitch harmonics), keeping the signal's outline and peak level.
+    // The value is the widest harmonic spacing removed, in Hz; 0 is off.
+    makeRow("De-comb Hz:", 0, AetherSDR::kFftDecombMaxHz, 0,
+            m_decombHzSlider, m_decombHzLabel);
+    m_decombHzSlider->setObjectName("displayFftDecombHzSlider");
+    m_decombHzSlider->setSingleStep(10);
+    m_decombHzSlider->setPageStep(50);
+    m_decombHzSlider->setAccessibleName(tr("FFT de-comb width in hertz"));
+    m_decombHzSlider->setToolTip(
+        tr("Removes the comb of voice harmonics a zoomed-in panadapter draws "
+           "across an SSB signal, drawing a smooth curve over the harmonic peaks "
+           "so the signal keeps its outline and peak level.\n"
+           "The value is the widest harmonic spacing removed, in Hz. Voices are "
+           "about 100-250 Hz; 300 covers most. 0 = off.\n"
+           "Rounds a signal's steep edges by about half this width. "
+           "The noise floor and the waterfall are not changed."));
+    m_decombHzSlider->setAccessibleDescription(
+        tr("Removes the comb of voice harmonics from the spectrum trace, up to "
+           "this spacing in hertz. Zero is off. The waterfall is not changed."));
+    m_decombHzLabel->setText(offOrValueText(0));
+    connect(m_decombHzSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_decombHzLabel->setText(offOrValueText(v));
+        emit fftDecombHzChanged(v);
     });
 
     // Line Width
@@ -1932,6 +2097,26 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         m_floorLabel->setText(QString::number(v));
         emit noiseFloorPositionChanged(v);
     });
+
+    // Radio-owned: the slider shows what the pan reported and sends a request.
+    const int rangeSteps = qRound(kNoiseFloorRangeMaximumDb / kNoiseFloorRangeStepDb);
+    makeRow("NF Range:", 0, rangeSteps, 3, m_floorRangeSlider, m_floorRangeLabel);
+    m_floorRangeSlider->setObjectName("displayNoiseFloorRangeSlider");
+    m_floorRangeSlider->setAccessibleName(tr("Noise floor range"));
+    m_floorRangeSlider->setPageStep(2);
+    static_cast<GuardedSlider*>(m_floorRangeSlider)->setDragValueFormatter([](int v) {
+        return QStringLiteral("%1 dB").arg(v * kNoiseFloorRangeStepDb, 0, 'f', 1);
+    });
+    m_floorRangeLabel->setText(QStringLiteral("-"));
+    connect(m_floorRangeSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_floorRangeLabel->setText(QString::number(v * kNoiseFloorRangeStepDb, 'f', 1));
+        if (!m_floorRangeSlider->isSliderDown()) {
+            requestNoiseFloorRange();
+        }
+    });
+    connect(m_floorRangeSlider, &QSlider::sliderReleased,
+            this, &SpectrumOverlayMenu::requestNoiseFloorRange);
+    syncNoiseFloorRange();
 
     makeHeader("WATERFALL");
 
@@ -2841,8 +3026,22 @@ void SpectrumOverlayMenu::syncExtraDisplaySettings(bool blankerOn, float blanker
                                                     int bgOpacity,
                                                     int freqGridSpacingKhz,
                                                     const QColor& bgFillColor,
-                                                    int freqScaleFontPt)
+                                                    int freqScaleFontPt,
+                                                    int fftSmoothing,
+                                                    int fftDecombHz)
 {
+    if (m_decombHzSlider) {
+        QSignalBlocker b(m_decombHzSlider);
+        m_decombHzSlider->setValue(fftDecombHz);
+        if (m_decombHzLabel)
+            m_decombHzLabel->setText(offOrValueText(m_decombHzSlider->value()));
+    }
+    if (m_smoothSlider) {
+        QSignalBlocker b(m_smoothSlider);
+        m_smoothSlider->setValue(fftSmoothing);
+        if (m_smoothLabel)
+            m_smoothLabel->setText(offOrValueText(m_smoothSlider->value()));
+    }
     if (m_freqGridSpacingCmb) {
         QSignalBlocker b(m_freqGridSpacingCmb);
         int idx = m_freqGridSpacingCmb->findData(freqGridSpacingKhz);
@@ -2907,12 +3106,12 @@ void SpectrumOverlayMenu::layoutDisplayPanel()
     const int scrollBarExtent = m_displayPanel->style()->pixelMetric(
         QStyle::PM_ScrollBarExtent, nullptr, m_displayScroll);
     const QSize panelSize = constrainedDisplayPanelSize(
-        contentHint, hostHeight, scrollBarExtent);
+        contentHint, hostHeight - m_topLimit, scrollBarExtent);
 
     m_displayPanel->resize(panelSize);
     const int menuBottom = y() + height();
     const int panelY = constrainedDisplayPanelTop(
-        menuBottom, panelSize.height(), hostHeight);
+        menuBottom, panelSize.height(), hostHeight, m_topLimit);
     m_displayPanel->move(x() + width(), panelY);
 }
 
@@ -3189,6 +3388,89 @@ void SpectrumOverlayMenu::refreshFrontEndButtons()
           QStringLiteral("preamp"));
     apply(m_attenuatorRow, m_attenuatorBtn, m_attenuatorLabels, m_attenuatorStep,
           QStringLiteral("attenuator"));
+}
+
+// The buttons do not own their state: a click emits the request and they
+// repaint from the index the backend reports.
+void SpectrumOverlayMenu::setScopeModeLabels(const QStringList& labels)
+{
+    if (labels == m_scopeModeLabels && m_scopeModeBtns.size() == labels.size()) {
+        return;
+    }
+    m_scopeModeLabels = labels;
+    rebuildScopeModeButtons();
+}
+
+void SpectrumOverlayMenu::setScopeModeIndex(int index)
+{
+    m_scopeModeIndex = index;
+    refreshScopeModeButtons();
+}
+
+void SpectrumOverlayMenu::setRadioFamily(const QString& family)
+{
+    if (family == m_radioFamily) {
+        return;
+    }
+    m_radioFamily = family;
+    refreshScopeModeButtons();
+}
+
+void SpectrumOverlayMenu::rebuildScopeModeButtons()
+{
+    if (!m_scopeModeRow || !m_scopeModeLayout) {
+        return;
+    }
+    qDeleteAll(m_scopeModeBtns);
+    m_scopeModeBtns.clear();
+    // A radio with no choice publishes the one mode it has; show that mode
+    // dimmed, not three buttons it does not offer.
+    const QStringList labels = !m_scopeModeLabels.isEmpty()
+        ? m_scopeModeLabels : QStringList{tr("Center"), tr("Scroll-F"), tr("Fixed")};
+    for (int i = 0; i < labels.size(); ++i) {
+        auto* btn = new QPushButton(labels.at(i));
+        btn->setCheckable(true);
+        btn->setFixedHeight(20);
+        QString slug = labels.at(i).toLower();
+        slug.remove(QLatin1Char('-'));
+        slug.remove(QLatin1Char(' '));
+        btn->setObjectName(QStringLiteral("displayScopeMode_%1").arg(slug));
+        btn->setAccessibleName(tr("Scope mode %1").arg(labels.at(i)));
+        m_scopeModeLayout->addWidget(btn, 1);
+        m_scopeModeBtns.append(btn);
+        connect(btn, &QPushButton::clicked, this, [this, i] {
+            // Undo the checked state Qt gave the click; the backend's answer lights it.
+            refreshScopeModeButtons();
+            if (i != m_scopeModeIndex) {
+                emit scopeModeChanged(i);
+            }
+        });
+    }
+    refreshScopeModeButtons();
+}
+
+void SpectrumOverlayMenu::refreshScopeModeButtons()
+{
+    if (!m_scopeModeRow) {
+        return;
+    }
+    // Shown for the Icom family only (a maintainer-ruled exception to
+    // dim-never-hide); within it the backend's label list decides: fewer than
+    // two = an Icom whose model or firmware has no choice, dimmed with the
+    // reason; two or more = the choice.
+    m_scopeModeRow->setVisible(m_radioFamily.compare(QLatin1String("icom"),
+                                                     Qt::CaseInsensitive) == 0);
+    const bool available = m_scopeModeLabels.size() > 1;
+    const QString reason = available ? QString{}
+        : tr("Scope mode selection is unavailable for this radio or firmware.");
+    m_scopeModeRow->setEnabled(available);
+    m_scopeModeRow->setAccessibleDescription(reason);
+    for (int i = 0; i < m_scopeModeBtns.size(); ++i) {
+        QSignalBlocker b(m_scopeModeBtns[i]);
+        m_scopeModeBtns[i]->setChecked(available && i == m_scopeModeIndex);
+        m_scopeModeBtns[i]->setAccessibleDescription(reason);
+        m_scopeModeBtns[i]->setToolTip(available ? m_scopeModeRow->toolTip() : reason);
+    }
 }
 
 void SpectrumOverlayMenu::setLoopState(bool loopA, bool loopB)

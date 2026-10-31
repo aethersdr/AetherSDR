@@ -1,10 +1,10 @@
 ---
 title: "Your First Session"
 slug: "/your-first-session"
-description: "This tutorial walks you through AetherSDR for the first time using the built-in demo, so you need no radio, no antenna and no licence."
+description: "This tutorial walks you through AetherSDR for the first time using the built-in demo, so you need no radio, no antenna and no license."
 ---
 
-This tutorial walks you through AetherSDR for the first time using the built-in demo, so you need no radio, no antenna and no licence. In about 20 minutes you will connect, tune, change mode and filter, add a panadapter, clean up a noisy band, change the display, save a memory and disconnect. Every step tells you what you should see, so you know it worked.
+This tutorial walks you through AetherSDR for the first time using the built-in demo, so you need no radio, no antenna and no license. In about 20 minutes you will connect, tune, change mode and filter, add a panadapter, clean up a noisy band, change the display, save a memory and disconnect. Every step tells you what you should see, so you know it worked.
 
 The demo is a simulator that generates its own receive audio and spectrum. **It cannot transmit**, so nothing you do here reaches the air. It also has fewer features than a real radio: one slice, USB and LSB audio, and no DAX. See [Demo Mode](./demo-mode.md) for everything it offers.
 
@@ -26,7 +26,7 @@ The demo is a simulator that generates its own receive audio and spectrum. **It 
 *The main window just after connecting to the demo: panadapter and waterfall on the left, applets on the right.*
 
 1. In the Connect to Radio window, choose **On This Network**.
-2. Under **Available radios**, find **AetherSDR Demo**, labelled **"Simulator (not on the air)"**. It always sorts below any real radios.
+2. Under **Available radios**, find **AetherSDR Demo**, labeled **"Simulator (not on the air)"**. It always sorts below any real radios.
 3. Select it and click **Connect Selected Radio**.
 
 **You should see** the main window come to life:
@@ -88,7 +88,7 @@ See [RX Controls](./rx-controls.md) for the presets in each mode.
 
 The demo has a single slice, so the **+RX** button does not add a second one here. On a real radio it does; see [Multi-Slice Operation](./multi-slice-operation.md). The demo can show up to four panadapters, so add one instead.
 
-<img src="/img/screens/first-session-layout-dialog.png" width="560" alt="Panadapter Layout window headed Choose panadapter layout. A grid of layout thumbnails, each labelled with its arrangement and pan count: A / B (2 pans), A | B (2 pans), A|B / C (3 pans), A / B|C (3 pans), A / B / C (3 pans), A|B / C|D (4 pans), A/B/C/D (4 pans) and Single (1 pan), highlighted. Layouts for five to eight pans are dimmed. A Cancel button sits at the bottom." />
+<img src="/img/screens/first-session-layout-dialog.png" width="560" alt="Panadapter Layout window headed Choose panadapter layout. A grid of layout thumbnails, each labeled with its arrangement and pan count: A / B (2 pans), A | B (2 pans), A|B / C (3 pans), A / B|C (3 pans), A / B / C (3 pans), A|B / C|D (4 pans), A/B/C/D (4 pans) and Single (1 pan), highlighted. Layouts for five to eight pans are dimmed. A Cancel button sits at the bottom." />
 
 *The Panadapter Layout window. The demo can show up to four panadapters, so larger layouts are dimmed.*
 
@@ -134,7 +134,7 @@ Make some noise, add a voice to listen to, then let AetherSDR's noise reduction 
 
    **You should hear** the unprocessed noise while BYPASS is on, and the cleaned-up audio when you turn it off.
 
-NNR works on every platform with nothing to download. Try the other methods too. A method your computer cannot run is greyed out; hover over it for the reason (for example **MNR** outside macOS). The first time you choose **NR2**, it spends a while optimising itself in an **FFTW Wisdom** window. See [DSP Noise Mitigation](./dsp-noise-mitigation.md).
+NNR works on every platform with nothing to download. Try the other methods too. A method your computer cannot run is grayed out; hover over it for the reason (for example **MNR** outside macOS). The first time you choose **NR2**, it spends a while optimizing itself in an **FFTW Wisdom** window. See [DSP Noise Mitigation](./dsp-noise-mitigation.md).
 
 ## Step 8: Open the Display panel
 
@@ -183,7 +183,7 @@ The demo keeps its memories on this computer. A FlexRadio keeps them on the radi
 
 1. Choose **File → Disconnect**.
 
-   **You should see** the demo session close. Open the **File** menu again and **Disconnect** is greyed out, because nothing is connected.
+   **You should see** the demo session close. Open the **File** menu again and **Disconnect** is grayed out, because nothing is connected.
 
 Because you disconnected yourself, AetherSDR does not reconnect to the demo the next time it starts.
 

@@ -3,12 +3,12 @@ title: "AetherModem Packet Radio"
 slug: "/aethermodem-packet-radio"
 description: "AetherModem is AetherSDR's built-in AX.25 packet modem."
 status: "Supported"
-applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)", "Networked Icom (early; IC-7300MK2 supported)"]
+applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)", "Networked Icom (early; IC-7300MK2 supported)", "RTL-SDR (experimental, receive-only)"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2 (experimental), Networked Icom (early; IC-7300MK2 supported)
+**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2 (experimental), Networked Icom (early; IC-7300MK2 supported), RTL-SDR (experimental, receive-only)
 
 :::
 
@@ -18,13 +18,19 @@ AetherModem works on FlexRadio, on the [Hermes-Lite 2](./hermes-lite-2.md) and o
 
 ## Setup
 
-Open it from **Tools → AetherModem…**
+Open it from **Tools → AetherModem...**
 
 ### Window layout
 
 The window has six tabs: **APRS**, **Digipeater**, **KISS TNC**, **Terminal**, **Mailbox** and **D-STAR** (the D-STAR tab is covered on [D-STAR (ThumbDV)](./d-star-thumbdv.md) and is hidden on radios without waveform support). A slim status bar along the bottom shows the modem state, the receive gain and a packet-activity strip.
 
+The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). It's a window of its own, with its own taskbar entry, so you can minimize it from the taskbar or park it on another monitor. **View → Frameless Window** does not apply to it. Closing only hides it: the KISS TNC, the mailbox and the APRS modem keep running, and reopening brings back the same window.
+
 All AetherModem transmissions share one queue and key the radio one at a time, so the APRS client, digipeater, KISS clients, terminal and mailbox never talk over each other.
+
+<img src="/img/screens/aethermodem-aprs.png" width="1102" alt="AetherModem window with tabs APRS (selected), Digipeater, KISS TNC, Terminal, Mailbox and D-STAR. Rows of settings cover the baud rate (300 or 1200), Enable Modem and Autostart at launch, then My Callsign (placeholder N0CALL-9), Symbol Home, Path WIDE1-1,WIDE2-1 and a Beacon every 30 min, the Position line (blacked out) with manual grid, latitude and longitude fields, a message composer with Send APRS Msg, and an empty table of heard stations with columns Time, Station, Symbol, Age, Pkts, Grid, Dist, CRS/SPD and Status / Comment. The status bar reads Modem Standby and No audio yet." />
+
+*AetherModem on the APRS tab. The station's GPS position is blacked out.*
 
 ### Modem and profiles
 
@@ -41,6 +47,12 @@ The 1200-baud receiver uses a Direwolf-derived AFSK demodulator. The 300-baud HF
 Packet length, retry timing and preamble are derived from the baud rate, not fixed values sized for VHF. On HF the packet length defaults to 64 bytes. The 1200-baud preamble is shorter than the HF one; raise it if a transverter's T/R switching clips the start of a burst.
 
 **Tips for receive level:** avoid clipping (peaks around −10 dBFS are fine) and don't chase every missed decode with AF gain once the tones are clearly visible.
+
+### RTL-SDR receive-only packets
+
+On [RTL-SDR](./rtl-sdr.md), the modem decodes the selected slice's audio. For VHF APRS, choose **FM** or **FM-N**, select **1200 baud** and enable **Enable Modem**. The status reports **RX: selected slice**. Speaker mute and volume do not affect this source, but receiver squelch does. Slice selection changes the modem's receive source; there is no fixed-source selector.
+
+Parking, removing or reconfiguring that receiver clears stale decoder input. Decoded packets can populate the APRS table and reach receive consumers such as KISS and MQTT. RTL remains receive-only: beacons, acknowledgements, digipeating and packet transmit are unavailable. APRS-IS gateway operation is not provided.
 
 ## Using AetherModem
 

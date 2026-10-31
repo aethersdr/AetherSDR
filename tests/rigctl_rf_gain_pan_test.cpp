@@ -5,6 +5,7 @@
 // setter and wire text. Socket-free: injected stub backend or the real Flex
 // backend built without dialling; nothing is opened and nothing is keyed.
 
+#include "ModelControlWireSpy.h"
 #include "TestSettingsProfile.h"
 #include "core/RigctlProtocol.h"
 #include "core/backends/IRadioBackend.h"
@@ -52,7 +53,14 @@ public:
     QString lastRfGainPanId;
     int rfGainWrites{0};
 
-    RadioCapabilities capabilities() const override { return {}; }
+    // Declares the one pan display control it implements, as a real backend
+    // must for RadioModel to route RF gain to it.
+    RadioCapabilities capabilities() const override
+    {
+        RadioCapabilities caps;
+        caps.panDisplayControl = PanDisplayControl{{PanDisplayField::RfGain}, {}};
+        return caps;
+    }
     bool isConnected() const override { return connected; }
     void connectRadio(const RadioConnectRequest&) override {}
     void disconnectRadio() override { connected = false; }
@@ -291,7 +299,7 @@ void testCommandPlaneKeepsTheSliceSetter()
     pan->setRfGain(-8);
 
     QStringList wire;
-    QObject::connect(slice, &SliceModel::commandReady, [&wire](const QString& cmd) {
+    const auto wireEncoder = modelControlEncoder(slice, [&wire](const QString& cmd) {
         wire << cmd;
     });
     RigctlProtocol port(&radio);

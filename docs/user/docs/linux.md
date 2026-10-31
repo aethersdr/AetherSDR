@@ -55,7 +55,7 @@ Most USB accessories are root-only on Linux until a udev rule or group membershi
 
 | Device | What to do | Page |
 |---|---|---|
-| RC-28, PowerMate, ShuttleXpress, ShuttlePro v2, Stream Deck+ | Copy `packaging/linux/60-hid-encoders.rules` from the source tree to `/etc/udev/rules.d/`, then run `sudo udevadm control --reload-rules && sudo udevadm trigger` | [USB Control Surfaces](./usb-control-surfaces.md), [StreamDeck](./streamdeck.md) |
+| RC-28, PowerMate, ShuttleXpress, ShuttlePro v2, TMate 2, Stream Deck+ | Copy `packaging/linux/60-hid-encoders.rules` from the source tree to `/etc/udev/rules.d/`, then run `sudo udevadm control --reload-rules && sudo udevadm trigger` | [USB Control Surfaces](./usb-control-surfaces.md), [StreamDeck](./streamdeck.md) |
 | Ulanzi Dial | Click **Grant access** in the mapper when it shows "… detected — needs permission". AetherSDR installs `70-ulanzi-dial.rules` through `pkexec`. | [Ulanzi Dial](./ulanzi-dial.md) |
 | CTR2-Max (USB mode) | **Start** offers to install the CTR2 udev rule if the device cannot be opened | [CTR2 Proxy](./ctr2-proxy.md) |
 | ThumbDV / DV3000U | Official packages install `70-aethersdr-thumbdv.rules`; otherwise join the serial group (below) | [D-STAR (ThumbDV)](./d-star-thumbdv.md) |
@@ -72,9 +72,10 @@ After changing your groups, log out and back in.
 - **Window frame:** AetherSDR draws a frameless window with a 6 px resize band on the sides and bottom. **View → Frameless Window** (Ctrl+Shift+F) turns it off if your compositor mishandles it.
 - **DAX virtual audio** is built in through PipeWire. Receive channels are native PipeWire streams, and they also appear through PipeWire's PulseAudio and JACK layers. DAX IQ channels appear as capture devices named **AetherSDR DAX IQ n**. See [DAX Virtual Audio](./dax-virtual-audio.md) and [DAX IQ Streaming](./dax-iq-streaming.md).
 - **CAT virtual serial ports** (PTY) are available as well as TCP ports, at `$XDG_RUNTIME_DIR/aethersdr/cat-A` … `cat-H`. See [CAT Control](./cat-control.md).
-- **Noise reduction:** **BNR** (NVIDIA Maxine, on an NVIDIA RTX/GeForce GPU) is available on Linux. **MNR** is macOS only and is greyed out. See [DSP Noise Mitigation](./dsp-noise-mitigation.md) and [BNR GPU Noise Removal](./bnr-gpu-noise-removal.md).
+- **Noise reduction:** **BNR** (NVIDIA Maxine, on an NVIDIA RTX/GeForce GPU) is available on Linux. **MNR** is macOS only and is grayed out. See [DSP Noise Mitigation](./dsp-noise-mitigation.md) and [BNR GPU Noise Removal](./bnr-gpu-noise-removal.md).
 - **Copy Assist** can use a **Vulkan** GPU (NVIDIA, AMD or Intel). On a Raspberry Pi the **base** model is the default, and builds that include sherpa-onnx can run faster non-whisper models. See [Copy Assist](./copy-assist.md).
 - **Credentials** are kept in the desktop keyring (libsecret or KWallet), never in the settings database.
+- **Sleep while connected:** on GNOME and KDE, AetherSDR blocks only automatic sleep. On other desktops, such as Hyprland or Sway, it uses systemd-logind, so choosing **Sleep** while a radio is connected asks for an administrator password. The screen still blanks and locks. See [Audio Settings](./audio-settings.md#prevent-system-sleep).
 - **Screen reader:** Orca. See [Accessibility](./accessibility.md).
 
 ### Software rendering

@@ -13,6 +13,12 @@
 
 #include "RadioSetupDialog.h"
 #include "RadioSetupDialogCommon.h"
+#include "Kpa500AdvancedWidget.h"
+#include "Kxpa100AdvancedWidget.h"
+#include "models/Kxpa100Model.h"
+#include "models/Kxpa100RadioAssociation.h"
+#include "Kat500AdvancedWidget.h"
+#include "models/Kat500Model.h"
 #include "PeripheralAuthConnectFlow.h"
 #include "PeripheralAuthStore.h"
 #include "PeripheralConnectionSource.h"
@@ -20,10 +26,12 @@
 #include "core/AcomConnection.h"
 #include "core/AppSettings.h"
 #include "core/Kpa1500Connection.h"
+#include "core/Kpa500Connection.h"
 #include "core/LpMeterConnection.h"
 #include "core/PeripheralRemovalGuard.h"
 #include "core/PeripheralSettings.h"
 #include "core/PgxlConnection.h"
+#include "core/RfkitConnection.h"
 #include "core/SpeConnection.h"
 #include "core/TgxlConnection.h"
 #include "core/ThemeManager.h"
@@ -34,6 +42,10 @@
 #include "models/TunerModel.h"
 
 #include <QAccessible>
+#include <QApplication>
+#include <QPainter>
+#include <QRegion>
+#include <QStyledItemDelegate>
 #include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
@@ -52,10 +64,14 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QTimer>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QVector>
 
 #include <memory>
 #include <optional>
@@ -75,6 +91,10 @@ struct PeripheralDeviceUi {
         SerialOrNetwork,  // ACOM, SPE Expert, LP-100A: serial port or ser2net host
         Vkamp,            // host + port, plus the amplifier model
         Kpa1500,          // host + port
+        Rfkit,            // host + port (HTTP)
+        Kxpa100,          // KXPA100 amplifier with optional tuner
+        Kat500,           // KAT500 serial or TCP tuner
+        Kpa500,           // Serial with selectable baud, or raw TCP
     };
 
     // Identity
@@ -101,6 +121,7 @@ struct PeripheralDeviceUi {
     // Connection state and actions, supplied by buildPeripheralsTab.
     std::function<bool()> isConnected;
     std::function<bool()> isConnecting;       // optional
+    std::function<bool()> isNetworkConnection; // optional transport badge
     std::function<bool()> hasRadioRelay;      // optional
     std::function<void()> disconnectNow;
     std::function<void(const QString&, quint16)> connectTo;       // flat-key devices
@@ -118,7 +139,17 @@ struct PeripheralDeviceUi {
     std::function<QString()> description;
 
     // Serial-or-network presentation
+    std::function<QString()> deviceInfo;
+    QLabel* deviceInfoLabel{nullptr};
     QString fixedBaud;
+    // Optional model picker for devices whose model decides the protocol and
+    // line speed (SPE). Stored under settingsGroup/"Model"; empty = no picker.
+    struct ModelChoice {
+        QString label;
+        QString key;
+        QString baud;
+    };
+    QVector<ModelChoice> modelChoices;
     QString networkPlaceholder;
     QString networkDescription;
     QString networkTooltip;
@@ -132,6 +163,7 @@ struct PeripheralDeviceUi {
     QStackedWidget* addressStack{nullptr};
     QStackedWidget* portStack{nullptr};
     QComboBox* modeCombo{nullptr};
+    QComboBox* baudCombo{nullptr};
     QPushButton* connectButton{nullptr};
     QPushButton* webUiButton{nullptr};
     QPushButton* serialRefreshButton{nullptr};
@@ -174,24 +206,83 @@ struct PeripheralDeviceUi {
 
 namespace {
 
-const QString kButtonStyle =
-    "QPushButton { background: {{color.background.1}}; "
-    "border: 1px solid {{color.background.2}}; border-radius: 3px; "
-    "color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
-    "padding: 3px 10px; }"
-    "QPushButton:hover { background: {{color.background.2}}; }";
-const QString kComboStyle =
-    "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-    "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
-    "QComboBox::drop-down { border: none; }";
-const QString kSpinStyle =
-    "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-    "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }";
-const QString kGroupBoxStyle =
-    "QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 4px; "
-    "margin-top: 8px; padding-top: 12px; color: {{color.text.secondary}}; "
-    "font-weight: bold; } QGroupBox::title { subcontrol-origin: margin; "
-    "left: 10px; padding: 0 4px; }";
+// The device list's line three starts with the connection-source dot. The item
+// carries its source under kSourceRole (-1 while connecting, when there is no
+// dot), and this delegate paints that dot in the source's color token; the
+// rest of the line keeps the list's text color.
+constexpr int kSourceRole = Qt::UserRole + 1;
+
+class PeripheralListDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override
+    {
+        QStyleOptionViewItem opt(option);
+        initStyleOption(&opt, index);
+        const QString text = opt.text;
+        const QVariant source = index.data(kSourceRole);
+        const QString dot = QStringLiteral("● ");
+        // initStyleOption() has turned the item's '\n' breaks into line
+        // separators (U+2028), which is what the style lays out.
+        auto isBreak = [](QChar c) {
+            return c == QLatin1Char('\n') || c == QChar(QChar::LineSeparator);
+        };
+        int lineStart = 0;
+        int lines = 1;
+        for (int i = 0; i < text.size(); ++i) {
+            if (isBreak(text.at(i))) {
+                lineStart = i + 1;
+                ++lines;
+            }
+        }
+        if (!source.isValid() || source.toInt() < 0
+            || text.mid(lineStart, dot.size()) != dot) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+        // The item as usual, except in the dot's own cell, which keeps only
+        // the item's fill and selection; the dot is drawn there in its color.
+        // Each pixel is painted once, so a translucent selection is not
+        // blended twice.
+        const QWidget* widget = opt.widget;
+        QStyle* style = widget ? widget->style() : QApplication::style();
+        const QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, widget);
+        const QFontMetrics fm(opt.font);
+        const int blockHeight = lines * fm.lineSpacing();
+        int top = textRect.top();
+        if (opt.displayAlignment & Qt::AlignVCenter) {
+            top += (textRect.height() - blockHeight) / 2;
+        }
+        const int margin = style->pixelMetric(QStyle::PM_FocusFrameHMargin, nullptr, widget) + 1;
+        const QPoint at(textRect.left() + margin,
+                        top + (lines - 1) * fm.lineSpacing() + fm.ascent());
+        const QRegion dotCell(at.x(), at.y() - fm.ascent(),
+                              fm.horizontalAdvance(dot.left(1)), fm.height());
+
+        painter->save();
+        painter->setClipRegion(QRegion(opt.rect).subtracted(dotCell), Qt::IntersectClip);
+        style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
+        painter->restore();
+
+        QStyleOptionViewItem ground = opt;
+        ground.text.clear();
+        painter->save();
+        painter->setClipRegion(dotCell, Qt::IntersectClip);
+        style->drawControl(QStyle::CE_ItemViewItem, &ground, painter, widget);
+        painter->restore();
+
+        using PeripheralConnectionSource::Source;
+        const QColor color = ThemeManager::instance().color(
+            PeripheralConnectionSource::colorToken(static_cast<Source>(source.toInt())));
+        painter->save();
+        painter->setFont(opt.font);
+        painter->setPen(color);
+        painter->drawText(at, QStringLiteral("●"));
+        painter->restore();
+    }
+};
 
 QString peripheralTr(const char* text)
 {
@@ -206,7 +297,8 @@ bool effectivelyConnecting(const PeripheralDeviceUi& ui)
 Source sourceOf(const PeripheralDeviceUi& ui)
 {
     if (ui.isConnected()) {
-        return Source::Direct;
+        return ui.isNetworkConnection && ui.isNetworkConnection()
+            ? Source::Network : Source::Direct;
     }
     if (ui.radioRelay && ui.hasRadioRelay && ui.hasRadioRelay()) {
         return Source::Radio;
@@ -225,7 +317,7 @@ QString statusText(const PeripheralDeviceUi& ui)
     QString text;
     if (effectivelyConnecting(ui)) {
         text = peripheralTr("Connecting…");
-    } else if (state.source == Source::Direct) {
+    } else if (state.source == Source::Direct || state.source == Source::Network) {
         text = peripheralTr("Connected");
     } else if (state.source == Source::Radio) {
         text = peripheralTr("Not connected directly; using the radio relay");
@@ -257,25 +349,25 @@ QString statusAccessibleName(const PeripheralDeviceUi& ui)
         ui.state.source, ui.shortName, !ui.radioRelay).accessibleName;
 }
 
-const char* statusColorToken(const PeripheralDeviceUi& ui)
+Tone statusTone(const PeripheralDeviceUi& ui)
 {
     switch (ui.state.attention) {
     case Attention::InvalidCode:
     case Attention::AuthBlocked:
     case Attention::ConnectError:
     case Attention::CredentialError:
-        return "{{color.accent.danger}}";
+        return Tone::Error;
     case Attention::CredentialWarning:
     case Attention::RemovalPending:
-        return "{{color.accent.warning}}";
+        return Tone::Warn;
     case Attention::None:
         break;
     }
     if (!ui.state.note.isEmpty() || ui.state.discardedAuthCode || ui.state.codeNotSaved) {
-        return "{{color.accent.warning}}";
+        return Tone::Warn;
     }
-    return ui.state.source == Source::Direct ? "{{color.accent.success}}"
-                                             : "{{color.text.secondary}}";
+    return ui.state.source == Source::Direct || ui.state.source == Source::Network
+        ? Tone::Ok : Tone::Hint;
 }
 
 // Name and description follow the visible state, and assistive technology is
@@ -288,15 +380,10 @@ void applyStatusLabel(PeripheralDeviceUi& ui)
     }
     const QString text = statusText(ui);
     const QString name = statusAccessibleName(ui);
-    const QString color = QString::fromLatin1(statusColorToken(ui));
     const bool textChanged = label->text() != text;
     const bool nameChanged = label->accessibleName() != name;
     const bool descriptionChanged = label->accessibleDescription() != text;
-    if (label->property("peripheralStatusColor").toString() != color) {
-        label->setProperty("peripheralStatusColor", color);
-        ThemeManager::instance().applyStyleSheet(label,
-            QStringLiteral("QLabel { color: %1; font-size: 11px; }").arg(color));
-    }
+    setTone(label, statusTone(ui));
     if (!textChanged && !nameChanged && !descriptionChanged) {
         return;
     }
@@ -376,17 +463,13 @@ DetailPage beginDetailPage(PeripheralDeviceUi& ui, QWidget* stackParent)
     DetailPage detail;
     detail.page = new QWidget(stackParent);
     detail.page->setObjectName(QStringLiteral("peripheralDetail_%1").arg(ui.id));
-    ThemeManager::instance().applyStyleSheet(detail.page,
-        QStringLiteral("QWidget#%1 { background: {{color.background.0}}; }")
-            .arg(detail.page->objectName()));
     detail.layout = new QVBoxLayout(detail.page);
     detail.layout->setContentsMargins(8, 12, 0, 0);
     detail.layout->setSpacing(10);
 
     auto* heading = new QHBoxLayout;
     auto* title = new QLabel(ui.label, detail.page);
-    ThemeManager::instance().applyStyleSheet(title,
-        "QLabel { color: {{color.text.primary}}; font-size: 15px; font-weight: bold; }");
+    setTone(title, Tone::Title);
     heading->addWidget(title);
     heading->addStretch();
     detail.layout->addLayout(heading);
@@ -399,7 +482,6 @@ DetailPage beginDetailPage(PeripheralDeviceUi& ui, QWidget* stackParent)
     detail.layout->addWidget(ui.statusLabel);
 
     detail.group = new QGroupBox(RadioSetupDialog::tr("Connection Settings"), detail.page);
-    ThemeManager::instance().applyStyleSheet(detail.group, kGroupBoxStyle);
     detail.form = new QGridLayout(detail.group);
     detail.form->setHorizontalSpacing(12);
     detail.form->setVerticalSpacing(10);
@@ -428,7 +510,8 @@ void finishDetailPage(DetailPage& detail, PeripheralDeviceUi& ui,
     detail.group->setMaximumWidth(760);
     detail.layout->addWidget(detail.group, 0, Qt::AlignTop);
 
-    if (ui.kind == PeripheralDeviceUi::Kind::AuthNetwork) {
+    if (ui.kind == PeripheralDeviceUi::Kind::AuthNetwork
+        || (ui.kind == PeripheralDeviceUi::Kind::Kpa500 || ui.kind == PeripheralDeviceUi::Kind::Kat500 || ui.kind == PeripheralDeviceUi::Kind::Kxpa100)) {
         // TGXL and PGXL can also be reached through the radio, so for them the
         // toggle chooses the direct link over the radio's relay.
         const bool relayed = ui.id == QLatin1String("tgxl") || ui.id == QLatin1String("pgxl");
@@ -447,9 +530,11 @@ void finishDetailPage(DetailPage& detail, PeripheralDeviceUi& ui,
             : RadioSetupDialog::tr(
                   "Connect to %1 on startup, when discovery reports it, and after a drop. "
                   "Turn off to connect only when you click Connect.").arg(ui.label));
-        ThemeManager::instance().applyStyleSheet(autoConnect,
-            "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 8px; }"
-            + kCheckBoxIndicator);
+        if ((ui.kind == PeripheralDeviceUi::Kind::Kpa500 || ui.kind == PeripheralDeviceUi::Kind::Kat500 || ui.kind == PeripheralDeviceUi::Kind::Kxpa100)) {
+            autoConnect->setAccessibleDescription(RadioSetupDialog::tr(
+                "Connect to %1 on startup. Turn off to connect only when you click Connect.")
+                .arg(ui.label));
+        }
         autoConnect->setChecked(PeripheralSettings::autoConnect(ui.id));
         // Written at once. The connections read it when they decide to
         // reconnect, so nothing needs to be pushed to them here.
@@ -462,8 +547,7 @@ void finishDetailPage(DetailPage& detail, PeripheralDeviceUi& ui,
     ui.editHint = new QLabel(detail.page);
     ui.editHint->setObjectName(QStringLiteral("peripheralEditHint_%1").arg(ui.id));
     ui.editHint->setWordWrap(true);
-    ThemeManager::instance().applyStyleSheet(ui.editHint,
-        "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    setTone(ui.editHint, Tone::Hint);
 
     auto* buttonRow = new QHBoxLayout;
     buttonRow->addWidget(ui.connectButton);
@@ -479,7 +563,7 @@ void finishDetailPage(DetailPage& detail, PeripheralDeviceUi& ui,
     // Remember the help text of the fields that are locked while connected.
     for (QWidget* field : {static_cast<QWidget*>(ui.addressEdit), static_cast<QWidget*>(ui.addressStack),
                            static_cast<QWidget*>(ui.portSpin), static_cast<QWidget*>(ui.portStack),
-                           static_cast<QWidget*>(ui.modeCombo)}) {
+                           static_cast<QWidget*>(ui.modeCombo), static_cast<QWidget*>(ui.baudCombo)}) {
         if (field) {
             ui.fieldHelp.insert(field, {field->accessibleDescription(), field->toolTip()});
         }
@@ -492,7 +576,6 @@ QPushButton* makeConnectButton(PeripheralDeviceUi& ui)
                                                     : QStringLiteral("Connect"));
     button->setObjectName(QStringLiteral("peripheralConnect_%1").arg(ui.id));
     button->setAccessibleName(RadioSetupDialog::tr("Connect or disconnect %1").arg(ui.label));
-    ThemeManager::instance().applyStyleSheet(button, kButtonStyle);
     return button;
 }
 
@@ -501,7 +584,6 @@ QSpinBox* makePortSpin(const PeripheralDeviceUi& ui)
     auto* spin = new QSpinBox;
     spin->setObjectName(QStringLiteral("peripheralPort_%1").arg(ui.id));
     spin->setRange(1, 65535);
-    ThemeManager::instance().applyStyleSheet(spin, kSpinStyle);
     spin->setAccessibleName(RadioSetupDialog::tr("%1 port").arg(ui.label));
     return spin;
 }
@@ -530,6 +612,10 @@ void resetFields(PeripheralDeviceUi& ui)
             spin->setValue(ui.defaultPort);
         }
         ui.portStack->setCurrentIndex(0);
+    }
+    if (ui.baudCombo) {
+        const QSignalBlocker blocked(ui.baudCombo);
+        ui.baudCombo->setCurrentIndex(0);
     }
     if (ui.modeCombo) {
         const QSignalBlocker blocked(ui.modeCombo);
@@ -576,11 +662,14 @@ void closeSaverForNetworkField(PeripheralDeviceUi* ui, QVector<std::function<voi
         }
         // The user cleared a previously-saved IP. If still connected (e.g.
         // auto-connect ran at startup), disconnect first so downstream
-        // visibility handlers see the cleared settings.
+        // visibility handlers see the cleared settings. A reconnect loop still
+        // aimed at the cleared address is stopped too, or it would keep
+        // dialing it until restart.
         settings.remove(ui->ipKey);
         settings.remove(ui->portKey);
         settings.save();
-        if (ui->isConnected()) {
+        if (ui->isConnected()
+            || (ui->description && ui->description().startsWith(savedIp + ":"))) {
             ui->disconnectNow();
         }
     });
@@ -600,11 +689,10 @@ void closeSaverForSettingsGroup(PeripheralDeviceUi* ui, QVector<std::function<vo
         }
         PeripheralSettings::clearDeviceField(ui->settingsGroup, "ManualIp");
         PeripheralSettings::clearDeviceField(ui->settingsGroup, "ManualPort");
-        // Only disconnect if the live connection is actually the network target
-        // being cleared; it may be connected over Serial, which this saved IP
-        // has nothing to do with.
-        if (ui->isConnected() && ui->description
-            && ui->description().startsWith(savedIp + ":")) {
+        // Only disconnect if the connection is actually the network target
+        // being cleared, whether connected or still retrying it; it may be on
+        // Serial, which this saved IP has nothing to do with.
+        if (ui->description && ui->description().startsWith(savedIp + ":")) {
             ui->disconnectNow();
         }
     });
@@ -636,6 +724,18 @@ void RadioSetupDialog::editPeripheralStatusForTest(
     }
 }
 
+RadioSetupDialog::PeripheralLinkProbes RadioSetupDialog::swapPeripheralLinkForTest(
+    const QString& id, PeripheralLinkProbes probes)
+{
+    PeripheralDeviceUi* ui = peripheralDevice(id);
+    if (!ui) {
+        return probes;
+    }
+    std::swap(ui->isConnected, probes.isConnected);
+    std::swap(ui->hasRadioRelay, probes.hasRadioRelay);
+    return probes;
+}
+
 void RadioSetupDialog::buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
                                               const std::function<void()>& refresh)
 {
@@ -648,7 +748,6 @@ void RadioSetupDialog::buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* s
     ui.addressEdit->setObjectName(QStringLiteral("peripheralAddress_%1").arg(ui.id));
     ui.addressEdit->setPlaceholderText(QStringLiteral("e.g. 192.168.1.100"));
     ui.addressEdit->setAccessibleName(tr("%1 address").arg(ui.label));
-    applyEditStyle(ui.addressEdit);
     ui.addressEdit->setMinimumWidth(140);
     const QString savedIp = settings.value(ui.ipKey, "").toString();
     if (!savedIp.isEmpty()) {
@@ -770,12 +869,10 @@ void RadioSetupDialog::buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* s
                 ? edit->property("authBlankDescription").toString()
                 : RadioSetupDialog::tr("A code has been entered. It replaces the saved code only after the device accepts it."));
         });
-        applyEditStyle(edit);
 
         auto* show = new QPushButton(tr("Show"));
         ui.showButton = show;
         show->setObjectName(QStringLiteral("peripheralAuth_%1_5").arg(ui.id));
-        ThemeManager::instance().applyStyleSheet(show, kButtonStyle);
         show->setAccessibleName(tr("%1 show authorization code").arg(label));
         auto concealSavedCode = [edit, show, label]() {
             edit->setProperty("authRevealGeneration",
@@ -851,10 +948,9 @@ void RadioSetupDialog::buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* s
         connect(ui.addressEdit, &QLineEdit::textChanged, edit, concealSavedCode);
         connect(ui.portSpin, &QSpinBox::valueChanged, edit, concealSavedCode);
 
-        auto* clear = new QPushButton(tr("Clear code"));
+        auto* clear = new QPushButton(tr("Clear Code"));
         ui.clearButton = clear;
         clear->setObjectName(QStringLiteral("peripheralAuth_%1_6").arg(ui.id));
-        ThemeManager::instance().applyStyleSheet(clear, kButtonStyle);
         clear->setAccessibleName(tr("%1 clear saved authorization code").arg(label));
         connect(clear, &QPushButton::clicked, edit, concealSavedCode);
         connect(clear, &QPushButton::clicked, this, [this, u, edit, authDevice, refresh]() {
@@ -901,7 +997,6 @@ void RadioSetupDialog::buildAuthNetworkDevice(PeripheralDeviceUi& ui, QWidget* s
         ui.webUiButton = new QPushButton(QStringLiteral("⚙ Web UI"));
         ui.webUiButton->setObjectName(QStringLiteral("peripheralWebUi_%1").arg(ui.id));
         ui.webUiButton->setAccessibleName(tr("Open the %1 web interface").arg(ui.label));
-        ThemeManager::instance().applyStyleSheet(ui.webUiButton, kButtonStyle);
         ui.webUiButton->setToolTip(tr("Open ShackSwitch web interface"));
         connect(ui.webUiButton, &QPushButton::clicked, this, [u]() { u->openWebUi(); });
         extras.append(ui.webUiButton);
@@ -921,7 +1016,6 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
 
     ui.modeCombo = new QComboBox;
     ui.modeCombo->setObjectName(QStringLiteral("peripheralMode_%1").arg(ui.id));
-    ThemeManager::instance().applyStyleSheet(ui.modeCombo, kComboStyle);
     ui.modeCombo->setAccessibleName(tr("%1 connection type").arg(ui.label));
 #ifdef HAVE_SERIALPORT
     ui.modeCombo->addItem("Serial", "Serial");
@@ -945,15 +1039,18 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
         auto* lay = new QHBoxLayout(serialPage);
         lay->setContentsMargins(0, 0, 0, 0);
         serialCombo = new QComboBox;
-        ThemeManager::instance().applyStyleSheet(serialCombo, kComboStyle);
         serialCombo->setAccessibleName(tr("%1 serial port").arg(ui.label));
+        // A port's description can be long ("ttyACM1 — USB JTAG serial debug
+        // unit"); sized by its content, one plugged-in device would widen the
+        // page past the window. The open list still shows the whole name.
+        serialCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        serialCombo->setMinimumContentsLength(14);
+        serialCombo->view()->setTextElideMode(Qt::ElideNone);
         serialCustomEdit = new QLineEdit;
         serialCustomEdit->setPlaceholderText("/dev/ttyUSB0");
         serialCustomEdit->setAccessibleName(tr("%1 custom serial port").arg(ui.label));
-        applyEditStyle(serialCustomEdit);
         populateSerialPortCombo(serialCombo, serialCustomEdit,
                                 PeripheralSettings::deviceString(group, "SerialPort"));
-        serialCustomEdit->setVisible(serialCombo->currentData().toString() == "__custom__");
         connect(serialCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
                 [serialCombo, serialCustomEdit](int idx) {
             serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
@@ -970,6 +1067,8 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
         pageReseeds->append(reseed);
         lay->addWidget(serialCombo, 1);
         lay->addWidget(serialCustomEdit, 1);
+        // Show only after parenting: a visible parentless widget is a transient window.
+        serialCustomEdit->setVisible(serialCombo->currentData().toString() == "__custom__");
         serialPageIdx = ui.addressStack->addWidget(serialPage);
     }
 #endif
@@ -982,7 +1081,6 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     netIpEdit->setPlaceholderText(ui.networkPlaceholder);
     netIpEdit->setAccessibleName(tr("%1 network address").arg(ui.label));
     netIpEdit->setAccessibleDescription(ui.networkDescription);
-    applyEditStyle(netIpEdit);
     netIpEdit->setText(PeripheralSettings::deviceString(group, "ManualIp"));
     if (!ui.networkTooltip.isEmpty()) {
         netIpEdit->setToolTip(ui.networkTooltip);
@@ -995,19 +1093,22 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     ui.portStack = new QStackedWidget;
     ui.portStack->setObjectName(QStringLiteral("peripheralPort_%1").arg(ui.id));
     int serialBaudIdx = -1;
+    QLabel* fixedBaudLbl = nullptr;
 #ifdef HAVE_SERIALPORT
     {
-        auto* fixedLbl = new QLabel(ui.fixedBaud);
-        ThemeManager::instance().applyStyleSheet(fixedLbl,
-            "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
-        serialBaudIdx = ui.portStack->addWidget(fixedLbl);
+        if (ui.baudCombo) {
+            serialBaudIdx = ui.portStack->addWidget(ui.baudCombo);
+        } else {
+            fixedBaudLbl = new QLabel(ui.fixedBaud);
+            setTone(fixedBaudLbl, Tone::Hint);
+            serialBaudIdx = ui.portStack->addWidget(fixedBaudLbl);
+        }
     }
 #endif
     auto* netPortSpin = new QSpinBox;
     netPortSpin->setRange(1, 65535);
     netPortSpin->setValue(PeripheralSettings::deviceInt(group, "ManualPort", ui.defaultPort));
     netPortSpin->setAccessibleName(tr("%1 network port").arg(ui.label));
-    ThemeManager::instance().applyStyleSheet(netPortSpin, kSpinStyle);
     const int netPortIdx = ui.portStack->addWidget(netPortSpin);
 
     auto applyMode = [stack = ui.addressStack, ports = ui.portStack,
@@ -1047,7 +1148,7 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     ui.connectButton = makeConnectButton(ui);
     connect(ui.connectButton, &QPushButton::clicked, this,
             [u, group, netIpEdit, netPortSpin, serialCombo, serialCustomEdit, refresh]() {
-        if (u->isConnected()) {
+        if (u->isConnected() || (u->isConnecting && u->isConnecting())) {
             u->disconnectNow();
             return;
         }
@@ -1087,9 +1188,50 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
         refresh();
     });
 
+    if (!ui.modelChoices.isEmpty()) {
+        // The model fixes the protocol and the serial speed, so the speed
+        // label follows it. A change applies on the next Connect.
+        ui.modelCombo = new QComboBox;
+        ui.modelCombo->setObjectName(QStringLiteral("peripheralModel_%1").arg(ui.id));
+        ui.modelCombo->setAccessibleName(tr("%1 model").arg(ui.label));
+        ui.modelCombo->setAccessibleDescription(
+            tr("Selects the amplifier's protocol and serial speed. Takes effect on the next connect."));
+        for (const auto& choice : ui.modelChoices) {
+            ui.modelCombo->addItem(choice.label, choice.key);
+        }
+        const int idx = ui.modelCombo->findData(PeripheralSettings::deviceString(group, "Model"));
+        ui.modelCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+        auto applyModel = [u, fixedBaudLbl](int i) {
+            if (fixedBaudLbl && i >= 0 && i < u->modelChoices.size()) {
+                fixedBaudLbl->setText(u->modelChoices.at(i).baud);
+            }
+        };
+        applyModel(ui.modelCombo->currentIndex());
+        connect(ui.modelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [group, combo = ui.modelCombo, applyModel](int i) {
+            PeripheralSettings::setDeviceString(group, "Model", combo->itemData(i).toString());
+            applyModel(i);
+        });
+        addFormRow(detail, tr("Amplifier Model"), ui.modelCombo);
+    }
     addFormRow(detail, tr("Connection Type"), ui.modeCombo);
     addFormRow(detail, tr("Address/Serial Port"), ui.addressStack);
     addFormRow(detail, tr("TCP Port/Speed"), ui.portStack);
+    if (ui.deviceInfo) {
+        ui.deviceInfoLabel = new QLabel(ui.deviceInfo());
+        ui.deviceInfoLabel->setObjectName(QStringLiteral("peripheralDeviceInfo_%1").arg(ui.id));
+        ui.deviceInfoLabel->setAccessibleName(tr("%1 device information").arg(ui.label));
+        ui.deviceInfoLabel->setWordWrap(true);
+        ui.deviceInfoLabel->setTextFormat(Qt::PlainText);
+        setTone(ui.deviceInfoLabel, Tone::Value);
+        addFormRow(detail, tr("Device Information"), ui.deviceInfoLabel);
+    }
+    if ((ui.kind == PeripheralDeviceUi::Kind::Kpa500 || ui.kind == PeripheralDeviceUi::Kind::Kat500 || ui.kind == PeripheralDeviceUi::Kind::Kxpa100)) {
+        auto* help = new QLabel(ui.networkTooltip);
+        help->setWordWrap(true);
+        setTone(help, Tone::Hint);
+        addFormRow(detail, tr("Network Setup"), help);
+    }
 
     QList<QWidget*> extras;
 #ifdef HAVE_SERIALPORT
@@ -1097,7 +1239,6 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     ui.serialRefreshButton->setObjectName(QStringLiteral("peripheralSerialRefresh_%1").arg(ui.id));
     ui.serialRefreshButton->setAutoDefault(false);
     ui.serialRefreshButton->setAccessibleName(tr("%1 refresh serial ports").arg(ui.label));
-    ThemeManager::instance().applyStyleSheet(ui.serialRefreshButton, kButtonStyle);
     connect(ui.serialRefreshButton, &QPushButton::clicked, this, [pageReseeds]() {
         for (const auto& reseed : *pageReseeds) {
             reseed();
@@ -1123,7 +1264,6 @@ void RadioSetupDialog::buildVkampDevice(PeripheralDeviceUi& ui, QWidget* stackPa
     ui.addressEdit = new QLineEdit;
     ui.addressEdit->setObjectName(QStringLiteral("peripheralAddress_%1").arg(ui.id));
     ui.addressEdit->setPlaceholderText(QStringLiteral("e.g. 192.168.1.50"));
-    applyEditStyle(ui.addressEdit);
     ui.addressEdit->setText(PeripheralSettings::deviceString("Vkamp", "ManualIp"));
     // Name answers "what is this?", description answers "what do I type?"
     // (docs/a11y.md section 2).
@@ -1169,7 +1309,6 @@ void RadioSetupDialog::buildVkampDevice(PeripheralDeviceUi& ui, QWidget* stackPa
     // defaults to W2000 (the originally-confirmed unit) rather than blocking.
     ui.modelCombo = new QComboBox;
     ui.modelCombo->setObjectName(QStringLiteral("peripheralAmplifierModel"));
-    ThemeManager::instance().applyStyleSheet(ui.modelCombo, kComboStyle);
     ui.modelCombo->setAccessibleName(tr("VK3AMP amplifier model"));
     ui.modelCombo->setAccessibleDescription(
         tr("Rated output of your unit. Sets the power meter's full scale; it does not change "
@@ -1203,7 +1342,302 @@ void RadioSetupDialog::buildVkampDevice(PeripheralDeviceUi& ui, QWidget* stackPa
         }
         PeripheralSettings::clearDeviceField("Vkamp", "ManualIp");
         PeripheralSettings::clearDeviceField("Vkamp", "ManualPort");
-        if (u->isConnected() && u->description().startsWith(savedIp + ":")) {
+        // Connected or still retrying: a reconnect loop aimed at the cleared
+        // address would otherwise keep dialing it until restart.
+        if (u->description().startsWith(savedIp + ":")) {
+            u->disconnectNow();
+        }
+    });
+    finishDetailPage(detail, ui, {});
+}
+
+void RadioSetupDialog::buildKpa500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
+                                        const std::function<void()>& refresh,
+                                        const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds)
+{
+#ifdef HAVE_SERIALPORT
+    ui.baudCombo = new QComboBox;
+    ui.baudCombo->setObjectName(QStringLiteral("peripheralBaud_%1").arg(ui.id));
+    ui.baudCombo->setAccessibleName(tr("KPA500 baud rate"));
+    ui.baudCombo->setAccessibleDescription(tr("Local serial speed; must match the amplifier. 8 data bits, no parity, 1 stop bit."));
+    for (int baud : {4800, 9600, 19200, 38400}) {
+        ui.baudCombo->addItem(QString::number(baud), baud);
+    }
+    const int savedBaud = PeripheralSettings::deviceInt(ui.settingsGroup, "BaudRate", 4800);
+    const int baudIndex = ui.baudCombo->findData(savedBaud);
+    ui.baudCombo->setCurrentIndex(baudIndex >= 0 ? baudIndex : 0);
+    ui.connectSerial = [this, u = &ui](const QString& port) {
+        const int baud = u->baudCombo->currentData().toInt();
+        PeripheralSettings::setDeviceInt(u->settingsGroup, "BaudRate", baud);
+        m_kpa500->connectSerial(port, baud);
+    };
+#endif
+    ui.networkPlaceholder = tr("ser2net host, raw TCP mode");
+    ui.networkDescription = tr("IP address or host name of the raw TCP serial proxy");
+    ui.networkTooltip = tr("Use a raw TCP ser2net endpoint, with 8N1 and the amplifier's baud rate configured on the server. "
+                           "Telnet/RFC 2217 and Elecraft Remote Server are not supported by this connection.");
+    buildSerialNetworkDevice(ui, stackParent, refresh, pageReseeds);
+    auto* advancedToggle = new QPushButton(tr("Advanced"), ui.page);
+    advancedToggle->setObjectName(QStringLiteral("peripheralAdvanced_kpa500"));
+    advancedToggle->setAccessibleName(tr("KPA500 advanced maintenance"));
+    advancedToggle->setAccessibleDescription(tr("Configuration backup and restore, stored fault history and power-on banner."));
+    advancedToggle->setCheckable(true);
+    auto* advanced = new Kpa500AdvancedWidget(m_kpa500, ui.page);
+    advanced->hide();
+    auto* layout = qobject_cast<QVBoxLayout*>(ui.page->layout());
+    layout->insertWidget(layout->count() - 1, advancedToggle, 0, Qt::AlignLeft);
+    layout->insertWidget(layout->count() - 1, advanced);
+    connect(advancedToggle, &QPushButton::toggled, advanced, &QWidget::setVisible);
+    connect(ui.autoConnectCheck, &QCheckBox::toggled, this, [this](bool on) {
+        m_kpa500->setAutoReconnect(on && PeripheralSettings::autoReconnect());
+    });
+}
+
+void RadioSetupDialog::revealKpa500AdvancedSettings()
+{
+    selectTab(QStringLiteral("Peripherals"));
+    if (QListWidget* devices = findChild<QListWidget*>(QStringLiteral("peripheralDeviceList"))) {
+        for (int row = 0; row < devices->count(); ++row) {
+            if (devices->item(row)->data(Qt::UserRole).toString() == QStringLiteral("kpa500")) {
+                devices->setCurrentRow(row);
+                break;
+            }
+        }
+    }
+    QPointer<QPushButton> toggle = findChild<QPushButton*>(QStringLiteral("peripheralAdvanced_kpa500"));
+    if (!toggle) {
+        return;
+    }
+    toggle->setChecked(true);
+    toggle->setFocus(Qt::OtherFocusReason);
+    QTimer::singleShot(0, this, [toggle] {
+        if (!toggle) {
+            return;
+        }
+        for (QWidget* parent = toggle->parentWidget(); parent; parent = parent->parentWidget()) {
+            if (auto* area = qobject_cast<QScrollArea*>(parent); area && area->widget()) {
+                const int y = toggle->mapTo(area->widget(), QPoint(0, 0)).y();
+                area->verticalScrollBar()->setValue(qMax(0, y - 8));
+                return;
+            }
+        }
+    });
+}
+
+void RadioSetupDialog::buildKat500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
+                                        const std::function<void()>& refresh,
+                                        const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds)
+{
+#ifdef HAVE_SERIALPORT
+    ui.baudCombo = new QComboBox;
+    ui.baudCombo->setObjectName(QStringLiteral("peripheralBaud_%1").arg(ui.id));
+    ui.baudCombo->setAccessibleName(tr("KAT500 baud rate"));
+    ui.baudCombo->setAccessibleDescription(tr("Local serial speed; must match the tuner. 8 data bits, no parity, 1 stop bit."));
+    for (int baud : {4800, 9600, 19200, 38400}) {
+        ui.baudCombo->addItem(QString::number(baud), baud);
+    }
+    const int savedBaud = PeripheralSettings::deviceInt(ui.settingsGroup, "BaudRate", 38400);
+    const int baudIndex = ui.baudCombo->findData(savedBaud);
+    ui.baudCombo->setCurrentIndex(baudIndex >= 0 ? baudIndex : 0);
+    ui.connectSerial = [this, u = &ui](const QString& port) {
+        const int baud = u->baudCombo->currentData().toInt();
+        PeripheralSettings::setDeviceInt(u->settingsGroup, "BaudRate", baud);
+        m_kat500->connectSerial(port, baud);
+    };
+#endif
+    ui.networkPlaceholder = tr("ser2net host, raw TCP mode");
+    ui.networkDescription = tr("IP address or host name of the raw TCP serial proxy");
+    ui.networkTooltip = tr("Use a raw TCP ser2net endpoint, with 8N1 and the tuner's baud rate configured on the server. "
+                           "Telnet/RFC 2217 and Elecraft Remote Server are not supported by this connection.");
+    buildSerialNetworkDevice(ui, stackParent, refresh, pageReseeds);
+    auto* advancedToggle = new QPushButton(tr("Advanced"), ui.page);
+    advancedToggle->setObjectName(QStringLiteral("peripheralAdvanced_kat500"));
+    advancedToggle->setAccessibleName(tr("KAT500 advanced maintenance"));
+    advancedToggle->setAccessibleDescription(tr("Configuration backup and restore, stored fault history and all seven configuration categories and stored matches."));
+    advancedToggle->setCheckable(true);
+    auto* advanced = new Kat500AdvancedWidget(m_kat500, ui.page);
+    advanced->hide();
+    auto* layout = qobject_cast<QVBoxLayout*>(ui.page->layout());
+    layout->insertWidget(layout->count() - 1, advancedToggle, 0, Qt::AlignLeft);
+    layout->insertWidget(layout->count() - 1, advanced);
+    connect(advancedToggle, &QPushButton::toggled, advanced, &QWidget::setVisible);
+    connect(ui.autoConnectCheck, &QCheckBox::toggled, this, [this](bool on) {
+        m_kat500->setAutoReconnect(on && PeripheralSettings::autoReconnect());
+    });
+}
+
+void RadioSetupDialog::revealKat500AdvancedSettings()
+{
+    selectTab(QStringLiteral("Peripherals"));
+    if (QListWidget* devices = findChild<QListWidget*>(QStringLiteral("peripheralDeviceList"))) {
+        for (int row = 0; row < devices->count(); ++row) {
+            if (devices->item(row)->data(Qt::UserRole).toString() == QStringLiteral("kat500")) {
+                devices->setCurrentRow(row);
+                break;
+            }
+        }
+    }
+    QPointer<QPushButton> toggle = findChild<QPushButton*>(QStringLiteral("peripheralAdvanced_kat500"));
+    if (!toggle) {
+        return;
+    }
+    toggle->setChecked(true);
+    toggle->setFocus(Qt::OtherFocusReason);
+    QTimer::singleShot(0, this, [toggle] {
+        if (!toggle) {
+            return;
+        }
+        for (QWidget* parent = toggle->parentWidget(); parent; parent = parent->parentWidget()) {
+            if (auto* area = qobject_cast<QScrollArea*>(parent); area && area->widget()) {
+                const int y = toggle->mapTo(area->widget(), QPoint(0, 0)).y();
+                area->verticalScrollBar()->setValue(qMax(0, y - 8));
+                return;
+            }
+        }
+    });
+}
+
+void RadioSetupDialog::buildKxpa100Device(PeripheralDeviceUi& ui, QWidget* stackParent,
+                                        const std::function<void()>& refresh,
+                                        const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds)
+{
+#ifdef HAVE_SERIALPORT
+    ui.baudCombo = new QComboBox;
+    ui.baudCombo->setObjectName(QStringLiteral("peripheralBaud_%1").arg(ui.id));
+    ui.baudCombo->setAccessibleName(tr("KXPA100 baud rate"));
+    ui.baudCombo->setAccessibleDescription(tr("Local serial speed; must match the tuner. 8 data bits, no parity, 1 stop bit."));
+    for (int baud : {4800, 9600, 19200, 38400}) {
+        ui.baudCombo->addItem(QString::number(baud), baud);
+    }
+    const int savedBaud = PeripheralSettings::deviceInt(ui.settingsGroup, "BaudRate", 38400);
+    const int baudIndex = ui.baudCombo->findData(savedBaud);
+    ui.baudCombo->setCurrentIndex(baudIndex >= 0 ? baudIndex : 0);
+    ui.connectSerial = [this, u = &ui](const QString& port) {
+        const int baud = u->baudCombo->currentData().toInt();
+        PeripheralSettings::setDeviceInt(u->settingsGroup, "BaudRate", baud);
+        m_kxpa100->connectSerial(port, baud);
+    };
+#endif
+    ui.networkPlaceholder = tr("ser2net host, raw TCP mode");
+    ui.networkDescription = tr("IP address or host name of the raw TCP serial proxy");
+    ui.networkTooltip = tr("Use a raw TCP ser2net endpoint, with 8N1 and the amplifier's baud rate configured on the server. "
+                           "Telnet/RFC 2217 and Elecraft Remote Server are not supported by this connection.");
+    buildSerialNetworkDevice(ui, stackParent, refresh, pageReseeds);
+    auto* advancedToggle = new QPushButton(tr("Advanced"), ui.page);
+    advancedToggle->setObjectName(QStringLiteral("peripheralAdvanced_kxpa100"));
+    advancedToggle->setAccessibleName(tr("KXPA100 advanced maintenance"));
+    advancedToggle->setAccessibleDescription(tr("Antenna configuration, backup and restore, stored fault history and tuner memories."));
+    advancedToggle->setCheckable(true);
+    auto* advanced = new Kxpa100AdvancedWidget(m_kxpa100, ui.page);
+    advanced->hide();
+    auto* layout = qobject_cast<QVBoxLayout*>(ui.page->layout());
+    auto* associate = new QPushButton(tr("Use with current radio"), ui.page);
+    associate->setObjectName("kxAssociateRadio");
+    associate->setAccessibleName(tr("Associate KXPA100 with the connected radio"));
+    associate->setToolTip(tr("Bind this KXPA100 serial to this radio for VU/PWR metering and applet frequency context."));
+    layout->insertWidget(layout->count() - 1, associate);
+    connect(associate, &QPushButton::clicked, this, [this, associate] {
+        const bool saved = Kxpa100RadioAssociation::associate(m_model, m_kxpa100);
+        associate->setToolTip(saved ? tr("Association saved for the current radio.") : tr("Connect an identified radio and KXPA100 before associating them. Settings must be writable."));
+    });
+    layout->insertWidget(layout->count() - 1, advancedToggle, 0, Qt::AlignLeft);
+    layout->insertWidget(layout->count() - 1, advanced);
+    connect(advancedToggle, &QPushButton::toggled, advanced, &QWidget::setVisible);
+    connect(ui.autoConnectCheck, &QCheckBox::toggled, this, [this](bool on) {
+        m_kxpa100->setAutoReconnect(on && PeripheralSettings::autoReconnect());
+    });
+}
+
+void RadioSetupDialog::revealKxpa100AdvancedSettings()
+{
+    selectTab(QStringLiteral("Peripherals"));
+    if (QListWidget* devices = findChild<QListWidget*>(QStringLiteral("peripheralDeviceList"))) {
+        for (int row = 0; row < devices->count(); ++row) {
+            if (devices->item(row)->data(Qt::UserRole).toString() == QStringLiteral("kxpa100")) {
+                devices->setCurrentRow(row);
+                break;
+            }
+        }
+    }
+    QPointer<QPushButton> toggle = findChild<QPushButton*>(QStringLiteral("peripheralAdvanced_kxpa100"));
+    if (!toggle) {
+        return;
+    }
+    toggle->setChecked(true);
+    toggle->setFocus(Qt::OtherFocusReason);
+    QTimer::singleShot(0, this, [toggle] {
+        if (!toggle) {
+            return;
+        }
+        for (QWidget* parent = toggle->parentWidget(); parent; parent = parent->parentWidget()) {
+            if (auto* area = qobject_cast<QScrollArea*>(parent); area && area->widget()) {
+                const int y = toggle->mapTo(area->widget(), QPoint(0, 0)).y();
+                area->verticalScrollBar()->setValue(qMax(0, y - 8));
+                return;
+            }
+        }
+    });
+}
+
+void RadioSetupDialog::buildRfkitDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
+                                        const std::function<void()>& refresh)
+{
+    PeripheralDeviceUi* const u = &ui;
+    DetailPage detail = beginDetailPage(ui, stackParent);
+
+    ui.addressEdit = new QLineEdit;
+    ui.addressEdit->setObjectName(QStringLiteral("peripheralAddress_%1").arg(ui.id));
+    ui.addressEdit->setPlaceholderText(QStringLiteral("e.g. 192.168.1.70"));
+    ui.addressEdit->setText(PeripheralSettings::deviceString("Rfkit", "ManualIp"));
+    ui.addressEdit->setAccessibleName(tr("RF-KIT address"));
+    ui.addressEdit->setAccessibleDescription(
+        tr("IP address or host name of the RF-KIT amplifier"));
+
+    // The REST API's port is a device setting, so it is editable rather than fixed.
+    ui.portSpin = makePortSpin(ui);
+    ui.portSpin->setValue(PeripheralSettings::deviceInt("Rfkit", "ManualPort", ui.defaultPort));
+    ui.portSpin->setAccessibleName(tr("RF-KIT control port"));
+    ui.portSpin->setAccessibleDescription(tr("HTTP port, 1 to 65535, default 8080"));
+
+    ui.connectButton = makeConnectButton(ui);
+    ui.connectButton->setAccessibleName(tr("Connect or disconnect the RF-KIT amplifier"));
+    connect(ui.connectButton, &QPushButton::clicked, this, [u, refresh]() {
+        if (u->isConnected()) {
+            u->disconnectNow();
+            return;
+        }
+        u->state.attention = Attention::None;
+        u->state.message.clear();
+        const QString ip = u->addressEdit->text().trimmed();
+        if (ip.isEmpty()) {
+            refresh();
+            return;
+        }
+        const int port = u->portSpin->value();
+        PeripheralSettings::setDeviceString("Rfkit", "ManualIp", ip);
+        PeripheralSettings::setDeviceInt("Rfkit", "ManualPort", port);
+        u->state.connecting = true;
+        refresh();
+        u->connectNetwork(ip, static_cast<quint16>(port));
+        refresh();
+    });
+
+    addFormRow(detail, tr("IP Address"), ui.addressEdit);
+    addFormRow(detail, tr("Port"), ui.portSpin);
+
+    m_peripheralRowSavers.append([u]() {
+        if (!u->addressEdit || !u->addressEdit->text().trimmed().isEmpty()) {
+            return;
+        }
+        const QString savedIp = PeripheralSettings::deviceString("Rfkit", "ManualIp");
+        if (savedIp.isEmpty()) {
+            return;
+        }
+        PeripheralSettings::clearDeviceField("Rfkit", "ManualIp");
+        PeripheralSettings::clearDeviceField("Rfkit", "ManualPort");
+        // Connected or still retrying: a reconnect loop aimed at the cleared
+        // address would otherwise keep dialing it until restart.
+        if (u->description().startsWith(savedIp + ":")) {
             u->disconnectNow();
         }
     });
@@ -1219,7 +1653,6 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
     ui.addressEdit = new QLineEdit;
     ui.addressEdit->setObjectName(QStringLiteral("peripheralAddress_%1").arg(ui.id));
     ui.addressEdit->setPlaceholderText(QStringLiteral("e.g. 192.168.1.60"));
-    applyEditStyle(ui.addressEdit);
     ui.addressEdit->setText(PeripheralSettings::deviceString("Kpa1500", "ManualIp"));
     ui.addressEdit->setAccessibleName(tr("KPA1500 address"));
     ui.addressEdit->setAccessibleDescription(
@@ -1267,7 +1700,9 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
         }
         PeripheralSettings::clearDeviceField("Kpa1500", "ManualIp");
         PeripheralSettings::clearDeviceField("Kpa1500", "ManualPort");
-        if (u->isConnected() && u->description().startsWith(savedIp + ":")) {
+        // Connected or still retrying: a reconnect loop aimed at the cleared
+        // address would otherwise keep dialing it until restart.
+        if (u->description().startsWith(savedIp + ":")) {
             u->disconnectNow();
         }
     });
@@ -1301,8 +1736,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
 {
     auto* page = new QWidget;
     page->setObjectName(QStringLiteral("peripheralsPage"));
-    ThemeManager::instance().applyStyleSheet(page,
-        "QWidget#peripheralsPage { background: {{color.background.0}}; }");
     auto* vbox = new QVBoxLayout(page);
     vbox->setSpacing(8);
 
@@ -1341,8 +1774,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
 
     auto* content = new QWidget(page);
     content->setObjectName(QStringLiteral("peripheralContent"));
-    ThemeManager::instance().applyStyleSheet(content,
-        "QWidget#peripheralContent { background: {{color.background.0}}; }");
     auto* columns = new QHBoxLayout(content);
     columns->setContentsMargins(0, 0, 0, 0);
     columns->setSpacing(12);
@@ -1354,8 +1785,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     auto* emptyText = new QLabel(
         tr("No peripherals added.\n\nChoose Add to configure a device."), emptyPage);
     emptyText->setAlignment(Qt::AlignCenter);
-    ThemeManager::instance().applyStyleSheet(emptyText,
-        "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
+    setTone(emptyText, Tone::Hint);
     emptyLayout->addWidget(emptyText);
     detailStack->addWidget(emptyPage);
 
@@ -1384,6 +1814,12 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         ui->authDevice = PeripheralAuthStore::Device::Tgxl;
         ui->isConnected = [this]() { return m_tgxl->isConnected(); };
         ui->isConnecting = [this]() { return m_tgxl->isConnecting(); };
+        // The target reconnects aim at, so clearing its address can stop them.
+        ui->description = [this]() {
+            const QString host = m_tgxl->reconnectHost();
+            return host.isEmpty() ? QString()
+                                  : QStringLiteral("%1:%2").arg(host).arg(m_tgxl->reconnectPort());
+        };
         ui->hasRadioRelay = [this]() {
             return m_model->isConnected() && !m_model->tunerModel().handle().isEmpty();
         };
@@ -1423,6 +1859,12 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         ui->authDevice = PeripheralAuthStore::Device::Pgxl;
         ui->isConnected = [this]() { return m_pgxl->isConnected(); };
         ui->isConnecting = [this]() { return m_pgxl->isConnecting(); };
+        // The target reconnects aim at, so clearing its address can stop them.
+        ui->description = [this]() {
+            const QString host = m_pgxl->reconnectHost();
+            return host.isEmpty() ? QString()
+                                  : QStringLiteral("%1:%2").arg(host).arg(m_pgxl->reconnectPort());
+        };
         ui->hasRadioRelay = [this]() {
             return m_model->isConnected() && !m_model->amplifier().handle().isEmpty();
         };
@@ -1594,15 +2036,40 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             "    options:\n"
             "      kickolduser: true\n"
             "    connector: serialdev,\n"
-            "              /dev/ttyUSB0");
+            "              /dev/ttyUSB0\n"
+            "\n"
+            "Plain serial-to-Ethernet converters (e.g. Waveshare in\n"
+            "TCP-server mode) work for monitoring and control, but cannot\n"
+            "power the amplifier ON — they have no RFC 2217 support.\n"
+            "\n"
+            "Original 1K-FA: set the proxy's serial side to 9600 baud;\n"
+            "raw mode is preferred (its binary status suffers in telnet mode).");
         auto ui = serialDevice(QStringLiteral("spe"), tr("SPE Expert Amplifier"),
             QStringLiteral("SPE Expert amplifier"), QStringLiteral("SpeExpert"), 7000,
             QStringLiteral("115200 8N1"), QStringLiteral("ser2net host — e.g. 192.168.1.52"),
             tr("IP address or host name of the serial proxy"), ser2netTip);
+        ui->modelChoices = {
+            {tr("1.3K / 1.5K / 2K-FA"), Spe::variantKey(Spe::Variant::Expert),
+             QStringLiteral("115200 8N1")},
+            {tr("1K-FA (original, RS-232)"), Spe::variantKey(Spe::Variant::Legacy1k),
+             QStringLiteral("9600 8N1")},
+        };
+        // The variant is read at connect time so a model change made since
+        // the last connect is honoured.
+        auto applySpeVariant = [this]() {
+            m_spe->setVariant(Spe::variantFromKey(
+                PeripheralSettings::deviceString("SpeExpert", "Model")));
+        };
         ui->isConnected = [this]() { return m_spe->isConnected(); };
         ui->disconnectNow = [this]() { m_spe->disconnect(); };
-        ui->connectNetwork = [this](const QString& h, quint16 p) { m_spe->connectNetwork(h, p); };
-        ui->connectSerial = [this](const QString& port) { m_spe->connectSerial(port); };
+        ui->connectNetwork = [this, applySpeVariant](const QString& h, quint16 p) {
+            applySpeVariant();
+            m_spe->connectNetwork(h, p);
+        };
+        ui->connectSerial = [this, applySpeVariant](const QString& port) {
+            applySpeVariant();
+            m_spe->connectSerial(port);
+        };
         ui->description = [this]() { return m_spe->description(); };
         ui->afterRemoval = [this]() { m_spe->disconnect(); };
         buildSerialNetworkDevice(*ui, detailStack, refresh, serialReseeds);
@@ -1635,6 +2102,103 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         ui->afterRemoval = [this]() { m_kpa1500->disconnect(); };
         buildKpa1500Device(*ui, detailStack, refresh);
     }
+    if (m_rfkit) {
+        // REST over HTTP (docs/architecture/rfkit-amplifier-design.md): a plain
+        // host/port pair, no Serial/Network toggle.
+        auto ui = addDevice(QStringLiteral("rfkit"), tr("RF-KIT Amplifier"),
+                            QStringLiteral("RF-KIT amplifier"),
+                            PeripheralDeviceUi::Kind::Rfkit, Rfkit::kDefaultPort);
+        ui->settingsGroup = QStringLiteral("Rfkit");
+        ui->isConnected = [this]() { return m_rfkit->isConnected(); };
+        ui->disconnectNow = [this]() { m_rfkit->disconnect(); };
+        ui->connectNetwork = [this](const QString& h, quint16 p) { m_rfkit->connectNetwork(h, p); };
+        ui->description = [this]() { return m_rfkit->description(); };
+        ui->afterRemoval = [this]() { m_rfkit->disconnect(); };
+        buildRfkitDevice(*ui, detailStack, refresh);
+    }
+    if (m_kpa500) {
+        auto ui = addDevice(QStringLiteral("kpa500"), tr("Elecraft KPA500"),
+                            QStringLiteral("KPA500 amplifier"),
+                            PeripheralDeviceUi::Kind::Kpa500, 2000);
+        ui->settingsGroup = QStringLiteral("Kpa500");
+        ui->isConnected = [this]() { return m_kpa500->isConnected(); };
+        ui->isConnecting = [this]() { return m_kpa500->isConnecting(); };
+        ui->isNetworkConnection = [this]() { return m_kpa500->isNetworkConnection(); };
+        ui->connectNetwork = [this](const QString& host, quint16 port) { m_kpa500->connectToHost(host, port); };
+        ui->deviceInfo = [this]() {
+            const Kpa500::Status& status = m_kpa500->lastStatus();
+            return tr("%1\nFirmware: %2 · Serial: %3")
+                .arg(m_kpa500->isConnected() ? m_kpa500->description() : tr("Disconnected"),
+                     status.firmwareVersion.value_or(tr("Not reported")),
+                     status.serialNumber.value_or(tr("Not reported")));
+        };
+        ui->disconnectNow = [this]() { m_kpa500->disconnect(); };
+        ui->description = [this]() { return m_kpa500->description(); };
+        ui->afterRemoval = [this]() {
+            m_kpa500->disconnect();
+            m_kpa500->setAutoReconnect(PeripheralSettings::autoReconnect()
+                                      && PeripheralSettings::autoConnect("kpa500"));
+        };
+        ui->state.note = m_kpa500->isConnected() && !m_kpa500->isResponding()
+            ? tr("amplifier not answering") : QString();
+        buildKpa500Device(*ui, detailStack, refresh, serialReseeds);
+    }
+    if (m_kat500) {
+        auto ui = addDevice(QStringLiteral("kat500"), tr("Elecraft KAT500"),
+                            QStringLiteral("KAT500 tuner"),
+                            PeripheralDeviceUi::Kind::Kat500, 2000);
+        ui->settingsGroup = QStringLiteral("Kat500");
+        ui->isConnected = [this]() { return m_kat500->isConnected(); };
+        ui->isConnecting = [this]() { return m_kat500->isConnecting(); };
+        ui->isNetworkConnection = [this]() { return m_kat500->isNetworkConnection(); };
+        ui->connectNetwork = [this](const QString& host, quint16 port) { m_kat500->connectToHost(host, port); };
+        ui->deviceInfo = [this]() {
+            const Kat500::Status& status = m_kat500->status();
+            return tr("%1\nFirmware: %2 · Serial: %3\n%4")
+                .arg(m_kat500->isConnected() ? m_kat500->description() : tr("Disconnected"),
+                     status.firmware.isEmpty() ? tr("Not reported") : status.firmware,
+                     status.serial.isEmpty() ? tr("Not reported") : status.serial,
+                     m_kat500->unavailableReason(false));
+        };
+        ui->disconnectNow = [this]() { m_kat500->disconnectDevice(); };
+        ui->description = [this]() { return m_kat500->description(); };
+        ui->afterRemoval = [this]() {
+            m_kat500->disconnectDevice();
+            m_kat500->setAutoReconnect(PeripheralSettings::autoReconnect()
+                                      && PeripheralSettings::autoConnect("kat500"));
+        };
+        ui->state.note = m_kat500->isConnected() && !m_kat500->isResponding()
+            ? tr("tuner not answering") : QString();
+        buildKat500Device(*ui, detailStack, refresh, serialReseeds);
+    }
+    if (m_kxpa100) {
+        auto ui = addDevice(QStringLiteral("kxpa100"), tr("Elecraft KXPA100"),
+                            QStringLiteral("KXPA100 amplifier / tuner"),
+                            PeripheralDeviceUi::Kind::Kxpa100, 2000);
+        ui->settingsGroup = QStringLiteral("Kxpa100");
+        ui->isConnected = [this]() { return m_kxpa100->isConnected(); };
+        ui->isConnecting = [this]() { return m_kxpa100->isConnecting(); };
+        ui->isNetworkConnection = [this]() { return m_kxpa100->isNetworkConnection(); };
+        ui->connectNetwork = [this](const QString& host, quint16 port) { m_kxpa100->connectToHost(host, port); };
+        ui->deviceInfo = [this]() {
+            const Kxpa100::Status& status = m_kxpa100->status();
+            return tr("%1\nFirmware: %2 · Serial: %3\n%4")
+                .arg(m_kxpa100->isConnected() ? m_kxpa100->description() : tr("Disconnected"),
+                     status.firmware.isEmpty() ? tr("Not reported") : status.firmware,
+                     status.serial.isEmpty() ? tr("Not reported") : status.serial,
+                     m_kxpa100->unavailableReason(false));
+        };
+        ui->disconnectNow = [this]() { m_kxpa100->disconnectDevice(); };
+        ui->description = [this]() { return m_kxpa100->description(); };
+        ui->afterRemoval = [this]() {
+            m_kxpa100->disconnectDevice();
+            m_kxpa100->setAutoReconnect(PeripheralSettings::autoReconnect()
+                                      && PeripheralSettings::autoConnect("kxpa100"));
+        };
+        ui->state.note = m_kxpa100->isConnected() && !m_kxpa100->isResponding()
+            ? tr("amplifier not answering") : QString();
+        buildKxpa100Device(*ui, detailStack, refresh, serialReseeds);
+    }
     if (m_lpMeter) {
         auto ui = serialDevice(QStringLiteral("lp100a"), tr("LP-100A Meter"), QStringLiteral("LP-100A meter"),
             QStringLiteral("Lp100a"), 2000, QStringLiteral("115200 8N1"),
@@ -1652,9 +2216,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     auto* reconnectCheck = new QCheckBox(tr("Reconnect automatically"));
     reconnectCheck->setObjectName(QStringLiteral("peripheralAutoReconnect"));
     reconnectCheck->setAccessibleDescription(tr("Reconnect peripherals after a connection drops."));
-    ThemeManager::instance().applyStyleSheet(reconnectCheck,
-        "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 8px; }"
-        + kCheckBoxIndicator);
     reconnectCheck->setChecked(PeripheralSettings::autoReconnect());
     connect(reconnectCheck, &QCheckBox::toggled, this, [this](bool on) {
         PeripheralSettings::setAutoReconnect(on);
@@ -1681,48 +2242,41 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         if (m_kpa1500) {
             m_kpa1500->setAutoReconnect(on);
         }
+        if (m_rfkit) {
+            m_rfkit->setAutoReconnect(on);
+        }
+        if (m_kpa500) {
+            m_kpa500->setAutoReconnect(on && PeripheralSettings::autoConnect("kpa500"));
+        }
+        if (m_kat500) {
+            m_kat500->setAutoReconnect(on && PeripheralSettings::autoConnect("kat500"));
+        }
+        if (m_kxpa100) {
+            m_kxpa100->setAutoReconnect(on && PeripheralSettings::autoConnect("kxpa100"));
+        }
         // VK3AMP takes this setting only at startup (#4919).
     });
 
     auto* listGroup = new QGroupBox(tr("Devices"), content);
     listGroup->setMinimumWidth(250);
     listGroup->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-    ThemeManager::instance().applyStyleSheet(listGroup, kGroupBoxStyle);
     auto* listLayout = new QVBoxLayout(listGroup);
     auto* deviceList = new QListWidget(listGroup);
     deviceList->setObjectName(QStringLiteral("peripheralDeviceList"));
     deviceList->setAccessibleName(tr("Configured peripherals"));
     deviceList->setAlternatingRowColors(true);
     deviceList->setSpacing(3);
-    ThemeManager::instance().applyStyleSheet(deviceList,
-        "QListWidget { background: {{color.background.0}}; alternate-background-color: {{color.background.0}}; "
-        "color: {{color.text.primary}}; "
-        "border: 1px solid {{color.background.1}}; font-size: 11px; }"
-        "QListWidget::item { background: {{color.background.1}}; padding: 8px 7px; margin-right: 6px; "
-        "border: 1px solid {{color.background.2}}; border-radius: 0px; }"
-        "QListWidget::item:alternate { background: {{color.background.2}}; }"
-        "QListWidget::item:selected, QListWidget::item:alternate:selected { background: palette(highlight); "
-        "color: palette(highlighted-text); }");
+    deviceList->setItemDelegate(new PeripheralListDelegate(deviceList));
     deviceList->setMinimumHeight(200);
     deviceList->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     listLayout->addWidget(deviceList);
 
-    const QString actionStyle =
-        "QPushButton { background: {{color.background.1}}; "
-        "border: 1px solid {{color.background.2}}; border-radius: 3px; "
-        "color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
-        "padding: 5px 8px; }"
-        "QPushButton:hover { background: {{color.background.2}}; }"
-        "QPushButton:disabled { color: {{color.text.disabled}}; }";
     auto* listActions = new QHBoxLayout;
     auto* addButton = new QPushButton(tr("Add"), listGroup);
     addButton->setObjectName(QStringLiteral("peripheralAddButton"));
     addButton->setAccessibleName(tr("Add peripheral device"));
     addButton->setAccessibleDescription(tr("Choose a device type to configure"));
-    ThemeManager::instance().applyStyleSheet(addButton, actionStyle);
     auto* addMenu = new QMenu(addButton);
-    ThemeManager::instance().applyStyleSheet(addMenu,
-        "QMenu::item:disabled { color: {{color.text.disabled}}; }");
     addButton->setMenu(addMenu);
     auto* removeButton = new QPushButton(tr("Remove"), listGroup);
     removeButton->setObjectName(QStringLiteral("peripheralRemoveButton"));
@@ -1730,17 +2284,16 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     removeButton->setAccessibleDescription(tr("Select a configured peripheral to remove it"));
     removeButton->setToolTip(tr("Remove this device and clear its saved connection details"));
     removeButton->setEnabled(false);
-    ThemeManager::instance().applyStyleSheet(removeButton, actionStyle);
-    listActions->addWidget(addButton, 1);
-    listActions->addWidget(removeButton, 1);
+    listActions->addWidget(addButton);
+    listActions->addWidget(removeButton);
+    listActions->addStretch(1);
     listLayout->addLayout(listActions);
     auto* removalNotice = new QLabel(listGroup);
     removalNotice->setObjectName(QStringLiteral("peripheralRemovalNotice"));
     removalNotice->setAccessibleName(tr("Peripheral removal status"));
     removalNotice->setWordWrap(true);
     removalNotice->hide();
-    ThemeManager::instance().applyStyleSheet(removalNotice,
-        "QLabel { color: {{color.accent.warning}}; font-size: 11px; }");
+    setTone(removalNotice, Tone::Warn);
     listLayout->addWidget(removalNotice);
     listLayout->addSpacing(8);
     listLayout->addWidget(reconnectCheck);
@@ -1749,7 +2302,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     helpButton->setObjectName(QStringLiteral("peripheralConnectionHelp"));
     helpButton->setAutoDefault(false);
     helpButton->setAccessibleDescription(tr("Explain local and remote peripheral connections."));
-    ThemeManager::instance().applyStyleSheet(helpButton, actionStyle);
     connect(helpButton, &QPushButton::clicked, this, [this]() {
         QMessageBox::information(this, tr("Peripheral connections"),
             tr("Add a device and enter its address for a direct connection. "
@@ -1939,6 +2491,12 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             }
         } else {
             PeripheralSettings::clearDeviceConnection(ui.settingsGroup);
+            if ((ui.kind == PeripheralDeviceUi::Kind::Kpa500 || ui.kind == PeripheralDeviceUi::Kind::Kat500 || ui.kind == PeripheralDeviceUi::Kind::Kxpa100)) {
+                PeripheralSettings::clearDeviceField(ui.settingsGroup, "BaudRate");
+                PeripheralSettings::resetAutoConnect(ui.id);
+                const QSignalBlocker blocked(ui.autoConnectCheck);
+                ui.autoConnectCheck->setChecked(true);
+            }
         }
         if (ui.afterRemoval) {
             ui.afterRemoval();
@@ -2241,23 +2799,35 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             const bool connected = ui.isConnected();
             ui.state.source = sourceOf(ui);
             const bool connecting = effectivelyConnecting(ui);
-            ui.connectButton->setText(connected ? QStringLiteral("Disconnect")
-                                                : QStringLiteral("Connect"));
+            const bool kpaConnecting = (ui.kind == PeripheralDeviceUi::Kind::Kpa500 || ui.kind == PeripheralDeviceUi::Kind::Kat500 || ui.kind == PeripheralDeviceUi::Kind::Kxpa100) && connecting;
+            ui.connectButton->setText(connected ? tr("Disconnect")
+                : kpaConnecting ? tr("Cancel") : tr("Connect"));
             applyStatusLabel(ui);
+            if (ui.deviceInfoLabel && ui.deviceInfo) {
+                const QString info = ui.deviceInfo();
+                if (ui.deviceInfoLabel->text() != info) {
+                    ui.deviceInfoLabel->setText(info);
+                    ui.deviceInfoLabel->setAccessibleDescription(info);
+                    QAccessibleEvent event(ui.deviceInfoLabel, QAccessible::DescriptionChanged);
+                    QAccessible::updateAccessibility(&event);
+                }
+            }
 
-            const QString reason = connected
-                ? tr("Disconnect to change connection settings.") : QString();
-            updateFieldAvailability(ui, ui.addressEdit, connected, reason);
-            updateFieldAvailability(ui, ui.addressStack, connected, reason);
-            updateFieldAvailability(ui, ui.portSpin, connected, reason);
-            updateFieldAvailability(ui, ui.portStack, connected, reason);
-            updateFieldAvailability(ui, ui.modeCombo, connected, reason);
+            const bool locked = connected || kpaConnecting;
+            const QString reason = locked
+                ? tr("Disconnect or cancel to change connection settings.") : QString();
+            updateFieldAvailability(ui, ui.addressEdit, locked, reason);
+            updateFieldAvailability(ui, ui.addressStack, locked, reason);
+            updateFieldAvailability(ui, ui.portSpin, locked, reason);
+            updateFieldAvailability(ui, ui.portStack, locked, reason);
+            updateFieldAvailability(ui, ui.modeCombo, locked, reason);
+            updateFieldAvailability(ui, ui.baudCombo, locked, reason);
             if (ui.editHint) {
                 ui.editHint->setText(reason);
-                ui.editHint->setVisible(connected);
+                ui.editHint->setVisible(locked);
             }
             if (ui.serialRefreshButton) {
-                ui.serialRefreshButton->setEnabled(!connected);
+                ui.serialRefreshButton->setEnabled(!locked);
                 ui.serialRefreshButton->setAccessibleDescription(reason);
                 ui.serialRefreshButton->setToolTip(reason);
             }
@@ -2279,6 +2849,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     continue;
                 }
                 item->setText(ui.label + QLatin1Char('\n') + address + QLatin1Char('\n') + stateWord);
+                item->setData(kSourceRole, connecting ? -1 : static_cast<int>(ui.state.source));
                 item->setToolTip(address + QLatin1Char('\n') + statusText(ui));
                 item->setData(Qt::AccessibleTextRole,
                               ui.label + QStringLiteral(": ") + address + QStringLiteral(", ") + spokenWord);
@@ -2430,7 +3001,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     connect(&m_model->amplifier(), &AmpModel::presenceChanged, this, refresh);
     connect(m_model, &RadioModel::connectionStateChanged, this, refresh);
 
-    // The serial, VK3AMP and KPA1500 devices: link changes, failures, and link-up with a
+    // The serial, VK3AMP, KPA1500 and RF-KIT devices: link changes, failures, and link-up with a
     // silent device.
     auto wireLinkDevice = [this, onLink, onFailure](const QString& id, auto* connection) {
         using Connection = std::remove_pointer_t<decltype(connection)>;
@@ -2450,6 +3021,30 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     }
     if (m_kpa1500) {
         wireLinkDevice(QStringLiteral("kpa1500"), m_kpa1500);
+    }
+    if (m_rfkit) {
+        wireLinkDevice(QStringLiteral("rfkit"), m_rfkit);
+    }
+    if (m_kat500) {
+        wireLinkDevice(QStringLiteral("kat500"), m_kat500);
+        connect(m_kat500, &Kat500Model::statusUpdated, this, refresh);
+        connect(m_kat500, &Kat500Model::availabilityChanged, this, refresh);
+    }
+    if (m_kxpa100) {
+        wireLinkDevice(QStringLiteral("kxpa100"), m_kxpa100);
+        connect(m_kxpa100, &Kxpa100Model::statusUpdated, this, refresh);
+        connect(m_kxpa100, &Kxpa100Model::availabilityChanged, this, refresh);
+    }
+    if (m_kpa500) {
+        wireLinkDevice(QStringLiteral("kpa500"), m_kpa500);
+        connect(m_kpa500, &Kpa500Connection::statusUpdated, this, refresh);
+        connect(m_kpa500, &Kpa500Connection::respondingChanged, this, [this, refresh](bool responding) {
+            if (PeripheralDeviceUi* ui = peripheralDevice(QStringLiteral("kpa500"))) {
+                ui->state.note = ui->isConnected() && !responding
+                    ? tr("amplifier not answering") : QString();
+            }
+            refresh();
+        });
     }
     if (m_lpMeter) {
         wireLinkDevice(QStringLiteral("lp100a"), m_lpMeter);

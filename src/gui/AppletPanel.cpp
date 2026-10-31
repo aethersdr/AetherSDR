@@ -15,9 +15,12 @@
 #include "AcomApplet.h"
 #include "SpeApplet.h"
 #include "VkampApplet.h"
+#include "Kpa500Applet.h"
+#include "Kat500Applet.h"
+#include "Kxpa100Applet.h"
 #include "Kpa1500Applet.h"
+#include "RfkitApplet.h"
 #include "LpMeterApplet.h"
-#include "Ctr2ProxyApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
@@ -174,6 +177,9 @@ class AppletDropArea : public QScrollArea {
 public:
     AppletDropArea(AppletPanel* panel) : QScrollArea(panel), m_panel(panel) {
         setAcceptDrops(true);
+        // Opt out of the app-wide touch-scroll hook: applets are rearranged by
+        // touch-dragging them, which QScroller would swallow as a scroll.
+        setProperty("_aetherNoTouchScroll", true);
     }
 
 protected:
@@ -327,7 +333,8 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
             "color: {{color.text.primary}}; "
             "border: 1px solid {{color.accent.bright}}; }"
             "QPushButton:disabled { color: {{color.text.disabled}}; "
-            "border-color: {{color.background.1}}; }");
+            "border-color: {{color.background.1}}; }"
+            "QPushButton#kpa500BarButton { font-size: 10px; }");
 
     m_favRow = new QWidget;
     m_favRow->setObjectName("barContainer");
@@ -887,6 +894,61 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_appletOrder.append(entry);
     }
 
+    // Elecraft KPA500 serial/raw-TCP amplifier, independent
+    // of every other amplifier applet. See
+    // docs/architecture/elecraft-kpa500-kat500-design.md.
+    m_kpa500Applet = new Kpa500Applet;
+    {
+        auto entry = makeEntry("KPA500", "Elecraft KPA500 Amplifier", m_kpa500Applet,
+                               false, m_drawer, m_drawerLayout, "KP500");
+        m_kpa500Btn = entry.btn;
+        m_kpa500Btn->setObjectName(QStringLiteral("kpa500BarButton"));
+        m_kpa500Btn->setAccessibleName(tr("Elecraft KPA500 amplifier"));
+        markHardwareConditional("KPA500");
+        if (auto* container = qobject_cast<ContainerWidget*>(entry.widget)) {
+            container->setDefaultFloatingSize(QSize(560, 720));
+            connect(container, &ContainerWidget::dockModeChanged, m_kpa500Applet,
+                    [this](ContainerWidget::DockMode mode) {
+                m_kpa500Applet->setFloating(mode != ContainerWidget::DockMode::PanelDocked);
+            });
+        }
+        m_appletOrder.append(entry);
+    }
+
+    m_kat500Applet = new Kat500Applet;
+    {
+        auto entry = makeEntry("KAT500", "Elecraft KAT500 Tuner", m_kat500Applet,
+                               false, m_drawer, m_drawerLayout, "KT500");
+        entry.btn->setObjectName(QStringLiteral("kat500BarButton"));
+        entry.btn->setAccessibleName(tr("Elecraft KAT500 tuner"));
+        markHardwareConditional("KAT500");
+        if (auto* container = qobject_cast<ContainerWidget*>(entry.widget)) {
+            container->setDefaultFloatingSize(QSize(560, 720));
+            connect(container, &ContainerWidget::dockModeChanged, m_kat500Applet,
+                    [this](ContainerWidget::DockMode mode) {
+                m_kat500Applet->setFloating(mode != ContainerWidget::DockMode::PanelDocked);
+            });
+        }
+        m_appletOrder.append(entry);
+    }
+
+    m_kxpa100Applet = new Kxpa100Applet;
+    {
+        auto entry = makeEntry("KXPA100", "Elecraft KXPA100 Amplifier / Tuner", m_kxpa100Applet,
+                               false, m_drawer, m_drawerLayout, "KX100");
+        entry.btn->setObjectName(QStringLiteral("kxpa100BarButton"));
+        entry.btn->setAccessibleName(tr("Elecraft KXPA100 amplifier and tuner"));
+        markHardwareConditional("KXPA100");
+        if (auto* container = qobject_cast<ContainerWidget*>(entry.widget)) {
+            container->setDefaultFloatingSize(QSize(560, 720));
+            connect(container, &ContainerWidget::dockModeChanged, m_kxpa100Applet,
+                    [this](ContainerWidget::DockMode mode) {
+                m_kxpa100Applet->setFloating(mode != ContainerWidget::DockMode::PanelDocked);
+            });
+        }
+        m_appletOrder.append(entry);
+    }
+
     // Elecraft KPA1500 — independent of AMP (PGXL), ACOM, SPE and VKAMP
     // for the same reason they are independent of each other: a station can
     // have any combination of them connected at once. Deliberately NOT in
@@ -899,6 +961,21 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
                                m_drawer, m_drawerLayout);
         m_kpa1500Btn = entry.btn;
         markHardwareConditional("KPA1500");
+        m_appletOrder.append(entry);
+    }
+
+    // RF-KIT amplifier — independent of every other amplifier applet for the
+    // same reason the KPA1500 is: a station can have any combination of them
+    // connected at once. Deliberately NOT in kDefaultOrder either: the RF-KIT
+    // has no discovery path, so the stored Peripherals configuration is the
+    // only thing that can ever reveal it. See
+    // docs/architecture/rfkit-amplifier-design.md.
+    m_rfkitApplet = new RfkitApplet;
+    {
+        auto entry = makeEntry("RFKIT", "RF-KIT Amplifier", m_rfkitApplet, false,
+                               m_drawer, m_drawerLayout);
+        m_rfkitBtn = entry.btn;
+        markHardwareConditional("RFKIT");
         m_appletOrder.append(entry);
     }
 
@@ -929,13 +1006,6 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_waveApplet = new WaveApplet;
     m_appletOrder.append(makeEntry("WAVE", "Waveform", m_waveApplet, true, m_drawer, m_drawerLayout, "WAV"));
-
-    // CTR2 Proxy — prototype opaque TCP relay for a CTR2 controller; off by
-    // default and outside kDefaultOrder. The proxy itself is off on every
-    // launch regardless of this tile's visibility.
-    m_ctr2ProxyApplet = new Ctr2ProxyApplet;
-    m_appletOrder.append(makeEntry("CTR2", "CTR2 Proxy", m_ctr2ProxyApplet, false,
-                                   m_drawer, m_drawerLayout));
 
     m_aetherClockApplet = new AetherClockApplet;
     m_appletOrder.append(makeEntry("CLOCK", "AetherClock", m_aetherClockApplet, false, m_drawer, m_drawerLayout, "CLK"));
@@ -1024,8 +1094,8 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // marketing name for the whole TX-DSP composite.  Settings ID
     // stays TXDSP for persistence.
     {
-        auto entry = makeEntry("TXDSP", "Channel Strip", txDsp, false,
-                               m_drawer, m_drawerLayout, "VUDU");
+        auto entry = makeEntry("TXDSP", QString::fromUtf8("Aetherial Audio\xe2\x84\xa2"),
+                               txDsp, false, m_drawer, m_drawerLayout, "VUDU");
         // Make the composite's drag MIME match its owning AppletEntry.id
         // so the drop handler's fast lookup hits directly.  Container
         // persistence keys still use the internal id ("tx_dsp") — drag
@@ -1423,8 +1493,12 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("AMP"),   QStringLiteral("Amplifiers")},
         {QStringLiteral("ACOM"),  QStringLiteral("Amplifiers")},
         {QStringLiteral("SPE"),   QStringLiteral("Amplifiers")},
+        {QStringLiteral("KPA500"), QStringLiteral("Amplifiers")},
+        {QStringLiteral("KAT500"), QStringLiteral("Transmit")},
+        {QStringLiteral("KXPA100"), QStringLiteral("Transmit")},
         {QStringLiteral("VKAMP"), QStringLiteral("Amplifiers")},
         {QStringLiteral("KPA1500"), QStringLiteral("Amplifiers")},
+        {QStringLiteral("RFKIT"), QStringLiteral("Amplifiers")},
         {QStringLiteral("EQ"),    QStringLiteral("Audio & DSP")},
         {QStringLiteral("TXDSP"), QStringLiteral("Audio & DSP")},
         {QStringLiteral("WAVE"),  QStringLiteral("Audio & DSP")},
@@ -1441,7 +1515,6 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("TCI"),   QStringLiteral("Integration")},
         {QStringLiteral("MQTT"),  QStringLiteral("Integration")},
         {QStringLiteral("RADE"),  QStringLiteral("Integration")},
-        {QStringLiteral("CTR2"),  QStringLiteral("Integration")},
         {QStringLiteral("CLOCK"), QStringLiteral("Station")},
         {QStringLiteral("PROF"),  QStringLiteral("Station")},
     };
@@ -1862,9 +1935,33 @@ void AppletPanel::setVkampVisible(bool visible)
     applyBarLayout();
 }
 
+void AppletPanel::setKat500Visible(bool visible)
+{
+    updateHardwareAvailability("KAT500", "Applet_KAT500", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setKxpa100Visible(bool visible)
+{
+    updateHardwareAvailability("KXPA100", "Applet_KXPA100", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setKpa500Visible(bool visible)
+{
+    updateHardwareAvailability("KPA500", "Applet_KPA500", visible);
+    applyBarLayout();
+}
+
 void AppletPanel::setKpa1500Visible(bool visible)
 {
     updateHardwareAvailability("KPA1500", "Applet_KPA1500", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setRfkitVisible(bool visible)
+{
+    updateHardwareAvailability("RFKIT", "Applet_RFKIT", visible);
     applyBarLayout();
 }
 

@@ -24,7 +24,14 @@ enum class RadioTabStatus {
     InUse        // another station has it — amber
 };
 
+// The machine-readable status token the automation bridge publishes:
+// "connected" / "available" / "in use", lower-case and untranslated. Drivers
+// match on these, so they are a contract — see docs/automation-bridge.md.
 QString radioTabStatusText(RadioTabStatus status);
+
+// The same state as an operator reads it: sentence case, translated. Only the
+// first letter is capitalized, so a multiword state stays "In use".
+QString radioTabStatusLabel(RadioTabStatus status);
 
 // One entry in the title bar's radio strip.
 struct RadioTabEntry {
@@ -101,7 +108,7 @@ protected:
 private:
     void refreshAccessibility();
     QString descriptionLine() const;   // name + statusLine, for a11y and tooltip
-    QString statusWord() const;        // "connected" … or "link lost" while alarmed
+    QString statusWord() const;        // "Connected" … or "Link lost" while alarmed
     QRect dotDirtyRect() const;        // the link indicator's repaint footprint
 
     QColor dotColor() const;

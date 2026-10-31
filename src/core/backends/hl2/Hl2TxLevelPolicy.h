@@ -29,7 +29,7 @@ namespace AetherSDR::hl2 {
 // The slider as the modulator's linear multiplier; level 0 mutes. Applies to
 // Microphone and ClientLeveled audio (voice, AX.25, TCI/DAX), not the WSPR
 // pump (Hl2TxDsp substitutes 1.0), so 0 does not silence a beacon. The ALC
-// only reduces, and reduction is instantaneous (`m_alcGain = target`), so a
+// only reduces, and reduction has no attack constant (Hl2TxAlc.h), so a
 // full-scale source at the slider top is limited by the ALC, not flat-topped
 // by the modulator clamp; hl2_txdsp_test's slider-top case asserts it.
 [[nodiscard]] inline double micSliderToLinear(int level) noexcept
@@ -106,5 +106,13 @@ defaultTxPassbandForModeName(std::string_view mode) noexcept
     if (eq(mode, "FM") || eq(mode, "NFM")) return {100, 3000};
     return {300, 2700};   // USB/LSB and anything else: the voice default
 }
+
+// TXA's AM carrier level and FM peak deviation: create_txa()'s own values.
+// 0.5 makes full-scale audio exactly 100 % modulation at the PEP of a
+// full-scale SSB peak (carrier is a quarter of PEP). 5000 Hz matches the RX FM
+// detector; it is the deviation for unit audio after TXA's pre-emphasis, so
+// speech deviates less. No operator control reaches either value.
+inline constexpr double kTxAmCarrierLevel = 0.5;
+inline constexpr double kTxFmDeviationHz = 5000.0;
 
 }  // namespace AetherSDR::hl2

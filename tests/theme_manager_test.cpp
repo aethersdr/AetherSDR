@@ -1415,6 +1415,8 @@ int main(int argc, char** argv)
             "ground", "raised", "nested", "control", "ink", "inkSoft", "muted",
             "line", "lineHi", "cyan", "aqua", "onAccent", "sparkHot", "sparkGold",
             "sparkGoldHot", "bloom.blue", "bloom.teal", "grid",
+            "category.cyan", "category.aqua", "category.blue", "category.amber",
+            "category.violet", "category.rose", "category.teal",
         };
         auto contrast = [](const QColor& a, const QColor& b) {
             auto lum = [](const QColor& c) {
@@ -1446,6 +1448,15 @@ int main(int argc, char** argv)
                 {"inkSoft", "nested", 4.5},   // build-card values
                 {"muted", "ground", 4.5},     // version line, close button
                 {"sparkGold", "control", 3.0},  // Logbook button focus ring
+                // Updates window: chapter dots and highlight-card edges are
+                // non-text marks on the ground and the raised card (3:1).
+                {"category.cyan", "ground", 3.0},   {"category.cyan", "raised", 3.0},
+                {"category.aqua", "ground", 3.0},   {"category.aqua", "raised", 3.0},
+                {"category.blue", "ground", 3.0},   {"category.blue", "raised", 3.0},
+                {"category.amber", "ground", 3.0},  {"category.amber", "raised", 3.0},
+                {"category.violet", "ground", 3.0}, {"category.violet", "raised", 3.0},
+                {"category.rose", "ground", 3.0},   {"category.rose", "raised", 3.0},
+                {"category.teal", "ground", 3.0},   {"category.teal", "raised", 3.0},
             };
             for (const auto& pr : pairs) {
                 const double r = contrast(canon(pr.fg), canon(pr.bg));
@@ -1477,6 +1488,43 @@ int main(int argc, char** argv)
                     EXPECT_TRUE(r >= floor);
                 }
             }
+        }
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+    }
+
+    // ---- the canon scope maps the base tokens onto color.canon.* in BOTH
+    //      bundled themes, for the windows under it (AetherRX, AetherTX) ----
+    //
+    // A scope value can alias only a primitive, so default-dark.json repeats
+    // the canon hex values there: this is what notices if one side moves.
+    {
+        const struct { const char* token; const char* canon; } mapped[] = {
+            {"color.background.0", "raised"},  {"color.background.1", "nested"},
+            {"color.background.2", "control"}, {"color.background.3", "lineHi"},
+            {"color.text.primary", "ink"},     {"color.text.secondary", "inkSoft"},
+            {"color.text.label", "muted"},     {"color.border.subtle", "line"},
+            {"color.border.strong", "lineHi"}, {"color.accent", "cyan"},
+            {"color.accent.bright", "aqua"},   {"color.knob.background", "control"},
+            {"color.knob.foreground", "cyan"}, {"color.slider.background", "control"},
+            {"color.slider.foreground", "cyan"},
+        };
+        for (const QString theme : {QStringLiteral("Default Dark"), QStringLiteral("Default Light")}) {
+            EXPECT_TRUE(tm.setActiveTheme(theme));
+            // The windows declare child containers; they inherit the scope.
+            tm.registerDeclaredContainer(QStringLiteral("canon/aetherRx"));
+            for (const auto& m : mapped) {
+                const QColor want = tm.color(QStringLiteral("color.canon.") + m.canon);
+                const QColor got = tm.colorAt(QStringLiteral("canon/aetherRx"), m.token);
+                if (got.rgba() != want.rgba()) {
+                    std::fprintf(stderr, "  %s: %s under canon/aetherRx is %s, color.canon.%s is %s\n",
+                                 qPrintable(theme), m.token, qPrintable(got.name(QColor::HexArgb)),
+                                 m.canon, qPrintable(want.name(QColor::HexArgb)));
+                }
+                EXPECT_TRUE(got.rgba() == want.rgba());
+            }
+            // Outside the scope nothing moves.
+            EXPECT_TRUE(tm.colorAt(QString(), "color.background.0").rgba()
+                        == tm.color("color.background.0").rgba());
         }
         EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
     }

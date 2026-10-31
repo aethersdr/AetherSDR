@@ -573,7 +573,7 @@ number, so the grep above does not find them; it is findable from this file
 and from `ensure_minphase` in `upstream/firmin.c`.
 
 When refreshing WDSP, first check whether upstream has made each change
-itself. The ten are different shapes, so grep for the shape, not for a free:
+itself. They are different shapes, so grep for the shape, not for a free:
 
 - **patches 1-2** -- a trailing `_aligned_free()` of the object itself at the
   end of `destroy_notchdb()` / `destroy_nurbs()`.
@@ -616,8 +616,14 @@ itself. The ten are different shapes, so grep for the shape, not for a free:
   `stitch(disp)`, not before it; and `sendbuf()`'s `IQO_idx` hand-off and
   `IQout_index` advance inside its existing `BufferControlSection`.
 - **patch 18** -- in `destroy_calcc()`, the `SemsPSCorr` and
-  `hCorrChangeExited` closes inside an `== WAIT_OBJECT_0` check on the
-  thread-exit wait.
+  `hCorrChangeExited` closes, still only after the thread's exit event was
+  seen (`corrThreadGone`, patch 22). A thread that was never started has
+  nothing to wait for, so its handles are closed directly.
+- **patch 22** -- in `calcc.c`: the `corrThreadStarted` field set from
+  `_beginthread()`'s result in `create_calcc()`, and in `destroy_calcc()` the
+  `hCorrChangeExited` wait (clearing iqc's `busy` bit each pass, unbounded
+  once patch 4 saw the worker exit) with the six `util` spline frees moved
+  **after** it, not before.
 
 Drop any local patch upstream now carries. Otherwise reapply only these minimal
 changes and run the lifecycle test under AddressSanitizer on every supported
@@ -1003,7 +1009,9 @@ wait, `destroy_calcc()` goes on to free `a` and its members, which a correction
 thread still running past the timeout would use. That use-after-free predates
 this patch (upstream frees `a` on the same path) and is tracked separately
 (#6179). Patch 18 only stops the normal, successful-exit path from
-leaking and avoids adding a second hazard on the timeout path.
+leaking and avoids adding a second hazard on the timeout path. Patch 22 leaves
+the timeout path only behind a wedged DSP worker; there the handles stay open
+as above, and `a` is still freed, as on `main`.
 
 **Upstream status.** Not reported.
 
@@ -1238,3 +1246,60 @@ freshness and retired observations. These tests are added validation obligations
 their results must come from a subsequent exact-source Nobara run. On upstream
 refresh retain this extension unless equivalent typed, bounded, race-free
 semantics replace it, and do not label INDY as a PLL.
+
+## Patch 22 — `destroy_calcc()` frees nothing the correction thread still uses (#6179)
+
+`upstream/calcc.c`. `destroy_calcc()` waited at most 500 ms for the
+`doPSCorrChange()` thread to signal `hCorrChangeExited`, then freed `a` and its
+members anyway. The thread reads `a`, the six `util` splines, `txa[].iqc` and
+`txa[].calcc.cs_update`, all freed by `destroy_calcc()` / `destroy_txa()`
+right after. A thread in `calc()` or in correction-file I/O past the 500 ms
+went on using freed memory. Upstream also freed the six `util` splines
+**before** the wait, under a thread in `PSSaveCorr` / `PSRestoreCorr` work.
+
+Now:
+
+- `create_calcc()` records whether `_beginthread()` started the thread
+  (`corrThreadStarted`). A thread that never started is not waited for, which
+  is the reason patches 4 and 9 bound their waits.
+- `destroy_calcc()` waits for `hCorrChangeExited`, clearing iqc's `busy` bit
+  on each 1 ms pass, because `SetTXAiqcStart()` / `SetTXAiqcSwap()` spin on
+  it for a DSP worker that `CloseChannel()` has already stopped. With the four
+  work semaphores drained first, the exit token is the next one the thread
+  takes once its current work ends.
+- The wait has **no time limit only when patch 4's worker wait succeeded**
+  (`mainExited == mainGen`). Those iqc setters take `ch[].csDSP`, which is
+  free only once the worker has exited (patch 9). If patch 4's wait fell
+  through its cap, a wedged worker may still hold `csDSP`, an unbounded wait
+  could then never end, and a bound of 500 one-millisecond passes stands
+  instead: 500 ms on POSIX, up to ~8 s under Windows' default 15.6 ms timer
+  tick, since nothing in AetherSDR calls `timeBeginPeriod`. That path
+  is already undefined on `main` (`post_main_destroy` deletes `csDSP` under a
+  live holder); there the handles stay open as patch 18 had them, and `a` is
+  still freed as on `main`, so this patch does not make it worse.
+- A `WAIT_FAILED` return (an exit event `CreateEvent` failed to make) ends
+  the wait rather than spinning.
+- The `SemsPSCorr` / exit-event closes (patch 18) run only once the exit
+  event was seen, or when the thread never started. The six `util` spline
+  frees follow the wait.
+
+**What can still stall teardown.** The thread's own work, on the normal path:
+`calc()` is bounded CPU work. Correction-file I/O can block as long as the file system does.
+AetherSDR calls neither `PSSaveCorr` nor `PSRestoreCorr` today; a caller that
+adds them owns that stall.
+
+**Reproduced before fixing**, locally: no `ci.yml` filter runs the test, and
+it covers the wait, not the reordering of the frees after it (that half is the
+sanitizer lanes'). `wdsp_calcc_teardown_test` holds the thread in
+`PSRestoreCorr()` on a FIFO with no writer, closes the channel on another
+thread, and opens the writer 1 s later. Before this patch `CloseChannel()`
+returned after ~500 ms while the thread was still blocked. With it,
+`CloseChannel()` returns only after the writer opens. POSIX only (`mkfifo`);
+skipped on Windows. The test queues the restore through
+`WdspChannel::restorePureSignalCorrectionForTest()`, so it links under
+`AETHER_SHARED_CORE` and the sanitizer lanes build it.
+
+**Upstream status.** Not reported.
+
+When updating WDSP, keep this unless upstream's `destroy_calcc()` joins the
+correction thread before freeing.

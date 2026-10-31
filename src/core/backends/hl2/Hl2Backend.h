@@ -6,6 +6,7 @@
 #include "core/dsp/WdspSMeter.h"
 
 #include <QElapsedTimer>
+#include <QJsonObject>
 #include <QPointer>
 #include <QString>
 #include <QThread>
@@ -96,6 +97,9 @@ public:
     void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
                               int level, AetherSDR::NoiseBlankerFill fill) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
+    ReceiveDispatch requestTransmitControl(const TransmitControlRequest& request,
+        TunePowerContext context = TunePowerContext::Deferred) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
     ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
@@ -159,16 +163,6 @@ public:
     void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTxAudioMonitor(bool on) override;
     void setTxFrequency(double hz);
-    // RIT / XIT, per receiver (#5386, #6105). RIT offsets that receiver's own
-    // receive; XIT is held per receiver and reaches the TX NCO register only
-    // while that receiver owns transmit. Neither moves the published slice
-    // frequency — that stays the dial.
-    void setSliceRitEnabled(int sliceId, bool on) override;
-    void setSliceRitOffset(int sliceId, int hz) override;
-    void setSliceXitEnabled(int sliceId, bool on) override;
-    // Overridden, not inherited: the base forwards to the RIT offset for a radio
-    // with one shared register, and the HL2's RX and TX paths are independent.
-    void setSliceXitOffset(int sliceId, int hz) override;
     void setTxDriveLevel(int level);
     // Baseband TX test tone, offsetHz from the carrier, amplitude 0..1.
     // Opt-in only — never enabled by a default.
@@ -215,9 +209,9 @@ public:
     //             interval. What "bandscope" degenerates to without the measurement.
     // "binary"    binaryHighLowConfig(): two-state per-band switch.
     // Same state machine, different numbers; selecting a mode installs its floor.
-    // "default" names the law a backend starts with. Neither law nor floor is
-    // persisted: every connect reinstalls the default (applyRestoredState).
-    // Returns false, changing nothing, on an unknown name.
+    // "default" names the law a backend starts with. A chosen law and floor are
+    // persisted per radio (rfGain); "default" clears the choice. Returns false,
+    // changing nothing, on an unknown name.
     bool setAutoRfGainMode(const QString& mode);
 
     // IAutoRfGainControl (AutoRfGainControl.h), thin forwarders. autoRfGainControl()
@@ -293,6 +287,9 @@ private:
     // Delivers one bandscope block through MetisClient's signal and ages the mirror,
     // so converter-row expiry is testable without a radio.
     friend struct Hl2HealthBlockTestAccess;
+    // Marks the backend connected and reaches its MetisClient, so the
+    // `ioboard.status` verb can be followed to the client and back without a socket.
+    friend struct Hl2IoBoardStatusTestAccess;
     // Reads the receive shift/NCO and adds a second receiver's state without a
     // socket or DSP, for hl2_rit_xit_test. Reaches nothing else.
     friend struct Hl2RitXitTestAccess;
@@ -300,6 +297,22 @@ private:
     // Fires link edges through MetisClient's signals and seeds the connect
     // baseline, so hl2_auto_gain_law_test reads the installed law without a radio.
     friend struct Hl2AutoGainLawTestAccess;
+    friend struct Hl2SessionMemoryTestAccess;
+    // Feeds EP6 status frames to the backend's own MetisClient on its I/O thread,
+    // for hl2_hardware_ptt_state_test.
+    friend struct Hl2HardwarePttTestAccess;
+    // The radio keyed or unkeyed itself (MetisClient::radioPttChanged). Observation
+    // only: it publishes the transmit state and mutes receive, and keys nothing.
+    void onRadioPttChanged(bool keyed);
+    // Emit transmitChanged{mox} when m_keyed || m_radioPtt changes, and only then.
+    void publishTransmitState();
+    // Reads the snapshot at a chosen instant, so hl2_adc_age_gate_test puts a
+    // held slice peak on either side of kSliceStaleMs without waiting.
+    friend struct Hl2AdcAgeTestAccess;
+    // The snapshot at `nowNs`, on steadyNowNs()'s timeline. The converter rows
+    // take their age from it and read no clock, so the age row and the pairing
+    // gate describe one instant.
+    HealthSnapshot healthSnapshot(std::int64_t nowNs) const;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
@@ -535,6 +548,8 @@ private:
         AetherSDR::NoiseBlankerKind nbKind = AetherSDR::NoiseBlankerKind::Off;
         int  nbLevel = 50;
         AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
+        // A restored blanker still to be published once (emitSliceState).
+        bool nbEchoPending = false;
 
         // APF request and AGC-off level, held like the blanker: nothing echoes
         // them and a fresh chain must be told again. Literal defaults match
@@ -637,6 +652,28 @@ private:
 
     // Index of `notchId` in m_notches — which IS its WDSP handle — or -1.
     [[nodiscard]] int notchIndexFor(int notchId) const;
+
+    // Session memory beyond the flat fields (Receivers and Notches domains),
+    // validated by applyRestoredState() and replayed once per connect by
+    // replayRestoredSession(). Index 0 is receiver A; ids in the notches are unused.
+    std::vector<Receiver> m_restoredReceivers;
+    std::vector<NotchRecord> m_restoredNotches;
+    int m_restoredTxReceiver = 0;   // the list index that held transmit
+    // Remembered receivers the replay could not reopen (ceiling, failed open).
+    // Captured after the live ones so a short connect does not erase them;
+    // dropped once the operator adds or closes a receiver.
+    std::vector<Receiver> m_replayUnreopened;
+    bool m_sessionReplayPending = false;
+    void replayRestoredSession();
+    // The open receivers' own setpoints from the document, before their DSPs
+    // open: receiver A's extras, and the whole entry for any a numRx param opened.
+    void seedOpenReceiversFromMemory();
+    void seedReceiverExtras(Receiver& r, const Receiver& memory) const;
+    [[nodiscard]] static QJsonObject receiverMemoryJson(const Receiver& r);
+    // Nullopt for an entry with no usable frequency or mode; other bad fields drop alone.
+    [[nodiscard]] std::optional<Receiver> receiverFromMemory(const QJsonObject& o) const;
+    // createPanadapter() with the new receiver's state given rather than copied.
+    bool addReceiver(const Receiver& seed);
     // Push the whole notch set + tune frequency into a receiver added later.
     void seedNotches(const Receiver& r);
     // Re-point a receiver's notch axis at its current NCO; call wherever ncoHz moves.
@@ -854,6 +891,10 @@ private:
     // is just numbers). No initialiser: installDefaultAutoGainLaw() sets name and
     // config together, so there is one copy of the default.
     QString m_autoGainMode;
+    // Whether the law and the floor are the operator's choice, so only a choice is
+    // persisted: a stored default would freeze it against a later build's default.
+    bool m_autoGainLawChosen = false;
+    bool m_autoGainFloorChosen = false;
     // A law is a name and its numbers, kept as one value so neither is installed
     // without the other.
     struct AutoGainLaw {
@@ -924,6 +965,9 @@ private:
     // The outstanding `bandscope.frame` requestId, or 0. One at a time: a reply is
     // one 2048-sample snapshot.
     quint64 m_bandscopeFrameRequest = 0;
+    // The outstanding `ioboard.status` requestId, or 0. One at a time, because
+    // the radio's response register holds one reply.
+    quint64 m_ioBoardStatusRequest = 0;
     // The most recent accepted bandscope block, mirrored from
     // MetisClient::bandscopeBlockReady. DISPLAY ONLY (IRadioBackend.h); levels are
     // uncalibrated and pre-DDC, comparable only with the gateware clip flag.
@@ -959,9 +1003,18 @@ private:
     quint64 m_adcTotalSamples = 0;
     quint64 m_adcTotalOverloadSamples = 0;
     QElapsedTimer m_adcWindowClock;
+    // Session totals of Hl2Telemetry::forwardPowerSamples + forwardPowerSkipped,
+    // and of the skipped ones alone. Published in healthSnapshot(), driving
+    // nothing; the first is what makes a skipped count of 0 a reading.
+    quint64 m_fwdTotalResponses = 0;
+    quint64 m_fwdTotalSkipped = 0;
     // Below this many observations a window has no rate, only a numerator.
     static constexpr int kAdcMinWindowSamples = 4;
     bool m_keyed = false;
+    // The radio reports its own PTT/key (EP6 ptt_resp). Never an input to keying.
+    bool m_radioPtt = false;
+    // What transmitChanged last carried as mox: m_keyed || m_radioPtt.
+    bool m_publishedTransmit = false;
     bool m_tuning = false;
     TxCoordinator::Operation m_tuneOperation;   // the TUNE carrier's admission
     bool m_cwAutoKeyed = false;
@@ -1028,6 +1081,15 @@ private:
     // True while band-memory/restore code drives setTxPower(): only operator intent
     // bootstraps the baseline or records into the per-band map.
     bool m_applyingBandMemory = false;
+    // TUNE power per band, with the same first-set baseline rule as drive. -1 in
+    // m_tunePowerPercent: nothing known yet, TransmitModel's value stands.
+    QMap<QString, int> m_tuneByBand;
+    int m_tuneDefaultPercent = -1;
+    int m_tunePowerPercent = -1;
+    // Records an operator's TUNE power under the current band; false when unchanged.
+    bool recordTunePower(int percent);
+    // The band's remembered TUNE power, echoed to TransmitModel; nothing when unknown.
+    void applyTuneMemoryFor(const QString& bandKey);
 
     // The operator's TX passband and whether they have set one.
     // defaultTxPassbandForMode() is re-pushed on every mode set and TX-slice move

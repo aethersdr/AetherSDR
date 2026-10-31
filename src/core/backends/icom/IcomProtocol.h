@@ -342,6 +342,19 @@ struct StreamGrant {
 };
 [[nodiscard]] StreamGrant parseStreamGrant(std::span<const std::uint8_t> pkt);
 
+// The asynchronous 0x90 radio-usage notification is distinct from a stream
+// request reply. Available means the radio reports no owner; the session must
+// correlate its header, auth ID and radio ID before treating it as a release.
+enum class ConnectionUsageKind { Invalid, Busy, Available };
+struct ConnectionUsage {
+    ConnectionUsageKind kind = ConnectionUsageKind::Invalid;
+    std::uint32_t remoteSid = 0;
+    std::uint32_t localSid = 0;
+    AuthId authId{};
+    RadioId radioId{};
+};
+[[nodiscard]] ConnectionUsage parseConnectionUsage(std::span<const std::uint8_t> pkt);
+
 // ---------------------------------------------------------------------------
 // Serial stream (CI-V transport)
 // ---------------------------------------------------------------------------

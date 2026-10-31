@@ -41,6 +41,7 @@
 #include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -285,7 +286,7 @@ int main(int argc, char** argv)
     host.show();
     app.processEvents();
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     QWidget uncreatedHost;
     mac::updateNativeTitleVisibility(&uncreatedHost);
     check(mac::nativeCaptionBounds(&uncreatedHost).isEmpty(), "uncreated window has no native caption bounds");
@@ -429,6 +430,51 @@ int main(int argc, char** argv)
         check(visibleSeparators() > 0, "dock separator returns after minimal mode");
     }
 
+    // ── UPDATE badge ────────────────────────────────────────────────────────
+    // Hidden until a version is set; only parsed digits reach its text and the
+    // bridge; minimal mode hides it without forgetting the version.
+    {
+        auto updateState = [bar]() {
+            return bar->barState().value(QStringLiteral("update")).toMap();
+        };
+        auto* badge = bar->findChild<QPushButton*>(QStringLiteral("updateAvailableBadge"));
+        check(badge != nullptr, "UPDATE badge exists");
+        check(!updateState().value(QStringLiteral("visible")).toBool(), "badge hidden by default");
+        bar->setUpdateAvailable(QStringLiteral("26.10.3<b>x"));
+        app.processEvents();
+        check(updateState().value(QStringLiteral("version")).toString() == QLatin1String("26.10.3"),
+              "badge keeps parsed digits only");
+        check(updateState().value(QStringLiteral("visible")).toBool(), "badge shows for a version");
+        check(badge && !badge->toolTip().contains(QLatin1Char('<')), "tooltip carries no markup");
+        check(badge && !badge->accessibleDescription().isEmpty(), "badge states its version to a screen reader");
+        bar->setMinimalMode(true);
+        app.processEvents();
+        check(!updateState().value(QStringLiteral("visible")).toBool(), "minimal mode hides the badge");
+        bar->setMinimalMode(false);
+        app.processEvents();
+        check(updateState().value(QStringLiteral("visible")).toBool(), "badge returns after minimal mode");
+        bar->setUpdateAvailable(QString());
+        app.processEvents();
+        check(!updateState().value(QStringLiteral("visible")).toBool(), "empty version clears the badge");
+        // Staged: RESTART TO UPDATE, shown whatever the check says (Check
+        // daily off clears the available version, not a staged release).
+        bar->setUpdateStaged(QStringLiteral("26.10.3"));
+        app.processEvents();
+        check(updateState().value(QStringLiteral("staged")).toString() == QLatin1String("26.10.3")
+                  && updateState().value(QStringLiteral("visible")).toBool(),
+              "a staged release shows the badge");
+        check(badge && badge->text() == QLatin1String("RESTART TO UPDATE")
+                  && badge->accessibleName() == QLatin1String("AetherSDR update ready to install")
+                  && badge->accessibleDescription().contains(QLatin1String("26.10.3")),
+              "the staged badge says so, to a screen reader too");
+        bar->setUpdateAvailable(QStringLiteral("26.10.3"));
+        bar->setUpdateStaged(QString());
+        app.processEvents();
+        check(badge && badge->text() == QLatin1String("UPDATE") && badge->isVisible(),
+              "discarded, the badge is UPDATE again");
+        bar->setUpdateAvailable(QString());
+    }
+
     // ── Radio tabs ──────────────────────────────────────────────────────────
     RadioTabEntry connected;
     connected.id = QStringLiteral("SERIAL-1");
@@ -456,23 +502,61 @@ int main(int argc, char** argv)
         check(connectedTab->focusPolicy() != Qt::NoFocus,
               "radio tabs are keyboard-reachable");
 
-        // Status in words, not just in the dot's colour.
+        // Status in words, not just in the dot's colour — and in sentence case
+        // (#6280): what the tab renders is prose, so only the first letter is
+        // capitalized, even for the two-word state.
         check(connectedTab->accessibleDescription().contains(
-                  QLatin1String("connected")),
+                  QLatin1String("Connected")),
               "connected tab spells its state on the rendered status line");
-        check(connectedTab->accessibleName().contains(QLatin1String("connected")),
+        check(connectedTab->accessibleName().contains(QLatin1String("Connected")),
               "connected tab spells its state in its accessible name");
-        check(inUseTab->accessibleDescription().contains(QLatin1String("in use")),
+        check(inUseTab->accessibleDescription().contains(QLatin1String("In use")),
               "in-use tab spells its state on the rendered status line");
+        check(!inUseTab->accessibleDescription().contains(QLatin1String("In Use")),
+              "only the first letter of a multiword state is capitalized");
 
         // Line two is the state, not the name again: the name is line one, and
         // repeating it pushed the state off the end of every narrow tab.
         check(!connectedTab->statusLine().contains(connected.name),
               "rendered status line does not repeat the tab's name");
-        check(connectedTab->statusLine() == QLatin1String("connected"),
+        check(connectedTab->statusLine() == QLatin1String("Connected"),
               "status line with no model or detail is just the state");
         check(connectedTab->accessibleDescription().contains(connected.name),
               "accessible description still carries the name");
+
+        // #6280: the display casing changed, the bridge token did not.  Drivers
+        // match on `status`, which docs/automation-bridge.md pins to the
+        // lower-case spelling, so the two must be allowed to disagree.
+        if (RadioTabBar* strip = bar->radioTabBar()) {
+            const QVariantList stateTabs =
+                strip->state().value(QStringLiteral("tabs")).toList();
+            bool sawConnected = false;
+            for (const QVariant& entry : stateTabs) {
+                const QVariantMap tab = entry.toMap();
+                if (tab.value(QStringLiteral("id")).toString() != connected.id) {
+                    continue;
+                }
+                sawConnected = true;
+                check(tab.value(QStringLiteral("status")).toString()
+                          == QLatin1String("connected"),
+                      "the bridge status token stays lower-case");
+                check(tab.value(QStringLiteral("statusLine")).toString()
+                          == QLatin1String("Connected"),
+                      "the rendered status line is sentence case");
+                check(tab.value(QStringLiteral("accessibleName")).toString()
+                          == QStringLiteral("Radio %1, Connected").arg(connected.name),
+                      "the accessible name uses the display casing");
+            }
+            check(sawConnected, "the bridge reports the connected tab");
+            for (const QVariant& entry : stateTabs) {
+                const QVariantMap tab = entry.toMap();
+                if (tab.value(QStringLiteral("id")).toString() == inUse.id) {
+                    check(tab.value(QStringLiteral("status")).toString()
+                              == QLatin1String("in use"),
+                          "the two-word bridge token is unchanged");
+                }
+            }
+        }
 
         // Keep tabs 8 px clear of the bar's edges: Qt's Windows frame keeps a
         // ~8 px top resize border, and a tab there would start a resize.
@@ -542,7 +626,7 @@ int main(int argc, char** argv)
     check(tabWithId(*bar, connected.id) == connectedTab,
           "a status-only change reuses the tab widget");
     if (connectedTab) {
-        check(connectedTab->accessibleName().contains(QLatin1String("available")),
+        check(connectedTab->accessibleName().contains(QLatin1String("Available")),
               "the tab re-announces its new state");
     }
 
@@ -850,12 +934,52 @@ int main(int argc, char** argv)
         check(tabWithId(*bar, inUse.id)->isLinkCarrier(), "link status stays on a visible tab after removal");
         tabs->setCompactMode(false);
 
+        // A confirmed USB connection does not need a network heartbeat to
+        // dismiss discovery; real link alarms still take precedence.
+        bar->setRadioTabs({nowAvailable});
+        bar->setActiveRadio(nowAvailable.id);
+        bar->setDiscovering(true);
+        const QString warning = ThemeManager::instance().color(
+            bar, QStringLiteral("color.accent.warning")).name();
+        check(tabs->state().value(QStringLiteral("linkOverrideColor")).toString() == warning,
+              "discovery is amber before a connection is confirmed");
+        bar->setRadioTabs({connected});
+        check(tabs->state().value(QStringLiteral("linkOverrideColor")).toString().isEmpty(),
+              "a connected radio clears discovery without a heartbeat");
+        check(tabs->state().value(QStringLiteral("linkPulse")).toDouble() == 0.0,
+              "connecting does not invent a heartbeat pulse");
+        bar->setRadioTabs({nowAvailable});
+        bar->setDiscovering(true);
+        bar->setRadioTabs({connected});
+        check(tabs->state().value(QStringLiteral("linkOverrideColor")).toString().isEmpty(),
+              "reconnecting clears discovery without a heartbeat");
+
+        // Rescanning while connected must survive repeated status snapshots.
+        bar->setDiscovering(true);
+        bar->setRadioTabs({connected});
+        check(tabs->state().value(QStringLiteral("linkOverrideColor")).toString() == warning,
+              "an unchanged connected snapshot preserves a newly requested scan");
+        RadioTabEntry renamed = connected;
+        renamed.name = QStringLiteral("Renamed connected radio");
+        bar->setRadioTabs({renamed});
+        check(tabs->state().value(QStringLiteral("linkOverrideColor")).toString() == warning,
+              "a connected radio metadata refresh does not end discovery");
+        RadioTabEntry secondConnection = connected;
+        secondConnection.id = QStringLiteral("SECOND-CONNECTION");
+        bar->setRadioTabs({renamed, secondConnection});
+        check(tabs->state().value(QStringLiteral("linkOverrideColor")).toString().isEmpty(),
+              "a newly confirmed connection ends discovery with another radio already connected");
+
         // A lost link raises the alarm; an operator disconnect clears it.
         for (int miss = 0; miss < 3; ++miss) {
             bar->onHeartbeatLost();
         }
         check(tabs->state().value(QStringLiteral("linkAlarm")).toBool(),
               "three missed beats raise the link alarm");
+        bar->setDiscovering(true);
+        bar->setRadioTabs({connected});
+        check(tabs->state().value(QStringLiteral("linkAlarm")).toBool(),
+              "a connected snapshot does not suppress a real link alarm");
         bar->clearLinkAlarm();
         check(!tabs->state().value(QStringLiteral("linkAlarm")).toBool(),
               "an operator disconnect clears the link alarm");
@@ -887,15 +1011,19 @@ int main(int argc, char** argv)
             if (firstTab && droppedTab) {
                 check(droppedTab->isLinkCarrier(), "after a drop the link stays on the radio that dropped");
                 check(!firstTab->isLinkCarrier(), "the first tab does not inherit another radio's link");
-                check(droppedTab->statusLine().contains(QLatin1String("link lost")),
+                // Sentence case here too (#6280): the alarm speaks over the
+                // radio's own status, so it is the same kind of prose.
+                check(droppedTab->statusLine().contains(QLatin1String("Link lost")),
                       "a lost link is spelled out on the dropped radio's tab");
-                check(droppedTab->accessibleName().contains(QLatin1String("link lost")),
+                check(droppedTab->accessibleName().contains(QLatin1String("Link lost")),
                       "a lost link is in the dropped radio's accessible name");
-                check(!firstTab->statusLine().contains(QLatin1String("link lost")),
+                check(!firstTab->statusLine().contains(QLatin1String("Link lost")),
                       "an idle radio's tab never claims a lost link");
                 bar->clearLinkAlarm();
-                check(!droppedTab->statusLine().contains(QLatin1String("link lost")),
+                check(!droppedTab->statusLine().contains(QLatin1String("Link lost")),
                       "clearing the alarm restores the radio's own status word");
+                check(droppedTab->statusLine() == QLatin1String("Available"),
+                      "the restored status word is sentence case as well");
             }
         }
 
@@ -937,7 +1065,7 @@ int main(int argc, char** argv)
         QMenu* helpMenu = menuBar->addMenu(QStringLiteral("&Help"));   // added after the hand-off
         menuHost.resize(1400, 200);
         menuHost.show();
-        QApplication::setActiveWindow(&menuHost);
+        menuHost.activateWindow();
         app.processEvents();
 
         auto* menuBtn = menuBarHost->findChild<QPushButton*>(QStringLiteral("titleBarAppMenuButton"));
@@ -1008,9 +1136,17 @@ int main(int argc, char** argv)
         QMenu* lateSubmenu = fileMenu->addMenu(QStringLiteral("Recent"));
         check(!rounded(lateSubmenu), "a submenu added later is not rounded until its parent opens");
 
-        QTest::keyClick(&menuHost, Qt::Key_F, Qt::AltModifier);
-        check(QApplication::activePopupWidget() == fileMenu,
-              "Alt+F still opens the File menu with the menu bar hidden");
+        // Qt has no menu mnemonics on macOS, so there the menu is opened directly.
+        if (!QKeySequence::mnemonic(fileMenu->menuAction()->text()).isEmpty()) {
+            QTest::keyClick(&menuHost, Qt::Key_F, Qt::AltModifier);
+            check(QApplication::activePopupWidget() == fileMenu,
+                  "Alt+F still opens the File menu with the menu bar hidden");
+        } else {
+            std::fprintf(stderr, "  mnemonics are off on this platform: Alt+F check skipped\n");
+            fileMenu->popup(menuBtn ? menuBtn->mapToGlobal(QPoint(0, menuBtn->height())) : QPoint());
+            check(QApplication::activePopupWidget() == fileMenu,
+                  "the File menu opens where mnemonics are unavailable");
+        }
         check(rounded(lateSubmenu), "opening a menu rounds the submenus added to it since");
         fileMenu->close();
         app.processEvents();
@@ -1025,6 +1161,62 @@ int main(int argc, char** argv)
                   "clicking the hamburger pops its menu without a nested loop");
             appMenu->close();
             app.processEvents();
+        }
+    }
+
+    // #6455: hiding the transmit timer (or the other-client TX label) must not
+    // flick PC Audio left for a frame.  Hide directly to skip the 15 s hold and
+    // 800 ms fade, pump exactly one layout pass, and compare against the shown
+    // position.
+    {
+        QWidget layoutHost;
+        auto* layoutBar = new TitleBar(&layoutHost);
+        layoutHost.resize(1400, 200);
+        layoutHost.show();
+        app.processEvents();
+
+        auto* pcBtn = layoutBar->findChild<QPushButton*>(QStringLiteral("pcAudioBtn"));
+        auto* timer = layoutBar->findChild<QLabel*>(QStringLiteral("txTimerLabel"));
+        check(pcBtn && timer, "layout probe finds PC Audio and the transmit timer");
+        if (pcBtn && timer) {
+            auto pcX = [&]() { return pcBtn->mapTo(layoutBar, QPoint(0, 0)).x(); };
+            auto onePass = []() {
+                QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+            };
+
+            layoutBar->setOperatorTransmitting(true);
+            app.processEvents();
+            check(timer->isVisible(), "timer shows while the operator transmits");
+            const int shownX = pcX();
+            timer->setVisible(false);
+            onePass();
+            checkEqual(pcX(), shownX, "hiding the timer does not move PC Audio in the first layout pass");
+            layoutBar->setOperatorTransmitting(false);
+
+            layoutBar->setOtherClientTx(true, QStringLiteral("X"));
+            app.processEvents();
+            const int otherShownX = pcX();
+            layoutBar->setOtherClientTx(false, QString());
+            onePass();
+            checkEqual(pcX(), otherShownX,
+                       "clearing the other-client TX label does not move PC Audio in the first layout pass");
+
+            for (const char* name : {"Master volume", "Headphone volume"}) {
+                QSlider* slider = nullptr;
+                for (auto* c : layoutBar->findChildren<QSlider*>())
+                    if (c->accessibleName() == QLatin1String(name)) slider = c;
+                check(slider && slider->cursor().shape() != Qt::OpenHandCursor,
+                      "audio sliders do not inherit the drag-handle cursor");
+            }
+
+            layoutBar->setMinimalMode(true);
+            app.processEvents();
+            check(!timer->sizePolicy().retainSizeWhenHidden(),
+                  "minimal mode does not reserve the idle timer's slot");
+            layoutBar->setMinimalMode(false);
+            app.processEvents();
+            check(timer->sizePolicy().retainSizeWhenHidden(),
+                  "leaving minimal mode reserves the timer's slot again");
         }
     }
 

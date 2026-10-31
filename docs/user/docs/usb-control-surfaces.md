@@ -4,7 +4,7 @@ slug: "/usb-control-surfaces"
 description: "AetherSDR works with hardware knobs, jog wheels, button decks and keying interfaces connected to the computer."
 ---
 
-AetherSDR works with hardware knobs, jog wheels, button decks and keying interfaces connected to the computer. Most of them are set up on one Radio Setup page, **Settings → Radio Setup... → Serial & Controllers**, which you can also reach from **Settings → FlexControl Knob & Buttons...**.
+AetherSDR works with hardware knobs, jog wheels, button decks and keying interfaces connected to the computer. Most of them are set up on one Radio Setup page, **Settings → Radio Setup... → Serial & Controllers**, which you can also reach from **Settings → Controllers → FlexControl Knob & Buttons...**.
 
 These are host devices: they plug into your computer, not the radio, so the page and its controllers stay available on every radio family. Actions the connected radio cannot perform (for example band zoom on some radios) are refused with a notice rather than sent.
 
@@ -18,9 +18,10 @@ These are host devices: they plug into your computer, not the radio, so the page
 | Device | Connection | Where it is set up |
 |--------|-----------|--------------------|
 | FlexRadio FlexControl | USB serial | [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md) |
-| Icom RC-28 remote encoder | USB HID | **Settings → Icom RC-28 Remote Encoder...** |
+| Icom RC-28 remote encoder | USB HID | **Settings → Controllers → Icom RC-28 Remote Encoder...** |
 | Griffin PowerMate | USB HID | Serial & Controllers → HID encoder groups |
 | Contour ShuttleXpress / ShuttlePro v2 | USB HID | Serial & Controllers → HID encoder groups |
+| ELAD / WoodBoxRadio TMate 2 | USB HID | Serial & Controllers → TMate 2 groups |
 | Elgato Stream Deck+ | USB HID | [StreamDeck](./streamdeck.md) |
 | Ulanzi Dial | USB input device | [Ulanzi Dial](./ulanzi-dial.md) |
 | MIDI controllers | USB MIDI | [MIDI Controller Mapping](./midi-controller-mapping.md) |
@@ -45,7 +46,7 @@ HID encoders are off by default because, on macOS, the first time AetherSDR open
 
 ### Linux permissions
 
-On Linux, HID devices are root-only until a udev rule grants access. AetherSDR ships one in the source tree at `packaging/linux/60-hid-encoders.rules` (RC-28, PowerMate, ShuttleXpress, ShuttlePro v2 and Stream Deck+):
+On Linux, HID devices are root-only until a udev rule grants access. AetherSDR ships one in the source tree at `packaging/linux/60-hid-encoders.rules` (RC-28, PowerMate, ShuttleXpress, ShuttlePro v2, Stream Deck+ and TMate 2):
 
 ```bash
 sudo cp 60-hid-encoders.rules /etc/udev/rules.d/
@@ -53,6 +54,8 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
 Then unplug and replug the device.
+
+The rule deliberately leaves out the `aether-pad` RC-28 emulator: it uses the Arduino Giga R1's stock USB identity, so a shipped rule would open every Giga on the machine. Add your own rule for it.
 
 ## Using encoder and button actions
 
@@ -66,19 +69,19 @@ The full action lists are under [Reference](#reference).
 
 ## Using the Icom RC-28
 
-The RC-28 is a weighted tuning knob with **F1**, **F2** and a **TX** bar. A community Arduino emulator (`aether-pad`) that speaks the same protocol is also recognised.
+The RC-28 is a weighted tuning knob with **F1**, **F2** and a **TX** bar. A community Arduino emulator (`aether-pad`) that speaks the same protocol is also recognized.
 
 1. Tick **Enable HID encoders / StreamDeck+** (see [Setup](#setup)).
-2. Open **Settings → Icom RC-28 Remote Encoder...** ("Icom RC-28 Button Mapping").
+2. Open **Settings → Controllers → Icom RC-28 Remote Encoder...** ("Icom RC-28 Button Mapping").
 
-The dialog has:
+The window reopens where you left it (centered on the main window the first time), and you can resize it by dragging any edge. Close it with the corner ✕, **Close**, Esc or Ctrl+W (⌘W on macOS). Changes take effect as you make them. It has:
 
 | Group | Controls |
 |-------|----------|
 | **Device** | Connection status, VID:PID, path, serial and firmware |
 | **Transmit (PTT) Button** | **Momentary** (hold to transmit, release to stop) or **Latched** (press to start, press again to stop) |
 | **Button Assignments** | **F1/F2 — short press** and **F1/F2 — long press** |
-| **Encoder** | **Invert encoder direction**; **Pulses per step** (1–10, higher is less sensitive); **Auto-snap to nearest 1 kHz after rotation stops** |
+| **Encoder** | **Invert encoder direction**; **Auto-snap to nearest 1 kHz after rotation stops**; **Pulses per step** (1–10, higher is less sensitive) |
 | **Activity** | A log of recent button and encoder events |
 
 Defaults: F1 short = Step Up, F1 long = Fast Tuning; F2 short = Step Down, F2 long = Mode.
@@ -91,6 +94,23 @@ Tuning speed follows how fast you turn the knob. Auto-snap rounds to the nearest
 ## Using the Griffin PowerMate and Contour Shuttle
 
 The PowerMate (one knob with a push) and the Contour ShuttleXpress (5 buttons) and ShuttlePro v2 (15 buttons) work as single-encoder devices. Enable HID encoders, then choose the knob or jog wheel's action as **Encoder 1**. Their buttons are numbered from 1 and use the **Key 1–8** slots in **StreamDeck+ LCD Button Actions**; the PowerMate's push is Key 1.
+
+Contour reports can contain several button changes together. Every press and release is handled, and turning the jog wheel while pressing a button still tunes normally.
+
+On ShuttlePro v2, buttons 1–8 use **Key 1–8**, buttons 9–12 use **StreamDeck+ Encoder Push Actions**, and buttons 13–15 have no action mapping.
+
+### Contour shuttle ring
+
+The spring-loaded outer ring tunes continuously while held. A small deflection tunes slowly; full deflection sweeps at about 100 kHz/s at **Normal** speed. Releasing the ring stops tuning. A new deflection applies its first step after about 60 ms; larger tuning steps have a minimum step rate so the inner positions remain usable.
+
+Set it up under **Settings → Radio Setup... → Serial & Controllers → Shuttle Ring (ShuttleXpress / ShuttlePro)**:
+
+| Setting | Choices | Default |
+|---------|---------|---------|
+| **Action** | Tune Slice, RIT (Receive Incremental Tuning), XIT (Transmit Incremental Tuning), None | Tune Slice |
+| **Speed** | Slow (×0.5), Normal, Fast (×2) | Normal |
+
+The ring uses the same direction setting as the jog wheel. Tune Slice respects the active slice's Tune Lock. RIT and XIT move in 10 Hz increments, capped at 1 kHz/s and ±9999 Hz. Unplugging the controller stops ring tuning. The ring does not trigger auto-snap on release.
 
 ## Using the TMate 2
 
@@ -121,7 +141,7 @@ The DCD input suits interfaces such as the HaliKey Serial, whose ring contact is
 |----------------|--------------------|
 | Tune Slice | Tunes the active slice (Encoder 1 default) |
 | RIT / XIT | RIT or XIT offset (Encoder 2 / 3 defaults) |
-| Master Volume | Master volume (Encoder 4 default) |
+| Master Volume | The level you are hearing: this computer's audio with PC Audio on, the radio's line out with it off (Encoder 4 default) |
 | Slice Audio Volume | Active slice's audio level |
 | Headphone Volume | Headphone level |
 | AGC Threshold | AGC-T |
@@ -136,11 +156,11 @@ The DCD input suits interfaces such as the HaliKey Serial, whose ring contact is
 
 **Key actions:** Toggle TX (MOX), Toggle Tune, Toggle RIT/XIT on/off, Clear RIT/XIT offset, Step Size Up/Down, Toggle Mute, Toggle Slice Lock, Toggle APF, Cycle AGC Mode, Toggle Band Zoom, Toggle Segment Zoom, Next/Previous Slice, Volume Up/Down (±5), Toggle Split, Monitor TX Frequency.
 
+Volume Up/Down, here and on the RC-28, step the same level as the **Master Volume** encoder action.
+
 ## Known issues
 
-- On Windows, the RC-28 can take several seconds to move the tuned frequency, then jump ([#6225](https://github.com/aethersdr/AetherSDR/issues/6225)).
 - After an upgrade, a Griffin PowerMate can stop working until **Enable HID encoders / StreamDeck+** is ticked ([#3357](https://github.com/aethersdr/AetherSDR/issues/3357)).
-- Volume up/down and volume-wheel actions start from the saved master volume, not the level of the audio path you are hearing, so the first step can jump ([#6132](https://github.com/aethersdr/AetherSDR/issues/6132)).
 - A USB-serial PTT switch can stop working after a while until the port is closed and opened again ([#5124](https://github.com/aethersdr/AetherSDR/issues/5124)).
 
 ## Troubleshooting

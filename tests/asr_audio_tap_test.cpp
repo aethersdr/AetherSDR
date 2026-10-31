@@ -225,6 +225,19 @@ int main(int argc, char** argv)
                "after a live switch the tap still follows exactly one feed");
     }
 
+    {
+        Rig rig;
+        rig.tap.setEnabled(true);
+        rig.push(input, kBlocks);
+        rig.tap.setEnabled(false);
+        rig.tap.setEnabled(true);
+        drain();
+        expect(rig.chunks == 0, "a same-point restart rejects old queued presentation blocks");
+        rig.push(input, kBlocks);
+        drain();
+        expect(rig.chunks == kBlocks, "new presentation binding still delivers audio");
+    }
+
     std::printf(g_failures == 0 ? "\nASR audio tap: ALL PASS\n"
                                 : "\nASR audio tap: %d FAILURE(S)\n",
                 g_failures);

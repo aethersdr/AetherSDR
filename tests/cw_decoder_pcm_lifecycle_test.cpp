@@ -249,6 +249,35 @@ void preserveLocksAndNumericBoundary()
     check(fixture.text.isEmpty(), "empty and invalid typed input produces no Morse text");
 }
 
+void unlockAfterStop(const QVector<float>& samples)
+{
+    // Zero Beat reads estimatedPitch(): a value unlocked after a stop is dead,
+    // one unlocked while running is still live (#5745).
+    {
+        Fixture fixture;
+        if (!fixture.feedWithoutDelivery(samples)) { return; }
+        fixture.decoder.lockPitch(true);
+        fixture.decoder.lockSpeed(true);
+        fixture.decoder.stop();
+        check(fixture.decoder.estimatedPitch() > 550 && fixture.decoder.estimatedSpeed() > 0,
+              "a stopped decoder keeps its locked values");
+        fixture.decoder.lockPitch(false);
+        fixture.decoder.lockSpeed(false);
+        check(fixture.decoder.estimatedPitch() == 0 && fixture.decoder.estimatedSpeed() == 0,
+              "unlocking a stopped decoder leaves no estimate");
+    }
+    {
+        Fixture fixture;
+        if (!fixture.feedWithoutDelivery(samples)) { return; }
+        fixture.decoder.lockPitch(true);
+        fixture.decoder.lockSpeed(true);
+        fixture.decoder.lockPitch(false);
+        fixture.decoder.lockSpeed(false);
+        check(fixture.decoder.estimatedPitch() > 550 && fixture.decoder.estimatedSpeed() > 0,
+              "unlocking a running decoder keeps its live estimate");
+    }
+}
+
 void preserveLegacyOverflow(const QVector<float>& samples)
 {
     Fixture fixture;
@@ -279,6 +308,7 @@ int main(int argc, char** argv)
     }
     stopRestart(samples);
     preserveLocksAndNumericBoundary();
+    unlockAfterStop(samples);
     preserveLegacyOverflow(samples);
     std::printf("cw_decoder_pcm_lifecycle_test: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

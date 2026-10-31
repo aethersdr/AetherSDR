@@ -12,6 +12,8 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <span>
+#include <vector>
 #include <QHash>
 #include <QWidget>
 #include <QPushButton>
@@ -33,6 +35,7 @@
 #include "SpectrumPreviewLogic.h"
 #include "WaterfallHistoryBuffer.h"
 #include "WaterfallTimeMarkers.h"
+#include "WaterfallTimeScaleLock.h"
 
 class QVariantAnimation;
 class QSoundEffect;
@@ -50,6 +53,8 @@ class QAction;
 namespace AetherSDR {
 
 class SpectrumOverlayMenu;
+class SpectralEnvelope;
+struct DecombScratch;
 class VfoWidget;
 class PanadapterRenderScheduler;
 struct PanadapterOverlayMessage;
@@ -342,7 +347,7 @@ public:
     // at or below pass-1 mean to exclude signal peaks).  An EMA (α=0.1)
     // smooths frame-to-frame variation.  Emits autoSquelchLevelSuggested()
     // with a squelch level just above the smoothed floor.
-    void setAutoSquelchEnable(bool on);
+    void setAutoSquelchEnable(bool on, bool showFloor = true);
 
     // Margin above the EMA-smoothed noise floor for auto-squelch suggestion
     // (5-20 dB, default 10).  User-tunable via Display > SQL Margin.
@@ -497,14 +502,21 @@ public:
     // pair states its reason in the tooltip (shown on a disabled button by
     // eventFilter()) and in the accessible description, which is what a
     // screen reader announces; the live pair says the span is shared.
+    // `spanFixed` dims the pair on every pane: the backend cannot change span.
     // `live = true, radioWide = false` is the per-pan default and restores
     // exactly what the constructor built: enabled, no tooltip, no description.
-    void setSpanControlPlacement(bool live, bool radioWide)
+    void setSpanControlPlacement(bool live, bool radioWide, bool spanFixed = false)
     {
         QString outTip;
         QString inTip;
         QString desc;
-        if (radioWide && live) {
+        if (spanFixed) {
+            live = false;
+            desc = tr("Span buttons unavailable: this radio's span is fixed, so zoom "
+                      "cannot change it.");
+            outTip = desc;
+            inTip = desc;
+        } else if (radioWide && live) {
             outTip = tr("Zoom out. The span is shared: this changes every panadapter on this radio.");
             inTip = tr("Zoom in. The span is shared: this changes every panadapter on this radio.");
             desc = tr("This radio has one span for all panadapters, so this control changes every panadapter.");
@@ -516,15 +528,18 @@ public:
             outTip = desc;
             inTip = desc;
         }
+        // Re-derived often; an unchanged description is not re-announced.
         if (m_zoomOutBtn) {
             m_zoomOutBtn->setEnabled(live);
             m_zoomOutBtn->setToolTip(outTip);
-            m_zoomOutBtn->setAccessibleDescription(desc);
+            if (m_zoomOutBtn->accessibleDescription() != desc)
+                m_zoomOutBtn->setAccessibleDescription(desc);
         }
         if (m_zoomInBtn) {
             m_zoomInBtn->setEnabled(live);
             m_zoomInBtn->setToolTip(inTip);
-            m_zoomInBtn->setAccessibleDescription(desc);
+            if (m_zoomInBtn->accessibleDescription() != desc)
+                m_zoomInBtn->setAccessibleDescription(desc);
         }
     }
 
@@ -660,6 +675,24 @@ public:
     void setBackgroundOpacity(int pct) { m_bgOpacity = qBound(0, pct, 100); markOverlayDirty(); }
     int backgroundOpacity() const { return m_bgOpacity; }
     void setBackgroundFillColor(const QColor& c);
+
+    // Space at the top of the spectrum covered by the host's header (a
+    // CanonPan's transparent canon header). The background, grid, trace and
+    // band plan still render under it; the controls anchored to the top edge
+    // (overlay menu, dBm arrows, CW / RIT / XIT labels) start below it. The
+    // slice flags and the marks drawn with them (VFO triangle, center-lock
+    // target, slice-link label) and the top-right text (WNB, RF gain,
+    // propagation, MQTT values) stay at the very top, riding over the header.
+    void setTopInset(int px);
+    int topInset() const { return m_topInset; }
+    // Under a host's header the slice flags (and the marks drawn with them)
+    // sit 2 px below the top edge rather than flush against it.
+    int flagTopPad() const { return m_topInset > 0 ? 2 : 0; }
+
+    // Width at the top right taken by the host's controls (the pan header's
+    // buttons): the top-right text ends left of it when it is wider than the
+    // dBm strip.
+    void setTopRightReserve(int px);
     QColor backgroundFillColor() const { return m_bgFillColor; }
     bool showBandPlan() const { return m_bandPlanFontSize > 0; }
     int  bandPlanFontSize() const { return m_bandPlanFontSize; }
@@ -679,6 +712,8 @@ public:
     void setFreqGridSpacing(int khz);
     void setFreqScaleFontPt(int pt);
     void setFftLineWidth(float w);
+    void setFftSmoothing(int halfWidthPx);
+    void setFftDecombHz(int hz);       // 0 = off
     float fftFillAlpha() const         { return m_fftFillAlpha; }
     QColor fftFillColor() const        { return m_fftFillColor; }
     QColor fftLineColor() const        { return m_fftLineColor; }
@@ -687,6 +722,11 @@ public:
     int  freqGridSpacing() const       { return m_freqGridSpacingKhz; }
     int  freqScaleFontPt() const       { return m_freqScaleFontPt; }
     float fftLineWidth() const         { return m_fftLineWidth; }
+    int   fftSmoothing() const         { return m_fftSmoothing; }
+    int   fftDecombHz() const          { return m_fftDecombHz; }
+    // FFT Smooth + De-comb applied to a whole pan frame of `spanHz`, exactly as
+    // the main trace is shaped, so the mini-pan magnifies the same trace.
+    void shapeFftTraceForMirror(QVector<float>& bins, double spanHz) const;
     int   fftAverage() const           { return m_fftAverage; }
     int   fftFps() const               { return m_fftFps; }
     bool  fftWeightedAvg() const       { return m_fftWeightedAvg; }
@@ -969,6 +1009,7 @@ signals:
     // Emitted when auto-squelch computes a new suggested level (0-100 radio units).
     // Connect to SliceModel::setSquelch and setSquelchLine to apply.
     void autoSquelchLevelSuggested(int level);
+    void autoSquelchNoiseFloorChanged(float floor);
 
     // Emitted when user clicks on an inactive slice marker.
     void sliceClicked(int sliceId);
@@ -1154,6 +1195,12 @@ private:
     void positionZoomButtons();
     void drawFreqScale(QPainter& p, const QRect& r);
     double frequencyCanvasFractionAtGlobal(const QPointF& globalPosition) const;
+    // Zoom the pan by a bandwidth multiplier, pinning the frequency under
+    // globalPosition to its pixel. Shared by the macOS trackpad pinch
+    // (QNativeGestureEvent, ZoomNativeGesture) and the touch pinch
+    // (QPinchGesture) paths in event(). Returns true (the event is consumed)
+    // whether the zoom applied or was clamped at a bandwidth limit.
+    bool applyAnchoredZoom(double bandwidthFactor, const QPointF& globalPosition);
     void drawDbmScale(QPainter& p, const QRect& specRect);
     // Shared strip chrome (background, border, ref-adjust arrows) for both the
     // 2D linear dBm scale and the 3D stacked-trace amplitude scale, so the
@@ -1450,6 +1497,10 @@ private:
     // rather than loose flat keys. Holds the 3D Gain and 3D Span controls.
     // (3D Floor is per-source and already owned by DisplaySourceTraceSettings.)
     QString display3DSettingsKey() const;
+    // FFT Smooth + FFT De-comb: one owned object per pan (Principle V).
+    QString fftTraceShapingKey() const;
+    void loadFftTraceShaping();
+    void saveFftTraceShaping();
     void saveDisplay3DSettings();
 
     QString displaySourceTraceSettingsKey() const;
@@ -1484,8 +1535,13 @@ private:
     const QVector<float>& displaySpectrumBins() const;
     // Returns a reference into shared mutable scratch — valid only until the
     // next call. Consume the result before invoking again; never hold two live.
+    // `logicalWidthPx` is the logical-pixel width the trace is drawn across,
+    // so FFT Smooth's window is the same on screen at any sampling density.
     const QVector<float>& buildFftDisplayTrace(const QVector<float>& bins,
-                                               int targetPoints) const;
+                                               int targetPoints,
+                                               int logicalWidthPx) const;
+    // FFT De-comb then FFT Smooth, in place on source bins.
+    void shapeFftTrace(std::span<float> bins, double hzPerBin, double hzPerPx) const;
     const QVector<float>& noiseFloorAutoLevelBins() const;
 
     void pushWaterfallRow(const QVector<float>& bins, int destWidth,
@@ -1559,6 +1615,9 @@ private:
     QVector<quint8> m_fftFallbackSeedMask; // 1 = replace from next real FFT frame
     mutable QVector<float> m_fftDisplaySmoothScratch;
     mutable QVector<float> m_fftDisplayTraceScratch;
+    mutable std::vector<double> m_fftSmoothLinearScratch;
+    mutable std::unique_ptr<SpectralEnvelope> m_fftDecombEnvelope;
+    mutable std::unique_ptr<DecombScratch> m_fftDecombScratch;
     QVector<float> m_kiwiSdrFftTrace;  // Kiwi-derived FFT trace, kept separate from Flex FFT
     QVector<quint8> m_kiwiSdrFftFallbackSeedMask; // 1 = replace from next real Kiwi row
     bool m_shutdownPrepared{false};
@@ -1703,6 +1762,7 @@ private:
     bool  m_kiwiSdrSquelchMeterFloorValid{false};
     QVector<float> m_kiwiSdrSquelchMeterSamples;
     QTimer* m_squelchLineHideTimer{nullptr}; // auto-hides yellow line 3 s after enable/adjust (manual SQL only)
+    bool  m_autoSquelchFloorVisible{true};
     bool  m_autoSquelchEnabled{false};
     float m_sqlNoiseFloorDbm{-999.0f};  // auto-squelch own two-pass trimmed-mean EWMA
     // dBm above noise floor for auto-squelch suggestion (5-20, default 10)
@@ -1737,6 +1797,8 @@ private:
     int  m_freqGridSpacingKhz{0};   // 0=Auto, or 1/2/5/10/25/50/100 kHz (#1390)
     int  m_freqScaleFontPt{8};      // freq-scale label size, 8..14 pt (#3501)
     float m_fftLineWidth{1.0f};     // spectrum trace width in pixels (RFC #5561)
+    int   m_fftSmoothing{0};        // FFT Smooth half-width, logical px (0 = off)
+    int   m_fftDecombHz{0};         // FFT De-comb width, Hz (0 = off)
 
     // ── Waterfall display controls (radio-side via "display panafall set") ─
     int   m_wfColorGain{50};         // 0-100, maps intensity to color range
@@ -2043,6 +2105,9 @@ private:
     // MQTT device status overlay
     QMap<QString, QString> m_mqttDisplayValues;
 
+    int     m_topInset{0};   // setTopInset()
+    int     m_topRightReserve{0};   // setTopRightReserve()
+
     // Background image
     QImage  m_bgImage;
     QImage  m_bgScaled;     // cached at current specRect size
@@ -2133,11 +2198,14 @@ private:
     // corrected from real appended-row timestamps once the current rate has
     // enough samples.  Per-rate measurements are cached so later drags can use
     // the observed cadence immediately without re-jittering the visible scale.
+    // The visible value is locked against per-row jitter and re-locked only
+    // when the estimate has settled somewhere else (WaterfallTimeScaleLock.h).
     float    m_wfMsPerRow{100.0f};
     quint32  m_wfPrevTimecode{0};      // previous tile timecode (frame counter)
     qint64   m_wfPrevTimecodeMs{0};    // wall-clock time of previous timecode
     int      m_wfCalibrationCount{0};  // tiles measured so far
     bool     m_wfTimeScaleLocked{false};
+    int      m_wfTimeScaleDriftSamples{0}; // consecutive settled-elsewhere samples
     bool     m_wfHasMeasuredMsPerRow{false};
     int      m_wfLastMeasuredLineDurationMs{100};
     float    m_wfLastMeasuredMsPerRow{100.0f};

@@ -30,6 +30,10 @@ This page walks through connecting to a FlexRadio for the first time. AetherSDR 
 
 *The Connect to Radio window, On This Network: every radio discovery found on the LAN. The addresses are blacked out.*
 
+The window has no title bar. It opens above the status bar; drag any empty part of it to move it, and drag an edge or corner to resize it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). **View → Frameless Window** does not apply to it, and pressing **Return** in a field (an IP address, a SmartLink password) does only what that field does.
+
+The window automatically fits its height to the available screen space, including room for a horizontal scrollbar when the contents are wider than the window. On a smaller screen, scroll the body to reach its controls; the connection status and **Disconnect** button remain below it.
+
 1. **Launch AetherSDR.** The **Connect to Radio** window opens. You can reopen it at any time with **File → Connect to Radio...**, or from the **+** button beside the title bar's radio tabs.
 2. Choose **On This Network** ("Recommended for new users when the radio and computer are on the same LAN").
 3. Your radio appears under **Available radios** within a few seconds.
@@ -40,7 +44,7 @@ If no radio appears, the window shows "No local radios found yet" with **Retry D
 
 The list can also include:
 - **Hermes-Lite 2** and **ANAN-G2** radios on the same LAN, and RTL-SDR dongles plugged into this computer (on builds with the RTL-SDR backend).
-- **AetherSDR Demo**, labelled "Simulator (not on the air)". It always sorts below real radios. Untick **Show the AetherSDR demo simulator** to hide it.
+- **AetherSDR Demo**, labeled "Simulator (not on the air)". It always sorts below real radios. Untick **Show the AetherSDR demo simulator** to hide it.
 
 ## What to Expect
 
@@ -48,7 +52,7 @@ After connecting, you'll see:
 - **Spectrum** (top) showing the RF environment
 - **Waterfall** (bottom) scrolling in real time
 - **VFO widget** with frequency, S-meter and controls
-- **Title bar** with a tab for the radio; its dot pulses with each heartbeat and turns red with "link lost" if the connection drops
+- **Title bar** with a tab for the radio; its dot pulses with each heartbeat and turns red with "Link lost" if the connection drops
 - **Applet panel** (right) with the RX, TX, P/CW and other applets
 
 Controls that the connected radio cannot use are hidden or dimmed with a reason. Continue with [Your First Session](./your-first-session.md).

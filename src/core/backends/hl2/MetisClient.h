@@ -270,6 +270,11 @@ public:
     // read data and neither is allowed; on an echo address it would leave the six-bit
     // address as the only match.
     Q_INVOKABLE bool requestRegister(int addr, quint32 data, bool subsystemRead = false);
+    // Read the IO board's status registers over RQST/ACK (kIoBoardStatusReadData).
+    // The only request that reaches 0x3d, and a read, so the allow-list above
+    // stays shut. Answered exactly once, by ioBoardStatusReady or
+    // ioBoardStatusFailed, never by the controlReply* signals.
+    Q_INVOKABLE void requestIoBoardStatus();
 
     // I/O-THREAD ONLY, like linkCounters(). Returned by reference because the
     // machine holds no implicitly-shared members; GUI-thread consumers read the
@@ -364,7 +369,9 @@ public:
 
     // Build the EP2 packet this client would send next, without sending it.
     // Exists so the gate can be tested on the exact bytes that would go out.
+    // `nowMs` is controlNowMs()'s clock; it only spaces I2C bus 2 traffic.
     std::array<std::uint8_t, kUsbPacketSize> buildNextControlPacket();
+    std::array<std::uint8_t, kUsbPacketSize> buildNextControlPacket(qint64 nowMs);
 
     // Queue transmit IQ. Samples are consumed kTxSamplesPerPacket at a time, one
     // packet per EP2 frame, so the queue drains at the 48 kHz EP2 rate.
@@ -434,6 +441,11 @@ signals:
     // bits of the fill level, and no sample count at all. See
     // Hl2Telemetry::apply().
     void telemetryUpdated(const AetherSDR::hl2::Hl2Telemetry& t);
+    // The radio's own keying changed: ptt_resp = cw_on | ext_ptt (control.v:456,
+    // gateware 74), the PTT/key jack or the internal keyer. Host MOX never raises
+    // it. An observation, per edge and unthrottled; false is also emitted when the
+    // stream ends or goes silent with the bit set.
+    void radioPttChanged(bool keyed);
     // One accepted bandscope block: 2048 contiguous converter samples merged from the
     // four in-phase EP4 packets the gate kept (never per packet). Uncalibrated and
     // pre-DDC, on the AD9866's own scale: nothing downstream may treat these as
@@ -462,6 +474,10 @@ signals:
     // machine is in quarantine, so the next requestRegister() will refuse for
     // a while. Consumers must not retry immediately in this handler.
     void controlRequestFailed(int addr, bool refused);
+    // requestIoBoardStatus()'s answer: registers 6..9 as read (decodeIoBoardStatus),
+    // never the echo of an ignored read, or why there is no reading.
+    void ioBoardStatusReady(quint32 registers);
+    void ioBoardStatusFailed(const QString& reason);
 
 private slots:
     // The sampling period elapsed: start one arming cycle if the interlocks allow.
@@ -502,6 +518,8 @@ private:
     // wire counters; it emits, so it is not noexcept. `drops` is what ep4SeqStep()
     // charged before this packet, since `seq % 4` cannot see a loss of four.
     void onRadioPttEdge(bool keyed);
+    // No stream, no observation: drop a PTT the radio last reported, with its edge.
+    void clearRadioPtt();
     void bandscopeOnPacket(std::uint32_t seq, std::uint32_t drops,
                            std::span<const std::uint8_t> bytes);
     // Begin one arming cycle: raise wide_spectrum, clear the accumulator, arm
@@ -600,6 +618,8 @@ private:
     [[nodiscard]] qint64 controlNowMs() const noexcept;
     // Emit whatever verdict the machine has settled, if any.
     void publishControlVerdict();
+    // A request that ends without an answer, on the signal its caller listens to.
+    void publishControlFailure(int addr, bool refused);
     // Confirm that the packet buildNextControlPacket() just produced reached the
     // socket, and start the RQST deadline if it carried the request bank. Takes
     // the socket's return value, so a write the kernel refused leaves the
@@ -817,6 +837,23 @@ private:
     // onControlPacketSent() runs, "is it still Queued" cannot distinguish a
     // request that went out from one that never did.
     bool m_requestOnBuiltPacket = false;
+    // I2C bus 2 spacing. i2c_bus2.v ignores any command that reaches it mid-
+    // transaction, so the IO board status read and the bus-2 writes either side
+    // of it go out at least kI2cBusSpacingMs apart. A config bank whose bus-2
+    // bits changed counts as a write (frame A's filter bits start one), and the
+    // read never shares its packet. Stamped on the packet built, committed when
+    // onControlPacketSent() sees it reach the socket. The ms clock rounds down,
+    // hence 2 for "over 1 ms".
+    static constexpr qint64 kI2cBusSpacingMs = 2;
+    qint64 m_builtAtMs = 0;
+    bool   m_busReadOnBuiltPacket = false;
+    bool   m_i2cWriteOnBuiltPacket = false;
+    // configBus2Bits() of the config bank; kConfigBus2Unknown before a session's first.
+    static constexpr std::uint32_t kConfigBus2Unknown = 0xFFFFFFFFu;
+    std::uint32_t m_configBus2OnBuiltPacket = kConfigBus2Unknown;
+    std::uint32_t m_lastConfigBus2Sent = kConfigBus2Unknown;
+    qint64 m_lastBusReadSentMs = -kI2cBusSpacingMs;
+    qint64 m_lastI2cWriteSentMs = -kI2cBusSpacingMs;
     // Last transmit frequency handed to the IO board, and whether one ever was.
     // A separate flag rather than a 0 sentinel: 0 Hz is not a plausible tuned
     // frequency, but "never sent" still has to survive a radio that legitimately

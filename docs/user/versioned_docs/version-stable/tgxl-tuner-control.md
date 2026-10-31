@@ -16,9 +16,9 @@ using with an indicator at the end of its readout row:
 
 | Indicator | Path |
 |---|---|
-| `● DIRECT` | A direct TCP connection to the tuner on port 9010 |
-| `● RADIO` | Through the FlexRadio, which relays the tuner's status and commands |
-| `● OFFLINE` | Neither is available |
+| `● DIRECT` | A direct TCP connection to the tuner on port 9010 (green) |
+| `● RADIO` | Through the FlexRadio, which relays the tuner's status and commands (yellow) |
+| `● OFFLINE` | Neither is available (orange) |
 
 When a TGXL is connected to your FlexRadio, the radio reports its address and
 AetherSDR opens the direct connection automatically. For a tuner the radio
@@ -47,8 +47,13 @@ doing nothing silently.
 
 Docked in the applet panel, the TUN applet (title "TGXL") shows:
 
-- **Fwd Power** gauge. It scales for barefoot, Aurora or PGXL power levels,
-  and uses the tuner's own peak reading, so voice peaks read correctly.
+<img src="/img/screens/tgxl-applet.png" width="248" alt="TGXL applet. PWR and SWR bar meters at the top, then C1, L and C2 bars reading 8, 16 and 24 beside TUNE and STANDBY buttons, and a green DIRECT status at the bottom right." />
+
+*The TGXL applet with a Tuner Genius XL connected.*
+
+- **Fwd Power** gauge. It scales for barefoot (0–200 W), Aurora or a KPA500 in
+  operate (0–600 W) and PGXL (0–2000 W) power levels, and uses the tuner's own
+  peak reading, so voice peaks read correctly.
 - **SWR** gauge (1.0–3.0).
 - **C1**, **L** and **C2** relay bars.
 - **TUNE**: starts an auto-tune. While a tune runs it reads **STOP**;
@@ -62,6 +67,11 @@ shows them: after a successful tune it shows the SWR it settled on
 (`Tuned SWR: 1.15:1`), and a tune that could not run says why.
 
 Meters update at about 60 Hz while transmitting and 4 Hz while receiving.
+
+While a TGXL is present, the **TUN** indicator in the status bar shows its
+state and cycles it OPERATE → BYPASS → STANDBY, like the applet's
+**OPERATE** key. Click it, or Tab to it and press Return or Enter. Screen
+readers announce it as a button with its state.
 
 ### Popped out or on the canvas
 

@@ -626,6 +626,33 @@ backend receive observations, bounded latest-value `meter` resources and a
 read-only `transmitState`; see `docs/aetherd-local-receive-control.md` for the
 per-backend support matrix and remaining no-op, geometry and TX-idle limits.
 This is not all-backend feature parity: unavailable operations remain absent.
+The M4 desktop command migration now removes raw Flex emitters from both
+`SliceModel` and `TransmitModel`. Their typed control requests preserve separate
+operator intent and radio readback; Flex encoding lives behind `IRadioBackend`,
+with explicit native dispatch/refusal for HL2 and Icom and no new TX authority.
+HL2 host-consumed CW/sidetone settings return local-only receipts, suppressing
+the false unsupported notice (#6153); Icom's CW capability gate stays unchanged
+pending #6110. Local active-slice selection also remains available on RX-only
+backends. HL2 RIT/XIT commits each enabled/offset pair before publishing readback.
+Radio Setup, TX Band settings and USB-cable configuration now use typed desktop
+requests with backend-owned encoding. Radio-owned state still arrives through
+existing observations; calibration and creation replies are lifetime/session
+fenced, not optimistic state. Profiles and memory management now use typed
+desktop requests, with direct neutral edits for the host bank and engine-owned
+create/populate/rollback. Slot revisions protect edits and confirmations;
+late replies cannot overwrite newer memory observations. Other dialogs,
+controllers and the remaining
+`RadioModel` command-plane sites are still follow-up work. This does not
+complete M4 or the UI/engine split.
+Panadapter/waterfall creation, paired removal, inventory refresh and existing
+display controls now use typed desktop requests. Flex owns command encoding;
+native backends declare the controls they actually implement. Creation pairs an
+answer with the original session's newly published owned pan; optional waterfall
+status may arrive later. Unknown allocation outcomes retain a bounded reservation
+until resolved or the session ends, without automatic retry or orphan deletion.
+Delayed initialization and profile-load flushes cannot overwrite a replacement
+pan or newer operator intent. This batch does not add daemon protocol methods,
+DAX/IQ ownership or rendering features.
 The desktop adapter has not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX

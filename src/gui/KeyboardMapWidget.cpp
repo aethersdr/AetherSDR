@@ -2,6 +2,10 @@
 #include "core/ShortcutManager.h"
 
 #include <QAccessible>
+#include <QSizePolicy>
+
+#include <algorithm>
+#include <cmath>
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QPainter>
@@ -12,13 +16,15 @@ namespace AetherSDR {
 
 // ─── Category colors ────────────────────────────────────────────────────────
 
-inline QColor kUnboundFill() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
-inline QColor kUnboundBorder() { return AetherSDR::ThemeManager::instance().color("color.background.2"); }
+// Tokens resolve through the widget, so the map follows the theme scope of
+// the window it sits in (canon/shortcuts in the shortcut editor).
+inline QColor kUnboundFill(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.1"); }
+inline QColor kUnboundBorder(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.background.2"); }
 QColor KeyboardMapWidget::categoryColor(const QString& cat) const
 {
-    if (cat == "Frequency") return AetherSDR::ThemeManager::instance().color("color.accent.dim");
+    if (cat == "Frequency") return AetherSDR::ThemeManager::instance().color(this, "color.accent.dim");
     if (cat == "TX")        return QColor(0x80, 0x00, 0x20);
-    if (cat == "Audio")     return AetherSDR::ThemeManager::instance().color("color.accent.success");
+    if (cat == "Audio")     return AetherSDR::ThemeManager::instance().color(this, "color.accent.success");
     if (cat == "Display")   return QColor(0x60, 0x60, 0x00);
     if (cat == "Slice")     return QColor(0x40, 0x00, 0x80);
     if (cat == "Mode")      return QColor(0x40, 0x00, 0x80);
@@ -26,9 +32,25 @@ QColor KeyboardMapWidget::categoryColor(const QString& cat) const
     if (cat == "Tuning")    return QColor(0x00, 0x60, 0x60);
     if (cat == "AGC")       return QColor(0x00, 0x40, 0x80);
     if (cat == "Filter")    return QColor(0x00, 0x40, 0x80);
-    if (cat == "Band")      return AetherSDR::ThemeManager::instance().color("color.accent.dim");
+    if (cat == "Band")      return AetherSDR::ThemeManager::instance().color(this, "color.accent.dim");
     if (cat == "RIT/XIT")   return QColor(0x00, 0x60, 0x60);
-    return kUnboundFill();
+    return kUnboundFill(this);
+}
+
+// The keys' extent in key units, gaps included: the right edge of the
+// numpad's last column (x 22) and the bottom of the last row (y 5.25).
+constexpr float kKeyGap = 0.08f;
+constexpr float kKeysW = 22.0f * (1 + kKeyGap) + 1.0f;
+constexpr float kKeysH = 5.25f * (1 + kKeyGap) + 1.0f;
+constexpr int kMapPadding = 10;
+// Past this width the keys stop growing and centre, so a wide window's spare
+// height goes to the widgets below the map rather than to bigger keys.
+constexpr int kMaxSizingWidth = 1100;
+
+int KeyboardMapWidget::heightForWidth(int width) const
+{
+    const float unit = (std::min(width, kMaxSizingWidth) - 2 * kMapPadding) / kKeysW;
+    return static_cast<int>(std::ceil(unit * kKeysH)) + 2 * kMapPadding;
 }
 
 // ─── Construction ───────────────────────────────────────────────────────────
@@ -38,6 +60,9 @@ KeyboardMapWidget::KeyboardMapWidget(ShortcutManager* mgr, QWidget* parent)
 {
     setMouseTracking(true);
     setFocusPolicy(Qt::TabFocus);
+    QSizePolicy policy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    policy.setHeightForWidth(true);
+    setSizePolicy(policy);
     setAccessibleName(tr("Keyboard shortcut map"));
     buildLayout();
     connect(mgr, &ShortcutManager::bindingsChanged, this, [this]() { update(); });
@@ -195,11 +220,10 @@ void KeyboardMapWidget::buildLayout()
 
 QRectF KeyboardMapWidget::keyRect(const KeyCap& k) const
 {
-    constexpr float gap = 0.08f;  // gap between keys in key units
-    float x = m_originX + k.x * (m_keyUnit + gap * m_keyUnit);
-    float y = m_originY + k.y * (m_keyUnit + gap * m_keyUnit);
-    float w = k.w * m_keyUnit + (k.w - 1) * gap * m_keyUnit;
-    float h = k.h * m_keyUnit + (k.h - 1) * gap * m_keyUnit;
+    float x = m_originX + k.x * (m_keyUnit + kKeyGap * m_keyUnit);
+    float y = m_originY + k.y * (m_keyUnit + kKeyGap * m_keyUnit);
+    float w = k.w * m_keyUnit + (k.w - 1) * kKeyGap * m_keyUnit;
+    float h = k.h * m_keyUnit + (k.h - 1) * kKeyGap * m_keyUnit;
     return {x, y, w, h};
 }
 
@@ -225,20 +249,20 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    p.fillRect(rect(), AetherSDR::ThemeManager::instance().color("color.background.0"));
+    // A rounded card, so the map sits on a canon window's ground as its
+    // other panels do.
+    p.setPen(QPen(AetherSDR::ThemeManager::instance().color(this, "color.border.subtle"), 1));
+    p.setBrush(AetherSDR::ThemeManager::instance().color(this, "color.background.0"));
+    p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
 
-    // Compute key unit size to fit the layout (23 key units wide for main + numpad)
-    constexpr float totalKeysW = 23.5f;
-    constexpr float totalKeysH = 6.5f;
-    constexpr float gap = 0.08f;
-
-    float availW = width() - 20;
-    float availH = height() - 20;
-    float unitFromW = availW / (totalKeysW * (1 + gap));
-    float unitFromH = availH / (totalKeysH * (1 + gap));
+    float availW = width() - 2 * kMapPadding;
+    float availH = height() - 2 * kMapPadding;
+    float unitFromW = availW / kKeysW;
+    float unitFromH = availH / kKeysH;
     m_keyUnit = std::min(unitFromW, unitFromH);
-    m_originX = 10;
-    m_originY = 10;
+    // Centred, so a height-limited map keeps even margins on both sides.
+    m_originX = (width() - m_keyUnit * kKeysW) / 2;
+    m_originY = kMapPadding;
 
     QFont keyFont;
     keyFont.setPixelSize(std::max(8, static_cast<int>(m_keyUnit * 0.28f)));
@@ -256,8 +280,8 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
         const auto* act = m_mgr->actionForKey(seq);
 
         // Determine colors
-        QColor fill = kUnboundFill();
-        QColor border = kUnboundBorder();
+        QColor fill = kUnboundFill(this);
+        QColor border = kUnboundBorder(this);
         if (act) {
             fill = categoryColor(act->category);
             border = fill.lighter(140);
@@ -271,7 +295,7 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
 
         // Selected highlight
         if (i == m_selectedIdx) {
-            border = AetherSDR::ThemeManager::instance().color("color.accent");
+            border = AetherSDR::ThemeManager::instance().color(this, "color.accent");
             fill = fill.lighter(150);
         }
 
@@ -288,14 +312,17 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
         // Extra label (shift character, top-left)
         if (!k.extraLabel.isEmpty()) {
             p.setFont(actionFont);
-            p.setPen(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
+            p.setPen(AetherSDR::ThemeManager::instance().color(this, "color.text.secondary"));
             QRectF extraR = r.adjusted(3, 2, -3, -r.height() * 0.6);
             p.drawText(extraR, Qt::AlignLeft | Qt::AlignTop, k.extraLabel);
         }
 
         // Key label (center-top)
+        // White on a bound key's dark category fill; an unbound key follows
+        // the theme, whose fill is light in a light theme.
         p.setFont(keyFont);
-        p.setPen(Qt::white);
+        p.setPen(act ? QColor(Qt::white)
+                     : AetherSDR::ThemeManager::instance().color(this, "color.text.primary"));
         QRectF labelR = r;
         if (act)
             labelR = r.adjusted(0, 2, 0, -r.height() * 0.4);
@@ -326,8 +353,11 @@ void KeyboardMapWidget::mousePressEvent(QMouseEvent* ev)
         update();
         emit keySelected(m_keys[idx].qtKey);
         announceKey(idx);
+        ev->accept();
+        return;
     }
-    ev->accept();
+    // A press between or around the keys is the window's, so it can drag it.
+    ev->ignore();
 }
 
 void KeyboardMapWidget::mouseMoveEvent(QMouseEvent* ev)

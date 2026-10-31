@@ -1,0 +1,1 @@
+littlefs v2.11.3 (https://github.com/littlefs-project/littlefs), built with LFS_READONLY

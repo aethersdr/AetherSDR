@@ -23,7 +23,6 @@
 #include <QHBoxLayout>
 #include <QSignalBlocker>
 #include <QTimer>
-#include <QPainter>
 #include <QDir>
 #include <QStandardPaths>
 #include "core/ThemeManager.h"
@@ -31,57 +30,19 @@
 namespace AetherSDR {
 
 // The ALC Gain gauge's face, named because two places need the SAME numbers
-// and one of them is "no reading".
-//
-// Not a display preference: the top is the HL2 modulator's makeup ceiling
-// (Hl2TxDsp::Config::alcMaxGainDb), so a reading pressed against it means the
-// ALC has run out of gain rather than that the face has run out of scale.
-// -20 covers the reductions this chain produces.
+// and one of them is "no reading" (resetAlcGain()). The HL2 ALC only reduces
+// (Hl2TxAlc caps its target at unity), so readings stay at or below 0 dB and
+// the face above 0 is never reached; Hl2Backend declares TX:ALCGAIN -20..0.
+// -20 is a presentation floor: a deeper reduction clamps to it.
 static constexpr float kAlcGainGaugeMinDb = -20.0f;
 static constexpr float kAlcGainGaugeMaxDb = 40.0f;
-
-// ── Triangle button (same as RxApplet) ──────────────────────────────────────
-
-class CwTriBtn : public QPushButton {
-public:
-    enum Dir { Left, Right };
-    explicit CwTriBtn(Dir dir, QWidget* parent = nullptr)
-        : QPushButton(parent), m_dir(dir)
-    {
-        setFlat(false);
-        setFixedSize(22, 22);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.1}}; "
-            "border-radius: 3px; padding: 0; margin: 0; min-width: 0; min-height: 0; }"
-            "QPushButton:hover { background: {{color.background.1}}; }"
-            "QPushButton:pressed { background: {{color.accent}}; }");
-    }
-protected:
-    void paintEvent(QPaintEvent* ev) override {
-        QPushButton::paintEvent(ev);
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-        p.setBrush(isDown() ? QColor(0, 0, 0) : QColor(0xc8, 0xd8, 0xe8));
-        p.setPen(Qt::NoPen);
-        const int cx = width() / 2, cy = height() / 2;
-        QPolygon tri;
-        if (m_dir == Left)
-            tri << QPoint(cx - 5, cy) << QPoint(cx + 4, cy - 5) << QPoint(cx + 4, cy + 5);
-        else
-            tri << QPoint(cx + 5, cy) << QPoint(cx - 4, cy - 5) << QPoint(cx - 4, cy + 5);
-        p.drawPolygon(tri);
-    }
-private:
-    Dir m_dir;
-};
-
-
 
 // ── Style constants ──────────────────────────────────────────────────────────
 
 static const QString kBlueActive =
     "QPushButton:checked { background-color: #0070c0; color: #ffffff; "
     "border: 1px solid #0090e0; }"
-    // "Checked but holding nothing" is a real state for the Hold Dly toggle
+    // "Checked but holding nothing" is a real state for the Hold Delay toggle
     // (the preference persists across a disconnect, the held delay does not —
     // #5288), so it must not look identical to "checked and protecting".
     // Alpha-dims the accent above rather than naming a second colour: no new
@@ -302,12 +263,10 @@ void PhoneCwApplet::buildPhonePanel()
     m_compGauge->setHoverValuePopupEnabled(true);
     vbox->addWidget(m_compGauge);
 
-    // ALC Gain gauge (-20..+40 dB), beside Compression: both show how much the
-    // chain changes the audio, while a post-ALC level meter sits near target
-    // even with a mic 30 dB too quiet. +40 is the HL2 modulator's makeup ceiling
-    // (Hl2TxDsp::Config::alcMaxGainDb), so top-of-scale means the ALC is out of
-    // gain. Yellow at +20 = half the makeup spent, red at +30 = three quarters
-    // (fix at the gain control); the reduction side is uncoloured.
+    // ALC Gain gauge, beside Compression: both show how much the chain changes
+    // the audio, while a post-ALC level meter sits near target. Readings stay
+    // at or below 0 dB (see kAlcGainGaugeMaxDb), so the yellow (+20) and red
+    // (+30) zones are not reached; the reduction side is uncoloured.
     m_alcGainGauge = new HGauge(kAlcGainGaugeMinDb, kAlcGainGaugeMaxDb, 30.0f,
         "ALC Gain", "dB",
         {{-20, "-20dB"}, {-10, "-10"}, {0, "0"}, {10, "+10"}, {20, "+20"},
@@ -320,8 +279,7 @@ void PhoneCwApplet::buildPhonePanel()
     m_alcGainGauge->setAccessibleDescription(
         "Gain the transmit ALC is applying, in dB; 0 is unity");
     m_alcGainGauge->setHoverValueFormatter([](float v) {
-        // Signed, unlike Compression's face below, because both directions are
-        // real here: the ALC both adds makeup and takes level away.
+        // Signed, unlike Compression's face: a reduction reads negative.
         return QStringLiteral("%1%2 dB")
             .arg(v > 0.0f ? QStringLiteral("+") : QString())
             .arg(QString::number(v, 'f', 1));
@@ -341,7 +299,7 @@ void PhoneCwApplet::buildPhonePanel()
         {{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
     m_alcGaugePhone->setValueImmediate(kAlcGaugeFloorDbfs);
     m_alcGaugePhone->setAccessibleName("ALC gauge (Phone)");
-    m_alcGaugePhone->setAccessibleDescription("Automatic level control — post-software-ALC SSB peak (dBFS)");
+    m_alcGaugePhone->setAccessibleDescription("Automatic level control — post-software-ALC peak (dBFS)");
     m_alcGaugePhone->setHoverValueFormatter(alcHoverFormatter());
     m_alcGaugePhone->setHoverValuePopupEnabled(true);
     vbox->addWidget(m_alcGaugePhone);
@@ -657,11 +615,43 @@ void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
     m_pitchMinHz = minPitchHz;
     m_pitchMaxHz = maxPitchHz;
     m_pitchStepHz = pitchStepHz;
+    const QSignalBlocker pitchBlocker(m_pitchSlider);
+    m_pitchSlider->setRange(minPitchHz, maxPitchHz);
+    if (m_model) {
+        m_pitchSlider->setValue(m_model->cwPitch());
+    }
+    m_pitchSlider->setSingleStep(pitchStepHz);
+    m_pitchSlider->setPageStep(pitchStepHz * 10);
     auto* pitchValidator = qobject_cast<QIntValidator*>(
         const_cast<QValidator*>(m_pitchEdit->validator()));
     pitchValidator->setRange(minPitchHz, maxPitchHz);
+    if (!m_pitchEdit->hasFocus() || !m_pitchEdit->hasAcceptableInput()) {
+        m_pitchEdit->setText(QString::number(
+            m_model ? m_model->cwPitch() : m_pitchSlider->value()));
+    }
     m_pitchEdit->setAccessibleDescription(
         tr("CW sidetone pitch in Hz, %1 to %2").arg(minPitchHz).arg(maxPitchHz));
+    m_pitchSlider->setAccessibleDescription(m_pitchEdit->accessibleDescription());
+}
+
+void PhoneCwApplet::commitCwPitch(int value)
+{
+    if (m_updatingFromModel) {
+        return;
+    }
+    const int bounded = qBound(m_pitchMinHz, value, m_pitchMaxHz);
+    const int hz = qBound(m_pitchMinHz,
+        m_pitchMinHz + qRound(static_cast<double>(bounded - m_pitchMinHz)
+                             / m_pitchStepHz) * m_pitchStepHz,
+        m_pitchMaxHz);
+    const QSignalBlocker blocker(m_pitchSlider);
+    if (m_model) {
+        m_model->setCwPitch(hz);
+    }
+    const int displayedHz = m_model && m_model->confirmsReceiveCwPitch()
+        ? m_model->cwPitch() : hz;
+    m_pitchSlider->setValue(displayedHz);
+    m_pitchEdit->setText(QString::number(displayedHz));
 }
 
 void PhoneCwApplet::buildCwPanel()
@@ -679,7 +669,7 @@ void PhoneCwApplet::buildCwPanel()
         {{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
     m_alcGaugeCw->setValueImmediate(kAlcGaugeFloorDbfs);
     m_alcGaugeCw->setAccessibleName("ALC gauge (CW)");
-    m_alcGaugeCw->setAccessibleDescription("Automatic level control — post-software-ALC SSB peak (dBFS)");
+    m_alcGaugeCw->setAccessibleDescription("Automatic level control — post-software-ALC peak (dBFS)");
     m_alcGaugeCw->setHoverValueFormatter(alcHoverFormatter());
     m_alcGaugeCw->setHoverValuePopupEnabled(true);
     vbox->addWidget(m_alcGaugeCw);
@@ -776,6 +766,46 @@ void PhoneCwApplet::buildCwPanel()
         vbox->addLayout(row);
     }
 
+    // Pitch shares Speed's columns; the keyer toggles have their own row
+    // so Qt's font- and style-derived minimum widths fit the viewport.
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        auto* lbl = new QLabel("Pitch:");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl,
+            "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+        lbl->setFixedWidth(kLeftColW);
+        row->addWidget(lbl);
+        row->addSpacing(kGap);
+
+        m_pitchSlider = new GuardedSlider(Qt::Horizontal);
+        m_pitchSlider->setRange(m_pitchMinHz, m_pitchMaxHz);
+        m_pitchSlider->setSingleStep(m_pitchStepHz);
+        m_pitchSlider->setPageStep(m_pitchStepHz * 10);
+        m_pitchSlider->setValue(600);
+        m_pitchSlider->setAccessibleName("CW pitch");
+        m_pitchSlider->setAccessibleDescription("CW sidetone pitch in Hz, 100 to 6000");
+        applyPrimarySliderStyle(m_pitchSlider);
+        row->addWidget(m_pitchSlider, 1);
+
+        m_pitchEdit = new QLineEdit("600");
+        m_pitchEdit->setAlignment(Qt::AlignCenter);
+        m_pitchEdit->setFixedWidth(kValueW);
+        m_pitchEdit->setAccessibleName("CW pitch frequency");
+        m_pitchEdit->setAccessibleDescription("CW sidetone pitch in Hz, 100 to 6000");
+        m_pitchEdit->setValidator(new QIntValidator(m_pitchMinHz, m_pitchMaxHz, m_pitchEdit));
+        row->addWidget(m_pitchEdit);
+
+        connect(m_pitchSlider, &QSlider::valueChanged,
+                this, &PhoneCwApplet::commitCwPitch);
+        connect(m_pitchEdit, &QLineEdit::editingFinished, this, [this] {
+            commitCwPitch(m_pitchEdit->text().toInt());
+        });
+
+        vbox->addLayout(row);
+    }
+
     // ── Sidetone: toggle button + slider + inset value ──────────────────
     {
         auto* row = new QHBoxLayout;
@@ -862,7 +892,7 @@ void PhoneCwApplet::buildCwPanel()
         vbox->addLayout(row);
     }
 
-    // ── Bottom row: Breakin, Iambic, Pitch stepper ──────────────────────
+    // ── Keyer toggles ──────────────────────
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
@@ -872,19 +902,21 @@ void PhoneCwApplet::buildCwPanel()
         m_breakinBtn->setFixedHeight(22);
         m_breakinBtn->setAccessibleName("CW break-in");
         m_breakinBtn->setAccessibleDescription("Toggle full break-in QSK mode");
-        row->addWidget(m_breakinBtn);
+        m_breakinBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+        row->addWidget(m_breakinBtn, 1);
 
         m_iambicBtn = new QPushButton("Iambic");
         m_iambicBtn->setCheckable(true);
         m_iambicBtn->setFixedHeight(22);
         m_iambicBtn->setAccessibleName("Iambic keyer");
         m_iambicBtn->setAccessibleDescription("Toggle iambic paddle keyer mode");
-        row->addWidget(m_iambicBtn);
+        m_iambicBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+        row->addWidget(m_iambicBtn, 1);
 
         // Opt-in: re-send the set break-in delay after every CW speed change so
         // SmartSDR's speed-linked QSK-floor walk can't drop an inline amp into
         // hot-switching (#5288). Off by default; persisted client-side.
-        m_holdDelayBtn = new QPushButton("Hold Dly");
+        m_holdDelayBtn = new QPushButton("Hold Delay");
         m_holdDelayBtn->setCheckable(true);
         m_holdDelayBtn->setFixedHeight(22);
         m_holdDelayBtn->setAccessibleName("Hold break-in delay");
@@ -892,13 +924,14 @@ void PhoneCwApplet::buildCwPanel()
         // sends. A speed change made at the radio's front panel or by another
         // client arrives as status, and Principle II keeps us off that path, so
         // the delay still walks there. #5519's triage asked for the limit to be
-        // stated so "Hold Dly" is not read as an absolute guarantee to an amp.
+        // stated so "Hold Delay" is not read as an absolute guarantee to an amp.
         m_holdDelayBtn->setAccessibleDescription(
             "Re-send the break-in delay you set after each CW speed change made "
             "here, so the radio's speed-linked QSK floor does not hot-switch an "
             "inline amplifier. Speed changes made at the radio or by another "
             "client are not covered.");
-        row->addWidget(m_holdDelayBtn);
+        m_holdDelayBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+        row->addWidget(m_holdDelayBtn, 1);
 
         // Both blue toggles share one style call site — the hardcoded-colour
         // ratchet (tools/audit_colours.py) counts call sites, so a per-button
@@ -906,32 +939,6 @@ void PhoneCwApplet::buildCwPanel()
         for (auto* blueToggle : { m_iambicBtn, m_holdDelayBtn }) {
             blueToggle->setStyleSheet(QString(kButtonBase) + kBlueActive);
         }
-
-        row->addStretch();
-
-        // Pitch: label + < value > stepper (inset display matching RIT/XIT style)
-        auto* pitchLbl = new QLabel("Pitch:");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(pitchLbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
-        row->addWidget(pitchLbl);
-
-        m_pitchDown = new CwTriBtn(CwTriBtn::Left);
-        m_pitchDown->setAccessibleName("CW pitch down");
-        row->addWidget(m_pitchDown);
-
-        m_pitchEdit = new QLineEdit("600");
-        m_pitchEdit->setAlignment(Qt::AlignCenter);
-        m_pitchEdit->setFixedWidth(48);
-        m_pitchEdit->setAccessibleName("CW pitch frequency");
-        m_pitchEdit->setAccessibleDescription("CW sidetone pitch in Hz, 100 to 6000");
-        m_pitchEdit->setValidator(new QIntValidator(100, 6000, m_pitchEdit));
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_pitchEdit, "QLineEdit { font-size: 11px; background: {{color.background.0}}; border: 1px solid {{color.background.1}}; "
-            "border-radius: 3px; padding: 1px 3px; color: {{color.text.primary}}; }"
-            "QLineEdit:focus { border: 1px solid {{color.accent}}; }");
-        row->addWidget(m_pitchEdit);
-
-        m_pitchUp = new CwTriBtn(CwTriBtn::Right);
-        m_pitchUp->setAccessibleName("CW pitch up");
-        row->addWidget(m_pitchUp);
 
         connect(m_breakinBtn, &QPushButton::toggled, this, [this](bool on) {
             if (!m_updatingFromModel && m_model)
@@ -955,28 +962,6 @@ void PhoneCwApplet::buildCwPanel()
             if (m_model)
                 m_model->setHoldBreakInDelay(on);
             updateHoldDelayAffordance();
-        });
-
-        // Pitch steps and bounds follow the connected radio capabilities.
-        // Read current value from the edit so rapid clicks accumulate
-        // correctly without waiting for the radio roundtrip.
-        connect(m_pitchDown, &QPushButton::clicked, this, [this]() {
-            if (!m_model) return;
-            int hz = qBound(m_pitchMinHz, m_pitchEdit->text().toInt() - m_pitchStepHz, m_pitchMaxHz);
-            m_model->setCwPitch(hz);
-            m_pitchEdit->setText(QString::number(hz));
-        });
-        connect(m_pitchUp, &QPushButton::clicked, this, [this]() {
-            if (!m_model) return;
-            int hz = qBound(m_pitchMinHz, m_pitchEdit->text().toInt() + m_pitchStepHz, m_pitchMaxHz);
-            m_model->setCwPitch(hz);
-            m_pitchEdit->setText(QString::number(hz));
-        });
-        connect(m_pitchEdit, &QLineEdit::editingFinished, this, [this]() {
-            if (!m_model) return;
-            int hz = qBound(m_pitchMinHz, m_pitchEdit->text().toInt(), m_pitchMaxHz);
-            m_pitchEdit->setText(QString::number(hz));
-            m_model->setCwPitch(hz);
         });
 
         vbox->addLayout(row);
@@ -1063,7 +1048,7 @@ void PhoneCwApplet::buildCwPanel()
     // buildCwPanel()'s kBlueActive loop.
     for (QPushButton* btn : {m_sidetoneBtn, m_breakinBtn, m_apfBtn})
         btn->setStyleSheet(QString(kButtonBase) + kGreenActive);
-    for (QLineEdit* edit : {m_delayEdit, m_speedEdit, m_sidetoneEdit, m_apfEdit})
+    for (QLineEdit* edit : {m_delayEdit, m_speedEdit, m_pitchEdit, m_sidetoneEdit, m_apfEdit})
         edit->setStyleSheet(kInsetEditStyle);
 
     // No slice is bound until AppletPanel::setSlice runs, so start the row
@@ -1072,6 +1057,29 @@ void PhoneCwApplet::buildCwPanel()
 }
 
 // ── Mode switching ───────────────────────────────────────────────────────────
+
+void PhoneCwApplet::setTransmitControlsAvailable(bool available)
+{
+    if (m_transmitControlsAvailable == available) { return; }
+    m_transmitControlsAvailable = available;
+    // Pitch and APF are receive controls too, so their CW face remains usable.
+    const QList<QWidget*> controls{m_phonePanel, m_delaySlider, m_delayEdit,
+        m_speedSlider, m_speedEdit, m_sidetoneBtn, m_sidetoneSlider,
+        m_sidetoneEdit, m_cwPanSlider, m_breakinBtn, m_iambicBtn, m_holdDelayBtn};
+    for (QWidget* control : controls) {
+        if (!available) {
+            control->setProperty("transmitAvailableTooltip", control->toolTip());
+            control->setProperty("transmitAvailableDescription", control->accessibleDescription());
+        }
+        control->setEnabled(available);
+        control->setToolTip(available
+            ? control->property("transmitAvailableTooltip").toString()
+            : tr("Transmit controls are unavailable on this receive-only radio"));
+        control->setAccessibleDescription(available
+            ? control->property("transmitAvailableDescription").toString()
+            : tr("Transmit controls are unavailable on this receive-only radio"));
+    }
+}
 
 void PhoneCwApplet::setMode(const QString& mode)
 {
@@ -1190,6 +1198,9 @@ void PhoneCwApplet::setSlice(SliceModel* slice)
     m_slice = slice;
 
     if (m_slice) {
+        connect(m_slice, &SliceModel::receiveDspRequested, this, [this] {
+            if (m_slice && m_slice->receiveControlsConfirmed()) { syncApfFromSlice(); }
+        }, Qt::QueuedConnection);
         connect(m_slice, &SliceModel::modeChanged,
                 this, &PhoneCwApplet::setMode);
         // Radio-side echo drives the UI; the button below only requests
@@ -1244,7 +1255,7 @@ void PhoneCwApplet::syncApfFromSlice()
     m_apfSlider->setEnabled(bound && on);
     m_apfEdit->setEnabled(bound && on);
     m_apfSlider->setValue(level);
-    if (!m_apfEdit->hasFocus())
+    if (!m_apfEdit->hasFocus() || (m_slice && m_slice->receiveControlsConfirmed()))
         m_apfEdit->setText(QString::number(level));
     m_updatingFromModel = false;
 }
@@ -1306,7 +1317,7 @@ void PhoneCwApplet::syncPhoneFromModel()
 
 // ── CW sync ──────────────────────────────────────────────────────────────────
 
-// "Hold Dly" has three states, not two: off, on-and-holding-a-delay, and
+// "Hold Delay" has three states, not two: off, on-and-holding-a-delay, and
 // on-but-holding-nothing. The third is reachable every session — the preference
 // is persisted in AppSettings, the held delay is cleared by
 // TransmitModel::resetState() on every disconnect — and on a feature whose whole
@@ -1317,7 +1328,7 @@ void PhoneCwApplet::syncPhoneFromModel()
 // accessible description carry the same distinction for non-visual use.
 void PhoneCwApplet::updateHoldDelayAffordance()
 {
-    if (!m_holdDelayBtn) return;
+    if (!m_holdDelayBtn || !m_transmitControlsAvailable) return;
     const bool on    = m_model && m_model->holdBreakInDelay();
     const bool armed = m_model && m_model->holdBreakInDelayArmed();
     const bool unarmed = on && !armed;
@@ -1367,7 +1378,8 @@ void PhoneCwApplet::syncCwFromModel()
     m_holdDelayBtn->setChecked(m_model->holdBreakInDelay());
     updateHoldDelayAffordance();
 
-    if (!m_pitchEdit->hasFocus())
+    m_pitchSlider->setValue(m_model->cwPitch());
+    if (!m_pitchEdit->hasFocus() || m_model->confirmsReceiveCwPitch())
         m_pitchEdit->setText(QString::number(m_model->cwPitch()));
 
     m_updatingFromModel = false;
@@ -1450,10 +1462,8 @@ void PhoneCwApplet::updateAlcGain(float gainDb)
     if (!m_alcGainGauge) {
         return;
     }
-    // No clamp here: HGauge clamps to its own range, and clamping twice would
-    // hide the case worth seeing — a gain pressed against the modulator's
-    // ceiling, which reads as "the ALC has nothing left" rather than as a
-    // meter at the end of its travel.
+    // No clamp here: HGauge clamps to its own range, so a reduction deeper
+    // than the -20 dB floor renders as an empty bar.
     m_alcGainGauge->setValue(gainDb);
 }
 
@@ -1515,7 +1525,7 @@ void PhoneCwApplet::setAlcMeterUnit(const QString& unit)
                         percent ? 85.0f : -3.0f, ticks);
         gauge->setAccessibleDescription(percent
             ? tr("Automatic level control — radio-reported percent")
-            : tr("Automatic level control — post-software-ALC SSB peak (dBFS)"));
+            : tr("Automatic level control — post-software-ALC peak (dBFS)"));
         gauge->setHoverValueFormatter(percent
             ? std::function<QString(float)>([](float value) {
                 return QStringLiteral("%1 %").arg(QString::number(value, 'f', 1));

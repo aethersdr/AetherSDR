@@ -1,4 +1,6 @@
 #include "NetworkDiagnosticsDialog.h"
+#include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
 #include "FramelessResizer.h"
 #include "ScopedChildWidget.h"
 #include "LogSyntaxHighlighter.h"
@@ -208,17 +210,6 @@ QCheckBox {
     color: {{color.canon.inkSoft}};
     spacing: 9px;
 }
-QCheckBox::indicator {
-    width: 18px;
-    height: 18px;
-    border-radius: 4px;
-    border: 1px solid {{color.canon.lineHi}};
-    background: {{color.canon.control}};
-}
-QCheckBox::indicator:checked {
-    background: {{color.canon.cyan}};
-    border-color: {{color.canon.aqua}};
-}
 QLineEdit {
     color: {{color.canon.ink}};
     background: {{color.canon.control}};
@@ -267,36 +258,6 @@ QScrollArea {
 }
 QSplitter::handle {
     background: transparent;
-}
-QScrollBar:vertical {
-    background: transparent;
-    width: 12px;
-    margin: 8px 2px 8px 2px;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-height: 34px;
-}
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-QScrollBar:horizontal {
-    background: transparent;
-    height: 12px;
-    margin: 2px 8px 2px 8px;
-    border-radius: 6px;
-}
-QScrollBar::handle:horizontal {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-width: 34px;
-}
-QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
-    width: 0px;
 }
 )";
 
@@ -349,8 +310,9 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     resize(1200, 820);
     FramelessResizer::install(this);
     bodyWidget()->setObjectName(QStringLiteral("networkDiagnosticsBody"));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(
-        bodyWidget(), QString::fromLatin1(kNetworkDiagnosticsStyle));
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kNetworkDiagnosticsStyle) + canonScrollBarRules() + canonIndicatorRules();
+    });
 
     auto* body = new QVBoxLayout(bodyWidget());
     body->setSpacing(10);
@@ -674,7 +636,8 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     row = 0;
     dropGrid->addWidget(makeNote(
         "Inferred packet loss from missing VITA sequence numbers. Zero loss here does "
-        "not rule out jitter or late bursts."), row++, 0, 1, 2);
+        "not rule out jitter or late bursts. Late counts FFT and waterfall packets "
+        "that arrived after their frame was replaced and were discarded."), row++, 0, 1, 2);
     dropGrid->addWidget(new QLabel("Audio:"), row, 0);
     m_audioDropLabel = makeDim();
     dropGrid->addWidget(m_audioDropLabel, row++, 1);
@@ -3084,7 +3047,12 @@ void NetworkDiagnosticsDialog::refresh()
             rateKbps = sample.meterKbps;
         }
         rateLabels[i]->setText(QString("%1 kbps").arg(static_cast<int>(rateKbps)));
-        dropLabels[i]->setText(formatDrop(cs));
+        QString drop = formatDrop(cs);
+        if (cats[i] == PanadapterStream::CatFFT
+            || cats[i] == PanadapterStream::CatWaterfall) {
+            drop += QStringLiteral(" \u00b7 %1 late").arg(cs.late);
+        }
+        dropLabels[i]->setText(drop);
     }
 
     // DAX traffic

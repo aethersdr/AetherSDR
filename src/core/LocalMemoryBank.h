@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/backends/MemoryDelta.h"
+#include "core/backends/MemoryRequest.h"
 #include "models/MemoryEntry.h"
 
 #include <optional>
@@ -73,6 +74,15 @@ public:
     // Handle one `memory …` command. Returns handled=false for anything outside
     // the four verbs above.
     CommandResult handleCommand(const QString& command);
+
+    struct EditResult {
+        int code{0};
+        QString message;
+        int index{-1};
+    };
+    EditResult createEntry(const MemoryEntry& entry);
+    EditResult updateEntry(int index, const MemoryPatch& patch);
+    EditResult removeEntry(int index);
 
     // RadioModel's post-decode view of a slot, and the authoritative one.
     void record(int index, const MemoryEntry& entry);

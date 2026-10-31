@@ -163,6 +163,62 @@ baseline warn; a new violation or a grown baseline errors.
   nothing. New controls use a typed intent through `IRadioBackend`. Growth
   under `src/core/backends/flex/` is not counted.
 
+`SliceModel` and `TransmitModel` no longer encode Flex commands. Their remaining
+desktop setters emit validated `SliceControlRequest` / `TransmitControlRequest`
+values through the identity-guarded `RadioModel` route. `FlexModelControls.cpp`
+owns the encoding; HL2 and Icom adapt only implemented controls and return
+explicit dispatch, local-only, or unsupported receipts. RX-only backends refuse
+TX controls. RTL active-slice selection validates accepted membership and
+publishes confirmed focus; other RX-only backends inherit local selection.
+These are desktop intents,
+not new daemon methods or TX permissions.
+`RadioSetupDialog`, `TxBandDialog` and `UsbCableModel` also have no raw command
+emitters. Their configuration requests use `RadioModel` and `FlexSetupControls`;
+unsupported families explicitly refuse vendor operations. `radioSetupControl`
+is a desktop-only field-set record, consumed at dispatch and by timing/power
+availability, not serialized into the daemon catalogue. Reply contexts and
+connection/backend generations fence calibration and transverter creation;
+acceptance does not confirm completion. Entity editors retain their original
+session, and USB inventory is retired at disconnect/replacement. Preserve the
+client-owned TX-waterfall flag and station settings separately from radio state.
+Profile and memory dialogs use typed `ProfileRequest` / `MemoryRequest` values
+through `RadioModel`; `FlexStoredControls` owns encoding, including recall
+corrections. Local memories consume neutral patches directly and retain their
+existing shared-bank persistence. Create/populate/rollback is engine-owned;
+session fences, bounded completions and slot revisions reject stale work.
+Slot retirement is tracked even before a create reply or initial slot status;
+retired/reused slots must not be populated or rolled back. Reply owners and
+sessions are rechecked after cache signals, which can synchronously retire them.
+Neutral storage validation covers supported backend modes and wide FM filters;
+the legacy Flex editor dropdown is not the storage vocabulary.
+These desktop operations add no daemon catalogue methods or TX authority.
+Independent slice create/remove, TX-slice selection, full duplex and runtime
+slice refresh also use typed `RadioModel` routes. `FlexSliceLifecycleControls`
+owns their wire encoding; the initial connection subscription batch is separate.
+A transient split receiver needs both its create reply and original-session,
+owned model publication before any consumer receives a cleanup receipt. Numeric
+ID reuse, retired slots, competing creators and destroyed requesters never grant
+ownership. Native ordinary lifecycle hooks remain adapters; transient creation
+requires an answered identity and must not fall back to an uncorrelated hook.
+Retirement history is bounded. Compaction retains live/quarantined identities
+and refuses any pending creation whose discarded history makes ownership
+uncertain, rather than issuing a cleanup receipt from incomplete evidence.
+GUI, CAT and TCI retain their existing topology, frequency, focus and audio
+policies. TX assignment is not keying and grants no extra TX authority.
+Desktop spot, pan-utility and net/tuning-step requests also use typed backend
+verbs; their desktop-only field-set records are not daemon permissions. Spot
+batches retain their original control session and Clear All epoch and detach
+before dispatch. TCI/memory/passive marker namespaces remain local, and radio
+spot triggers leave lock/SWR admission to firmware. Net repeater patches carry
+present fields only. Physical-output setup preserves native ANAN lineout and
+the separate MIDI/PC-audio routing policy. Temporary station overrides never
+persist client identity; restore is fenced by session, ownership and newer edits.
+MOX, TUNE and ATU start/stop still use the existing operation-fenced TX path;
+host TUNE-power edits additionally require a live locally admitted carrier.
+HL2 host-keyer, sidetone and compressor settings return local-only receipts;
+their existing local consumers still apply them (#6153). Icom CW controls retain
+the current keyer capability gate; its replacement belongs to #6110.
+
 If your change trips any of these, restructure the change — do not move the
 file, weaken the check, or add an exemption. Engine code that needs a UI
 callback defines a gui-free interface in `core/` (e.g. `IConnectionAutomation`)
@@ -249,9 +305,19 @@ author or reviewer — walks the list:
    PR removed, lowering `FROZEN_BOOL_COUNT` when a bool became a record, and
    lowering a converted file's command-plane count are all conforming. Growing
    a baseline, adding a stem or row, or retagging a `vendor(...)` header is
-   forbidden; the two maintainer carveouts (EB3 reclassification with
-   merge-base proof; a `FROZEN_BOOL_COUNT` raise on a maintainer ruling) are
-   rulings carrying that evidence, never a route to a passing check.
+   forbidden; the three maintainer carveouts (EB3 reclassification with
+   merge-base proof; a `FROZEN_BOOL_COUNT` raise on a maintainer ruling; an
+   EB3 **relocation**, below) are rulings carrying that evidence, never a
+   route to a passing check.
+
+   A **relocation** moves existing stems with the code that needs them, from
+   one file's row to another's, when a maintainer has ruled that the code
+   moves. All of these must hold: the old row shrinks by exactly the stems the
+   new row gains; no stem or vendor header is new to the baseline; the PR body
+   shows the merge-base and head per-file EB3 findings; and the ruling is
+   recorded on the tracking issue. It adds no coupling and converts nothing;
+   the moved stems stay burndown targets. First use: the radio firmware flow
+   leaving Radio Setup for the Updates window (#6718, ruling on #5304).
 5. **Touching a backend?** Read the THREADING AND LIFETIME CONTRACT in
    `IRadioBackend.h` against the diff, and re-check the #5554 notice above. A
    survey result means reading is the check, because no test will fail.

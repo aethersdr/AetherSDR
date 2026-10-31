@@ -14,7 +14,7 @@ The pages in this section are generated from the AetherSDR source code, not writ
 - [Ulanzi Dial Actions](./ulanzi-dial-actions.md): Ulanzi Dial wheel actions and button defaults.
 - [Stream Deck+ and HID Controller Actions](./hid-controller-actions.md): Stream Deck+, HID encoder and TMate 2 actions and defaults.
 - [Log Categories](./log-categories.md): logging categories for support logs.
-- [TCI Commands](./tci-commands.md): command names the TCI server recognises.
+- [TCI Commands](./tci-commands.md): command names the TCI server recognizes.
 
 ## Refreshing these pages
 

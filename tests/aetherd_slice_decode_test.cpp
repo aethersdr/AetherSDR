@@ -11,6 +11,7 @@
 #include <QSignalSpy>
 #include <QString>
 #include <cstdio>
+#include <initializer_list>
 
 using namespace AetherSDR;
 
@@ -32,6 +33,94 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     qRegisterMetaType<SliceDelta>();
     FlexBackend b;
+
+    // ---- DSP level status names (#6447): the radio reports nrl_level /
+    // nrs_level / anfl_level, not the lms_nr_level / speex_nr_level /
+    // lms_anf_level command names; those stay as a fallback ----
+    {
+        const SliceDelta d = decode(b, {
+            {QStringLiteral("nrl_level"), QStringLiteral("41")},
+            {QStringLiteral("nrs_level"), QStringLiteral("50")},
+            {QStringLiteral("anfl_level"), QStringLiteral("17")},
+        });
+        CHECK(d.nrlLevel.has_value() && *d.nrlLevel == 41);
+        CHECK(d.nrsLevel.has_value() && *d.nrsLevel == 50);
+        CHECK(d.anflLevel.has_value() && *d.anflLevel == 17);
+    }
+    {
+        const SliceDelta d = decode(b, {
+            {QStringLiteral("lms_nr_level"), QStringLiteral("12")},
+            {QStringLiteral("speex_nr_level"), QStringLiteral("13")},
+            {QStringLiteral("lms_anf_level"), QStringLiteral("14")},
+        });
+        CHECK(d.nrlLevel.has_value() && *d.nrlLevel == 12);
+        CHECK(d.nrsLevel.has_value() && *d.nrsLevel == 13);
+        CHECK(d.anflLevel.has_value() && *d.anflLevel == 14);
+    }
+    {
+        // Both present: the status name wins.
+        const SliceDelta d = decode(b, {
+            {QStringLiteral("nrl_level"), QStringLiteral("30")},
+            {QStringLiteral("lms_nr_level"), QStringLiteral("99")},
+            {QStringLiteral("nrs_level"), QStringLiteral("31")},
+            {QStringLiteral("speex_nr_level"), QStringLiteral("99")},
+            {QStringLiteral("anfl_level"), QStringLiteral("32")},
+            {QStringLiteral("lms_anf_level"), QStringLiteral("99")},
+        });
+        CHECK(d.nrlLevel.has_value() && *d.nrlLevel == 30);
+        CHECK(d.nrsLevel.has_value() && *d.nrsLevel == 31);
+        CHECK(d.anflLevel.has_value() && *d.anflLevel == 32);
+    }
+    {
+        // Zero is a reported level, not a reason to use the alias.
+        const SliceDelta d = decode(b, {
+            {QStringLiteral("nrl_level"), QStringLiteral("0")},
+            {QStringLiteral("lms_nr_level"), QStringLiteral("99")},
+            {QStringLiteral("nrs_level"), QStringLiteral("0")},
+            {QStringLiteral("speex_nr_level"), QStringLiteral("99")},
+            {QStringLiteral("anfl_level"), QStringLiteral("0")},
+            {QStringLiteral("lms_anf_level"), QStringLiteral("99")},
+        });
+        CHECK(d.nrlLevel.has_value() && *d.nrlLevel == 0);
+        CHECK(d.nrsLevel.has_value() && *d.nrsLevel == 0);
+        CHECK(d.anflLevel.has_value() && *d.anflLevel == 0);
+    }
+    for (const QString& invalid : {QStringLiteral("junk"), QStringLiteral("2147483648")}) {
+        // A present but invalid status name suppresses the command-name alias.
+        const SliceDelta d = decode(b, {
+            {QStringLiteral("nrl_level"), invalid},
+            {QStringLiteral("lms_nr_level"), QStringLiteral("12")},
+            {QStringLiteral("nrs_level"), invalid},
+            {QStringLiteral("speex_nr_level"), QStringLiteral("13")},
+            {QStringLiteral("anfl_level"), invalid},
+            {QStringLiteral("lms_anf_level"), QStringLiteral("14")},
+        });
+        CHECK(!d.nrlLevel.has_value());
+        CHECK(!d.nrsLevel.has_value());
+        CHECK(!d.anflLevel.has_value());
+    }
+    {
+        // Invalid aliases do not replace valid primary values.
+        const SliceDelta d = decode(b, {
+            {QStringLiteral("nrl_level"), QStringLiteral("30")},
+            {QStringLiteral("lms_nr_level"), QStringLiteral("junk")},
+            {QStringLiteral("nrs_level"), QStringLiteral("31")},
+            {QStringLiteral("speex_nr_level"), QStringLiteral("junk")},
+            {QStringLiteral("anfl_level"), QStringLiteral("32")},
+            {QStringLiteral("lms_anf_level"), QStringLiteral("junk")},
+        });
+        CHECK(d.nrlLevel.has_value() && *d.nrlLevel == 30);
+        CHECK(d.nrsLevel.has_value() && *d.nrsLevel == 31);
+        CHECK(d.anflLevel.has_value() && *d.anflLevel == 32);
+    }
+    {
+        // Malformed: dropped, never applied as 0.
+        const SliceDelta d = decode(b, {
+            {QStringLiteral("nrs_level"), QStringLiteral("junk")},
+            {QStringLiteral("nr"), QStringLiteral("1")},
+        });
+        CHECK(!d.nrsLevel.has_value());
+    }
 
     // ---- key renames + typed values ----
     {

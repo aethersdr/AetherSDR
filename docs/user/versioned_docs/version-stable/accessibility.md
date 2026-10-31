@@ -4,7 +4,7 @@ slug: "/accessibility"
 description: "AetherSDR is built to be usable with a screen reader and from the keyboard."
 ---
 
-AetherSDR is built to be usable with a screen reader and from the keyboard. This page summarises what works today and how to get help when something doesn't.
+AetherSDR is built to be usable with a screen reader and from the keyboard. This page summarizes what works today and how to get help when something doesn't.
 
 ## Requirements
 
@@ -23,14 +23,16 @@ What you can expect:
 - **Every interactive control has a name** (and, where useful, a description), so a screen reader announces "Master volume" or "Dock applet panel left" rather than just "button".
 - **Live values are announced.** The S-meter and the VFO frequency announce their values as they change. Announcements wait for a value to settle, so tuning across a band doesn't flood you with interim readings.
 - **Custom-drawn meters report their values.** Meters and indicators that AetherSDR paints itself expose their current reading to the screen reader.
-- **Status is given in words, not colour alone.** For example, each radio tab in the title bar states its connection state ("link lost" and so on) as text as well as with the coloured dot.
+- **Status is given in words, not color alone.** For example, each radio tab in the title bar states its connection state ("Link lost" and so on) as text as well as with the colored dot.
 - **Unavailable controls say why.** A control your radio or build can't use is dimmed rather than hidden, and the reason is announced along with it (for example, a headphone control on a radio with no headphone output).
+- **Available controls keep their descriptions.** When an unavailable control becomes available, its own tooltip and description return. An inactive control may also announce "Available, not currently active".
 - **Notices are announced.** For example, pressing a shortcut key while keyboard shortcuts are off gives a "Keyboard shortcuts are off" notice that is announced as well as shown.
 
 ## Using the keyboard
 
 - You can reach controls with Tab and Shift+Tab, including the tabs on the VFO flag (Audio, DSP, mode, X/RIT, DAX).
 - The title bar's radio list ("+") is keyboard reachable, including its search box and per-radio actions.
+- The status-bar indicators (band stack, **+PAN**, **TNF**, **CWX**, **ASR**, **DVK**, **FDX**, **TUN**, **AMP** and **TX**) are in the Tab order and read as buttons. Press **Return** or **Enter** to activate one. On/off indicators report their state, and **TUN** and **AMP** start their description with their state (for example OPERATE, BYPASS or STANDBY). With keyboard shortcuts on, **Space** is still push-to-talk on a focused indicator.
 - Operating shortcuts (tuning, MOX, PTT hold, band and mode changes) are off by default. Turn them on with **Settings → Keyboard Shortcuts**; see [Keyboard Shortcuts](./keyboard-shortcuts.md). With them off, keys go to the focused control.
 - On Windows and Linux, Alt+letter opens each menu from the title bar's ☰ button. See [Menu Reference](./menu-reference.md).
 
@@ -40,7 +42,7 @@ Animated elements, such as those in the About window, hold still when your opera
 
 ## Reporting a problem
 
-Please report accessibility gaps. If something is silent, mislabelled or unreachable from the keyboard, use **Help → File an Issue...** and say which screen reader and platform you use. See [Support and Logging](./support-and-logging.md). Ongoing screen-reader work, including JAWS, is tracked in [issue #4896](https://github.com/aethersdr/AetherSDR/issues/4896).
+Please report accessibility gaps. If something is silent, mislabeled or unreachable from the keyboard, use **Help → File an Issue...** and say which screen reader and platform you use. See [Support and Logging](./support-and-logging.md). Ongoing screen-reader work, including JAWS, is tracked in [issue #4896](https://github.com/aethersdr/AetherSDR/issues/4896).
 
 ## Known issues
 

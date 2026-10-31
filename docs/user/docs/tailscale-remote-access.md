@@ -8,6 +8,7 @@ Operate a FLEX-8000 series or Aurora radio from anywhere: a small container
 installed **inside the radio** joins your private Tailscale network. It works
 behind carrier-grade NAT (CGNAT), Starlink, cellular home internet or any
 router whose ports you can't forward, and it needs no SmartLink account.
+The radio needs firmware **4.2.18 or later**.
 
 AetherSDR installs and sets up the container for you from the **Waveforms**
 window. After that you connect from anywhere with **Connect by IP**, as if the
@@ -27,9 +28,10 @@ radio were on your desk.
 > trial instead.
 
 > **Radios:** FLEX-8000 series and Aurora, which can run Docker waveform
-> containers. It was developed and measured on a FLEX-8600 (firmware 4.2.20);
-> the FLEX-8400 and Aurora have not been tested yet. FLEX-6000 series radios
-> can't run containers.
+> containers, on firmware **4.2.18 or later** (see
+> [Firmware Update](./firmware-update.md)). It was developed and measured
+> on a FLEX-8600 (firmware 4.2.20); the FLEX-8400 and Aurora have not been
+> tested yet. FLEX-6000 series radios can't run containers.
 
 ## What Tailscale is
 
@@ -62,7 +64,7 @@ Some things to know:
 |---|---|---|
 | Port forwarding at the station | Not needed; works behind CGNAT | Required (TCP 4994, UDP 4993) or UPnP |
 | Account | A **free** Tailscale Personal account | A FlexRadio SmartLink account |
-| Radios | FLEX-8000 series, Aurora | All FlexRadio models with SmartLink |
+| Radios | FLEX-8000 series, Aurora, firmware 4.2.18 or later | All FlexRadio models with SmartLink |
 | Station accessories (Antenna Genius, PGXL, TGXL) | Reachable remotely | Not reachable |
 | What the remote computer needs | The Tailscale app | Nothing extra |
 
@@ -116,8 +118,11 @@ local network.
 
 *The Waveforms window, listing the waveforms installed on the radio. The serial number and the waveform processor's address are blacked out.*
 
-1. Open **File → Waveforms…**.
-2. Click **Install…** and choose **Remote Access (Tailscale)**.
+When the installed list is empty, **No radio waveforms installed** appears
+with the hint **Use Install... to add waveforms to your radio.**
+
+1. Open **Tools → Waveforms...**.
+2. Click **Install...** and choose **Remote Access (Tailscale)**.
 3. AetherSDR downloads the container image (about 8 MB) and checks its
    size and SHA-256 against the values built into AetherSDR. Any other file
    is refused, and nothing is installed.
@@ -129,8 +134,8 @@ power-on.
 
 **Without internet on the AetherSDR computer**, download
 `flex-tailnet-shim-<version>.tar.gz` from the AetherSDR GitHub release
-tagged `flex-tailnet-shim-v<version>`. Then use **Install… → Docker
-Waveform Image…** and pick that file.
+tagged `flex-tailnet-shim-v<version>`. Then use **Install... → Docker
+Waveform Image...** and pick that file.
 
 The container can run alongside other waveform containers, such as FreeDV.
 AetherSDR has its own RADE digital voice, so it doesn't need the FreeDV
@@ -223,7 +228,7 @@ their applets work remotely too.
    **Confirmed in use over the tailnet**.
 5. Remotely, set each device's applet to its **LAN address** (for example
    `192.168.1.40`), exactly as at home. **WHO MAY CONNECT** applies to the
-   devices as well as the radio (container 0.4.1 and later). See [Amplifiers](./amplifiers.md) and
+   devices as well as the radio. See [Amplifiers](./amplifiers.md) and
    [TGXL Tuner Control](./tgxl-tuner-control.md).
 
 Remember `--accept-routes` on Linux computers (Part 2).
@@ -231,7 +236,7 @@ Remember `--accept-routes` on Linux computers (Part 2).
 ## Part 6 — Connect from anywhere
 
 1. Make sure Tailscale is running and logged in on the remote computer.
-2. In AetherSDR open **File → Connect to Radio…** and choose **Connect by
+2. In AetherSDR open **File → Connect to Radio...** and choose **Connect by
    IP** (see [Manual Connection](./manual-connection.md)).
 3. Set **Radio type:** to **FlexRadio**, enter the radio's **tailnet
    address**, and click **Connect by IP**.
@@ -323,7 +328,9 @@ container.
 - **Save Access List** takes effect at once. Anyone no longer on the list
   is disconnected from the radio, which ends anything they were
   transmitting, and their file transfers and station-device connections
-  are closed. (Container 0.4.1 and later.)
+  are closed. Only a definite refusal ends a connection: if Tailscale
+  can't answer who a device is (a timeout, for example), the connection
+  is kept, while a new connection is refused until it can.
 - Shared devices never reach the radio itself. A route wide enough to
   include the radio's own address doesn't make the radio's ports reachable
   through it.
@@ -357,6 +364,8 @@ about a fifth of one core and around 34 MB of memory.
 
 ## Troubleshooting
 
+- **The container won't install or start**: check that the radio runs
+  firmware 4.2.18 or later (see [Firmware Update](./firmware-update.md)).
 - **Remote Access says "Unavailable"**: connect to the radio over its
   local network, not over the tailnet, to change settings.
 - **"Doesn't look like a Tailscale auth key"**: paste the whole key,
@@ -380,7 +389,7 @@ about a fifth of one core and around 34 MB of memory.
   - on Linux, run `sudo tailscale set --accept-routes`;
   - set the applet to the device's LAN address.
 - Before reporting a problem, turn on the relevant log categories in **Help →
-  Support & Diagnostics…** (see [Support and Logging](./support-and-logging.md)).
+  Support & Diagnostics...** (see [Support and Logging](./support-and-logging.md)).
 
 ## Licensing
 

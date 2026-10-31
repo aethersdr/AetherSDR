@@ -25,11 +25,13 @@ See [Radio Setup](./radio-setup.md).
 
 Choose the computer's microphone (**Input**) and speaker (**Output**) devices. The selection is saved and restored at startup, and you can switch devices while connected.
 
+If the saved device is not connected, AetherSDR uses the system default device and keeps your saved choice. It switches back to the saved device when that device connects, without asking. On Linux, saved devices with IDs containing `.monitor`, `auto_null`, `echo-cancel`, or `combined`, or starting with `pulse_input_loopback`, are used again at the next launch rather than automatically restored when they reappear.
+
 AetherSDR handles sample-rate conversion itself. The microphone is captured at whatever rate the device offers, processed at 48 kHz, and converted once to the radio's transport rate. The PC microphone is used for transmit when the radio's mic source is **PC** (see [Choosing the mic source](#choosing-the-mic-source)).
 
 ### When a device is plugged in or removed
 
-When the operating system adds or removes an audio device, an **Audio Device Detected** dialog offers to switch PC audio to the new device or keep the current one, with a **Don't ask me again** option. It does not appear while your selected device is still available. Turn it on or off with **Prompt on Audio Device Changes** (on by default).
+When the operating system adds or removes an audio device, an **Audio Device Detected** dialog offers to switch PC audio to the new device or keep the current one, with a **Don't ask me again** option. It does not appear while your selected device is still available. In the dialog, leaving a direction on **System default** while its saved device is not connected uses the default for now and keeps the saved choice. Turn it on or off with **Prompt on Audio Device Changes** (on by default).
 
 ### Audio Boost
 
@@ -42,9 +44,11 @@ When the operating system adds or removes an audio device, an **Audio Device Det
 ## Volume and mute
 
 - **AF slider** (VFO flag or RX applet): the slice's audio level, 0–100.
-- **Mute button:** single-click mutes or unmutes this slice; double-click mutes or unmutes all of your slices. **Radio Setup → Appearance & Behavior → Single-click delay** sets how long AetherSDR waits to tell a single click from a double click (0 makes single clicks instant and turns off the double-click action).
+- **Mute button:** single-click mutes or unmutes this slice; double-click mutes or unmutes all of your slices. **Radio Setup → Appearance & Behavior → Single-Click Delay** sets how long AetherSDR waits to tell a single click from a double click (0 makes single clicks instant and turns off the double-click action).
 - Slice mute belongs to the radio, so it is not restored by AetherSDR on reconnect.
 - **Title-bar speaker icon and master slider** always show the path you are actually hearing. With **PC Audio** on, they show and control the computer's mute and level. With PC Audio off, they show the radio's Line Out mute and level, including changes made by another Multi-Flex client.
+- **Clicking the title-bar speaker** mutes or unmutes this computer's output and, on a radio with a line out AetherSDR can control, the radio's Line Out as well. On a radio with no such line out and PC Audio off, there is nothing to mute: the click is refused and the icon stays as it was.
+- The volume keyboard shortcuts, FlexControl and HID controllers, and TCI `volume` all adjust the same level the master slider shows: the computer's level with PC Audio on, the radio's Line Out level with it off. MIDI **Master Volume** has its own rules; see [MIDI Controller Mapping](./midi-controller-mapping.md#using-midi-with-non-flex-radios).
 - The title-bar headphone controls follow the radio's headphone output, and are dimmed on radios that have none.
 
 ## Recording QSOs
@@ -128,7 +132,6 @@ On Linux, GNOME and KDE block only automatic sleep, so choosing **Sleep** from t
 
 ## Known issues
 
-- A saved PC audio device that is missing when AetherSDR starts, such as Bluetooth headphones that connect later, is forgotten at the next device change, so you have to select it again ([#6040](https://github.com/aethersdr/AetherSDR/issues/6040)).
 - On remote links that deliver packets out of order, received audio has short dropouts because late packets are treated as lost ([#6051](https://github.com/aethersdr/AetherSDR/issues/6051)).
 - Client-side recordings can sound noisier than the audio you hear when client-side noise reduction is on ([#6246](https://github.com/aethersdr/AetherSDR/issues/6246)).
 

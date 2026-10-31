@@ -25,7 +25,11 @@ static QString extractField(const QString& block, const QString& fieldName)
     if (!m.hasMatch()) return {};
     int len = m.captured(1).toInt();
     int start = m.capturedEnd(0);
-    if (start + len > block.length()) return {};
+    // Compare against the space remaining rather than adding: `len` is an
+    // attacker-controlled <FIELD:len> token, and start + len overflows int
+    // (UB, and a wrapped-negative sum slips past the guard) near INT_MAX.
+    // start <= block.length(), so the subtraction cannot underflow.
+    if (len < 0 || len > block.length() - start) return {};
     return block.mid(start, len);
 }
 

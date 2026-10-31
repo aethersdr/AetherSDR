@@ -52,6 +52,9 @@ public:
         // Filled by submit(), never borrowed from the backend during preparation.
         Capture capture;
         bool extractRf = false;
+        // Analytic RTL IQ is opposite WDSP RXA's passband axis. FM recipes
+        // retain their established orientation; sideband recipes opt in.
+        bool conjugateIq = false;
         std::uint64_t epoch = 0; // reprepare on a gap without reusing DSP history
         std::optional<HdFmRecipe> hdFm; // alternative native decoder; analog edges remain in passband
         bool operator==(const ReceiverSpec&) const = default;

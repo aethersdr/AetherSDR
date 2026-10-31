@@ -1,4 +1,5 @@
 #include "WaveformsDialog.h"
+#include "CanonIndicators.h"
 #include "core/DigitalVoiceWaveformProcess.h"
 #include "core/DigitalVoiceWaveformSettings.h"
 #include "core/DigitalVoiceFeature.h"
@@ -405,21 +406,6 @@ QCheckBox {
     color: {{color.canon.inkSoft}};
     spacing: 9px;
 }
-QCheckBox::indicator {
-    width: 20px;
-    height: 20px;
-    border-radius: 4px;
-    border: 1px solid {{color.canon.lineHi}};
-    background: {{color.canon.control}};
-}
-QCheckBox::indicator:checked {
-    background: {{color.canon.cyan}};
-    border-color: {{color.canon.aqua}};
-}
-QCheckBox::indicator:disabled {
-    border-color: {{color.canon.line}};
-    background: transparent;
-}
 QPushButton,
 QToolButton {
     color: {{color.canon.cyan}};
@@ -803,7 +789,8 @@ QWidget* makeEmptyWaveformsState(QWidget* parent = nullptr)
     subtext->setAlignment(Qt::AlignCenter);
     subtext->setWordWrap(true);
     subtext->setAccessibleName(QObject::tr("Install radio waveforms hint"));
-    layout->addWidget(subtext, 0, Qt::AlignHCenter);
+    // Keep the wrapping width consistent with the layout's height-for-width calculation.
+    layout->addWidget(subtext);
 
     return state;
 }
@@ -938,7 +925,9 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     // the frameless main window is (CanonWindow itself only moves).
     FramelessResizer::install(this);
     bodyWidget()->setObjectName(QStringLiteral("waveformsBody"));
-    ThemeManager::instance().applyStyleSheet(bodyWidget(), kWaveformsDialogStyle);
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kWaveformsDialogStyle) + canonIndicatorRules();
+    });
 
     auto* root = new QVBoxLayout(bodyWidget());
     root->setSpacing(12);
@@ -1154,7 +1143,7 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     m_dstarSerialLabel->setBuddy(m_dstarSerialCombo);
 #if defined(Q_OS_WIN)
     m_dstarSerialCombo->lineEdit()->setPlaceholderText(tr("COM3"));
-#elif defined(Q_OS_MAC)
+#elif defined(Q_OS_MACOS)
     m_dstarSerialCombo->lineEdit()->setPlaceholderText(tr("/dev/cu.usbserial-*"));
 #else
     m_dstarSerialCombo->lineEdit()->setPlaceholderText(tr("/dev/ttyUSB0"));

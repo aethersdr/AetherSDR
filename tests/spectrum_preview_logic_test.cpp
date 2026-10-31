@@ -135,6 +135,35 @@ int testPanPointsForPixelWidth()
     return 0;
 }
 
+int testPanRadioXpixels()
+{
+    using namespace AetherSDR;
+    // The safety bound, from the measured stall (xpixels 4093 and up on a
+    // FLEX-8600, 4.3.16): unlike the 3840 checks, which follow the chosen cap,
+    // this one must not be relaxed if the cap changes.
+    for (const double dpr : {1.0, 1.25, 1.5, 2.0, 3.0}) {
+        for (int width = 1; width <= 8192; ++width) {
+            if (panRadioXpixels(width, dpr) > 4092) {
+                return fail("no pan width may request xpixels of 4093 or more");
+            }
+        }
+    }
+    if (panRadioXpixels(1000, 2.0) != 2000 || panRadioXpixels(1206, 1.0) != 1206
+        || panRadioXpixels(1920, 2.0) != 3840 || panRadioXpixels(1001, 1.5) != 1502) {
+        return fail("a pan inside the cap requests one xpixel per device pixel");
+    }
+    if (panRadioXpixels(1921, 2.0) != 3840 || panRadioXpixels(2560, 2.0) != 3840
+        || panRadioXpixels(5000, 1.0) != 3840) {
+        return fail("a pan wider than the cap requests exactly 3840 xpixels");
+    }
+    if (panRadioXpixels(1000, 0.0) != 1000
+        || panRadioXpixels(1000, std::numeric_limits<double>::quiet_NaN()) != 1000
+        || panRadioXpixels(0, 2.0) != 1) {
+        return fail("a bad ratio counts as 1 and the request is at least one xpixel");
+    }
+    return 0;
+}
+
 int testEdgeCropGateAndZoomAnchor()
 {
     using namespace AetherSDR;
@@ -1263,6 +1292,9 @@ int main()
         return result;
     }
     if (const int result = testPanPointsForPixelWidth(); result != 0) {
+        return result;
+    }
+    if (const int result = testPanRadioXpixels(); result != 0) {
         return result;
     }
     return testStablePresentationAnchor();

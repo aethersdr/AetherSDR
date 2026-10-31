@@ -31,7 +31,9 @@ These are the logging categories listed in **Help → Support & Diagnostics...**
 | Meters | `aether.meters` | Meter definitions and value conversion |
 | Transmit | `aether.transmit` | TX state, ATU, profiles, power control |
 | Firmware | `aether.firmware` | Firmware download, staging, upload |
+| App Updates | `aether.updater` | AetherSDR update checks: trigger, result, skipped and store-managed installs |
 | Tuner/AGM | `aether.tuner` | TGXL tuner, Antenna Genius state |
+| KAT500 Tuner | `aether.kat500` | Independent tuner connection, confirmed readbacks, configuration and maintenance diagnostics |
 | Peripheral Authorization | `aether.peripheral.auth` | Credential store availability and save failures; code values are never logged |
 | GUI | `aether.gui` | Window, applets, dialogs |
 | DX Cluster | `aether.dxcluster` | DX cluster telnet connection and spot parsing |
@@ -50,6 +52,7 @@ These are the logging categories listed in **Help → Support & Diagnostics...**
 | ANAN Protocol 2 | `aether.anan.p2` | ANAN/Saturn Protocol 2 wire session: DDC sequence gaps, speaker-audio FIFO level and underflow reports, unexpected sender ports |
 | KiwiSDR Audio/DSP | `aether.kiwisdr.audio` | Verbose KiwiSDR receive audio: frame decode, resampler, jitter/FIFO under/overrun, mixing (high-rate; off by default) |
 | Automation Bridge | `aether.automation` | Agent-drivable test bridge (#3646): QLocalServer verbs, widget snapshots, captures (AETHER\_AUTOMATION only) |
+| External Services | `aether.network` | Failed requests to external services (update check, QRZ, maps, propagation, radar), once per service, host, error and HTTP status, with TLS errors and the TLS backend in use; URLs are logged as scheme://host only |
 | QRZ Lookup | `aether.qrz` | QRZ.com callsign lookups: session, cache, CW callsign spotting, photos |
 | AetherClock | `aether.clock` | WWV/WWVB time-signal decoder: state transitions, per-second alignment, frame decodes, voter verdicts |
 | Hermes-Lite 2 | `aether.hl2` | HL2 backend: band changes, J16 companion-filter selection, LNA gain, and radio health telemetry |
@@ -60,4 +63,5 @@ These are the logging categories listed in **Help → Support & Diagnostics...**
 | Icom Scope | `aether.icom.pan` | Icom spectrum scope: sweep frames, division reassembly, bounds |
 | Icom Link | `aether.icom.link` | Icom backend link state: connect/disconnect, model resolution, capability publication |
 | Icom Credentials | `aether.icom.cred` | Icom credential storage and retrieval (no secret values are logged) |
+| BNR (NVIDIA AFX) | `aether.nvafx` | BNR GPU noise removal: runtime pack download and install failures, network transfer errors, filter load errors |
 | System Info | `aether.sysinfo` | Startup hardware/capability inventory: OS, CPU model + SIMD features, RAM, and the speech-engine ISA baseline check (#4986). A few lines once per launch |

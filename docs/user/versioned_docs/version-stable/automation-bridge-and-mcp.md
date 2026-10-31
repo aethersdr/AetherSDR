@@ -27,6 +27,10 @@ Each request is one line (a bare command or a JSON object) and each reply is one
 
 Open **Settings → Radio Setup... → Network** and find the **Advanced** group:
 
+<img src="/img/screens/radio-setup-network-advanced.png" width="643" alt="Advanced group of the Network page. Enforce Private IP Connections and Agent Automation (MCP) both read Enabled. The Access Token field is blacked out, beside Copy and Rotate buttons. Below are the Allow TX via MCP checkbox (Enable transmit control), the Observe only checkbox (Read-only, block all driving), Network MTU at 1450 bytes and a VITA-49 RX buffer slider at 4 MB, granted 8 MB." />
+
+*The Advanced group on the Network page, with the agent automation (MCP) switch. The access token is blacked out.*
+
 | Control | What it does |
 |---------|--------------|
 | **Agent Automation (MCP):** Enabled / Disabled | Starts or stops the bridge. Off by default. Enabling it with no token creates one. The setting is saved, so the bridge comes back at the next launch. |
@@ -34,7 +38,11 @@ Open **Settings → Radio Setup... → Network** and find the **Advanced** group
 | **Allow TX via MCP:** "Enable transmit control" | Lets bridge clients key the transmitter. Off by default; turning it on asks for a one-time confirmation. |
 | **Observe only:** "Read-only (block all driving)" | Blocks every action that changes anything; reads still work. |
 
-You can also start the bridge for a single run by launching with `AETHER_AUTOMATION=1`. In that case the Enabled/Disabled button is greyed out, because the environment variable wins.
+The `interlock probe` diagnostic works with **Observe only** enabled. It
+checks transmit-state reconciliation on an isolated model without changing
+your session or keying the radio. It still requires the access token.
+
+You can also start the bridge for a single run by launching with `AETHER_AUTOMATION=1`. In that case the Enabled/Disabled button is grayed out, because the environment variable wins.
 
 ### Access token
 
@@ -42,7 +50,7 @@ Every verb except `ping` is refused without the matching token. The token is kep
 
 To give it to an MCP client, set `AETHER_MCP_TOKEN` **only in the environment of the shell that launches your assistant**, using a method that does not record it in shell history. The MCP server inherits it from there.
 
-> **Keep the token out of shared configs.** Do not put the literal token in a shell profile, in `.mcp.json`, or in any other MCP config file: that puts a live credential on disk and risks it landing in a commit or a backup. The token field's tooltip in Radio Setup suggests pasting it into the MCP config; follow this page and the docs instead.
+> **Keep the token out of shared configs.** Do not put the literal token in a shell profile, in `.mcp.json`, or in any other MCP config file: that puts a live credential on disk and risks it landing in a commit or a backup. The token field's tooltip in Radio Setup gives the same advice and links this page, as do the tooltips on the other bridge controls.
 
 Headless or CI runs can pass `AETHER_MCP_TOKEN` to AetherSDR directly; it overrides the keychain.
 
@@ -62,6 +70,36 @@ The token decides which client you have deliberately let in. It is not a wall ag
 
 It offers typed tools (`bridge_status`, `dump_tree`, `grab_widget`, `get_state`, `get_log`, `invoke`, `tune`, `slice`, `pan`, `record`, `menu`, `connect`, `capture_audio`, `wait_for`, `assert_state` and more), plus a raw `bridge_command` for everything else, a `validate_ui_change` prompt, and read-only state resources. The transmit verbs are deliberately reachable only through `bridge_command`.
 
+### Editing the radio nickname
+
+Open **Settings → Radio Setup... → Radio**. Use `invoke` with target
+`radioNicknameEdit`, action `editText`, and the desired `value` (an empty
+string clears it). Then invoke action `commit` without a value. The dialog
+sends the nickname request; check `get_state` for the radio's accepted nickname.
+Repeated commits of an unchanged field do not send another request. These
+actions currently support only **Radio nickname**; `setText` alone does not
+commit it.
+
+### Temporary station identity
+
+On FlexRadio, `station <name>` sets this client's session-only station label for
+other MultiFlex clients. Use one token without spaces. It does not change your
+saved station name or radio-wide callsign. A successful reply means the request
+was sent, not that the radio confirmed it. Unsupported or disconnected radios
+refuse the request.
+
+Your saved station-name edits are retained even if an automation request
+applies a temporary label at the same time.
+
+Stopping the bridge restores your saved name only while that bridge still owns
+the override in the same radio session. A newer operator edit takes precedence;
+an old restore or reconnect callback cannot overwrite it.
+
+The `txwaterfall on|off` command changes **Show TX in Waterfall** through the same
+route as Radio Setup. FlexRadio owns the flag on the radio; Hermes-Lite 2 keeps
+it client-side. Other unsupported radios refuse it. This display setting never
+keys the transmitter.
+
 ## Using transmit safety
 
 - The bridge refuses to operate any control that keys the transmitter (MOX/PTT, TUNE, ATU, CWX send, packet/APRS send) through its generic "click this control" path, whoever is asking.
@@ -79,13 +117,23 @@ Tick **Observe only** to hand a client visibility without control. The bridge th
 
 `ping` needs no token and returns the app version plus the **build identity**: the `git describe` string, commit SHA, the release tag it is based on, commits since that tag, and whether the build had local changes. It is the same identity **Help → About** shows, so a test build can be told apart from a release with the same version number.
 
+### Checking pan creation and removal
+
+`pan create` and `pan close` report whether the backend accepted a request for
+dispatch, not whether a display has appeared or disappeared. Re-poll `get pans`
+to observe the result. Each entry in a close response includes `requested`;
+`closed` is the compatibility name for that request list, not proof of removal.
+An explicit `pan close all` may request the last pan's removal, but still respects
+backend refusals and display ownership. A normal single-pan close preserves the
+last pan. No pan action enables transmit.
+
 ## Reference
 
 ### Environment variables
 
 | Variable | Effect |
 |----------|--------|
-| `AETHER_AUTOMATION=1` | Starts the bridge for this run; greys out the Enabled/Disabled button |
+| `AETHER_AUTOMATION=1` | Starts the bridge for this run; grays out the Enabled/Disabled button |
 | `AETHER_MCP_TOKEN` | The access token for an MCP client; passed to AetherSDR itself, it overrides the keychain |
 | `AETHER_AUTOMATION_ALLOW_TX=1` | Allows the dedicated transmit verbs |
 | `AETHER_AUTOMATION_NO_TX=1` | Pins TX off for the process |
@@ -95,7 +143,7 @@ Tick **Observe only** to hand a client visibility without control. The bridge th
 
 ## Known issues
 
-- The VOX button refuses every bridge action, including switching VOX off, while the `vox_toggle` shortcut can still switch it on ([#6053](https://github.com/aethersdr/AetherSDR/issues/6053)).
+- Without **Allow TX via MCP**, the bridge cannot switch VOX off with the VOX button, and it cannot switch VOX on with the button at all, while the `vox_toggle` shortcut can still switch it on ([#6053](https://github.com/aethersdr/AetherSDR/issues/6053)).
 - `key ptt off` and `key mox off` report success without checking that the transmitter actually unkeyed ([#5252](https://github.com/aethersdr/AetherSDR/issues/5252)).
 
 ## Troubleshooting
@@ -122,7 +170,7 @@ Observe-only mode is on.
 1. Untick **Observe only** in **Settings → Radio Setup... → Network → Advanced**.
 2. If it stays on, the process was launched with `AETHER_AUTOMATION_READONLY=1`; relaunch without it.
 
-### The Enabled/Disabled button is greyed out
+### The Enabled/Disabled button is grayed out
 
 AetherSDR was launched with `AETHER_AUTOMATION=1`, and the environment variable wins.
 

@@ -8,7 +8,7 @@ AetherSDR has a built-in CAT server, so logging and digital-mode programs can re
 
 CAT works with WSJT-X, JTDX, fldigi, JS8Call, Winlink/VARA, N1MM+, DXLog and most other Hamlib- or Kenwood-aware programs. For audio, pair it with [DAX Virtual Audio](./dax-virtual-audio.md), or use the [TCI Server](./tci-server.md), which carries CAT and audio over one connection.
 
-![CAT Control applet in its own window. A Disabled button at the top with the hint Enable before configuring ports. Below is a table of CAT channels with the columns Enabled, Port, Dialect, VFO A, VFO B, PTY and Clients: the first row is port 4532 using the Rigctld dialect, the second is port 5001 using the Flex dialect, and the remaining rows are unassigned Flex channels.](/img/screens/cat-applet.png)
+<img src="/img/screens/cat-applet.png" width="368" alt="CAT Control applet in its own window. A Disabled button at the top with the hint Enable before configuring ports. Below is a table of CAT channels with the columns Enabled, Port, Dialect, VFO A, VFO B, PTY and Clients: the first row is port 4532 using the Rigctld dialect, the second is port 5001 using the Flex dialect with VFO B set to B, and the remaining six rows are unassigned Flex channels." />
 
 *The CAT Control applet popped out of the applet panel, showing the full channel table.*
 
@@ -79,9 +79,9 @@ The letter is the port's row (first row = `cat-A`), not the slice. The path is a
 
 ## Reference
 
-### Command behaviour
+### Command behavior
 
-- **Band changes move the panadapter.** A tune that lands inside the visible span moves only the slice, so Doppler-stepping satellite software does not keep re-centring the pan. A tune outside the span, or to another band, re-centres or re-bands the panadapter. This applies to WSJT-X and fldigi band changes, rigctld `set_freq`, `FA`/`FB` and VFO up/down (#4876).
+- **Band changes move the panadapter.** A tune that lands inside the visible span moves only the slice, so Doppler-stepping satellite software does not keep re-centering the pan. A tune outside the span, or to another band, re-centers or re-bands the panadapter. This applies to WSJT-X and fldigi band changes, rigctld `set_freq`, `FA`/`FB` and VFO up/down (#4876).
 - **Locked slices refuse.** A CAT tune on a locked slice returns an error instead of a false success.
 - **Split is tracked per client.** Each CAT client sees its own split state, so several WSJT-X instances (one per port) can all use **Split Operation: Fake It** (#4853).
 - **Safety.** A bare `ZZTX;` reads the transmit state; it does not key. TS-2000 satellite-mode TX is refused. Repeating `set_split_vfo` or `tx_enable` with the same value does not trip the radio's TX watchdog.
@@ -98,7 +98,7 @@ The letter is the port's row (first row = `cat-A`), not the slice. The path is a
 
 ## Troubleshooting
 
-To capture a log for any CAT problem, turn on the **TCI / CAT / rigctld** category in **Help → Support & Diagnostics…**. It logs the CAT servers and the virtual serial ports. See [Support and Logging](./support-and-logging.md).
+To capture a log for any CAT problem, turn on the **TCI / CAT / rigctld** category in **Help → Support & Diagnostics...**. It logs the CAT servers and the virtual serial ports. See [Support and Logging](./support-and-logging.md).
 
 ### The Clients column shows "—"
 

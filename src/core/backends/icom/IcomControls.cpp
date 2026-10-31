@@ -456,11 +456,11 @@ constexpr std::array kSpecs = {
                 IcomFeature::Scope},
     ControlSpec{"scope.fixededge", 0x27, 0x1E, true, "Scope fixed edges",
                 Plane::Pan, Encoding::Bcd4, Wiring::Declared,
-                1, 3, "preset", 1, 3,
+                1, 4, "preset", 1, 4,
                 "", "", false,
-                "STUB, and deliberately: FIXED mode's edges are three saved presets "
-                "per band, so following a pan drag would overwrite the operator's "
-                "own stored scope edges thirty times a second.", IcomFeature::Scope},
+                "Not a control: the backend writes only its own slot 4, for SCROLL-F "
+                "and Fixed pan gestures (#6168); operator slots 1-3 are never written.",
+                IcomFeature::Scope},
 
     // ---- Transmit passband ------------------------------------------------
     ControlSpec{"tx.bandwidth.slot", 0x16, 0x58, true, "SSB TX bandwidth slot",

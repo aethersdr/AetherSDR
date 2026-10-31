@@ -26,6 +26,7 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.accent.bright", QString("#00c8f0"));
     m_tokens.insert("color.accent.danger", QString("#ff4d4d"));
     m_tokens.insert("color.accent.dim", QString("#0070c0"));
+    m_tokens.insert("color.accent.offline", QString("#ff7a1a"));
     m_tokens.insert("color.accent.success", QString("#4dd87a"));
     m_tokens.insert("color.accent.warning", QString("#ffb84d"));
     m_tokens.insert("color.accessory.dial.face", QString("#0070c0"));
@@ -82,6 +83,13 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.canon.aqua", QString("#8ef7e6"));
     m_tokens.insert("color.canon.bloom.blue", QString("#293aa7ff"));
     m_tokens.insert("color.canon.bloom.teal", QString("#1a7bf2dc"));
+    m_tokens.insert("color.canon.category.amber", QString("#f0a35e"));
+    m_tokens.insert("color.canon.category.aqua", QString("#8ef7e6"));
+    m_tokens.insert("color.canon.category.blue", QString("#3aa7ff"));
+    m_tokens.insert("color.canon.category.cyan", QString("#5de3ff"));
+    m_tokens.insert("color.canon.category.rose", QString("#fca5a5"));
+    m_tokens.insert("color.canon.category.teal", QString("#7bf2dc"));
+    m_tokens.insert("color.canon.category.violet", QString("#c4a1ff"));
     m_tokens.insert("color.canon.control", QString("#12233a"));
     m_tokens.insert("color.canon.cyan", QString("#5de3ff"));
     m_tokens.insert("color.canon.grid", QString("#0978aad2"));
@@ -375,6 +383,23 @@ void ThemeManager::seedGeneratedDefaults()
     seedScopedToken(QStringLiteral("applet/tx"), "color.knob.foreground", QString("#ff4d4d"));
     seedScopedToken(QStringLiteral("applet/tx"), "color.slider.foreground", QString("#ff4d4d"));
     seedScopedToken(QStringLiteral("applet/tx"), "color.toggle.accent.background.checked", QString("#ff4d4d"));
+
+    // scope: canon
+    seedScopedToken(QStringLiteral("canon"), "color.accent", QString("#5de3ff"));
+    seedScopedToken(QStringLiteral("canon"), "color.accent.bright", QString("#8ef7e6"));
+    seedScopedToken(QStringLiteral("canon"), "color.background.0", QString("#0a121e"));
+    seedScopedToken(QStringLiteral("canon"), "color.background.1", QString("#0e1a2a"));
+    seedScopedToken(QStringLiteral("canon"), "color.background.2", QString("#12233a"));
+    seedScopedToken(QStringLiteral("canon"), "color.background.3", QString("#4778bee6"));
+    seedScopedToken(QStringLiteral("canon"), "color.border.strong", QString("#4778bee6"));
+    seedScopedToken(QStringLiteral("canon"), "color.border.subtle", QString("#1f78a5d2"));
+    seedScopedToken(QStringLiteral("canon"), "color.knob.background", QString("#12233a"));
+    seedScopedToken(QStringLiteral("canon"), "color.knob.foreground", QString("#5de3ff"));
+    seedScopedToken(QStringLiteral("canon"), "color.slider.background", QString("#12233a"));
+    seedScopedToken(QStringLiteral("canon"), "color.slider.foreground", QString("#5de3ff"));
+    seedScopedToken(QStringLiteral("canon"), "color.text.label", QString("#8598b4"));
+    seedScopedToken(QStringLiteral("canon"), "color.text.primary", QString("#eaf2fb"));
+    seedScopedToken(QStringLiteral("canon"), "color.text.secondary", QString("#c4d4e8"));
 }
 
 } // namespace AetherSDR

@@ -510,7 +510,7 @@ def key_sequence(expr: str, where: str) -> str:
 
 def platform_keys(src: Source, name: str, where: str) -> dict:
     """{'macOS': ..., 'other': ...} for a QKeySequence variable declared in
-    an ``#ifdef Q_OS_MAC`` / ``#else`` block."""
+    an ``#ifdef Q_OS_MACOS`` / ``#else`` block."""
     found = {}
     for m in re.finditer(
         r"const\s+QKeySequence\s+%s\s*(\((?:[^;]*)\))?\s*;" % re.escape(name),
@@ -520,9 +520,9 @@ def platform_keys(src: Source, name: str, where: str) -> dict:
         if not conds:
             raise ParseError(f"{where}: {name} is not inside a platform #ifdef")
         last = conds[-1]
-        if last == "Q_OS_MAC":
+        if last == "Q_OS_MACOS":
             plat = "macOS"
-        elif last == "not (Q_OS_MAC)":
+        elif last == "not (Q_OS_MACOS)":
             plat = "other"
         else:
             raise ParseError(f"{where}: {name} is under unexpected #if {last!r}")
@@ -887,7 +887,7 @@ MIDI_BASE_CONDS = {}
 def render_midi(params, sources) -> str:
     intro = [
         "These are the controls you can map to a MIDI controller in "
-        "**Settings → MIDI Mapping...**. The same list feeds the Ulanzi Dial "
+        "**Settings → Controllers → MIDI Mapping...**. The same list feeds the Ulanzi Dial "
         "button menus.",
         "",
         "- **Slider**: a continuous control (knob, fader, pitch bend), scaled "
@@ -945,7 +945,7 @@ def render_flexcontrol(actions, defaults, sources) -> str:
     intro = [
         "The FlexControl knob's three Aux buttons can each run one action on "
         "a single tap and another on a double tap. Set them in **Settings → "
-        "FlexControl Knob & Buttons...**.",
+        "Controllers → FlexControl Knob & Buttons...**.",
     ]
     rows = []
     for i, row in enumerate(defaults):
@@ -1010,7 +1010,7 @@ def parse_ulanzi(shortcuts, midi):
 
 def render_ulanzi(rotary, default_rotary, pills, sources) -> str:
     intro = [
-        "Set the Ulanzi Dial up in **Settings → Ulanzi Dial Mapping...**.",
+        "Set the Ulanzi Dial up in **Settings → Controllers → Ulanzi Dial Mapping...**.",
         "",
         "- The **wheel** runs one of the actions below.",
         "- Each **button** can run any action from "
@@ -1152,7 +1152,7 @@ def parse_log_categories():
         if len(fields) != 3:
             raise ParseError(f"{where}: category entry with {len(fields)} fields")
         cats.append([need_literal(f, where) for f in fields])
-    loose = len(re.findall(r'\{\s*"aether\.', src.code[open_pos:close]))
+    loose = len(re.findall(r'\{\s*"(?:aether|aethersdr)\.', src.code[open_pos:close]))
     if loose != len(cats):
         raise ParseError(f"{src.rel}: {loose} category rows, parsed {len(cats)}")
     ids = [c[0] for c in cats]
@@ -1233,11 +1233,11 @@ def parse_tci():
 
 def render_tci(commands, session, sources) -> str:
     intro = [
-        "These are the command names the TCI server recognises from a client. "
-        "Names are case-insensitive. A command the server does not recognise "
-        "is ignored, as the TCI specification requires. Recognising a command "
+        "These are the command names the TCI server recognizes from a client. "
+        "Names are case-insensitive. A command the server does not recognize "
+        "is ignored, as the TCI specification requires. Recognizing a command "
         "does not mean every radio supports every value of it; see the TCI "
-        "Server page for behaviour.",
+        "Server page for behavior.",
     ]
     std = [c for c, ext in commands if not ext]
     ext = [c for c, ext in commands if ext]
@@ -1252,7 +1252,7 @@ def render_tci(commands, session, sources) -> str:
     body += table(["Command"], [[code(c)] for c in ext]) + [""]
     return page(
         "TCI Commands",
-        "The TCI command names AetherSDR's TCI server recognises, generated "
+        "The TCI command names AetherSDR's TCI server recognizes, generated "
         "from the source.",
         sources, intro, body, 8,
     )
@@ -1276,7 +1276,7 @@ PAGES = [
     ("log-categories.md", "Log Categories",
      "logging categories for support logs"),
     ("tci-commands.md", "TCI Commands",
-     "command names the TCI server recognises"),
+     "command names the TCI server recognizes"),
 ]
 
 

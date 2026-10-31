@@ -18,6 +18,13 @@ Before opening the PR, please:
 <!-- One-paragraph description of what changes and why.  If this fixes
 an issue, lead with "Fixes #N" or "Closes #N". -->
 
+## Intent
+
+<!-- What will be true after this merges that is not true now, in one or two
+sentences, and anything deliberately left out of scope.  Review starts here:
+the diff is judged against this before it is read line by line, so a correct
+diff for the wrong goal is caught first. -->
+
 ## Constitution principle honored
 
 <!-- Cite the principle by Roman numeral when relevant.  E.g.
