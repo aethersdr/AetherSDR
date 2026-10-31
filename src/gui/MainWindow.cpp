@@ -9516,12 +9516,18 @@ void MainWindow::routeCwDecoderOutput()
                    m_cwDecoderApplet, &PanadapterApplet::appendCwTextTx);
         disconnect(&m_cwDecoder, &CwRxModel::statsUpdated,
                    m_cwDecoderApplet, &PanadapterApplet::setCwStats);
-        if (auto* pb = m_cwDecoderApplet->lockPitchButton())
+        // Unchecked after the disconnect, so returning to this pan shows no
+        // stale lock and the decoder is not toggled from here.
+        if (auto* pb = m_cwDecoderApplet->lockPitchButton()) {
             disconnect(pb, &QPushButton::toggled,
                        &m_cwDecoder, &CwRxModel::lockPitch);
-        if (auto* sb = m_cwDecoderApplet->lockSpeedButton())
+            pb->setChecked(false);
+        }
+        if (auto* sb = m_cwDecoderApplet->lockSpeedButton()) {
             disconnect(sb, &QPushButton::toggled,
                        &m_cwDecoder, &CwRxModel::lockSpeed);
+            sb->setChecked(false);
+        }
         disconnect(m_cwDecoderApplet, &PanadapterApplet::pitchRangeChanged,
                    &m_cwDecoder, &CwRxModel::setPitchRange);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::speedRangeChanged,
@@ -9561,10 +9567,17 @@ void MainWindow::routeCwDecoderOutput()
             m_cwLastSpeedWpm  = speedWpm;
         });
 #endif
+        // A lock holds the signal heard on the old pan, and a retarget is a
+        // station boundary: the target's buttons and the decoder start
+        // unlocked. Unchecked before the connect so only the explicit
+        // unlock below reaches the decoder.
+        m_cwDecoderApplet->lockPitchButton()->setChecked(false);
+        m_cwDecoderApplet->lockSpeedButton()->setChecked(false);
         connect(m_cwDecoderApplet->lockPitchButton(), &QPushButton::toggled,
                 &m_cwDecoder, &CwRxModel::lockPitch);
         connect(m_cwDecoderApplet->lockSpeedButton(), &QPushButton::toggled,
                 &m_cwDecoder, &CwRxModel::lockSpeed);
+        m_cwDecoder.releaseLocks();
         connect(m_cwDecoderApplet, &PanadapterApplet::pitchRangeChanged,
                 &m_cwDecoder, &CwRxModel::setPitchRange);
         m_cwDecoder.setPitchRange(m_cwDecoderApplet->pitchRangeLow(),

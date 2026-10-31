@@ -62,6 +62,9 @@ public:
     // republish or the panel keeps a dead reading (#5745).
     void lockPitch(bool on) { m_backend->lockPitch(on); if (!on && !isRunning()) { queueState(); } }
     void lockSpeed(bool on) { m_backend->lockSpeed(on); if (!on && !isRunning()) { queueState(); } }
+    // The locks live on ggmorse, which keeps them while another backend is
+    // selected, so releasing them must reach ggmorse, not the active backend.
+    void releaseLocks();
     void setPitchRange(int low, int high) { m_backend->setPitchRange(low, high); }
     void setSpeedRange(int low, int high) { m_backend->setSpeedRange(low, high); }
     float estimatedPitch() const { return m_backend->estimatedPitch(); }
