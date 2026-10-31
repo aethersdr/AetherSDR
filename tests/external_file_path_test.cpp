@@ -54,6 +54,8 @@ int main(int argc, char** argv)
     check(resolve(oldFile, mappings) == oldFile, "real-only file retains its original path");
     check(touch(logical), "create both-layer fixture");
     check(resolve(logical, mappings) == physical, "redirected file wins when both layers exist");
+    const QString doubled = cache + "/Local/Packages/Test_family/LocalCache/Local" + relative;
+    check(touch(doubled), "create exact doubled-redirection candidate");
     check(resolve(physical, mappings) == physical, "already physical path is not redirected twice");
     check(resolve(logical, {}) == logical, "missing mappings preserve input");
     check(resolve(logical, {{local, local}}) == logical, "unpackaged identity mapping preserves input");
