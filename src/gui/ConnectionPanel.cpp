@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "ConnectionPanel.h"
 #include "core/AppSettings.h"
 #include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with MainWindow_Session
@@ -1582,6 +1583,10 @@ bool ConnectionPanel::automationConnectLocalSerial(const QString& serial, QStrin
 
     for (int i = 0; i < m_radios.size(); ++i) {
         if (m_radios[i].serial.compare(wanted, Qt::CaseInsensitive) == 0) {
+            if (!AutomationIsolationPolicy::allowsRadio(m_radios[i].family, m_radios[i].serial)) {
+                setAutomationError(error, AutomationIsolationPolicy::refusal());
+                return false;
+            }
             setCurrentMode(LocalMode);
             m_radioList->setCurrentRow(i);
             onLocalConnectClicked();
@@ -1599,6 +1604,11 @@ bool ConnectionPanel::automationConnectByIp(const QString& hostOrIp,
                                             const QString& family,
                                             QString* error)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        setAutomationError(error, AutomationIsolationPolicy::refusal());
+        return false;
+    }
+
     const QString target = hostOrIp.trimmed();
     if (target.isEmpty()) {
         setAutomationError(error, QStringLiteral("connect ip requires an address"));
@@ -2071,6 +2081,10 @@ void ConnectionPanel::onLocalConnectClicked()
         return;
 
     const RadioInfo& info = m_radios[row];
+    if (!AutomationIsolationPolicy::allowsRadio(info.family, info.serial)) {
+        setStatusText(AutomationIsolationPolicy::refusal());
+        return;
+    }
     // F5 (#4448): an in-use radio of a single-client family can't be shared,
     // and connecting would wedge both clients. Fail closed. The rule lives in
     // ConnectionSharingPolicy.h — one home, shared with the startup
@@ -2101,6 +2115,11 @@ void ConnectionPanel::onLocalConnectClicked()
 
 void ConnectionPanel::onWanConnectClicked()
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        setStatusText(AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     const int row = m_wanList->currentRow();
     if (m_connected || row < 0 || row >= m_wanRadios.size())
         return;
@@ -2111,6 +2130,11 @@ void ConnectionPanel::onWanConnectClicked()
 
 void ConnectionPanel::onWanDisconnectClientsClicked()
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        setStatusText(AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     const int row = m_wanList->currentRow();
     if (row < 0 || row >= m_wanRadios.size())
         return;
@@ -2689,6 +2713,13 @@ void ConnectionPanel::reportStartupProbeFailure(const QString& reason)
 
 void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        setManualMessage(AutomationIsolationPolicy::refusal(), true);
+        resetManualConnectButton();
+        reportStartupProbeFailure(AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     const QString trimmedIp = ip.trimmed();
     if (trimmedIp.isEmpty())
         return;

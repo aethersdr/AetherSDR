@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "core/backends/anan/AnanDiscovery.h"
 
 #include "core/AppSettings.h"
@@ -239,6 +240,8 @@ bool AnanDiscovery::isRunning() const noexcept
 
 void AnanDiscovery::start(int intervalMs)
 {
+    if (AutomationIsolationPolicy::demoOnly()) { return; }
+
     // The timer starts even if sweepNow()'s bind fails: every sweep retries
     // it, so discovery recovers without a restart.
     m_timer->start(intervalMs);
@@ -274,6 +277,8 @@ bool AnanDiscovery::openSocket()
 
 void AnanDiscovery::sweepNow()
 {
+    if (AutomationIsolationPolicy::demoOnly()) { return; }
+
     // start() starts the timer before its first sweep, and stop() stops it,
     // so this is also the stopped case.
     if (!isRunning()) {

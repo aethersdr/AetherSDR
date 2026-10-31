@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "RadioDiscovery.h"
 #include "LogManager.h"
 
@@ -82,6 +83,8 @@ RadioDiscovery::~RadioDiscovery()
 
 void RadioDiscovery::startListening()
 {
+    if (AutomationIsolationPolicy::demoOnly()) { return; }
+
     // Close any previous socket state before (re-)binding
     m_socket.close();
 

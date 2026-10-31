@@ -34,18 +34,46 @@ production; it only exists when you ask for it via an env var.
 
 ## Quickstart
 
+Normal automation preserves the selected saved profile (including an inherited
+`AETHER_SETTINGS_DIR`) and honors `AutoConnectToLastRadio`. Enabling the bridge
+alone does not disable autoconnect or force simulator mode. Use only a profile
+and radio connection authorized for the task. The normal MCP launch is:
+
+```json
+{"action":"launch","worktree":"/absolute/path/to/AetherSDR","label":"proof"}
+```
+
+Simulator isolation is an optional test mode, not a prerequisite for review,
+fix, certification, or proof workflows. Use it for behavior the simulator can
+exercise. Real firmware and protocol convergence require the intended radio;
+state explicitly when that validation has not run.
+
+### Optional simulator-only launch
+
 ```bash
 # 1. Build with the bridge available (it's compiled in unconditionally;
 #    the env var below is what turns it on at runtime).
 cmake --build build --parallel
 
-# 2. Launch the app with the bridge enabled.
-AETHER_AUTOMATION=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &   # macOS
-#   AETHER_AUTOMATION=1 ./build/AetherSDR &                            # Linux/Windows
+# 2. Prepare a fresh simulator-only proof profile (POSIX shell).
+EXE="$PWD/build/AetherSDR.app/Contents/MacOS/AetherSDR"  # macOS
+# EXE="$PWD/build/AetherSDR"                           # Linux
+export AETHER_SETTINGS_DIR="$(mktemp -d)"
+export AETHER_AUTOMATION=1 AETHER_AUTOMATION_DEMO_ONLY=1 AETHER_AUTOMATION_NO_TX=1
+unset AETHER_AUTOMATION_ALLOW_TX
+export AETHER_AUTOMATION_SOCKET="/tmp/aether-demo-$$.sock"
+export AETHER_MCP_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+# Fail closed: do not launch if the headless policy/config check fails.
+python3 tools/automation_isolation.py "$EXE" && "$EXE" &
 
-# 3. Drive it. The dependency-free probe needs no Qt:
-python3 tools/automation_probe.py ping
-python3 tools/automation_probe.py demo --out /tmp/phase0   # → tree.json + panadapter.png
+# 3. Once the bridge has started, verify policy at this explicit socket.
+#    The dependency-free probe carries the token from the environment.
+python3 tools/automation_probe.py --socket "$AETHER_AUTOMATION_SOCKET" whoami | \
+  python3 -c 'import json,sys; p=json.load(sys.stdin); sys.exit(not (p.get("ok") is True and p.get("demoOnly") is True and p.get("txAllowed") is False))' &&
+python3 tools/automation_probe.py --socket "$AETHER_AUTOMATION_SOCKET" connect local serial DEMO-0001 &&
+python3 tools/automation_probe.py --socket "$AETHER_AUTOMATION_SOCKET" connect wait 30000 &&
+python3 tools/automation_probe.py --socket "$AETHER_AUTOMATION_SOCKET" demo --out /tmp/phase0
+# → tree.json + panadapter.png; stop the owned app after the proof.
 ```
 
 `demo` produces the two canonical artifacts: a semantic snapshot of the UI
@@ -53,19 +81,39 @@ python3 tools/automation_probe.py demo --out /tmp/phase0   # → tree.json + pan
 to confirm a visual change; parse the JSON to assert on control state.
 
 For headless / CI runs, add `QT_QPA_PLATFORM=offscreen` — no display required.
-Saved-radio autoconnect follows the `AutoConnectToLastRadio` setting; a bridge
-run reconnects to the last radio just as an interactive launch does. Use the
-`connect` verb to drive a specific radio, or clear the setting to start idle.
+Demo proofs require `AETHER_AUTOMATION_DEMO_ONLY` in the process environment
+and a successful headless `--config isolation-policy` capability check before
+GUI startup. Its presence enables the process pin even when its value is `0`.
+The helper requires policy version 1 with `demoOnlySupported:true` and
+`demoOnly:true`, then sets and reads back `AutoConnectToLastRadio=False`.
+Unsupported binaries, malformed replies, timeouts, or failed readback refuse
+launch. After startup, require authenticated `whoami.demoOnly:true` before setup
+or interaction. Isolated settings and disabled autoconnect alone do not prevent
+manual hardware connections.
+
+This process pin restricts radio connections to the simulator, including native
+UI actions, and cannot be disabled through settings. It is an application radio
+policy, not an operating-system network sandbox. Hardware proof requires explicit
+operator authorization and a separate process without the demo-only variable;
+normal interactive and automation launches retain their saved-profile behavior. Delete the manual
+scratch settings directory only after the process exits. The MCP `app_instance`
+tool manages this lifecycle automatically and is the preferred cross-platform
+proof launcher.
+
+Demo-only processes also refuse SmartLink automatic/manual login, token refresh,
+and server reconnect before credential or network access. SmartLink keychain
+reads, writes, and deletes are suppressed, including credential removal through
+logout. A fresh settings directory alone does not isolate the OS keychain.
 
 Parallel worktrees should give each bridge a stable automation identity and a
 human-readable agent name:
 
 ```bash
-AETHER_AUTOMATION=1 \
-AETHER_AUTOMATION_IDENTITY=issue-4166-worktree \
-AETHER_AUTOMATION_AGENT_NAME=Codex-GPT-5.6 \
-AETHER_AUTOMATION_SOCKET=aethersdr-4166 \
-./build/AetherSDR.app/Contents/MacOS/AetherSDR
+# Uses the demo-only environment and EXE from the quickstart above.
+export AETHER_AUTOMATION_IDENTITY=issue-4166-worktree
+export AETHER_AUTOMATION_AGENT_NAME=Codex
+export AETHER_AUTOMATION_SOCKET=aethersdr-4166
+python3 tools/automation_isolation.py "$EXE" && "$EXE"
 ```
 
 `AETHER_AUTOMATION_IDENTITY` deterministically selects a process-scoped Flex
@@ -124,7 +172,9 @@ socket the bridge needs. When the MCP wrapper is configured, prefer its secure
 outside the command sandbox instead:
 
 ```bash
-QT_QPA_PLATFORM=offscreen AETHER_AUTOMATION=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &
+# First export the fresh-profile/demo-only environment from the quickstart.
+export QT_QPA_PLATFORM=offscreen
+python3 tools/automation_isolation.py "$EXE" && "$EXE" &
 ```
 
 ---
@@ -150,7 +200,7 @@ contributors to self-verify UI changes before requesting review.
      ```
    - **Windows**: use `python` (or `py -3`) instead of `python3`.
 2. Launch through `app_instance` (recommended for a fresh proof build), or
-   manually with `AETHER_AUTOMATION=1 ./build/AetherSDR`.
+   use the fail-closed simulator-only quickstart above.
 
 **Tools exposed** (25 typed tools): process handoff — `app_instance`;
 introspection — `bridge_status`,
@@ -217,20 +267,38 @@ child process environment using the app's existing `AETHER_MCP_TOKEN` runtime
 override; the token is never a command-line argument, MCP result, discovery
 field, log message, or settings value.
 
-Each launch gets a unique explicit local socket and safe label. The wrapper
-pins TX automation off with `AETHER_AUTOMATION_NO_TX=1`, removes any inherited
-TX-enable flag, and refuses success unless token-free `ping` reports that auth
-is required and authenticated `whoami` matches the exact child PID, socket, and
-label with `txAllowed:false`.
-All other MCP tools then target that owned socket. `status` inspects only the
-owned process; `stop`, wrapper exit, or a failed launch terminates only that
-process and releases its socket.
+Each launch gets a unique explicit local socket and safe label. Normal launches
+preserve the inherited `AETHER_SETTINGS_DIR`, or the default saved profile when
+none is set, and honor `AutoConnectToLastRadio`. They do not run the isolation
+preflight or change that preference, and work with authenticated builds that
+lack demo-only support. The wrapper removes an inherited demo-only variable
+unless the launch explicitly requests `"demo_only":true`.
+
+With `"demo_only":true`, the wrapper instead creates a fresh owned settings
+directory, pins `AETHER_AUTOMATION_DEMO_ONLY=1`, disables autoconnect in that
+profile, and requires the headless policy/config preflight before spawning.
+This optional path additionally requires authenticated `whoami.demoOnly:true`.
+It refuses unsupported binaries rather than falling back to a normal launch.
+
+Both paths pin `AETHER_AUTOMATION_NO_TX=1` and remove any inherited TX-enable
+flag. Both require token-free `ping` to report authentication, a tokenless
+privileged request to be refused, and authenticated `whoami` to match the exact
+child PID, socket, and label with `txAllowed:false`.
+All other MCP tools then target that owned socket. Once a proof launch is
+requested, the wrapper never falls back to inherited or discovered instances,
+even if launch fails or the child exits. Later tools fail clearly until another
+explicit `app_instance launch` succeeds. A fresh wrapper session that has never
+requested a proof launch retains the usual explicit-attachment workflow.
+`status` inspects only the owned process; `stop`, wrapper exit, or a failed launch terminates only that
+process and releases its socket. The owned settings directory is removed only
+after confirmed process exit (or a failure before GUI launch). If stopping
+fails, ownership and the profile are retained until the process exits.
 
 The tool fails closed if the wrapper has no token. It does not read, print, or
 copy a secret from the app settings UI, so an assistant never needs to put the
-credential in chat or a plaintext MCP configuration. Observe-only remains
-operator-authoritative: if the saved setting is enabled, the launched instance
-reports `readOnly:true` and mutating tools remain blocked.
+credential in chat or a plaintext MCP configuration. Only the optional demo-only profile
+does not inherit operator preferences; normal profiles are never deleted by cleanup. Observe-only can be enabled within that
+instance; `readOnly:true` then blocks mutating bridge tools.
 
 What the token *does* and *doesn't* do: it opts a **specific** client in
 and protects the secret at rest (nothing in a backed-up / synced /
@@ -3814,11 +3882,14 @@ its own per-pid socket + discovery entry).
 ← {"ok":true,"pid":34758,"name":"aethersdr-automation-34758",
    "socket":"/var/folders/…/aethersdr-automation-34758",
    "label":"","station":"Automation","agentName":"Automation",
-   "txAllowed":false,"version":"26.6.5"}
+   "txAllowed":false,"demoOnly":true,"version":"26.6.5"}
 ```
 
-`txAllowed` reports whether `AETHER_AUTOMATION_ALLOW_TX` is set for this process —
-check it before assuming a keying verb will work. `label` is
+`demoOnly` reports the process-pinned simulator-only radio policy. Optional
+demo-only launches require the literal boolean `true`; normal launches do not
+require this field. Absent or false is not evidence of isolation.
+`txAllowed` reports the effective automation TX gate, including the process pin
+and operator preference; check it before assuming a keying verb will work. `label` is
 `AETHER_AUTOMATION_LABEL` (a human tag for the instance).
 
 ### `health`
