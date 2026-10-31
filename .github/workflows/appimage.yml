@@ -539,12 +539,29 @@ jobs:
           tar -cJf "AetherSDR-${SAFE_REF}-${{ matrix.arch }}-symbols.tar.xz" -C symbols .
           ls -l AetherSDR-*-symbols.tar.xz
 
+      # The release tarball (RFC #5304 Phase 5): the AppImage's own payload as
+      # AetherSDR-<ref>-<arch>.tar.zst, the `full` download an installed Linux
+      # copy stages in-app and what `AetherSDR --install` installs from. It is
+      # written from the image just built (read with unsquashfs, never run) and
+      # read back against its own file list; Update Manifest then checks it
+      # against the signed `files` before naming it.
+      - name: Build the release tarball
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -q squashfs-tools zstd
+          SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
+          python3 tools/build_update_manifest.py \
+            --tarball "AetherSDR-${SAFE_REF}-${{ matrix.arch }}.AppImage" \
+            "AetherSDR-${SAFE_REF}-${{ matrix.arch }}.tar.zst" --work "$RUNNER_TEMP/release-tarball"
+          ls -l AetherSDR-*.tar.zst
+
       - name: Upload artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: AppImage-${{ matrix.arch }}
           path: |
             AetherSDR-*.AppImage
+            AetherSDR-*.tar.zst
             AetherSDR-*-symbols.tar.xz
 
       - name: Attach to release
@@ -553,4 +570,5 @@ jobs:
         with:
           files: |
             AetherSDR-*.AppImage
+            AetherSDR-*.tar.zst
             AetherSDR-*-symbols.tar.xz

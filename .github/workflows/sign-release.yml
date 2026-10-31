@@ -1,6 +1,7 @@
 name: Sign Release Artifacts
 
-# GPG signs Linux AppImage, Windows binaries, and source archives.
+# GPG signs Linux AppImages and release tarballs, Windows binaries, and source
+# archives.
 # macOS artifacts are signed via Apple codesign + notarization.
 
 on:
@@ -103,6 +104,10 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           want="x86_64.AppImage aarch64.AppImage Windows-x64-setup.exe Windows-x64-portable.zip"
+          # Linux tarballs, when the tag's own AppImage build makes them.
+          if grep -q -- '--tarball' .github/workflows/appimage.yml; then
+            want="$want x86_64.tar.zst aarch64.tar.zst"
+          fi
           for i in $(seq 1 90); do
             names=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
             missing=
@@ -127,7 +132,7 @@ jobs:
         run: |
           mkdir -p artifacts
           gh release download "$TAG" \
-            --dir artifacts --pattern '*.AppImage' \
+            --dir artifacts --pattern '*.AppImage' --pattern '*.tar.zst' \
             --pattern '*.exe' --pattern '*.zip'
 
       - name: Generate source archive
@@ -159,7 +164,7 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         working-directory: artifacts
         run: |
-          for file in *.AppImage *.exe *.zip *.tar.gz SHA256SUMS.txt; do
+          for file in *.AppImage *.tar.zst *.exe *.zip *.tar.gz SHA256SUMS.txt; do
             [ -f "$file" ] || continue
             printf '%s' "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
               --passphrase-fd 0 \
