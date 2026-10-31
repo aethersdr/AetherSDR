@@ -42,7 +42,10 @@ public:
         QString username;
         QString password;
         quint32 sampleRateHz = 48000;
-        AudioCodec codec = AudioCodec::Lpcm1ch16;
+        AudioCodec codec = AudioCodec::Lpcm1ch16; // TX stays mono for the single PA.
+        // 0 auto-selects stereo RX from a high-end factory-address hint; 1/2
+        // explicitly choose transport shape for a customized CI-V bus address.
+        int rxChannels = 0;
         // Whether to negotiate a transmit channel at all. False leaves the
         // radio with no TX codec, which is a stronger guarantee than simply
         // not sending audio — a receive-only session cannot key by accident.
@@ -67,6 +70,7 @@ public:
         std::uint8_t civAddress = 0xA4;
     };
 
+    int rxChannels() const { return codecChannels(m_rxCodec); }
     explicit IcomSession(QObject* parent = nullptr);
     ~IcomSession() override;
 
@@ -149,6 +153,7 @@ private:
 
     IcomStream* m_control = nullptr;
     IcomStream* m_serial  = nullptr;
+    AudioCodec m_rxCodec = AudioCodec::Lpcm1ch16;
     IcomStream* m_audio   = nullptr;
 
     QTimer* m_tokenTimer = nullptr;

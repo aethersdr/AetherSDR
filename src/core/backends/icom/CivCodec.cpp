@@ -87,6 +87,8 @@ bool commandHasSubcommand(std::uint8_t command)
     // 0x26 is sub-addressed by VFO: 26 00 is the selected VFO, 26 01 the
     // unselected one. Without this the selector stays in the payload and every
     // mode/DATA/filter field is decoded one byte off.
+    case 0x25: // Absolute MAIN/SUB frequency on high-end receivers.
+    case 0x29: // Receiver-addressed command wrapper.
     case cmd::kVfoMode:
         return true;
     default:

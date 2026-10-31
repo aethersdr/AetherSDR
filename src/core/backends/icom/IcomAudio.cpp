@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace AetherSDR::icom {
 namespace {
@@ -214,11 +215,19 @@ std::size_t TxPacketizer::padToFrame()
 
 std::vector<float> RxAssembler::accept(std::span<const std::uint8_t> payload)
 {
-    return decodeAudio(m_codec, payload);
+    if (m_codec != AudioCodec::Lpcm2ch16) { return decodeAudio(m_codec, payload); }
+    // A UDP payload boundary need not be a stereo-frame boundary. Retain
+    // incomplete frames so one packet cannot swap MAIN and SUB thereafter.
+    std::vector<std::uint8_t> bytes = std::move(m_partialFrame);
+    bytes.insert(bytes.end(), payload.begin(), payload.end());
+    const std::size_t complete = bytes.size() - bytes.size() % 4;
+    m_partialFrame.assign(bytes.begin() + complete, bytes.end());
+    return decodeAudio(m_codec, std::span<const std::uint8_t>(bytes).first(complete));
 }
 
-std::vector<float> RxAssembler::concealLoss(int packets, int sampleRateHz) const
+std::vector<float> RxAssembler::concealLoss(int packets, int sampleRateHz)
 {
+    m_partialFrame.clear();
     if (packets <= 0 || sampleRateHz <= 0)
         return {};
     // 10 ms per packet is the AVERAGE across the unequal pair, and averaging is
@@ -226,7 +235,7 @@ std::vector<float> RxAssembler::concealLoss(int packets, int sampleRateHz) const
     // we cannot know, and silence of approximately the right duration keeps the
     // stream's timing from walking.
     const std::size_t perPacket = static_cast<std::size_t>(sampleRateHz) / 100;
-    return std::vector<float>(perPacket * static_cast<std::size_t>(packets), 0.0f);
+    return std::vector<float>(perPacket * static_cast<std::size_t>(packets) * codecChannels(m_codec), 0.0f);
 }
 
 }  // namespace AetherSDR::icom

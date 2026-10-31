@@ -961,6 +961,7 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomModels.cpp    # IcomCIV Phase 5 (per-model capability table)
     src/core/backends/icom/IcomControls.cpp  # the CI-V control registry (controls.map / controls.scrub)
     src/core/backends/icom/IcomCivBackend.cpp # IcomCIV (IRadioBackend impl)
+    src/core/backends/icom/IcomCivBackend_DualReceiver.cpp
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
     src/core/dsp/FftwPlannerLock.cpp # the one process-global FFTW planner lock (#5895)

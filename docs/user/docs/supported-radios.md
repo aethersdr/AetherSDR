@@ -70,7 +70,7 @@ This table lists only what has been confirmed for each family. A **?** means not
 
 Notes:
 - **Receivers on the HL2:** up to four receivers at spans up to 192 kHz, three at 384 kHz. The span is one value for the whole board.
-- **Icom panadapters:** the IC-9700, IC-7610 and IC-785x offer one panadapter, the single scope stream AetherSDR implements.
+- **Icom panadapters:** the IC-7610 and IC-7760 have an initial two-pan MAIN/SUB implementation, pending hardware qualification. The IC-9700 and IC-785x offer one panadapter.
 - **Memory channels:** a FlexRadio keeps its memories. Every other family uses one shared bank stored on this computer. On an Icom whose model supports it, the radio's own memories can be read into that bank; the IC-9700's radio memories are read-only. See [Memory Channels](./memory-channels.md).
 
 ### Controls on non-Flex radios
