@@ -103,6 +103,37 @@ void PhoneApplet::setVoxDelayAvailable(bool available)
     m_voxDelayRow->setToolTip(available ? QString() : tr("VOX delay is unavailable on this radio"));
 }
 
+void PhoneApplet::setVoxAvailable(bool available)
+{
+    m_voxAvailable = available;
+    if (!m_voxBtn || !m_voxLevelSlider) {
+        return;
+    }
+    // The reason reaches a screen reader through accessibleDescription; a
+    // tooltip alone is never announced (theme-style-guide, Three-state controls).
+    const QString reason = tr("Unavailable: this radio has no voice-operated "
+                              "transmit that AetherSDR can control.");
+    if (available) {
+        m_voxBtn->setToolTip(QString());
+        m_voxBtn->setAccessibleDescription(
+            QStringLiteral("Toggle voice-activated transmit"));
+        m_voxLevelSlider->setToolTip(QString());
+        m_voxLevelSlider->setAccessibleDescription(
+            QStringLiteral("VOX activation threshold"));
+    } else {
+        // Optimistic setVoxEnable() would otherwise leave the button lit.
+        const QSignalBlocker blocker(m_voxBtn);
+        m_voxBtn->setChecked(false);
+        m_voxBtn->setToolTip(reason);
+        m_voxBtn->setAccessibleDescription(reason);
+        m_voxLevelSlider->setToolTip(reason);
+        m_voxLevelSlider->setAccessibleDescription(reason);
+    }
+    m_voxBtn->setEnabled(available);
+    m_voxLevelSlider->setEnabled(available);
+    m_voxLevelLabel->setEnabled(available);
+}
+
 void PhoneApplet::buildUI()
 {
     auto* outer = new QVBoxLayout(this);
@@ -569,7 +600,7 @@ void PhoneApplet::syncFromModel()
     // VOX
     {
         QSignalBlocker b(m_voxBtn);
-        m_voxBtn->setChecked(m_model->voxEnable());
+        m_voxBtn->setChecked(m_voxAvailable && m_model->voxEnable());
     }
     {
         QSignalBlocker b(m_voxLevelSlider);
