@@ -1954,13 +1954,25 @@ RadioCapabilities Hl2Backend::capabilities() const
          QStringLiteral("SAM"), QStringLiteral("CW"), QStringLiteral("CWL"),
          QStringLiteral("FM")}};
     // Conservative carrier-relative subdomains of the existing WDSP passband.
+    // Every mode below has its cuts applied by the NBP stage ahead of the
+    // detector (WdspChannel::setFilter -> RXANBPSetFreqs; nbp0 runs in every
+    // non-WBFM mode, third_party/wdsp/upstream/RXA.c SetRXAMode) and read back
+    // unchanged (Receiver::filterLowHz/HighHz, carrier-relative). DSB and FM are
+    // symmetric-about-the-carrier like AM, so they take AM's range; the straddle
+    // keeps the carrier inside the passband. CW/CWL add the BFO to the cuts in
+    // dspFilterHz(), whose pitch reaches 6000 Hz (setCwPitch), so their cuts stop
+    // at 6000 Hz and the demodulator's edges stay inside +-12000 Hz.
     c.receiveFilterControl = ReceiveFilterControl{SliceFrequencyControl::Authority::Engine, {
         {QStringLiteral("USB"), 0, 11990, 10, 12000, 10, 12000},
         {QStringLiteral("DIGU"), 0, 11990, 10, 12000, 10, 12000},
         {QStringLiteral("LSB"), -12000, -10, -11990, 0, 10, 12000},
         {QStringLiteral("DIGL"), -12000, -10, -11990, 0, 10, 12000},
         {QStringLiteral("AM"), -12000, -10, 10, 12000, 20, 24000},
-        {QStringLiteral("SAM"), -12000, -10, 10, 12000, 20, 24000}}};
+        {QStringLiteral("SAM"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("DSB"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("FM"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("CW"), -6000, -10, 10, 6000, 20, 12000},
+        {QStringLiteral("CWL"), -6000, -10, 10, 6000, 20, 12000}}};
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.dspParameterReset = std::nullopt;

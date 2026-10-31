@@ -452,6 +452,74 @@ void productionCapabilityContracts()
     check(hl2Caps.receiveModeControl && hl2Caps.receiveFilterControl && hl2Caps.receiveAudioControl
         && hl2Caps.receivePanCenterControl && !hl2Caps.receivePanBandwidthControl,
         "HL2 exposes receive controls but not topology-changing bandwidth");
+    // The HL2's adjustable filters: every mode whose cuts reach the NBP stage
+    // and are read back. WBFM/WFM/DRM never appear (not receive-controllable).
+    QStringList hl2FilterModes;
+    const auto hl2Filter = [&](const QString& mode) -> const ReceiveFilterMode* {
+        for (const ReceiveFilterMode& filter : hl2Caps.receiveFilterControl->modes) {
+            if (filter.mode == mode) { return &filter; }
+        }
+        return nullptr;
+    };
+    for (const ReceiveFilterMode& filter : hl2Caps.receiveFilterControl->modes) {
+        hl2FilterModes.append(filter.mode);
+    }
+    hl2FilterModes.sort();
+    check(hl2FilterModes == QStringList{"AM", "CW", "CWL", "DIGL", "DIGU", "DSB", "FM", "LSB", "SAM", "USB"},
+        "HL2 declares adjustable filters for exactly its sideband, data, AM, DSB, CW and FM modes");
+    bool filterModesRequestable = true;
+    for (const QString& mode : hl2FilterModes) {
+        filterModesRequestable &= hl2Caps.receiveModeControl->modes.contains(mode);
+    }
+    check(filterModesRequestable, "every HL2 filter mode is also a requestable receive mode");
+    const ReceiveFilterMode* hl2Dsb = hl2Filter(QStringLiteral("DSB"));
+    const ReceiveFilterMode* hl2Fm = hl2Filter(QStringLiteral("FM"));
+    const ReceiveFilterMode* hl2Cw = hl2Filter(QStringLiteral("CW"));
+    const ReceiveFilterMode* hl2Cwl = hl2Filter(QStringLiteral("CWL"));
+    check(hl2Dsb && hl2Fm && hl2Cw && hl2Cwl, "HL2 DSB, FM, CW and CWL filter records exist");
+    if (hl2Dsb && hl2Fm && hl2Cw && hl2Cwl) {
+        // Carrier-straddling modes: the carrier stays inside every accepted
+        // passband, so a low cut is always negative and a high cut positive.
+        bool straddles = true;
+        for (const ReceiveFilterMode* range : {hl2Dsb, hl2Fm, hl2Cw, hl2Cwl}) {
+            straddles &= range->maximumLowHz < 0 && range->minimumHighHz > 0;
+        }
+        check(straddles, "HL2 DSB/FM/CW/CWL filters always straddle the carrier");
+        // The default passbands the backend adopts on a mode change fit.
+        check(hl2Dsb->minimumLowHz <= -3000 && hl2Dsb->maximumHighHz >= 3000
+                && hl2Fm->minimumLowHz <= -8000 && hl2Fm->maximumHighHz >= 8000
+                && hl2Cw->minimumLowHz <= -250 && hl2Cw->maximumHighHz >= 250
+                && hl2Cwl->minimumLowHz <= -250 && hl2Cwl->maximumHighHz >= 250,
+            "HL2 default DSB, FM and CW passbands lie inside their declared ranges");
+        // CW cuts stop at 6000 Hz: the BFO (pitch up to 6000 Hz) is added on top.
+        check(hl2Cw->minimumLowHz == -6000 && hl2Cw->maximumHighHz == 6000
+                && hl2Cwl->minimumLowHz == -6000 && hl2Cwl->maximumHighHz == 6000,
+            "HL2 CW and CWL cuts leave room for the maximum CW pitch");
+        // A pair beyond the CW limit or not straddling the carrier is outside.
+        const auto accepts = [](const ReceiveFilterMode& r, int low, int high) {
+            const qint64 width = qint64(high) - low;
+            return low >= r.minimumLowHz && low <= r.maximumLowHz
+                && high >= r.minimumHighHz && high <= r.maximumHighHz
+                && width >= r.minimumWidthHz && width <= r.maximumWidthHz;
+        };
+        check(accepts(*hl2Cw, -250, 250) && accepts(*hl2Cwl, -250, 250)
+                && accepts(*hl2Fm, -8000, 8000) && accepts(*hl2Dsb, -3000, 3000),
+            "HL2 accepts the default CW, CWL, FM and DSB passbands");
+        check(!accepts(*hl2Cw, -7000, 250) && !accepts(*hl2Cwl, 100, 500)
+                && !accepts(*hl2Fm, -13000, 8000) && !accepts(*hl2Dsb, -5, 5),
+            "HL2 refuses cuts past the CW limit, off the carrier, past 12 kHz and too narrow");
+    }
+    check(!hl2Filter(QStringLiteral("WBFM")) && !hl2Filter(QStringLiteral("WFM"))
+            && !hl2Filter(QStringLiteral("DRM")) && !hl2Filter(QStringLiteral("NFM"))
+            && !hl2Filter(QStringLiteral("CWU")),
+        "HL2 offers no filter for modes it cannot be asked to enter or that are aliases");
+    QStringList flexFilterModes;
+    for (const ReceiveFilterMode& filter : flexCaps.receiveFilterControl->modes) {
+        flexFilterModes.append(filter.mode);
+    }
+    flexFilterModes.sort();
+    check(flexFilterModes == QStringList{"AM", "DIGL", "DIGU", "DSB", "LSB", "SAM", "USB"},
+        "Flex filter modes are unchanged by the HL2 declaration");
     SliceDelta observed;
     int gainReports = 0;
     QObject::connect(&hl2, &IRadioBackend::sliceChanged, &hl2, [&](int, const SliceDelta& delta) {
