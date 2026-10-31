@@ -122,7 +122,7 @@ where the same field would be a wire command.
 | `setSliceFilter(id, lo, hi)` | **Engine DSP** — configures the RX `WdspChannel` passband on the control path. |
 | `setSliceNoiseBlanker(id, kind, level, fill)` | **Engine DSP** — WDSP's two impulse blankers, ANB (`nob.c`) and NOB (`nobII.c`), on the raw IQ ahead of the `WdspChannel`, per receiver. `kind` picks one and at most one ever runs; `fill` is what the NOB puts in the blanked window (WDSP's own 0..4) and is ignored by the ANB, which always zeroes ([screenshot](../screenshots/hl2-noise-blanker.png)). The HL2 runs no firmware DSP, so this is the same arrangement as the manual notch: the verb lands in WDSP on this host or it lands nowhere. `level` is 0..100 and rises with aggression; WDSP's own threshold is a multiple of the running average magnitude and therefore falls with it, so `WdspChannel::noiseBlankerThresholdForLevel()` owns the inversion. Held OFF across a transmit period — the mute path clocks the channel with silence, and a blanker whose reference average decays into that silence gates the start of the next receive period. The held stage is SKIPPED rather than flushed, so its average is frozen at the pre-transmit signal level and it is armed for the first receive sample; flushing on the T→R edge would re-arm it from full scale and leave it unable to trigger for ~200 ms of every receive period. `hasHostNoiseBlanker` is what makes the NB button visible. |
 | `setKeying(bool)` | **Guarded no-op** — `capabilities().canTransmit == false`, so the engine TX guard (RFC §6) denies keying above the seam; the backend never keys. (TX is Phase 2+.) |
-| `invokeExtension(...)` | Stub, exactly like FlexBackend (FlexBackend::invokeExtension): if `requestId != 0`, emit `extensionError` immediately. HL2 advertises **no** extension namespaces (see §4). |
+| `invokeExtension(...)` | Implemented for namespace `hl2` (`Hl2Backend::invokeExtension`; verbs such as `freqcal.get`, `freqcal.set`, `hw.get`, `hw.set`, `bandscope.enable`, `ioboard.status`, `nb.get`). HL2 advertises that namespace (see §4). The daemon control protocol has no method that invokes an extension, so only in-process callers reach these verbs. |
 
 ### State UP
 
@@ -160,16 +160,17 @@ caps.hasTuner            = false;
 caps.hasAmplifier        = false;
 caps.hasExtendedDsp      = false;                 // DSP is engine-side, not firmware
 caps.persistsMemories    = false;                 // no radio-side memory slots
-caps.extensionNamespaces = {};                    // advertise NONE until step 3
+caps.extensionNamespaces << "hl2";               // verbs implemented in invokeExtension
 ```
 
 `persistsMemories = false` is the struct's default, so HL2 gets it by saying
 nothing — see §4a.
 
-The empty `extensionNamespaces` follows FlexBackend's deliberate precedent
-(FlexBackend's capabilities setup): advertising a namespace whose `invokeExtension`
-can't yet reply would hang a client. HL2 keeps it empty until the step-3 encode
-path lands.
+`extensionNamespaces` names `hl2` because `invokeExtension` answers its verbs: the field is
+what a client checks before issuing an extension call, so it must not be empty while the
+verbs work. The namespace name is carried in the `radioCatalogue` resource's `extensions`
+list; the daemon does not expose a way to call a verb (see the HL2 section of
+[the control resource catalogue](../aetherd-control-resource-v1-catalogue.md#hl2-backend-observations)).
 
 ---
 
@@ -281,7 +282,7 @@ data plane, and multi-RX all wait for their respective later steps.
   and is deliberately deferred — it is also the only path that can key a radio, so
   keeping it out of Phase 1 is the safe default.
 - **Multiple DDC receivers.** Gateware supports them; Phase 1 is one slice / one pan.
-- **Vendor extensions.** No namespaces advertised until the step-3 encode path exists.
+- **Vendor extensions through the daemon.** The `hl2` namespace is advertised and implemented in-process, but the control protocol's closed method registry has no extension method, so a daemon client cannot invoke it.
 - **Discovery-driven UI selection / multi-radio.** Phase 1 connects to an explicit
   host; enumeration is a later enhancement (the spike's `discover.py` proves it works).
 

@@ -345,3 +345,47 @@ It introduces no TX verb, grant, lease, policy decision or safety guarantee.
 
 FFT bins, waterfall rows, audio, and other high-rate streams never enter these
 JSON resources; they belong to the later bounded binary data plane.
+
+## HL2 backend observations
+
+What an HL2 session shows through the resources above, from
+`Hl2Backend::defineMeters` and `Hl2Backend::capabilities`. Nothing here adds a
+method or a resource.
+
+### Meters
+
+The HL2 defines nine meters. They reach clients through the generic `meter`
+resource; the HL2 chooses the indices, since the radio assigns none.
+
+| Index | `source` | `name` | `unit` | Range | Note |
+|---|---|---|---|---|---|
+| 1 | `SLC` | `LEVEL` | `dBm` | -140 to 0 | Receive signal level |
+| 2 | `TX` | `FWDPWR` | `dBm` | 0 to 41 | Forward power; uncalibrated |
+| 3 | `TX` | `REFPWR` | `dBm` | 0 to 41 | Reflected power; uncalibrated |
+| 4 | `TX` | `SWR` | `SWR` | 1 to 10 | Standing wave ratio |
+| 5 | `RAD` | `PATEMP` | `degC` | 0 to 100 | PA temperature |
+| 6 | `TX` | `MICPEAK` | `dBFS` | -100 to 0 | Microphone peak |
+| 7 | `TX` | `ALC` | `dBFS` | -100 to 0 | Post-ALC audio peak, before the modulator |
+| 8 | `TX` | `COMPPEAK` | `dB` | 0 to 25 | Speech processor compression |
+| 9 | `TX` | `ALCGAIN` | `dB` | -20 to 0 | Gain the ALC is applying |
+
+`FWDPWR` and `REFPWR` are labelled uncalibrated in their definitions: the value
+comes from an uncalibrated reference curve, not a calibrated power reading.
+
+### Not offered
+
+- Supply voltage and PA current telemetry: not offered. The HL2 sets
+  `hasSupplyVoltageTelemetry` and `hasPaCurrentTelemetry` to false.
+- ADC overload: the backend emits `frontEndOverloadChanged`, but no daemon
+  resource carries it.
+- `radioCatalogue` capabilities: `maximumTransmitWatts` is `0.0` for the HL2,
+  meaning uncalibrated rather than zero watts. The HL2's `txPowerBands` is not
+  projected into any resource.
+
+### Extensions
+
+The HL2 advertises extension namespace `hl2`, listed in the `radioCatalogue`
+capabilities `extensions` field, and implements its verbs in
+`Hl2Backend::invokeExtension`. The control protocol's method registry is
+closed and has no extension method, so a daemon client cannot invoke them;
+only in-process callers can.
