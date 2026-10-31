@@ -1117,8 +1117,9 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     // and throw away the frame now in progress; FlexLib drops it
     // (reference/FlexLib/FlexLib/Panadapter.cs:805, v4.3.16) (#6883).
     if (totalBins == frame.totalBins
-        && isStragglerFftFrame(frame.frameIndex, frameIndex))
+        && isStragglerFftFrame(frame.frameIndex, frameIndex)) {
         return;
+    }
     const bool startsNewFrame =
         frameIndex != frame.frameIndex || totalBins != frame.totalBins;
     if (startsNewFrame) {
