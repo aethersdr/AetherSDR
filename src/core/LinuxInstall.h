@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 
 #include <functional>
 
@@ -46,8 +47,11 @@ public:
     // AppImage, a build folder, a distribution's package.
     static QString treeOf(const QString& appDir, const QString& base);
 
-    // AetherSDR --install, from an unpacked tarball (or, later, from inside
-    // the AppImage): copies tree into <base>/<version>, makes it current,
+    // The release current names in base, or empty when there is no install.
+    static QString installedVersion(const QString& base);
+
+    // AetherSDR --install, from an unpacked tarball or from inside the
+    // AppImage (Install for updates, RFC #5304 Phase 6): copies tree into <base>/<version>, makes it current,
     // and points the menu entry, its icon and the aethersdr command at
     // current. A file or link of the user's own at ~/.local/bin/aethersdr is
     // left alone; note says so. If the menu entry can't be written, current
@@ -79,10 +83,16 @@ public:
     static Switch switchTo(const QString& base, const QString& stagedDir, const QString& version,
                            const QString& keep, const SelfTest& test, bool retry, QString* problem);
 
+    // What an AppImage's runtime sets ($APPIMAGE, $APPDIR, ...): an
+    // installed release started from inside the AppImage is run without
+    // them, or it would take itself for the AppImage.
+    static QStringList appImageVariables();
+
     // Starts program once process pid has exited, giving up after two
     // minutes: Restart to update's relaunch, without a second instance
-    // overlapping the one that is closing.
-    static bool startAfterExit(qint64 pid, const QString& program);
+    // overlapping the one that is closing. The variables named in unset are
+    // removed from what program starts with.
+    static bool startAfterExit(qint64 pid, const QString& program, const QStringList& unset = {});
 };
 
 } // namespace AetherSDR

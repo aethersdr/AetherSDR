@@ -240,9 +240,9 @@ static int runConfigCli(int argc, char* argv[])
 
 #ifdef Q_OS_LINUX
 // ── `AetherSDR --install` — the Linux install the updater keeps current ───────
-// Run from an unpacked release tarball: copies the release into
-// ~/.local/share/AetherSDR/install/<version>/, makes it current, adds the
-// menu entry and the aethersdr command, then starts it (RFC #5304 Phase 5).
+// Run from an unpacked release tarball or the AppImage: copies the release
+// into ~/.local/share/AetherSDR/install/<version>/, makes it current, adds
+// the menu entry and the aethersdr command, then starts it (RFC #5304 Phase 5).
 // Needs a console, not a window; nothing of the user's settings is touched.
 static int runInstallCli(int argc, char* argv[])
 {
@@ -273,7 +273,15 @@ static int runInstallCli(int argc, char* argv[])
         std::printf("%s\n", qPrintable(note));
     }
     if (qEnvironmentVariableIsSet("WAYLAND_DISPLAY") || qEnvironmentVariableIsSet("DISPLAY")) {
-        QProcess::startDetached(run, {});
+        // Run from the AppImage, the installed copy must not inherit its variables.
+        QProcess process;
+        process.setProgram(run);
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        for (const QString& name : AetherSDR::LinuxInstall::appImageVariables()) {
+            env.remove(name);
+        }
+        process.setProcessEnvironment(env);
+        process.startDetached();
     }
     return EXIT_SUCCESS;
 }

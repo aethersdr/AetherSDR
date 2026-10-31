@@ -46,6 +46,22 @@ public:
         // UpdateSettings::rolledBackVersion: a release the helper rolled
         // back is never staged or offered again.
         std::function<QString()> rolledBackVersion;
+
+        // Install for updates (RFC #5304 Phase 6), on Linux: the AppImage
+        // file AetherSDR runs from ($APPIMAGE); empty when it isn't one.
+        QString appImage;
+        // Where Install for updates puts it, as shown ("~/.local/share/...").
+        QString installFolder;
+        // The release installed for updates (LinuxInstall's current); empty:
+        // nothing is installed.
+        std::function<QString()> installedVersion;
+        // Installs the running release, the AppImage's own tree, for
+        // updates (LinuxInstall::install). Runs on a worker thread.
+        std::function<bool(QString* problem, QString* note)> installRunning;
+        // Moves file to the trash. Runs on a worker thread.
+        std::function<bool(const QString& file)> trash;
+        // Starts the installed release once this process has exited.
+        std::function<bool()> startInstalled;
     };
 
     // This app's: the install it runs from, UpdateInstaller::stateDir(),
@@ -67,6 +83,21 @@ public:
     // A release the helper rolled back here: never staged, offered or
     // badged again.
     bool isRolledBack(const QString& version) const;
+
+    // Install for updates: the AppImage whose release can be installed for
+    // updates, when AetherSDR runs as one and nothing is installed yet;
+    // empty otherwise.
+    QString appImageToInstall() const;
+    // The release installed for updates; empty when none.
+    QString installedVersion() const;
+    // The AppImage AetherSDR runs from; empty when it isn't one.
+    QString appImage() const { return m_env.appImage; }
+    QString installFolder() const { return m_env.installFolder; }
+    bool isInstallingAppImage() const { return m_installingAppImage; }
+    // Copies the running release into the install for updates on a worker
+    // thread, then, with trash, moves the AppImage to the trash. Ends in
+    // appImageInstalled.
+    void installAppImage(bool trash);
 
     State state() const { return m_state; }
     // The release staged, or being staged; empty when Idle.
@@ -113,6 +144,11 @@ signals:
     // Restart to update finished: handed over (quit now), or not, with
     // problem (the staged release is discarded when it can't be used again).
     void restartReady(bool handed, const QString& problem, const QString& version);
+    // Install for updates finished. restart: it is installed and starts
+    // once AetherSDR exits (quit now). Otherwise problem says what went
+    // wrong: it wasn't installed, or it was but the AppImage couldn't be
+    // moved to the trash or the installed copy started, and nothing restarts.
+    void appImageInstalled(bool restart, const QString& problem);
 
 private:
     // What a hand-over did, worked out off the GUI thread.
@@ -135,6 +171,7 @@ private:
     Environment m_env;
     UpdateStager* m_stager;
     State m_state{State::Idle};
+    bool m_installingAppImage{false};
     QString m_version;
     UpdateStager::StagedRelease m_staged;
     QString m_latest;   // GitHub's latest as last heard; empty: not known

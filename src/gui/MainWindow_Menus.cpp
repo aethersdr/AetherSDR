@@ -2337,6 +2337,13 @@ void MainWindow::wireUpdateChecker()
                     m_updatesWindow->showInstallProblem(problem, version);
                 }
             });
+    // Install for updates: installed, and it starts once this copy quits.
+    connect(m_updateController, &UpdateController::appImageInstalled, this,
+            [this](bool restart, const QString&) {
+                if (restart) {
+                    close();
+                }
+            });
     connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
             [this](const QString& ver) {
         m_updateController->refreshStaged(ver);

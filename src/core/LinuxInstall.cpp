@@ -166,6 +166,42 @@ QString currentVersion(const QString& base)
     return isVersion(name) ? name : QString();
 }
 
+// A copy of from at to, folder by folder, each made writable by its owner
+// before anything goes in it: a read-only source (an AppImage's mount) gives
+// its modes to the copy, which stays the user's to update and remove. Links
+// are copied as links. False at the first thing that can't be copied.
+bool copyTree(const fs::path& from, const fs::path& to)
+{
+    std::error_code ec;
+    const auto made = [&ec](const fs::path& p) {
+        if (!ec) {
+            fs::permissions(p, fs::perms::owner_write, fs::perm_options::add, ec);
+        }
+        return !ec;
+    };
+    fs::create_directory(to, from, ec);
+    if (!made(to)) {
+        return false;
+    }
+    fs::recursive_directory_iterator it(from, ec);
+    for (const fs::recursive_directory_iterator end; !ec && it != end; it.increment(ec)) {
+        const fs::path target = to / it->path().lexically_relative(from);
+        if (it->is_symlink(ec)) {
+            fs::copy_symlink(it->path(), target, ec);
+        } else if (!ec && it->is_directory(ec)) {
+            fs::create_directory(target, it->path(), ec);
+            made(target);
+        } else if (!ec) {
+            fs::copy_file(it->path(), target, ec);
+            made(target);
+        }
+        if (ec) {
+            return false;
+        }
+    }
+    return !ec;
+}
+
 // source to dest, which must not exist, without ever leaving a partial
 // dest: a rename on one filesystem, otherwise a copy beside dest renamed in.
 bool moveTree(const QString& source, const QString& dest, bool keepSource, QString* problem)
@@ -178,8 +214,10 @@ bool moveTree(const QString& source, const QString& dest, bool keepSource, QStri
         }
     }
     const QString partial = unique(QFileInfo(dest).absolutePath(), kPartial);
-    fs::copy(toPath(source), toPath(partial), fs::copy_options::recursive | fs::copy_options::copy_symlinks,
-             ec);
+    ec.clear();   // the rename's failure, which the copy answers
+    if (!copyTree(toPath(source), toPath(partial))) {
+        ec = std::make_error_code(std::errc::io_error);
+    }
     if (!ec) {
         fs::rename(toPath(partial), toPath(dest), ec);
     }
@@ -315,6 +353,11 @@ QString LinuxInstall::treeOf(const QString& appDir, const QString& base)
         return {};
     }
     return tree.canonicalPath();
+}
+
+QString LinuxInstall::installedVersion(const QString& base)
+{
+    return currentVersion(base);
 }
 
 bool LinuxInstall::install(const QString& tree, const QString& version, const Paths& paths,
@@ -486,16 +529,28 @@ LinuxInstall::Switch LinuxInstall::switchTo(const QString& base, const QString& 
     return Switch::Switched;
 }
 
-bool LinuxInstall::startAfterExit(qint64 pid, const QString& program)
+QStringList LinuxInstall::appImageVariables()
+{
+    return {QStringLiteral("APPIMAGE"), QStringLiteral("APPDIR"), QStringLiteral("ARGV0"), QStringLiteral("OWD")};
+}
+
+bool LinuxInstall::startAfterExit(qint64 pid, const QString& program, const QStringList& unset)
 {
     // 600 polls of 0.2 s: two minutes for the quit's own prompts and
     // shutdown, then nothing is started.
     static const QString script = QStringLiteral(
         "i=0; while kill -0 \"$1\" 2>/dev/null; do i=$((i+1)); "
         "if [ \"$i\" -gt 600 ]; then exit 1; fi; sleep 0.2; done; exec \"$2\"");
-    return QProcess::startDetached(QStringLiteral("/bin/sh"),
-                                   {QStringLiteral("-c"), script, QStringLiteral("aethersdr-restart"),
-                                    QString::number(pid), program});
+    QProcess process;
+    process.setProgram(QStringLiteral("/bin/sh"));
+    process.setArguments({QStringLiteral("-c"), script, QStringLiteral("aethersdr-restart"),
+                          QString::number(pid), program});
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    for (const QString& name : unset) {
+        env.remove(name);
+    }
+    process.setProcessEnvironment(env);
+    return process.startDetached();
 }
 
 } // namespace AetherSDR

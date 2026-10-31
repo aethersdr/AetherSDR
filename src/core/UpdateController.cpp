@@ -7,6 +7,8 @@
 #include "VersionNumber.h"
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QSysInfo>
@@ -45,6 +47,32 @@ UpdateController::Environment UpdateController::forThisApp()
         return UpdateInstaller::launchHelper(dir, version, restart, problem);
     };
     env.rolledBackVersion = [] { return UpdateSettings::rolledBackVersion(); };
+#if defined(Q_OS_LINUX)
+    const QString base = LinuxInstall::forThisUser().base;
+    // An installed release started from the AppImage would still have its
+    // variables: only the AppImage itself is one.
+    if (LinuxInstall::treeOf(LinuxInstall::binaryDir(), base).isEmpty()) {
+        env.appImage = qEnvironmentVariable("APPIMAGE");
+    }
+    env.installFolder = base.startsWith(QDir::homePath() + QLatin1Char('/'))
+                            ? QStringLiteral("~") + base.mid(QDir::homePath().size())
+                            : base;
+    env.installedVersion = [base] { return LinuxInstall::installedVersion(base); };
+    env.installRunning = [version = env.request.runningVersion](QString* problem, QString* note) {
+        // This binary is <tree>/usr/bin/AetherSDR, inside the AppImage's mount.
+        QDir tree(LinuxInstall::binaryDir());
+        tree.cdUp();
+        tree.cdUp();
+        return LinuxInstall::install(tree.absolutePath(), version, LinuxInstall::forThisUser(), problem, note);
+    };
+    env.trash = [](const QString& file) { return QFile::moveToTrash(file); };
+    env.startInstalled = [base] {
+        // Without the AppImage's variables: its mount is gone by then.
+        return LinuxInstall::startAfterExit(QCoreApplication::applicationPid(),
+                                            QDir(base).filePath(QStringLiteral("current/AppRun")),
+                                            LinuxInstall::appImageVariables());
+    };
+#endif
     return env;
 }
 
@@ -271,6 +299,68 @@ bool UpdateController::restartToUpdate(QString* problem)
     });
     watcher->setFuture(QtConcurrent::run([env = m_env, staged] { return runHandOver(env, staged, true); }));
     return true;
+}
+
+QString UpdateController::appImageToInstall() const
+{
+    return m_env.appImage.isEmpty() || !m_env.installRunning || !installedVersion().isEmpty() ? QString()
+                                                                                              : m_env.appImage;
+}
+
+QString UpdateController::installedVersion() const
+{
+    return m_env.installedVersion ? m_env.installedVersion() : QString();
+}
+
+void UpdateController::installAppImage(bool trash)
+{
+    if (m_installingAppImage || appImageToInstall().isEmpty()) {
+        return;
+    }
+    struct Result {
+        bool installed = false;
+        bool trashed = true;
+        QString problem;
+        QString note;
+    };
+    m_installingAppImage = true;
+    emit stateChanged();
+    const QString version = m_env.request.runningVersion;
+    auto* watcher = new QFutureWatcher<Result>(this);
+    connect(watcher, &QFutureWatcher<Result>::finished, this, [this, watcher, version] {
+        const Result r = watcher->result();
+        watcher->deleteLater();
+        m_installingAppImage = false;
+        QString problem;
+        if (!r.installed) {
+            qCWarning(lcUpdater).noquote() << "v" + version + " not installed for updates:" << r.problem;
+            problem = tr("AetherSDR wasn't installed: %1").arg(r.problem);
+        } else {
+            if (!r.note.isEmpty()) {
+                qCInfo(lcUpdater).noquote() << r.note;
+            }
+            if (!r.trashed) {
+                qCWarning(lcUpdater).noquote() << "could not move" << m_env.appImage << "to the trash";
+                problem = tr("AetherSDR %1 is installed for updates, but %2 couldn't be moved to the trash, so "
+                             "delete it yourself. Quit, then start AetherSDR from your applications menu.")
+                              .arg(version, m_env.appImage);
+            } else if (!m_env.startInstalled || !m_env.startInstalled()) {
+                problem = tr("AetherSDR %1 is installed for updates. Quit, then start it from your applications "
+                             "menu.")
+                              .arg(version);
+            }
+        }
+        emit stateChanged();
+        emit appImageInstalled(r.installed && problem.isEmpty(), problem);
+    });
+    watcher->setFuture(QtConcurrent::run([env = m_env, trash] {
+        Result r;
+        r.installed = env.installRunning(&r.problem, &r.note);
+        if (r.installed && trash) {
+            r.trashed = env.trash && env.trash(env.appImage);
+        }
+        return r;
+    }));
 }
 
 bool UpdateController::installOnQuit()

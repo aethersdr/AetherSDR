@@ -533,6 +533,7 @@ private slots:
             QVERIFY2(LinuxInstall::install(t, QString::fromLatin1(v), paths, &problem), qPrintable(problem));
         }
         const QString current = paths.base + QStringLiteral("/current");
+        QCOMPARE(LinuxInstall::installedVersion(paths.base), QStringLiteral("26.10.5"));
         const auto pointAt = [&](const QString& target) {
             std::error_code ec;
             fs::remove(fs::path(current.toStdString()), ec);
@@ -556,6 +557,7 @@ private slots:
                      LinuxInstall::Switch::Current);
             QCOMPARE(tests, 0);
             QCOMPARE(linkTarget(current), target);
+            QCOMPARE(LinuxInstall::installedVersion(paths.base), QFileInfo(target).fileName());
             QVERIFY(QFileInfo(current + QStringLiteral("/AppRun")).isExecutable());
         }
         // current names 26.10.3 by a full path while 26.10.2 runs: the
@@ -574,6 +576,7 @@ private slots:
         const QString elsewhere = tmp.filePath(QStringLiteral("elsewhere/26.10.9"));
         makeTree(elsewhere, "26.10.9");
         QVERIFY(pointAt(elsewhere));
+        QVERIFY(LinuxInstall::installedVersion(paths.base).isEmpty());
         const QString next = tmp.filePath(QStringLiteral("state/update/26.10.7"));
         makeTree(next, "26.10.7");
         QCOMPARE(LinuxInstall::switchTo(paths.base, next, QStringLiteral("26.10.7"), QStringLiteral("26.10.6"),
@@ -643,6 +646,45 @@ private slots:
         QVERIFY(!LinuxInstall::selfTest(tmp.filePath(QStringLiteral("none")), QStringLiteral("26.10.4")));
     }
 
+    void nothingInstalledIsNoVersion()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(LinuxInstall::installedVersion(tmp.filePath(QStringLiteral("install"))).isEmpty());
+        QVERIFY(QDir().mkpath(tmp.filePath(QStringLiteral("install"))));
+        QVERIFY(LinuxInstall::installedVersion(tmp.filePath(QStringLiteral("install"))).isEmpty());
+    }
+
+    // Install for updates copies the running AppImage's tree, a read-only
+    // mount: it installs, and the source is left as it was.
+    void aReadOnlyTreeIsCopiedAndLeftAlone()
+    {
+        QTemporaryDir tmp;
+        const LinuxInstall::Paths paths = pathsIn(tmp.path());
+        const QString mount = tmp.filePath(QStringLiteral("mount"));
+        makeTree(mount, "26.10.4");
+        const auto readOnly = [&](bool on) {
+            for (const auto& e : fs::recursive_directory_iterator(fs::path(mount.toStdString()))) {
+                if (!e.is_symlink()) {
+                    fs::permissions(e.path(), fs::perms::owner_write,
+                                    on ? fs::perm_options::remove : fs::perm_options::add);
+                }
+            }
+            fs::permissions(fs::path(mount.toStdString()), fs::perms::owner_write,
+                            on ? fs::perm_options::remove : fs::perm_options::add);
+        };
+        readOnly(true);
+        QString problem;
+        const bool installed = LinuxInstall::install(mount, QStringLiteral("26.10.4"), paths, &problem);
+        const bool sourceKept = QFileInfo::exists(mount + QStringLiteral("/usr/bin/AetherSDR"));
+        readOnly(false);   // so the temporary folder can be removed
+        QVERIFY2(installed, qPrintable(problem));
+        QVERIFY(sourceKept);
+        QCOMPARE(LinuxInstall::installedVersion(paths.base), QStringLiteral("26.10.4"));
+        QVERIFY(QFileInfo(paths.base + QStringLiteral("/current/AppRun")).isExecutable());
+        // The installed copy is the user's to change, not read-only like its source.
+        QVERIFY(QFileInfo(paths.base + QStringLiteral("/26.10.4/usr/bin")).isWritable());
+    }
+
     void theRelaunchWaitsForTheQuittingProcess()
     {
         QTemporaryDir tmp;
@@ -657,6 +699,32 @@ private slots:
         QVERIFY(!QFileInfo::exists(started));
         QVERIFY(quitting.waitForFinished(5000));
         QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(started), 5000);
+    }
+
+    // Install for updates restarts into the install without the AppImage's
+    // variables, and with everything else.
+    void theRelaunchDropsTheVariablesItIsTold()
+    {
+        QTemporaryDir tmp;
+        const QString seen = tmp.filePath(QStringLiteral("seen"));
+        const QString program = tmp.filePath(QStringLiteral("program"));
+        writeFile(program,
+                  "#!/bin/sh\nprintf '%s|%s' \"${APPIMAGE-unset}\" \"${AETHER_KEPT-unset}\" > '" + seen.toUtf8()
+                      + ".part' && mv '" + seen.toUtf8() + ".part' '" + seen.toUtf8() + "'\n",
+                  true);
+        qputenv("APPIMAGE", "/home/op/AetherSDR.AppImage");
+        qputenv("AETHER_KEPT", "yes");
+        QProcess quitting;
+        quitting.start(QStringLiteral("sleep"), {QStringLiteral("0.3")});
+        QVERIFY(quitting.waitForStarted());
+        QVERIFY(LinuxInstall::startAfterExit(quitting.processId(), program, {QStringLiteral("APPIMAGE")}));
+        qunsetenv("APPIMAGE");
+        qunsetenv("AETHER_KEPT");
+        QVERIFY(quitting.waitForFinished(5000));
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(seen), 5000);
+        QFile f(seen);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(f.readAll(), QByteArray("unset|yes"));
     }
 };
 
