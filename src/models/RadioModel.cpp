@@ -3999,6 +3999,12 @@ bool RadioModel::prepareFlexBackendForWan()
     return m_panStream != nullptr;
 }
 
+bool RadioModel::prepareWanConnection()
+{
+    if (isConnected() || m_connectAttemptActive) { return false; }
+    return prepareFlexBackendForWan();
+}
+
 void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort)
 {
     discardTuneInhibit();
