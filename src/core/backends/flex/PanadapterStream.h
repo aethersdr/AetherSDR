@@ -239,6 +239,7 @@ private:
     friend class PcmCompatibilityTestAccess;
     friend class VitaSequenceLossLogTestAccess;
     friend struct PanadapterDbmRangeTestAccess;
+    friend struct PanadapterLatePacketTestAccess;
     PcmProducer m_pcmProducer;
     std::map<quint32, std::unique_ptr<PcmProducer>> m_daxPcm;
     void publishLegacyDaxAudio(quint32 streamId, int channel, const QByteArray& pcm);
@@ -325,6 +326,10 @@ private:
         bool isComplete() const { return coverage.isComplete(); }
     };
 
+    // m_frameMutex guards m_frames and m_wfFrames: assembled on the network
+    // worker thread, removed from the main thread on pan/session teardown.
+    // Never nested with m_streamMutex, and released before any emit.
+    mutable QMutex m_frameMutex;
     QMap<quint32, WaterfallFrame> m_wfFrames;  // per-stream waterfall frame assembly
 
     // Per-stream packet sequence tracking (4-bit count in VITA-49 word0 bits 19:16)
@@ -350,6 +355,7 @@ public:
         qint64 bytes{0};
         int    packets{0};
         int    errors{0};
+        int    late{0};    // FFT/waterfall packets discarded as late (#6883)
     };
     struct AudioStreamDiagnostics {
         quint32 streamId{0};
@@ -403,12 +409,13 @@ private:
     QMap<quint32, QPair<float,float>> m_pendingDbmRanges;  // streamId → pending echoed range
     QMap<quint32, int> m_yPixels;  // streamId → ypixels for FFT bin scaling
     RadioConnection* m_conn{nullptr};
-    QMap<quint32, FrameAssembler> m_frames;  // per-stream FFT frame assembly
+    QMap<quint32, FrameAssembler> m_frames;  // per-stream FFT frame assembly; m_frameMutex
     QMap<quint32, StreamStats> m_streamStats;  // keyed by stream ID
     mutable QMutex m_statsMutex;
     QElapsedTimer m_seqLossClock;  // time base for StreamStats::lossLog; read only on new streams and errors
     VitaSequenceLossBudget m_seqLossBudget;  // all streams' lines together; under m_statsMutex
     CategoryStats m_catStats[CatCount]{};
+    void recordLatePacket(StreamCategory cat);
 
     struct AudioStreamTracker {
         quint16 packetClassCode{0};
