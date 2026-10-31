@@ -71,8 +71,8 @@ The AppImage runs from wherever you saved it, and updates by downloading the nex
 ### From the AppImage
 
 1. Open **File > Update…** in the AppImage.
-2. Click **Install for updates**. AetherSDR asks first and says where it goes. Tick **Move this AppImage to the trash afterwards** if you won't run the AppImage again.
-3. Click **Install and restart**. The release you are running is copied into `~/.local/share/AetherSDR/install/`, added to your applications menu, and given an `aethersdr` command in `~/.local/bin`. Nothing is downloaded. AetherSDR then quits and starts again from the install.
+2. Click **Install for updates**. AetherSDR asks first and says where it goes. Tick **Move this AppImage to the trash afterward** if you won't run the AppImage again.
+3. Click **Install and restart**. The release you are running is copied into `~/.local/share/AetherSDR/install/`, added to your applications menu, and given an `aethersdr` command in `~/.local/bin`. Nothing is downloaded. AetherSDR then quits and starts again from the install, and the status bar says it is installed for updates.
 
 From then on, start AetherSDR from your applications menu or with `aethersdr`. If you open the AppImage again, its Updates window says AetherSDR is installed for updates instead of offering it again.
 

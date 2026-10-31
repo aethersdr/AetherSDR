@@ -402,8 +402,10 @@ because `~/.local/share/AetherSDR` already holds user data. `LinuxInstall`
   tree's own `usr/share/applications/AetherSDR.desktop` with `Exec` and
   `TryExec` naming `current/AppRun`, links the tree's hicolor icons and the
   command through `current`, and starts it. A file of the user's own at a
-  link's place is left alone. It runs before `QApplication` and writes no
-  settings. The copy is made writable by its owner folder by folder, since
+  link's place is left alone. If the menu entry or `current` can't be
+  written, a release folder it has just copied is removed again, so a
+  failed install leaves nothing behind. It runs before `QApplication` and
+  writes no settings. The copy is made writable by its owner folder by folder, since
   the AppImage's mount is read-only and its modes would otherwise follow.
 - **Install for updates** (RFC #5304 Phase 6) is the same install from the
   AppImage's Updates window, offered only when `$APPIMAGE` is set, the
@@ -418,7 +420,11 @@ because `~/.local/share/AetherSDR` already holds user data. `LinuxInstall`
   started copy, and the one `--install` starts, run without the AppImage
   runtime's variables (`APPIMAGE`, `APPDIR`, `ARGV0`, `OWD`), whose mount
   is gone by then and which would make the installed copy take itself for
-  the AppImage.
+  the AppImage. Before it restarts, the version goes in
+  `Updates.installedFromAppImage`; the installed copy's next start reports
+  it in the status bar once (`UpdateController::lastUpdate`, outcome
+  `Installed`) and clears it, a maintainer ruling. The AppImage never
+  reports it.
 - **The switch** is what the helper's hand-over is on Windows, done by the
   app itself in `UpdateInstaller::launchHelper`: the staged tree is renamed
   into `install/<version>`, that folder's `AppRun --update-selftest` must

@@ -55,7 +55,7 @@ public:
     // and points the menu entry, its icon and the aethersdr command at
     // current. A file or link of the user's own at ~/.local/bin/aethersdr is
     // left alone; note says so. If the menu entry can't be written, current
-    // is not changed.
+    // is not changed, and a release folder it copied is removed again.
     static bool install(const QString& tree, const QString& version, const Paths& paths,
                         QString* problem, QString* note = nullptr);
 

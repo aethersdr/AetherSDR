@@ -66,11 +66,17 @@ UpdateController::Environment UpdateController::forThisApp()
         return LinuxInstall::install(tree.absolutePath(), version, LinuxInstall::forThisUser(), problem, note);
     };
     env.trash = [](const QString& file) { return QFile::moveToTrash(file); };
-    env.startInstalled = [base] {
+    env.startInstalled = [base, version = env.request.runningVersion] {
+        // The installed copy says so once it starts (lastUpdate).
+        UpdateSettings::setInstalledFromAppImage(version);
         // Without the AppImage's variables: its mount is gone by then.
-        return LinuxInstall::startAfterExit(QCoreApplication::applicationPid(),
-                                            QDir(base).filePath(QStringLiteral("current/AppRun")),
-                                            LinuxInstall::appImageVariables());
+        if (!LinuxInstall::startAfterExit(QCoreApplication::applicationPid(),
+                                          QDir(base).filePath(QStringLiteral("current/AppRun")),
+                                          LinuxInstall::appImageVariables())) {
+            UpdateSettings::setInstalledFromAppImage({});
+            return false;
+        }
+        return true;
     };
 #endif
     return env;
@@ -79,7 +85,20 @@ UpdateController::Environment UpdateController::forThisApp()
 UpdateController::LastUpdate UpdateController::lastUpdate()
 {
     const UpdateInstaller::SwapResult r = UpdateInstaller::lastSwapResult();
-    return {r.outcome, r.version};
+    if (!r.outcome.isEmpty()) {
+        return {r.outcome, r.version};
+    }
+#if defined(Q_OS_LINUX)
+    // Install for updates restarted into the install: said once, by the
+    // installed copy only.
+    const QString installed = UpdateSettings::installedFromAppImage();
+    if (!installed.isEmpty()
+        && !LinuxInstall::treeOf(LinuxInstall::binaryDir(), LinuxInstall::forThisUser().base).isEmpty()) {
+        UpdateSettings::setInstalledFromAppImage({});
+        return {QStringLiteral("Installed"), installed};
+    }
+#endif
+    return {};
 }
 
 UpdateController::UpdateController(Environment env, QObject* parent)

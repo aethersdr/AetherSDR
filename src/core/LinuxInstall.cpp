@@ -378,12 +378,14 @@ bool LinuxInstall::install(const QString& tree, const QString& version, const Pa
         return false;
     }
     const QString dest = QDir(paths.base).filePath(version);
+    bool copied = false;   // dest is new: removed again if the install goes no further
     // Run again from the installed tree, only the links are redone.
     if (QFileInfo(dest).canonicalFilePath() != source) {
         if (!QFileInfo::exists(dest)) {
             if (!moveTree(source, dest, true, problem)) {
                 return false;
             }
+            copied = true;
         } else {
             // That version again: the new copy is made beside the installed
             // one, which current runs until the two trade places in one
@@ -411,6 +413,10 @@ bool LinuxInstall::install(const QString& tree, const QString& version, const Pa
     const QString run = QDir(current).filePath(kAppRun);
     if (!writeDesktopEntry(dest, run, paths.applications, problem)
         || !makeCurrent(paths.base, version, problem)) {
+        if (copied) {
+            std::error_code ec;
+            fs::remove_all(toPath(dest), ec);
+        }
         return false;
     }
     // The release's icons, by the same relative paths, through current.

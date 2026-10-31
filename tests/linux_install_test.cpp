@@ -363,6 +363,23 @@ private slots:
         QVERIFY(!QFileInfo::exists(paths.applications));
     }
 
+    // Copied, then refused for want of a menu entry: the copy goes too, so
+    // a failed install leaves nothing behind.
+    void aCopyThatGoesNoFurtherIsRemoved()
+    {
+        QTemporaryDir tmp;
+        const LinuxInstall::Paths paths = pathsIn(tmp.path());
+        const QString source = tmp.filePath(QStringLiteral("tarball"));
+        makeTree(source, "26.10.4");
+        QVERIFY(QFile::remove(source + QStringLiteral("/usr/share/applications/AetherSDR.desktop")));
+        QString problem;
+        QVERIFY(!LinuxInstall::install(source, QStringLiteral("26.10.4"), paths, &problem));
+        QVERIFY(problem.contains(QLatin1String("menu entry")));
+        QCOMPARE(QDir(paths.base).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot),
+                 QStringList());
+        QVERIFY(QFileInfo::exists(source + QStringLiteral("/AppRun")));
+    }
+
     void theSwitchMakesAPassingReleaseCurrentAndKeepsOnlyTheOneItReplaced()
     {
         QTemporaryDir tmp;

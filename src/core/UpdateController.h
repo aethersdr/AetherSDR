@@ -69,7 +69,8 @@ public:
     static Environment forThisApp();
 
     // What AetherSDRUpdater did after the last run ("Updated", "RolledBack",
-    // ...; empty outcome: nothing), as main.cpp read it at start.
+    // ...; empty outcome: nothing), as main.cpp read it at start, or
+    // "Installed" once, in the copy Install for updates restarted into.
     struct LastUpdate {
         QString outcome;
         QString version;
