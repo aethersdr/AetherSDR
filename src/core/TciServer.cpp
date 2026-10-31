@@ -7,6 +7,7 @@
 #include "AudioEngine.h"
 #include "AppSettings.h"
 #include <QScopeGuard>
+#include <climits>
 #include <QMutexLocker>
 #include "LogManager.h"
 #include "TciPeerProcess.h"
@@ -72,6 +73,12 @@ constexpr int kPowerRateLimitMs = 100;
 // resume publishing conservative keyed state well inside the existing 1250 ms
 // PTT contract if an accepted CI-V PTT-off readback never arrives.
 constexpr int kIcomTciUnkeySettleMs = 500;
+
+// A Flex band change drops TX for up to ~340 ms (observed, not specified), so
+// the GUI split state is published once this has passed. If a slow machine
+// exceeds it, a spurious split_enable:false can go out; the next TX edge
+// publishes the settled state again.
+constexpr int kSplitSettleMs = 450;
 
 QString tciCommandName(const QString& message)
 {
@@ -429,6 +436,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 abortTciPtt();
             }
             m_tciDaxSlices.remove(sliceId);
+            // Closing the TX slice ends a GUI split without a txSliceChanged edge.
+            QTimer::singleShot(kSplitSettleMs, this, [this] { publishMainSplit(); });
 
             // Under the #4567 sticky map a removal does NOT renumber the
             // survivors (that renumbering was #4160's original concern) —
@@ -921,6 +930,7 @@ void TciServer::onClientOpened(std::shared_ptr<TciClientLifetime> lifetime,
     // The IQ rate is shared across clients; a client joining after another
     // has moved it must not be told the 48000 default in its init burst.
     protocol->setIqSampleRate(achievedIqSampleRate());
+    protocol->setCenterLockQuery(m_centerLockQuery);
 
     ClientState cs;
     cs.txProducer = ([model = m_model, ws]() {
@@ -1646,6 +1656,9 @@ void TciServer::onTextMessage(const QString& msg)
         if (const auto request = client.protocol->takeTuneRequest()) {
             handleTuneRequest(ws, *request);
         }
+        if (const auto request = client.protocol->takeCenterLockRequest()) {
+            if (m_centerLockSet) m_centerLockSet(request->sliceId, request->locked);
+        }
 
         // If the command changed radio state, broadcast to all other clients
         QString notification = client.protocol->pendingNotification();
@@ -1669,6 +1682,16 @@ void TciServer::onTextMessage(const QString& msg)
         // stashes the 0-100 value and we apply it here via setTxGain().
         int txg = client.protocol->pendingTxGain();
         if (txg >= 0) setTxGain(txg / 100.0f);
+    }
+}
+
+void TciServer::setCenterLockHandlers(std::function<void(int, bool)> set,
+                                      std::function<bool(int)> query)
+{
+    m_centerLockSet = std::move(set);
+    m_centerLockQuery = std::move(query);
+    for (auto& cs : m_clients) {
+        if (cs.protocol) cs.protocol->setCenterLockQuery(m_centerLockQuery);
     }
 }
 
@@ -2954,6 +2977,35 @@ void TciServer::broadcastSliceFrequencies(SliceModel* slice)
             const int rxTrx = m_trxMap.trxForSlice(m_model, rxSlice);
             broadcast(QStringLiteral("vfo:%1,1,%2;").arg(rxTrx).arg(vfoHz));
         }
+    } else if (slice->isTxSlice() && slice != sliceForTrx(0)) {
+        // GUI split: the TX slice is trx 0's VFO B.
+        broadcast(QStringLiteral("vfo:0,1,%1;").arg(vfoHz));
+    }
+}
+
+void TciServer::publishMainSplit()
+{
+    if (!m_model) {
+        return;
+    }
+    SliceModel* main = sliceForTrx(0);
+    const bool split = m_routingState.splitRequested()
+        || TciProtocol::txOnOtherSlice(m_model, main);
+    // Tracked with no clients too, so the init burst and this baseline agree.
+    const int v = split ? 1 : 0;
+    if (m_announcedSplit == v) {
+        return;
+    }
+    m_announcedSplit = v;
+    if (m_clients.isEmpty()) {
+        return;
+    }
+    broadcast(QStringLiteral("split_enable:0,%1;").arg(split ? "true" : "false"));
+    if (SliceModel* tx = m_model->txSlice(); split && tx && tx != main) {
+        const long long txHz = TciProtocol::mhzToHz(tx->frequency());
+        if (txHz > 0) {
+            broadcast(QStringLiteral("vfo:0,1,%1;").arg(txHz));
+        }
     }
 }
 
@@ -3016,6 +3068,9 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         // leaves the cache pointing at the outgoing slice for the brief
         // band-change gap, which is the value drive should still use.
         if (tx) m_lastTxTrx = trx;
+        // Both edges of a TX move fire here, and a band change drops TX for
+        // ~340 ms; publish once it has settled.
+        QTimer::singleShot(kSplitSettleMs, this, [this] { publishMainSplit(); });
     });
 
     // Seed the TX-trx cache from current state — txSliceChanged only fires on
@@ -3130,6 +3185,53 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     wireFlag(&SliceModel::squelchChanged, "sql_enable", [slice]{ return slice->receiveSquelchOn(); });
     wireFlag(&SliceModel::ritChanged,     "rit_enable", [slice]{ return slice->ritOn(); });
     wireFlag(&SliceModel::xitChanged,     "xit_enable", [slice]{ return slice->xitOn(); });
+
+    // The offsets ride the same (on, hz) signals, whose hz the flag relay
+    // drops, so a GUI offset change reached no client. Relay it on its own,
+    // de-duped by value for the same status-refresh reason.
+    auto wireOffset = [this, slice](auto signal, const char* cmd) {
+        auto last = std::make_shared<int>(INT_MIN);  // nothing announced yet
+        connect(slice, signal, this, [this, slice, cmd, last](bool, int hz) {
+            if (*last == hz) {
+                return;
+            }
+            *last = hz;
+            if (m_clients.isEmpty()) {
+                return;
+            }
+            broadcast(QStringLiteral("%1:%2,%3;")
+                          .arg(QLatin1String(cmd))
+                          .arg(m_trxMap.trxForSlice(m_model, slice))
+                          .arg(hz));
+        });
+    };
+    wireOffset(&SliceModel::ritChanged, "rit_offset");
+    wireOffset(&SliceModel::xitChanged, "xit_offset");
+
+    // AGC mode and gain from the GUI reached no client either. Read the way
+    // the GET reads (an external receive source can replace the slice's own),
+    // de-duped as text since status refreshes re-emit both.
+    auto wireAgc = [this, slice](auto signal, const char* cmd, std::function<QString()> read) {
+        auto last = std::make_shared<QString>();
+        connect(slice, signal, this, [this, slice, cmd, last, read] {
+            const QString v = read();
+            if (*last == v) {
+                return;
+            }
+            *last = v;
+            if (m_clients.isEmpty()) {
+                return;
+            }
+            broadcast(QStringLiteral("%1:%2,%3;")
+                          .arg(QLatin1String(cmd))
+                          .arg(m_trxMap.trxForSlice(m_model, slice))
+                          .arg(v));
+        });
+    };
+    wireAgc(&SliceModel::agcModeChanged, "agc_mode",
+            [slice] { return slice->receiveAgcMode().toLower(); });
+    wireAgc(&SliceModel::agcThresholdChanged, "agc_gain",
+            [slice] { return QString::number(slice->receiveAgcThreshold()); });
 
     // Deferred state sync on (re)wire: a Flex band change recreates the slice, and
     // if the restored frequency equals the init value no frequencyChanged fires,

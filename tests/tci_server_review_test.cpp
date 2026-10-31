@@ -2765,6 +2765,192 @@ public:
         }
         return true;
     }
+    // DSB is a mode on every backend that has one (Flex, ANAN, HL2), but TCI
+    // knew no name for it: a radio-side DSB went out as usb, and a client's
+    // modulation:0,dsb was refused. It is advertised, and it round-trips.
+    static bool dsbRoundTripsAndIsAdvertised()
+    {
+        bool ok = false;
+        if (TciProtocol::smartsdrToTci(QStringLiteral("DSB")) != QStringLiteral("dsb")
+            || TciProtocol::tciToSmartSDR(QStringLiteral("dsb"), &ok) != QStringLiteral("DSB")
+            || !ok) {
+            std::printf("      DSB does not map to dsb and back\n");
+            return false;
+        }
+        RadioModel model;
+        TciProtocol protocol(&model);
+        const QString burst = protocol.generateInitBurst();
+        const int at = burst.indexOf(QStringLiteral("modulations_list:"));
+        const QString list = burst.mid(at, burst.indexOf(QLatin1Char(';'), at) - at);
+        if (!list.split(QLatin1Char(':')).value(1).split(QLatin1Char(','))
+                 .contains(QStringLiteral("dsb"))) {
+            std::printf("      modulations_list lacks dsb: %s\n", qPrintable(list));
+            return false;
+        }
+        return true;
+    }
+
+    // rx_ctun_ex is Thetis's CTUN switch; AetherSDR maps it onto center
+    // lock, inverted. A SET is handed to TciServer as a request and
+    // broadcast; a GET is answered only once a query is injected.
+    static bool rxCtunExDrivesCenterLockInverted()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        QString error;
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)) {
+            std::printf("      slice fixture failed: %s\n", qPrintable(error));
+            return false;
+        }
+        // The fixture model is not connected, so trx 0 resolves only
+        // through the server's stable map, as on the live accept path.
+        TciProtocol protocol(&model, &server.m_routingState, &server.m_trxMap);
+
+        if (!protocol.handleCommand(QStringLiteral("rx_ctun_ex:0")).isEmpty()) {
+            std::printf("      GET answered without a center-lock query\n");
+            return false;
+        }
+
+        protocol.handleCommand(QStringLiteral("rx_ctun_ex:0,true"));
+        const QString note = protocol.pendingNotification();
+        const auto off = protocol.takeCenterLockRequest();
+        if (!off || off->sliceId != 0 || off->locked
+            || note != QStringLiteral("rx_ctun_ex:0,true;")) {
+            std::printf("      ctun true did not request center lock off\n");
+            return false;
+        }
+
+        protocol.handleCommand(QStringLiteral("rx_ctun_ex:0,false"));
+        const auto on = protocol.takeCenterLockRequest();
+        if (!on || !on->locked) {
+            std::printf("      ctun false did not request center lock on\n");
+            return false;
+        }
+
+        protocol.handleCommand(QStringLiteral("rx_ctun_ex:0,maybe"));
+        if (protocol.takeCenterLockRequest()) {
+            std::printf("      malformed bool produced a request\n");
+            return false;
+        }
+
+        protocol.setCenterLockQuery([](int sliceId) { return sliceId == 0; });
+        if (protocol.handleCommand(QStringLiteral("rx_ctun_ex:0"))
+            != QStringLiteral("rx_ctun_ex:0,false;")) {
+            std::printf("      GET of a locked slice is not ctun false\n");
+            return false;
+        }
+        return true;
+    }
+
+    // Split made in the GUI (another slice holds TX) is reported as
+    // split_enable on trx 0, and GUI RIT/XIT offset changes reach clients.
+    static bool guiSplitAndRitOffsetReachClients()
+    {
+        RadioModel model;
+        TciClient sock;
+        TciServer server(&model);
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
+
+        QString err;
+        model.automationApplySliceFixture(0, QStringLiteral("A"), &err);
+        model.automationApplySliceFixture(1, QStringLiteral("B"), &err);
+        SliceModel* s0 = model.slice(0);
+        SliceModel* s1 = model.slice(1);
+        if (!s0 || !s1) {
+            std::printf("      slice fixture failed: %s\n", qPrintable(err));
+            return false;
+        }
+        server.wireSlice(s0->sliceId(), s0);
+        server.wireSlice(s1->sliceId(), s1);
+        TciProtocol protocol(&model, &server.m_routingState, &server.m_trxMap);
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+            [&sent](const QString& dir, const QString& msg) {
+                if (dir == QLatin1String("tx"))
+                    sent << msg.trimmed();
+            });
+
+        SliceDelta aTx;
+        aTx.txSlice = true;
+        s0->applyChanges(aTx);
+        server.publishMainSplit();
+        if (protocol.handleCommand(QStringLiteral("split_enable:0"))
+            != QStringLiteral("split_enable:0,false;")) {
+            std::printf("      TX on trx 0 reported as split\n");
+            return false;
+        }
+
+        sent.clear();
+        SliceDelta aRx;
+        aRx.txSlice = false;
+        s0->applyChanges(aRx);
+        SliceDelta bTx;
+        bTx.txSlice = true;
+        s1->applyChanges(bTx);
+        server.publishMainSplit();
+        if (!sent.contains(QStringLiteral("split_enable:0,true;"))) {
+            std::printf("      GUI split was not broadcast\n");
+            return false;
+        }
+        bool vfoB = false;
+        for (const QString& m : sent) {
+            vfoB = vfoB || m.startsWith(QLatin1String("vfo:0,1,"));
+        }
+        if (!vfoB) {
+            std::printf("      GUI split did not announce VFO B\n");
+            return false;
+        }
+        if (protocol.handleCommand(QStringLiteral("split_enable:0"))
+                != QStringLiteral("split_enable:0,true;")
+            || protocol.handleCommand(QStringLiteral("split_enable:1"))
+                != QStringLiteral("split_enable:1,false;")) {
+            std::printf("      split_enable GET does not follow the GUI split\n");
+            return false;
+        }
+        if (!protocol.generateInitBurst().contains(QStringLiteral("split_enable:0,true;"))) {
+            std::printf("      init burst misses the GUI split\n");
+            return false;
+        }
+
+        sent.clear();
+        server.publishMainSplit();
+        if (sent.contains(QStringLiteral("split_enable:0,true;"))) {
+            std::printf("      unchanged split was announced again\n");
+            return false;
+        }
+
+        sent.clear();
+        SliceDelta rit;
+        rit.ritFreq = 120;
+        s0->applyChanges(rit);
+        SliceDelta xit;
+        xit.xitFreq = -50;
+        s0->applyChanges(xit);
+        if (!sent.contains(QStringLiteral("rit_offset:0,120;"))
+            || !sent.contains(QStringLiteral("xit_offset:0,-50;"))) {
+            std::printf("      GUI RIT/XIT offset was not broadcast\n");
+            return false;
+        }
+
+        sent.clear();
+        SliceDelta agc;
+        agc.agcMode = QStringLiteral("fast");
+        agc.agcThreshold = 72;  // 65 is the default: no change, no signal
+        s0->applyChanges(agc);
+        if (!sent.contains(QStringLiteral("agc_mode:0,fast;"))
+            || !sent.contains(QStringLiteral("agc_gain:0,72;"))) {
+            std::printf("      GUI AGC change was not broadcast\n");
+            return false;
+        }
+        if (!protocol.generateInitBurst().contains(QStringLiteral("agc_gain:0,72;"))) {
+            std::printf("      init burst misses agc_gain\n");
+            return false;
+        }
+        return true;
+    }
 };
 
 } // namespace AetherSDR
@@ -2857,6 +3043,12 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::chronoStallCountsCatchUpAndLatePolls();
     const bool daxRestored
         = AetherSDR::TciServerReviewTest::txAudioRestoresTransmitDaxAsFound();
+    const bool dsbMode
+        = AetherSDR::TciServerReviewTest::dsbRoundTripsAndIsAdvertised();
+    const bool rxCtunEx
+        = AetherSDR::TciServerReviewTest::rxCtunExDrivesCenterLockInverted();
+    const bool guiSplit
+        = AetherSDR::TciServerReviewTest::guiSplitAndRitOffsetReachClients();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -2945,6 +3137,12 @@ int main(int argc, char** argv)
                 chronoCatchUp ? "PASS" : "FAIL");
     std::printf("%s  TCI TX hands transmit dax back as found (#6538)\n",
                 daxRestored ? "PASS" : "FAIL");
+    std::printf("%s  DSB maps to dsb both ways and is in modulations_list\n",
+                dsbMode ? "PASS" : "FAIL");
+    std::printf("%s  rx_ctun_ex drives center lock, inverted\n",
+                rxCtunEx ? "PASS" : "FAIL");
+    std::printf("%s  GUI split, RIT/XIT offsets and AGC reach clients\n",
+                guiSplit ? "PASS" : "FAIL");
 
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
@@ -2967,6 +3165,6 @@ int main(int argc, char** argv)
         && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
-        && chronoIdle && chronoCatchUp && daxRestored
+        && chronoIdle && chronoCatchUp && daxRestored && dsbMode && rxCtunEx && guiSplit
         ? 0 : 1;
 }

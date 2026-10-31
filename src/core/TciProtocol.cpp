@@ -99,6 +99,7 @@ QString TciProtocol::smartsdrToTci(const QString& mode)
         {"USB",  "usb"},   {"LSB",  "lsb"},
         {"CW",   "cw"},    {"CWL",  "cwr"},
         {"AM",   "am"},    {"SAM",  "sam"},
+        {"DSB",  "dsb"},
         {"FM",   "fm"},    {"NFM",  "nfm"},
         {"DFM",  "fm"},    {"FDM",  "fm"},
         {"DIGU", "digu"},  {"DIGL", "digl"},
@@ -114,6 +115,7 @@ QString TciProtocol::tciToSmartSDR(const QString& mode, bool* ok)
         {"usb",  "USB"},   {"lsb",  "LSB"},
         {"cw",   "CW"},    {"cwr",  "CWL"},
         {"am",   "AM"},    {"sam",  "SAM"},
+        {"dsb",  "DSB"},
         {"fm",   "FM"},    {"nfm",  "NFM"},
         {"digu", "DIGU"},  {"digl", "DIGL"},
         {"rtty", "RTTY"},
@@ -250,6 +252,12 @@ int TciProtocol::txSliceTrxOrNone(RadioModel* model)
     return -1;
 }
 
+bool TciProtocol::txOnOtherSlice(const RadioModel* model, const SliceModel* rx)
+{
+    const SliceModel* tx = model ? model->txSlice() : nullptr;
+    return rx && tx && tx != rx;
+}
+
 int TciProtocol::txTrx() const
 {
     const int trx = m_trxMap ? m_trxMap->txSliceTrxOrNone(m_model)
@@ -315,7 +323,7 @@ QString TciProtocol::generateInitBurst()
     // identity is #2806.
     burst += QStringLiteral("device:AetherSDR;");
     burst += QStringLiteral("receive_only:false;");
-    burst += QStringLiteral("modulations_list:usb,lsb,cw,cwr,am,sam,fm,nfm,digu,digl,rtty;");
+    burst += QStringLiteral("modulations_list:usb,lsb,cw,cwr,am,sam,dsb,fm,nfm,digu,digl,rtty;");
     burst += QStringLiteral("protocol:ExpertSDR3,1.5;");
 
     // ── Phase 2: Current state notifications ──────────────────────────
@@ -331,6 +339,10 @@ QString TciProtocol::generateInitBurst()
             const long long hz = mhzToHz(s->frequency());
             burst += QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(hz);
             SliceModel* txVfo = sliceForVfo(trx, 1);
+            // GUI split: the TX slice is trx 0's VFO B (see TciServer::publishMainSplit).
+            if (trx == 0 && (!txVfo || txVfo == s) && txOnOtherSlice(m_model, s)) {
+                txVfo = m_model->txSlice();
+            }
             const long long txHz = mhzToHz(txVfo ? txVfo->frequency() : s->frequency());
             burst += QStringLiteral("vfo:%1,1,%2;").arg(trx).arg(txHz);
             // dds: = IQ-stream center (panadapter center). Skimmers learn the
@@ -365,7 +377,8 @@ QString TciProtocol::generateInitBurst()
             // tciSupport.py, SplitThreadSafeValue.get() + extract_current_vfo.)
             burst += QStringLiteral("split_enable:%1,%2;")
                          .arg(trx)
-                         .arg(m_routingState && m_routingState->splitRequested()
+                         .arg((m_routingState && m_routingState->splitRequested())
+                                      || (trx == 0 && txOnOtherSlice(m_model, s))
                                  ? QStringLiteral("true")
                                  : QStringLiteral("false"));
 
@@ -383,6 +396,8 @@ QString TciProtocol::generateInitBurst()
             // AGC
             burst += QStringLiteral("agc_mode:%1,%2;")
                          .arg(trx).arg(s->receiveAgcMode().toLower());
+            burst += QStringLiteral("agc_gain:%1,%2;")
+                         .arg(trx).arg(s->receiveAgcThreshold());
 
             // DSP
             burst += QStringLiteral("rx_nb_enable:%1,%2;")
@@ -476,6 +491,7 @@ QString TciProtocol::handleCommand(const QString& cmd)
     m_pendingNotification.clear();
     m_pendingMasterVolume = -1;
     m_pendingTxGain = -1;
+    m_centerLockRequest.reset();
     m_vfoRequest.reset();
     m_splitRequest.reset();
     m_trxRequest.reset();
@@ -579,6 +595,9 @@ QString TciProtocol::handleCommand(const QString& cmd)
     if (name == "tx_gain")          return cmdTxGain(args, isSet);
     if (name == "active_slice")     return cmdActiveSlice(args);
 
+    // Thetis extension, see cmdRxCtunEx
+    if (name == "rx_ctun_ex")       return cmdRxCtunEx(args, isSet);
+
     // Unknown command — ignore silently per TCI spec
     return {};
 }
@@ -588,6 +607,13 @@ QString TciProtocol::pendingNotification()
     QString n = m_pendingNotification;
     m_pendingNotification.clear();
     return n;
+}
+
+std::optional<TciProtocol::CenterLockRequest> TciProtocol::takeCenterLockRequest()
+{
+    std::optional<CenterLockRequest> request = std::move(m_centerLockRequest);
+    m_centerLockRequest.reset();
+    return request;
 }
 
 std::optional<TciProtocol::VfoRequest> TciProtocol::takeVfoRequest()
@@ -1007,13 +1033,10 @@ QString TciProtocol::cmdSplitEnable(const QStringList& args, bool isSet)
     if (!isSet) {
         bool split = m_routingState && m_routingState->splitRequested();
 
-        if (!m_routingState && s && m_model) {
-            for (auto* sl : m_model->slices()) {
-                if (sl->isTxSlice() && sl != s) {
-                    split = true;
-                    break;
-                }
-            }
+        // A split made in the GUI is just as real; without a routing state
+        // every receiver reports it, as before.
+        if ((trx == 0 || !m_routingState) && txOnOtherSlice(m_model, s)) {
+            split = true;
         }
         return QStringLiteral("split_enable:%1,%2;").arg(trx).arg(split ? "true" : "false");
     }
@@ -1132,6 +1155,42 @@ QString TciProtocol::cmdLock(const QStringList& args, bool isSet)
 
     m_pendingNotification = QStringLiteral("lock:%1,%2;")
                                 .arg(trx).arg(on ? "true" : "false");
+    return {};
+}
+
+// ── RX_CTUN_EX (Thetis extension) ──────────────────────────────────────────
+//
+// `rx_ctun_ex:<trx>,<bool>;` is Thetis's click-tune switch: true lets the VFO
+// move inside a fixed panadapter, false keeps the VFO centred and drags the
+// pan along. AetherSDR's equivalent is the inverse, center lock: ctun true =
+// center lock off. Additive; TCI 2.1 has no command for it. Clients that
+// draw their own spectrum (TCI Remote) send `rx_ctun_ex:0,true;` on connect
+// because a locked pan moves under them on every tune.
+//
+// Center lock is MainWindow state, so a SET is stashed for TciServer and a
+// GET is answered through the injected query, if any.
+
+QString TciProtocol::cmdRxCtunEx(const QStringList& args, bool isSet)
+{
+    if (args.isEmpty()) return {};
+    int trx = 0;
+    if (!argToInt(args, 0, trx)) return {};
+    auto* s = sliceForTrx(trx);
+    if (!s) return {};
+
+    if (!isSet) {
+        if (!m_centerLockQuery) return {};
+        return QStringLiteral("rx_ctun_ex:%1,%2;")
+                   .arg(trx).arg(m_centerLockQuery(s->sliceId()) ? "false" : "true");
+    }
+
+    if (args.size() < 2) return {};
+    bool ctun = false;
+    if (!argToBool(args, 1, ctun)) return {};
+    m_centerLockRequest = CenterLockRequest{trx, s->sliceId(), !ctun};
+
+    m_pendingNotification = QStringLiteral("rx_ctun_ex:%1,%2;")
+                                .arg(trx).arg(ctun ? "true" : "false");
     return {};
 }
 
