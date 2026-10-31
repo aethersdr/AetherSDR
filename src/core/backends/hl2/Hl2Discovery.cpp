@@ -248,6 +248,17 @@ void Hl2Discovery::stop()
     m_answered = false;
 }
 
+void Hl2Discovery::setDirectedTargets(const QList<QHostAddress>& targets)
+{
+    m_directedTargets.clear();
+    for (const QHostAddress& target : targets) {
+        if (target.protocol() == QAbstractSocket::IPv4Protocol && !target.isNull()
+            && !m_directedTargets.contains(target)) {
+            m_directedTargets.append(target);
+        }
+    }
+}
+
 void Hl2Discovery::sweepNow()
 {
     // Interfaces can come up after the application starts (common with a
@@ -290,7 +301,10 @@ void Hl2Discovery::sweepNow()
         if (directedBroadcast != QHostAddress::Broadcast) {
             probe(QHostAddress::Broadcast);
         }
-        // One of the two reaching the wire is a sent probe.
+        for (const QHostAddress& target : std::as_const(m_directedTargets)) {
+            probe(target);
+        }
+        // One of the probes reaching the wire is a sent probe.
         if (sent) {
             m_notices.sendSucceeded(local);
         } else {

@@ -2649,6 +2649,22 @@ target_include_directories(hl2_discovery_logging_test PRIVATE src)
 target_link_libraries(hl2_discovery_logging_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME hl2_discovery_logging_test COMMAND hl2_discovery_logging_test)
 
+# A directed discovery target finds an HL2 a broadcast cannot reach (aetherd
+# --hl2-address). A fake HL2 on the loopback; skips (77) without a LAN interface.
+add_executable(hl2_directed_discovery_test
+    tests/hl2_directed_discovery_test.cpp
+    src/core/backends/hl2/Hl2Discovery.cpp
+    src/core/backends/hl2/MetisProtocol.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+)
+set_target_properties(hl2_directed_discovery_test PROPERTIES AUTOMOC ON)
+target_include_directories(hl2_directed_discovery_test PRIVATE src)
+target_link_libraries(hl2_directed_discovery_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME hl2_directed_discovery_test COMMAND hl2_directed_discovery_test)
+set_tests_properties(hl2_directed_discovery_test PROPERTIES SKIP_RETURN_CODE 77)
+
 add_executable(nr2_settings_model_test
     tests/nr2_settings_model_test.cpp
     src/models/Nr2SettingsModel.cpp
@@ -9938,6 +9954,7 @@ set(AETHER_SETTINGS_CONSUMERS
     dax_receive_applet_test
     graphic_eq_persistence_test
     hl2_discovery_logging_test
+    hl2_directed_discovery_test
     reroute_dead_controls_test
     cat_freedv_mode_tokens_test
     hl2_bandstack_digital_agc_test
