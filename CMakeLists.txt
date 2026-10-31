@@ -881,6 +881,7 @@ set(AETHER_SETTINGS_SOURCES
 )
 
 set(CORE_SOURCES
+    src/models/ConnectionWorkspace.cpp
     src/core/control/ControlProtocolCodec.cpp # aetherd v1 bounded JSON envelopes
     src/core/control/ControlResourceStore.cpp # typed snapshots and revisions
     src/core/control/ControlSession.cpp       # subscriptions and bounded event queues
