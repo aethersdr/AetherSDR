@@ -276,6 +276,7 @@ private:
     void onRadioTransmitConfirmed(bool transmitting);
     void broadcastActualTxState(bool transmitting);
     void handleTuneRequest(TciClient* client, const TciProtocol::TuneRequest& request);
+    void handleKeyerRequest(TciClient* client, const TciProtocol::KeyerRequest& request);
     void scheduleTuneBroadcast();
     void broadcastTuneState();
     void stopTciOwnedTune();
@@ -285,6 +286,7 @@ private:
     void noteClientTextTx(TciClient* socket, const QString& message);
     void sendClientText(TciClient* socket, const QString& message);
     void noteClientSocketError(TciClient* socket, int error);
+    void releaseTciKeyer(ClientState& state);
     QJsonObject disconnectSnapshot(const ClientState& client,
                                    const TciClient* socket) const;
 
@@ -296,6 +298,10 @@ private:
     struct ClientState {
         TxCoordinator::Producer txProducer;
         TxCoordinator::Request pttRequest;
+        // The key-down's request, held until its key-up: keyer: (#5873).
+        // keyerHeld, not keyerRequest.valid(): a revoked request still owes its key-up.
+        TxCoordinator::Request keyerRequest;
+        bool keyerHeld{false};
         QPointer<TciClient> socket;
         TciProtocol* protocol{nullptr};
         QString      processName;        // #5087 — see TciClientInfo

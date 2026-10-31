@@ -288,6 +288,14 @@ void TciIoWorker::captureTextInputs(Client& client)
             } else if (request && request->transmitting) {
                 text.input = client.producer.request();
             }
+        } else if (command.left(colon).trimmed().compare(QLatin1String("keyer"), Qt::CaseInsensitive) == 0) {
+            // A key-down is captured here too, so a later release revokes it.
+            QString arguments = command.mid(colon + 1);
+            if (arguments.endsWith(QLatin1Char(';'))) { arguments.chop(1); }
+            const QStringList args = arguments.split(QLatin1Char(','));
+            if (args.size() >= 2 && args[1].trimmed().compare(QLatin1String("true"), Qt::CaseInsensitive) == 0) {
+                text.input = client.producer.request();
+            }
         }
     }
 }
