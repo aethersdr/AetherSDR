@@ -105,22 +105,24 @@ std::array<std::uint8_t, 1444> buildDdcSpecific(std::span<const DdcConfig> ddcs,
     pkt[5] = ditherEnabled ? 0x03 : 0x00;
     pkt[6] = randomEnabled ? 0x03 : 0x00;
 
-    // Clamp rather than trust the caller: writing rows for more DDCs than
-    // kMaxDdcs would keep landing inside this 1444-byte packet (the spec has
-    // room for 80), so this is not a buffer guard -- it is a refusal to
-    // enable hardware receivers the rest of this backend is not driving.
-    const std::size_t count =
-        std::min(ddcs.size(), static_cast<std::size_t>(kMaxDdcs));
-
     std::uint8_t enableBits = 0;
-    for (std::size_t n = 0; n < count; ++n) {
-        enableBits |= static_cast<std::uint8_t>(1u << n);
+    for (const DdcConfig& ddc : ddcs) {
+        // Refuse rather than trust the caller: a row for a DDC past kMaxDdcs
+        // would still land inside this 1444-byte packet (the spec has room for
+        // 80), so this is not a buffer guard -- it is a refusal to enable
+        // hardware receivers the rest of this backend is not driving.
+        if (ddc.ddc < 0 || ddc.ddc >= kMaxDdcs)
+            continue;
+        const auto bit = static_cast<std::uint8_t>(1u << ddc.ddc);
+        if ((enableBits & bit) != 0)
+            continue;   // a repeated DDC: the first entry owns the row
+        enableBits |= bit;
         // One 6-byte row per DDC: ADC select, 2-byte rate, CIC1, CIC2,
         // sample size. Offsets confirmed against the single-DDC layout this
         // replaced (DDC0: 17 / 18-19 / 20-21 / 22), which is bench-proven.
-        const std::size_t row = 17 + 6 * n;
-        pkt[row] = static_cast<std::uint8_t>(ddcs[n].adcIndex);
-        writeU16be(&pkt[row + 1], static_cast<std::uint16_t>(ddcs[n].rateKsps));
+        const std::size_t row = 17 + 6 * static_cast<std::size_t>(ddc.ddc);
+        pkt[row] = static_cast<std::uint8_t>(ddc.adcIndex);
+        writeU16be(&pkt[row + 1], static_cast<std::uint16_t>(ddc.rateKsps));
         // row+3, row+4 = CIC1/CIC2, "For Future use" (p.25) -- left zero.
         pkt[row + 5] = 24;   // sample size, 24 bits (default, made explicit)
     }
@@ -135,7 +137,7 @@ std::array<std::uint8_t, 1444> buildDdcSpecific(int ddc0RateKsps, int numAdcs,
     // Delegates so the row layout has exactly one implementation; the
     // single-DDC output stays byte-identical to what this function built
     // before the multi-DDC overload existed (pinned by the existing tests).
-    const DdcConfig one{ddc0RateKsps, ddc0AdcIndex};
+    const DdcConfig one{.ddc = 0, .rateKsps = ddc0RateKsps, .adcIndex = ddc0AdcIndex};
     return buildDdcSpecific(std::span<const DdcConfig>(&one, 1),
                             numAdcs, ditherEnabled, randomEnabled);
 }
