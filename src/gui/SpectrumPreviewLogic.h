@@ -575,6 +575,21 @@ inline float waterfallScrollProgressRows(std::int64_t elapsedMs, float msPerRow,
                       0.0f, distanceRows);
 }
 
+// Every render of the pan re-reads the waterfall scroll clock, the newest row and
+// the overlay, so while FFT frames are presenting they carry all three. A
+// scroll tick, waterfall row or label change only needs a present of its own
+// when no FFT present is due: each extra one is another whole-window composite
+// on a QRhiWidget window (#6883). A stream counts as live until 1.5 FFT frame
+// periods pass without a frame.
+inline bool presentNeededBesideFft(std::int64_t sinceFftPresentMs, int fftFps)
+{
+    if (sinceFftPresentMs < 0 || fftFps <= 0) {
+        return true;
+    }
+    const std::int64_t framePeriodMs = 1000 / fftFps;
+    return sinceFftPresentMs > framePeriodMs + framePeriodMs / 2;
+}
+
 inline float waterfallScrollSampleOffsetUnit(float progressRows,
                                               float distanceRows,
                                               int textureRows)
