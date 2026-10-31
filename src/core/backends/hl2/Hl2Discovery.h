@@ -76,6 +76,10 @@ public:
     // found this way (the desktop's connect-by-IP probe is the same idea).
     // Empty by default; a reply is handled exactly like a broadcast reply.
     void setDirectedTargets(const QList<QHostAddress>& targets);
+    // The accepted targets, after the IPv4-only, non-null, de-duplicating
+    // filter setDirectedTargets applies. Lets the policy be asserted without
+    // a socket (tests/hl2_discovery_logging_test is the sibling precedent).
+    [[nodiscard]] QList<QHostAddress> directedTargets() const { return m_directedTargets; }
 
     [[nodiscard]] bool isRunning() const noexcept;
 
