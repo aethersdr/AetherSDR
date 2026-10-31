@@ -11,6 +11,7 @@
 #include "core/backends/GpsDelta.h"     // applyGpsChanges payload (aetherd 2.3)
 #include "core/backends/MemoryDelta.h"  // applyMemoryChanges payload (aetherd 2.3)
 #include "core/backends/ProfileDelta.h" // applyProfileChanges payload (aetherd 2.3)
+#include "core/backends/RadioStatusObservation.h"
 #include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
 #include "core/backends/FrontEndOverload.h"
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
@@ -54,6 +55,7 @@
 #include "DisplayInventoryPolicy.h"
 
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QList>
 #include <QJsonObject>
@@ -1352,6 +1354,7 @@ signals:
     void callsignChanged(const QString& callsign);
     // Emitted when the radio reports 10 MHz reference oscillator state.
     void oscillatorChanged();
+    void calibrationProgress(bool done, const std::optional<int>& frequencyErrorPpb);
     // Emitted when network quality assessment changes.
     // quality: "Off", "Excellent", "Very Good", "Good", "Fair", "Poor"
     // pingMs: round-trip time in milliseconds
@@ -1576,11 +1579,12 @@ private:
     void retireDisplayResource(const QString& id);
     void requestPanRfGainInfo(PanadapterModel* pan);
     friend struct RadioModelWakeTestAccess;
-    void handleRadioStatus(const QMap<QString, QString>& kvs);
     void adoptSoftwareVersion(const QString& version);
     // Apply a normalized radio-global delta from the backend
     // (IRadioBackend::radioChanged). aetherd RFC 2.3 — RadioModel residual.
-    void applyRadioChanges(const RadioDelta& delta);
+    void applyRadioChanges(const RadioDelta& delta, const std::function<bool()>& current = {});
+    void applyRadioObservation(const RadioStatusObservation& observation);
+    void resetRadioObservations();
     // Apply normalized GPS / memory-slot / profile deltas from the backend
     // (IRadioBackend::gpsChanged / memoryChanged / profileChanged). aetherd RFC
     // 2.3 — RadioModel residual.
@@ -1907,6 +1911,7 @@ public:
     bool rebuildBackendForTest(const QString& family);
 private:
     friend class RadioModelSliceLifecycleTestAccess;
+    friend class FlexRadioStatusTestPeer;
     friend class RadioNicknameTestAccess;
     friend class TuneOutputControlTestAccess;
     friend class TuneOutputDialogTestAccess;
@@ -2513,7 +2518,9 @@ private:
     // `stream remove` (unregisterDaxStream). Stops the radio's own transient
     // empty-slice= unbind echo from re-triggering the nudge → #4009 storm.
     QSet<quint32> m_nudgedDaxStreams;
-    WanConnection* m_wanConn{nullptr};  // non-null when connected via SmartLink
+    quint64 m_wanBindingGeneration{0};
+    quint64 m_radioObservationGeneration{0};
+    QPointer<WanConnection> m_wanConn;  // non-null when connected via SmartLink
     QString  m_wanPublicIp;
     quint16  m_wanUdpPort{4991};
     QSet<int>          m_ownedSliceIds;   // slice IDs that belong to our client
@@ -2539,6 +2546,13 @@ private:
     // one-shot timers, which would fire a stale flush for every extension).
     QTimer m_profileLoadPanWriteFlushTimer;
 
+    quint64 m_clientLifecycleRevision{0};
+    QMap<quint32, quint64> m_clientLifecycles;
+    QSet<quint32> m_liveClientHandles;
+    QSet<quint32> m_retiredClientHandles;
+    bool m_clientHistoryComplete{true};
+    static constexpr qsizetype kMaxObservedClients = 256;
+    static constexpr qsizetype kMaxRetiredClients = 1024;
     QMap<quint32, ClientInfo> m_clientInfoMap; // handle → full client info
     std::function<void()> m_multiFlexContinuation; // saved continuation during conflict pause
     QMap<quint32, QString> m_clientStations;   // handle → station name (legacy, kept in sync)

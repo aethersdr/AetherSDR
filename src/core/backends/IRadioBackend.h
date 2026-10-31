@@ -1,5 +1,7 @@
 #pragma once
 
+#include "RadioStatusObservation.h"
+
 #include "IndependentTxControl.h"
 
 #include "core/RadioSettingsIdentity.h"
@@ -1208,6 +1210,7 @@ signals:
     // residual). Typed + compiler-checked; the backend populates only the fields
     // the wire reported and RadioModel applies them + its own orchestration.
     void radioChanged(const RadioDelta& delta);
+    void radioStatusObserved(const AetherSDR::RadioStatusObservation& observation);
 
     // Normalized GPS status delta (aetherd RFC 2.3 — RadioModel residual). The
     // backend tokenizes the vendor GPS status line into a present-only GpsDelta;

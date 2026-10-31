@@ -3539,54 +3539,24 @@ QWidget* RadioSetupDialog::buildRxTab()
                 ppbEdit->setText(QString::number(m_model->freqErrorPpb()));
         });
 
-        connect(m_model, &RadioModel::statusReceived, this,
-                [startBtn, calStatus, calibrationActive, pllRunningSeen](
-                    const QString& object, const QMap<QString, QString>& kvs) {
-            if (object != QStringLiteral("radio") || !kvs.contains(QStringLiteral("pll_done")))
-                return;
-
-            const QString pllDone = kvs.value(QStringLiteral("pll_done"));
-            const QString freqError = kvs.value(QStringLiteral("freq_error_ppb"));
-            const QString calFreq = kvs.value(QStringLiteral("cal_freq"));
-            qCDebug(lcProtocol)
-                << "RadioSetupDialog: frequency calibration status"
-                << "pll_done=" << pllDone
-                << "freq_error_ppb=" << freqError
-                << "cal_freq=" << calFreq
-                << "active=" << *calibrationActive
-                << "running_seen=" << *pllRunningSeen;
-
-            if (!*calibrationActive)
-                return;
-
-            if (pllDone == QStringLiteral("0")) {
+        connect(m_model, &RadioModel::calibrationProgress, this,
+                [calibrationActive, pllRunningSeen, startBtn, calStatus](
+                    bool done, const std::optional<int>& frequencyErrorPpb) {
+            if (!*calibrationActive) { return; }
+            if (!done) {
                 *pllRunningSeen = true;
                 calStatus->setText("Calibrating...");
                 setTone(calStatus, Tone::Accent);
                 return;
             }
-
-            if (pllDone == QStringLiteral("1") && !*pllRunningSeen) {
-                qCDebug(lcProtocol)
-                    << "RadioSetupDialog: ignoring pll_done=1 before pll_done=0 for active calibration"
-                    << "freq_error_ppb=" << freqError
-                    << "cal_freq=" << calFreq;
-                return;
-            }
-
-            if (pllDone == QStringLiteral("1")) {
-                *calibrationActive = false;
-                startBtn->setEnabled(true);
-                startBtn->setText("Start");
-                calStatus->setText(freqError.isEmpty()
-                    ? QStringLiteral("Complete")
-                    : QStringLiteral("Complete (%1 ppb)").arg(freqError));
-                setTone(calStatus, Tone::Ok);
-                qCDebug(lcProtocol)
-                    << "RadioSetupDialog: frequency calibration completed"
-                    << "freq_error_ppb=" << freqError
-                    << "cal_freq=" << calFreq;
-            }
+            if (!*pllRunningSeen) { return; }
+            *calibrationActive = false;
+            startBtn->setEnabled(true);
+            startBtn->setText("Start");
+            calStatus->setText(frequencyErrorPpb
+                ? QStringLiteral("Complete (%1 ppb)").arg(*frequencyErrorPpb)
+                : QStringLiteral("Complete"));
+            setTone(calStatus, Tone::Ok);
         });
 
         vbox->addWidget(group);

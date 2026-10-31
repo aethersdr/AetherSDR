@@ -162,6 +162,7 @@ timings are entered in milliseconds. The Demo does not implement these settings.
 ### Calibration is interrupted by a disconnect
 
 On **Receive → Frequency Offset**, **Start** begins radio-side calibration.
+Disconnecting cancels the displayed calibration attempt; reconnect before starting again.
 An accepted request is not a completed calibration; completion comes from the
 radio's status. The reference frequency and correction reset must each be
 accepted before calibration starts. A rejected or unanswered step stops the

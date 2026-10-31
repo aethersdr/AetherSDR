@@ -1,5 +1,7 @@
 #pragma once
 
+#include "FlexRadioStatus.h"
+
 #include "CommandParser.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/IndependentTxControl.h"
@@ -52,6 +54,10 @@ public:
     QHostAddress explicitLocalBindAddress() const { return m_explicitBindAddr; }
     QHostAddress sessionLocalBindAddress() const  { return m_sessionBindAddr; }
 
+    // Only these source operations are safe across the transport thread boundary.
+    std::shared_ptr<RadioStatusLifetime> radioStatusLifetime() const { return m_radioStatusSource.lifetime(); }
+    void invalidateRadioStatus() { m_radioStatusSource.invalidate(); }
+
     using ResponseCallback = std::function<void(int resultCode, const QString& body)>;
 
 public slots:
@@ -89,6 +95,7 @@ signals:
     void errorOccurred(const QString& message);
     void messageReceived(const ParsedMessage& msg);
     void pingRttMeasured(int ms);
+    void radioStatusObserved(const AetherSDR::RadioStatusObservation& observation);
     void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
     // Demo mode: the user tuned the (synthetic) slice VFO. MainWindow's
     // wireBackendSeam() forwards this to SimBackend::setSliceFrequency so the
@@ -114,6 +121,8 @@ private slots:
     void onHeartbeat();
 
 private:
+    friend class FlexRadioStatusTestPeer;
+    FlexRadioStatusSource m_radioStatusSource;
     void resetSocket();
     void resetSessionState();
     void processLine(const QString& line);

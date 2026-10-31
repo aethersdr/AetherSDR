@@ -139,6 +139,7 @@ bool RadioConnection::isDemoTarget(const RadioInfo& info)
 void RadioConnection::startSyntheticDemoConnect()
 {
     resetSessionState();
+    m_radioStatusSource.begin();
     // Pin this session. m_syntheticDemo alone cannot distinguish "still the
     // demo session I queued from" from "a NEW demo session started after mine
     // was torn down" -- a fast disconnect/reconnect sets the flag back to true
@@ -205,7 +206,7 @@ void RadioConnection::startSyntheticDemoConnect()
                 "SDE300001|slice 0 client_handle=0xDE300001 pan=0x40000000 "
                 "RF_frequency=14.100000 mode=USB filter_lo=100 filter_hi=2900 "
                 "in_use=1 active=1"));
-            // Oscillator/reference status. RadioModel parses "radio oscillator"
+            // Oscillator/reference status. The typed boundary parses "radio oscillator"
             // directly (backend-agnostic, not m_flexBackend-gated), driving the
             // status-bar Ref label; without it the demo shows "Ref: -- [Waiting]".
             // A demo has a perfect notional reference: TCXO, locked, present.
@@ -258,6 +259,7 @@ void RadioConnection::connectToHost(const QHostAddress& address,
         resetSocket();
     }
     resetSessionState();
+    m_radioStatusSource.begin();
 
     const QHostAddress preferredBindAddr =
         (bindMode == RadioBindMode::Explicit) ? explicitBindAddr : sessionBindAddr;
@@ -316,6 +318,7 @@ void RadioConnection::connectToHost(const QHostAddress& address,
 
 void RadioConnection::resetSessionState()
 {
+    if (const auto end = m_radioStatusSource.end()) { emit radioStatusObserved(*end); }
     m_pttProtocol.store(PttProtocol::Unknown);
     if (m_independentPtt) {
         m_independentPtt->disconnect();
@@ -373,6 +376,7 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
         return;
     }
 
+    if (const auto end = m_radioStatusSource.end()) { emit radioStatusObserved(*end); }
     if (m_heartbeat) m_heartbeat->stop();
 
     QElapsedTimer totalTimer;
@@ -673,6 +677,8 @@ void RadioConnection::onHeartbeat()
 
 void RadioConnection::processLine(const QString& line)
 {
+    const auto radioLifetime = m_radioStatusSource.lifetime();
+    const quint32 radioLocalHandle = clientHandle();
     if (m_independentPtt && !isSyntheticDemo()) {
         m_independentPtt->observe(line, TxCoordinator::monotonicMs());
         updateIndependentPttTimer();
@@ -745,6 +751,9 @@ void RadioConnection::processLine(const QString& line)
         emit commandResponse(msg.sequence, msg.resultCode, msg.object);
         break;
     case MessageType::Status:
+        if (const auto observation = decodeFlexRadioStatus(msg.object, msg.kvs, radioLifetime, radioLocalHandle)) {
+            emit radioStatusObserved(*observation);
+        }
         emit statusReceived(msg.object, msg.kvs);
         break;
     default:
