@@ -2003,6 +2003,13 @@ QString TciProtocol::cmdMonEnable(const QStringList& args, bool /*isSet*/)
     }
     bool on = false;
     if (!argToBool(args, args.size() == 1 ? 0 : 1, on)) return {};
+    // A radio with no transmit monitor: leave the model alone and tell peers
+    // the state it really has, as rx_anf_enable does where it refuses.
+    if (!m_model->transmitMonitorAvailable()) {
+        m_pendingNotification = QStringLiteral("mon_enable:%1;")
+            .arg(m_model->transmitModel().sbMonitor() ? "true" : "false");
+        return {};
+    }
     QMetaObject::invokeMethod(m_model, [model = m_model, on]() {
         model->transmitModel().setSbMonitor(on);
     }, Qt::QueuedConnection);
@@ -2021,6 +2028,11 @@ QString TciProtocol::cmdMonVolume(const QStringList& args, bool /*isSet*/)
     }
     int vol = 0;
     if (!argToInt(args, args.size() == 1 ? 0 : 1, vol)) return {};
+    if (!m_model->transmitMonitorAvailable()) {
+        m_pendingNotification = QStringLiteral("mon_volume:%1;")
+            .arg(m_model->transmitModel().monGainSb());
+        return {};
+    }
     QMetaObject::invokeMethod(m_model, [model = m_model, vol]() {
         model->transmitModel().setMonGainSb(vol);
     }, Qt::QueuedConnection);
