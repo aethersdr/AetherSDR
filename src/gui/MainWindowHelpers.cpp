@@ -150,6 +150,13 @@ QString networkQualityColor(const QString& quality)
     return QStringLiteral("#8aa8c0"); // Off / unknown
 }
 
+QString adaptiveFpsCapColor(int fpsCap)
+{
+    if (fpsCap <= 4) return networkQualityColor(QStringLiteral("Poor"));
+    if (fpsCap <= 8) return networkQualityColor(QStringLiteral("Fair"));
+    return networkQualityColor(QStringLiteral("Good"));
+}
+
 QString buildNetworkTooltip(const RadioModel& model,
                             int adaptiveFpsCap,
                             bool throttleRestorePending)

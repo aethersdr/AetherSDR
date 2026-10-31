@@ -1,7 +1,9 @@
 #pragma once
 
 #include <QAbstractButton>
+#include <QColor>
 #include <QList>
+#include <QSizeF>
 #include <QString>
 #include <QVariantMap>
 #include <QPointer>
@@ -82,6 +84,18 @@ public:
     void setAlarmVisible(bool on);          // driven by the bar's blink phase
     void setBeatColor(const QColor& color); // throttle tint; invalid = dot colour
 
+    // Network link quality, as the status bar grades it.  While the AT chip
+    // shows, a connected radio's dot takes the quality colour (the old lamp's
+    // cue); the label goes into the tooltip and accessible name so the colour
+    // is never the only carrier.  Invalid colour = plain status colour.
+    void setLinkQuality(const QColor& color, const QString& label);
+
+    // "AT" chip after the name while the adaptive frame-rate throttle is
+    // enabled.  `tint` invalid = enabled but idle (outlined); valid = a cap
+    // is in force (filled in the cap's colour).  `text` spells it out.
+    void setThrottleChip(bool shown, const QColor& tint, const QString& text);
+    bool isThrottleChipShown() const { return m_chipShown; }
+
     // Which tab is currently showing the link state.  Normally the active one,
     // but with no radio connected it falls back to the first tab — "searching"
     // is reported precisely when nothing is active, so keying the carrier off
@@ -112,11 +126,17 @@ private:
     QRect dotDirtyRect() const;        // the link indicator's repaint footprint
 
     QColor dotColor() const;
+    QSizeF chipSize() const;           // AT chip footprint; empty when hidden
 
     RadioTabEntry m_entry;
     qreal         m_pulse{0.0};
     QColor        m_overrideColor;   // invalid = use the status colour
     QColor        m_beatColor;       // invalid = use the dot colour
+    QColor        m_qualityColor;    // invalid = no quality reading
+    QString       m_qualityLabel;
+    bool          m_chipShown{false};
+    QColor        m_chipTint;        // invalid = throttle enabled, no cap
+    QString       m_chipText;
     bool          m_alarm{false};    // link lost — red, and blinking if enabled
     bool          m_alarmVisible{true};
     bool          m_linkCarrier{false};
@@ -157,6 +177,15 @@ public:
     // way).  `pulseLink()` is one heartbeat: the dot's glow swells and decays.
     void setLinkIndicator(const QColor& overrideColor, bool alarm);
     void pulseLink(const QColor& beatColor = QColor());
+
+    // Network quality ("Excellent" … "Poor") and its colour; an invalid
+    // colour clears it ("Off" / disconnected).  Shown on the link's own tab,
+    // and only while the adaptive throttle's AT chip is showing.
+    void setLinkQuality(const QColor& color, const QString& label);
+
+    // Adaptive frame-rate throttle: `enabled` shows the AT chip on the
+    // link's tab; `fpsCap` > 0 means a cap is in force, tinted `capColor`.
+    void setAdaptiveThrottle(bool enabled, int fpsCap, const QColor& capColor);
 
     // Minimal mode: show the active tab only and drop the "+".  The strip has
     // to survive there rather than being hidden — since the heartbeat lamp was
@@ -225,6 +254,11 @@ private:
     qreal                m_pulseLevel{0.0};
     QColor               m_linkOverride;
     QColor               m_beatColor;
+    QColor               m_qualityColor;
+    QString              m_qualityLabel;
+    bool                 m_throttleEnabled{false};
+    int                  m_throttleFpsCap{0};
+    QColor               m_throttleCapColor;
     bool                 m_alarm{false};
     bool                 m_alarmVisible{true};
     bool                 m_compact{false};
