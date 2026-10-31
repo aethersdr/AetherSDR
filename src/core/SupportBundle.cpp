@@ -7,6 +7,7 @@
 #include "GpuSelector.h"
 #include "ZipArchive.h"
 #include "models/RadioModel.h"
+#include "core/backends/IRadioBackend.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -16,6 +17,8 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QObject>
+#include <QVariant>
 #include <QSaveFile>
 #include <QStringList>
 #include <QSysInfo>
@@ -91,6 +94,85 @@ SupportBundle::RadioInfo SupportBundle::collectRadioInfo(const RadioModel* model
     info.protocolVersion = model->protocolVersion();
     info.callsign        = model->callsign();
     info.ip              = model->ip();
+    return info;
+}
+
+SupportBundle::Hl2Info SupportBundle::collectHl2Info(RadioModel* model)
+{
+    Hl2Info info;
+    if (!model || !model->isConnected()
+        || !model->backendDeclaresExtension(QStringLiteral("hl2"))) {
+        return info;
+    }
+    IRadioBackend* backend = model->backend();
+    if (!backend)
+        return info;
+    info.present = true;
+
+    // Board variant: the operator's declared board, through hw.get like the
+    // Radio Setup page (the vendor header stays below the seam). hw.get
+    // completes synchronously, so the handler is armed before the invoke and
+    // dies with `guard`.
+    QVariantMap hw;
+    {
+        // 0x03.. is Radio Setup's hw.get, 0x04.. its calibration read, 0x05.. its
+        // calibration set: a fourth decade, so a report made with the dialog open
+        // cannot answer, or be answered by, one of its requests.
+        constexpr quint64 kRequestId = 0x0600000000000000ull;
+        QObject guard;
+        QObject::connect(backend, &IRadioBackend::extensionResult, &guard,
+                         [&hw](quint64 id, const QVariant& result) {
+                             if (id == kRequestId)
+                                 hw = result.toMap();
+                         });
+        model->invokeBackendExtension(QStringLiteral("hl2"),
+                                      QStringLiteral("hw.get"), kRequestId);
+    }
+    if (hw.contains(QStringLiteral("codec"))) {
+        switch (hw.value(QStringLiteral("codec")).toInt()) {
+        case 0: info.boardVariant = QStringLiteral("plain Hermes-Lite 2"); break;
+        case 1: info.boardVariant = QStringLiteral("AK4951 (HL2+ companion board)"); break;
+        case 2: info.boardVariant = QStringLiteral("SquareSDR 2"); break;
+        default: break;
+        }
+    }
+
+    const IRadioBackend::HealthSnapshot h = backend->healthSnapshot();
+    info.sampleRateHz = h.values.value(QStringLiteral("sampleRateHz")).toInt();
+    info.receivers    = h.values.value(QStringLiteral("receivers")).toInt();
+    if (h.values.contains(QStringLiteral("droppedPackets")))
+        info.droppedPackets = h.values.value(QStringLiteral("droppedPackets")).toLongLong();
+    if (h.values.contains(QStringLiteral("ep4Drops")))
+        info.ep4Drops = h.values.value(QStringLiteral("ep4Drops")).toLongLong();
+    if (h.values.contains(QStringLiteral("txFifoRecovery")))
+        info.txFifoFault = h.values.value(QStringLiteral("txFifoRecovery")).toBool() ? 1 : 0;
+    // Per-receiver rows are keyed dspUnderruns<N> / dspFaultCount<N>; sum them,
+    // and leave the total unreported when no receiver has reported at all.
+    for (auto it = h.values.constBegin(); it != h.values.constEnd(); ++it) {
+        if (it.key().startsWith(QLatin1String("dspUnderruns")))
+            info.dspUnderruns = qMax<qlonglong>(info.dspUnderruns, 0) + it.value().toLongLong();
+        else if (it.key().startsWith(QLatin1String("dspFaultCount")))
+            info.dspFaults = qMax<qlonglong>(info.dspFaults, 0) + it.value().toLongLong();
+    }
+
+    // Which TX modulator this build carries, and the blocks it could not place.
+    const QVariantList chains = backend->dspChains();
+    for (const QVariant& c : chains) {
+        const QVariantMap m = c.toMap();
+        if (m.value(QStringLiteral("chain")).toString() != QLatin1String("hl2-tx"))
+            continue;
+        info.txModulator = m.value(QStringLiteral("modulator")).toString();
+        if (m.contains(QStringLiteral("modulatorFaultBlocks")))
+            info.txModulatorFaultBlocks =
+                m.value(QStringLiteral("modulatorFaultBlocks")).toLongLong();
+    }
+
+    QStringList modes;
+    for (const SliceModel* slice : model->slices()) {
+        if (slice && !slice->mode().isEmpty() && !modes.contains(slice->mode()))
+            modes << slice->mode();
+    }
+    info.mode = modes.join(QStringLiteral(", "));
     return info;
 }
 

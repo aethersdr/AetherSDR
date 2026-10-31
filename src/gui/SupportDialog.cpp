@@ -335,6 +335,7 @@ void SupportDialog::fileIssue(QWidget* parent, RadioModel* radioModel)
         radio.callsign = radioModel->callsign();
         radio.ip = radioModel->radioAddress().toString();
         radio.connected = true;
+        radio.hl2 = SupportBundle::collectHl2Info(radioModel);
     }
     QString bundlePath = SupportBundle::createBundle(radio);
     if (bundlePath.isEmpty()) {

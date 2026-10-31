@@ -135,6 +135,97 @@ void testBundleSystemInfoJsonCarriesHardwareFacts()
            && obj.value("aetherVersion").toString() == "26.7.3");
 }
 
+SupportBundle::RadioInfo sampleHl2Radio()
+{
+    SupportBundle::RadioInfo radio;
+    radio.connected       = true;
+    radio.model           = "Hermes-Lite 2";
+    radio.serial          = "00:1C:C0:A2:13:DD";
+    radio.firmware        = "75";
+    radio.ip              = "192.168.50.77";
+    radio.hl2.present     = true;
+    radio.hl2.boardVariant = "AK4951 (HL2+ companion board)";
+    radio.hl2.sampleRateHz = 192000;
+    radio.hl2.receivers    = 2;
+    radio.hl2.txModulator  = "wdsp-txa";
+    radio.hl2.mode         = "USB, CWU";
+    radio.hl2.droppedPackets = 12;
+    radio.hl2.ep4Drops     = 0;
+    radio.hl2.txFifoFault  = 1;
+    radio.hl2.dspUnderruns = 3;
+    radio.hl2.dspFaults    = 0;
+    radio.hl2.txModulatorFaultBlocks = 5;
+    return radio;
+}
+
+// An HL2 report carries the Hermes-Lite 2 block with the facts the app holds.
+void testHl2BlockPresent()
+{
+    const QString body = buildIssueReport(sampleSys(), sampleHl2Radio(), QString());
+    report("HL2 section heading present",       body.contains("### Hermes-Lite 2\n"));
+    report("gateware line",                     body.contains("- Gateware: 75\n"));
+    report("board variant line",
+           body.contains("- Board variant: AK4951 (HL2+ companion board)\n"));
+    report("sample rate line",                  body.contains("- Sample rate: 192000 Hz\n"));
+    report("receivers line",                    body.contains("- Receivers: 2\n"));
+    report("TX path line",                      body.contains("- TX path: wdsp-txa\n"));
+    report("mode line",                         body.contains("- Mode: USB, CWU\n"));
+    report("dropped EP6 packets line",          body.contains("- Dropped EP6 packets: 12\n"));
+    report("dropped EP4 packets line",          body.contains("- Dropped EP4 packets: 0\n"));
+    report("TX pacing fault line",              body.contains("- TX pacing fault: yes\n"));
+    report("DSP underruns line",                body.contains("- DSP pipeline underruns: 3\n"));
+    report("DSP faults line",                   body.contains("- DSP processing faults: 0\n"));
+    report("TX modulator fault blocks line",
+           body.contains("- TX modulator fault blocks: 5\n"));
+    report("HL2 section sits before OS & version",
+           body.indexOf("### Hermes-Lite 2") < body.indexOf("### OS & version"));
+
+    // Unreported values are left out, never printed as zero.
+    SupportBundle::RadioInfo sparse = sampleHl2Radio();
+    sparse.hl2 = SupportBundle::Hl2Info{};
+    sparse.hl2.present = true;
+    const QString sparseBody = buildIssueReport(sampleSys(), sparse, QString());
+    report("unreported HL2 values are omitted",
+           sparseBody.contains("### Hermes-Lite 2\n")
+           && !sparseBody.contains("Sample rate")
+           && !sparseBody.contains("Dropped EP6")
+           && !sparseBody.contains("TX path"));
+}
+
+// No HL2 section for any other radio, and the report is exactly what it was:
+// the HL2 fields on a Flex or disconnected radio are ignored.
+void testHl2BlockAbsentElsewhere()
+{
+    const QString flex = buildIssueReport(sampleSys(), sampleRadio(), "line");
+    report("Flex report has no HL2 section", !flex.contains("Hermes-Lite 2"));
+
+    SupportBundle::RadioInfo flexWithStray = sampleRadio();
+    flexWithStray.hl2.droppedPackets = 99;    // present stays false
+    flexWithStray.hl2.sampleRateHz   = 48000;
+    report("Flex report is byte-identical when hl2.present is false",
+           buildIssueReport(sampleSys(), flexWithStray, "line") == flex);
+
+    SupportBundle::RadioInfo none;
+    const QString noRadio = buildIssueReport(sampleSys(), none, QString());
+    report("no-radio report has no HL2 section", !noRadio.contains("Hermes-Lite 2"));
+
+    SupportBundle::RadioInfo gone = sampleHl2Radio();
+    gone.connected = false;
+    report("disconnected radio gets no HL2 section",
+           !buildIssueReport(sampleSys(), gone, QString()).contains("### Hermes-Lite 2"));
+}
+
+// The HL2's serial is its MAC: redacted like any serial, never listed whole.
+void testHl2MacRedacted()
+{
+    const QString body = buildIssueReport(sampleSys(), sampleHl2Radio(), QString());
+    report("HL2 MAC is absent from body",
+           !body.contains("00:1C:C0:A2:13:DD") && !body.contains("A2:13"));
+    report("HL2 serial keeps only its last octet",
+           body.contains("**:**:**:**:**:DD"));
+    report("radio IP is absent from body", !body.contains("192.168.50.77"));
+}
+
 } // namespace
 
 int main(int, char**)
@@ -144,6 +235,9 @@ int main(int, char**)
     testOmittedLogNote();
     testSnapshotSectionsPresent();
     testBundleSystemInfoJsonCarriesHardwareFacts();
+    testHl2BlockPresent();
+    testHl2BlockAbsentElsewhere();
+    testHl2MacRedacted();
 
     std::printf("\n%s\n", g_failed == 0 ? "ALL PASSED" : "FAILURES PRESENT");
     return g_failed == 0 ? 0 : 1;
