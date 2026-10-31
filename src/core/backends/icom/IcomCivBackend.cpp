@@ -536,9 +536,16 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // No DDC in any networked Icom's receive chain — CI-V ships finished audio
     // (see hasDaxStreams below), not a decimated IQ stream with an edge to taper.
     c.hasDdcPanEdgeRolloff = false;
-    // CI-V has no per-pan zoom-to-band/segment verb; the scope span is set
-    // directly, not by a radio-owned flag.
-    c.panZoomModes = std::nullopt;
+    // A scope-capable model can fulfill band/segment zoom by setting its native
+    // span; the radio still owns the center. The widths come from the same
+    // detent table used by setPanBandwidth() and the limits status.
+    if (m.hasScope) {
+        const auto widths = availableBandwidthsHz();
+        c.panZoomModes = RadioCapabilities::PanZoomModes{
+            QStringLiteral("setPanBandwidth"),
+            RadioCapabilities::PanZoomModes::Control::NativeScopeSpan,
+            QVector<int>(widths.begin(), widths.end())};
+    }
     c.panFrameRateShaping = std::nullopt;  // no client owner is declared for FFT FPS
     // CI-V carries no waterfall rate: the client is the only memory it has.
     c.panWaterfallRateShaping =

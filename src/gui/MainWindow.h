@@ -394,6 +394,7 @@ protected:
 private slots:
     // Radio/connection events
     void onConnectionStateChanged(bool connected);
+    void refreshPanZoomControls();
     void adjustCatPortCounts(bool connected);  // called from onConnectionStateChanged
     void onConnectionError(const QString& msg);
     // GHSA-wfx7-w6p8-4jr2 phase 2 (#2951): show mismatch modal and

@@ -5,6 +5,7 @@
 #include <QMap>
 #include <QString>
 #include <QVector>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -70,6 +71,11 @@ public:
     const QVector<Segment>& segments() const { return m_segments; }
     const QVector<Spot>& spots() const { return m_spots; }
 
+    // The active plan's segment containing a frequency, or the enclosing
+    // amateur-band allocation assembled from nearby segments. These are
+    // display targets only; they do not authorize transmission.
+    std::optional<Region> zoomRegionAt(double frequencyMhz, bool segment) const;
+
     // Active plan's optional license-class table: code → human label
     // (e.g. {"T": "Technician", "G": "General", "E": "Extra"} for ARRL US).
     // Empty when the plan declares no class structure — callers should hide
@@ -134,4 +140,3 @@ private:
 };
 
 } // namespace AetherSDR
-
