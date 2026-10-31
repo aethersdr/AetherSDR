@@ -36,7 +36,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 |---|---|
 | **RX1 … RX8** | One row per receive channel: the slice it carries and a combined level meter / gain slider. Rows above the radio's slice capacity are hidden. |
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
-| **Line Out TX (Experimental)** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
+| **Line Out TX** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
 
@@ -157,7 +157,7 @@ audio_stream_sample_type:int16;
 audio_stream_channels:1;
 ```
 
-### Experimental Line Out recording
+### Line Out recording
 
 Clients start and stop a separate stereo mix with `line_out_start:<receiver>;`
 and `line_out_stop:<receiver>;`. It uses TCI stream type **4**, fixed at
@@ -173,13 +173,13 @@ and other sources in that mix. Playback master volume and mute also apply.
 The TCI RX, TX and MIC faders do not add another recording gain to Line Out.
 It does not record other applications or separate local cue/sidetone devices.
 
-**Line Out TX (Experimental)** is off by default. When off, Line Out sends silence
+**Line Out TX** is off by default. When off, Line Out sends silence
 throughout radio TX, including any simultaneous RX: TX monitor and RX cannot be
 separated after mixing. When on, it records the existing playback mix during TX
 without adding a duplicate microphone feed. On FlexRadio, enable MON yourself
 to hear and record radio-side TX monitor audio. Subscribing never changes MON,
 microphone selection or transmitter state. This is separate from
-**Mic During TX (Experimental)** and does not require that option.
+**Mic During TX** and does not require that option.
 
 Switching PC Audio on or off does not stop an active Line Out subscription.
 The radio audio stream is released after the last Line Out listener stops unless
@@ -188,10 +188,10 @@ Server-side `line_out_recorder_*` file recording is not implemented.
 Live TX, MON and multi-client recording qualification remain outstanding
 ([#6410](https://github.com/aethersdr/AetherSDR/issues/6410)).
 
-### Experimental microphone recording with DXLog
+### Microphone recording with DXLog
 
-The FlexRadio microphone recording experiment is disabled by default. In the
-TCI Server applet, select **Mic During TX (Experimental)**, then connect DXLog
+FlexRadio microphone recording is disabled by default. In the
+TCI Server applet, select **Mic During TX**, then connect DXLog
 to AetherSDR's normal TCI endpoint, usually
 `ws://127.0.0.1:50001`. No separate probe or audio device is needed.
 The option stays visible but unavailable, with a reason, when the connected
@@ -211,7 +211,7 @@ float32/int16 negotiation still applies, including 48 kHz recording. Other
 receivers keep their RX audio.
 
 The **MIC** fader controls only this outgoing recording feed. It appears only
-when **Mic During TX (Experimental)** is selected and remembers its setting.
+when **Mic During TX** is selected and remembers its setting.
 The default is 100 percent (0 dB, unity gain). Reduce it to attenuate the mic;
 zero mutes it. There is no boost or automatic loudness normalization. The
 gain popup shows attenuation in dB. The meter and adjacent dBFS readout show
@@ -238,7 +238,7 @@ and timing still need hardware validation
 Capture starts only with an audio subscriber and releases its own mic stream
 when no subscribers remain or TCI stops. It never keys the radio, changes the
 mic source, enables MON or enables DAX TX. Any PTT is solely your action.
-Clear **Mic During TX (Experimental)** to release capture and restore RX-only
+Clear **Mic During TX** to release capture and restore RX-only
 TCI audio immediately, without restarting. The existing TX gain control still refers to audio arriving from clients,
 not the microphone recording feed.
 

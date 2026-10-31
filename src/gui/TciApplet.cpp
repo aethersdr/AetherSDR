@@ -214,7 +214,7 @@ void TciApplet::buildUI()
     auto* recordingRow = new QHBoxLayout;
     auto* lineOutRow = new QHBoxLayout;
     lineOutRow->setContentsMargins(4, 2, 4, 2);
-    m_lineOutIncludeTx = new QCheckBox(tr("Line Out TX (Experimental)"), this);
+    m_lineOutIncludeTx = new QCheckBox(tr("Line Out TX"), this);
     m_lineOutIncludeTx->setObjectName(QStringLiteral("tciLineOutIncludeTx"));
     m_lineOutIncludeTx->setAccessibleName(tr("TCI Line Out TX recording"));
     m_lineOutIncludeTx->setAccessibleDescription(tr(
@@ -234,7 +234,7 @@ void TciApplet::buildUI()
         if (m_tciServer) { m_tciServer->setLineOutIncludeTx(enabled); }
     });
     recordingRow->setContentsMargins(4, 2, 4, 2);
-    m_microphoneRecording = new QCheckBox(tr("Mic During TX (Experimental)"), this);
+    m_microphoneRecording = new QCheckBox(tr("Mic During TX"), this);
     m_microphoneRecording->setObjectName(QStringLiteral("tciMicrophoneRecording"));
     m_microphoneRecording->setAccessibleName(tr("TCI microphone recording"));
     m_microphoneRecording->setAccessibleDescription(tr(
@@ -277,7 +277,7 @@ void TciApplet::buildUI()
     m_microphoneMeter->setObjectName(QStringLiteral("tciMicrophoneGain"));
     m_microphoneMeter->setAccessibleName(tr("TCI mic recording gain"));
     m_microphoneMeter->setAccessibleDescription(tr(
-        "Enable Mic During TX (Experimental) to adjust the recording feed. "
+        "Enable Mic During TX to adjust the recording feed. "
         "Zero to 100 percent, attenuation only; does not change radio MIC gain or RF output."));
     m_microphoneMeter->setToolTip(m_microphoneMeter->accessibleDescription());
     m_microphoneMeter->setLogarithmicLevelEnabled(true);

@@ -2950,7 +2950,7 @@ void TciServer::updateMicrophoneRecording()
         m_microphoneCaptureActive = backend->setMicrophoneCaptureEnabled(wanted) && wanted;
         if (wanted && !m_microphoneCaptureActive) { m_microphoneRetryTimer->start(); }
         if (m_microphoneCaptureActive) {
-            qCInfo(lcCat) << "TCI: experimental microphone recording enabled; RX audio switches to mic during radio TX";
+            qCInfo(lcCat) << "TCI: microphone recording enabled; RX audio switches to mic during radio TX";
         }
     }
     refreshRxBindings();
