@@ -54,6 +54,45 @@ QString buildIssueReport(const SupportBundle::SystemInfo& sys,
         body += "- Connection: not connected\n\n";
     }
 
+    if (radio.connected && radio.hl2.present) {
+        // Hermes-Lite 2 only: what the app already holds that makes an HL2
+        // report diagnosable. Lines the backend did not report are left out.
+        // Run through redactPii like the log tail, so nothing here can carry
+        // an identifier even if a field later gains one; the HL2's MAC (its
+        // serial) is deliberately not listed, and its Serial line above is
+        // already redacted.
+        const SupportBundle::Hl2Info& hl2 = radio.hl2;
+        QString block = "### Hermes-Lite 2\n";
+        if (!radio.firmware.isEmpty())
+            block += QString("- Gateware: %1\n").arg(radio.firmware);
+        if (!hl2.boardVariant.isEmpty())
+            block += QString("- Board variant: %1\n").arg(hl2.boardVariant);
+        if (hl2.sampleRateHz > 0)
+            block += QString("- Sample rate: %1 Hz\n").arg(hl2.sampleRateHz);
+        if (hl2.receivers > 0)
+            block += QString("- Receivers: %1\n").arg(hl2.receivers);
+        if (!hl2.txModulator.isEmpty())
+            block += QString("- TX path: %1\n").arg(hl2.txModulator);
+        if (!hl2.mode.isEmpty())
+            block += QString("- Mode: %1\n").arg(hl2.mode);
+        if (hl2.droppedPackets >= 0)
+            block += QString("- Dropped EP6 packets: %1\n").arg(hl2.droppedPackets);
+        if (hl2.ep4Drops >= 0)
+            block += QString("- Dropped EP4 packets: %1\n").arg(hl2.ep4Drops);
+        if (hl2.txFifoFault >= 0)
+            block += QString("- TX pacing fault: %1\n")
+                         .arg(hl2.txFifoFault ? QStringLiteral("yes") : QStringLiteral("no"));
+        if (hl2.dspUnderruns >= 0)
+            block += QString("- DSP pipeline underruns: %1\n").arg(hl2.dspUnderruns);
+        if (hl2.dspFaults >= 0)
+            block += QString("- DSP processing faults: %1\n").arg(hl2.dspFaults);
+        if (hl2.txModulatorFaultBlocks >= 0)
+            block += QString("- TX modulator fault blocks: %1\n")
+                         .arg(hl2.txModulatorFaultBlocks);
+        body += redactPii(block);
+        body += "\n";
+    }
+
     body += "### OS & version\n";
     body += QString("- AetherSDR: %1\n").arg(sys.aetherVersion);
     body += QString("- Qt: %1\n").arg(sys.qtVersion);
