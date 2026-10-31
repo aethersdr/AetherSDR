@@ -402,7 +402,7 @@ int main(int argc, char** argv)
         const int tableEnd = tableStart < 0 ? -1 : dialog.indexOf(QStringLiteral("};"), tableStart);
         const QString table = tableEnd < 0 ? QString() : dialog.mid(tableStart, tableEnd - tableStart);
         const QRegularExpression row(QStringLiteral(
-            R"re(\{"([a-z_]+)",\s*"[^"]*",\s*"[^"]*",\s*"([^"]+)")re"));
+            R"re(\{"([a-z_]+)",\s*(?:QT_TRANSLATE_NOOP\(\s*"[^"]*",\s*)?"[^"]*"\)?,\s*"[^"]*",\s*"([^"]+)")re"));
         int rows = 0;
         QStringList txDefaults;
         for (auto it = row.globalMatch(table); it.hasNext();) {

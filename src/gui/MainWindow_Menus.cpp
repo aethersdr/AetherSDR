@@ -628,8 +628,17 @@ void MainWindow::buildMenuBar()
 #else
         MidiControlManager* midi = nullptr;
 #endif
-        showOrRaisePersistent(m_ulanziMapperDialog, m_dialBackend,
-                              &m_shortcutManager, midi);
+        // A canon dialog, so not showOrRaisePersistent(): that applies View →
+        // Frameless Window, which a CanonWindow does not follow.
+        if (!m_ulanziMapperDialog) {
+            auto* dlg = new UlanziDialMapperDialog(m_dialBackend, &m_shortcutManager,
+                                                   midi, this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            m_ulanziMapperDialog = dlg;
+        }
+        m_ulanziMapperDialog->show();
+        m_ulanziMapperDialog->raise();
+        m_ulanziMapperDialog->activateWindow();
     });
     settingsMenu->addSeparator();
     auto* usbCablesAction = settingsMenu->addAction("USB Cables...");

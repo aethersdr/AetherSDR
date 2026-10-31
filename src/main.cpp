@@ -687,7 +687,7 @@ int main(int argc, char* argv[])
         auto& s = AetherSDR::AppSettings::instance();
         bool removed = false;
         for (const char* key : {"SHistorySoftEdgeDb", "AboutDialogGeometry",
-                                "MqttSettingsDialogGeometry"}) {
+                                "MqttSettingsDialogGeometry", "UlanziDialMapperGeom"}) {
             if (s.contains(key)) {
                 s.remove(key);
                 removed = true;

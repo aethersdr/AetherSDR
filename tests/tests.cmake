@@ -6140,6 +6140,11 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME bridge_docs_check
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_bridge_docs.py --check)
+    # The Generated Reference pages read names out of C++ string tables;
+    # literal() must read a translation-marked entry as its text.
+    add_test(NAME gen_reference_literal_test
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_gen_reference_literal.py)
     # The generated seam-probe table (tests/SeamSignalProbeTable.inc) vs
     # IRadioBackend.h. static-checks.yml runs the same --check on every PR;
     # this is the local copy, so `ctest` says so before a push does.
@@ -8709,6 +8714,26 @@ add_executable(midi_relative_cc_decoder_test
 target_include_directories(midi_relative_cc_decoder_test PRIVATE src)
 add_test(NAME midi_relative_cc_decoder_test COMMAND midi_relative_cc_decoder_test)
 
+# Ulanzi Dial — Control Mapping on CanonWindow: fixed size, Return never
+# resets the pills, the status line follows the dial, named controls, and
+# every close destroys it. No backend or device; no socket.
+add_executable(ulanzi_dial_mapper_dialog_test
+    tests/ulanzi_dial_mapper_dialog_test.cpp
+    src/gui/UlanziDialMapperDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(ulanzi_dial_mapper_dialog_test PRIVATE src tests)
+target_link_libraries(ulanzi_dial_mapper_dialog_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME ulanzi_dial_mapper_dialog_test COMMAND ulanzi_dial_mapper_dialog_test)
+set_tests_properties(ulanzi_dial_mapper_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(ulanzi_chord_decoder_test
     tests/ulanzi_chord_decoder_test.cpp
     src/core/UlanziChordDecoder.cpp
@@ -9929,6 +9954,7 @@ set(AETHER_SETTINGS_CONSUMERS
     update_controller_test
     update_installer_test
     update_stager_test
+    ulanzi_dial_mapper_dialog_test
     mqtt_settings_dialog_test
     flex_readonly_metadata_test
     dsp_parameter_reset_test

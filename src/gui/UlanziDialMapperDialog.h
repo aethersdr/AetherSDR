@@ -1,7 +1,7 @@
 #pragma once
 #include <QtGlobal>
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include "core/UlanziDialBackend.h"
 
 #include <QList>
@@ -24,8 +24,10 @@ class UlanziDialCanvas;
 // with callout pills per physical control, each showing its action and learned
 // device-event signature. Click a pill to Learn, press the dial control, and the
 // signature (e.g. "KEY_PLAYPAUSE", "Ctrl+V") is persisted to AppSettings.
-// This dialog owns capture + persistence; MainWindow dispatches.
-class UlanziDialMapperDialog : public PersistentDialog {
+// This dialog owns capture + persistence; MainWindow dispatches. A canon
+// dialog (style guide, RFC #6226), opened from Settings → Controllers →
+// Ulanzi Dial Mapping...
+class UlanziDialMapperDialog : public CanonWindow {
     Q_OBJECT
 
 public:
@@ -37,10 +39,8 @@ public:
     friend class UlanziDialCanvas;
 
 protected:
-    // Re-run layoutPills after the dialog is fully shown.  Until that
-    // point, m_canvas->mapTo/mapFrom return values relative to an
-    // uninitialised position, so any "centre on window" calc has to
-    // wait for the layout to settle.
+    // Re-reads the backend's state, so a dialog opened after the scan
+    // reported still shows the right status line.
     void showEvent(QShowEvent* event) override;
 
 public:
@@ -81,8 +81,9 @@ private slots:
     // Status line for a dial turned off in Radio Setup: without it the dialog
     // reads "Disconnected" with nothing to say why.
     void showDisabledStatus();
-    // Plain (untracked) status-line style; see the definition.
-    void setStatusStyle(const QString& css);
+    // Connected, disconnected, warning, error or off: the status line
+    // restyles from the ulanziState property.
+    void setStatusState(const QString& state);
 #ifdef Q_OS_LINUX
     // Dial present but its evdev node isn't accessible — offer to install the
     // udev access rule via polkit.
@@ -101,7 +102,7 @@ private:
         QString defaultAction;  // default function on this pill (matches
                                 // the original mockup labels).
         QPoint  anchor;         // dial-image anchor (normalized × body rect)
-        QPoint  pillCenter;     // computed each resize, screen coords
+        QPoint  pillCenter;     // computed each layout, canvas coords
         QComboBox* combo{nullptr};
     };
 
