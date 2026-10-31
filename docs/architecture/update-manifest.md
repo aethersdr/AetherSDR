@@ -105,14 +105,15 @@ release is `"version": "26.7.4.1"`).
   (Phase 4) and is not listed.
 - **Windows** is the tree inside the portable zip, which is the `deploy\` tree
   `setup.exe` installs. **Linux** is the tree inside the AppImage's squashfs,
-  which the Phase 5 tarball channel installs.
+  which `AetherSDR --install` installs (see
+  [The Linux install](#the-linux-install-phase-5)).
 - `full`: the whole payload, the fallback when no patch applies or anything
   fails to verify. Its `sha256` and `size` are as binding as a bundle's: release
   assets can be replaced by anyone with write access, and the signed manifest
-  is what pins them. For Linux, `full` is the AppImage, a container the
-  tarball channel cannot install without squashfs tools. The Phase 5 tarball
-  is the Linux fallback the client will use; until it exists, a Linux client
-  that cannot patch offers the release page.
+  is what pins them. For Linux, `full` is the release's `.tar.zst` (see
+  [The full release in-app (Linux)](#the-full-release-in-app-linux)). A
+  manifest whose Linux `full` is still the AppImage, a container the app
+  cannot unpack, sends a Linux client that cannot patch to the browser.
 - `files`: the complete new tree. Paths use `/`, are relative and never contain
   `..`. Directories are implied. A symlink's `target` is relative and resolves
   inside the tree: the builder refuses any other link, and the client must too.
@@ -181,7 +182,7 @@ A file in `files` with no op is unchanged from the `from` release.
 When no patch applies, or the patch fails anywhere (download, hash, a
 drifted install, a result that does not match), a request with
 `fullFallback` stages `full` instead of sending the user to the browser.
-That needs `full` to be a `.zip` of at most 512 MiB, so it is Windows only.
+That needs `full` to be a `.zip` of at most 512 MiB here; Linux's `.tar.zst` is below.
 
 - Its `sha256` and `size` are checked like a bundle's.
 - The zip must hold exactly the files in `files`: no others, none missing,
@@ -195,10 +196,35 @@ That needs `full` to be a `.zip` of at most 512 MiB, so it is Windows only.
 
 If the full release fails too, the browser fallback is offered, once.
 
-The full release is unpacked in memory: the download and its unpacked
+The Windows zip is unpacked in memory: the download and its unpacked
 files are held at once, on a worker thread. For v26.10.3 that measured
 548 MiB peak (a 157 MB zip, 344 MB of files). The caps above are hard
 ceilings, so this is footprint, not safety.
+
+### The full release in-app (Linux)
+
+The client stages `full` in-app when its name ends in `.tar.zst` (and in
+`.zip`, Windows above); anything else, the AppImage, goes to the browser.
+The tarball is the payload tree itself, built from `files`, so it is the
+same tree the patches produce:
+
+- A zstd stream (one frame or several) of a POSIX ustar archive, with a
+  window of at most 2^27 (zstd's default levels use 2^23 and less, `--long`
+  2^27). Its `sha256` and `size` are checked first, so nothing unsigned is
+  ever decompressed.
+- Exactly the entries in `files`: each file (type `0`) once, with the size
+  `files` gives, and each link (type `2`) once, to its signed `target`.
+  Folder entries (type `5`) are allowed only for folders that hold one of
+  them, so the AppImage's empty folders are left out. Names are relative,
+  `/`-separated, and may use ustar's `prefix` field. Hard links, devices,
+  GNU long names, pax headers, anything after the end-of-archive blocks
+  except zeros, and a missing end are all refused.
+- File modes in the archive are ignored: each file's executable bit comes
+  from `files`.
+- It is unpacked as it is decompressed, straight into the staging folder,
+  so only the download is held in memory (134 MB for v26.10.4 x86_64, from
+  a 348 MB tree). Every file is then checked against `files`, as in step 6.
+  Nothing comes from the install.
 
 ### What stays staged
 
@@ -344,6 +370,66 @@ start the full app, stop it after 60 s and roll back a good release.
 If a rollback rename itself fails, the helper shows a message naming the
 three folders and the log (`updater.log`), rather than failing silently.
 
+## The Linux install (Phase 5)
+
+There is no helper on Linux. Each release has its own folder, and a link
+names the one to run:
+
+```
+~/.local/share/AetherSDR/install/<version>/   the payload tree (AppRun, usr/...)
+~/.local/share/AetherSDR/install/current      -> <version>
+~/.local/bin/aethersdr                         -> .../install/current/AppRun
+~/.local/share/applications/AetherSDR.desktop  Exec/TryExec .../install/current/AppRun
+```
+
+(`~/.local/share` is `$XDG_DATA_HOME`.) The install has a folder of its own
+because `~/.local/share/AetherSDR` already holds user data. `LinuxInstall`
+(`src/core`) does all of it.
+
+- **`AetherSDR --install`**, run from the unpacked tree (the tarball, or
+  `--appimage-extract`'s `squashfs-root`), copies the tree into
+  `install/<version>`, makes it `current`, writes the menu entry from the
+  tree's own `usr/share/applications/AetherSDR.desktop` with `Exec` and
+  `TryExec` naming `current/AppRun`, links the tree's hicolor icons and the
+  command through `current`, and starts it. A file of the user's own at a
+  link's place is left alone. It runs before `QApplication` and writes no
+  settings.
+- **The switch** is what the helper's hand-over is on Windows, done by the
+  app itself in `UpdateInstaller::launchHelper`: the staged tree is renamed
+  into `install/<version>`, that folder's `AppRun --update-selftest` must
+  pass (the same frozen contract, 60 s), and only then is a new link renamed
+  over `current`. Every other version folder is then removed, except the one
+  running, the one `current` named and any another AetherSDR runs from
+  (found through `/proc/<pid>/exe`). A rename over a link is atomic, and the
+  running tree is never touched, so there is no window with nothing
+  runnable, no journal and no repair. `--install` of a version already
+  installed copies the new tree beside it and trades the two in one step
+  (`renameat2(RENAME_EXCHANGE)`), so `current` never dangles, even if the
+  installer is killed mid-copy; the old copy is removed once nothing runs
+  from it.
+- If the self-test fails on **Restart to update**, the new folder is
+  removed, `current` is unchanged and the release is remembered as rolled
+  back; the window says so at once. As AetherSDR **quits**, a failure may be
+  the session's rather than the release's (a logout takes the display away
+  first), so the tree goes back to staging and is tried again at the next
+  quit or Restart (a maintainer ruling), counted in
+  `Updates.quitSwitchTries`. The third failure at quit is final: the
+  release is removed and rolled back, and `RolledBack <version>` is written
+  to `swap-result.txt` for the next start (a maintainer ruling). If
+  `current` cannot be changed, the tree goes back to staging too. Success
+  writes `Updated <version>`.
+- If `current` already names that release or a newer one (installed by hand
+  meanwhile), the staged tree is dropped and nothing is switched: never a
+  step back. Cleanup never removes the folder `current` named.
+- **Restart to update** then starts `current/AppRun` once this process has
+  exited (a `/bin/sh` loop polling the pid, two minutes at most), so two
+  instances never overlap.
+- Install update is offered only when the running binary
+  (`/proc/self/exe`: Qt reports the link's folder when started through
+  `AppRun` or `current`) is `install/<version>/usr/bin/AetherSDR` and the
+  install folder is writable. The AppImage, distribution packages and build
+  folders keep **Get AetherSDR**.
+
 ## Install update (the app's side)
 
 `UpdateController` (`src/core`) is the one place the app installs from.
@@ -353,11 +439,12 @@ started it; the window and the title-bar badge show its state:
 helper has it and waits for AetherSDR to exit).
 
 - Install update is offered only when `UpdateInstaller::canInstallInPlace`
-  says so: Windows, not a store install, no split elevated token,
+  says so. Windows: not a store install, no split elevated token,
   `AetherSDRUpdater.exe` beside the app, and the install's parent writable.
+  Linux: an install `--install` made (see above).
   Otherwise, or once a release falls back from the full download, the
   window keeps **Get AetherSDR** in the browser. Beside Install update, a
-  **Download installer** link keeps the browser route (Phase 3 ruling).
+  **Download release** link keeps the browser route (a maintainer ruling).
 - Staging requests `fullFallback`, with GitHub's latest as the freeze
   check's tag. Closing the window while it stages cancels it (a maintainer
   ruling); a staged release stays.
@@ -368,9 +455,11 @@ helper has it and waits for AetherSDR to exit).
 - Skip this version discards a staged (or staging) release of that
   version. A rolled-back version is never staged.
 - **Restart to update** runs `revalidate()` and then hands the release to
-  the helper with `--restart`, and AetherSDR quits normally. If the files
-  changed since staging, the release is discarded and the window says to
-  install again.
+  the helper with `--restart` on a worker thread (on Linux the switch and
+  its self-test run there too, a maintainer ruling), in the state
+  `Installing`; `restartReady` then closes the window, and AetherSDR quits
+  normally. If the files changed since staging, the release is discarded
+  and the window says to install again.
 - As AetherSDR quits (the end of `MainWindow::closeEvent`), a staged
   release is revalidated and handed over without `--restart`, unless radio
   firmware is being written. Revalidating hashes the whole tree, so the

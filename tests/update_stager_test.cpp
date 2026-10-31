@@ -20,6 +20,7 @@
 #include "monocypher-ed25519.h"
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 
 // UpdateStager against tests/fixtures/update: a v26.10.2 install and the
@@ -146,6 +147,112 @@ QByteArray portableZip(const QHash<QString, QByteArray>& tree, const QList<ZipEn
     }
     entries.append(extra);
     return writeDeflatedZip(entries);
+}
+
+// One ustar entry, as tar writes it: type '0' a file, '2' a link, '5' a
+// folder; anything else to see it refused.
+struct TarEntry {
+    QByteArray name;
+    char type{'0'};
+    QByteArray data;
+    QByteArray link;
+    QByteArray prefix;
+};
+
+QByteArray ustarHeader(const TarEntry& e)
+{
+    QByteArray h(512, '\0');
+    const auto put = [&h](int at, const QByteArray& v) { std::memcpy(h.data() + at, v.constData(), v.size()); };
+    put(0, e.name);
+    put(100, "0000644");
+    put(108, "0000000");
+    put(116, "0000000");
+    put(124, QByteArray::number(e.data.size(), 8).rightJustified(11, '0'));
+    put(136, "00000000000");
+    put(148, "        ");
+    h[156] = e.type;
+    put(157, e.link);
+    put(257, QByteArray("ustar\0", 6));
+    put(263, "00");
+    put(345, e.prefix);
+    quint32 sum = 0;
+    for (const char c : h) {
+        sum += quint8(c);
+    }
+    put(148, QByteArray::number(sum, 8).rightJustified(6, '0') + QByteArray("\0 ", 2));
+    return h;
+}
+
+// The entries, then tail: by default the two zero blocks that end a tar.
+QByteArray ustar(const QList<TarEntry>& entries, const QByteArray& tail = QByteArray(1024, '\0'))
+{
+    QByteArray out;
+    for (const TarEntry& e : entries) {
+        out += ustarHeader(e);
+        out += e.data;
+        out += QByteArray((512 - e.data.size() % 512) % 512, '\0');
+    }
+    return out + tail;
+}
+
+// A zstd frame of raw (stored) blocks: what zstd writes for data it cannot
+// shrink, readable by the bundled decoder, written without a compressor.
+// blockSize: at most 128 KiB; an odd one moves tar's 512-byte blocks off
+// the decoder's output boundaries.
+QByteArray zstdRaw(const QByteArray& data, int windowLog = 17, qsizetype blockSize = 128 * 1024)
+{
+    QByteArray out("\x28\xb5\x2f\xfd", 4);
+    out += char(0x00);                          // no content size, checksum or dictionary
+    out += char((windowLog - 10) << 3);         // window 2^windowLog
+    qsizetype at = 0;
+    do {
+        const qsizetype n = std::min(blockSize, data.size() - at);
+        const bool last = at + n == data.size();
+        const quint32 header = (quint32(n) << 3) | (last ? 1u : 0u);   // type 0: raw
+        out += char(header & 0xff);
+        out += char((header >> 8) & 0xff);
+        out += char((header >> 16) & 0xff);
+        out += data.mid(at, n);
+        at += n;
+    } while (at < data.size());
+    return out;
+}
+
+// The v26.10.3 release as a Linux tarball holds it: its folder, its files,
+// and AppRun linking to the binary; extra entries appended.
+QByteArray releaseTarball(const QHash<QString, QByteArray>& tree, const QList<TarEntry>& extra = {},
+                          const QStringList& drop = {}, const QByteArray& tail = QByteArray(1024, '\0'),
+                          int windowLog = 17, qsizetype blockSize = 128 * 1024)
+{
+    QList<TarEntry> entries{{"plugins/", '5', {}, {}, {}}};
+    QStringList names = tree.keys();
+    std::sort(names.begin(), names.end());
+    for (const QString& name : names) {
+        if (!drop.contains(name)) {
+            entries.append({name.toUtf8(), '0', tree.value(name), {}, {}});
+        }
+    }
+    if (!drop.contains(QStringLiteral("AppRun"))) {
+        entries.append({"AppRun", '2', {}, "AetherSDR.exe", {}});
+    }
+    entries.append(extra);
+    return zstdRaw(ustar(entries, tail), windowLog, blockSize);
+}
+
+// The manifest's files for releaseTarball(): the fixture's, the binary
+// executable, and the AppRun link.
+QList<UpdateManifest::File> tarballFiles(const QList<UpdateManifest::File>& files)
+{
+    QList<UpdateManifest::File> out = files;
+    for (UpdateManifest::File& f : out) {
+        f.executable = f.path == QLatin1String("AetherSDR.exe");
+    }
+    UpdateManifest::File link;
+    link.path = QStringLiteral("AppRun");
+    link.symlink = true;
+    link.target = QStringLiteral("AetherSDR.exe");
+    out.append(link);
+    return out;
 }
 
 QString sha256Hex(const QByteArray& b)
@@ -707,7 +814,8 @@ private slots:
     // (unless keepPatch) no patch, signed by the test key and published in
     // site/latest/.
     QString publishFull(const QTemporaryDir& tmp, const QByteArray& zip, bool keepPatch,
-                        const QByteArray& bundle = bundleBytes())
+                        const QByteArray& bundle = bundleBytes(),
+                        const QString& asset = QStringLiteral("AetherSDR-v26.10.3-Windows-x64-portable.zip"))
     {
         QJsonObject o = fixtureManifest();
         QJsonArray payloads = o.value(QLatin1String("payloads")).toArray();
@@ -715,6 +823,9 @@ private slots:
         QJsonObject full = p.value(QLatin1String("full")).toObject();
         full[QStringLiteral("sha256")] = sha256Hex(zip);
         full[QStringLiteral("size")] = zip.size();
+        full[QStringLiteral("asset")] = asset;
+        full[QStringLiteral("url")] =
+            QStringLiteral("https://github.com/aethersdr/AetherSDR/releases/download/v26.10.3/") + asset;
         p[QStringLiteral("full")] = full;
         if (!keepPatch) {
             p[QStringLiteral("patches")] = QJsonArray();
@@ -725,12 +836,174 @@ private slots:
         const QString site = tmp.filePath(QStringLiteral("site"));
         writeFile(site + QStringLiteral("/latest/manifest.json"), manifest);
         writeFile(site + QStringLiteral("/latest/manifest.json.sig"), m_key.sign(manifest));
-        writeFile(tmp.filePath(QStringLiteral("dl/v26.10.3/AetherSDR-v26.10.3-Windows-x64-portable.zip")), zip);
+        writeFile(tmp.filePath(QStringLiteral("dl/v26.10.3/") + asset), zip);
         writeFile(tmp.filePath(QStringLiteral("dl/v26.10.3/AetherSDR-v26.10.3-Windows-x64-from-v26.10.2.update.tar")),
                   bundle);
         UpdateStager::setDownloadBaseForTesting(QUrl::fromLocalFile(tmp.filePath(QStringLiteral("dl"))));
         UpdateSettings::setAcceptedManifestUtc({});
         return site + QStringLiteral("/latest/manifest.json");
+    }
+
+    // ── The full release as a Linux tarball ─────────────────────────────
+
+    void theFullTarballUnpacksExactlyItsFilesAndLinks()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("a Linux tarball's links need privileges on Windows");
+#endif
+        QTemporaryDir tmp;
+        const UpdateManifest m = parsed(fixtureManifest());
+        QList<UpdateManifest::File> files = tarballFiles(m.payloads[0].files);
+        QHash<QString, QByteArray> tree = releaseTree(tmp);
+        // Larger than the decoder's buffer, and not a whole number of tar
+        // blocks, so headers and data cross its output boundaries.
+        QByteArray big(1300 * 1000 + 7, '\0');
+        for (qsizetype i = 0; i < big.size(); ++i) {
+            big[i] = char((i * 131) % 251);
+        }
+        tree.insert(QStringLiteral("plugins/big.so"), big);
+        UpdateManifest::File f;
+        f.path = QStringLiteral("plugins/big.so");
+        f.size = big.size();
+        f.sha256 = sha256Hex(big);
+        files.append(f);
+        for (const qsizetype block : {qsizetype(128 * 1024), qsizetype(1000)}) {
+            const QString staging = tmp.filePath(QStringLiteral("staging-%1").arg(block));
+            QString problem;
+            QVERIFY2(UpdateStager::applyFullTar(releaseTarball(tree, {}, {}, QByteArray(1024, '\0'), 17, block),
+                                                files, staging, &problem),
+                     qPrintable(problem));
+            for (auto it = tree.cbegin(); it != tree.cend(); ++it) {
+                QCOMPARE(readFile(staging + QLatin1Char('/') + it.key()), it.value());
+            }
+            QCOMPARE(QString::fromStdString(fs::read_symlink(fs::path((staging + QStringLiteral("/AppRun")).toStdString())).string()),
+                     QStringLiteral("AetherSDR.exe"));
+            QVERIFY(QFileInfo(staging + QStringLiteral("/AetherSDR.exe")).isExecutable());
+            QVERIFY(!QFileInfo(staging + QStringLiteral("/Qt6Core.dll")).isExecutable());
+            QCOMPARE(QDir(staging).entryList(QDir::AllEntries | QDir::System | QDir::NoDotAndDotDot).size(), 4);
+        }
+    }
+
+    void aFullTarballThatIsNotExactlyTheManifestIsRefused()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("a Linux tarball's links need privileges on Windows");
+#endif
+        QTemporaryDir tmp;
+        const UpdateManifest m = parsed(fixtureManifest());
+        const QList<UpdateManifest::File> files = tarballFiles(m.payloads[0].files);
+        const QHash<QString, QByteArray> tree = releaseTree(tmp);
+        const QString staging = tmp.filePath(QStringLiteral("work/staging"));
+        const auto refused = [&](const QByteArray& tarZst) {
+            QString problem;
+            const bool ok = UpdateStager::applyFullTar(tarZst, files, staging, &problem);
+            return !ok && !QFileInfo::exists(staging) && !problem.isEmpty();
+        };
+        const QStringList qtCore{QStringLiteral("Qt6Core.dll")};
+        const QStringList appRun{QStringLiteral("AppRun")};
+        QVERIFY(refused(releaseTarball(tree, {{"extra.so", '0', "x", {}, {}}})));
+        QVERIFY(refused(releaseTarball(tree, {{"../evil.so", '0', "x", {}, {}}})));
+        QVERIFY(refused(releaseTarball(tree, {{"evil.so", '0', "x", {}, ".."}})));   // by way of the prefix
+        QVERIFY(refused(releaseTarball(tree, {{"etc/", '5', {}, {}, {}}})));        // a folder no file needs
+        QVERIFY(refused(releaseTarball(tree, {{"../", '5', {}, {}, {}}})));
+        QVERIFY(refused(releaseTarball(tree, {}, {QStringLiteral("plugins/new.dll")})));
+        QVERIFY(refused(releaseTarball(tree, {}, appRun)));
+        // A duplicate, a hard link, a long-name or pax extension, a device.
+        QVERIFY(refused(releaseTarball(tree, {{"Qt6Core.dll", '0', tree.value(qtCore[0]), {}, {}}})));
+        QVERIFY(refused(releaseTarball(tree, {{"Qt6Core.dll", '1', {}, "AetherSDR.exe", {}}}, qtCore)));
+        QVERIFY(refused(releaseTarball(tree, {{"././@LongLink", 'L', "Qt6Core.dll", {}, {}}})));
+        QVERIFY(refused(releaseTarball(tree, {{"pax", 'x', "path=Qt6Core.dll", {}, {}}})));
+        QVERIFY(refused(releaseTarball(tree, {{"Qt6Core.dll", '3', {}, {}, {}}}, qtCore)));
+        // A link to anything but its signed target, a file where a link is
+        // signed, and a link to write a file's folder through.
+        QVERIFY(refused(releaseTarball(tree, {{"AppRun", '2', {}, "Qt6Core.dll", {}}}, appRun)));
+        QVERIFY(refused(releaseTarball(tree, {{"AppRun", '2', {}, "../../../bin/sh", {}}}, appRun)));
+        QVERIFY(refused(releaseTarball(tree, {{"AppRun", '0', "#!/bin/sh", {}, {}}}, appRun)));
+        QVERIFY(refused(zstdRaw(ustar({{"plugins", '2', {}, "..", {}}, {"plugins/new.dll", '0', "x", {}, {}}}))));
+        // Other bytes, another size.
+        QHash<QString, QByteArray> changed = tree;
+        changed[qtCore[0]][0] = 'X';
+        QVERIFY(refused(releaseTarball(changed)));
+        changed = tree;
+        changed[QStringLiteral("plugins/old")] += "longer than signed";
+        QVERIFY(refused(releaseTarball(changed)));
+        // Not a whole tarball: not zstd, cut short, no end, data after the
+        // end, a window larger than a release needs.
+        const QByteArray good = releaseTarball(tree);
+        QString problem;
+        QVERIFY(refused(QByteArray("not a tarball")));
+        // A whole, matching tarball but for one header whose checksum no
+        // longer matches it: a byte of the folder's mode changed after it
+        // was summed.
+        QList<TarEntry> entries{{"plugins/", '5', {}, {}, {}}, {"AppRun", '2', {}, "AetherSDR.exe", {}}};
+        for (auto it = tree.cbegin(); it != tree.cend(); ++it) {
+            entries.append({it.key().toUtf8(), '0', it.value(), {}, {}});
+        }
+        QByteArray stale = ustar(entries);
+        QVERIFY(UpdateStager::applyFullTar(zstdRaw(stale), files, staging, &problem));   // as built, it is good
+        stale[100] = '1';
+        QVERIFY(refused(zstdRaw(stale)));
+        QVERIFY(refused(good.left(good.size() / 2)));
+        QVERIFY(refused(good.left(good.size() - 1)));
+        QVERIFY(refused(releaseTarball(tree, {}, {}, {})));
+        QVERIFY(refused(releaseTarball(tree, {}, {}, QByteArray(1024, '\0') + ustarHeader({"Qt6Core.dll", '0', {}, {}, {}}))));
+        QVERIFY(refused(releaseTarball(tree, {}, {}, QByteArray(1024, '\0'), 28)));
+        QVERIFY(!QFileInfo::exists(tmp.filePath(QStringLiteral("evil.so"))));
+        QVERIFY(!QFileInfo::exists(tmp.filePath(QStringLiteral("work/evil.so"))));
+        // The good one, and the same once cancelled.
+        QVERIFY2(UpdateStager::applyFullTar(good, files, staging, &problem), qPrintable(problem));
+        std::atomic_bool cancelled{true};
+        QVERIFY(!UpdateStager::applyFullTar(good, files, staging, &problem, &cancelled));
+        QVERIFY(!QFileInfo::exists(staging));
+    }
+
+    void withNoPatchTheLinuxTarballIsStaged()
+    {
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        const QHash<QString, QByteArray> tree = releaseTree(tmp);
+        const QString manifest = publishFull(tmp, releaseTarball(tree, {}, {QStringLiteral("AppRun")}), false,
+                                             bundleBytes(), QStringLiteral("AetherSDR-v26.10.3-x86_64.tar.zst"));
+        UpdateStager::Request r = request();
+        r.installRoot = install;
+        r.stagingRoot = tmp.filePath(QStringLiteral("staging"));
+        r.manifestUrl = QUrl::fromLocalFile(manifest);
+        r.fullFallback = true;
+        UpdateStager stager;
+        QSignalSpy staged(&stager, &UpdateStager::staged);
+        QSignalSpy full(&stager, &UpdateStager::fullDownloadNeeded);
+        QSignalSpy failed(&stager, &UpdateStager::failed);
+        stager.stage(r);
+        QTRY_COMPARE_WITH_TIMEOUT(full.size() + staged.size() + failed.size(), 1, 20000);
+        QCOMPARE(staged.size(), 1);
+        const QString dir = staged.first().at(0).toString();
+        for (auto it = tree.cbegin(); it != tree.cend(); ++it) {
+            QCOMPARE(readFile(dir + QLatin1Char('/') + it.key()), it.value());
+        }
+        QVERIFY(!QFile::exists(dir + QStringLiteral("/gone.dll")));
+        QVERIFY(!stager.isBusy());
+    }
+
+    void anAppImageFullDownloadIsOfferedInTheBrowser()
+    {
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        const QString manifest = publishFull(tmp, "an AppImage", false, bundleBytes(),
+                                             QStringLiteral("AetherSDR-v26.10.3-x86_64.AppImage"));
+        UpdateStager::Request r = request();
+        r.installRoot = install;
+        r.stagingRoot = tmp.filePath(QStringLiteral("staging"));
+        r.manifestUrl = QUrl::fromLocalFile(manifest);
+        r.fullFallback = true;
+        UpdateStager stager;
+        QSignalSpy staged(&stager, &UpdateStager::staged);
+        QSignalSpy full(&stager, &UpdateStager::fullDownloadNeeded);
+        stager.stage(r);
+        QTRY_COMPARE_WITH_TIMEOUT(full.size() + staged.size(), 1, 20000);
+        QCOMPARE(full.size(), 1);
+        QCOMPARE(full.first().at(1).value<UpdateManifest::Asset>().name,
+                 QStringLiteral("AetherSDR-v26.10.3-x86_64.AppImage"));
+        QVERIFY(!QFileInfo::exists(r.stagingRoot + QStringLiteral("/26.10.3")));
     }
 
     void withNoPatchTheFullReleaseIsStagedOnlyWhenAsked()

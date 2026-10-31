@@ -462,9 +462,9 @@ int main(int argc, char** argv)
                   && !primary->accessibleDescription().isEmpty(),
               "Install update names the release for a screen reader");
         check(progressRow && !progressRow->isVisible(), "no progress before Install");
-        const QPushButton* download = button(*w, QStringLiteral("Download installer"));
+        const QPushButton* download = button(*w, QStringLiteral("Download release"));
         check(download && download->isVisible() && download->accessibleDescription().contains(QLatin1String("browser")),
-              "Download installer keeps the browser route beside Install update");
+              "Download release keeps the browser route beside Install update");
         check(progress && !progress->accessibleName().isEmpty(), "the progress bar has a name");
 
         // Cancel: back to Install update, nothing kept.
@@ -473,7 +473,7 @@ int main(int argc, char** argv)
         }
         app.processEvents();
         check(progressRow && progressRow->isVisible() && !primary->isVisible(), "staging shows progress, not the button");
-        check(download && !download->isVisible(), "no Download installer while staging");
+        check(download && !download->isVisible(), "no Download release while staging");
         auto* cancel = const_cast<QPushButton*>(button(*w, QStringLiteral("Cancel")));
         check(cancel && !cancel->accessibleName().isEmpty(), "Cancel is offered, named");
         if (cancel) {
@@ -612,8 +612,8 @@ int main(int argc, char** argv)
         app.processEvents();
         check(button(w, QStringLiteral("Get AetherSDR 26.10.3")) != nullptr,
               "without in-place support, Get AetherSDR as before");
-        const QPushButton* link = button(w, QStringLiteral("Download installer"));
-        check(!link || !link->isVisible(), "no Download installer when the primary action is the download");
+        const QPushButton* link = button(w, QStringLiteral("Download release"));
+        check(!link || !link->isVisible(), "no Download release when the primary action is the download");
     }
 
     return failures ? 1 : 0;

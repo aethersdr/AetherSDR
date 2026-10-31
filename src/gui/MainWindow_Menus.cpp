@@ -2312,11 +2312,22 @@ void MainWindow::wireUpdateChecker()
     m_updateController->refreshStaged(QString());
     connect(m_updateController, &UpdateController::stateChanged, this, [this] {
         if (m_titleBar) {
-            const bool ready = m_updateController->state() == UpdateController::State::Staged
-                               || m_updateController->state() == UpdateController::State::Handed;
+            const UpdateController::State s = m_updateController->state();
+            const bool ready = s == UpdateController::State::Staged || s == UpdateController::State::Installing
+                               || s == UpdateController::State::Handed;
             m_titleBar->setUpdateStaged(ready ? m_updateController->version() : QString());
         }
     });
+    // Restart to update, once the release is handed over: quit, the normal
+    // way, prompts and all.
+    connect(m_updateController, &UpdateController::restartReady, this,
+            [this](bool handed, const QString& problem, const QString& version) {
+                if (handed) {
+                    close();
+                } else if (m_updatesWindow) {
+                    m_updatesWindow->showInstallProblem(problem, version);
+                }
+            });
     connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
             [this](const QString& ver) {
         m_updateController->refreshStaged(ver);
@@ -2387,16 +2398,12 @@ void MainWindow::showUpdatesWindow(bool checkNow)
 void MainWindow::restartToUpdate()
 {
     // The helper waits for this process to exit, then swaps the release in
-    // and starts it; the quit is the normal one, prompts and all.
+    // and starts it; restartReady closes the window once it has it.
     QString problem;
-    const QString version = m_updateController->version();   // before a refusal clears it
-    if (!m_updateController->restartToUpdate(&problem)) {
-        if (m_updatesWindow) {
-            m_updatesWindow->showInstallProblem(problem, version);
-        }
-        return;
+    const QString version = m_updateController->version();
+    if (!m_updateController->restartToUpdate(&problem) && m_updatesWindow) {
+        m_updatesWindow->showInstallProblem(problem, version);
     }
-    close();
 }
 
 void MainWindow::reportLastUpdate()

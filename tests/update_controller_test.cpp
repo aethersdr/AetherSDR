@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QtTest>
 
 #include "monocypher-ed25519.h"
@@ -69,6 +70,7 @@ struct Launch {
     QString dir;
     QString version;
     bool restart{false};
+    bool onGuiThread{false};
 };
 
 // A scratch install, staging root and file:// release site, and a
@@ -79,6 +81,7 @@ struct Rig {
     QString staging;
     QList<Launch> launches;
     bool helperStarts = true;
+    bool selfTestFails = false;
     QString rolledBack;
     bool inPlace = true;
 
@@ -121,7 +124,14 @@ struct Rig {
                 *problem = QStringLiteral("no helper");
                 return false;
             }
-            launches.append({dir, version, restart});
+            if (selfTestFails) {
+                // Linux's switch: the release moved out of staging and,
+                // failing its self-test, removed.
+                QDir(dir).removeRecursively();
+                *problem = QStringLiteral("failed its start-up check");
+                return false;
+            }
+            launches.append({dir, version, restart, QThread::currentThread() == qApp->thread()});
             return true;
         };
         e.rolledBackVersion = [this] { return rolledBack; };
@@ -132,6 +142,21 @@ struct Rig {
 bool waitFor(UpdateController& c, UpdateController::State s)
 {
     return QTest::qWaitFor([&] { return c.state() == s; }, 20000);
+}
+
+// Restart to update, to its end: whether it was handed over.
+bool restart(UpdateController& c, QString* problem)
+{
+    QSignalSpy ready(&c, &UpdateController::restartReady);
+    if (!c.restartToUpdate(problem)) {
+        return false;
+    }
+    if (c.state() != UpdateController::State::Installing || !ready.wait(20000)) {
+        *problem = QStringLiteral("never finished");
+        return false;
+    }
+    *problem = ready.at(0).at(1).toString();
+    return ready.at(0).at(0).toBool();
 }
 
 } // namespace
@@ -300,12 +325,15 @@ private slots:
     {
         Rig rig(m_key);
         UpdateController c(rig.env());
+        QString problem;
+        QVERIFY(!restart(c, &problem));   // nothing staged
+        QVERIFY(!problem.isEmpty());
         c.install(QStringLiteral("26.10.3"));
         QVERIFY(waitFor(c, UpdateController::State::Staged));
-        QString problem;
-        QVERIFY2(c.restartToUpdate(&problem), qPrintable(problem));
+        QVERIFY2(restart(c, &problem), qPrintable(problem));
         QCOMPARE(c.state(), UpdateController::State::Handed);
         QCOMPARE(rig.launches.size(), 1);
+        QVERIFY(!rig.launches[0].onGuiThread);   // the switch and self-test never block the window
         QCOMPARE(rig.launches[0].dir, rig.staging + QStringLiteral("/26.10.3"));
         QCOMPARE(rig.launches[0].version, QStringLiteral("26.10.3"));
         QVERIFY(rig.launches[0].restart);
@@ -324,6 +352,7 @@ private slots:
         QVERIFY(c.installOnQuit());
         QCOMPARE(rig.launches.size(), 1);
         QVERIFY(!rig.launches[0].restart);
+        QCOMPARE(c.state(), UpdateController::State::Handed);
     }
 
     void stagedFilesThatChangedAreNeverHandedOver()
@@ -334,7 +363,7 @@ private slots:
         QVERIFY(waitFor(c, UpdateController::State::Staged));
         writeFile(rig.staging + QStringLiteral("/26.10.3/plugins/new.dll"), "tampered");
         QString problem;
-        QVERIFY(!c.restartToUpdate(&problem));
+        QVERIFY(!restart(c, &problem));
         QVERIFY(!problem.isEmpty());
         QCOMPARE(c.state(), UpdateController::State::Idle);
         QVERIFY(rig.launches.isEmpty());
@@ -349,9 +378,28 @@ private slots:
         c.install(QStringLiteral("26.10.3"));
         QVERIFY(waitFor(c, UpdateController::State::Staged));
         QString problem;
-        QVERIFY(!c.restartToUpdate(&problem));
+        QVERIFY(!restart(c, &problem));
         QCOMPARE(problem, QStringLiteral("no helper"));
         QCOMPARE(c.state(), UpdateController::State::Staged);
+    }
+
+    void aReleaseThatFailsTheSwitchLeavesNothingStaged()
+    {
+        Rig rig(m_key);
+        rig.selfTestFails = true;
+        UpdateController c(rig.env());
+        c.install(QStringLiteral("26.10.3"));
+        QVERIFY(waitFor(c, UpdateController::State::Staged));
+        QString problem;
+        QVERIFY(!restart(c, &problem));
+        QCOMPARE(problem, QStringLiteral("failed its start-up check"));
+        // Not Restart to update for a tree that is gone, and no record left
+        // to find at the next launch.
+        QCOMPARE(c.state(), UpdateController::State::Idle);
+        QVERIFY(!c.installOnQuit());
+        QVERIFY(!QFileInfo::exists(rig.staging + QStringLiteral("/26.10.3.json")));
+        c.refreshStaged(QStringLiteral("26.10.3"));
+        QCOMPARE(c.state(), UpdateController::State::Idle);
     }
 
     void noPatchAndNoFullReleaseGoesToTheBrowser()

@@ -3,6 +3,7 @@
 #include "gui/FramelessMessageBox.h"
 #include "gui/SliceColorManager.h"
 #include "core/UpdateInstaller.h"
+#include "core/LinuxInstall.h"
 #include "core/AppSettings.h"
 #include "core/SystemInfo.h"
 #include "core/SettingsBootstrap.h"
@@ -43,6 +44,7 @@
 #include <QFontDatabase>
 #include <QDateTime>
 #include <QStandardPaths>
+#include <QProcess>
 #include <QTimer>
 #include <cstdio>
 #include <cstdlib>
@@ -236,6 +238,47 @@ static int runConfigCli(int argc, char* argv[])
     return usage();
 }
 
+#ifdef Q_OS_LINUX
+// ── `AetherSDR --install` — the Linux install the updater keeps current ───────
+// Run from an unpacked release tarball: copies the release into
+// ~/.local/share/AetherSDR/install/<version>/, makes it current, adds the
+// menu entry and the aethersdr command, then starts it (RFC #5304 Phase 5).
+// Needs a console, not a window; nothing of the user's settings is touched.
+static int runInstallCli(int argc, char* argv[])
+{
+    QCoreApplication app(argc, argv);
+    QCoreApplication::setApplicationName(QStringLiteral("AetherSDR"));
+    QCoreApplication::setOrganizationName(QStringLiteral("AetherSDR"));
+    const QString version = QStringLiteral(AETHERSDR_VERSION);
+    // This binary is <tree>/usr/bin/AetherSDR.
+    QDir tree(AetherSDR::LinuxInstall::binaryDir());
+    tree.cdUp();
+    tree.cdUp();
+    const AetherSDR::LinuxInstall::Paths paths = AetherSDR::LinuxInstall::forThisUser();
+    QString problem;
+    QString note;
+    if (!AetherSDR::LinuxInstall::install(tree.absolutePath(), version, paths, &problem, &note)) {
+        std::fprintf(stderr, "AetherSDR %s was not installed: %s\n", qPrintable(version), qPrintable(problem));
+        return EXIT_FAILURE;
+    }
+    const QString run = QDir(paths.base).filePath(QStringLiteral("current/AppRun"));
+    // The command by name only when ~/.local/bin is on PATH.
+    const bool onPath = qEnvironmentVariable("PATH").split(QLatin1Char(':')).contains(paths.bin);
+    std::printf("AetherSDR %s is installed in %s.\n"
+                "Start it from your applications menu, or run %s. "
+                "It updates itself from File > Update.\n",
+                qPrintable(version), qPrintable(QDir(paths.base).filePath(version)),
+                onPath ? "aethersdr" : qPrintable(QDir(paths.bin).filePath(QStringLiteral("aethersdr"))));
+    if (!note.isEmpty()) {
+        std::printf("%s\n", qPrintable(note));
+    }
+    if (qEnvironmentVariableIsSet("WAYLAND_DISPLAY") || qEnvironmentVariableIsSet("DISPLAY")) {
+        QProcess::startDetached(run, {});
+    }
+    return EXIT_SUCCESS;
+}
+#endif
+
 // The Qt platform-selection decision made on a Wayland session, recorded before
 // the log handler exists and re-emitted next to the GpuSelector summary once
 // logging is up — so a Support bundle shows why we chose xcb vs wayland (the
@@ -266,6 +309,11 @@ int main(int argc, char* argv[])
     if (argc >= 2 && qstrcmp(argv[1], "--config") == 0) {
         return runConfigCli(argc, argv);
     }
+#ifdef Q_OS_LINUX
+    if (argc >= 2 && qstrcmp(argv[1], "--install") == 0) {
+        return runInstallCli(argc, argv);
+    }
+#endif
 
     // ── Pre-QApplication environment setup ────────────────────────────────
 
