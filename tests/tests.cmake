@@ -8968,7 +8968,8 @@ add_test(NAME hl2_gain_restore_test COMMAND hl2_gain_restore_test)
 # What an HL2 comes back with after a restart, through the operator's setters
 # and the production store/load: every offered mode with its passband, the last
 # band, per-band drive and LNA gain; and two radios (by MAC) in one profile.
-# Nothing answers at TEST-NET-1; the link-up push is run by hand; never keys.
+# Each session binds an ephemeral UDP socket and sends start datagrams to
+# TEST-NET-1, where nothing answers; the link-up push is run by hand; never keys.
 add_executable(hl2_persist_restart_test tests/hl2_persist_restart_test.cpp)
 target_include_directories(hl2_persist_restart_test PRIVATE src tests)
 target_link_libraries(hl2_persist_restart_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)

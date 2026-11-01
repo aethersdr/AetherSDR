@@ -221,7 +221,7 @@ int main(int argc, char** argv)
         next.backend.setSliceFrequency(0, k15m);
         check(next.liveDriveFor(QStringLiteral("15m")) == 30,
               "an unvisited band takes the stored drive baseline (30), not the band it came from (20)");
-        check(next.liveLnaDb() != 8 && next.liveLnaDb() != -6 && next.liveLnaDb() != 3,
+        check(next.liveLnaDb() == hl2::kLnaDefaultGainDb,
               "an unvisited band takes the shipped LNA default, not a visited band's gain");
         check(!Session::hasLna(up, QStringLiteral("15m")) && !Session::hasDrive(up, QStringLiteral("15m")),
               "negative control: the stored document had no 15 m entry to begin with");
