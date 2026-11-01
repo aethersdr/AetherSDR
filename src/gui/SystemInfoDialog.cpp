@@ -3,6 +3,7 @@
 #include "LogSyntaxHighlighter.h"
 #include "SparklineDelegate.h"
 #include "TimeSeriesGraphWidget.h"
+#include "core/ExternalFilePath.h"
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
 
@@ -1275,9 +1276,10 @@ void SystemInfoDialog::openLogTail()
 bool SystemInfoDialog::reopenLogTail(const QString& path)
 {
     if (m_logPathLabel != nullptr) {
-        m_logPathLabel->setText(path.isEmpty()
-                                    ? QStringLiteral("Log: (not writing to a file)")
-                                    : QStringLiteral("Log: %1").arg(path));
+        // Display only: m_logFile below keeps the original path.
+        m_logPathLabel->setText(
+            path.isEmpty() ? QStringLiteral("Log: (not writing to a file)")
+                           : QStringLiteral("Log: %1").arg(ExternalFilePath::resolve(path)));
     }
     if (path.isEmpty()) {
         return false;

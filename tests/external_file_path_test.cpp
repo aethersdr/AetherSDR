@@ -26,6 +26,11 @@ bool touch(const QString& path)
     QFile file(path);
     return file.open(QIODevice::WriteOnly) && file.write("fixture") == 7;
 }
+// "C:/x" -> "/x"; POSIX paths are already rooted.
+QString driveRelative(const QString& path)
+{
+    return path.size() > 1 && path.at(1) == QLatin1Char(':') ? path.mid(2) : path;
+}
 }
 
 int main(int argc, char** argv)
@@ -59,14 +64,27 @@ int main(int argc, char** argv)
     check(resolve(physical, mappings) == physical, "already physical path is not redirected twice");
     check(resolve(logical, {}) == logical, "missing mappings preserve input");
     check(resolve(logical, {{local, local}}) == logical, "unpackaged identity mapping preserves input");
-    check(resolve(logical, {{QString(), cache + "/Local"}}) == logical,
+    // A failed known-folder lookup must not act as a root. Each check below
+    // first creates the exact file the resolver would return if it did, so
+    // only the empty-root guard keeps the input. On Windows a drive-relative
+    // path ("/Users/...") resolves against the current drive.
+    const QString previousCurrent = QDir::currentPath();
+    QDir::setCurrent(temporary.path());
+    const QString rootedLogical = driveRelative(logical);
+    check(touch(cache + "/Local" + rootedLogical), "create empty-original-root candidate");
+    check(resolve(rootedLogical, {{QString(), cache + "/Local"}}) == rootedLogical,
           "failed original known-folder lookup preserves input");
-    check(resolve(logical, {{local, QString()}}) == logical,
+    const QString escaped = temporary.path() + "/escaped.log";
+    check(touch(escaped), "create empty-redirected-root candidate");
+    const QString escapeInput = local + driveRelative(escaped);
+    check(resolve(escapeInput, {{local, QString()}}) == escapeInput,
           "failed redirected known-folder lookup preserves input");
+    QDir::setCurrent(previousCurrent);
     check(resolve(QString(), mappings).isEmpty(), "empty path remains empty");
     const QString absent = local + "/AetherSDR/logs/missing.log";
     check(resolve(absent, mappings) == absent, "missing candidate preserves input");
     const QString outside = temporary.path() + "/Local-other/AetherSDR/logs/old.log";
+    check(touch(cache + "/Local-other/AetherSDR/logs/old.log"), "create sibling-prefix candidate");
     check(resolve(outside, mappings) == outside, "prefix sibling is not an AppData child");
     check(resolve(local + "/../outside.log", mappings) == local + "/../outside.log",
           "parent traversal outside AppData is not redirected");
