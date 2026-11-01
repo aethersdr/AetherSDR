@@ -5,6 +5,8 @@
 #include "core/backends/icom/IcomCivBackend.h"
 #include "core/backends/icom/IcomSession.h"
 #include "TxTestAuthority.h"
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 
 #include <QCoreApplication>
 #include <QLoggingCategory>
@@ -19,6 +21,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 using namespace AetherSDR;
@@ -44,7 +47,7 @@ struct IcomCivBackendTestAccess {
     static void deliver(IcomCivBackend& b, CivFrame frame, std::uint64_t generation = 1)
     {
         frame.to = kControllerAddress;
-        frame.from = b.m_model->civAddress;
+        frame.from = b.m_session->civAddress();
         b.onCivFrame(frame, generation);
     }
     static void expectPttConfirmation(IcomCivBackend& b, bool keyed)
@@ -81,6 +84,8 @@ struct IcomCivBackendTestAccess {
         b.m_civTrace.clear();
         (void)b.m_civScheduler.reset();
     }
+    // Clear only the trace: what is in flight and queued stays so.
+    static void forgetSent(IcomCivBackend& b) { b.m_civTrace.clear(); }
     // Drain by letting each in-flight transaction time out on a future clock.
     static void settle(IcomCivBackend& b)
     {
@@ -90,6 +95,51 @@ struct IcomCivBackendTestAccess {
             b.pumpCiv(t);
         }
     }
+    // Operator picked SCROLL-F; the startup writes themselves are not under test.
+    static void scrollF(IcomCivBackend& b)
+    {
+        b.m_scopeView = IcomCivBackend::ScopeView::ScrollF;
+        b.m_scopeStarted = true;
+    }
+    // Run the one-turn deferrals, then flush a throttled edge write now
+    // rather than after its real 200 ms, so the tests never race the clock.
+    static void settleScope(IcomCivBackend& b)
+    {
+        QCoreApplication::processEvents();
+        if (b.m_scopeEdgeWriteTimer && b.m_scopeEdgeWriteTimer->isActive()) {
+            b.m_scopeEdgeWriteTimer->stop();
+            b.flushScopeEdgeWrite();
+        }
+    }
+    static void armThrottle(IcomCivBackend& b) { b.m_scopeLastEdgeWriteMs = b.nowMs(); }
+    // Date the current scope's last sweep in the past, so the other selector
+    // reads as a MAIN/SUB switch rather than Dual-scope interleave.
+    static void ageScopeSelector(IcomCivBackend& b, qint64 ms)
+    {
+        if (b.m_scopeSelectorSeenAtMs) {
+            *b.m_scopeSelectorSeenAtMs -= ms;
+        }
+    }
+    // Date the newest commanded tune in the past, so a frequency echo that
+    // follows it is unambiguously an answer (the clock can read 0 in a test).
+    static void ageCommandedTune(IcomCivBackend& b, qint64 ms)
+    {
+        if (!b.m_scopeRecentTunes.empty()) {
+            b.m_scopeRecentTunes.back().atMs -= ms;
+        }
+    }
+    static bool edgeWritePending(const IcomCivBackend& b)
+    {
+        return b.m_scopeEdgeWriteTimer && b.m_scopeEdgeWriteTimer->isActive();
+    }
+    static qint64 holdRemainingMs(const IcomCivBackend& b)
+    {
+        return b.m_scopeEdgeHoldUntilMs - b.nowMs();
+    }
+    static void refuse(IcomCivBackend& b, const char* key) { b.handleScopeRefusal(key); }
+    static bool scopeModesOffered(const IcomCivBackend& b) { return b.scopeModesOffered(); }
+    static void scopeStartup(IcomCivBackend& b) { b.applyScopeStartup(); }
+    static void fixedView(IcomCivBackend& b) { b.m_scopeView = IcomCivBackend::ScopeView::Fixed; }
     static bool tuning(const IcomCivBackend& b) { return b.m_tuning; }
     static bool tuneTimerActive(const IcomCivBackend& b)
     {
@@ -105,12 +155,31 @@ struct IcomCivBackendTestAccess {
         b.m_mode = mode;
         b.m_dataMode = data;
     }
+    static void forgetIdentity(IcomCivBackend& b) { b.m_civReported = 0; b.m_civModelId = 0; }
+    static void publishControls(IcomCivBackend& b) { b.publishModelControls(); }
+    static std::uint64_t frequency(const IcomCivBackend& b) { return b.m_frequencyHz; }
+    // No frequency reported yet this session: the next echo is the first report.
+    static void awaitFirstReport(IcomCivBackend& b) { b.m_frequencyHz = 0; }
     static int preampStep(const IcomCivBackend& b) { return b.m_preampStep; }
     static void reassertPreamp(IcomCivBackend& b) { b.reassertPanPreampWireStep(b.m_preampStep); }
     static void queuePendingRead(IcomCivBackend& b)
     {
         const std::vector<std::uint8_t> frame = cmdReadFrequency(0xA4);
         b.queueRead(frame, b.semanticKey(frame), IcomCivScheduler::Priority::Maintenance);
+    }
+    static void queueMeterRead(IcomCivBackend& b)
+    {
+        const auto frame = cmdReadMeter(b.m_session->civAddress(), meter::kSMeter);
+        b.queueRead(frame, b.semanticKey(frame), IcomCivScheduler::Priority::ActiveMeter);
+    }
+    static void pumpNextSlot(IcomCivBackend& b)
+    {
+        b.pumpCiv(std::max<qint64>(b.nowMs(), b.m_civScheduler.stats().lastDispatchMs)
+                  + IcomCivScheduler::kSlotMs);
+    }
+    static std::string inFlightKey(const IcomCivBackend& b)
+    {
+        return b.m_civScheduler.stats().inFlightKey;
     }
     static void cancelScheduler(IcomCivBackend& b)
     {
@@ -248,6 +317,113 @@ void testSwrMinimumHold()
     swr.data = {0x00, 0x82};
     Access::deliver(backend, swr);
     check(meterSpy.count() == 2, "the next real SWR reading publishes");
+}
+
+// Both polled and unsolicited frequency replies drive the effective ladder.
+void testIc705PreampFrequencyRanges()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-705");
+    QSignalSpy info(&backend, &IRadioBackend::panPreampInfoChanged);
+    QSignalSpy value(&backend, &IRadioBackend::panPreampChanged);
+    Access::publishControls(backend);
+    check(info.size() == 1 && info.last().at(1).toStringList().size() == 3,
+          "initial IC-705 controls use the authoritative HF frequency");
+    backend.setSliceFrequency(0, 144'300'000);
+    check(info.size() == 1 && Access::frequency(backend) == 14'100'000,
+          "tune intent alone cannot change the radio-authoritative ladder");
+    Access::deliver(backend, frame(cmd::kReadFreq, {}, encodeFreq(74'799'999)));
+    check(info.size() == 1, "same-ladder frequency read does not republish controls");
+    Access::forget(backend);
+    Access::deliver(backend, frame(cmd::kSetFreqTrx, {}, encodeFreq(74'800'000)));
+    check(info.size() == 2 && info.last().at(1).toStringList() == QStringList({"OFF", "P.AMP1"}),
+          "transceive frequency at the boundary publishes two preamp positions");
+    const auto crossed = Access::issued(backend);
+    check(any(crossed, [](const CivFrame& f) {
+        return f.cmd == cmd::kFunction && f.hasSub && f.sub == func::kPreamp && f.data.empty();
+    }), "ladder transition requests authoritative preamp readback");
+    check(writes(crossed, cmd::kFunction, func::kPreamp).empty() && value.isEmpty(),
+          "frequency crossing never writes or invents a preamp setting");
+    Access::deliver(backend, frame(cmd::kFunction, func::kPreamp, {1}));
+    check(value.size() == 1 && value.last().at(1).toInt() == 1,
+          "preamp confirmation adopts the radio's stage");
+    Access::forget(backend);
+    backend.setPanPreamp(QStringLiteral("0"), 2);
+    const auto bounded = writes(Access::issued(backend), cmd::kFunction, func::kPreamp);
+    check(bounded.size() == 1 && bounded.front().data == std::vector<std::uint8_t>{1},
+          "stale out-of-range intent cannot send P.AMP2 at the boundary");
+    Access::forget(backend);
+    backend.setPanPreamp(QStringLiteral("0"), 0);
+    const auto off = writes(Access::issued(backend), cmd::kFunction, func::kPreamp);
+    check(off.size() == 1 && off.front().data == std::vector<std::uint8_t>{0},
+          "OFF remains writable from P.AMP1 on the restricted ladder");
+    Access::deliver(backend, frame(cmd::kReadFreq, {}, encodeFreq(442'000'000)));
+    check(info.size() == 2, "VHF to UHF preserves the same two-position ladder");
+    Access::forget(backend);
+    Access::deliver(backend, frame(cmd::kReadFreq, {}, encodeFreq(50'000'000)));
+    check(info.size() == 3 && info.last().at(1).toStringList().size() == 3,
+          "polled frequency returning to 6 m restores P.AMP2");
+    check(writes(Access::issued(backend), cmd::kFunction, func::kPreamp).empty(),
+          "return to HF also leaves the setting to the radio");
+    Access::forget(backend);
+    backend.setPanPreamp(QStringLiteral("0"), 2);
+    const auto full = writes(Access::issued(backend), cmd::kFunction, func::kPreamp);
+    check(full.size() == 1 && full.front().data == std::vector<std::uint8_t>{2},
+          "P.AMP2 remains writable in the lower receive range");
+    Access::forgetIdentity(backend);
+    Access::sessionConnected(backend);
+    check(Access::frequency(backend) == 0, "new session discards the previous receive frequency");
+    Access::deliver(backend, frame(cmd::kReadId, 0, {0xA4}));
+    check(info.last().at(1).toStringList() == QStringList({"OFF", "P.AMP1"}),
+          "identified IC-705 with unknown frequency publishes only shared stages");
+    Access::forget(backend);
+    backend.setPanPreamp(QStringLiteral("0"), 2);
+    const auto unknown = writes(Access::issued(backend), cmd::kFunction, func::kPreamp);
+    check(unknown.size() == 1 && unknown.front().data == std::vector<std::uint8_t>{1},
+          "unknown frequency cannot authorize P.AMP2 at the backend entry");
+}
+
+void testRangePreampReadPrecedesQueuedMeters()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-705");
+    Access::queuePendingRead(backend);
+    Access::pumpNextSlot(backend);
+    Access::queueMeterRead(backend);
+    // The unsolicited band change arrives while a frequency poll is in flight.
+    Access::deliver(backend, frame(cmd::kSetFreqTrx, {}, encodeFreq(144'300'000)));
+    Access::deliver(backend, frame(cmd::kReadFreq, {}, encodeFreq(144'300'000)));
+    Access::pumpNextSlot(backend);
+    check(Access::inFlightKey(backend) == "civ.22.2",
+          "range-change preamp confirmation precedes a queued active meter read");
+    Access::deliver(backend, frame(cmd::kFunction, func::kPreamp, {1}));
+    Access::pumpNextSlot(backend);
+    check(Access::inFlightKey(backend) == "civ.21.2",
+          "active meter polling resumes after the range-change confirmation");
+}
+
+void testReconnectSMeterWaitsForFrequency()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-705");
+    Access::sessionConnected(backend);
+    QSignalSpy meterSpy(&backend, &IRadioBackend::meterUpdate);
+    const CivFrame s9 = frame(cmd::kMeter, meter::kSMeter, {0x01, 0x20});
+    Access::deliver(backend, s9);
+    check(meterSpy.isEmpty(), "unknown receive frequency cannot publish an assumed HF S-meter value");
+    meterSpy.clear();
+    Access::deliver(backend, frame(cmd::kMeter, meter::kVd, {0x01, 0x20}));
+    check(meterSpy.size() == 1 && meterSpy.last().at(0).toString() == "RAD:+13.8A",
+          "frequency-independent meter telemetry remains available during reconnect");
+    meterSpy.clear();
+    Access::deliver(backend, frame(cmd::kReadFreq, {}, encodeFreq(144'300'000)));
+    Access::deliver(backend, s9);
+    check(meterSpy.size() == 1 && std::abs(meterSpy.last().at(1).toDouble() + 93.0) < 0.01,
+          "the first S9 sample after VHF frequency readback uses -93 dBm");
+    Access::deliver(backend, frame(cmd::kSetFreqTrx, {}, encodeFreq(14'100'000)));
+    Access::deliver(backend, s9);
+    check(meterSpy.size() == 2 && std::abs(meterSpy.last().at(1).toDouble() + 73.0) < 0.01,
+          "confirmed HF frequency restores the -73 dBm S9 reference");
 }
 
 // IC-9700 preamp wire state 02 is mirrored; operator intent stays bounded.
@@ -737,6 +913,817 @@ void testPanIntents()
           "zoom-out from 100 kHz steps to the next span (250 kHz), not back");
 }
 
+std::optional<CivFrame> scopeEdgeSweep(std::uint64_t lowerHz, std::uint64_t upperHz,
+                                       std::uint8_t civAddress = 0xB6, std::uint8_t mode = 0x03,
+                                       std::uint8_t selector = 0x00)
+{
+    std::vector<std::uint8_t> body{selector, encodeBcdByte(1), encodeBcdByte(1), mode};
+    const auto lower = encodeFreq(lowerHz);
+    const auto upper = encodeFreq(upperHz);
+    body.insert(body.end(), lower.begin(), lower.end());
+    body.insert(body.end(), upper.begin(), upper.end());
+    body.push_back(0x00);
+    body.insert(body.end(), static_cast<std::size_t>(kScopePointsIc705), 0x20);
+    return parseFrame(buildFrameSub(civAddress, cmd::kScope, scope::kWaveData, body));
+}
+
+CivFrame frequencyEcho(std::uint64_t hz)
+{
+    const auto bytes = encodeFreq(hz);
+    return frame(cmd::kReadFreq, std::nullopt, std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+}
+
+struct EdgeWrite {
+    int range = 0;
+    int slot = 0;
+    std::uint64_t lowerHz = 0;
+    std::uint64_t upperHz = 0;
+};
+
+// 27 16 selects (two bytes: selector + slot); the one-byte selector read is not one.
+std::vector<CivFrame> slotSelects(const std::vector<CivFrame>& frames)
+{
+    std::vector<CivFrame> out;
+    for (const CivFrame& f : writes(frames, cmd::kScope, scope::kEdgeNumber)) {
+        if (f.data.size() == 2) {
+            out.push_back(f);
+        }
+    }
+    return out;
+}
+
+std::vector<EdgeWrite> edgeWrites(const std::vector<CivFrame>& frames)
+{
+    std::vector<EdgeWrite> out;
+    for (const CivFrame& f : writes(frames, cmd::kScope, scope::kFixedEdge)) {
+        if (f.data.size() < 2 + 2 * kFreqBytes) {
+            continue;
+        }
+        const std::span<const std::uint8_t> d(f.data);
+        out.push_back({decodeBcdByte(d[0]), decodeBcdByte(d[1]),
+                       decodeFreq(d.subspan(2, kFreqBytes)).value_or(0),
+                       decodeFreq(d.subspan(2 + kFreqBytes, kFreqBytes)).value_or(0)});
+    }
+    return out;
+}
+
+// SCROLL-F (#6168): the window is free. A drag scrolls without retuning and
+// stops short of losing the VFO; a reveal lands in the range of the tune it
+// reveals, even when it arrives first; a zoom is one write.
+void testScrollFPanIntents()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    const auto sweep = scopeEdgeSweep(14'000'000, 14'100'000);
+    check(sweep.has_value(), "SCROLL-F fixture sweep parses");
+    if (!sweep) {
+        return;
+    }
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *sweep);
+    const auto retunes = [](const std::vector<CivFrame>& frames) {
+        return any(frames, [](const CivFrame& f) {
+            return (f.cmd == cmd::kSetFreq || f.cmd == cmd::kSetFreqTrx) && !f.data.empty();
+        });
+    };
+
+    Access::forget(backend);
+    backend.setPanCenter(QStringLiteral("0"), 14'030'000.0, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    auto edges = edgeWrites(Access::issued(backend));
+    check(Access::holdRemainingMs(backend) <= 1000,
+          "the hold runs one second from the write reaching the wire, not the queued bound");
+    check(!retunes(Access::issued(backend)), "a SCROLL-F drag does not retune");
+    check(edges.size() == 1 && edges.front().range == 6 && edges.front().slot == 4
+              && edges.front().lowerHz == 13'980'000 && edges.front().upperHz == 14'080'000,
+          "it writes the dragged window to slot 4 of range 06");
+
+    Access::forget(backend);
+    QSignalSpy pan(&backend, &IRadioBackend::panCenterBandwidthChanged);
+    backend.setPanCenter(QStringLiteral("0"), 13'900'000.0, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().upperHz == 14'052'000,
+          "a drag that would lose the VFO stops with it 2 kHz inside the edge");
+    check(!pan.isEmpty(), "and the view is told where it stopped");
+
+    // Memory recall order: the reveal arrives before the tune it reveals.
+    Access::forget(backend);
+    backend.setPanCenter(QStringLiteral("0"), 400'900.0, IRadioBackend::PanCenterIntent::Range);
+    backend.setSliceFrequency(0, 400'900.0);
+    Access::settleScope(backend);
+    edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().range == 1
+              && edges.front().lowerHz == 351'000 && edges.front().upperHz == 451'000,
+          "a reveal before its tune is centred in the tune's range, not the old band's");
+
+    // A zoom's centre and width travel as one write.
+    Access::deliver(backend, frequencyEcho(400'900));
+    Access::deliver(backend, *scopeEdgeSweep(351'000, 451'000));
+    Access::forget(backend);
+    pan.clear();
+    backend.setPanCenter(QStringLiteral("0"), 400'000.0, IRadioBackend::PanCenterIntent::Range);
+    backend.setPanBandwidth(QStringLiteral("0"), 50'000.0);
+    check(!pan.isEmpty() && std::fabs(pan.first().at(2).toDouble() - 0.05) < 1e-9,
+          "a zoom announces its new width at once");
+    Access::settleScope(backend);
+    edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().upperHz - edges.front().lowerHz == 50'000,
+          "a zoom costs one edge write, at the new width");
+}
+
+// Gestures inside the 200 ms throttle coalesce into one write of the latest window.
+void testScrollFEdgeWriteThrottle()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+
+    Access::forget(backend);
+    Access::armThrottle(backend);
+    backend.setPanCenter(QStringLiteral("0"), 14'040'000.0, IRadioBackend::PanCenterIntent::Drag);
+    backend.setPanCenter(QStringLiteral("0"), 14'035'000.0, IRadioBackend::PanCenterIntent::Drag);
+    QCoreApplication::processEvents();
+    check(Access::edgeWritePending(backend) && edgeWrites(Access::issued(backend)).empty(),
+          "drags inside the throttle wait for it");
+    Access::settleScope(backend);
+    const auto edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().lowerHz == 13'985'000,
+          "and then cost one write, of the latest window");
+}
+
+// Entering a new edge range re-selects slot 4: the radio remembers a slot per band.
+void testScrollFReselectsSlotOnRangeChange()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+    Access::forget(backend);
+    Access::deliver(backend, frequencyEcho(7'074'000));
+    const auto slotWrites = writes(Access::issued(backend), cmd::kScope, scope::kEdgeNumber);
+    check(any(slotWrites, [](const CivFrame& f) {
+              return f.data.size() == 2 && f.data[0] == 0x00 && f.data[1] == 0x04;
+          }),
+          "a move from range 06 to range 04 re-selects slot 4 (27 16 00 04)");
+}
+
+// FA to SCROLL-F or slot 4 (old firmware) falls back to Center and says so;
+// FA to a slot READ is not proof of old firmware.
+void testScrollFRefusalFallsBackToCenter()
+{
+    {
+        IcomCivBackend backend;
+        Access::prepare(backend, "IC-705");
+        Access::scrollF(backend);
+        Access::refuse(backend, "scope.edge.read");
+        check(Access::scopeModesOffered(backend), "an FA to a slot read keeps SCROLL-F");
+    }
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-705");
+    Access::scrollF(backend);
+    QSignalSpy modes(&backend, &IRadioBackend::panScopeModesChanged);
+    QSignalSpy warning(&backend, &IRadioBackend::configurationWarning);
+    Access::forget(backend);
+    Access::refuse(backend, "scope.mode");
+    check(!Access::scopeModesOffered(backend), "an FA to 27 14 00 03 withdraws SCROLL-F");
+    check(!modes.isEmpty()
+              && modes.last().at(1).toStringList() == QStringList{QStringLiteral("Center")},
+          "the unsupported scope choices are withdrawn, leaving Center (the row stays, dimmed)");
+    check(warning.count() == 1, "the operator is told why");
+    const auto mode = writes(Access::issued(backend), cmd::kScope, scope::kMode);
+    check(mode.size() == 1 && mode.front().data.size() == 2 && mode.front().data[1] == 0x00,
+          "and the radio is put back in Center");
+}
+
+// Startup initialises the panadapter from the radio's own mode: it reads
+// 27 14 first, writes SCROLL-F only when the radio is in Center, and keeps a
+// SCROLL-F or Fixed the operator left there. No client-side copy exists.
+void testScopeStartupInitialisesFromRadio()
+{
+    const auto modeWrites = [](const std::vector<CivFrame>& frames) {
+        std::vector<CivFrame> out;
+        for (const CivFrame& f : writes(frames, cmd::kScope, scope::kMode)) {
+            if (f.data.size() == 2) {
+                out.push_back(f);
+            }
+        }
+        return out;
+    };
+    const auto modeReads = [](const std::vector<CivFrame>& frames) {
+        return any(frames, [](const CivFrame& f) {
+            return f.cmd == cmd::kScope && f.hasSub && f.sub == scope::kMode && f.data.size() == 1;
+        });
+    };
+    const auto slotReads = [](const std::vector<CivFrame>& frames) {
+        return any(frames, [](const CivFrame& f) {
+            return f.cmd == cmd::kScope && f.hasSub && f.sub == scope::kEdgeNumber
+                && f.data.size() == 1;
+        });
+    };
+    for (const char* model : {"IC-7300MK2", "IC-705", "IC-9700"}) {
+        IcomCivBackend backend;
+        Access::prepare(backend, model);
+        Access::scopeStartup(backend);
+        check(modeReads(Access::issued(backend)) && slotReads(Access::issued(backend))
+                  && modeWrites(Access::issued(backend)).empty()
+                  && slotSelects(Access::issued(backend)).empty(),
+              "startup reads the radio's scope mode and edge slot before writing anything");
+        // The radio answers: Center.
+        Access::forget(backend);
+        Access::deliver(backend, frame(cmd::kScope, scope::kMode, {0x00, 0x00}));
+        auto mode = modeWrites(Access::issued(backend));
+        auto slot = slotSelects(Access::issued(backend));
+        check(mode.size() == 1 && mode.front().data == std::vector<std::uint8_t>({0x00, 0x03}),
+              "a radio found in Center is initialised to SCROLL-F");
+        check(slot.size() == 1 && slot.front().data == std::vector<std::uint8_t>({0x00, 0x04}),
+              "and slot 4 is selected");
+        Access::forget(backend);
+        Access::scopeStartup(backend);
+        Access::deliver(backend, frame(cmd::kScope, scope::kMode, {0x00, 0x00}));
+        check(Access::issued(backend).empty(), "initialisation happens once per session");
+    }
+    for (const std::uint8_t kept : {std::uint8_t{0x03}, std::uint8_t{0x01}}) {
+        IcomCivBackend backend;
+        Access::prepare(backend, "IC-7300MK2");
+        Access::scopeStartup(backend);
+        Access::forget(backend);
+        Access::deliver(backend, frame(cmd::kScope, scope::kMode, {0x00, kept}));
+        Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, kept));
+        check(modeWrites(Access::issued(backend)).empty(),
+              "a radio found in SCROLL-F or Fixed keeps the operator's mode: no 27 14 write");
+        check(slotSelects(Access::issued(backend)).empty()
+                  && edgeWrites(Access::issued(backend)).empty(),
+              "and its edge slot: no 27 16 or 27 1E write until the operator does something");
+    }
+    IcomCivBackend unsupported;
+    Access::prepare(unsupported, "IC-7300");
+    QSignalSpy modes(&unsupported, &IRadioBackend::panScopeModesChanged);
+    Access::scopeStartup(unsupported);
+    check(!modeReads(Access::issued(unsupported)) && modeWrites(Access::issued(unsupported)).empty()
+              && writes(Access::issued(unsupported), cmd::kScope, scope::kEdgeNumber).empty(),
+          "the original IC-7300's scope mode is neither read nor written");
+    check(!modes.isEmpty() && modes.last().at(1).toStringList() == QStringList{QStringLiteral("Center")},
+          "and its Scope row is published as Center-only (dimmed), not hidden");
+}
+
+// The slot the radio is found on at connect decides whose window it is. Fixed
+// on an operator slot (1-3): theirs, gestures refused, nothing written. Fixed
+// on slot 4: ours, a drag writes it. SCROLL-F on an operator slot: the first
+// gesture moves the radio to slot 4 and writes there; their preset is untouched.
+void testScopeStartupKeepsTheOperatorsSlot()
+{
+    const auto retunes = [](const std::vector<CivFrame>& frames) {
+        return any(frames, [](const CivFrame& f) {
+            return (f.cmd == cmd::kSetFreq || f.cmd == cmd::kSetFreqTrx) && !f.data.empty();
+        });
+    };
+    const auto startOn = [](IcomCivBackend& backend, std::uint8_t slot, std::uint8_t mode) {
+        Access::prepare(backend, "IC-7300MK2");
+        Access::scopeStartup(backend);
+        Access::deliver(backend, frequencyEcho(14'050'000));
+        Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, slot}));
+        Access::deliver(backend, frame(cmd::kScope, scope::kMode, {0x00, mode}));
+        Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, mode));
+        Access::forget(backend);
+    };
+    {
+        IcomCivBackend backend;
+        startOn(backend, 0x01, 0x01);
+        QSignalSpy pan(&backend, &IRadioBackend::panCenterBandwidthChanged);
+        backend.setPanCenter(QStringLiteral("0"), 14'030'000.0,
+                             IRadioBackend::PanCenterIntent::Drag);
+        Access::settleScope(backend);
+        check(!retunes(Access::issued(backend)) && edgeWrites(Access::issued(backend)).empty()
+                  && slotSelects(Access::issued(backend)).empty(),
+              "found in Fixed on slot 1: a drag neither retunes nor writes the operator's preset");
+        check(!pan.isEmpty(), "and the view is put back");
+    }
+    {
+        IcomCivBackend backend;
+        startOn(backend, 0x04, 0x01);
+        backend.setPanCenter(QStringLiteral("0"), 14'030'000.0,
+                             IRadioBackend::PanCenterIntent::Drag);
+        Access::settleScope(backend);
+        const auto edges = edgeWrites(Access::issued(backend));
+        check(!retunes(Access::issued(backend)) && edges.size() == 1 && edges.front().slot == 4
+                  && slotSelects(Access::issued(backend)).empty(),
+              "found in Fixed on slot 4: the window is ours, a drag writes it (no re-select)");
+    }
+    {
+        // Slot-4 reply first, then the session's first frequency report: ours
+        // already, so there is nothing to re-select and no edge state to reset.
+        IcomCivBackend backend;
+        Access::prepare(backend, "IC-7300MK2");
+        Access::scopeStartup(backend);
+        Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+        Access::deliver(backend, frame(cmd::kScope, scope::kMode, {0x00, 0x01}));
+        Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x01));
+        Access::awaitFirstReport(backend);
+        Access::forget(backend);
+        Access::deliver(backend, frequencyEcho(14'296'800));
+        Access::settleScope(backend);
+        check(slotSelects(Access::issued(backend)).empty()
+                  && edgeWrites(Access::issued(backend)).empty(),
+              "found on slot 4, the first frequency report writes no redundant 27 16 and no 27 1E");
+    }
+    {
+        // The session's first frequency report lands in some range; it is not a
+        // range entry, so nothing is re-selected even once the slot is known.
+        IcomCivBackend backend;
+        Access::prepare(backend, "IC-7300MK2");
+        Access::scopeStartup(backend);
+        Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x01));
+        Access::awaitFirstReport(backend);
+        Access::forget(backend);
+        Access::deliver(backend, frequencyEcho(14'296'800));
+        check(slotSelects(Access::issued(backend)).empty(),
+              "the first frequency report of a session re-selects nothing");
+        Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x01}));
+        Access::deliver(backend, frame(cmd::kScope, scope::kMode, {0x00, 0x01}));
+        Access::deliver(backend, frequencyEcho(7'100'000));
+        check(slotSelects(Access::issued(backend)).empty(),
+              "and a band change on the operator's Fixed slot leaves their slot alone");
+    }
+    {
+        // On the wire the first mode report is a sweep's mode byte, which can
+        // land before the 27 16 reply: the slot still decides once it arrives.
+        IcomCivBackend backend;
+        Access::prepare(backend, "IC-7300MK2");
+        Access::scopeStartup(backend);
+        Access::deliver(backend, frequencyEcho(14'050'000));
+        Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x01));
+        Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x01}));
+        Access::deliver(backend, frame(cmd::kScope, scope::kMode, {0x00, 0x01}));
+        Access::forget(backend);
+        backend.setPanCenter(QStringLiteral("0"), 14'030'000.0,
+                             IRadioBackend::PanCenterIntent::Drag);
+        Access::settleScope(backend);
+        check(!retunes(Access::issued(backend)) && edgeWrites(Access::issued(backend)).empty()
+                  && slotSelects(Access::issued(backend)).empty(),
+              "a Fixed sweep that lands before the slot reply still ends on the operator's slot");
+    }
+    {
+        IcomCivBackend backend;
+        startOn(backend, 0x02, 0x03);
+        backend.setPanCenter(QStringLiteral("0"), 14'030'000.0,
+                             IRadioBackend::PanCenterIntent::Drag);
+        Access::settleScope(backend);
+        const auto selects = slotSelects(Access::issued(backend));
+        const auto edges = edgeWrites(Access::issued(backend));
+        check(selects.size() == 1 && selects.front().data == std::vector<std::uint8_t>({0x00, 0x04})
+                  && edges.size() == 1 && edges.front().slot == 4,
+              "found in SCROLL-F on slot 2: the first drag selects slot 4 and writes there");
+    }
+}
+
+// A tune outside the span queues its window write behind the 05 (a CAT/TCI
+// AllowRecenter tune, or the GUI's Range reveal). If the radio refuses the 05,
+// that write is dropped before the next pump, or the refused destination's
+// window would land on the radio while the VFO stays where it was.
+void testRefusedTuneDropsItsQueuedWindow()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+    Access::forget(backend);
+    backend.setSliceFrequency(0, 14'200'000.0);
+    backend.setPanCenter(QStringLiteral("0"), 14'200'000.0,
+                         IRadioBackend::PanCenterIntent::Range);
+    Access::settleScope(backend);
+    // issued() lists what went out AND what is still queued behind the 05.
+    const auto tuneOut = any(Access::issued(backend), [](const CivFrame& f) {
+        return f.cmd == cmd::kSetFreq && !f.data.empty();
+    });
+    const auto queued = edgeWrites(Access::issued(backend));
+    check(tuneOut && queued.size() == 1 && queued.front().lowerHz <= 14'200'000
+              && queued.front().upperHz >= 14'200'000,
+          "the 05 is in flight and the window write for 14.200 is queued behind it");
+    // The radio refuses the tune (FA). Only the trace is cleared: the queue
+    // and the in-flight 05 are exactly what the refusal must act on.
+    Access::forgetSent(backend);
+    Access::deliver(backend, frame(kCivNg, std::nullopt, {}));
+    Access::settleScope(backend);
+    check(edgeWrites(Access::issued(backend)).empty(),
+          "a refused tune's queued window write is dropped: neither sent nor still queued");
+    check(Access::frequency(backend) == 14'050'000, "and the VFO is still where the radio says");
+}
+
+// The slot select that rides with a refused tune's window (radio on an
+// operator slot) is dropped with it, and the slot re-read from the radio.
+void testRefusedTuneDropsItsSlotSelect()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x02}));
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+    Access::forget(backend);
+    backend.setSliceFrequency(0, 14'200'000.0);
+    backend.setPanCenter(QStringLiteral("0"), 14'200'000.0,
+                         IRadioBackend::PanCenterIntent::Range);
+    Access::settleScope(backend);
+    check(slotSelects(Access::issued(backend)).size() == 1,
+          "on operator slot 2, the tune's window write queues a select of slot 4");
+    Access::forgetSent(backend);
+    Access::deliver(backend, frame(kCivNg, std::nullopt, {}));
+    Access::settleScope(backend);
+    const auto slotReads = writes(Access::issued(backend), cmd::kScope, scope::kEdgeNumber);
+    check(slotSelects(Access::issued(backend)).empty() && edgeWrites(Access::issued(backend)).empty(),
+          "a refused tune sends neither its window nor its slot select");
+    check(any(slotReads, [](const CivFrame& f) { return f.data.size() == 1; }),
+          "and the slot is re-read from the radio");
+}
+
+// SCROLL-C follows the VFO like Center and uses no edge slot: a band change
+// there re-selects nothing.
+void testScrollCUsesNoEdgeSlot()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+    // The front panel switches to SCROLL-C.
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x02));
+    Access::forget(backend);
+    Access::deliver(backend, frequencyEcho(7'074'000));
+    check(slotSelects(Access::issued(backend)).empty(),
+          "in SCROLL-C a band change leaves the radio's per-band slot alone");
+}
+
+// An FA to the slot select (old firmware) must not let the SCROLL-F write
+// queued behind it reach the radio after the fallback's Center.
+void testScopeFallbackCancelsQueuedScrollF()
+{
+    const auto scrollFWrites = [](const std::vector<CivFrame>& frames) {
+        std::size_t n = 0;
+        for (const CivFrame& f : writes(frames, cmd::kScope, scope::kMode)) {
+            n += f.data == std::vector<std::uint8_t>({0x00, 0x03}) ? 1 : 0;
+        }
+        return n;
+    };
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-705");
+    Access::scopeStartup(backend);
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x01}));
+    Access::deliver(backend, frame(cmd::kScope, scope::kMode, {0x00, 0x00}));
+    Access::forgetSent(backend);
+    check(scrollFWrites(Access::issued(backend)) == 1,
+          "a radio found in Center has SCROLL-F queued behind the slot select");
+    Access::refuse(backend, "scope.edge");
+    check(scrollFWrites(Access::issued(backend)) == 0,
+          "the fallback to Center drops the queued SCROLL-F write");
+}
+
+// Fixed with the VFO dragged off screen, then Scroll-F: the seeded window must
+// hold the VFO, or the radio pages the moment SCROLL-F lands.
+void testScrollFSeedHoldsTheVfo()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::fixedView(backend);
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'250'000, 14'350'000, 0xB6, 0x01));
+    Access::forget(backend);
+    backend.setPanScopeMode(QStringLiteral("0"), 1);
+    Access::settleScope(backend);
+    const auto edges = edgeWrites(Access::issued(backend));
+    check(!edges.empty() && edges.front().lowerHz <= 14'048'000
+              && edges.front().upperHz >= 14'052'000
+              && edges.front().upperHz - edges.front().lowerHz == 100'000,
+          "Fixed to Scroll-F seeds the on-screen width moved to hold the VFO >= 2 kHz inside");
+}
+
+// An operator pick before the startup mode report lands is the mode now: the
+// late Center report does not initialize SCROLL-F over it.
+void testOperatorPickEndsStartupInit()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scopeStartup(backend);
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+    QSignalSpy lit(&backend, &IRadioBackend::panScopeModeChanged);
+    backend.setPanScopeMode(QStringLiteral("0"), 2);
+    Access::deliver(backend, frame(cmd::kScope, scope::kMode, {0x00, 0x00}));
+    Access::settleScope(backend);
+    check(!any(writes(Access::issued(backend), cmd::kScope, scope::kMode), [](const CivFrame& f) {
+              return f.data == std::vector<std::uint8_t>({0x00, 0x03});
+          }),
+          "a Center report after the operator picked Fixed writes no SCROLL-F");
+    check(!lit.isEmpty() && lit.first().at(1).toInt() == 2
+              && std::ranges::none_of(lit, [](const QList<QVariant>& args) {
+                     return args.at(1).toInt() == 1;
+                 }),
+          "and Scroll-F is never lit over the operator's pick");
+}
+
+// A sweep with no window during the hold neither confirms nor refutes the
+// edge write: the target stays and nothing is re-read.
+void testZeroWidthSweepKeepsTheHold()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+    Access::forget(backend);
+    backend.setPanCenter(QStringLiteral("0"), 14'030'000.0, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    check(edgeWrites(Access::issued(backend)).size() == 1, "the drag writes its window");
+    Access::forgetSent(backend);
+    Access::deliver(backend, *scopeEdgeSweep(14'050'000, 14'050'000));
+    check(!any(writes(Access::issued(backend), cmd::kScope, scope::kEdgeNumber),
+               [](const CivFrame& f) { return f.data.size() == 1; })
+              && Access::holdRemainingMs(backend) > 0,
+          "a zero-width sweep during the hold re-reads nothing and keeps the hold");
+}
+
+// A slot read answered before our own select went out describes the slot that
+// select replaces: the backend keeps slot 4 and re-selects it on a band change.
+void testStaleSlotReadDoesNotOverrideOurSelect()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scopeStartup(backend);
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    // A Center sweep lands before the 27 16 read is answered: initialized.
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x00));
+    check(slotSelects(Access::issued(backend)).size() == 1, "Center at startup selects slot 4");
+    // The read, sent before that select, answers with the operator's slot 2.
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x02}));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x03));
+    Access::forget(backend);
+    Access::deliver(backend, frequencyEcho(7'074'000));
+    check(!slotSelects(Access::issued(backend)).empty(),
+          "the stale slot-2 reply did not displace slot 4: a band change re-selects it");
+}
+
+// A corrective drag back to the window still on screen must go out while an
+// earlier write is unconfirmed, or the scope settles on the earlier gesture
+// once that write's sweep lands. Once confirmed, a repeat is deduplicated.
+void testCorrectiveDragSurvivesAnUnconfirmedWrite()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+    Access::forget(backend);
+    backend.setPanCenter(QStringLiteral("0"), 14'030'000.0, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    auto edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().lowerHz == 13'980'000, "the first drag writes 13.980-14.080");
+    // Back to 14.050 before that write's sweep has arrived.
+    Access::forget(backend);
+    backend.setPanCenter(QStringLiteral("0"), 14'050'000.0, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().lowerHz == 14'000'000 && edges.front().upperHz == 14'100'000,
+          "the drag back to the window still on screen is written while the first is unconfirmed");
+    // The radio confirms the correction: a repeat of it is now a no-op.
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+    Access::forget(backend);
+    backend.setPanCenter(QStringLiteral("0"), 14'050'000.0, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    check(edgeWrites(Access::issued(backend)).empty(), "a confirmed window is not rewritten");
+}
+
+// A Fixed on one of the operator's presets lights no Scope button, so a click
+// on Fixed is a request (not "already selected") and reclaims slot 4 with the
+// window on screen; the operator's presets are never written.
+void testFixedClickReclaimsSlotFour()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    QSignalSpy lit(&backend, &IRadioBackend::panScopeModeChanged);
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x01}));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x01));
+    check(!lit.isEmpty() && lit.last().at(1).toInt() == -1,
+          "a Fixed on the operator's slot 1 lights no Scope button");
+    Access::forget(backend);
+    backend.setPanScopeMode(QStringLiteral("0"), 2);
+    Access::settleScope(backend);
+    const auto selects = slotSelects(Access::issued(backend));
+    const auto modes = writes(Access::issued(backend), cmd::kScope, scope::kMode);
+    const auto edges = edgeWrites(Access::issued(backend));
+    check(selects.size() == 1 && selects.front().data == std::vector<std::uint8_t>({0x00, 0x04})
+              && modes.size() == 1 && modes.front().data == std::vector<std::uint8_t>({0x00, 0x01})
+              && !edges.empty()
+              && std::ranges::all_of(edges, [](const EdgeWrite& e) { return e.slot == 4; }),
+          "clicking Fixed selects slot 4, keeps Fixed, and writes only our slot");
+    check(lit.last().at(1).toInt() == 2, "and Fixed lights");
+    // The radio confirms: Fixed on slot 4 is ours.
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x01));
+    check(lit.last().at(1).toInt() == 2, "and stays lit once the radio confirms slot 4");
+}
+
+// Fixed chosen here, but the radio shows one of the operator's slots (picked on
+// its front panel): the window is theirs, a retune would not move it, so a
+// drag or a zoom is refused rather than falling through to Center's retune.
+void testFixedOnOperatorSlotRefusesGestures()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::fixedView(backend);
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x01));
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x01}));
+    const auto retunes = [](const std::vector<CivFrame>& frames) {
+        return any(frames, [](const CivFrame& f) {
+            return (f.cmd == cmd::kSetFreq || f.cmd == cmd::kSetFreqTrx) && !f.data.empty();
+        });
+    };
+    Access::forget(backend);
+    QSignalSpy pan(&backend, &IRadioBackend::panCenterBandwidthChanged);
+    backend.setPanCenter(QStringLiteral("0"), 14'030'000.0, IRadioBackend::PanCenterIntent::Drag);
+    backend.setPanBandwidth(QStringLiteral("0"), 50'000.0);
+    Access::settleScope(backend);
+    check(!retunes(Access::issued(backend)), "a drag on the operator's Fixed slot does not retune");
+    check(edgeWrites(Access::issued(backend)).empty()
+              && writes(Access::issued(backend), cmd::kScope, scope::kSpan).empty(),
+          "nor writes their preset or a dead span");
+    check(!pan.isEmpty(), "and the view is put back");
+}
+
+// An edge-pan that carries the VFO across an edge-range boundary takes the
+// window with it: the Drag centre is placed in the VFO's range, not the one on
+// screen. A pan drag (no VFO motion) still stops at the boundary.
+void testScrollFEdgePanCrossesRangeBoundary()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::deliver(backend, frequencyEcho(7'990'000));
+    Access::deliver(backend, *scopeEdgeSweep(7'961'000, 8'000'000));
+
+    // Edge-pan tick: the GUI tunes to 8.005 (range 05), then asks for a centre
+    // just past the window, exactly as MainWindow's edgePanTuneRequested does.
+    Access::forget(backend);
+    backend.setSliceFrequency(0, 8'005'000.0);
+    backend.setPanCenter(QStringLiteral("0"), 7'990'000.0, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    auto edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().range == 5 && edges.front().lowerHz == 8'000'000,
+          "an edge-pan tracking a VFO that crossed 8.000 MHz writes the range-05 window");
+    check(edges.size() == 1 && edges.front().lowerHz <= 8'005'000 - 2'000
+              && edges.front().upperHz >= 8'005'000 + 2'000,
+          "and that window holds the VFO");
+
+    // A pan drag with no VFO motion stays in the shown range and stops at 8.000.
+    // The radio reports the VFO back at 7.990 after our last tune (8.005), so
+    // that tune is no longer the VFO and this Drag tracks nothing.
+    // The radio showed the range-05 window the edge-pan wrote, then the VFO
+    // came back to 7.990 and the radio paged to a range-04 window.
+    Access::deliver(backend, *scopeEdgeSweep(8'000'000, 8'039'000));
+    Access::ageCommandedTune(backend, 1);
+    Access::deliver(backend, frequencyEcho(7'990'000));
+    Access::deliver(backend, *scopeEdgeSweep(7'961'000, 8'000'000));
+    Access::forget(backend);
+    backend.setPanCenter(QStringLiteral("0"), 8'050'000.0, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    edges = edgeWrites(Access::issued(backend));
+    // The request clamps into the shown range, to 7.961-8.000: the window
+    // already on screen, so the flush deduplicates it and nothing is sent.
+    // That is the stop at the boundary, asserted as the no-write it is.
+    check(edges.empty(), "a pan drag with the VFO at 7.990 cannot take the window past 8.000: "
+                         "the clamped window is the one on screen, so nothing is written");
+    check(!any(Access::issued(backend), [](const CivFrame& f) {
+              return f.cmd == cmd::kSetFreq || f.cmd == cmd::kSetFreqTrx;
+          }),
+          "and the pan drag did not retune");
+}
+
+// IC-9700 Dual scope interleaves MAIN and SUB sweeps: the pan follows the scope
+// it is on and drops the other's, so its edge state is not reset every sweep.
+void testDualScopeFollowsOneScope()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-9700");
+    Access::scrollF(backend);
+    Access::deliver(backend, frequencyEcho(145'500'000));
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+    Access::deliver(backend, *scopeEdgeSweep(145'400'000, 145'600'000, 0xA2));
+    Access::forget(backend);
+    QSignalSpy frames(&backend, &IRadioBackend::spectrumFrameReady);
+    for (int i = 0; i < 10; ++i) {
+        Access::deliver(backend, *scopeEdgeSweep(430'000'000, 430'200'000, 0xA2, 0x03, 0x01));
+        Access::deliver(backend, *scopeEdgeSweep(145'400'000, 145'600'000, 0xA2, 0x03, 0x00));
+    }
+    check(!any(Access::issued(backend), [](const CivFrame& f) {
+              return f.cmd == cmd::kScope && f.hasSub && !f.data.empty() && f.data[0] == 0x01;
+          }),
+          "Dual scope: SUB's interleaved sweeps trigger no SUB reads or writes");
+    check(frames.size() == 10, "and only MAIN's ten sweeps reach the panadapter");
+    backend.setPanCenter(QStringLiteral("0"), 145'480'000.0, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    check(edgeWrites(Access::issued(backend)).size() == 1,
+          "and a drag on MAIN still writes its window (slot 4 was not forgotten)");
+}
+
+// IC-9700: when the radio starts streaming the other scope, its mode is read
+// and kept or initialised exactly as at startup, never overwritten with ours.
+void testScopeSelectorChangeReadsTheOtherScope()
+{
+    const auto modeWritesTo = [](const std::vector<CivFrame>& frames, std::uint8_t selector) {
+        std::vector<CivFrame> out;
+        for (const CivFrame& f : writes(frames, cmd::kScope, scope::kMode)) {
+            if (f.data.size() == 2 && f.data[0] == selector) {
+                out.push_back(f);
+            }
+        }
+        return out;
+    };
+    const auto modeReadOf = [](const std::vector<CivFrame>& frames, std::uint8_t selector) {
+        return any(frames, [&](const CivFrame& f) {
+            return f.cmd == cmd::kScope && f.hasSub && f.sub == scope::kMode
+                && f.data.size() == 1 && f.data[0] == selector;
+        });
+    };
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-9700");
+    Access::scrollF(backend);
+    Access::deliver(backend, frequencyEcho(145'500'000));
+    Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+    Access::deliver(backend, *scopeEdgeSweep(145'400'000, 145'600'000, 0xA2));
+
+    // The front panel switches to SUB: MAIN falls silent, then selector 01 arrives.
+    Access::forget(backend);
+    Access::ageScopeSelector(backend, 2000);
+    Access::deliver(backend, *scopeEdgeSweep(430'000'000, 430'200'000, 0xA2, 0x01, 0x01));
+    check(modeReadOf(Access::issued(backend), 0x01) && modeWritesTo(Access::issued(backend), 0x01).empty(),
+          "a MAIN->SUB switch reads SUB's mode before writing anything");
+    // SUB answers Fixed: kept.
+    Access::forget(backend);
+    Access::deliver(backend, frame(cmd::kScope, scope::kMode, {0x01, 0x01}));
+    check(modeWritesTo(Access::issued(backend), 0x01).empty(),
+          "a SUB scope the operator left in Fixed is kept, not forced to SCROLL-F");
+    // SUB's slot is unread for one round trip: MAIN's slot 4 must not carry
+    // over, or a SUB Fixed on an operator slot would be ours for that moment.
+    Access::forget(backend);
+    backend.setPanCenter(QStringLiteral("0"), 430'050'000.0, IRadioBackend::PanCenterIntent::Drag);
+    Access::settleScope(backend);
+    check(edgeWrites(Access::issued(backend)).empty() && slotSelects(Access::issued(backend)).empty(),
+          "before SUB's slot reply its Fixed window is not ours: a drag writes nothing");
+    // Back to MAIN, which answers the mode read with Center before any of its
+    // sweeps arrive (the read is queued on the switch): initialised, on MAIN only.
+    // The sweep's own mode byte (Center) is a mode report, so the init
+    // write may ride on it or on the 27 14 reply; count both together.
+    Access::forget(backend);
+    Access::ageScopeSelector(backend, 2000);
+    Access::deliver(backend, *scopeEdgeSweep(145'400'000, 145'600'000, 0xA2, 0x00, 0x00));
+    check(modeReadOf(Access::issued(backend), 0x00), "a SUB->MAIN switch reads MAIN's mode");
+    Access::deliver(backend, frame(cmd::kScope, scope::kMode, {0x00, 0x00}));
+    const auto toMain = modeWritesTo(Access::issued(backend), 0x00);
+    check(toMain.size() == 1 && toMain.front().data[1] == 0x03
+              && modeWritesTo(Access::issued(backend), 0x01).empty(),
+          "a scope found in Center is initialised to SCROLL-F on that scope alone");
+}
+
+// A VFO move AetherSDR did not command (the dial) is followed; our own is not.
+void testScrollFFollowsTheDial()
+{
+    IcomCivBackend backend;
+    Access::prepare(backend, "IC-7300MK2");
+    Access::scrollF(backend);
+    Access::deliver(backend, frequencyEcho(14'050'000));
+    Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+
+    Access::forget(backend);
+    backend.setSliceFrequency(0, 14'095'000.0);
+    Access::deliver(backend, frequencyEcho(14'095'000));
+    Access::settleScope(backend);
+    check(edgeWrites(Access::issued(backend)).empty(),
+          "the echo of our own tune does not move the window (the GUI places it)");
+
+    Access::forget(backend);
+    Access::deliver(backend, frequencyEcho(14'097'000));
+    Access::settleScope(backend);
+    const auto edges = edgeWrites(Access::issued(backend));
+    check(edges.size() == 1 && edges.front().upperHz == 14'122'000,
+          "a dial move into the edge zone pans so the VFO sits 25 % inside");
+}
+
 // CW text keyer limits: rejected text emits nothing; 30 characters fit.
 void testCwTextLimits()
 {
@@ -919,12 +1906,20 @@ void testScrubReasserts()
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile profile(QStringLiteral("icom-backend-seam-test"));
+    if (!profile.isValid()) {
+        return 1;
+    }
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
     qRegisterMetaType<SliceDelta>("SliceDelta");
     qRegisterMetaType<MeterDef>("MeterDef");
 
     testStaleGenerationDropped();
     testSwrMinimumHold();
+    testIc705PreampFrequencyRanges();
+    testRangePreampReadPrecedesQueuedMeters();
+    testReconnectSMeterWaitsForFrequency();
     testIc9700PreampWireState();
     testWaiterLifetime(app);
     testCapabilityFlags();
@@ -935,6 +1930,27 @@ int main(int argc, char** argv)
     testCompoundModeWrite();
     testPassbandDecomposition();
     testPanIntents();
+    testScrollFPanIntents();
+    testScrollFFollowsTheDial();
+    testScopeSelectorChangeReadsTheOtherScope();
+    testDualScopeFollowsOneScope();
+    testScrollFEdgePanCrossesRangeBoundary();
+    testScrollFEdgeWriteThrottle();
+    testScrollFReselectsSlotOnRangeChange();
+    testScrollFRefusalFallsBackToCenter();
+    testFixedOnOperatorSlotRefusesGestures();
+    testScopeStartupInitialisesFromRadio();
+    testScopeStartupKeepsTheOperatorsSlot();
+    testRefusedTuneDropsItsQueuedWindow();
+    testCorrectiveDragSurvivesAnUnconfirmedWrite();
+    testFixedClickReclaimsSlotFour();
+    testRefusedTuneDropsItsSlotSelect();
+    testScrollCUsesNoEdgeSlot();
+    testScopeFallbackCancelsQueuedScrollF();
+    testScrollFSeedHoldsTheVfo();
+    testOperatorPickEndsStartupInit();
+    testZeroWidthSweepKeepsTheHold();
+    testStaleSlotReadDoesNotOverrideOurSelect();
     testCwTextLimits();
     testReceiveAudioRatio();
     testTraceTags();

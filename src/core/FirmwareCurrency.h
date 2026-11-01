@@ -182,7 +182,7 @@ inline QString tooltip(Status status)
     case Status::Current:
         return QStringLiteral("Firmware up-to-date");
     case Status::Outdated:
-        return QStringLiteral("Firmware is out of date, click to see release notes.");
+        return QStringLiteral("Firmware is out of date, click to update.");
     case Status::Unknown:
         break;
     }

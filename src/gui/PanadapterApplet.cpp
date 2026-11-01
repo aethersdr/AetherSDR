@@ -28,6 +28,7 @@
 #include <QLabel>
 #include <QDateTime>
 #include <QMenu>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QTextEdit>
@@ -247,18 +248,28 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     cwBar->addWidget(m_lockSpeedBtn);
 
     // Pitch range — double-handle slider, label embedded in widget
-    m_pitchRangeSlider = new RangeSlider(300, 1200, 500, 700, "Pitch", {}, this);
+    // Both ranges start from the shared saved values and are saved again when a
+    // drag or key press ends (see eventFilter), not on every step of it.
+    const auto pitch = CwDecodeSettings::pitchRange();
+    m_pitchRangeSlider = new RangeSlider(CwDecodeSettings::kPitchSpan.low,
+                                         CwDecodeSettings::kPitchSpan.high,
+                                         pitch.low, pitch.high, "Pitch", {}, this);
     m_pitchRangeSlider->setFixedWidth(195);
     m_pitchRangeSlider->setToolTip("Decoder pitch search range (Hz)");
+    m_pitchRangeSlider->installEventFilter(this);
     cwBar->addWidget(m_pitchRangeSlider);
     connect(m_pitchRangeSlider, &RangeSlider::rangeChanged, this, [this](int lo, int hi) {
         emit pitchRangeChanged(lo, hi);
     });
 
     // WPM range — double-handle slider, label embedded in widget
-    m_speedRangeSlider = new RangeSlider(5, 60, 15, 40, "WPM", {}, this);
+    const auto speed = CwDecodeSettings::speedRange();
+    m_speedRangeSlider = new RangeSlider(CwDecodeSettings::kSpeedSpan.low,
+                                         CwDecodeSettings::kSpeedSpan.high,
+                                         speed.low, speed.high, "WPM", {}, this);
     m_speedRangeSlider->setFixedWidth(195);
     m_speedRangeSlider->setToolTip("Decoder speed search range (WPM)");
+    m_speedRangeSlider->installEventFilter(this);
     cwBar->addWidget(m_speedRangeSlider);
     connect(m_speedRangeSlider, &RangeSlider::rangeChanged, this, [this](int lo, int hi) {
         emit speedRangeChanged(lo, hi);
@@ -789,22 +800,44 @@ void PanadapterApplet::setCwPanelHeight(int h)
 
 int PanadapterApplet::speedRangeLow()  const
 {
-    return m_speedRangeSlider ? m_speedRangeSlider->low() : 15;
+    return m_speedRangeSlider ? m_speedRangeSlider->low() : CwDecodeSettings::kSpeedDefault.low;
 }
 
 int PanadapterApplet::speedRangeHigh() const
 {
-    return m_speedRangeSlider ? m_speedRangeSlider->high() : 40;
+    return m_speedRangeSlider ? m_speedRangeSlider->high() : CwDecodeSettings::kSpeedDefault.high;
 }
 
 int PanadapterApplet::pitchRangeLow()  const
 {
-    return m_pitchRangeSlider ? m_pitchRangeSlider->low() : 500;
+    return m_pitchRangeSlider ? m_pitchRangeSlider->low() : CwDecodeSettings::kPitchDefault.low;
 }
 
 int PanadapterApplet::pitchRangeHigh() const
 {
-    return m_pitchRangeSlider ? m_pitchRangeSlider->high() : 700;
+    return m_pitchRangeSlider ? m_pitchRangeSlider->high() : CwDecodeSettings::kPitchDefault.high;
+}
+
+namespace {
+// Moves the handle that keeps low <= high first, so neither setter clamps
+// against the slider's previous range.
+void applyRange(RangeSlider* slider, CwDecodeSettings::Range range)
+{
+    if (!slider) { return; }
+    if (range.low > slider->high()) {
+        slider->setHigh(range.high);
+        slider->setLow(range.low);
+    } else {
+        slider->setLow(range.low);
+        slider->setHigh(range.high);
+    }
+}
+} // namespace
+
+void PanadapterApplet::restoreCwRanges()
+{
+    applyRange(m_pitchRangeSlider, CwDecodeSettings::pitchRange());
+    applyRange(m_speedRangeSlider, CwDecodeSettings::speedRange());
 }
 
 QString PanadapterApplet::cwCostColor(float cost)
@@ -998,6 +1031,18 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
         || ((obj == m_titleBar || obj == m_headerButtons)
             && ev->type() == QEvent::LayoutRequest)) {
         layoutHeader();
+    }
+    // A decoder range is saved once the drag or key press that set it ends.
+    // Observe only: the slider still handles the event itself.
+    if ((obj == m_pitchRangeSlider || obj == m_speedRangeSlider)
+        && (ev->type() == QEvent::MouseButtonRelease
+            || (ev->type() == QEvent::KeyRelease
+                && !static_cast<QKeyEvent*>(ev)->isAutoRepeat()))) {
+        if (obj == m_pitchRangeSlider) {
+            CwDecodeSettings::setPitchRange(m_pitchRangeSlider->low(), m_pitchRangeSlider->high());
+        } else {
+            CwDecodeSettings::setSpeedRange(m_speedRangeSlider->low(), m_speedRangeSlider->high());
+        }
     }
     // CW panel resize grip — drag the top edge to grow/shrink the decode
     // panel (and reveal more decoded-text history) (#3628).

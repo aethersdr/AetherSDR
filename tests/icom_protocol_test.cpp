@@ -7,6 +7,7 @@
 #include "core/backends/icom/IcomProtocol.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 
@@ -263,6 +264,95 @@ static void testStreamRequestAndGrant()
     check(!parseStreamGrant(grant).granted, "a non-success echo is not a grant");
 }
 
+static void testConnectionUsage()
+{
+    const AuthId authId{0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5};
+    const RadioId radioId{0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+                           0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F};
+    std::vector<std::uint8_t> available(kLenConnInfo, 0);
+    Header header;
+    header.len = static_cast<std::uint32_t>(kLenConnInfo);
+    header.sentId = 0x11223344;
+    header.rcvdId = 0x55667788;
+    writeHeader(available, header);
+    available[0x13] = 0x80;
+    available[0x14] = 0x03;
+    std::copy(authId.begin(), authId.end(), available.begin() + 0x1a);
+    std::copy(radioId.begin(), radioId.end(), available.begin() + 0x20);
+
+    // Connection status uses reply 03/type 00, with busy LE32 at 0x60.
+    const ConnectionUsage release = parseConnectionUsage(available);
+    check(release.kind == ConnectionUsageKind::Available,
+          "a complete available notification reports released media");
+    check(release.remoteSid == 0x11223344 && release.localSid == 0x55667788,
+          "connection usage preserves both big-endian control session IDs");
+    check(release.authId == authId && release.radioId == radioId,
+          "connection usage retains auth and selected-radio correlation data");
+    check(!parseStreamGrant(available).granted,
+          "an available notification is never a startup stream grant");
+
+    std::vector<std::uint8_t> busy = available;
+    busy[0x60] = 1;
+    busy[0x64] = 'x';
+    busy[0x84] = 1;
+    check(parseConnectionUsage(busy).kind == ConnectionUsageKind::Busy,
+          "a busy notification can identify its streaming owner");
+    check(parseStreamGrant(busy).granted,
+          "connection usage parsing preserves existing startup busy-grant interpretation");
+
+    const auto invalid = [](const std::vector<std::uint8_t>& packet, const char* reason) {
+        check(parseConnectionUsage(packet).kind == ConnectionUsageKind::Invalid, reason);
+    };
+    std::vector<std::uint8_t> malformed = available;
+    malformed.pop_back();
+    invalid(malformed, "a truncated connection notification is rejected");
+    malformed = available;
+    malformed.push_back(0);
+    invalid(malformed, "an oversized connection notification is rejected");
+    malformed = available;
+    malformed[0] = 0x8f;
+    invalid(malformed, "the declared outer length must match the notification");
+    malformed = available;
+    malformed[4] = static_cast<std::uint8_t>(PacketType::Disconnect);
+    invalid(malformed, "connection usage must ride the Idle packet type");
+    malformed = available;
+    malformed[0x13] = 0x7f;
+    invalid(malformed, "the inner length must describe all 128 payload bytes");
+    malformed = available;
+    malformed[0x14] = 0x02;
+    invalid(malformed, "an ordinary response is not a connection-usage notification");
+    malformed = available;
+    malformed[0x14] = 0x01;
+    malformed[0x15] = 0x03;
+    invalid(malformed, "an outbound stream request is not an availability notification");
+    malformed = available;
+    malformed[0x15] = 0x03;
+    invalid(malformed, "the notification request type must be zero");
+    malformed = available;
+    malformed[0x60] = 2;
+    invalid(malformed, "unavailable is distinct from the captured available release");
+    malformed = available;
+    malformed[0x61] = 1;
+    invalid(malformed, "busy value 256 cannot alias Available through its low byte");
+    malformed = busy;
+    malformed[0x63] = 1;
+    invalid(malformed, "busy high bytes cannot alias a valid Busy notification");
+    malformed = available;
+    malformed[0x64] = 'x';
+    invalid(malformed, "available plus a computer owner is not released media");
+    malformed = available;
+    malformed[0x87] = 1;
+    invalid(malformed, "available requires all four owner IP bytes to be zero");
+
+    std::vector<std::uint8_t> padded = available;
+    padded[0x65] = 'x';
+    padded[0x73] = 'y';
+    padded[0x16] = 0x12;
+    padded[0x17] = 0x34;
+    check(parseConnectionUsage(padded).kind == ConnectionUsageKind::Available,
+          "unused inner sequence and bytes after the owner terminator do not invalidate availability");
+}
+
 static void testCapabilities()
 {
     std::vector<std::uint8_t> caps(kLenCapabilities, 0);
@@ -401,6 +491,7 @@ int main()
     testLoginAndAuth();
     testStatusOrdering();
     testStreamRequestAndGrant();
+    testConnectionUsage();
     testCapabilities();
     testSerialEnvelope();
     testAudioEnvelope();

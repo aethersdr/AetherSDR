@@ -540,6 +540,39 @@ StreamGrant parseStreamGrant(std::span<const std::uint8_t> pkt)
     return g;
 }
 
+ConnectionUsage parseConnectionUsage(std::span<const std::uint8_t> pkt)
+{
+    ConnectionUsage usage;
+    if (pkt.size() != kLenConnInfo || getLe32(pkt, 0x00) != kLenConnInfo
+        || getLe16(pkt, 0x04) != static_cast<std::uint16_t>(PacketType::Idle)
+        || getBe32(pkt, 0x10) != kLenConnInfo - kHeaderSize
+        || pkt[0x14] != 0x03 || pkt[0x15] != 0x00) {
+        return usage;
+    }
+
+    // wfview's conninfo_packet receive layout carries a full little-endian
+    // busy word, a 16-byte owner name and the owner's IPv4 address. Only the
+    // explicit owner-free shape can revoke a current media session.
+    const std::uint32_t busy = getLe32(pkt, 0x60);
+    if (busy == 0) {
+        const bool ownerEmpty = pkt[0x64] == 0;
+        if (!ownerEmpty || getLe32(pkt, 0x84) != 0) {
+            return usage;
+        }
+        usage.kind = ConnectionUsageKind::Available;
+    } else if (busy == 1) {
+        usage.kind = ConnectionUsageKind::Busy;
+    } else {
+        return usage;
+    }
+
+    usage.remoteSid = getBe32(pkt, 0x08);
+    usage.localSid = getBe32(pkt, 0x0c);
+    std::copy_n(pkt.begin() + 0x1a, usage.authId.size(), usage.authId.begin());
+    std::copy_n(pkt.begin() + 0x20, usage.radioId.size(), usage.radioId.begin());
+    return usage;
+}
+
 // ---------------------------------------------------------------------------
 // Serial stream
 // ---------------------------------------------------------------------------

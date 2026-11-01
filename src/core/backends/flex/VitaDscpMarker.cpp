@@ -3,13 +3,16 @@
 
 #include <QVector>
 
+#include <cstring>
+
 #if defined(Q_OS_WIN)
+#include <QNetworkInterface>
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <qos2.h>
 #elif defined(Q_OS_UNIX)
 #include <cerrno>
-#include <cstring>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #endif
@@ -64,7 +67,7 @@ struct VitaDscpMarker::NativeState {
         using FlowId = QOS_FLOWID;
         NativeState& state;
         SOCKET socket;
-        sockaddr_in destination;
+        sockaddr_storage destination;
         QString& error;
 
         bool addBestEffortFlow(FlowId& flow)
@@ -129,8 +132,9 @@ VitaDscpResult VitaDscpMarker::apply(qintptr descriptor, const QHostAddress& des
 #if defined(Q_OS_WIN)
     bool ipv4 = false;
     const quint32 address = destination.toIPv4Address(&ipv4);
-    if (!ipv4 || ports.size() == 0) {
-        return {false, QStringLiteral("IPv4 destination and UDP port required")};
+    const bool ipv6 = !ipv4 && destination.protocol() == QAbstractSocket::IPv6Protocol;
+    if ((!ipv4 && !ipv6) || ports.size() == 0) {
+        return {false, QStringLiteral("IPv4 or IPv6 destination and UDP port required")};
     }
     QString error;
     if (!m_native->open(error)) {
@@ -138,9 +142,23 @@ VitaDscpResult VitaDscpMarker::apply(qintptr descriptor, const QHostAddress& des
     }
     for (quint16 port : ports) {
         NativeState::FlowApi api{*m_native, static_cast<SOCKET>(descriptor), {}, error};
-        api.destination.sin_family = AF_INET;
-        api.destination.sin_addr.s_addr = htonl(address);
-        api.destination.sin_port = htons(port);
+        if (ipv6) {
+            auto* in6 = reinterpret_cast<sockaddr_in6*>(&api.destination);
+            const Q_IPV6ADDR bytes = destination.toIPv6Address();
+            in6->sin6_family = AF_INET6;
+            std::memcpy(&in6->sin6_addr, bytes.c, sizeof(bytes.c));
+            const QString scope = destination.scopeId();
+            bool numeric = false;
+            const ulong scopeId = scope.toULong(&numeric);
+            in6->sin6_scope_id = numeric ? scopeId
+                                         : QNetworkInterface::interfaceIndexFromName(scope);
+            in6->sin6_port = htons(port);
+        } else {
+            auto* in4 = reinterpret_cast<sockaddr_in*>(&api.destination);
+            in4->sin_family = AF_INET;
+            in4->sin_addr.s_addr = htonl(address);
+            in4->sin_port = htons(port);
+        }
         const std::optional<QOS_FLOWID> flow = createVitaEfFlow(api);
         if (!flow) {
             // Roll back earlier destinations too; retain no partially
@@ -152,21 +170,35 @@ VitaDscpResult VitaDscpMarker::apply(qintptr descriptor, const QHostAddress& des
     }
     return {true, QStringLiteral("qWAVE accepted EF for outgoing UDP endpoints")};
 #elif defined(Q_OS_UNIX)
-    Q_UNUSED(destination);
     Q_UNUSED(ports);
+    const int fd = static_cast<int>(descriptor);
+    // Native IPv6 packets take their class from IPV6_TCLASS; IP_TOS on an
+    // IPv6 socket reads back fine but marks only IPv4-mapped traffic, which a
+    // dual-stack socket sends to an IPv4 destination.
+    sockaddr_storage local{};
+    socklen_t localLength = sizeof(local);
+    const bool ipv6Socket = ::getsockname(fd, reinterpret_cast<sockaddr*>(&local), &localLength) == 0
+        && local.ss_family == AF_INET6;
+    bool ipv4Destination = false;
+    destination.toIPv4Address(&ipv4Destination);
+    const bool ipv6 = ipv6Socket && !ipv4Destination;
+    const int level = ipv6 ? IPPROTO_IPV6 : IPPROTO_IP;
+    const int option = ipv6 ? IPV6_TCLASS : IP_TOS;
+    const QString name = ipv6 ? QStringLiteral("IPV6_TCLASS") : QStringLiteral("IP_TOS");
     const int tos = kVitaIpTosEf;
-    if (::setsockopt(static_cast<int>(descriptor), IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) != 0) {
+    if (::setsockopt(fd, level, option, &tos, sizeof(tos)) != 0) {
         return {false, QString::fromLocal8Bit(std::strerror(errno))};
     }
     int granted = 0;
     socklen_t length = sizeof(granted);
-    if (::getsockopt(static_cast<int>(descriptor), IPPROTO_IP, IP_TOS, &granted, &length) != 0) {
+    if (::getsockopt(fd, level, option, &granted, &length) != 0) {
         return {false, QString::fromLocal8Bit(std::strerror(errno))};
     }
     if (granted != tos) {
-        return {false, QStringLiteral("IP_TOS readback %1 differs from requested %2").arg(granted).arg(tos)};
+        return {false, QStringLiteral("%1 readback %2 differs from requested %3")
+                           .arg(name).arg(granted).arg(tos)};
     }
-    return {true, QStringLiteral("IP_TOS readback 0xB8")};
+    return {true, QStringLiteral("%1 readback 0xB8").arg(name)};
 #else
     Q_UNUSED(destination);
     Q_UNUSED(ports);

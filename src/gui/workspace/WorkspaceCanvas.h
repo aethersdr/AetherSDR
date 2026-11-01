@@ -9,6 +9,7 @@
 #include "gui/workspace/CanvasLayout.h"
 
 #include <QHash>
+#include <QMargins>
 #include <QPointF>
 #include <QPointer>
 #include <QSize>
@@ -220,6 +221,7 @@ private:
 
     void beginGesture(const QString& id, HitZone zone, const QPoint& globalPos);
     void updateFrame();
+    void updateGripInset();
     QSizeF minNormFor(const QString& id) const;
 
     // Model -> Qt stacking.  Raising bottom-to-top leaves the highest z on
@@ -236,6 +238,11 @@ private:
     // Selection + frame (phase 5).
     QString m_selectedId;
     class CanvasItemFrame* m_frame{nullptr};
+    // The item inset by the grip band, its margins before the inset, and the
+    // selection that decision was made for.
+    QPointer<QWidget> m_gripInsetWidget;
+    QMargins m_gripInsetSavedMargins;
+    QString m_gripInsetCheckedId;
     // Gesture visuals — guides + grid dots painted ABOVE the items (a
     // widget's own paint sits under its children, so the canvas paintEvent
     // can only reach exposed background).  Mouse-transparent.

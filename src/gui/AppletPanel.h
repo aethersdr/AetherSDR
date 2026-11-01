@@ -40,6 +40,7 @@ class Kpa500Applet;
 class Kat500Applet;
 class Kxpa100Applet;
 class Kpa1500Applet;
+class RfkitApplet;
 class LpMeterApplet;
 class TxApplet;
 class PhoneCwApplet;
@@ -116,6 +117,7 @@ public:
     Kxpa100Applet* kxpa100Applet() { return m_kxpa100Applet; }
     Kpa500Applet* kpa500Applet()  { return m_kpa500Applet; }
     Kpa1500Applet* kpa1500Applet() { return m_kpa1500Applet; }
+    RfkitApplet*  rfkitApplet()   { return m_rfkitApplet; }
     LpMeterApplet* lpMeterApplet() { return m_lpMeterApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
     PhoneCwApplet*  phoneCwApplet()  { return m_phoneCwApplet; }
@@ -209,6 +211,11 @@ public:
     // applet for the same reason setVkampVisible is: these are separate,
     // simultaneously-present pieces of hardware, not alternatives.
     void setKpa1500Visible(bool visible);
+
+    // Show/hide the RFKIT button and applet based on a direct RF-KIT
+    // amplifier connection. Independent of every other amplifier applet for
+    // the same reason setKpa1500Visible is.
+    void setRfkitVisible(bool visible);
 
     // Show/hide the LP100 button and applet from the direct LP-100A connection,
     // independent of any amplifier applet. Gated on the connection like
@@ -429,6 +436,8 @@ private:
     VkampApplet* m_vkampApplet{nullptr};
     Kpa1500Applet* m_kpa1500Applet{nullptr};
     QPushButton* m_kpa1500Btn{nullptr};
+    RfkitApplet* m_rfkitApplet{nullptr};
+    QPushButton* m_rfkitBtn{nullptr};
     LpMeterApplet* m_lpMeterApplet{nullptr};
     QPushButton* m_vkampBtn{nullptr};
     Kat500Applet* m_kat500Applet{nullptr};

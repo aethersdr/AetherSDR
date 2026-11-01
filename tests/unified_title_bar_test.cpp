@@ -430,6 +430,51 @@ int main(int argc, char** argv)
         check(visibleSeparators() > 0, "dock separator returns after minimal mode");
     }
 
+    // ── UPDATE badge ────────────────────────────────────────────────────────
+    // Hidden until a version is set; only parsed digits reach its text and the
+    // bridge; minimal mode hides it without forgetting the version.
+    {
+        auto updateState = [bar]() {
+            return bar->barState().value(QStringLiteral("update")).toMap();
+        };
+        auto* badge = bar->findChild<QPushButton*>(QStringLiteral("updateAvailableBadge"));
+        check(badge != nullptr, "UPDATE badge exists");
+        check(!updateState().value(QStringLiteral("visible")).toBool(), "badge hidden by default");
+        bar->setUpdateAvailable(QStringLiteral("26.10.3<b>x"));
+        app.processEvents();
+        check(updateState().value(QStringLiteral("version")).toString() == QLatin1String("26.10.3"),
+              "badge keeps parsed digits only");
+        check(updateState().value(QStringLiteral("visible")).toBool(), "badge shows for a version");
+        check(badge && !badge->toolTip().contains(QLatin1Char('<')), "tooltip carries no markup");
+        check(badge && !badge->accessibleDescription().isEmpty(), "badge states its version to a screen reader");
+        bar->setMinimalMode(true);
+        app.processEvents();
+        check(!updateState().value(QStringLiteral("visible")).toBool(), "minimal mode hides the badge");
+        bar->setMinimalMode(false);
+        app.processEvents();
+        check(updateState().value(QStringLiteral("visible")).toBool(), "badge returns after minimal mode");
+        bar->setUpdateAvailable(QString());
+        app.processEvents();
+        check(!updateState().value(QStringLiteral("visible")).toBool(), "empty version clears the badge");
+        // Staged: RESTART TO UPDATE, shown whatever the check says (Check
+        // daily off clears the available version, not a staged release).
+        bar->setUpdateStaged(QStringLiteral("26.10.3"));
+        app.processEvents();
+        check(updateState().value(QStringLiteral("staged")).toString() == QLatin1String("26.10.3")
+                  && updateState().value(QStringLiteral("visible")).toBool(),
+              "a staged release shows the badge");
+        check(badge && badge->text() == QLatin1String("RESTART TO UPDATE")
+                  && badge->accessibleName() == QLatin1String("AetherSDR update ready to install")
+                  && badge->accessibleDescription().contains(QLatin1String("26.10.3")),
+              "the staged badge says so, to a screen reader too");
+        bar->setUpdateAvailable(QStringLiteral("26.10.3"));
+        bar->setUpdateStaged(QString());
+        app.processEvents();
+        check(badge && badge->text() == QLatin1String("UPDATE") && badge->isVisible(),
+              "discarded, the badge is UPDATE again");
+        bar->setUpdateAvailable(QString());
+    }
+
     // ── Radio tabs ──────────────────────────────────────────────────────────
     RadioTabEntry connected;
     connected.id = QStringLiteral("SERIAL-1");

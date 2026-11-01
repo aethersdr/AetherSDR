@@ -1,12 +1,12 @@
 ---
 title: "Amplifiers"
 slug: "/amplifiers"
-description: "AetherSDR controls several linear amplifiers directly, independent of the radio: the ACOM S-series, the SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA and the original 1K-FA, the VK3AMP 600 / 1000 / 2000 W, and the Elecraft KPA500 / KPA1500."
+description: "AetherSDR controls several linear amplifiers directly, independent of the radio: the ACOM S-series, the SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA and the original 1K-FA, the VK3AMP 600 / 1000 / 2000 W, the Elecraft KPA500 / KPA1500, and the RF-KIT."
 ---
 
 AetherSDR controls several linear amplifiers directly, independent of the
 radio: the ACOM S-series, the SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA and the
-original 1K-FA, the VK3AMP 600 / 1000 / 2000 W, and the Elecraft KPA500 / KPA1500. Each is configured in
+original 1K-FA, the VK3AMP 600 / 1000 / 2000 W, the Elecraft KPA500 / KPA1500, and the RF-KIT. Each is configured in
 [Peripherals](./peripherals.md) and gets its own applet in the **Amplifiers** category. Any
 combination can be connected at once, alongside a PGXL.
 
@@ -354,6 +354,44 @@ The **Elecraft KPA1500** applet (button **KPA1500**):
 
 There is no network PTT and no lost-link TX inhibit.
 
+## Using the RF-KIT
+
+> **Tested on an RF2K-S, firmware G200C267.** The RF-KIT support follows the
+> vendor's published REST API documentation (RFKIT API 0.9.0). Other RF-KIT
+> models have not been tried. Reports from owners are welcome.
+
+Add it with **Peripherals → Add → RF-KIT Amplifier**, enter the amplifier's IP
+address (or host name) and HTTP port (default 8080), and press **Connect**.
+AetherSDR talks to the amplifier's REST API over plain HTTP; there is no login.
+
+The **RF-KIT Amplifier** applet:
+
+- A status pill, the amplifier's name, and **PWR**, **REF** and **SWR** gauges.
+  The scales are fixed, like the amplifier's own display: forward power
+  0–1600 W, reflected power 0–200 W, and SWR on the amplifier's 1 / 1.5 / 2 / 3 /
+  5 / ∞ scale. The reflected-power and SWR bars turn orange from 1.5:1 and red
+  from 2:1 (on the reflected-power bar these points follow the forward power).
+- An info grid with temperature, supply voltage, current, band, frequency and
+  the operational interface (`UNIV`, `CAT`, `UDP` or `TCI`).
+- A **TUNER** line showing the tuner's mode, setup and L/C values, and a
+  **TUNER ON** (green) / **TUNER OFF** (red) indicator beside OPERATE. The tuner
+  is read-only: the amplifier's API has no tuner control, so the indicator
+  cannot be pressed.
+- The amplifier's own status text and, when it reports one, an error banner.
+- **OPERATE / STANDBY**. The label changes only when the amplifier confirms.
+- **ANT** buttons for the internal antennas (1–4). Antennas the amplifier
+  reports as disabled, or does not list, are dimmed (hover for the reason), and the amplifier may refuse a change at
+  times (it answers 409). **EXT** is dimmed unless the amplifier lists an external
+  antenna, and lights, with the switch port ("EXT 16") when the amplifier gives
+  one, while the external antenna is in use. It is an indicator only: the
+  external antenna cannot be selected from AetherSDR.
+- **RESET ERR**, which asks for confirmation and then clears the amplifier's
+  error state. Make sure the cause has been dealt with first.
+
+The operational interface is shown but cannot be changed from AetherSDR:
+switching it could cut the amplifier off from the radio driving it. There is no
+network PTT.
+
 ## Using the LP-100A wattmeter
 
 The TelePost LP-100A is a wattmeter, not an amplifier, but it is set up the
@@ -426,6 +464,17 @@ After the amplifier has been idle, the first connection can take 9–12
 seconds, because the amplifier answers only broadcast ARP.
 
 1. Wait: AetherSDR waits up to 18 seconds before trying again.
+
+### The RF-KIT will not connect
+
+AetherSDR declares the link up only when the amplifier answers `GET /info` with
+an RF-KIT document, so a wrong address or port fails rather than half-connecting.
+
+1. Check the address and port in **Peripherals**; the default HTTP port is 8080.
+2. Open `http://<address>:<port>/info` in a web browser on the same network. An
+   RF-KIT answers with a short JSON document.
+3. If the link drops, AetherSDR marks it down after three failed requests in a
+   row; enable **Reconnect automatically** to have it retry.
 
 ### The SPE front-panel keys are dimmed
 

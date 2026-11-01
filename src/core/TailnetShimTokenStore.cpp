@@ -30,6 +30,14 @@ QHash<QString, QString>& sessionTokens()
     return tokens;
 }
 
+// Bumped by every save, per entry: a keychain read that started before a
+// save finishes after it, and must not put the older token back.
+QHash<QString, quint64>& saveGenerations()
+{
+    static QHash<QString, quint64> generations;
+    return generations;
+}
+
 #ifdef HAVE_KEYCHAIN
 constexpr const char* kKeychainService = "AetherSDR";
 #endif
@@ -61,6 +69,7 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
         return;
     }
     const QString key = keyFor(radioSerial);
+    ++saveGenerations()[key];
     if (token.isEmpty()) {
         sessionTokens().remove(key);
     } else {
@@ -115,18 +124,21 @@ void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
     const QString session = sessionTokens().value(key);
 #ifdef HAVE_KEYCHAIN
     if (session.isEmpty()) {
+        const quint64 startedAt = saveGenerations().value(key);
         auto* job = new QKeychain::ReadPasswordJob(QString::fromLatin1(kKeychainService));
         job->setKey(key);
         job->setAutoDelete(true);
         QPointer<QObject> guard(context);
         QObject::connect(job, &QKeychain::Job::finished, context,
-                         [guard, key, callback = std::move(callback)](QKeychain::Job* finished) {
-            QString token;
+                         [guard, key, startedAt, callback = std::move(callback)](QKeychain::Job* finished) {
+            QString read;
             if (finished->error() == QKeychain::NoError) {
-                token = static_cast<QKeychain::ReadPasswordJob*>(finished)->textData();
-                if (!token.isEmpty()) {
-                    sessionTokens().insert(key, token);
-                }
+                read = static_cast<QKeychain::ReadPasswordJob*>(finished)->textData();
+            }
+            const bool savedSince = saveGenerations().value(key) != startedAt;
+            const QString token = pickLoadedToken(savedSince, read, sessionTokens().value(key));
+            if (!savedSince && !token.isEmpty()) {
+                sessionTokens().insert(key, token);
             }
             if (guard) {
                 callback(token);
@@ -136,9 +148,16 @@ void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
         return;
     }
 #endif
-    QTimer::singleShot(0, context, [session, callback = std::move(callback)] {
-        callback(session);
+    // Read when it runs, not now: a save in between is the newer token.
+    QTimer::singleShot(0, context, [key, callback = std::move(callback)] {
+        callback(sessionTokens().value(key));
     });
+}
+
+QString TailnetShimTokenStore::pickLoadedToken(bool savedSinceReadStarted, const QString& read,
+                                               const QString& sessionNow)
+{
+    return savedSinceReadStarted ? sessionNow : read;
 }
 
 }  // namespace AetherSDR

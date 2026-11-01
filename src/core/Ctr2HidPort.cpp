@@ -6,7 +6,9 @@ const std::vector<Ctr2HidPort::KnownCtr2>& Ctr2HidPort::knownCtr2Devices()
 {
     // VID:PID and product string as the CTR2 firmware reports them.
     static const std::vector<KnownCtr2> kDevices{
-        {0x303A, 0x1001, "ESP32S3_DEV", "CTR2-Max / Nano"},
+        // Lynovation's firmware relays over USB from v1.02.00 on; an earlier
+        // version never answers the link, and the relay says so.
+        {0x303A, 0x1001, "ESP32S3_DEV", "CTR2-Max / Nano", true},
         {0x303A, 0x1001, "M5STACK_DIAL", "CTR2 (M5Dial)"},
         {0x303A, 0x1001, "STAMP-S3", "CTR2 (M5Dial)"},
         {0x2886, 0x0056, "XIAO_ESP32S3", "CTR2-MIDI"},

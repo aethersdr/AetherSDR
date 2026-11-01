@@ -1,5 +1,6 @@
 // The overlay menu's DAX button stays hidden on a radio with no DAX plane,
-// across expand/collapse.
+// across expand/collapse; the Scope row appears only for a radio with a scope
+// mode (Icom).
 //
 // setDaxStreamsAvailable(false) hid the button with a bare setVisible(), and
 // updateLayout() -- which runs on every expand/collapse and assigns every menu
@@ -25,6 +26,7 @@
 #include <QWidget>
 
 #include <cstdio>
+#include <vector>
 
 using namespace AetherSDR;
 
@@ -88,6 +90,46 @@ int main(int argc, char* argv[])
           "DAX becoming available on a COLLAPSED menu does not show it alone");
     setExpanded(addRx, true);
     check(!dax->isHidden(), "DAX available -> shown again on expand");
+
+    // The Scope row is an Icom-only cluster (#6168): it exists for that family
+    // alone (the applet-level hide gui.md allows), and within it the backend's
+    // label list dims it with a reason when the model or firmware has no choice.
+    auto* scopeRow = parent.findChild<QWidget*>(QStringLiteral("displayScopeModeRow"));
+    check(scopeRow != nullptr, "the Scope row is discoverable");
+    if (scopeRow) {
+        menu.setRadioFamily(QStringLiteral("flex"));
+        menu.setScopeModeLabels({QStringLiteral("Center"), QStringLiteral("Scroll-F"),
+                                 QStringLiteral("Fixed")});
+        check(scopeRow->isHidden(), "a non-Icom family -> no Scope row, whatever is published");
+        menu.setRadioFamily(QStringLiteral("icom"));
+        menu.setScopeModeLabels({QStringLiteral("Center")});
+        check(!scopeRow->isHidden() && !scopeRow->isEnabled()
+                  && !scopeRow->accessibleDescription().isEmpty(),
+              "an Icom without a choice -> Scope row shown, dimmed, with a reason");
+        menu.setScopeModeLabels({QStringLiteral("Center"), QStringLiteral("Scroll-F"),
+                                 QStringLiteral("Fixed")});
+        check(!scopeRow->isHidden() && scopeRow->isEnabled(),
+              "an Icom offering modes -> Scope row shown and enabled");
+        // A Fixed on one of the radio's own presets is published as "nothing
+        // lit" (index -1): a click on Fixed must then ask for Fixed, so the
+        // backend can reclaim its slot; with Fixed already lit it asks nothing.
+        std::vector<int> picks;
+        QObject::connect(&menu, &SpectrumOverlayMenu::scopeModeChanged,
+                         [&picks](int i) { picks.push_back(i); });
+        auto* fixedBtn = parent.findChild<QPushButton*>(QStringLiteral("displayScopeMode_fixed"));
+        check(fixedBtn != nullptr, "the Fixed button is discoverable");
+        if (fixedBtn) {
+            menu.setScopeModeIndex(-1);
+            fixedBtn->click();
+            check(picks.size() == 1 && picks.back() == 2,
+                  "with nothing lit, clicking Fixed asks for Fixed");
+            menu.setScopeModeIndex(2);
+            fixedBtn->click();
+            check(picks.size() == 1, "with Fixed already lit, clicking it asks for nothing");
+        }
+        menu.setRadioFamily(QStringLiteral("hl2"));
+        check(scopeRow->isHidden(), "the next non-Icom radio -> no Scope row again");
+    }
 
     std::printf("spectrum_overlay_dax_availability_test: %s\n",
                 g_failures == 0 ? "PASS" : "FAIL");

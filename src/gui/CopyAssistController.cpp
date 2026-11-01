@@ -476,10 +476,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         m_asr->setModelPath(path);
     });
     connect(m_models, &AsrModelManager::failed, this, [this](const QString& err) {
-        m_panel->setBusy(false);
-        m_gpuFallbackNotice.clear(); // the fallback reload never got a model
-        m_panel->setStatus(tr("Model download failed: %1").arg(err));
-        m_panel->setAsrEnabled(false);
+        abandonEnable(tr("Model download failed: %1").arg(err));
     });
 
     // Live VAD tuning (reads m_asr at call time → survives engine rebuild).
@@ -1159,10 +1156,7 @@ void CopyAssistController::buildEngine()
     });
     connect(m_asr, &AsrEngine::loadFailed, this, [this](const QString& err) {
         loadSettled(); // a failure that reports is not a fault
-        m_panel->setBusy(false);
-        m_gpuFallbackNotice.clear(); // failed reload: this message wins instead
-        m_panel->setStatus(tr("Model load failed: %1").arg(err));
-        m_panel->setAsrEnabled(false);
+        abandonEnable(tr("Model load failed: %1").arg(err));
     });
     connect(m_asr, &AsrEngine::finalText, this,
             [this](const QString& text, float confidence, int speaker) {
@@ -1333,15 +1327,24 @@ void CopyAssistController::setBackend(AsrBackendKind kind, const QString& tierId
     }
 }
 
+void CopyAssistController::abandonEnable(const QString& reason)
+{
+    // The toggle synchronously runs normal shutdown, including its "Disabled"
+    // status. Publish the failure afterward so that shutdown cannot erase it.
+    m_panel->setAsrEnabled(false);
+    m_enableAfterGpuDiscovery = false;
+    m_panel->setBusy(false);
+    m_gpuFallbackNotice.clear();
+    m_panel->setStatus(reason);
+    qCWarning(lcGui).noquote() << "Copy Assist: enable abandoned —" << reason;
+}
+
 void CopyAssistController::requestEnable()
 {
     if (m_localEngineStoodDown && m_backend == AsrBackendKind::Whisper) {
         // ggml could not run here last time (#5190); entering it again would
         // only repeat the death. Remote/sherpa tiers remain selectable.
-        m_enableAfterGpuDiscovery = false;
-        m_panel->setBusy(false);
-        m_panel->setStatus(m_standDownReason);
-        m_panel->setAsrEnabled(false);
+        abandonEnable(m_standDownReason);
         return;
     }
     if (m_backend == AsrBackendKind::Whisper && m_gpuDiscoveryPending) {
@@ -1380,10 +1383,7 @@ void CopyAssistController::beginEnable()
         // User-supplied model: load the picked file directly, bypassing the
         // catalog download + SHA verification (we don't know its checksum).
         if (m_customModelPath.isEmpty() || !QFileInfo::exists(m_customModelPath)) {
-            m_panel->setBusy(false);
-            m_gpuFallbackNotice.clear(); // no reload will arrive to show it
-            m_panel->setStatus(tr("Custom model file not found — pick it again."));
-            m_panel->setAsrEnabled(false);
+            abandonEnable(tr("Custom model file not found — pick it again."));
             return;
         }
         m_panel->setStatus(tr("Loading model…"));
@@ -1393,10 +1393,7 @@ void CopyAssistController::beginEnable()
         // sherpa-onnx model: load the picked directory directly (the backend
         // discovers the bundle's files). No download/verify.
         if (m_sherpaModelDir.isEmpty() || !QDir(m_sherpaModelDir).exists()) {
-            m_panel->setBusy(false);
-            m_gpuFallbackNotice.clear(); // no reload will arrive to show it
-            m_panel->setStatus(tr("sherpa-onnx model folder not found — pick it again."));
-            m_panel->setAsrEnabled(false);
+            abandonEnable(tr("sherpa-onnx model folder not found — pick it again."));
             return;
         }
         m_panel->setStatus(tr("Loading model…"));
@@ -1411,8 +1408,7 @@ void CopyAssistController::requestModel(const QString& tierId)
 {
     const AsrModelTier* tier = AsrModelCatalog::tierById(tierId);
     if (tier == nullptr) {
-        m_panel->setStatus(tr("Unknown model tier: %1").arg(tierId));
-        m_panel->setAsrEnabled(false);
+        abandonEnable(tr("Unknown model tier: %1").arg(tierId));
         return;
     }
     m_models->ensure(*tier); // emits alreadyPresent / finished / failed

@@ -8,6 +8,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QSignalSpy>
+#include <QVariantMap>
 
 #include <algorithm>
 #include <cstdio>
@@ -82,6 +83,11 @@ struct IcomCivBackendTestAccess {
         s.m_initialMaintenancePending = earlyPending;
         s.m_renewUnacked = false;
     }
+    static void selectRadio(IcomSession& s, const RadioId& id)
+    {
+        s.m_radioId = id;
+        s.m_haveRadioId = true;
+    }
     static AuthId authId(const IcomSession& s) { return s.m_authId; }
     static int retries(const IcomSession& s) { return s.m_renewRetries; }
 };
@@ -146,6 +152,28 @@ std::vector<std::uint8_t> streamGrant(std::uint32_t sent, std::uint32_t rcvd,
     p[0x60] = 0x01;
     std::copy(id.begin(), id.end(), p.begin() + 0x1a);
     return p;
+}
+
+const RadioId kSelectedRadio{0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+                             0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F};
+
+// RS-BA1 connection-usage notification: reply 03/type 00, not a stream request.
+std::vector<std::uint8_t> connectionUsage(std::uint32_t busy = 0)
+{
+    std::vector<std::uint8_t> packet(kLenConnInfo, 0);
+    Header header;
+    header.len = static_cast<std::uint32_t>(kLenConnInfo);
+    header.sentId = kRemote;
+    header.rcvdId = kLocal;
+    writeHeader(packet, header);
+    packet[0x13] = 0x80; // 128-byte inner payload, big-endian.
+    packet[0x14] = 0x03;
+    std::copy(kLoginId.begin(), kLoginId.end(), packet.begin() + 0x1a);
+    std::copy(kSelectedRadio.begin(), kSelectedRadio.end(), packet.begin() + 0x20);
+    for (std::size_t byte = 0; byte < 4; ++byte) {
+        packet[0x60 + byte] = static_cast<std::uint8_t>(busy >> (byte * 8));
+    }
+    return packet;
 }
 
 std::vector<std::uint8_t> loginReply()
@@ -308,6 +336,127 @@ void testGrantCorrelation()
           "only the correlated grant is adopted, with its token");
 }
 
+void testConnectedConnectionUsage()
+{
+    const auto remainsConnected = [](const std::vector<std::uint8_t>& packet,
+                                     const char* reason) {
+        Packets sent;
+        IcomSession session;
+        Access::attachControl(session, sent);
+        Access::establish(session, kLoginId);
+        Access::selectRadio(session, kSelectedRadio);
+        QSignalSpy dropped(&session, &IcomSession::disconnected);
+        QSignalSpy connected(&session, &IcomSession::connected);
+        const QVariantMap before = session.leaseDiagnostics();
+        Access::control(session, packet);
+        Access::control(session, packet);
+        const QVariantMap after = session.leaseDiagnostics();
+        check(session.isConnected() && dropped.isEmpty() && connected.isEmpty()
+                  && Access::authId(session) == kLoginId && sent.empty()
+                  && after.value(QStringLiteral("authenticated")) == before.value(QStringLiteral("authenticated"))
+                  && after.value(QStringLiteral("streamGranted")) == before.value(QStringLiteral("streamGranted"))
+                  && after.value(QStringLiteral("acceptedRenewals")) == before.value(QStringLiteral("acceptedRenewals"))
+                  && after.value(QStringLiteral("nextInnerSequence")) == before.value(QStringLiteral("nextInnerSequence")),
+              reason);
+    };
+
+    remainsConnected(connectionUsage(1),
+                     "duplicate busy notifications neither reopen nor stop healthy media");
+    std::vector<std::uint8_t> foreign = connectionUsage();
+    foreign[0x08] ^= 0x01;
+    remainsConnected(foreign, "a release with another remote SID is inert");
+    foreign = connectionUsage();
+    foreign[0x0c] ^= 0x01;
+    remainsConnected(foreign, "a release with another local SID is inert");
+    foreign = connectionUsage();
+    foreign[0x1a] ^= 0x01;
+    remainsConnected(foreign, "a release with another auth ID cannot retire this lease");
+    foreign = connectionUsage();
+    foreign[0x20] ^= 0x01;
+    remainsConnected(foreign, "another radio's availability cannot retire selected media");
+    foreign = connectionUsage();
+    foreign[0x14] = 0x02;
+    remainsConnected(foreign, "a reply-shaped packet is not a connection-usage release");
+    foreign = connectionUsage();
+    foreign[0x15] = 0x03;
+    remainsConnected(foreign, "a stream-request-shaped packet is not a release notification");
+    foreign = connectionUsage();
+    foreign[0x13] = 0x7f;
+    remainsConnected(foreign, "a release with an inconsistent inner size is inert");
+    foreign = connectionUsage();
+    foreign[0] = 0x8f;
+    remainsConnected(foreign, "a release with an inconsistent outer size is inert");
+    foreign = connectionUsage();
+    foreign[4] = static_cast<std::uint8_t>(PacketType::Retransmit);
+    remainsConnected(foreign, "another outer packet type cannot release media");
+    foreign = connectionUsage();
+    foreign.pop_back();
+    remainsConnected(foreign, "a truncated availability notification is inert");
+    foreign = connectionUsage();
+    foreign.push_back(0);
+    remainsConnected(foreign, "an oversized availability notification is inert");
+    remainsConnected(connectionUsage(2), "unavailable is not the captured available release");
+    remainsConnected(connectionUsage(0x100), "busy uses all four bytes, not only its low byte");
+    foreign = connectionUsage();
+    foreign[0x64] = 'x';
+    remainsConnected(foreign, "available with a named owner is not a released stream");
+    foreign = connectionUsage();
+    foreign[0x84] = 1;
+    remainsConnected(foreign, "available with an owner IP is not a released stream");
+
+    Packets sent;
+    IcomSession session;
+    Access::attachControl(session, sent);
+    Access::awaitGrant(session, kLoginId);
+    Access::establish(session, kLoginId);
+    Access::selectRadio(session, kSelectedRadio);
+    Access::pending(session, 9);
+    Access::pending(session, 10);
+    QSignalSpy dropped(&session, &IcomSession::disconnected);
+    Access::control(session, connectionUsage());
+    Access::control(session, connectionUsage());
+    // One readyRead can deliver these before fail()'s deferred stop runs.
+    Access::control(session, streamGrant(kRemote, kLocal, kRotatedId));
+    Access::control(session, tokenReply(9, kRotatedId, 0));
+    Access::control(session, tokenReply(10, kLoginId, 0));
+    check(!session.isConnected() && dropped.count() == 1
+              && !dropped.first().at(0).toString().isEmpty() && sent.empty(),
+          "a correlated available notification terminates connected media exactly once");
+    check(Access::authId(session) == kLoginId
+              && lease(session, "acceptedRenewals").toULongLong() == 0
+              && lease(session, "pendingRenewals").toInt() == 2
+              && lease(session, "ignoredAuthReplies").toULongLong() == 0,
+          "release is terminal before deferred stop: queued grants and token replies are ignored");
+    QCoreApplication::processEvents();
+    check(!lease(session, "authenticated").toBool()
+              && !lease(session, "streamGranted").toBool(),
+          "release teardown clears the cached lease rather than claiming media remains granted");
+    check(sent.size() == 2 && isAuth(sent[0], AuthKind::Deauth)
+              && isAuth(sent[1], AuthKind::Deauth),
+          "control cleanup sends the two deauth packets");
+    Access::control(session, connectionUsage());
+    check(dropped.count() == 1, "a release after teardown cannot emit another terminal event");
+}
+
+void testAvailabilityBeforeGrant()
+{
+    Packets sent;
+    IcomSession session;
+    Access::attachControl(session, sent);
+    Access::awaitGrant(session, kLoginId);
+    Access::selectRadio(session, kSelectedRadio);
+    QSignalSpy dropped(&session, &IcomSession::disconnected);
+    Access::control(session, connectionUsage());
+    check(dropped.isEmpty() && !session.isConnected()
+              && !lease(session, "streamGranted").toBool()
+              && Access::authId(session) == kLoginId && sent.empty(),
+          "initial available status is not a release of media that has never opened");
+    Access::control(session, streamGrant(kRemote, kLocal, kRotatedId));
+    check(lease(session, "streamGranted").toBool()
+              && Access::authId(session) == kRotatedId && dropped.isEmpty(),
+          "initial availability does not suppress the existing startup grant path");
+}
+
 void testRejectedRenewalFailsFast()
 {
     Packets sent;
@@ -398,6 +547,8 @@ int main(int argc, char** argv)
     testLoginThenReissuedToken();
     testStaleGrantAndAuthFailureRules();
     testGrantCorrelation();
+    testConnectedConnectionUsage();
+    testAvailabilityBeforeGrant();
     testRejectedRenewalFailsFast();
     testMiscorrelatedAckResends();
     testEarlyRenewalAndRandomTokenId();

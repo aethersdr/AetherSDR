@@ -46,6 +46,8 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QNativeGestureEvent>
+#include <QGestureEvent>
+#include <QPinchGesture>
 #include <QMenu>
 #include <QActionGroup>
 #include <QToolTip>
@@ -1975,6 +1977,11 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // this QRhiWidget whenever a 60 Hz data/preview frame is presented.
     setAttribute(Qt::WA_OpaquePaintEvent);
     setAccessibleName(tr("Panadapter spectrum display"));
+    // Touch pinch-to-zoom on the pan, delivered as QEvent::Gesture and handled
+    // in event() alongside the macOS trackpad ZoomNativeGesture. Both funnel
+    // through applyAnchoredZoom() so a two-finger pinch on the Maestro panel
+    // zooms the spectrum exactly as a trackpad pinch does on a laptop.
+    grabGesture(Qt::PinchGesture);
 #ifdef AETHER_GPU_SPECTRUM
     m_rhiFailureForcedForAutomation = rhiFailureForcedForAutomation();
     connect(this, &QRhiWidget::renderFailed, this, [this]() {
@@ -11999,55 +12006,87 @@ bool SpectrumWidget::event(QEvent* ev)
         if (ge->gestureType() == Qt::ZoomNativeGesture) {
             // value > 0 = pinch out (zoom in = narrower BW)
             // value < 0 = pinch in  (zoom out = wider BW)
-            // Zoom anchored on the frequency under the cursor: the frequency
-            // at the mouse position stays at that pixel after the zoom.
             const double delta = ge->value();
             if (qFuzzyIsNull(delta)) { return true; }
-            const double factor = 1.0 / (1.0 + delta);  // invert: pinch-out narrows BW
-            const double newBw = m_bandwidthMhz * factor;
-            if (newBw < m_minBwMhz || newBw > m_maxBwMhz) { return true; }  // at limit
-            // Anchor: keep the frequency under the cursor at the same pixel.
-            const double mouseXFrac = frequencyCanvasFractionAtGlobal(
-                ge->globalPosition());
-            // Effective (cropped) bandwidth for the anchor -- see the
-            // matching comment at the bandwidth-drag-start anchor above.
-            // newBw itself stays on the raw bandwidth.
-            const double anchorMhz = frequencyAtFraction(
-                FrequencyFrame{m_centerMhz, effectiveBandwidthMhz()}, mouseXFrac);
-            const double newCenter = std::max(
-                centerForAnchoredPanBandwidth(
-                    anchorMhz, mouseXFrac, newBw, panEdgeCropActive()),
-                newBw / 2.0);
-            if (panGeometryConfirmationRequired()) {
-                scheduleFrequencyRangeSettleUpdate(newCenter, newBw);
-                requestFrequencyRangeChange(newCenter, newBw);
-                return true;
+            // invert: pinch-out (delta > 0) narrows the bandwidth.
+            return applyAnchoredZoom(1.0 / (1.0 + delta), ge->globalPosition());
+        }
+    } else if (ev->type() == QEvent::Gesture) {
+        // Touch pinch (grabGesture(Qt::PinchGesture) in the ctor). Delivered on
+        // the Maestro panel and any Qt touchscreen; it funnels through the same
+        // anchored zoom as the macOS trackpad ZoomNativeGesture above.
+        auto* gestureEvent = static_cast<QGestureEvent*>(ev);
+        if (auto* pinch = static_cast<QPinchGesture*>(
+                gestureEvent->gesture(Qt::PinchGesture))) {
+            // scaleFactor() is the incremental scale since the previous update:
+            // > 1 = fingers apart = zoom in = narrower BW, so the bandwidth
+            // multiplier is its reciprocal. centerPoint() is in global/screen
+            // coordinates, matching frequencyCanvasFractionAtGlobal().
+            // Only act on Started/Updated with a real scale change: Qt's
+            // recognizer re-delivers the last incremental scaleFactor() on the
+            // terminal GestureFinished/Canceled event, which would otherwise
+            // apply the final pinch step a second time on finger-lift.
+            const qreal scale = pinch->scaleFactor();
+            if ((pinch->state() == Qt::GestureStarted
+                 || pinch->state() == Qt::GestureUpdated)
+                && pinch->changeFlags().testFlag(QPinchGesture::ScaleFactorChanged)
+                && scale > 0.0 && !qFuzzyCompare(scale, qreal(1.0))) {
+                applyAnchoredZoom(1.0 / static_cast<double>(scale),
+                                  pinch->centerPoint());
             }
-            const bool previewed = updateFrequencyPreview(
-                m_centerMhz, m_bandwidthMhz, newCenter, newBw);
-            if (!previewed) {
-                handleWaterfallFrequencyFrameChange(m_centerMhz, m_bandwidthMhz,
-                                                    newCenter, newBw);
-            }
-            if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
-                m_bins.clear();
-                m_smoothed.clear();
-                m_resetFftSmoothingOnNextFrame = true;
-            }
-            m_bandwidthMhz = newBw;
-            m_centerMhz = newCenter;
-            resetNoiseFloorBaseline();
-            if (previewed) {
-                scheduleFrequencyPreviewFrame();
-            } else {
-                markOverlayDirty();
-            }
-            scheduleFrequencyRangeSettleUpdate(newCenter, newBw);
-            requestFrequencyRangeChange(newCenter, newBw);
+            gestureEvent->accept(pinch);
             return true;
         }
     }
     return SPECTRUM_BASE_CLASS::event(ev);
+}
+
+bool SpectrumWidget::applyAnchoredZoom(double bandwidthFactor,
+                                       const QPointF& globalPosition)
+{
+    // No-op (and NaN/non-positive) factors are consumed but change nothing.
+    if (!(bandwidthFactor > 0.0) || qFuzzyCompare(bandwidthFactor, 1.0)) {
+        return true;
+    }
+    const double newBw = m_bandwidthMhz * bandwidthFactor;
+    if (newBw < m_minBwMhz || newBw > m_maxBwMhz) { return true; }  // at limit
+    // Anchor: keep the frequency under the cursor/pinch-center at the same pixel.
+    const double mouseXFrac = frequencyCanvasFractionAtGlobal(globalPosition);
+    // Effective (cropped) bandwidth for the anchor -- see the matching comment
+    // at the bandwidth-drag-start anchor. newBw itself stays on the raw bandwidth.
+    const double anchorMhz = frequencyAtFraction(
+        FrequencyFrame{m_centerMhz, effectiveBandwidthMhz()}, mouseXFrac);
+    const double newCenter = std::max(
+        centerForAnchoredPanBandwidth(
+            anchorMhz, mouseXFrac, newBw, panEdgeCropActive()),
+        newBw / 2.0);
+    if (panGeometryConfirmationRequired()) {
+        scheduleFrequencyRangeSettleUpdate(newCenter, newBw);
+        requestFrequencyRangeChange(newCenter, newBw);
+        return true;
+    }
+    const bool previewed = updateFrequencyPreview(
+        m_centerMhz, m_bandwidthMhz, newCenter, newBw);
+    if (!previewed) {
+        handleWaterfallFrequencyFrameChange(m_centerMhz, m_bandwidthMhz,
+                                            newCenter, newBw);
+    }
+    if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
+        m_bins.clear();
+        m_smoothed.clear();
+        m_resetFftSmoothingOnNextFrame = true;
+    }
+    m_bandwidthMhz = newBw;
+    m_centerMhz = newCenter;
+    resetNoiseFloorBaseline();
+    if (previewed) {
+        scheduleFrequencyPreviewFrame();
+    } else {
+        markOverlayDirty();
+    }
+    scheduleFrequencyRangeSettleUpdate(newCenter, newBw);
+    requestFrequencyRangeChange(newCenter, newBw);
+    return true;
 }
 
 bool SpectrumWidget::eventFilter(QObject* watched, QEvent* event)

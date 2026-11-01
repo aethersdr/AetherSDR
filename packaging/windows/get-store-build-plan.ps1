@@ -8,6 +8,9 @@ param(
     [Parameter(Mandatory = $true)][string]$Repository,
     [Parameter(Mandatory = $true)][long]$RunNumber,
     [bool]$RequestFlight = $false,
+    # The dispatch's dev_overrides input: an updater that trusts test keys
+    # and manifests from its environment (BUILD-OPTIONS.md).
+    [bool]$DevOverrides = $false,
     [string]$ProductId,
     [string]$FlightId,
     [string]$ProjectFile = (Join-Path $PSScriptRoot "../../CMakeLists.txt")
@@ -18,6 +21,14 @@ $ErrorActionPreference = "Stop"
 $upstream = $Repository -eq 'aethersdr/AetherSDR'
 $release = $upstream -and $EventName -eq 'push' -and $Ref.StartsWith('refs/tags/v')
 $flight = $upstream -and $EventName -eq 'workflow_dispatch' -and $RequestFlight
+# A dev-overrides build is a downloadable test artifact only: never a tag's
+# build, never the Store flight.
+if ($DevOverrides -and $Ref.StartsWith('refs/tags/')) {
+    throw "dev_overrides is for branch test builds, never a tag."
+}
+if ($DevOverrides -and $RequestFlight) {
+    throw "dev_overrides builds never go to the Store flight."
+}
 if ($RequestFlight -and -not $flight) {
     throw "Store flights require workflow_dispatch in aethersdr/AetherSDR."
 }

@@ -542,7 +542,7 @@ RadioCapabilities AnanBackend::capabilities() const
                               | RadioCapabilities::ClientSettingsDomain::ReceiveOutputLevel;
     c.hostDroopCalibration = true; // AnanDroopCorrection.h -- real DDC0 roll-off,
                                     // corrected client-side via AnanDroopCalibrator
-    c.extensionNamespaces = {QStringLiteral("anan")};  // "droop.apply" -- see invokeExtension()
+    c.extensionNamespaces = {QStringLiteral("anan")};  // "frontend.set", "droop.apply" -- see invokeExtension()
     // From this session's own Discovery reply (P2Client::discoveryInfoReceived()).
     // Absent until it lands ("not reported yet", like tuningMinHz/MaxHz);
     // capabilitiesChanged() fires when it does. numDdc is informational:
@@ -675,6 +675,14 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     // populated this param must not start one.
     m_pendingParams.speakerAudioEnabled =
         request.params.value(QStringLiteral("anan.speakerAudioEnabled"), false).toBool();
+    // Live once connected ("frontend.set" below), and seeded here so the
+    // session's first High Priority packet already carries them. FALSE by
+    // default: both defaults are the bytes this client sent before either
+    // option existed.
+    m_pendingParams.bandFiltersEnabled =
+        request.params.value(QStringLiteral("anan.bandFiltersEnabled"), false).toBool();
+    m_pendingParams.speakerAmpMuted =
+        request.params.value(QStringLiteral("anan.speakerAmpMuted"), false).toBool();
     // applyRestoredState() seeds both ADC values before this connect.
     m_attenuationDb = m_pendingParams.ddc0AdcIndex == 1
         ? m_pendingParams.adc1AttenuationDb
@@ -1465,7 +1473,38 @@ QString AnanBackend::applyDroopTables(const QMap<int, DroopCorrectionTable>& tab
 void AnanBackend::invokeExtension(const QString& ns, const QString& verb,
                                   quint64 requestId, const QVariant& arg)
 {
-    Q_UNUSED(arg);
+    if (ns == QLatin1String("anan") && verb == QLatin1String("frontend.set")) {
+        // The live front-end options. Partial: only the named fields move,
+        // so one control cannot overwrite another. A change reaches the radio
+        // on the next High Priority packet, within 100 ms.
+        //
+        // This persists nothing. The ANAN Front End page writes AnanSettings
+        // and then invokes this; a caller that only invokes it gets a change
+        // that reverts at the next connect, which reads AnanSettings.
+        const QVariantMap fields = arg.toMap();
+        if (fields.contains(QStringLiteral("bandFiltersEnabled"))) {
+            m_pendingParams.bandFiltersEnabled =
+                fields.value(QStringLiteral("bandFiltersEnabled")).toBool();
+            if (m_client) {
+                QMetaObject::invokeMethod(m_client, "setBandFiltersEnabled",
+                                          Qt::QueuedConnection,
+                                          Q_ARG(bool, m_pendingParams.bandFiltersEnabled));
+            }
+        }
+        if (fields.contains(QStringLiteral("speakerAmpMuted"))) {
+            m_pendingParams.speakerAmpMuted =
+                fields.value(QStringLiteral("speakerAmpMuted")).toBool();
+            if (m_client) {
+                QMetaObject::invokeMethod(m_client, "setSpeakerAmpMuted",
+                                          Qt::QueuedConnection,
+                                          Q_ARG(bool, m_pendingParams.speakerAmpMuted));
+            }
+        }
+        if (requestId != 0) {
+            emit extensionResult(requestId, QVariantMap{{QStringLiteral("ok"), true}});
+        }
+        return;
+    }
     if (ns == QLatin1String("anan") && verb == QLatin1String("nb.get")) {
         if (requestId != 0) {
             const AnanRxDsp::NoiseBlankerState applied = m_dsp

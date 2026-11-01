@@ -21,6 +21,7 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 |------|-------------|
 | **Connect to Radio...** | Opens the connection panel (LAN radios, SmartLink, manual IP). See [First Connection](./first-connection.md) and [Manual Connection](./manual-connection.md). |
 | **Disconnect** | Ends the radio session without closing AetherSDR. |
+| **Update...** | The Updates window: the newest AetherSDR release, what is in it, and the download for this computer. See [Updates](./updates.md). |
 | **Quit** | Closes the application. |
 
 ## Settings
@@ -131,7 +132,7 @@ The Minimize and Full Screen keys can be rebound in **Settings → Configure Sho
 | Item | What it does |
 |------|-------------|
 | **AetherSDR Documentation** | Opens this documentation site in your browser. |
-| **Printable Manual (PDF)** | Opens the [printable manual](pathname:///AetherSDR-Manual.pdf), all of these pages in one PDF. |
+| **Printable Manual (PDF)** | Downloads the [printable manual](pathname:///AetherSDR-Manual.pdf), all of these pages in one PDF. |
 | **Log Analyzer** | Opens the [Log Analyzer](/log-analyzer), which checks a log or support bundle for known problems in your browser. |
 | **Getting Started...**, **AetherSDR Help...**, **What's New...** | Built-in guides, each in its own window. They work offline, and each guide links its page on this site. In **What's New...**, only web links (http and https) open; any other kind of link in the release notes is ignored. |
 | **Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...** | Topic guides, also offline. |
@@ -141,7 +142,8 @@ The Minimize and Full Screen keys can be rebound in **Settings → Configure Sho
 | **Contributing to AetherSDR...** | See [Contributing Guide](./contributing-guide.md). |
 | **Support & Diagnostics...** | Logging categories and support bundles. See [Support and Logging](./support-and-logging.md). |
 | **Slice Troubleshooting...** | A diagnostics window for slice, audio and display state. |
-| **Check for Updates...** | Checks for a newer release now. |
+| **Check for Updates...** | Opens the Updates window and checks again now. See [Updates](./updates.md). |
+| **Check for Updates Automatically** | On by default. Checks for a newer release at startup, at most once a day, and shows **UPDATE** in the title bar when there is one. The same setting as **Check daily** in the Updates window; turning it off also removes the badge. Dimmed on store-managed installs (the Microsoft Store, or a Flatpak build), which update themselves. |
 | **About AetherSDR** | The About window (below). |
 
 ## The Title Bar
@@ -152,6 +154,7 @@ The main window has one 52 px title bar. From left to right:
 |------|-----------|
 | **☰** | The application menu (Windows and Linux only). |
 | **AetherSDR** brand mark | Drag the bar here to move the window. |
+| **UPDATE** badge | Shown when a newer AetherSDR release is available; hover names it, click opens the Updates window. See [Updates](./updates.md). |
 | **Radio tabs** | One tab per known radio (LAN, SmartLink or routed). See below. |
 | **EXPERIMENTAL** badge | Shown when the connected radio family's support is experimental. |
 | **multiFLEX** | Appears when other clients share the radio; hover lists them, click opens the dashboard. |
@@ -162,6 +165,10 @@ The main window has one 52 px title bar. From left to right:
 | **Headphone + slider** | Headphone mute and level. Dimmed, with the reason, on radios that have no headphone output. |
 | **Dock left / Dock right / Pop out** | Move the applet panel to the left or right of the panadapters (click the active side again to hide it), or float it in its own window. **Ctrl+Shift+S** also pops it out. |
 | **Window controls** | Minimize, maximize and close (see "Per platform"). |
+
+### Updates
+
+The **UPDATE** badge appears when a newer AetherSDR release is available; click it for the Updates window. See [Updates](./updates.md).
 
 ### Radio tabs
 

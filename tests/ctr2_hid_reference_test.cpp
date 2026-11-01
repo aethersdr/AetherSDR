@@ -281,6 +281,20 @@ void testExtensionsAgree()
                      == extensionMaxLength(MessageType::AudioSpectrum)
               && ctr2_ext_max_length(0x45) == 0,
           "extension constants and maximum lengths agree");
+    check(CTR2_CAP_WIDE_REPORTS == kWideReportsBit && CTR2_WIDE_REPORT_ID == kWideReportId
+              && CTR2_WIDE_REPORT_BYTES == kWideReportBytes
+              && CTR2_WIDE_REPORTS == kReportsPerWideReport
+              && 1 + CTR2_WIDE_REPORTS * CTR2_REPORT_BYTES <= CTR2_WIDE_REPORT_BYTES,
+          "the wide report constants agree, and seven reports fit in one");
+    std::uint8_t wide[CTR2_WIDE_REPORT_BYTES] = {7};
+    check(ctr2_wide_count(wide, sizeof wide) == 7, "a full bundle holds seven reports");
+    wide[0] = 0;
+    check(ctr2_wide_count(wide, sizeof wide) == 0, "a bundle claiming none is malformed");
+    wide[0] = 8;
+    check(ctr2_wide_count(wide, sizeof wide) == 0, "a bundle claiming eight is malformed");
+    wide[0] = 2;
+    check(ctr2_wide_count(wide, 16) == 0 && ctr2_wide_count(wide, 17) == 2,
+          "a bundle shorter than its reports is malformed");
     // Both sides place the bars on the same log axis.
     bool edgesAgree = true;
     for (int span : {600, 3000, 6000, 12000}) {

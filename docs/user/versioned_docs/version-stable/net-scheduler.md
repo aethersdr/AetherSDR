@@ -55,6 +55,10 @@ At reminder time a banner appears in the main window with:
 
 AetherSDR also tries to show a desktop notification.
 
+On a supported radio, a captured preset also reapplies its tuning step and any
+saved repeater offset or tone fields. Fields absent from the preset are left
+unchanged. The net is not a radio memory slot, and applying it does not key TX.
+
 ### Import and export
 
 **Export…** saves the schedule as a JSON file; **Import…** reads one back,

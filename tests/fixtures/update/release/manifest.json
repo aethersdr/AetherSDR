@@ -1,0 +1,100 @@
+{
+ "schema": 1,
+ "product": "AetherSDR",
+ "tag": "v26.10.3",
+ "version": "26.10.3",
+ "generated_at": "2026-10-24T20:17:05Z",
+ "key_id": "788fb6e31f7ecba4",
+ "payloads": [
+  {
+   "platform": "windows",
+   "arch": "x86_64",
+   "full": {
+    "asset": "AetherSDR-v26.10.3-Windows-x64-portable.zip",
+    "url": "https://github.com/aethersdr/AetherSDR/releases/download/v26.10.3/AetherSDR-v26.10.3-Windows-x64-portable.zip",
+    "sha256": "97f3a8e749c41ee2ccc448ed9447520e3638fcdca84831c07acb691df9c25c0a",
+    "size": 320446
+   },
+   "files": [
+    {
+     "path": "AetherSDR.exe",
+     "type": "file",
+     "size": 300008,
+     "sha256": "8536a8dc26a36f7643ddb1c7e8f6345a124459bf8a39d8c395f95d6ccb3c534c",
+     "executable": false
+    },
+    {
+     "path": "Qt6Core.dll",
+     "type": "file",
+     "size": 16000,
+     "sha256": "35794cef4473927755085abde61fd5094294542c0716f826501f7d7acd0f420c",
+     "executable": false
+    },
+    {
+     "path": "plugins/new.dll",
+     "type": "file",
+     "size": 4000,
+     "sha256": "50bb4a92ff719bb4b9d2bdf6178364b3849f159695bcccdbb481c99a873859c0",
+     "executable": false
+    },
+    {
+     "path": "plugins/old",
+     "type": "file",
+     "size": 12,
+     "sha256": "3f8b689d852b7c99b35ea12d322688e66d3d3b5bd13802b8d46f344606bab5e9",
+     "executable": false
+    }
+   ],
+   "patches": [
+    {
+     "from": "26.10.2",
+     "bundle": {
+      "asset": "AetherSDR-v26.10.3-Windows-x64-from-v26.10.2.update.tar",
+      "url": "https://github.com/aethersdr/AetherSDR/releases/download/v26.10.3/AetherSDR-v26.10.3-Windows-x64-from-v26.10.2.update.tar",
+      "sha256": "93e4349362f0fb31f7b86fc4fa2a9560dcebf9fe40ca70d5b9fd584fd82c392a",
+      "size": 10240
+     },
+     "ops": [
+      {
+       "op": "remove",
+       "path": "gone.dll"
+      },
+      {
+       "op": "remove",
+       "path": "plugins/old/x.dll"
+      },
+      {
+       "op": "patch",
+       "path": "AetherSDR.exe",
+       "from_sha256": "816fb909ec9129901eefe16e0f83591d435b80e472288cbaa35f8daa96be998f",
+       "member": "000000.zst",
+       "window_log": 19,
+       "sha256": "8536a8dc26a36f7643ddb1c7e8f6345a124459bf8a39d8c395f95d6ccb3c534c",
+       "size": 300008,
+       "executable": false
+      },
+      {
+       "op": "add",
+       "path": "plugins/new.dll",
+       "member": "000001.zst",
+       "window_log": 12,
+       "sha256": "50bb4a92ff719bb4b9d2bdf6178364b3849f159695bcccdbb481c99a873859c0",
+       "size": 4000,
+       "executable": false
+      },
+      {
+       "op": "add",
+       "path": "plugins/old",
+       "member": "000002.zst",
+       "window_log": 10,
+       "sha256": "3f8b689d852b7c99b35ea12d322688e66d3d3b5bd13802b8d46f344606bab5e9",
+       "size": 12,
+       "executable": false
+      }
+     ],
+     "unchanged": 1
+    }
+   ]
+  }
+ ]
+}

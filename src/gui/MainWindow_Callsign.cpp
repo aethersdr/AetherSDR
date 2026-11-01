@@ -197,7 +197,7 @@ void MainWindow::clearLiveCwContact()
 
 void MainWindow::showCallsignLookupDialog(const QString& call)
 {
-    showOrRaisePersistent(m_callsignLookupDialog);
+    showOrRaiseCanon(m_callsignLookupDialog, [this] { return new CallsignLookupDialog(this); });
     if (!call.isEmpty())
         m_callsignLookupDialog->lookupCallsign(call);
 }

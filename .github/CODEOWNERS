@@ -300,6 +300,18 @@ docs/VERIFYING-RELEASES.md   @aethersdr/maintainers
 .github/workflows/appimage.yml           @aethersdr/maintainers
 .github/workflows/docker-ci-image.yml    @aethersdr/maintainers
 
+# In-app updates (RFC #5304). update-manifest.yml holds the Ed25519 update
+# signing key and the updates.aethersdr.com upload credential (first limb).
+# The two tools it runs are carved back with it: build_update_manifest.py
+# writes the bytes that key signs and publish_update_manifest.py runs with the
+# upload credential (second limb: poisoning either defeats the signing step's
+# gate). update-signing.pub is the trust anchor every client will embed, the
+# counterpart of docs/RELEASE-SIGNING-KEY.pub.asc above.
+.github/workflows/update-manifest.yml    @aethersdr/maintainers
+tools/build_update_manifest.py           @aethersdr/maintainers
+tools/publish_update_manifest.py         @aethersdr/maintainers
+packaging/update-signing.pub             @aethersdr/maintainers
+
 # NOTE: the AI-instruction files (AGENTS.md, CLAUDE.md, GEMINI.md,
 # .github/copilot-instructions.md, .claude/commands/) and the two release
 # skills (.claude/skills/release-prep/, .claude/skills/tag-release/) are

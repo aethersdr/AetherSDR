@@ -272,17 +272,8 @@ QString flexControlButtonAction(int button, int action)
 void MainWindow::showFlexControlDialog()
 {
     // No capability check: the knob is a host serial device (#5778).
-    // A canon workspace window: created directly rather than through
-    // showOrRaisePersistent(), which would apply View → Frameless Window.
-    const bool wasFresh = !m_flexControlDialog;
-    if (wasFresh) {
-        auto* dialog = new FlexControlDialog(this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        m_flexControlDialog = dialog;
-    }
-    m_flexControlDialog->show();
-    m_flexControlDialog->raise();
-    m_flexControlDialog->activateWindow();
+    const bool wasFresh = showOrRaiseCanon(m_flexControlDialog,
+                                           [this] { return new FlexControlDialog(this); });
     if (wasFresh && m_flexControlDialog) {
         connect(m_flexControlDialog, &FlexControlDialog::virtualWheelSteps,
                 this, &MainWindow::handleVirtualFlexControlWheel);

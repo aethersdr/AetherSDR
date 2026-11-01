@@ -185,23 +185,71 @@ std::array<std::uint8_t, 1444> buildDdcSpecific(std::span<const DdcConfig> ddcs,
 
 // ---- High Priority to Hardware (spec p.31-34) ----
 
+// One selection of a receive band-pass bank, named as the spec's SATURN/ANAN-G2
+// Alex0 and Alex1 bit tables name it (p.91). Both words use the same bits, so
+// one enum serves ADC0 and ADC1. The names are the spec's, not band names: the
+// spec publishes the bits but not the passbands (see alexRxFilterFor()).
+enum class AlexRxFilter {
+    Bypass,      // bit 12, "HF Bypass": the bank out of circuit
+    Bpf1_5MHz,   // bit 6
+    Bpf6_5MHz,   // bit 5
+    Bpf9_5MHz,   // bit 4
+    Bpf13MHz,    // bit 1
+    Bpf20MHz,    // bit 2
+    Preamp6m,    // bit 3, "6M Preamp"
+};
+
+// The 16-bit receive word selecting `filter` alone. Exactly one bit is set: the
+// bank's relays are in series ahead of the ADC (p.90).
+[[nodiscard]] std::uint16_t alexRxFilterBits(AlexRxFilter filter) noexcept;
+
+// The filter for a receiver tuned to `tunedHz`. The edges are deskHPSDR's for
+// SATURN and ORION2 boards (new_protocol.c): 1.5, 2.1, 5.5, 11, 22 and 35 MHz.
+// They are not derivable from the filter names, and a filter that does not
+// cover the tuned frequency removes the signal path, so the selection stays
+// opt-in. Below 1.5 MHz, and for a non-finite frequency, it is Bypass.
+[[nodiscard]] AlexRxFilter alexRxFilterFor(double tunedHz) noexcept;
+
+// The High Priority fields that apply live, beyond the bypass flags. Defaults
+// reproduce the bytes this client sends with no options.
+struct HighPriorityOptions {
+    // A band-pass selection for that ADC's bank. It replaces the matching
+    // bypass flag: the bank takes one relay, so bypass and a filter are
+    // alternatives. nullopt leaves the bypass flag in charge.
+    std::optional<AlexRxFilter> adc0Filter;
+    std::optional<AlexRxFilter> adc1Filter;
+    // Byte 1400 bit 1: mutes the radio's speaker amplifier (p2app SetSpkrMute()).
+    // Sending silent speaker audio leaves the amplifier running and hissing.
+    // Byte 1400's bit 0 (XVTR route on PTT) and bit 2 (tuner start) stay clear.
+    bool muteSpeakerAmp = false;
+};
+
 // 1444-byte High Priority packet. RX-ONLY: `run` sets byte 4 bit[0] only and
 // there is no PTT parameter. `ddc0FreqWord` sets bytes 9-12 (p.32). Must be
 // re-sent at least once a second (100 ms recommended, p.8) to stay in RUN;
 // P2Client owns that cadence.
-// Alex0 (bytes 1432-1435, p.35, p.90-91) is always written: ANT1 (bit 24), plus
-// HF Bypass (bit 12) when `bypassAdc0Filters`. Power-on Alex is all zero (p.79),
-// and the RX1 BPF bank sits in series before the ADC (p.90), so with neither a
-// band filter nor Bypass energised there is no signal path. ANT2/3 and per-band
-// BPF are not exposed. `bypassAdc1Filters` sets bit 12 ("HF Bypass 2") of Alex1
-// (bytes 1430-1431); RX2 is a single dedicated jack with no antenna select.
+//
+// The "32-bit Alex0" at 1432-1435 is two 16-bit words to the radio: p2app reads
+// 1432-1433 as the TX filter and antenna word and 1434-1435 as ADC0's receive
+// filter word (InHighPriority.c); 1430-1431 is ADC1's receive word (Alex1). A
+// receive filter written into 1432-1433 would reach the TX relays, not the ADC.
+//
+// Alex0 is always written: ANT1 (bit 24 of the 32-bit word), plus ADC0's
+// receive selection. Power-on Alex is all zero (p.79) and the RX1 BPF bank sits
+// in series before the ADC (p.90), so with neither a band filter nor Bypass
+// energised there is no signal path. ANT2/3 are not exposed; RX2 is a single
+// dedicated jack with no antenna select.
+//
+// `bypassAdc0Filters`/`bypassAdc1Filters` set HF Bypass (bit 12) in ADC0's and
+// ADC1's receive words, unless `opts` selects a filter for that ADC.
 // `adc0AttenuationDb`/`adc1AttenuationDb`: step attenuators, byte 1443 (ADC0) and
 // 1442 (ADC1), 0-31 dB in 1 dB steps (p.34, p.36), clamped; 0 = none.
 std::array<std::uint8_t, 1444> buildHighPriority(bool run, std::uint32_t ddc0FreqWord,
                                                   bool bypassAdc0Filters = true,
                                                   bool bypassAdc1Filters = true,
                                                   int adc0AttenuationDb = 0,
-                                                  int adc1AttenuationDb = 0) noexcept;
+                                                  int adc1AttenuationDb = 0,
+                                                  const HighPriorityOptions& opts = {}) noexcept;
 
 // Multi-DDC form: one 4-byte frequency/phase word per DDC at 9 + 4*n (p.32),
 // N capped at kMaxDdcs, excess ignored. Still RX-only (no PTT; byte 4 is bit[0]
@@ -211,7 +259,8 @@ std::array<std::uint8_t, 1444> buildHighPriority(bool run,
                                                   bool bypassAdc0Filters = true,
                                                   bool bypassAdc1Filters = true,
                                                   int adc0AttenuationDb = 0,
-                                                  int adc1AttenuationDb = 0) noexcept;
+                                                  int adc1AttenuationDb = 0,
+                                                  const HighPriorityOptions& opts = {}) noexcept;
 
 // The step attenuators' range (spec pp.34,36), shared by the encoder's clamp and
 // by the backend that offers the control.

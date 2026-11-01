@@ -157,6 +157,7 @@ const sidebars = {
         "themes-and-theme-editor",
         "slice-colors",
         "accessibility",
+        "updates",
         "firmware-update"
       ]
     },

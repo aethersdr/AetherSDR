@@ -7,18 +7,18 @@ namespace {
 
 // Offsets inside a 0x27 0x00 frame's data (i.e. after cmd + subcommand).
 //
-//   data[0]      0x00, fixed
+//   data[0]      scope selector: 00, or 00 MAIN / 01 SUB on the IC-9700
 //   data[1]      division index, BCD 01..11
 //   data[2]      division maximum, BCD — 01 over WLAN, 11 over USB
 // then, ONLY when the division index is 1:
-//   data[3]      mode: 00 centre, 01 fixed
+//   data[3]      mode: 00 centre, 01 fixed, 02 SCROLL-C, 03 SCROLL-F
 //   data[4..8]   frequency A — centre (centre mode) or lower edge (fixed)
 //   data[9..13]  frequency B — span   (centre mode) or upper edge (fixed)
 //   data[14]     out-of-range flag
 //   data[15..]   waveform, when this frame is also the LAST division (WLAN)
 // and for every division after the first:
 //   data[3..]    waveform
-constexpr std::size_t kOffFixed      = 0;
+constexpr std::size_t kOffSelector   = 0;
 constexpr std::size_t kOffDivision   = 1;
 constexpr std::size_t kOffDivisionMax = 2;
 constexpr std::size_t kOffMode       = 3;
@@ -57,6 +57,7 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
         // sweep was left half-assembled by packet loss, this is where it gets
         // discarded — keeping it would splice two sweeps into one trace.
         m_partial = ScopeFrame{};
+        m_partial.selector = frame.data[kOffSelector];
         m_assembling = true;
         m_expectedDivision = 1;
 
@@ -187,6 +188,64 @@ std::vector<int> availableBandwidthsHz()
     for (int s : kScopeSpansHz)
         out.push_back(bandwidthForSpanHz(s));
     return out;
+}
+
+std::vector<float> remapToWindow(const std::vector<float>& dbm,
+                                 std::int64_t srcStartHz, std::int64_t srcEndHz,
+                                 std::int64_t dstStartHz, std::int64_t dstEndHz,
+                                 float fillDbm)
+{
+    const std::size_t n = dbm.size();
+    std::vector<float> out(n, fillDbm);
+    if (n == 0 || srcEndHz <= srcStartHz || dstEndHz <= dstStartHz) {
+        return out;
+    }
+    const double srcWidth = static_cast<double>(srcEndHz - srcStartHz);
+    const double dstWidth = static_cast<double>(dstEndHz - dstStartHz);
+    const double points = static_cast<double>(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const double hz = static_cast<double>(dstStartHz)
+            + (static_cast<double>(i) + 0.5) * dstWidth / points;
+        const double pos = (hz - static_cast<double>(srcStartHz)) / srcWidth * points;
+        if (pos < 0.0 || pos >= points) {
+            continue;
+        }
+        out[i] = dbm[static_cast<std::size_t>(pos)];
+    }
+    return out;
+}
+
+std::optional<double> scopeFollowCentre(double lowerHz, double upperHz, double previousHz,
+                                        double hz, double zoneFraction, double insetFraction)
+{
+    const double width = upperHz - lowerHz;
+    if (!(width > 0.0)) {
+        return std::nullopt;
+    }
+    const double zone = width * zoneFraction;
+    const double inset = width * insetFraction;
+    if (hz > upperHz + width || hz < lowerHz - width) {
+        return hz;
+    }
+    const bool rising = previousHz <= 0.0 || hz > previousHz;
+    if (hz > upperHz - zone && (hz > upperHz || rising)) {
+        return hz + inset - width / 2.0;
+    }
+    const bool falling = previousHz <= 0.0 || hz < previousHz;
+    if (hz < lowerHz + zone && (hz < lowerHz || falling)) {
+        return hz - inset + width / 2.0;
+    }
+    return std::nullopt;
+}
+
+double scopeCentreHoldingVfo(double requestedHz, double widthHz, double vfoHz, double marginHz)
+{
+    const double lowest = vfoHz + marginHz - widthHz / 2.0;
+    const double highest = vfoHz - marginHz + widthHz / 2.0;
+    if (lowest > highest) {
+        return vfoHz;
+    }
+    return std::clamp(requestedHz, lowest, highest);
 }
 
 }  // namespace AetherSDR::icom
