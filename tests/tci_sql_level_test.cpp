@@ -1,8 +1,6 @@
-// TCI sql_level in the spec form (TCI v2.0): `sql_level:trx,dB;` with dB
-// -140..0. The value used to be taken as the slice's 0..100 level, so a spec
-// SET of -83 failed the level clamp and every read answered a level a client
-// then drew as dB. The backend's published squelch scale converts; without one
-// Flex's -160 + level map applies. The spec defines dB only, so a positive
+// TCI sql_level in the spec form (TCI 2.1 p.31): `sql_level:trx,dB;` with dB
+// -140..0, while the slice stores a 0..100 level. The backend's published
+// squelch scale converts; without one Flex's -160 + level map applies. The spec defines dB only, so a positive
 // value (an older client's 0..100 level) is ignored rather than read as dB.
 //
 // Socket-free: an injected stub backend and TciProtocol driven by command
@@ -170,6 +168,38 @@ void testPublishedScaleConverts()
           "and back again for the echo");
 }
 
+// A scale whose lowest level sits above -140 dB (HL2's level squelch floor is
+// near -119 dB, 0.7 dB a step). Level 0 is echoed as that floor, and sending
+// the echo back must leave the squelch fully open rather than move it to the
+// scale's first step.
+void testFloorAboveRangeKeepsLevelZero()
+{
+    SquelchLevelScale scale;
+    scale.offsetDb = -120.0;
+    scale.dbPerStep = 0.7;
+    scale.modes = {QStringLiteral("USB")};
+    Fixture f(scale);
+    TciProtocol tci(&f.radio);
+
+    f.send(tci, QStringLiteral("sql_level:0,-140"));
+    check(f.lastLevel() == 0, "floor scale: -140 dB opens the squelch fully");
+    check(tci.pendingNotification() == QStringLiteral("sql_level:0,-120;"),
+          "floor scale: level 0 is echoed as the scale's floor");
+
+    f.send(tci, QStringLiteral("sql_level:0,-120"));
+    check(f.lastLevel() == 0, "floor scale: the echo of level 0, sent back, keeps level 0");
+
+    f.send(tci, QStringLiteral("sql_level:0,-130"));
+    check(f.lastLevel() == 0, "floor scale: a value below the floor opens the squelch fully");
+
+    f.send(tci, QStringLiteral("sql_level:0,-119"));
+    check(f.lastLevel() == 1, "floor scale: just above the floor is the first step");
+
+    f.setSliceLevel(0);
+    check(f.send(tci, QStringLiteral("sql_level:0")) == QStringLiteral("sql_level:0,-120;"),
+          "floor scale: the GET of level 0 answers the floor");
+}
+
 // Read as dB, an older client's level 35 would be above 0 dB and close the
 // squelch. Ignoring it leaves the slice as it was.
 void testPositiveValueIsIgnored()
@@ -218,6 +248,7 @@ int main(int argc, char** argv)
     testSpecSetIsDecibels();
     testSpecGetAnswersDecibels();
     testPublishedScaleConverts();
+    testFloorAboveRangeKeepsLevelZero();
     testPositiveValueIsIgnored();
     testMalformedIsDropped();
     testRelayConversionMatchesGet();

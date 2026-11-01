@@ -181,10 +181,10 @@ static bool argToDouble(const QStringList& args, int idx, double& out)
     return true;
 }
 
-// SQL_LEVEL is a threshold in dB, -140..0, per TCI v2.0. A slice stores a
+// SQL_LEVEL is a threshold in dB, -140..0 (TCI 2.1 p.31). A slice stores a
 // 0..100 level; the backend's published squelch scale converts between the
-// two, and a backend that publishes none for the slice's mode keeps Flex's
-// -160 + level map, as the panadapter's SQL line does.
+// two. Where the backend publishes no dB place for the slice's mode (HL2 FM,
+// RTL, a Kiwi source), Flex's -160 + level map stands in as a nominal scale.
 static constexpr double kSqlMinDb = -140.0;
 
 static SquelchLevelScale sqlScaleFor(RadioModel* model, SliceModel* s)
@@ -1209,10 +1209,12 @@ QString TciProtocol::cmdSqlLevel(const QStringList& args, bool isSet)
     if (!argToDouble(args, 1, value)) return {};
     // The spec defines dB only. A positive value is outside its range, and is
     // most likely an older client's 0..100 level; read as dB it would close
-    // the squelch, so it is ignored (TCI 2.1 p.6). The bottom of the range
-    // opens the squelch fully, so level 0 stays reachable.
+    // the squelch, so it is ignored (TCI 2.1 p.6). At or below what level 0
+    // is reported as (-140 dB, or a higher floor the scale publishes), the
+    // squelch opens fully, so level 0 stays reachable and its own echo, sent
+    // back, does not move it.
     if (value > 0.0) return {};
-    const int level = (value <= kSqlMinDb)
+    const int level = (value <= sqlLevelDb(m_model, s, 0))
         ? 0
         : sqlScaleFor(m_model, s).levelForThresholdDb(value);
     auto& pending = (*m_pendingSquelch)[trx];
