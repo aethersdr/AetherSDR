@@ -21,7 +21,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -59,8 +58,8 @@ type Summary struct {
 	WritableDirs   []string `json:"writable_dirs"`
 	SurvivedReboot []string `json:"dirs_whose_marker_survived_a_reboot"`
 	BootsSeen      int      `json:"boots_seen_by_markers"`
-	// RunsThisBoot counts starts in this boot from the install directory's
-	// marker: above 1, the radio relaunches an exited waveform.
+	// RunsThisBoot counts starts in this boot from the markers: above 1,
+	// the radio relaunches an exited waveform.
 	RunsThisBoot        int               `json:"runs_this_boot"`
 	InternetTCP         bool              `json:"internet_tcp_443"`
 	InternetTLS         bool              `json:"internet_tls_verified"`
@@ -193,16 +192,16 @@ func summarize(r *Report) Summary {
 		}
 	}
 	s.BootsSeen = len(bootSet)
-	if exe, err := os.Executable(); err == nil {
-		for _, d := range r.Storage.Dirs {
-			if d.Path == filepath.Dir(exe) {
-				for _, run := range d.MarkerRuns {
-					if run.BootID == r.System.BootID {
-						s.RunsThisBoot++
-					}
-				}
+	// Any writable marker counts this boot's starts; the install directory
+	// may not be writable (it isn't on the 8600).
+	for _, d := range r.Storage.Dirs {
+		n := 0
+		for _, run := range d.MarkerRuns {
+			if run.BootID == r.System.BootID {
+				n++
 			}
 		}
+		s.RunsThisBoot = max(s.RunsThisBoot, n)
 	}
 	for _, st := range r.Network.STUN {
 		if st.OK {
