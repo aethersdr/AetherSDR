@@ -9,6 +9,7 @@
 #include "core/TailnetShimRelease.h"
 #include "core/TailnetShimDownloader.h"
 #include "TailnetShimDialog.h"
+#include "WaveformEnvironmentDialog.h"
 #include "FramelessResizer.h"
 #include "CanonMessageBox.h"
 #include "RoundedMenu.h"
@@ -1430,6 +1431,11 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
             this, &WaveformsDialog::refreshWaveformList);
     connect(&wfModel, &FlexWaveformModel::commandFinished,
             this, &WaveformsDialog::onWaveformCommandFinished);
+    connect(&wfModel, &FlexWaveformModel::restarted,
+            this, &WaveformsDialog::onWaveformRestarted);
+    // The Environment… action follows the radio's firmware and platform.
+    connect(m_radioModel, &RadioModel::capabilitiesChanged,
+            this, &WaveformsDialog::refreshWaveformList);
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &WaveformsDialog::refreshStatus);
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
@@ -1490,9 +1496,13 @@ void WaveformsDialog::updateInstallButtonState()
     }
 
     const FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
-    const QString dockerBlocker = connected
-        ? dockerInstallBlockerText(m_radioModel, wfModel)
-        : tr("Connect to a radio before installing Docker waveform images.");
+    // While a container environment is being applied the radio holds staged
+    // variables, and a deploy now would pick them up.
+    const QString dockerBlocker = !connected
+        ? tr("Connect to a radio before installing Docker waveform images.")
+        : m_radioModel->waveformEnvironmentApplyActive()
+            ? tr("Wait for the container environment change to finish.")
+            : dockerInstallBlockerText(m_radioModel, wfModel);
     const bool dockerReady = connected && dockerBlocker.isEmpty();
     m_installDockerAction->setEnabled(!busy && dockerReady);
     if (m_installRemoteAccessAction) {
@@ -1709,7 +1719,9 @@ void WaveformsDialog::installWaveformPath(bool docker, const QString& path, Radi
 
     if (docker) {
         const FlexWaveformModel& wfModel = modelGuard->flexWaveformModel();
-        const QString blocker = dockerInstallBlockerText(modelGuard, wfModel);
+        const QString blocker = modelGuard->waveformEnvironmentApplyActive()
+            ? tr("Wait for the container environment change to finish.")
+            : dockerInstallBlockerText(modelGuard, wfModel);
         if (!blocker.isEmpty()) {
             showDockerWfpNotReadyDialog(this, blocker);
             return;
@@ -2189,6 +2201,21 @@ void WaveformsDialog::refreshWaveformList()
             });
         }
 
+        // Docker containers carry a radio-held environment (SmartSDR 4.3.16).
+        // Dimmed with the reason on a radio that cannot edit it.
+        QPushButton* environmentBtn = nullptr;
+        if (isContainer) {
+            environmentBtn = new QPushButton(tr("Environment…"), actionWidget);
+            environmentBtn->setAccessibleName(tr("Edit the environment of waveform %1").arg(name));
+            const QString unavailable = waveformEnvironmentUnavailableReason(m_radioModel);
+            environmentBtn->setEnabled(unavailable.isEmpty() && !rowPending);
+            environmentBtn->setToolTip(unavailable);
+            environmentBtn->setAccessibleDescription(unavailable);
+            connect(environmentBtn, &QPushButton::clicked, this, [this, name]() {
+                openEnvironmentEditor(name);
+            });
+        }
+
         auto* restartBtn = new QPushButton(tr("Restart"), actionWidget);
         restartBtn->setAccessibleName(tr("Restart waveform %1").arg(name));
         connect(restartBtn, &QPushButton::clicked, this, [this, name]() {
@@ -2219,12 +2246,16 @@ void WaveformsDialog::refreshWaveformList()
             installedWaveformActionButtonWidth(restartBtn, removeBtn),
             styledWaveformActionButtonWidth(restartBtn),
             styledWaveformActionButtonWidth(removeBtn),
-            styledWaveformActionButtonWidth(configureBtn)});
-        const int actionButtonCount = configureBtn ? 3 : 2;
-        if (configureBtn) {
-            configureBtn->setFixedWidth(actionButtonWidth);
-            configureBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-            actionLayout->addWidget(configureBtn);
+            styledWaveformActionButtonWidth(configureBtn),
+            styledWaveformActionButtonWidth(environmentBtn)});
+        const int actionButtonCount = 2 + (configureBtn ? 1 : 0) + (environmentBtn ? 1 : 0);
+        for (QPushButton* extra : {configureBtn, environmentBtn}) {
+            if (!extra) {
+                continue;
+            }
+            extra->setFixedWidth(actionButtonWidth);
+            extra->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            actionLayout->addWidget(extra);
         }
         restartBtn->setFixedWidth(actionButtonWidth);
         restartBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
@@ -2238,6 +2269,76 @@ void WaveformsDialog::refreshWaveformList()
 
         m_listLayout->insertWidget(m_listLayout->count() - 1, row);
     }
+}
+
+void WaveformsDialog::openEnvironmentEditor(const QString& name)
+{
+    // One editor per container; a second click raises it.
+    if (const QPointer<WaveformEnvironmentDialog> open = m_environmentDialogs.value(name)) {
+        open->raise();
+        open->activateWindow();
+        return;
+    }
+    auto* dialog = new WaveformEnvironmentDialog(m_radioModel, name, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    // The apply belongs to this window, so its outcome reaches the row even when
+    // the editor is closed first.
+    dialog->setApplyHandler([this](const QString& container, const WaveformEnvironment& environment) {
+        const auto finished = std::make_shared<bool>(false);
+        const bool started = m_radioModel->applyWaveformEnvironment(container, environment, this,
+            [this, container, finished](const WaveformEnvApplyResult& result) {
+                *finished = true;
+                m_environmentApplies.remove(container);
+                onEnvironmentApplyFinished(container, result);
+                updateInstallButtonState();
+                if (const QPointer<WaveformEnvironmentDialog> editor = m_environmentDialogs.value(container)) {
+                    editor->showApplyResult(result);
+                }
+            });
+        // A step refused on the spot has already reported; otherwise the row
+        // waits for the radio.
+        if (started && !*finished) {
+            m_environmentApplies.insert(container);
+            setRowNotice(container, tr("Recreating…"), QStringLiteral("pending"), true);
+        }
+        updateInstallButtonState();
+        return started;
+    });
+    m_environmentDialogs.insert(name, dialog);
+    dialog->show();
+}
+
+void WaveformsDialog::onEnvironmentApplyFinished(const QString& name,
+                                                 const WaveformEnvApplyResult& result)
+{
+    using Outcome = WaveformEnvApplyResult::Outcome;
+    switch (result.outcome) {
+    case Outcome::Recreated:
+        setRowNotice(name, tr("Recreated"), QStringLiteral("ok"), false);
+        break;
+    case Outcome::RecreateFailed:
+        setRowNotice(name, tr("Recreate failed: the radio reported an error"),
+                     QStringLiteral("error"), false);
+        break;
+    case Outcome::NoConfirmation:
+        setRowNotice(name, tr("Recreate not confirmed by the radio"), QStringLiteral("error"), false);
+        break;
+    case Outcome::Refused:
+    case Outcome::Cancelled:
+        setRowNotice(name, tr("Environment not applied"), QStringLiteral("error"), false);
+        break;
+    }
+}
+
+void WaveformsDialog::onWaveformRestarted(const QString& name, bool ok)
+{
+    // An environment apply reports its own outcome. A plain restart already said
+    // "Restarted" on the command reply; a later result=error corrects it.
+    if (m_environmentApplies.contains(name) || ok) {
+        return;
+    }
+    setRowNotice(name, tr("Restart failed: the radio reported an error"),
+                 QStringLiteral("error"), false);
 }
 
 void WaveformsDialog::setRowNotice(const QString& name, const QString& text,

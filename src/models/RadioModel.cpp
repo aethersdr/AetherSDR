@@ -2271,6 +2271,11 @@ RadioModel::RadioModel(QObject* parent)
         digitalVoiceDir + QStringLiteral("/dstar-traffic.json"));
     connect(&m_flexWaveformModel, &FlexWaveformModel::genericStatusReceived,
             &m_dstarModel, &DStarModel::handleWaveformStatus);
+    connect(&m_flexWaveformModel, &FlexWaveformModel::environmentChanged,
+            this, &RadioModel::waveformContainersChanged);
+    connect(&m_flexWaveformModel, &FlexWaveformModel::waveformsChanged, this, [this] {
+        emit waveformContainersChanged({});
+    });
     connect(&m_dstarModel, &DStarModel::configurationChanged,
             this, &RadioModel::scheduleDStarRuntimeConfiguration);
     // A `transmit dax` release that landed while the carrier was up is
@@ -12317,6 +12322,10 @@ void RadioModel::onStatusReceived(const QString& object,
     }
     if (object == QLatin1String("waveform status")) {
         m_flexWaveformModel.handleGenericStatus(kvs);
+        return;
+    }
+    if (object == QLatin1String("waveform restarted")) {
+        m_flexWaveformModel.handleRestarted(kvs);
         return;
     }
 

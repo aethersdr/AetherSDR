@@ -788,6 +788,13 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasVoiceKeyer = true;
     caps.hasFullDuplex = true;
     caps.hasWaveforms = true;            // installable SmartSDR waveforms
+    // Container environments (FlexLib 4.3.16 Radio.cs:8841-8861) need firmware
+    // that has them and a platform with a Waveform Processor; the 6000-series
+    // platforms have none (gui/WaveformInstallGate.h).
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform != RadioPlatform::Unknown
+        && mc.platform != RadioPlatform::Microburst && mc.platform != RadioPlatform::DeepEddy) {
+        caps.waveformEnvControl = RadioCapabilities::WaveformEnvControl{};
+    }
     caps.hasMultiClientSessions = true;  // multiFLEX
     caps.alwaysUseClientSideSpots = false;
     // TNFs. Neither FlexLib nor the `tnf` status declares a ceiling — Radio.cs

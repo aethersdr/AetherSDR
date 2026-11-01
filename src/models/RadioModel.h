@@ -1116,6 +1116,21 @@ public:
                                   QObject* replyContext = nullptr,
                                   const RadioControlCompletion& completion = {},
                                   std::optional<RadioControlSession> expectedSession = {});
+    ReceiveDispatch requestWaveformEnv(const WaveformEnvRequest& request,
+                                       QObject* replyContext = nullptr,
+                                       const RadioControlCompletion& completion = {});
+    // Replace a container's environment and recreate it: clear the staged
+    // environment, stage each variable, recreate, then wait for the radio's
+    // `waveform restarted` status and clear the stage again so it cannot leak into
+    // a later deploy. One apply at a time; false = refused before anything was sent.
+    // The completion runs exactly once unless replyContext is destroyed first.
+    bool applyWaveformEnvironment(const QString& name, const WaveformEnvironment& environment,
+                                  QObject* replyContext,
+                                  std::function<void(const WaveformEnvApplyResult&)> completion);
+    bool waveformEnvironmentApplyActive() const { return m_waveformEnvApplyActive; }
+    // A container's environment as the radio last reported it, or nullopt when no
+    // container of that name is installed. Values may be secrets.
+    std::optional<QMap<QString, QString>> waveformContainerEnvironment(const QString& name) const;
     void createMemory(const MemoryEntry& entry, QObject* replyContext,
                       const MemoryCreateCompletion& completion,
                       std::optional<RadioControlSession> expectedSession = {});
@@ -1219,6 +1234,9 @@ signals:
     // lets surfaces tell "radio lacks this" from "no radio", which restores the
     // permissive value (MainWindow::applyCapabilitiesToUi).
     void capabilitiesChanged(bool connected, const RadioCapabilities& caps);
+    // An installed container's environment changed (name), or the list of
+    // installed waveforms did (empty name).
+    void waveformContainersChanged(const QString& name);
     void transmitFrequencyCheckChanged(bool on);
     // Straight-key-shaped local CW edges (serial key line, TCI `keyer:trx`,
     // MIDI/keyboard/HID), all via sendCwKey; drives the local sidetone
@@ -1938,6 +1956,7 @@ private:
     friend class RerouteDeadControlsTestAccess;
     friend class VoiceKeyerTxRouteTestAccess;
     friend class RadioSetupControlTestAccess;
+    friend class WaveformEnvTestAccess;
     friend class StoredControlTestAccess;
     friend class TciServerReviewTest;
     friend class TransmitDaxHoldTestAccess;
@@ -2110,6 +2129,8 @@ private:
     UsbCableModel       m_usbCableModel;
     DaxIqModel          m_daxIqModel;
     FlexWaveformModel   m_flexWaveformModel;
+    bool m_waveformEnvApplyActive{false};
+    int  m_waveformEnvConfirmTimeoutMs{60000};
     DStarModel          m_dstarModel{nullptr, true};
 
     // NetCW stream — VITA-49 UDP delivery for low-latency CW keying

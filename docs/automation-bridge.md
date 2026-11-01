@@ -792,7 +792,7 @@ connects).
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
 | `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
-| `waveforms` | — | installed legacy/Docker waveforms, WFP state, local Digital Voice service/mode configuration and delivery metrics, raw radio `mode_list` values, duplicate counts, last maintenance response, and recent `waveform status` reports |
+| `waveforms` | — | installed legacy/Docker waveforms (each container with `environmentKeys`: its environment variable names, never their values), WFP state, local Digital Voice service/mode configuration and delivery metrics, raw radio `mode_list` values, duplicate counts, last maintenance response, and recent `waveform status` reports |
 
 Read-only Flex metadata is available as `get radio` → `iaruRegion` (1–3 or
 `null`) and `get slice` / `get slices` → `chainMode` (bounded radio-reported

@@ -909,6 +909,7 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexSetupControls.cpp
     src/core/backends/flex/FlexUtilityControls.cpp
     src/core/backends/flex/FlexStoredControls.cpp
+    src/core/backends/flex/FlexWaveformEnvControls.cpp
     src/core/backends/flex/FlexSliceLifecycleControls.cpp
     src/core/backends/flex/FlexPanControls.cpp
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
@@ -1257,6 +1258,7 @@ set(MODEL_SOURCES
     src/models/RadioModel_Setup.cpp
     src/models/RadioModel_Utilities.cpp
     src/models/RadioModel_StoredControls.cpp
+    src/models/RadioModel_WaveformEnv.cpp
     src/models/RadioModel_SliceLifecycle.cpp
     src/models/RadioModel_PanControls.cpp
     src/models/RadioModel_TxCoordinator.cpp
@@ -1401,6 +1403,7 @@ set(GUI_SOURCES
     src/gui/NrGainStrip.cpp
     src/gui/UpdatesWindow.cpp
     src/gui/WaveformsDialog.cpp
+    src/gui/WaveformEnvironmentDialog.cpp
     src/gui/TailnetShimDialog.cpp
     src/gui/QrCodeImage.cpp
     src/gui/ClientRxDspApplet.cpp

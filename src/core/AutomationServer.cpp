@@ -5309,11 +5309,17 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         if (m_radioModel) {
             const FlexWaveformModel& wf = m_radioModel->flexWaveformModel();
             for (const FlexWaveformEntry& entry : wf.waveforms()) {
+                // Environment values may be secrets: the bridge reports keys only.
+                QJsonArray envKeys;
+                for (const QString& key : entry.environment.keys()) {
+                    envKeys.append(key);
+                }
                 installed.append(QJsonObject{
                     {QStringLiteral("name"), entry.name},
                     {QStringLiteral("version"), entry.version},
                     {QStringLiteral("isContainer"), entry.isContainer},
                     {QStringLiteral("displayName"), entry.displayName()},
+                    {QStringLiteral("environmentKeys"), envKeys},
                 });
             }
             wfp = QJsonObject{

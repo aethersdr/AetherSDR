@@ -1,4 +1,10 @@
 {
+ "core/backends/WaveformEnvRequest.h": {
+  "tag": "universal",
+  "note": "Seam vocabulary for a radio-held waveform container environment: the typed clear/stage/recreate request with its validation, and the apply outcome. No wire text; FlexBackend encodes it (SmartSDR 4.3.16) and capabilities().waveformEnvControl gates it.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/DxSpotLineParser.h": {
   "tag": "universal",
   "note": "Parses DX-cluster `DX de` lines (DXSpider/AR/CC/RBN/GoCluster) into DxSpot, including the GoCluster fixed-column tail and SNR report, and replays saved spot logs with per-session provenance. Pure line-to-value logic; no vendor radio ties.",
