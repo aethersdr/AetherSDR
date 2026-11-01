@@ -1,4 +1,10 @@
 {
+ "core/backends/WaveformEnvRequest.h": {
+  "tag": "universal",
+  "note": "Seam vocabulary for a radio-held waveform container environment: the typed clear/stage/recreate request with its validation, and the apply outcome. No wire text; FlexBackend encodes it (SmartSDR 4.3.16) and capabilities().waveformEnvControl gates it.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/RigExpertHidTransport.h": {
   "tag": "peripheral(rigexpert)",
   "note": "Independent Stick Pro HID instrument transport; no radio backend, audio or transceiver commands. USB proof of concept under RFC #6471.",

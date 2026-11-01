@@ -142,6 +142,7 @@ const sidebars = {
         "smartlink-setup",
         "manual-connection",
         "tailscale-remote-access",
+        "waveform-environment",
         "low-bandwidth-connections",
         "multi-flex"
       ]

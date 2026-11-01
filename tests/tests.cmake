@@ -8728,6 +8728,24 @@ add_test(NAME noise_floor_range_test COMMAND noise_floor_range_test)
 set_tests_properties(noise_floor_range_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# SmartSDR 4.3 waveform container environments (#6947): request validation, the
+# Flex capability and wire text, env=/restarted decode, RadioModel's apply
+# sequence and the Environment editor. Recording sinks and injected status only:
+# no sockets, radio or TX.
+add_executable(waveform_env_control_test
+    tests/waveform_env_control_test.cpp
+    src/gui/WaveformEnvironmentDialog.cpp
+    src/gui/CanonWindow.cpp
+)
+target_include_directories(waveform_env_control_test PRIVATE src tests)
+target_link_libraries(waveform_env_control_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+set_target_properties(waveform_env_control_test PROPERTIES AUTOMOC ON)
+add_test(NAME waveform_env_control_test COMMAND waveform_env_control_test)
+set_tests_properties(waveform_env_control_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # AntennaChoiceGate.h: when the RX/TX antenna menus refuse instead of offering
 # invented ANT1/ANT2. Header-only predicate, no Qt.
 add_executable(antenna_choice_gate_test tests/antenna_choice_gate_test.cpp)
