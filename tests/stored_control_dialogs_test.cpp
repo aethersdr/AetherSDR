@@ -22,6 +22,7 @@
 #include <QTimer>
 #include <QWidget>
 #include <cstdio>
+#include <utility>
 
 using namespace AetherSDR;
 
