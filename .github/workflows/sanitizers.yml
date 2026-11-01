@@ -21,7 +21,11 @@ permissions:
 jobs:
   sanitize:
     name: ${{ matrix.sanitizer.label }}
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the 26.04 host kernel randomizes mmap more
+    # widely than the GCC 13 TSan runtime in the 24.04 containers supports, so
+    # every instrumented binary (rcc first) dies with "ThreadSanitizer:
+    # unexpected memory mapping" before the build finishes (#6911).
+    runs-on: ubuntu-24.04
     # Per-entry image: the TSan entry runs on the image whose Qt is itself
     # built with -sanitize thread (.github/docker/Dockerfile.tsan). A TSan
     # binary against an uninstrumented Qt reports every cross-thread queued
