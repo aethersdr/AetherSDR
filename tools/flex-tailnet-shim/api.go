@@ -139,8 +139,9 @@ func NewAPI(n *Node) http.Handler {
 			writeJSON(w, http.StatusBadRequest, apiError{"malformed request"})
 			return
 		}
+		// No auth key means sign-in by URL (login.go), shown as a QR code.
 		req.AuthKey = strings.TrimSpace(req.AuthKey)
-		if !authKeyRe.MatchString(req.AuthKey) {
+		if req.AuthKey != "" && !authKeyRe.MatchString(req.AuthKey) {
 			writeJSON(w, http.StatusBadRequest, apiError{"that doesn't look like a Tailscale auth key (tskey-…)"})
 			return
 		}
@@ -160,19 +161,45 @@ func NewAPI(n *Node) http.Handler {
 			return
 		}
 		log.Printf("api: provisioning requested by %s (hostname %q)", r.RemoteAddr, req.Hostname)
-		token, err := n.Provision(bearer(r), req.AuthKey, req.Hostname, req.Allow, req.Routes, req.ShareDiscovered)
+		var token, authURL string
+		var err error
+		if req.AuthKey == "" {
+			token, authURL, err = n.ProvisionInteractive(bearer(r), req.Hostname, req.Allow, req.Routes, req.ShareDiscovered)
+		} else {
+			token, err = n.Provision(bearer(r), req.AuthKey, req.Hostname, req.Allow, req.Routes, req.ShareDiscovered)
+		}
 		if errors.Is(err, errUnauthorized) {
 			unauthorized(w)
 			return
 		}
-		if err != nil {
+		if err != nil && token == "" {
 			writeJSON(w, http.StatusBadGateway, apiError{"could not join the tailnet: " + err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, struct {
+		// An interactive join that failed after saving its token still
+		// returns the token, with the error: the caller must keep it to
+		// change or sign out the node it now owns.
+		reply := struct {
 			AdminToken string `json:"admin_token"`
+			AuthURL    string `json:"auth_url,omitempty"`
+			Error      string `json:"error,omitempty"`
 			Status     Status `json:"status"`
-		}{token, n.Status()})
+		}{AdminToken: token, AuthURL: authURL, Status: n.Status()}
+		if err != nil {
+			reply.Error = err.Error()
+		}
+		writeJSON(w, http.StatusOK, reply)
+	})
+
+	// The sign-in URL while the node waits for one, to the admin-token holder
+	// only: whoever opens it first claims the radio.
+	mux.HandleFunc("GET /v1/login", func(w http.ResponseWriter, r *http.Request) {
+		reply, err := n.Login(bearer(r))
+		if errors.Is(err, errUnauthorized) {
+			unauthorized(w)
+			return
+		}
+		writeJSON(w, http.StatusOK, reply)
 	})
 
 	mux.HandleFunc("PUT /v1/allow", func(w http.ResponseWriter, r *http.Request) {

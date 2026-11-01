@@ -58,8 +58,9 @@ int main(int argc, char** argv)
 
     const QByteArray provisioned = R"({"admin_token":"abc123","status":)" + running + "}";
     const auto pr = tailnetshim::parseProvisionReply(provisioned);
-    ok &= expect(pr.has_value() && pr->first == QStringLiteral("abc123")
-                 && pr->second.state == QStringLiteral("running"), "provision reply parses");
+    ok &= expect(pr.has_value() && pr->adminToken == QStringLiteral("abc123")
+                 && pr->status.state == QStringLiteral("running") && pr->authUrl.isEmpty(),
+                 "provision reply parses");
     ok &= expect(!tailnetshim::parseProvisionReply(running).has_value(),
                  "provision reply without a token is rejected");
 
@@ -96,6 +97,65 @@ int main(int argc, char** argv)
                  "provision body has exactly the API's fields");
     ok &= expect(body.value(QStringLiteral("auth_key")).toString()
                  == QStringLiteral("tskey-auth-k123"), "auth key trimmed");
+
+    // Sign-in by QR code (shim 0.5.0): no key in the body, a URL in the reply.
+    {
+        const QJsonObject qrBody = QJsonDocument::fromJson(tailnetshim::provisionBody(
+            QStringLiteral("  "), QStringLiteral("flex-8600"), {})).object();
+        ok &= expect(!qrBody.contains(QStringLiteral("auth_key")),
+                     "a QR sign-in sends no auth_key");
+        const QByteArray qrReply = R"({"admin_token":"tok","auth_url":"https://login.tailscale.com/a/abc123",
+            "status":{"version":"0.5.0","provisioned":true,"state":"needs_login","key_expiry":""}})";
+        const auto qr = tailnetshim::parseProvisionReply(qrReply);
+        ok &= expect(qr && qr->authUrl == QStringLiteral("https://login.tailscale.com/a/abc123")
+                     && qr->status.state == QStringLiteral("needs_login"),
+                     "a QR provision reply carries the sign-in URL");
+        const auto late = tailnetshim::parseProvisionReply(
+            R"({"admin_token":"tok","error":"the tailnet sign-in didn't start: x",
+                "status":{"version":"0.5.0","state":"error"}})");
+        ok &= expect(late && late->adminToken == QStringLiteral("tok") && !late->error.isEmpty(),
+                     "a token that comes with an error is still returned");
+
+        const auto login = tailnetshim::parseLoginReply(
+            R"({"state":"needs_login","auth_url":"https://login.tailscale.com/a/xyz","key_expiry":"2027-04-30T12:00:00Z"})");
+        ok &= expect(login && login->authUrl == QStringLiteral("https://login.tailscale.com/a/xyz")
+                     && login->keyExpiry == QStringLiteral("2027-04-30T12:00:00Z"), "login reply parses");
+        ok &= expect(!tailnetshim::parseLoginReply(R"({"error":"admin token required"})"),
+                     "an error is not a login reply");
+
+        ok &= expect(tailnetshim::checkedAuthUrl(QStringLiteral("http://login.tailscale.com/a/x")).isEmpty(),
+                     "plain http sign-in URL refused");
+        ok &= expect(tailnetshim::checkedAuthUrl(QStringLiteral("javascript:alert(1)")).isEmpty(),
+                     "non-https scheme refused");
+        ok &= expect(tailnetshim::checkedAuthUrl(QStringLiteral("https://x/a b")).isEmpty(),
+                     "URL with whitespace refused");
+        ok &= expect(tailnetshim::checkedAuthUrl(QStringLiteral("https://headscale.example.net/register/abc"))
+                         == QStringLiteral("https://headscale.example.net/register/abc"),
+                     "a self-hosted control server's URL is kept");
+        ok &= expect(tailnetshim::checkedAuthUrl(QStringLiteral("https://x/") + QString(600, QLatin1Char('a'))).isEmpty(),
+                     "oversized URL refused");
+
+        const auto withExpiry = tailnetshim::parseStatus(
+            R"({"version":"0.5.0","state":"running","key_expiry":"2027-04-30T12:00:00Z"})");
+        ok &= expect(withExpiry && withExpiry->keyExpiry == QStringLiteral("2027-04-30T12:00:00Z"),
+                     "status key expiry parses");
+        const auto pending = tailnetshim::parseStatus(
+            R"({"version":"0.5.0","provisioned":true,"state":"needs_login","claimable":true})");
+        ok &= expect(pending && pending->claimable, "a never-completed sign-in is claimable");
+        const auto oldRunning = tailnetshim::parseStatus(
+            R"({"version":"0.4.1","provisioned":true,"state":"running"})");
+        const auto oldFresh = tailnetshim::parseStatus(
+            R"({"version":"0.4.1","provisioned":false,"state":"unprovisioned"})");
+        ok &= expect(oldRunning && !oldRunning->claimable && oldFresh && oldFresh->claimable,
+                     "before 0.5.0 only an unprovisioned radio is claimable");
+
+        ok &= expect(!tailnetshim::supportsQrSignIn(QStringLiteral("0.4.1")), "0.4.1 has no QR sign-in");
+        ok &= expect(!tailnetshim::supportsQrSignIn(QStringLiteral("0.4.1-native")), "0.4.1-native neither");
+        ok &= expect(tailnetshim::supportsQrSignIn(QStringLiteral("0.5.0")), "0.5.0 signs in by QR");
+        ok &= expect(tailnetshim::supportsQrSignIn(QStringLiteral("0.5.0-native")), "native 0.5.0 too");
+        ok &= expect(tailnetshim::supportsQrSignIn(QStringLiteral("1.0.0")), "1.0.0 too");
+        ok &= expect(!tailnetshim::supportsQrSignIn(QString()), "an unknown version doesn't");
+    }
 
     ok &= expect(tailnetshim::suggestedHostname(QStringLiteral("KK7GWY FLEX-8600"))
                  == QStringLiteral("kk7gwy-flex-8600"), "hostname from nickname");

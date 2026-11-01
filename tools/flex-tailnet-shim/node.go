@@ -35,6 +35,7 @@ const (
 	stateStarting      = "starting"      // joining the tailnet
 	stateRunning       = "running"       // on the tailnet, relaying
 	stateError         = "error"         // last attempt failed; see LastError
+	// stateNeedsLogin and stateNeedsApproval (login.go): waiting on a person.
 )
 
 // provisionConfig is persisted in the state directory. It never holds the
@@ -51,6 +52,11 @@ type provisionConfig struct {
 	// ShareDiscovered shares every 4O3A device the container hears on the LAN
 	// (nil means the default: on).
 	ShareDiscovered *bool `json:"share_discovered,omitempty"`
+	// PendingSignIn: provisioned for a sign-in by URL that hasn't completed.
+	// The node belongs to no tailnet yet, so, like first use, a LAN caller
+	// may start it over without the token (whoever began it may have lost
+	// it with their window). Cleared once the node is first on the tailnet.
+	PendingSignIn bool `json:"pending_sign_in,omitempty"`
 }
 
 func (c provisionConfig) shareDiscovered() bool {
@@ -107,6 +113,10 @@ type Node struct {
 	// first-hand evidence of approval (a node's own status doesn't carry its
 	// approved routes).
 	routesInUse map[netip.Prefix]bool
+	// loginRead reads the tailnet backend's sign-in state, set from the
+	// moment a start attempt has a tsnet instance (login.go).
+	loginRead loginReader
+	keyExpiry *time.Time // the node key's expiry; nil when it doesn't expire
 
 	telemetry linkTelemetry // per-peer path, RTT and throughput (telemetry.go)
 
@@ -145,7 +155,7 @@ func (n *Node) newTsnetServer(hostname, authKey string) (*tsnet.Server, error) {
 		Dir:      n.tsnetDir(),
 		AuthKey:  authKey,
 		Logf:     func(string, ...any) {},
-		UserLogf: log.Printf,
+		UserLogf: withoutURLs(log.Printf),
 	}
 	if n.RunDir == "" {
 		return srv, nil
@@ -214,7 +224,7 @@ func (n *Node) Boot() {
 	if !provisioned || n.bootCancel != nil {
 		n.mu.Unlock()
 		if !provisioned {
-			log.Printf("unprovisioned: waiting for AetherSDR to supply a Tailscale auth key")
+			log.Printf("unprovisioned: waiting for AetherSDR to sign the radio in to a tailnet")
 		}
 		return
 	}
@@ -330,11 +340,32 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 		n.setState(stateError, err.Error())
 		return err
 	}
-	ctx, cancel := context.WithTimeout(parent, timeout)
+	// The local client starts tsnet, so the sign-in state can be watched
+	// while Up waits; without an auth key the timeout stops counting once
+	// the node waits on a person (watchJoin).
+	lc0, err := srv.LocalClient()
+	if err != nil {
+		srv.Close()
+		n.setState(stateError, err.Error())
+		return err
+	}
+	read := lcLoginReader(lc0)
+	n.mu.Lock()
+	n.loginRead = read
+	n.mu.Unlock()
+	ctx, cancel := context.WithCancel(parent)
+	deadline := time.AfterFunc(timeout, cancel)
+	wctx, wcancel := context.WithCancel(ctx)
+	go n.watchJoin(wctx, read, authKey == "", func() { deadline.Stop() })
 	st, err := srv.Up(ctx)
+	wcancel()
+	deadline.Stop()
 	cancel()
 	if err != nil {
 		srv.Close()
+		n.mu.Lock()
+		n.loginRead = nil
+		n.mu.Unlock()
 		if parent.Err() != nil {
 			n.setState(stateStarting, "")
 		} else {
@@ -466,8 +497,14 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 	n.authorize = admitOnly(n.check)
 	n.advertised = nil
 	n.mu.Unlock()
+	n.markJoined()
 	n.RefreshRoutes()
 	go reportHealth(lc)
+	kctx, kcancel := context.WithCancel(context.Background())
+	n.mu.Lock()
+	n.closers = append(n.closers, func() error { kcancel(); return nil })
+	n.mu.Unlock()
+	go n.keepSignedIn(kctx, read, lc.StartLoginInteractive)
 	return nil
 }
 
@@ -585,7 +622,7 @@ func (n *Node) SetSharing(presented string, routes []string, shareDiscovered *bo
 func (n *Node) beginOp(presented string, firstUse bool) (end func(), err error) {
 	refused := func() bool {
 		n.mu.Lock()
-		needsToken := !firstUse || n.provisioned()
+		needsToken := !firstUse || (n.provisioned() && !n.cfg.PendingSignIn)
 		n.mu.Unlock()
 		return needsToken && !n.checkToken(presented)
 	}
@@ -620,6 +657,7 @@ func (n *Node) stop(logout bool) error {
 	n.authorize, n.check = nil, nil
 	n.fwd = nil
 	n.routesInUse = nil
+	n.loginRead, n.keyExpiry = nil, nil
 	n.telemetry.mu.Lock()
 	n.telemetry.peers = nil
 	n.telemetry.mu.Unlock()
@@ -752,31 +790,9 @@ func (n *Node) Provision(presented, authKey, hostname string, allow, routes []st
 	token, hash := newToken()
 	cfg := provisionConfig{TokenSHA256: hash, Hostname: hostname, Allow: allow, Routes: routes,
 		ShareDiscovered: shareDiscovered}
-	// Leave the previous tailnet first and fail closed if its state can't be
-	// deleted: tsnet ignores a new auth key while a stored node exists, so
-	// starting on top of it would keep the old identity while reporting a
-	// new join. On that failure the saved settings and token are untouched,
-	// so the caller's token still works for another try. (A logout the
-	// tailnet didn't confirm is only logged: the state is gone either way.)
-	if err := n.stop(true); err != nil {
-		log.Printf("provision: leaving the previous tailnet: %v", err)
+	if err := n.replaceNode(cfg); err != nil {
+		return "", err
 	}
-	if _, err := os.Stat(n.tsnetDir()); !errors.Is(err, os.ErrNotExist) {
-		n.setState(stateError, "could not delete the previous tailnet state")
-		if err == nil {
-			err = errors.New("it is still there")
-		}
-		return "", fmt.Errorf("could not delete the previous tailnet state, so the key was not used: %w", err)
-	}
-	// Then save, so a full or read-only state directory fails with the old
-	// settings and token intact.
-	if err := n.save(cfg); err != nil {
-		n.setState(stateError, "could not save settings")
-		return "", fmt.Errorf("could not save settings: %w", err)
-	}
-	n.mu.Lock()
-	n.cfg = cfg
-	n.mu.Unlock()
 
 	start := n.startFn
 	if start == nil {
@@ -913,6 +929,13 @@ type Status struct {
 	// Per-session UDP counters: where VITA-49 stops, if it does.
 	SessionDetail []SessionInfo `json:"session_detail"`
 	LastError     string        `json:"last_error"`
+	// Claimable: no tailnet owns the node yet (unprovisioned, or a sign-in by
+	// URL never completed), so provisioning needs no admin token.
+	Claimable bool `json:"claimable"`
+	// KeyExpiry is when the node's sign-in expires (RFC 3339), empty when it
+	// doesn't. A node signed in by URL expires after 180 days unless key
+	// expiry is turned off for it in the Tailscale admin console.
+	KeyExpiry string `json:"key_expiry"`
 	// Command verbs relayed so far (never arguments), for diagnosing what a
 	// client such as a Maestro asks the radio for.
 	RecentCommands []string `json:"recent_commands"`
@@ -989,6 +1012,10 @@ func (n *Node) statusLocked() Status {
 		Version: version(), Provisioned: n.provisioned(), State: n.state,
 		Hostname: n.cfg.Hostname, DNSName: n.dnsName, Allow: n.cfg.Allow,
 		LastError: n.lastError,
+		Claimable: !n.provisioned() || n.cfg.PendingSignIn,
+	}
+	if n.keyExpiry != nil {
+		st.KeyExpiry = n.keyExpiry.UTC().Format(time.RFC3339)
 	}
 	if st.Allow == nil {
 		st.Allow = []string{}

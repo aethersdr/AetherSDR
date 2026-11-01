@@ -350,6 +350,10 @@
             "footer.success.background.checked": "#2d4dd87a",
             "footer.success.background.hover":   "#464dd87a"
           },
+          "qr": {
+            "dark":  "#000000",
+            "light": "#ffffff"
+          },
           "highlight": {
             "tx":      "#fc4500",
             "rx":      "#379baf",

@@ -83,6 +83,11 @@ std::optional<TailnetShimStatus> statusFromObject(const QJsonObject& o)
     }
     st.advertisedRoutes = fieldList(o, QStringLiteral("advertised_routes"));
     st.approvedRoutes = fieldList(o, QStringLiteral("approved_routes"));
+    st.keyExpiry = field(o, QStringLiteral("key_expiry"));
+    // Before 0.5.0 there was no such field: only an unprovisioned radio was.
+    st.claimable = o.contains(QStringLiteral("claimable"))
+        ? o.value(QStringLiteral("claimable")).toBool()
+        : !st.provisioned;
     return st;
 }
 
@@ -95,7 +100,7 @@ std::optional<TailnetShimStatus> parseStatus(const QByteArray& json)
     return statusFromObject(doc.object());
 }
 
-std::optional<std::pair<QString, TailnetShimStatus>> parseProvisionReply(const QByteArray& json)
+std::optional<TailnetShimProvisionReply> parseProvisionReply(const QByteArray& json)
 {
     const QJsonDocument doc = QJsonDocument::fromJson(json);
     if (!doc.isObject()) {
@@ -109,7 +114,54 @@ std::optional<std::pair<QString, TailnetShimStatus>> parseProvisionReply(const Q
     if (token.isEmpty() || token.size() > kMaxField || !st) {
         return std::nullopt;
     }
-    return std::make_pair(token, *st);
+    TailnetShimProvisionReply reply;
+    reply.adminToken = token;
+    reply.authUrl = checkedAuthUrl(o.value(QStringLiteral("auth_url")).toString());
+    reply.error = field(o, QStringLiteral("error"), kMaxMessage);
+    reply.status = *st;
+    return reply;
+}
+
+std::optional<TailnetShimLogin> parseLoginReply(const QByteArray& json)
+{
+    const QJsonDocument doc = QJsonDocument::fromJson(json);
+    if (!doc.isObject() || !doc.object().contains(QStringLiteral("state"))) {
+        return std::nullopt;
+    }
+    const QJsonObject o = doc.object();
+    TailnetShimLogin login;
+    login.state = field(o, QStringLiteral("state"));
+    login.authUrl = checkedAuthUrl(o.value(QStringLiteral("auth_url")).toString());
+    login.keyExpiry = field(o, QStringLiteral("key_expiry"));
+    return login;
+}
+
+QString checkedAuthUrl(const QString& url)
+{
+    // Real ones are about 50 characters; the cap keeps the QR code readable.
+    constexpr int kMaxUrl = 512;
+    if (url.isEmpty() || url.size() > kMaxUrl) {
+        return {};
+    }
+    const QUrl u(url, QUrl::StrictMode);
+    if (!u.isValid() || u.scheme() != QLatin1String("https") || u.host().isEmpty()
+        || url.contains(QRegularExpression(QStringLiteral("\\s")))) {
+        return {};
+    }
+    return url;
+}
+
+bool supportsQrSignIn(const QString& version)
+{
+    // "0.5.0", "0.5.0-native": compare major.minor.
+    const QRegularExpressionMatch m =
+        QRegularExpression(QStringLiteral("^(\\d+)\\.(\\d+)")).match(version);
+    if (!m.hasMatch()) {
+        return false;
+    }
+    const int major = m.captured(1).toInt();
+    const int minor = m.captured(2).toInt();
+    return major > 0 || minor >= 5;
 }
 
 QString parseError(const QByteArray& json)
@@ -129,7 +181,9 @@ QByteArray provisionBody(const QString& authKey, const QString& hostname,
                          bool shareDiscovered)
 {
     QJsonObject o;
-    o.insert(QStringLiteral("auth_key"), authKey.trimmed());
+    if (!authKey.trimmed().isEmpty()) {
+        o.insert(QStringLiteral("auth_key"), authKey.trimmed());
+    }
     o.insert(QStringLiteral("hostname"), hostname.trimmed());
     o.insert(QStringLiteral("allow"), QJsonArray::fromStringList(allow));
     o.insert(QStringLiteral("routes"), QJsonArray::fromStringList(routes));
@@ -222,6 +276,9 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
         if (reply == m_statusReply) {
             m_statusReply = nullptr;
         }
+        if (reply == m_loginReply) {
+            m_loginReply = nullptr;
+        }
         reply->deleteLater();
         const int code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QByteArray body = reply->readAll();
@@ -247,7 +304,16 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
                 emit requestFailed(operation, tr("The container sent an unreadable reply."), false);
                 return;
             }
-            emit provisioned(parsed->first, parsed->second);
+            emit provisioned(*parsed);
+            return;
+        }
+        if (operation == QLatin1String("login")) {
+            const auto login = tailnetshim::parseLoginReply(body);
+            if (!login) {
+                emit requestFailed(operation, tr("The container sent an unreadable reply."), false);
+                return;
+            }
+            emit loginReceived(*login);
             return;
         }
         const auto st = tailnetshim::parseStatus(body);
@@ -267,6 +333,15 @@ void TailnetShimClient::fetchStatus()
     }
     m_statusReply = send(QStringLiteral("GET"), QStringLiteral("/v1/status"), {}, {});
     handle(m_statusReply, QStringLiteral("status"));
+}
+
+void TailnetShimClient::fetchLogin(const QString& adminToken)
+{
+    if (m_loginReply || adminToken.isEmpty()) {
+        return;
+    }
+    m_loginReply = send(QStringLiteral("GET"), QStringLiteral("/v1/login"), {}, adminToken);
+    handle(m_loginReply, QStringLiteral("login"));
 }
 
 void TailnetShimClient::provision(const QString& authKey, const QString& hostname,
