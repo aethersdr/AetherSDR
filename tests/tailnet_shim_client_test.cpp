@@ -180,6 +180,10 @@ int main(int argc, char** argv)
         ok &= expect(tailnetshim::shouldSignInUnasked(abandoned, true, false, false, true, false)
                      && !tailnetshim::shouldSignInUnasked(abandoned, true, true, false, true, false),
                      "an abandoned sign-in restarts only without its token");
+        TailnetShimStatus failedHere = abandoned;
+        failedHere.state = QStringLiteral("error");
+        ok &= expect(tailnetshim::shouldSignInUnasked(failedHere, true, true, false, true, false),
+                     "a pending sign-in that failed here restarts even with its token");
         TailnetShimStatus joined = abandoned;
         joined.claimable = false;
         joined.state = QStringLiteral("running");

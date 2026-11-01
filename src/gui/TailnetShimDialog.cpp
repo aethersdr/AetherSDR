@@ -448,12 +448,10 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     m_pollTimer->setInterval(3000);
     connect(m_pollTimer, &QTimer::timeout, this, [this] {
         if (!m_busy) {
+            // While a sign-in is waited on, the status reply fetches the
+            // login too (showStatus), which keeps a restarted join's code
+            // current.
             m_client.fetchStatus();
-            // A join restarted on the radio comes with a new URL: keep the
-            // code on screen current.
-            if (m_status && waitingOnPerson(m_status->state)) {
-                m_client.fetchLogin(m_adminToken);
-            }
         }
     });
 
@@ -644,9 +642,12 @@ void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
     const QString expiresText = expires.isValid()
         ? QLocale().toString(expires.toLocalTime().date(), QLocale::LongFormat)
         : QString();
+    // Only a container that reports expiry (0.5.0 on) can say "Never".
     m_expiryLabel->setText(!expiresText.isEmpty() ? expiresText
-                           : st.state == QLatin1String("running") ? tr("Never")
-                                                                   : QStringLiteral("—"));
+                           : st.state == QLatin1String("running")
+                                   && tailnetshim::supportsQrSignIn(st.version)
+                               ? tr("Never")
+                               : QStringLiteral("—"));
     const bool showExpiryHint = st.state == QLatin1String("running") && !expiresText.isEmpty();
     if (showExpiryHint) {
         setWrapped(m_expiryHint,
@@ -711,7 +712,7 @@ void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
         if (st.state == QLatin1String("needs_approval")) {
             showSignIn(QString());
         }
-    } else if (st.state != QLatin1String("starting") && m_qrPanel->isVisible()) {
+    } else if (st.state != QLatin1String("starting") && !m_qrPanel->isHidden()) {
         // "starting" is a join on its way to a sign-in or back from one:
         // the code stays up until the radio is on the tailnet or gives up.
         hideSignIn();
@@ -773,8 +774,12 @@ void TailnetShimDialog::updateControls()
     m_saveSharingButton->setEnabled(provisioned && haveToken && !waiting);
     // Disconnect belongs to a radio on the tailnet; until then there is
     // only the sign-in to finish.
+    // A provisioned radio stuck in error can also be signed out, or its
+    // token holder would have no way back.
     const bool joined = known
-        && (m_status->state == QLatin1String("running") || !m_status->tailnetIp.isEmpty());
+        && (m_status->state == QLatin1String("running") || !m_status->tailnetIp.isEmpty()
+            || (provisioned && !m_status->claimable
+                && m_status->state == QLatin1String("error")));
     // Without the admin token nothing here can change a radio a tailnet
     // owns: Reset (reinstall the container) takes Disconnect's place.
     const bool lockedOut = provisioned && m_tokenLoaded && !haveToken && !m_status->claimable;
@@ -928,7 +933,9 @@ void TailnetShimDialog::showSignIn(const QString& url)
             m_cardTextWidth - kQrArea - 16);
         setWrapped(m_qrLink, tr("Or open: %1").arg(url), m_cardTextWidth - kQrArea - 16);
     }
-    if (!m_qrPanel->isVisible()) {
+    // isHidden, not isVisible: the panel's own flag, whether or not the
+    // Join card around it is showing.
+    if (m_qrPanel->isHidden()) {
         m_qrPanel->show();
         if (isVisible()) {
             fitToContents();
@@ -940,7 +947,7 @@ void TailnetShimDialog::hideSignIn()
 {
     m_authUrl.clear();
     m_qrImage->clear();
-    if (m_qrPanel->isVisible()) {
+    if (!m_qrPanel->isHidden()) {
         m_qrPanel->hide();
         if (isVisible()) {
             fitToContents();
@@ -966,10 +973,17 @@ void TailnetShimDialog::onRequestFailed(const QString& operation, const QString&
         // Mid sign-in, a refused token means another computer started the
         // sign-in over, which replaced this window's code and token.
         if (operation == QLatin1String("login")) {
+            // The token is dead: forget it, here and in the keychain, so
+            // Refresh or reopening the window offers a new code instead of
+            // failing with it again. Not unasked in this window, or two open
+            // windows would keep replacing each other's code.
             m_signingIn = false;
+            m_adminToken.clear();
+            TailnetShimTokenStore::save(m_radioSerial, QString());
             hideSignIn();
             showError(tr("This radio's sign-in was started over from another computer. Finish "
-                         "it there, or close and reopen this window for a new code."));
+                         "it there, or press Refresh for a new code here."));
+            updateControls();
             return;
         }
         showError(tr("The container rejected this computer's admin token. To start over, "
@@ -1031,6 +1045,9 @@ void TailnetShimDialog::signOut()
         return;
     }
     m_messageLabel->hide();
+    // Disconnected stays disconnected: a new code waits for the window to be
+    // reopened (or Refresh), as the confirmation says.
+    m_autoSignInTried = true;
     setBusy(true, tr("Disconnecting…"));
     connect(&m_client, &TailnetShimClient::statusReceived, this,
             [this](const TailnetShimStatus& st) {
