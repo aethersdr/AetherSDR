@@ -159,6 +159,7 @@ RadioTab::RadioTab(const RadioTabEntry& entry, QWidget* parent)
 
 QString RadioTab::statusLine() const
 {
+    if (m_entry.kind == RadioTabEntry::Kind::Workspace) { return m_entry.detail; }
     // The name is already line one; repeating it here pushed the state — the
     // part that changes — off the end of every narrow tab.  The model is shown
     // only when an operator nickname hides it.
@@ -204,7 +205,8 @@ void RadioTab::refreshAccessibility()
     setText(m_entry.name);
     // The status is in the accessible name as well as on screen — a screen
     // reader user must not have to infer it from the dot's colour.
-    setAccessibleName(QStringLiteral("Radio %1, %2").arg(m_entry.name, statusWord()));
+    setAccessibleName(m_entry.kind == RadioTabEntry::Kind::Workspace
+        ? descriptionLine() : QStringLiteral("Radio %1, %2").arg(m_entry.name, statusWord()));
     setAccessibleDescription(descriptionLine());
     setToolTip(descriptionLine());
 }
@@ -598,6 +600,9 @@ RadioTabBar::RadioTabBar(QWidget* parent)
 
 bool RadioTabBar::eventFilter(QObject* watched, QEvent* ev)
 {
+    if (m_scrollArea && watched == m_scrollArea->viewport() && ev->type() == QEvent::Resize) {
+        QTimer::singleShot(0, this, &RadioTabBar::applyActiveState);
+    }
     if (watched == m_addButton
         && (ev->type() == QEvent::FocusIn || ev->type() == QEvent::FocusOut)) {
         bool visible = false;
@@ -747,7 +752,10 @@ void RadioTabBar::pulseLink(const QColor& beatColor)
 
 QString RadioTabBar::linkRadioId() const
 {
-    return m_activeId.isEmpty() ? m_carrierId : m_activeId;
+    for (const RadioTabEntry& entry : m_radios) {
+        if (entry.id == m_activeId && entry.kind == RadioTabEntry::Kind::Radio) { return m_activeId; }
+    }
+    return m_carrierId;
 }
 
 void RadioTabBar::applyLinkVisuals()
@@ -777,7 +785,7 @@ RadioTab* RadioTabBar::linkCarrierTab() const
 {
     const QString& id = linkRadioId();
     for (RadioTab* tab : m_tabs) {
-        if (!id.isEmpty() && tab->entry().id == id
+        if (tab->entry().kind == RadioTabEntry::Kind::Radio && !id.isEmpty() && tab->entry().id == id
             && (tab->entry().visibleInTabs || id == m_activeId)) {
             return tab;
         }
@@ -786,9 +794,9 @@ RadioTab* RadioTabBar::linkCarrierTab() const
     // needs a tab to render on, so it rides the first visible one.  That tab
     // is not the link's radio, so applyLinkVisuals() never paints the alarm
     // on it.
-    if (m_activeId.isEmpty()) {
+    if (m_activeId.isEmpty() || m_activeId != linkRadioId()) {
         for (RadioTab* tab : m_tabs) {
-            if (tab->entry().visibleInTabs) {
+            if (tab->entry().kind == RadioTabEntry::Kind::Radio && tab->entry().visibleInTabs) {
                 return tab;
             }
         }
@@ -884,7 +892,10 @@ void RadioTabBar::setActiveRadio(const QString& id)
     if (m_activeId == id) {
         return;
     }
-    if (!id.isEmpty()) {
+    const bool radio = std::any_of(m_radios.cbegin(), m_radios.cend(), [&id](const RadioTabEntry& entry) {
+        return entry.id == id && entry.kind == RadioTabEntry::Kind::Radio;
+    });
+    if (!id.isEmpty() && radio) {
         // The link the heartbeat describes.  Kept through a drop — when the
         // active id goes empty — so a lost link is shown on the radio that
         // lost it, not on whichever tab happens to come first.
@@ -938,6 +949,7 @@ void RadioTabBar::applyActiveState()
         const bool isActive = tab->entry().id == m_activeId;
         tab->setChecked(isActive);
         tab->setVisible(m_compact ? tab == shown : tab->entry().visibleInTabs);
+        if (isActive && !m_compact) { shown = tab; }
     }
     if (m_addButton) {
         m_addButton->setVisible(!m_compact);
@@ -1159,6 +1171,15 @@ void RadioTabBar::showDiscoveryPopover()
     ThemeManager::instance().applyStyleSheet(refresh, rowStyleTemplate());
     connect(refresh, &QPushButton::clicked, this, [this]() { emit rescanRequested(); });
     rows->addWidget(refresh);
+    auto* lab = new QPushButton(tr("AetherLab"), popover->panel());
+    lab->setObjectName(QStringLiteral("radioSwitcherAetherLab"));
+    lab->setAccessibleName(tr("Open AetherLab antenna analyzer"));
+    ThemeManager::instance().applyStyleSheet(lab, rowStyleTemplate());
+    connect(lab, &QPushButton::clicked, this, [this] {
+        if (m_popover) { m_popover->close(); }
+        emit aetherLabRequested();
+    });
+    rows->addWidget(lab);
     popover->adjustSize();
 
     // Anchor under the "+" button, then clamp into the screen so a radio strip
@@ -1169,7 +1190,7 @@ void RadioTabBar::showDiscoveryPopover()
                            : nullptr) {
         const QRect avail = scr->availableGeometry();
         popover->setFixedWidth(qMin(380, avail.width()));
-        scroller->setFixedHeight(qMin(scroller->height(), qMax(48, avail.height() - 190)));
+        scroller->setFixedHeight(qMin(scroller->height(), qMax(48, avail.height() - 230)));
         popover->adjustSize();
         anchor.setX(qBound(avail.left(),
                            anchor.x(),
@@ -1194,7 +1215,8 @@ QVariantMap RadioTabBar::state() const
             {QStringLiteral("screenRect"),
              QVariantList{screen.x(), screen.y(), screen.width(), screen.height()}},
             {QStringLiteral("name"), e.name},
-            {QStringLiteral("status"), radioTabStatusText(e.status)},
+            {QStringLiteral("status"), e.kind == RadioTabEntry::Kind::Workspace ? QStringLiteral("workspace") : radioTabStatusText(e.status)},
+            {QStringLiteral("kind"), e.kind == RadioTabEntry::Kind::Workspace ? QStringLiteral("workspace") : QStringLiteral("radio")},
             {QStringLiteral("model"), e.model},
             {QStringLiteral("statusLine"), tab->statusLine()},
             {QStringLiteral("transport"), e.transport},
@@ -1214,7 +1236,8 @@ QVariantMap RadioTabBar::state() const
             {QStringLiteral("id"), e.id},
             {QStringLiteral("name"), e.name},
             {QStringLiteral("transport"), e.transport},
-            {QStringLiteral("status"), radioTabStatusText(e.status)},
+            {QStringLiteral("status"), e.kind == RadioTabEntry::Kind::Workspace ? QStringLiteral("workspace") : radioTabStatusText(e.status)},
+            {QStringLiteral("kind"), e.kind == RadioTabEntry::Kind::Workspace ? QStringLiteral("workspace") : QStringLiteral("radio")},
         });
     }
 

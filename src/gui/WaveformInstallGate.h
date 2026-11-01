@@ -1,16 +1,28 @@
 #pragma once
 
-#include "models/ModelCapabilities.h"   // RadioPlatform
+#include "models/ModelCapabilities.h"   // RadioPlatform, isKnownNonWfpPlatform
+
+#include <QPointer>
 
 namespace AetherSDR {
 
-// Platforms with no on-radio WFP hardware at all (6000-series Microburst /
-// DeepEddy). This is a genuine hard incompatibility for Docker waveform
-// deployment, distinct from the "wfp" license feature (see below).
-inline bool isKnownNonWfpPlatform(RadioPlatform platform)
+// Whether Install -> Remote Access fetches the shim as a legacy waveform:
+// yes for a radio with no Waveform Processor; every other one takes the
+// container, which the Docker gate below still governs.
+inline bool remoteAccessUsesNativePackage(RadioPlatform platform)
 {
-    return platform == RadioPlatform::Microburst
-        || platform == RadioPlatform::DeepEddy;
+    return isKnownNonWfpPlatform(platform);
+}
+
+// The radio a package may be installed to once its download or file picker
+// finishes: the one it was chosen for, in the same control session, or null.
+// The RadioModel object outlives a reconnect, so the pointer alone can't stop
+// a FLEX-6000 package reaching a different radio. A template, so this header
+// needs no model include; Model is RadioModel.
+template <typename Model, typename Session>
+Model* radioStillChosen(const QPointer<Model>& model, const Session& chosen)
+{
+    return model && model->controlSessionCurrent(chosen) ? model.data() : nullptr;
 }
 
 // Why "Install -> Docker Waveform Image..." is blocked, or None (#4210).

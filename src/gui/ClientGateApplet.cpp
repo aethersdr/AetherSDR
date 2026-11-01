@@ -217,8 +217,11 @@ void ClientGateApplet::buildUI()
     // connect lines read cleanly.
     auto wire = [this](ClientCompKnob* k, auto setter) {
         connect(k, &ClientCompKnob::valueChanged, this, [this, setter](float v) {
-            if (!m_audio || !gate()) return;
-            (gate()->*setter)(v);
+            if (!m_audio) return;
+            // Local object operand: see VfoWidget::buildTabContent (#6724).
+            auto* const target = gate();
+            if (!target) return;
+            (target->*setter)(v);
             saveGateSettings();
         });
     };
