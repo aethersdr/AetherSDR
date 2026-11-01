@@ -1947,7 +1947,9 @@ if(AETHER_BACKEND_RTL)
     target_include_directories(rtl_model_acceptance_test PRIVATE src tests)
     target_link_libraries(rtl_model_acceptance_test PRIVATE aethercore Qt6::Core)
     add_test(NAME rtl_model_acceptance_test COMMAND rtl_model_acceptance_test)
-    set_tests_properties(rtl_model_acceptance_test PROPERTIES TIMEOUT 60)
+    # Each waitFor allows 30 s; this leaves room for a stuck backend to print
+    # its FAILs and the failure count instead of dying as a bare Timeout.
+    set_tests_properties(rtl_model_acceptance_test PROPERTIES TIMEOUT 300)
 
     # Inject the C API into the private adapter; no USB, sockets or driver load.
     add_executable(rtl_usb_controls_test tests/rtl_usb_controls_test.cpp
