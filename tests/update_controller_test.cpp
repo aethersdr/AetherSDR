@@ -6,6 +6,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QThread>
@@ -598,8 +601,28 @@ private slots:
         // Nothing staged: no note.
         Rig rig(m_key);
         UpdateController::Environment e = rig.env();
-        e.installedDaxDriverSource = [&] { return std::optional<QString>(a); };
+        std::optional<QString> installed = a;
+        e.installedDaxDriverSource = [&] { return installed; };
         UpdateController c(e);
+        QVERIFY(!c.daxDriverChanges());
+        // Staged, with a manifest naming b for this platform: the note shows
+        // while the installed driver is a, and not once it is b.
+        c.install(QStringLiteral("26.10.3"));
+        QVERIFY(waitFor(c, UpdateController::State::Staged));
+        const QString kept = rig.staging + QStringLiteral("/26.10.3.manifest.json");
+        QJsonObject m = QJsonDocument::fromJson(readFile(kept)).object();
+        QJsonArray ps = m[QStringLiteral("payloads")].toArray();
+        for (int i = 0; i < ps.size(); ++i) {
+            QJsonObject p = ps[i].toObject();
+            p[QStringLiteral("dax_driver")] = QJsonObject{{QStringLiteral("source"), b}};
+            ps[i] = p;
+        }
+        m[QStringLiteral("payloads")] = ps;
+        writeFile(kept, QJsonDocument(m).toJson());
+        QVERIFY(c.daxDriverChanges());
+        installed = b;
+        QVERIFY(!c.daxDriverChanges());
+        installed = std::nullopt;
         QVERIFY(!c.daxDriverChanges());
     }
 

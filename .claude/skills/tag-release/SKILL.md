@@ -372,15 +372,16 @@ morning. A failed platform job is re-run once without asking (`gh run rerun
 <id> --failed`); a second failure is an "Always ask"; a hand upload goes in
 the report by name and uploader.
 
-**Sign Release Artifacts** runs on `workflow_run` after **AppImage** and
-after **Windows Installer** each conclude — two runs per tag, serialised by
-a concurrency group. Each run is skipped by its own `if` unless the
-triggering build **succeeded** and its head branch starts with `v`. A run
-that passes the `if` waits up to 30 minutes for the six GPG-signable assets
-(both AppImages, both Linux release tarballs, the setup.exe, the portable
-ZIP), checks out the **tag** for the source tarball, writes `SHA256SUMS.txt`
-over exactly seven files (the six plus the source tarball — DMGs and the
-`.msixupload` are deliberately absent), signs
+**Sign Release Artifacts** runs on `workflow_run` after **AppImage**,
+**Windows Installer** and **macOS DMG** each conclude — up to three runs per
+tag, serialised by a concurrency group (a third trigger cancels the one still
+pending). Each run is skipped by its own `if` unless the triggering build
+**succeeded** and its head branch starts with `v`. A run that passes the `if`
+waits up to 30 minutes for the eight GPG-signable assets (both AppImages,
+both Linux release tarballs, both macOS app tarballs, the setup.exe, the
+portable ZIP), checks out the **tag** for the source tarball, writes
+`SHA256SUMS.txt` over exactly nine files (the eight plus the source tarball —
+DMGs and the `.msixupload` are deliberately absent), signs
 everything and uploads with `--clobber`. Its runs execute on the default
 branch, so `gh run list --branch vX.Y.Z` never shows them:
 
@@ -401,6 +402,17 @@ gh workflow run sign-release.yml -f tag=vX.Y.Z
 
 A run that exists and is neither concluded nor waiting for a missing asset
 is an "Always ask" before a second dispatch.
+
+**macOS never blocks the others** (a maintainer ruling): signing and Update
+Manifest wait for the macOS app tarballs only while the tag's macOS DMG run
+can still attach them. If it finishes without one (a notarization failure, a
+leg that failed to sign), Linux and Windows are signed and the manifest is
+published without macOS, with a `::warning::` in each run. The asset check
+then reports the missing app tarball and its `.asc`. Recovery: re-run the
+failed `Sign and notarize` leg and its `App update tarball` leg, then dispatch
+`sign-release.yml` (it re-signs the full set) and `update-manifest.yml` with
+`publish=true` (a manifest already published without macOS is otherwise left
+as it is).
 
 **Docs** runs on `release: published`, so creating the release (step 2)
 starts it, not the tag push. "Render PDF manual for release" checks out the

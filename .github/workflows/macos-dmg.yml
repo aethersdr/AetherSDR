@@ -6,8 +6,12 @@ on:
   workflow_dispatch:
 
 # The build job compiles with a read-only token and no secrets; only
-# sign-dmg below holds the Apple signing identities and can write to the
-# release, and it runs no build code.
+# sign-dmg below holds the Apple signing identities, and it runs no build
+# code. Two jobs can write to the release: sign-dmg (the DMG) and app-tarball
+# (the in-app update's app tarball, taken from that signed DMG). app-tarball
+# holds no secrets and runs only the repo's own manifest tool, so it is not
+# in the `release` environment (a maintainer ruling): what it attaches is
+# hash-pinned by the signed update manifest and GPG-signed with the rest.
 permissions:
   contents: read
 
