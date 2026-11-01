@@ -793,6 +793,10 @@ void MainWindow::disconnectFromRadioByUser()
     s.remove("LastConnectedRadioSerial");
     s.remove("LastRoutedRadioIp");
     s.save();
+    // Lift any adaptive cap while the link is up, so the radio keeps the
+    // operator's rates rather than the cap for the next session.
+    if (m_adaptiveThrottleActive)
+        restorePreCapPanRates();
     m_radioModel.disconnectFromRadio();
 }
 

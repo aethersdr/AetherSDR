@@ -2430,6 +2430,31 @@ add_test(NAME reset_settings_prompts_test COMMAND reset_settings_prompts_test)
 set_tests_properties(reset_settings_prompts_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 
+# The shortcut editor as a CanonWindow dialog: its scope, and questions that
+# change nothing unless their accepting button is clicked.
+add_executable(shortcut_dialog_test
+    tests/shortcut_dialog_test.cpp
+    src/gui/ShortcutDialog.cpp
+    src/gui/KeyboardMapWidget.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/ModemChrome.cpp
+    src/core/ShortcutManager.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(shortcut_dialog_test PRIVATE src)
+target_link_libraries(shortcut_dialog_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(shortcut_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME shortcut_dialog_test COMMAND shortcut_dialog_test)
+set_tests_properties(shortcut_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # CanonApplet, CanonPan and CanonCanvas (RFC #6226): the canon ground with
 # square corners inside the main window; the close button only requests.
 add_executable(canon_surface_test
@@ -2747,6 +2772,13 @@ add_test(NAME waterfall_rate_test COMMAND waterfall_rate_test)
 add_executable(display_status_gate_test tests/display_status_gate_test.cpp)
 target_include_directories(display_status_gate_test PRIVATE src)
 add_test(NAME display_status_gate_test COMMAND display_status_gate_test)
+
+# Band changes awaiting their reply, during which the adaptive throttle
+# neither restores nor caps the pan (#6791).
+add_executable(pan_band_transition_test tests/pan_band_transition_test.cpp)
+target_include_directories(pan_band_transition_test PRIVATE src)
+target_link_libraries(pan_band_transition_test PRIVATE Qt6::Core)
+add_test(NAME pan_band_transition_test COMMAND pan_band_transition_test)
 
 add_executable(whats_new_links_test tests/whats_new_links_test.cpp)
 target_include_directories(whats_new_links_test PRIVATE src)
@@ -3912,6 +3944,8 @@ add_executable(firmware_close_dialog_test
     src/gui/UpdatesWindow.cpp
     src/gui/FirmwareUpdateCard.cpp
     src/gui/CanonPrompt.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/CanonWindow.cpp
 )
 target_include_directories(firmware_close_dialog_test PRIVATE src tests)
@@ -4380,12 +4414,23 @@ add_test(NAME legacy_waveform_package_test COMMAND legacy_waveform_package_test)
 add_executable(tailnet_shim_client_test
     tests/tailnet_shim_client_test.cpp
     src/core/TailnetShimClient.cpp
+    src/core/TailnetShimTokenStore.cpp   # built without HAVE_KEYCHAIN: the session store
     src/core/TailnetShimDownloader.cpp
     src/core/TailnetLinkTelemetry.cpp
 )
 target_include_directories(tailnet_shim_client_test PRIVATE src)
 target_link_libraries(tailnet_shim_client_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME tailnet_shim_client_test COMMAND tailnet_shim_client_test)
+
+# The Remote Access sign-in QR code: encodes the URL scannably (quiet zone,
+# finder patterns, theme-invariant colors), socket-free.
+add_executable(qr_code_image_test
+    tests/qr_code_image_test.cpp
+    src/gui/QrCodeImage.cpp
+)
+target_include_directories(qr_code_image_test PRIVATE src)
+target_link_libraries(qr_code_image_test PRIVATE Qt6::Core Qt6::Gui aether_qrcodegen)
+add_test(NAME qr_code_image_test COMMAND qr_code_image_test)
 
 # Pins the filter-before-merge invariant on the license-class-aware overload
 # of BandPlanManager::contiguousRegionsForBand (PR #3050, closing #2649). (#3060)
@@ -4767,6 +4812,27 @@ target_link_libraries(update_installer_test PRIVATE aethercore Qt6::Core Qt6::Te
 set_target_properties(update_installer_test PROPERTIES AUTOMOC ON)
 add_test(NAME update_installer_test COMMAND update_installer_test)
 
+# LinuxInstall (RFC #5304 Phase 5): what --install makes (the release copied,
+# current, the menu entry, icon and command), the switch to a staged release
+# with its self-test and cleanup, and the relaunch after exit. Temporary
+# folders only. Skips on Windows.
+add_executable(linux_install_test tests/linux_install_test.cpp)
+target_include_directories(linux_install_test PRIVATE src tests)
+target_link_libraries(linux_install_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(linux_install_test PROPERTIES AUTOMOC ON)
+add_test(NAME linux_install_test COMMAND linux_install_test)
+
+# MacInstall (RFC #5304 Phase 4): the bundle of the binary, the checks before
+# the swap (injected), the swap of the staged bundle for the installed one
+# with the previous version kept, and UpdateInstaller's prepareSwap and
+# finishSwapOnExit. The swap is renamex_np on macOS and renameat2 on Linux, so
+# it runs on both; Windows skips it. Temporary folders only.
+add_executable(mac_install_test tests/mac_install_test.cpp)
+target_include_directories(mac_install_test PRIVATE src tests)
+target_link_libraries(mac_install_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(mac_install_test PROPERTIES AUTOMOC ON)
+add_test(NAME mac_install_test COMMAND mac_install_test)
+
 # AetherSDRUpdater's folder swap (RFC #5304 Phase 3): UpdateSwap's state
 # machine on a simulated clock with injected processes and rename failures,
 # on every platform; the Win32 entry point is a thin shell over it. No Qt.
@@ -4815,6 +4881,8 @@ add_executable(updates_window_test
     src/gui/UpdatesWindow.cpp
     src/gui/FirmwareUpdateCard.cpp
     src/gui/CanonPrompt.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/CanonWindow.cpp
 )
 target_include_directories(updates_window_test PRIVATE src tests)
@@ -5057,6 +5125,15 @@ add_executable(dvk_availability_gate_test
 target_include_directories(dvk_availability_gate_test PRIVATE src)
 target_link_libraries(dvk_availability_gate_test PRIVATE Qt6::Core)
 add_test(NAME dvk_availability_gate_test COMMAND dvk_availability_gate_test)
+
+# SmartSDR+ entitlement: a lapsed subscription keeps the features released
+# before it expired. Header-only rules, no radio.
+add_executable(license_entitlement_test
+    tests/license_entitlement_test.cpp
+)
+target_include_directories(license_entitlement_test PRIVATE src)
+target_link_libraries(license_entitlement_test PRIVATE Qt6::Core)
+add_test(NAME license_entitlement_test COMMAND license_entitlement_test)
 
 # Who is holding live RX off the shared sink while audio plays back through it
 # (the QSO recorder, the PUDU monitor, a voice keyer preview). Header-only
@@ -6105,6 +6182,11 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME bridge_docs_check
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_bridge_docs.py --check)
+    # The Generated Reference pages read names out of C++ string tables;
+    # literal() must read a translation-marked entry as its text.
+    add_test(NAME gen_reference_literal_test
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_gen_reference_literal.py)
     # The generated seam-probe table (tests/SeamSignalProbeTable.inc) vs
     # IRadioBackend.h. static-checks.yml runs the same --check on every PR;
     # this is the local copy, so `ctest` says so before a push does.
@@ -7060,6 +7142,12 @@ target_include_directories(panadapter_dbm_range_test PRIVATE src)
 target_link_libraries(panadapter_dbm_range_test PRIVATE aethercore Qt6::Core)
 set_target_properties(panadapter_dbm_range_test PROPERTIES AUTOMOC ON)
 add_test(NAME panadapter_dbm_range_test COMMAND panadapter_dbm_range_test)
+
+add_executable(panadapter_late_packet_test tests/panadapter_late_packet_test.cpp)
+target_include_directories(panadapter_late_packet_test PRIVATE src)
+target_link_libraries(panadapter_late_packet_test PRIVATE aethercore Qt6::Core)
+set_target_properties(panadapter_late_packet_test PROPERTIES AUTOMOC ON)
+add_test(NAME panadapter_late_packet_test COMMAND panadapter_late_packet_test)
 
 # wirePanadapter() can see the placeholder SpectrumWidget more than once. The
 # helper keeps one timer/path per widget while retaining separate per-pan timers.
@@ -8024,9 +8112,13 @@ add_executable(stored_control_dialogs_test
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/MemoryDialog.cpp
     src/gui/MemoryCommands.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
+    ${THEME_TEST_RESOURCES}
 )
 target_include_directories(stored_control_dialogs_test PRIVATE src tests)
 target_link_libraries(stored_control_dialogs_test PRIVATE aethercore Qt6::Core Qt6::Widgets Qt6::Test)
@@ -8667,6 +8759,26 @@ add_executable(midi_relative_cc_decoder_test
 )
 target_include_directories(midi_relative_cc_decoder_test PRIVATE src)
 add_test(NAME midi_relative_cc_decoder_test COMMAND midi_relative_cc_decoder_test)
+
+# Ulanzi Dial — Control Mapping on CanonWindow: fixed size, Return never
+# resets the pills, the status line follows the dial, named controls, and
+# every close destroys it. No backend or device; no socket.
+add_executable(ulanzi_dial_mapper_dialog_test
+    tests/ulanzi_dial_mapper_dialog_test.cpp
+    src/gui/UlanziDialMapperDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(ulanzi_dial_mapper_dialog_test PRIVATE src tests)
+target_link_libraries(ulanzi_dial_mapper_dialog_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME ulanzi_dial_mapper_dialog_test COMMAND ulanzi_dial_mapper_dialog_test)
+set_tests_properties(ulanzi_dial_mapper_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(ulanzi_chord_decoder_test
     tests/ulanzi_chord_decoder_test.cpp
@@ -9605,9 +9717,10 @@ add_executable(gui_nested_lifetime_test
     src/gui/AdaptiveFilterControls.cpp
     src/gui/GuardedSlider.h
     src/gui/NetSchedulerDialog.cpp
-    src/gui/PersistentDialog.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
     src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
 )
 target_include_directories(gui_nested_lifetime_test PRIVATE src tests)
 target_link_libraries(gui_nested_lifetime_test PRIVATE
@@ -9615,6 +9728,43 @@ target_link_libraries(gui_nested_lifetime_test PRIVATE
 )
 add_test(NAME gui_nested_lifetime_test COMMAND gui_nested_lifetime_test)
 set_tests_properties(gui_nested_lifetime_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Net Scheduler on CanonWindow (RFC #6226): the workspace shape and canon scope,
+# the saved-geometry carry-over, the Remove box's Cancel default, and the
+# editor. Socket-free; it never touches a radio.
+add_executable(net_scheduler_dialog_test
+    tests/net_scheduler_dialog_test.cpp
+    src/gui/NetSchedulerDialog.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/FramelessResizer.cpp
+)
+target_include_directories(net_scheduler_dialog_test PRIVATE src tests)
+target_link_libraries(net_scheduler_dialog_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME net_scheduler_dialog_test COMMAND net_scheduler_dialog_test)
+set_tests_properties(net_scheduler_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 60)
+
+# Socket-free capture, editor and saved-preset round trips in the real dialog.
+add_executable(net_scheduler_modes_test
+    tests/net_scheduler_modes_test.cpp
+    src/gui/NetSchedulerDialog.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/FramelessResizer.cpp
+)
+target_include_directories(net_scheduler_modes_test PRIVATE src tests)
+target_link_libraries(net_scheduler_modes_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME net_scheduler_modes_test COMMAND net_scheduler_modes_test)
+set_tests_properties(net_scheduler_modes_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Injected serial transport and backend only: no sockets, serial ports or RF.
@@ -9872,6 +10022,7 @@ set(AETHER_SETTINGS_CONSUMERS
     update_controller_test
     update_installer_test
     update_stager_test
+    ulanzi_dial_mapper_dialog_test
     mqtt_settings_dialog_test
     flex_readonly_metadata_test
     dsp_parameter_reset_test
@@ -9960,12 +10111,14 @@ set(AETHER_SETTINGS_CONSUMERS
     client_display_pan_settings_test
     spectrum_overlay_fft_fps_bounds_test
     gui_nested_lifetime_test
+    net_scheduler_modes_test
     rx_applet_squelch_reconciliation_test
     vfo_meter_overlay_invalidation_test
     fm_filter_controls_test
     wfm_controls_test
     spectrum_confirmed_geometry_test
     panadapter_dbm_range_test
+    panadapter_late_packet_test
     flex_slice_mode_intent_test
     rtl_slice_settings_test
     rtl_device_settings_test
@@ -10009,6 +10162,7 @@ set(AETHER_SETTINGS_CONSUMERS
     canon_window_test
     callsign_lookup_dialog_test
     canon_message_box_test
+    shortcut_dialog_test
     reset_settings_prompts_test
     canon_surface_test
     kpa500_applet_test

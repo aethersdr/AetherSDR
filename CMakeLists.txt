@@ -1154,6 +1154,8 @@ set(CORE_SOURCES
     src/core/UpdateStager.cpp
     src/core/UpdateInstaller.cpp
     src/core/UpdateController.cpp
+    src/core/LinuxInstall.cpp
+    src/core/MacInstall.cpp
     src/core/NetworkDiagnostics.cpp
     src/core/WindowsFirewall.cpp
     src/core/OleCompoundFile.cpp
@@ -1400,6 +1402,7 @@ set(GUI_SOURCES
     src/gui/UpdatesWindow.cpp
     src/gui/WaveformsDialog.cpp
     src/gui/TailnetShimDialog.cpp
+    src/gui/QrCodeImage.cpp
     src/gui/ClientRxDspApplet.cpp
     src/gui/DragValuePopup.cpp
     src/gui/DspParamPopup.cpp
@@ -1709,6 +1712,19 @@ else()
     target_compile_options(aether_monocypher PRIVATE -w)
 endif()
 
+# Bundled Nayuki QR Code generator (MIT): draws the Remote Access sign-in
+# link as a QR code to scan with a phone.
+add_library(aether_qrcodegen STATIC
+    ${CMAKE_SOURCE_DIR}/third_party/qrcodegen/qrcodegen.cpp
+)
+target_include_directories(aether_qrcodegen PUBLIC ${CMAKE_SOURCE_DIR}/third_party/qrcodegen)
+set_target_properties(aether_qrcodegen PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+    target_compile_options(aether_qrcodegen PRIVATE /w)
+else()
+    target_compile_options(aether_qrcodegen PRIVATE -w)
+endif()
+
 # Bundled zstd 1.5.7 (BSD), decompressor only: applies the in-app update's
 # per-file --patch-from deltas (RFC #5304, docs/architecture/update-manifest.md)
 # on every platform alike. Symbols are hidden so this copy can never interpose
@@ -1899,6 +1915,7 @@ add_executable(AetherSDR
 )
 target_link_libraries(AetherSDR PRIVATE
     aetherdesktop_support
+    aether_qrcodegen   # QrCodeImage: the Remote Access sign-in QR code
 )
 
 add_executable(aetherd

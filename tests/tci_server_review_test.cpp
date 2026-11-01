@@ -3,6 +3,7 @@
 #include "core/AudioEngine.h"
 #include "core/QsoRecorder.h"
 #include "core/RadioDiscovery.h"
+#include "core/TciProtocol.h"
 #include "core/TciServer.h"
 #include "core/TciTrxMap.h"
 #include "core/backends/IRadioBackend.h"
@@ -167,6 +168,53 @@ private:
 class TciServerReviewTest
 {
 public:
+    static bool freeDvModeAliasesPreserveSidebands()
+    {
+        struct ModeEntry {
+            const char* radioMode;
+            const char* tciMode;
+        };
+        const ModeEntry modes[] = {
+            {"FDVU", "digu"}, {"fdvu", "digu"}, {"FdVu", "digu"},
+            {"FDVL", "digl"}, {"fdvl", "digl"}, {"FdVl", "digl"},
+            {"FDV", "digu"}, {"fdv", "digu"}, {"FdV", "digu"},
+        };
+        for (const ModeEntry& entry : modes) {
+            if (TciProtocol::smartsdrToTci(QString::fromLatin1(entry.radioMode))
+                != QString::fromLatin1(entry.tciMode)) {
+                std::printf("      radio mode %s did not map to TCI %s\n",
+                            entry.radioMode, entry.tciMode);
+                return false;
+            }
+        }
+
+        const ModeEntry digitalModes[] = {
+            {"DIGU", "digu"}, {"DIGU", "DIGU"}, {"DIGU", "DiGu"},
+            {"DIGL", "digl"}, {"DIGL", "DIGL"}, {"DIGL", "DiGl"},
+        };
+        for (const ModeEntry& entry : digitalModes) {
+            bool recognized = false;
+            const QString radioMode = TciProtocol::tciToSmartSDR(
+                QString::fromLatin1(entry.tciMode), &recognized);
+            if (!recognized || radioMode != QString::fromLatin1(entry.radioMode)) {
+                std::printf("      TCI %s did not retain ordinary radio mode %s\n",
+                            entry.tciMode, entry.radioMode);
+                return false;
+            }
+        }
+
+        const char* unsupportedAliases[] = {"fdv", "fdvu", "fdvl", "FreeDV"};
+        for (const char* alias : unsupportedAliases) {
+            bool recognized = true;
+            (void)TciProtocol::tciToSmartSDR(QString::fromLatin1(alias), &recognized);
+            if (recognized) {
+                std::printf("      unadvertised TCI alias %s was accepted\n", alias);
+                return false;
+            }
+        }
+        return true;
+    }
+
     static bool deferredAbortIsClientScoped()
     {
         RadioModel model;
@@ -2729,6 +2777,8 @@ int main(int argc, char** argv)
     AetherSDR::AppSettings::instance().load();
 
     const bool validProfile = settingsProfile.isValid();
+    const bool freeDvModeAliases
+        = AetherSDR::TciServerReviewTest::freeDvModeAliasesPreserveSidebands();
     const bool deferredAbort
         = AetherSDR::TciServerReviewTest::deferredAbortIsClientScoped();
     const bool observableFailure
@@ -2810,6 +2860,8 @@ int main(int argc, char** argv)
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
+    std::printf("%s  FreeDV TCI aliases preserve sidebands and ordinary digital modes\n",
+                freeDvModeAliases ? "PASS" : "FAIL");
     std::printf("%s  deferred TRX abort is client-scoped\n",
                 deferredAbort ? "PASS" : "FAIL");
     std::printf("%s  VFO-B route failure is observable\n",
@@ -2901,7 +2953,8 @@ int main(int argc, char** argv)
     std::printf("%s  worker streams and revokes TX while owner is stalled\n", workerStall ? "PASS" : "FAIL");
     std::printf("%s  late key abort runs on model owner\n", lateKeyAbort ? "PASS" : "FAIL");
 
-    return workerStall && lateKeyAbort && inputFence && validProfile && deferredAbort && observableFailure
+    return workerStall && lateKeyAbort && inputFence && validProfile && freeDvModeAliases
+        && deferredAbort && observableFailure
         && payloadFreeDisconnect && outboundTextAccounting && pttBindsReceiver
         && pttUsesStableMap && ownershipJoin
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups

@@ -74,18 +74,39 @@ The image is generic and contains no secret.
 
 1. **Install:** in AetherSDR, open File → Waveforms → Install… and pick
    `flex-tailnet-shim-<version>.tar.gz`. The radio starts the container. It
-   stays unprovisioned until it receives an auth key.
+   stays unprovisioned until it is signed in to a tailnet.
 2. **Provision:** the container's row in the Waveforms list has a
-   **Configure…** button. Paste a single-use Tailscale auth key, choose a
-   machine name and, optionally, who may connect, then press **Join Tailnet**.
-   AetherSDR sends the key to the container over the LAN and does not keep it.
-   The container joins the tailnet and returns an admin token, which AetherSDR
-   stores in the OS keychain, one entry per radio.
+   **Configure…** button. Choose a machine name and, optionally, who may
+   connect, then sign in with a QR code: scan it with a phone, sign in to
+   Tailscale and approve the radio, and the dialog turns to connected. Under
+   Advanced, a single-use Tailscale auth key works instead; AetherSDR sends it
+   to the container over the LAN and does not keep it. Either way the
+   container returns an admin token, which AetherSDR stores in the OS
+   keychain, one entry per radio.
 3. **Connect remotely:** from anywhere on the tailnet, use Connect → Manual
    with the address shown in the dialog.
 
-The node's tailnet state survives radio reboots, so the key is needed only
-once. Removing or reinstalling the container wipes that state.
+The node's tailnet state survives radio reboots, so the sign-in is needed
+only once. Removing or reinstalling the container wipes that state.
+
+**Sign-in by URL** (version 0.5.0): without an auth key, tsnet starts an
+interactive login and the control plane sends a sign-in URL, which AetherSDR
+draws as a QR code. Whoever opens that URL first claims the radio for their
+tailnet, so it goes only to the caller that started the join or holds the
+admin token: the provision reply and `GET /v1/login`, never `/v1/status` or a
+log. The join then waits for the sign-in without a timeout, since starting
+over would mint a new URL under the code being scanned. A node signed in this
+way belongs to the user, not a tag, and its key expires (180 days by default)
+unless key expiry is turned off for it in the admin console; `key_expiry` in
+the status says when. Once expired, the shim asks the control plane for a new
+URL, and the dialog shows it as a new QR code (from the LAN only, since the
+expired node is off the tailnet). A tagged auth key, under Advanced, makes a
+node that never expires.
+
+**Access** (0.5.0): who may connect is decided by the tailnet's own access
+rules. Versions before 0.5.0 kept a Who may connect list and enforced it;
+0.5.0 drops a saved list at start-up (and logs it), ignores one sent with a
+provision, and refuses to set one.
 
 ## Provisioning API
 
@@ -96,9 +117,10 @@ are refused.
 
 | Method | Path | Token needed | Does |
 |---|---|---|---|
-| GET | `/v1/status` | no | State, tailnet IP and DNS name, allowlist, session count, version, last error. Never a secret. |
-| POST | `/v1/provision` | only once provisioned | `{auth_key, hostname, allow[]}`: joins (or, with the token, re-joins) the tailnet and returns `{admin_token, status}` |
-| PUT | `/v1/allow` | yes | `{allow[]}`: changes who may connect without leaving the tailnet |
+| GET | `/v1/status` | no | State (`needs_login` and `needs_approval` while waiting on a person), tailnet IP and DNS name, allowlist, session count, version, key expiry, last error. Never a secret. |
+| POST | `/v1/provision` | only once provisioned | `{auth_key, hostname, allow[]}`: joins (or, with the token, re-joins) the tailnet and returns `{admin_token, status}`. Without `auth_key` it signs in by URL and also returns `auth_url` once the control plane sends it (within 30 s); the join goes on in the background |
+| GET | `/v1/login` | yes | `{state, auth_url, key_expiry}`: the sign-in URL while one is wanted (a new join, or an expired key) |
+| PUT | `/v1/allow` | yes | `{allow: []}` clears a list an older version kept; from 0.5.0 a non-empty list is refused (400): who may connect is the tailnet's access rules |
 | POST | `/v1/signout` | yes | Logs out, deletes the node state and forgets the token |
 
 **Trust model:** the first provisioning is open to the LAN. That matches the

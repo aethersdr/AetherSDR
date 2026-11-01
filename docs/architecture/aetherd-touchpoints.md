@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 274 touchpoint headers (223 core, 51 models) — 274/274 tagged, 0/274 converted.
+**Totals:** 275 touchpoint headers (224 core, 51 models) — 275/275 tagged, 0/275 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -88,6 +88,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/Kpa500FaultHistory.h` | 1 | peripheral(elecraft) — Pure decoder for the KPA500 peripheral stored fault ring; no radio-family transport. See docs/architecture/elecraft-kpa500-kat500-design.md. | unconverted |
 | `core/Kpa500Maintenance.h` | 1 | peripheral(elecraft) — Bounded KPA500 maintenance framing and configuration file codec; independent peripheral, no radio-family transport. See docs/architecture/elecraft-kpa500-kat500-design.md. | unconverted |
 | `core/Kpa500Protocol.h` | 1 | peripheral(elecraft) — Frame parser, status snapshot and command builders for the KPA500 '^CMD;' text protocol — the codec half of core/Kpa500Connection.h. A standalone accessory's own transport with no radio-family awareness, same precedent as core/AcomProtocol.h. Authority: KPA500 Programmer's Reference Rev. A2. | unconverted |
+| `core/LinuxInstall.h` | 1 | ui-support — App self-update on Linux: the install --install makes and the switch to a staged release after its self-test; pure client plumbing, no radio state. | unconverted |
 | `core/LocationAddressResolver.h` | 1 | ui-support — Reverse-geocoding helper backing the GPS location dialog. Network/OS plumbing; no radio state. | unconverted |
 | `core/LogManager.h` | 34 | ui-support — App-wide diagnostic logging: category registry, log file/retention, runtime toggles. Plumbing, not radio state. | unconverted |
 | `core/LpMeterConnection.h` | 3 | peripheral(lp100a) — Direct serial/ser2net client for the TelePost LP-100A digital vector RF wattmeter — a standalone RS-232 instrument with no FlexRadio awareness at all, same precedent as core/AcomConnection.h and core/SpeConnection.h. Poll-only (the meter never pushes), and the transport is commonly shared with other polling clients, so the poll loop is gated rather than free-running. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/lp-100a-wattmeter-design.md. | unconverted |
@@ -95,7 +96,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/MacMicPermission.h` | 1 | ui-support — macOS mic permission dialog at app startup; OS permission plumbing, no radio state — belongs in the client app | unconverted |
 | `core/MaidenheadLocator.h` | 4 | ui-support — Header-only Maidenhead grid/lat-lon/distance/bearing math; stateless shared utility, not a protocol surface | unconverted |
 | `core/MemoryCsvCompat.h` | 1 | vendor(flex) — SmartSDR memory-CSV import/export codec (exact 22-col format); Flex ecosystem interchange, not core protocol. | unconverted |
-| `core/MemoryFieldValues.h` | 1 | mixed(flex) — Canonical memory-channel value lists + sanitizers; concepts universal, wire forms mirror FlexLib protocol | unconverted |
+| `core/MemoryFieldValues.h` | 2 | mixed(flex) — Canonical memory-channel value lists + sanitizers; concepts universal, wire forms mirror FlexLib protocol | unconverted |
 | `core/MidiControlManager.h` | 3 | ui-support — RtMidi input-device manager (ports, bindings, MIDI Learn) driving client setters; control-surface plumbing | unconverted |
 | `core/MidiSettings.h` | 3 | ui-support — MIDI controller binding/profile persistence (XML files) — client input-device config, not radio state. | unconverted |
 | `core/MiniPanSettings.h` | 1 | ui-support — Client-side persistence for the mini-pan applet span; UI configuration, not radio-owned state or a daemon protocol resource. | unconverted |
@@ -169,7 +170,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/TailnetShimTokenStore.h` | 1 | peripheral(tailnet-shim) — OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h). | unconverted |
 | `core/TciServer.h` | 3 | mixed(flex) — TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX | unconverted |
 | `core/TgxlConnection.h` | 3 | peripheral(4o3a) — Direct TCP client for the 4O3A Tuner Genius XL (port 9010, relay/autotune), reverse-engineered from the 4O3A management app — a standalone accessory transport, not SmartSDR. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
-| `core/ThemeManager.h` | 185 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
+| `core/ThemeManager.h` | 186 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
 | `core/TxKeyingMarker.h` | 16 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |

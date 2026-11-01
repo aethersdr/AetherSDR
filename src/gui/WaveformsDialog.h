@@ -33,6 +33,10 @@ private slots:
     void onInstallLegacyClicked();
     void onInstallDockerClicked();
     void onInstallRemoteAccessClicked();
+    // Removes the remote-access container and installs the pinned one again,
+    // for a computer that lacks the radio's admin token (TailnetShimDialog's
+    // Reset).
+    void resetRemoteAccess();
     void onDStarStartStopClicked();
     void onDStarBrowseClicked();
 

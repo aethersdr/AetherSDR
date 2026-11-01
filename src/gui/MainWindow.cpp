@@ -725,6 +725,39 @@ bool MainWindow::sendWanRadioClientDisconnects(const QString& serial,
     return true;
 }
 
+// Send each pan the FPS and waterfall rate captured in its SpectrumWidget
+// before the adaptive cap arrived. Live fps/line-duration status is held out
+// of the widgets while throttled, so these are the operator's values and the
+// cap never becomes saved radio state. Empty panId = every pan.
+//
+// A pan with a band change in flight is skipped. Its widget still holds the
+// band it left, and the new band carries its own rates, uncapped:
+// RadioModel holds the cap until the change settles (#6791).
+void MainWindow::restorePreCapPanRates(const QString& onlyPanId)
+{
+    if (profileLoadRadioStateWritesHeld()) {
+        qCDebug(lcProtocol)
+            << "MainWindow: adaptive throttle restore suppressed during profile load";
+        return;
+    }
+    if (!m_panStack) return;
+    for (auto* applet : m_panStack->allApplets()) {
+        if (!applet) continue;
+        auto* sw = applet->spectrumWidget();
+        if (!sw) continue;
+        const QString panId = applet->panId();
+        if (!onlyPanId.isEmpty() && panId != onlyPanId) continue;
+        if (m_radioModel.panBandInFlight(panId)) continue;
+        // Route through requestPanDisplayRates, not raw Flex wire text: a
+        // backend that shapes its own display rate (HL2) has no Flex
+        // command sink, so the restore silently never arrived and an FPS
+        // change made while throttled was lost for good. The dispatcher
+        // picks the seam or the wire per backend. (#4470)
+        m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
+                                            sw->wfLineDuration());
+    }
+}
+
 void MainWindow::disconnectWanRadioClients(const WanRadioInfo& info)
 {
     const auto clients = buildDisconnectClients(info);
@@ -822,12 +855,17 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
     // Pre-bind UDP socket for VITA-49 reception BEFORE requesting
     // connection, so we can pass our port to the SmartLink server.
     // The server tells the radio our public IP:port for UDP streaming.
-    // SmartLink is a Flex service, so in practice this path only runs with a
-    // PanadapterStream present -- but it dereferenced it bare, and "in practice"
-    // is what the HL2 bring-up kept disproving. Decline instead of crashing.
-    if (!m_radioModel.panStream()) {
+    // SmartLink is a Flex service, but the session may still hold the backend
+    // of the last non-Flex radio (IC-705, HL2), which has no PanadapterStream.
+    // Swap to Flex first; decline rather than dereference null if that fails.
+    if (!m_radioModel.prepareFlexBackendForWan()) {
         qWarning() << "MainWindow: WAN connect requested with no PanadapterStream"
-                   << "— backend does not use VITA-49 transport";
+                   << "— Flex backend unavailable";
+        m_connPanel->setStatusText("SmartLink connection failed");
+        setPanadapterConnectionAnimation(false);
+        // From requestWanReconnect(), let the next tick try again rather than
+        // re-arm forever behind an attempt that never started.
+        m_wanReconnectAttemptInProgress = false;
         return;
     }
     quint16 udpPort = m_radioModel.panStream()->localPort();
@@ -1667,6 +1705,22 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel.transmitModel(), &TransmitModel::phoneStateChanged,
             this, [this]() { refreshCwDecodeState(); });
 
+    // The receive decoder's pitch range follows the CW pitch: a range that
+    // contains the pitch is kept, one that misses it is re-centred on it
+    // (CwDecodeSettings::pitchRangeFor). cwPitchReported also carries a
+    // reported pitch the model already held, which cwPitchChanged skips.
+    // The pitch itself is only read here, never stored or sent.
+    const auto followCwPitch = [this](int hz) {
+        if (const auto range = CwDecodeSettings::pitchRangeFor(hz, CwDecodeSettings::pitchRange())) {
+            CwDecodeSettings::setPitchRange(range->low, range->high);
+            if (m_cwDecoderApplet) {
+                m_cwDecoderApplet->restoreCwRanges();
+            }
+        }
+    };
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchReported, this, followCwPitch);
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchChanged, this, followCwPitch);
+
     // RTTY decoder audio feed is wired in wireRxDemodAudioSinks() above,
     // gated on the decoder being running.
 
@@ -1788,13 +1842,14 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
-    // Propagate late-arriving SmartSDR+ subscription + dual-SCU diversity
+    // Propagate the late-arriving CW Autotune license + dual-SCU diversity
     // eligibility to all existing VFOs. Both depend on radio info (license
-    // subscription / model) that can arrive after a slice is created — in
-    // which case onSliceAdded reads empty strings and the VFO gets stuck in
-    // the wrong state (#1356 for SmartSDR+, #1503 for DIV).
+    // feature / model) that can arrive after a slice is created — in which
+    // case onSliceAdded reads empty state and the VFO gets stuck in the wrong
+    // state (#1356 for Autotune, #1503 for DIV). Every `license feature` and
+    // `license subscription` status emits infoChanged.
     connect(&m_radioModel, &RadioModel::infoChanged, this, [this]() {
-        const bool hasPlus = m_radioModel.licenseSubscription().contains("SmartSDR+");
+        const bool autotuneLicensed = m_radioModel.cwAutotuneLicensed();
         const bool divAllowed = m_radioModel.isDiversityAllowed();
         // Refresh extended-DSP (NRL/NRS/RNN/NRF) visibility here too: onSliceAdded
         // pushes it once at slice creation, but if the `model` status arrives after
@@ -1805,7 +1860,7 @@ MainWindow::MainWindow(QWidget* parent)
             for (auto* applet : m_panStack->allApplets()) {
                 auto* sw = applet->spectrumWidget();
                 for (auto* vfo : sw->findChildren<VfoWidget*>()) {
-                    vfo->setSmartSdrPlus(hasPlus);
+                    vfo->setCwAutotuneLicensed(autotuneLicensed);
                     vfo->setDiversityAllowed(divAllowed);
                     vfo->setHasExtendedDsp(hasExtendedDsp);
                 }
@@ -1821,6 +1876,20 @@ MainWindow::MainWindow(QWidget* parent)
     // the next radio's statuses arrive.)
     connect(&m_radioModel, &RadioModel::licenseFeaturesChanged, this,
             &MainWindow::updateKeyerAvailability);
+    // The same clear withdraws the CW Autotune license from surviving VFOs.
+    connect(&m_radioModel, &RadioModel::licenseFeaturesChanged, this, [this]() {
+        // ~RadioModel's teardown clears the licenses too; never rebuild a VFO
+        // whose slice is already gone.
+        if (!m_panStack || m_shuttingDown) {
+            return;
+        }
+        const bool autotuneLicensed = m_radioModel.cwAutotuneLicensed();
+        for (auto* applet : m_panStack->allApplets()) {
+            for (auto* vfo : applet->spectrumWidget()->findChildren<VfoWidget*>()) {
+                vfo->setCwAutotuneLicensed(autotuneLicensed);
+            }
+        }
+    });
 
     // Client-side DSP buttons (NR2 / NR4 / MNR / BNR / DFNR / RN2) now
     // live only in the AetherDSP applet, which owns its own
@@ -2166,31 +2235,43 @@ MainWindow::MainWindow(QWidget* parent)
         m_adaptiveFpsCap = active ? fpsCap : 0;
         if (m_titleBar)
             m_titleBar->setThrottleFlashColor(active ? fpsCapColor(fpsCap) : QString{});
-        if (!active) {
-            // Throttle lifted — restore the radio values captured in each
-            // SpectrumWidget before the transient cap status arrived. Live
-            // fps/line-duration status is deliberately held out of the widgets
-            // while throttled, so the cap never becomes profile state.
-            if (profileLoadRadioStateWritesHeld()) {
-                qCDebug(lcProtocol)
-                    << "MainWindow: adaptive throttle restore suppressed during profile load";
-                return;
-            }
-            if (!m_panStack) return;
-            for (auto* applet : m_panStack->allApplets()) {
-                if (!applet) continue;
-                auto* sw = applet->spectrumWidget();
-                if (!sw) continue;
-                const QString panId = applet->panId();
-                // Route through requestPanDisplayRates, not raw Flex wire text: a
-                // backend that shapes its own display rate (HL2) has no Flex
-                // command sink, so the restore silently never arrived and an FPS
-                // change made while throttled was lost for good. The dispatcher
-                // picks the seam or the wire per backend. (#4470)
-                m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
-                                                    sw->wfLineDuration());
-            }
+        if (active) {
+            m_adaptiveFpsCapsSent.insert(fpsCap);
+            m_adaptiveWfRatesSent.insert(m_radioModel.adaptiveWfRateForCap(fpsCap));
+        } else {
+            m_adaptiveFpsCapsSent.clear();
+            m_adaptiveWfRatesSent.clear();
+            restorePreCapPanRates();
         }
+    });
+
+    // A Flex saves each pan's FPS and waterfall rate in the band it leaves, so
+    // a band change while capped would store the cap as that band's setting.
+    // Put the operator's values back first. Only band changes AetherSDR
+    // dispatches pass through here: one from CAT, another client or a pan
+    // dragged across a band edge does not (#6791).
+    connect(&m_radioModel, &RadioModel::panBandAboutToDispatch,
+            this, [this](const QString& panId) {
+        // restorePreCapPanRates() skips a pan whose previous band change is
+        // still in flight: the band being left has not been capped, and the
+        // widget still holds the band before it.
+        if (m_adaptiveThrottleActive)
+            restorePreCapPanRates(panId);
+    });
+    // The reply follows the new band's own pan and waterfall status, so the
+    // widget now holds that band's rates as the restore target. Until here
+    // RadioModel kept the cap off the pan, a tier change included.
+    connect(&m_radioModel, &RadioModel::panBandSettled,
+            this, [this](const QString& panId) {
+        if (m_adaptiveThrottleActive)
+            m_radioModel.sendAdaptiveCapToPan(panId, m_adaptiveFpsCap);
+    });
+    // Closing a pan has the same effect: the radio keeps the closing pan's
+    // rates and gives them to the next pan it opens.
+    connect(&m_radioModel, &RadioModel::panAboutToRemove,
+            this, [this](const QString& panId) {
+        if (m_adaptiveThrottleActive)
+            restorePreCapPanRates(panId);
     });
 
     connect(&m_radioModel.meterModel(), &MeterModel::hwTelemetryChanged,
@@ -3562,21 +3643,13 @@ void MainWindow::publishRadioStateMqtt()
 RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
 {
     const QString prevComp = m_radioModel.audioCompressionParam();
-    const bool wasFresh = !m_radioSetupDialog;
-    // A canon workspace window: created directly rather than through
-    // showOrRaisePersistent(), which would apply View → Frameless Window.
-    if (wasFresh) {
-        auto* dlg = new RadioSetupDialog(&m_radioModel, m_audio,
-                                         &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                                         m_kiwiSdrManager, &m_acomConn, &m_speConn,
-                                         &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn, &m_kpa500Conn,
-                                         this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        m_radioSetupDialog = dlg;
-    }
-    m_radioSetupDialog->show();
-    m_radioSetupDialog->raise();
-    m_radioSetupDialog->activateWindow();
+    const bool wasFresh = showOrRaiseCanon(m_radioSetupDialog, [this] {
+        return new RadioSetupDialog(&m_radioModel, m_audio,
+                                    &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
+                                    m_kiwiSdrManager, &m_acomConn, &m_speConn,
+                                    &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn, &m_kpa500Conn,
+                                    this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn);
+    });
     if (wasFresh && m_radioSetupDialog)
         wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     if (m_radioSetupDialog && !page.isEmpty())
@@ -4216,6 +4289,13 @@ void MainWindow::closeEvent(QCloseEvent* event)
             slice->setExternalReceiveAudioReplacementMute(false, restoreMute);
         }
     }
+
+    // Lift any adaptive cap while the connection is alive, or the radio keeps
+    // the capped rates for the next session. Before the UI teardown below:
+    // the pre-cap rates live in the SpectrumWidgets, and prepareShutdown()
+    // deletes every pan applet, which left this loop nothing to send (#6791).
+    if (m_adaptiveThrottleActive)
+        restorePreCapPanRates();
 
     preparePanadapterUiForShutdown();
     auto& s = AppSettings::instance();
@@ -4979,9 +5059,8 @@ void MainWindow::hideConnectionDialog()
 
 void MainWindow::showMemoryDialog()
 {
-    const bool wasFresh = !m_memoryDialog;
-    showOrRaisePersistent(m_memoryDialog, &m_radioModel);
-    if (wasFresh && m_memoryDialog) {
+    if (showOrRaiseCanon(m_memoryDialog,
+                         [this] { return new MemoryDialog(&m_radioModel, this); })) {
         connect(m_memoryDialog.data(), &MemoryDialog::memoryActivated,
                 this, [this](int memoryIndex) { activateMemorySpot(memoryIndex); });
         connect(m_memoryDialog.data(), &QObject::destroyed, this, [this] {
@@ -7172,6 +7251,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_panDisplayStatusConnections.clear();
         m_adaptiveThrottleActive = false;
         m_adaptiveFpsCap = 0;  // clear cap alongside throttle flag — see #2829 review
+        m_adaptiveFpsCapsSent.clear();
+        m_adaptiveWfRatesSent.clear();
 
         // Clear spectrum/waterfall so the display doesn't look frozen
         if (m_panStack) {
@@ -9797,6 +9878,11 @@ void MainWindow::applyUiScale(int pct)
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer == QMessageBox::Yes) {
         m_relaunchingApp = true;
+        // A new instance starts from the bundle as this one exits: a swap
+        // readied for this exit would replace it under that instance.
+        if (m_updateController) {
+            m_updateController->dropPendingSwap();
+        }
 #ifdef Q_OS_MACOS
         // On macOS, relaunch via 'open -n' so the .app bundle is activated through
         // Launch Services — direct binary exec bypasses the bundle, causing dock

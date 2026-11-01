@@ -4,12 +4,15 @@
 #include "core/UpdateChecker.h"
 #include "core/UpdateController.h"
 #include "gui/CanonIndicators.h"
+#include "gui/CanonMessageBox.h"
 #include "gui/FirmwareUpdateCard.h"
 #include "gui/FlowLayout.h"
+#include "gui/ScopedChildWidget.h"
 
 #include <QCheckBox>
 #include <QCoreApplication>
 #include <QDesktopServices>
+#include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -131,7 +134,7 @@ QString sheet()
                "QLabel { background: transparent; color: {{color.canon.inkSoft}}; }"
                // Plain containers stay see-through over the canon ground.
                "QWidget#updatesHeader, QWidget#updatesVersion, QWidget#updatesChapters,"
-               " QWidget#updatesContent, QScrollArea#updatesScroll,"
+               " QWidget#updatesContent, QWidget#updatesInstallForUpdates, QScrollArea#updatesScroll,"
                " QScrollArea#updatesScroll > QWidget > QWidget { background: transparent; border: none; }"
                "QLabel[role=\"eyebrow\"] { color: {{color.canon.cyan}}; font-size: 11px; font-weight: 700;"
                " letter-spacing: 1.5px; }"
@@ -292,10 +295,10 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget*
     m_get->setObjectName(QStringLiteral("updatesGet"));
     m_get->setCursor(Qt::PointingHandCursor);
     actions->addWidget(m_get);
-    m_download = new QPushButton(tr("Download installer"));
+    m_download = new QPushButton(tr("Download release"));
     m_download->setObjectName(QStringLiteral("updatesGhost"));
     m_download->setCursor(Qt::PointingHandCursor);
-    m_download->setAccessibleName(tr("Download installer"));
+    m_download->setAccessibleName(tr("Download release"));
     actions->addWidget(m_download);
     m_notes = new QPushButton(tr("Full release notes"));
     m_notes->setObjectName(QStringLiteral("updatesSecondary"));
@@ -343,6 +346,25 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget*
     m_progressRow->hide();
     content->addWidget(m_progressRow);
 
+    // Install for updates (an AppImage, Linux): the offer, or where the
+    // install is once there is one.
+    m_appImageRow = new QWidget;
+    m_appImageRow->setObjectName(QStringLiteral("updatesInstallForUpdates"));
+    auto* appImageRow = new QHBoxLayout(m_appImageRow);
+    appImageRow->setContentsMargins(0, 0, 0, 0);
+    appImageRow->setSpacing(10);
+    m_appImageText = plainLabel(QStringLiteral("note"));
+    m_appImageText->setObjectName(QStringLiteral("updatesInstallForUpdatesText"));
+    m_appImageText->setWordWrap(true);
+    appImageRow->addWidget(m_appImageText, 1);
+    m_installForUpdates = new QPushButton(tr("Install for updates"));
+    m_installForUpdates->setObjectName(QStringLiteral("updatesSecondary"));
+    m_installForUpdates->setCursor(Qt::PointingHandCursor);
+    m_installForUpdates->setAccessibleName(tr("Install for updates"));
+    appImageRow->addWidget(m_installForUpdates, 0, Qt::AlignTop);
+    m_appImageRow->hide();
+    content->addWidget(m_appImageRow);
+
     auto* footer = new QHBoxLayout;
     m_footnote = plainLabel(QStringLiteral("footnote"));
     m_footnote->setObjectName(QStringLiteral("updatesFootnote"));
@@ -376,6 +398,7 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget*
 
     connect(m_get, &QPushButton::clicked, this, &UpdatesWindow::primaryClicked);
     connect(m_download, &QPushButton::clicked, this, &UpdatesWindow::openDownload);
+    connect(m_installForUpdates, &QPushButton::clicked, this, &UpdatesWindow::installForUpdatesClicked);
     connect(m_cancel, &QPushButton::clicked, this, [this] {
         if (m_controller) {
             m_controller->cancel();
@@ -469,6 +492,11 @@ void UpdatesWindow::setController(UpdateController* controller)
                     m_browserVersion = version;
                     refresh();
                 });
+        connect(controller, &UpdateController::appImageInstalled, this,
+                [this](bool, const QString& problem) {
+                    m_appImageProblem = problem;
+                    refresh();
+                });
         connect(controller, &UpdateController::failed, this, [this](const QString& reason, const QString& version) {
             m_installProblem = reason;
             m_problemVersion = version;
@@ -506,6 +534,7 @@ void UpdatesWindow::primaryClicked()
         return;
     }
     if (m_controller->state() != UpdateController::State::Staging
+        && m_controller->state() != UpdateController::State::Installing
         && m_controller->state() != UpdateController::State::Handed) {
         m_installProblem.clear();
         // Installing a skipped release means it is wanted after all.
@@ -515,6 +544,37 @@ void UpdatesWindow::primaryClicked()
         }
         m_controller->install(version);
     }
+}
+
+void UpdatesWindow::installForUpdatesClicked()
+{
+    if (!m_controller || m_controller->appImageToInstall().isEmpty() || m_controller->isInstallingAppImage()) {
+        return;
+    }
+    const QString version = QCoreApplication::applicationVersion();
+    const QString appImage = m_controller->appImageToInstall();
+    ScopedChildWidget<CanonMessageBox> ask(
+        tr("Install for updates"),
+        tr("Install AetherSDR %1 so it updates itself?").arg(version), this);
+    ask.get()->setInformativeText(
+        tr("It is copied into %1 and added to your applications menu, with an aethersdr command. AetherSDR "
+           "then restarts from there, and Install update keeps it current. Nothing is downloaded, and your "
+           "settings stay as they are.")
+            .arg(m_controller->installFolder()));
+    QCheckBox* trash = ask.get()->addCheckBox(
+        tr("Move this AppImage, %1, to the trash afterward").arg(QFileInfo(appImage).fileName()));
+    trash->setObjectName(QStringLiteral("updatesTrashAppImage"));
+    trash->setAccessibleDescription(tr("Moves %1 to the trash once AetherSDR is installed.").arg(appImage));
+    trash->setToolTip(appImage);
+    ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject);
+    QPushButton* go = ask.get()->addButton(tr("Install and restart"), CanonMessageBox::Role::Accept);
+    ask.get()->setDefaultButton(go);
+    ask.get()->exec();
+    if (!ask || ask.get()->clickedButton() != go || !m_controller) {
+        return;
+    }
+    m_appImageProblem.clear();
+    m_controller->installAppImage(trash->isChecked());
 }
 
 UpdatesWindow::View UpdatesWindow::currentView() const
@@ -566,6 +626,10 @@ void UpdatesWindow::refresh()
         m_tagline->setText(release.tagline);
         if (!store.isEmpty()) {
             note = tr("Updates for this copy come from %1.").arg(store);
+        } else if (m_controller && m_controller->version() == release.version && m_controller->daxDriverChanges()) {
+            // About what will install, so ahead of the offline notes. The in-app
+            // update installs the app only (RFC #5304 Phase 4).
+            note = tr("This release also updates the DAX audio driver. Install it from the release's disk image.");
         } else if (m_failed && release.fromSettings) {
             note = tr("Couldn't reach GitHub for this release's details. Check your connection, then try again.");
         } else if (m_failed) {
@@ -629,7 +693,8 @@ void UpdatesWindow::refresh()
     // Whatever release it is staging: a newer latest heard meanwhile waits
     // until it finishes (the controller then discards it).
     const bool staging = inPlace && installState == State::Staging;
-    const bool staged = inPlace && forThis && (installState == State::Staged || installState == State::Handed);
+    const bool installing = installState == State::Installing || installState == State::Handed;
+    const bool staged = inPlace && forThis && (installState == State::Staged || installing);
     m_get->setVisible(canDownload && !staging);
     m_progressRow->setVisible(staging);
     // The browser route stays beside Install update (Phase 3 ruling).
@@ -683,12 +748,43 @@ void UpdatesWindow::refresh()
         }
     }
     if (!m_firmwareBusy) {
-        // Handed to the helper: AetherSDR is quitting.
-        m_get->setEnabled(!(staged && installState == State::Handed));
+        // Being handed over, or handed to the helper: AetherSDR is quitting.
+        m_get->setEnabled(!(staged && installing));
         m_autoCheck->setEnabled(UpdateChecker::storeName().isEmpty());
     }
 
-    if (staged) {
+    // Install for updates, in every view: it needs nothing from GitHub.
+    const QString appImage = m_controller ? m_controller->appImageToInstall() : QString();
+    const bool installingAppImage = m_controller && m_controller->isInstallingAppImage();
+    const QString installed = m_controller && !m_controller->appImage().isEmpty()
+                                  ? m_controller->installedVersion()
+                                  : QString();
+    QString appImageText;
+    if (installingAppImage) {
+        appImageText = tr("Installing AetherSDR %1 for updates…").arg(running);
+    } else if (!m_appImageProblem.isEmpty()) {
+        appImageText = m_appImageProblem;
+    } else if (!appImage.isEmpty()) {
+        appImageText = tr("This AppImage doesn't install updates. Install AetherSDR %1 from it once, and "
+                          "Install update keeps it current. Nothing is downloaded.")
+                           .arg(running);
+    } else if (!installed.isEmpty()) {
+        appImageText = tr("AetherSDR %1 is installed for updates. Start it from your applications menu, or with "
+                          "aethersdr: it updates itself, and this AppImage doesn't.")
+                           .arg(installed);
+    }
+    m_appImageText->setText(appImageText);
+    m_appImageRow->setVisible(!appImageText.isEmpty());
+    m_installForUpdates->setVisible(!appImage.isEmpty() || installingAppImage);
+    m_installForUpdates->setEnabled(!installingAppImage && !m_firmwareBusy);
+    m_installForUpdates->setText(installingAppImage ? tr("Installing…") : tr("Install for updates"));
+    m_installForUpdates->setAccessibleDescription(
+        tr("Copies AetherSDR %1 from this AppImage into an install that updates itself, then restarts it.")
+            .arg(running));
+
+    if (staged && installState == State::Installing) {
+        m_footnote->setText(tr("Installing AetherSDR %1…").arg(release.version));
+    } else if (staged) {
         m_footnote->setText(tr("AetherSDR %1 is ready. It installs when you quit, or now with Restart to update.")
                                 .arg(release.version));
     } else if (staging) {
