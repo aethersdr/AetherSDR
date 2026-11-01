@@ -252,6 +252,26 @@ private slots:
 #endif
     }
 
+    // The source stamped into an installed DAX driver's Info.plist.
+    void theInstalledDriversStampIsRead()
+    {
+        QTemporaryDir tmp;
+        const QString driver = tmp.filePath(QStringLiteral("AetherSDRDAX.driver"));
+        QCOMPARE(MacInstall::daxDriverSourceOf(driver), std::optional<QString>());   // none installed
+        const QByteArray head = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n"
+                                "    <key>CFBundleIdentifier</key>\n    <string>com.aethersdr.dax</string>\n";
+        const QByteArray nested = "    <key>CFPlugInFactories</key>\n    <dict>\n"
+                                  "        <key>AetherSDRDAXSource</key>\n        <string>not this one</string>\n"
+                                  "    </dict>\n";
+        writeFile(driver + QStringLiteral("/Contents/Info.plist"), head + nested + "</dict>\n</plist>\n");
+        QCOMPARE(MacInstall::daxDriverSourceOf(driver), std::optional<QString>(QString()));   // before the stamp
+        writeFile(driver + QStringLiteral("/Contents/Info.plist"),
+                  head + nested + "    <key>AetherSDRDAXSource</key>\n"
+                                  "    <string>ebf4a3c10dbbbe04d70f59c99d55de467e9ccc07</string>\n</dict>\n</plist>\n");
+        QCOMPARE(MacInstall::daxDriverSourceOf(driver),
+                 std::optional<QString>(QStringLiteral("ebf4a3c10dbbbe04d70f59c99d55de467e9ccc07")));
+    }
+
     void theSelfTestRunsTheBundlesBinaryAndReadsItsVersion()
     {
         QTemporaryDir tmp;

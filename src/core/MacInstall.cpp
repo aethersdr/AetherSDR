@@ -10,6 +10,7 @@
 #include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QUuid>
+#include <QXmlStreamReader>
 
 #include <filesystem>
 #include <system_error>
@@ -239,6 +240,36 @@ bool MacInstall::otherInstanceRunning(const QString& bundle)
     }
 #endif
     return false;
+}
+
+std::optional<QString> MacInstall::daxDriverSourceOf(const QString& driverBundle)
+{
+    QFile f(QDir(driverBundle).filePath(QStringLiteral("Contents/Info.plist")));
+    if (!f.open(QIODevice::ReadOnly)) {
+        return std::nullopt;
+    }
+    // The top-level dict's AetherSDRDAXSource string, in an XML plist.
+    QXmlStreamReader xml(&f);
+    int depth = 0;
+    bool wanted = false;
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (xml.isStartElement()) {
+            ++depth;
+            const auto name = xml.name();
+            if (depth == 3 && name == QLatin1String("key")) {
+                wanted = xml.readElementText() == QLatin1String("AetherSDRDAXSource");
+                --depth;
+            } else if (depth == 3 && wanted && name == QLatin1String("string")) {
+                return xml.readElementText().trimmed();
+            } else if (depth == 3) {
+                wanted = false;
+            }
+        } else if (xml.isEndElement()) {
+            --depth;
+        }
+    }
+    return QString();
 }
 
 MacInstall::Checks MacInstall::real(const QString& runningBundle)

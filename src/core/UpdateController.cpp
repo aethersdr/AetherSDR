@@ -45,6 +45,11 @@ UpdateController::Environment UpdateController::forThisApp()
     }
 #endif
     env.request.stagingRoot = UpdateInstaller::stateDir();
+#if defined(Q_OS_MACOS)
+    env.installedDaxDriverSource = [] {
+        return MacInstall::daxDriverSourceOf(QStringLiteral("/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver"));
+    };
+#endif
     // Windows: the portable zip is the tree setup.exe installs, so either
     // install can take it when no patch applies. Linux: the tarball is the
     // installed tree.
@@ -322,6 +327,24 @@ bool UpdateController::restartToUpdate(QString* problem)
     });
     watcher->setFuture(QtConcurrent::run([env = m_env, staged] { return runHandOver(env, staged, true); }));
     return true;
+}
+
+bool UpdateController::daxDriverChanges(const std::optional<QString>& installed, const QString& staged)
+{
+    return !staged.isEmpty() && installed.has_value() && *installed != staged;
+}
+
+bool UpdateController::daxDriverChanges() const
+{
+    if (m_state != State::Staged || m_version.isEmpty() || !m_env.installedDaxDriverSource) {
+        return false;
+    }
+    if (m_daxSourceVersion != m_version) {
+        const UpdateStager::Request& r = m_env.request;
+        m_daxSource = UpdateStager::stagedDaxDriverSource(r.stagingRoot, m_version, r.platform, r.arch);
+        m_daxSourceVersion = m_version;
+    }
+    return daxDriverChanges(m_env.installedDaxDriverSource(), m_daxSource);
 }
 
 QString UpdateController::appImageToInstall() const

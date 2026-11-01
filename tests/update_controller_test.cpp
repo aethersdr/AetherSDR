@@ -6,6 +6,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QThread>
@@ -581,6 +584,46 @@ private slots:
             QCOMPARE(done.at(0).at(0).toBool(), false);
             QVERIFY(done.at(0).at(1).toString().contains(QLatin1String("applications menu")));
         }
+    }
+
+    // The DAX driver note (RFC #5304 Phase 4): the staged release names a
+    // source, a driver is installed, and its stamp differs; a driver from
+    // before the stamp counts as different.
+    void theDaxDriverNoteComparesTheInstalledDriver()
+    {
+        const QString a = QStringLiteral("ebf4a3c10dbbbe04d70f59c99d55de467e9ccc07");
+        const QString b = QStringLiteral("0123456789abcdef0123456789abcdef01234567");
+        QVERIFY(UpdateController::daxDriverChanges(std::optional<QString>(a), b));
+        QVERIFY(!UpdateController::daxDriverChanges(std::optional<QString>(a), a));       // already current
+        QVERIFY(!UpdateController::daxDriverChanges(std::nullopt, b));                    // no driver installed
+        QVERIFY(UpdateController::daxDriverChanges(std::optional<QString>(QString()), b)); // unstamped driver
+        QVERIFY(!UpdateController::daxDriverChanges(std::optional<QString>(a), QString())); // manifest names none
+        // Nothing staged: no note.
+        Rig rig(m_key);
+        UpdateController::Environment e = rig.env();
+        std::optional<QString> installed = a;
+        e.installedDaxDriverSource = [&] { return installed; };
+        UpdateController c(e);
+        QVERIFY(!c.daxDriverChanges());
+        // Staged, with a manifest naming b for this platform: the note shows
+        // while the installed driver is a, and not once it is b.
+        c.install(QStringLiteral("26.10.3"));
+        QVERIFY(waitFor(c, UpdateController::State::Staged));
+        const QString kept = rig.staging + QStringLiteral("/26.10.3.manifest.json");
+        QJsonObject m = QJsonDocument::fromJson(readFile(kept)).object();
+        QJsonArray ps = m[QStringLiteral("payloads")].toArray();
+        for (int i = 0; i < ps.size(); ++i) {
+            QJsonObject p = ps[i].toObject();
+            p[QStringLiteral("dax_driver")] = QJsonObject{{QStringLiteral("source"), b}};
+            ps[i] = p;
+        }
+        m[QStringLiteral("payloads")] = ps;
+        writeFile(kept, QJsonDocument(m).toJson());
+        QVERIFY(c.daxDriverChanges());
+        installed = b;
+        QVERIFY(!c.daxDriverChanges());
+        installed = std::nullopt;
+        QVERIFY(!c.daxDriverChanges());
     }
 
     void inPlaceIsAskedOfTheEnvironment()

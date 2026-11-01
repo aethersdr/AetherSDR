@@ -1,8 +1,9 @@
-# Asset manifest — the twenty-one files, who makes them, who signs them
+# Asset manifest — the twenty-five files, who makes them, who signs them
 
 v26.9.3 and v26.9.4 carry rows 1–15; the manual (rows 16–17) is attached
 from the first release cut after the docs site landed, and the Linux release
-tarballs (rows 18–21) from the first cut after RFC #5304 Phase 5's CI half. Names substitute the version;
+tarballs (rows 18–21) from the first cut after RFC #5304 Phase 5's CI half, and the macOS app tarballs
+(rows 22–25) from the first cut after Phase 4's CI half. Names substitute the version;
 `X.Y.Z` is the bare version, `vX.Y.Z` the tag.
 
 | # | asset | produced by | GPG `.asc` | Apple notarized | in `SHA256SUMS.txt` |
@@ -19,7 +20,7 @@ tarballs (rows 18–21) from the first cut after RFC #5304 Phase 5's CI half. Na
 | 10 | `AetherSDR-vX.Y.Z-Windows-x64-portable.zip.asc` | Sign Release Artifacts | — | — | — |
 | 11 | `AetherSDR-vX.Y.Z-source.tar.gz` | Sign Release Artifacts (`git archive` of the **tag**) | yes (12) | — | yes |
 | 12 | `AetherSDR-vX.Y.Z-source.tar.gz.asc` | Sign Release Artifacts | — | — | — |
-| 13 | `SHA256SUMS.txt` | Sign Release Artifacts (`sha256sum *` over 1, 3, 7, 9, 11, 18, 20) | yes (14) | — | — |
+| 13 | `SHA256SUMS.txt` | Sign Release Artifacts (`sha256sum *` over 1, 3, 7, 9, 11, 18, 20, 22, 24) | yes (14) | — | — |
 | 14 | `SHA256SUMS.txt.asc` | Sign Release Artifacts | — | — | — |
 | 15 | `AetherSDR-X.Y.Z.0-Windows-x64.msixupload` | Windows Installer (`package-windows` "Create MSIX package", attached by `release-windows`) | no | — | no |
 | 16 | `AetherSDR-Manual-vX.Y.Z.pdf` | Docs (`release-pdf`, on `release: published`; `tools/docs/build_pdf.py` from the tag) | yes (17) | — | no |
@@ -28,10 +29,14 @@ tarballs (rows 18–21) from the first cut after RFC #5304 Phase 5's CI half. Na
 | 19 | `AetherSDR-vX.Y.Z-x86_64.tar.zst.asc` | Sign Release Artifacts | — | — | — |
 | 20 | `AetherSDR-vX.Y.Z-aarch64.tar.zst` | AppImage (aarch64, same step) | yes (21) | — | yes |
 | 21 | `AetherSDR-vX.Y.Z-aarch64.tar.zst.asc` | Sign Release Artifacts | — | — | — |
+| 22 | `AetherSDR-vX.Y.Z-macOS-apple-silicon.app.tar.zst` | macOS DMG (`app-tarball`, apple-silicon: the signed app taken out of the notarized DMG, `tools/build_update_manifest.py --app-tarball`) | yes (23) | the app is Developer ID signed (inside row 5, which is notarized) | yes |
+| 23 | `AetherSDR-vX.Y.Z-macOS-apple-silicon.app.tar.zst.asc` | Sign Release Artifacts | — | — | — |
+| 24 | `AetherSDR-vX.Y.Z-macOS-intel.app.tar.zst` | macOS DMG (`app-tarball`, intel, same step) | yes (25) | same, inside row 6 | yes |
+| 25 | `AetherSDR-vX.Y.Z-macOS-intel.app.tar.zst.asc` | Sign Release Artifacts | — | — | — |
 
 **Hotfix delta** (nonzero fourth component): row 15 is absent —
 `get-store-build-plan.ps1` returns `storeEligible = false`, the MSIX step is
-skipped, nothing is staged. Twenty assets. Everything else is identical.
+skipped, nothing is staged. Twenty-four assets. Everything else is identical.
 v26.7.4.1 predates that rule and carries a `26.7.4.1` `.msixupload` that the
 Store cannot take; it also carries no `.asc` at all, because the signing
 trigger could not fire and nobody dispatched it.
@@ -41,14 +46,14 @@ signing job neither waits for nor downloads them), the `.msixupload` (a
 maintainer-only Partner Center package) and the manual PDF (made by a
 different workflow on a different trigger; its own `.asc` covers it, and
 `.pdf` is outside the signing job's download patterns). A `SHA256SUMS.txt` with more or
-fewer than seven lines was written over a partial set — the wait step timed
+fewer than nine lines was written over a partial set — the wait step timed
 out or the workflow changed.
 
 **Also absent since #5600**: `com.aethersdr.radio.streamDeckPlugin` and
 `streamcontroller-aethersdr.zip` (+ `.asc`), which every release through
 v26.9.2 carried. Their presence on a new release is a `WARN`.
 
-## Debug-symbol archives — outside the twenty-one
+## Debug-symbol archives — outside the twenty-five
 
 Each platform build also attaches one `.tar.xz` of debug symbols
 (`docs/debugging-crashes.md`). Users never download them, so they are not part
@@ -64,7 +69,7 @@ of the set above:
 
 They are neither GPG-signed nor in `SHA256SUMS.txt`. `.tar.xz` keeps them out
 of the signing job's `*.AppImage`/`*.tar.zst`/`*.exe`/`*.zip` download
-patterns, so `SHA256SUMS.txt` stays at seven lines. `check_release_assets.py` reports them
+patterns, so `SHA256SUMS.txt` stays at nine lines. `check_release_assets.py` reports them
 as a separate check: missing ones are a `WARN`, because that build's crashes
 cannot be symbolized; the release itself is unaffected. The workflows' symbol
 steps are `continue-on-error` for the same reason, so a missing archive means
@@ -73,7 +78,7 @@ re-running a green release job.
 
 ## Signature timing
 
-The six CI-built binaries (rows 1, 3, 7, 9, 18, 20) are attached by their
+The eight CI-built binaries (rows 1, 3, 7, 9, 18, 20, 22, 24) are attached by their
 build workflows before the signing job runs, so each `.asc` is minutes newer
 than its binary; a `.asc` older than its binary means the binary was
 re-attached (a re-run) after signing and the signature covers other bytes.

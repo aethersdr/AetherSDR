@@ -7,7 +7,9 @@ name: Update Manifest
 #          payload, and writes manifest.json plus one patch bundle per payload
 #          and per earlier release (tools/build_update_manifest.py). Linux's
 #          `full` is the release tarball the AppImage build attached, once it
-#          is shown to hold exactly the payload's files.
+#          is shown to hold exactly the payload's files. macOS's payload and
+#          `full` is the app tarball the macOS DMG build attached (Phase 4),
+#          with the DAX driver's source hash (hal-plugin/ at the tag).
 # publish  runs in the update-signing environment (main and v* tags only,
 #          maintainer approval): signs the manifest with the Ed25519 update key, verifies
 #          the signature against packaging/update-signing.pub, attaches the
@@ -21,7 +23,7 @@ on:
   # No `branches:` filter, for the reason sign-release.yml gives: a tag
   # build's head_branch is the tag, and the job's `if` restricts this to tags.
   workflow_run:
-    workflows: ["AppImage", "Windows Installer"]
+    workflows: ["AppImage", "Windows Installer", "macOS DMG"]
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -37,8 +39,10 @@ on:
 permissions:
   contents: read
 
-# Both builds trigger this, so one tag produces two runs. They queue rather
-# than race; the second finds the manifest already published and stops.
+# AppImage, Windows Installer and macOS DMG trigger this, so one tag produces
+# up to three runs. They queue rather than race; GitHub keeps one pending run
+# per group, so a third trigger cancels the one still pending, and a run that
+# finds the manifest already published stops.
 concurrency:
   group: update-manifest-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
   cancel-in-progress: false
@@ -90,6 +94,17 @@ jobs:
         id: tarballs
         run: |
           if grep -q -- '--tarball' .github/workflows/appimage.yml; then
+            echo "expected=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "expected=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # macOS payloads, when the tag's own macOS DMG build makes app tarballs;
+      # a release cut before that leaves macOS out, as it was.
+      - name: Does the release carry macOS app tarballs?
+        id: apptarballs
+        run: |
+          if grep -q -- '--app-tarball' .github/workflows/macos-dmg.yml; then
             echo "expected=true" >> "$GITHUB_OUTPUT"
           else
             echo "expected=false" >> "$GITHUB_OUTPUT"
@@ -157,25 +172,54 @@ jobs:
           fi
 
       - name: Wait for every payload asset to be attached
+        id: assets
         if: ${{ steps.plan.outputs.publish != 'already' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.tag.outputs.tag }}
           TARBALLS: ${{ steps.tarballs.outputs.expected }}
+          APP_TARBALLS: ${{ steps.apptarballs.outputs.expected }}
         run: |
           want="x86_64.AppImage aarch64.AppImage Windows-x64-portable.zip"
           if [ "$TARBALLS" = true ]; then
             want="$want x86_64.tar.zst aarch64.tar.zst"
           fi
+          app=
+          if [ "$APP_TARBALLS" = true ]; then
+            app="macOS-apple-silicon.app.tar.zst macOS-intel.app.tar.zst"
+          fi
+          base="$want"
           for i in $(seq 1 90); do
             names=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
+            # The macOS app tarballs are waited for only while the tag's macOS
+            # DMG build can still attach them: once it has finished without
+            # them, the manifest is built without macOS (a maintainer ruling),
+            # until it is dispatched again.
+            want="$base"
+            macos=false
+            if [ -n "$app" ]; then
+              mac=$(gh run list --workflow "macOS DMG" --branch "$TAG" --limit 1 --json status --jq '.[0].status // ""')
+              have=0
+              for w in $app; do
+                case "$names" in *"$w"*) have=$((have + 1)) ;; esac
+              done
+              if [ "$have" -eq 2 ]; then
+                want="$want $app"
+                macos=true
+              elif [ "$mac" != completed ]; then
+                want="$want $app"
+              else
+                echo "::warning::The macOS DMG build finished without both app tarballs; the manifest leaves macOS out."
+              fi
+            fi
             missing=
             for w in $want; do
               case "$names" in *"$w"*) ;; *) missing="$missing $w" ;; esac
             done
             if [ -z "$missing" ]; then
               echo "All payload assets present."
+              echo "macos=$macos" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             echo "Waiting for:$missing  ($i/90)"
@@ -196,14 +240,22 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
           TARBALLS: ${{ steps.tarballs.outputs.expected }}
+          MACOS: ${{ steps.assets.outputs.macos }}
         run: |
           # --fetch-from-github requires every payload: a download that still
           # fails after retries stops the run rather than leaving a platform out.
           no_tarballs=
           [ "$TARBALLS" = true ] || no_tarballs=--no-release-tarballs
+          macos=--no-macos-payloads
+          if [ "$MACOS" = true ]; then
+            # The DAX driver's source at the tag, which the app compares with
+            # its own to say a release changes the driver.
+            macos="--dax-driver-source $(git rev-parse HEAD:hal-plugin)"
+          fi
+          # shellcheck disable=SC2086
           python3 "$RUNNER_TEMP/tool/build_update_manifest.py" --tag "$TAG" --out update-out \
             --fetch-from-github --depth 4 --work "$RUNNER_TEMP/update-work" \
-            --public-key "$RUNNER_TEMP/tool/update-signing.pub" $no_tarballs
+            --public-key "$RUNNER_TEMP/tool/update-signing.pub" $no_tarballs $macos
           cp "$RUNNER_TEMP/tool/publish_update_manifest.py" "$RUNNER_TEMP/tool/build_update_manifest.py" update-out/
           ls -l update-out
 

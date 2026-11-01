@@ -37,13 +37,18 @@ from typing import Any
 
 KEY_FPR = "B7656E6BCB2E022B79F0F97B5578D10E3D5918F3"
 SIGNABLE = ("x86_64.AppImage", "aarch64.AppImage", "x86_64.tar.zst", "aarch64.tar.zst",
+            "macOS-apple-silicon.app.tar.zst", "macOS-intel.app.tar.zst",
             "Windows-x64-setup.exe", "Windows-x64-portable.zip")
+LINUX_TARBALLS = ("x86_64.tar.zst", "aarch64.tar.zst")
+APP_TARBALLS = ("macOS-apple-silicon.app.tar.zst", "macOS-intel.app.tar.zst")
 BUILD_WORKFLOWS = ("AppImage", "Windows Installer", "macOS DMG")
 
 
-def signables(tarballs: bool) -> tuple[str, ...]:
-    """SIGNABLE for a release: the Linux tarballs only once its AppImage build made them."""
-    return SIGNABLE if tarballs else tuple(s for s in SIGNABLE if not s.endswith(".tar.zst"))
+def signables(tarballs: bool, app_tarballs: bool = True) -> tuple[str, ...]:
+    """SIGNABLE for a release: the Linux tarballs only once its AppImage build made
+    them, the macOS app tarballs only once its macOS DMG build made them."""
+    return tuple(s for s in SIGNABLE
+                 if (tarballs or s not in LINUX_TARBALLS) and (app_tarballs or s not in APP_TARBALLS))
 # Started by publishing the release, not by the tag push: it typesets, signs
 # and attaches the PDF manual.
 DOCS_WORKFLOW = "Docs"
@@ -235,11 +240,18 @@ def _check_macos_steps(repo: str, r: dict[str, Any]) -> None:
     view = gh_json("run", "view", "--repo", repo, str(r["databaseId"]), "--json", "jobs") or {}
     for job in view.get("jobs", []):
         steps = {s["name"]: s["conclusion"] for s in job.get("steps", [])}
-        wanted = {k: steps.get(k) for k in ("Code sign application", "Sign DMG", "Notarize DMG", "Attach to release")}
-        if all(c == "success" for c in wanted.values()):
-            report("PASS", f"macOS notarization steps: {job['name']}", ", ".join(f"{k} {c}" for k, c in wanted.items()))
+        # The build legs sign nothing: only the signing and app-tarball jobs are read.
+        if job["name"].startswith("Sign and notarize"):
+            what = "macOS notarization steps"
+            names = ("Code sign application", "Sign DMG", "Notarize DMG", "Attach to release")
+        elif job["name"].startswith("App update tarball"):
+            what = "macOS app tarball steps"
+            names = ("Take the app out", "Build the app tarball", "Attach to release")
         else:
-            report("FAIL", f"macOS notarization steps: {job['name']}", ", ".join(f"{k} {c}" for k, c in wanted.items()))
+            continue
+        wanted = {k: steps.get(k) for k in names}
+        verdict = "PASS" if all(c == "success" for c in wanted.values()) else "FAIL"
+        report(verdict, f"{what}: {job['name']}", ", ".join(f"{k} {c}" for k, c in wanted.items()))
 
 
 # --------------------------------------------------------------------- assets
@@ -255,10 +267,22 @@ def release_makes_tarballs(repo: str, v: str) -> bool:
     return "--tarball" in proc.stdout
 
 
-def expected_assets(v: str, hotfix: bool, tarballs: bool = True) -> list[str]:
+def release_makes_app_tarballs(repo: str, v: str) -> bool:
+    """Whether the tag's own macOS DMG workflow builds the app tarballs (the
+    in-app update's macOS payload): a release cut before that carries none."""
+    proc = run([_tool("gh"), "api", f"repos/{repo}/contents/.github/workflows/macos-dmg.yml?ref={v}",
+                "-H", "Accept: application/vnd.github.raw"], check=False)
+    if proc.returncode != 0:
+        report("WARN", "the tag's macOS DMG workflow read", "could not read it; expecting the macOS app tarballs")
+        return True
+    return "--app-tarball" in proc.stdout
+
+
+def expected_assets(v: str, hotfix: bool, tarballs: bool = True, app_tarballs: bool = True) -> list[str]:
     bare = ".".join(v.lstrip("v").split(".")[:3])  # 26.9.5 and 26.9.5.0 both package as 26.9.5.0
     names = [f"AetherSDR-{v}-x86_64.AppImage", f"AetherSDR-{v}-aarch64.AppImage",
              *([f"AetherSDR-{v}-x86_64.tar.zst", f"AetherSDR-{v}-aarch64.tar.zst"] if tarballs else []),
+             *([f"AetherSDR-{v}-{s}" for s in APP_TARBALLS] if app_tarballs else []),
              f"AetherSDR-{v}-macOS-apple-silicon.dmg", f"AetherSDR-{v}-macOS-intel.dmg",
              f"AetherSDR-{v}-Windows-x64-setup.exe", f"AetherSDR-{v}-Windows-x64-portable.zip",
              f"AetherSDR-{v}-source.tar.gz", "SHA256SUMS.txt", f"AetherSDR-Manual-{v}.pdf"]
@@ -271,16 +295,17 @@ def expected_assets(v: str, hotfix: bool, tarballs: bool = True) -> list[str]:
 
 def expected_symbol_assets(v: str) -> list[str]:
     # Debug-symbol archives, one per platform build (docs/debugging-crashes.md).
-    # Kept out of the twenty-one: users never download them, nothing signs them,
+    # Kept out of the asset set: users never download them, nothing signs them,
     # and a missing one costs crash symbolization, not the release.
     return [f"AetherSDR-{v}-x86_64-symbols.tar.xz", f"AetherSDR-{v}-aarch64-symbols.tar.xz",
             f"AetherSDR-{v}-macOS-apple-silicon-symbols.tar.xz", f"AetherSDR-{v}-macOS-intel-symbols.tar.xz",
             f"AetherSDR-{v}-Windows-x64-symbols.tar.xz"]
 
 
-def check_assets(rel: dict[str, Any], v: str, hotfix: bool, tarballs: bool) -> dict[str, dict[str, Any]]:
+def check_assets(rel: dict[str, Any], v: str, hotfix: bool, tarballs: bool,
+                 app_tarballs: bool = True) -> dict[str, dict[str, Any]]:
     assets = {a["name"]: a for a in rel.get("assets", [])}
-    want = expected_assets(v, hotfix, tarballs)
+    want = expected_assets(v, hotfix, tarballs, app_tarballs)
     missing = [n for n in want if n not in assets]
     n_want = len(want)
     if missing:
@@ -304,7 +329,7 @@ def check_assets(rel: dict[str, Any], v: str, hotfix: bool, tarballs: bool) -> d
     # are uploaded in the same `gh release upload` as their signatures, so
     # their timestamps tie (either order, within a few seconds); only a real
     # gap there means a re-sign clobbered one file and not the other.
-    built = [f"AetherSDR-{v}-{s}" for s in signables(tarballs)]
+    built = [f"AetherSDR-{v}-{s}" for s in signables(tarballs, app_tarballs)]
     late, gaps = [], []
     for n in want:
         if not n.endswith(".asc") or n not in assets or n[:-4] not in assets:
@@ -349,7 +374,8 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Namespace, tarballs: bool) -> None:
+def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Namespace, tarballs: bool,
+                    app_tarballs: bool = True) -> None:
     if args.skip_download:
         report("SKIP", "download and verify signatures and checksums", "--skip-download")
         return
@@ -361,6 +387,10 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
     if tarballs:
         # The in-app full download for Linux: its bytes and signature too.
         patterns += [f"AetherSDR-{v}-x86_64.tar.zst", f"AetherSDR-{v}-x86_64.tar.zst.asc"]
+    if app_tarballs:
+        # And macOS's (Apple silicon), the app the in-app update installs.
+        patterns += [f"AetherSDR-{v}-macOS-apple-silicon.app.tar.zst",
+                     f"AetherSDR-{v}-macOS-apple-silicon.app.tar.zst.asc"]
     if args.all:
         patterns = [n for n in assets if not n.endswith(".dmg") and not n.endswith(".msixupload")]
     patterns = [p for p in patterns if p in assets]
@@ -381,7 +411,7 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
             m = re.match(r"^([0-9a-f]{64})\s+\*?(.+)$", line.strip())
             if m:
                 entries[m.group(2)] = m.group(1)
-        want = [f"AetherSDR-{v}-{s}" for s in signables(tarballs)] + [f"AetherSDR-{v}-source.tar.gz"]
+        want = [f"AetherSDR-{v}-{s}" for s in signables(tarballs, app_tarballs)] + [f"AetherSDR-{v}-source.tar.gz"]
         if sorted(entries) == sorted(want):
             report("PASS", f"SHA256SUMS.txt covers exactly the {len(want)} signable files")
         else:
@@ -418,7 +448,9 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
         else:
             report("WARN", "release signing key file", "docs/RELEASE-SIGNING-KEY.pub.asc not found; relying on the local keyring")
         for name in ["SHA256SUMS.txt", f"AetherSDR-{v}-source.tar.gz", f"AetherSDR-{v}-x86_64.AppImage",
-                     *([f"AetherSDR-{v}-x86_64.tar.zst"] if tarballs else []), f"AetherSDR-Manual-{v}.pdf"]:
+                     *([f"AetherSDR-{v}-x86_64.tar.zst"] if tarballs else []),
+                     *([f"AetherSDR-{v}-macOS-apple-silicon.app.tar.zst"] if app_tarballs else []),
+                     f"AetherSDR-Manual-{v}.pdf"]:
             sig = ddir / (name + ".asc")
             if not sig.exists() or not (ddir / name).exists():
                 report("SKIP", f"gpg --verify {name}.asc", "not downloaded")
@@ -543,8 +575,9 @@ def main(argv: list[str] | None = None) -> int:
     windows_run, _ = check_runs(args.repo, v, tagged_at)
     if rel:
         tarballs = release_makes_tarballs(args.repo, v)
-        assets = check_assets(rel, v, hotfix, tarballs)
-        check_downloads(args.repo, v, assets, args, tarballs)
+        app_tarballs = release_makes_app_tarballs(args.repo, v)
+        assets = check_assets(rel, v, hotfix, tarballs, app_tarballs)
+        check_downloads(args.repo, v, assets, args, tarballs, app_tarballs)
     check_store(args.repo, windows_run, hotfix)
 
     fails = [r for r in results if r[0] == "FAIL"]

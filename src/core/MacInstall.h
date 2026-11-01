@@ -3,6 +3,7 @@
 #include <QString>
 
 #include <functional>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -37,6 +38,12 @@ public:
     // team is given, a Developer ID Application signature from that team;
     // problem is what codesign said, or why it couldn't run.
     static Signature verifySignature(const QString& tree, const QString& team, QString* problem);
+
+    // The DAX driver source stamped into an installed driver bundle's
+    // Info.plist (AetherSDRDAXSource, the git tree hash of hal-plugin/ it was
+    // built from). nullopt when no driver is there; empty when it predates
+    // the stamp.
+    static std::optional<QString> daxDriverSourceOf(const QString& driverBundle);
 
     // Whether a process other than this one runs bundle's binary: another
     // AetherSDR, started with open -n, which the swap would pull the bundle
