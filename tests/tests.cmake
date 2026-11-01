@@ -7207,6 +7207,8 @@ if(UNIX)
     target_link_libraries(meter_applet_voltage_state_test PRIVATE pthread)
 endif()
 set_target_properties(meter_applet_voltage_state_test PROPERTIES AUTOMOC ON)
+target_compile_definitions(meter_applet_voltage_state_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME meter_applet_voltage_state_test COMMAND meter_applet_voltage_state_test)
 set_tests_properties(meter_applet_voltage_state_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
@@ -7658,6 +7660,21 @@ endif()
 # The registry is src/gui/ code — it uses QWidget, so it cannot live in
 # aethercore without breaking the engine boundary. Compiled directly into the
 # test, the way every other gui-widget test in this file does it.
+add_executable(meter_applet_supply_availability_test
+    tests/meter_applet_supply_availability_test.cpp
+    src/gui/MeterApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    ${THEME_TEST_RESOURCES})
+target_include_directories(meter_applet_supply_availability_test PRIVATE src)
+target_link_libraries(meter_applet_supply_availability_test PRIVATE aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(meter_applet_supply_availability_test PROPERTIES AUTOMOC ON)
+target_compile_definitions(meter_applet_supply_availability_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME meter_applet_supply_availability_test COMMAND meter_applet_supply_availability_test)
+set_tests_properties(meter_applet_supply_availability_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(control_availability_registry_test
     tests/control_availability_registry_test.cpp
     src/gui/ControlAvailabilityRegistry.cpp
