@@ -113,11 +113,11 @@ func (n *Node) watchJoin(ctx context.Context, read loginReader, interactive bool
 		if err != nil {
 			continue
 		}
-		if s := pendingState(li); s != "" {
+		// A keyed join that the control plane answers with a sign-in URL
+		// has had its key refused: it stays "starting" until its timeout.
+		if s := pendingState(li); s != "" && interactive {
 			n.setLoginState(s)
-			if interactive {
-				disarm()
-			}
+			disarm()
 		}
 	}
 }
@@ -246,8 +246,14 @@ func (n *Node) ProvisionInteractive(presented, hostname string, allow, routes []
 			// Signed out or re-provisioned meanwhile: this token is dead.
 			return "", "", lerr
 		}
-		if r.AuthURL != "" || r.State == stateRunning || r.State == stateNeedsApproval {
+		if r.AuthURL != "" {
+			// The backend has the URL before watchJoin's next tick says so;
+			// say it now, so the reply's status agrees with its URL.
+			n.setLoginState(stateNeedsLogin)
 			return token, r.AuthURL, nil
+		}
+		if r.State == stateRunning || r.State == stateNeedsApproval {
+			return token, "", nil
 		}
 		if r.State == stateError {
 			n.mu.Lock()

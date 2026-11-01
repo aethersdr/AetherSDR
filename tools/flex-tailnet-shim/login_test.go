@@ -111,8 +111,8 @@ func TestKeyedJoinKeepsItsTimeout(t *testing.T) {
 	go n.watchJoin(ctx, fb.read, false, func() { disarmed.Store(true) })
 	time.Sleep(50 * time.Millisecond)
 	cancel()
-	if disarmed.Load() {
-		t.Fatal("a keyed join disarmed its timeout")
+	if disarmed.Load() || n.currentState() != stateStarting {
+		t.Fatalf("a keyed join disarmed its timeout or left starting (%s)", n.currentState())
 	}
 }
 
@@ -197,10 +197,11 @@ func TestProvisionWithoutAKeyReturnsTheSignInURL(t *testing.T) {
 	var gotKey atomic.Value
 	n.startFn = func(ctx context.Context, authKey string, _ time.Duration) error {
 		gotKey.Store(authKey)
+		// The backend has the URL; watchJoin hasn't ticked yet, so the
+		// node still says "starting" until the provision reply sets it.
 		n.mu.Lock()
 		n.loginRead = fb.read
 		n.mu.Unlock()
-		n.setLoginState(stateNeedsLogin)
 		<-ctx.Done() // waits for the sign-in, as the real join does
 		return ctx.Err()
 	}
@@ -215,7 +216,8 @@ func TestProvisionWithoutAKeyReturnsTheSignInURL(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil || rec.Code != http.StatusOK {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
-	if reply.AdminToken == "" || reply.AuthURL != testAuthURL || !reply.Status.Provisioned {
+	if reply.AdminToken == "" || reply.AuthURL != testAuthURL || !reply.Status.Provisioned ||
+		reply.Status.State != stateNeedsLogin {
 		t.Fatalf("reply %+v", reply)
 	}
 	if k, _ := gotKey.Load().(string); k != "" {
