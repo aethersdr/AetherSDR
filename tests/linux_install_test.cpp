@@ -342,7 +342,7 @@ private slots:
             QSKIP("running as root: an unreadable file can still be read");
         }
         QVERIFY(!LinuxInstall::install(second, QStringLiteral("26.10.4"), paths, &problem));
-        QVERIFY(!problem.isEmpty());
+        QVERIFY2(problem.contains(QLatin1String("Permission denied")), qPrintable(problem));   // the reason, not only that it failed
         lib.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
         QVERIFY(QFileInfo(paths.base + QStringLiteral("/current/AppRun")).isExecutable());
         QCOMPARE(readFile(paths.base + QStringLiteral("/current/usr/lib/libQt6Core.so.6")), QByteArray("qt"));
@@ -696,12 +696,81 @@ private slots:
         QCOMPARE(LinuxInstall::installedVersion(empty.base), QStringLiteral("26.10.4"));
     }
 
-    // Installs racing for an empty install, each from its own tree: exactly
-    // one becomes current, and every other one's copy is gone.
-    void racingInstallsLeaveExactlyOneCurrent()
+    // A current left by an earlier install, naming no installed release, is
+    // no install: KeepExisting clears it and installs. Something at current
+    // that isn't a link is never removed, and a failure there leaves no copy
+    // and no menu entry behind.
+    void keepExistingClearsAStaleCurrentOnly()
+    {
+        const auto entries = [](const QString& dir) {
+            return QDir(dir).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
+        };
+        QTemporaryDir tmp;
+        const QString tree = tmp.filePath(QStringLiteral("appimage"));
+        makeTree(tree, "26.10.4");
+        QString problem;
+        for (const QString& stale : {QStringLiteral("26.10.3"), tmp.filePath(QStringLiteral("elsewhere/26.10.9"))}) {
+            QTemporaryDir home;
+            const LinuxInstall::Paths paths = pathsIn(home.path());
+            QVERIFY(QDir().mkpath(paths.base));
+            if (stale.contains(QLatin1Char('/'))) {
+                makeTree(stale, "26.10.9");   // a real release, outside the install
+            }
+            std::error_code ec;
+            fs::create_symlink(fs::path(stale.toStdString()), fs::path((paths.base + QStringLiteral("/current")).toStdString()), ec);
+            QVERIFY(!ec);
+            QVERIFY(LinuxInstall::installedVersion(paths.base).isEmpty());
+            QVERIFY2(LinuxInstall::install(tree, QStringLiteral("26.10.4"), paths, &problem, nullptr,
+                                           LinuxInstall::Current::KeepExisting),
+                     qPrintable(problem));
+            QCOMPARE(LinuxInstall::installedVersion(paths.base), QStringLiteral("26.10.4"));
+            QCOMPARE(entries(paths.base), (QStringList{QStringLiteral("26.10.4"), QStringLiteral("current")}));
+        }
+        QTemporaryDir home;
+        const LinuxInstall::Paths paths = pathsIn(home.path());
+        QVERIFY(QDir().mkpath(paths.base + QStringLiteral("/current/mine")));
+        QVERIFY(!LinuxInstall::install(tree, QStringLiteral("26.10.4"), paths, &problem, nullptr,
+                                       LinuxInstall::Current::KeepExisting));
+        QVERIFY(QFileInfo(paths.base + QStringLiteral("/current/mine")).isDir());
+        QCOMPARE(entries(paths.base), QStringList{QStringLiteral("current")});
+        QVERIFY(!QFileInfo::exists(paths.applications + QStringLiteral("/AetherSDR.desktop")));
+    }
+
+    // A current whose release folder is gone names no install.
+    void aDanglingCurrentIsNoInstall()
     {
         QTemporaryDir tmp;
         const LinuxInstall::Paths paths = pathsIn(tmp.path());
+        const QString tree = tmp.filePath(QStringLiteral("tarball"));
+        makeTree(tree, "26.10.4");
+        QString problem;
+        QVERIFY2(LinuxInstall::install(tree, QStringLiteral("26.10.4"), paths, &problem), qPrintable(problem));
+        QCOMPARE(LinuxInstall::installedVersion(paths.base), QStringLiteral("26.10.4"));
+        QVERIFY(QDir(paths.base + QStringLiteral("/26.10.4")).removeRecursively());
+        QVERIFY(LinuxInstall::installedVersion(paths.base).isEmpty());
+    }
+
+    void racingInstallsLeaveExactlyOneCurrent_data()
+    {
+        QTest::addColumn<bool>("staleCurrent");
+        QTest::newRow("empty install") << false;
+        QTest::newRow("a dangling current left behind") << true;
+    }
+
+    // Installs racing for an install with none, each from its own tree:
+    // exactly one becomes current, and every other one's copy is gone. With
+    // a stale current to clear first, too.
+    void racingInstallsLeaveExactlyOneCurrent()
+    {
+        QFETCH(bool, staleCurrent);
+        QTemporaryDir tmp;
+        const LinuxInstall::Paths paths = pathsIn(tmp.path());
+        if (staleCurrent) {
+            QVERIFY(QDir().mkpath(paths.base));
+            std::error_code ec;
+            fs::create_symlink("26.10.3", fs::path((paths.base + QStringLiteral("/current")).toStdString()), ec);
+            QVERIFY(!ec);
+        }
         constexpr int kRacers = 8;
         QStringList versions;
         for (int i = 0; i < kRacers; ++i) {

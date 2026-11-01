@@ -415,8 +415,12 @@ because `~/.local/share/AetherSDR` already holds user data. `LinuxInstall`
   `LinuxInstall::install` takes `Current::KeepExisting`, which makes the
   link with a plain `symlink()` at `current` instead of renaming one over
   it, so it fails if anything is there by then. The copy is removed again,
-  and the window points to the install that won. `--install` keeps
-  `Current::Replace`.
+  and the window points to the install that won. A `current` naming no
+  installed release (its folder gone, or a target outside the install)
+  does not count as an install: it is moved aside in one rename, judged,
+  and removed, or put back with `RENAME_NOREPLACE` if it names a release
+  after all. `--install` keeps `Current::Replace`, so an older AppImage's
+  `--install` deliberately replaces a newer install.
   `UpdateController::installAppImage` runs `LinuxInstall::install` on the
   running tree on a worker thread, then, if the operator ticked it in the
   confirmation (off by default, a maintainer ruling), moves the AppImage to

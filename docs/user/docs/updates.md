@@ -76,7 +76,7 @@ The AppImage runs from wherever you saved it, and updates by downloading the nex
 
 From then on, start AetherSDR from your applications menu or with `aethersdr`. If you open the AppImage again, its Updates window says AetherSDR is installed for updates instead of offering it again.
 
-From a terminal, `./AetherSDR-<version>-x86_64.AppImage --install` does the same, without the trash.
+From a terminal, `./AetherSDR-<version>-x86_64.AppImage --install` installs the AppImage's release the same way, without the trash option. Unlike **Install for updates**, it installs over an existing install, even a newer one, so it is also a way back to an older release.
 
 ### From the release tarball
 

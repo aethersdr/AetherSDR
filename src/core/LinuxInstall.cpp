@@ -19,8 +19,10 @@
 #include <system_error>
 
 #ifdef Q_OS_LINUX
-#include <fcntl.h>   // AT_FDCWD
-#include <stdio.h>   // renameat2, RENAME_EXCHANGE
+#include <fcntl.h>      // AT_FDCWD, open
+#include <stdio.h>      // renameat2, RENAME_EXCHANGE
+#include <sys/file.h>   // flock
+#include <unistd.h>     // close
 #endif
 
 namespace fs = std::filesystem;
@@ -128,13 +130,63 @@ void discard(const QString& path)
 
 // <base>/current -> version, by renaming a new link over the old one: a
 // reader sees the old release or the new one, never neither.
+// Every change to current, in every AetherSDR, one at a time: an advisory
+// lock on the install folder itself, held until it goes out of scope and
+// dropped by the kernel if the process dies.
+class CurrentLock {
+public:
+    explicit CurrentLock(const QString& base)
+    {
+#ifdef Q_OS_LINUX
+        m_fd = ::open(QFile::encodeName(base).constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (m_fd >= 0) {
+            ::flock(m_fd, LOCK_EX);
+        }
+#else
+        Q_UNUSED(base);
+#endif
+    }
+    ~CurrentLock()
+    {
+#ifdef Q_OS_LINUX
+        if (m_fd >= 0) {
+            ::close(m_fd);
+        }
+#endif
+    }
+    CurrentLock(const CurrentLock&) = delete;
+    CurrentLock& operator=(const CurrentLock&) = delete;
+
+private:
+    int m_fd{-1};
+};
+
+QString versionNamedBy(const QString& base, const fs::path& link);
+bool namesInstalled(const QString& base, const QString& version);
+
 bool makeCurrent(const QString& base, const QString& version, LinuxInstall::Current policy, QString* problem)
 {
+    const CurrentLock lock(base);
     std::error_code ec;
     if (policy == LinuxInstall::Current::KeepExisting) {
-        // Made in place: symlink() fails if anything is at current by then,
-        // in one step, so an install made meanwhile is never replaced.
-        fs::create_symlink(toPath(version), toPath(QDir(base).filePath(kCurrent)), ec);
+        const fs::path at = toPath(QDir(base).filePath(kCurrent));
+        // Under the lock, what is at current stays put while it is judged:
+        // a link naming no installed release (left by an earlier install,
+        // its folder gone or its target outside base) is cleared; a release
+        // made current meanwhile, or anything that isn't a link, is kept.
+        const fs::file_status there = fs::symlink_status(at, ec);
+        if (fs::exists(there)) {
+            if (fs::is_symlink(there) && !namesInstalled(base, versionNamedBy(base, at))) {
+                fs::remove(at, ec);
+            } else {
+                *problem = QStringLiteral("Another AetherSDR install became current meanwhile.");
+                return false;
+            }
+        }
+        // Made in place, so even an AetherSDR that takes no lock is never
+        // replaced: symlink() fails if anything is at current by then.
+        ec.clear();
+        fs::create_symlink(toPath(version), at, ec);
         if (ec == std::errc::file_exists) {
             *problem = QStringLiteral("Another AetherSDR install became current meanwhile.");
             return false;
@@ -161,11 +213,11 @@ bool makeCurrent(const QString& base, const QString& version, LinuxInstall::Curr
 // The release current names, or empty: a version folder of base, however
 // the link is written ("26.10.4", "./26.10.4" or a full path). A link to
 // anything else names no release.
-QString currentVersion(const QString& base)
+QString versionNamedBy(const QString& base, const fs::path& link)
 {
     std::error_code ec;
     const fs::path root = fs::weakly_canonical(toPath(base), ec);
-    fs::path target = ec ? fs::path() : fs::read_symlink(root / kCurrent.toStdString(), ec);
+    fs::path target = ec ? fs::path() : fs::read_symlink(link, ec);
     if (ec) {
         return {};
     }
@@ -180,13 +232,24 @@ QString currentVersion(const QString& base)
     return isVersion(name) ? name : QString();
 }
 
+QString currentVersion(const QString& base)
+{
+    return versionNamedBy(base, toPath(QDir(base).filePath(kCurrent)));
+}
+
+// A version link names an installed release: its folder is there with AppRun.
+bool namesInstalled(const QString& base, const QString& version)
+{
+    return !version.isEmpty() && QFileInfo::exists(QDir(base).filePath(version + QLatin1Char('/') + kAppRun));
+}
+
+
 // A copy of from at to, folder by folder, each made writable by its owner
 // before anything goes in it: a read-only source (an AppImage's mount) gives
 // its modes to the copy, which stays the user's to update and remove. Links
 // are copied as links. False at the first thing that can't be copied.
-bool copyTree(const fs::path& from, const fs::path& to)
+bool copyTree(const fs::path& from, const fs::path& to, std::error_code& ec)
 {
-    std::error_code ec;
     const auto made = [&ec](const fs::path& p) {
         if (!ec) {
             fs::permissions(p, fs::perms::owner_write, fs::perm_options::add, ec);
@@ -229,15 +292,14 @@ bool moveTree(const QString& source, const QString& dest, bool keepSource, QStri
     }
     const QString partial = unique(QFileInfo(dest).absolutePath(), kPartial);
     ec.clear();   // the rename's failure, which the copy answers
-    if (!copyTree(toPath(source), toPath(partial))) {
-        ec = std::make_error_code(std::errc::io_error);
-    }
-    if (!ec) {
+    if (copyTree(toPath(source), toPath(partial), ec)) {
         fs::rename(toPath(partial), toPath(dest), ec);
     }
     if (ec) {
-        fs::remove_all(toPath(partial), ec);
-        *problem = QStringLiteral("The release could not be copied into %1.").arg(dest);
+        const QString why = QString::fromLocal8Bit(ec.message().c_str());
+        std::error_code ignored;
+        fs::remove_all(toPath(partial), ignored);
+        *problem = QStringLiteral("The release could not be copied into %1: %2.").arg(dest, why);
         return false;
     }
     if (!keepSource) {
@@ -371,7 +433,8 @@ QString LinuxInstall::treeOf(const QString& appDir, const QString& base)
 
 QString LinuxInstall::installedVersion(const QString& base)
 {
-    return currentVersion(base);
+    const QString version = currentVersion(base);
+    return namesInstalled(base, version) ? version : QString();
 }
 
 bool LinuxInstall::install(const QString& tree, const QString& version, const Paths& paths,
@@ -425,11 +488,19 @@ bool LinuxInstall::install(const QString& tree, const QString& version, const Pa
     // The menu entry first: if it can't be written, nothing has changed.
     const QString current = QDir(paths.base).filePath(kCurrent);
     const QString run = QDir(current).filePath(kAppRun);
+    const QString entry = QDir(paths.applications).filePath(QStringLiteral("AetherSDR.desktop"));
+    const bool hadEntry = QFileInfo::exists(entry) || QFileInfo(entry).isSymLink();
     if (!writeDesktopEntry(dest, run, paths.applications, problem)
         || !makeCurrent(paths.base, version, policy, problem)) {
-        if (copied) {
+        // The copy goes, unless another install of this version made it
+        // current meanwhile; a menu entry this install added goes when it
+        // would start nothing.
+        if (copied && currentVersion(paths.base) != version) {
             std::error_code ec;
             fs::remove_all(toPath(dest), ec);
+        }
+        if (!hadEntry && installedVersion(paths.base).isEmpty()) {
+            QFile::remove(entry);
         }
         return false;
     }

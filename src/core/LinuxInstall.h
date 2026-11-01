@@ -47,7 +47,8 @@ public:
     // AppImage, a build folder, a distribution's package.
     static QString treeOf(const QString& appDir, const QString& base);
 
-    // The release current names in base, or empty when there is no install.
+    // The release current names in base when it is installed (its folder is
+    // there with AppRun); empty otherwise, a link left dangling included.
     static QString installedVersion(const QString& base);
 
     // AetherSDR --install, from an unpacked tarball or from inside the
@@ -55,13 +56,15 @@ public:
     // and points the menu entry, its icon and the aethersdr command at
     // current. A file or link of the user's own at ~/.local/bin/aethersdr is
     // left alone; note says so. If the menu entry can't be written, current
-    // is not changed, and a release folder it copied is removed again.
+    // is not changed, a release folder it copied is removed again, and so is
+    // a menu entry it added.
     //
     // Replace (--install) makes version current whatever current named.
     // KeepExisting (Install for updates) makes it current only if nothing
     // is current when it gets there, checked in the same step that makes the
     // link, so an install made while this one copies is never replaced; the
-    // copy is then removed again.
+    // copy is then removed again. A current naming no installed release
+    // (left by an earlier install) does not count, and is cleared.
     enum class Current { Replace, KeepExisting };
     static bool install(const QString& tree, const QString& version, const Paths& paths,
                         QString* problem, QString* note = nullptr, Current policy = Current::Replace);

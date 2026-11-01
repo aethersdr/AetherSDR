@@ -44,7 +44,6 @@
 #include <QFontDatabase>
 #include <QDateTime>
 #include <QStandardPaths>
-#include <QProcess>
 #include <QTimer>
 #include <cstdio>
 #include <cstdlib>
@@ -273,17 +272,10 @@ static int runInstallCli(int argc, char* argv[])
         std::printf("%s\n", qPrintable(note));
     }
     if (qEnvironmentVariableIsSet("WAYLAND_DISPLAY") || qEnvironmentVariableIsSet("DISPLAY")) {
-        // Run from the AppImage, the installed copy must not inherit its
-        // variables, or a descriptor that keeps its mount alive.
-        QProcess process;
-        process.setProgram(run);
-        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-        for (const QString& name : AetherSDR::LinuxInstall::appImageVariables()) {
-            env.remove(name);
-        }
-        process.setProcessEnvironment(env);
-        process.setUnixProcessParameters(QProcess::UnixProcessFlag::CloseFileDescriptors);
-        process.startDetached();
+        // Once this installer has exited, without the AppImage's variables
+        // or descriptors when run from it, as Install for updates starts it.
+        AetherSDR::LinuxInstall::startAfterExit(QCoreApplication::applicationPid(), run,
+                                                AetherSDR::LinuxInstall::appImageVariables());
     }
     return EXIT_SUCCESS;
 }
