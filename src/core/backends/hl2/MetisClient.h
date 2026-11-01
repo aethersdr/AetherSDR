@@ -380,8 +380,9 @@ public:
     // repeating stale samples or blocking the pacer. Repeating would put a
     // periodic artefact on the air, and blocking would starve the radio's
     // watchdog. Overflow drops the oldest, because on transmit the freshest
-    // audio is the one that matters. Each over is primed once: its first
-    // samples wait until kTxPrimeTargetSamples are queued (#6052).
+    // audio is the one that matters. The queue is primed at the start of each
+    // over and again after every abandon (abandonTxIq()): the first samples
+    // wait until kTxPrimeTargetSamples are queued (#6052).
     void queueTxIq(std::span<const std::complex<float>> iq, const TxCoordinator::Context& context);
     // Discard pending transmit audio. Call on unkey: whatever is still queued
     // belongs to the transmission that just ended.

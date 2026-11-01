@@ -222,7 +222,7 @@ public:
         return out;
     }
 
-    // The once-per-over line the prime writes when it lets go (#6052).
+    // The line the prime writes each time it lets go (#6052).
     [[nodiscard]] QStringList primeLines() const
     {
         QStringList out;
@@ -761,6 +761,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     TxTestAuthority authority;
     MetisClient client;
+    MetisClientTestAccess::setStreaming(client);
 
     testAtuTuneHonoursTheTransmitGate(authority);
     testTunePowerAppliesLiveWhileTuning(authority);
@@ -908,6 +909,7 @@ int main(int argc, char** argv)
     // from doing so with whatever happens to be in the buffer.
     {
         MetisClient c2;
+        MetisClientTestAccess::setStreaming(c2);
         // Sized to the prime target (#6052): below it the prime's hold, not
         // this gate, would keep the first keyed packet silent.
         std::vector<std::complex<float>> tone(MetisClientTestAccess::primeTarget(),
@@ -963,6 +965,7 @@ int main(int argc, char** argv)
     // ---- PC/MIDI CW is a shaped, packet-paced carrier under MOX ----
     {
         MetisClient cw;
+        MetisClientTestAccess::setStreaming(cw);
         cw.setCwKeyDown(true, authority.operation);
         check(!cw.cwModeActive(),
               "CW down is not latched while the transmit gate is closed");
@@ -991,6 +994,7 @@ int main(int argc, char** argv)
         // floating-point rounding details.
         TxTestAuthority tuneAuthority;
         MetisClient tune;
+        MetisClientTestAccess::setStreaming(tune);
         tune.enableTransmit(true);
         tune.setMox(true, tuneAuthority.operation);
         tune.setTxTestTone(0.0, kHl2CarrierAmplitude, tuneAuthority.operation);
@@ -1025,6 +1029,7 @@ int main(int argc, char** argv)
     {
         TxTestAuthority media;
         MetisClient queued;
+        MetisClientTestAccess::setStreaming(queued);
         queued.enableTransmit(true);
         queued.setMox(true, media.operation);
         // Sized to the prime target (#6052): with fewer samples the prime
@@ -1048,6 +1053,7 @@ int main(int argc, char** argv)
     {
         TxTestAuthority tx;
         MetisClient fenced;
+        MetisClientTestAccess::setStreaming(fenced);
         fenced.enableTransmit(true);
         fenced.setMox(true, {});
         check(!anyFrameKeyed(fenced.buildNextControlPacket()),
@@ -1075,6 +1081,7 @@ int main(int argc, char** argv)
     {
         TxTestAuthority tx;
         MetisClient held;
+        MetisClientTestAccess::setStreaming(held);
         held.enableTransmit(true);
         const auto first = tx.coordinator.registerProducer();
         const auto second = tx.coordinator.registerProducer();
@@ -1177,6 +1184,7 @@ int main(int argc, char** argv)
     {
         TxTestAuthority tx;
         MetisClient independent;
+        MetisClientTestAccess::setStreaming(independent);
         independent.enableTransmit(true);
         const auto manual = tx.coordinator.registerProducer();
         const auto keyer = tx.coordinator.registerProducer();
@@ -1202,6 +1210,7 @@ int main(int argc, char** argv)
     {
         TxTestAuthority tx;
         MetisClient entered;
+        MetisClientTestAccess::setStreaming(entered);
         entered.enableTransmit(true);
         entered.setMox(true, tx.operation);
         bool written = false;
@@ -1283,6 +1292,7 @@ int main(int argc, char** argv)
         // most 125 samples against the 126-per-packet a real starvation adds.
         TxTestAuthority tx;
         MetisClient over;
+        MetisClientTestAccess::setStreaming(over);
         over.enableTransmit(true);
         over.setMox(true, tx.operation);
         pastThePrime(over, tx.context);   // #6052: this block is about the END of the over
@@ -1369,6 +1379,7 @@ int main(int argc, char** argv)
         TxTestAuthority tx;
         ScopedTxFifoLog log;
         MetisClient keydown;
+        MetisClientTestAccess::setStreaming(keydown);
         keydown.enableTransmit(true);
         keydown.setMox(true, tx.operation);
         check(keydown.txQueueDepth() == 0,
@@ -1466,6 +1477,7 @@ int main(int argc, char** argv)
         TxTestAuthority tx;
         ScopedTxFifoLog log;
         MetisClient over;
+        MetisClientTestAccess::setStreaming(over);
         over.enableTransmit(true);
         AetherSDR::TxChainLatency::publishVoiceProcessorFrames(970);
         over.setMox(true, tx.operation);
@@ -1532,6 +1544,7 @@ int main(int argc, char** argv)
         TxTestAuthority tx;
         ScopedTxFifoLog log;
         MetisClient over;
+        MetisClientTestAccess::setStreaming(over);
         over.enableTransmit(true);
         over.setMox(true, tx.operation);
 
@@ -1559,8 +1572,8 @@ int main(int argc, char** argv)
               "THE PRIME: two packets were held, and the target let it go, not the deadline");
         check(log.primeLines().size() == 1, "THE PRIME: one log line when it lets go");
 
-        // ONCE PER OVER. Below the target again, the queue keeps draining: the
-        // margin is given once and is not defended.
+        // NOT DEFENDED. Below the target again, the queue keeps draining: the
+        // margin is not restored until the queue is abandoned and re-primed.
         while (over.txQueueDepth() >= packet)
             check(payloadNonZero(over.buildNextControlPacket()),
                   "THE PRIME: once let go, a queue below the target still drains");
@@ -1594,6 +1607,7 @@ int main(int argc, char** argv)
         {   // THE DEADLINE: a producer that stops short goes out late, not never
             TxTestAuthority shortTx;
             MetisClient stopped;
+            MetisClientTestAccess::setStreaming(stopped);
             stopped.enableTransmit(true);
             stopped.setMox(true, shortTx.operation);
             stopped.queueTxIq(oneBlock, shortTx.context);
@@ -1612,6 +1626,7 @@ int main(int argc, char** argv)
         {   // CW AND THE TEST TONE ARE NOT HELD: they never reach the queue
             TxTestAuthority toneTx;
             MetisClient tone;
+            MetisClientTestAccess::setStreaming(tone);
             tone.enableTransmit(true);
             tone.setMox(true, toneTx.operation);
             tone.queueTxIq(oneBlock, toneTx.context);    // armed, and would hold
@@ -1624,6 +1639,7 @@ int main(int argc, char** argv)
 
             TxTestAuthority cwTx;
             MetisClient cw;
+            MetisClientTestAccess::setStreaming(cw);
             cw.enableTransmit(true);
             cw.setMox(true, cwTx.operation);
             cw.setCwKeyDown(true, cwTx.operation);
@@ -1634,6 +1650,7 @@ int main(int argc, char** argv)
         {   // AN ABANDONED QUEUE IS PRIMED AGAIN, inside the same keyed over
             TxTestAuthority voiceTx;
             MetisClient mixed;
+            MetisClientTestAccess::setStreaming(mixed);
             mixed.enableTransmit(true);
             mixed.setMox(true, voiceTx.operation);
             pastThePrime(mixed, voiceTx.context);          // let go: voice is flowing
@@ -1664,6 +1681,7 @@ int main(int argc, char** argv)
         TxTestAuthority tx;
         ScopedTxFifoLog log;
         MetisClient drift;
+        MetisClientTestAccess::setStreaming(drift);
         drift.enableTransmit(true);
         drift.setMox(true, tx.operation);
         pastThePrime(drift, tx.context);   // #6052: the drift shape is mid-over
@@ -1712,6 +1730,7 @@ int main(int argc, char** argv)
             TxTestAuthority tx;
             ScopedTxFifoLog log;
             MetisClient tune;
+            MetisClientTestAccess::setStreaming(tune);
             tune.enableTransmit(true);
             tune.setMox(true, tx.operation);
             pastThePrime(tune, tx.context);   // #6052: an episode needs a draining queue
@@ -1730,6 +1749,7 @@ int main(int argc, char** argv)
             TxTestAuthority tx;
             ScopedTxFifoLog log;
             MetisClient unkey;
+            MetisClientTestAccess::setStreaming(unkey);
             unkey.enableTransmit(true);
             unkey.setMox(true, tx.operation);
             pastThePrime(unkey, tx.context);   // #6052: as above
@@ -1762,6 +1782,7 @@ int main(int argc, char** argv)
         // consume every keyed input with CW or a positive tone amplitude.
         TxTestAuthority tx;
         MetisClient nan;
+        MetisClientTestAccess::setStreaming(nan);
         nan.enableTransmit(true);
         nan.setMox(true, tx.operation);
         nan.setTxTestTone(0.0, std::numeric_limits<double>::quiet_NaN(), tx.operation);
@@ -1796,6 +1817,7 @@ int main(int argc, char** argv)
         // as well as short ones" (n <= where the code has n <).
         TxTestAuthority tx;
         MetisClient clean;
+        MetisClientTestAccess::setStreaming(clean);
         clean.enableTransmit(true);
         clean.setMox(true, tx.operation);
         pastThePrime(clean, tx.context);   // #6052: four packets alone would be held
@@ -1848,6 +1870,7 @@ int main(int argc, char** argv)
         // counters.
         TxTestAuthority tx;
         MetisClient partial;
+        MetisClientTestAccess::setStreaming(partial);
         partial.enableTransmit(true);
         partial.setMox(true, tx.operation);
         pastThePrime(partial, tx.context);   // #6052: a short packet is a mid-over event
@@ -1892,6 +1915,7 @@ int main(int argc, char** argv)
         // they must not alter a single byte of what the radio receives.
         TxTestAuthority tx;
         MetisClient starved;
+        MetisClientTestAccess::setStreaming(starved);
         starved.enableTransmit(true);
         starved.setMox(true, tx.operation);
         check(starved.txQueueDepth() == 0, "nothing queued");

@@ -24,6 +24,8 @@ namespace AetherSDR::hl2 {
 struct MetisClientTestAccess {
     // The EP2 rate is MetisClient's own constant, read rather than retyped.
     static constexpr int ep2AudioRateHz() { return MetisClient::kEp2AudioRateHz; }
+    // A session without a socket: the client keys only while running.
+    static void setStreaming(MetisClient& client) { client.m_running = true; }
 };
 }
 
@@ -108,6 +110,7 @@ OverResult runOver(const std::vector<int>& lateness)
 
     TxTestAuthority tx;
     MetisClient client;
+    MetisClientTestAccess::setStreaming(client);
     client.enableTransmit(true);
     client.setMox(true, tx.operation);
 
