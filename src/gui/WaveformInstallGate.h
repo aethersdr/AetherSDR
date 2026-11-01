@@ -1,6 +1,5 @@
 #pragma once
 
-#include "core/TailnetShimRelease.h"     // TailnetShimPackage
 #include "models/ModelCapabilities.h"   // RadioPlatform
 
 namespace AetherSDR {
@@ -14,13 +13,12 @@ inline bool isKnownNonWfpPlatform(RadioPlatform platform)
         || platform == RadioPlatform::DeepEddy;
 }
 
-// Which remote-access package Install -> Remote Access fetches: a radio with no
-// Waveform Processor takes the shim as a legacy waveform, every other one as a
-// container (which the Docker gate below still governs).
-inline TailnetShimPackage remoteAccessPackage(RadioPlatform platform)
+// Whether Install -> Remote Access fetches the shim as a legacy waveform:
+// yes for a radio with no Waveform Processor; every other one takes the
+// container, which the Docker gate below still governs.
+inline bool remoteAccessUsesNativePackage(RadioPlatform platform)
 {
-    return isKnownNonWfpPlatform(platform) ? TailnetShimPackage::Native
-                                           : TailnetShimPackage::Container;
+    return isKnownNonWfpPlatform(platform);
 }
 
 // Why "Install -> Docker Waveform Image..." is blocked, or None (#4210).

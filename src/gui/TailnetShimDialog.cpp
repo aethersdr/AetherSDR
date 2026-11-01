@@ -148,8 +148,7 @@ QFrame* makeCard(const QString& title, QWidget* parent, QVBoxLayout** contents)
 TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     : CanonWindow(tr("Remote Access (Tailscale)"), parent)
     , m_model(model)
-    , m_native(model && remoteAccessPackage(model->capabilities().platform)
-                            == TailnetShimPackage::Native)
+    , m_native(model && remoteAccessUsesNativePackage(model->capabilities().platform))
 {
     constexpr int kWidth = 600;
     constexpr int kSide = 28;          // body side margins, as About's 24 plus room for cards

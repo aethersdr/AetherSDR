@@ -130,6 +130,13 @@ QString wfpRuntimeStatusText(const FlexWaveformModel& wfModel)
     return QObject::tr("%1, %2").arg(powerText, readyText);
 }
 
+TailnetShimPackage remoteAccessPackageFor(const RadioModel* radioModel)
+{
+    return remoteAccessUsesNativePackage(radioModel->capabilities().platform)
+        ? TailnetShimPackage::Native
+        : TailnetShimPackage::Container;
+}
+
 QString dockerInstallBlockerText(const RadioModel* radioModel,
                                  const FlexWaveformModel& wfModel)
 {
@@ -1499,8 +1506,7 @@ void WaveformsDialog::updateInstallButtonState()
         const bool downloading = m_shimDownloader && m_shimDownloader->isRunning();
         // A radio with no Waveform Processor takes the legacy waveform, which
         // the Docker gate doesn't govern.
-        const TailnetShimPackage package =
-            remoteAccessPackage(m_radioModel->capabilities().platform);
+        const TailnetShimPackage package = remoteAccessPackageFor(m_radioModel);
         const bool native = package == TailnetShimPackage::Native;
         const bool remoteReady = connected && (native || dockerReady);
         m_installRemoteAccessAction->setEnabled(!busy && !downloading && remoteReady);
@@ -1558,7 +1564,7 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
     if (!m_radioModel || !m_radioModel->isConnected()) {
         return;
     }
-    const TailnetShimPackage package = remoteAccessPackage(m_radioModel->capabilities().platform);
+    const TailnetShimPackage package = remoteAccessPackageFor(m_radioModel);
     const bool docker = package == TailnetShimPackage::Container;
     if (docker) {
         const QString blocker =
@@ -1638,7 +1644,7 @@ void WaveformsDialog::resetRemoteAccess()
         return;
     }
     // The package this radio takes is the one installed: Install offers no other.
-    const bool docker = remoteAccessPackage(m_radioModel->capabilities().platform)
+    const bool docker = remoteAccessPackageFor(m_radioModel)
         == TailnetShimPackage::Container;
     const QString name = QString::fromLatin1(docker ? kTailnetShimContainerName
                                                     : kTailnetShimNativeName);
