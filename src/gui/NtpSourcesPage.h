@@ -3,6 +3,7 @@
 #include "core/backends/NtpSourceRequest.h"
 #include "core/backends/RadioCapabilities.h"
 
+#include <QHash>
 #include <QWidget>
 
 #include <functional>
@@ -20,10 +21,10 @@ namespace AetherSDR {
 class ControlAvailabilityRegistry;
 class RadioModel;
 
-// Radio Setup → Time: the radio's own NTP time sources (SmartSDR 4.3.16,
-// FLEX-8000/Aurora). Every row is what the radio last reported; Add, Edit,
-// Remove and the Enabled box send a request and the table follows the radio's
-// status (Principle II). Unavailable radios keep the page, dimmed with a reason.
+// Radio Setup → Time: the radio's own NTP time sources (SmartSDR 4.3.16 on the
+// BigBend platform: FLEX-8400/8600, Aurora, ML-9600/MLS-9601, CL-9300/CLS-9301).
+// Every row is what the radio last reported; Add, Edit, Remove and the Enabled
+// box send a request and the table follows the radio's status (Principle II). Unavailable radios keep the page, dimmed with a reason.
 class NtpSourcesPage final : public QWidget {
     Q_OBJECT
 public:
@@ -32,16 +33,18 @@ public:
     // Why the page cannot be used with this radio, or empty.
     static QString unavailableReason(bool connected, const RadioCapabilities& caps);
     // Why a definition cannot be sent, or empty. `adding` also checks that the id
-    // is new and that the radio has room for another source.
+    // is new and that the radio has room for another source, counting creates
+    // already sent but not yet reported (pendingCreates).
     static QString definitionIssue(const NtpSourceDefinition& definition, bool adding,
-                                   const QList<NtpSourceState>& sources, int maxSources);
+                                   const QList<NtpSourceState>& sources, int maxSources,
+                                   const QStringList& pendingCreates = {});
     // FlexLib NtpSource.cs Status and ReachabilityDisplay wording.
     static QString statusText(const NtpSourceState& source);
     static QString reachText(const NtpSourceState& source);
 
     // Asks the operator to confirm; returns true to go ahead. Replaceable so the
     // page test can answer without a modal box.
-    using Confirm = std::function<bool(const QString& title, const QString& text)>;
+    using Confirm = std::function<bool(const QString& title, const QString& text, const QString& accept)>;
     void setConfirm(Confirm confirm) { m_confirm = std::move(confirm); }
 
 private:
@@ -50,7 +53,11 @@ private:
     void setMessage(const QString& text, const QString& token);
     QString selectedId() const;
     const NtpSourceState* source(const QString& id) const;
+    // Enabled sources once the requests still in flight land.
     int enabledCount() const;
+    bool pending(const QString& id) const { return m_pending.contains(id); }
+    void track(const QString& id, NtpSourceRequest::Action action);
+    void untrack(const QString& id, NtpSourceRequest::Action action);
     int maxSources() const;
     void openEditor(const NtpSourceState* existing);
     void closeEditor();
@@ -80,6 +87,10 @@ private:
     QLabel* m_message;
     QLabel* m_reason;
     Confirm m_confirm;
+    // Requests sent and not yet answered, by id (Create, Remove, Enable, Disable).
+    QHash<QString, NtpSourceRequest::Action> m_pending;
+    // Still the session the open editor was filled from.
+    std::function<bool()> m_editorSessionCurrent;
     bool m_adding{false};
     bool m_rebuilding{false};
     QString m_pendingSelection;

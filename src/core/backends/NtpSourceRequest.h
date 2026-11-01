@@ -11,7 +11,8 @@ namespace AetherSDR {
 // The radio's own NTP time sources (SmartSDR 4.3.16, FlexLib NtpSource.cs). The
 // radio keeps at most ten; each has an immutable id. The allowlists mirror the
 // firmware's validation (NtpSource.cs:29-77): anything outside them is refused by
-// the radio, and a quote or space would break the command line.
+// the radio, and a quote or space would break the command line. \z, not $: $
+// also matches before a final newline, which would end the command early.
 struct NtpSourceRules {
     static constexpr int kMaxSources = 10;
     static constexpr int kMaxIdChars = 64;
@@ -22,17 +23,17 @@ struct NtpSourceRules {
     static bool idValid(const QString& id)
     {
         static const QRegularExpression re(
-            QStringLiteral("^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$"));
+            QStringLiteral("^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\\z"));
         return id.size() <= kMaxIdChars && re.match(id).hasMatch();
     }
     static bool addressValid(const QString& address)
     {
-        static const QRegularExpression re(QStringLiteral("^[A-Za-z0-9._:%-]+$"));
+        static const QRegularExpression re(QStringLiteral("^[A-Za-z0-9._:%-]+\\z"));
         return address.size() <= kMaxAddressChars && re.match(address).hasMatch();
     }
     static bool descriptionValid(const QString& description)
     {
-        static const QRegularExpression re(QStringLiteral("^[A-Za-z0-9._\\- ]*$"));
+        static const QRegularExpression re(QStringLiteral("^[A-Za-z0-9._\\- ]*\\z"));
         return description.size() <= kMaxDescriptionChars && re.match(description).hasMatch();
     }
     static bool directiveValid(const QString& directive)

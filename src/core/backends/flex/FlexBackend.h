@@ -253,6 +253,11 @@ public:
     // RadioModel residual). Satellite counts are numeric; the rest keep the
     // radio's string form (units included).
     void decodeGpsStatus(const QString& rawBody);
+    // Decode a raw status body (after "S<handle>|") whose object this backend
+    // parses from the raw line itself; false when it is not one of them. Today
+    // that is `ntp_sources`, whose quoted description keeps its spaces only in
+    // the raw line.
+    bool decodeRawStatus(const QString& body);
     // Decode one `ntp_sources id=<id> …` status body (after "ntp_sources ") into
     // a present-only NtpSourceDelta and emit ntpSourceChanged. The description is
     // quoted and may hold spaces (FlexLib NtpSource.cs SplitStatusTokens).

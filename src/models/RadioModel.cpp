@@ -9725,10 +9725,10 @@ void RadioModel::handleMessageReceived(const ParsedMessage& msg, quint64 gpsSess
         return;
     }
 
-    // NTP source status carries a quoted description with spaces (SmartSDR
-    // 4.3.16), which parseKVs() would split.
-    if (body.startsWith("ntp_sources ")) {
-        if (m_flexBackend) m_flexBackend->decodeNtpSourceStatus(body.mid(12));  // skip "ntp_sources "
+    // Objects the Flex backend reads from the raw line itself (ntp_sources),
+    // from this session only.
+    if (m_flexBackend && gpsSessionGeneration == m_gpsSessionGeneration
+        && m_flexBackend->decodeRawStatus(body)) {
         return;
     }
 

@@ -1,5 +1,6 @@
 #include "NtpSourcesPage.h"
 
+#include "CanonMessageBox.h"
 #include "ControlAvailabilityRegistry.h"
 #include "ScopedChildWidget.h"
 #include "core/ThemeManager.h"
@@ -13,7 +14,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMessageBox>
+#include <QPointer>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QTableWidget>
@@ -26,16 +27,27 @@ namespace {
 enum Column { ColId, ColAddress, ColType, ColStatus, ColStratum, ColReach, ColEnabled, ColPrefer,
               ColDescription, ColumnCount };
 
-bool confirmWithBox(QWidget* parent, const QString& title, const QString& text)
+bool confirmWithBox(QWidget* parent, const QString& title, const QString& text, const QString& accept)
 {
-    ScopedChildWidget<QMessageBox> owner(parent);
-    QMessageBox& box = *owner.get();
-    box.setWindowTitle(title);
-    box.setIcon(QMessageBox::Warning);
-    box.setText(text);
-    box.setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
-    box.setDefaultButton(QMessageBox::Cancel);
-    return box.exec() == QMessageBox::Yes;
+    ScopedChildWidget<CanonMessageBox> box(title, text, parent);
+    QPushButton* cancel = box.get()->addButton(QObject::tr("Cancel"), CanonMessageBox::Role::Reject);
+    QPushButton* go = box.get()->addButton(accept, CanonMessageBox::Role::Destructive);
+    box.get()->setDefaultButton(cancel);
+    box.get()->exec();
+    return box && box.get()->clickedButton() == go;
+}
+
+// The radio's reason, or why there is none: a local timeout is not a refusal.
+QString replyReason(const RadioControlReply& reply)
+{
+    if (reply.kind == RadioControlReply::Kind::Failed && reply.code == -1) {
+        return QObject::tr("the radio did not answer. The table shows what it reports");
+    }
+    if (reply.kind == RadioControlReply::Kind::Cancelled) {
+        return QObject::tr("the radio session ended. The table shows what the radio reports");
+    }
+    const QString why = reply.message.trimmed();
+    return why.isEmpty() ? QObject::tr("no reason given") : why;
 }
 
 } // namespace
@@ -45,16 +57,17 @@ QString NtpSourcesPage::unavailableReason(bool connected, const RadioCapabilitie
     if (!connected) { return tr("Connect to a radio to see its NTP time sources."); }
     if (!caps.ntpSourceControl) {
         return tr("This radio does not keep its own NTP time sources. They need SmartSDR 4.3.16 "
-                  "or later on a FLEX-8000 or Aurora radio.");
+                  "or later on a FLEX-8000-series, Aurora, ML-9600 or CL-9300 radio.");
     }
     return {};
 }
 
 QString NtpSourcesPage::definitionIssue(const NtpSourceDefinition& d, bool adding,
-                                        const QList<NtpSourceState>& sources, int maxSources)
+                                        const QList<NtpSourceState>& sources, int maxSources,
+                                        const QStringList& pendingCreates)
 {
     if (adding) {
-        if (sources.size() >= maxSources) {
+        if (sources.size() + pendingCreates.size() >= maxSources) {
             return tr("The radio holds at most %1 NTP sources. Remove one first.").arg(maxSources);
         }
         if (d.id.isEmpty()) { return tr("Enter an ID for the source."); }
@@ -64,6 +77,9 @@ QString NtpSourcesPage::definitionIssue(const NtpSourceDefinition& d, bool addin
         }
         for (const NtpSourceState& s : sources) {
             if (s.id == d.id) { return tr("A source with the ID %1 already exists.").arg(d.id); }
+        }
+        if (pendingCreates.contains(d.id)) {
+            return tr("A source with the ID %1 is being added.").arg(d.id);
         }
     }
     if (d.address.isEmpty()) { return tr("Enter the server's host name or IP address."); }
@@ -75,8 +91,8 @@ QString NtpSourcesPage::definitionIssue(const NtpSourceDefinition& d, bool addin
         return tr("Choose server, pool or peer.");
     }
     if (!NtpSourceRules::descriptionValid(d.description)) {
-        return tr("The description can use letters, digits, spaces and . _ -, up to %1 characters.")
-            .arg(NtpSourceRules::kMaxDescriptionChars);
+        return tr("The description can use letters, digits, spaces and . _ -, on one line, up to "
+                  "%1 characters.").arg(NtpSourceRules::kMaxDescriptionChars);
     }
     return {};
 }
@@ -117,7 +133,9 @@ NtpSourcesPage::NtpSourcesPage(RadioModel& model, QWidget* parent)
       m_message(new QLabel(this)), m_reason(new QLabel(this))
 {
     setObjectName(QStringLiteral("ntpSourcesPage"));
-    m_confirm = [this](const QString& title, const QString& text) { return confirmWithBox(this, title, text); };
+    m_confirm = [this](const QString& title, const QString& text, const QString& accept) {
+        return confirmWithBox(this, title, text, accept);
+    };
 
     auto* layout = new QVBoxLayout(this);
     auto* intro = new QLabel(tr(
@@ -127,6 +145,7 @@ NtpSourcesPage::NtpSourcesPage(RadioModel& model, QWidget* parent)
     layout->addWidget(intro);
     m_reason->setObjectName(QStringLiteral("ntpUnavailableReason"));
     m_reason->setWordWrap(true);
+    m_reason->setTextFormat(Qt::PlainText);
     m_reason->setAccessibleName(tr("Why NTP time sources are unavailable"));
     layout->addWidget(m_reason);
 
@@ -140,7 +159,11 @@ NtpSourcesPage::NtpSourcesPage(RadioModel& model, QWidget* parent)
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->verticalHeader()->setVisible(false);
-    m_table->horizontalHeader()->setStretchLastSection(true);
+    // The short columns take what their text needs, so Enabled stays on screen
+    // at the dialog's size; Description takes what is left.
+    QHeaderView* header = m_table->horizontalHeader();
+    header->setSectionResizeMode(QHeaderView::ResizeToContents);
+    header->setSectionResizeMode(ColDescription, QHeaderView::Stretch);
     m_table->setTabKeyNavigation(false);
     bodyLayout->addWidget(m_table, 1);
 
@@ -179,6 +202,7 @@ NtpSourcesPage::NtpSourcesPage(RadioModel& model, QWidget* parent)
     m_prefer->setObjectName(QStringLiteral("ntpSourcePrefer"));
     m_editorIssue->setObjectName(QStringLiteral("ntpSourceIssue"));
     m_editorIssue->setWordWrap(true);
+    m_editorIssue->setTextFormat(Qt::PlainText);
     m_editorIssue->setAccessibleName(tr("Why the source cannot be saved"));
     m_save->setObjectName(QStringLiteral("ntpSourceSave"));
     m_cancel->setObjectName(QStringLiteral("ntpSourceCancel"));
@@ -199,13 +223,15 @@ NtpSourcesPage::NtpSourcesPage(RadioModel& model, QWidget* parent)
 
     m_message->setObjectName(QStringLiteral("ntpSourcesMessage"));
     m_message->setWordWrap(true);
+    m_message->setTextFormat(Qt::PlainText);
     m_message->setAccessibleName(tr("NTP source status"));
     m_message->setVisible(false);
     layout->addWidget(m_message);
 
+    // True whether or not a radio is connected; m_reason names the specific one.
     m_availability->registerWidget(m_body,
-        tr("This radio does not keep its own NTP time sources. They need SmartSDR 4.3.16 or later "
-           "on a FLEX-8000 or Aurora radio."),
+        tr("NTP time sources need a connection to a FLEX-8000-series, Aurora, ML-9600 or CL-9300 "
+           "radio running SmartSDR 4.3.16 or later."),
         [](bool connected, const RadioCapabilities& caps) {
             return unavailableReason(connected, caps).isEmpty();
         }, {}, false);
@@ -232,6 +258,7 @@ NtpSourcesPage::NtpSourcesPage(RadioModel& model, QWidget* parent)
         connect(edit, &QLineEdit::textChanged, this, &NtpSourcesPage::validateEditor);
     }
     connect(m_directive, &QComboBox::currentIndexChanged, this, &NtpSourcesPage::validateEditor);
+    connect(m_prefer, &QCheckBox::toggled, this, &NtpSourcesPage::validateEditor);
     connect(m_save, &QPushButton::clicked, this, &NtpSourcesPage::saveEditor);
     connect(m_cancel, &QPushButton::clicked, this, &NtpSourcesPage::closeEditor);
     connect(&m_model, &RadioModel::ntpSourcesChanged, this, &NtpSourcesPage::rebuild);
@@ -248,7 +275,8 @@ NtpSourcesPage::NtpSourcesPage(RadioModel& model, QWidget* parent)
 
 int NtpSourcesPage::maxSources() const
 {
-    const auto control = m_model.backendCapabilities().ntpSourceControl;
+    const std::optional<RadioCapabilities::NtpSourceControl> control =
+        m_model.backendCapabilities().ntpSourceControl;
     return control ? control->maxSources : NtpSourceRules::kMaxSources;
 }
 
@@ -262,9 +290,35 @@ const NtpSourceState* NtpSourcesPage::source(const QString& id) const
 
 int NtpSourcesPage::enabledCount() const
 {
+    using Action = NtpSourceRequest::Action;
     int count = 0;
-    for (const NtpSourceState& s : m_model.ntpSources()) { count += s.enabled ? 1 : 0; }
+    for (const NtpSourceState& s : m_model.ntpSources()) {
+        const auto request = m_pending.constFind(s.id);
+        if (request == m_pending.cend()) {
+            count += m_model.ntpSourceEnabledShown(s) ? 1 : 0;
+        } else {
+            count += *request == Action::Enable ? 1 : 0;
+        }
+    }
+    // A created source starts enabled.
+    for (auto it = m_pending.cbegin(); it != m_pending.cend(); ++it) {
+        count += it.value() == Action::Create && !source(it.key()) ? 1 : 0;
+    }
     return count;
+}
+
+void NtpSourcesPage::track(const QString& id, NtpSourceRequest::Action action)
+{
+    m_pending.insert(id, action);
+    rebuild();
+}
+
+void NtpSourcesPage::untrack(const QString& id, NtpSourceRequest::Action action)
+{
+    const auto it = m_pending.find(id);
+    if (it == m_pending.end() || *it != action) { return; }
+    m_pending.erase(it);
+    rebuild();
 }
 
 QString NtpSourcesPage::selectedId() const
@@ -287,6 +341,8 @@ void NtpSourcesPage::rebuild()
     for (int row = 0; row < sources.size(); ++row) {
         const NtpSourceState& s = sources.at(row);
         const bool replacing = m_model.ntpSourceReplaceActive(s.id);
+        const bool enabled = m_model.ntpSourceEnabledShown(s);
+        const bool locked = replacing || pending(s.id);
         const QStringList texts{s.id, s.address, s.directive,
                                 replacing ? tr("Updating…") : statusText(s),
                                 s.enabled && s.stratum >= 0 ? QString::number(s.stratum) : QStringLiteral("—"),
@@ -298,9 +354,9 @@ void NtpSourcesPage::rebuild()
             item->setText(texts.at(column));
             if (column == ColEnabled) {
                 item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled
-                               | (replacing ? Qt::NoItemFlags : Qt::ItemIsUserCheckable));
-                item->setCheckState(s.enabled ? Qt::Checked : Qt::Unchecked);
-                item->setData(Qt::AccessibleTextRole, s.enabled ? tr("Enabled") : tr("Disabled"));
+                               | (locked ? Qt::NoItemFlags : Qt::ItemIsUserCheckable));
+                item->setCheckState(enabled ? Qt::Checked : Qt::Unchecked);
+                item->setData(Qt::AccessibleTextRole, enabled ? tr("Enabled") : tr("Disabled"));
             } else {
                 item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
             }
@@ -314,6 +370,8 @@ void NtpSourcesPage::rebuild()
     }
     m_rebuilding = false;
     m_count->setText(tr("%1 of %2 sources").arg(sources.size()).arg(maxSources()));
+    // Another client can change the list while the form is open.
+    if (!m_editor->isHidden()) { validateEditor(); }
     updateButtons();
 }
 
@@ -321,15 +379,19 @@ void NtpSourcesPage::updateButtons()
 {
     const bool usable = unavailableReason(m_model.isConnected(), m_model.backendCapabilities()).isEmpty();
     const QString id = selectedId();
-    const bool selected = usable && !id.isEmpty() && !m_model.ntpSourceReplaceActive(id);
-    const bool full = m_model.ntpSources().size() >= maxSources();
-    m_add->setEnabled(usable && !full && !m_editor->isVisible());
+    const bool selected = usable && !id.isEmpty() && !m_model.ntpSourceReplaceActive(id) && !pending(id);
+    QStringList creates;
+    for (auto it = m_pending.cbegin(); it != m_pending.cend(); ++it) {
+        if (it.value() == NtpSourceRequest::Action::Create) { creates.append(it.key()); }
+    }
+    const bool full = m_model.ntpSources().size() + creates.size() >= maxSources();
+    m_add->setEnabled(usable && !full && m_editor->isHidden());
     const QString addWhy = full ? tr("The radio holds at most %1 NTP sources. Remove one first.").arg(maxSources())
                                 : QString();
     m_add->setToolTip(addWhy);
     m_add->setAccessibleDescription(addWhy);
-    m_edit->setEnabled(selected && !m_editor->isVisible());
-    m_remove->setEnabled(selected && !m_editor->isVisible());
+    m_edit->setEnabled(selected && m_editor->isHidden());
+    m_remove->setEnabled(selected && m_editor->isHidden());
 }
 
 void NtpSourcesPage::setMessage(const QString& text, const QString& token)
@@ -343,8 +405,11 @@ void NtpSourcesPage::setMessage(const QString& text, const QString& token)
 void NtpSourcesPage::openEditor(const NtpSourceState* existing)
 {
     m_adding = existing == nullptr;
+    const RadioControlSession session = m_model.controlSession();
+    const QPointer<RadioModel> model(&m_model);
+    m_editorSessionCurrent = [model, session] { return model && model->controlSessionCurrent(session); };
     const QSignalBlocker blockId(m_id), blockAddress(m_address), blockDescription(m_description),
-        blockDirective(m_directive);
+        blockDirective(m_directive), blockPrefer(m_prefer);
     m_id->setText(existing ? existing->id : QString());
     m_id->setReadOnly(!m_adding);
     m_id->setAccessibleDescription(m_adding ? QString() : tr("The ID cannot be changed."));
@@ -365,6 +430,7 @@ void NtpSourcesPage::openEditor(const NtpSourceState* existing)
 void NtpSourcesPage::closeEditor()
 {
     m_editor->setVisible(false);
+    m_editorSessionCurrent = {};
     updateButtons();
 }
 
@@ -376,7 +442,24 @@ NtpSourceDefinition NtpSourcesPage::editorDefinition() const
 
 void NtpSourcesPage::validateEditor()
 {
-    const QString issue = definitionIssue(editorDefinition(), m_adding, m_model.ntpSources(), maxSources());
+    const NtpSourceDefinition d = editorDefinition();
+    QStringList creates;
+    for (auto it = m_pending.cbegin(); it != m_pending.cend(); ++it) {
+        if (it.value() == NtpSourceRequest::Action::Create) { creates.append(it.key()); }
+    }
+    QString issue = definitionIssue(d, m_adding, m_model.ntpSources(), maxSources(), creates);
+    if (issue.isEmpty() && !m_adding) {
+        const NtpSourceState* current = source(d.id);
+        if (!current) {
+            issue = tr("The radio no longer lists %1.").arg(d.id);
+        } else if (m_model.ntpSourceReplaceActive(d.id) || pending(d.id)) {
+            issue = tr("%1 is being updated. Wait for the radio to answer.").arg(d.id);
+        } else if (current->address == d.address && current->directive == d.directive
+                   && current->description == d.description && current->prefer == d.prefer) {
+            // Saving would remove and re-create the source for nothing.
+            issue = tr("Nothing has changed.");
+        }
+    }
     m_editorIssue->setText(issue);
     m_editorIssue->setVisible(!issue.isEmpty());
     ThemeManager::instance().setWidgetForegroundToken(m_editorIssue, QStringLiteral("color.accent.warning"));
@@ -387,32 +470,38 @@ void NtpSourcesPage::validateEditor()
 
 void NtpSourcesPage::saveEditor()
 {
+    if (!m_editorSessionCurrent || !m_editorSessionCurrent()) {
+        setMessage(tr("The radio session changed while the form was open. Nothing was sent."),
+                   QStringLiteral("color.accent.warning"));
+        closeEditor();
+        return;
+    }
+    validateEditor();
+    if (!m_save->isEnabled()) { return; }   // the reason is shown under the form
     const NtpSourceDefinition d = editorDefinition();
-    if (!definitionIssue(d, m_adding, m_model.ntpSources(), maxSources()).isEmpty()) { return; }
+    const RadioControlSession session = m_model.controlSession();
     const QPointer<NtpSourcesPage> self(this);
+    using Action = NtpSourceRequest::Action;
     if (m_adding) {
         m_pendingSelection = d.id;
         setMessage(tr("Adding %1…").arg(d.id), {});
-        m_model.requestNtpSource({NtpSourceRequest::Action::Create, d}, this,
+        closeEditor();
+        track(d.id, Action::Create);
+        m_model.requestNtpSource({Action::Create, d}, this,
             [self, id = d.id](const RadioControlReply& reply) {
                 if (!self) { return; }
+                self->untrack(id, Action::Create);
                 if (reply.kind == RadioControlReply::Kind::Accepted) {
                     self->setMessage(tr("The radio added %1.").arg(id), QStringLiteral("color.accent.success"));
                 } else {
-                    self->setMessage(tr("The radio did not add %1: %2").arg(id, reply.message),
+                    self->setMessage(tr("The radio did not add %1: %2").arg(id, replyReason(reply)),
                                      QStringLiteral("color.accent.danger"));
                 }
-            });
-        closeEditor();
-        return;
-    }
-    const NtpSourceState* current = source(d.id);
-    if (!current) {
-        setMessage(tr("The radio no longer lists %1.").arg(d.id), QStringLiteral("color.accent.danger"));
-        closeEditor();
+            }, session);
         return;
     }
     setMessage(tr("Updating %1…").arg(d.id), {});
+    closeEditor();
     const bool started = m_model.replaceNtpSource(d, this,
         [self, id = d.id](const RadioModel::NtpSourceReplaceResult& r) {
             if (!self) { return; }
@@ -440,63 +529,93 @@ void NtpSourcesPage::saveEditor()
                                     "The table shows what the radio reports.").arg(id),
                                  QStringLiteral("color.accent.warning"));
                 break;
+            case Outcome::NoAnswer:
+                self->setMessage(tr("While %1 was being updated, %2. The table shows what the radio "
+                                    "reports.").arg(id, r.message),
+                                 QStringLiteral("color.accent.warning"));
+                break;
             }
-        });
+        }, session);
     if (!started) {
         setMessage(tr("%1 could not be updated now. Try again in a moment.").arg(d.id),
                    QStringLiteral("color.accent.danger"));
     }
-    closeEditor();
 }
 
 void NtpSourcesPage::removeSelected()
 {
     const QString id = selectedId();
     const NtpSourceState* s = source(id);
-    if (!s) { return; }
-    const bool lastEnabled = s->enabled && enabledCount() == 1;
+    if (!s || pending(id) || m_model.ntpSourceReplaceActive(id)) { return; }
+    const bool lastEnabled = m_model.ntpSourceEnabledShown(*s) && enabledCount() == 1;
     const QString text = lastEnabled
         ? tr("%1 is the radio's only enabled NTP source. Without it the radio cannot set its clock "
              "from the network. Remove it?").arg(id)
         : tr("Remove the NTP source %1 from the radio?").arg(id);
-    if (!m_confirm(tr("Remove NTP Source"), text)) { return; }
+    // The question is asked of this session, about this source.
+    const RadioControlSession session = m_model.controlSession();
     const QPointer<NtpSourcesPage> self(this);
+    if (!m_confirm(tr("Remove NTP Source"), text, tr("Remove"))) { return; }
+    if (!self) { return; }
+    if (!m_model.controlSessionCurrent(session) || !source(id) || pending(id)
+        || m_model.ntpSourceReplaceActive(id)) {
+        setMessage(tr("%1 changed while you were asked. Nothing was sent.").arg(id),
+                   QStringLiteral("color.accent.warning"));
+        return;
+    }
+    using Action = NtpSourceRequest::Action;
     setMessage(tr("Removing %1…").arg(id), {});
-    m_model.requestNtpSource({NtpSourceRequest::Action::Remove, {id, {}, {}, {}, false}}, this,
+    track(id, Action::Remove);
+    m_model.requestNtpSource({Action::Remove, {id, {}, {}, {}, false}}, this,
         [self, id](const RadioControlReply& reply) {
             if (!self) { return; }
+            self->untrack(id, Action::Remove);
             if (reply.kind == RadioControlReply::Kind::Accepted) {
                 self->setMessage(tr("The radio removed %1.").arg(id), QStringLiteral("color.accent.success"));
             } else {
-                self->setMessage(tr("The radio did not remove %1: %2").arg(id, reply.message),
+                self->setMessage(tr("The radio did not remove %1: %2").arg(id, replyReason(reply)),
                                  QStringLiteral("color.accent.danger"));
             }
-        });
+        }, session);
 }
 
 void NtpSourcesPage::requestEnabled(const QString& id, bool enabled)
 {
     const NtpSourceState* s = source(id);
-    if (!s || s->enabled == enabled || m_model.ntpSourceReplaceActive(id)) { return; }
+    if (!s || s->enabled == enabled || m_model.ntpSourceReplaceActive(id) || pending(id)) { return; }
+    const RadioControlSession session = m_model.controlSession();
+    const QPointer<NtpSourcesPage> self(this);
     if (!enabled && enabledCount() == 1) {
         if (!m_confirm(tr("Disable NTP Source"),
                        tr("%1 is the radio's only enabled NTP source. Without it the radio cannot set "
-                          "its clock from the network. Disable it?").arg(id))) {
+                          "its clock from the network. Disable it?").arg(id), tr("Disable"))) {
+            return;
+        }
+        if (!self) { return; }
+        const NtpSourceState* now = source(id);
+        if (!m_model.controlSessionCurrent(session) || !now || now->enabled == enabled || pending(id)
+            || m_model.ntpSourceReplaceActive(id)) {
+            setMessage(tr("%1 changed while you were asked. Nothing was sent.").arg(id),
+                       QStringLiteral("color.accent.warning"));
             return;
         }
     }
-    const QPointer<NtpSourcesPage> self(this);
     using Action = NtpSourceRequest::Action;
-    m_model.requestNtpSource({enabled ? Action::Enable : Action::Disable, {id, {}, {}, {}, false}}, this,
-        [self, id, enabled](const RadioControlReply& reply) {
-            if (!self || reply.kind == RadioControlReply::Kind::Accepted) {
-                if (self) { self->setMessage({}, {}); }
+    const Action action = enabled ? Action::Enable : Action::Disable;
+    track(id, action);
+    m_model.requestNtpSource({action, {id, {}, {}, {}, false}}, this,
+        [self, id, action](const RadioControlReply& reply) {
+            if (!self) { return; }
+            self->untrack(id, action);
+            if (reply.kind == RadioControlReply::Kind::Accepted) {
+                self->setMessage({}, {});
                 return;
             }
-            self->setMessage((enabled ? tr("The radio did not enable %1: %2") : tr("The radio did not disable %1: %2"))
-                                 .arg(id, reply.message),
+            self->setMessage((action == Action::Enable ? tr("The radio did not enable %1: %2")
+                                                       : tr("The radio did not disable %1: %2"))
+                                 .arg(id, replyReason(reply)),
                              QStringLiteral("color.accent.danger"));
-        });
+        }, session);
 }
 
 } // namespace AetherSDR

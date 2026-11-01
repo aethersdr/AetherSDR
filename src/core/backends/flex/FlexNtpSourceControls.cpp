@@ -74,6 +74,15 @@ ReceiveDispatch FlexBackend::requestNtpSource(const NtpSourceRequest& request,
     return sink(command, completion) ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
 }
 
+// FlexLib v4.3.16 Radio.cs:3610 routes `ntp_sources` before its kv split.
+bool FlexBackend::decodeRawStatus(const QString& body)
+{
+    static const QString kNtpSources = QStringLiteral("ntp_sources ");
+    if (!body.startsWith(kNtpSources)) { return false; }
+    decodeNtpSourceStatus(body.mid(kNtpSources.size()));
+    return true;
+}
+
 // FlexLib v4.3.16 Radio.cs:14427 ParseNtpSourcesStatus and NtpSource.cs
 // StatusUpdate. The first word is always id=<id>; only the word right after it
 // can mean removal, since a description could contain "removed".

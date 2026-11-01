@@ -6215,7 +6215,8 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = gpsSnapshot(radio);
     } else if (model == QLatin1String("ntp")) {
         // The radio's own NTP time sources as it last reported them (#6953).
-        const auto control = radio->backendCapabilities().ntpSourceControl;
+        const std::optional<RadioCapabilities::NtpSourceControl> control =
+            radio->backendCapabilities().ntpSourceControl;
         QJsonArray sources;
         for (const NtpSourceState& n : radio->ntpSources()) {
             sources.append(QJsonObject{
