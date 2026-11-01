@@ -419,11 +419,6 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     m_messageLabel->setAccessibleName(tr("Remote access message"));
     m_messageLabel->hide();
     layout->addWidget(m_messageLabel);
-    m_tokenNote = roleLabel(QString(), "message", body);
-    m_tokenNote->setProperty("tone", QStringLiteral("warn"));
-    m_tokenNote->setAccessibleName(tr("Admin token note"));
-    m_tokenNote->hide();
-    layout->addWidget(m_tokenNote);
 
     auto* footer = new QHBoxLayout;
     m_refreshButton = new QPushButton(tr("Refresh"), body);
@@ -768,25 +763,6 @@ void TailnetShimDialog::updateControls()
     m_shareDiscoveredCheck->setEnabled(mayChange);
     m_extraDevicesEdit->setEnabled(mayChange);
     m_copyButton->setEnabled(m_status && !m_status->tailnetIp.isEmpty());
-
-    QString note;
-    if (provisioned && m_tokenLoaded && !haveToken && !m_status->claimable) {
-        note = tr("Note: this computer doesn't hold the admin token for this radio's "
-                  "remote-access container, so it can't change the key, access list or "
-                  "shared devices. To start over, remove and reinstall the container from the "
-                  "Waveforms list.");
-    } else if (haveToken && !m_tokenSaveError.isEmpty()) {
-        note = tr("Note: the admin token couldn't be saved to the system keychain (%1), so it "
-                  "is kept only until AetherSDR quits. Change the key or sharing settings now, or "
-                  "fix the keychain and rejoin with a new key.").arg(m_tokenSaveError);
-    } else if (haveToken && !TailnetShimTokenStore::persistentStoreAvailable()) {
-        note = tr("Note: this build of AetherSDR can't use the system keychain, so the admin "
-                  "token is kept only until AetherSDR quits.");
-    }
-    m_tokenNote->setVisible(!note.isEmpty());
-    if (m_tokenNote->text() != note) {
-        setWrapped(m_tokenNote, note, m_bodyTextWidth);
-    }
 }
 
 void TailnetShimDialog::join()
@@ -835,15 +811,13 @@ void TailnetShimDialog::provision(const QString& authKey)
     const QString serial = m_radioSerial;
     connect(transaction, &TailnetShimClient::provisioned, qApp,
             [transaction, window, serial](const TailnetShimProvisionReply& reply) {
+        // A token the keychain refuses is kept for this session only; the
+        // log says why. The window doesn't: there is nothing to act on.
         TailnetShimTokenStore::save(serial, reply.adminToken, qApp,
-                                    [window](bool persisted, const QString& error) {
+                                    [](bool persisted, const QString& error) {
             if (!persisted) {
                 qWarning("Remote access: the new admin token was not saved to the keychain: %s",
                          qPrintable(error));
-            }
-            if (window) {
-                window->m_tokenSaveError = persisted ? QString() : error;
-                window->updateControls();
             }
         });
         if (window) {

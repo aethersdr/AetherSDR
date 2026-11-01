@@ -62,7 +62,6 @@ private:
     QString m_radioSerial;
     QHostAddress m_apiAddress;   // the radio's LAN address, where the API listens
     QString m_adminToken;
-    QString m_tokenSaveError;   // why the keychain refused the token, if it did
     bool m_tokenLoaded{false};
     bool m_lanReachable{false};
     bool m_busy{false};
@@ -85,7 +84,6 @@ private:
     QLabel* m_expiryLabel{nullptr};
     QLabel* m_expiryHint{nullptr};
     QLabel* m_messageLabel{nullptr};
-    QLabel* m_tokenNote{nullptr};
     QLineEdit* m_keyEdit{nullptr};
     QLineEdit* m_hostnameEdit{nullptr};
     QLineEdit* m_allowEdit{nullptr};
