@@ -1,3 +1,5 @@
+//go:build unix
+
 package main
 
 import (
@@ -45,5 +47,34 @@ func TestATruncatedArchiveLeavesTheOldBinary(t *testing.T) {
 	}
 	if ents, _ := os.ReadDir(dir); len(ents) != 2 {
 		t.Fatalf("temp file left behind: %v", ents)
+	}
+}
+
+// The run directory is shared RAM: someone else's directory, or one others
+// can write, could swap the binary before the launcher runs it.
+func TestUnpackRefusesADirectoryOthersControl(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "s.gz")
+	os.WriteFile(src, gz(t, []byte("shim")), 0o644)
+
+	open := filepath.Join(dir, "open")
+	os.Mkdir(open, 0o700)
+	os.Chmod(open, 0o777)
+	if err := unpack(src, filepath.Join(open, "shim")); err == nil {
+		t.Fatal("unpacked into a world-writable directory")
+	}
+
+	real := filepath.Join(dir, "real")
+	os.Mkdir(real, 0o700)
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := unpack(src, filepath.Join(link, "shim")); err == nil {
+		t.Fatal("unpacked through a symlinked directory")
+	}
+
+	if err := unpack(src, filepath.Join(real, "shim")); err != nil {
+		t.Fatalf("a private directory was refused: %v", err)
 	}
 }

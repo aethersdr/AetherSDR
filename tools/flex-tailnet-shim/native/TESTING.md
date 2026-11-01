@@ -199,8 +199,10 @@ for" table with numbers, and list the files I should send.
   partition while unpacking it, the install needs about twice the space.
   Uninstalling waveforms you don't use frees it.
 - At start the shim is unpacked to `/tmp` (RAM, about 20 MB of the radio's
-  469 MB). An `unpack:` error in the log means the package is damaged or
-  `/tmp` is full.
+  469 MB). An `unpack:` error in the log means the package is damaged,
+  `/tmp` is full, or `/tmp/aether-tailnet` exists but isn't this
+  waveform's own private folder (another user's, or open to others), which
+  it refuses rather than run a binary someone else could swap.
 - Try SmartSDR's Waveforms window, and reboot once if it isn't listed
   after 10 minutes.
 
