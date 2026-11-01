@@ -159,6 +159,55 @@ void testKiwiReplacementPassesThrough()
           "and reads it back unchanged");
 }
 
+void testHugeAndNonFiniteValuesStayBounded()
+{
+    Fixture f;
+    TciProtocol tci(&f.radio);
+    f.setKnob(72);
+    f.send(tci, QStringLiteral("agc_gain:0,inf"));
+    f.send(tci, QStringLiteral("agc_gain:0,nan"));
+    check(f.slice->agcThreshold() == 72, "inf and nan are ignored");
+    f.send(tci, QStringLiteral("agc_gain:0,1e300"));
+    check(f.slice->agcThreshold() == 100, "1e300 dB is held at 120 dB, knob 100");
+
+    f.slice->setExternalReceiveAudioReplacementMute(true, false);
+    f.send(tci, QStringLiteral("agc_gain:0,-90"));
+    f.send(tci, QStringLiteral("agc_gain:0,2147483648"));
+    check(f.slice->receiveAgcThreshold() == 0,
+          "a KiwiSDR value past int range is held at the top, 0 dB, not wrapped");
+    check(tci.pendingNotification() == QStringLiteral("agc_gain:0,0;"),
+          "and the echo states the bounded value");
+    f.send(tci, QStringLiteral("agc_gain:0,-4294967296"));
+    check(f.slice->receiveAgcThreshold() == -160,
+          "a KiwiSDR value below int range is held at the bottom, -160 dB");
+    check(tci.pendingNotification() == QStringLiteral("agc_gain:0,-160;"),
+          "and the echo states the bounded value");
+}
+
+void testPathChangeBeforeDeliveryDropsTheSet()
+{
+    Fixture f;
+    TciProtocol tci(&f.radio);
+    f.slice->setExternalReceiveAudioReplacementMute(true, false);
+    f.slice->setAgcThreshold(-90);
+    f.slice->setExternalReceiveAudioReplacementMute(false, false);
+    f.setKnob(72);
+
+    // Queued for the knob, delivered after a KiwiSDR replacement starts.
+    tci.handleCommand(QStringLiteral("agc_gain:0,-10"));
+    f.slice->setExternalReceiveAudioReplacementMute(true, false);
+    QCoreApplication::processEvents();
+    check(f.slice->receiveAgcThreshold() == -90,
+          "a knob SET is not delivered to the KiwiSDR threshold as dB");
+    check(f.slice->agcThreshold() == 72, "nor applied to the knob it was meant for");
+
+    // Queued for the KiwiSDR, delivered after the replacement stops.
+    tci.handleCommand(QStringLiteral("agc_gain:0,-10"));
+    f.slice->setExternalReceiveAudioReplacementMute(false, false);
+    QCoreApplication::processEvents();
+    check(f.slice->agcThreshold() == 72, "a KiwiSDR SET is not delivered to the knob");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -172,6 +221,8 @@ int main(int argc, char** argv)
     testGetAnswersDecibels();
     testSetIsDecibels();
     testKiwiReplacementPassesThrough();
+    testHugeAndNonFiniteValuesStayBounded();
+    testPathChangeBeforeDeliveryDropsTheSet();
 
     std::printf("%s: %d failure(s)\n", g_failed ? "FAIL" : "PASS", g_failed);
     return g_failed ? 1 : 0;

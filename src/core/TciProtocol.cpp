@@ -1447,9 +1447,21 @@ QString TciProtocol::cmdAgcGain(const QStringList& args, bool isSet)
     double db = 0.0;
     if (!argToDouble(args, 1, db)) return {};
     const bool external = s->externalReceiveReplacementActive();
-    const int value = external ? static_cast<int>(std::lround(db)) : agcLevelForGainDb(db);
-    QMetaObject::invokeMethod(s, [s, value]() { s->setAgcThreshold(value); },
-                              Qt::QueuedConnection);
+    // Bound in floating point first: a huge value must not wrap in the
+    // conversion to int and land on the opposite end of the range.
+    const int value = external
+        ? static_cast<int>(std::lround(std::clamp(
+              db, static_cast<double>(s->receiveAgcThresholdMinimum()),
+              static_cast<double>(s->receiveAgcThresholdMaximum()))))
+        : agcLevelForGainDb(db);
+    // The value is in the unit of the receive path chosen here. If a KiwiSDR
+    // replacement starts or stops before the queued call runs, the request is
+    // dropped rather than read in the other path's unit.
+    QMetaObject::invokeMethod(s, [s, value, external]() {
+        if (s->externalReceiveReplacementActive() == external) {
+            s->setAgcThreshold(value);
+        }
+    }, Qt::QueuedConnection);
 
     // Echo the gain the knob step really gives, not the client's number.
     m_pendingNotification = QStringLiteral("agc_gain:%1,%2;")
