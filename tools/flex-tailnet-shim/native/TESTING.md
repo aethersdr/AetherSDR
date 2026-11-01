@@ -6,7 +6,8 @@ behind CGNAT or Starlink. On FLEX-8000 and Aurora radios it runs in their
 Docker container feature. This is an **experimental** build for FLEX-6000
 radios, installed as a legacy waveform named **AetherTailnet**.
 
-AetherRadioProbe (`../cmd/radio-probe`) showed a FLEX-6300 can host it:
+AetherRadioProbe (`../cmd/radio-probe`) showed a FLEX-6300 and a FLEX-6700,
+which have the same internal computer, can host it:
 
 - the radio runs our Go program on its 2.6.37 kernel;
 - the waveform's own folder keeps files across a reboot;
@@ -30,6 +31,9 @@ that:
   falling back to `/var/tmp/aether-tailnet` if that isn't writable;
 - keeps Tailscale's logs and caches in RAM (`/tmp/aether-tailnet`), so they
   don't wear or fill the radio's small flash partition;
+- ships the shim gzipped and unpacks it into RAM (`/tmp`) at each start:
+  the shim is 20 MB, and a FLEX-6700's waveform partition has about 13 MB
+  free, so the package takes about 10 MB there;
 - reaches the radio's API at `127.0.0.1`;
 - turns off Tailscale's log uploads (`TS_NO_LOGS_NO_SUPPORT`) to save CPU;
 - runs the shim at `nice 10`, so SmartSDR wins whenever the one core is busy;
@@ -115,7 +119,7 @@ Run the commands from this folder. `tool.py` talks to the radio over the LAN.
 |---|---|---|---|
 | 1 | Does the shim start? | `status` → `version` | The real shim is bigger than the probe and does more at start-up |
 | 2 | Does it join the tailnet? | `status` → `state`, `last_error`; `shim-log.txt` | The first use of Tailscale's networking code on a 2.6.37 kernel. Watch for "function not implemented" / ENOSYS |
-| 3 | What does it cost when idle? | `idle.jsonl` → `shim_cpu_pct`, `shim_rss_kb`; `probe-idle.json` | One core, already about 46% busy with SmartSDR. The container shim idles at 0–3% of a much faster core |
+| 3 | What does it cost when idle? | `idle.jsonl` → `shim_cpu_pct`, `shim_rss_kb`; `probe-idle.json` | One core, already 46–51% busy with SmartSDR (more slices, more load). The container shim idles at 0–3% of a much faster core |
 | 4 | Does a remote session work? | your notes; `session.jsonl` → `session_detail` (packets, gaps, breaks), `shim_cpu_pct`, `path`, `rtt_ms` | The point of the shim |
 | 5 | Does it survive a reboot? | step 6 timing; same `tailnet_ip` | No re-provisioning after power cuts |
 | 6 | Direct or relayed? | `path` (`direct`, `peer-relay`, `relay`) | A relayed path costs latency |
@@ -171,12 +175,20 @@ for" table with numbers, and list the files I should send.
 
 ### The upload fails, or the waveform is never listed
 
-- The full package is about 8.4 MB, and the probe that ran on a FLEX-6300
-  was 5.5 MB. If the radio refuses or drops the upload, rebuild with
-  `--small`, which is about 0.8 MB smaller because it leaves out Tailscale
+- The package is about 9.2 MB, and the probe that ran on the FLEX-6300 and
+  6700 was 5.5 MB. If the radio refuses or drops the upload, rebuild with
+  `--small`, which is about 0.45 MB smaller because it leaves out Tailscale
   features the shim doesn't use.
-- Unpacked it needs about 22 MB. On the 6300 the `/user` partition that
-  holds waveforms had 41 MB free, and other waveforms use that space too.
+- Installed it takes about 10 MB in the waveform partition (`/user`). A
+  FLEX-6300 had about 54 MB free there, but a FLEX-6700 only about 13 MB,
+  and every other legacy waveform installed uses the same space.
+  AetherRadioProbe 0.1.2 lists what is installed and how big each one is
+  (`storage.waveform_store`). If the radio stores the uploaded file in that
+  partition while unpacking it, the install needs about twice the space.
+  Uninstalling waveforms you don't use frees it.
+- At start the shim is unpacked to `/tmp` (RAM, about 20 MB of the radio's
+  469 MB). An `unpack:` error in the log means the package is damaged or
+  `/tmp` is full.
 - As with the probe: try SmartSDR's Waveforms window, and reboot once if it
   isn't listed after 10 minutes.
 

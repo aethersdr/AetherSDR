@@ -27,8 +27,12 @@ export SHIM_STATE_DIR SHIM_RUN_DIR SSDR_RADIO_ADDRESS TS_NO_LOGS_NO_SUPPORT
 # Set at build time for diagnostics (build.py --log-url); empty otherwise.
 SHIM_LOG_URL=""
 [ -n "$SHIM_LOG_URL" ] && export SHIM_LOG_URL
+# The shim ships gzipped (the waveform partition is small; a FLEX-6700's
+# has about 13 MB free) and runs from RAM.
+bin=$SHIM_RUN_DIR/flex-tailnet-shim
+"$dir/unpack-armv7" "$dir/flex-tailnet-shim-armv7.gz" "$bin" || exit 1
 # Below SmartSDR, so the radio wins when the one core is contended.
 if command -v nice >/dev/null 2>&1; then
-  exec nice -n 10 "$dir/flex-tailnet-shim-armv7"
+  exec nice -n 10 "$bin"
 fi
-exec "$dir/flex-tailnet-shim-armv7"
+exec "$bin"

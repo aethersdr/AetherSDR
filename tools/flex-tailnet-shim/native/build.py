@@ -14,6 +14,7 @@ its recent log lines there every 15 s (see logsink.py). Use it only for a
 test build; the address is in the package.
 """
 import argparse
+import gzip
 import os
 import pathlib
 import re
@@ -27,7 +28,8 @@ NAME = 'AetherTailnet'
 TOOLCHAIN = 'go1.27.1'
 VARIANT = '-native'
 # The radio's limit on a legacy upload is unknown: 5.5 MB has been proven on
-# a FLEX-6300 and 8 MiB on a FLEX-8600. The full shim is about 8.4 MB.
+# FLEX-6300 and 6700 radios and 8 MiB on a FLEX-8600. The package is about
+# 9 MB, and that is also what it occupies once unpacked.
 MAX_BYTES = 12 * 1024 * 1024
 # --small leaves out Tailscale features the shim never uses, saving under
 # 1 MB, for a radio that refuses the full package.
@@ -93,21 +95,27 @@ def main():
         tags = ['-tags', SMALL_TAGS] if a.small else []
         go(env, 'build', *tags, '-trimpath', f'-ldflags=-s -w -X main.buildVariant={variant}',
            '-o', str(stage / 'flex-tailnet-shim-armv7'), '.')
+        go(env, 'build', '-trimpath', '-ldflags=-s -w', '-o', str(stage / 'unpack-armv7'), './native/unpack')
+        # The shim ships gzipped and is unpacked into RAM at each start: a
+        # FLEX-6700's /user has about 13 MB free and the shim is 20 MB.
+        # mtime=0 and no file name keep the bytes reproducible.
+        shim_gz = gzip.compress((stage / 'flex-tailnet-shim-armv7').read_bytes(), compresslevel=9, mtime=0)
         files = {
-            f'{NAME}.cfg': ((HERE / f'{NAME}.cfg').read_bytes(), 0o644),
-            'shim.sh': (launcher(a.log_url), 0o755),
-            'flex-tailnet-shim-armv7': ((stage / 'flex-tailnet-shim-armv7').read_bytes(), 0o755),
-            'LICENSES': (licenses(env).encode(), 0o644),
+            f'{NAME}.cfg': ((HERE / f'{NAME}.cfg').read_bytes(), 0o644, zipfile.ZIP_DEFLATED),
+            'shim.sh': (launcher(a.log_url), 0o755, zipfile.ZIP_DEFLATED),
+            'unpack-armv7': ((stage / 'unpack-armv7').read_bytes(), 0o755, zipfile.ZIP_DEFLATED),
+            'flex-tailnet-shim-armv7.gz': (shim_gz, 0o644, zipfile.ZIP_STORED),
+            'LICENSES': (licenses(env).encode(), 0o644, zipfile.ZIP_DEFLATED),
         }
         target = a.output / f'{NAME}.ssdr_waveform'
         tmp = target.with_suffix('.tmp')
         with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
-            for name, (data, mode) in files.items():
+            for name, (data, mode, method) in files.items():
                 info = zipfile.ZipInfo(f'{NAME}/{name}', FIXED_TIME)
                 info.create_system = 3
-                info.compress_type = zipfile.ZIP_DEFLATED
+                info.compress_type = method
                 info.external_attr = (0o100000 | mode) << 16
-                z.writestr(info, data, compresslevel=9)
+                z.writestr(info, data, compresslevel=9 if method == zipfile.ZIP_DEFLATED else None)
         size = tmp.stat().st_size
         if size > MAX_BYTES:
             tmp.unlink()
