@@ -2773,6 +2773,13 @@ add_executable(display_status_gate_test tests/display_status_gate_test.cpp)
 target_include_directories(display_status_gate_test PRIVATE src)
 add_test(NAME display_status_gate_test COMMAND display_status_gate_test)
 
+# Band changes awaiting their reply, during which the adaptive throttle
+# neither restores nor caps the pan (#6791).
+add_executable(pan_band_transition_test tests/pan_band_transition_test.cpp)
+target_include_directories(pan_band_transition_test PRIVATE src)
+target_link_libraries(pan_band_transition_test PRIVATE Qt6::Core)
+add_test(NAME pan_band_transition_test COMMAND pan_band_transition_test)
+
 add_executable(whats_new_links_test tests/whats_new_links_test.cpp)
 target_include_directories(whats_new_links_test PRIVATE src)
 target_link_libraries(whats_new_links_test PRIVATE Qt6::Core)
