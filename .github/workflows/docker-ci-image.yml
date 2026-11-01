@@ -97,8 +97,9 @@ jobs:
     needs: build
     if: ${{ !cancelled() && needs.build.result != 'failure' }}
     # Pinned, not ubuntu-latest: Dockerfile.tsan runs the TSan-built Qt
-    # tools while it builds, and the 26.04 host kernel randomizes mmap more
-    # widely than their GCC 13 TSan runtime supports (#6911).
+    # tools while it builds, and the 26.04 runner image's host
+    # vm.mmap_rnd_bits is higher than their GCC 13 TSan runtime supports
+    # (#6911).
     runs-on: ubuntu-24.04
     timeout-minutes: 330
     steps:
