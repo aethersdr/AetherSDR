@@ -4804,6 +4804,17 @@ target_link_libraries(linux_install_test PRIVATE aethercore Qt6::Core Qt6::Test)
 set_target_properties(linux_install_test PROPERTIES AUTOMOC ON)
 add_test(NAME linux_install_test COMMAND linux_install_test)
 
+# MacInstall (RFC #5304 Phase 4): the bundle of the binary, the checks before
+# the swap (injected), the swap of the staged bundle for the installed one
+# with the previous version kept, and UpdateInstaller's prepareSwap and
+# finishSwapOnExit. The swap is renamex_np on macOS and renameat2 on Linux, so
+# it runs on both; Windows skips it. Temporary folders only.
+add_executable(mac_install_test tests/mac_install_test.cpp)
+target_include_directories(mac_install_test PRIVATE src tests)
+target_link_libraries(mac_install_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(mac_install_test PROPERTIES AUTOMOC ON)
+add_test(NAME mac_install_test COMMAND mac_install_test)
+
 # AetherSDRUpdater's folder swap (RFC #5304 Phase 3): UpdateSwap's state
 # machine on a simulated clock with injected processes and rename failures,
 # on every platform; the Win32 entry point is a thin shell over it. No Qt.

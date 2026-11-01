@@ -1,6 +1,7 @@
 #include "UpdateController.h"
 
 #include "LinuxInstall.h"
+#include "MacInstall.h"
 #include "LogManager.h"
 #include "UpdateInstaller.h"
 #include "UpdateSettings.h"
@@ -36,6 +37,12 @@ UpdateController::Environment UpdateController::forThisApp()
         !tree.isEmpty()) {
         env.request.installRoot = tree;
     }
+#elif defined(Q_OS_MACOS)
+    // The app bundle, whose root the manifest's paths start from
+    // (Contents/MacOS/AetherSDR), not the binary's own folder.
+    if (const QString bundle = MacInstall::bundleOf(QCoreApplication::applicationDirPath()); !bundle.isEmpty()) {
+        env.request.installRoot = bundle;
+    }
 #endif
     env.request.stagingRoot = UpdateInstaller::stateDir();
     // Windows: the portable zip is the tree setup.exe installs, so either
@@ -68,7 +75,7 @@ UpdateController::Environment UpdateController::forThisApp()
         UpdateSettings::setInstalledFromAppImage(version);
         // Without the AppImage's variables: its mount is gone by then.
         if (!LinuxInstall::startAfterExit(QCoreApplication::applicationPid(),
-                                          QDir(base).filePath(QStringLiteral("current/AppRun")),
+                                          {QDir(base).filePath(QStringLiteral("current/AppRun"))},
                                           LinuxInstall::appImageVariables())) {
             UpdateSettings::setInstalledFromAppImage({});
             return false;
@@ -383,6 +390,11 @@ void UpdateController::installAppImage(bool trash)
         }
         return r;
     }));
+}
+
+void UpdateController::dropPendingSwap()
+{
+    UpdateInstaller::dropPendingSwap();
 }
 
 bool UpdateController::installOnQuit()

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "MacInstall.h"
+
 #include <QString>
 #include <QStringList>
 
@@ -13,8 +15,10 @@ namespace AetherSDR {
 // helper is copied out of the install before it runs, into stateDir(): it
 // renames the install, so it must not be running from inside it. On Linux
 // (Phase 5) there is no helper: the release goes in beside the running one
-// and becomes current (LinuxInstall). Either way the next start reads what
-// happened.
+// and becomes current (LinuxInstall). On macOS (Phase 4) there is none
+// either: the new bundle is checked at the hand-over and swapped in as the
+// last thing before AetherSDR exits (MacInstall, finishSwapOnExit). Every
+// way, the next start reads what happened.
 class UpdateInstaller {
 public:
     // Per-user app data, outside the install: the staged release, the
@@ -26,8 +30,9 @@ public:
     // install, not elevated across a UAC boundary, AetherSDRUpdater.exe
     // beside the app, and the install's parent writable (the swap renames
     // the install there). Linux: an install AetherSDR --install made, its
-    // folder writable. Otherwise why says so, and the Updates window offers
-    // the download in the browser.
+    // folder writable. macOS: an app bundle, not translocated, its folder and
+    // the bundle itself writable (the swap moves it). Otherwise why says so,
+    // and the Updates window offers the download in the browser.
     static bool canInstallInPlace(QString* why = nullptr);
 
     // AetherSDRUpdater's command line (protocol 1, src/updater/main_win.cpp).
@@ -36,7 +41,8 @@ public:
                                        const QString& version, bool restart);
 
     // Windows: copies the helper beside the state and starts it, waiting for
-    // this process to exit. Linux: switches to the staged release now,
+    // this process to exit. macOS: prepareSwap, the swap itself waiting for
+    // finishSwapOnExit. Linux: switches to the staged release now,
     // after its self-test (LinuxInstall::switchTo). A release that fails it
     // on Restart to update is removed and remembered as rolled back; as
     // AetherSDR quits it stays staged, to try again. restart: start the app
@@ -59,6 +65,37 @@ public:
                               const std::function<bool(const QString& tree, const QString& version)>& selfTest,
                               bool restart, const QString& stateDir, QString* problem);
     static constexpr int kQuitSwitchTries = 3;
+
+    // macOS's hand-over: the staged bundle readied to replace bundle
+    // (MacInstall::prepare), its signature and self-test passed, and the swap
+    // recorded for finishSwapOnExit. A failed self-test is final on Restart
+    // to update and retried at the next quit up to the third, as on Linux; a
+    // bad signature is final at once. A final failure is remembered as
+    // rolled back.
+    static bool prepareSwap(const QString& bundle, const QString& stagedDir, const QString& version,
+                            const MacInstall::Checks& checks, bool restart, const QString& stateDir,
+                            QString* problem);
+    // The last thing before AetherSDR exits (main.cpp, after the event loop
+    // and the window are gone): the swap prepareSwap readied, the previous
+    // bundle kept in stateDir/previous, the result written for the next
+    // start, and with restart, the new bundle opened once this process has
+    // exited. Nothing when no swap is ready; a preparation still running
+    // (Restart to update's worker) is waited for first. While another
+    // AetherSDR runs from the bundle it waits (OldStillRunning). A swap that
+    // fails at quit counts as a failed try; the third is final (RolledBack).
+    static void finishSwapOnExit();
+    // Whether a swap is ready for finishSwapOnExit.
+    static bool swapPending();
+    // Replaces MacInstall::otherInstanceRunning in finishSwapOnExit; null
+    // restores it.
+    static void setOtherInstanceCheckForTesting(std::function<bool(const QString& bundle)> check);
+    // Replaces Restart to update's `open -n <bundle>` after exit; null
+    // restores it.
+    static void setRestartForTesting(std::function<bool(const QString& bundle)> restart);
+    // Forgets the readied swap, and any a preparation still running would
+    // publish: another instance is starting from the bundle as this one
+    // exits (a UI-scale restart). The release stays staged.
+    static void dropPendingSwap();
 
     // What the helper did, from <stateDir>/swap-result.txt, once: the file
     // is removed when read. A rolled-back release is remembered in
