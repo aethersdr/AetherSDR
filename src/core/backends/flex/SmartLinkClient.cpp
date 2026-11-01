@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "SmartLinkClient.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
@@ -68,6 +69,9 @@ SmartLinkClient::~SmartLinkClient()
 
 void SmartLinkClient::login(const QString& email, const QString& password)
 {
+    if (refuseDemoOnly()) {
+        return;
+    }
     // Auth0 Resource Owner Password Grant
     // https://auth0.com/docs/get-started/authentication-and-authorization-flow/resource-owner-password-flow
     QUrl url(QString("https://%1/oauth/token").arg(AUTH0_DOMAIN));
@@ -89,42 +93,51 @@ void SmartLinkClient::login(const QString& email, const QString& password)
     s.setValue("SmartLinkEmail", QString::fromUtf8(email.toUtf8().toBase64()));
     s.save();
 
-    auto* reply = m_nam.post(req, QJsonDocument(body).toJson());
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
-        reply->deleteLater();
+    auto* reply = postAuthRequest(req, QJsonDocument(body).toJson());
+    connect(reply, &QNetworkReply::finished, this, [this, reply] { finishLogin(reply); });
+}
 
-        if (reply->error() != QNetworkReply::NoError) {
-            const auto data = reply->readAll();
-            QJsonObject err = QJsonDocument::fromJson(data).object();
-            QString desc = err.value("error_description").toString(reply->errorString());
-            qCWarning(lcSmartLink) << "SmartLinkClient: Auth0 login failed:" << desc;
-            emit authFailed(desc);
-            return;
-        }
+void SmartLinkClient::finishLogin(QNetworkReply* reply)
+{
+    reply->deleteLater();
+    if (refuseDemoOnly()) {
+        return;
+    }
 
+    if (reply->error() != QNetworkReply::NoError) {
         const auto data = reply->readAll();
-        QJsonObject resp = QJsonDocument::fromJson(data).object();
-        m_idToken      = resp.value("id_token").toString();
-        m_refreshToken = resp.value("refresh_token").toString();
+        QJsonObject err = QJsonDocument::fromJson(data).object();
+        QString desc = err.value("error_description").toString(reply->errorString());
+        qCWarning(lcSmartLink) << "SmartLinkClient: Auth0 login failed:" << desc;
+        emit authFailed(desc);
+        return;
+    }
 
-        if (m_idToken.isEmpty()) {
-            qCWarning(lcSmartLink) << "SmartLinkClient: Auth0 response missing id_token";
-            emit authFailed("No id_token in response");
-            return;
-        }
+    const auto data = reply->readAll();
+    QJsonObject resp = QJsonDocument::fromJson(data).object();
+    m_idToken      = resp.value("id_token").toString();
+    m_refreshToken = resp.value("refresh_token").toString();
 
-        qCDebug(lcSmartLink) << "SmartLinkClient: Auth0 login successful, id_token length:" << m_idToken.length();
-        m_authenticated = true;
-        saveCredentials();
-        emit authenticated();
+    if (m_idToken.isEmpty()) {
+        qCWarning(lcSmartLink) << "SmartLinkClient: Auth0 response missing id_token";
+        emit authFailed("No id_token in response");
+        return;
+    }
 
-        // Now connect to SmartLink server with the token
-        connectToServer();
-    });
+    qCDebug(lcSmartLink) << "SmartLinkClient: Auth0 login successful, id_token length:" << m_idToken.length();
+    m_authenticated = true;
+    saveCredentials();
+    emit authenticated();
+
+    // Now connect to SmartLink server with the token
+    connectToServer();
 }
 
 void SmartLinkClient::loginWithRefreshToken(const QString& refreshToken)
 {
+    if (refuseDemoOnly()) {
+        return;
+    }
     if (m_authRequestInProgress) {
         qCDebug(lcSmartLink) << "SmartLinkClient: Auth0 refresh already in progress";
         return;
@@ -142,39 +155,45 @@ void SmartLinkClient::loginWithRefreshToken(const QString& refreshToken)
     qCDebug(lcSmartLink) << "SmartLinkClient: Auth0 refresh token login";
 
     m_authRequestInProgress = true;
-    auto* reply = m_nam.post(req, QJsonDocument(body).toJson());
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
-        reply->deleteLater();
-        m_authRequestInProgress = false;
+    auto* reply = postAuthRequest(req, QJsonDocument(body).toJson());
+    connect(reply, &QNetworkReply::finished, this, [this, reply] { finishRefresh(reply); });
+}
 
-        if (reply->error() != QNetworkReply::NoError) {
-            const auto data = reply->readAll();
-            QJsonObject err = QJsonDocument::fromJson(data).object();
-            QString desc = err.value("error_description").toString(reply->errorString());
-            qCWarning(lcSmartLink) << "SmartLinkClient: Auth0 refresh failed:" << desc;
-            emit authFailed(desc);
-            return;
-        }
+void SmartLinkClient::finishRefresh(QNetworkReply* reply)
+{
+    reply->deleteLater();
+    if (refuseDemoOnly()) {
+        return;
+    }
+    m_authRequestInProgress = false;
 
+    if (reply->error() != QNetworkReply::NoError) {
         const auto data = reply->readAll();
-        QJsonObject resp = QJsonDocument::fromJson(data).object();
-        m_idToken = resp.value("id_token").toString();
-        // Auth0 may return a new refresh token
-        QString newRefresh = resp.value("refresh_token").toString();
-        if (!newRefresh.isEmpty())
-            m_refreshToken = newRefresh;
+        QJsonObject err = QJsonDocument::fromJson(data).object();
+        QString desc = err.value("error_description").toString(reply->errorString());
+        qCWarning(lcSmartLink) << "SmartLinkClient: Auth0 refresh failed:" << desc;
+        emit authFailed(desc);
+        return;
+    }
 
-        if (m_idToken.isEmpty()) {
-            emit authFailed("No id_token in refresh response");
-            return;
-        }
+    const auto data = reply->readAll();
+    QJsonObject resp = QJsonDocument::fromJson(data).object();
+    m_idToken = resp.value("id_token").toString();
+    // Auth0 may return a new refresh token
+    QString newRefresh = resp.value("refresh_token").toString();
+    if (!newRefresh.isEmpty())
+        m_refreshToken = newRefresh;
 
-        qCDebug(lcSmartLink) << "SmartLinkClient: Auth0 refresh successful";
-        m_authenticated = true;
-        saveCredentials();
-        emit authenticated();
-        connectToServer();
-    });
+    if (m_idToken.isEmpty()) {
+        emit authFailed("No id_token in refresh response");
+        return;
+    }
+
+    qCDebug(lcSmartLink) << "SmartLinkClient: Auth0 refresh successful";
+    m_authenticated = true;
+    saveCredentials();
+    emit authenticated();
+    connectToServer();
 }
 
 void SmartLinkClient::logout()
@@ -191,59 +210,112 @@ void SmartLinkClient::logout()
 
 // ── Credential Persistence ──────────────────────────────────────────────────
 
+bool SmartLinkClient::refuseDemoOnly()
+{
+    if (!AutomationIsolationPolicy::demoOnly()) {
+        return false;
+    }
+    emit authFailed(AutomationIsolationPolicy::refusal());
+    return true;
+}
+
 void SmartLinkClient::saveCredentials()
 {
-#ifdef HAVE_KEYCHAIN
-    if (m_refreshToken.isEmpty()) return;
-
-    auto* job = new QKeychain::WritePasswordJob("AetherSDR");
-    job->setAutoDelete(true);
-    job->setKey("smartlink_refresh_token");
-    job->setTextData(m_refreshToken);
-    connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
-        if (j->error() != QKeychain::NoError)
-            qCWarning(lcSmartLink) << "SmartLinkClient: keychain save failed:" << j->errorString();
-        else
-            qCDebug(lcSmartLink) << "SmartLinkClient: refresh token saved to keychain";
-    });
-    job->start();
-#endif
+    if (refuseDemoOnly() || m_refreshToken.isEmpty()) {
+        return;
+    }
+    writeStoredToken(m_refreshToken);
 }
 
 void SmartLinkClient::clearCredentials()
 {
-#ifdef HAVE_KEYCHAIN
-    auto* job = new QKeychain::DeletePasswordJob("AetherSDR");
-    job->setAutoDelete(true);
-    job->setKey("smartlink_refresh_token");
-    connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
-        if (j->error() != QKeychain::NoError && j->error() != QKeychain::EntryNotFound)
-            qCWarning(lcSmartLink) << "SmartLinkClient: keychain clear failed:" << j->errorString();
-        else
-            qCDebug(lcSmartLink) << "SmartLinkClient: refresh token cleared from keychain";
-    });
-    job->start();
-#endif
+    if (refuseDemoOnly()) {
+        return;
+    }
+    deleteStoredToken();
     AppSettings::instance().remove("SmartLinkEmail");
     AppSettings::instance().save();
 }
 
 void SmartLinkClient::tryAutoLogin()
 {
+    if (refuseDemoOnly()) {
+        return;
+    }
+    readStoredToken([this](const QString& token) { acceptStoredToken(token); });
+}
+
+void SmartLinkClient::acceptStoredToken(const QString& token)
+{
+    if (refuseDemoOnly() || token.isEmpty()) {
+        return;
+    }
+    qCDebug(lcSmartLink) << "SmartLinkClient: found stored refresh token, attempting auto-login";
+    loginWithRefreshToken(token);
+}
+
+QNetworkReply* SmartLinkClient::postAuthRequest(const QNetworkRequest& request, const QByteArray& body)
+{
+    return m_nam.post(request, body);
+}
+
+void SmartLinkClient::writeStoredToken(const QString& token)
+{
+#ifdef HAVE_KEYCHAIN
+    auto* job = new QKeychain::WritePasswordJob("AetherSDR");
+    job->setAutoDelete(true);
+    job->setKey("smartlink_refresh_token");
+    job->setTextData(token);
+    connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
+        if (j->error() != QKeychain::NoError) {
+            qCWarning(lcSmartLink) << "SmartLinkClient: keychain save failed:" << j->errorString();
+        } else {
+            qCDebug(lcSmartLink) << "SmartLinkClient: refresh token saved to keychain";
+        }
+    });
+    job->start();
+#else
+    Q_UNUSED(token)
+#endif
+}
+
+void SmartLinkClient::deleteStoredToken()
+{
+#ifdef HAVE_KEYCHAIN
+    auto* job = new QKeychain::DeletePasswordJob("AetherSDR");
+    job->setAutoDelete(true);
+    job->setKey("smartlink_refresh_token");
+    connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
+        if (j->error() != QKeychain::NoError && j->error() != QKeychain::EntryNotFound) {
+            qCWarning(lcSmartLink) << "SmartLinkClient: keychain clear failed:" << j->errorString();
+        } else {
+            qCDebug(lcSmartLink) << "SmartLinkClient: refresh token cleared from keychain";
+        }
+    });
+    job->start();
+#endif
+}
+
+void SmartLinkClient::readStoredToken(const std::function<void(const QString&)>& completed)
+{
 #ifdef HAVE_KEYCHAIN
     auto* job = new QKeychain::ReadPasswordJob("AetherSDR");
     job->setAutoDelete(true);
     job->setKey("smartlink_refresh_token");
-    connect(job, &QKeychain::Job::finished, this, [this](QKeychain::Job* j) {
+    connect(job, &QKeychain::Job::finished, this, [this, completed](QKeychain::Job* j) {
+        if (refuseDemoOnly()) {
+            return;
+        }
         auto* readJob = static_cast<QKeychain::ReadPasswordJob*>(j);
         if (j->error() != QKeychain::NoError || readJob->textData().isEmpty()) {
             qCDebug(lcSmartLink) << "SmartLinkClient: no stored credentials";
             return;
         }
-        qCDebug(lcSmartLink) << "SmartLinkClient: found stored refresh token, attempting auto-login";
-        loginWithRefreshToken(readJob->textData());
+        completed(readJob->textData());
     });
     job->start();
+#else
+    Q_UNUSED(completed)
 #endif
 }
 
@@ -251,6 +323,9 @@ void SmartLinkClient::tryAutoLogin()
 
 void SmartLinkClient::connectToServer()
 {
+    if (refuseDemoOnly()) {
+        return;
+    }
     if (m_idToken.isEmpty()) {
         qCWarning(lcSmartLink) << "SmartLinkClient: cannot connect to server without token";
         return;
@@ -263,6 +338,11 @@ void SmartLinkClient::connectToServer()
 
     qCDebug(lcSmartLink) << "SmartLinkClient: connecting to" << SMARTLINK_HOST << ":" << SMARTLINK_PORT;
 
+    startServerConnection();
+}
+
+void SmartLinkClient::startServerConnection()
+{
     // Standard TLS with certificate validation
     QSslConfiguration sslConfig = QSslConfiguration::defaultConfiguration();
     sslConfig.setPeerVerifyMode(QSslSocket::VerifyPeer);
@@ -282,6 +362,9 @@ void SmartLinkClient::disconnect()
 
 void SmartLinkClient::reconnect()
 {
+    if (refuseDemoOnly()) {
+        return;
+    }
     if (m_serverConnected) {
         return;
     }
@@ -308,16 +391,26 @@ void SmartLinkClient::reconnect()
 
 void SmartLinkClient::requestConnect(const QString& serial, quint16 holePunchPort)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        qCWarning(lcSmartLink) << AutomationIsolationPolicy::refusal();
+        return;
+    }
+
     if (!m_serverConnected) return;
     QString cmd = QString("application connect serial=%1 hole_punch_port=%2\n")
                       .arg(serial).arg(holePunchPort);
     qCDebug(lcSmartLink) << "SmartLinkClient: requesting connection to" << serial
              << "hole_punch_port=" << holePunchPort;
-    m_socket.write(cmd.toUtf8());
+    writeServerData(cmd.toUtf8());
 }
 
 void SmartLinkClient::disconnectRadioClients(const QString& serial, const QList<quint32>& handles)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        qCWarning(lcSmartLink) << AutomationIsolationPolicy::refusal();
+        return;
+    }
+
     if (!m_serverConnected || serial.isEmpty())
         return;
 
@@ -333,14 +426,22 @@ void SmartLinkClient::disconnectRadioClients(const QString& serial, const QList<
                                 .arg(serial, handleText);
         qCDebug(lcSmartLink) << "SmartLinkClient: disconnecting GUI client"
                              << handleText << "from radio" << serial;
-        m_socket.write(cmd.toUtf8());
+        writeServerData(cmd.toUtf8());
     }
+}
+
+void SmartLinkClient::writeServerData(const QByteArray& data)
+{
+    m_socket.write(data);
 }
 
 // ── TLS Socket Callbacks ─────────────────────────────────────────────────────
 
 void SmartLinkClient::onSslConnected()
 {
+    if (refuseDemoOnly()) {
+        return;
+    }
     qCDebug(lcSmartLink) << "SmartLinkClient: TLS connected to SmartLink server";
     m_serverConnected = true;
 
@@ -348,7 +449,7 @@ void SmartLinkClient::onSslConnected()
     qCDebug(lcSmartLink) << "SmartLinkClient: sending application register (token length:" << m_idToken.length() << ")";
     QString cmd = QString("application register name=AetherSDR platform=Linux token=%1\n")
                       .arg(m_idToken);
-    m_socket.write(cmd.toUtf8());
+    writeServerData(cmd.toUtf8());
 
     // Start keepalive pings
     m_pingTimer.start();
@@ -374,6 +475,9 @@ void SmartLinkClient::onSslError(const QList<QSslError>& errors)
 
 void SmartLinkClient::onReadyRead()
 {
+    if (refuseDemoOnly()) {
+        return;
+    }
     m_readBuffer.append(m_socket.readAll());
     if (m_readBuffer.size() > kMaxReadBuffer) {
         qCWarning(lcSmartLink) << "SmartLinkClient: read buffer exceeded"
@@ -400,8 +504,11 @@ void SmartLinkClient::onReadyRead()
 
 void SmartLinkClient::onPingTimer()
 {
+    if (refuseDemoOnly()) {
+        return;
+    }
     if (m_serverConnected)
-        m_socket.write("ping from client\n");
+        writeServerData("ping from client\n");
 }
 
 // ── Message Parsing ──────────────────────────────────────────────────────────

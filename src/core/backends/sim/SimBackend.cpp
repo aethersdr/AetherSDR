@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "core/backends/sim/SimBackend.h"
 #include "core/AppActivity.h"
 
@@ -243,7 +244,7 @@ void SimBackend::setDemoNb(bool on)
 
 QString SimBackend::demoModelName() { return QStringLiteral("AetherSDR Demo"); }
 QString SimBackend::demoSerial()    { return DemoRadio::serial(); }
-QString SimBackend::familyName()    { return QStringLiteral("sim"); }
+QString SimBackend::familyName()    { return DemoRadio::family(); }
 
 RadioCapabilities SimBackend::capabilities() const
 {
@@ -396,8 +397,13 @@ RadioCapabilities SimBackend::capabilities() const
     return caps;
 }
 
-void SimBackend::connectRadio(const RadioConnectRequest& /*request*/)
+void SimBackend::connectRadio(const RadioConnectRequest& request)
 {
+    if (!AutomationIsolationPolicy::allowsRadio(familyName(), request.serial)) {
+        emit connectionError(AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     if (m_connected) {
         return;   // idempotent — a second connect is a no-op, not a reset
     }

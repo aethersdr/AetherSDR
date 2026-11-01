@@ -17,8 +17,9 @@ Three kinds of shot, three passes (Linux; see docs/user/README.md):
   that serial and aborts (after disconnecting) if it lands on any other radio.
 * Demo -- shots tagged ``"radio": "demo"`` (the pages that teach the
   simulator). Without ``--radio-serial`` the script connects to DEMO-0001, in a
-  private network + UTS namespace (``unshare -n -u --map-current-user``) so no
-  real radio can be discovered or reached.
+  process-pinned demo-only mode. Linux also uses a private network + UTS
+  namespace (``unshare -n -u --map-current-user``) when available, unless
+  ``--no-netns`` is specified.
 * Popups -- shots tagged ``"offscreen": true``. On Wayland a popup menu needs
   a focused window, which a background capture never has, so menus are shot in
   a ``--platform offscreen --dpr <ratio>`` pass (with or without
@@ -38,7 +39,10 @@ popup pass runs there. The script refuses a GPU build without
 
 Safety. The app is launched with a fresh settings directory,
 ``AETHER_AUTOMATION_NO_TX=1``, a random bridge token and an explicit socket;
-the script refuses transmit verbs and never presses a keying control. Steps
+demo runs require a supported headless isolation-policy preflight and runtime
+``whoami.demoOnly`` (including ``--socket`` attachments). Hardware runs require
+explicit ``--radio-serial`` and do not claim demo isolation. The script refuses
+transmit verbs and never presses a keying control. Steps
 that change the radio undo themselves (``remove_extra_slices``,
 ``notch_snapshot``/``notch_remove_new``, which never touches a notch that was
 there before). On exit it disconnects and kills only the PID it launched.
@@ -70,6 +74,9 @@ import tempfile
 import time
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, os.path.join(REPO, "tools"))
+from automation_isolation import demo_environment, prepare_demo_launch, require_demo_identity
+
 DEFAULT_MANIFEST = os.path.join(REPO, "docs", "user", "screens.json")
 DEFAULT_OUT = os.path.join(REPO, "docs", "user", "static", "img", "screens")
 DEMO_SERIAL = "DEMO-0001"
@@ -279,6 +286,7 @@ class Capture:
         # DEMO-0001; every other shot runs against the --radio-serial radio.
         self.serial = args.radio_serial or DEMO_SERIAL
         self.demo = self.serial == DEMO_SERIAL
+        self.demo_verified = False
         self.secrets = []           # literal strings to black out (see redact)
         self.pii_hits = []
         self.proc = None
@@ -377,6 +385,9 @@ class Capture:
             # it stays reachable from inside the private network namespace.
             env["WAYLAND_DISPLAY"] = self.args.wayland_display or os.environ.get(
                 "WAYLAND_DISPLAY", "wayland-0")
+        if self.demo:
+            env = demo_environment(settings, env)
+            prepare_demo_launch(exe, env)
         self.hypr_rule_on()
         cmd = [exe]
         if sys.platform.startswith("linux") and not self.args.no_netns and shutil.which("unshare"):
@@ -393,10 +404,11 @@ class Capture:
         print("launching %s\n  settings %s\n  socket   %s\n  log      %s"
               % (" ".join(cmd[:4]) + (" ... " + exe if len(cmd) > 1 else ""),
                  settings, self.socket_path, log_path))
-        self.proc = subprocess.Popen(cmd, env=env, cwd=self.workdir,
-                                     stdin=subprocess.DEVNULL,
-                                     stdout=open(log_path, "wb"), stderr=subprocess.STDOUT,
-                                     start_new_session=True)
+        with open(log_path, "wb") as log:
+            self.proc = subprocess.Popen(cmd, env=env, cwd=self.workdir,
+                                         stdin=subprocess.DEVNULL,
+                                         stdout=log, stderr=subprocess.STDOUT,
+                                         start_new_session=True)
         self.pid = self.proc.pid
         print("  pid      %d" % self.pid)
         deadline = time.time() + 60
@@ -409,6 +421,9 @@ class Capture:
             time.sleep(0.25)
         time.sleep(0.5)
         self.bridge = Bridge(self.socket_path, self.token)
+        if self.demo:
+            require_demo_identity(self.bridge.request({"cmd": "whoami"}))
+            self.demo_verified = True
 
     # -- Hyprland placement ------------------------------------------------
 
@@ -446,11 +461,15 @@ class Capture:
         self.workdir = tempfile.mkdtemp(prefix="ads-", dir=tempfile.gettempdir())
         self.token = token
         self.bridge = Bridge(self.socket_path, token)
+        if self.demo:
+            require_demo_identity(self.bridge.request({"cmd": "whoami"}))
+            self.demo_verified = True
 
     def shutdown(self):
         if self.bridge:
             try:
-                if self.proc is not None and not self.args.keep:
+                if (self.proc is not None and not self.args.keep
+                        and (not self.demo or self.demo_verified)):
                     self.bridge.request({"cmd": "disconnect"}, allow_fail=True)
             except Exception:
                 pass
@@ -933,10 +952,15 @@ class Capture:
                      "\"offscreen\" run only with --platform offscreen)"
                      % ("offscreen" if offscreen else "on-screen",
                         "demo" if self.demo else "real-radio"))
-        if self.args.socket:
-            self.attach()
-        else:
-            self.launch()
+        try:
+            if self.args.socket:
+                self.attach()
+            else:
+                self.launch()
+        except BaseException:
+            self.args.keep = False
+            self.shutdown()
+            raise
         self.secrets = [x for x in (None if self.demo else self.serial, self.token,
                                     self.workdir, os.path.expanduser("~"),
                                     socket.gethostname()) if x and len(x) >= 4]

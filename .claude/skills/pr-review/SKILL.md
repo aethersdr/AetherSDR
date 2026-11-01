@@ -556,47 +556,49 @@ before they reach the author.
 `docs/automation-bridge.md` is the reference; it is written for agents and is
 copy-pasteable.
 
-### Demo mode, never the live radio
+### Choose the validation target
 
-**Every bridge session in a review runs against the built-in demo simulator
-(`SimBackend`, RFC #4288) — never the operator's FLEX-8600.** The demo is a
-synthetic backend that generates its own RX audio and matching panadapter, it
-exercises the same `RadioModel` / slice / pan / settings paths the GUI uses
-with real hardware, and by construction it **cannot key** (Principle VI). It
-is the correct target for a review: reproducible, no hardware contention, no
-emissions, and nothing you do to it can disturb the operator's station.
+Simulator mode is optional. No review, fix, certification, or proof workflow
+requires a demo run or a demo-capable binary first. Choose a target that can
+exercise the claim. The simulator can verify client UI/model behavior; real
+firmware and protocol convergence require an explicitly authorized live-radio
+test. If hardware validation is unavailable, report it as unrun.
 
-The trap is that this is opt-*out*, not opt-in: `AutoConnectToLastRadio`
-defaults on, and on the operator's machine the saved settings point at the
-real radio — so a bridge instance launched with the default config **will
-connect itself to the live FLEX** before you have issued a single verb. Two
-things prevent it, and you do both:
+Normal `app_instance launch` preserves the selected saved profile and honors
+`AutoConnectToLastRadio`; confirm that the task authorizes its connection before
+launching. For optional isolated simulator work, pass `"demo_only":true`.
 
-1. **Isolate the settings store**, so there is no saved radio to autoconnect
-   to. `AETHER_SETTINGS_DIR` is honoured at runtime (`SettingsPaths.cpp`);
-   point it at a fresh scratch dir. A per-session scratch `HOME` /
-   `XDG_CONFIG_HOME` does the same job. A clean store also means
-   `ShowDemoRadio` is at its default (on), so the demo entry is in the list.
-2. **Connect explicitly to the demo, and to nothing else.** Its discovery
-   serial is `DEMO-0001` (`SimBackend::demoSerial()`), family `sim`, shown as
-   "Simulator (not on the air)".
+A demo proof needs an enforced process policy, not only fresh settings or a
+choice in the connection window. Prefer MCP `app_instance launch` with `demo_only:true`, which owns a
+fresh profile, preflights policy support, pins demo-only/TX-off, and validates the
+authenticated process identity. For a manual POSIX launch:
 
 ```sh
 export SCRATCH=<your scratch dir>
-AETHER_AUTOMATION=1 QT_QPA_PLATFORM=offscreen \
-AETHER_SETTINGS_DIR="$SCRATCH/settings" \
-AETHER_AUTOMATION_IDENTITY=pr-<PR>-review \
-AETHER_AUTOMATION_SOCKET=aethersdr-pr<PR> \
-AETHER_AUTOMATION_NO_TX=1 \
-nohup ./build/AetherSDR >"$SCRATCH/app.log" 2>&1 &
+mkdir -p "$SCRATCH/settings"
+export AETHER_SETTINGS_DIR="$SCRATCH/settings"
+export AETHER_AUTOMATION=1 AETHER_AUTOMATION_DEMO_ONLY=1 AETHER_AUTOMATION_NO_TX=1
+export QT_QPA_PLATFORM=offscreen
+export AETHER_AUTOMATION_IDENTITY=pr-<PR>-review
+export AETHER_AUTOMATION_SOCKET=aethersdr-pr<PR>
+unset AETHER_AUTOMATION_ALLOW_TX
+EXE="$PWD/build/AetherSDR"  # macOS: build/AetherSDR.app/Contents/MacOS/AetherSDR
+python3 tools/automation_isolation.py "$EXE" && nohup "$EXE" >"$SCRATCH/app.log" 2>&1 &
 ```
+
+The headless capability check must confirm policy v1, `demoOnlySupported:true`,
+and `demoOnly:true`, and the helper must verify autoconnect is disabled. Any
+unsupported binary or failed check means **do not launch**. Require authenticated
+`whoami.demoOnly:true` after startup before driving it. Setting the environment
+variable alone on an older binary is insufficient. Only connect to `DEMO-0001`
+(family `sim`, "Simulator (not on the air)").
 
 Detach so a shell exit cannot `SIGHUP` the instance — prefix `setsid` on Linux,
 where it exists. On macOS the binary is inside the bundle,
 `./build/AetherSDR.app/Contents/MacOS/AetherSDR`; `docs/automation-bridge.md`
 gives both paths.
 
-Then, before anything else, confirm where you are pointed and attach the demo:
+For this optional simulator launch, confirm the target before attaching:
 
 ```text
 connect list                      → verify DEMO-0001 is offered
@@ -605,7 +607,7 @@ connect wait 30000                → asserts connected, returns the radio block
 get radio                         → confirm model "AetherSDR Demo", family sim
 ```
 
-If `get radio` ever shows a FLEX serial, you are on the operator's hardware:
+If a simulator-only session reports a FLEX serial, its isolation has failed:
 `disconnect` immediately, fix the isolation, and say so in the report.
 
 The demo also gives you failure paths that live hardware will not: the `sim`
@@ -623,7 +625,7 @@ then never for TX.
 
 ### Driving it
 
-With the demo attached, use the `aethersdr-automation` MCP tools:
+With the authorized validation target attached, use the `aethersdr-automation` MCP tools:
 `bridge_status` →
 `dump_tree filter=<widget>` → `invoke` / `gesture` / `shortcut` / `tune` /
 `slice` / `menu` → `assert_state` / `wait_for` on the model property that
@@ -669,13 +671,10 @@ Non-negotiable operating rules:
   `AETHER_AUTOMATION_ALLOW_TX`; a review never needs them. Launch with
   `AETHER_AUTOMATION_NO_TX=1` (or via the MCP `app_instance` tool, which pins
   it) so the gate is off regardless of the saved preference.
-- **Demo mode, offscreen, isolated settings — always.** Never point a review
-  instance at the FLEX-8600. It is single-occupancy and it is the operator's
-  station, not test equipment; a review has no business on it. If a finding
-  truly cannot be reached in demo mode, ask the operator rather than
-  connecting.
-- **Close your instance when done**, and say in the report which instance you
-  drove and that it was the demo.
+- **Use the authorized validation target.** Optional simulator-only tests use
+  `demo_only:true` with fresh settings; a live-radio test requires explicit
+  authorization for that radio and operation. No simulator run is a prerequisite.
+- **Close your instance when done**, and report the exact instance and target.
 
 When you genuinely cannot drive it — the change is headless, the path needs
 hardware you must not touch, the build fails — say so explicitly and label the
@@ -750,7 +749,7 @@ Bulleted, explicitly non-blocking. Style, naming, missed niceties, stale docs.
 The attacks that did NOT produce a finding — the claims from the body you
 tested and that held, the edge cases and failure paths you walked, the tests
 you inverted, what you built or ran, and **the bridge session**: which build
-you drove against the demo, the verbs/tools you used, and the state you
+you drove, the validation target, the verbs/tools you used, and the state you
 asserted. Two to five
 bullets. This is what makes a clean review trustworthy; without it, "no
 blockers" and "I did not look" are indistinguishable. Name anything you could

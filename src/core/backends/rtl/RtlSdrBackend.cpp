@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "core/backends/rtl/RtlSdrBackend.h"
 
 #include <QPointer>
@@ -380,6 +381,11 @@ RadioCapabilities RtlSdrBackend::capabilities() const
 
 void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        emit connectionError(AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     if (m_worker) {
         disconnectRadio();
     }

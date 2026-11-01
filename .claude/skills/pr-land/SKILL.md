@@ -470,37 +470,25 @@ into the thread reply and the dismissal. Per item:
 - **Quote what you observed** — ctest output, the `assert_state` JSON, the log
   line, the screenshot. Paraphrase is not evidence.
 
-## 6. Drive the app — demo simulator only
+## 6. Drive the app — authorized validation target
 
 Any claim about UI state, a control's effect, a dialog's lifecycle, what the
 panadapter renders, connect/disconnect and slice-recreate paths, or whether a
 setting survives a restart gets tested against the running app.
 `docs/automation-bridge.md` is the reference.
 
-**Every bridge session runs against the built-in demo simulator
-(`SimBackend`), never the operator's FLEX-8600.** This is opt-*out*:
-`AutoConnectToLastRadio` defaults on, and the operator's saved settings point
-at the real radio, so a default-config instance connects itself to live
-hardware before you issue a verb. Two guards, both mandatory — isolate the
-settings store (`AETHER_SETTINGS_DIR` at a fresh scratch dir, or a scratch
-`HOME`/`XDG_CONFIG_HOME`), and connect explicitly to `DEMO-0001` and nothing
-else. If `get radio` ever shows a FLEX serial, `disconnect` immediately, fix
-the isolation, and say so in the report.
+Choose a target that exercises the claim. Simulator mode is optional, and no
+review, fix, certification, or proof workflow requires a demo run or support
+first. Real firmware and protocol convergence need an explicitly authorized
+live-radio test; report that validation as unrun when it is unavailable.
 
-```sh
-export SCRATCH=<your scratch dir>
-AETHER_AUTOMATION=1 QT_QPA_PLATFORM=offscreen \
-AETHER_SETTINGS_DIR="$SCRATCH/settings" \
-AETHER_AUTOMATION_IDENTITY=pr-<PR>-land \
-AETHER_AUTOMATION_SOCKET=aethersdr-pr<PR> \
-AETHER_AUTOMATION_NO_TX=1 \
-nohup ./build/AetherSDR >"$SCRATCH/app.log" 2>&1 &
-```
-
-Detach so a shell exit cannot `SIGHUP` the instance — prefix `setsid` on Linux,
-where it exists. On macOS the binary is inside the bundle,
-`./build/AetherSDR.app/Contents/MacOS/AetherSDR`; `docs/automation-bridge.md`
-gives both paths.
+Normal MCP `app_instance launch` preserves the selected saved profile and honors
+`AutoConnectToLastRadio`. Confirm that its connection is authorized before
+launching. Both launch modes pin automation TX off and verify the exact child
+PID, socket, label, and authentication. To request optional isolated simulator
+work, use `"demo_only":true`; its fresh profile and enforced policy are described
+in `docs/automation-bridge.md`. Unsupported isolation fails without falling back
+to a normal launch.
 
 `pgrep -lf AetherSDR` **first** — `-lf` is the portable spelling, since BSD and
 macOS read a bare `-a` as "include ancestors" and print no command line to

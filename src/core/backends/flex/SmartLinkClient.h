@@ -1,12 +1,17 @@
 #pragma once
 
 #include <QObject>
+#include <QByteArray>
 #include <QList>
 #include <QSslSocket>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
 #include <QNetworkAccessManager>
+#include <functional>
+
+class QNetworkReply;
+class QNetworkRequest;
 
 namespace AetherSDR {
 
@@ -93,6 +98,16 @@ signals:
     void testConnectionResult(const QString& serial, bool upnpTcp, bool upnpUdp,
                               bool fwdTcp, bool fwdUdp, bool holePunch);
 
+protected:
+    // Effect boundaries let offline tests exercise admission and callbacks
+    // without constructing keychain jobs or dispatching network traffic.
+    virtual QNetworkReply* postAuthRequest(const QNetworkRequest& request, const QByteArray& body);
+    virtual void readStoredToken(const std::function<void(const QString&)>& completed);
+    virtual void writeStoredToken(const QString& token);
+    virtual void deleteStoredToken();
+    virtual void startServerConnection();
+    virtual void writeServerData(const QByteArray& data);
+
 private slots:
     void onSslConnected();
     void onSslDisconnected();
@@ -102,6 +117,10 @@ private slots:
 
 private:
     friend struct SmartLinkClientTestAccess;
+    bool refuseDemoOnly();
+    void finishLogin(QNetworkReply* reply);
+    void finishRefresh(QNetworkReply* reply);
+    void acceptStoredToken(const QString& token);
     void connectToServer();
     void parseMessage(const QString& msg);
     void parseRadioList(const QString& msg);

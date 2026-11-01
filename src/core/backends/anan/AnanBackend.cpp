@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "core/backends/anan/AnanBackend.h"
 #include "core/AppActivity.h"
 #include "core/backends/anan/AnanDroopCalibrator.h"
@@ -596,6 +597,11 @@ RestoredRadioState AnanBackend::currentOperatingState() const
 
 void AnanBackend::connectRadio(const RadioConnectRequest& request)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        emit connectionError(AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     const QHostAddress hostAddr(request.host);
     if (hostAddr.isNull()) {
         emit connectionError(QStringLiteral("ANAN: invalid host '%1'").arg(request.host));

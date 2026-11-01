@@ -7,6 +7,11 @@ namespace AetherSDR::DemoRadio {
 // Backend-only compatibility data for the in-process Demo radio and its
 // synthetic Flex connection. Neither consumer needs the other's implementation:
 // RadioConnection reads these values, not SimBackend.
+inline QString family()
+{
+    return QStringLiteral("sim");
+}
+
 inline QString serial()
 {
     return QStringLiteral("DEMO-0001");
