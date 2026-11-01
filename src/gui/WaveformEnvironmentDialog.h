@@ -8,7 +8,6 @@
 #include <QPointer>
 #include <functional>
 
-class QCheckBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -30,8 +29,8 @@ QString waveformEnvironmentInstallBlocker(const RadioModel* model);
 // hands the validated rows to the apply handler, which the Waveforms dialog points
 // at RadioModel::applyWaveformEnvironment so the outcome still reaches its row if
 // this window is closed first. Nothing is kept locally: after an apply the rows
-// show the radio's report again (Principle II). Values may be secrets, so they are
-// masked until Show values is ticked.
+// show the radio's report again (Principle II). Values are plain text on screen
+// but marked sensitive, so automation dumps and grabs never carry them.
 class WaveformEnvironmentDialog : public CanonWindow {
     Q_OBJECT
 
@@ -82,13 +81,13 @@ private:
     QWidget* m_rowsContainer{nullptr};
     QLabel* m_emptyLabel{nullptr};
     QLabel* m_message{nullptr};
-    QCheckBox* m_showValues{nullptr};
     QPushButton* m_addButton{nullptr};
     QPushButton* m_revertButton{nullptr};
     QPushButton* m_applyButton{nullptr};
     QPushButton* m_clearStagingButton{nullptr};
     QLabel* m_applyHint{nullptr};
     int m_newRowCount{0};
+    QString m_availabilityMessage;
 };
 
 } // namespace AetherSDR

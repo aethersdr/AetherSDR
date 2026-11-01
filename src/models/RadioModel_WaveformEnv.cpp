@@ -70,11 +70,19 @@ WaveformEnvApplyResult applyResult(WaveformEnvApplyResult::Outcome outcome, cons
 
 } // namespace
 
-void RadioModel::setWaveformEnvironmentStagingState(bool active, bool uncertain)
+bool RadioModel::waveformEnvironmentStagingUncertain() const
 {
-    if (active == m_waveformEnvApplyActive && uncertain == m_waveformEnvStagingUncertain) { return; }
+    return m_waveformEnvStagingUncertain && isConnected() && serial() == m_waveformEnvStagingSerial;
+}
+
+void RadioModel::setWaveformEnvironmentStagingState(bool active, bool uncertain, const QString& radioSerial)
+{
+    const QString serialFor = uncertain ? radioSerial : QString();
+    if (active == m_waveformEnvApplyActive && uncertain == m_waveformEnvStagingUncertain
+        && serialFor == m_waveformEnvStagingSerial) { return; }
     m_waveformEnvApplyActive = active;
     m_waveformEnvStagingUncertain = uncertain;
+    m_waveformEnvStagingSerial = serialFor;
     emit waveformEnvironmentStagingChanged();
 }
 
@@ -83,14 +91,35 @@ bool RadioModel::clearWaveformEnvironmentStaging(QObject* replyContext,
 {
     if (m_waveformEnvApplyActive) { return false; }
     const QPointer<RadioModel> alive(this);
+    const QString radioSerial = serial();
     return requestWaveformEnv({WaveformEnvRequest::Action::Clear, {}, {}, {}}, replyContext,
-        [alive, completion](const RadioControlReply& reply) {
+        [alive, completion, radioSerial](const RadioControlReply& reply) {
             if (alive && !alive->m_waveformEnvApplyActive
-                && reply.kind == RadioControlReply::Kind::Accepted) {
-                alive->setWaveformEnvironmentStagingState(false, false);
+                && reply.kind == RadioControlReply::Kind::Accepted
+                && radioSerial == alive->m_waveformEnvStagingSerial) {
+                alive->setWaveformEnvironmentStagingState(false, false, {});
             }
             if (completion) { completion(reply); }
         }) == ReceiveDispatch::Dispatched;
+}
+
+// Jeremy's ruling on #6949: a new session to the radio whose staging is
+// uncertain sends one `waveform env clear` by itself. Staging is radio-wide, so
+// this also drops anything another client staged and has not applied yet (as
+// the leading clear of every apply does). A refusal keeps the block, and the
+// editor's Clear Staged Variables stays the manual path.
+void RadioModel::autoClearWaveformEnvironmentStaging(bool connected, const RadioCapabilities& caps)
+{
+    if (!connected || !waveformEnvironmentStagingUncertain() || m_waveformEnvApplyActive
+        || !caps.hasWaveforms || !caps.waveformEnvControl.has_value()
+        || m_waveformEnvAutoClearSession == controlSession()) {
+        return;
+    }
+    // Marked only once sent, so a session that could not send yet (still
+    // closing, or capabilities not final) tries again on the next publish.
+    if (clearWaveformEnvironmentStaging(nullptr, {})) {
+        m_waveformEnvAutoClearSession = controlSession();
+    }
 }
 
 bool RadioModel::applyWaveformEnvironment(const QString& name,
@@ -149,10 +178,11 @@ bool RadioModel::applyWaveformEnvironment(const QString& name,
     state->completion = std::move(completion);
     // From the first stage on, the radio may hold variables a later deploy
     // would pick up, until an acknowledged clear says otherwise.
-    setWaveformEnvironmentStagingState(true, true);
+    const QString radioSerial = serial();
+    setWaveformEnvironmentStagingState(true, true, radioSerial);
 
     const QPointer<RadioModel> alive(this);
-    const auto deliver = [alive, state] {
+    const auto deliver = [alive, state, radioSerial] {
         if (state->done || !state->pending || !state->cleanupDone || state->awaitingEnvironment) {
             return;
         }
@@ -161,7 +191,7 @@ bool RadioModel::applyWaveformEnvironment(const QString& name,
         QObject::disconnect(state->environment);
         QObject::disconnect(state->sessionEnded);
         if (alive) {
-            alive->setWaveformEnvironmentStagingState(false, !state->pending->stagingCleared);
+            alive->setWaveformEnvironmentStagingState(false, !state->pending->stagingCleared, radioSerial);
         }
         if (state->completion && (!state->hasOwner || state->owner)) {
             state->completion(*state->pending);
@@ -198,14 +228,14 @@ bool RadioModel::applyWaveformEnvironment(const QString& name,
     };
 
     state->sessionEnded = connect(this, &RadioModel::connectionStateChanged, this,
-        [alive, state] {
+        [alive, state, radioSerial] {
             if (!alive || state->done || alive->controlSessionCurrent(state->session)) { return; }
             // No clear can reach the radio now, so its staging stays uncertain.
             state->done = true;
             QObject::disconnect(state->restarted);
             QObject::disconnect(state->environment);
             QObject::disconnect(state->sessionEnded);
-            alive->setWaveformEnvironmentStagingState(false, true);
+            alive->setWaveformEnvironmentStagingState(false, true, radioSerial);
             WaveformEnvApplyResult result = state->pending.value_or(
                 applyResult(Outcome::Cancelled, QStringLiteral("the radio session ended")));
             result.stagingCleared = false;
@@ -254,6 +284,18 @@ bool RadioModel::applyWaveformEnvironment(const QString& name,
         alive->requestWaveformEnv(step, alive,
             [alive, state, end, send, index, step, recreate](const RadioControlReply& reply) {
                 if (!alive || state->done || state->pending) { return; }
+                // fencedSetupCompletion's own 30 s "no radio response" is not the
+                // radio's answer: a recreate may still be rebuilding the container,
+                // so keep waiting for `restarted` and let the NoConfirmation timer
+                // below decide. A refusal from the radio still ends it.
+                const bool localTimeout = reply.kind == RadioControlReply::Kind::Failed && reply.code == -1;
+                if (recreate && localTimeout) {
+                    QTimer::singleShot(alive->m_waveformEnvConfirmTimeoutMs, alive, [state, end] {
+                        end(applyResult(Outcome::NoConfirmation,
+                                        QStringLiteral("the radio did not report the restart")));
+                    });
+                    return;
+                }
                 if (reply.kind != RadioControlReply::Kind::Accepted) {
                     const QString why = reply.message.trimmed().isEmpty()
                         ? QStringLiteral("no reason given") : reply.message.trimmed();

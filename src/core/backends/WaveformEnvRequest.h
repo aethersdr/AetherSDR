@@ -8,6 +8,20 @@
 
 namespace AetherSDR {
 
+// A waveform name as the radio's waveform verbs take it: one token of letters,
+// digits, '.', '_' or '-', at most 64 characters. Shared by every waveform
+// command (restart, remove, uninstall, recreate).
+inline bool waveformNameTokenValid(const QString& name)
+{
+    if (name.isEmpty() || name.size() > 64) { return false; }
+    for (const QChar ch : name) {
+        const ushort c = ch.unicode();
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+              || c == '.' || c == '_' || c == '-')) { return false; }
+    }
+    return true;
+}
+
 // One step of a container-environment change (SmartSDR 4.3.16, FlexLib
 // Radio.cs:8841-8861). The radio keeps a staged environment: Clear empties it,
 // Stage adds one variable, Recreate rebuilds a container from its installed image
@@ -22,11 +36,18 @@ struct WaveformEnvRequest {
     static constexpr int kMaxKeyChars = 64;
     static constexpr int kMaxValueChars = 512;
 
+    // `waveform env clear` is the clear verb, so a variable cannot be named that.
+    static bool keyReserved(const QString& key)
+    {
+        return key.compare(QLatin1String("clear"), Qt::CaseInsensitive) == 0;
+    }
+
     // A POSIX-style variable name: a letter or underscore, then letters, digits
-    // or underscores. Rules out the '=' and spaces the wire uses as delimiters.
+    // or underscores. Rules out the '=' and spaces the wire uses as delimiters,
+    // and the reserved name `clear`.
     static bool keyValid(const QString& key)
     {
-        if (key.isEmpty() || key.size() > kMaxKeyChars) { return false; }
+        if (key.isEmpty() || key.size() > kMaxKeyChars || keyReserved(key)) { return false; }
         for (qsizetype i = 0; i < key.size(); ++i) {
             const ushort c = key.at(i).unicode();
             const bool letter = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
@@ -61,17 +82,7 @@ struct WaveformEnvRequest {
     }
     static bool valueValid(const QString& value) { return valueIssue(value) == ValueIssue::None; }
 
-    // Same token rule as the existing waveform restart/remove commands.
-    static bool nameValid(const QString& name)
-    {
-        if (name.isEmpty() || name.size() > 64) { return false; }
-        for (const QChar ch : name) {
-            const ushort c = ch.unicode();
-            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
-                  || c == '.' || c == '_' || c == '-')) { return false; }
-        }
-        return true;
-    }
+    static bool nameValid(const QString& name) { return waveformNameTokenValid(name); }
 
     bool valid() const
     {

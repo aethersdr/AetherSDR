@@ -1132,9 +1132,11 @@ public:
                                   QObject* replyContext,
                                   std::function<void(const WaveformEnvApplyResult&)> completion);
     bool waveformEnvironmentApplyActive() const { return m_waveformEnvApplyActive; }
-    // This client staged variables and has not seen an acknowledged clear since,
-    // so the radio may still hold them for the next deploy.
-    bool waveformEnvironmentStagingUncertain() const { return m_waveformEnvStagingUncertain; }
+    // This client staged variables on the connected radio and has not seen an
+    // acknowledged clear since, so that radio may still hold them for its next
+    // deploy. Tied to the radio's serial: another radio is never affected. A new
+    // session to the same radio sends one clear automatically.
+    bool waveformEnvironmentStagingUncertain() const;
     // An acknowledged `waveform env clear`; on success the staging is known clear.
     bool clearWaveformEnvironmentStaging(QObject* replyContext, const RadioControlCompletion& completion);
     // A container's environment as the radio last reported it, or nullopt when no
@@ -2142,7 +2144,10 @@ private:
     FlexWaveformModel   m_flexWaveformModel;
     bool m_waveformEnvApplyActive{false};
     bool m_waveformEnvStagingUncertain{false};
-    void setWaveformEnvironmentStagingState(bool active, bool uncertain);
+    QString m_waveformEnvStagingSerial;
+    std::optional<RadioControlSession> m_waveformEnvAutoClearSession;
+    void setWaveformEnvironmentStagingState(bool active, bool uncertain, const QString& serial);
+    void autoClearWaveformEnvironmentStaging(bool connected, const RadioCapabilities& caps);
     int  m_waveformEnvConfirmTimeoutMs{60000};
     DStarModel          m_dstarModel{nullptr, true};
 

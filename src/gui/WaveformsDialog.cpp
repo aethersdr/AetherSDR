@@ -1498,11 +1498,10 @@ void WaveformsDialog::updateInstallButtonState()
     }
 
     const FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
+    const QString stagingBlocker = connected ? waveformEnvironmentInstallBlocker(m_radioModel) : QString();
     const QString dockerBlocker = !connected
         ? tr("Connect to a radio before installing Docker waveform images.")
-        : waveformEnvironmentInstallBlocker(m_radioModel).isEmpty()
-            ? dockerInstallBlockerText(m_radioModel, wfModel)
-            : waveformEnvironmentInstallBlocker(m_radioModel);
+        : stagingBlocker.isEmpty() ? dockerInstallBlockerText(m_radioModel, wfModel) : stagingBlocker;
     const bool dockerReady = connected && dockerBlocker.isEmpty();
     m_installDockerAction->setEnabled(!busy && dockerReady);
     if (m_installRemoteAccessAction) {

@@ -34,18 +34,18 @@ Measured on a FLEX-8600 running SmartSDR v4.3.16:
 ## Changing a container's environment
 
 1. Open **Tools → Waveforms...**.
-2. On the container's row, click **Environment…**. The window lists the variables the radio reports for that container. Values are hidden; tick **Show values** to see them. Even when shown, values stay hidden from the automation bridge and its screenshots.
+2. On the container's row, click **Environment…**. The window lists the variables the radio reports for that container, names and values in plain text. Values are still kept out of the automation bridge: its dumps list variable names only, and its screenshots show dots in place of each value.
 3. Edit a name or value, click **Add Variable** for a new one, or **Remove** to delete one. **Revert** goes back to what the radio reports.
 4. Click **Apply & Recreate**. AetherSDR replaces the container's whole environment with the rows shown and asks the radio to rebuild the container. The waveform restarts, and the row in the Waveforms window reads **Recreating…**.
 5. When the radio reports the new variables, the editor reads **Recreated. These are the variables the radio now reports.** and the row reads **Recreated**. Nothing is saved on the computer: what you see always comes from the radio.
 
-The editor can be closed while the radio works. The Waveforms window still shows the result on the container's row. **Apply & Recreate** is dimmed while the list is empty, because the radio would keep the old variables.
+The editor can be closed while the radio works. The Waveforms window still shows the result on the container's row. While any environment change is running, every Environment window is dimmed until it finishes. If the container briefly disappears from the radio's list, your edits stay in the window, dimmed, until it comes back. **Apply & Recreate** is dimmed while the list is empty, because the radio would keep the old variables.
 
 ## Reference
 
 | Item | Rule |
 |---|---|
-| Variable name | Letters, digits and underscores, starting with a letter or underscore; at most 64 characters. Each name once. |
+| Variable name | Letters, digits and underscores, starting with a letter or underscore; at most 64 characters. Each name once. `clear` (in any case) is reserved by the radio's command and refused. |
 | Value | Text on one line, at most 512 characters. Single spaces between words are fine; a value cannot start or end with a space or contain two spaces in a row, because the radio would change it. A value can be empty. |
 | Longer values from the radio | Shown in full and never shortened. Apply is refused with the reason until the value fits, so editing another row cannot change it. |
 | Blank rows | Skipped. |
@@ -58,13 +58,14 @@ The editor can be closed while the radio works. The Waveforms window still shows
 | **Recreate failed: the radio reported an error** | The radio could not rebuild the container. |
 | **Recreate not confirmed by the radio** | The radio accepted the request but did not report a result within a minute. Check the waveform before relying on it. |
 | **Environment not applied** | The radio refused a step, or the connection ended, before the container was recreated. The editor names the step. |
-| **Recreated, but clearing staged variables failed** | The container is rebuilt, but the radio did not confirm that the staged variables are gone. Docker installs stay blocked until **Clear Staged Variables** in the editor succeeds. |
+| **Recreated, but clearing staged variables failed** | The container is rebuilt, but the radio did not confirm that the staged variables are gone. Docker installs on that radio stay blocked until a clear succeeds: AetherSDR tries again on the next connection, or use **Clear Staged Variables** in the editor. |
 
 ## Known issues
 
-- Values may be passwords or keys. AetherSDR keeps them out of its logs, the support bundle and the automation bridge (which lists variable names only, and masks the editor's fields even after **Show values**), but the radio itself sends them back over the network in plain text.
+- A value can be a password or key. AetherSDR keeps values out of its logs, the support bundle and the automation bridge (which lists variable names only and masks the editor's value fields in its screenshots), but the radio itself sends them back over the network in plain text.
 - Because staging is shared by every client on the radio, two clients changing environments at the same moment can apply each other's variables. Change environments from one client at a time.
-- While AetherSDR cannot tell whether the radio still holds variables it staged (a clear that was refused, or a connection that ended mid-change), Docker installs wait, since an install would pick them up. **Clear Staged Variables** in the editor resolves it.
+- While AetherSDR cannot tell whether a radio still holds variables it staged (a clear that was refused, or a connection that ended mid-change), Docker installs on **that radio** wait, since an install would pick them up. Other radios are not affected.
+- The next time AetherSDR connects to that radio it sends one clear of the staged variables by itself, and the block lifts when the radio accepts it. Like every clear, this one is radio-wide: it also discards variables another client has staged on that radio and not yet applied. If the radio refuses it, **Clear Staged Variables** in the editor is the manual way out.
 
 ## See also
 

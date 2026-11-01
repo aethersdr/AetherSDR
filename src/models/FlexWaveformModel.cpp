@@ -1,4 +1,5 @@
 #include "FlexWaveformModel.h"
+#include "core/backends/WaveformEnvRequest.h"
 #include <QByteArray>
 #include <QDebug>
 #include <QJsonDocument>
@@ -6,32 +7,6 @@
 #include <QVariant>
 
 namespace AetherSDR {
-
-namespace {
-
-bool isSafeWaveformCommandName(const QString& name)
-{
-    if (name.isEmpty() || name.size() > 64) {
-        return false;
-    }
-
-    for (const QChar ch : name) {
-        const ushort c = ch.unicode();
-        const bool allowed =
-            (c >= 'A' && c <= 'Z')
-            || (c >= 'a' && c <= 'z')
-            || (c >= '0' && c <= '9')
-            || c == '.'
-            || c == '_'
-            || c == '-';
-        if (!allowed) {
-            return false;
-        }
-    }
-    return true;
-}
-
-} // namespace
 
 FlexWaveformModel::FlexWaveformModel(QObject* parent)
     : QObject(parent)
@@ -233,7 +208,7 @@ void FlexWaveformModel::clear()
 
 void FlexWaveformModel::requestUninstall(const QString& name)
 {
-    if (!isSafeWaveformCommandName(name)) {
+    if (!waveformNameTokenValid(name)) {
         qWarning() << "FlexWaveformModel: refusing unsafe waveform uninstall name:" << name;
         return;
     }
@@ -242,7 +217,7 @@ void FlexWaveformModel::requestUninstall(const QString& name)
 
 void FlexWaveformModel::requestRemoveContainer(const QString& name)
 {
-    if (!isSafeWaveformCommandName(name)) {
+    if (!waveformNameTokenValid(name)) {
         qWarning() << "FlexWaveformModel: refusing unsafe waveform container removal name:" << name;
         return;
     }
@@ -261,7 +236,7 @@ void FlexWaveformModel::handleCommandReply(const QString& cmd, int code, const Q
 
 void FlexWaveformModel::requestRestart(const QString& name)
 {
-    if (!isSafeWaveformCommandName(name)) {
+    if (!waveformNameTokenValid(name)) {
         qWarning() << "FlexWaveformModel: refusing unsafe waveform restart name:" << name;
         return;
     }

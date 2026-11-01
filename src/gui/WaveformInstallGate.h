@@ -1,17 +1,8 @@
 #pragma once
 
-#include "models/ModelCapabilities.h"   // RadioPlatform
+#include "models/ModelCapabilities.h"   // RadioPlatform, isKnownNonWfpPlatform
 
 namespace AetherSDR {
-
-// Platforms with no on-radio WFP hardware at all (6000-series Microburst /
-// DeepEddy). This is a genuine hard incompatibility for Docker waveform
-// deployment, distinct from the "wfp" license feature (see below).
-inline bool isKnownNonWfpPlatform(RadioPlatform platform)
-{
-    return platform == RadioPlatform::Microburst
-        || platform == RadioPlatform::DeepEddy;
-}
 
 // Why "Install -> Docker Waveform Image..." is blocked, or None (#4210).
 // Follows live WFP runtime state plus the no-WFP-hardware check, NOT the

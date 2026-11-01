@@ -2271,6 +2271,8 @@ RadioModel::RadioModel(QObject* parent)
         digitalVoiceDir + QStringLiteral("/dstar-traffic.json"));
     connect(&m_flexWaveformModel, &FlexWaveformModel::genericStatusReceived,
             &m_dstarModel, &DStarModel::handleWaveformStatus);
+    connect(this, &RadioModel::capabilitiesChanged,
+            this, &RadioModel::autoClearWaveformEnvironmentStaging);
     connect(&m_flexWaveformModel, &FlexWaveformModel::environmentChanged,
             this, &RadioModel::waveformContainersChanged);
     connect(&m_flexWaveformModel, &FlexWaveformModel::waveformsChanged, this, [this] {

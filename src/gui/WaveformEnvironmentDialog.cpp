@@ -4,7 +4,6 @@
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 
-#include <QCheckBox>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -39,8 +38,6 @@ constexpr const char* kEnvironmentStyle =
     " selection-background-color: {{color.canon.cyan}}; selection-color: {{color.canon.onAccent}}; }"
     "QLineEdit:focus { border-color: {{color.canon.aqua}}; }"
     "QLineEdit:disabled { color: {{color.canon.muted}}; border-color: {{color.canon.line}}; }"
-    "QCheckBox { color: {{color.canon.inkSoft}}; background: transparent; font-size: 12px; spacing: 8px; }"
-    "QCheckBox:disabled { color: {{color.canon.muted}}; }"
     "QPushButton { background: {{color.canon.control}}; color: {{color.canon.cyan}};"
     " border: 1px solid {{color.canon.lineHi}}; border-radius: 4px; padding: 6px 16px;"
     " font-size: 12px; font-weight: bold; }"
@@ -110,6 +107,10 @@ QString WaveformEnvironmentDialog::collectEnvironment(const QList<QPair<QString,
         if (key.isEmpty() && value.isEmpty()) { continue; }
         if (key.isEmpty()) {
             return tr("Row %1 has a value but no variable name.").arg(number);
+        }
+        if (WaveformEnvRequest::keyReserved(key)) {
+            return tr("\"%1\" cannot be a variable name: the radio's waveform env command reserves "
+                      "it to clear the staged variables.").arg(key);
         }
         if (!WaveformEnvRequest::keyValid(key)) {
             return tr("\"%1\" is not a valid variable name. Use letters, digits and underscores, "
@@ -225,17 +226,7 @@ WaveformEnvironmentDialog::WaveformEnvironmentDialog(RadioModel* model, const QS
         addRow({}, {});
         if (!m_rows.isEmpty()) { m_rows.last().key->setFocus(); }
     });
-    m_showValues = new QCheckBox(tr("Show values"), body);
-    m_showValues->setAccessibleName(tr("Show environment values"));
-    m_showValues->setAccessibleDescription(
-        tr("Values are hidden because they may hold passwords or keys."));
-    connect(m_showValues, &QCheckBox::toggled, this, [this](bool show) {
-        for (const Row& row : m_rows) {
-            row.value->setEchoMode(show ? QLineEdit::Normal : QLineEdit::Password);
-        }
-    });
     tools->addWidget(m_addButton);
-    tools->addWidget(m_showValues);
     tools->addStretch(1);
     layout->addLayout(tools);
 
@@ -292,8 +283,12 @@ WaveformEnvironmentDialog::WaveformEnvironmentDialog(RadioModel* model, const QS
                 this, &WaveformEnvironmentDialog::updateAvailability);
         connect(m_model, &RadioModel::connectionStateChanged,
                 this, &WaveformEnvironmentDialog::updateAvailability);
-        connect(m_model, &RadioModel::waveformEnvironmentStagingChanged,
-                this, &WaveformEnvironmentDialog::updateAvailability);
+        // Follows any apply, including one another editor started: dim while
+        // it runs, then catch up with what the radio reported meanwhile.
+        connect(m_model, &RadioModel::waveformEnvironmentStagingChanged, this, [this] {
+            updateAvailability();
+            onRadioEnvironmentChanged();
+        });
     }
     loadFromRadio();
     updateAvailability();
@@ -327,11 +322,10 @@ void WaveformEnvironmentDialog::addRow(const QString& key, const QString& value)
     row.key = new QLineEdit(key, rowWidget);
     row.key->setPlaceholderText(tr("NAME"));
     row.value = new QLineEdit(value, rowWidget);
-    // Permanent: Show values must never expose the text to automation dumps or
-    // grabs (AutomationSensitiveLineEdit.h).
+    // Shown as plain text (most variables are not secrets), but marked so the
+    // automation bridge's dumps and grabs never carry a value that might be
+    // (AutomationSensitiveLineEdit.h).
     row.value->setProperty("aetherSensitiveValue", true);
-    row.value->setEchoMode(m_showValues && m_showValues->isChecked()
-                               ? QLineEdit::Normal : QLineEdit::Password);
     auto* remove = new QPushButton(tr("Remove"), rowWidget);
     // Names fixed at creation, so a script or screen reader can keep addressing
     // the row while its variable name is typed; the description follows the name.
@@ -397,7 +391,10 @@ void WaveformEnvironmentDialog::updateAvailability()
 {
     QString reason = waveformEnvironmentUnavailableReason(m_model);
     if (reason.isEmpty() && !m_containerPresent) {
-        reason = tr("%1 is no longer installed on the radio.").arg(m_name);
+        reason = tr("%1 is not installed on the radio right now. Your edits are kept.").arg(m_name);
+    }
+    if (reason.isEmpty() && !m_applying && m_model && m_model->waveformEnvironmentApplyActive()) {
+        reason = tr("Another environment change is in progress. Wait for it to finish.");
     }
     const bool editable = reason.isEmpty() && !m_applying;
     const bool empty = !hasRows();
@@ -422,6 +419,12 @@ void WaveformEnvironmentDialog::updateAvailability()
     m_clearStagingButton->setEnabled(uncertain && waveformEnvironmentUnavailableReason(m_model).isEmpty());
     if (!reason.isEmpty() && !m_applying) {
         setMessage(reason, QStringLiteral("error"));
+        m_availabilityMessage = reason;
+    } else if (reason.isEmpty() && !m_availabilityMessage.isEmpty()) {
+        // The reason went away; take its message down unless something else
+        // has replaced it since.
+        if (m_message->text() == m_availabilityMessage) { setMessage({}, {}); }
+        m_availabilityMessage.clear();
     }
 }
 
@@ -436,26 +439,33 @@ void WaveformEnvironmentDialog::setMessage(const QString& text, const QString& t
 
 void WaveformEnvironmentDialog::onRadioEnvironmentChanged()
 {
-    if (m_applying) { return; }
+    // Mid-recreate statuses (ours or another editor's) are transient: the line
+    // after `restarted` still carries the old environment.
+    if (m_applying || (m_model && m_model->waveformEnvironmentApplyActive())) { return; }
     const auto current = m_model ? m_model->waveformContainerEnvironment(m_name) : std::nullopt;
     const bool present = current.has_value();
-    const QMap<QString, QString> reported = current.value_or(QMap<QString, QString>{});
-    if (present == m_containerPresent && reported == m_loaded) { return; }
+    if (!present) {
+        // Gone, perhaps only for a moment: keep every row, dim editing, say why.
+        m_containerPresent = false;
+        updateAvailability();
+        return;
+    }
+    const QMap<QString, QString> reported = *current;
+    if (m_containerPresent && reported == m_loaded) { return; }
+    m_containerPresent = true;
     // Unedited rows simply follow the radio; edited ones are the operator's until
     // they choose Revert.
     QMap<QString, QString> shown;
     for (const auto& [key, value] : rowValues()) {
         if (!key.trimmed().isEmpty() || !value.isEmpty()) { shown.insert(key.trimmed(), value); }
     }
-    if (shown == m_loaded || !present) {
+    if (shown == m_loaded) {
         loadFromRadio();
     } else if (shown == reported) {
         // The radio caught up with what is on screen (after a recreate whose
         // new environment arrived late): nothing to tell the operator.
         m_loaded = reported;
-        m_containerPresent = present;
     } else {
-        m_containerPresent = present;
         setMessage(tr("The radio reported a different environment. Revert shows it."),
                    QStringLiteral("pending"));
     }
