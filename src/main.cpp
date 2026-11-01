@@ -274,7 +274,7 @@ static int runInstallCli(int argc, char* argv[])
     if (qEnvironmentVariableIsSet("WAYLAND_DISPLAY") || qEnvironmentVariableIsSet("DISPLAY")) {
         // Once this installer has exited, without the AppImage's variables
         // or descriptors when run from it, as Install for updates starts it.
-        AetherSDR::LinuxInstall::startAfterExit(QCoreApplication::applicationPid(), run,
+        AetherSDR::LinuxInstall::startAfterExit(QCoreApplication::applicationPid(), {run},
                                                 AetherSDR::LinuxInstall::appImageVariables());
     }
     return EXIT_SUCCESS;
@@ -828,6 +828,10 @@ int main(int argc, char* argv[])
 
         exitCode = app.exec();
     }
+
+    // macOS: a staged update goes in now, with the window gone and nothing
+    // more to load from the bundle (RFC #5304 Phase 4). Nothing elsewhere.
+    AetherSDR::UpdateInstaller::finishSwapOnExit();
 
     AetherSDR::ShutdownTrace::complete("application");
 

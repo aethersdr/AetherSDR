@@ -105,12 +105,12 @@ public:
     // them, or it would take itself for the AppImage.
     static QStringList appImageVariables();
 
-    // Starts program once process pid has exited, giving up after two
+    // Starts command (a program and its arguments) once process pid has exited, giving up after two
     // minutes: Restart to update's relaunch, without a second instance
     // overlapping the one that is closing. The variables named in unset are
     // removed from what program starts with, and it inherits no descriptor
     // beyond the standard three.
-    static bool startAfterExit(qint64 pid, const QString& program, const QStringList& unset = {});
+    static bool startAfterExit(qint64 pid, const QStringList& command, const QStringList& unset = {});
 };
 
 } // namespace AetherSDR

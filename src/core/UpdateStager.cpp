@@ -1051,8 +1051,9 @@ bool UpdateStager::applyFull(const QString& installRoot, const QByteArray& zip,
     // release's own files never include them.
     // A release file of that name, in any case on Windows, where the
     // install's unins000.dat and the release's Unins000.dat are one file.
+    // macOS's default volume ignores case too.
     const auto isReleaseFile = [&wanted](const QString& name) {
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
         for (auto w = wanted.cbegin(); w != wanted.cend(); ++w) {
             if (w.key().compare(name, Qt::CaseInsensitive) == 0) {
                 return true;
@@ -1158,7 +1159,7 @@ bool sameInstall(const QString& a, const QString& b)
     if (a.isEmpty() || b.isEmpty()) {
         return false;
     }
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
     const Qt::CaseSensitivity cs = Qt::CaseInsensitive;
 #else
     const Qt::CaseSensitivity cs = Qt::CaseSensitive;

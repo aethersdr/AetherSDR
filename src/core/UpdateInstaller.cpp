@@ -42,6 +42,31 @@ bool knownOutcome(const QString& o)
     }
     return false;
 }
+// What happened, for the next start to read (takeSwapResult).
+void writeSwapResult(const QString& stateDir, updater::Outcome outcome, const QString& version)
+{
+    QDir().mkpath(stateDir);
+    QSaveFile f(QDir(stateDir).filePath(QStringLiteral("swap-result.txt")));
+    if (f.open(QIODevice::WriteOnly)) {
+        f.write(QByteArray(updater::outcomeName(outcome)) + ' ' + version.toUtf8() + '\n');
+        f.commit();
+    }
+}
+
+// The swap prepareSwap readied, for finishSwapOnExit.
+struct PendingSwap {
+    QString bundle;
+    QString ready;
+    QString version;
+    QString stateDir;
+    bool restart = false;
+};
+PendingSwap& pendingSwap()
+{
+    static PendingSwap p;
+    return p;
+}
+
 #ifdef Q_OS_WIN
 // Elevated past a UAC boundary: the split token's full half. With UAC off,
 // or as the built-in Administrator, there is no lower level to escape from.
@@ -116,6 +141,20 @@ bool UpdateInstaller::canInstallInPlace(QString* why)
             reason = QStringLiteral("The folder AetherSDR is installed in can't be changed by this user.");
         }
     }
+#elif defined(Q_OS_MACOS)
+    const QString bundle = MacInstall::bundleOf(QCoreApplication::applicationDirPath());
+    if (bundle.isEmpty()) {
+        reason = QStringLiteral("This copy isn't an app bundle.");
+    } else if (MacInstall::translocated(bundle)) {
+        reason = QStringLiteral("macOS is running this copy from a temporary place. Move AetherSDR to your "
+                                "Applications folder, then open it from there.");
+    } else {
+        // The swap moves the bundle within its folder: try what it will do.
+        QTemporaryFile probe(QDir(QFileInfo(bundle).absolutePath()).filePath(QStringLiteral(".aethersdr-update-XXXXXX")));
+        if (!probe.open() || !QFileInfo(bundle).isWritable()) {
+            reason = QStringLiteral("The folder AetherSDR is installed in can't be changed by this user.");
+        }
+    }
 #else
     reason = QStringLiteral("Installing updates in place isn't available on this system.");
 #endif
@@ -177,11 +216,21 @@ bool UpdateInstaller::launchHelper(const QString& stagedDir, const QString& vers
     UpdateStager::discard(state, version);
     if (restart) {
         const QString run = QDir(paths.base).filePath(QStringLiteral("current/AppRun"));
-        if (!LinuxInstall::startAfterExit(QCoreApplication::applicationPid(), run)) {
+        if (!LinuxInstall::startAfterExit(QCoreApplication::applicationPid(), {run})) {
             qCWarning(lcUpdater) << "the restart could not be arranged; AetherSDR quits without it";
         }
     }
     qCInfo(lcUpdater).noquote() << "v" + version + " installed" + (restart ? " (restart)" : " (on quit)");
+    return true;
+#elif defined(Q_OS_MACOS)
+    // No helper on macOS either: checked now, swapped in as AetherSDR exits.
+    const QString bundle = MacInstall::bundleOf(QCoreApplication::applicationDirPath());
+    if (!prepareSwap(bundle, stagedDir, version, MacInstall::real(), restart, stateDir(), problem)) {
+        qCWarning(lcUpdater).noquote() << "update to v" + version + " not installed:" << *problem;
+        return false;
+    }
+    qCInfo(lcUpdater).noquote() << "v" + version + " is ready; it goes in as AetherSDR exits"
+                                       + (restart ? " (restart)" : "");
     return true;
 #else
     Q_UNUSED(stagedDir);
@@ -204,14 +253,7 @@ bool UpdateInstaller::switchRelease(const QString& base, const QString& stagedDi
     if (result == Switch::Kept && !restart) {
         UpdateSettings::setQuitSwitchTries(version, tried + 1);
     }
-    const auto report = [&](updater::Outcome outcome) {
-        QDir().mkpath(stateDir);
-        QSaveFile f(QDir(stateDir).filePath(QStringLiteral("swap-result.txt")));
-        if (f.open(QIODevice::WriteOnly)) {
-            f.write(QByteArray(updater::outcomeName(outcome)) + ' ' + version.toUtf8() + '\n');
-            f.commit();
-        }
-    };
+    const auto report = [&](updater::Outcome outcome) { writeSwapResult(stateDir, outcome, version); };
     if (result == Switch::Failed) {
         UpdateSettings::setRolledBackVersion(version);   // never offered again
         if (!restart) {
@@ -261,6 +303,68 @@ UpdateInstaller::SwapResult UpdateInstaller::takeSwapResult(const QString& state
     }
     lastRead() = r;
     return r;
+}
+
+bool UpdateInstaller::prepareSwap(const QString& bundle, const QString& stagedDir, const QString& version,
+                                  const MacInstall::Checks& checks, bool restart, const QString& stateDir,
+                                  QString* problem)
+{
+    using Prepared = MacInstall::Prepared;
+    const int tried = restart ? 0 : UpdateSettings::quitSwitchTries(version);
+    QString ready;
+    const Prepared result = MacInstall::prepare(bundle, stagedDir, version, checks,
+                                                !restart && tried + 1 < kQuitSwitchTries, &ready, problem);
+    if (result == Prepared::Kept && !restart) {
+        UpdateSettings::setQuitSwitchTries(version, tried + 1);
+    }
+    if (result == Prepared::Failed) {
+        UpdateSettings::setRolledBackVersion(version);   // never offered again
+        if (!restart) {
+            writeSwapResult(stateDir, updater::Outcome::RolledBack, version);   // told at the next start
+        }
+    }
+    if (result != Prepared::Ready) {
+        return false;
+    }
+    pendingSwap() = {bundle, ready, version, stateDir, restart};
+    return true;
+}
+
+bool UpdateInstaller::swapPending()
+{
+    return !pendingSwap().ready.isEmpty();
+}
+
+void UpdateInstaller::dropPendingSwap()
+{
+    pendingSwap() = {};
+}
+
+void UpdateInstaller::finishSwapOnExit()
+{
+    const PendingSwap p = pendingSwap();
+    if (p.ready.isEmpty()) {
+        return;
+    }
+    pendingSwap() = {};
+    QString problem;
+    if (MacInstall::swap(p.bundle, p.ready, QDir(p.stateDir).filePath(QStringLiteral("previous")), &problem)) {
+        // The staged copy is the previous version now, or gone: its record goes.
+        UpdateStager::discard(p.stateDir, p.version);
+        writeSwapResult(p.stateDir, updater::Outcome::Updated, p.version);
+        qCInfo(lcUpdater).noquote() << "v" + p.version + " installed in" << p.bundle;
+    } else {
+        // Nothing changed; it stays staged for the next quit.
+        writeSwapResult(p.stateDir, updater::Outcome::NotPossible, p.version);
+        qCWarning(lcUpdater).noquote() << "update to v" + p.version + " not installed:" << problem;
+    }
+    // Restart to update starts AetherSDR again either way: the new bundle,
+    // or the one that is still there.
+    if (p.restart
+        && !LinuxInstall::startAfterExit(QCoreApplication::applicationPid(),
+                                         {QStringLiteral("/usr/bin/open"), QStringLiteral("-n"), p.bundle})) {
+        qCWarning(lcUpdater) << "the restart could not be arranged";
+    }
 }
 
 bool UpdateInstaller::writeSelfTestMarker(const QString& marker, const QString& version)
