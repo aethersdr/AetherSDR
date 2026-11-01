@@ -6,19 +6,10 @@
 
 namespace AetherSDR {
 
-// The macOS install the in-app updater keeps current (RFC #5304 Phase 4): the
-// AetherSDR.app bundle wherever the user put it, /Applications usually.
-//
-// A new release is staged as a whole bundle in the update state folder. While
-// AetherSDR still runs, it is checked: its code signature, which catches a
-// tree that does not match what was signed (the manifest's Ed25519 signature
-// is what keeps a hostile payload out), and its self-test. Then, as the very
-// last thing before AetherSDR exits, one renamex_np(RENAME_SWAP) trades it for
-// the installed bundle, so nothing at the bundle's path is ever half in place,
-// and nothing the running app loads late comes from the new release. There is
-// no helper. The bundle swapped out is kept as the previous version in the
-// state folder, not beside the app, so the Applications folder shows one
-// AetherSDR (a maintainer ruling).
+// The macOS install (RFC #5304 Phase 4): checks a staged AetherSDR.app (its
+// code signature and self-test) while the app runs, then exchanges it for the
+// installed bundle in one rename as AetherSDR exits. No helper. See
+// docs/architecture/update-manifest.md, "The macOS install (Phase 4)".
 class MacInstall {
 public:
     // The bundle the binary in appDir (<bundle>/Contents/MacOS) belongs to.

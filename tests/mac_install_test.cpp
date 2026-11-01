@@ -11,7 +11,11 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include <chrono>
+#include <condition_variable>
 #include <filesystem>
+#include <mutex>
+#include <thread>
 
 // MacInstall and the macOS hand-over (RFC #5304 Phase 4): the bundle the
 // binary is in, the checks before the swap (injected here; the real ones are
@@ -294,6 +298,59 @@ private slots:
         QCOMPARE(readFile(bundle + QStringLiteral("/Contents/Info.plist")), QByteArray("<plist>26.11.1</plist>"));
         QVERIFY(QFileInfo::exists(staged + QStringLiteral("/Contents/MacOS/AetherSDR")));
         QVERIFY(!QFileInfo::exists(state + QStringLiteral("/swap-result.txt")));
+    }
+
+    // A drop while the checks still run (a UI-scale restart during Restart
+    // to update's worker): the late result is never published.
+    void aDropDuringTheChecksFencesTheirResult()
+    {
+        QTemporaryDir tmp;
+        const QString bundle = tmp.filePath(QStringLiteral("Apps/AetherSDR.app"));
+        makeBundle(bundle, "26.11.1");
+        const QString state = tmp.filePath(QStringLiteral("update"));
+        const QString staged = state + QStringLiteral("/26.11.2");
+        makeBundle(staged, "26.11.2");
+        std::mutex m;
+        std::condition_variable cv;
+        bool inCheck = false;
+        bool release = false;
+        MacInstall::Checks blocking{[&](const QString&, QString*) {
+                                        std::unique_lock<std::mutex> l(m);
+                                        inCheck = true;
+                                        cv.notify_all();
+                                        cv.wait(l, [&] { return release; });
+                                        return true;
+                                    },
+                                    [](const QString&, const QString&) { return true; }};
+        bool prepared = true;
+        QString problem;
+        std::thread worker([&] {
+            prepared = UpdateInstaller::prepareSwap(bundle, staged, QStringLiteral("26.11.2"), blocking, true, state,
+                                                    &problem);
+        });
+        {
+            std::unique_lock<std::mutex> l(m);
+            QVERIFY(cv.wait_for(l, std::chrono::seconds(10), [&] { return inCheck; }));
+        }
+        UpdateInstaller::dropPendingSwap();
+        {
+            const std::lock_guard<std::mutex> l(m);
+            release = true;
+        }
+        cv.notify_all();
+        worker.join();
+        QVERIFY(!prepared);
+        QVERIFY(problem.contains(QLatin1String("next quit")));
+        QVERIFY(!UpdateInstaller::swapPending());
+        UpdateInstaller::finishSwapOnExit();
+        QCOMPARE(readFile(bundle + QStringLiteral("/Contents/Info.plist")), QByteArray("<plist>26.11.1</plist>"));
+        QVERIFY(QFileInfo::exists(staged + QStringLiteral("/Contents/MacOS/AetherSDR")));   // still staged
+        // A preparation after it publishes as usual.
+        QVERIFY2(UpdateInstaller::prepareSwap(bundle, staged, QStringLiteral("26.11.2"), passing(), true, state,
+                                              &problem),
+                 qPrintable(problem));
+        QVERIFY(UpdateInstaller::swapPending());
+        UpdateInstaller::dropPendingSwap();
     }
 
     void aReleaseFailingAtQuitIsTriedThreeTimesThenRolledBack()

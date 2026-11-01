@@ -1,7 +1,7 @@
 ---
 title: "Updates"
 slug: "/updates"
-description: "The Updates window shows the newest AetherSDR release and what is in it, and installs it on Windows and Linux or opens the download built for your computer."
+description: "The Updates window shows the newest AetherSDR release and what is in it, and installs it on Windows, macOS and Linux or opens the download built for your computer."
 status: "Supported"
 applies_to: ["All radios"]
 ---
@@ -50,7 +50,7 @@ Most updates download only what changed since your version. When that isn't poss
 Before the new version goes in, it is started once with a quick check, without a window or the radio. If that check fails, your previous version stays, and that release is never offered again.
 
 - **Windows:** a small updater swaps the new version in after AetherSDR quits. If the check fails, your previous version is put back. The previous version is kept beside the new one (in a folder named like your install with `.previous` after it) until the next update.
-- **macOS:** the new version is checked while AetherSDR runs: its code signature must match what AetherSDR's developer signed, and it must pass the start-up check. It replaces the app in one step as the last thing AetherSDR does when it quits. If a check fails as AetherSDR quits, the update stays ready and is tried again next time; a failure after **Restart to update**, or at a third quit in a row, stops it being offered. The version you were running is kept in `~/Library/Application Support/AetherSDR/AetherSDR/update/previous` until the next update. Only the app updates: when a release changes the DAX audio drivers, install them from that release's disk image.
+- **macOS:** the new version is checked while AetherSDR runs: its code signature must match what AetherSDR's developer signed, and it must pass the start-up check. It replaces the app in one step as the last thing AetherSDR does when it quits. If a check fails as AetherSDR quits, the update stays ready and is tried again next time; a failure after **Restart to update**, or at a third quit in a row, stops it being offered. The version you were running is kept in `~/Library/Application Support/AetherSDR/AetherSDR/update/previous` until the next update, unless AetherSDR is on another disk than your home folder; then it isn't kept. Only the app updates: when a release changes the DAX audio drivers, install them from that release's disk image.
 - **Linux:** the new version goes in its own folder beside yours, and only once it passes the check does it become the one your menu entry and the `aethersdr` command start. If the check fails as AetherSDR quits, for example while you log out, the update stays ready and is tried again next time. A failure after **Restart to update**, or at a third quit in a row, stops it being offered. The version you were running is kept until the next update; see [Going back to the previous version on Linux](#going-back-to-the-previous-version-on-linux).
 
 The next time AetherSDR starts, the status bar says what happened: **Updated to AetherSDR** *version*, or that the update didn't start and your previous version was restored.

@@ -83,8 +83,9 @@ public:
     static void finishSwapOnExit();
     // Whether a swap is ready for finishSwapOnExit.
     static bool swapPending();
-    // Forgets the readied swap: another instance is starting from the bundle
-    // as this one exits (a UI-scale restart). The release stays staged.
+    // Forgets the readied swap, and any a preparation still running would
+    // publish: another instance is starting from the bundle as this one
+    // exits (a UI-scale restart). The release stays staged.
     static void dropPendingSwap();
 
     // What the helper did, from <stateDir>/swap-result.txt, once: the file

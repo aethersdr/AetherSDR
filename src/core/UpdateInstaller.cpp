@@ -17,6 +17,8 @@
 #include <QStandardPaths>
 #include <QTemporaryFile>
 
+#include <mutex>
+
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -53,7 +55,10 @@ void writeSwapResult(const QString& stateDir, updater::Outcome outcome, const QS
     }
 }
 
-// The swap prepareSwap readied, for finishSwapOnExit.
+// The swap prepareSwap readied, for finishSwapOnExit. The checks run on a
+// worker thread, so it is read and written under one lock; generation is
+// bumped by every drop, and a preparation that started before one never
+// publishes its result.
 struct PendingSwap {
     QString bundle;
     QString ready;
@@ -61,10 +66,15 @@ struct PendingSwap {
     QString stateDir;
     bool restart = false;
 };
-PendingSwap& pendingSwap()
+struct SwapState {
+    std::mutex lock;
+    PendingSwap pending;
+    quint64 generation = 0;
+};
+SwapState& swapState()
 {
-    static PendingSwap p;
-    return p;
+    static SwapState s;
+    return s;
 }
 
 #ifdef Q_OS_WIN
@@ -310,6 +320,11 @@ bool UpdateInstaller::prepareSwap(const QString& bundle, const QString& stagedDi
                                   QString* problem)
 {
     using Prepared = MacInstall::Prepared;
+    quint64 generation = 0;
+    {
+        const std::lock_guard<std::mutex> g(swapState().lock);
+        generation = swapState().generation;
+    }
     const int tried = restart ? 0 : UpdateSettings::quitSwitchTries(version);
     QString ready;
     const Prepared result = MacInstall::prepare(bundle, stagedDir, version, checks,
@@ -326,27 +341,46 @@ bool UpdateInstaller::prepareSwap(const QString& bundle, const QString& stagedDi
     if (result != Prepared::Ready) {
         return false;
     }
-    pendingSwap() = {bundle, ready, version, stateDir, restart};
-    return true;
+    {
+        const std::lock_guard<std::mutex> g(swapState().lock);
+        if (swapState().generation == generation) {
+            swapState().pending = {bundle, ready, version, stateDir, restart};
+            return true;
+        }
+    }
+    // Dropped while the checks ran: another instance is starting from the
+    // bundle. The release stays staged; a copy made beside the app goes.
+    if (ready != stagedDir) {
+        QDir(ready).removeRecursively();
+    }
+    *problem = QStringLiteral("AetherSDR is restarting, so the update waits for the next quit.");
+    return false;
 }
 
 bool UpdateInstaller::swapPending()
 {
-    return !pendingSwap().ready.isEmpty();
+    const std::lock_guard<std::mutex> g(swapState().lock);
+    return !swapState().pending.ready.isEmpty();
 }
 
 void UpdateInstaller::dropPendingSwap()
 {
-    pendingSwap() = {};
+    const std::lock_guard<std::mutex> g(swapState().lock);
+    swapState().pending = {};
+    ++swapState().generation;
 }
 
 void UpdateInstaller::finishSwapOnExit()
 {
-    const PendingSwap p = pendingSwap();
+    PendingSwap p;
+    {
+        const std::lock_guard<std::mutex> g(swapState().lock);
+        p = swapState().pending;
+        swapState().pending = {};
+    }
     if (p.ready.isEmpty()) {
         return;
     }
-    pendingSwap() = {};
     QString problem;
     if (MacInstall::swap(p.bundle, p.ready, QDir(p.stateDir).filePath(QStringLiteral("previous")), &problem)) {
         // The staged copy is the previous version now, or gone: its record goes.
