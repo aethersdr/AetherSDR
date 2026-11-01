@@ -102,10 +102,11 @@ jobs:
         id: configure
         run: |
           # -g1 to match ci.yml's build job, whose ccache this restores; the
-          # reason is there.
+          # reason is there. Compress linked DWARF as in the PR build.
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
             "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
             "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
+            "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--compress-debug-sections=zlib-gabi" \
             -DAETHER_GPU_SPECTRUM=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache > configure.log 2>&1 || {
@@ -119,6 +120,7 @@ jobs:
           rc=0
           cmake --build build -j$(nproc) || rc=$?
           df -h /__w
+          du -sh build /ccache
           exit "$rc"
 
       # A Configure or Build failure skips ctest, and a skipped step's output

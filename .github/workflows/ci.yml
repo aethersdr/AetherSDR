@@ -265,10 +265,13 @@ jobs:
           # -g each is ~325 MB and the tree outgrew the runner; at -g1 (line
           # tables only, so backtraces keep file:line) each is ~120 MB.
           # full-suite.yml configures identically and restores this job's
-          # ccache, so change both together.
+          # ccache, so change both together. Compress linked DWARF to avoid
+          # repeating uncompressed line tables in every test executable. The
+          # compiler flags and cached objects remain unchanged.
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
             "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
             "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
+            "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--compress-debug-sections=zlib-gabi" \
             -DAETHER_GPU_SPECTRUM=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache > configure.log 2>&1 || {
@@ -303,7 +306,22 @@ jobs:
           grep "GPU spectrum rendering enabled" configure.log
 
       - name: Build
-        run: cmake --build build -j$(nproc)
+        run: |
+          rc=0
+          cmake --build build -j$(nproc) || rc=$?
+          df -h /__w
+          du -sh build /ccache
+          exit "$rc"
+
+      - name: Verify compressed debug lines
+        run: |
+          address=$(nm -n build/AetherSDR | awk '$3 == "main" { print $1; exit }')
+          test -n "$address"
+          location=$(addr2line -e build/AetherSDR "$address")
+          echo "main: $location"
+          case "$location" in
+            '??:'*|'':*) exit 1 ;;
+          esac
 
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months
