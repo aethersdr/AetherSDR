@@ -785,10 +785,10 @@ bool Kat500Model::readBackup()
                     m_backup = std::move(m_pendingBackup);
                     const Backup result = m_backup;
                     finish(QStringLiteral("Complete backup read, including fault history.")); emit backupRead(result);
-                });
+                }, false);
             });
         });
-    }); return true;
+    }, false); return true;
 }
 bool Kat500Model::restoreBackup(const Backup& backup, bool confirmed)
 {
@@ -846,7 +846,7 @@ bool Kat500Model::readFaultHistory()
                 finish(QStringLiteral("Fault history read; current fault unchanged.")); emit faultHistoryRead(result);
             });
         });
-    }); return true;
+    }, false); return true;
 }
 bool Kat500Model::inspectMemories(int frequencyKhz)
 {

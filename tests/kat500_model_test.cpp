@@ -748,7 +748,7 @@ static int rejectNewUnsafeReadback()
 }
 static int doNotExposeFailedBackup()
 {
-    for (const int failure : {0,1,2,3}) {
+    for (const int failure : {1,2,3}) {
         Peer peer;
         bool completeData = false;
         const auto transport = peer.model.m_write;
@@ -757,7 +757,6 @@ static int doNotExposeFailedBackup()
                 if (failure == 1) { return true; } // Final identity query times out.
                 if (failure == 2) { peer.model.receiveBytes("SN 99999;"); return true; }
                 if (failure == 3) { peer.model.transportClosed("Final preflight disconnected"); return true; }
-                peer.rf = true;
             }
             const bool lastBlock = bytes.startsWith("ERSFFC040");
             const bool result = transport(bytes);
@@ -867,6 +866,13 @@ static int stateful()
     Peer partial; partial.dropRead = true;
     QSignalSpy noPartial(&partial.model,&Kat500Model::backupRead);
     CHECK(partial.model.readBackup()); partial.complete(); CHECK(noPartial.isEmpty());
+    // Read-only EEPROM tools accept an idle VFWD offset; only writes keep the zero fence.
+    Peer offsetBackup; offsetBackup.idleAdc = 2;
+    QSignalSpy offsetRead(&offsetBackup.model,&Kat500Model::backupRead);
+    CHECK(offsetBackup.model.readBackup()); offsetBackup.complete(); CHECK(offsetRead.size() == 1);
+    Peer offsetHistory; offsetHistory.idleAdc = 2;
+    CHECK(offsetHistory.model.readFaultHistory()); offsetHistory.complete();
+    CHECK(offsetHistory.model.faults().size() == 256);
     Peer history;
     CHECK(history.model.readFaultHistory()); history.complete();
     CHECK(history.model.faults().size() == 256 && history.model.faults().first().slot == 81);
