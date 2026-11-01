@@ -669,6 +669,10 @@ def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
         # Linux's full download is the release tarball, the tree the app
         # stages in-app, once it is shown to hold exactly these files.
         full = asset
+        # A macOS app tarball is the payload and its full: the app's strict
+        # reader must accept it too, not only Python's tarfile.
+        if kind.container == "tarzst":
+            check_release_tarball(asset, files)
         if kind.tarball_suffix and release_tarballs:
             tarball = get_asset(tag, kind.tarball_name(tag))
             if tarball is not None:

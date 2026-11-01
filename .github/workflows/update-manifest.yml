@@ -39,8 +39,10 @@ on:
 permissions:
   contents: read
 
-# Both builds trigger this, so one tag produces two runs. They queue rather
-# than race; the second finds the manifest already published and stops.
+# AppImage, Windows Installer and macOS DMG trigger this, so one tag produces
+# up to three runs. They queue rather than race; GitHub keeps one pending run
+# per group, so a third trigger cancels the one still pending, and a run that
+# finds the manifest already published stops.
 concurrency:
   group: update-manifest-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
   cancel-in-progress: false
@@ -170,6 +172,7 @@ jobs:
           fi
 
       - name: Wait for every payload asset to be attached
+        id: assets
         if: ${{ steps.plan.outputs.publish != 'already' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -182,17 +185,41 @@ jobs:
           if [ "$TARBALLS" = true ]; then
             want="$want x86_64.tar.zst aarch64.tar.zst"
           fi
+          app=
           if [ "$APP_TARBALLS" = true ]; then
-            want="$want macOS-apple-silicon.app.tar.zst macOS-intel.app.tar.zst"
+            app="macOS-apple-silicon.app.tar.zst macOS-intel.app.tar.zst"
           fi
+          base="$want"
           for i in $(seq 1 90); do
             names=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
+            # The macOS app tarballs are waited for only while the tag's macOS
+            # DMG build can still attach them: once it has finished without
+            # them, the manifest is built without macOS (a maintainer ruling),
+            # until it is dispatched again.
+            want="$base"
+            macos=false
+            if [ -n "$app" ]; then
+              mac=$(gh run list --workflow "macOS DMG" --branch "$TAG" --limit 1 --json status --jq '.[0].status // ""')
+              have=0
+              for w in $app; do
+                case "$names" in *"$w"*) have=$((have + 1)) ;; esac
+              done
+              if [ "$have" -eq 2 ]; then
+                want="$want $app"
+                macos=true
+              elif [ "$mac" != completed ]; then
+                want="$want $app"
+              else
+                echo "::warning::The macOS DMG build finished without both app tarballs; the manifest leaves macOS out."
+              fi
+            fi
             missing=
             for w in $want; do
               case "$names" in *"$w"*) ;; *) missing="$missing $w" ;; esac
             done
             if [ -z "$missing" ]; then
               echo "All payload assets present."
+              echo "macos=$macos" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             echo "Waiting for:$missing  ($i/90)"
@@ -213,14 +240,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
           TARBALLS: ${{ steps.tarballs.outputs.expected }}
-          APP_TARBALLS: ${{ steps.apptarballs.outputs.expected }}
+          MACOS: ${{ steps.assets.outputs.macos }}
         run: |
           # --fetch-from-github requires every payload: a download that still
           # fails after retries stops the run rather than leaving a platform out.
           no_tarballs=
           [ "$TARBALLS" = true ] || no_tarballs=--no-release-tarballs
           macos=--no-macos-payloads
-          if [ "$APP_TARBALLS" = true ]; then
+          if [ "$MACOS" = true ]; then
             # The DAX driver's source at the tag, which the app compares with
             # its own to say a release changes the driver.
             macos="--dax-driver-source $(git rev-parse HEAD:hal-plugin)"

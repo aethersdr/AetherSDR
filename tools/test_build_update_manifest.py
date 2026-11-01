@@ -641,6 +641,22 @@ class MacOSPayload(Base):
         (p,) = json.loads((self.tmp / "o3" / "manifest.json").read_text())["payloads"]
         self.assertNotIn("dax_driver", p)
 
+    def test_a_tarball_the_app_would_refuse_fails_the_build(self) -> None:
+        """Python's tarfile reads a pax archive; the app's ustar reader refuses
+        one, so the manifest must not name it."""
+        app = self.app(self.tmp / "src", b"26.10.4")
+        d = self.tmp / "dl"
+        d.mkdir()
+        plain = self.tmp / "pax.tar"
+        with tarfile.open(plain, "w", format=tarfile.PAX_FORMAT) as tar:
+            for p in sorted(app.rglob("*")):
+                tar.add(p, p.relative_to(app).as_posix(), recursive=False)
+        out = d / "AetherSDR-v26.10.4-macOS-apple-silicon.app.tar.zst"
+        subprocess.run(["zstd", "-q", "-19", "-o", str(out), str(plain)], check=True)
+        get = lambda t, n: (d / n) if (d / n).exists() else None  # noqa: E731
+        with self.assertRaises(ValueError):
+            bum.build("v26.10.4", self.tmp / "out", 0, get, [], None, self.tmp / "w")
+
     def test_the_driver_source_must_be_a_tree_hash(self) -> None:
         with self.assertRaises(SystemExit):
             bum.main(["--tag", "v26.10.4", "--out", str(self.tmp / "o"), "--dax-driver-source", "main"])

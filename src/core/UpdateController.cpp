@@ -1,6 +1,5 @@
 #include "UpdateController.h"
 
-#include "AetherBuildIdentity.h"
 #include "LinuxInstall.h"
 #include "MacInstall.h"
 #include "LogManager.h"
@@ -47,9 +46,8 @@ UpdateController::Environment UpdateController::forThisApp()
 #endif
     env.request.stagingRoot = UpdateInstaller::stateDir();
 #if defined(Q_OS_MACOS)
-    env.daxDriverSource = QStringLiteral(AETHER_BUILD_DAX_DRIVER_SOURCE);
-    env.daxDriverInstalled = [] {
-        return QFileInfo::exists(QStringLiteral("/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver"));
+    env.installedDaxDriverSource = [] {
+        return MacInstall::daxDriverSourceOf(QStringLiteral("/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver"));
     };
 #endif
     // Windows: the portable zip is the tree setup.exe installs, so either
@@ -331,20 +329,22 @@ bool UpdateController::restartToUpdate(QString* problem)
     return true;
 }
 
-bool UpdateController::daxDriverChanges(const QString& running, const QString& staged, bool installed)
+bool UpdateController::daxDriverChanges(const std::optional<QString>& installed, const QString& staged)
 {
-    return installed && !running.isEmpty() && !staged.isEmpty() && running != staged;
+    return !staged.isEmpty() && installed.has_value() && *installed != staged;
 }
 
 bool UpdateController::daxDriverChanges() const
 {
-    if (m_state != State::Staged || m_version.isEmpty() || !m_env.daxDriverInstalled) {
+    if (m_state != State::Staged || m_version.isEmpty() || !m_env.installedDaxDriverSource) {
         return false;
     }
-    const UpdateStager::Request& r = m_env.request;
-    return daxDriverChanges(m_env.daxDriverSource,
-                            UpdateStager::stagedDaxDriverSource(r.stagingRoot, m_version, r.platform, r.arch),
-                            m_env.daxDriverInstalled());
+    if (m_daxSourceVersion != m_version) {
+        const UpdateStager::Request& r = m_env.request;
+        m_daxSource = UpdateStager::stagedDaxDriverSource(r.stagingRoot, m_version, r.platform, r.arch);
+        m_daxSourceVersion = m_version;
+    }
+    return daxDriverChanges(m_env.installedDaxDriverSource(), m_daxSource);
 }
 
 QString UpdateController::appImageToInstall() const

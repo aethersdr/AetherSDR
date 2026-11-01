@@ -16,9 +16,6 @@ set(AETHER_BUILD_SHA               "unknown")
 set(AETHER_BUILD_BASELINE          "unknown")
 set(AETHER_BUILD_COMMITS_SINCE_TAG -1)
 set(AETHER_BUILD_DIRTY             false)
-# The DAX driver's source, the git tree hash of hal-plugin/ (RFC #5304 Phase 4):
-# the update manifest names the release's, and the Updates window compares.
-set(AETHER_BUILD_DAX_DRIVER_SOURCE "")
 
 if(Git_FOUND)
     execute_process(
@@ -60,17 +57,6 @@ if(Git_FOUND)
                 set(AETHER_BUILD_SHA "${_s}")
             endif()
         endif()
-    endif()
-endif()
-
-if(Git_FOUND)
-    execute_process(
-        COMMAND ${GIT_EXECUTABLE} rev-parse HEAD:hal-plugin
-        WORKING_DIRECTORY ${AETHER_SRC_DIR}
-        OUTPUT_VARIABLE _dax OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET RESULT_VARIABLE _daxrv)
-    if(_daxrv EQUAL 0 AND _dax MATCHES "^[0-9a-f]+$")
-        set(AETHER_BUILD_DAX_DRIVER_SOURCE "${_dax}")
     endif()
 endif()
 

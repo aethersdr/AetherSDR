@@ -583,22 +583,22 @@ private slots:
         }
     }
 
-    // The DAX driver note (RFC #5304 Phase 4): only when both sources are
-    // known, they differ, and a driver is installed.
-    void theDaxDriverNoteNeedsAChangeAndAnInstalledDriver()
+    // The DAX driver note (RFC #5304 Phase 4): the staged release names a
+    // source, a driver is installed, and its stamp differs; a driver from
+    // before the stamp counts as different.
+    void theDaxDriverNoteComparesTheInstalledDriver()
     {
         const QString a = QStringLiteral("ebf4a3c10dbbbe04d70f59c99d55de467e9ccc07");
         const QString b = QStringLiteral("0123456789abcdef0123456789abcdef01234567");
-        QVERIFY(UpdateController::daxDriverChanges(a, b, true));
-        QVERIFY(!UpdateController::daxDriverChanges(a, a, true));          // unchanged
-        QVERIFY(!UpdateController::daxDriverChanges(a, b, false));         // no driver installed
-        QVERIFY(!UpdateController::daxDriverChanges(QString(), b, true));  // a build outside git
-        QVERIFY(!UpdateController::daxDriverChanges(a, QString(), true));  // a manifest naming none
+        QVERIFY(UpdateController::daxDriverChanges(std::optional<QString>(a), b));
+        QVERIFY(!UpdateController::daxDriverChanges(std::optional<QString>(a), a));       // already current
+        QVERIFY(!UpdateController::daxDriverChanges(std::nullopt, b));                    // no driver installed
+        QVERIFY(UpdateController::daxDriverChanges(std::optional<QString>(QString()), b)); // unstamped driver
+        QVERIFY(!UpdateController::daxDriverChanges(std::optional<QString>(a), QString())); // manifest names none
         // Nothing staged: no note.
         Rig rig(m_key);
         UpdateController::Environment e = rig.env();
-        e.daxDriverSource = a;
-        e.daxDriverInstalled = [] { return true; };
+        e.installedDaxDriverSource = [&] { return std::optional<QString>(a); };
         UpdateController c(e);
         QVERIFY(!c.daxDriverChanges());
     }
