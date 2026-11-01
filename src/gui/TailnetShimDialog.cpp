@@ -254,31 +254,11 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     m_hostnameEdit = new QLineEdit(body);
     m_hostnameEdit->setAccessibleName(tr("Tailnet machine name"));
     m_hostnameEdit->setMaxLength(63);
-    m_allowEdit = new QLineEdit(body);
-    m_allowEdit->setPlaceholderText(tr("you@example.com, tag:operators"));
-    m_allowEdit->setAccessibleName(tr("Who may connect"));
-    m_allowEdit->setAccessibleDescription(
-        tr("Tailnet logins or tags allowed to connect, separated by commas. Leave empty to "
-           "allow anyone on your tailnet."));
     joinGrid->addWidget(roleLabel(tr("MACHINE NAME"), "key", body), 0, 0);
     joinGrid->addWidget(m_hostnameEdit, 0, 1);
-    joinGrid->addWidget(roleLabel(tr("WHO MAY CONNECT"), "key", body), 1, 0);
-    joinGrid->addWidget(m_allowEdit, 1, 1);
     join->addLayout(joinGrid);
-    auto* allowHint = roleLabel(QString(), "hint", body);
-    setWrapped(allowHint, tr("Leave Who may connect empty to allow anyone on your tailnet."),
-               m_cardTextWidth);
-    join->addWidget(allowHint);
-    auto* joinButtons = new QHBoxLayout;
-    m_saveAllowButton = new QPushButton(tr("Save Access List"), body);
-    m_saveAllowButton->setAccessibleName(tr("Save who may connect"));
-    m_qrButton = new QPushButton(tr("Sign In with QR Code"), body);
-    m_qrButton->setAccessibleName(tr("Sign the radio in to your tailnet with a QR code"));
-    m_qrButton->setDefault(true);
-    joinButtons->addWidget(m_saveAllowButton);
-    joinButtons->addStretch(1);
-    joinButtons->addWidget(m_qrButton);
-    join->addLayout(joinButtons);
+    // Who may reach the radio is the tailnet's business (its access rules
+    // in the Tailscale admin console), not a list kept here.
     m_qrHint = roleLabel(QString(), "hint", body);
     m_qrHint->setAccessibleName(tr("QR code sign-in note"));
     m_qrHint->hide();
@@ -423,8 +403,8 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     auto* footer = new QHBoxLayout;
     m_refreshButton = new QPushButton(tr("Refresh"), body);
     m_refreshButton->setAccessibleName(tr("Refresh remote access status"));
-    m_signOutButton = new QPushButton(tr("Sign Out of Tailnet"), body);
-    m_signOutButton->setAccessibleName(tr("Sign the radio out of the tailnet"));
+    m_signOutButton = new QPushButton(tr("Disconnect"), body);
+    m_signOutButton->setAccessibleName(tr("Disconnect the radio from your tailnet"));
     auto* doneButton = new QPushButton(tr("Done"), body);
     doneButton->setObjectName(QStringLiteral("tsDone"));
     doneButton->setAccessibleName(tr("Close remote access settings"));
@@ -436,11 +416,14 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     layout->addLayout(footer);
 
     connect(doneButton, &QPushButton::clicked, this, &QDialog::close);
-    connect(m_refreshButton, &QPushButton::clicked, this, &TailnetShimDialog::refresh);
+    connect(m_refreshButton, &QPushButton::clicked, this, [this] {
+        // Pressing Refresh also retries a sign-in code that couldn't start;
+        // the refresh after a failed request doesn't, or it would loop.
+        m_autoSignInTried = false;
+        refresh();
+    });
     connect(m_joinButton, &QPushButton::clicked, this, &TailnetShimDialog::join);
-    connect(m_qrButton, &QPushButton::clicked, this, &TailnetShimDialog::signInWithQr);
     connect(&m_client, &TailnetShimClient::loginReceived, this, &TailnetShimDialog::onLogin);
-    connect(m_saveAllowButton, &QPushButton::clicked, this, &TailnetShimDialog::saveAllowList);
     connect(m_saveSharingButton, &QPushButton::clicked, this, &TailnetShimDialog::saveSharing);
     connect(m_signOutButton, &QPushButton::clicked, this, &TailnetShimDialog::signOut);
 
@@ -534,7 +517,7 @@ void TailnetShimDialog::maybeSignInUnasked()
     // A radio not yet on any tailnet gets its sign-in code as soon as
     // the window opens: there is nothing to choose first. Once per
     // window, so a failed attempt isn't retried behind the operator's
-    // back; Sign In with QR Code tries again.
+    // back; the Refresh button tries again.
     // That includes a QR sign-in someone started and never finished
     // whose token this computer doesn't hold: it belongs to no tailnet.
     const bool fresh = !st.provisioned && st.state == QLatin1String("unprovisioned");
@@ -647,9 +630,6 @@ void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
     if (!st.hostname.isEmpty()) {
         m_hostnameEdit->setText(st.hostname);
     }
-    if (!m_allowEdit->hasFocus()) {
-        m_allowEdit->setText(st.allow.join(QStringLiteral(", ")));
-    }
     QStringList found;
     for (const TailnetShimDevice& d : st.discovered) {
         found << tr("%1 “%2” at %3").arg(d.kind, d.name, d.ip);
@@ -729,22 +709,19 @@ void TailnetShimDialog::updateControls()
     // unless no tailnet owns it yet (claimable).
     const bool mayChange = known && (!provisioned || haveToken || m_status->claimable);
 
-    // Saving the access list or sharing restarts a join on the radio, which
-    // would replace the QR code being scanned: not while one is waited on.
+    // Saving sharing restarts a join on the radio, which would replace the
+    // QR code being scanned: not while one is waited on.
     const bool waiting = known && waitingOnPerson(m_status->state);
     const bool qrSupported = known && tailnetshim::supportsQrSignIn(m_status->version);
 
     m_refreshButton->setEnabled(m_lanReachable && !m_busy);
     m_keyEdit->setEnabled(mayChange);
     m_hostnameEdit->setEnabled(mayChange);
-    m_allowEdit->setEnabled(mayChange);
     m_joinButton->setText(provisioned ? tr("Change Key") : tr("Join with Key"));
     m_joinButton->setAccessibleName(provisioned
         ? tr("Rejoin the tailnet with a new auth key")
         : tr("Join the tailnet with this auth key"));
     m_joinButton->setEnabled(mayChange && !m_keyEdit->text().trimmed().isEmpty());
-    m_qrButton->setText(provisioned ? tr("Sign In Again") : tr("Sign In with QR Code"));
-    m_qrButton->setEnabled(mayChange && qrSupported);
     if (known && !qrSupported) {
         setWrapped(m_qrHint,
             tr("This remote-access container (version %1) can only join with an auth key, under "
@@ -757,9 +734,13 @@ void TailnetShimDialog::updateControls()
         }
     }
     m_qrHint->setVisible(known && !qrSupported);
-    m_saveAllowButton->setEnabled(provisioned && haveToken && !waiting);
     m_saveSharingButton->setEnabled(provisioned && haveToken && !waiting);
-    m_signOutButton->setEnabled(provisioned && haveToken);
+    // Disconnect belongs to a radio on the tailnet; until then there is
+    // only the sign-in to finish.
+    const bool joined = known
+        && (m_status->state == QLatin1String("running") || !m_status->tailnetIp.isEmpty());
+    m_signOutButton->setVisible(joined);
+    m_signOutButton->setEnabled(joined && haveToken);
     m_shareDiscoveredCheck->setEnabled(mayChange);
     m_extraDevicesEdit->setEnabled(mayChange);
     m_copyButton->setEnabled(m_status && !m_status->tailnetIp.isEmpty());
@@ -779,16 +760,6 @@ void TailnetShimDialog::join()
 
 void TailnetShimDialog::signInWithQr()
 {
-    if (m_status && m_status->provisioned && !m_status->claimable) {
-        const auto answer = QMessageBox::question(
-            this, tr("Sign In Again"),
-            tr("Sign this radio in again? It leaves your tailnet now, remote sessions end, and "
-               "once it is signed in it may have a new tailnet address."),
-            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
-        if (answer != QMessageBox::Yes) {
-            return;
-        }
-    }
     m_signingIn = true;
     setBusy(true, tr("Getting a sign-in code…"));
     provision(QString());
@@ -835,7 +806,7 @@ void TailnetShimDialog::provision(const QString& authKey)
         transaction->deleteLater();
     });
     transaction->provision(authKey, m_hostnameEdit->text().trimmed(),
-                           tailnetshim::splitAllowList(m_allowEdit->text()),
+                           {},
                            tailnetshim::splitAllowList(m_extraDevicesEdit->text()),
                            m_shareDiscoveredCheck->isChecked(), m_adminToken);
 }
@@ -962,13 +933,6 @@ void TailnetShimDialog::onRequestFailed(const QString& operation, const QString&
     }
 }
 
-void TailnetShimDialog::saveAllowList()
-{
-    m_messageLabel->hide();
-    setBusy(true, tr("Saving…"));
-    m_client.setAllow(tailnetshim::splitAllowList(m_allowEdit->text()), m_adminToken);
-}
-
 void TailnetShimDialog::saveSharing()
 {
     m_messageLabel->hide();
@@ -980,15 +944,15 @@ void TailnetShimDialog::saveSharing()
 void TailnetShimDialog::signOut()
 {
     const auto answer = QMessageBox::question(
-        this, tr("Sign Out of Tailnet"),
-        tr("Sign this radio out of your tailnet? Remote sessions end now, and it has to be "
-           "signed in again to set remote access up again."),
+        this, tr("Disconnect"),
+        tr("Disconnect this radio from your tailnet? Remote sessions end now. To connect it "
+           "again, open this window on the radio's local network and scan the new code."),
         QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
     if (answer != QMessageBox::Yes) {
         return;
     }
     m_messageLabel->hide();
-    setBusy(true, tr("Signing out…"));
+    setBusy(true, tr("Disconnecting…"));
     connect(&m_client, &TailnetShimClient::statusReceived, this,
             [this](const TailnetShimStatus& st) {
         if (!st.provisioned) {

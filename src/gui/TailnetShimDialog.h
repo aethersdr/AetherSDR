@@ -49,7 +49,6 @@ private:
     // Starts the QR sign-in without being asked when no tailnet owns the
     // radio: never provisioned, or a sign-in abandoned with its token.
     void maybeSignInUnasked();
-    void saveAllowList();
     void saveSharing();
     void signOut();
     void onProvisioned(const TailnetShimProvisionReply& reply);
@@ -67,7 +66,8 @@ private:
     bool m_busy{false};
     // A QR sign-in this window started: on reaching the tailnet it says so.
     bool m_signingIn{false};
-    bool m_autoSignInTried{false};   // the code is offered unasked once per window
+    // The code is offered unasked once per window, and again on Refresh.
+    bool m_autoSignInTried{false};
     bool m_advancedOpenedForVersion{false};
     QString m_authUrl;   // the sign-in URL the QR code shows, if any
     std::optional<TailnetShimStatus> m_status;
@@ -86,14 +86,11 @@ private:
     QLabel* m_messageLabel{nullptr};
     QLineEdit* m_keyEdit{nullptr};
     QLineEdit* m_hostnameEdit{nullptr};
-    QLineEdit* m_allowEdit{nullptr};
     QPushButton* m_refreshButton{nullptr};
     QPushButton* m_signOutButton{nullptr};
-    QPushButton* m_saveAllowButton{nullptr};
     QPushButton* m_joinButton{nullptr};
 
     // Sign-in by QR code, and the auth key under Advanced.
-    QPushButton* m_qrButton{nullptr};
     QLabel* m_qrHint{nullptr};
     QWidget* m_qrPanel{nullptr};
     QLabel* m_qrImage{nullptr};
