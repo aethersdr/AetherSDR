@@ -4,7 +4,9 @@ computer, with nothing but Python 3.
 
     tool.py --host RADIO install AetherTailnet.ssdr_waveform
     tool.py --host RADIO status
-    tool.py --host RADIO provision --key-file KEY [--hostname NAME] [--allow LOGIN ...]
+    tool.py --host RADIO provision [--hostname NAME]        (sign in by link)
+    tool.py --host RADIO provision --key-file KEY [--hostname NAME]
+    tool.py --host RADIO login                              (the sign-in link again)
     tool.py --host RADIO [--tailnet-ip 100.x.y.z] watch --seconds 600 --out idle.jsonl
     tool.py --tailnet-ip 100.x.y.z session          (from a device on the tailnet)
     tool.py --host RADIO signout
@@ -13,9 +15,14 @@ computer, with nothing but Python 3.
 The install is the legacy waveform upload FlexLib uses (Radio.cs: `file
 filename`, `file upload <n> new_waveform`, then the bytes on the port the
 radio names, 42607 if none). The provisioning API (TCP 48992) answers LAN
-callers only. The auth key is read from a file and never printed. The admin
-token the shim returns is saved to admin-token.txt (mode 600) and sent as a
-Bearer token on later changes.
+callers only.
+
+Without --key-file, provision signs the radio in by link (shim 0.5.0): it
+prints the sign-in link to open on a phone or in a browser, then waits until
+the radio is on the tailnet. Whoever opens that link first adds the radio to
+their tailnet, so don't paste it anywhere else. An auth key is read from a
+file and never printed. The admin token the shim returns is saved to
+admin-token.txt (mode 600) and sent as a Bearer token on later changes.
 """
 import argparse
 import json
@@ -89,10 +96,11 @@ def main():
     p = sub.add_parser('install'); p.add_argument('package', type=pathlib.Path)
     sub.add_parser('uninstall'); sub.add_parser('restart'); sub.add_parser('status')
     p = sub.add_parser('provision')
-    p.add_argument('--key-file', required=True, type=pathlib.Path)
+    p.add_argument('--key-file', type=pathlib.Path, help='join with this auth key instead of a sign-in link')
     p.add_argument('--hostname', default='flex-6000')
-    p.add_argument('--allow', nargs='*', default=[], help='tailnet logins or tag:names that may connect (empty: anyone on the tailnet)')
     p.add_argument('--no-share-discovered', action='store_true', help="don't share 4O3A devices the radio finds")
+    p.add_argument('--wait', type=int, default=600, help='seconds to wait for the sign-in (link only)')
+    sub.add_parser('login')
     p = sub.add_parser('watch')
     p.add_argument('--seconds', type=int, default=600); p.add_argument('--every', type=int, default=10)
     p.add_argument('--out', type=pathlib.Path, required=True)
@@ -129,17 +137,51 @@ def main():
         code, body = http('GET', base + '/v1/status', timeout=10)
         print(code, json.dumps(body, indent=2))
     elif a.cmd == 'provision':
-        key = a.key_file.read_text().strip()
-        req = {'auth_key': key, 'hostname': a.hostname, 'allow': a.allow, 'routes': [],
+        req = {'hostname': a.hostname, 'allow': [], 'routes': [],
                'share_discovered': not a.no_share_discovered}
-        print('joining the tailnet (can take a minute on this radio)…')
+        if a.key_file:
+            req['auth_key'] = a.key_file.read_text().strip()
+            print('joining the tailnet with the key (can take a minute on this radio)…')
+        else:
+            print('asking the radio for a sign-in link…')
         code, body = http('POST', base + '/v1/provision', req, token())
         if code == 200 and body.get('admin_token'):
             fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, 'w') as f:
                 f.write(body['admin_token'] + '\n')
             body['admin_token'] = f'(saved to {TOKEN_FILE})'
+        url = body.pop('auth_url', '')
         print(code, json.dumps(body, indent=2))
+        if code != 200 or a.key_file:
+            return
+        if not url:
+            code, lb = http('GET', base + '/v1/login', None, token(), timeout=10)
+            url = lb.get('auth_url', '') if code == 200 else ''
+        if url:
+            print('\nOpen this link on your phone or in a browser, sign in to Tailscale and approve')
+            print('the radio. Don\'t share it: whoever opens it first adds the radio to their tailnet.\n')
+            print('    ' + url + '\n')
+        else:
+            print('no sign-in link yet; run `login` in a moment')
+        end, last = time.time() + a.wait, ''
+        while time.time() < end:
+            code, st = http('GET', base + '/v1/status', timeout=10)
+            state = st.get('state', '?')
+            if state != last:
+                print(time.strftime('%H:%M:%S'), state, st.get('tailnet_ip') or '', st.get('last_error') or '')
+                last = state
+            if state == 'running':
+                print('on the tailnet; sign-in expires', st.get('key_expiry') or 'never')
+                return
+            time.sleep(3)
+        print('still not signed in; run `login` for the link and `status` to check')
+    elif a.cmd == 'login':
+        code, body = http('GET', base + '/v1/login', None, token(), timeout=10)
+        if code == 401:
+            sys.exit('the radio refused admin-token.txt (or it is missing)')
+        print(code, body.get('state'), 'expires', body.get('key_expiry') or 'never')
+        if body.get('auth_url'):
+            print('\nsign-in link (don\'t share it):\n    ' + body['auth_url'])
     elif a.cmd == 'signout':
         code, body = http('POST', base + '/v1/signout', {}, token())
         print(code, json.dumps(body, indent=2))

@@ -91,6 +91,10 @@ To compare against, a FLEX-6300 on SmartSDR 4.2.18 reported:
 - **Persistent storage:** `/user/waveforms/AetherRadioProbe` (ext2, 41 MB free) and `/var/tmp` (ext3) kept their markers across a power cycle.
 - **UDP source:** `127.0.0.1:4992` → `127.0.0.1:4993`, and the same pattern for each address.
 
+A FLEX-6400 on SmartSDR 4.3.16 matched it too, with SmartSDR using about 27%
+of the core (ChaCha 9.35 MB/s) and a 19 MB `/user` with about 17 MB free
+before the probe was installed.
+
 A FLEX-6700 on SmartSDR 4.3.16 had the same computer (same kernel, one
 Cortex-A8 core, 469 MB) and the same answers, with two differences:
 

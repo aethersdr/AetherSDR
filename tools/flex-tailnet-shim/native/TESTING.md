@@ -6,8 +6,8 @@ behind CGNAT or Starlink. On FLEX-8000 and Aurora radios it runs in their
 Docker container feature. This is an **experimental** build for FLEX-6000
 radios, installed as a legacy waveform named **AetherTailnet**.
 
-AetherRadioProbe (`../cmd/radio-probe`) showed a FLEX-6300 and a FLEX-6700,
-which have the same internal computer, can host it:
+AetherRadioProbe (`../cmd/radio-probe`) showed a FLEX-6300, a FLEX-6400 and
+a FLEX-6700, which have the same internal computer, can host it:
 
 - the radio runs our Go program on its 2.6.37 kernel;
 - the waveform's own folder keeps files across a reboot;
@@ -24,7 +24,7 @@ reboot.
 
 ## How it differs from the container shim
 
-Same code, same version (`0.4.1-native`), started by a launcher (`shim.sh`)
+Same code, same version (`0.5.0-native`), started by a launcher (`shim.sh`)
 that:
 
 - keeps the node's identity and settings in `state/` beside the waveform,
@@ -44,9 +44,10 @@ that:
 - **Receive only.** Don't transmit through the shim during this test. The
   shim relays whatever the remote client sends, transmit included. Keeping
   the test to receive keeps an untested build away from your transmitter.
-- The shim joins the tailnet you choose, with an auth key you create. Only
-  devices on that tailnet, and only those on its allowlist if you set one,
-  can reach the radio through it.
+- The shim joins the tailnet you sign it in to. Only devices on that tailnet
+  (within its access rules) can reach the radio through it.
+- The sign-in link (step 3) adds the radio to whichever tailnet opens it
+  first. Open it yourself and don't paste it anywhere else.
 - Uninstall the other tailnet waveforms first (for example FlexiTailnet).
   Two shims can't share the radio's ports.
 - Signing out (step 7) removes the radio from your tailnet. Uninstalling
@@ -55,10 +56,10 @@ that:
 ## You need
 
 - A FLEX-6000 on SmartSDR 4.x. The probe ran on 4.2.18.
-- A Tailscale account. Create an **auth key** in the admin console
-  (Settings → Keys): one-off, *not* ephemeral (an ephemeral node can vanish
-  across the reboot). Save it in a file such as `ts-key.txt`, readable only
-  by you. Never paste it into a chat.
+- A Tailscale account, and a phone or browser signed in to it. No auth key
+  is needed: the radio signs in by link. (An auth key still works, with
+  `provision --key-file`: one-off, *not* ephemeral, in a file readable only
+  by you, never pasted into a chat.)
 - A computer on the radio's LAN with Python 3, ideally with Tailscale
   installed and on the same tailnet, so it can read the shim's CPU figures.
 - A second device for the remote test, running AetherSDR and Tailscale. It's
@@ -77,14 +78,18 @@ Run the commands from this folder. `tool.py` talks to the radio over the LAN.
    waveforms no other way to report errors.
 2. **Install:** `python3 -I tool.py --host <radio-ip> install AetherTailnet.ssdr_waveform`.
    Within a minute or two, `python3 -I tool.py --host <radio-ip> status`
-   should show `"version": "0.4.1-native"` and `"state": "unprovisioned"`.
+   should show `"version": "0.5.0-native"` and `"state": "unprovisioned"`.
    Note how long that took and whether a reboot was needed.
-3. **Join the tailnet:**
-   `python3 -I tool.py --host <radio-ip> provision --key-file ts-key.txt --hostname flex-6300`.
-   Add `--allow you@example.com` to limit who may connect. The shim's admin
-   token is saved to `admin-token.txt`, so keep that file private. `status`
-   should now show `"state": "running"` and a `tailnet_ip` (100.x.y.z). The
-   radio appears in your Tailscale admin console.
+3. **Sign in to the tailnet:**
+   `python3 -I tool.py --host <radio-ip> provision --hostname flex-6400`.
+   It prints a sign-in link. Open it on your phone or in a browser, sign in
+   to Tailscale and approve the radio (if your tailnet requires device
+   approval, also approve it on **Machines**). The tool waits and prints
+   `on the tailnet` with the sign-in's expiry. `login` prints the link
+   again if you need it. The shim's admin token is saved to
+   `admin-token.txt`, so keep that file private. `status` should now show
+   `"state": "running"` and a `tailnet_ip` (100.x.y.z). Note how long the
+   sign-in took on this radio, from the link appearing to `running`.
 4. **Idle for 10 minutes**, with no AetherSDR connected:
    `python3 -I tool.py --host <radio-ip> --tailnet-ip <100.x.y.z> watch --seconds 600 --out idle.jsonl`.
    `shim_cpu_pct` is the shim's share of the radio's one core. If you have
@@ -107,7 +112,8 @@ Run the commands from this folder. `tool.py` talks to the radio over the LAN.
      from your tailnet;
    - `python3 -I tool.py --host <radio-ip> uninstall`;
    - delete `admin-token.txt`;
-   - revoke the auth key if it's still valid.
+   - delete the radio from **Machines** in the admin console if it's still
+     listed (and revoke any auth key you used).
 8. **Send** `notes.md`, `idle.jsonl`, `session.jsonl`, the `status` outputs,
    `probe-idle.json` if you made one, and `shim-log.txt`. These contain
    tailnet and LAN addresses but no keys or tokens; remove the addresses if
@@ -136,7 +142,7 @@ TESTING.md if I use the probe); they describe the steps and the data needed.
 
 My radio: <model> on SmartSDR <version>, LAN IP <radio-ip>.
 This computer's LAN IP: <pc-ip>. Tailscale on this computer: <yes/no>.
-My Tailscale auth key is in the file <ts-key.txt>.
+I'll sign the radio in myself with the link tool.py prints (step 3).
 Remote device for step 5: <description>.
 
 If this folder has no AetherTailnet.ssdr_waveform, build one as TESTING.md's
@@ -150,7 +156,9 @@ Keep notes.md: what you did, when, how long each step took, every error
 message, and anything that differs from TESTING.md.
 
 Rules you must follow:
-- Never print, log or copy the auth key or admin-token.txt anywhere, and
+- Show me the sign-in link in step 3 so I can open it, but never write it
+  to notes.md or any other file, and never open it yourself. If I use an
+  auth key, never print, log or copy it or admin-token.txt anywhere, and
   never put them on a command line; use the files.
 - Never send a radio command other than the upload, `waveform restart` and
   `waveform uninstall` that tool.py sends for AetherTailnet (or the probe's
@@ -180,7 +188,8 @@ for" table with numbers, and list the files I should send.
   `--small`, which is about 0.45 MB smaller because it leaves out Tailscale
   features the shim doesn't use.
 - Installed it takes about 10 MB in the waveform partition (`/user`). A
-  FLEX-6300 had about 54 MB free there, but a FLEX-6700 only about 13 MB,
+  FLEX-6300 had about 54 MB free there, a FLEX-6400 about 17 MB and a
+  FLEX-6700 only about 13 MB (both of those have a 19 MB `/user`),
   and every other legacy waveform installed uses the same space.
   AetherRadioProbe 0.1.2 lists what is installed and how big each one is
   (`storage.waveform_store`). If the radio stores the uploaded file in that
@@ -210,7 +219,9 @@ for" table with numbers, and list the files I should send.
 ### Provision fails, or `state` is `error`
 
 - Read `last_error` and `shim-log.txt`. Typical causes:
-  - the key is invalid, used up or expired;
+  - no sign-in link within 30 s: run `login`; if it stays empty, the radio
+    can't reach Tailscale's control plane (check DNS and the clock);
+  - with a key: the key is invalid, used up or expired;
   - the radio's clock is wrong (TLS certificate errors right after boot);
   - the kernel lacks a feature Tailscale needs ("function not implemented",
     "ENOSYS", "invalid argument" on a socket call).
