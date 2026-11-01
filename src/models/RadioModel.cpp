@@ -1782,10 +1782,7 @@ void RadioModel::teardownBackend()
     const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
     discardTuneInhibit();
     resetTuneOutputControl();
-    if (!m_licenseFeatures.isEmpty()) {
-        m_licenseFeatures.clear();
-        emit licenseFeaturesChanged();
-    }
+    clearLicenseState();
     m_transmitModel.invalidateControlIntents();
     for (SliceModel* source : m_slices) { source->invalidateControlIntents(); }
     resetTxOperations();
@@ -6989,10 +6986,7 @@ void RadioModel::onConnected()
     // would otherwise be staged below and "reclaimed" by the real status
     // replay — with the fixture set staying poisoned for the session.
     clearAutomationSliceFixtures();
-    if (!m_licenseFeatures.isEmpty()) {
-        m_licenseFeatures.clear();
-        emit licenseFeaturesChanged();
-    }
+    clearLicenseState();
     stageSessionModelsForReconnect();
     // The selected discovery serial names the non-Flex session that actually
     // reached Connected. Keep it separate from m_lastInfo: a same-family radio
@@ -8459,10 +8453,7 @@ void RadioModel::onDisconnected()
     m_tnfModel.clear();
     m_flexWaveformModel.clear();
     m_dvkModel.reset();
-    if (!m_licenseFeatures.isEmpty()) {
-        m_licenseFeatures.clear();
-        emit licenseFeaturesChanged();
-    }
+    clearLicenseState();
     m_memorySlotRetirements.clear();
     if (!m_memories.isEmpty()) {
         m_memories.clear();
@@ -11507,26 +11498,18 @@ void RadioModel::onStatusReceived(const QString& object,
             m_licenseMaxVersion = kvs["highest_major_version"];
         }
         // Base subscription is always "SmartSDR" — upgraded by subscription messages
-        if (m_licenseSubscription.isEmpty()) {
-            m_licenseSubscription = "SmartSDR";
+        if (m_licenseSubscription.name.isEmpty()) {
+            m_licenseSubscription.name = QStringLiteral("SmartSDR");
         }
         emit infoChanged();
         return;
     }
     if (object == "license subscription") {
         // Per FlexLib: name=smartsdr+ or name=smartsdr+_early_access
-        // with expiration=<ISO-8601 date>
-        QString name = kvs.value("name").toLower();
-        QString expStr = kvs.value("expiration");
-        QDate expDate = QDate::fromString(expStr.left(10), Qt::ISODate);
-        bool active = expDate.isValid() && expDate >= QDate::currentDate();
-        if (name == "smartsdr+_early_access" && active) {
-            m_licenseSubscription = "SmartSDR+ Early Access";
-            m_licenseExpirationDate = expDate.toString("MM/dd/yyyy");
-        } else if (name == "smartsdr+" && active) {
-            m_licenseSubscription = "SmartSDR+";
-            m_licenseExpirationDate = expDate.toString("MM/dd/yyyy");
-        }
+        // with expiration=<ISO-8601 date>. A lapsed one is kept for display
+        // only; feature gates read the `license feature` records.
+        m_licenseSubscription = mergeLicenseSubscription(
+            m_licenseSubscription, kvs.value("name"), kvs.value("expiration"));
         emit infoChanged();
         return;
     }
@@ -12337,6 +12320,28 @@ LicenseFeatureState RadioModel::licenseFeature(const QString& name) const
 bool RadioModel::licenseFeatureSeen(const QString& name) const
 {
     return licenseFeature(name).seen;
+}
+
+bool RadioModel::cwAutotuneLicensed() const
+{
+    const LicenseFeatureState feature = licenseFeature(QStringLiteral("auto_tune"));
+    return smartSdrPlusFeatureUsable(
+        feature.seen, feature.enabled,
+        m_licenseSubscription.isActive(QDateTime::currentDateTime()));
+}
+
+void RadioModel::clearLicenseState()
+{
+    const bool held = !m_licenseFeatures.isEmpty()
+        || !m_licenseSubscription.name.isEmpty()
+        || !m_licenseRadioId.isEmpty() || !m_licenseMaxVersion.isEmpty();
+    m_licenseFeatures.clear();
+    m_licenseSubscription = {};
+    m_licenseRadioId.clear();
+    m_licenseMaxVersion.clear();
+    if (held) {
+        emit licenseFeaturesChanged();
+    }
 }
 
 bool RadioModel::licenseFeatureEnabled(const QString& name) const

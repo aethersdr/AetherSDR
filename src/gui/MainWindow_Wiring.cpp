@@ -1705,8 +1705,7 @@ bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
     if (!targetVfo) {
         targetVfo = target->addVfoWidget(sliceId);
         if (targetVfo) {
-            const QString& sub = m_radioModel.licenseSubscription();
-            targetVfo->setSmartSdrPlus(sub.contains("SmartSDR+"));
+            targetVfo->setCwAutotuneLicensed(m_radioModel.cwAutotuneLicensed());
             targetVfo->setHasExtendedDsp(m_radioModel.hasExtendedDspFilters());
             targetVfo->setHasRadioSideDsp(m_radioModel.hasRadioSideDsp());
             targetVfo->setHasLmsNoiseFilters(m_radioModel.hasLmsNoiseFilters());
@@ -2400,13 +2399,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
     if (auto* swForVfo = spectrumForSlice(s)) {
         auto* vfo = swForVfo->addVfoWidget(s->sliceId());
 
-        // Set SmartSDR+ flag before wireVfoWidget so rebuildFilterButtons
+        // Set the CW Autotune license before wireVfoWidget so rebuildFilterButtons
         // sees the correct value when setSlice() triggers the first build (#1356)
-        {
-            const QString& sub = m_radioModel.licenseSubscription();
-            bool hasPlus = sub.contains("SmartSDR+");
-            vfo->setSmartSdrPlus(hasPlus);
-        }
+        vfo->setCwAutotuneLicensed(m_radioModel.cwAutotuneLicensed());
 
         // Set extended DSP flag before wireVfoWidget so the mode-change lambda
         // in setSlice() gates NRL/NRS/RNN/NRF visibility correctly (#2177)

@@ -7,6 +7,7 @@
 
 #include "core/backends/flex/CommandParser.h"   // MessageSeverity for radioMessageReceived
 #include "core/GuiClientRegistrationState.h"
+#include "models/LicenseEntitlement.h"
 #include "core/RadioSettingsScope.h"  // RFC #4603 radio-scoped feature documents
 #include "core/backends/GpsDelta.h"     // applyGpsChanges payload (aetherd 2.3)
 #include "core/backends/MemoryDelta.h"  // applyMemoryChanges payload (aetherd 2.3)
@@ -265,9 +266,20 @@ public:
 
     // License info (populated from "sub license all" responses)
     QString licenseRadioId()        const { return m_licenseRadioId; }
-    QString licenseExpirationDate() const { return m_licenseExpirationDate; }
+    QString licenseExpirationDate() const
+    {
+        return m_licenseSubscription.expiration.isValid()
+            ? m_licenseSubscription.expiration.date().toString(QStringLiteral("MM/dd/yyyy"))
+            : QString();
+    }
     QString licenseMaxVersion()     const { return m_licenseMaxVersion; }
-    QString licenseSubscription()   const { return m_licenseSubscription; }
+    QString licenseSubscription()   const
+    {
+        return m_licenseSubscription.label(QDateTime::currentDateTime());
+    }
+    // CW Autotune (`slice auto_tune`) is a SmartSDR+ feature the radio keeps
+    // after the subscription lapses; see LicenseEntitlement.h.
+    bool cwAutotuneLicensed() const;
     LicenseFeatureState licenseFeature(const QString& name) const;
     bool licenseFeatureSeen(const QString& name) const;
     // The radio refused a dvk command as unlicensed (50004001); the reliable
@@ -2128,10 +2140,12 @@ private:
     QString     m_region;
     std::optional<int> m_iaruRegion;
     QString     m_radioOptions;
+    // Clears every license record of the session, so the next radio inherits
+    // none of them, and emits licenseFeaturesChanged when anything was held.
+    void clearLicenseState();
     QString     m_licenseRadioId;
-    QString     m_licenseExpirationDate;
     QString     m_licenseMaxVersion;
-    QString     m_licenseSubscription;   // e.g. "SmartSDR+", "SmartSDR", "Unknown"
+    LicenseSubscriptionState m_licenseSubscription;
     QHash<QString, LicenseFeatureState> m_licenseFeatures;
     QString     m_ip;
     QString     m_netmask;
