@@ -24,4 +24,24 @@ struct TailnetShimRelease {
     static constexpr qint64 kSize = 8066394;
 };
 
+// Which of the two shim packages a radio takes.
+enum class TailnetShimPackage {
+    Container,   // a Docker image, for a radio with a Waveform Processor
+    Native,      // a legacy .ssdr_waveform, for one without
+};
+
+// The same shim as a legacy waveform, for radios with no Waveform Processor
+// (the FLEX-6000 series), which install .ssdr_waveform packages instead of
+// containers. `tools/flex-tailnet-shim/native/build.py` at the release tag
+// rebuilds the identical file with the same toolchain.
+struct TailnetShimNativeRelease {
+    static constexpr const char* kVersion = "0.5.1-native";
+    static constexpr const char* kUrl =
+        "https://github.com/aethersdr/AetherSDR/releases/download/"
+        "flex-tailnet-shim-v0.5.1/AetherTailnet-0.5.1-native.ssdr_waveform";
+    static constexpr const char* kSha256 =
+        "80a5289f0251c00ee1efcab0379673164658cc2ae8a2e4e4948569807961b0e1";
+    static constexpr qint64 kSize = 9161938;
+};
+
 }  // namespace AetherSDR

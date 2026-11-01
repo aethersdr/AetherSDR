@@ -82,6 +82,21 @@ int main()
            gate(true, RadioPlatform::Microburst, false, false, false)
                == B::UnsupportedPlatform);
 
+    // ── Remote Access package: legacy waveform exactly where Docker can't go ──
+    using P = TailnetShimPackage;
+    report("Microburst -> native remote-access package",
+           remoteAccessPackage(RadioPlatform::Microburst) == P::Native);
+    report("DeepEddy -> native remote-access package",
+           remoteAccessPackage(RadioPlatform::DeepEddy) == P::Native);
+    report("BigBend -> container remote-access package",
+           remoteAccessPackage(RadioPlatform::BigBend) == P::Container);
+    report("DragonFire -> container remote-access package",
+           remoteAccessPackage(RadioPlatform::DragonFire) == P::Container);
+    // An unidentified radio stays on the container path, where the Docker
+    // gate holds it at "Checking" rather than guessing the legacy package.
+    report("Unknown -> container remote-access package",
+           remoteAccessPackage(RadioPlatform::Unknown) == P::Container);
+
     if (g_failed == 0) {
         std::printf("\nAll %d waveform-install-gate tests passed.\n", g_total);
         return 0;

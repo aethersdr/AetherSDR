@@ -3,6 +3,7 @@
 #include "CanonMessageBox.h"
 #include "QrCodeImage.h"
 #include "ScopedChildWidget.h"
+#include "WaveformInstallGate.h"
 
 #include "core/TailnetShimTokenStore.h"
 #include "core/ThemeManager.h"
@@ -147,6 +148,8 @@ QFrame* makeCard(const QString& title, QWidget* parent, QVBoxLayout** contents)
 TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     : CanonWindow(tr("Remote Access (Tailscale)"), parent)
     , m_model(model)
+    , m_native(model && remoteAccessPackage(model->capabilities().platform)
+                            == TailnetShimPackage::Native)
 {
     constexpr int kWidth = 600;
     constexpr int kSide = 28;          // body side margins, as About's 24 plus room for cards
@@ -192,10 +195,15 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     intro->setAlignment(Qt::AlignCenter);
     intro->setAccessibleName(tr("About remote access over Tailscale"));
     setWrapped(intro,
-        tr("This radio container puts the radio on your Tailscale network, so AetherSDR can "
-           "reach it from anywhere, including behind CGNAT. Set it up here while you are on the "
-           "radio's local network, then connect remotely with Connect → Manual and the tailnet "
-           "address below."),
+        (m_native
+            ? tr("This radio waveform puts the radio on your Tailscale network, so AetherSDR can "
+                 "reach it from anywhere, including behind CGNAT. Set it up here while you are "
+                 "on the radio's local network, then connect remotely with Connect → Manual and "
+                 "the tailnet address below.")
+            : tr("This radio container puts the radio on your Tailscale network, so AetherSDR "
+                 "can reach it from anywhere, including behind CGNAT. Set it up here while you "
+                 "are on the radio's local network, then connect remotely with Connect → Manual "
+                 "and the tailnet address below.")),
         m_bodyTextWidth);
     layout->addWidget(intro);
 
@@ -483,8 +491,11 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
 
     if (!m_lanReachable) {
         setStatusLine(tr("Unavailable"), QStringLiteral("idle"));
-        showError(tr("Connect to this radio over its local network to set up remote access. "
-                     "The container's settings can't be changed over the tailnet."));
+        showError(m_native
+            ? tr("Connect to this radio over its local network to set up remote access. "
+                 "The waveform's settings can't be changed over the tailnet.")
+            : tr("Connect to this radio over its local network to set up remote access. "
+                 "The container's settings can't be changed over the tailnet."));
         updateControls();
         return;
     }
@@ -627,7 +638,8 @@ void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
     }
     QString line = stateText(st);
     if (!st.version.isEmpty()) {
-        line += QStringLiteral(" · ") + tr("container %1").arg(st.version);
+        line += QStringLiteral(" · ")
+            + (m_native ? tr("waveform %1") : tr("container %1")).arg(st.version);
     }
     if (st.state == QLatin1String("running")) {
         line += QStringLiteral(" · ") + tr("%n remote session(s)", "", st.sessions);
@@ -986,9 +998,12 @@ void TailnetShimDialog::onRequestFailed(const QString& operation, const QString&
             updateControls();
             return;
         }
-        showError(tr("The container rejected this computer's admin token. To start over, "
-                     "remove and reinstall the remote-access container from the Waveforms "
-                     "list."));
+        showError(m_native
+            ? tr("The waveform rejected this computer's admin token. To start over, uninstall "
+                 "and reinstall the remote-access waveform from the Waveforms list.")
+            : tr("The container rejected this computer's admin token. To start over, "
+                 "remove and reinstall the remote-access container from the Waveforms "
+                 "list."));
         return;
     }
     showError(message);
@@ -1016,8 +1031,11 @@ void TailnetShimDialog::reset()
         tr("This computer doesn't hold the key that lets it change this radio's remote access."),
         this);
     ask.get()->setInformativeText(
-        tr("Resetting removes and reinstalls the remote-access container: the radio leaves your "
-           "tailnet now, and you sign it in again with a new code."));
+        m_native
+            ? tr("Resetting uninstalls and reinstalls the remote-access waveform: the radio "
+                 "leaves your tailnet now, and you sign it in again with a new code.")
+            : tr("Resetting removes and reinstalls the remote-access container: the radio leaves "
+                 "your tailnet now, and you sign it in again with a new code."));
     // Return keeps what is on the radio; resetting takes a click.
     ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
     QPushButton* go = ask.get()->addButton(tr("Reset"), CanonMessageBox::Role::Destructive);

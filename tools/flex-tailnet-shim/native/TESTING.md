@@ -24,7 +24,7 @@ reboot.
 
 ## How it differs from the container shim
 
-Same code, same version (`0.5.0-native`), started by a launcher (`shim.sh`)
+Same code, same version (`0.5.1-native`), started by a launcher (`shim.sh`)
 that:
 
 - keeps the node's identity and settings in `state/` beside the waveform,
@@ -78,7 +78,7 @@ Run the commands from this folder. `tool.py` talks to the radio over the LAN.
    waveforms no other way to report errors.
 2. **Install:** `python3 -I tool.py --host <radio-ip> install AetherTailnet.ssdr_waveform`.
    Within a minute or two, `python3 -I tool.py --host <radio-ip> status`
-   should show `"version": "0.5.0-native"` and `"state": "unprovisioned"`.
+   should show `"version": "0.5.1-native"` and `"state": "unprovisioned"`.
    Note how long that took and whether a reboot was needed.
 3. **Sign in to the tailnet:**
    `python3 -I tool.py --host <radio-ip> provision --hostname flex-6400`.

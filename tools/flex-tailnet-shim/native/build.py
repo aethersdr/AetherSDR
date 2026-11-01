@@ -81,12 +81,24 @@ def launcher(log_url):
     return text.encode()
 
 
+def check_version():
+    # The radio lists the waveform under the .cfg's Version; keep it the
+    # version the shim itself reports, so the two never disagree.
+    shim = re.search(r'^const shimVersion = "([^"]+)"', (MODULE / 'main.go').read_text(), re.M)
+    cfg = re.search(r'^Version: "([^"]+)"', (HERE / f'{NAME}.cfg').read_text(), re.M)
+    want = shim.group(1) + VARIANT if shim else None
+    if not cfg or cfg.group(1) != want:
+        raise SystemExit(f'{NAME}.cfg Version is {cfg.group(1) if cfg else "missing"}, '
+                         f'expected {want} (shimVersion + {VARIANT})')
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--output', required=True, type=pathlib.Path)
     ap.add_argument('--log-url', default='', help='diagnostic log sink baked into the launcher')
     ap.add_argument('--small', action='store_true', help='omit unused Tailscale features (about 0.8 MB smaller)')
     a = ap.parse_args()
+    check_version()
     a.output.mkdir(parents=True, exist_ok=True)
     env = build_env()
     with tempfile.TemporaryDirectory(prefix='aether-tailnet-') as t:
