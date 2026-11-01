@@ -33,7 +33,8 @@ signals:
     // The operator chose Reset: this computer can't change the radio's
     // remote access (it lacks the admin token), so the container is to be
     // removed and the pinned one installed again (WaveformsDialog does it).
-    void resetRequested();
+    // `update`: the same, asked for by Update, so it is worded as one.
+    void resetRequested(bool update);
 
 private:
     void refresh();
@@ -60,6 +61,7 @@ private:
     void saveSharing();
     void signOut();
     void reset();
+    void updateRadioShim();   // reinstall at the pinned version, after asking
     void onProvisioned(const TailnetShimProvisionReply& reply);
     void onRequestFailed(const QString& operation, const QString& message, bool unauthorized);
 
@@ -101,6 +103,7 @@ private:
     QPushButton* m_refreshButton{nullptr};
     QPushButton* m_signOutButton{nullptr};
     QPushButton* m_resetButton{nullptr};   // in Disconnect's place when locked out
+    QPushButton* m_updateButton{nullptr};  // when the radio runs an older release
     QPushButton* m_joinButton{nullptr};
 
     // Sign-in by QR code, and the auth key under Advanced.

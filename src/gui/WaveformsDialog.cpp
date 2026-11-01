@@ -1660,7 +1660,7 @@ void WaveformsDialog::installRemoteAccess(bool container)
     updateInstallButtonState();
 }
 
-void WaveformsDialog::resetRemoteAccess(bool container)
+void WaveformsDialog::resetRemoteAccess(bool container, bool update)
 {
     if (!m_radioModel || !m_radioModel->isConnected()) {
         return;
@@ -1673,7 +1673,7 @@ void WaveformsDialog::resetRemoteAccess(bool container)
     const QString removeAction = docker ? QStringLiteral("remove_container")
                                         : QStringLiteral("uninstall");
     FlexWaveformModel& waveforms = m_radioModel->flexWaveformModel();
-    setRowNotice(name, tr("Resetting…"), QStringLiteral("pending"), true);
+    setRowNotice(name, update ? tr("Updating…") : tr("Resetting…"), QStringLiteral("pending"), true);
 
     // The radio accepts the removal at once and takes a few seconds to carry
     // it out; install again once it no longer lists the shim.
@@ -1708,7 +1708,7 @@ void WaveformsDialog::resetRemoteAccess(bool container)
         finish(true);
     });
     pending->replied = connect(&waveforms, &FlexWaveformModel::commandFinished, this,
-                               [this, name, removeAction, docker, finish](
+                               [this, name, removeAction, docker, update, finish](
                                    const QString& action, const QString& which,
                                    bool ok, const QString& message) {
         // The row notice is onWaveformCommandFinished's; this adds the why.
@@ -1716,18 +1716,19 @@ void WaveformsDialog::resetRemoteAccess(bool container)
             finish(false);
             const QString why = message.isEmpty() ? tr("the radio refused it") : message;
             showWaveformInstallResultDialog(
-                this, tr("Reset Failed"),
+                this, update ? tr("Update Failed") : tr("Reset Failed"),
                 docker ? tr("The radio didn't remove the remote-access container: %1").arg(why)
                        : tr("The radio didn't uninstall the remote-access waveform: %1").arg(why));
         }
     });
     // Installing over a container the radio still lists would collide with
     // it: if the removal isn't seen in time, say so rather than install.
-    connect(bound, &QTimer::timeout, this, [this, name, docker, finish] {
+    connect(bound, &QTimer::timeout, this, [this, name, docker, update, finish] {
         finish(false);
-        setRowNotice(name, tr("Reset didn't finish"), QStringLiteral("error"), false);
+        setRowNotice(name, update ? tr("Update didn't finish") : tr("Reset didn't finish"),
+                     QStringLiteral("error"), false);
         showWaveformInstallResultDialog(
-            this, tr("Reset Failed"),
+            this, update ? tr("Update Failed") : tr("Reset Failed"),
             docker ? tr("The radio still lists the remote-access container after 30 seconds. "
                         "Remove it from the Waveforms list, then install Remote Access again.")
                    : tr("The radio still lists the remote-access waveform after 30 seconds. "
@@ -2254,7 +2255,9 @@ void WaveformsDialog::refreshWaveformList()
                 auto* dialog = new TailnetShimDialog(m_radioModel, !isContainer, this);
                 dialog->setAttribute(Qt::WA_DeleteOnClose);
                 connect(dialog, &TailnetShimDialog::resetRequested, this,
-                        [this, isContainer] { resetRemoteAccess(isContainer); });
+                        [this, isContainer](bool update) {
+                    resetRemoteAccess(isContainer, update);
+                });
                 open = dialog;
                 dialog->show();
             });
