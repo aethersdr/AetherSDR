@@ -27,6 +27,12 @@ import (
 
 const shimVersion = "0.4.1"
 
+// buildVariant names a non-container build, e.g. "-native" for the legacy
+// waveform package; set with -ldflags -X.
+var buildVariant string
+
+func version() string { return shimVersion + buildVariant }
+
 func env(k, def string) string {
 	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
 		return v
@@ -40,14 +46,15 @@ func main() {
 		radioAddr = flag.String("radio", env("SSDR_RADIO_ADDRESS", "172.30.1.1"), "radio API address (set by the radio)")
 		apiAddr   = flag.String("api", env("SHIM_API_ADDR", fmt.Sprintf(":%d", ProvisionPort)), "provisioning API listen address")
 		maxMTU    = flag.Int("max-mtu", 1200, "clamp client network_mtu= to this many bytes (0 = no clamp)")
+		runDir    = flag.String("run-dir", env("SHIM_RUN_DIR", ""), "volatile directory for tailnet logs and caches; the node's identity stays in -state (empty: all in -state)")
 	)
 	flag.Parse()
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	startLogSink()
-	log.Printf("flex-tailnet-shim %s starting", shimVersion)
+	log.Printf("flex-tailnet-shim %s starting", version())
 
 	disc := &Discovery{}
-	node := &Node{StateDir: *stateDir, RadioAddr: *radioAddr, MaxMTU: *maxMTU, Discovery: disc}
+	node := &Node{StateDir: *stateDir, RunDir: *runDir, RadioAddr: *radioAddr, MaxMTU: *maxMTU, Discovery: disc}
 	disc.OnChange = node.RefreshRoutes
 	disc.Start()
 	if err := node.load(); err != nil {
