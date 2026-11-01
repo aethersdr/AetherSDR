@@ -131,6 +131,13 @@ QString wfpRuntimeStatusText(const FlexWaveformModel& wfModel)
     return QObject::tr("%1, %2").arg(powerText, readyText);
 }
 
+TailnetShimPackage remoteAccessPackageFor(const RadioModel* radioModel)
+{
+    return remoteAccessUsesNativePackage(radioModel->capabilities().platform)
+        ? TailnetShimPackage::Native
+        : TailnetShimPackage::Container;
+}
+
 QString dockerInstallBlockerText(const RadioModel* radioModel,
                                  const FlexWaveformModel& wfModel)
 {
@@ -1506,12 +1513,23 @@ void WaveformsDialog::updateInstallButtonState()
     m_installDockerAction->setEnabled(!busy && dockerReady);
     if (m_installRemoteAccessAction) {
         const bool downloading = m_shimDownloader && m_shimDownloader->isRunning();
-        m_installRemoteAccessAction->setEnabled(!busy && !downloading && dockerReady);
+        // A radio with no Waveform Processor takes the legacy waveform, which
+        // the Docker gate doesn't govern.
+        const TailnetShimPackage package = remoteAccessPackageFor(m_radioModel);
+        const bool native = package == TailnetShimPackage::Native;
+        const bool remoteReady = connected && (native || dockerReady);
+        m_installRemoteAccessAction->setEnabled(!busy && !downloading && remoteReady);
         // The reason goes on the accessible channel too, not just the tooltip (#4896).
-        const QString remoteTip = dockerReady
-            ? tr("Download the remote-access container (version %1), verify it, and install it.")
-                  .arg(QString::fromLatin1(TailnetShimRelease::kVersion))
-            : (busy ? tr("A waveform install is already in progress.") : dockerBlocker);
+        const QString version = TailnetShimDownloader::pin(package).version;
+        const QString remoteTip = busy
+            ? tr("A waveform install is already in progress.")
+            : !connected ? tr("Connect to a radio before installing Remote Access.")
+            : !remoteReady ? dockerBlocker
+            : native
+            ? tr("Download the remote-access waveform (version %1), verify it, and install it.")
+                  .arg(version)
+            : tr("Download the remote-access container (version %1), verify it, and install it.")
+                  .arg(version);
         m_installRemoteAccessAction->setToolTip(remoteTip);
         m_installRemoteAccessAction->setStatusTip(remoteTip);
     }
@@ -1556,23 +1574,44 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
     if (!m_radioModel || !m_radioModel->isConnected()) {
         return;
     }
-    const QString blocker = dockerInstallBlockerText(m_radioModel, m_radioModel->flexWaveformModel());
-    if (!blocker.isEmpty()) {
-        showDockerWfpNotReadyDialog(this, blocker);
+    installRemoteAccess(remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container);
+}
+
+void WaveformsDialog::installRemoteAccess(bool container)
+{
+    if (!m_radioModel || !m_radioModel->isConnected()) {
         return;
+    }
+    const TailnetShimPackage package =
+        container ? TailnetShimPackage::Container : TailnetShimPackage::Native;
+    const bool docker = container;
+    if (docker) {
+        const QString blocker =
+            dockerInstallBlockerText(m_radioModel, m_radioModel->flexWaveformModel());
+        if (!blocker.isEmpty()) {
+            showDockerWfpNotReadyDialog(this, blocker);
+            return;
+        }
+    }
+    if (m_shimDownloader && m_shimDownloader->isRunning()) {
+        return;
+    }
+    // The radio may have changed since the last download, and with it the package.
+    if (m_shimDownloader && m_shimDownloader->package() != package) {
+        m_shimDownloader->deleteLater();
+        m_shimDownloader = nullptr;
     }
     if (!m_shimDownloader) {
-        m_shimDownloader = new TailnetShimDownloader(this);
-    }
-    if (m_shimDownloader->isRunning()) {
-        return;
+        m_shimDownloader = new TailnetShimDownloader(package, this);
     }
 
+    const QString version = TailnetShimDownloader::pin(package).version;
     const CanonProgress dl = makeCanonProgress(
         tr("Downloading Remote Access"),
-        tr("Downloading the remote-access container %1 and checking it against the release "
-           "this AetherSDR expects...")
-            .arg(QString::fromLatin1(TailnetShimRelease::kVersion)),
+        docker ? tr("Downloading the remote-access container %1 and checking it against the "
+                    "release this AetherSDR expects...").arg(version)
+               : tr("Downloading the remote-access waveform %1 and checking it against the "
+                    "release this AetherSDR expects...").arg(version),
         this);
     CanonWindow* progress = dl.window;
     QProgressBar* bar = dl.bar;
@@ -1586,6 +1625,7 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
     });
 
     const QPointer<RadioModel> modelGuard(m_radioModel);
+    const RadioControlSession chosenSession = m_radioModel->controlSession();
     // Each signal fires once per attempt; whichever fires first closes the
     // window and disconnects the other.
     auto finish = [progress]() {
@@ -1595,13 +1635,15 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
     auto readyConn = std::make_shared<QMetaObject::Connection>();
     auto failConn = std::make_shared<QMetaObject::Connection>();
     *readyConn = connect(m_shimDownloader, &TailnetShimDownloader::ready, this,
-                         [this, finish, modelGuard, readyConn, failConn](const QString& path) {
+                         [this, finish, modelGuard, chosenSession, readyConn, failConn,
+                          docker](const QString& path) {
         disconnect(*readyConn);
         disconnect(*failConn);
         finish();
         updateInstallButtonState();
-        if (modelGuard) {
-            installWaveformPath(true, path, modelGuard);
+        // A reconnect during the download may have brought a different radio.
+        if (RadioModel* radio = radioStillChosen(modelGuard, chosenSession)) {
+            installWaveformPath(docker, path, radio);
         }
     });
     *failConn = connect(m_shimDownloader, &TailnetShimDownloader::failed, this,
@@ -1618,17 +1660,23 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
     updateInstallButtonState();
 }
 
-void WaveformsDialog::resetRemoteAccess()
+void WaveformsDialog::resetRemoteAccess(bool container)
 {
     if (!m_radioModel || !m_radioModel->isConnected()) {
         return;
     }
-    const QString name = QString::fromLatin1(kTailnetShimContainerName);
+    // The installed row says which package this is; the platform may not be
+    // identified yet.
+    const bool docker = container;
+    const QString name = QString::fromLatin1(docker ? kTailnetShimContainerName
+                                                    : kTailnetShimNativeName);
+    const QString removeAction = docker ? QStringLiteral("remove_container")
+                                        : QStringLiteral("uninstall");
     FlexWaveformModel& waveforms = m_radioModel->flexWaveformModel();
     setRowNotice(name, tr("Resetting…"), QStringLiteral("pending"), true);
 
     // The radio accepts the removal at once and takes a few seconds to carry
-    // it out; install again once it no longer lists the container.
+    // it out; install again once it no longer lists the shim.
     struct Pending {
         bool done{false};
         QMetaObject::Connection listed;
@@ -1637,7 +1685,7 @@ void WaveformsDialog::resetRemoteAccess()
     auto pending = std::make_shared<Pending>();
     auto* bound = new QTimer(this);
     bound->setSingleShot(true);
-    auto finish = [this, pending, bound](bool install) {
+    auto finish = [this, pending, bound, docker](bool install) {
         if (pending->done) {
             return;
         }
@@ -1647,42 +1695,51 @@ void WaveformsDialog::resetRemoteAccess()
         bound->stop();
         bound->deleteLater();
         if (install) {
-            onInstallRemoteAccessClicked();
+            installRemoteAccess(docker);
         }
     };
     pending->listed = connect(&waveforms, &FlexWaveformModel::waveformsChanged, this,
-                              [&waveforms, name, finish] {
+                              [&waveforms, finish] {
         for (const FlexWaveformEntry& w : waveforms.waveforms()) {
-            if (w.isContainer && w.name == name) {
+            if (isTailnetShimWaveform(w.name, w.isContainer)) {
                 return;
             }
         }
         finish(true);
     });
     pending->replied = connect(&waveforms, &FlexWaveformModel::commandFinished, this,
-                               [this, name, finish](const QString& action, const QString& which,
-                                                    bool ok, const QString& message) {
+                               [this, name, removeAction, docker, finish](
+                                   const QString& action, const QString& which,
+                                   bool ok, const QString& message) {
         // The row notice is onWaveformCommandFinished's; this adds the why.
-        if (action == QLatin1String("remove_container") && which == name && !ok) {
+        if (action == removeAction && which == name && !ok) {
             finish(false);
+            const QString why = message.isEmpty() ? tr("the radio refused it") : message;
             showWaveformInstallResultDialog(
                 this, tr("Reset Failed"),
-                tr("The radio didn't remove the remote-access container: %1")
-                    .arg(message.isEmpty() ? tr("the radio refused it") : message));
+                docker ? tr("The radio didn't remove the remote-access container: %1").arg(why)
+                       : tr("The radio didn't uninstall the remote-access waveform: %1").arg(why));
         }
     });
     // Installing over a container the radio still lists would collide with
     // it: if the removal isn't seen in time, say so rather than install.
-    connect(bound, &QTimer::timeout, this, [this, name, finish] {
+    connect(bound, &QTimer::timeout, this, [this, name, docker, finish] {
         finish(false);
         setRowNotice(name, tr("Reset didn't finish"), QStringLiteral("error"), false);
         showWaveformInstallResultDialog(
             this, tr("Reset Failed"),
-            tr("The radio still lists the remote-access container after 30 seconds. Remove it "
-               "from the Waveforms list, then install Remote Access again."));
+            docker ? tr("The radio still lists the remote-access container after 30 seconds. "
+                        "Remove it from the Waveforms list, then install Remote Access again.")
+                   : tr("The radio still lists the remote-access waveform after 30 seconds. "
+                        "Uninstall it from the Waveforms list, then install Remote Access "
+                        "again."));
     });
     bound->start(30'000);
-    waveforms.requestRemoveContainer(name);
+    if (docker) {
+        waveforms.requestRemoveContainer(name);
+    } else {
+        waveforms.requestUninstall(name);
+    }
 }
 
 void WaveformsDialog::installWaveformFile(const QString& title,
@@ -1696,13 +1753,15 @@ void WaveformsDialog::installWaveformFile(const QString& title,
 
     const QPointer<WaveformsDialog> self(this);
     const QPointer<RadioModel> modelGuard(m_radioModel);
+    const RadioControlSession chosenSession = m_radioModel->controlSession();
     const QString path = QFileDialog::getOpenFileName(
         this,
         title,
         initialPath,
         filter);
 
-    if (!self || !modelGuard || self->m_radioModel != modelGuard.data() || path.isEmpty()) {
+    if (!self || !radioStillChosen(modelGuard, chosenSession)
+        || self->m_radioModel != modelGuard.data() || path.isEmpty()) {
         return;
     }
 
@@ -2177,13 +2236,14 @@ void WaveformsDialog::refreshWaveformList()
         actionLayout->setContentsMargins(0, 0, 0, 0);
         actionLayout->setSpacing(kInstalledWaveformActionButtonSpacing);
 
-        // The remote-access container gets a Configure… button that opens its
-        // Tailscale settings; every other waveform keeps Restart / Remove only.
+        // The remote-access shim (container or legacy waveform) gets a
+        // Configure… button that opens its Tailscale settings; every other
+        // waveform keeps Restart / Remove only.
         QPushButton* configureBtn = nullptr;
-        if (isContainer && name == QLatin1String(kTailnetShimContainerName)) {
+        if (isTailnetShimWaveform(name, isContainer)) {
             configureBtn = new QPushButton(tr("Configure…"), actionWidget);
             configureBtn->setAccessibleName(tr("Configure remote access for waveform %1").arg(name));
-            connect(configureBtn, &QPushButton::clicked, this, [this]() {
+            connect(configureBtn, &QPushButton::clicked, this, [this, isContainer]() {
                 // A CanonWindow: one at a time; a second click raises it.
                 static QPointer<TailnetShimDialog> open;
                 if (open) {
@@ -2191,10 +2251,10 @@ void WaveformsDialog::refreshWaveformList()
                     open->activateWindow();
                     return;
                 }
-                auto* dialog = new TailnetShimDialog(m_radioModel, this);
+                auto* dialog = new TailnetShimDialog(m_radioModel, !isContainer, this);
                 dialog->setAttribute(Qt::WA_DeleteOnClose);
-                connect(dialog, &TailnetShimDialog::resetRequested,
-                        this, &WaveformsDialog::resetRemoteAccess);
+                connect(dialog, &TailnetShimDialog::resetRequested, this,
+                        [this, isContainer] { resetRemoteAccess(isContainer); });
                 open = dialog;
                 dialog->show();
             });
