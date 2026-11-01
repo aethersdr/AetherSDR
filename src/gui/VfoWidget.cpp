@@ -2804,7 +2804,15 @@ void VfoWidget::buildTabContent()
                                      void (SliceModel::* setter)(bool),
                                      DspLevelTarget tag) {
             connect(btn, &QPushButton::toggled, this, [this, setter, tag](bool on) {
-                if (!m_updatingFromModel && m_slice) (m_slice->*setter)(on);
+                // Keep the object operand in a local: calling a captured
+                // member-function pointer on m_slice directly makes GCC 13.3's
+                // Debug UBSan code read an uninitialized register, which ASan
+                // reports as a stack-buffer-underflow (#6724). The client DSP
+                // applets use the same form for the same reason.
+                SliceModel* const target = m_slice;
+                if (!m_updatingFromModel && target) {
+                    (target->*setter)(on);
+                }
                 if (on) pushDspLevelTarget(tag);
                 else    popDspLevelTarget(tag);
             });
