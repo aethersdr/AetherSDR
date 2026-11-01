@@ -10,6 +10,7 @@ class QCheckBox;
 class QComboBox;
 class QLineEdit;
 class QPushButton;
+class QTimer;
 class QToolButton;
 class QVBoxLayout;
 
@@ -62,6 +63,10 @@ private:
     // container, or the legacy waveform for a radio without a Waveform
     // Processor.
     void installRemoteAccess(bool container);
+    // The bottom bar: "Install radio health tools" mirrors whether the radio
+    // lists the agent; the readout polls it while installed.
+    void updateHealthBar();
+    void onHealthToggled(bool install);
     // Row feedback for Restart / Remove: a restart changes nothing visible,
     // so the row says what was asked and what the radio answered.
     void setRowNotice(const QString& name, const QString& text, const QString& tone, bool pending);
@@ -87,6 +92,12 @@ private:
     QHash<QString, RowNotice> m_rowNotices;
     quint64 m_rowNoticeSerial{0};
     class TailnetShimDownloader* m_shimDownloader{nullptr};
+    class TailnetShimDownloader* m_healthDownloader{nullptr};
+    class RadioHealthClient* m_healthClient{nullptr};
+    QCheckBox*         m_healthCheck{nullptr};
+    QLabel*            m_healthLabel{nullptr};
+    QTimer*            m_healthTimer{nullptr};
+    bool               m_healthBusy{false};   // an install or uninstall in flight
     QWidget*           m_listContainer{nullptr};
     QVBoxLayout*       m_listLayout{nullptr};
     WaveformInstaller* m_installer{nullptr};

@@ -4422,6 +4422,15 @@ target_include_directories(tailnet_shim_client_test PRIVATE src)
 target_link_libraries(tailnet_shim_client_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME tailnet_shim_client_test COMMAND tailnet_shim_client_test)
 
+# The radio health agent's readout: parse, refuse, summarize; socket-free.
+add_executable(radio_health_client_test
+    tests/radio_health_client_test.cpp
+    src/core/RadioHealthClient.cpp
+)
+target_include_directories(radio_health_client_test PRIVATE src)
+target_link_libraries(radio_health_client_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME radio_health_client_test COMMAND radio_health_client_test)
+
 # The Remote Access sign-in QR code: encodes the URL scannably (quiet zone,
 # finder patterns, theme-invariant colors), socket-free.
 add_executable(qr_code_image_test

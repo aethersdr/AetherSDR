@@ -47,6 +47,18 @@
   "split": "",
   "confidence": "high"
  },
+ "core/RadioHealthClient.h": {
+  "tag": "peripheral(radio-health)",
+  "note": "Reads one JSON line from the radio health agent on the radio's LAN address (TCP 48994) and summarizes free storage, memory and CPU for the Waveforms window's health bar. Not SmartSDR wire: AetherSDR's own TCP service (the radio health agent, tools/radio-health) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/TailnetShimClient.h).",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/RadioHealthRelease.h": {
+  "tag": "peripheral(radio-health)",
+  "note": "Pinned version, URL, size and SHA-256 of the radio health agent package, plus its waveform name and port. Not SmartSDR wire: AetherSDR's own TCP service (the radio health agent, tools/radio-health) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/TailnetShimClient.h).",
+  "split": "",
+  "confidence": "high"
+ },
  "core/TailnetShimTokenStore.h": {
   "tag": "peripheral(tailnet-shim)",
   "note": "OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h).",

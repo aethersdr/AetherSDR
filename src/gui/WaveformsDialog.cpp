@@ -8,6 +8,8 @@
 #include "core/TailnetShimClient.h"
 #include "core/TailnetShimRelease.h"
 #include "core/TailnetShimDownloader.h"
+#include "core/RadioHealthClient.h"
+#include "core/RadioHealthRelease.h"
 #include "TailnetShimDialog.h"
 #include "FramelessResizer.h"
 #include "CanonMessageBox.h"
@@ -37,6 +39,7 @@
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPointer>
+#include <QLocale>
 #include <QTimer>
 #include <memory>
 #include <QPushButton>
@@ -272,6 +275,7 @@ QFrame#WaveformsHeaderRule {
     max-height: 1px;
 }
 QFrame#WaveformsStatusFrame,
+QFrame#WaveformsHealthFrame,
 QFrame#localDigitalVoicePanel,
 QFrame#installedWaveformsPanel {
     background: {{color.canon.raised}};
@@ -352,6 +356,7 @@ QLabel#ValuePill {
     background: {{color.canon.control}};
 }
 QLabel#MutedLabel,
+QLabel#RadioHealthReadout,
 QLabel#EmptyStateText {
     color: {{color.canon.muted}};
 }
@@ -1427,6 +1432,52 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     installedRoot->addWidget(listFrame, 1);
     contentRow->addWidget(installedFrame, 1);
 
+    // ── Radio health bar ──────────────────────────────────────────────────────
+    // An opt-in agent on the radio (tools/radio-health) reports its free
+    // storage, memory and CPU. It never appears in the installed list: this
+    // checkbox installs and removes it, and mirrors whether the radio lists it.
+    auto* healthFrame = makePanel(QStringLiteral("WaveformsHealthFrame"), bodyWidget());
+    auto* healthLayout = new QVBoxLayout(healthFrame);
+    healthLayout->setContentsMargins(18, 10, 18, 10);
+    healthLayout->setSpacing(4);
+    m_healthCheck = new QCheckBox(tr("Install radio health tools"), healthFrame);
+    m_healthCheck->setAccessibleName(tr("Install radio health tools"));
+    m_healthCheck->setToolTip(tr("Installs a small tool on the radio (about 63 KB) that reports "
+                                 "its free storage, memory and CPU here."));
+    m_healthLabel = new QLabel(healthFrame);
+    m_healthLabel->setObjectName(QStringLiteral("RadioHealthReadout"));
+    m_healthLabel->setAccessibleName(tr("Radio health"));
+    m_healthLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_healthLabel->setContentsMargins(27, 0, 0, 0);   // under the checkbox text
+    healthLayout->addWidget(m_healthCheck);
+    healthLayout->addWidget(m_healthLabel);
+    root->addWidget(healthFrame);
+
+    m_healthClient = new RadioHealthClient(this);
+    connect(m_healthClient, &RadioHealthClient::received, this, [this](const RadioHealth& h) {
+        const QString text = radiohealth::summary(h);
+        m_healthLabel->setText(text.isEmpty() ? tr("The radio reported no readings.") : text);
+        QStringList detail;
+        for (const RadioHealth::Volume& v : h.storage) {
+            detail << tr("%1: %2 free of %3").arg(v.path,
+                QLocale().formattedDataSize(qint64(v.freeBytes), 1, QLocale::DataSizeSIFormat),
+                QLocale().formattedDataSize(qint64(v.totalBytes), 1, QLocale::DataSizeSIFormat));
+        }
+        if (h.cpuCores > 0) {
+            detail << tr("%n CPU core(s)", "", h.cpuCores);
+        }
+        detail << tr("Radio health tools %1").arg(h.agentVersion);
+        m_healthLabel->setToolTip(detail.join(QLatin1Char('\n')));
+    });
+    connect(m_healthClient, &RadioHealthClient::failed, this, [this](const QString&) {
+        m_healthLabel->setText(tr("Waiting for the radio health tools to answer…"));
+        m_healthLabel->setToolTip({});
+    });
+    m_healthTimer = new QTimer(this);
+    m_healthTimer->setInterval(5000);
+    connect(m_healthTimer, &QTimer::timeout, m_healthClient, &RadioHealthClient::fetch);
+    connect(m_healthCheck, &QCheckBox::toggled, this, &WaveformsDialog::onHealthToggled);
+
     // ── Wire model + theme signals ────────────────────────────────────────────
     FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
     connect(&wfModel, &FlexWaveformModel::wfpStatusChanged,
@@ -1435,6 +1486,8 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
             this, &WaveformsDialog::updateInstallButtonState);
     connect(&wfModel, &FlexWaveformModel::waveformsChanged,
             this, &WaveformsDialog::refreshWaveformList);
+    connect(&wfModel, &FlexWaveformModel::waveformsChanged,
+            this, &WaveformsDialog::updateHealthBar);
     connect(&wfModel, &FlexWaveformModel::commandFinished,
             this, &WaveformsDialog::onWaveformCommandFinished);
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
@@ -1469,6 +1522,8 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     }
     connect(m_radioModel, &RadioModel::connectionStateChanged,
             this, &WaveformsDialog::updateInstallButtonState);
+    connect(m_radioModel, &RadioModel::connectionStateChanged,
+            this, &WaveformsDialog::updateHealthBar);
     connect(m_radioModel, &RadioModel::infoChanged,
             this, &WaveformsDialog::refreshStatus);
     connect(m_radioModel, &RadioModel::infoChanged,
@@ -1480,6 +1535,7 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     refreshStatus();
     updateInstallButtonState();
     refreshWaveformList();
+    updateHealthBar();
     if constexpr (kShowLocalDigitalVoiceControls) {
         refreshDStarConfiguration();
         refreshDStarStatus();
@@ -1733,6 +1789,121 @@ void WaveformsDialog::resetRemoteAccess(bool container)
     }
 }
 
+void WaveformsDialog::updateHealthBar()
+{
+    if (!m_healthCheck || !m_radioModel) {
+        return;
+    }
+    bool installed = false;
+    for (const FlexWaveformEntry& w : m_radioModel->flexWaveformModel().waveforms()) {
+        installed = installed || isRadioHealthWaveform(w.name, w.isContainer);
+    }
+    // The agent answers only on the radio's local network.
+    const QHostAddress address = m_radioModel->radioAddress();
+    const bool lan = m_radioModel->isConnected() && !address.isNull()
+        && address.protocol() == QAbstractSocket::IPv4Protocol
+        && (address.isPrivateUse() || address.isLinkLocal());
+    const bool busy = m_healthBusy || (m_installer && m_installer->isInstalling());
+    {
+        const QSignalBlocker block(m_healthCheck);
+        m_healthCheck->setChecked(installed);
+    }
+    m_healthCheck->setEnabled(lan && !busy);
+    m_healthClient->setRadioAddress(lan ? address : QHostAddress());
+
+    if (busy) {
+        m_healthLabel->setText(installed ? tr("Removing the radio health tools…")
+                                         : tr("Installing the radio health tools…"));
+    } else if (!m_radioModel->isConnected()) {
+        m_healthLabel->setText(tr("Connect to a radio to see its storage, memory and CPU."));
+    } else if (!lan) {
+        m_healthLabel->setText(tr("Radio health is shown only on the radio's local network."));
+    } else if (!installed) {
+        m_healthLabel->setText(tr("Shows the radio's free storage, memory and CPU here."));
+    }
+    m_healthLabel->setToolTip({});
+
+    if (installed && lan && !busy) {
+        if (!m_healthTimer->isActive()) {
+            m_healthLabel->setText(tr("Waiting for the radio health tools to answer…"));
+            m_healthTimer->start();
+            m_healthClient->fetch();
+        }
+    } else {
+        m_healthTimer->stop();
+    }
+}
+
+void WaveformsDialog::onHealthToggled(bool install)
+{
+    if (!m_radioModel || !m_radioModel->isConnected() || m_healthBusy) {
+        updateHealthBar();
+        return;
+    }
+    const QString name = QString::fromLatin1(kRadioHealthWaveformName);
+    if (!install) {
+        m_healthBusy = true;
+        updateHealthBar();
+        FlexWaveformModel& waveforms = m_radioModel->flexWaveformModel();
+        auto conn = std::make_shared<QMetaObject::Connection>();
+        *conn = connect(&waveforms, &FlexWaveformModel::commandFinished, this,
+                        [this, conn, name](const QString& action, const QString& which,
+                                           bool ok, const QString& message) {
+            if (action != QLatin1String("uninstall") || which != name) {
+                return;
+            }
+            disconnect(*conn);
+            m_healthBusy = false;
+            updateHealthBar();
+            if (!ok) {
+                m_healthLabel->setText(tr("The radio didn't remove the health tools: %1")
+                    .arg(message.isEmpty() ? tr("it refused") : message));
+            }
+        });
+        waveforms.requestUninstall(name);
+        return;
+    }
+
+    if (!m_healthDownloader) {
+        const TailnetShimDownloader::Pin pin{
+            QString::fromLatin1(RadioHealthRelease::kVersion),
+            QString::fromLatin1(RadioHealthRelease::kUrl),
+            QByteArray(RadioHealthRelease::kSha256), RadioHealthRelease::kSize};
+        const QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
+            + QStringLiteral("/waveforms/aether-health-%1/AetherHealth.ssdr_waveform")
+                  .arg(pin.version);
+        m_healthDownloader = new TailnetShimDownloader(pin, cache, this);
+    }
+    if (m_healthDownloader->isRunning()) {
+        return;
+    }
+    m_healthBusy = true;
+    updateHealthBar();
+    const QPointer<RadioModel> modelGuard(m_radioModel);
+    const RadioControlSession chosenSession = m_radioModel->controlSession();
+    auto readyConn = std::make_shared<QMetaObject::Connection>();
+    auto failConn = std::make_shared<QMetaObject::Connection>();
+    *readyConn = connect(m_healthDownloader, &TailnetShimDownloader::ready, this,
+                         [this, modelGuard, chosenSession, readyConn, failConn](const QString& path) {
+        disconnect(*readyConn);
+        disconnect(*failConn);
+        m_healthBusy = false;
+        if (RadioModel* radio = radioStillChosen(modelGuard, chosenSession)) {
+            installWaveformPath(false, path, radio);
+        }
+        updateHealthBar();
+    });
+    *failConn = connect(m_healthDownloader, &TailnetShimDownloader::failed, this,
+                        [this, readyConn, failConn](const QString& message) {
+        disconnect(*readyConn);
+        disconnect(*failConn);
+        m_healthBusy = false;
+        updateHealthBar();
+        m_healthLabel->setText(message);
+    });
+    m_healthDownloader->start();
+}
+
 void WaveformsDialog::installWaveformFile(const QString& title,
                                           const QString& filter,
                                           bool docker,
@@ -1823,6 +1994,7 @@ void WaveformsDialog::installWaveformPath(bool docker, const QString& path, Radi
                 progress->close();
                 progress->deleteLater();
                 updateInstallButtonState();
+                updateHealthBar();
                 showWaveformInstallResultDialog(
                     this,
                     ok ? tr("Install Complete") : tr("Install Failed"),
@@ -2163,7 +2335,13 @@ void WaveformsDialog::refreshWaveformList()
     }
 
     const FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
-    const QList<FlexWaveformEntry>& waveforms = wfModel.waveforms();
+    // The radio health agent is the health bar's, not a row of its own.
+    QList<FlexWaveformEntry> waveforms;
+    for (const FlexWaveformEntry& entry : wfModel.waveforms()) {
+        if (!isRadioHealthWaveform(entry.name, entry.isContainer)) {
+            waveforms.append(entry);
+        }
+    }
 
     if (waveforms.isEmpty()) {
         m_listLayout->insertWidget(0, makeEmptyWaveformsState(m_listContainer));
