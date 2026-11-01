@@ -46,6 +46,9 @@ private:
     void hideSignIn();
     void onLogin(const TailnetShimLogin& login);
     void setAdvancedOpen(bool open);
+    // Starts the QR sign-in without being asked when no tailnet owns the
+    // radio: never provisioned, or a sign-in abandoned with its token.
+    void maybeSignInUnasked();
     void saveAllowList();
     void saveSharing();
     void signOut();

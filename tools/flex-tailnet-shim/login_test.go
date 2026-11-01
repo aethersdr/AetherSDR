@@ -226,13 +226,66 @@ func TestProvisionWithoutAKeyReturnsTheSignInURL(t *testing.T) {
 	if !n.checkToken(reply.AdminToken) {
 		t.Fatal("the returned token isn't the node's")
 	}
-	// A key-less provision on a provisioned node still needs its token.
-	if _, _, err := n.ProvisionInteractive("", "flex-qr", nil, nil, nil); !errors.Is(err, errUnauthorized) {
-		t.Fatalf("re-provision without the token: %v", err)
-	}
 	// Stop the background join this test left waiting for its sign-in.
 	if _, err := n.interruptBoot(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A sign-in by URL that never completed belongs to no tailnet, so it can be
+// started over without the token (the window that began it may be gone);
+// once the node has joined, the token is required again.
+func TestANeverCompletedSignInCanBeStartedOverWithoutTheToken(t *testing.T) {
+	n := newTestNode(t, "")
+	fb := &fakeBackend{}
+	fb.set(loginInfo{Backend: "NeedsLogin", AuthURL: testAuthURL})
+	n.startFn = func(ctx context.Context, _ string, _ time.Duration) error {
+		n.mu.Lock()
+		n.loginRead = fb.read
+		n.mu.Unlock()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	first, _, err := n.ProvisionInteractive("", "flex-qr", nil, nil, nil)
+	if err != nil || first == "" {
+		t.Fatalf("first: %q %v", first, err)
+	}
+	if !n.Status().Claimable {
+		t.Fatal("a pending sign-in isn't claimable")
+	}
+	second, url, err := n.ProvisionInteractive("", "flex-qr", nil, nil, nil)
+	if err != nil || second == "" || second == first || url != testAuthURL {
+		t.Fatalf("token-less restart: %q %q %v", second, url, err)
+	}
+	if _, err := n.interruptBoot(); err != nil {
+		t.Fatal(err)
+	}
+	// The node joins: the window closes, and survives a restart of the shim.
+	n.markJoined()
+	if n.Status().Claimable {
+		t.Fatal("a joined node is still claimable")
+	}
+	if _, _, err := n.ProvisionInteractive("", "flex-qr", nil, nil, nil); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("a joined node re-provisioned without its token: %v", err)
+	}
+	reloaded := &Node{StateDir: n.StateDir}
+	if err := reloaded.load(); err != nil || reloaded.cfg.PendingSignIn {
+		t.Fatalf("joined state not saved: %v %+v", err, reloaded.cfg)
+	}
+}
+
+// A keyed provision never opens the token-free window.
+func TestAKeyedNodeIsNeverClaimable(t *testing.T) {
+	n := newTestNode(t, "")
+	n.startFn = inertStart(n)
+	if _, err := n.Provision("", "tskey-auth-k", "flex-test", nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n.Status().Claimable {
+		t.Fatal("a keyed node is claimable")
+	}
+	if _, _, err := n.ProvisionInteractive("", "flex-qr", nil, nil, nil); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("taken over without the token: %v", err)
 	}
 }
 

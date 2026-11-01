@@ -84,6 +84,10 @@ std::optional<TailnetShimStatus> statusFromObject(const QJsonObject& o)
     st.advertisedRoutes = fieldList(o, QStringLiteral("advertised_routes"));
     st.approvedRoutes = fieldList(o, QStringLiteral("approved_routes"));
     st.keyExpiry = field(o, QStringLiteral("key_expiry"));
+    // Before 0.5.0 there was no such field: only an unprovisioned radio was.
+    st.claimable = o.contains(QStringLiteral("claimable"))
+        ? o.value(QStringLiteral("claimable")).toBool()
+        : !st.provisioned;
     return st;
 }
 

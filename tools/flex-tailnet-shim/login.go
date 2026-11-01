@@ -229,7 +229,7 @@ func (n *Node) ProvisionInteractive(presented, hostname string, allow, routes []
 	}
 	token, hash := newToken()
 	cfg := provisionConfig{TokenSHA256: hash, Hostname: hostname, Allow: allow, Routes: routes,
-		ShareDiscovered: shareDiscovered}
+		ShareDiscovered: shareDiscovered, PendingSignIn: true}
 	if err := n.replaceNode(cfg); err != nil {
 		end()
 		return "", "", err
@@ -264,6 +264,26 @@ func (n *Node) ProvisionInteractive(presented, hostname string, allow, routes []
 		time.Sleep(250 * time.Millisecond)
 	}
 	return token, "", nil
+}
+
+// markJoined records that the node has been on the tailnet, ending the
+// token-free window a pending sign-in by URL leaves open. Caller holds opMu
+// (start does).
+func (n *Node) markJoined() {
+	n.mu.Lock()
+	cfg := n.cfg
+	n.mu.Unlock()
+	if !cfg.PendingSignIn {
+		return
+	}
+	cfg.PendingSignIn = false
+	if err := n.save(cfg); err != nil {
+		log.Printf("could not record the completed sign-in: %v", err)
+		return
+	}
+	n.mu.Lock()
+	n.cfg.PendingSignIn = false
+	n.mu.Unlock()
 }
 
 // replaceNode leaves the previous tailnet and saves cfg as the node's

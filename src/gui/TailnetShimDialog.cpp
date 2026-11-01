@@ -453,16 +453,7 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
             [this](const TailnetShimStatus& st) {
         setBusy(false);
         showStatus(st);
-        // A radio not yet on any tailnet gets its sign-in code as soon as
-        // the window opens: there is nothing to choose first. Once per
-        // window, so a failed attempt isn't retried behind the operator's
-        // back; Sign In with QR Code tries again.
-        if (!m_autoSignInTried && m_lanReachable && !st.provisioned
-            && st.state == QLatin1String("unprovisioned")
-            && tailnetshim::supportsQrSignIn(st.version)) {
-            m_autoSignInTried = true;
-            signInWithQr();
-        }
+        maybeSignInUnasked();
     });
     connect(&m_client, &TailnetShimClient::requestFailed,
             this, &TailnetShimDialog::onRequestFailed);
@@ -534,12 +525,40 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
         m_adminToken = token;
         m_tokenLoaded = true;
         updateControls();
+        maybeSignInUnasked();   // the status may have arrived first
     });
     refresh();
 }
 
+void TailnetShimDialog::maybeSignInUnasked()
+{
+    if (!m_status) {
+        return;
+    }
+    const TailnetShimStatus& st = *m_status;
+    // A radio not yet on any tailnet gets its sign-in code as soon as
+    // the window opens: there is nothing to choose first. Once per
+    // window, so a failed attempt isn't retried behind the operator's
+    // back; Sign In with QR Code tries again.
+    // That includes a QR sign-in someone started and never finished
+    // whose token this computer doesn't hold: it belongs to no tailnet.
+    const bool fresh = !st.provisioned && st.state == QLatin1String("unprovisioned");
+    const bool abandoned = st.claimable && st.provisioned && m_adminToken.isEmpty()
+        && m_tokenLoaded;
+    if (!m_autoSignInTried && !m_busy && m_lanReachable && (fresh || abandoned)
+        && tailnetshim::supportsQrSignIn(st.version)) {
+        m_autoSignInTried = true;
+        signInWithQr();
+    }
+}
+
 void TailnetShimDialog::setWrapped(QLabel* label, const QString& text, int width)
 {
+    // Status polls repeat the same text every few seconds; re-laying out the
+    // window for it makes it jump.
+    if (label->wordWrap() && label->text() == text) {
+        return;
+    }
     label->setWordWrap(true);
     label->setText(text);
     label->ensurePolished();
@@ -711,8 +730,9 @@ void TailnetShimDialog::updateControls()
     const bool known = m_lanReachable && m_status.has_value() && !m_busy;
     const bool provisioned = known && m_status->provisioned;
     const bool haveToken = !m_adminToken.isEmpty();
-    // A provisioned container accepts changes only with its admin token.
-    const bool mayChange = known && (!provisioned || haveToken);
+    // A provisioned container accepts changes only with its admin token,
+    // unless no tailnet owns it yet (claimable).
+    const bool mayChange = known && (!provisioned || haveToken || m_status->claimable);
 
     // Saving the access list or sharing restarts a join on the radio, which
     // would replace the QR code being scanned: not while one is waited on.
@@ -750,7 +770,7 @@ void TailnetShimDialog::updateControls()
     m_copyButton->setEnabled(m_status && !m_status->tailnetIp.isEmpty());
 
     QString note;
-    if (provisioned && m_tokenLoaded && !haveToken) {
+    if (provisioned && m_tokenLoaded && !haveToken && !m_status->claimable) {
         note = tr("Note: this computer doesn't hold the admin token for this radio's "
                   "remote-access container, so it can't change the key, access list or "
                   "shared devices. To start over, remove and reinstall the container from the "
@@ -783,7 +803,7 @@ void TailnetShimDialog::join()
 
 void TailnetShimDialog::signInWithQr()
 {
-    if (m_status && m_status->provisioned) {
+    if (m_status && m_status->provisioned && !m_status->claimable) {
         const auto answer = QMessageBox::question(
             this, tr("Sign In Again"),
             tr("Sign this radio in again? It leaves your tailnet now, remote sessions end, and "

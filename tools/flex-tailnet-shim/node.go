@@ -51,6 +51,11 @@ type provisionConfig struct {
 	// ShareDiscovered shares every 4O3A device the container hears on the LAN
 	// (nil means the default: on).
 	ShareDiscovered *bool `json:"share_discovered,omitempty"`
+	// PendingSignIn: provisioned for a sign-in by URL that hasn't completed.
+	// The node belongs to no tailnet yet, so, like first use, a LAN caller
+	// may start it over without the token (whoever began it may have lost
+	// it with their window). Cleared once the node is first on the tailnet.
+	PendingSignIn bool `json:"pending_sign_in,omitempty"`
 }
 
 func (c provisionConfig) shareDiscovered() bool {
@@ -453,6 +458,7 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 	n.authorize = admitOnly(n.check)
 	n.advertised = nil
 	n.mu.Unlock()
+	n.markJoined()
 	n.RefreshRoutes()
 	go reportHealth(lc)
 	kctx, kcancel := context.WithCancel(context.Background())
@@ -577,7 +583,7 @@ func (n *Node) SetSharing(presented string, routes []string, shareDiscovered *bo
 func (n *Node) beginOp(presented string, firstUse bool) (end func(), err error) {
 	refused := func() bool {
 		n.mu.Lock()
-		needsToken := !firstUse || n.provisioned()
+		needsToken := !firstUse || (n.provisioned() && !n.cfg.PendingSignIn)
 		n.mu.Unlock()
 		return needsToken && !n.checkToken(presented)
 	}
@@ -882,6 +888,9 @@ type Status struct {
 	// Per-session UDP counters: where VITA-49 stops, if it does.
 	SessionDetail []SessionInfo `json:"session_detail"`
 	LastError     string        `json:"last_error"`
+	// Claimable: no tailnet owns the node yet (unprovisioned, or a sign-in by
+	// URL never completed), so provisioning needs no admin token.
+	Claimable bool `json:"claimable"`
 	// KeyExpiry is when the node's sign-in expires (RFC 3339), empty when it
 	// doesn't. A node signed in by URL expires after 180 days unless key
 	// expiry is turned off for it in the Tailscale admin console.
@@ -962,6 +971,7 @@ func (n *Node) statusLocked() Status {
 		Version: shimVersion, Provisioned: n.provisioned(), State: n.state,
 		Hostname: n.cfg.Hostname, DNSName: n.dnsName, Allow: n.cfg.Allow,
 		LastError: n.lastError,
+		Claimable: !n.provisioned() || n.cfg.PendingSignIn,
 	}
 	if n.keyExpiry != nil {
 		st.KeyExpiry = n.keyExpiry.UTC().Format(time.RFC3339)

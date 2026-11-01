@@ -48,6 +48,9 @@ struct TailnetShimStatus {
     QStringList advertisedRoutes;    // what the tailnet is offered now
     QStringList approvedRoutes;      // what the admin console has approved
     QString keyExpiry;               // RFC 3339 when the sign-in expires; empty: never
+    // No tailnet owns the radio yet (never provisioned, or a QR sign-in that
+    // never completed): provisioning needs no admin token.
+    bool claimable{false};
 };
 
 // A provisioning reply. authUrl is set for a sign-in by QR code (no auth

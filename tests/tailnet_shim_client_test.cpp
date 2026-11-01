@@ -139,6 +139,15 @@ int main(int argc, char** argv)
             R"({"version":"0.5.0","state":"running","key_expiry":"2027-04-30T12:00:00Z"})");
         ok &= expect(withExpiry && withExpiry->keyExpiry == QStringLiteral("2027-04-30T12:00:00Z"),
                      "status key expiry parses");
+        const auto pending = tailnetshim::parseStatus(
+            R"({"version":"0.5.0","provisioned":true,"state":"needs_login","claimable":true})");
+        ok &= expect(pending && pending->claimable, "a never-completed sign-in is claimable");
+        const auto oldRunning = tailnetshim::parseStatus(
+            R"({"version":"0.4.1","provisioned":true,"state":"running"})");
+        const auto oldFresh = tailnetshim::parseStatus(
+            R"({"version":"0.4.1","provisioned":false,"state":"unprovisioned"})");
+        ok &= expect(oldRunning && !oldRunning->claimable && oldFresh && oldFresh->claimable,
+                     "before 0.5.0 only an unprovisioned radio is claimable");
 
         ok &= expect(!tailnetshim::supportsQrSignIn(QStringLiteral("0.4.1")), "0.4.1 has no QR sign-in");
         ok &= expect(!tailnetshim::supportsQrSignIn(QStringLiteral("0.4.1-native")), "0.4.1-native neither");
