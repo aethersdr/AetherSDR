@@ -23,9 +23,19 @@ public:
     // Whether a and b are on one volume, so a rename can move between them.
     static bool sameVolume(const QString& a, const QString& b);
 
-    // /usr/bin/codesign --verify --deep --strict on tree; problem is what it
-    // said when it refuses.
-    static bool verifySignature(const QString& tree, QString* problem);
+    // The Developer ID team that signed bundle ("944M585CW5"); empty when it
+    // has none (an ad-hoc signed local build) or can't be read.
+    static QString teamOf(const QString& bundle);
+
+    // /usr/bin/codesign --verify --deep --strict on tree, also requiring, when
+    // team is given, a Developer ID signature from that team; problem is what
+    // codesign said when it refuses.
+    static bool verifySignature(const QString& tree, const QString& team, QString* problem);
+
+    // Whether a process other than this one runs bundle's binary: another
+    // AetherSDR, started with open -n, which the swap would pull the bundle
+    // out from under.
+    static bool otherInstanceRunning(const QString& bundle);
 
     // Runs <tree>/Contents/MacOS/AetherSDR --update-selftest and waits for it
     // (60 s at most): true when it wrote version as its marker.
@@ -36,7 +46,8 @@ public:
         std::function<bool(const QString& tree, QString* problem)> signature;
         std::function<bool(const QString& tree, const QString& version)> selfTest;
     };
-    static Checks real();
+    // codesign pinned to the team that signed runningBundle, and the self-test.
+    static Checks real(const QString& runningBundle);
 
     enum class Prepared {
         Ready,    // *ready is the bundle to swap in as AetherSDR exits

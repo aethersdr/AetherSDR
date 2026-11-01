@@ -232,10 +232,17 @@ private slots:
                                    {QStringLiteral("--force"), QStringLiteral("--sign"), QStringLiteral("-"), bundle}),
                  0);
         QString problem;
-        QVERIFY2(MacInstall::verifySignature(bundle, &problem), qPrintable(problem));
+        QVERIFY2(MacInstall::verifySignature(bundle, {}, &problem), qPrintable(problem));
         writeFile(bundle + QStringLiteral("/Contents/Resources/qt.conf"), "[Paths]\nPrefix=elsewhere\n");
-        QVERIFY(!MacInstall::verifySignature(bundle, &problem));
+        QVERIFY(!MacInstall::verifySignature(bundle, {}, &problem));
         QVERIFY2(problem.contains(QLatin1String("doesn't match")), qPrintable(problem));
+        // Signed again, ad hoc: valid, but not by the team a release requires.
+        QCOMPARE(QProcess::execute(QStringLiteral("/usr/bin/codesign"),
+                                   {QStringLiteral("--force"), QStringLiteral("--sign"), QStringLiteral("-"), bundle}),
+                 0);
+        QVERIFY(MacInstall::teamOf(bundle).isEmpty());
+        QVERIFY2(MacInstall::verifySignature(bundle, {}, &problem), qPrintable(problem));
+        QVERIFY(!MacInstall::verifySignature(bundle, QStringLiteral("944M585CW5"), &problem));
 #endif
     }
 
@@ -351,6 +358,82 @@ private slots:
                  qPrintable(problem));
         QVERIFY(UpdateInstaller::swapPending());
         UpdateInstaller::dropPendingSwap();
+    }
+
+    // Another AetherSDR running the bundle's binary is found; one that has
+    // exited is not.
+    void anotherInstanceOfTheBundleIsFound()
+    {
+#ifdef Q_OS_UNIX
+        QTemporaryDir tmp;
+        const QString bundle = tmp.filePath(QStringLiteral("Apps/AetherSDR.app"));
+        makeBundle(bundle, "26.11.1");
+        const QString binary = bundle + QStringLiteral("/Contents/MacOS/AetherSDR");
+        QFile::remove(binary);
+        QVERIFY(QFile::copy(QStringLiteral("/bin/sleep"), binary));
+        QFile(binary).setPermissions(QFile(binary).permissions() | QFile::ExeOwner | QFile::ExeUser);
+        QVERIFY(!MacInstall::otherInstanceRunning(bundle));
+        QProcess other;
+        other.start(binary, {QStringLiteral("30")});
+        QVERIFY(other.waitForStarted());
+        QTRY_VERIFY_WITH_TIMEOUT(MacInstall::otherInstanceRunning(bundle), 5000);
+        other.kill();
+        QVERIFY(other.waitForFinished(5000));
+        QTRY_VERIFY_WITH_TIMEOUT(!MacInstall::otherInstanceRunning(bundle), 5000);
+#endif
+    }
+
+    // While another AetherSDR runs from the bundle the swap waits, as the
+    // Windows helper does: nothing changes and the release stays staged.
+    void theSwapWaitsForAnotherInstance()
+    {
+        QTemporaryDir tmp;
+        const QString bundle = tmp.filePath(QStringLiteral("Apps/AetherSDR.app"));
+        makeBundle(bundle, "26.11.1");
+        const QString state = tmp.filePath(QStringLiteral("update"));
+        const QString staged = state + QStringLiteral("/26.11.2");
+        makeBundle(staged, "26.11.2");
+        UpdateSettings::setQuitSwitchTries(QStringLiteral("26.11.2"), 0);
+        QString problem;
+        QVERIFY(UpdateInstaller::prepareSwap(bundle, staged, QStringLiteral("26.11.2"), passing(), false, state,
+                                             &problem));
+        UpdateInstaller::setOtherInstanceCheckForTesting([&](const QString& b) { return b == bundle; });
+        UpdateInstaller::finishSwapOnExit();
+        UpdateInstaller::setOtherInstanceCheckForTesting({});
+        QCOMPARE(readFile(bundle + QStringLiteral("/Contents/Info.plist")), QByteArray("<plist>26.11.1</plist>"));
+        QVERIFY(QFileInfo::exists(staged + QStringLiteral("/Contents/MacOS/AetherSDR")));
+        QCOMPARE(readFile(state + QStringLiteral("/swap-result.txt")), QByteArray("OldStillRunning 26.11.2\n"));
+        QCOMPARE(UpdateSettings::quitSwitchTries(QStringLiteral("26.11.2")), 0);   // not a failure
+    }
+
+    // A swap macOS refuses at exit (App Management, say) counts as a failed
+    // try: the third is final, so it is not retried at every quit.
+    void aSwapRefusedAtExitIsTriedThreeTimesThenDropped()
+    {
+        QTemporaryDir tmp;
+        const QString bundle = tmp.filePath(QStringLiteral("Apps/AetherSDR.app"));
+        makeBundle(bundle, "26.11.1");
+        const QString state = tmp.filePath(QStringLiteral("update"));
+        const QString staged = state + QStringLiteral("/26.11.2");
+        makeBundle(staged, "26.11.2");
+        writeFile(staged + QStringLiteral(".json"), "{}");
+        UpdateSettings::setRolledBackVersion({});
+        UpdateSettings::setQuitSwitchTries(QStringLiteral("26.11.2"), 0);
+        const QString away = tmp.filePath(QStringLiteral("away"));
+        QString problem;
+        for (int i = 1; i <= 3; ++i) {
+            QVERIFY(UpdateInstaller::prepareSwap(bundle, staged, QStringLiteral("26.11.2"), passing(), false, state,
+                                                 &problem));
+            // The swap fails: what it would swap in is gone at exit.
+            QVERIFY(QDir().rename(staged, away));
+            UpdateInstaller::finishSwapOnExit();
+            QVERIFY(QDir().rename(away, staged));
+            QCOMPARE(readFile(state + QStringLiteral("/swap-result.txt")), QByteArray("NotPossible 26.11.2\n"));
+            QCOMPARE(UpdateSettings::quitSwitchTries(QStringLiteral("26.11.2")), i);
+            QCOMPARE(UpdateSettings::rolledBackVersion().isEmpty(), i < 3);
+        }
+        QVERIFY(!QFileInfo::exists(staged + QStringLiteral(".json")));   // discarded at the third
+        QCOMPARE(readFile(bundle + QStringLiteral("/Contents/Info.plist")), QByteArray("<plist>26.11.1</plist>"));
     }
 
     void aReleaseFailingAtQuitIsTriedThreeTimesThenRolledBack()

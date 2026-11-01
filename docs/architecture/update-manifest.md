@@ -506,13 +506,23 @@ user put it; `MacInstall` (`src/core`) does the work.
   bundle swapped out is moved to `update/previous`, replacing the one there,
   when that is on the same volume, and removed otherwise (a maintainer
   ruling: `/Applications` shows one AetherSDR). Success writes
-  `Updated <version>` to `swap-result.txt`; a swap that cannot be made writes
-  `NotPossible` and leaves the release staged. Restart to update then runs
+  `Updated <version>` to `swap-result.txt`. While another AetherSDR runs the
+  bundle's binary (`open -n`; found through `proc_pidpath`), the swap waits
+  as the Windows helper does: `OldStillRunning`, the release stays staged
+  (a maintainer ruling). A swap that cannot be made writes `NotPossible` and
+  counts as a failed try at quit with the self-test's; the third is final and
+  the release is dropped and remembered as rolled back, so a rename macOS
+  keeps refusing is not retried at every quit. Restart to update then runs
   `open -n <bundle>` once this process has exited.
-- **The code signature is a consistency check, not the trust boundary.** The
-  manifest's Ed25519 signature decides what is installed; codesign catches a
-  staged tree that does not match what was signed, before it can replace a
-  working app. A bad signature is final at once. A failed self-test is final
+- **The code signature backs up the manifest; it is not the trust boundary.**
+  The manifest's Ed25519 signature decides what is installed; codesign
+  catches a staged tree that does not match what was signed, before it can
+  replace a working app. When the running app has a Developer ID team, the
+  staged bundle must be signed by that same team (`codesign -R` with
+  `anchor apple generic and certificate leaf[subject.OU] = "<team>"`, a
+  maintainer ruling), so a tree re-signed by another process in the
+  user-writable staging folder between the manifest re-check and the swap is
+  refused. An ad-hoc signed local build checks the signature alone. A bad signature is final at once. A failed self-test is final
   on Restart to update and retried at the next quit up to the third, as on
   Linux; a final failure is remembered as rolled back.
 - The bundle carries no signatures in extended attributes (no

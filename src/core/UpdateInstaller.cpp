@@ -61,6 +61,7 @@ void writeSwapResult(const QString& stateDir, updater::Outcome outcome, const QS
 // publishes its result.
 struct PendingSwap {
     QString bundle;
+    QString staged;
     QString ready;
     QString version;
     QString stateDir;
@@ -75,6 +76,13 @@ SwapState& swapState()
 {
     static SwapState s;
     return s;
+}
+
+// MacInstall::otherInstanceRunning, replaced by tests.
+std::function<bool(const QString& bundle)>& otherInstance()
+{
+    static std::function<bool(const QString&)> f = &MacInstall::otherInstanceRunning;
+    return f;
 }
 
 #ifdef Q_OS_WIN
@@ -235,7 +243,7 @@ bool UpdateInstaller::launchHelper(const QString& stagedDir, const QString& vers
 #elif defined(Q_OS_MACOS)
     // No helper on macOS either: checked now, swapped in as AetherSDR exits.
     const QString bundle = MacInstall::bundleOf(QCoreApplication::applicationDirPath());
-    if (!prepareSwap(bundle, stagedDir, version, MacInstall::real(), restart, stateDir(), problem)) {
+    if (!prepareSwap(bundle, stagedDir, version, MacInstall::real(bundle), restart, stateDir(), problem)) {
         qCWarning(lcUpdater).noquote() << "update to v" + version + " not installed:" << *problem;
         return false;
     }
@@ -344,7 +352,7 @@ bool UpdateInstaller::prepareSwap(const QString& bundle, const QString& stagedDi
     {
         const std::lock_guard<std::mutex> g(swapState().lock);
         if (swapState().generation == generation) {
-            swapState().pending = {bundle, ready, version, stateDir, restart};
+            swapState().pending = {bundle, stagedDir, ready, version, stateDir, restart};
             return true;
         }
     }
@@ -361,6 +369,11 @@ bool UpdateInstaller::swapPending()
 {
     const std::lock_guard<std::mutex> g(swapState().lock);
     return !swapState().pending.ready.isEmpty();
+}
+
+void UpdateInstaller::setOtherInstanceCheckForTesting(std::function<bool(const QString& bundle)> check)
+{
+    otherInstance() = check ? std::move(check) : std::function<bool(const QString&)>(&MacInstall::otherInstanceRunning);
 }
 
 void UpdateInstaller::dropPendingSwap()
@@ -381,16 +394,37 @@ void UpdateInstaller::finishSwapOnExit()
     if (p.ready.isEmpty()) {
         return;
     }
+    // A copy made beside the app goes whenever it isn't swapped in.
+    const auto dropCopy = [&p] {
+        if (p.ready != p.staged) {
+            QDir(p.ready).removeRecursively();
+        }
+    };
     QString problem;
-    if (MacInstall::swap(p.bundle, p.ready, QDir(p.stateDir).filePath(QStringLiteral("previous")), &problem)) {
+    if (otherInstance()(p.bundle)) {
+        // Another AetherSDR runs from the bundle: it waits, as the Windows
+        // helper does, and installs at a quit with no other instance.
+        dropCopy();
+        writeSwapResult(p.stateDir, updater::Outcome::OldStillRunning, p.version);
+        qCInfo(lcUpdater).noquote() << "update to v" + p.version + " waits: another AetherSDR runs from" << p.bundle;
+    } else if (MacInstall::swap(p.bundle, p.ready, QDir(p.stateDir).filePath(QStringLiteral("previous")), &problem)) {
         // The staged copy is the previous version now, or gone: its record goes.
         UpdateStager::discard(p.stateDir, p.version);
         writeSwapResult(p.stateDir, updater::Outcome::Updated, p.version);
         qCInfo(lcUpdater).noquote() << "v" + p.version + " installed in" << p.bundle;
     } else {
-        // Nothing changed; it stays staged for the next quit.
+        // Nothing changed. Counted with the failed checks at quit: the third
+        // is final, as on Linux, so a swap macOS keeps refusing is not
+        // retried at every quit.
+        dropCopy();
         writeSwapResult(p.stateDir, updater::Outcome::NotPossible, p.version);
         qCWarning(lcUpdater).noquote() << "update to v" + p.version + " not installed:" << problem;
+        const int tried = UpdateSettings::quitSwitchTries(p.version) + 1;
+        UpdateSettings::setQuitSwitchTries(p.version, tried);
+        if (tried >= kQuitSwitchTries) {
+            UpdateSettings::setRolledBackVersion(p.version);   // never offered again
+            UpdateStager::discard(p.stateDir, p.version);
+        }
     }
     // Restart to update starts AetherSDR again either way: the new bundle,
     // or the one that is still there.

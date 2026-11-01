@@ -79,10 +79,15 @@ public:
     // and the window are gone): the swap prepareSwap readied, the previous
     // bundle kept in stateDir/previous, the result written for the next
     // start, and with restart, the new bundle opened once this process has
-    // exited. Nothing when no swap is ready.
+    // exited. Nothing when no swap is ready. While another AetherSDR runs
+    // from the bundle it waits (OldStillRunning). A swap that fails counts
+    // as a failed try at quit; the third is final.
     static void finishSwapOnExit();
     // Whether a swap is ready for finishSwapOnExit.
     static bool swapPending();
+    // Replaces MacInstall::otherInstanceRunning in finishSwapOnExit; null
+    // restores it.
+    static void setOtherInstanceCheckForTesting(std::function<bool(const QString& bundle)> check);
     // Forgets the readied swap, and any a preparation still running would
     // publish: another instance is starting from the bundle as this one
     // exits (a UI-scale restart). The release stays staged.

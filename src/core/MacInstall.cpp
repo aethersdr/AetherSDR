@@ -6,11 +6,13 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QUuid>
 
 #include <filesystem>
 #include <system_error>
+#include <vector>
 
 #if defined(Q_OS_MACOS) || defined(Q_OS_LINUX)
 #include <fcntl.h>      // AT_FDCWD
@@ -18,6 +20,10 @@
 #include <string.h>     // strerror
 #include <errno.h>
 #include <sys/stat.h>   // stat, for the volume
+#include <unistd.h>     // getpid
+#endif
+#if defined(Q_OS_MACOS)
+#include <libproc.h>    // proc_listallpids, proc_pidpath
 #endif
 
 namespace fs = std::filesystem;
@@ -97,12 +103,32 @@ bool MacInstall::sameVolume(const QString& a, const QString& b)
 #endif
 }
 
-bool MacInstall::verifySignature(const QString& tree, QString* problem)
+QString MacInstall::teamOf(const QString& bundle)
 {
     QProcess p;
     p.setProcessChannelMode(QProcess::MergedChannels);
-    p.start(QStringLiteral("/usr/bin/codesign"),
-            {QStringLiteral("--verify"), QStringLiteral("--deep"), QStringLiteral("--strict"), tree});
+    p.start(QStringLiteral("/usr/bin/codesign"), {QStringLiteral("-dv"), QStringLiteral("--verbose=2"), bundle});
+    if (!p.waitForStarted(10000) || !p.waitForFinished(30000) || p.exitCode() != 0) {
+        return {};
+    }
+    static const QRegularExpression team(QStringLiteral("^TeamIdentifier=([A-Z0-9]{10})$"),
+                                         QRegularExpression::MultilineOption);
+    return team.match(QString::fromLocal8Bit(p.readAll())).captured(1);
+}
+
+bool MacInstall::verifySignature(const QString& tree, const QString& team, QString* problem)
+{
+    QStringList args{QStringLiteral("--verify"), QStringLiteral("--deep"), QStringLiteral("--strict")};
+    if (!team.isEmpty()) {
+        // The team that signed this copy, and only by a Developer ID: a tree
+        // re-signed by anyone else in the staging folder is refused.
+        args << QStringLiteral("-R")
+             << QStringLiteral("=anchor apple generic and certificate leaf[subject.OU] = \"%1\"").arg(team);
+    }
+    args << tree;
+    QProcess p;
+    p.setProcessChannelMode(QProcess::MergedChannels);
+    p.start(QStringLiteral("/usr/bin/codesign"), args);
     if (!p.waitForStarted(10000) || !p.waitForFinished(120000)) {
         p.kill();
         p.waitForFinished(5000);
@@ -147,9 +173,42 @@ bool MacInstall::selfTest(const QString& tree, const QString& version)
     return ok;
 }
 
-MacInstall::Checks MacInstall::real()
+bool MacInstall::otherInstanceRunning(const QString& bundle)
 {
-    return {&MacInstall::verifySignature, &MacInstall::selfTest};
+    const QString binary = QFileInfo(QDir(bundle).filePath(kBinary)).canonicalFilePath();
+    if (binary.isEmpty()) {
+        return false;
+    }
+    const pid_t self = ::getpid();
+#if defined(Q_OS_MACOS)
+    std::vector<pid_t> pids(4096);
+    const int bytes = ::proc_listallpids(pids.data(), static_cast<int>(pids.size() * sizeof(pid_t)));
+    for (int i = 0; i < bytes / static_cast<int>(sizeof(pid_t)); ++i) {
+        char path[PROC_PIDPATHINFO_MAXSIZE];
+        if (pids[i] != self && ::proc_pidpath(pids[i], path, sizeof(path)) > 0
+            && QFileInfo(QString::fromLocal8Bit(path)).canonicalFilePath() == binary) {
+            return true;
+        }
+    }
+#elif defined(Q_OS_LINUX)
+    // The same question through /proc, so the tests run here too.
+    for (const QString& pid : QDir(QStringLiteral("/proc")).entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        bool number = false;
+        const pid_t p = static_cast<pid_t>(pid.toLongLong(&number));
+        if (number && p != self
+            && QFileInfo(QFile::symLinkTarget(QStringLiteral("/proc/%1/exe").arg(pid))).canonicalFilePath() == binary) {
+            return true;
+        }
+    }
+#endif
+    return false;
+}
+
+MacInstall::Checks MacInstall::real(const QString& runningBundle)
+{
+    const QString team = teamOf(runningBundle);
+    return {[team](const QString& tree, QString* problem) { return verifySignature(tree, team, problem); },
+            &MacInstall::selfTest};
 }
 
 MacInstall::Prepared MacInstall::prepare(const QString& bundle, const QString& stagedDir, const QString& version,
