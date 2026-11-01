@@ -1931,10 +1931,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     amplitude.clientPersistsDbmRange = true;
     c.panAmplitude = amplitude;
 
-    // radioOwnsDbmScale is not declared: this radio cannot be commanded a dBm
-    // range, so it would be false, but declaring that is its own change.
-    // binsAbsolute already keeps noiseFloorAutoAdjustAllowed() open (bench run
-    // d101: the loop settles, 0.307 dB in 74 s quiescent).
+    // No dBm range can be commanded or echoed, so a scale drag stays local
+    // instead of dispatching a request this backend refuses. binsAbsolute keeps
+    // noiseFloorAutoAdjustAllowed() open (bench run d101: the loop settles).
+    c.radioOwnsDbmScale = false;
     // Tuning range: the AD9866 samples at 76.8 MHz, so the first Nyquist zone is
     // DC to 38.4 MHz; below 100 kHz the input transformer rolls off.
     c.tuningMinHz = kTuningMinHz;

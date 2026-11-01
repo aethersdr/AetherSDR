@@ -8983,9 +8983,8 @@ target_include_directories(hl2_adc_age_gate_test PRIVATE src tests)
 target_link_libraries(hl2_adc_age_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_adc_age_gate_test COMMAND hl2_adc_age_gate_test)
 # Socket-free HL2 panadapter-limit DECLARATIONS: the span shape, the four
-# discrete rates and the dBm axis. NOT radioOwnsDbmScale -- the HL2 deliberately
-# leaves that undeclared and this target asserts only its DEFAULT, which is a
-# different fact. An earlier version of this line claimed otherwise. The span
+# discrete rates, the dBm axis and radioOwnsDbmScale (false: no command plane,
+# the auto-floor gate open through absolute bins). The span
 # floor and rate set, the shared span, and the uncalibrated dBm axis — each
 # asserted against the constant or predicate production reads, never a copy.
 # Constructs a backend and reads capabilities(); binds nothing and connects
