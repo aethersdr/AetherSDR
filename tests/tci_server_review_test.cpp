@@ -2964,6 +2964,74 @@ public:
         }
         return true;
     }
+
+    // #2824 on the value relays: a band change recreates the slice and the
+    // radio can restore RIT/XIT offsets and AGC without a change signal on
+    // the new object. The deferred settled seed still announces each value
+    // once, and a status refresh with the same value is de-duped against it.
+    static bool valueRelaySeedsAfterRewire()
+    {
+        RadioModel model;
+        TciClient sock;
+        TciServer server(&model);
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
+
+        QString err;
+        model.automationApplySliceFixture(0, QStringLiteral("A"), &err);
+        SliceModel* s0 = model.slice(0);
+        if (!s0) {
+            std::printf("      slice fixture failed: %s\n", qPrintable(err));
+            return false;
+        }
+        SliceDelta restored;                      // state before the re-wire
+        restored.ritFreq = 120;
+        restored.xitFreq = -50;
+        restored.agcMode = QStringLiteral("fast");
+        restored.agcThreshold = 72;
+        s0->applyChanges(restored);
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+            [&sent](const QString& dir, const QString& msg) {
+                if (dir == QLatin1String("tx"))
+                    sent << msg.trimmed();
+            });
+        server.wireSlice(s0->sliceId(), s0);
+        const QStringList expected {
+            QStringLiteral("rit_offset:0,120;"), QStringLiteral("xit_offset:0,-50;"),
+            QStringLiteral("agc_mode:0,fast;"), QStringLiteral("agc_gain:0,72;"),
+        };
+        for (const QString& m : expected) {
+            if (sent.contains(m)) {
+                std::printf("      %s seeded synchronously\n", qPrintable(m));
+                return false;
+            }
+        }
+        spin(450);
+        for (const QString& m : expected) {
+            if (sent.count(m) != 1) {
+                std::printf("      %s seeded %lld times after the settle\n",
+                            qPrintable(m), static_cast<long long>(sent.count(m)));
+                return false;
+            }
+        }
+
+        sent.clear();
+        s0->applyChanges(restored);               // status refresh, same values
+        SliceDelta rit;
+        rit.ritFreq = 120;
+        rit.ritOn = true;                         // flag edge re-emits the same hz
+        s0->applyChanges(rit);
+        for (const QString& m : expected) {
+            if (sent.contains(m)) {
+                std::printf("      unchanged %s announced again\n", qPrintable(m));
+                return false;
+            }
+        }
+        return true;
+    }
 };
 
 } // namespace AetherSDR
@@ -3064,6 +3132,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::rxCtunExDrivesCenterLockInverted();
     const bool guiSplit
         = AetherSDR::TciServerReviewTest::guiSplitAndRitOffsetReachClients();
+    const bool valueSeed
+        = AetherSDR::TciServerReviewTest::valueRelaySeedsAfterRewire();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -3160,6 +3230,8 @@ int main(int argc, char** argv)
                 rxCtunEx ? "PASS" : "FAIL");
     std::printf("%s  GUI split, RIT/XIT offsets and AGC reach clients\n",
                 guiSplit ? "PASS" : "FAIL");
+    std::printf("%s  RIT/XIT offset and AGC relays seed once after a re-wire (#2824)\n",
+                valueSeed ? "PASS" : "FAIL");
 
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
@@ -3183,6 +3255,6 @@ int main(int argc, char** argv)
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
         && chronoIdle && chronoCatchUp && daxRestored && initProtocol
-        && dsbMode && rxCtunEx && guiSplit
+        && dsbMode && rxCtunEx && guiSplit && valueSeed
         ? 0 : 1;
 }

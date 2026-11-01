@@ -7,7 +7,6 @@
 #include "AudioEngine.h"
 #include "AppSettings.h"
 #include <QScopeGuard>
-#include <climits>
 #include <QMutexLocker>
 #include "LogManager.h"
 #include "TciPeerProcess.h"
@@ -3191,34 +3190,18 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     wireFlag(&SliceModel::ritChanged,     "rit_enable", [slice]{ return slice->ritOn(); });
     wireFlag(&SliceModel::xitChanged,     "xit_enable", [slice]{ return slice->xitOn(); });
 
-    // The offsets ride the same (on, hz) signals, whose hz the flag relay
-    // drops, so a GUI offset change reached no client. Relay it on its own,
-    // de-duped by value for the same status-refresh reason.
-    auto wireOffset = [this, slice](auto signal, const char* cmd) {
-        auto last = std::make_shared<int>(INT_MIN);  // nothing announced yet
-        connect(slice, signal, this, [this, slice, cmd, last](bool, int hz) {
-            if (*last == hz) {
-                return;
-            }
-            *last = hz;
-            if (m_clients.isEmpty()) {
-                return;
-            }
-            broadcast(QStringLiteral("%1:%2,%3;")
-                          .arg(QLatin1String(cmd))
-                          .arg(m_trxMap.trxForSlice(m_model, slice))
-                          .arg(hz));
-        });
-    };
-    wireOffset(&SliceModel::ritChanged, "rit_offset");
-    wireOffset(&SliceModel::xitChanged, "xit_offset");
-
-    // AGC mode and gain from the GUI reached no client either. Read the way
-    // the GET reads (an external receive source can replace the slice's own),
-    // de-duped as text since status refreshes re-emit both.
-    auto wireAgc = [this, slice](auto signal, const char* cmd, std::function<QString()> read) {
-        auto last = std::make_shared<QString>();
-        connect(slice, signal, this, [this, slice, cmd, last, read] {
+    // RIT/XIT offsets and AGC mode/gain from the GUI reached no client: the
+    // offsets ride the same (on, hz) signals whose hz the flag relay drops,
+    // and AGC was never relayed. Same shape as wireFlag: a change handler and
+    // a deferred settled seed sharing one baseline, so a band-change recreate
+    // that restores a value without a signal (#2824) is still announced once,
+    // and status refreshes that re-emit an unchanged value are de-duped. AGC
+    // is read the way the GET reads (an external receive source can replace
+    // the slice's own).
+    auto wireValue = [this, slice](auto signal, const char* cmd,
+                                   std::function<QString()> read) {
+        auto last = std::make_shared<QString>();  // nothing announced yet
+        auto announce = [this, cmd, last, read](SliceModel* s) {
             const QString v = read();
             if (*last == v) {
                 return;
@@ -3229,14 +3212,26 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
             }
             broadcast(QStringLiteral("%1:%2,%3;")
                           .arg(QLatin1String(cmd))
-                          .arg(m_trxMap.trxForSlice(m_model, slice))
+                          .arg(m_trxMap.trxForSlice(m_model, s))
                           .arg(v));
+        };
+        connect(slice, signal, this, [slice, announce] { announce(slice); });
+        QPointer<SliceModel> guard(slice);
+        QTimer::singleShot(400, this, [this, guard, announce] {
+            if (!guard || m_clients.isEmpty()) {
+                return;
+            }
+            announce(guard);
         });
     };
-    wireAgc(&SliceModel::agcModeChanged, "agc_mode",
-            [slice] { return slice->receiveAgcMode().toLower(); });
-    wireAgc(&SliceModel::agcThresholdChanged, "agc_gain",
-            [slice] { return QString::number(slice->receiveAgcThreshold()); });
+    wireValue(&SliceModel::ritChanged, "rit_offset",
+              [slice] { return QString::number(slice->ritFreq()); });
+    wireValue(&SliceModel::xitChanged, "xit_offset",
+              [slice] { return QString::number(slice->xitFreq()); });
+    wireValue(&SliceModel::agcModeChanged, "agc_mode",
+              [slice] { return slice->receiveAgcMode().toLower(); });
+    wireValue(&SliceModel::agcThresholdChanged, "agc_gain",
+              [slice] { return QString::number(slice->receiveAgcThreshold()); });
 
     // Deferred state sync on (re)wire: a Flex band change recreates the slice, and
     // if the restored frequency equals the init value no frequencyChanged fires,
