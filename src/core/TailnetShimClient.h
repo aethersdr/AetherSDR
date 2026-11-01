@@ -34,7 +34,8 @@ struct TailnetShimDevice {
 struct TailnetShimStatus {
     QString version;
     bool provisioned{false};
-    QString state;       // unprovisioned | starting | running | error
+    // unprovisioned | starting | needs_login | needs_approval | running | error
+    QString state;
     QString hostname;
     QString tailnetIp;
     QString dnsName;
@@ -46,15 +47,40 @@ struct TailnetShimStatus {
     QList<TailnetShimDevice> discovered;
     QStringList advertisedRoutes;    // what the tailnet is offered now
     QStringList approvedRoutes;      // what the admin console has approved
+    QString keyExpiry;               // RFC 3339 when the sign-in expires; empty: never
+};
+
+// A provisioning reply. authUrl is set for a sign-in by QR code (no auth
+// key): the URL to show until the radio is signed in. error is a failure the
+// container hit after issuing the token, which the caller must still keep.
+struct TailnetShimProvisionReply {
+    QString adminToken;
+    QString authUrl;
+    QString error;
+    TailnetShimStatus status;
+};
+
+// What GET /v1/login returns to the admin-token holder.
+struct TailnetShimLogin {
+    QString state;
+    QString authUrl;     // set while the radio waits for a sign-in
+    QString keyExpiry;
 };
 
 // Pure helpers, separated from the transport so they can be unit-tested
 // without sockets.
 namespace tailnetshim {
 std::optional<TailnetShimStatus> parseStatus(const QByteArray& json);
-// Parses a provisioning reply: {"admin_token": "...", "status": {...}}.
-std::optional<std::pair<QString, TailnetShimStatus>> parseProvisionReply(const QByteArray& json);
+// Parses a provisioning reply: {"admin_token", "auth_url"?, "error"?, "status"}.
+std::optional<TailnetShimProvisionReply> parseProvisionReply(const QByteArray& json);
+std::optional<TailnetShimLogin> parseLoginReply(const QByteArray& json);
+// The sign-in URL if it is one to show: https, a host, no spaces, bounded.
+// The host isn't checked, so a self-hosted control server's URL works too.
+QString checkedAuthUrl(const QString& url);
+// Whether a container version signs in by QR code (0.5.0 and later).
+bool supportsQrSignIn(const QString& version);
 QString parseError(const QByteArray& json);
+// An empty authKey is left out, which asks for sign-in by QR code.
 QByteArray provisionBody(const QString& authKey, const QString& hostname,
                          const QStringList& allow, const QStringList& routes = {},
                          bool shareDiscovered = true);
@@ -80,6 +106,7 @@ public:
     void setRadioAddress(const QHostAddress& address) { m_address = address; }
 
     void fetchStatus();
+    void fetchLogin(const QString& adminToken);
     void provision(const QString& authKey, const QString& hostname,
                    const QStringList& allow, const QStringList& routes,
                    bool shareDiscovered, const QString& adminToken);
@@ -89,8 +116,9 @@ public:
 
 signals:
     void statusReceived(const AetherSDR::TailnetShimStatus& status);
-    void provisioned(const QString& adminToken, const AetherSDR::TailnetShimStatus& status);
-    // operation is "status", "provision", "allow", "sharing" or "signout". unauthorized
+    void provisioned(const AetherSDR::TailnetShimProvisionReply& reply);
+    void loginReceived(const AetherSDR::TailnetShimLogin& login);
+    // operation is "status", "login", "provision", "allow", "sharing" or "signout". unauthorized
     // is true when the shim refused the admin token.
     void requestFailed(const QString& operation, const QString& message, bool unauthorized);
 
@@ -102,6 +130,7 @@ private:
     QNetworkAccessManager m_nam;
     QHostAddress m_address;
     QPointer<QNetworkReply> m_statusReply;   // the status request in flight, if any
+    QPointer<QNetworkReply> m_loginReply;    // the login request in flight, if any
 };
 
 }  // namespace AetherSDR

@@ -4414,6 +4414,16 @@ target_include_directories(tailnet_shim_client_test PRIVATE src)
 target_link_libraries(tailnet_shim_client_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME tailnet_shim_client_test COMMAND tailnet_shim_client_test)
 
+# The Remote Access sign-in QR code: encodes the URL scannably (quiet zone,
+# finder patterns, theme-invariant colours), socket-free.
+add_executable(qr_code_image_test
+    tests/qr_code_image_test.cpp
+    src/gui/QrCodeImage.cpp
+)
+target_include_directories(qr_code_image_test PRIVATE src)
+target_link_libraries(qr_code_image_test PRIVATE Qt6::Core Qt6::Gui aether_qrcodegen)
+add_test(NAME qr_code_image_test COMMAND qr_code_image_test)
+
 # Pins the filter-before-merge invariant on the license-class-aware overload
 # of BandPlanManager::contiguousRegionsForBand (PR #3050, closing #2649). (#3060)
 add_executable(band_plan_license_filter_test

@@ -810,3 +810,15 @@ The native helpers' separate historical MIT notice above remains in effect.
   License:   https://raw.githubusercontent.com/n9bc/DeepFist/930bd3cea7d9bf19fd45413acc9064b54c722871/LICENSE
   LICENSE:   35927 bytes; SHA-256
              d8dcabd2c59c9e96be89f094a94474685e3fcd5ee8c4304ae7fbbf6c722df6ab
+
+
+34. QR Code generator library (C++) — Remote Access sign-in QR code
+-------------------------------------------------------------------------------
+Bundled at third_party/qrcodegen/ (v1.8.0: cpp/qrcodegen.hpp and
+cpp/qrcodegen.cpp, unmodified; hashes in VERSION.txt). Draws the Remote
+Access window's Tailscale sign-in link as a QR code. The full license text is
+in third_party/qrcodegen/LICENSE.
+
+  Copyright: Copyright (c) Project Nayuki
+  License:   MIT
+  Source:    https://github.com/nayuki/QR-Code-generator/tree/v1.8.0

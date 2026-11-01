@@ -244,6 +244,17 @@ six tokens so the footer stays editable and follows theme changes.
 | `color.spe.lcd.dim` | `#3a553a` | waiting-for-display text |
 | `color.spe.lcd.bezel` | `#222822` | SPE Expert LCD bezel |
 
+### QR codes (specialised — paint code only)
+
+The same in every theme on purpose: phone cameras read a QR code reliably only
+as dark modules on a light ground, with a light quiet zone around it, so the
+code must not follow a dark theme's inversion.
+
+| Token | Canonical | Use |
+|---|---|---|
+| `color.qr.dark` | `#000000` | QR code modules (Remote Access sign-in) |
+| `color.qr.light` | `#ffffff` | QR code ground and quiet zone |
+
 ### Slice indicators
 
 | Token | Canonical | Notes |
