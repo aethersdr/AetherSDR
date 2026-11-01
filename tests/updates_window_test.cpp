@@ -678,7 +678,8 @@ int main(int argc, char** argv)
                     }
                     asked = box->accessibleDescription().contains(QLatin1String("~/.local/share/AetherSDR/install"));
                     auto* trash = box->findChild<QCheckBox*>(QStringLiteral("updatesTrashAppImage"));
-                    trashUnchecked = trash && !trash->isChecked() && !trash->accessibleDescription().isEmpty();
+                    trashUnchecked = trash && !trash->isChecked() && !trash->accessibleDescription().isEmpty()
+                                     && trash->text().contains(QLatin1String("AetherSDR-v26.10.3-x86_64.AppImage"));
                     if (trash && tickTrash) {
                         trash->setChecked(true);
                     }
@@ -695,7 +696,8 @@ int main(int argc, char** argv)
         answer(QStringLiteral("Cancel"), true);
         const_cast<QPushButton*>(offer)->click();
         app.processEvents();
-        check(asked && trashUnchecked, "it asks first, naming the install folder, with the trash unchecked");
+        check(asked && trashUnchecked,
+              "it asks first, naming the install folder, with the trash unchecked and naming the AppImage");
         check(!controller.isInstallingAppImage() && trashed.isEmpty() && installed.isEmpty(),
               "Cancel installs nothing");
 

@@ -47,6 +47,13 @@ public:
     // AppImage, a build folder, a distribution's package.
     static QString treeOf(const QString& appDir, const QString& base);
 
+    // The AppImage this process runs from ($APPIMAGE), for Install for
+    // updates: only when the binary in binDir is the AppImage's own
+    // ($APPDIR/usr/bin) and not an installed release. The runtime's variables
+    // are inherited, so a copy started from another AppImage (a terminal
+    // that is one) has them too, and is not that AppImage. Empty otherwise.
+    static QString appImageOf(const QString& binDir, const QString& base);
+
     // The release current names in base when it is installed (its folder is
     // there with AppRun); empty otherwise, a link left dangling included.
     static QString installedVersion(const QString& base);

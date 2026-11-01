@@ -431,6 +431,18 @@ QString LinuxInstall::treeOf(const QString& appDir, const QString& base)
     return tree.canonicalPath();
 }
 
+QString LinuxInstall::appImageOf(const QString& binDir, const QString& base)
+{
+    const QString appImage = qEnvironmentVariable("APPIMAGE");
+    const QString appDir = QFileInfo(qEnvironmentVariable("APPDIR")).canonicalFilePath();
+    const QString bin = QFileInfo(binDir).canonicalFilePath();
+    if (appImage.isEmpty() || appDir.isEmpty() || bin.isEmpty() || !treeOf(binDir, base).isEmpty()
+        || bin != QDir(appDir).filePath(QStringLiteral("usr/bin"))) {
+        return {};
+    }
+    return appImage;
+}
+
 QString LinuxInstall::installedVersion(const QString& base)
 {
     const QString version = currentVersion(base);

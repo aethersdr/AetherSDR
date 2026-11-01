@@ -408,8 +408,10 @@ because `~/.local/share/AetherSDR` already holds user data. `LinuxInstall`
   writes no settings. The copy is made writable by its owner folder by folder, since
   the AppImage's mount is read-only and its modes would otherwise follow.
 - **Install for updates** (RFC #5304 Phase 6) is the same install from the
-  AppImage's Updates window, offered only when `$APPIMAGE` is set, the
-  binary is not already in an install, and no `current` exists: an
+  AppImage's Updates window, offered only when the running binary is the
+  AppImage's own (`$APPDIR/usr/bin`, with `$APPIMAGE` set; the variables
+  alone are inherited by anything another AppImage starts), it is not
+  already in an install, and no installed release is current: an
   existing install is never replaced from an AppImage, which could be older.
   That holds against an install made while the copy runs, too:
   `LinuxInstall::install` takes `Current::KeepExisting`, which makes the

@@ -801,6 +801,31 @@ private slots:
                  (QStringList{winner, QStringLiteral("current")}));
     }
 
+    // Only the AppImage's own binary is the AppImage: a copy that inherited
+    // the variables from another one (an AppImage terminal) is not, and an
+    // installed release is not.
+    void theAppImageIsTheOneWhoseBinaryItRuns()
+    {
+        QTemporaryDir tmp;
+        const LinuxInstall::Paths paths = pathsIn(tmp.path());
+        const QString mount = tmp.filePath(QStringLiteral("mount"));
+        makeTree(mount, "26.10.4");
+        const QString tarball = tmp.filePath(QStringLiteral("tarball"));
+        makeTree(tarball, "26.10.4");
+        const QString file = tmp.filePath(QStringLiteral("AetherSDR-v26.10.4-x86_64.AppImage"));
+        qputenv("APPIMAGE", file.toUtf8());
+        qputenv("APPDIR", mount.toUtf8());
+        QCOMPARE(LinuxInstall::appImageOf(mount + QStringLiteral("/usr/bin"), paths.base), file);
+        QVERIFY(LinuxInstall::appImageOf(tarball + QStringLiteral("/usr/bin"), paths.base).isEmpty());
+        QString problem;
+        QVERIFY2(LinuxInstall::install(tarball, QStringLiteral("26.10.4"), paths, &problem), qPrintable(problem));
+        qputenv("APPDIR", (paths.base + QStringLiteral("/26.10.4")).toUtf8());
+        QVERIFY(LinuxInstall::appImageOf(paths.base + QStringLiteral("/26.10.4/usr/bin"), paths.base).isEmpty());
+        qunsetenv("APPDIR");
+        QVERIFY(LinuxInstall::appImageOf(mount + QStringLiteral("/usr/bin"), paths.base).isEmpty());
+        qunsetenv("APPIMAGE");
+    }
+
     void nothingInstalledIsNoVersion()
     {
         QTemporaryDir tmp;

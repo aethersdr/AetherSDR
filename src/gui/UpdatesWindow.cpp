@@ -12,6 +12,7 @@
 #include <QCheckBox>
 #include <QCoreApplication>
 #include <QDesktopServices>
+#include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -560,7 +561,8 @@ void UpdatesWindow::installForUpdatesClicked()
            "then restarts from there, and Install update keeps it current. Nothing is downloaded, and your "
            "settings stay as they are.")
             .arg(m_controller->installFolder()));
-    QCheckBox* trash = ask.get()->addCheckBox(tr("Move this AppImage to the trash afterward"));
+    QCheckBox* trash = ask.get()->addCheckBox(
+        tr("Move this AppImage, %1, to the trash afterward").arg(QFileInfo(appImage).fileName()));
     trash->setObjectName(QStringLiteral("updatesTrashAppImage"));
     trash->setAccessibleDescription(tr("Moves %1 to the trash once AetherSDR is installed.").arg(appImage));
     trash->setToolTip(appImage);

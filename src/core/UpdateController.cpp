@@ -49,11 +49,7 @@ UpdateController::Environment UpdateController::forThisApp()
     env.rolledBackVersion = [] { return UpdateSettings::rolledBackVersion(); };
 #if defined(Q_OS_LINUX)
     const QString base = LinuxInstall::forThisUser().base;
-    // An installed release started from the AppImage would still have its
-    // variables: only the AppImage itself is one.
-    if (LinuxInstall::treeOf(LinuxInstall::binaryDir(), base).isEmpty()) {
-        env.appImage = qEnvironmentVariable("APPIMAGE");
-    }
+    env.appImage = LinuxInstall::appImageOf(LinuxInstall::binaryDir(), base);
     env.installFolder = base.startsWith(QDir::homePath() + QLatin1Char('/'))
                             ? QStringLiteral("~") + base.mid(QDir::homePath().size())
                             : base;
