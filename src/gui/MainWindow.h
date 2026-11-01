@@ -2300,6 +2300,10 @@ private:
         qint64 untilMs{0};
     };
     QHash<int, CenterLockTuneHold> m_centerLockTuneHoldBySlice;
+    // Pans whose live Center Lock was set by a TCI client (`rx_ctun_ex`), not
+    // the operator. The saved letter map is neither written nor cleared on
+    // their behalf; any other set or clear of the pan's lock drops the mark.
+    QSet<QString> m_centerLockSessionOnlyPans;
     // While a slice is being dragged (in-window tune OR edge auto-pan) Center Lock
     // stands down so it doesn't fight the drag with per-tick recenters. The
     // drag-end handler recenters once so the locked pan re-asserts.
@@ -2322,6 +2326,7 @@ private:
     void setCenterLockForSlice(SliceModel* slice, bool on);
     void setCenterLockForPan(const QString& panId, int sliceId, bool on,
                              bool persist = true);
+    void setSessionCenterLockForSlice(int sliceId, bool on);
     void clearCenterLockForPan(const QString& panId, bool clearPersistedIntent = false);
     void clearCenterLockForSlice(int sliceId, bool clearPersistedIntent = false);
     // serial + "/" + station: per-client persistence identity so co-located
