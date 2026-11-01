@@ -247,16 +247,6 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     // connect.
     QVBoxLayout* join = nullptr;
     layout->addWidget(makeCard(tr("Join your tailnet"), body, &join));
-    auto* joinGrid = new QGridLayout;
-    joinGrid->setHorizontalSpacing(16);
-    joinGrid->setVerticalSpacing(8);
-    joinGrid->setColumnStretch(1, 1);
-    m_hostnameEdit = new QLineEdit(body);
-    m_hostnameEdit->setAccessibleName(tr("Tailnet machine name"));
-    m_hostnameEdit->setMaxLength(63);
-    joinGrid->addWidget(roleLabel(tr("MACHINE NAME"), "key", body), 0, 0);
-    joinGrid->addWidget(m_hostnameEdit, 0, 1);
-    join->addLayout(joinGrid);
     // Who may reach the radio is the tailnet's business (its access rules
     // in the Tailscale admin console), not a list kept here.
     m_qrHint = roleLabel(QString(), "hint", body);
@@ -318,7 +308,16 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     keyBox->setSpacing(8);
     auto* keyGrid = new QGridLayout;
     keyGrid->setHorizontalSpacing(16);
+    keyGrid->setVerticalSpacing(8);
     keyGrid->setColumnStretch(1, 1);
+    // The machine name applies to a join with a key; the QR sign-in starts
+    // as the window opens, with the name suggested from the radio's
+    // nickname (rename it in the Tailscale admin console).
+    m_hostnameEdit = new QLineEdit(m_keyPanel);
+    m_hostnameEdit->setAccessibleName(tr("Tailnet machine name"));
+    m_hostnameEdit->setMaxLength(63);
+    keyGrid->addWidget(roleLabel(tr("MACHINE NAME"), "key", m_keyPanel), 0, 0);
+    keyGrid->addWidget(m_hostnameEdit, 0, 1);
     m_keyEdit = new QLineEdit(m_keyPanel);
     m_keyEdit->setEchoMode(QLineEdit::Password);
     m_keyEdit->setPlaceholderText(QStringLiteral("tskey-auth-…"));
@@ -333,8 +332,8 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
             this->join();
         }
     });
-    keyGrid->addWidget(roleLabel(tr("AUTH KEY"), "key", m_keyPanel), 0, 0);
-    keyGrid->addWidget(m_keyEdit, 0, 1);
+    keyGrid->addWidget(roleLabel(tr("AUTH KEY"), "key", m_keyPanel), 1, 0);
+    keyGrid->addWidget(m_keyEdit, 1, 1);
     keyBox->addLayout(keyGrid);
     auto* keyHint = roleLabel(QString(), "hint", m_keyPanel);
     setWrapped(keyHint,
