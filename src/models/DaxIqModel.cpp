@@ -84,6 +84,18 @@ quint32 runPactlSync(const QStringList& args)
     return ok ? idx : 0;
 }
 
+DaxIqModel::PactlRunner& pactlRunnerForTest()
+{
+    static DaxIqModel::PactlRunner runner;
+    return runner;
+}
+
+quint32 runPactl(const QStringList& args)
+{
+    const auto& runner = pactlRunnerForTest();
+    return runner ? runner(args) : runPactlSync(args);
+}
+
 } // namespace
 #endif // !Q_OS_WIN
 
@@ -131,6 +143,15 @@ void DaxIqModel::relayIqSamples(int channel, const QByteArray& iqBytes, int samp
     std::memcpy(samples.data(), iqBytes.constData(),
                 static_cast<size_t>(samples.size()) * sizeof(float));
     emit iqSamplesReady(channel, std::move(samples), sampleRate);
+}
+
+void DaxIqModel::setPactlRunnerForTest(PactlRunner runner)
+{
+#ifndef Q_OS_WIN
+    pactlRunnerForTest() = std::move(runner);
+#else
+    Q_UNUSED(runner);
+#endif
 }
 
 void DaxIqModel::setSampleRateProvider(std::function<QList<int>()> provider)
@@ -385,7 +406,7 @@ void DaxIqWorker::createPipe(int channel, int sampleRate)
     // the spaced device.description survives pipewire-pulse's module-arg parser
     // (mirrors the DAX RX/TX naming fix); node.description drives the label shown
     // in qpwgraph / JACK / WSJT-X.
-    const quint32 modIdx = runPactlSync({
+    const quint32 modIdx = runPactl({
         "load-module", "module-pipe-source",
         QStringLiteral("source_name=aethersdr-iq-%1").arg(channel),
         QStringLiteral("file=%1").arg(pipePath),
@@ -407,7 +428,7 @@ void DaxIqWorker::createPipe(int channel, int sampleRate)
     if (fd < 0) {
         qCWarning(lcAudio) << "DaxIqWorker: cannot open IQ pipe" << pipePath
                            << strerror(errno);
-        runPactlSync({"unload-module", QString::number(modIdx)});
+        runPactl({"unload-module", QString::number(modIdx)});
         ::unlink(pipePath.toLocal8Bit().constData());
         m_pipeModuleIdx[idx] = 0;
         return;
@@ -432,7 +453,7 @@ void DaxIqWorker::destroyPipe(int channel)
     // Unload the pipe-source module by its stored index (clean, no grep race),
     // then remove the FIFO we created.
     if (m_pipeModuleIdx[idx] != 0) {
-        runPactlSync({"unload-module", QString::number(m_pipeModuleIdx[idx])});
+        runPactl({"unload-module", QString::number(m_pipeModuleIdx[idx])});
         m_pipeModuleIdx[idx] = 0;
     }
     const QString pipePath = iqPipePath(channel);

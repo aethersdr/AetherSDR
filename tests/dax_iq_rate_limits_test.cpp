@@ -12,6 +12,7 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/SliceDelta.h"
 #include "gui/DaxIqApplet.h"
+#include "models/DaxIqModel.h"
 #include "models/ModelCapabilities.h"
 #include "models/RadioModel.h"
 
@@ -28,6 +29,8 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QPixmap>
+
+#include <atomic>
 #include <QStringList>
 #include <functional>
 #include <memory>
@@ -199,6 +202,14 @@ int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("dax-iq-rate-limits"));
     qputenv("XDG_RUNTIME_DIR", profile.path().toUtf8());
+    // Every new IQ stream builds a pipe, which loads module-pipe-source through
+    // pactl on the model's worker thread. Answer it here instead: no process is
+    // launched from that thread, and the host's pactl never matters (#6726).
+    static std::atomic<int> pactlCalls{0};
+    DaxIqModel::setPactlRunnerForTest([](const QStringList&) {
+        ++pactlCalls;
+        return quint32{0};
+    });
     QApplication app(argc, argv);
     AppSettings::instance().load();
 
@@ -484,5 +495,8 @@ int main(int argc, char** argv)
         recoveredAt96k = recoveredAt96k || command.first().toString().endsWith("daxiq_rate=96000");
     }
     check(recoveredAt96k, "profile recovery restores a saved 192k preference at 96k");
+#ifndef Q_OS_WIN
+    check(pactlCalls.load() > 0, "IQ pipe setup reached the test's pactl runner");
+#endif
     return failures == 0 ? 0 : 1;
 }
