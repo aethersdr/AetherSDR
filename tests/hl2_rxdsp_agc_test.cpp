@@ -18,8 +18,10 @@
 //      AGC-T slider says.
 //
 // The AGC-off LEVEL control (fixed gain per slider unit) is pinned in
-// hl2_apf_agc_off_test; this file does not repeat it. The absolute AGC-off gain is not pinned here: Hl2RxDsp::Config carries no
-// fixed-gain field, so it is WdspChannel's default, and this measures ratios.
+// hl2_apf_agc_off_test; this file does not repeat it. The absolute AGC-off
+// gain is not pinned here: it is Hl2RxDsp::kDefaultAgcOffLevel mapped by
+// agcFixedGainDbForOffLevel (pinned in hl2_apf_agc_off_test), and this file
+// measures ratios.
 
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/MetisProtocol.h"   // kEp6BlockSamples

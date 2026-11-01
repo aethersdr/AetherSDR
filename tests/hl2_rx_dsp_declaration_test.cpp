@@ -7,7 +7,8 @@
 // (hl2_noise_blanker_test, hl2_rxdsp_agc_test, hl2_rxdsp_notch_audio_test):
 //
 //   present:  the host noise blanker, the AGC threshold control, the CW audio
-//             peaking filter (host WDSP, Hl2Backend::setSliceApf)
+//             peaking filter (host WDSP, Hl2Backend::setSliceApf), and the
+//             host multi-notch (maxNotchFilters, no depth choice)
 //   absent:   radio-side DSP, the LMS noise filters (NRL/ANFL/ANFT), extended
 //             DSP (NRS/RNN/NRF), the radio-side single manual notch
 //
@@ -17,6 +18,7 @@
 
 #include "TestSettingsProfile.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2RxDsp.h"
 
 #include <QCoreApplication>
 
@@ -53,6 +55,10 @@ int main(int argc, char** argv)
     check(!caps.hasExtendedDsp, "no extended NRS/RNN/NRF");
     check(caps.hasAudioPeakingFilter, "the CW peaking filter runs on this host");
     check(!caps.hasManualNotch, "no radio-side single manual notch");
+    check(caps.maxNotchFilters > 0, "the host WDSP notch database is declared");
+    check(!caps.notchHasDepth, "a WDSP notch is a full null, so no depth choice");
+    check(caps.notchMinWidthHz == hl2::Hl2RxDsp::kMinNotchWidthHz,
+          "the notch minimum width is the RX filter's");
 
     return failures == 0 ? 0 : 1;
 }
