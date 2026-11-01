@@ -138,7 +138,7 @@ struct Peer {
                 else if (command == "C") { reply = "C00;"; }
                 else if (command == "L") { reply = "L00;"; }
                 else if (command.startsWith("DM")) { reply = wrongMemory ? "DM 14080-14099;AN2;BYP;VSWRB 1.00;5 UNUSED;" : "DM 14080-14099;AN1;BYP;VSWRB 1.00;5 UNUSED;"; }
-                else if (command == "VFWD") { reply = "VFWD " + QByteArray::number(rf ? 1 : idleAdc) + ';'; }
+                else if (command == "VFWD") { reply = "VFWD " + QByteArray::number(rf ? 400 : idleAdc) + ';'; }
                 else if (command == "AMPI" || command == "ATTN" || command == "FLT" || command == "VRFL") { reply = command + "0;"; }
                 else if (command == "VSWR" || command == "VSWRB") { reply = command + " 1.00;"; }
                 else if (command == "F" || command == "FC" || command == "FX") { reply = command + " 14096;"; }
@@ -237,6 +237,8 @@ static int maintenanceKeepsZeroRfFence()
     QSignalSpy failed(&peer.model, &Kat500Model::operationFailed);
     CHECK(peer.model.eraseMemories(5, 1, true)); peer.complete();
     CHECK(failed.size() == 1);
+    // The preflight failure names the reading that blocked it.
+    CHECK(failed.front().front().toString().contains(QStringLiteral("forward ADC is 2")));
     for (const QByteArray& request : peer.wire) {
         CHECK(!request.startsWith("EM"));
     }
@@ -542,7 +544,7 @@ static int followWithNonzeroForwardAdc(bool rf, bool confirm)
     peer.model.query("TP;"); peer.step();
     peer.model.query("VFWD;"); peer.step();
     CHECK(peer.model.status().tuning == false);
-    CHECK(peer.model.status().forwardAdc == (rf ? 1 : 2));
+    CHECK(peer.model.status().forwardAdc == (rf ? 400 : 2));
     CHECK(peer.model.fieldAgeMs(QStringLiteral("TP")) < 1000);
     CHECK(peer.model.fieldAgeMs(QStringLiteral("VFWD")) < 1000);
 

@@ -19,6 +19,8 @@ namespace {
 const QList<QByteArray> kPolls{"PS;","TP;","VFWD;","VRFL;","VSWR;","VSWRB;","F;","BN;","AN;","MD;",
     "AMPI;","ATTN;","BYP;","FLT;","C;","L;","SIDE;","FY;","FC;","FX;","I;","RV;","SN;"};
 QByteArray hexMask(int mask) { return QByteArray::number(mask,16).rightJustified(2,'0').toUpper(); }
+// Lifetime of a direct tuner search sent in this session before CT is requested.
+constexpr qint64 kSearchWatchdogMs = 30000;
 }
 Kat500Model::Kat500Model(QObject* parent) : QObject(parent), m_parser(std::make_unique<FrameParser>()),
     m_socket(std::make_unique<QTcpSocket>())
@@ -216,7 +218,7 @@ void Kat500Model::tick()
     if (!m_connected) { return; }
     if (m_searchDeadline && now >= m_searchDeadline) {
         cancelTuneAfterPendingOperation();
-        report(QStringLiteral("Tuner search exceeded 30 seconds; cancellation requested. No radio carrier command was sent."));
+        report(QStringLiteral("Tuner search exceeded %1 seconds; cancellation requested. No radio carrier command was sent.").arg(kSearchWatchdogMs / 1000));
     }
     emit availabilityChanged();
     if (!m_connected) { return; }
@@ -325,7 +327,7 @@ void Kat500Model::tick()
     if ((wire == "T;TP;" || wire == "FTNS;TP;") && !m_tunePermit) {
         // Carrier-controlled searches have their own stop-RF-before-cancel deadline.
         // This watchdog owns only a direct search actually sent in this session.
-        m_searchDeadline = now + 30000;
+        m_searchDeadline = now + kSearchWatchdogMs;
         m_searchObserved = false;
     }
     write(wire);
@@ -458,7 +460,7 @@ void Kat500Model::fail(const QString& reason)
     // A lost reply retains the watchdog until polling establishes its outcome.
     if (m_operation == QStringLiteral("Request tuner search") && m_searchDeadline &&
         !m_searchObserved && m_status.tuning == false &&
-        m_received.value(QStringLiteral("TP"), -1) >= m_searchDeadline - 30000) {
+        m_received.value(QStringLiteral("TP"), -1) >= m_searchDeadline - kSearchWatchdogMs) {
         m_searchDeadline = 0;
     }
     ++m_generation; m_resetAt = 0; m_pendingBackup = {};
@@ -677,11 +679,20 @@ void Kat500Model::preflight(std::function<void()> ready, bool requireZeroRf)
     if (!m_connected || !operationBusy()) { return; }
     query("I;"); query("RV;"); query("SN;"); query("PS;"); query("TP;");
     query("VFWD;",[this,ready = std::move(ready),requireZeroRf] {
-        if (m_status.identity != QStringLiteral("KAT500") || m_status.firmware != m_operationFirmware || m_status.serial != m_operationSerial ||
-            m_status.powerOn != true || m_status.tuning != false || !m_status.forwardAdc ||
-            (requireZeroRf && m_status.forwardAdc != 0) || m_status.serial.isEmpty()) {
-            fail(QStringLiteral("Fresh identity, power, idle or no-RF preflight failed.")); return;
+        QString reason;
+        if (m_status.identity != QStringLiteral("KAT500") || m_status.serial.isEmpty() ||
+            m_status.firmware != m_operationFirmware || m_status.serial != m_operationSerial) {
+            reason = QStringLiteral("the tuner identity, firmware or serial number changed or is unknown");
+        } else if (m_status.powerOn != true) {
+            reason = QStringLiteral("the KAT500 is off or its power state is unknown");
+        } else if (m_status.tuning != false) {
+            reason = QStringLiteral("the KAT500 reports a tuning search (TP1) or no TP reply");
+        } else if (!m_status.forwardAdc) {
+            reason = QStringLiteral("no forward ADC (VFWD) reply was received");
+        } else if (requireZeroRf && *m_status.forwardAdc != 0) {
+            reason = QStringLiteral("forward ADC is %1 and this operation requires zero; stop RF and check the tuner readback").arg(*m_status.forwardAdc);
         }
+        if (!reason.isEmpty()) { fail(QStringLiteral("Preflight failed: %1.").arg(reason)); return; }
         ready();
     });
 }
