@@ -181,6 +181,34 @@ static bool argToDouble(const QStringList& args, int idx, double& out)
     return true;
 }
 
+// SQL_LEVEL is a threshold in dB, -140..0 (TCI 2.1 p.31). A slice stores a
+// 0..100 level; the backend's published squelch scale converts between the
+// two. Where the backend publishes no dB place for the slice's mode (HL2 FM,
+// RTL, a Kiwi source), Flex's -160 + level map stands in as a nominal scale.
+static constexpr double kSqlMinDb = -140.0;
+
+static SquelchLevelScale sqlScaleFor(RadioModel* model, SliceModel* s)
+{
+    if (model && s) {
+        if (auto scale = squelchScaleForMode(
+                model->backendCapabilities().squelchLevelScale, s->mode())) {
+            return *scale;
+        }
+    }
+    return legacyDbmSquelchScale();
+}
+
+static int sqlLevelDb(RadioModel* model, SliceModel* s, int level)
+{
+    const double db = sqlScaleFor(model, s).thresholdDb(level);
+    return static_cast<int>(std::lround(std::clamp(db, kSqlMinDb, 0.0)));
+}
+
+int TciProtocol::squelchLevelDb(RadioModel* model, SliceModel* s, int level)
+{
+    return sqlLevelDb(model, s, level);
+}
+
 SliceModel* TciProtocol::sliceForTrx(int trx) const
 {
     if (m_trxMap)
@@ -379,7 +407,7 @@ QString TciProtocol::generateInitBurst()
                          .arg(trx)
                          .arg(s->receiveSquelchOn() ? "true" : "false");
             burst += QStringLiteral("sql_level:%1,%2;")
-                         .arg(trx).arg(s->receiveSquelchLevel());
+                         .arg(trx).arg(sqlLevelDb(m_model, s, s->receiveSquelchLevel()));
 
             // AGC
             burst += QStringLiteral("agc_mode:%1,%2;")
@@ -1174,18 +1202,28 @@ QString TciProtocol::cmdSqlLevel(const QStringList& args, bool isSet)
 
     if (!isSet) {
         return QStringLiteral("sql_level:%1,%2;")
-                   .arg(trx).arg(s->receiveSquelchLevel());
+                   .arg(trx).arg(sqlLevelDb(m_model, s, s->receiveSquelchLevel()));
     }
 
     if (args.size() < 2) return {};
-    int level = 0;
-    if (!argToInt(args, 1, level)) return {};
+    double value = 0.0;
+    if (!argToDouble(args, 1, value)) return {};
+    // The spec defines dB only. A positive value is outside its range, and is
+    // most likely an older client's 0..100 level; read as dB it would close
+    // the squelch, so it is ignored (TCI 2.1 p.6). At or below what level 0
+    // is reported as (-140 dB, or a higher floor the scale publishes), the
+    // squelch opens fully, so level 0 stays reachable and its own echo, sent
+    // back, does not move it.
+    if (value > 0.0) return {};
+    const int level = (value <= sqlLevelDb(m_model, s, 0))
+        ? 0
+        : sqlScaleFor(m_model, s).levelForThresholdDb(value);
     auto& pending = (*m_pendingSquelch)[trx];
     pending.level = level;
     queueSquelch(s, trx, pending.on.value_or(s->receiveSquelchOn()), level);
 
     m_pendingNotification = QStringLiteral("sql_level:%1,%2;")
-                                .arg(trx).arg(level);
+                                .arg(trx).arg(sqlLevelDb(m_model, s, level));
     return {};
 }
 

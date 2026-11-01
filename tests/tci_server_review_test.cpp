@@ -955,6 +955,79 @@ public:
         return nb.size() == 1;
     }
 
+    // The sql_level relay (#6857) follows the flag relays above: nothing on
+    // the wire at wire time, the settled level announced once after the
+    // ~400 ms settle, then one broadcast per change in dB. An enable-only edge
+    // re-emits squelchChanged with the same level and is de-duped.
+    static bool sqlLevelRelaySeedsAndDeDups()
+    {
+        RadioModel model;
+        TciClient sock;
+        TciServer server(&model);
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
+
+        QStringList sql;
+        QObject::connect(&server, &TciServer::tciMessage,
+            [&sql](const QString& dir, const QString& msg) {
+                if (dir == QLatin1String("tx")
+                    && msg.startsWith(QLatin1String("sql_level:")))
+                    sql << msg.trimmed();
+            });
+
+        QString err;
+        model.automationApplySliceFixture(0, QString(), &err);
+        SliceModel* s0 = model.slice(0);
+        if (!s0) return false;
+        s0->setSquelch(false, 30);               // -130 dB on the -160 + level map
+        server.wireSlice(s0->sliceId(), s0);
+        if (!sql.isEmpty()) return false;        // seed is deferred, not sync
+        spin(450);
+        const bool seeded = sql == QStringList{QStringLiteral("sql_level:0,-130;")};
+
+        sql.clear();
+        s0->setSquelch(false, 60);               // GUI slider → one broadcast
+        const bool oneOnChange = sql == QStringList{QStringLiteral("sql_level:0,-100;")};
+        s0->setSquelch(true, 60);                // enable edge, same level → none
+        return seeded && oneOnChange && sql.size() == 1;
+    }
+
+    // Band-change re-wire: the recreated slice holds a pre-settle level and the
+    // radio restores the settled one inside the window. The client sees the
+    // settled value once, never the transient (cf. #2824).
+    static bool sqlLevelSeedReadsSettledNotTransient()
+    {
+        RadioModel model;
+        TciClient sock;
+        TciServer server(&model);
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
+
+        QStringList sql;
+        QObject::connect(&server, &TciServer::tciMessage,
+            [&sql](const QString& dir, const QString& msg) {
+                if (dir == QLatin1String("tx")
+                    && msg.startsWith(QLatin1String("sql_level:")))
+                    sql << msg.trimmed();
+            });
+
+        QString err;
+        model.automationApplySliceFixture(0, QString(), &err);
+        SliceModel* s0 = model.slice(0);
+        if (!s0) return false;
+        s0->setSquelch(false, 70);               // recreated slice's pre-settle
+        sql.clear();
+        server.wireSlice(s0->sliceId(), s0);
+        spin(120);                               // still inside the window
+        s0->setSquelch(false, 40);               // radio restores settled value
+        if (sql != QStringList{QStringLiteral("sql_level:0,-120;")})
+            return false;
+        spin(400);                               // the deferred seed de-dups
+        return sql.size() == 1;
+    }
+
     // A TX slice *closed* (removed with no recreation) must not leave
     // m_lastTxTrx pointing at a dead index. The deferred cleanup resets it once
     // the settle window passes with no live slice carrying that trx; a
@@ -2816,6 +2889,10 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::flagRelaySeedsAndDeDups();
     const bool flagSeedSettled
         = AetherSDR::TciServerReviewTest::flagSeedReadsSettledNotTransient();
+    const bool sqlSeedsDeDups
+        = AetherSDR::TciServerReviewTest::sqlLevelRelaySeedsAndDeDups();
+    const bool sqlSeedSettled
+        = AetherSDR::TciServerReviewTest::sqlLevelSeedReadsSettledNotTransient();
     const bool vfoConfirmsAccepted
         = AetherSDR::TciServerReviewTest::vfoSetConfirmsTheAcceptedFrequency();
     const bool vfoConfirmsRefusal
@@ -2901,6 +2978,10 @@ int main(int argc, char** argv)
                 flagSeedsDeDups ? "PASS" : "FAIL");
     std::printf("%s  flag seed reads settled, no band-change transient\n",
                 flagSeedSettled ? "PASS" : "FAIL");
+    std::printf("%s  sql_level relay seeds after the settle and de-dups in dB\n",
+                sqlSeedsDeDups ? "PASS" : "FAIL");
+    std::printf("%s  sql_level seed reads settled, no band-change transient\n",
+                sqlSeedSettled ? "PASS" : "FAIL");
     std::printf("%s  m_lastTxTrx resets when TX slice is closed\n",
                 txTrxResets ? "PASS" : "FAIL");
     std::printf("%s  active_slice seeds from current GUI focus (#4160)\n",
@@ -2975,7 +3056,7 @@ int main(int argc, char** argv)
         && payloadFreeDisconnect && outboundTextAccounting && pttBindsReceiver
         && pttUsesStableMap && ownershipJoin
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
-        && flagSeedSettled && txTrxResets
+        && flagSeedSettled && sqlSeedsDeDups && sqlSeedSettled && txTrxResets
         && activeSliceSeed && activeSliceRemoval && trxStableRecreate
         && rxEnableLifecycle && overlapSilent && reclaimCloseAnnounced
         && trxDistinctReconnect && heldTrxRefuses
