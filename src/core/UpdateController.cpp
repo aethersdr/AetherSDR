@@ -392,6 +392,11 @@ void UpdateController::installAppImage(bool trash)
     }));
 }
 
+void UpdateController::dropPendingSwap()
+{
+    UpdateInstaller::dropPendingSwap();
+}
+
 bool UpdateController::installOnQuit()
 {
     if (m_state != State::Staged || m_staged.version.isEmpty()) {

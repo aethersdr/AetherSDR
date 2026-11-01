@@ -34,7 +34,6 @@
 #include "TitleBar.h"
 #include "UpdatesWindow.h"
 #include "core/UpdateController.h"
-#include "core/UpdateInstaller.h"
 #include "WindowCaptionButtons.h"
 #include "WindowChrome.h"
 #ifdef Q_OS_MACOS
@@ -9836,7 +9835,9 @@ void MainWindow::applyUiScale(int pct)
         m_relaunchingApp = true;
         // A new instance starts from the bundle as this one exits: a swap
         // readied for this exit would replace it under that instance.
-        UpdateInstaller::dropPendingSwap();
+        if (m_updateController) {
+            m_updateController->dropPendingSwap();
+        }
 #ifdef Q_OS_MACOS
         // On macOS, relaunch via 'open -n' so the .app bundle is activated through
         // Launch Services — direct binary exec bypasses the bundle, causing dock

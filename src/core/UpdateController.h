@@ -130,6 +130,9 @@ public:
     // As the app quits: the same, silently, without the restart, waited
     // for. False when nothing was handed over.
     bool installOnQuit();
+    // macOS: forgets a swap readied for this exit, because another instance
+    // is starting from the bundle (a UI-scale restart). It stays staged.
+    void dropPendingSwap();
 
 signals:
     void stateChanged();
