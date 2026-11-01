@@ -354,7 +354,8 @@ public:
     }
     [[nodiscard]] bool transmitEnabled() const noexcept { return m_txAllowed; }
 
-    // Key / unkey. Ignored unless enableTransmit(true) was called.
+    // Key / unkey. A key is refused unless enableTransmit(true) was called and the
+    // session is streaming (start() until stop()); stop() drops a held key.
     void setMox(bool keyed, const TxCoordinator::Operation& operation);
     // Only the backend's explicit CW break-in path uses CW holds to sustain
     // MOX. Ordinary manual PTT must not borrow a still-held bare CW element.

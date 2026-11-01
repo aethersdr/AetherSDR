@@ -1823,6 +1823,7 @@ int main(int argc, char** argv)
         const auto operation = coordinator.acquire(actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
         MetisClient c;
         c.enableTransmit(true);
+        MetisClientTestAccess::setStreaming(c);
         c.setMox(true, operation);
         check(anyFrameKeyed(c.buildNextControlPacket()), "control: a bounded operation keys inside its bound");
         QThread::msleep(400);
