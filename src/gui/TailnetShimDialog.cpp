@@ -776,8 +776,8 @@ void TailnetShimDialog::updateControls()
         // An older container may still enforce a Who may connect list this
         // window no longer edits; name it, since updating is what drops it.
         QString hint = tr("This remote-access container (version %1) can only join with an auth "
-                          "key, under Advanced. Update it from the Waveforms list to sign in with "
-                          "a QR code.").arg(m_status->version);
+                          "key, under Advanced. Use Update below to sign in with a QR code.")
+                           .arg(m_status->version);
         if (!m_status->allow.isEmpty()) {
             hint += QLatin1Char(' ')
                 + tr("It also still limits who may connect to %1; updating hands that to your "
@@ -812,9 +812,11 @@ void TailnetShimDialog::updateControls()
         && tailnetshim::updateAvailable(m_status->version, tailnetshim::pinnedVersion(m_native));
     m_updateButton->setVisible(outdated && !lockedOut);
     m_updateButton->setEnabled(outdated && !m_busy);
-    m_updateButton->setToolTip(outdated
+    const QString updateWhy = outdated
         ? tr("Install version %1 on the radio.").arg(tailnetshim::pinnedVersion(m_native))
-        : QString());
+        : QString();
+    m_updateButton->setToolTip(updateWhy);
+    m_updateButton->setAccessibleDescription(updateWhy);
     m_shareDiscoveredCheck->setEnabled(mayChange);
     m_extraDevicesEdit->setEnabled(mayChange);
     m_copyButton->setEnabled(m_status && !m_status->tailnetIp.isEmpty());
@@ -1059,7 +1061,7 @@ void TailnetShimDialog::reset()
     if (!self || !ask || ask.get()->clickedButton() != go) {
         return;
     }
-    emit resetRequested();
+    emit resetRequested(false);
     close();
 }
 
@@ -1086,7 +1088,7 @@ void TailnetShimDialog::updateRadioShim()
     if (!self || !ask || ask.get()->clickedButton() != go) {
         return;
     }
-    emit resetRequested();
+    emit resetRequested(true);
     close();
 }
 

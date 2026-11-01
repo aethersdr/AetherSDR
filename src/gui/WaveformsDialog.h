@@ -37,7 +37,8 @@ private slots:
     // without a Waveform Processor the legacy waveform) and installs the
     // pinned one again, for a computer that lacks the radio's admin token
     // (TailnetShimDialog's Reset).
-    void resetRemoteAccess(bool container);
+    // `update`: asked for by Update, so the notices say Update, not Reset.
+    void resetRemoteAccess(bool container, bool update = false);
     void onDStarStartStopClicked();
     void onDStarBrowseClicked();
 

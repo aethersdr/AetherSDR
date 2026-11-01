@@ -33,7 +33,8 @@ signals:
     // The operator chose Reset: this computer can't change the radio's
     // remote access (it lacks the admin token), so the container is to be
     // removed and the pinned one installed again (WaveformsDialog does it).
-    void resetRequested();
+    // `update`: the same, asked for by Update, so it is worded as one.
+    void resetRequested(bool update);
 
 private:
     void refresh();
