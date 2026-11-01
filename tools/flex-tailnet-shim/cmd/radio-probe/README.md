@@ -35,6 +35,10 @@ uninstalled.
 
 ## Running it on a radio
 
+Testers: follow [TESTING.md](TESTING.md), which also has a prompt for an AI
+assistant and the troubleshooting steps. In short:
+
+
 1. Install `AetherRadioProbe.ssdr_waveform` with SmartSDR's Waveforms window,
    or `python3 -I upload.py --host <radio-ip> --install AetherRadioProbe.ssdr_waveform`.
    The upload can take minutes, and some radios list the waveform only after
