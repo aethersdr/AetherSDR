@@ -47,9 +47,10 @@ cleanup command removes every trace.
    Or, from Python:
    `python3 -I upload.py --host <radio-ip> --install AetherRadioProbe.ssdr_waveform`
    Note how long it takes, and whether AetherRadioProbe appears in the
-   waveform list without a reboot. Other 6000 users report that the upload
-   takes 4–5 minutes and a reboot is needed before the waveform is listed.
-   If it isn't listed after 10 minutes, reboot the radio.
+   waveform list without a reboot. On a FLEX-6300 it uploaded in under a
+   second and was running 45 seconds later with no reboot; other 6000 users
+   have reported 4–5 minutes and a reboot. If it isn't listed after 10
+   minutes, reboot the radio.
 3. **First report.** Once it's listed, wait 2 minutes, then
    `python3 -I upload.py --host <radio-ip> --report boot1.json`
    or open `http://<radio-ip>:48994/` in a browser and save the page as
@@ -83,7 +84,19 @@ in the report.
 | 7 | Are the shim's ports free? | `network.shim_port_binds`; `network.listening` | It uses TCP 48992/48993. |
 | 8 | Who does it run as? | `identity.uid`, `process_status`, `parent_cmdline`, `limits` | This sets what the shim may do. |
 
-To compare against, the FLEX-8600 on SmartSDR 4.3.16 reported:
+To compare against, a FLEX-6300 on SmartSDR 4.2.18 reported:
+
+- **Platform:** `armv7l` Cortex-A8, kernel `2.6.37-0.1-microburst+`, 1 core, 469 MB total and about 430 MB free, ChaCha 9.8 MB/s, CPU 54% idle.
+- **Identity:** UID 78666, parent `/usr/bin/smartsdr`.
+- **Lifecycle:** running 45 s after upload with no reboot, and restarted itself at boot.
+- **Persistent storage:** `/user/waveforms/AetherRadioProbe` (ext2, 41 MB free) and `/var/tmp` (ext3) kept their markers across a power cycle.
+- **UDP source:** `127.0.0.1:4992` → `127.0.0.1:4993`, and the same pattern for each address.
+
+Go 1.27 documents Linux 3.2 as its minimum, but the probe ran on that 2.6.37
+kernel. Probe 0.1.0 reported `mem_available_mb: 0` on it, because kernels
+before 3.14 have no `MemAvailable`; 0.1.1 estimates it instead.
+
+The FLEX-8600 on SmartSDR 4.3.16 reported:
 
 - **Platform:** `aarch64`, kernel `5.15.92-v8+`, 4 cores, 1459 MB available, ChaCha 137 MB/s, CPU about 95% idle.
 - **Identity:** UID 78666, parent `/usr/bin/smartsdr`.

@@ -180,3 +180,13 @@ func TestTheWaveformStoreIsNeverWritten(t *testing.T) {
 		t.Fatalf("the store gained a file: %d -> %d entries", len(before), len(after))
 	}
 }
+
+func TestMemAvailableFallsBackOnOldKernels(t *testing.T) {
+	// The FLEX-6300's 2.6.37 meminfo has no MemAvailable.
+	if kb, est := memAvailableKB(map[string]int64{"MemTotal": 480436, "MemFree": 389920, "Buffers": 2636, "Cached": 48152}); kb != 440708 || !est {
+		t.Fatalf("old kernel: %d %v", kb, est)
+	}
+	if kb, est := memAvailableKB(map[string]int64{"MemAvailable": 1494000, "MemFree": 10}); kb != 1494000 || est {
+		t.Fatalf("new kernel: %d %v", kb, est)
+	}
+}
