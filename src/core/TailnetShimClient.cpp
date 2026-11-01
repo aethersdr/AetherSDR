@@ -215,13 +215,6 @@ QByteArray sharingBody(const QStringList& routes, bool shareDiscovered)
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 
-QByteArray allowBody(const QStringList& allow)
-{
-    QJsonObject o;
-    o.insert(QStringLiteral("allow"), QJsonArray::fromStringList(allow));
-    return QJsonDocument(o).toJson(QJsonDocument::Compact);
-}
-
 QString suggestedHostname(const QString& nickname)
 {
     QString h = nickname.toLower();
@@ -376,13 +369,6 @@ void TailnetShimClient::setSharing(const QStringList& routes, bool shareDiscover
     handle(send(QStringLiteral("PUT"), QStringLiteral("/v1/routes"),
                 tailnetshim::sharingBody(routes, shareDiscovered), adminToken),
            QStringLiteral("sharing"));
-}
-
-void TailnetShimClient::setAllow(const QStringList& allow, const QString& adminToken)
-{
-    handle(send(QStringLiteral("PUT"), QStringLiteral("/v1/allow"),
-                tailnetshim::allowBody(allow), adminToken),
-           QStringLiteral("allow"));
 }
 
 void TailnetShimClient::signOut(const QString& adminToken)

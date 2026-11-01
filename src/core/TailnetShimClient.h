@@ -97,7 +97,6 @@ QString parseError(const QByteArray& json);
 QByteArray provisionBody(const QString& authKey, const QString& hostname,
                          const QStringList& allow, const QStringList& routes = {},
                          bool shareDiscovered = true);
-QByteArray allowBody(const QStringList& allow);
 QByteArray sharingBody(const QStringList& routes, bool shareDiscovered);
 // "KK7GWY FLEX-8600" -> "kk7gwy-flex-8600": a valid tailnet hostname.
 QString suggestedHostname(const QString& nickname);
@@ -123,7 +122,6 @@ public:
     void provision(const QString& authKey, const QString& hostname,
                    const QStringList& allow, const QStringList& routes,
                    bool shareDiscovered, const QString& adminToken);
-    void setAllow(const QStringList& allow, const QString& adminToken);
     void setSharing(const QStringList& routes, bool shareDiscovered, const QString& adminToken);
     void signOut(const QString& adminToken);
 
@@ -131,7 +129,7 @@ signals:
     void statusReceived(const AetherSDR::TailnetShimStatus& status);
     void provisioned(const AetherSDR::TailnetShimProvisionReply& reply);
     void loginReceived(const AetherSDR::TailnetShimLogin& login);
-    // operation is "status", "login", "provision", "allow", "sharing" or "signout". unauthorized
+    // operation is "status", "login", "provision", "sharing" or "signout". unauthorized
     // is true when the shim refused the admin token.
     void requestFailed(const QString& operation, const QString& message, bool unauthorized);
 

@@ -312,6 +312,20 @@ func TestUserLogWithholdsURLs(t *testing.T) {
 	}
 }
 
+// pendingSignInStart stands in for a join waiting for its sign-in: the
+// backend offers a URL at once, so a provision returns without waiting.
+func pendingSignInStart(n *Node) func(context.Context, string, time.Duration) error {
+	fb := &fakeBackend{}
+	fb.set(loginInfo{Backend: "NeedsLogin", AuthURL: testAuthURL})
+	return func(ctx context.Context, _ string, _ time.Duration) error {
+		n.mu.Lock()
+		n.loginRead = fb.read
+		n.mu.Unlock()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+}
+
 // writeTailnetState writes a tailscaled.state as tsnet's file store does.
 func writeTailnetState(t *testing.T, dir string, keys map[string]string) {
 	t.Helper()
@@ -333,10 +347,7 @@ func writeTailnetState(t *testing.T, dir string, keys map[string]string) {
 // stale flag.
 func TestAJoinedNodeIsNeverClaimableEvenIfItsCompletionIsntSaved(t *testing.T) {
 	n := newTestNode(t, "")
-	n.startFn = func(ctx context.Context, _ string, _ time.Duration) error {
-		<-ctx.Done()
-		return ctx.Err()
-	}
+	n.startFn = pendingSignInStart(n)
 	if _, _, err := n.ProvisionInteractive("", "flex-qr", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -438,5 +449,31 @@ func TestAccessListsAreDropped(t *testing.T) {
 	}
 	if got := fresh.Status().Allow; len(got) != 0 {
 		t.Fatalf("provision kept a list: %v", got)
+	}
+}
+
+// Waiting for a tailnet admin's approval, the node already belongs to the
+// tailnet of whoever signed in: it can't be taken over without the token.
+func TestANodeAwaitingApprovalIsNotClaimable(t *testing.T) {
+	fastLoginPolls(t)
+	n := newTestNode(t, "")
+	n.startFn = pendingSignInStart(n)
+	if _, _, err := n.ProvisionInteractive("", "flex-qr", nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.interruptBoot(); err != nil {
+		t.Fatal(err)
+	}
+	if !n.Status().Claimable {
+		t.Fatal("a fresh pending sign-in isn't claimable")
+	}
+	fb := &fakeBackend{}
+	fb.set(loginInfo{Backend: "NeedsMachineAuth"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go n.watchJoin(ctx, fb.read, true, func() {})
+	waitFor(t, "the approval wait to close the window", func() bool { return !n.Status().Claimable })
+	if _, _, err := n.ProvisionInteractive("", "attacker", nil, nil, nil); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("token-less takeover while awaiting approval: %v", err)
 	}
 }

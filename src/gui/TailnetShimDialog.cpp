@@ -846,8 +846,11 @@ void TailnetShimDialog::provision(const QString& authKey)
         }
         transaction->deleteLater();
     });
+    // An older container still keeps a Who may connect list: rejoining
+    // passes it through rather than silently widening access. 0.5.0
+    // ignores it.
     transaction->provision(authKey, m_hostnameEdit->text().trimmed(),
-                           {},
+                           m_status ? m_status->allow : QStringList{},
                            tailnetshim::splitAllowList(m_extraDevicesEdit->text()),
                            m_shareDiscoveredCheck->isChecked(), m_adminToken);
 }
@@ -960,6 +963,15 @@ void TailnetShimDialog::onRequestFailed(const QString& operation, const QString&
 {
     setBusy(false);
     if (unauthorized) {
+        // Mid sign-in, a refused token means another computer started the
+        // sign-in over, which replaced this window's code and token.
+        if (operation == QLatin1String("login")) {
+            m_signingIn = false;
+            hideSignIn();
+            showError(tr("This radio's sign-in was started over from another computer. Finish "
+                         "it there, or close and reopen this window for a new code."));
+            return;
+        }
         showError(tr("The container rejected this computer's admin token. To start over, "
                      "remove and reinstall the remote-access container from the Waveforms "
                      "list."));

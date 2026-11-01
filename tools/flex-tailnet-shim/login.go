@@ -118,6 +118,11 @@ func (n *Node) watchJoin(ctx context.Context, read loginReader, interactive bool
 		}
 		// A keyed join that the control plane answers with a sign-in URL
 		// has had its key refused: it stays "starting" until its timeout.
+		// Waiting for an admin's approval means someone has signed in: the
+		// node belongs to their tailnet, so it is no longer claimable.
+		if pendingState(li) == stateNeedsApproval {
+			n.markJoined()
+		}
 		if s := pendingState(li); s != "" && interactive {
 			n.setLoginState(s)
 			disarm()
@@ -163,6 +168,7 @@ func (n *Node) keepSignedIn(ctx context.Context, read loginReader, startLogin fu
 				n.setLoginState(s)
 			}
 		case li.Backend == "NeedsMachineAuth":
+			n.markJoined()
 			n.setLoginState(stateNeedsApproval)
 		}
 	}
@@ -270,9 +276,10 @@ func (n *Node) ProvisionInteractive(presented, hostname string, allow, routes []
 	return token, "", nil
 }
 
-// markJoined records that the node has been on the tailnet, ending the
-// token-free window a pending sign-in by URL leaves open. Caller holds opMu
-// (start does).
+// markJoined records that someone has signed the node in (it reached the
+// tailnet, or awaits an admin's approval there), ending the token-free
+// window a pending sign-in by URL leaves open. Called while a join holds
+// opMu (start, watchJoin) or from the running node's watcher.
 func (n *Node) markJoined() {
 	n.mu.Lock()
 	if !n.cfg.PendingSignIn {
