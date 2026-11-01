@@ -490,8 +490,7 @@ int main()
 
         // The helper's own bound with a count of one. P2Client passes
         // kMaxDdcs; a session drops the ports of DDCs it did not enable in
-        // handleDatagram() (isEnabledDdc()), which anan_link_telemetry_test
-        // covers.
+        // handleDatagram() (isEnabledDdc()).
         check(ddcIndexForSenderPort(1035, 1).has_value(),
               "single-DDC session accepts DDC0's port");
         check(!ddcIndexForSenderPort(1036, 1).has_value(),
