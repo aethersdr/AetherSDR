@@ -49,8 +49,9 @@ AetherSDR instrument session on the same host. It cannot detect AntScope or
 other applications: close those before testing. Multiple HID interfaces are
 shown independently so descriptor assumptions can be investigated.
 
-At most 64 received reports may await delivery to the model; exceeding that
-backlog fails and closes the instrument instead of growing the event queue.
+At most 1024 received reports (64 KB) may await delivery to the model, so a
+short GUI-thread stall does not abort a sweep; exceeding that backlog fails and
+closes the instrument instead of growing the event queue.
 The worker drains at most 64 existing reports before issuing a fresh identity
 query. Every normal send uses the source API's 64-byte buffer: `07`, payload
 count, up to 62 ASCII bytes, zero padding. The read buffer is 64 bytes; the
@@ -77,8 +78,9 @@ from an overclaimed measurement report.
 2. A full `Stick Pro <version> ...` identity → send `FULLINFO\r\n`.
 3. After 500 ms without another identity/info line → `ready`. The identity
    must exist; this quiet period is a host heuristic for optional FULLINFO,
-   not a protocol-defined completion ACK. Identification has a 3 s total
-   deadline. Full firmware text and up to 32 info lines are retained.
+   not a protocol-defined completion ACK. Identification fails after 3 s
+   without a line, counted from the device opening. Full firmware text and up
+   to 32 info lines are retained.
 4. Explicit sweep → `FQ<centerHz>\r`; require an exact `OK` after that command's
    HID write receipt before sending `SW<fullWidthHz>\r`.
 5. Require the next exact `OK` after the SW write receipt → `FRX<N>\r`.
@@ -91,9 +93,11 @@ from an overclaimed measurement report.
    firmware end-of-sweep marker. Extra data after cutoff is discarded locally;
    the bounded report trace may retain it while USB closes.
 8. Completion, Stop, Disconnect, leaving AetherLab, malformed data or timeout
-   cancels queued sends, attempts `off\r`, closes USB, and retains data until the next Connect. App
-   shutdown queues the same best-effort cleanup without joining the I/O thread;
-   process exit can precede the final write and USB-close callbacks. A new
+   cancels queued sends, attempts `off\r`, closes USB, and retains data until the next Connect.
+   If the I/O worker does not confirm the close within 3 s, the session ends in
+   `error` with RF-off unconfirmed and the controls recover. App shutdown runs
+   the same cleanup and waits up to 500 ms for the worker to write `off\r` and
+   close USB; a wedged device can still outlast that wait. A new
    sweep requires an explicit new Connect. No automatic sweep, retry or
    reconnect occurs.
 
@@ -126,6 +130,8 @@ unconfirmed after either an error or stop.
 | FRX N | 1–1000; span at least N Hz | Host cap, **not** a discovered firmware maximum |
 | Expected rows | N + 1; at most 1001 samples | Observed for N=1, 2, 10, 200 at 14.000–14.350 MHz on the tested Stick Pro 108; other settings unqualified |
 | Setup ACK | 3 s per command | Host deadline, not a firmware timing specification |
+| Identify | 3 s without a line after the device opens | Host deadline |
+| Close | 3 s for the worker to confirm; 500 ms at app exit | Host deadlines; RF-off unconfirmed after either |
 | Sweep | 15 s without a valid row; 60 s total, starting at FQ | Host deadlines; partial data never labelled complete |
 | Input line | 512 bytes, LF framing, optional single CR before LF | Host parser bound |
 | Trace | Last 128 input/output reports, actual length, UTC, first 64 bytes in hex | Bounded diagnostics; a long sweep overwrites earlier reports |

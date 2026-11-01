@@ -25,6 +25,8 @@ wchar_t g_error[64] = L"";
 bool g_reenter = false;
 std::atomic<bool> g_openDevice{false};
 std::atomic<bool> g_readFails{false};
+std::atomic<bool> g_slowWrite{false};
+std::atomic<int> g_closes{0};
 
 struct Operation {
     Operation()
@@ -86,8 +88,12 @@ const wchar_t* HID_API_CALL hid_error(hid_device*)
 void HID_API_CALL hid_free_enumeration(hid_device_info*) {}
 int HID_API_CALL hid_set_nonblocking(hid_device*, int) { return 0; }
 int HID_API_CALL hid_read(hid_device*, unsigned char*, size_t) { return g_readFails ? -1 : 0; }
-int HID_API_CALL hid_write(hid_device*, const unsigned char*, size_t) { return -1; }
-void HID_API_CALL hid_close(hid_device*) {}
+int HID_API_CALL hid_write(hid_device*, const unsigned char*, size_t)
+{
+    if (g_slowWrite) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+    return -1;
+}
+void HID_API_CALL hid_close(hid_device*) { ++g_closes; }
 
 } // extern "C"
 
@@ -172,6 +178,36 @@ int main(int argc, char** argv)
         loop.exec();
         if (!closed || failures != 1) { ++g_errors; }
         port->deleteLater();
+        g_openDevice = false;
+    }
+    // Destroying an open transport, as app exit does, waits for the worker to
+    // write RF-off and close USB. The slow write makes an unjoined exit lose that.
+    {
+        g_openDevice = true;
+        g_readFails = false;
+        g_slowWrite = true;
+        g_closes = 0;
+        QEventLoop loop;
+        QTimer deadline;
+        deadline.setSingleShot(true);
+        QObject::connect(&deadline, &QTimer::timeout, &loop, &QEventLoop::quit);
+        AetherSDR::RigExpertHidTransport* port = AetherSDR::RigExpertHidTransport::create(&app);
+        bool opened = false;
+        QObject::connect(port, &AetherSDR::RigExpertHidTransport::opened, &loop, [&] {
+            opened = true;
+            loop.quit();
+        });
+        deadline.start(3000);
+        port->start(QStringLiteral("absent"));
+        loop.exec();
+        QByteArray off(64, '\0');
+        port->finish(off);
+        delete port;
+        if (!opened || g_closes != 1) {
+            std::fprintf(stderr, "exit wait: opened=%d closes=%d\n", opened, g_closes.load());
+            ++g_errors;
+        }
+        g_slowWrite = false;
         g_openDevice = false;
     }
     g_reenter = true;

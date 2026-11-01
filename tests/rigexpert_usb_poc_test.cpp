@@ -15,6 +15,7 @@ public:
         QMetaObject::invokeMethod(&model.m_identityQuiet, "timeout", Qt::DirectConnection);
     }
     static void expire(AntennaAnalyzerModel& model) { model.deadlineExpired(); }
+    static int deadlineRemaining(const AntennaAnalyzerModel& model) { return model.m_deadline.remainingTime(); }
 };
 }
 
@@ -236,6 +237,35 @@ private slots:
         QCOMPARE(model.state(), AntennaAnalyzerModel::State::Identifying);
         QCOMPARE(current->commands.size(), 1);
         QCOMPARE(model.snapshot().value("generation").toInt(), 2);
+    }
+    void closingDeadlineReleasesSession()
+    {
+        AntennaAnalyzerModel model;
+        InjectedHid* old = install(model);
+        ready(model, old);
+        QVERIFY(model.sweep(14000000, 14350000, 2, true));
+        old->closeImmediately = false;
+        model.stop();
+        QCOMPARE(model.state(), AntennaAnalyzerModel::State::Closing);
+        QVERIFY(AntennaAnalyzerModelTestAccess::deadlineRemaining(model) > 0);
+        AntennaAnalyzerModelTestAccess::expire(model);
+        QCOMPARE(model.state(), AntennaAnalyzerModel::State::Error);
+        QVERIFY(model.lastError().contains("RF-off unconfirmed"));
+        InjectedHid* current = install(model);
+        QVERIFY(current);
+        emit old->closed();
+        QCOMPARE(model.state(), AntennaAnalyzerModel::State::Identifying);
+    }
+    void identityLinesExtendDeadline()
+    {
+        AntennaAnalyzerModel model;
+        InjectedHid* port = install(model);
+        QVERIFY(port);
+        QTest::qWait(400);
+        port->feed("Stick Pro 1.234 REV 7\r\n");
+        // The deadline restarts on each identity line rather than running from Connect.
+        QVERIFY(AntennaAnalyzerModelTestAccess::deadlineRemaining(model) > 2800);
+        QCOMPARE(model.state(), AntennaAnalyzerModel::State::Identifying);
     }
     void malformedOrderingAndDeadline()
     {

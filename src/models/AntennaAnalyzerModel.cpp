@@ -105,6 +105,8 @@ bool AntennaAnalyzerModel::connectDevice(int index)
     RigExpertHidTransport* port = m_port;
     connect(port, &RigExpertHidTransport::opened, this, [this, port] {
         if (m_port != port || m_state != State::Identifying) { return; }
+        // Locking, opening and draining the device can take most of the connect deadline.
+        m_deadline.start(kAckTimeoutMs);
         sendCommand("VER\r\n");
     });
     connect(port, &RigExpertHidTransport::reportReceived, this, [this, port](const QByteArray& report) {
@@ -218,6 +220,8 @@ void AntennaAnalyzerModel::lineReceived(const QByteArray& line)
     }
     if (line == "ERROR") { finish(State::Error, QStringLiteral("Stick Pro returned ERROR")); return; }
     if (m_state == State::Identifying) {
+        // Identification is bounded by inactivity; FULLINFO is capped at 32 lines below.
+        m_deadline.start(kAckTimeoutMs);
         if (m_info.size() < 32) { m_info.append(QString::fromLatin1(line)); }
         static const QRegularExpression identity(QStringLiteral("^Stick Pro\\s+[^\\s]+(?:\\s+.*)?$"),
                                                   QRegularExpression::CaseInsensitiveOption);
@@ -308,6 +312,7 @@ void AntennaAnalyzerModel::finish(State result, const QString& error)
         if (m_state != State::Closing) {
             m_state = State::Closing;
             m_port->finish(commandReport("off\r"));
+            m_deadline.start(kAckTimeoutMs);
         }
     } else { m_state = result; }
     emit changed();
@@ -320,6 +325,17 @@ void AntennaAnalyzerModel::stop()
 void AntennaAnalyzerModel::disconnectDevice() { finish(State::Disconnected); }
 void AntennaAnalyzerModel::deadlineExpired()
 {
+    if (m_state == State::Closing) {
+        // The I/O worker never confirmed the close. Release the session so the
+        // controls recover; the retired transport's late signals are ignored.
+        m_port = nullptr;
+        m_pending.clear();
+        m_state = State::Error;
+        m_error = QStringLiteral("Stick Pro did not confirm USB close; RF-off unconfirmed");
+        qCWarning(lcAetherLab).noquote() << m_error;
+        emit changed();
+        return;
+    }
     finish(State::Error, QStringLiteral("Protocol deadline expired; partial data retained, RF-off unconfirmed"));
 }
 

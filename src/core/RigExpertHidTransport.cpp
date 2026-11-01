@@ -1,9 +1,11 @@
 #include "RigExpertHidTransport.h"
 
 #include <QCryptographicHash>
+#include <QDeadlineTimer>
 #include <QDir>
 #include <QFile>
 #include <QLockFile>
+#include <QPointer>
 #include <QStandardPaths>
 #include <QThread>
 #include <QTimer>
@@ -49,6 +51,9 @@ QList<RigExpertUsbDevice> RigExpertHidTransport::enumerate()
 
 #ifdef HAVE_HIDAPI
 namespace {
+
+// Reports queued for the GUI thread; a GUI stall must not abort a healthy sweep.
+constexpr int kMaxPendingReports = 1024;
 
 class HidWorker final : public QObject {
     Q_OBJECT
@@ -145,8 +150,8 @@ private:
             const int n = hid_read(m_handle, buffer.data(), buffer.size());
             if (n == 0) { return; }
             if (n < 0) { fail(QStringLiteral("HID read failed: %1").arg(error())); return; }
-            if (m_pendingReceives->load() >= 64) {
-                fail(QStringLiteral("HID receive backlog exceeded 64 reports")); return;
+            if (m_pendingReceives->load() >= kMaxPendingReports) {
+                fail(QStringLiteral("HID receive backlog exceeded %1 reports").arg(kMaxPendingReports)); return;
             }
             m_pendingReceives->fetch_add(1);
             emit reportReceived(QByteArray(reinterpret_cast<const char*>(buffer.data()), n));
@@ -176,13 +181,19 @@ class HidTransport final : public RigExpertHidTransport {
     Q_OBJECT
 public:
     explicit HidTransport(QObject* parent) : RigExpertHidTransport(parent) {}
-    ~HidTransport() override { finish({}); }
+    ~HidTransport() override
+    {
+        finish({});
+        // Give the worker a bounded chance to send RF-off and close USB before exit.
+        if (m_thread) { m_thread->wait(QDeadlineTimer(500)); }
+    }
 
     void start(const QString& path) override
     {
         if (m_started) { return; }
         m_started = true;
         auto* ioThread = new QThread;
+        m_thread = ioThread;
         auto* worker = new HidWorker(m_cancelled, m_pendingReceives);
         worker->moveToThread(ioThread);
         connect(ioThread, &QThread::started, worker, [worker, path] { worker->open(path); });
@@ -223,6 +234,7 @@ signals:
 private:
     std::shared_ptr<std::atomic<bool>> m_cancelled{std::make_shared<std::atomic<bool>>(false)};
     std::shared_ptr<std::atomic<int>> m_pendingReceives{std::make_shared<std::atomic<int>>(0)};
+    QPointer<QThread> m_thread;
     bool m_started{false};
     bool m_closing{false};
 };

@@ -156,6 +156,32 @@ private slots:
         window.close();
         QCOMPARE(model.state(), AntennaAnalyzerModel::State::Complete);
     }
+    void minimumSwrNeedsMeasuredRow()
+    {
+        AntennaAnalyzerModel model;
+        auto* input = new WindowInput(&model);
+        model.setUsbBackend([] { return QList<RigExpertUsbDevice>{{"injected", "460012345", "Stick Pro"}}; },
+                            [input](QObject*) { return input; });
+        AetherLabWidget window(&model);
+        window.show();
+        QVERIFY(model.refreshDevices());
+        QVERIFY(model.connectDevice(0));
+        input->feed("Stick Pro 1.234 REV 7\r\n");
+        AntennaAnalyzerModelTestAccess::settled(model);
+        QVERIFY(model.sweep(14000000, 14350000, 2, true));
+        input->feed("OK\r\n");
+        input->feed("OK\r\n");
+        // Every row is non-passive, so the sweep has no SWR minimum to select.
+        input->feed("14,-5,0\r\n14.175,-6,0\r\n14.35,-7,0\r\n");
+        auto* marker = window.findChild<QSlider*>("aetherLabMarker");
+        auto* minimum = window.findChild<QPushButton*>("aetherLabMinimum");
+        QVERIFY(marker && minimum);
+        QTRY_COMPARE(marker->maximum(), 2);
+        QVERIFY(!minimum->isEnabled());
+        marker->setValue(2);
+        minimum->click();
+        QCOMPARE(marker->value(), 2);
+    }
 };
 QTEST_MAIN(AetherLabWidgetTest)
 #include "aetherlab_window_test.moc"

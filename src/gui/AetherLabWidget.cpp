@@ -443,6 +443,7 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
     layout->addWidget(equivalents);
     auto* footer = new QHBoxLayout;
     m_minimum = new QPushButton(tr("Minimum SWR marker"), content);
+    m_minimum->setObjectName(QStringLiteral("aetherLabMinimum"));
     m_minimum->setAccessibleName(tr("Select minimum measured SWR"));
     footer->addWidget(m_minimum);
     m_save = new QPushButton(tr("Save session…"), content);
@@ -494,7 +495,7 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
             const QJsonValue swr = samples.at(i).toObject().value(QStringLiteral("swr"));
             if (swr.isDouble() && swr.toDouble() < best) { best = swr.toDouble(); index = static_cast<int>(i); }
         }
-        m_marker->setValue(index);
+        if (std::isfinite(best)) { m_marker->setValue(index); }
     });
     connect(m_save, &QPushButton::clicked, this, &AetherLabWidget::saveSession);
     connect(returnButton, &QPushButton::clicked, this, &AetherLabWidget::returnRequested);
@@ -543,7 +544,11 @@ void AetherLabWidget::refresh()
     m_marker->blockSignals(true);
     m_marker->setRange(0, std::max(0, static_cast<int>(samples.size()) - 1));
     m_marker->blockSignals(false);
-    availability(m_minimum, !samples.isEmpty(), tr("Run a sweep to find the minimum measured SWR"));
+    const bool measuredSwr = std::any_of(samples.cbegin(), samples.cend(), [](const QJsonValue& row) {
+        return row.toObject().value(QStringLiteral("swr")).isDouble();
+    });
+    availability(m_minimum, measuredSwr, samples.isEmpty() ? tr("Run a sweep to find the minimum measured SWR")
+        : tr("No sample in this sweep has a measured SWR"));
     availability(m_marker, !samples.isEmpty(), tr("Run a sweep to populate marker samples"));
     const qint64 start = state.value(QStringLiteral("startHz")).toDouble() > 0
         ? static_cast<qint64>(state.value(QStringLiteral("startHz")).toDouble()) : 14000000;
@@ -553,14 +558,20 @@ void AetherLabWidget::refresh()
     const QJsonObject sample = samples.isEmpty() ? QJsonObject() : samples.at(m_marker->value()).toObject();
     const QString frequency = samples.isEmpty() ? tr("No measurement")
         : tr("%1 MHz").arg(QString::number(sample.value(QStringLiteral("frequencyHz")).toDouble() / 1e6, 'f', 6));
+    bool textChanged = false;
     if (m_frequency->text() != frequency) {
+        textChanged = true;
         m_frequency->setText(frequency);
         m_frequency->setAccessibleName(tr("Marker frequency: %1").arg(frequency));
         QAccessibleEvent event(m_frequency, QAccessible::NameChanged);
         QAccessible::updateAccessibility(&event);
     }
-    m_quality->setText(samples.isEmpty() ? tr("Run a sweep to place a marker")
-        : tr("Sample %1 / %2 · %3").arg(m_marker->value() + 1).arg(samples.size()).arg(sample.value(QStringLiteral("quality")).toString()));
+    const QString quality = samples.isEmpty() ? tr("Run a sweep to place a marker")
+        : tr("Sample %1 / %2 · %3").arg(m_marker->value() + 1).arg(samples.size()).arg(sample.value(QStringLiteral("quality")).toString());
+    if (m_quality->text() != quality) {
+        textChanged = true;
+        m_quality->setText(quality);
+    }
     for (auto it = m_values.cbegin(); it != m_values.cend(); ++it) {
         const QString& key = it.key();
         QString text = QStringLiteral("—");
@@ -578,13 +589,15 @@ void AetherLabWidget::refresh()
             }
         }
         if (it.value()->text() != text) {
+            textChanged = true;
             it.value()->setText(text);
             it.value()->setAccessibleName(tr("%1: %2").arg(it.value()->property("labAccessibleCaption").toString(), text));
             QAccessibleEvent event(it.value(), QAccessible::NameChanged);
             QAccessible::updateAccessibility(&event);
         }
     }
-    reflow();
+    // Readouts set the row widths, so only a text change can change the fit.
+    if (textChanged) { reflow(); }
 }
 
 void AetherLabWidget::saveSession()
