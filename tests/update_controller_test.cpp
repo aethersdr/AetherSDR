@@ -145,6 +145,7 @@ struct Rig {
 struct AppImageRig {
     QString appImage = QStringLiteral("/home/op/Downloads/AetherSDR-v26.10.2-x86_64.AppImage");
     QString installed;
+    QString installedMeanwhile;   // another install finished while this one copied
     bool installWorks = true;
     bool trashWorks = true;
     bool startWorks = true;
@@ -160,6 +161,11 @@ struct AppImageRig {
         e.installRunning = [this](QString* problem, QString*) {
             ++installs;
             installedOnGuiThread = QThread::currentThread() == qApp->thread();
+            if (!installedMeanwhile.isEmpty()) {
+                installed = installedMeanwhile;
+                *problem = QStringLiteral("Another AetherSDR install became current meanwhile.");
+                return false;
+            }
             if (!installWorks) {
                 *problem = QStringLiteral("disk full");
                 return false;
@@ -547,6 +553,21 @@ private slots:
             QCOMPARE(a.starts, 0);
             QCOMPARE(done.at(0).at(0).toBool(), false);
             QVERIFY(done.at(0).at(1).toString().contains(QLatin1String("trash")));
+            QVERIFY(c.appImageToInstall().isEmpty());
+        }
+        {
+            // A newer install finished while this one copied: kept, nothing
+            // trashed or restarted, and the window points to it.
+            AppImageRig a;
+            a.installedMeanwhile = QStringLiteral("26.10.5");
+            UpdateController c(a.env(rig.env()));
+            QSignalSpy done(&c, &UpdateController::appImageInstalled);
+            c.installAppImage(true);
+            QVERIFY(done.wait(20000));
+            QVERIFY(a.trashed.isEmpty());
+            QCOMPARE(a.starts, 0);
+            QCOMPARE(done.at(0).at(0).toBool(), false);
+            QVERIFY(done.at(0).at(1).toString().contains(QLatin1String("26.10.5 was installed for updates meanwhile")));
             QVERIFY(c.appImageToInstall().isEmpty());
         }
         {

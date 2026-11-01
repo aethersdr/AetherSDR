@@ -63,7 +63,8 @@ UpdateController::Environment UpdateController::forThisApp()
         QDir tree(LinuxInstall::binaryDir());
         tree.cdUp();
         tree.cdUp();
-        return LinuxInstall::install(tree.absolutePath(), version, LinuxInstall::forThisUser(), problem, note);
+        return LinuxInstall::install(tree.absolutePath(), version, LinuxInstall::forThisUser(), problem, note,
+                                     LinuxInstall::Current::KeepExisting);
     };
     env.trash = [](const QString& file) { return QFile::moveToTrash(file); };
     env.startInstalled = [base, version = env.request.runningVersion] {
@@ -353,7 +354,13 @@ void UpdateController::installAppImage(bool trash)
         QString problem;
         if (!r.installed) {
             qCWarning(lcUpdater).noquote() << "v" + version + " not installed for updates:" << r.problem;
-            problem = tr("AetherSDR wasn't installed: %1").arg(r.problem);
+            // Another install finished while this one copied: it is kept.
+            const QString installed = installedVersion();
+            problem = installed.isEmpty()
+                          ? tr("AetherSDR wasn't installed: %1").arg(r.problem)
+                          : tr("AetherSDR %1 was installed for updates meanwhile, so this AppImage wasn't "
+                               "installed over it. Start it from your applications menu.")
+                                .arg(installed);
         } else {
             if (!r.note.isEmpty()) {
                 qCInfo(lcUpdater).noquote() << r.note;

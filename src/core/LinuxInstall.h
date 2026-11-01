@@ -56,8 +56,15 @@ public:
     // current. A file or link of the user's own at ~/.local/bin/aethersdr is
     // left alone; note says so. If the menu entry can't be written, current
     // is not changed, and a release folder it copied is removed again.
+    //
+    // Replace (--install) makes version current whatever current named.
+    // KeepExisting (Install for updates) makes it current only if nothing
+    // is current when it gets there, checked in the same step that makes the
+    // link, so an install made while this one copies is never replaced; the
+    // copy is then removed again.
+    enum class Current { Replace, KeepExisting };
     static bool install(const QString& tree, const QString& version, const Paths& paths,
-                        QString* problem, QString* note = nullptr);
+                        QString* problem, QString* note = nullptr, Current policy = Current::Replace);
 
     // Runs <tree>/AppRun --update-selftest and waits for it (60 s at most):
     // true when it wrote version as its marker.

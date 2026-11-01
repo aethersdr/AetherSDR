@@ -128,10 +128,24 @@ void discard(const QString& path)
 
 // <base>/current -> version, by renaming a new link over the old one: a
 // reader sees the old release or the new one, never neither.
-bool makeCurrent(const QString& base, const QString& version, QString* problem)
+bool makeCurrent(const QString& base, const QString& version, LinuxInstall::Current policy, QString* problem)
 {
-    const QString link = unique(base, kNewCurrent);
     std::error_code ec;
+    if (policy == LinuxInstall::Current::KeepExisting) {
+        // Made in place: symlink() fails if anything is at current by then,
+        // in one step, so an install made meanwhile is never replaced.
+        fs::create_symlink(toPath(version), toPath(QDir(base).filePath(kCurrent)), ec);
+        if (ec == std::errc::file_exists) {
+            *problem = QStringLiteral("Another AetherSDR install became current meanwhile.");
+            return false;
+        }
+        if (ec) {
+            *problem = QStringLiteral("%1 could not be made the current release.").arg(version);
+            return false;
+        }
+        return true;
+    }
+    const QString link = unique(base, kNewCurrent);
     fs::create_symlink(toPath(version), toPath(link), ec);
     if (!ec) {
         fs::rename(toPath(link), toPath(QDir(base).filePath(kCurrent)), ec);
@@ -361,7 +375,7 @@ QString LinuxInstall::installedVersion(const QString& base)
 }
 
 bool LinuxInstall::install(const QString& tree, const QString& version, const Paths& paths,
-                           QString* problem, QString* note)
+                           QString* problem, QString* note, Current policy)
 {
     if (!isVersion(version)) {
         *problem = QStringLiteral("%1 is not a release version.").arg(version);
@@ -412,7 +426,7 @@ bool LinuxInstall::install(const QString& tree, const QString& version, const Pa
     const QString current = QDir(paths.base).filePath(kCurrent);
     const QString run = QDir(current).filePath(kAppRun);
     if (!writeDesktopEntry(dest, run, paths.applications, problem)
-        || !makeCurrent(paths.base, version, problem)) {
+        || !makeCurrent(paths.base, version, policy, problem)) {
         if (copied) {
             std::error_code ec;
             fs::remove_all(toPath(dest), ec);
@@ -518,7 +532,7 @@ LinuxInstall::Switch LinuxInstall::switchTo(const QString& base, const QString& 
         *problem = QStringLiteral("AetherSDR %1 failed its start-up check, so it wasn't installed.").arg(version);
         return Switch::Failed;
     }
-    if (!makeCurrent(base, version, problem)) {
+    if (!makeCurrent(base, version, LinuxInstall::Current::Replace, problem)) {
         return putBack();
     }
     // The new release, the one running, the one current named and any
@@ -559,7 +573,9 @@ bool LinuxInstall::startAfterExit(qint64 pid, const QString& program, const QStr
     // Nothing of this process's is handed on: started from the AppImage, an
     // inherited descriptor on its mount keeps the mount, and the AppImage
     // file, alive for as long as the new copy runs.
+#ifdef Q_OS_UNIX
     process.setUnixProcessParameters(QProcess::UnixProcessFlag::CloseFileDescriptors);
+#endif
     return process.startDetached();
 }
 

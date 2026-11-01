@@ -411,6 +411,12 @@ because `~/.local/share/AetherSDR` already holds user data. `LinuxInstall`
   AppImage's Updates window, offered only when `$APPIMAGE` is set, the
   binary is not already in an install, and no `current` exists: an
   existing install is never replaced from an AppImage, which could be older.
+  That holds against an install made while the copy runs, too:
+  `LinuxInstall::install` takes `Current::KeepExisting`, which makes the
+  link with a plain `symlink()` at `current` instead of renaming one over
+  it, so it fails if anything is there by then. The copy is removed again,
+  and the window points to the install that won. `--install` keeps
+  `Current::Replace`.
   `UpdateController::installAppImage` runs `LinuxInstall::install` on the
   running tree on a worker thread, then, if the operator ticked it in the
   confirmation (off by default, a maintainer ruling), moves the AppImage to

@@ -11,8 +11,10 @@
 #include <atomic>
 #include <filesystem>
 
+#ifdef Q_OS_LINUX
 #include <fcntl.h>    // open
 #include <unistd.h>   // close
+#endif
 #include <thread>
 
 // LinuxInstall (RFC #5304 Phase 5): the install --install makes, the switch
@@ -666,6 +668,70 @@ private slots:
         QVERIFY(!LinuxInstall::selfTest(tmp.filePath(QStringLiteral("none")), QStringLiteral("26.10.4")));
     }
 
+    // Install for updates' policy: an install that is current by the time
+    // its copy is done is kept, and the copy is removed.
+    void keepExistingNeverReplacesACurrentInstall()
+    {
+        QTemporaryDir tmp;
+        const LinuxInstall::Paths paths = pathsIn(tmp.path());
+        const QString newer = tmp.filePath(QStringLiteral("newer"));
+        makeTree(newer, "26.10.5");
+        QString problem;
+        QVERIFY2(LinuxInstall::install(newer, QStringLiteral("26.10.5"), paths, &problem), qPrintable(problem));
+        const QString older = tmp.filePath(QStringLiteral("appimage"));
+        makeTree(older, "26.10.4");
+        QVERIFY(!LinuxInstall::install(older, QStringLiteral("26.10.4"), paths, &problem, nullptr,
+                                       LinuxInstall::Current::KeepExisting));
+        QVERIFY(problem.contains(QLatin1String("meanwhile")));
+        QCOMPARE(linkTarget(paths.base + QStringLiteral("/current")), QStringLiteral("26.10.5"));
+        QCOMPARE(QDir(paths.base).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot),
+                 (QStringList{QStringLiteral("26.10.5"), QStringLiteral("current")}));
+        QVERIFY(QFileInfo(paths.base + QStringLiteral("/current/AppRun")).isExecutable());
+        // With nothing current, it installs as --install does.
+        QTemporaryDir fresh;
+        const LinuxInstall::Paths empty = pathsIn(fresh.path());
+        QVERIFY2(LinuxInstall::install(older, QStringLiteral("26.10.4"), empty, &problem, nullptr,
+                                       LinuxInstall::Current::KeepExisting),
+                 qPrintable(problem));
+        QCOMPARE(LinuxInstall::installedVersion(empty.base), QStringLiteral("26.10.4"));
+    }
+
+    // Installs racing for an empty install, each from its own tree: exactly
+    // one becomes current, and every other one's copy is gone.
+    void racingInstallsLeaveExactlyOneCurrent()
+    {
+        QTemporaryDir tmp;
+        const LinuxInstall::Paths paths = pathsIn(tmp.path());
+        constexpr int kRacers = 8;
+        QStringList versions;
+        for (int i = 0; i < kRacers; ++i) {
+            versions << QStringLiteral("26.10.%1").arg(10 + i);
+            makeTree(tmp.filePath(versions.last()), versions.last().toLatin1());
+        }
+        std::atomic<bool> go{false};
+        std::atomic<int> won{0};
+        std::vector<std::thread> racers;
+        for (int i = 0; i < kRacers; ++i) {
+            racers.emplace_back([&, i] {
+                while (!go) {
+                    std::this_thread::yield();
+                }
+                QString problem;
+                won += LinuxInstall::install(tmp.filePath(versions[i]), versions[i], paths, &problem, nullptr,
+                                             LinuxInstall::Current::KeepExisting);
+            });
+        }
+        go = true;
+        for (auto& t : racers) {
+            t.join();
+        }
+        QCOMPARE(won.load(), 1);
+        const QString winner = LinuxInstall::installedVersion(paths.base);
+        QVERIFY(versions.contains(winner));
+        QCOMPARE(QDir(paths.base).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot),
+                 (QStringList{winner, QStringLiteral("current")}));
+    }
+
     void nothingInstalledIsNoVersion()
     {
         QTemporaryDir tmp;
@@ -721,6 +787,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(started), 5000);
     }
 
+#ifdef Q_OS_LINUX
     // Install for updates restarts into the install without the AppImage's
     // variables or its open descriptors, and with everything else.
     void theRelaunchDropsTheVariablesItIsTold()
@@ -753,6 +820,7 @@ private slots:
         QVERIFY(f.open(QIODevice::ReadOnly));
         QCOMPARE(f.readAll(), QByteArray("unset|yes|closed"));
     }
+#endif
 };
 
 QTEST_GUILESS_MAIN(LinuxInstallTest)

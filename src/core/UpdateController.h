@@ -56,7 +56,8 @@ public:
         // nothing is installed.
         std::function<QString()> installedVersion;
         // Installs the running release, the AppImage's own tree, for
-        // updates (LinuxInstall::install). Runs on a worker thread.
+        // updates (LinuxInstall::install), never over an install made
+        // meanwhile. Runs on a worker thread.
         std::function<bool(QString* problem, QString* note)> installRunning;
         // Moves file to the trash. Runs on a worker thread.
         std::function<bool(const QString& file)> trash;
