@@ -9672,6 +9672,29 @@ target_link_libraries(nrs_level_range_test PRIVATE
     aethercore Qt6::Widgets Qt6::Test
 )
 add_test(NAME nrs_level_range_test COMMAND nrs_level_range_test)
+
+# Client DSP knob dispatch (#6724): each applet knob reaches its engine
+# setter through a local object operand.
+add_executable(client_dsp_knob_dispatch_test
+    tests/client_dsp_knob_dispatch_test.cpp
+    ${THEME_TEST_RESOURCES}
+    src/gui/ClientCompKnob.cpp
+    src/gui/ClientCompApplet.cpp
+    src/gui/ClientCompCurveWidget.cpp
+    src/gui/ClientGateApplet.cpp
+    src/gui/ClientGateCurveWidget.cpp
+    src/gui/ClientTubeApplet.cpp
+    src/gui/ClientTubeCurveWidget.cpp
+    src/gui/ClientDeEssApplet.cpp
+    src/gui/ClientDeEssCurveWidget.cpp
+    src/gui/ClientReverbApplet.cpp
+    src/gui/StripReverbPanel.cpp
+    src/gui/EditorFramelessTitleBar.cpp
+)
+target_include_directories(client_dsp_knob_dispatch_test PRIVATE src tests)
+target_link_libraries(client_dsp_knob_dispatch_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test)
+add_test(NAME client_dsp_knob_dispatch_test COMMAND client_dsp_knob_dispatch_test)
 set_tests_properties(nrs_level_range_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
