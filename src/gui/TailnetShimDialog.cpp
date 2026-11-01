@@ -405,11 +405,17 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     m_refreshButton->setAccessibleName(tr("Refresh remote access status"));
     m_signOutButton = new QPushButton(tr("Disconnect"), body);
     m_signOutButton->setAccessibleName(tr("Disconnect the radio from your tailnet"));
+    m_resetButton = new QPushButton(tr("Reset"), body);
+    m_resetButton->setAccessibleName(tr("Reset remote access on this radio"));
+    m_resetButton->setToolTip(
+        tr("This computer can't change this radio's remote access. Reset reinstalls it."));
+    m_resetButton->hide();
     auto* doneButton = new QPushButton(tr("Done"), body);
     doneButton->setObjectName(QStringLiteral("tsDone"));
     doneButton->setAccessibleName(tr("Close remote access settings"));
     footer->addWidget(m_refreshButton);
     footer->addWidget(m_signOutButton);
+    footer->addWidget(m_resetButton);
     footer->addStretch(1);
     footer->addWidget(doneButton);
     layout->addSpacing(4);
@@ -426,6 +432,7 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     connect(&m_client, &TailnetShimClient::loginReceived, this, &TailnetShimDialog::onLogin);
     connect(m_saveSharingButton, &QPushButton::clicked, this, &TailnetShimDialog::saveSharing);
     connect(m_signOutButton, &QPushButton::clicked, this, &TailnetShimDialog::signOut);
+    connect(m_resetButton, &QPushButton::clicked, this, &TailnetShimDialog::reset);
 
     connect(&m_client, &TailnetShimClient::statusReceived, this,
             [this](const TailnetShimStatus& st) {
@@ -768,8 +775,13 @@ void TailnetShimDialog::updateControls()
     // only the sign-in to finish.
     const bool joined = known
         && (m_status->state == QLatin1String("running") || !m_status->tailnetIp.isEmpty());
-    m_signOutButton->setVisible(joined);
+    // Without the admin token nothing here can change a radio a tailnet
+    // owns: Reset (reinstall the container) takes Disconnect's place.
+    const bool lockedOut = provisioned && m_tokenLoaded && !haveToken && !m_status->claimable;
+    m_signOutButton->setVisible(joined && !lockedOut);
     m_signOutButton->setEnabled(joined && haveToken);
+    m_resetButton->setVisible(lockedOut);
+    m_resetButton->setEnabled(lockedOut && !m_busy);
     m_shareDiscoveredCheck->setEnabled(mayChange);
     m_extraDevicesEdit->setEnabled(mayChange);
     m_copyButton->setEnabled(m_status && !m_status->tailnetIp.isEmpty());
@@ -968,6 +980,21 @@ void TailnetShimDialog::saveSharing()
     setBusy(true, tr("Saving…"));
     m_client.setSharing(tailnetshim::splitAllowList(m_extraDevicesEdit->text()),
                         m_shareDiscoveredCheck->isChecked(), m_adminToken);
+}
+
+void TailnetShimDialog::reset()
+{
+    const auto answer = QMessageBox::question(
+        this, tr("Reset Remote Access"),
+        tr("This computer doesn't hold the key that lets it change this radio's remote access. "
+           "Resetting removes and reinstalls the remote-access container: the radio leaves your "
+           "tailnet now, and you sign it in again with a new code."),
+        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+    emit resetRequested();
+    close();
 }
 
 void TailnetShimDialog::signOut()

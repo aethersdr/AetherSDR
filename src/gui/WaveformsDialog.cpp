@@ -1632,6 +1632,62 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
     updateInstallButtonState();
 }
 
+void WaveformsDialog::resetRemoteAccess()
+{
+    if (!m_radioModel || !m_radioModel->isConnected()) {
+        return;
+    }
+    const QString name = QString::fromLatin1(kTailnetShimContainerName);
+    FlexWaveformModel& waveforms = m_radioModel->flexWaveformModel();
+    setRowNotice(name, tr("Resetting…"), QStringLiteral("pending"), true);
+
+    // The radio accepts the removal at once and takes a few seconds to carry
+    // it out; install again once it no longer lists the container (or after
+    // a bound, if its list never says so).
+    struct Pending {
+        bool done{false};
+        QMetaObject::Connection listed;
+        QMetaObject::Connection replied;
+    };
+    auto pending = std::make_shared<Pending>();
+    auto* bound = new QTimer(this);
+    bound->setSingleShot(true);
+    auto finish = [this, pending, bound](bool install) {
+        if (pending->done) {
+            return;
+        }
+        pending->done = true;
+        disconnect(pending->listed);
+        disconnect(pending->replied);
+        bound->stop();
+        bound->deleteLater();
+        if (install) {
+            onInstallRemoteAccessClicked();
+        }
+    };
+    pending->listed = connect(&waveforms, &FlexWaveformModel::waveformsChanged, this,
+                              [&waveforms, name, finish] {
+        for (const FlexWaveformEntry& w : waveforms.waveforms()) {
+            if (w.isContainer && w.name == name) {
+                return;
+            }
+        }
+        finish(true);
+    });
+    pending->replied = connect(&waveforms, &FlexWaveformModel::commandFinished, this,
+                               [this, name, finish](const QString& action, const QString& which,
+                                                    bool ok, const QString& message) {
+        if (action == QLatin1String("remove_container") && which == name && !ok) {
+            finish(false);
+            setRowNotice(name, tr("Reset failed"), QStringLiteral("error"), false);
+            showWaveformInstallResultDialog(this, tr("Reset Failed"), message);
+        }
+    });
+    connect(bound, &QTimer::timeout, this, [finish] { finish(true); });
+    bound->start(30'000);
+    waveforms.requestRemoveContainer(name);
+}
+
 void WaveformsDialog::installWaveformFile(const QString& title,
                                           const QString& filter,
                                           bool docker,
@@ -2162,6 +2218,8 @@ void WaveformsDialog::refreshWaveformList()
                 }
                 auto* dialog = new TailnetShimDialog(m_radioModel, this);
                 dialog->setAttribute(Qt::WA_DeleteOnClose);
+                connect(dialog, &TailnetShimDialog::resetRequested,
+                        this, &WaveformsDialog::resetRemoteAccess);
                 open = dialog;
                 dialog->show();
             });

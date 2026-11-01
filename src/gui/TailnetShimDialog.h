@@ -28,6 +28,12 @@ class TailnetShimDialog : public CanonWindow {
 public:
     explicit TailnetShimDialog(RadioModel* model, QWidget* parent = nullptr);
 
+signals:
+    // The operator chose Reset: this computer can't change the radio's
+    // remote access (it lacks the admin token), so the container is to be
+    // removed and the pinned one installed again (WaveformsDialog does it).
+    void resetRequested();
+
 private:
     void refresh();
     void showStatus(const TailnetShimStatus& status);
@@ -52,6 +58,7 @@ private:
     void maybeSignInUnasked();
     void saveSharing();
     void signOut();
+    void reset();
     void onProvisioned(const TailnetShimProvisionReply& reply);
     void onRequestFailed(const QString& operation, const QString& message, bool unauthorized);
 
@@ -91,6 +98,7 @@ private:
     QLineEdit* m_hostnameEdit{nullptr};
     QPushButton* m_refreshButton{nullptr};
     QPushButton* m_signOutButton{nullptr};
+    QPushButton* m_resetButton{nullptr};   // in Disconnect's place when locked out
     QPushButton* m_joinButton{nullptr};
 
     // Sign-in by QR code, and the auth key under Advanced.
