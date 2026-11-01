@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QProcess>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -205,6 +206,33 @@ private slots:
         QVERIFY(!MacInstall::swap(bundle, tmp.filePath(QStringLiteral("update/26.11.9")), previous, &problem));
         QVERIFY(!problem.isEmpty());
         QCOMPARE(readFile(bundle + QStringLiteral("/Contents/Info.plist")), QByteArray("<plist>26.11.3</plist>"));
+    }
+
+    // The real check: codesign on a bundle signed here (ad hoc; releases are
+    // Developer ID signed), then with one sealed resource changed.
+    void theRealSignatureCheckCatchesAChangedFile()
+    {
+#ifndef Q_OS_MACOS
+        QSKIP("codesign is macOS's");
+#else
+        QTemporaryDir tmp;
+        const QString bundle = tmp.filePath(QStringLiteral("AetherSDR.app"));
+        writeFile(bundle + QStringLiteral("/Contents/Info.plist"),
+                  "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>"
+                  "<key>CFBundleExecutable</key><string>AetherSDR</string>"
+                  "<key>CFBundleIdentifier</key><string>com.aethersdr.test</string>"
+                  "<key>CFBundlePackageType</key><string>APPL</string></dict></plist>\n");
+        writeFile(bundle + QStringLiteral("/Contents/MacOS/AetherSDR"), "#!/bin/sh\nexit 0\n", true);
+        writeFile(bundle + QStringLiteral("/Contents/Resources/qt.conf"), "[Paths]\n");
+        QCOMPARE(QProcess::execute(QStringLiteral("/usr/bin/codesign"),
+                                   {QStringLiteral("--force"), QStringLiteral("--sign"), QStringLiteral("-"), bundle}),
+                 0);
+        QString problem;
+        QVERIFY2(MacInstall::verifySignature(bundle, &problem), qPrintable(problem));
+        writeFile(bundle + QStringLiteral("/Contents/Resources/qt.conf"), "[Paths]\nPrefix=elsewhere\n");
+        QVERIFY(!MacInstall::verifySignature(bundle, &problem));
+        QVERIFY2(problem.contains(QLatin1String("doesn't match")), qPrintable(problem));
+#endif
     }
 
     void theSelfTestRunsTheBundlesBinaryAndReadsItsVersion()
