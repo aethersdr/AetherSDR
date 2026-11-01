@@ -7,18 +7,31 @@
 #include <QString>
 #include <QCryptographicHash>
 
+#include "TailnetShimRelease.h"
+
 class QNetworkReply;
 
 namespace AetherSDR {
 
-// Fetches the pinned remote-access container image (TailnetShimRelease) and
-// hands back a local path only if the bytes match the pinned size and
-// SHA-256. A verified copy is cached and re-verified before reuse, so a
+// Fetches a pinned remote-access package (TailnetShimRelease for the
+// container, TailnetShimNativeRelease for the legacy waveform) and hands
+// back a local path only if the bytes match the pinned size and SHA-256. A verified copy is cached and re-verified before reuse, so a
 // second install needs no download and a tampered cache is never trusted.
 class TailnetShimDownloader : public QObject {
     Q_OBJECT
 public:
-    explicit TailnetShimDownloader(QObject* parent = nullptr);
+    // What one package's release pins: AetherSDR accepts only these bytes.
+    struct Pin {
+        QString version;
+        QString url;
+        QByteArray sha256;   // lower-case hex
+        qint64 size{0};
+    };
+    static Pin pin(TailnetShimPackage package);
+
+    explicit TailnetShimDownloader(TailnetShimPackage package = TailnetShimPackage::Container,
+                                   QObject* parent = nullptr);
+    TailnetShimPackage package() const { return m_package; }
 
     // Pure check, separated for tests: empty when `path` holds exactly
     // `expectedSize` bytes hashing to `expectedSha256` (lower-case hex);
@@ -31,8 +44,9 @@ public:
     static QString promoteVerified(const QString& part, const QString& target,
                                    const QByteArray& expectedSha256, qint64 expectedSize);
 
-    // Where the verified image is cached.
-    static QString cachePath();
+    // Where the verified package is cached. The native package keeps its
+    // file name: the radio installs a legacy waveform by that name.
+    static QString cachePath(TailnetShimPackage package = TailnetShimPackage::Container);
 
     void start();
     void cancel();
@@ -40,7 +54,7 @@ public:
 
 signals:
     void progress(qint64 received, qint64 total);
-    void ready(const QString& path);       // verified image, safe to install
+    void ready(const QString& path);       // verified package, safe to install
     void failed(const QString& message);
 
 private:
@@ -48,6 +62,8 @@ private:
     void onFinished();
     void fail(const QString& message);
 
+    const TailnetShimPackage m_package;
+    const Pin m_pin;
     QNetworkAccessManager m_nam;
     QPointer<QNetworkReply> m_reply;
     QFile m_part;

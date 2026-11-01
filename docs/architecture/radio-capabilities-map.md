@@ -122,7 +122,11 @@ The optional `receiveModeControl`, `receiveFilterControl`, `receiveAudioControl`
 `receivePanCenterControl`, and `receivePanBandwidthControl` records are read by
 `ModelReceiveControlTarget` at action time and by `RadioResourceAdapter` for
 versioned metadata/observation provenance. All six backends declare each record
-explicitly. They do not change UI visibility or migrate legacy command routes.
+explicitly. They do not migrate legacy command routes. `receiveFilterControl` also
+reaches the desktop through `ModeFilters` (`RxApplet`, `VfoWidget`): which FM rows
+are declared decides whether the FM width presets show and whether the passband
+widget is enabled or replaced by the "Filter unavailable" placeholder, and a
+declared row range-checks saved presets for its mode.
 Null or unknown authority fails closed. Their full per-backend support matrix,
 range contracts, TX-idle restrictions and remaining no-op/coupling limitations
 are in [local receive control](../aetherd-local-receive-control.md#qualified-backend-surface).
@@ -356,6 +360,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `hasVoiceKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasVoiceKeyer()` | Status-bar DVK indicator, the DVK panel, and its F1-F12 arming. ANDed *ahead of* the SmartSDR+ entitlement gate — see below |
 | `hasFullDuplex` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Status-bar FDX indicator |
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` (Tools ▸ Waveforms… + AetherModem D-STAR tab), `MainWindow::scheduleDigitalVoiceAutoStart` | ThumbDV helper needs a SmartSDR D-STAR waveform. Flex sets true; Icom/HL2/Sim set false; ANAN/RTL inherit the `= false` default. Disconnected restores the tab. Autostart of `aether-dv-waveform` is gated on the same flag so a non-Flex connect cannot launch a helper with no Stop surface |
+| `waveformEnvControl` | engaged on firmware 4.3.16+ on a platform with a Waveform Processor (not Microburst/DeepEddy/Unknown) | absent | absent | `RadioModel::requestWaveformEnv`, `RadioModel::applyWaveformEnvironment`, `waveformEnvironmentUnavailableReason` (Waveforms ▸ Environment…, `WaveformEnvironmentDialog`) | Optional record (#6947): the radio keeps a per-container environment (`waveform env K=V` / `waveform env clear` / `waveform recreate`, status `env=` + `waveform restarted`). Requires `hasWaveforms`. Unavailable = the action is dimmed with the reason |
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
 | `alwaysUseClientSideSpots` | ❌ | ✅ | ❌ | `MainWindow_Spots.cpp`, `MainWindow_Wiring.cpp` through `SpotCommandPolicy` | Forces SpotHub and manual spots into the existing passive-local `SpotModel` instead of emitting Flex `spot add` commands. Icom: ✅ because CI-V has no compatible spot service. HL2: ✅ because it has no command plane — `RadioModel::sendCmd` drops `spot add`, so with ❌ no DX-cluster, RBN, WSJT-X, POTA or manual spot was ever drawn (N1MM and EiBi markers were always client-side). Flex and Sim remain under the existing operator Passive toggle. ANAN/RTL inherit the `= false` default and have no command plane either. |
 | `hasGpsLocation` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi`, `RadioModel::hasGpsHardware`, GPS dashboard | Family/model can provide coordinates. Flex combines this with per-unit GPSDO/GNSS presence; IC-705 is ✅ from verified `23 00` |

@@ -66,7 +66,8 @@ const sidebars = {
         "memory-channels",
         "profile-management",
         "xvtr-transverters",
-        "workspace-canvas"
+        "workspace-canvas",
+        "aetherlab"
       ]
     },
     {
@@ -141,6 +142,7 @@ const sidebars = {
         "smartlink-setup",
         "manual-connection",
         "tailscale-remote-access",
+        "waveform-environment",
         "low-bandwidth-connections",
         "multi-flex"
       ]

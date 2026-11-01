@@ -1,4 +1,22 @@
 {
+ "core/backends/WaveformEnvRequest.h": {
+  "tag": "universal",
+  "note": "Seam vocabulary for a radio-held waveform container environment: the typed clear/stage/recreate request with its validation, and the apply outcome. No wire text; FlexBackend encodes it (SmartSDR 4.3.16) and capabilities().waveformEnvControl gates it.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/RigExpertHidTransport.h": {
+  "tag": "peripheral(rigexpert)",
+  "note": "Independent Stick Pro HID instrument transport; no radio backend, audio or transceiver commands. USB proof of concept under RFC #6471.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/AntennaAnalyzerModel.h": {
+  "tag": "peripheral(rigexpert)",
+  "note": "Independent antenna analyzer state and finite-sweep model, exposed to the GUI and automation bridge. Does not use RadioModel or IRadioBackend.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/DxSpotLineParser.h": {
   "tag": "universal",
   "note": "Parses DX-cluster `DX de` lines (DXSpider/AR/CC/RBN/GoCluster) into DxSpot, including the GoCluster fixed-column tail and SNR report, and replays saved spot logs with per-session provenance. Pure line-to-value logic; no vendor radio ties.",
@@ -1688,6 +1706,12 @@
  "core/GeneratedAudioTransmitter.h": {
   "tag": "universal",
   "note": "Keys the transmitter, paces one finite block of generated audio in real time and unkeys, over an abstract TxAudioRoute rather than any vendor stream class. Shared by the client-side voice keyer (RFC #4214); works over any radio's TX audio path, same precedent as core/ClientQuindarTone.h. Tagged universal on its surface, not its prose: the header names dax_tx three times, but only in comments explaining that a Flex route must create a stream before the keyed edge while HL2 and Icom bypass DAX entirely (txAudioBypassesDax, #4812) - the route abstraction exists precisely to keep that difference out of this class. No Flex type, verb or wire format appears in the interface; the vendor half lives in the route implementations.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/LinuxInstall.h": {
+  "tag": "ui-support",
+  "note": "App self-update on Linux: the install --install makes and the switch to a staged release after its self-test; pure client plumbing, no radio state.",
   "split": "",
   "confidence": "high"
  },
