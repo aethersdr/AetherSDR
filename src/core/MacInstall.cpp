@@ -181,9 +181,10 @@ bool MacInstall::otherInstanceRunning(const QString& bundle)
     }
     const pid_t self = ::getpid();
 #if defined(Q_OS_MACOS)
-    std::vector<pid_t> pids(4096);
-    const int bytes = ::proc_listallpids(pids.data(), static_cast<int>(pids.size() * sizeof(pid_t)));
-    for (int i = 0; i < bytes / static_cast<int>(sizeof(pid_t)); ++i) {
+    // proc_listallpids returns how many pids it wrote, not bytes.
+    std::vector<pid_t> pids(16384);
+    const int count = ::proc_listallpids(pids.data(), static_cast<int>(pids.size() * sizeof(pid_t)));
+    for (int i = 0; i < count && i < static_cast<int>(pids.size()); ++i) {
         char path[PROC_PIDPATHINFO_MAXSIZE];
         if (pids[i] != self && ::proc_pidpath(pids[i], path, sizeof(path)) > 0
             && QFileInfo(QString::fromLocal8Bit(path)).canonicalFilePath() == binary) {

@@ -372,6 +372,12 @@ private slots:
         QFile::remove(binary);
         QVERIFY(QFile::copy(QStringLiteral("/bin/sleep"), binary));
         QFile(binary).setPermissions(QFile(binary).permissions() | QFile::ExeOwner | QFile::ExeUser);
+#ifdef Q_OS_MACOS
+        // A system binary copied elsewhere runs only re-signed.
+        QCOMPARE(QProcess::execute(QStringLiteral("/usr/bin/codesign"),
+                                   {QStringLiteral("--force"), QStringLiteral("--sign"), QStringLiteral("-"), binary}),
+                 0);
+#endif
         QVERIFY(!MacInstall::otherInstanceRunning(bundle));
         QProcess other;
         other.start(binary, {QStringLiteral("30")});
