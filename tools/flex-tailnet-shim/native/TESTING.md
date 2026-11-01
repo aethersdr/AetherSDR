@@ -6,8 +6,8 @@ behind CGNAT or Starlink. On FLEX-8000 and Aurora radios it runs in their
 Docker container feature. This is an **experimental** build for FLEX-6000
 radios, installed as a legacy waveform named **AetherTailnet**.
 
-AetherRadioProbe (`../cmd/radio-probe`) showed a FLEX-6300, a FLEX-6400 and
-a FLEX-6700, which have the same internal computer, can host it:
+A probe waveform showed a FLEX-6300, a FLEX-6400 and a FLEX-6700, which
+have the same internal computer, can host it:
 
 - the radio runs our Go program on its 2.6.37 kernel;
 - the waveform's own folder keeps files across a reboot;
@@ -92,10 +92,7 @@ Run the commands from this folder. `tool.py` talks to the radio over the LAN.
    sign-in took on this radio, from the link appearing to `running`.
 4. **Idle for 10 minutes**, with no AetherSDR connected:
    `python3 -I tool.py --host <radio-ip> --tailnet-ip <100.x.y.z> watch --seconds 600 --out idle.jsonl`.
-   `shim_cpu_pct` is the shim's share of the radio's one core. If you have
-   AetherRadioProbe, install it during this window and save its report as
-   `probe-idle.json`: its `load.top_by_cpu` shows SmartSDR's and the shim's
-   CPU side by side. Uninstall it afterwards.
+   `shim_cpu_pct` is the shim's share of the radio's one core.
 5. **Remote receive for 10 minutes.** On the remote device, connect
    AetherSDR to the radio's tailnet IP (Connect → Manual). Receive only:
    tune around, keep a panadapter open, listen. Meanwhile run
@@ -119,7 +116,7 @@ Run the commands from this folder. `tool.py` talks to the radio over the LAN.
    - delete the radio from **Machines** in the admin console if it's still
      listed (and revoke any auth key you used).
 8. **Send** `notes.md`, `idle.jsonl`, `session.jsonl`, the `status` outputs,
-   `probe-idle.json` if you made one, and `shim-log.txt`. These contain
+   and `shim-log.txt`. These contain
    tailnet and LAN addresses but no keys or tokens; remove the addresses if
    you like.
 
@@ -129,7 +126,7 @@ Run the commands from this folder. `tool.py` talks to the radio over the LAN.
 |---|---|---|---|
 | 1 | Does the shim start? | `status` → `version` | The real shim is bigger than the probe and does more at start-up |
 | 2 | Does it join the tailnet? | `status` → `state`, `last_error`; `shim-log.txt` | The first use of Tailscale's networking code on a 2.6.37 kernel. Watch for "function not implemented" / ENOSYS |
-| 3 | What does it cost when idle? | `idle.jsonl` → `shim_cpu_pct`, `shim_rss_kb`; `probe-idle.json` | One core, already 46–51% busy with SmartSDR (more slices, more load). The container shim idles at 0–3% of a much faster core |
+| 3 | What does it cost when idle? | `idle.jsonl` → `shim_cpu_pct`, `shim_rss_kb` | One core, already 46–51% busy with SmartSDR (more slices, more load). The container shim idles at 0–3% of a much faster core |
 | 4 | Does a remote session work? | your notes; `session.jsonl` → `session_detail` (packets, gaps, breaks), `shim_cpu_pct`, `path`, `rtt_ms` | The point of the shim |
 | 5 | Does it survive a reboot? | step 6 timing; same `tailnet_ip` | No re-provisioning after power cuts |
 | 6 | Direct or relayed? | `path` (`direct`, `peer-relay`, `relay`) | A relayed path costs latency |
@@ -142,8 +139,8 @@ Fill in the angle brackets and start your assistant in this folder.
 ```text
 Help me test the native AetherSDR tailnet shim (the "AetherTailnet" legacy
 waveform) on my FlexRadio, and collect the results for the AetherSDR team.
-Read native/TESTING.md and native/tool.py first (and ../cmd/radio-probe/
-TESTING.md if I use the probe); they describe the steps and the data needed.
+Read native/TESTING.md and native/tool.py first; they describe the steps
+and the data needed.
 
 My radio: <model> on SmartSDR <version>, LAN IP <radio-ip>.
 This computer's LAN IP: <pc-ip>. Tailscale on this computer: <yes/no>.
@@ -166,8 +163,7 @@ Rules you must follow:
   auth key, never print, log or copy it or admin-token.txt anywhere, and
   never put them on a command line; use the files.
 - Never send a radio command other than the upload, `waveform restart` and
-  `waveform uninstall` that tool.py sends for AetherTailnet (or the probe's
-  equivalents). Nothing that transmits, tunes or changes radio settings.
+  `waveform uninstall` that tool.py sends for AetherTailnet. Nothing that transmits, tunes or changes radio settings.
   This test is receive only.
 - Don't try to gain root or other privileges on the radio, don't get around
   its permissions, and don't decompile or read FlexRadio's software.
@@ -196,15 +192,14 @@ for" table with numbers, and list the files I should send.
   FLEX-6300 had about 54 MB free there, a FLEX-6400 about 17 MB and a
   FLEX-6700 only about 13 MB (both of those have a 19 MB `/user`),
   and every other legacy waveform installed uses the same space.
-  AetherRadioProbe 0.1.2 lists what is installed and how big each one is
-  (`storage.waveform_store`). If the radio stores the uploaded file in that
+  If the radio stores the uploaded file in that
   partition while unpacking it, the install needs about twice the space.
   Uninstalling waveforms you don't use frees it.
 - At start the shim is unpacked to `/tmp` (RAM, about 20 MB of the radio's
   469 MB). An `unpack:` error in the log means the package is damaged or
   `/tmp` is full.
-- As with the probe: try SmartSDR's Waveforms window, and reboot once if it
-  isn't listed after 10 minutes.
+- Try SmartSDR's Waveforms window, and reboot once if it isn't listed
+  after 10 minutes.
 
 ### Listed, but `status` can't connect (port 48992)
 
@@ -215,10 +210,9 @@ for" table with numbers, and list the files I should send.
    another program already holds port 48992, such as another tailnet
    waveform, the shim logs `api: … address already in use; retrying` and
    keeps trying.
-4. If the probe ran on this radio but the shim doesn't, the difference is
-   the shim itself: start-up system calls or memory. Find where it stops
-   using the log, or a launcher that writes `date` and the exit code to
-   `/tmp` around the binary, then read it back with a probe-style report.
+4. If it still doesn't start, find where it stops using the log, or a
+   launcher that writes `date` and the exit code to `/tmp` around the
+   binary.
    Report what you find; don't work around the radio's permissions.
 
 ### Provision fails, or `state` is `error`
@@ -247,8 +241,7 @@ for" table with numbers, and list the files I should send.
 
 ### After a reboot it asks to be provisioned again
 
-The identity didn't survive. Report `status` before and after, and the
-probe's storage section from this radio if you have it. The launcher keeps
+The identity didn't survive. Report `status` before and after. The launcher keeps
 state in `state/` beside the waveform, or `/var/tmp/aether-tailnet` when
 that isn't writable.
 

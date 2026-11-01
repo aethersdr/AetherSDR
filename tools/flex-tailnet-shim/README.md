@@ -141,7 +141,7 @@ FLEX-6000 radios have no container feature, so `native/` packages the same
 shim as a legacy waveform, `AetherTailnet.ssdr_waveform`, for their ARMv7
 CPU. `-run-dir` / `SHIM_RUN_DIR` keeps tsnet's logs and caches on volatile
 storage while the node's identity stays in the state directory: the
-FLEX-6300 measured by `cmd/radio-probe` persists only to a 60 MB flash
+FLEX-6300 we measured persists only to a 60 MB flash
 partition (19 MB on a FLEX-6700), so the shim ships gzipped and a small
 unpacker (`native/unpack`) puts it in `/tmp` at each start. `native/TESTING.md` is the test protocol, with a prompt for a
 tester's AI assistant; `native/tool.py` installs, provisions and watches it
