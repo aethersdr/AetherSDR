@@ -1446,10 +1446,12 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     m_healthLabel->setObjectName(QStringLiteral("RadioHealthReadout"));
     m_healthLabel->setAccessibleName(tr("Radio health"));
     m_healthLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_healthLabel->setTextFormat(Qt::PlainText);
     m_healthResourceLabel = new QLabel(healthFrame);
     m_healthResourceLabel->setObjectName(QStringLiteral("RadioHealthReadout"));
     m_healthResourceLabel->setAccessibleName(tr("Radio memory and CPU"));
     m_healthResourceLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_healthResourceLabel->setTextFormat(Qt::PlainText);
     // One row: checkbox, storage, then memory and CPU.
     healthLayout->addWidget(m_healthCheck);
     healthLayout->addWidget(m_healthLabel);
@@ -1478,7 +1480,13 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
             detail << tr("%n CPU core(s)", "", h.cpuCores);
         }
         detail << tr("Radio health tools %1").arg(h.agentVersion);
-        m_healthLabel->setToolTip(detail.join(QLatin1Char('\n')));
+        // The paths and version come from the radio: escaped, in a tooltip
+        // that is always rich text, so they show as text and never as markup.
+        for (QString& line : detail) {
+            line = line.toHtmlEscaped();
+        }
+        m_healthLabel->setToolTip(QStringLiteral("<qt>") + detail.join(QStringLiteral("<br>"))
+                                  + QStringLiteral("</qt>"));
         m_healthResourceLabel->setToolTip(m_healthLabel->toolTip());
     });
     connect(m_healthClient, &RadioHealthClient::failed, this, [this](const QString&) {
