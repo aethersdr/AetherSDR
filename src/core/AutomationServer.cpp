@@ -1448,6 +1448,14 @@ bool isTransmitControl(const QWidget* w)
     return match != TransmitControlMatch::None;
 }
 
+bool hasAnalyzerRfInChain(const QWidget* widget)
+{
+    for (const QWidget* current = widget; current; current = current->parentWidget()) {
+        if (current->property("aetherLabRf").toBool()) { return true; }
+    }
+    return false;
+}
+
 bool hasTransmitControlInChain(const QWidget* widget)
 {
     for (const QWidget* current = widget; current;
@@ -2774,6 +2782,11 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
     }
 
     const QString normalizedAction = action.trimmed().toLower();
+    if (name == QLatin1String("lab")) {
+        // Stop remains available in observe-only mode to cancel analyzer RF.
+        return normalizedAction.isEmpty() || normalizedAction == QLatin1String("status")
+            || normalizedAction == QLatin1String("devices") || normalizedAction == QLatin1String("stop");
+    }
     // The probe constructs only an isolated TransmitModel and touches no session.
     if (name == QLatin1String("interlock") && action == QLatin1String("probe")) {
         return true;
@@ -3571,6 +3584,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             parseActionOnly,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doStreams(a.action);
+            });
+
+        add("lab", {},
+            "lab <status|devices|connect index|sweep startHz stopHz intervals isolated|stop|disconnect> — Stick Pro USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1)",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doLab(a.action, a.value);
             });
 
         add("devices", {},
@@ -4517,6 +4537,10 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
                                 + QStringLiteral("' is disabled — the radio won't accept the change")},
                            {QStringLiteral("disabled"), true},
                            {QStringLiteral("class"), shortClassName(w)}};
+    }
+
+    if (hasAnalyzerRfInChain(w)) {
+        return err(QStringLiteral("Use lab sweep for analyzer RF; generic UI automation cannot confirm physical isolation"));
     }
 
     // TX-safety guard — never key a live radio from the test bridge unless the
@@ -10019,6 +10043,9 @@ QJsonObject AutomationServer::pointerSafetyError(const QWidget* widget,
                                                  const QString& target,
                                                  const QString& verb) const
 {
+    if (hasAnalyzerRfInChain(widget)) {
+        return err(QStringLiteral("Use lab sweep for analyzer RF; pointer automation is unavailable on this control"));
+    }
     if (!widget->isVisible()) {
         return err(QStringLiteral("refused: '") + target
                    + QStringLiteral("' is not visible"));
@@ -11167,6 +11194,10 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
                                                  "the click would be dropped")},
                            {QStringLiteral("disabled"), true},
                            {QStringLiteral("class"), shortClassName(w)}};
+    }
+
+    if (hasAnalyzerRfInChain(w)) {
+        return err(QStringLiteral("Use lab sweep for analyzer RF; coordinate automation is unavailable on this control"));
     }
 
     // TX-safety guard — a raw coordinate click must honor the same opt-in as
@@ -13116,6 +13147,20 @@ QJsonObject AutomationServer::doWhoami() const
         {QStringLiteral("readOnly"), m_readOnly},
         {QStringLiteral("version"), QCoreApplication::applicationVersion()},
     };
+}
+
+QJsonObject AutomationServer::doLab(const QString& action, const QString& value) const
+{
+    const QString normalized = action.trimmed().toLower();
+    if (normalized == QLatin1String("sweep")
+        && qEnvironmentVariable("AETHER_AUTOMATION_ALLOW_LAB_RF") != QLatin1String("1")) {
+        return err(QStringLiteral("Analyzer RF automation requires AETHER_AUTOMATION_ALLOW_LAB_RF=1 and physical RF isolation"));
+    }
+    if (!m_labHandler) { return err(QStringLiteral("AetherLab provider unavailable")); }
+    QJsonObject result = m_labHandler(normalized, value);
+    result.insert(QStringLiteral("automationRfAllowed"),
+                  qEnvironmentVariable("AETHER_AUTOMATION_ALLOW_LAB_RF") == QLatin1String("1"));
+    return result;
 }
 
 QJsonObject AutomationServer::doDeviceDiagnostics(const QString& action) const

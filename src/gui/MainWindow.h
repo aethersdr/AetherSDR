@@ -133,6 +133,8 @@ class QSystemTrayIcon;
 #include "gui/PersistentDialog.h" // showOrRaisePersistent template needs
                                    // PersistentDialog visible at point of use.
 
+class QStackedWidget;
+
 namespace AetherSDR {
 
 enum class RadioSliceSelectionSource;
@@ -140,6 +142,8 @@ enum class RadioSliceSelectionSource;
 class AetherClockApplet;
 class AetherClockEngine;
 class AetherClockModel;
+class AntennaAnalyzerModel;
+class AetherLabWidget;
 class AutomationServer;
 class CanonWindow;
 class ConnectionPanel;
@@ -1151,6 +1155,9 @@ private:
     void stopDigitalVoiceService(bool waitForExit);
     void showPskReporterMapDialog();
     void startKissTncOnStartupIfConfigured();
+    AntennaAnalyzerModel* antennaAnalyzerModel();
+    void showAetherLab();
+    void returnFromAetherLab();
     void showFlexControlDialog();
     void handleFlexControlTuneSteps(int steps);
     void handleFlexControlButton(int button, int action);
@@ -1641,6 +1648,10 @@ private:
 #endif
 
     // GUI — left sidebar
+    AntennaAnalyzerModel* m_antennaAnalyzer{nullptr};
+    AetherLabWidget* m_aetherLabWidget{nullptr};
+    QStackedWidget* m_labWorkspaceStack{nullptr};
+    bool m_aetherLabActive{false};
     ConnectionPanel* m_connPanel{nullptr};
 
     // GUI — main area
