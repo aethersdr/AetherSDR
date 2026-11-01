@@ -471,6 +471,7 @@ private slots:
         QVERIFY(!parses(withSource(QStringLiteral("main"))));
         QVERIFY(!parses(withSource(hash.toUpper())));
         QVERIFY(!parses(withSource(hash.left(39))));
+        QVERIFY(!parses(withSource(hash + QStringLiteral("\n"))));
         QVERIFY(!parses(withSource(42)));
     }
 

@@ -681,7 +681,8 @@ bool UpdateManifest::parse(const QByteArray& json, UpdateManifest* out, QString*
             return bad(QStringLiteral("a payload's full download"));
         }
         if (const QJsonValue dax = po.value(QLatin1String("dax_driver")); !dax.isUndefined()) {
-            static const QRegularExpression treeHash(QStringLiteral("^[0-9a-f]{40}$"));
+            // \A and \z: $ would also take a hash with a trailing newline.
+            static const QRegularExpression treeHash(QStringLiteral("\\A[0-9a-f]{40}\\z"));
             p.daxDriverSource = dax.toObject().value(QLatin1String("source")).toString();
             if (!treeHash.match(p.daxDriverSource).hasMatch()) {
                 return bad(QStringLiteral("a payload's DAX driver source"));
