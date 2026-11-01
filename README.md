@@ -29,7 +29,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **Seven client-side noise-reduction engines**, each denoising left and right independently so pans and diversity survive them — NR2 (spectral), RN2 (RNNoise), NR4 (libspecbleach), NNR (WDSP's Neural Noise Reduction), DFNR (DeepFilterNet3), BNR (the NVIDIA Maxine denoiser, in-process on a local RTX/GeForce GPU, Linux + Windows — [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md)) and MNR (macOS)
 - **DAX virtual audio + IQ** — up to 8 RX audio channels (radio-dependent) plus 1 TX, and 4 channels of raw I/Q at 24–192 kHz for WSJT-X / fldigi / VARA / JS8Call, with a per-slice **WFM demodulator** for satellite data
 - **AetherModem packet radio** — KISS-over-TCP TNC, connected-mode AX.25 BBS, a personal mailbox, a WIDE1-1 fill-in digipeater, and an **APRS client** (station table, GPS beacon, messaging) on a Direwolf-derived VHF demodulator
-- **AetherLab** — an experimental vector network analyzer workspace for the RigExpert Stick Pro over USB, a proof of concept with hardware sweeps qualified on one Stick Pro 108 on macOS: SWR, return loss, impedance and series/parallel R, X, L and C with markers and CSV/JSON export
+- **AetherLab** — an experimental vector network analyzer workspace for the RigExpert Stick Pro over USB, a proof of concept with hardware sweeps qualified on one Stick Pro 108 on macOS: SWR, return loss, impedance and series/parallel R, X, L and C with markers and JSON session export
 - **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading and interpolated bandwidth at SWR ≤ 1.5 / 2.0
 - **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, FreeDV Reporter, N1MM+/DXLog contest bandmap, the EiBi shortwave schedule and the KiwiSDR DX Community database, with auto-mode switch and per-feed colouring
 - **Local voice keyer** — twelve PC-microphone recordings up to 30 seconds each, with preview, import/export and F1–F12 playback; radio DVK remains available separately
@@ -37,7 +37,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **Copy Assist (speech-to-text)** — on-device transcription of received voice via whisper.cpp, docked under the waterfall with confidence colour-coding, optionally from the audio before noise reduction. CPU or GPU (Vulkan/Metal, auto-detected), download-on-demand models, optional remote OpenAI-compatible endpoint. Not in the Intel macOS build — see [`docs/asr-copy-assist.md`](docs/asr-copy-assist.md)
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
 - **AetherMap (PSK Reporter) overlays** — optional global precipitation (LibreWXR, with NOAA, ECCC and EUMETNET OPERA regional radar backups and a per-provider legend), NOAA/NWS weather radar with observation playback ([`docs`](docs/psk-reporter-weather-radar.md)) and a NASA/GSFC VIIRS night-lights layer that fades through civil twilight ([`docs`](docs/psk-reporter-city-lights.md)), on both the 2D map and 3D globe
-- **SmartLink remote, remote over CGNAT, and a TCI server** — Auth0/TLS WAN operation; an in-radio Tailscale node, signed in with a QR code, that carries AetherSDR to a FLEX-6000, FLEX-8000 or Aurora radio behind CGNAT; and CAT + audio + IQ + CW + spots + tune and receiver events over a single TCI WebSocket announcing protocol 2.1
+- **SmartLink remote, remote over CGNAT, and a TCI server** — Auth0/TLS WAN operation; an in-radio Tailscale node, signed in with a QR code, that carries AetherSDR to a FLEX-8000 or Aurora radio behind CGNAT, and to a FLEX-6000 as a legacy waveform (not yet run end to end from AetherSDR); and CAT + audio + IQ + CW + spots + tune and receiver events over a single TCI WebSocket announcing protocol 2.1
 - **Broad hardware control** — rigctld and virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, Multi-Flex operation alongside SmartSDR/Maestro, a CTR2-Max relay over Wi-Fi or USB with negotiated spectrum and CW-text extensions for compatible controllers, and touch gestures (pinch-zoom, press-and-hold, kinetic scrolling) on touch screens
 - **Workspace canvas** — place pans and applets freely as resizable, layered items with edge and grid snapping, across several windows if you want them. Named workspaces recall which applets are open as well as where they sit, and bind to radio profiles. Off by default; the Classic shell is unchanged until you enable it
 - **A user guide at [docs.aethersdr.com](https://docs.aethersdr.com)** — Stable and Next versions, a printable PDF manual signed with each release, and a Log Analyzer that reads a log or support bundle in your browser without uploading it
@@ -281,6 +281,8 @@ Currently in flight:
   surface at a time; Callsign Lookup, FreeDV Reporter, Net Scheduler, Memory
   Channels, MQTT Settings, Keyboard Shortcuts and Ulanzi Dial mapping now join
   the earlier ones, and a single base-token flip comes last.
+- **Radio connection workspace** (RFC #6561) — Locations, operator profiles and
+  SmartLink accounts in one workspace; the implementation is in review.
 - **AppSettings nested-JSON refactor** — storage is on SQLite with per-radio
   versioned feature documents; the legacy flat keys still need migrating.
 - **Flathub submission** — the AppStream metainfo and manpage are in; the

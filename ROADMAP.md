@@ -219,6 +219,11 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   Settings, Keyboard Shortcuts, Ulanzi Dial — Control Mapping and the Reset
   Settings confirmation as dialogs. Remaining: the other surfaces,
   one PR at a time, then a single flip of the base tokens to canon values.
+- **Radio connection workspace** ([RFC #6561](https://github.com/aethersdr/AetherSDR/issues/6561), approved) —
+  Locations, operator profiles and SmartLink accounts in one connection
+  workspace. The implementation is open in
+  [#6885](https://github.com/aethersdr/AetherSDR/pull/6885); nothing has
+  shipped yet.
 - **AppSettings nested-JSON refactor** — ~460 flat call sites today;
   the new pattern is one nested-JSON value per feature (Principle V).
   The storage layer moved to SQLite and the scoped feature-document store,
@@ -385,8 +390,8 @@ complete list are in [`CHANGELOG.md`](CHANGELOG.md):
   rollback and signed release tarballs; Linux installs through
   `AetherSDR --install` or Install for updates. RFC #5304 (v26.11.1).
 - **Remote Access on FLEX-6000 radios, with QR sign-in** — scan a code to put
-  the radio on a tailnet, the FLEX-6000 as a legacy waveform, and Update for an
-  older install (v26.11.1).
+  the radio on a tailnet, the FLEX-6000 as a legacy waveform (not yet run end to
+  end from AetherSDR), and Update for an older install (v26.11.1).
 - **Container environments and radio health tools** — edit a SmartSDR 4.3
   container's variables and recreate it, and see the radio's free storage,
   memory and CPU in the Waveforms window (v26.11.1).
