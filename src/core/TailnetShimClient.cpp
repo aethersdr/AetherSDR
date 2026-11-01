@@ -1,5 +1,7 @@
 #include "TailnetShimClient.h"
 
+#include "TailnetShimRelease.h"
+
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -162,6 +164,30 @@ bool supportsQrSignIn(const QString& version)
     const int major = m.captured(1).toInt();
     const int minor = m.captured(2).toInt();
     return major > 0 || minor >= 5;
+}
+
+QString pinnedVersion(bool native)
+{
+    return QString::fromLatin1(native ? TailnetShimNativeRelease::kVersion
+                                      : TailnetShimRelease::kVersion);
+}
+
+bool updateAvailable(const QString& installed, const QString& pinned)
+{
+    static const QRegularExpression re(QStringLiteral("^(\\d{1,6})\\.(\\d{1,6})\\.(\\d{1,6})"));
+    const QRegularExpressionMatch a = re.match(installed);
+    const QRegularExpressionMatch b = re.match(pinned);
+    if (!a.hasMatch() || !b.hasMatch()) {
+        return false;
+    }
+    for (int i = 1; i <= 3; ++i) {
+        const int x = a.captured(i).toInt();
+        const int y = b.captured(i).toInt();
+        if (x != y) {
+            return x < y;
+        }
+    }
+    return false;
 }
 
 bool shouldSignInUnasked(const TailnetShimStatus& st, bool tokenLoaded, bool haveToken,

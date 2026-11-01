@@ -2929,7 +2929,9 @@ void MainWindow::wireExternalControllers()
     });
 
     MidiSettings::instance().load();
-    auto savedBindings = MidiSettings::instance().loadBindings();
+    // A damaged or unreadable midi.settings blocks binding saves for the
+    // session; the MIDI mapping window tells the operator. (#6683)
+    auto savedBindings = MidiSettings::instance().loadStartupBindings();
     for (const auto& b : savedBindings)
         m_midiControl->addBinding(b);
 #endif

@@ -955,6 +955,79 @@ public:
         return nb.size() == 1;
     }
 
+    // The sql_level relay (#6857) follows the flag relays above: nothing on
+    // the wire at wire time, the settled level announced once after the
+    // ~400 ms settle, then one broadcast per change in dB. An enable-only edge
+    // re-emits squelchChanged with the same level and is de-duped.
+    static bool sqlLevelRelaySeedsAndDeDups()
+    {
+        RadioModel model;
+        TciClient sock;
+        TciServer server(&model);
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
+
+        QStringList sql;
+        QObject::connect(&server, &TciServer::tciMessage,
+            [&sql](const QString& dir, const QString& msg) {
+                if (dir == QLatin1String("tx")
+                    && msg.startsWith(QLatin1String("sql_level:")))
+                    sql << msg.trimmed();
+            });
+
+        QString err;
+        model.automationApplySliceFixture(0, QString(), &err);
+        SliceModel* s0 = model.slice(0);
+        if (!s0) return false;
+        s0->setSquelch(false, 30);               // -130 dB on the -160 + level map
+        server.wireSlice(s0->sliceId(), s0);
+        if (!sql.isEmpty()) return false;        // seed is deferred, not sync
+        spin(450);
+        const bool seeded = sql == QStringList{QStringLiteral("sql_level:0,-130;")};
+
+        sql.clear();
+        s0->setSquelch(false, 60);               // GUI slider → one broadcast
+        const bool oneOnChange = sql == QStringList{QStringLiteral("sql_level:0,-100;")};
+        s0->setSquelch(true, 60);                // enable edge, same level → none
+        return seeded && oneOnChange && sql.size() == 1;
+    }
+
+    // Band-change re-wire: the recreated slice holds a pre-settle level and the
+    // radio restores the settled one inside the window. The client sees the
+    // settled value once, never the transient (cf. #2824).
+    static bool sqlLevelSeedReadsSettledNotTransient()
+    {
+        RadioModel model;
+        TciClient sock;
+        TciServer server(&model);
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
+
+        QStringList sql;
+        QObject::connect(&server, &TciServer::tciMessage,
+            [&sql](const QString& dir, const QString& msg) {
+                if (dir == QLatin1String("tx")
+                    && msg.startsWith(QLatin1String("sql_level:")))
+                    sql << msg.trimmed();
+            });
+
+        QString err;
+        model.automationApplySliceFixture(0, QString(), &err);
+        SliceModel* s0 = model.slice(0);
+        if (!s0) return false;
+        s0->setSquelch(false, 70);               // recreated slice's pre-settle
+        sql.clear();
+        server.wireSlice(s0->sliceId(), s0);
+        spin(120);                               // still inside the window
+        s0->setSquelch(false, 40);               // radio restores settled value
+        if (sql != QStringList{QStringLiteral("sql_level:0,-120;")})
+            return false;
+        spin(400);                               // the deferred seed de-dups
+        return sql.size() == 1;
+    }
+
     // A TX slice *closed* (removed with no recreation) must not leave
     // m_lastTxTrx pointing at a dead index. The deferred cleanup resets it once
     // the settle window passes with no live slice carrying that trx; a
@@ -2778,6 +2851,260 @@ public:
         }
         return true;
     }
+    // DSB is a mode on every backend that has one (Flex, ANAN, HL2), but TCI
+    // knew no name for it: a radio-side DSB went out as usb, and a client's
+    // modulation:0,dsb was refused. It is advertised, and it round-trips.
+    static bool dsbRoundTripsAndIsAdvertised()
+    {
+        bool ok = false;
+        if (TciProtocol::smartsdrToTci(QStringLiteral("DSB")) != QStringLiteral("dsb")
+            || TciProtocol::tciToSmartSDR(QStringLiteral("dsb"), &ok) != QStringLiteral("DSB")
+            || !ok) {
+            std::printf("      DSB does not map to dsb and back\n");
+            return false;
+        }
+        RadioModel model;
+        TciProtocol protocol(&model);
+        const QString burst = protocol.generateInitBurst();
+        const int at = burst.indexOf(QStringLiteral("modulations_list:"));
+        const QString list = burst.mid(at, burst.indexOf(QLatin1Char(';'), at) - at);
+        if (!list.split(QLatin1Char(':')).value(1).split(QLatin1Char(','))
+                 .contains(QStringLiteral("dsb"))) {
+            std::printf("      modulations_list lacks dsb: %s\n", qPrintable(list));
+            return false;
+        }
+        return true;
+    }
+
+    // rx_ctun_ex is Thetis's CTUN switch; AetherSDR maps it onto center
+    // lock, inverted. A SET is handed to TciServer as a request and
+    // broadcast; a GET is answered only once a query is injected.
+    static bool rxCtunExDrivesCenterLockInverted()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        QString error;
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)) {
+            std::printf("      slice fixture failed: %s\n", qPrintable(error));
+            return false;
+        }
+        // The fixture model is not connected, so trx 0 resolves only
+        // through the server's stable map, as on the live accept path.
+        TciProtocol protocol(&model, &server.m_routingState, &server.m_trxMap);
+
+        if (!protocol.handleCommand(QStringLiteral("rx_ctun_ex:0")).isEmpty()) {
+            std::printf("      GET answered without a center-lock query\n");
+            return false;
+        }
+
+        protocol.handleCommand(QStringLiteral("rx_ctun_ex:0,true"));
+        const QString note = protocol.pendingNotification();
+        const auto off = protocol.takeCenterLockRequest();
+        if (!off || off->sliceId != 0 || off->locked
+            || note != QStringLiteral("rx_ctun_ex:0,true;")) {
+            std::printf("      ctun true did not request center lock off\n");
+            return false;
+        }
+
+        protocol.handleCommand(QStringLiteral("rx_ctun_ex:0,false"));
+        const auto on = protocol.takeCenterLockRequest();
+        if (!on || !on->locked) {
+            std::printf("      ctun false did not request center lock on\n");
+            return false;
+        }
+
+        protocol.handleCommand(QStringLiteral("rx_ctun_ex:0,maybe"));
+        if (protocol.takeCenterLockRequest()) {
+            std::printf("      malformed bool produced a request\n");
+            return false;
+        }
+
+        protocol.setCenterLockQuery([](int sliceId) { return sliceId == 0; });
+        if (protocol.handleCommand(QStringLiteral("rx_ctun_ex:0"))
+            != QStringLiteral("rx_ctun_ex:0,false;")) {
+            std::printf("      GET of a locked slice is not ctun false\n");
+            return false;
+        }
+        return true;
+    }
+
+    // Split made in the GUI (another slice holds TX) is reported as
+    // split_enable on trx 0, and GUI RIT/XIT offset changes reach clients.
+    static bool guiSplitAndRitOffsetReachClients()
+    {
+        RadioModel model;
+        TciClient sock;
+        TciServer server(&model);
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
+
+        QString err;
+        model.automationApplySliceFixture(0, QStringLiteral("A"), &err);
+        model.automationApplySliceFixture(1, QStringLiteral("B"), &err);
+        SliceModel* s0 = model.slice(0);
+        SliceModel* s1 = model.slice(1);
+        if (!s0 || !s1) {
+            std::printf("      slice fixture failed: %s\n", qPrintable(err));
+            return false;
+        }
+        server.wireSlice(s0->sliceId(), s0);
+        server.wireSlice(s1->sliceId(), s1);
+        TciProtocol protocol(&model, &server.m_routingState, &server.m_trxMap);
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+            [&sent](const QString& dir, const QString& msg) {
+                if (dir == QLatin1String("tx"))
+                    sent << msg.trimmed();
+            });
+
+        SliceDelta aTx;
+        aTx.txSlice = true;
+        s0->applyChanges(aTx);
+        server.publishMainSplit();
+        if (protocol.handleCommand(QStringLiteral("split_enable:0"))
+            != QStringLiteral("split_enable:0,false;")) {
+            std::printf("      TX on trx 0 reported as split\n");
+            return false;
+        }
+
+        sent.clear();
+        SliceDelta aRx;
+        aRx.txSlice = false;
+        s0->applyChanges(aRx);
+        SliceDelta bTx;
+        bTx.txSlice = true;
+        s1->applyChanges(bTx);
+        server.publishMainSplit();
+        if (!sent.contains(QStringLiteral("split_enable:0,true;"))) {
+            std::printf("      GUI split was not broadcast\n");
+            return false;
+        }
+        bool vfoB = false;
+        for (const QString& m : sent) {
+            vfoB = vfoB || m.startsWith(QLatin1String("vfo:0,1,"));
+        }
+        if (!vfoB) {
+            std::printf("      GUI split did not announce VFO B\n");
+            return false;
+        }
+        if (protocol.handleCommand(QStringLiteral("split_enable:0"))
+                != QStringLiteral("split_enable:0,true;")
+            || protocol.handleCommand(QStringLiteral("split_enable:1"))
+                != QStringLiteral("split_enable:1,false;")) {
+            std::printf("      split_enable GET does not follow the GUI split\n");
+            return false;
+        }
+        if (!protocol.generateInitBurst().contains(QStringLiteral("split_enable:0,true;"))) {
+            std::printf("      init burst misses the GUI split\n");
+            return false;
+        }
+
+        sent.clear();
+        server.publishMainSplit();
+        if (sent.contains(QStringLiteral("split_enable:0,true;"))) {
+            std::printf("      unchanged split was announced again\n");
+            return false;
+        }
+
+        sent.clear();
+        SliceDelta rit;
+        rit.ritFreq = 120;
+        s0->applyChanges(rit);
+        SliceDelta xit;
+        xit.xitFreq = -50;
+        s0->applyChanges(xit);
+        if (!sent.contains(QStringLiteral("rit_offset:0,120;"))
+            || !sent.contains(QStringLiteral("xit_offset:0,-50;"))) {
+            std::printf("      GUI RIT/XIT offset was not broadcast\n");
+            return false;
+        }
+
+        sent.clear();
+        SliceDelta agc;
+        agc.agcMode = QStringLiteral("fast");
+        agc.agcThreshold = 72;  // 65 is the default: no change, no signal
+        s0->applyChanges(agc);
+        if (!sent.contains(QStringLiteral("agc_mode:0,fast;"))
+            || !sent.contains(QStringLiteral("agc_gain:0,72;"))) {
+            std::printf("      GUI AGC change was not broadcast\n");
+            return false;
+        }
+        if (!protocol.generateInitBurst().contains(QStringLiteral("agc_gain:0,72;"))) {
+            std::printf("      init burst misses agc_gain\n");
+            return false;
+        }
+        return true;
+    }
+
+    // #2824 on the value relays: a band change recreates the slice and the
+    // radio can restore RIT/XIT offsets and AGC without a change signal on
+    // the new object. The deferred settled seed still announces each value
+    // once, and a status refresh with the same value is de-duped against it.
+    static bool valueRelaySeedsAfterRewire()
+    {
+        RadioModel model;
+        TciClient sock;
+        TciServer server(&model);
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
+
+        QString err;
+        model.automationApplySliceFixture(0, QStringLiteral("A"), &err);
+        SliceModel* s0 = model.slice(0);
+        if (!s0) {
+            std::printf("      slice fixture failed: %s\n", qPrintable(err));
+            return false;
+        }
+        SliceDelta restored;                      // state before the re-wire
+        restored.ritFreq = 120;
+        restored.xitFreq = -50;
+        restored.agcMode = QStringLiteral("fast");
+        restored.agcThreshold = 72;
+        s0->applyChanges(restored);
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+            [&sent](const QString& dir, const QString& msg) {
+                if (dir == QLatin1String("tx"))
+                    sent << msg.trimmed();
+            });
+        server.wireSlice(s0->sliceId(), s0);
+        const QStringList expected {
+            QStringLiteral("rit_offset:0,120;"), QStringLiteral("xit_offset:0,-50;"),
+            QStringLiteral("agc_mode:0,fast;"), QStringLiteral("agc_gain:0,72;"),
+        };
+        for (const QString& m : expected) {
+            if (sent.contains(m)) {
+                std::printf("      %s seeded synchronously\n", qPrintable(m));
+                return false;
+            }
+        }
+        spin(450);
+        for (const QString& m : expected) {
+            if (sent.count(m) != 1) {
+                std::printf("      %s seeded %lld times after the settle\n",
+                            qPrintable(m), static_cast<long long>(sent.count(m)));
+                return false;
+            }
+        }
+
+        sent.clear();
+        s0->applyChanges(restored);               // status refresh, same values
+        SliceDelta rit;
+        rit.ritFreq = 120;
+        rit.ritOn = true;                         // flag edge re-emits the same hz
+        s0->applyChanges(rit);
+        for (const QString& m : expected) {
+            if (sent.contains(m)) {
+                std::printf("      unchanged %s announced again\n", qPrintable(m));
+                return false;
+            }
+        }
+        return true;
+    }
 };
 
 } // namespace AetherSDR
@@ -2816,6 +3143,10 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::flagRelaySeedsAndDeDups();
     const bool flagSeedSettled
         = AetherSDR::TciServerReviewTest::flagSeedReadsSettledNotTransient();
+    const bool sqlSeedsDeDups
+        = AetherSDR::TciServerReviewTest::sqlLevelRelaySeedsAndDeDups();
+    const bool sqlSeedSettled
+        = AetherSDR::TciServerReviewTest::sqlLevelSeedReadsSettledNotTransient();
     const bool vfoConfirmsAccepted
         = AetherSDR::TciServerReviewTest::vfoSetConfirmsTheAcceptedFrequency();
     const bool vfoConfirmsRefusal
@@ -2872,6 +3203,14 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::initBurstAnnouncesTci21();
     const bool daxRestored
         = AetherSDR::TciServerReviewTest::txAudioRestoresTransmitDaxAsFound();
+    const bool dsbMode
+        = AetherSDR::TciServerReviewTest::dsbRoundTripsAndIsAdvertised();
+    const bool rxCtunEx
+        = AetherSDR::TciServerReviewTest::rxCtunExDrivesCenterLockInverted();
+    const bool guiSplit
+        = AetherSDR::TciServerReviewTest::guiSplitAndRitOffsetReachClients();
+    const bool valueSeed
+        = AetherSDR::TciServerReviewTest::valueRelaySeedsAfterRewire();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -2901,6 +3240,10 @@ int main(int argc, char** argv)
                 flagSeedsDeDups ? "PASS" : "FAIL");
     std::printf("%s  flag seed reads settled, no band-change transient\n",
                 flagSeedSettled ? "PASS" : "FAIL");
+    std::printf("%s  sql_level relay seeds after the settle and de-dups in dB\n",
+                sqlSeedsDeDups ? "PASS" : "FAIL");
+    std::printf("%s  sql_level seed reads settled, no band-change transient\n",
+                sqlSeedSettled ? "PASS" : "FAIL");
     std::printf("%s  m_lastTxTrx resets when TX slice is closed\n",
                 txTrxResets ? "PASS" : "FAIL");
     std::printf("%s  active_slice seeds from current GUI focus (#4160)\n",
@@ -2962,6 +3305,14 @@ int main(int argc, char** argv)
                 daxRestored ? "PASS" : "FAIL");
     std::printf("%s  init burst announces TCI protocol 2.1\n",
                 initProtocol ? "PASS" : "FAIL");
+    std::printf("%s  DSB maps to dsb both ways and is in modulations_list\n",
+                dsbMode ? "PASS" : "FAIL");
+    std::printf("%s  rx_ctun_ex drives center lock, inverted\n",
+                rxCtunEx ? "PASS" : "FAIL");
+    std::printf("%s  GUI split, RIT/XIT offsets and AGC reach clients\n",
+                guiSplit ? "PASS" : "FAIL");
+    std::printf("%s  RIT/XIT offset and AGC relays seed once after a re-wire (#2824)\n",
+                valueSeed ? "PASS" : "FAIL");
 
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
@@ -2975,7 +3326,7 @@ int main(int argc, char** argv)
         && payloadFreeDisconnect && outboundTextAccounting && pttBindsReceiver
         && pttUsesStableMap && ownershipJoin
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
-        && flagSeedSettled && txTrxResets
+        && flagSeedSettled && sqlSeedsDeDups && sqlSeedSettled && txTrxResets
         && activeSliceSeed && activeSliceRemoval && trxStableRecreate
         && rxEnableLifecycle && overlapSilent && reclaimCloseAnnounced
         && trxDistinctReconnect && heldTrxRefuses
@@ -2985,5 +3336,6 @@ int main(int argc, char** argv)
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
         && chronoIdle && chronoCatchUp && daxRestored && initProtocol
+        && dsbMode && rxCtunEx && guiSplit && valueSeed
         ? 0 : 1;
 }

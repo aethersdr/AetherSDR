@@ -13,6 +13,7 @@ class QCheckBox;
 class QComboBox;
 class QLineEdit;
 class QPushButton;
+class QTimer;
 class QToolButton;
 class QVBoxLayout;
 
@@ -41,7 +42,8 @@ private slots:
     // without a Waveform Processor the legacy waveform) and installs the
     // pinned one again, for a computer that lacks the radio's admin token
     // (TailnetShimDialog's Reset).
-    void resetRemoteAccess(bool container);
+    // `update`: asked for by Update, so the notices say Update, not Reset.
+    void resetRemoteAccess(bool container, bool update = false);
     void onDStarStartStopClicked();
     void onDStarBrowseClicked();
 
@@ -61,11 +63,18 @@ private:
                              bool docker,
                              const QString& initialPath = {});
     // Everything after the file is chosen: WFP gate, installer, progress.
-    void installWaveformPath(bool docker, const QString& path, RadioModel* model);
+    // `quiet` (the radio health tools): no progress window and no result
+    // pop-up; the health bar reports the outcome instead.
+    void installWaveformPath(bool docker, const QString& path, RadioModel* model,
+                             bool quiet = false);
     // Downloads, verifies and installs one remote-access package: the
     // container, or the legacy waveform for a radio without a Waveform
     // Processor.
     void installRemoteAccess(bool container);
+    // The bottom bar: "Install radio health tools" mirrors whether the radio
+    // lists the agent; the readout polls it while installed.
+    void updateHealthBar();
+    void onHealthToggled(bool install);
     // Row feedback for Restart / Remove: a restart changes nothing visible,
     // so the row says what was asked and what the radio answered.
     void setRowNotice(const QString& name, const QString& text, const QString& tone, bool pending);
@@ -96,6 +105,12 @@ private:
     QSet<QString> m_environmentApplies;
     quint64 m_rowNoticeSerial{0};
     class TailnetShimDownloader* m_shimDownloader{nullptr};
+    class RadioHealthClient* m_healthClient{nullptr};
+    QCheckBox*         m_healthCheck{nullptr};
+    QLabel*            m_healthLabel{nullptr};           // storage, or a hint/status
+    QLabel*            m_healthResourceLabel{nullptr};   // memory and CPU
+    QTimer*            m_healthTimer{nullptr};
+    bool               m_healthBusy{false};   // an uninstall in flight
     QWidget*           m_listContainer{nullptr};
     QVBoxLayout*       m_listLayout{nullptr};
     WaveformInstaller* m_installer{nullptr};

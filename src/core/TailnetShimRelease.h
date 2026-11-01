@@ -17,13 +17,13 @@ namespace AetherSDR {
 // reproduces from the tag in its own URL, not from the tree around it: the
 // source's shimVersion runs ahead of a pin until that release is cut.
 struct TailnetShimRelease {
-    static constexpr const char* kVersion = "0.5.0";
+    static constexpr const char* kVersion = "0.5.1";
     static constexpr const char* kUrl =
         "https://github.com/aethersdr/AetherSDR/releases/download/"
-        "flex-tailnet-shim-v0.5.0/flex-tailnet-shim-0.5.0.tar.gz";
+        "flex-tailnet-shim-v0.5.1/flex-tailnet-shim-0.5.1.tar.gz";
     static constexpr const char* kSha256 =
-        "68f50ae8c257214984c43b55fe42dba46fdb57ab24a44bc3c49e6786aaf7cd61";
-    static constexpr qint64 kSize = 8066394;
+        "4ae4556c26ff312faab85269b0e9d3bc9d11b91879805df3fca0fc3e284aca48";
+    static constexpr qint64 kSize = 8066855;
 };
 
 // Which of the two shim packages a radio takes.

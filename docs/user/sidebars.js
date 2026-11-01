@@ -32,6 +32,7 @@ const sidebars = {
       "items": [
         "supported-radios",
         "flexradio",
+        "radio-health-tools",
         "hermes-lite-2",
         "networked-icom",
         "anan-g2",

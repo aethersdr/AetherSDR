@@ -822,3 +822,15 @@ in third_party/qrcodegen/LICENSE.
   Copyright: Copyright (c) Project Nayuki
   License:   MIT
   Source:    https://github.com/nayuki/QR-Code-generator/tree/v1.8.0
+
+35. musl libc — linked into the radio health tools
+-------------------------------------------------------------------------------
+Statically linked into the AetherHealth agent binaries
+(resources/waveforms/AetherHealth.ssdr_waveform, built from tools/radio-health
+by zig 0.17, which bundles musl). AetherSDR installs that package on a radio
+when "Install radio health tools" is ticked. The full license text ships in
+the package as LICENSES.
+
+  Copyright: Copyright (c) 2005-2020 Rich Felker, et al.
+  License:   MIT
+  Source:    https://musl.libc.org/

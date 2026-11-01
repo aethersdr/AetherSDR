@@ -4426,6 +4426,26 @@ target_include_directories(tailnet_shim_client_test PRIVATE src)
 target_link_libraries(tailnet_shim_client_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME tailnet_shim_client_test COMMAND tailnet_shim_client_test)
 
+# The radio health agent: the bundled package matches its pin and is a valid
+# legacy waveform; its readout parses, refuses and summarizes. Socket-free;
+# writes only to a QTemporaryDir.
+qt_add_resources(RADIO_HEALTH_TEST_RESOURCES resources/resources.qrc)
+add_executable(radio_health_client_test
+    tests/radio_health_client_test.cpp
+    src/core/RadioHealthClient.cpp
+    src/core/LegacyWaveformPackage.cpp
+    src/core/ZipArchive.cpp
+    ${RADIO_HEALTH_TEST_RESOURCES}
+)
+target_include_directories(radio_health_client_test PRIVATE src)
+target_link_libraries(radio_health_client_test PRIVATE Qt6::Core Qt6::Network)
+if (USE_SYSTEM_ZLIB)
+    target_link_libraries(radio_health_client_test PRIVATE PkgConfig::zlib)
+else()
+    target_link_libraries(radio_health_client_test PRIVATE zlibstatic)
+endif()
+add_test(NAME radio_health_client_test COMMAND radio_health_client_test)
+
 # The Remote Access sign-in QR code: encodes the URL scannably (quiet zone,
 # finder patterns, theme-invariant colors), socket-free.
 add_executable(qr_code_image_test
@@ -7004,6 +7024,13 @@ target_link_libraries(hl2_bandstack_digital_agc_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_bandstack_digital_agc_test COMMAND hl2_bandstack_digital_agc_test)
 
+# TCI sql_level in the spec form (trx,dB). Injected stub backend,
+# TciProtocol fed command text. Socket-free, nothing keyed.
+add_executable(tci_sql_level_test tests/tci_sql_level_test.cpp)
+target_include_directories(tci_sql_level_test PRIVATE src tests)
+target_link_libraries(tci_sql_level_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME tci_sql_level_test COMMAND tci_sql_level_test)
+
 # #5774: socket-free rigctl `L RF` / `l RF`. An injected backend records the pan
 # RF gain it is handed; the pan is materialised through the seam's geometry
 # signal. Nothing is bound, opened or keyed.
@@ -8659,6 +8686,42 @@ add_test(NAME spectrum_overlay_band_highlight_test
 set_tests_properties(spectrum_overlay_band_highlight_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Mouse events ignored by overlay descendants stop at the floating panel,
+# including rebuilt Band/XVTR panels. Socket-free QWidget parent records leaks.
+add_executable(spectrum_overlay_mouse_boundary_test
+    tests/spectrum_overlay_mouse_boundary_test.cpp
+    src/gui/SpectrumOverlayMenu.cpp
+    src/gui/FrontEndOverloadIndicator.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
+    src/gui/MemoryBrowsePanel.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/DspParamPopup.cpp
+)
+target_include_directories(spectrum_overlay_mouse_boundary_test PRIVATE src tests)
+if(DEBIAN_GPU_FIX_REQUIRED)
+    target_include_directories(spectrum_overlay_mouse_boundary_test PRIVATE
+        "${DEBIAN_PRIVATE_INC}"
+        "${DEBIAN_PRIVATE_INC}/QtGui"
+    )
+endif()
+if(QT_FRAMEWORK_PRIVATE_INC)
+    target_include_directories(spectrum_overlay_mouse_boundary_test PRIVATE
+        "${QT_FRAMEWORK_PRIVATE_INC}"
+        "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
+    )
+endif()
+target_link_libraries(spectrum_overlay_mouse_boundary_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+if(TARGET Qt6::GuiPrivate)
+    target_link_libraries(spectrum_overlay_mouse_boundary_test PRIVATE Qt6::GuiPrivate)
+endif()
+set_target_properties(spectrum_overlay_mouse_boundary_test PROPERTIES AUTOMOC ON)
+add_test(NAME spectrum_overlay_mouse_boundary_test
+         COMMAND spectrum_overlay_mouse_boundary_test)
+set_tests_properties(spectrum_overlay_mouse_boundary_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
 # The overlay DAX button stays hidden across expand/collapse on a radio with no
 # DAX plane (updateLayout() used to re-show it). Same link set and shape as
 # spectrum_overlay_band_highlight_test above.
@@ -10120,6 +10183,7 @@ set(AETHER_SETTINGS_CONSUMERS
     reroute_dead_controls_test
     cat_freedv_mode_tokens_test
     hl2_bandstack_digital_agc_test
+    tci_sql_level_test
     radio_model_client_state_test
     pan_control_routing_test
     squelch_level_scale_test
@@ -10330,6 +10394,7 @@ set(AETHER_SETTINGS_CONSUMERS
     rfkit_connection_test
     system_info_dialog_test
     spectrum_overlay_band_highlight_test
+    spectrum_overlay_mouse_boundary_test
     spectrum_overlay_dax_availability_test
     spectrum_overlay_auto_rf_gain_refusal_test
     tgxl_panel_widgets_test
