@@ -670,23 +670,15 @@ void MainWindow::buildMenuBar()
 
     auto* spotsAction = settingsMenu->addAction("SpotHub...");
     connect(spotsAction, &QAction::triggered, this, [this] {
-        // A canon workspace window: created directly rather than through
-        // showOrRaisePersistent(), which would apply View → Frameless Window.
-        const bool wasFresh = !m_spotHubDialog;
-        if (wasFresh) {
-            auto* hub = new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
-                                            m_spotCollectorClient, m_potaClient, m_eibiClient,
-                                            m_n1mmSpotClient,
+        const bool wasFresh = showOrRaiseCanon(m_spotHubDialog, [this] {
+            return new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
+                                       m_spotCollectorClient, m_potaClient, m_eibiClient,
+                                       m_n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
-                                            m_freedvClient,
+                                       m_freedvClient,
 #endif
-                                            &m_radioModel, &m_dxccProvider, this);
-            hub->setAttribute(Qt::WA_DeleteOnClose);
-            m_spotHubDialog = hub;
-        }
-        m_spotHubDialog->show();
-        m_spotHubDialog->raise();
-        m_spotHubDialog->activateWindow();
+                                       &m_radioModel, &m_dxccProvider, this);
+        });
 #ifdef HAVE_WEBSOCKETS
         // Every open, not just the first: this dialog is a persistent
         // singleton, so without this the field would only ever show
@@ -870,16 +862,7 @@ void MainWindow::buildMenuBar()
             statusBar()->showMessage("Not connected to radio", 3000);
             return;
         }
-        // A canon workspace window: created directly rather than through
-        // showOrRaisePersistent(), which would apply View → Frameless Window.
-        if (!m_txBandDialog) {
-            auto* dialog = new TxBandDialog(&m_radioModel, this);
-            dialog->setAttribute(Qt::WA_DeleteOnClose);
-            m_txBandDialog = dialog;
-        }
-        m_txBandDialog->show();
-        m_txBandDialog->raise();
-        m_txBandDialog->activateWindow();
+        showOrRaiseCanon(m_txBandDialog, [this] { return new TxBandDialog(&m_radioModel, this); });
     });
 
     // Inhibit during TUNE submenu — user selects which TX outputs to suppress.

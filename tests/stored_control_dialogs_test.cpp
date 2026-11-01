@@ -203,23 +203,45 @@ void memoryRemoveConfirm()
     for (QPushButton* button : dialog.findChildren<QPushButton*>())
         if (button->text() == "Remove") remove = button;
     if (!table || table->rowCount() != 1 || !remove) { check(false, "memory row and Remove button exist"); return; }
+    table->clearSelection();
+    check(!remove->isEnabled()
+              && remove->accessibleDescription() == "Select one or more memories to remove.",
+          "a disabled Remove says why, to screen readers too");
 
-    // answer: "Cancel", "Delete", or "" to close the box with Escape.
+    // answer: "Cancel", "Delete", or "" to close the box without a button.
+    // A repeating driver answers once the box is up, however late exec()
+    // shows it; a safety timer closes any box left open so a miss fails a
+    // check instead of hanging.
     auto run = [&](const QString& answer) {
         QString seenTitle;
         QString seenDefault;
-        QTimer::singleShot(50, &dialog, [&] {
+        bool answered = false;
+        QTimer driver;
+        QObject::connect(&driver, &QTimer::timeout, &dialog, [&] {
+            if (answered) return;
             for (QWidget* widget : QApplication::topLevelWidgets()) {
                 auto* box = qobject_cast<CanonMessageBox*>(widget);
                 if (!box || !box->isVisible()) continue;
+                answered = true;
                 seenTitle = box->windowTitle();
                 for (QPushButton* button : box->findChildren<QPushButton*>())
                     if (button->isDefault()) seenDefault = button->text();
                 if (answer.isEmpty()) { box->reject(); return; }
                 for (QPushButton* button : box->findChildren<QPushButton*>())
                     if (button->text() == answer) { button->click(); return; }
+                box->reject();
+                return;
             }
         });
+        driver.start(20);
+        QTimer safety;
+        safety.setSingleShot(true);
+        QObject::connect(&safety, &QTimer::timeout, &dialog, [] {
+            for (QWidget* widget : QApplication::topLevelWidgets())
+                if (auto* box = qobject_cast<CanonMessageBox*>(widget); box && box->isVisible())
+                    box->reject();
+        });
+        safety.start(10000);
         table->selectRow(0);
         remove->click();
         QTest::qWait(20);

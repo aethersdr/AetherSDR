@@ -62,6 +62,14 @@ void showMemoryMessage(QWidget* parent, const QString& title, const QString& tex
     box.exec();
 }
 
+// Why a button is unavailable (or what it does), for the mouse and for
+// screen readers alike.
+void setButtonReason(QPushButton* button, const QString& reason)
+{
+    button->setToolTip(reason);
+    button->setAccessibleDescription(reason);
+}
+
 // The window's own widgets on the canon palette; the table takes the shared
 // canonTableRules() after it.
 constexpr const char* kMemoryStyle = R"(
@@ -1562,42 +1570,43 @@ void MemoryDialog::updateSelectionActions()
             needsConnection = recallable && memory->nativeFilter > 0 && !m_model->isConnected();
         }
         m_selectBtn->setEnabled(selectedCount == 1 && recallable && !needsConnection);
-        m_selectBtn->setToolTip(needsConnection
+        setButtonReason(m_selectBtn, needsConnection
             ? "Connect to a radio before recalling a synced native memory."
             : selectedCount == 1 && !recallable
             ? "Split, reverse-split, DV, and DD memories are display-only."
             : (selectedCount == 1 ? QString()
                                   : "Tune is available when exactly one memory is highlighted."));
-        m_selectBtn->setAccessibleDescription(m_selectBtn->toolTip());
     }
     if (m_selectAllBtn) {
         m_selectAllBtn->setEnabled(visibleCount > 0 && selectedCount < visibleCount);
-        m_selectAllBtn->setToolTip(visibleCount > 0
+        setButtonReason(m_selectAllBtn, visibleCount > 0
             ? "Select every memory in the current search/filter result."
             : QString());
-        m_selectAllBtn->setAccessibleDescription(m_selectAllBtn->toolTip());
     }
     if (m_removeBtn) {
         m_removeBtn->setEnabled(m_model->memoriesWritable() && selectedCount > 0);
         m_removeBtn->setText(selectedCount > 1 ? "Remove Selected" : "Remove");
+        setButtonReason(m_removeBtn,
+                        !m_model->memoriesWritable()
+                            ? QStringLiteral("Radio memories are read-only in this version.")
+                            : selectedCount == 0
+                            ? QStringLiteral("Select one or more memories to remove.")
+                            : QString());
     }
     const bool writable = m_model->memoriesWritable();
     if (m_addBtn) {
         m_addBtn->setEnabled(writable);
-        m_addBtn->setToolTip(writable ? QString()
+        setButtonReason(m_addBtn, writable ? QString()
                                      : "Radio memories are read-only in this version.");
-        m_addBtn->setAccessibleDescription(m_addBtn->toolTip());
     }
     if (m_importBtn) {
         m_importBtn->setEnabled(writable);
-        m_importBtn->setToolTip(writable ? QString()
+        setButtonReason(m_importBtn, writable ? QString()
                                         : "Writing radio memories is not available yet.");
-        m_importBtn->setAccessibleDescription(m_importBtn->toolTip());
     }
     if (m_exportBtn) {
         m_exportBtn->setEnabled(!m_model->memories().isEmpty());
-        m_exportBtn->setToolTip(QStringLiteral("Export the displayed memories to CSV."));
-        m_exportBtn->setAccessibleDescription(m_exportBtn->toolTip());
+        setButtonReason(m_exportBtn, QStringLiteral("Export the displayed memories to CSV."));
     }
     if (m_syncBtn) {
         const bool refreshable = m_model->memoriesRefreshable();
@@ -1606,10 +1615,9 @@ void MemoryDialog::updateSelectionActions()
             capabilities, m_filterCombo->currentData().toString());
         m_syncBtn->setVisible(refreshable);
         m_syncBtn->setEnabled(refreshable && hasRequiredGroup && !m_syncInProgress);
-        m_syncBtn->setToolTip(hasRequiredGroup
+        setButtonReason(m_syncBtn, hasRequiredGroup
             ? QStringLiteral("Read the current memory channels from the radio.")
             : QStringLiteral("Choose an IC-705 memory group before reading."));
-        m_syncBtn->setAccessibleDescription(m_syncBtn->toolTip());
     }
 }
 
