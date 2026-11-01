@@ -26,7 +26,8 @@ class RadioModel;
 class TailnetShimDialog : public CanonWindow {
     Q_OBJECT
 public:
-    explicit TailnetShimDialog(RadioModel* model, QWidget* parent = nullptr);
+    // `native`: the shim is installed as a legacy waveform, not a container.
+    explicit TailnetShimDialog(RadioModel* model, bool native, QWidget* parent = nullptr);
 
 signals:
     // The operator chose Reset: this computer can't change the radio's
@@ -69,6 +70,7 @@ private:
     QString m_radioSerial;
     QHostAddress m_apiAddress;   // the radio's LAN address, where the API listens
     QString m_adminToken;
+    bool m_native{false};   // the shim is a legacy waveform, not a container
     bool m_tokenLoaded{false};
     bool m_lanReachable{false};
     bool m_busy{false};

@@ -18,6 +18,17 @@ namespace AetherSDR {
 // dialog offers "Configure…" only for a Docker waveform with this name.
 inline constexpr const char* kTailnetShimContainerName = "flex-tailnet-shim";
 
+// The same shim installed as a legacy waveform on a radio with no Waveform
+// Processor (tools/flex-tailnet-shim/native/AetherTailnet.cfg: Name).
+inline constexpr const char* kTailnetShimNativeName = "AetherTailnet";
+
+// True for an installed waveform that is the shim, in either package.
+inline bool isTailnetShimWaveform(const QString& name, bool isContainer)
+{
+    return isContainer ? name == QLatin1String(kTailnetShimContainerName)
+                       : name == QLatin1String(kTailnetShimNativeName);
+}
+
 // TCP port of the shim's provisioning API on the radio's LAN address
 // (tools/flex-tailnet-shim/api.go: ProvisionPort).
 inline constexpr quint16 kTailnetShimApiPort = 48992;

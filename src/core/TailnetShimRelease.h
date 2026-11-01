@@ -13,7 +13,9 @@ namespace AetherSDR {
 // and CPython 3.14 with zlib 1.3.2. build.sh pins the locale itself (from
 // 0.4.1; 0.4.0 reproduces only under en_US.UTF-8).
 //
-// Bump all four together when a new shim release is published.
+// Bump all four together when a new shim release is published. Each pin
+// reproduces from the tag in its own URL, not from the tree around it: the
+// source's shimVersion runs ahead of a pin until that release is cut.
 struct TailnetShimRelease {
     static constexpr const char* kVersion = "0.5.0";
     static constexpr const char* kUrl =
@@ -22,6 +24,26 @@ struct TailnetShimRelease {
     static constexpr const char* kSha256 =
         "68f50ae8c257214984c43b55fe42dba46fdb57ab24a44bc3c49e6786aaf7cd61";
     static constexpr qint64 kSize = 8066394;
+};
+
+// Which of the two shim packages a radio takes.
+enum class TailnetShimPackage {
+    Container,   // a Docker image, for a radio with a Waveform Processor
+    Native,      // a legacy .ssdr_waveform, for one without
+};
+
+// The same shim as a legacy waveform, for radios with no Waveform Processor
+// (the FLEX-6000 series), which install .ssdr_waveform packages instead of
+// containers. `tools/flex-tailnet-shim/native/build.py` at the release tag
+// rebuilds the identical file with the same toolchain.
+struct TailnetShimNativeRelease {
+    static constexpr const char* kVersion = "0.5.1-native";
+    static constexpr const char* kUrl =
+        "https://github.com/aethersdr/AetherSDR/releases/download/"
+        "flex-tailnet-shim-v0.5.1/AetherTailnet-0.5.1-native.ssdr_waveform";
+    static constexpr const char* kSha256 =
+        "cb71cfd0115c916fadae698c5f6fc23841e9693346a29f61979019092de8584a";
+    static constexpr qint64 kSize = 9171618;
 };
 
 }  // namespace AetherSDR
