@@ -97,7 +97,8 @@ void SupportDialog::buildUI()
     // ── Log file info ─────────────────────────────────────────────────────
     auto* fileRow = new QHBoxLayout;
     auto* pathLabel = new QLabel(QString("Log: <code>%1</code>").arg(
-        ExternalFilePath::resolve(LogManager::instance().logFilePath()).toHtmlEscaped()));
+        QDir::toNativeSeparators(
+            ExternalFilePath::resolve(LogManager::instance().logFilePath())).toHtmlEscaped()));
     pathLabel->setTextFormat(Qt::RichText);
     pathLabel->setStyleSheet("color: #8898a8; font-size: 11px;");
     m_sizeLabel = new QLabel;
@@ -514,32 +515,6 @@ void SupportDialog::disableAll()
 {
     LogManager::instance().setAllEnabled(false);
     syncCheckboxes();
-}
-
-void SupportDialog::sendToSupport()
-{
-    setCursor(Qt::WaitCursor);
-
-    auto sys = SupportBundle::collectSystemInfo();
-    auto radio = SupportBundle::collectRadioInfo(m_radioModel);
-    QString bundlePath = SupportBundle::createBundle(radio);
-
-    setCursor(Qt::ArrowCursor);
-
-    if (bundlePath.isEmpty()) {
-        FramelessMessageBox::warning(this, "Support Bundle",
-            "Failed to create support bundle.\n"
-            "Check that the log directory is writable.");
-        return;
-    }
-
-    FramelessMessageBox::information(this, "Support Bundle Created",
-        QString("Support bundle saved to:\n%1\n\n"
-                "Your email client will now open.\n"
-                "Please attach the bundle file and describe the issue.")
-            .arg(ExternalFilePath::resolve(bundlePath)));
-
-    SupportBundle::openEmailClient(bundlePath, sys, radio);
 }
 
 QString SupportDialog::formatFileSize(qint64 bytes) const

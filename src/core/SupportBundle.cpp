@@ -3,7 +3,6 @@
 #include "SettingsSanitizer.h"
 #include "AsyncLogWriter.h"  // redactPii — GHSA-ccrg-j8cp-qhc4
 #include "LogManager.h"
-#include "ExternalFilePath.h"
 #include "SystemInventory.h"
 #include "GpuSelector.h"
 #include "ZipArchive.h"
@@ -11,7 +10,6 @@
 
 #include <QCoreApplication>
 #include <QDateTime>
-#include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -21,8 +19,6 @@
 #include <QStringList>
 #include <QSysInfo>
 #include <QTemporaryDir>
-#include <QUrl>
-#include <QUrlQuery>
 
 namespace AetherSDR {
 
@@ -276,44 +272,6 @@ QString SupportBundle::recentLogTail(int lines)
     if (all.size() > lines)
         all = all.mid(all.size() - lines);
     return all.join('\n').trimmed();
-}
-
-void SupportBundle::openEmailClient(const QString& bundlePath,
-                                    const SystemInfo& sys,
-                                    const RadioInfo& radio)
-{
-    QString subject = QString("AetherSDR Support - %1 v%2")
-        .arg(radio.connected ? radio.model : "No Radio", sys.aetherVersion);
-
-    QString body;
-    body += "AetherSDR Support Bundle\n\n";
-    body += QString("App: AetherSDR v%1\n").arg(sys.aetherVersion);
-    body += QString("Qt: %1\n").arg(sys.qtVersion);
-    body += QString("OS: %1 (kernel %2)\n").arg(sys.osName, sys.kernelVersion);
-    body += QString("CPU: %1\n").arg(sys.cpu);
-    body += QString("RAM: %1\n").arg(sys.ram);
-    body += QString("GPU: %1\n").arg(sys.gpu);
-    body += QString("Build: %1\n").arg(sys.buildDate);
-
-    if (radio.connected) {
-        body += QString("Radio: %1 (serial %2, fw %3, protocol %4)\n")
-            .arg(radio.model, radio.serial, radio.firmware, radio.protocolVersion);
-        body += QString("Callsign: %1\n").arg(radio.callsign);
-    } else {
-        body += "Radio: not connected\n";
-    }
-
-    body += QString("\nPlease attach the support bundle saved at:\n  %1\n")
-        .arg(ExternalFilePath::resolve(bundlePath));
-    body += "\nDescribe the issue below:\n---\n\n";
-
-    QUrl url("mailto:support@aethersdr.com");
-    QUrlQuery query;
-    query.addQueryItem("subject", subject);
-    query.addQueryItem("body", body);
-    url.setQuery(query);
-
-    QDesktopServices::openUrl(url);
 }
 
 } // namespace AetherSDR

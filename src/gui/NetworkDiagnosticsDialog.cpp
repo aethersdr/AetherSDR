@@ -22,6 +22,7 @@
 
 #include <QComboBox>
 #include <QDateTime>
+#include <QDir>
 #include <QFileInfo>
 #include <QFont>
 #include <QFrame>
@@ -1869,7 +1870,8 @@ void NetworkDiagnosticsDialog::initializeLogTail()
 {
     const QString logPath = LogManager::instance().logFilePath();
     if (m_logPathLabel) {
-        m_logPathLabel->setText(QString("Log: %1").arg(ExternalFilePath::resolve(logPath)));
+        m_logPathLabel->setText(QString("Log: %1").arg(
+            QDir::toNativeSeparators(ExternalFilePath::resolve(logPath))));
     }
 
     m_logFile.close();
@@ -1897,7 +1899,8 @@ bool NetworkDiagnosticsDialog::reopenLogFile(bool keepExistingLines)
 {
     const QString logPath = LogManager::instance().logFilePath();
     if (m_logPathLabel) {
-        m_logPathLabel->setText(QString("Log: %1").arg(ExternalFilePath::resolve(logPath)));
+        m_logPathLabel->setText(QString("Log: %1").arg(
+            QDir::toNativeSeparators(ExternalFilePath::resolve(logPath))));
     }
 
     m_logFile.close();
