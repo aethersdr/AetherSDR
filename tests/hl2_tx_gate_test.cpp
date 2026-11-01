@@ -87,6 +87,13 @@ struct Hl2TxGateTestAccess {
         hw.atuGateware = true;
         backend.m_hw = hw;
     }
+    // Through the production option path, so its mid-tune re-derivation runs.
+    static void toggleGatewareAtu(Hl2Backend& backend, bool on)
+    {
+        Hl2HardwareOptions hw = backend.m_hw;
+        hw.atuGateware = on;
+        backend.applyHardwareOptions(hw, /*persist=*/false);
+    }
     static bool txAllowed(const Hl2Backend& backend) { return backend.m_txAllowed; }
     // Set it explicitly rather than relying on the default. m_txAllowed is
     // `!automation || automationAllowsTx`, so in a plain test process it is
@@ -132,6 +139,10 @@ struct Hl2TxGateTestAccess {
     // it inside the unkey, so tests park it and expire it explicitly.
     static void setTxTailHoldMs(Hl2Backend& backend, int ms) { backend.m_txTailHoldMs = ms; }
     static bool backendKeyed(const Hl2Backend& backend) { return backend.m_keyed; }
+    static bool backendTuning(const Hl2Backend& backend)
+    {
+        return backend.m_tuning || backend.m_toneFromTune || backend.m_rfDriveOwed;
+    }
     static bool txTailPending(const Hl2Backend& backend) { return backend.m_txTailPending; }
     static bool txTailArmed(const Hl2Backend& backend)
     {
@@ -354,6 +365,33 @@ static void testAtuTuneHonoursTheTransmitGate(TxTestAuthority& authority)
         check(sawTuneRequest(backend),
               "gate OPEN with the gateware ATU declared: the tune request does reach "
               "the wire — the gate narrows this feature, it does not disable it");
+        backend.setTune(false, 10, authority.operation, {});
+    }
+
+    {   // The gate closes MID-TUNE, then the ATU option is declared: the option
+        // path re-derives the bit, and the gate term must still hold it down.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        Hl2TxGateTestAccess::setTxAllowed(backend, true);
+        backend.setTune(true, 10, authority.operation, {});
+        check(!sawTuneRequest(backend), "control: no ATU declared, no tune request");
+        Hl2TxGateTestAccess::setTxAllowed(backend, false);
+        Hl2TxGateTestAccess::toggleGatewareAtu(backend, true);
+        check(!sawTuneRequest(backend),
+              "gate closed mid-tune, then the gateware ATU declared: the re-derived "
+              "tune request stays down");
+        Hl2TxGateTestAccess::setTxAllowed(backend, true);
+        backend.setTune(false, 10, authority.operation, {});
+    }
+    {   // Control for the case above: the same toggle with the gate OPEN does
+        // raise the re-derived request, so the case above tests the gate term.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        Hl2TxGateTestAccess::setTxAllowed(backend, true);
+        backend.setTune(true, 10, authority.operation, {});
+        Hl2TxGateTestAccess::toggleGatewareAtu(backend, true);
+        check(sawTuneRequest(backend),
+              "control: gate open, gateware ATU declared mid-tune: the request goes up");
         backend.setTune(false, 10, authority.operation, {});
     }
 
@@ -1835,6 +1873,21 @@ int main(int argc, char** argv)
                 keyed = Hl2TxGateTestAccess::metis(backend)->isKeyed();
             }, Qt::BlockingQueuedConnection);
             r.leftover = keyed || Hl2TxGateTestAccess::backendKeyed(backend);
+            rows.push_back(r);
+        }
+
+        {   // TUNE on the backend with no running session: no tune state either
+            TxTestAuthority tx;
+            Hl2Backend backend;
+            Hl2TxGateTestAccess::setTxAllowed(backend, true);
+            QMetaObject::invokeMethod(Hl2TxGateTestAccess::metis(backend), [&] {
+                Hl2TxGateTestAccess::metis(backend)->enableTransmit(true);
+            }, Qt::BlockingQueuedConnection);
+            backend.setTune(true, 10, tx.operation);
+            Row r{"backend TUNE while the session is stopped"};
+            r.keyedFrame = anyFrameKeyed(Hl2TxGateTestAccess::packet(backend));
+            r.leftover = Hl2TxGateTestAccess::backendKeyed(backend)
+                || Hl2TxGateTestAccess::backendTuning(backend);
             rows.push_back(r);
         }
 
