@@ -27,8 +27,8 @@ reboot.
 Same code, same version (`0.5.1-native`), started by a launcher (`shim.sh`)
 that:
 
-- keeps the node's identity and settings in `state/` beside the waveform,
-  falling back to `/var/tmp/aether-tailnet` if that isn't writable;
+- keeps the node's identity and settings in `state/` beside the waveform
+  (in RAM, lost at reboot, if that folder isn't writable);
 - keeps Tailscale's logs and caches in RAM (`/tmp/aether-tailnet`), so they
   don't wear or fill the radio's small flash partition;
 - ships the shim gzipped and unpacks it into RAM (`/tmp`) at each start:
@@ -111,8 +111,8 @@ Run the commands from this folder. `tool.py` talks to the radio over the LAN.
    - `python3 -I tool.py --host <radio-ip> uninstall`;
    - check that uninstalling cleared the saved state, which AetherSDR's
      Reset relies on. First note where the state was: the shim's first log
-     line ends `state in <dir>`, either the waveform's own `state` folder or
-     `/var/tmp/aether-tailnet`. Then `install` again, wait for it to be
+     line ends `state in <dir>`: the waveform's own `state` folder, or
+     `/tmp/aether-tailnet/state` (RAM) if that wasn't writable. Then `install` again, wait for it to be
      listed, run `status` and note whether it says `"provisioned": false`
      and `"state": "unprovisioned"`, then `uninstall` once more;
    - delete `admin-token.txt`;
@@ -133,7 +133,7 @@ Run the commands from this folder. `tool.py` talks to the radio over the LAN.
 | 4 | Does a remote session work? | your notes; `session.jsonl` → `session_detail` (packets, gaps, breaks), `shim_cpu_pct`, `path`, `rtt_ms` | The point of the shim |
 | 5 | Does it survive a reboot? | step 6 timing; same `tailnet_ip` | No re-provisioning after power cuts |
 | 6 | Direct or relayed? | `path` (`direct`, `peer-relay`, `relay`) | A relayed path costs latency |
-| 7 | Does uninstalling clear it? | step 7: the `state in` directory, `status` after reinstalling | AetherSDR's Reset uninstalls and reinstalls. If the radio keeps `state/`, or the state was in `/var/tmp/aether-tailnet` (which no uninstall touches), the radio comes back still signed in with the old token |
+| 7 | Does uninstalling clear it? | step 7: the `state in` directory, `status` after reinstalling | AetherSDR's Reset uninstalls and reinstalls. If the radio keeps `state/`, the radio comes back still signed in with the old token |
 
 ## Prompt for your AI assistant
 
@@ -244,9 +244,10 @@ for" table with numbers, and list the files I should send.
 
 ### After a reboot it asks to be provisioned again
 
-The identity didn't survive. Report `status` before and after. The launcher keeps
-state in `state/` beside the waveform, or `/var/tmp/aether-tailnet` when
-that isn't writable.
+The identity didn't survive. Report `status` before and after, and the
+shim's first log line: if it says `state in /tmp/aether-tailnet/state`, the
+waveform's own folder wasn't writable, so the launcher kept the state in
+RAM, which a reboot clears.
 
 ## Building it
 

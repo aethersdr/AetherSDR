@@ -202,7 +202,7 @@ When the status reads **On your tailnet**, the **Tailnet** card shows:
 | **TAILNET NAME** | The radio's name on your tailnet |
 | **TAILNET ADDRESS** | The `100.x.y.z` address to connect to. **Copy** puts it on the clipboard. |
 | **REMOTE SESSIONS** | Clients connected through the tailnet right now |
-| **CONTAINER VERSION** | The container's version |
+| **CONTAINER VERSION** | The container's version (**WAVEFORM VERSION** on a FLEX-6000) |
 | **SIGN-IN EXPIRES** | When the radio's sign-in runs out, or **Never** |
 
 Write the tailnet address down: it's what you connect to when you're away.

@@ -13,7 +13,9 @@ namespace AetherSDR {
 // and CPython 3.14 with zlib 1.3.2. build.sh pins the locale itself (from
 // 0.4.1; 0.4.0 reproduces only under en_US.UTF-8).
 //
-// Bump all four together when a new shim release is published.
+// Bump all four together when a new shim release is published. Each pin
+// reproduces from the tag in its own URL, not from the tree around it: the
+// source's shimVersion runs ahead of a pin until that release is cut.
 struct TailnetShimRelease {
     static constexpr const char* kVersion = "0.5.0";
     static constexpr const char* kUrl =
@@ -40,8 +42,8 @@ struct TailnetShimNativeRelease {
         "https://github.com/aethersdr/AetherSDR/releases/download/"
         "flex-tailnet-shim-v0.5.1/AetherTailnet-0.5.1-native.ssdr_waveform";
     static constexpr const char* kSha256 =
-        "62b45fa33a9a45a183196c01a77320b75fa9033c8058562c47f19647016f7aaa";
-    static constexpr qint64 kSize = 9162025;
+        "9c20d149bcc21ab6f6b1ac2ace9fbcc61b5940d1bbabae91e6639bdf92f68e79";
+    static constexpr qint64 kSize = 9162152;
 };
 
 }  // namespace AetherSDR

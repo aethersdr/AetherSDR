@@ -14,8 +14,8 @@ class QNetworkReply;
 namespace AetherSDR {
 
 // Fetches a pinned remote-access package (TailnetShimRelease for the
-// container, TailnetShimNativeRelease for the legacy waveform) and hands back a local path only if the bytes match the pinned size and
-// SHA-256. A verified copy is cached and re-verified before reuse, so a
+// container, TailnetShimNativeRelease for the legacy waveform) and hands
+// back a local path only if the bytes match the pinned size and SHA-256. A verified copy is cached and re-verified before reuse, so a
 // second install needs no download and a tampered cache is never trusted.
 class TailnetShimDownloader : public QObject {
     Q_OBJECT

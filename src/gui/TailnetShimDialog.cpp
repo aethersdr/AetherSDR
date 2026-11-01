@@ -3,7 +3,6 @@
 #include "CanonMessageBox.h"
 #include "QrCodeImage.h"
 #include "ScopedChildWidget.h"
-#include "WaveformInstallGate.h"
 
 #include "core/TailnetShimTokenStore.h"
 #include "core/ThemeManager.h"
@@ -145,10 +144,10 @@ QFrame* makeCard(const QString& title, QWidget* parent, QVBoxLayout** contents)
 
 }  // namespace
 
-TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
+TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* parent)
     : CanonWindow(tr("Remote Access (Tailscale)"), parent)
     , m_model(model)
-    , m_native(model && remoteAccessUsesNativePackage(model->capabilities().platform))
+    , m_native(native)
 {
     constexpr int kWidth = 600;
     constexpr int kSide = 28;          // body side margins, as About's 24 plus room for cards
@@ -237,11 +236,11 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     m_sessionsLabel = roleLabel(QStringLiteral("—"), "value", body);
     m_sessionsLabel->setAccessibleName(tr("Remote sessions"));
     m_versionLabel = roleLabel(QStringLiteral("—"), "value", body);
-    m_versionLabel->setAccessibleName(tr("Container version"));
+    m_versionLabel->setAccessibleName(m_native ? tr("Waveform version") : tr("Container version"));
     addRow(0, tr("TAILNET NAME"), m_nameLabel);
     addRow(1, tr("TAILNET ADDRESS"), m_addressLabel, m_copyButton);
     addRow(2, tr("REMOTE SESSIONS"), m_sessionsLabel);
-    addRow(3, tr("CONTAINER VERSION"), m_versionLabel);
+    addRow(3, m_native ? tr("WAVEFORM VERSION") : tr("CONTAINER VERSION"), m_versionLabel);
     m_expiryLabel = roleLabel(QStringLiteral("—"), "value", body);
     m_expiryLabel->setAccessibleName(tr("Sign-in expires"));
     addRow(4, tr("SIGN-IN EXPIRES"), m_expiryLabel);

@@ -10,16 +10,20 @@ case "$(uname -m 2>/dev/null)" in
   armv7*) ;;
   *) echo "flex-tailnet-shim: this package is for FLEX-6000 radios (ARMv7); use the container shim on this radio" >&2; exit 1 ;;
 esac
+# Logs and caches stay in RAM. (Overridable for tests only.)
+SHIM_RUN_DIR=${SHIM_RUN_DIR:-/tmp/aether-tailnet}
 # The node's identity and settings persist beside the waveform (on a
-# FLEX-6300 that's the /user partition); fall back to /var/tmp, which also
-# survived a reboot there. Logs and caches stay in RAM.
+# FLEX-6300 that's the /user partition), so uninstalling removes them and
+# AetherSDR's Reset starts clean. If that folder isn't writable, keep them in
+# RAM instead: the radio then signs in again after each reboot, but nothing
+# outlives the waveform. The shim logs which it used ("state in <dir>").
 state="$dir/state"
 if ! mkdir -p "$state" 2>/dev/null || ! touch "$state/.w" 2>/dev/null; then
-  state=/var/tmp/aether-tailnet
+  state=$SHIM_RUN_DIR/state
+  mkdir -p "$state"
 fi
 rm -f "$state/.w" 2>/dev/null
 SHIM_STATE_DIR=$state
-SHIM_RUN_DIR=/tmp/aether-tailnet
 SSDR_RADIO_ADDRESS=${SSDR_RADIO_ADDRESS:-127.0.0.1}
 # No log uploads to Tailscale: they cost CPU this radio's single core needs.
 TS_NO_LOGS_NO_SUPPORT=true

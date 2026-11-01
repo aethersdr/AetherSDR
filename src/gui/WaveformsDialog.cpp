@@ -1514,6 +1514,7 @@ void WaveformsDialog::updateInstallButtonState()
         const QString version = TailnetShimDownloader::pin(package).version;
         const QString remoteTip = busy
             ? tr("A waveform install is already in progress.")
+            : !connected ? tr("Connect to a radio before installing Remote Access.")
             : !remoteReady ? dockerBlocker
             : native
             ? tr("Download the remote-access waveform (version %1), verify it, and install it.")
@@ -1564,8 +1565,17 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
     if (!m_radioModel || !m_radioModel->isConnected()) {
         return;
     }
-    const TailnetShimPackage package = remoteAccessPackageFor(m_radioModel);
-    const bool docker = package == TailnetShimPackage::Container;
+    installRemoteAccess(remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container);
+}
+
+void WaveformsDialog::installRemoteAccess(bool container)
+{
+    if (!m_radioModel || !m_radioModel->isConnected()) {
+        return;
+    }
+    const TailnetShimPackage package =
+        container ? TailnetShimPackage::Container : TailnetShimPackage::Native;
+    const bool docker = container;
     if (docker) {
         const QString blocker =
             dockerInstallBlockerText(m_radioModel, m_radioModel->flexWaveformModel());
@@ -1641,14 +1651,14 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
     updateInstallButtonState();
 }
 
-void WaveformsDialog::resetRemoteAccess()
+void WaveformsDialog::resetRemoteAccess(bool container)
 {
     if (!m_radioModel || !m_radioModel->isConnected()) {
         return;
     }
-    // The package this radio takes is the one installed: Install offers no other.
-    const bool docker = remoteAccessPackageFor(m_radioModel)
-        == TailnetShimPackage::Container;
+    // The installed row says which package this is; the platform may not be
+    // identified yet.
+    const bool docker = container;
     const QString name = QString::fromLatin1(docker ? kTailnetShimContainerName
                                                     : kTailnetShimNativeName);
     const QString removeAction = docker ? QStringLiteral("remove_container")
@@ -1666,7 +1676,7 @@ void WaveformsDialog::resetRemoteAccess()
     auto pending = std::make_shared<Pending>();
     auto* bound = new QTimer(this);
     bound->setSingleShot(true);
-    auto finish = [this, pending, bound](bool install) {
+    auto finish = [this, pending, bound, docker](bool install) {
         if (pending->done) {
             return;
         }
@@ -1676,7 +1686,7 @@ void WaveformsDialog::resetRemoteAccess()
         bound->stop();
         bound->deleteLater();
         if (install) {
-            onInstallRemoteAccessClicked();
+            installRemoteAccess(docker);
         }
     };
     pending->listed = connect(&waveforms, &FlexWaveformModel::waveformsChanged, this,
@@ -2222,7 +2232,7 @@ void WaveformsDialog::refreshWaveformList()
         if (isTailnetShimWaveform(name, isContainer)) {
             configureBtn = new QPushButton(tr("Configure…"), actionWidget);
             configureBtn->setAccessibleName(tr("Configure remote access for waveform %1").arg(name));
-            connect(configureBtn, &QPushButton::clicked, this, [this]() {
+            connect(configureBtn, &QPushButton::clicked, this, [this, isContainer]() {
                 // A CanonWindow: one at a time; a second click raises it.
                 static QPointer<TailnetShimDialog> open;
                 if (open) {
@@ -2230,10 +2240,10 @@ void WaveformsDialog::refreshWaveformList()
                     open->activateWindow();
                     return;
                 }
-                auto* dialog = new TailnetShimDialog(m_radioModel, this);
+                auto* dialog = new TailnetShimDialog(m_radioModel, !isContainer, this);
                 dialog->setAttribute(Qt::WA_DeleteOnClose);
-                connect(dialog, &TailnetShimDialog::resetRequested,
-                        this, &WaveformsDialog::resetRemoteAccess);
+                connect(dialog, &TailnetShimDialog::resetRequested, this,
+                        [this, isContainer] { resetRemoteAccess(isContainer); });
                 open = dialog;
                 dialog->show();
             });
