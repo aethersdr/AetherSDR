@@ -21,6 +21,12 @@ which the AppImage build writes from the AppImage it just made (--tarball, below
 Here it is read back and must hold exactly the manifest's `files`, or the build
 fails.
 
+Each macOS payload (RFC #5304 Phase 4) is the signed AetherSDR.app, published as
+AetherSDR-<tag>-macOS-<label>.app.tar.zst by the macOS DMG workflow
+(--app-tarball, below). That tarball is both the payload and its `full`. With
+--dax-driver-source, each macOS entry also names the DAX driver's source (the
+git tree hash of hal-plugin/ at the tag), which the app compares with its own.
+
 The manifest is NOT signed here. The publish job signs it with the Ed25519
 update key and verifies the signature against packaging/update-signing.pub
 before anything is uploaded.
@@ -37,8 +43,12 @@ Usage (the AppImage build, the release tarball of one AppImage):
     python3 tools/build_update_manifest.py --tarball AetherSDR-v26.10.4-x86_64.AppImage \\
         AetherSDR-v26.10.4-x86_64.tar.zst
 
-Needs python3 >= 3.10, zstd >= 1.5 (>= 1.4.8 for --tarball alone) and (for
-AppImages) unsquashfs. Nothing
+Usage (the macOS DMG workflow, the update tarball of one signed app):
+    python3 tools/build_update_manifest.py --app-tarball AetherSDR.app \\
+        AetherSDR-v26.10.4-macOS-apple-silicon.app.tar.zst
+
+Needs python3 >= 3.10 (>= 3.12 to read a macOS payload), zstd >= 1.5 (>= 1.4.8
+for --tarball or --app-tarball alone) and (for AppImages) unsquashfs. Nothing
 here executes a downloaded file: an AppImage's squashfs is located from its
 ELF header and read with unsquashfs, so an aarch64 image is handled on an
 x86_64 runner.
@@ -88,10 +98,10 @@ TARBALL_MAX_WINDOW = "128MB"
 class PayloadKind:
     """One updatable payload: which asset carries it and how to open it."""
 
-    platform: str   # "windows", "linux"
+    platform: str   # "windows", "linux", "macos"
     arch: str       # as QSysInfo::buildCpuArchitecture() names it
     asset_suffix: str
-    container: str  # "zip" or "appimage"
+    container: str  # "zip", "appimage", or "tarzst" (the asset is the payload's release tarball)
     label: str      # used in bundle names
     tarball_suffix: str = ""   # the release tarball that is `full`, when not the asset
 
@@ -106,6 +116,8 @@ PAYLOADS = (
     PayloadKind("windows", "x86_64", "Windows-x64-portable.zip", "zip", "Windows-x64"),
     PayloadKind("linux", "x86_64", "x86_64.AppImage", "appimage", "x86_64", "x86_64.tar.zst"),
     PayloadKind("linux", "arm64", "aarch64.AppImage", "appimage", "aarch64", "aarch64.tar.zst"),
+    PayloadKind("macos", "arm64", "macOS-apple-silicon.app.tar.zst", "tarzst", "macOS-apple-silicon"),
+    PayloadKind("macos", "x86_64", "macOS-intel.app.tar.zst", "tarzst", "macOS-intel"),
 )
 
 
@@ -221,6 +233,18 @@ def extract_payload(asset: Path, container: str, dest: Path) -> Path:
                     raise ValueError(f"{asset.name}: unsafe path {info.filename!r}")
             z.extractall(dest)
         return dest
+    if container == "tarzst":
+        # A release tarball: zstd, then a tar Python's "data" filter reads
+        # (no absolute or escaping paths, no links out of the tree).
+        plain = dest.parent / (dest.name + ".tar")
+        with plain.open("wb") as out:
+            subprocess.run(["zstd", "-dc", "--memory=128MB", str(asset)], check=True, stdout=out)
+        root = dest / "payload"
+        root.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(plain) as tar:
+            tar.extractall(root, filter="data")
+        plain.unlink()
+        return root
     if container == "appimage":
         root = dest / "squashfs-root"
         subprocess.run(["unsquashfs", "-q", "-n", "-no-xattrs", "-o",
@@ -396,6 +420,19 @@ def make_release_tarball(appimage: Path, out: Path, work: Path) -> int:
     root = extract_payload(appimage, "appimage", work)
     tree = scan_tree(root)
     write_release_tarball(root, tree, out)
+    check_release_tarball(out, files_list(tree))
+    print(f"{out.name}: {out.stat().st_size} bytes, {len(tree)} entries", file=sys.stderr)
+    return 0
+
+
+def make_app_tarball(app: Path, out: Path) -> int:
+    """--app-tarball: a signed AetherSDR.app as its macOS update tarball, its
+    paths starting at Contents/, read back against its own file list."""
+    if not (app / "Contents" / "MacOS" / "AetherSDR").is_file():
+        raise ValueError(f"{app}: not an AetherSDR app bundle")
+    tree = scan_tree(app)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    write_release_tarball(app, tree, out)
     check_release_tarball(out, files_list(tree))
     print(f"{out.name}: {out.stat().st_size} bytes, {len(tree)} entries", file=sys.stderr)
     return 0
@@ -587,7 +624,8 @@ class MissingPayload(RuntimeError):
 
 def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
           public_key: Path | None, work_root: Path, discard_assets: bool = False,
-          require_all: bool = False, release_tarballs: bool = True) -> dict:
+          require_all: bool = False, release_tarballs: bool = True,
+          macos_payloads: bool = True, dax_driver_source: str | None = None) -> dict:
     """discard_assets: delete each downloaded asset once used (CI disk);
     never set for assets the caller supplied.
 
@@ -597,7 +635,13 @@ def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
 
     release_tarballs: Linux's full is the release tarball, required with
     require_all. False for a release cut before the AppImage build made them:
-    full is then the AppImage, as it was."""
+    full is then the AppImage, as it was.
+
+    macos_payloads: False for a release cut before the macOS DMG workflow made
+    app tarballs: macOS is then left out, as it was.
+
+    dax_driver_source: the git tree hash of hal-plugin/ at the tag, named in
+    each macOS entry so the app can tell a release changes the DAX driver."""
     out.mkdir(parents=True, exist_ok=True)
     manifest = {
         "schema": SCHEMA,
@@ -609,6 +653,8 @@ def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
         "payloads": [],
     }
     for kind in PAYLOADS:
+        if kind.platform == "macos" and not macos_payloads:
+            continue
         asset = get_asset(tag, kind.asset_name(tag))
         if asset is None:
             if require_all:
@@ -640,6 +686,8 @@ def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
             "files": files,
             "patches": [],
         }
+        if kind.platform == "macos" and dax_driver_source:
+            entry["dax_driver"] = {"source": dax_driver_source}
         if discard_assets and full is not asset:
             full.unlink(missing_ok=True)
         for old_tag in earlier[:depth]:
@@ -682,6 +730,18 @@ def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
+    if "--app-tarball" in argv:
+        ap_ = argparse.ArgumentParser(description="The macOS update tarball of one signed app.")
+        ap_.add_argument("--app-tarball", required=True, type=Path, metavar="APP")
+        ap_.add_argument("out", type=Path)
+        aargs = ap_.parse_args(argv)
+        try:
+            return make_app_tarball(aargs.app_tarball, aargs.out)
+        except (ValueError, subprocess.CalledProcessError) as e:
+            aargs.out.unlink(missing_ok=True)
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+
     if "--tarball" in argv:
         tp = argparse.ArgumentParser(description="The release tarball of one AppImage.")
         tp.add_argument("--tarball", required=True, type=Path, metavar="APPIMAGE")
@@ -709,11 +769,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--work", type=Path, help="scratch directory (default: a temp dir)")
     ap.add_argument("--no-release-tarballs", action="store_true",
                     help="a release cut before the AppImage build made tarballs: Linux's full is the AppImage")
+    ap.add_argument("--no-macos-payloads", action="store_true",
+                    help="a release cut before the macOS DMG workflow made app tarballs: macOS is left out")
+    ap.add_argument("--dax-driver-source", metavar="HASH",
+                    help="the git tree hash of hal-plugin/ at the tag, for the macOS entries")
     ap.add_argument("--require-all", action="store_true",
                     help="fail unless every payload is present (implied by --fetch-from-github)")
     args = ap.parse_args(argv)
 
     version_key(args.tag)
+    if args.dax_driver_source is not None and not re.fullmatch(r"[0-9a-f]{40}", args.dax_driver_source):
+        ap.error("--dax-driver-source must be a 40-digit git tree hash")
     if args.public_key is not None and not args.public_key.exists():
         args.public_key = None
 
@@ -736,7 +802,9 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build(args.tag, args.out, args.depth, get_asset, earlier, args.public_key, work,
                          discard_assets=args.fetch_from_github,
                          require_all=args.require_all or args.fetch_from_github,
-                         release_tarballs=not args.no_release_tarballs)
+                         release_tarballs=not args.no_release_tarballs,
+                         macos_payloads=not args.no_macos_payloads,
+                         dax_driver_source=args.dax_driver_source)
     except MissingPayload as e:
         print(f"error: {e}; no manifest written", file=sys.stderr)
         return 1

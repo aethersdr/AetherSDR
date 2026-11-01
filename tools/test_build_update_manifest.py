@@ -561,6 +561,91 @@ class LinuxFull(Base):
         bum.check_release_tarball(out, bum.files_list(bum.scan_tree(self.root)))
 
 
+class MacOSPayload(Base):
+    """RFC #5304 Phase 4: the signed AetherSDR.app as its update tarball, which
+    is both the macOS payload and its `full`."""
+
+    DAX = "0123456789abcdef0123456789abcdef01234567"
+
+    def app(self, root: Path, version: bytes) -> Path:
+        app = root / "AetherSDR.app"
+        write(app / "Contents" / "Info.plist", b"<plist>" + version + b"</plist>")
+        write(app / "Contents" / "MacOS" / "AetherSDR", b"\xcf\xfa\xed\xfe" + version * 4000, executable=True)
+        fw = app / "Contents" / "Frameworks" / "QtGui.framework"
+        write(fw / "Versions" / "A" / "QtGui", b"qtgui" * 4000)
+        (fw / "Versions" / "Current").symlink_to("A")
+        (fw / "QtGui").symlink_to("Versions/Current/QtGui")
+        return app
+
+    def test_app_tarball_round_trips_with_its_links(self) -> None:
+        app = self.app(self.tmp / "src", b"26.10.4")
+        out = self.tmp / "AetherSDR-v26.10.4-macOS-apple-silicon.app.tar.zst"
+        self.assertEqual(bum.main(["--app-tarball", str(app), str(out)]), 0)
+        root = bum.extract_payload(out, "tarzst", self.tmp / "x")
+        self.assertEqual(bum.scan_tree(root), bum.scan_tree(app))
+        self.assertEqual(os.readlink(root / "Contents/Frameworks/QtGui.framework/Versions/Current"), "A")
+        self.assertTrue(os.access(root / "Contents/MacOS/AetherSDR", os.X_OK))
+
+    def test_a_folder_that_is_not_the_app_is_refused(self) -> None:
+        other = self.tmp / "other.app"
+        write(other / "Contents" / "Info.plist", b"x")
+        out = self.tmp / "x.app.tar.zst"
+        self.assertEqual(bum.main(["--app-tarball", str(other), str(out)]), 1)
+        self.assertFalse(out.exists())
+
+    def releases(self) -> dict[str, Path]:
+        dirs = {}
+        for tag, version in (("v26.10.4", b"26.10.4"), ("v26.10.3", b"26.10.3")):
+            d = self.tmp / ("dl-" + tag)
+            app = self.app(self.tmp / ("app-" + tag), version)
+            name = f"AetherSDR-{tag}-macOS-apple-silicon.app.tar.zst"
+            self.assertEqual(bum.main(["--app-tarball", str(app), str(d / name)]), 0)
+            dirs[tag] = d
+        return dirs
+
+    def test_the_manifest_names_the_tarball_patches_and_the_driver(self) -> None:
+        dirs = self.releases()
+        out = self.tmp / "out"
+        rc = bum.main(["--tag", "v26.10.4", "--out", str(out), "--work", str(self.tmp / "w"),
+                       "--dax-driver-source", self.DAX,
+                       "--assets", f"v26.10.4={dirs['v26.10.4']}", "--assets", f"v26.10.3={dirs['v26.10.3']}"])
+        self.assertEqual(rc, 0)
+        (p,) = json.loads((out / "manifest.json").read_text())["payloads"]
+        self.assertEqual((p["platform"], p["arch"]), ("macos", "arm64"))
+        name = "AetherSDR-v26.10.4-macOS-apple-silicon.app.tar.zst"
+        self.assertEqual(p["full"]["asset"], name)
+        self.assertEqual(p["full"]["sha256"], bum.sha256_file(dirs["v26.10.4"] / name))
+        self.assertEqual(p["dax_driver"], {"source": self.DAX})
+        self.assertIn({"path": "Contents/Frameworks/QtGui.framework/Versions/Current", "type": "symlink",
+                       "target": "A"}, p["files"])
+        (patch,) = p["patches"]
+        self.assertEqual(patch["from"], "26.10.3")
+        self.assertEqual(sorted(o["path"] for o in patch["ops"]),
+                         ["Contents/Info.plist", "Contents/MacOS/AetherSDR"])
+        apply_patch_set(self.tmp / "app-v26.10.3" / "AetherSDR.app", out / patch["bundle"]["asset"], patch,
+                        p["files"], self.tmp / "applied")
+
+    def test_a_release_cut_before_app_tarballs_leaves_macos_out(self) -> None:
+        dirs = self.releases()
+        out = self.tmp / "out"
+        rc = bum.main(["--tag", "v26.10.4", "--out", str(out), "--work", str(self.tmp / "w"),
+                       "--no-macos-payloads", "--assets", f"v26.10.4={dirs['v26.10.4']}"])
+        self.assertEqual(rc, 1, "macOS left out and nothing else: no payloads")
+        # A release build without them fails; without the driver hash, no field.
+        self.assertEqual(bum.main(["--tag", "v26.10.4", "--out", str(self.tmp / "o2"), "--require-all",
+                                   "--work", str(self.tmp / "w2"),
+                                   "--assets", f"v26.10.4={dirs['v26.10.4']}"]), 1)
+        rc = bum.main(["--tag", "v26.10.4", "--out", str(self.tmp / "o3"), "--work", str(self.tmp / "w3"),
+                       "--assets", f"v26.10.4={dirs['v26.10.4']}"])
+        self.assertEqual(rc, 0)
+        (p,) = json.loads((self.tmp / "o3" / "manifest.json").read_text())["payloads"]
+        self.assertNotIn("dax_driver", p)
+
+    def test_the_driver_source_must_be_a_tree_hash(self) -> None:
+        with self.assertRaises(SystemExit):
+            bum.main(["--tag", "v26.10.4", "--out", str(self.tmp / "o"), "--dax-driver-source", "main"])
+
+
 class Manifest(Base):
     def zip_tree(self, root: Path, out: Path) -> None:
         with zipfile.ZipFile(out, "w") as z:

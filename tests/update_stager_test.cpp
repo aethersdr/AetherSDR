@@ -451,6 +451,29 @@ private slots:
 
     // ── Choose ──────────────────────────────────────────────────────────
 
+    // A macOS entry's DAX driver source (RFC #5304 Phase 4): read when it is a
+    // git tree hash, refused when it is anything else, absent by default.
+    void theDaxDriverSourceIsATreeHash()
+    {
+        const QJsonObject good = fixtureManifest();
+        QCOMPARE(parsed(good).payloads.value(0).daxDriverSource, QString());
+        const auto withSource = [&](const QJsonValue& v) {
+            QJsonObject o = good;
+            QJsonArray ps = o[QStringLiteral("payloads")].toArray();
+            QJsonObject p = ps[0].toObject();
+            p[QStringLiteral("dax_driver")] = QJsonObject{{QStringLiteral("source"), v}};
+            ps[0] = p;
+            o[QStringLiteral("payloads")] = ps;
+            return o;
+        };
+        const QString hash = QStringLiteral("ebf4a3c10dbbbe04d70f59c99d55de467e9ccc07");
+        QCOMPARE(parsed(withSource(hash)).payloads.value(0).daxDriverSource, hash);
+        QVERIFY(!parses(withSource(QStringLiteral("main"))));
+        QVERIFY(!parses(withSource(hash.toUpper())));
+        QVERIFY(!parses(withSource(hash.left(39))));
+        QVERIFY(!parses(withSource(42)));
+    }
+
     void chooseRefusesReplayFreezeAndOldReleases()
     {
         const UpdateManifest m = parsed(fixtureManifest());

@@ -10,3 +10,7 @@
 #define AETHER_BUILD_BASELINE           "@AETHER_BUILD_BASELINE@"
 #define AETHER_BUILD_COMMITS_SINCE_TAG  @AETHER_BUILD_COMMITS_SINCE_TAG@
 #define AETHER_BUILD_DIRTY              @AETHER_BUILD_DIRTY@
+
+// The git tree hash of hal-plugin/ (the DAX driver's source) this build was
+// made from, or "" outside a git checkout (RFC #5304 Phase 4).
+#define AETHER_BUILD_DAX_DRIVER_SOURCE  "@AETHER_BUILD_DAX_DRIVER_SOURCE@"

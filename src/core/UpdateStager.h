@@ -52,11 +52,14 @@ struct UpdateManifest {
         QList<Op> ops;
     };
     struct Payload {
-        QString platform;   // "windows", "linux"
+        QString platform;   // "windows", "linux", "macos"
         QString arch;       // QSysInfo::buildCpuArchitecture()'s name
         Asset full;
         QList<File> files;
         QList<Patch> patches;
+        // macOS: the DAX driver's source, the git tree hash of hal-plugin/ at
+        // the tag (40 hex digits); empty when the manifest names none.
+        QString daxDriverSource;
     };
 
     int schema{0};

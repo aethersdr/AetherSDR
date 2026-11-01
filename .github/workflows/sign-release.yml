@@ -96,7 +96,8 @@ jobs:
       # SHA256SUMS.txt silently omits whatever had not landed yet, while still
       # looking like a complete manifest.  Wait for the full signable set first.
       # macOS DMGs are deliberately absent: they are Apple-notarized, not GPG
-      # signed, so they are neither waited for nor signed here.
+      # signed, so they are neither waited for nor signed here. The macOS app
+      # tarballs (the in-app update's payload) are signed, like Linux's.
       - name: Wait for every signable artifact to be attached
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -107,6 +108,10 @@ jobs:
           # Linux tarballs, when the tag's own AppImage build makes them.
           if grep -q -- '--tarball' .github/workflows/appimage.yml; then
             want="$want x86_64.tar.zst aarch64.tar.zst"
+          fi
+          # macOS app tarballs, when the tag's own macOS DMG build makes them.
+          if grep -q -- '--app-tarball' .github/workflows/macos-dmg.yml; then
+            want="$want macOS-apple-silicon.app.tar.zst macOS-intel.app.tar.zst"
           fi
           for i in $(seq 1 90); do
             names=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')

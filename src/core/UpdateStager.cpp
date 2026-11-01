@@ -680,6 +680,13 @@ bool UpdateManifest::parse(const QByteArray& json, UpdateManifest* out, QString*
             || !readAsset(po.value(QLatin1String("full")).toObject(), m.tag, &p.full)) {
             return bad(QStringLiteral("a payload's full download"));
         }
+        if (const QJsonValue dax = po.value(QLatin1String("dax_driver")); !dax.isUndefined()) {
+            static const QRegularExpression treeHash(QStringLiteral("^[0-9a-f]{40}$"));
+            p.daxDriverSource = dax.toObject().value(QLatin1String("source")).toString();
+            if (!treeHash.match(p.daxDriverSource).hasMatch()) {
+                return bad(QStringLiteral("a payload's DAX driver source"));
+            }
+        }
         QSet<QString> paths;
         for (const QJsonValue& fv : po.value(QLatin1String("files")).toArray()) {
             const QJsonObject fo = fv.toObject();
