@@ -135,7 +135,7 @@ struct Rig {
                 *problem = QStringLiteral("failed its start-up check");
                 return false;
             }
-            launches.append({dir, version, restart, QThread::currentThread() == qApp->thread()});
+            launches.append({dir, version, restart, QThread::currentThread() == QCoreApplication::instance()->thread()});
             return true;
         };
         e.rolledBackVersion = [this] { return rolledBack; };
@@ -163,7 +163,7 @@ struct AppImageRig {
         e.installedVersion = [this] { return installed; };
         e.installRunning = [this](QString* problem, QString*) {
             ++installs;
-            installedOnGuiThread = QThread::currentThread() == qApp->thread();
+            installedOnGuiThread = QThread::currentThread() == QCoreApplication::instance()->thread();
             if (!installedMeanwhile.isEmpty()) {
                 installed = installedMeanwhile;
                 *problem = QStringLiteral("Another AetherSDR install became current meanwhile.");
