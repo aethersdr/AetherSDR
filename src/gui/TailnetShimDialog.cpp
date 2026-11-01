@@ -508,7 +508,7 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
         updateControls();
     });
     TailnetShimTokenStore::load(m_radioSerial, this, [this](const QString& token) {
-        m_adminToken = token;
+        m_adminToken = tailnetshim::tokenAfterKeychainRead(m_adminToken, token);
         m_tokenLoaded = true;
         updateControls();
         maybeSignInUnasked();   // the status may have arrived first
@@ -521,18 +521,11 @@ void TailnetShimDialog::maybeSignInUnasked()
     if (!m_status) {
         return;
     }
-    const TailnetShimStatus& st = *m_status;
-    // A radio not yet on any tailnet gets its sign-in code as soon as
-    // the window opens: there is nothing to choose first. Once per
-    // window, so a failed attempt isn't retried behind the operator's
-    // back; the Refresh button tries again.
-    // That includes a QR sign-in someone started and never finished
-    // whose token this computer doesn't hold: it belongs to no tailnet.
-    const bool fresh = !st.provisioned && st.state == QLatin1String("unprovisioned");
-    const bool abandoned = st.claimable && st.provisioned && m_adminToken.isEmpty()
-        && m_tokenLoaded;
-    if (!m_autoSignInTried && !m_busy && m_lanReachable && (fresh || abandoned)
-        && tailnetshim::supportsQrSignIn(st.version)) {
+    // A radio no tailnet owns gets its sign-in code as soon as the window
+    // opens: there is nothing to choose first. Once per window (Refresh
+    // tries again), and only once the keychain has answered.
+    if (tailnetshim::shouldSignInUnasked(*m_status, m_tokenLoaded, !m_adminToken.isEmpty(),
+                                         m_busy, m_lanReachable, m_autoSignInTried)) {
         m_autoSignInTried = true;
         signInWithQr();
     }
@@ -760,11 +753,17 @@ void TailnetShimDialog::updateControls()
         : tr("Join the tailnet with this auth key"));
     m_joinButton->setEnabled(mayChange && !m_keyEdit->text().trimmed().isEmpty());
     if (known && !qrSupported) {
-        setWrapped(m_qrHint,
-            tr("This remote-access container (version %1) can only join with an auth key, under "
-               "Advanced. Update it from the Waveforms list to sign in with a QR code.")
-                .arg(m_status->version),
-            m_cardTextWidth);
+        // An older container may still enforce a Who may connect list this
+        // window no longer edits; name it, since updating is what drops it.
+        QString hint = tr("This remote-access container (version %1) can only join with an auth "
+                          "key, under Advanced. Update it from the Waveforms list to sign in with "
+                          "a QR code.").arg(m_status->version);
+        if (!m_status->allow.isEmpty()) {
+            hint += QLatin1Char(' ')
+                + tr("It also still limits who may connect to %1; updating hands that to your "
+                     "tailnet's access rules.").arg(m_status->allow.join(QStringLiteral(", ")));
+        }
+        setWrapped(m_qrHint, hint, m_cardTextWidth);
         if (!m_advancedOpenedForVersion) {
             m_advancedOpenedForVersion = true;
             m_advancedToggle->setChecked(true);

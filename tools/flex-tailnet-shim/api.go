@@ -211,6 +211,9 @@ func NewAPI(n *Node) http.Handler {
 		if err := n.SetAllow(bearer(r), req.Allow); errors.Is(err, errUnauthorized) {
 			unauthorized(w)
 			return
+		} else if errors.Is(err, errAccessListRetired) {
+			writeJSON(w, http.StatusBadRequest, apiError{err.Error()})
+			return
 		} else if err != nil {
 			writeJSON(w, http.StatusInternalServerError, apiError{err.Error()})
 			return

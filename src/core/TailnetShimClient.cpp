@@ -164,6 +164,22 @@ bool supportsQrSignIn(const QString& version)
     return major > 0 || minor >= 5;
 }
 
+bool shouldSignInUnasked(const TailnetShimStatus& st, bool tokenLoaded, bool haveToken,
+                         bool busy, bool lanReachable, bool alreadyTried)
+{
+    if (alreadyTried || busy || !lanReachable || !tokenLoaded || !supportsQrSignIn(st.version)) {
+        return false;
+    }
+    const bool fresh = !st.provisioned && st.state == QLatin1String("unprovisioned");
+    const bool abandoned = st.claimable && st.provisioned && !haveToken;
+    return fresh || abandoned;
+}
+
+QString tokenAfterKeychainRead(const QString& held, const QString& read)
+{
+    return held.isEmpty() ? read : held;
+}
+
 QString parseError(const QByteArray& json)
 {
     const QJsonDocument doc = QJsonDocument::fromJson(json);

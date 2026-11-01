@@ -4407,6 +4407,7 @@ add_test(NAME legacy_waveform_package_test COMMAND legacy_waveform_package_test)
 add_executable(tailnet_shim_client_test
     tests/tailnet_shim_client_test.cpp
     src/core/TailnetShimClient.cpp
+    src/core/TailnetShimTokenStore.cpp   # built without HAVE_KEYCHAIN: the session store
     src/core/TailnetShimDownloader.cpp
     src/core/TailnetLinkTelemetry.cpp
 )

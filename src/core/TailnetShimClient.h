@@ -82,6 +82,16 @@ std::optional<TailnetShimLogin> parseLoginReply(const QByteArray& json);
 QString checkedAuthUrl(const QString& url);
 // Whether a container version signs in by QR code (0.5.0 and later).
 bool supportsQrSignIn(const QString& version);
+// Whether the Remote Access window should start the QR sign-in without being
+// asked: the radio belongs to no tailnet (never provisioned, or a QR sign-in
+// abandoned with its token), the container can, nothing is in flight, and
+// the keychain has answered, so the token it holds is known and can't
+// arrive after a new one.
+bool shouldSignInUnasked(const TailnetShimStatus& status, bool tokenLoaded, bool haveToken,
+                         bool busy, bool lanReachable, bool alreadyTried);
+// The token the window keeps when the keychain answers: one it already
+// holds (issued by a sign-in meanwhile) wins over the read.
+QString tokenAfterKeychainRead(const QString& held, const QString& read);
 QString parseError(const QByteArray& json);
 // An empty authKey is left out, which asks for sign-in by QR code.
 QByteArray provisionBody(const QString& authKey, const QString& hostname,
