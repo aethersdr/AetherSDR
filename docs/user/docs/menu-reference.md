@@ -79,7 +79,7 @@ See [Profile Management](./profile-management.md).
 | **FreeDV Reporter...** | FreeDV Reporter station list. |
 | **Net Scheduler...** | See [Net Scheduler](./net-scheduler.md). |
 | **Memory...** | See [Memory Channels](./memory-channels.md). |
-| **Waveforms...** | Install and manage radio waveforms (radios with installable waveforms only). Its bottom bar can install [Radio Health Tools](./radio-health-tools.md) and show the radio's free storage, memory and CPU. |
+| **Waveforms...** | Install and manage radio waveforms (radios with installable waveforms only), and edit a Docker container's [environment](./waveform-environment.md). Its bottom bar can install [Radio Health Tools](./radio-health-tools.md) and show the radio's free storage, memory and CPU. |
 | **Wideband Bandscope...** | The radio's converter view before tuning; dimmed on radios without one. See [Hermes-Lite 2](./hermes-lite-2.md). |
 | **Radio Health...** | Reachability, other clients holding the radio, PA temperature — works even with no session. |
 | **AetherGPS...** | See [AetherClock and GPS](./aetherclock-and-gps.md). |

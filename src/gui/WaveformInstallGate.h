@@ -1,19 +1,10 @@
 #pragma once
 
-#include "models/ModelCapabilities.h"   // RadioPlatform
+#include "models/ModelCapabilities.h"   // RadioPlatform, isKnownNonWfpPlatform
 
 #include <QPointer>
 
 namespace AetherSDR {
-
-// Platforms with no on-radio WFP hardware at all (6000-series Microburst /
-// DeepEddy). This is a genuine hard incompatibility for Docker waveform
-// deployment, distinct from the "wfp" license feature (see below).
-inline bool isKnownNonWfpPlatform(RadioPlatform platform)
-{
-    return platform == RadioPlatform::Microburst
-        || platform == RadioPlatform::DeepEddy;
-}
 
 // Whether Install -> Remote Access fetches the shim as a legacy waveform:
 // yes for a radio with no Waveform Processor; every other one takes the

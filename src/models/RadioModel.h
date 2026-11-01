@@ -1116,6 +1116,32 @@ public:
                                   QObject* replyContext = nullptr,
                                   const RadioControlCompletion& completion = {},
                                   std::optional<RadioControlSession> expectedSession = {});
+    ReceiveDispatch requestWaveformEnv(const WaveformEnvRequest& request,
+                                       QObject* replyContext = nullptr,
+                                       const RadioControlCompletion& completion = {});
+    // Replace a container's environment and recreate it: clear the staged
+    // environment, stage each variable, recreate, wait for the radio's `waveform
+    // restarted` status and for a container status carrying the new environment,
+    // and clear the stage again (acknowledged) so it cannot leak into a later
+    // deploy. Staging is radio-wide, so the first clear also drops anything
+    // another client staged. One apply at a time; an empty environment is refused
+    // because the radio keeps the old one when nothing is staged. false = refused
+    // before anything was sent. The completion runs exactly once unless
+    // replyContext is destroyed first.
+    bool applyWaveformEnvironment(const QString& name, const WaveformEnvironment& environment,
+                                  QObject* replyContext,
+                                  std::function<void(const WaveformEnvApplyResult&)> completion);
+    bool waveformEnvironmentApplyActive() const { return m_waveformEnvApplyActive; }
+    // This client staged variables on the connected radio and has not seen an
+    // acknowledged clear since, so that radio may still hold them for its next
+    // deploy. Tied to the radio's serial: another radio is never affected. A new
+    // session to the same radio sends one clear automatically.
+    bool waveformEnvironmentStagingUncertain() const;
+    // An acknowledged `waveform env clear`; on success the staging is known clear.
+    bool clearWaveformEnvironmentStaging(QObject* replyContext, const RadioControlCompletion& completion);
+    // A container's environment as the radio last reported it, or nullopt when no
+    // container of that name is installed. Values may be secrets.
+    std::optional<QMap<QString, QString>> waveformContainerEnvironment(const QString& name) const;
     void createMemory(const MemoryEntry& entry, QObject* replyContext,
                       const MemoryCreateCompletion& completion,
                       std::optional<RadioControlSession> expectedSession = {});
@@ -1219,6 +1245,11 @@ signals:
     // lets surfaces tell "radio lacks this" from "no radio", which restores the
     // permissive value (MainWindow::applyCapabilitiesToUi).
     void capabilitiesChanged(bool connected, const RadioCapabilities& caps);
+    // An installed container's environment changed (name), or the list of
+    // installed waveforms did (empty name).
+    void waveformContainersChanged(const QString& name);
+    // waveformEnvironmentApplyActive() or waveformEnvironmentStagingUncertain() changed.
+    void waveformEnvironmentStagingChanged();
     void transmitFrequencyCheckChanged(bool on);
     // Straight-key-shaped local CW edges (serial key line, TCI `keyer:trx`,
     // MIDI/keyboard/HID), all via sendCwKey; drives the local sidetone
@@ -1938,6 +1969,7 @@ private:
     friend class RerouteDeadControlsTestAccess;
     friend class VoiceKeyerTxRouteTestAccess;
     friend class RadioSetupControlTestAccess;
+    friend class WaveformEnvTestAccess;
     friend class StoredControlTestAccess;
     friend class TciServerReviewTest;
     friend class TransmitDaxHoldTestAccess;
@@ -2110,6 +2142,13 @@ private:
     UsbCableModel       m_usbCableModel;
     DaxIqModel          m_daxIqModel;
     FlexWaveformModel   m_flexWaveformModel;
+    bool m_waveformEnvApplyActive{false};
+    bool m_waveformEnvStagingUncertain{false};
+    QString m_waveformEnvStagingSerial;
+    std::optional<RadioControlSession> m_waveformEnvAutoClearSession;
+    void setWaveformEnvironmentStagingState(bool active, bool uncertain, const QString& serial);
+    void autoClearWaveformEnvironmentStaging(bool connected, const RadioCapabilities& caps);
+    int  m_waveformEnvConfirmTimeoutMs{60000};
     DStarModel          m_dstarModel{nullptr, true};
 
     // NetCW stream — VITA-49 UDP delivery for low-latency CW keying
