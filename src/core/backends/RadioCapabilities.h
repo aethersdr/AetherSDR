@@ -998,6 +998,12 @@ struct RadioCapabilities {
     // action; meaningless unless hasWaveforms is also true.
     struct WaveformEnvControl {};
     std::optional<WaveformEnvControl> waveformEnvControl;
+    // The radio keeps its own list of NTP time sources that a client can list,
+    // add, remove, enable and disable (Flex `ntp_sources …`, SmartSDR 4.3.16+ on
+    // FLEX-8000/Aurora). Engaged gates NtpSourceRequest and the Radio Setup Time
+    // page; maxSources is the radio's ceiling.
+    struct NtpSourceControl { int maxSources{10}; };
+    std::optional<NtpSourceControl> ntpSourceControl;
 
     // Several GUI clients can hold independent sessions on the radio at once,
     // each with its own slices and audio streams (SmartSDR multiFLEX). A backend

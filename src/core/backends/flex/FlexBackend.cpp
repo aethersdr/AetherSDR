@@ -794,6 +794,11 @@ RadioCapabilities FlexBackend::capabilities() const
         && !isKnownNonWfpPlatform(mc.platform)) {
         caps.waveformEnvControl = RadioCapabilities::WaveformEnvControl{};
     }
+    // The radio's own NTP time sources (FlexLib 4.3.16 NtpSource.cs; SMART-10565,
+    // FLEX-8000/Aurora).
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform == RadioPlatform::BigBend) {
+        caps.ntpSourceControl = RadioCapabilities::NtpSourceControl{NtpSourceRules::kMaxSources};
+    }
     caps.hasMultiClientSessions = true;  // multiFLEX
     caps.alwaysUseClientSideSpots = false;
     // TNFs. Neither FlexLib nor the `tnf` status declares a ceiling — Radio.cs

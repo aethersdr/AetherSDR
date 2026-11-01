@@ -3968,6 +3968,7 @@ add_executable(flex_control_visibility_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -3994,6 +3995,7 @@ add_executable(radio_setup_no_transient_window_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4032,6 +4034,7 @@ add_executable(radio_setup_region_field_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4059,6 +4062,7 @@ add_executable(radio_setup_operations_test
     src/gui/TxBandDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4091,6 +4095,7 @@ add_executable(radio_setup_label_theme_token_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4117,6 +4122,7 @@ add_executable(radio_setup_window_size_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4143,6 +4149,7 @@ add_executable(radio_setup_pair_grid_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4175,6 +4182,7 @@ add_executable(radio_setup_max_power_field_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4204,6 +4212,7 @@ add_executable(radio_setup_tx_timing_fields_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4234,6 +4243,7 @@ add_executable(radio_setup_recording_mode_dim_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4265,6 +4275,7 @@ add_executable(radio_setup_headphone_output_gate_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4299,6 +4310,7 @@ add_executable(radio_nickname_test
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kpa500AdvancedWidget.cpp
@@ -4366,6 +4378,7 @@ add_executable(radio_setup_show_tx_waterfall_test
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -5955,6 +5968,7 @@ add_executable(peripheral_auth_dialog_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -8807,6 +8821,23 @@ target_link_libraries(waveform_env_control_test PRIVATE
 set_target_properties(waveform_env_control_test PROPERTIES AUTOMOC ON)
 add_test(NAME waveform_env_control_test COMMAND waveform_env_control_test)
 set_tests_properties(waveform_env_control_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# SmartSDR 4.3 NTP time sources (#6953): validation, Flex capability and wire
+# text, `ntp_sources` decode, the subscription, the remove-and-create edit and
+# the Radio Setup Time page. Recording sinks and injected status; no socket.
+add_executable(ntp_sources_test
+    tests/ntp_sources_test.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+)
+target_include_directories(ntp_sources_test PRIVATE src tests)
+target_link_libraries(ntp_sources_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+set_target_properties(ntp_sources_test PROPERTIES AUTOMOC ON)
+add_test(NAME ntp_sources_test COMMAND ntp_sources_test)
+set_tests_properties(ntp_sources_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # AntennaChoiceGate.h: when the RX/TX antenna menus refuse instead of offering

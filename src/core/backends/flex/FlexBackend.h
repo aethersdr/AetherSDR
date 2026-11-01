@@ -135,6 +135,9 @@ public:
     ReceiveDispatch requestWaveformEnv(const WaveformEnvRequest& request,
                                        const RadioControlCompletion& completion = {},
                                        const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestNtpSource(const NtpSourceRequest& request,
+                                     const RadioControlCompletion& completion = {},
+                                     const RadioControlFence& current = {}) override;
     ReceiveDispatch requestUsbCable(const UsbCableRequest& request) override;
     ReceiveDispatch requestTransverter(const TransverterRequest& request,
                                        const RadioSetupCompletion& completion = {}) override;
@@ -250,6 +253,10 @@ public:
     // RadioModel residual). Satellite counts are numeric; the rest keep the
     // radio's string form (units included).
     void decodeGpsStatus(const QString& rawBody);
+    // Decode one `ntp_sources id=<id> …` status body (after "ntp_sources ") into
+    // a present-only NtpSourceDelta and emit ntpSourceChanged. The description is
+    // quoted and may hold spaces (FlexLib NtpSource.cs SplitStatusTokens).
+    void decodeNtpSourceStatus(const QString& rawBody);
     // Decode a Flex memory-slot status kv-set (keyed by slot index) into a
     // normalized MemoryDelta and emit memoryChanged (aetherd RFC 2.3 — RadioModel
     // residual). Sets delta.removed for "in_use=0" / a bare "removed"; carries
