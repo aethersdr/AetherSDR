@@ -1,6 +1,6 @@
 // The Remote Access sign-in QR code (src/gui/QrCodeImage.cpp): the image a
 // phone scans must have the quiet zone and finder patterns the QR standard
-// requires, in exactly the two colours given, and fail cleanly for text too
+// requires, in exactly the two colors given, and fail cleanly for text too
 // long to encode.
 
 #include "gui/QrCodeImage.h"
@@ -65,14 +65,14 @@ int main(int argc, char** argv)
     ok &= expect(finderAt(modules - 4 - 7, 4), "top-right finder pattern");
     ok &= expect(finderAt(4, modules - 4 - 7), "bottom-left finder pattern");
 
-    bool twoColours = true;
+    bool twoColors = true;
     for (int y = 0; y < img.height(); y += 2) {
         for (int x = 0; x < img.width(); x += 2) {
             const QColor c = img.pixelColor(x, y);
-            twoColours &= c == dark || c == light;
+            twoColors &= c == dark || c == light;
         }
     }
-    ok &= expect(twoColours, "only the two given colours");
+    ok &= expect(twoColors, "only the two given colors");
 
     ok &= expect(qrCodeImage(QString(5000, QLatin1Char('x')), px, dark, light).isNull(),
                  "text too long for a QR code gives a null image");

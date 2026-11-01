@@ -4415,7 +4415,7 @@ target_link_libraries(tailnet_shim_client_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME tailnet_shim_client_test COMMAND tailnet_shim_client_test)
 
 # The Remote Access sign-in QR code: encodes the URL scannably (quiet zone,
-# finder patterns, theme-invariant colours), socket-free.
+# finder patterns, theme-invariant colors), socket-free.
 add_executable(qr_code_image_test
     tests/qr_code_image_test.cpp
     src/gui/QrCodeImage.cpp

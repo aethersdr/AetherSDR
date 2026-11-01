@@ -343,6 +343,12 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
         tr("A single-use key from the Tailscale admin console. It is sent to the radio once "
            "and is not stored."));
     connect(m_keyEdit, &QLineEdit::textChanged, this, &TailnetShimDialog::updateControls);
+    // Enter here joins with the key, not the window's default (QR) button.
+    connect(m_keyEdit, &QLineEdit::returnPressed, this, [this] {
+        if (m_joinButton->isEnabled()) {
+            this->join();
+        }
+    });
     keyGrid->addWidget(roleLabel(tr("AUTH KEY"), "key", m_keyPanel), 0, 0);
     keyGrid->addWidget(m_keyEdit, 0, 1);
     keyBox->addLayout(keyGrid);
@@ -651,7 +657,9 @@ void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
         if (st.state == QLatin1String("needs_approval")) {
             showSignIn(QString());
         }
-    } else if (m_qrPanel->isVisible()) {
+    } else if (st.state != QLatin1String("starting") && m_qrPanel->isVisible()) {
+        // "starting" is a join on its way to a sign-in or back from one:
+        // the code stays up until the radio is on the tailnet or gives up.
         hideSignIn();
     }
     if (st.state == QLatin1String("running") && m_signingIn) {
