@@ -104,6 +104,11 @@ they describe the probe, the steps, and the data the team needs.
 
 My radio: <model, e.g. FLEX-6500>, SmartSDR <version>, at IP <radio-ip>.
 
+If this folder doesn't already have AetherRadioProbe.ssdr_waveform, get it
+the way TESTING.md's "Building it yourself" section says: clone the repo,
+check out the feat/flex6k-radio-probe branch, and build it with build.py
+(install Go if needed; ask me first).
+
 Do the test in TESTING.md: install the package with upload.py (or tell me if I
 should use SmartSDR's Waveforms window instead), watch for the report on
 http://<radio-ip>:48994/, save boot1.json, ask me before rebooting the radio,
