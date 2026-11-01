@@ -997,6 +997,15 @@ private:
     template <class T, class... Args>
     void showOrRaisePersistent(QPointer<T>& slot, Args&&... ctorArgs);
 
+    // Lazy-construct + show + raise + activate for a CanonWindow, which is
+    // always frameless and so is not tracked for View → Frameless Window.
+    // `create` builds the window with this as its parent; it is deleted on
+    // close. Returns true when this call created it, so the caller can wire
+    // its signals once.
+    // Example: if (showOrRaiseCanon(m_fooDialog, [this] { return new FooDialog(this); })) …
+    template <class T, class Create>
+    bool showOrRaiseCanon(QPointer<T>& slot, Create&& create);
+
     // Create-or-raise helper for the AetherDSP Settings dialog.  Centralizes
     // the ~17 audio-parameter signal connections that every call site was
     // duplicating; on first construction wires them once, on subsequent calls
@@ -2387,6 +2396,21 @@ void MainWindow::showOrRaisePersistent(QPointer<T>& slot, Args&&... ctorArgs)
     slot->show();
     slot->raise();
     slot->activateWindow();
+}
+
+template <class T, class Create>
+bool MainWindow::showOrRaiseCanon(QPointer<T>& slot, Create&& create)
+{
+    const bool created = !slot;
+    if (created) {
+        T* window = create();
+        window->setAttribute(Qt::WA_DeleteOnClose);
+        slot = window;
+    }
+    slot->show();
+    slot->raise();
+    slot->activateWindow();
+    return created;
 }
 
 } // namespace AetherSDR
