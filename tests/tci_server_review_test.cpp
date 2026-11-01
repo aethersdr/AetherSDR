@@ -3028,11 +3028,11 @@ public:
         agc.agcThreshold = 72;  // 65 is the default: no change, no signal
         s0->applyChanges(agc);
         if (!sent.contains(QStringLiteral("agc_mode:0,fast;"))
-            || !sent.contains(QStringLiteral("agc_gain:0,72;"))) {
+            || !sent.contains(QStringLiteral("agc_gain:0,81;"))) {
             std::printf("      GUI AGC change was not broadcast\n");
             return false;
         }
-        if (!protocol.generateInitBurst().contains(QStringLiteral("agc_gain:0,72;"))) {
+        if (!protocol.generateInitBurst().contains(QStringLiteral("agc_gain:0,81;"))) {
             std::printf("      init burst misses agc_gain\n");
             return false;
         }
@@ -3075,7 +3075,7 @@ public:
         server.wireSlice(s0->sliceId(), s0);
         const QStringList expected {
             QStringLiteral("rit_offset:0,120;"), QStringLiteral("xit_offset:0,-50;"),
-            QStringLiteral("agc_mode:0,fast;"), QStringLiteral("agc_gain:0,72;"),
+            QStringLiteral("agc_mode:0,fast;"), QStringLiteral("agc_gain:0,81;"),
         };
         for (const QString& m : expected) {
             if (sent.contains(m)) {

@@ -3265,7 +3265,7 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     wireValue(&SliceModel::agcModeChanged, "agc_mode",
               [slice] { return slice->receiveAgcMode().toLower(); });
     wireValue(&SliceModel::agcThresholdChanged, "agc_gain",
-              [slice] { return QString::number(slice->receiveAgcThreshold()); });
+              [slice] { return QString::number(TciProtocol::agcGainDb(slice)); });
 
     // Deferred state sync on (re)wire: a Flex band change recreates the slice, and
     // if the restored frequency equals the init value no frequencyChanged fires,
