@@ -1,11 +1,15 @@
 #include "RadioHealthClient.h"
 
-#include "RadioHealthRelease.h"
+#include "RadioHealthPackage.h"
 
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocale>
+#include <QSaveFile>
 #include <QTcpSocket>
 #include <QTimer>
 
@@ -50,15 +54,27 @@ std::optional<RadioHealth> parse(const QByteArray& line)
     return h;
 }
 
+QString storageSummary(const RadioHealth& h)
+{
+    if (h.storage.isEmpty()) {
+        return {};
+    }
+    return QObject::tr("Storage %1 free")
+        .arg(QLocale().formattedDataSize(qint64(h.storage.first().freeBytes), 0,
+                                         QLocale::DataSizeSIFormat));
+}
+
 QString summary(const RadioHealth& h)
+{
+    QStringList parts{storageSummary(h), resourceSummary(h)};
+    parts.removeAll(QString());
+    return parts.join(QStringLiteral(" · "));
+}
+
+QString resourceSummary(const RadioHealth& h)
 {
     const QLocale locale;
     QStringList parts;
-    if (!h.storage.isEmpty()) {
-        parts << QObject::tr("Storage %1 free")
-                     .arg(locale.formattedDataSize(qint64(h.storage.first().freeBytes), 0,
-                                                   QLocale::DataSizeSIFormat));
-    }
     if (h.memAvailableKb >= 0) {
         const QString size = locale.formattedDataSize(h.memAvailableKb * 1000, 1,
                                                       QLocale::DataSizeSIFormat);
@@ -69,6 +85,48 @@ QString summary(const RadioHealth& h)
         parts << QObject::tr("CPU %1% idle").arg(h.cpuIdlePct);
     }
     return parts.join(QStringLiteral(" · "));
+}
+
+namespace {
+
+bool matchesPin(const QByteArray& bytes)
+{
+    return bytes.size() == RadioHealthPackage::kSize
+        && QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()
+               == QByteArray(RadioHealthPackage::kSha256);
+}
+
+}  // namespace
+
+QString writeBundledPackage(const QString& dir, QString* error, const QString& resource)
+{
+    const QString target = QDir(dir).filePath(QStringLiteral("AetherHealth.ssdr_waveform"));
+    QFile existing(target);
+    if (existing.open(QIODevice::ReadOnly) && existing.size() == RadioHealthPackage::kSize
+        && matchesPin(existing.readAll())) {
+        return target;
+    }
+    existing.close();
+    QFile bundled(resource);
+    const QByteArray bytes = bundled.open(QIODevice::ReadOnly)
+        ? bundled.read(RadioHealthPackage::kSize + 1) : QByteArray();
+    if (!matchesPin(bytes)) {
+        if (error) {
+            *error = QObject::tr("This AetherSDR's radio health tools are damaged, so nothing "
+                                 "was installed.");
+        }
+        return {};
+    }
+    QSaveFile out(target);
+    if (!QDir().mkpath(dir) || !out.open(QIODevice::WriteOnly)
+        || out.write(bytes) != bytes.size() || !out.commit()) {
+        if (error) {
+            *error = QObject::tr("Can't write the radio health tools to %1.")
+                         .arg(QDir::toNativeSeparators(target));
+        }
+        return {};
+    }
+    return target;
 }
 
 }  // namespace radiohealth

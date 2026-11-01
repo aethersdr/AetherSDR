@@ -4422,13 +4422,24 @@ target_include_directories(tailnet_shim_client_test PRIVATE src)
 target_link_libraries(tailnet_shim_client_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME tailnet_shim_client_test COMMAND tailnet_shim_client_test)
 
-# The radio health agent's readout: parse, refuse, summarize; socket-free.
+# The radio health agent: the bundled package matches its pin and is a valid
+# legacy waveform; its readout parses, refuses and summarizes. Socket-free;
+# writes only to a QTemporaryDir.
+qt_add_resources(RADIO_HEALTH_TEST_RESOURCES resources/resources.qrc)
 add_executable(radio_health_client_test
     tests/radio_health_client_test.cpp
     src/core/RadioHealthClient.cpp
+    src/core/LegacyWaveformPackage.cpp
+    src/core/ZipArchive.cpp
+    ${RADIO_HEALTH_TEST_RESOURCES}
 )
 target_include_directories(radio_health_client_test PRIVATE src)
 target_link_libraries(radio_health_client_test PRIVATE Qt6::Core Qt6::Network)
+if (USE_SYSTEM_ZLIB)
+    target_link_libraries(radio_health_client_test PRIVATE PkgConfig::zlib)
+else()
+    target_link_libraries(radio_health_client_test PRIVATE zlibstatic)
+endif()
 add_test(NAME radio_health_client_test COMMAND radio_health_client_test)
 
 # The Remote Access sign-in QR code: encodes the URL scannably (quiet zone,

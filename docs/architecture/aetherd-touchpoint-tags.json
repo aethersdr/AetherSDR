@@ -53,9 +53,9 @@
   "split": "",
   "confidence": "high"
  },
- "core/RadioHealthRelease.h": {
+ "core/RadioHealthPackage.h": {
   "tag": "peripheral(radio-health)",
-  "note": "Pinned version, URL, size and SHA-256 of the radio health agent package, plus its waveform name and port. Not SmartSDR wire: AetherSDR's own TCP service (the radio health agent, tools/radio-health) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/TailnetShimClient.h).",
+  "note": "Pinned version, Qt resource path, size and SHA-256 of the radio health agent package that ships inside AetherSDR, plus its waveform name and port. Not SmartSDR wire: AetherSDR's own TCP service (the radio health agent, tools/radio-health) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/TailnetShimClient.h).",
   "split": "",
   "confidence": "high"
  },

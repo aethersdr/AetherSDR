@@ -1,12 +1,19 @@
-// The radio health agent's readout (tools/radio-health/agent.c): its JSON
-// line parses, anything else is refused, values out of range are dropped,
-// and the summary leaves out what the agent couldn't measure. Socket-free.
+// The radio health agent (tools/radio-health): the package that ships in
+// AetherSDR's resources matches its pin, is a valid legacy waveform and is
+// written out only when it does; its JSON line parses, anything else is
+// refused, values out of range are dropped, and the summary leaves out what
+// the agent couldn't measure. Socket-free; files only in a temporary dir.
 
 #include "core/RadioHealthClient.h"
-#include "core/RadioHealthRelease.h"
+#include "core/LegacyWaveformPackage.h"
+#include "core/RadioHealthPackage.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
 #include <QLocale>
+#include <QTemporaryDir>
 
 #include <cstdio>
 
@@ -50,6 +57,10 @@ int main(int argc, char** argv)
         check(radiohealth::summary(*h)
                   == QStringLiteral("Storage 824 MB free · Memory 1.7 GB free · CPU 90% idle"),
               "summary");
+        check(radiohealth::storageSummary(*h) == QStringLiteral("Storage 824 MB free")
+                  && radiohealth::resourceSummary(*h)
+                         == QStringLiteral("Memory 1.7 GB free · CPU 90% idle"),
+              "storage and memory/CPU parts for the one-row bar");
     }
 
     // A FLEX-6000 (2.6.37: estimated memory) before its second CPU sample.
@@ -81,17 +92,53 @@ int main(int argc, char** argv)
           "impossible volumes dropped, at most four kept");
     check(odd && odd->memAvailableKb == -1 && radiohealth::summary(*odd).startsWith("Storage"),
           "missing memory left out of the summary");
+    const auto noVolumes = radiohealth::parse(R"({"agent":"0.1.0","cpu_idle_pct":5,"storage":[]})");
+    check(noVolumes && radiohealth::storageSummary(*noVolumes).isEmpty()
+              && radiohealth::summary(*noVolumes) == QStringLiteral("CPU 5% idle"),
+          "no readable volume: storage left out");
+
 
     check(isRadioHealthWaveform(QStringLiteral("AetherHealth"), false),
           "the agent's legacy row is recognized");
     check(!isRadioHealthWaveform(QStringLiteral("AetherHealth"), true)
               && !isRadioHealthWaveform(QStringLiteral("AetherTailnet"), false),
           "a container of that name, or another waveform, is not");
-    check(QByteArray(RadioHealthRelease::kSha256).size() == 64
-              && QByteArray(RadioHealthRelease::kSha256) == QByteArray(RadioHealthRelease::kSha256).toLower()
-              && QLatin1String(RadioHealthRelease::kUrl).endsWith(QLatin1String(".ssdr_waveform"))
-              && QLatin1String(RadioHealthRelease::kUrl).startsWith(QLatin1String("https://")),
-          "the pin is a lower-case SHA-256 of an HTTPS .ssdr_waveform");
+    // The bundled package.
+    {
+        QTemporaryDir dir;
+        QString error;
+        const QString path = radiohealth::writeBundledPackage(dir.path(), &error);
+        QFile f(path);
+        const QByteArray bytes = f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+        check(!path.isEmpty() && bytes.size() == RadioHealthPackage::kSize
+                  && QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()
+                         == QByteArray(RadioHealthPackage::kSha256),
+              "the bundled package is written and matches its pin");
+        f.close();
+        const LegacyWaveformPackageInfo info = inspectLegacyWaveformPackageFile(path);
+        check(info.valid && info.waveformName == QLatin1String(kRadioHealthWaveformName)
+                  && info.version == QLatin1String(RadioHealthPackage::kVersion),
+              "it is a valid legacy waveform named AetherHealth, at the pinned version");
+
+        // A damaged copy left on disk is replaced, not installed.
+        QFile damaged(path);
+        damaged.open(QIODevice::WriteOnly);
+        damaged.write("not the package");
+        damaged.close();
+        const QString again = radiohealth::writeBundledPackage(dir.path(), &error);
+        QFile g(again);
+        check(again == path && g.open(QIODevice::ReadOnly) && g.size() == RadioHealthPackage::kSize,
+              "a damaged copy on disk is rewritten from the bundle");
+
+        // Bytes that don't match the pin are never written.
+        QTemporaryDir other;
+        QString why;
+        const QString none = radiohealth::writeBundledPackage(
+            other.path(), &why, QStringLiteral(":/cty.dat"));
+        check(none.isEmpty() && !why.isEmpty()
+                  && !QFile::exists(QDir(other.path()).filePath(QStringLiteral("AetherHealth.ssdr_waveform"))),
+              "a resource that doesn't match the pin is refused and nothing is written");
+    }
 
     std::printf(g_failed ? "\n%d radio-health tests failed.\n" : "\nAll radio-health tests passed.\n",
                 g_failed);

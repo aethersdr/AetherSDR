@@ -31,10 +31,6 @@ public:
 
     explicit TailnetShimDownloader(TailnetShimPackage package = TailnetShimPackage::Container,
                                    QObject* parent = nullptr);
-    // Any other pinned package, cached at `cachePath` (the radio health
-    // agent uses this). package() then reports Native: it is a legacy
-    // waveform too.
-    TailnetShimDownloader(const Pin& pin, const QString& cachePath, QObject* parent = nullptr);
     TailnetShimPackage package() const { return m_package; }
 
     // Pure check, separated for tests: empty when `path` holds exactly
@@ -68,7 +64,6 @@ private:
 
     const TailnetShimPackage m_package;
     const Pin m_pin;
-    const QString m_cachePath;
     QNetworkAccessManager m_nam;
     QPointer<QNetworkReply> m_reply;
     QFile m_part;

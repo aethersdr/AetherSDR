@@ -8,6 +8,8 @@
 
 #include <optional>
 
+#include "RadioHealthPackage.h"
+
 class QTcpSocket;
 
 namespace AetherSDR {
@@ -33,9 +35,20 @@ namespace radiohealth {
 // Parses the agent's JSON line; nullopt for anything else.
 std::optional<RadioHealth> parse(const QByteArray& line);
 
-// "Storage 824 MB free · Memory 1.7 GB free · CPU 90% idle", leaving out
-// what the agent couldn't measure.
+// "Storage 824 MB free", or empty when no volume could be read.
+QString storageSummary(const RadioHealth& health);
+// "Memory 1.7 GB free · CPU 90% idle", leaving out what wasn't measured.
+QString resourceSummary(const RadioHealth& health);
+// Both, joined.
 QString summary(const RadioHealth& health);
+
+// Writes the agent package that ships inside AetherSDR (RadioHealthPackage)
+// to `dir`/AetherHealth.ssdr_waveform for the installer, reusing a matching
+// copy already there. Only bytes matching the pin are written: empty, with
+// `error` set, otherwise.
+QString writeBundledPackage(const QString& dir, QString* error,
+                            const QString& resource = QString::fromLatin1(
+                                RadioHealthPackage::kResource));
 
 }  // namespace radiohealth
 

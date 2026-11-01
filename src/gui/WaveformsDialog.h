@@ -58,7 +58,10 @@ private:
                              bool docker,
                              const QString& initialPath = {});
     // Everything after the file is chosen: WFP gate, installer, progress.
-    void installWaveformPath(bool docker, const QString& path, RadioModel* model);
+    // `quiet` (the radio health tools): no progress window and no result
+    // pop-up; the health bar reports the outcome instead.
+    void installWaveformPath(bool docker, const QString& path, RadioModel* model,
+                             bool quiet = false);
     // Downloads, verifies and installs one remote-access package: the
     // container, or the legacy waveform for a radio without a Waveform
     // Processor.
@@ -92,12 +95,12 @@ private:
     QHash<QString, RowNotice> m_rowNotices;
     quint64 m_rowNoticeSerial{0};
     class TailnetShimDownloader* m_shimDownloader{nullptr};
-    class TailnetShimDownloader* m_healthDownloader{nullptr};
     class RadioHealthClient* m_healthClient{nullptr};
     QCheckBox*         m_healthCheck{nullptr};
-    QLabel*            m_healthLabel{nullptr};
+    QLabel*            m_healthLabel{nullptr};           // storage, or a hint/status
+    QLabel*            m_healthResourceLabel{nullptr};   // memory and CPU
     QTimer*            m_healthTimer{nullptr};
-    bool               m_healthBusy{false};   // an install or uninstall in flight
+    bool               m_healthBusy{false};   // an uninstall in flight
     QWidget*           m_listContainer{nullptr};
     QVBoxLayout*       m_listLayout{nullptr};
     WaveformInstaller* m_installer{nullptr};

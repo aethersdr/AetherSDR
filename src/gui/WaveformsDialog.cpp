@@ -9,7 +9,7 @@
 #include "core/TailnetShimRelease.h"
 #include "core/TailnetShimDownloader.h"
 #include "core/RadioHealthClient.h"
-#include "core/RadioHealthRelease.h"
+#include "core/RadioHealthPackage.h"
 #include "TailnetShimDialog.h"
 #include "FramelessResizer.h"
 #include "CanonMessageBox.h"
@@ -1437,9 +1437,9 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     // storage, memory and CPU. It never appears in the installed list: this
     // checkbox installs and removes it, and mirrors whether the radio lists it.
     auto* healthFrame = makePanel(QStringLiteral("WaveformsHealthFrame"), bodyWidget());
-    auto* healthLayout = new QVBoxLayout(healthFrame);
+    auto* healthLayout = new QHBoxLayout(healthFrame);
     healthLayout->setContentsMargins(18, 10, 18, 10);
-    healthLayout->setSpacing(4);
+    healthLayout->setSpacing(16);
     m_healthCheck = new QCheckBox(tr("Install radio health tools"), healthFrame);
     m_healthCheck->setAccessibleName(tr("Install radio health tools"));
     m_healthCheck->setToolTip(tr("Installs a small tool on the radio (about 63 KB) that reports "
@@ -1448,15 +1448,25 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     m_healthLabel->setObjectName(QStringLiteral("RadioHealthReadout"));
     m_healthLabel->setAccessibleName(tr("Radio health"));
     m_healthLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_healthLabel->setContentsMargins(27, 0, 0, 0);   // under the checkbox text
+    m_healthResourceLabel = new QLabel(healthFrame);
+    m_healthResourceLabel->setObjectName(QStringLiteral("RadioHealthReadout"));
+    m_healthResourceLabel->setAccessibleName(tr("Radio memory and CPU"));
+    m_healthResourceLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    // One row: checkbox, storage, then memory and CPU.
     healthLayout->addWidget(m_healthCheck);
     healthLayout->addWidget(m_healthLabel);
+    healthLayout->addWidget(m_healthResourceLabel);
+    healthLayout->addStretch(1);
     root->addWidget(healthFrame);
 
     m_healthClient = new RadioHealthClient(this);
     connect(m_healthClient, &RadioHealthClient::received, this, [this](const RadioHealth& h) {
-        const QString text = radiohealth::summary(h);
-        m_healthLabel->setText(text.isEmpty() ? tr("The radio reported no readings.") : text);
+        const QString storage = radiohealth::storageSummary(h);
+        const QString resources = radiohealth::resourceSummary(h);
+        m_healthLabel->setText(storage.isEmpty() && resources.isEmpty()
+                                   ? tr("The radio reported no readings.") : storage);
+        m_healthResourceLabel->setText(resources);
+        m_healthResourceLabel->setVisible(!resources.isEmpty());
         QStringList detail;
         for (const RadioHealth::Volume& v : h.storage) {
             detail << tr("%1: %2 free of %3").arg(v.path,
@@ -1468,10 +1478,12 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
         }
         detail << tr("Radio health tools %1").arg(h.agentVersion);
         m_healthLabel->setToolTip(detail.join(QLatin1Char('\n')));
+        m_healthResourceLabel->setToolTip(m_healthLabel->toolTip());
     });
     connect(m_healthClient, &RadioHealthClient::failed, this, [this](const QString&) {
         m_healthLabel->setText(tr("Waiting for the radio health tools to answer…"));
         m_healthLabel->setToolTip({});
+        m_healthResourceLabel->hide();
     });
     m_healthTimer = new QTimer(this);
     m_healthTimer->setInterval(5000);
@@ -1821,9 +1833,13 @@ void WaveformsDialog::updateHealthBar()
     } else if (!installed) {
         m_healthLabel->setText(tr("Shows the radio's free storage, memory and CPU here."));
     }
-    m_healthLabel->setToolTip({});
+    const bool reading = installed && lan && !busy;
+    if (!reading) {
+        m_healthLabel->setToolTip({});
+        m_healthResourceLabel->hide();
+    }
 
-    if (installed && lan && !busy) {
+    if (reading) {
         if (!m_healthTimer->isActive()) {
             m_healthLabel->setText(tr("Waiting for the radio health tools to answer…"));
             m_healthTimer->start();
@@ -1864,44 +1880,20 @@ void WaveformsDialog::onHealthToggled(bool install)
         return;
     }
 
-    if (!m_healthDownloader) {
-        const TailnetShimDownloader::Pin pin{
-            QString::fromLatin1(RadioHealthRelease::kVersion),
-            QString::fromLatin1(RadioHealthRelease::kUrl),
-            QByteArray(RadioHealthRelease::kSha256), RadioHealthRelease::kSize};
-        const QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
-            + QStringLiteral("/waveforms/aether-health-%1/AetherHealth.ssdr_waveform")
-                  .arg(pin.version);
-        m_healthDownloader = new TailnetShimDownloader(pin, cache, this);
-    }
-    if (m_healthDownloader->isRunning()) {
+    // The package ships inside AetherSDR; the installer wants a file.
+    QString error;
+    const QString path = radiohealth::writeBundledPackage(
+        QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
+            + QStringLiteral("/waveforms/aether-health-%1")
+                  .arg(QString::fromLatin1(RadioHealthPackage::kVersion)),
+        &error);
+    if (path.isEmpty()) {
+        updateHealthBar();
+        m_healthLabel->setText(error);
         return;
     }
-    m_healthBusy = true;
+    installWaveformPath(false, path, m_radioModel, true);
     updateHealthBar();
-    const QPointer<RadioModel> modelGuard(m_radioModel);
-    const RadioControlSession chosenSession = m_radioModel->controlSession();
-    auto readyConn = std::make_shared<QMetaObject::Connection>();
-    auto failConn = std::make_shared<QMetaObject::Connection>();
-    *readyConn = connect(m_healthDownloader, &TailnetShimDownloader::ready, this,
-                         [this, modelGuard, chosenSession, readyConn, failConn](const QString& path) {
-        disconnect(*readyConn);
-        disconnect(*failConn);
-        m_healthBusy = false;
-        if (RadioModel* radio = radioStillChosen(modelGuard, chosenSession)) {
-            installWaveformPath(false, path, radio);
-        }
-        updateHealthBar();
-    });
-    *failConn = connect(m_healthDownloader, &TailnetShimDownloader::failed, this,
-                        [this, readyConn, failConn](const QString& message) {
-        disconnect(*readyConn);
-        disconnect(*failConn);
-        m_healthBusy = false;
-        updateHealthBar();
-        m_healthLabel->setText(message);
-    });
-    m_healthDownloader->start();
 }
 
 void WaveformsDialog::installWaveformFile(const QString& title,
@@ -1930,7 +1922,8 @@ void WaveformsDialog::installWaveformFile(const QString& title,
     installWaveformPath(docker, path, modelGuard);
 }
 
-void WaveformsDialog::installWaveformPath(bool docker, const QString& path, RadioModel* model)
+void WaveformsDialog::installWaveformPath(bool docker, const QString& path, RadioModel* model,
+                                          bool quiet)
 {
     const QPointer<RadioModel> modelGuard(model);
     if (!modelGuard || m_radioModel != modelGuard.data() || !modelGuard->isConnected()) {
@@ -1963,6 +1956,20 @@ void WaveformsDialog::installWaveformPath(bool docker, const QString& path, Radi
     }
 
     m_installBtn->setEnabled(false);
+
+    if (quiet) {
+        connect(m_installer, &WaveformInstaller::finished,
+                this, [this](bool ok, const QString& msg) {
+                    updateInstallButtonState();
+                    updateHealthBar();
+                    if (!ok) {
+                        m_healthLabel->setText(tr("Couldn't install the radio health tools: %1")
+                                                   .arg(msg));
+                    }
+                }, Qt::SingleShotConnection);
+        m_installer->installLegacyWaveform(path);
+        return;
+    }
 
     const CanonProgress inst = makeCanonProgress(
         docker ? tr("Installing Docker Waveform") : tr("Installing Legacy Waveform"),

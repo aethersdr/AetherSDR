@@ -8,6 +8,10 @@ with the launcher that picks one, the waveform manifest and the licenses.
 Needs zig 0.17 (it bundles the linker and musl for both targets). The
 package is reproducible byte for byte with the same zig. --host also builds
 a native binary for the tests.
+
+AetherSDR ships the package as a Qt resource: copy it to
+resources/waveforms/AetherHealth.ssdr_waveform and update the version,
+SHA-256 and size in src/core/RadioHealthPackage.h together.
 """
 import argparse
 import os

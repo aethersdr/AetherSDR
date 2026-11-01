@@ -33,21 +33,9 @@ TailnetShimDownloader::TailnetShimDownloader(TailnetShimPackage package, QObject
     : QObject(parent)
     , m_package(package)
     , m_pin(pin(package))
-    , m_cachePath(cachePath(package))
 {
     m_nam.setTransferTimeout(kTransferTimeoutMs);
     // GitHub release assets redirect to a CDN; never follow to plain HTTP.
-    m_nam.setRedirectPolicy(QNetworkRequest::NoLessSafeRedirectPolicy);
-}
-
-TailnetShimDownloader::TailnetShimDownloader(const Pin& pin, const QString& cachePath,
-                                             QObject* parent)
-    : QObject(parent)
-    , m_package(TailnetShimPackage::Native)
-    , m_pin(pin)
-    , m_cachePath(cachePath)
-{
-    m_nam.setTransferTimeout(kTransferTimeoutMs);
     m_nam.setRedirectPolicy(QNetworkRequest::NoLessSafeRedirectPolicy);
 }
 
@@ -87,7 +75,7 @@ void TailnetShimDownloader::start()
     if (m_reply) {
         return;
     }
-    const QString target = m_cachePath;
+    const QString target = cachePath(m_package);
     if (QFileInfo::exists(target)) {
         if (verifyFile(target, m_pin.sha256, m_pin.size).isEmpty()) {
             QTimer::singleShot(0, this, [this, target] { emit ready(target); });
@@ -169,7 +157,7 @@ void TailnetShimDownloader::onFinished()
                        "(size or SHA-256), so it was discarded and nothing was installed."));
         return;
     }
-    const QString target = m_cachePath;
+    const QString target = cachePath(m_package);
     const QString error = promoteVerified(part, target, m_pin.sha256, m_pin.size);
     if (!error.isEmpty()) {
         emit failed(error);
