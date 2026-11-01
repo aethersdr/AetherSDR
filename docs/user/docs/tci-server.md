@@ -172,7 +172,7 @@ FT8/WSJT-X users who want exact tones can choose NaN guard or Measure only.
 
 ### Server identity
 
-The init burst announces `device:AetherSDR;` and `protocol:ExpertSDR3,1.5;`, followed by the full radio state and `ready;`.
+The init burst announces `device:AetherSDR;` and `protocol:ExpertSDR3,2.1;`, followed by the full radio state and `ready;`.
 
 ### Protocol coverage
 
