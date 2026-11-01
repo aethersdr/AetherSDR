@@ -64,6 +64,7 @@ private:
     bool m_busy{false};
     // A QR sign-in this window started: on reaching the tailnet it says so.
     bool m_signingIn{false};
+    bool m_autoSignInTried{false};   // the code is offered unasked once per window
     bool m_advancedOpenedForVersion{false};
     QString m_authUrl;   // the sign-in URL the QR code shows, if any
     std::optional<TailnetShimStatus> m_status;

@@ -443,6 +443,16 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
             [this](const TailnetShimStatus& st) {
         setBusy(false);
         showStatus(st);
+        // A radio not yet on any tailnet gets its sign-in code as soon as
+        // the window opens: there is nothing to choose first. Once per
+        // window, so a failed attempt isn't retried behind the operator's
+        // back; Sign In with QR Code tries again.
+        if (!m_autoSignInTried && m_lanReachable && !st.provisioned
+            && st.state == QLatin1String("unprovisioned")
+            && tailnetshim::supportsQrSignIn(st.version)) {
+            m_autoSignInTried = true;
+            signInWithQr();
+        }
     });
     connect(&m_client, &TailnetShimClient::requestFailed,
             this, &TailnetShimDialog::onRequestFailed);
