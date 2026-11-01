@@ -8320,12 +8320,16 @@ add_executable(system_info_dialog_test
     src/core/SystemInfoCollector.cpp
     src/core/MemoryTelemetry.cpp
     src/core/ThreadName.cpp
+    src/core/ExternalFilePath.cpp
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(system_info_dialog_test PRIVATE src tests)
 target_link_libraries(system_info_dialog_test PRIVATE Qt6::Widgets)
+if(WIN32)
+    target_link_libraries(system_info_dialog_test PRIVATE shell32 ole32 uuid)
+endif()
 set_target_properties(system_info_dialog_test PROPERTIES AUTOMOC ON)
 add_test(NAME system_info_dialog_test COMMAND system_info_dialog_test)
 set_tests_properties(system_info_dialog_test PROPERTIES
@@ -10602,6 +10606,16 @@ if(RADE_FOUND)
     endif()
     add_test(NAME rade_phase_renorm_test COMMAND rade_phase_renorm_test)
 endif()
+
+# Filesystem-only MSIX presentation-path resolution; fixtures use a private temp directory.
+add_executable(external_file_path_test
+    tests/external_file_path_test.cpp src/core/ExternalFilePath.cpp)
+target_include_directories(external_file_path_test PRIVATE src)
+target_link_libraries(external_file_path_test PRIVATE Qt6::Core)
+if(WIN32)
+    target_link_libraries(external_file_path_test PRIVATE shell32 ole32 uuid)
+endif()
+add_test(NAME external_file_path_test COMMAND external_file_path_test)
 
 # ── Deferred retrofits: applied after the LAST test, wherever it is declared ──
 #
