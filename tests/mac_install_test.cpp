@@ -369,15 +369,18 @@ private slots:
         const QString bundle = tmp.filePath(QStringLiteral("Apps/AetherSDR.app"));
         makeBundle(bundle, "26.11.1");
         const QString binary = bundle + QStringLiteral("/Contents/MacOS/AetherSDR");
-        QFile::remove(binary);
-        QVERIFY(QFile::copy(QStringLiteral("/bin/sleep"), binary));
-        QFile(binary).setPermissions(QFile(binary).permissions() | QFile::ExeOwner | QFile::ExeUser);
+        const QString sleeper = tmp.filePath(QStringLiteral("sleep"));
+        QVERIFY(QFile::copy(QStringLiteral("/bin/sleep"), sleeper));
+        QFile(sleeper).setPermissions(QFile(sleeper).permissions() | QFile::ExeOwner | QFile::ExeUser);
 #ifdef Q_OS_MACOS
-        // A system binary copied elsewhere runs only re-signed.
+        // A system binary copied elsewhere runs only re-signed; signed here,
+        // outside the test bundle, whose Info.plist codesign would refuse.
         QCOMPARE(QProcess::execute(QStringLiteral("/usr/bin/codesign"),
-                                   {QStringLiteral("--force"), QStringLiteral("--sign"), QStringLiteral("-"), binary}),
+                                   {QStringLiteral("--force"), QStringLiteral("--sign"), QStringLiteral("-"), sleeper}),
                  0);
 #endif
+        QFile::remove(binary);
+        QVERIFY(QFile::rename(sleeper, binary));
         QVERIFY(!MacInstall::otherInstanceRunning(bundle));
         QProcess other;
         other.start(binary, {QStringLiteral("30")});
