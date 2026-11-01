@@ -1892,7 +1892,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // restore was actually suppressed. Logging every mid-session add would
         // report "skipping" for the overwhelmingly common case of no key at
         // all, which is noise in exactly the captures this logging exists for.
-        if (savedDax > 0 && m_daxRestore.restoreAllowed()) {
+        const bool radioHasDax = m_radioModel.backendCapabilities().hasDaxStreams;
+        if (m_daxRestore.shouldRestore(savedDax, radioHasDax)) {
             // QPointer guards against a dangling slice: a raw SliceModel*
             // stays non-null after the slice is destroyed, so the `s &&`
             // check below is only meaningful if the capture auto-nulls.
@@ -1910,6 +1911,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
                     sp->setDaxChannel(savedDax);
                 }
             });
+        } else if (savedDax > 0 && !radioHasDax) {
+            qCDebug(lcDax) << "MainWindow: skipping last-session DAX restore"
+                           << key << "=" << savedDax
+                           << "on a radio without DAX channels, slice"
+                           << s->sliceId();
         } else if (savedDax > 0) {
             qCDebug(lcDax) << "MainWindow: skipping last-session DAX restore"
                            << key << "=" << savedDax
