@@ -1428,22 +1428,27 @@ void TciServer::onTextMessage(const QString& msg)
                                     .arg(client.audioSampleRate));
             continue;
         }
-        if (trimmed.startsWith("audio_stream_sample_type:")) {
-            int colonIdx2 = trimmed.indexOf(':');
-            QString fmtStr = trimmed.mid(colonIdx2 + 1).trimmed();
-            int fmt;
-            if (fmtStr == "float32")
-                fmt = 3;
-            else if (fmtStr == "int16")
-                fmt = 0;
-            else
-                fmt = fmtStr.toInt();  // numeric value
-            if (fmt == 0 || fmt == 3) { // int16 or float32
-                resetClientRx(client);
-                client.audioFormat = fmt;
+        // TCI 2.1: the format is set and replied by name, in lower case; an
+        // unknown or unsupported format is ignored and the current one is
+        // replied. The older numeric form (0 = int16, 3 = float32) is still
+        // taken, but never answered.
+        if (trimmed == QLatin1String("audio_stream_sample_type")
+            || trimmed.startsWith("audio_stream_sample_type:")) {
+            const int colonIdx2 = trimmed.indexOf(':');
+            if (colonIdx2 > 0) {
+                const QString fmtStr = trimmed.mid(colonIdx2 + 1).trimmed();
+                int fmt = -1;
+                if (fmtStr == "float32" || fmtStr == "3")
+                    fmt = 3;
+                else if (fmtStr == "int16" || fmtStr == "0")
+                    fmt = 0;
+                if (fmt >= 0) {
+                    resetClientRx(client);
+                    client.audioFormat = fmt;
+                }
             }
             replyText(ws,QStringLiteral("audio_stream_sample_type:%1;")
-                                    .arg(client.audioFormat));
+                                    .arg(client.audioFormat == 0 ? "int16" : "float32"));
             continue;
         }
         // Sensor enable/disable
