@@ -6600,6 +6600,7 @@ target_link_libraries(ax25_replay PRIVATE Qt6::Core aether_libmodem_core aether_
 
 add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
     tools/ax25_session_analyze.cpp
+    tools/Ax25SessionWav.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
     src/core/tnc/HdlcCodec.cpp
@@ -6612,6 +6613,15 @@ add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
 )
 target_include_directories(ax25_session_analyze PRIVATE src)
 target_link_libraries(ax25_session_analyze PRIVATE Qt6::Core aether_libmodem_core aether_afskdemod)
+
+# File-only parser coverage; no modem, settings, or radio transport.
+add_executable(ax25_session_wav_test
+    tests/ax25_session_wav_test.cpp
+    tools/Ax25SessionWav.cpp
+)
+target_include_directories(ax25_session_wav_test PRIVATE tools)
+target_link_libraries(ax25_session_wav_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME ax25_session_wav_test COMMAND ax25_session_wav_test)
 
 # AX.25 airtime model + link-liveness behaviour (T3 idle poll, bounded REJ
 # recovery, SABME refusal, Karn-safe RTT sampling). See docs/HFMODEM.md.
