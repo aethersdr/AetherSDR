@@ -79,6 +79,20 @@ deadlock:QSslSocketPrivate::tlsBackendInUse
 # CAVEAT: hides any race whose stack contains ~QHttpThreadDelegate.
 race:QHttpThreadDelegate::~QHttpThreadDelegate
 
+# Qt's file-system model start-up (#6726; kpa500_advanced_widget_test, any
+# test that opens a non-native QFileDialog). QFileSystemModelPrivate::init
+# connects to its QFileInfoGatherer (qfilesystemmodel.cpp:2162) after the
+# gatherer's thread has already started, so the main thread's addConnection
+# resizes the gatherer's signal vector while the new thread's QThread::started
+# emission reads it in doActivate. Both accesses are inside Qt; no AetherSDR
+# object is in either stack's racing frame.
+#
+# ANCHORED ON QFileSystemModelPrivate::init, which runs only Qt code. NOT on
+# doActivate, addConnection or QFileDialog: every signal, every connect and
+# our own dialog code pass through those.
+# CAVEAT: hides any race whose stack contains QFileSystemModel's set-up.
+race:QFileSystemModelPrivate::init
+
 # ── DO NOT ADD — rejected in #5275 and #5411 review, each would blind the lane ─
 # Every entry below matches a frame that OUR code executes inside, so a real
 # race whose access sits in a queued slot body — the sendCmd and audio-atomics
