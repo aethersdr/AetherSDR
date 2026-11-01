@@ -65,6 +65,14 @@ struct MetisClientTestAccess {
     {
         return MetisClient::kUnderflowRunQuietPackets;
     }
+    // The prime (#6052), read from the production constants for the same
+    // reason as the three above.
+    static constexpr std::size_t primeTarget() { return MetisClient::kTxPrimeTargetSamples; }
+    static constexpr std::size_t primeBlock() { return MetisClient::kTxPrimeBlockSamples; }
+    static constexpr std::uint64_t primeMaxHoldPackets()
+    {
+        return MetisClient::kTxPrimeMaxHoldPackets;
+    }
 };
 
 struct Hl2TxGateTestAccess {
@@ -214,6 +222,17 @@ public:
         return out;
     }
 
+    // The once-per-over line the prime writes when it lets go (#6052).
+    [[nodiscard]] QStringList primeLines() const
+    {
+        QStringList out;
+        for (const QString& line : m_lines) {
+            if (line.contains(QStringLiteral("prime let go")))
+                out << line;
+        }
+        return out;
+    }
+
 private:
     QStringList m_lines;
     QtMessageHandler m_previous = nullptr;
@@ -291,6 +310,21 @@ static Ep2IqShape ep2IqShape(const std::array<std::uint8_t, kUsbPacketSize>& pkt
         }
     }
     return shape;
+}
+
+// Bring a keyed client past its prime (#6052): queue the target rounded up to
+// whole EP2 packets and drain it. No packet is short and nothing is counted, so
+// the accounting blocks that follow read the queue mid-over. The prime itself
+// is pinned in "THE PRIME".
+static void pastThePrime(MetisClient& client, const AetherSDR::TxCoordinator::Context& context)
+{
+    const std::size_t packet = static_cast<std::size_t>(kTxSamplesPerPacket);
+    const std::size_t packets = (MetisClientTestAccess::primeTarget() + packet - 1) / packet;
+    const std::vector<std::complex<float>> fill(packets * packet,
+                                                std::complex<float>(0.25f, -0.25f));
+    client.queueTxIq(fill, context);
+    for (std::size_t i = 0; i < packets; ++i)
+        (void)client.buildNextControlPacket();
 }
 
 // THE ATU TUNE REQUEST IS TRANSMIT, AND THE GATE MUST REACH IT. Principle VI.
@@ -874,18 +908,21 @@ int main(int argc, char** argv)
     // from doing so with whatever happens to be in the buffer.
     {
         MetisClient c2;
-        std::vector<std::complex<float>> tone(512, std::complex<float>(0.5f, -0.5f));
+        // Sized to the prime target (#6052): below it the prime's hold, not
+        // this gate, would keep the first keyed packet silent.
+        std::vector<std::complex<float>> tone(MetisClientTestAccess::primeTarget(),
+                                              std::complex<float>(0.5f, -0.5f));
 
         // Gate closed, unkeyed: queued samples must not go out.
         c2.queueTxIq(tone, authority.context);
-        check(c2.txQueueDepth() == 512, "samples queue regardless of gate state");
+        check(c2.txQueueDepth() == tone.size(), "samples queue regardless of gate state");
         for (int i = 0; i < 4; ++i) {
             if (payloadNonZero(c2.buildNextControlPacket())) {
                 check(false, "IQ reached the wire with the gate CLOSED");
                 break;
             }
         }
-        check(c2.txQueueDepth() == 512, "an unkeyed frame consumes no samples");
+        check(c2.txQueueDepth() == tone.size(), "an unkeyed frame consumes no samples");
 
         // Gate open but still unkeyed: still silence.
         c2.enableTransmit(true);
@@ -896,7 +933,7 @@ int main(int argc, char** argv)
         c2.setMox(true, authority.operation);
         const auto keyedPkt = c2.buildNextControlPacket();
         check(payloadNonZero(keyedPkt), "keyed frames carry the queued IQ");
-        check(c2.txQueueDepth() == 512 - kTxSamplesPerPacket,
+        check(c2.txQueueDepth() == tone.size() - kTxSamplesPerPacket,
               "one packet consumes exactly kTxSamplesPerPacket samples");
         // 0.5 -> 16383 (0x3FFF), -0.5 -> -16383 (0xC001), big-endian.
         const std::uint8_t* pay = keyedPkt.data() + 8 + 8;
@@ -962,7 +999,11 @@ int main(int argc, char** argv)
               "CW plateau matches TUNE carrier amplitude (#5610)");
 
         // Voice queued behind manual PTT must not leak between CW elements.
-        std::vector<std::complex<float>> voice(512, std::complex<float>(0.4f, -0.4f));
+        // Sized to the prime target (#6052): leaving CW abandons the queue, so
+        // the voice after it is primed, and must already be at the target to
+        // reach the very next packet.
+        std::vector<std::complex<float>> voice(MetisClientTestAccess::primeTarget(),
+                                               std::complex<float>(0.4f, -0.4f));
         cw.queueTxIq(voice, authority.context);
         cw.setCwKeyDown(false, authority.operation);
         for (int i = 0; i < 6; ++i) {
@@ -986,7 +1027,10 @@ int main(int argc, char** argv)
         MetisClient queued;
         queued.enableTransmit(true);
         queued.setMox(true, media.operation);
-        const std::vector<std::complex<float>> voice(252, {0.25f, 0.25f});
+        // Sized to the prime target (#6052): with fewer samples the prime
+        // would hold them anyway, and the check would pass without the fence.
+        const std::vector<std::complex<float>> voice(MetisClientTestAccess::primeTarget(),
+                                                     {0.25f, 0.25f});
         queued.queueTxIq(voice, media.context);
         (void)media.coordinator.finishLocalIntent(media.operation);
         const auto operation = media.coordinator.acquire(media.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
@@ -1241,6 +1285,7 @@ int main(int argc, char** argv)
         MetisClient over;
         over.enableTransmit(true);
         over.setMox(true, tx.operation);
+        pastThePrime(over, tx.context);   // #6052: this block is about the END of the over
         constexpr std::size_t kOverSamples = 500;   // 3 * 126 + 122
         const std::vector<std::complex<float>> speech(
             kOverSamples, std::complex<float>(0.25f, -0.25f));
@@ -1444,6 +1489,143 @@ int main(int argc, char** argv)
     }
 
     {
+        // ---- THE PRIME (#6052): the first samples of an over ----
+        // An empty queue is still the counted pre-roll above. Once a block
+        // lands, keyed packets are silence, consume nothing and count no
+        // underflow until three blocks are queued (one draining, two margin).
+        // The block is derived from the real Hl2TxDsp::Config.
+        const Hl2TxDsp::Config chain{};
+        const std::size_t block =
+            static_cast<std::size_t>(chain.dspBlockSize)
+            * static_cast<std::size_t>(MetisClientTestAccess::ep2AudioRateHz())
+            / static_cast<std::size_t>(chain.inputSampleRateHz);
+        check(MetisClientTestAccess::primeBlock() == block,
+              "THE PRIME: the block MetisClient primes in is Hl2TxDsp's own, at the EP2 rate");
+        check(MetisClientTestAccess::primeTarget() == 3 * block,
+              "THE PRIME: the target is three blocks -- one draining, two of margin");
+        const std::vector<std::complex<float>> oneBlock(block, std::complex<float>(0.25f, -0.25f));
+        const auto packet = static_cast<std::size_t>(kTxSamplesPerPacket);
+
+        TxTestAuthority tx;
+        ScopedTxFifoLog log;
+        MetisClient over;
+        over.enableTransmit(true);
+        over.setMox(true, tx.operation);
+
+        over.queueTxIq(oneBlock, tx.context);            // block 1
+        const auto held1 = over.buildNextControlPacket();
+        check(anyFrameKeyed(held1) && !payloadNonZero(held1),
+              "THE PRIME: with one block queued the keyed packet is silence");
+        check(over.txQueueDepth() == block, "THE PRIME: and the hold consumes nothing");
+        check(over.txUnderflowPackets() == 0 && over.txUnderflowSamples() == 0,
+              "THE PRIME: a hold is not an underflow -- nothing was missing");
+        check(over.txPrimeHoldPackets() == 1, "THE PRIME: it is counted as a hold instead");
+
+        over.queueTxIq(oneBlock, tx.context);            // block 2
+        check(!payloadNonZero(over.buildNextControlPacket()) && over.txQueueDepth() == 2 * block,
+              "THE PRIME: two blocks are still short of the target -- one block of margin "
+              "is not what was chosen");
+
+        over.queueTxIq(oneBlock, tx.context);            // block 3: the target
+        const auto first = over.buildNextControlPacket();
+        const auto firstShape = ep2IqShape(first);
+        check(firstShape.carryingIq == kTxSamplesPerPacket && firstShape.firstSilent < 0,
+              "THE PRIME: at the target the next packet is a FULL packet of IQ");
+        check(over.txQueueDepth() == 3 * block - packet, "THE PRIME: and the queue drains from there");
+        check(over.txPrimeHoldPackets() == 2 && over.txPrimeDeadlineReleases() == 0,
+              "THE PRIME: two packets were held, and the target let it go, not the deadline");
+        check(log.primeLines().size() == 1, "THE PRIME: one log line when it lets go");
+
+        // ONCE PER OVER. Below the target again, the queue keeps draining: the
+        // margin is given once and is not defended.
+        while (over.txQueueDepth() >= packet)
+            check(payloadNonZero(over.buildNextControlPacket()),
+                  "THE PRIME: once let go, a queue below the target still drains");
+        const auto tail = ep2IqShape(over.buildNextControlPacket());
+        check(tail.carryingIq == static_cast<int>(3 * block % packet),
+              "THE PRIME: down to the last short packet, which is not held either");
+        check(over.txPrimeHoldPackets() == 2 && log.primeLines().size() == 1,
+              "THE PRIME: no second hold and no second line in the same over");
+
+        // THE KEYED EDGE ARMS IT AGAIN. Same context, no flush, queue empty:
+        // nothing but the edge itself can have armed this one.
+        over.setMox(false, tx.operation);
+        (void)over.buildNextControlPacket();
+        over.setMox(true, tx.operation);
+        over.queueTxIq(oneBlock, tx.context);
+        const auto next = over.buildNextControlPacket();
+        check(anyFrameKeyed(next) && !payloadNonZero(next) && over.txQueueDepth() == block,
+              "THE PRIME: the next over's first block is held again -- armed on the keyed edge");
+        std::fprintf(stderr,
+            "PROBE  prime: block %zu samples, target %zu (%.2f ms queued), margin %.2f ms,"
+            " deadline %llu packets (%.2f ms)\n",
+            block, MetisClientTestAccess::primeTarget(),
+            1000.0 * static_cast<double>(MetisClientTestAccess::primeTarget())
+                / MetisClientTestAccess::ep2AudioRateHz(),
+            1000.0 * static_cast<double>(MetisClientTestAccess::primeTarget() - block)
+                / MetisClientTestAccess::ep2AudioRateHz(),
+            static_cast<unsigned long long>(MetisClientTestAccess::primeMaxHoldPackets()),
+            1000.0 * static_cast<double>(MetisClientTestAccess::primeMaxHoldPackets())
+                * kTxSamplesPerPacket / MetisClientTestAccess::ep2AudioRateHz());
+
+        {   // THE DEADLINE: a producer that stops short goes out late, not never
+            TxTestAuthority shortTx;
+            MetisClient stopped;
+            stopped.enableTransmit(true);
+            stopped.setMox(true, shortTx.operation);
+            stopped.queueTxIq(oneBlock, shortTx.context);
+            for (std::uint64_t i = 0; i < MetisClientTestAccess::primeMaxHoldPackets(); ++i) {
+                check(!payloadNonZero(stopped.buildNextControlPacket()),
+                      "THE PRIME: one block alone is held up to the deadline");
+            }
+            check(stopped.txQueueDepth() == block, "THE PRIME: and is still whole when it expires");
+            check(payloadNonZero(stopped.buildNextControlPacket()),
+                  "THE PRIME: at the deadline the held block goes out");
+            check(stopped.txPrimeDeadlineReleases() == 1
+                      && stopped.txPrimeHoldPackets() == MetisClientTestAccess::primeMaxHoldPackets(),
+                  "THE PRIME: and the release is counted as a deadline, not as primed");
+        }
+
+        {   // CW AND THE TEST TONE ARE NOT HELD: they never reach the queue
+            TxTestAuthority toneTx;
+            MetisClient tone;
+            tone.enableTransmit(true);
+            tone.setMox(true, toneTx.operation);
+            tone.queueTxIq(oneBlock, toneTx.context);    // armed, and would hold
+            tone.setTxTestTone(0.0, 0.5, toneTx.operation);
+            const auto shape = ep2IqShape(tone.buildNextControlPacket());
+            check(shape.carryingIq == kTxSamplesPerPacket,
+                  "THE PRIME: the test tone fills the FIRST keyed packet, prime armed or not");
+            check(tone.txPrimeHoldPackets() == 0 && tone.txQueueDepth() == block,
+                  "THE PRIME: and a tone packet is neither a hold nor a drain of the queue");
+
+            TxTestAuthority cwTx;
+            MetisClient cw;
+            cw.enableTransmit(true);
+            cw.setMox(true, cwTx.operation);
+            cw.setCwKeyDown(true, cwTx.operation);
+            check(payloadNonZero(cw.buildNextControlPacket()) && cw.txPrimeHoldPackets() == 0,
+                  "THE PRIME: the CW carrier starts in the first keyed packet, as before");
+        }
+
+        {   // AN ABANDONED QUEUE IS PRIMED AGAIN, inside the same keyed over
+            TxTestAuthority voiceTx;
+            MetisClient mixed;
+            mixed.enableTransmit(true);
+            mixed.setMox(true, voiceTx.operation);
+            pastThePrime(mixed, voiceTx.context);          // let go: voice is flowing
+            mixed.setCwKeyDown(true, voiceTx.operation);   // CW takes the stream
+            (void)mixed.buildNextControlPacket();
+            mixed.clearCwKeying();                         // and gives it back, MOX still up
+            mixed.queueTxIq(oneBlock, voiceTx.context);
+            const auto resumed = mixed.buildNextControlPacket();
+            check(anyFrameKeyed(resumed) && !payloadNonZero(resumed)
+                      && mixed.txQueueDepth() == block,
+                  "THE PRIME: voice that restarts after CW is held like the start of an over");
+        }
+    }
+
+    {
         // ---- THE DRIFT SHAPE IS ONE EPISODE, NOT ONE LINE PER PAIR ----
         //
         // The other shape this FIFO produces: the EP2 wall clock and the audio
@@ -1461,6 +1643,7 @@ int main(int argc, char** argv)
         MetisClient drift;
         drift.enableTransmit(true);
         drift.setMox(true, tx.operation);
+        pastThePrime(drift, tx.context);   // #6052: the drift shape is mid-over
         constexpr int kPairs = 10;
         constexpr std::size_t kShort = 40;
         for (int i = 0; i < kPairs; ++i) {
@@ -1508,6 +1691,7 @@ int main(int argc, char** argv)
             MetisClient tune;
             tune.enableTransmit(true);
             tune.setMox(true, tx.operation);
+            pastThePrime(tune, tx.context);   // #6052: an episode needs a draining queue
             const std::vector<std::complex<float>> ragged(kShort,
                 std::complex<float>(0.25f, -0.25f));
             tune.queueTxIq(ragged, tx.context);
@@ -1525,6 +1709,7 @@ int main(int argc, char** argv)
             MetisClient unkey;
             unkey.enableTransmit(true);
             unkey.setMox(true, tx.operation);
+            pastThePrime(unkey, tx.context);   // #6052: as above
             const std::vector<std::complex<float>> ragged(kShort,
                 std::complex<float>(0.25f, -0.25f));
             unkey.queueTxIq(ragged, tx.context);
@@ -1557,6 +1742,10 @@ int main(int argc, char** argv)
         nan.enableTransmit(true);
         nan.setMox(true, tx.operation);
         nan.setTxTestTone(0.0, std::numeric_limits<double>::quiet_NaN(), tx.operation);
+        // #6052: one packet's worth would be held by the prime, and "the
+        // queued block was consumed" below could not tell that from the fault.
+        // Past the prime, and under the NaN amplitude all the way.
+        pastThePrime(nan, tx.context);
         const std::vector<std::complex<float>> block(
             static_cast<std::size_t>(kTxSamplesPerPacket),
             std::complex<float>(0.25f, -0.25f));
@@ -1586,6 +1775,7 @@ int main(int argc, char** argv)
         MetisClient clean;
         clean.enableTransmit(true);
         clean.setMox(true, tx.operation);
+        pastThePrime(clean, tx.context);   // #6052: four packets alone would be held
         const std::vector<std::complex<float>> exact(
             static_cast<std::size_t>(kTxSamplesPerPacket) * 4, std::complex<float>(0.25f, -0.25f));
         clean.queueTxIq(exact, tx.context);
@@ -1637,6 +1827,7 @@ int main(int argc, char** argv)
         MetisClient partial;
         partial.enableTransmit(true);
         partial.setMox(true, tx.operation);
+        pastThePrime(partial, tx.context);   // #6052: a short packet is a mid-over event
         constexpr std::size_t kShort = 40;
         const std::vector<std::complex<float>> ragged(
             static_cast<std::size_t>(kTxSamplesPerPacket) + kShort,
