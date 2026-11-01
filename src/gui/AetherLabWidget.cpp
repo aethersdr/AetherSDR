@@ -222,6 +222,9 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
     layout->setSpacing(12);
     scroll->setWidget(content);
     outer->addWidget(scroll);
+    m_scroll = scroll;
+    m_content = content;
+    scroll->viewport()->installEventFilter(this);
     m_heading = new QBoxLayout(QBoxLayout::LeftToRight);
     m_heading->setSpacing(12);
     auto* identity = new QWidget(content);
@@ -569,7 +572,9 @@ void AetherLabWidget::refresh()
                 text = number(sample, key, key == QLatin1String("swr") || key == QLatin1String("reflectionMagnitude") ? 3 : 2);
                 if (value.isDouble() && key.endsWith(QLatin1String("Ohm"))) { text += QStringLiteral(" Ω"); }
                 if (value.isDouble() && key.endsWith(QLatin1String("Deg"))) { text += QStringLiteral("°"); }
-                if (key == QLatin1String("returnLossDb")) { text += QStringLiteral(" dB"); }
+                if (key == QLatin1String("returnLossDb") && (value.isDouble() || text == QStringLiteral("∞"))) {
+                    text += QStringLiteral(" dB");
+                }
             }
         }
         if (it.value()->text() != text) {
@@ -579,6 +584,7 @@ void AetherLabWidget::refresh()
             QAccessible::updateAccessibility(&event);
         }
     }
+    reflow();
 }
 
 void AetherLabWidget::saveSession()
@@ -589,17 +595,41 @@ void AetherLabWidget::saveSession()
     const QByteArray bytes = QJsonDocument(m_model->snapshot()).toJson(QJsonDocument::Indented);
     if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
         m_status->setText(tr("Could not save session: %1").arg(file.errorString()));
+        QAccessibleEvent event(m_status, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
     }
 }
 
 void AetherLabWidget::resizeEvent(QResizeEvent* event)
 {
     CanonCanvas::resizeEvent(event);
-    m_heading->setDirection(event->size().width() < 1000 ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
-    m_controls->setDirection(event->size().width() < 1280 ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
-    const bool narrow = event->size().width() < 1000;
-    m_analysis->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
-    m_models->setDirection(event->size().width() < 720 ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    reflow();
+}
+
+bool AetherLabWidget::eventFilter(QObject* watched, QEvent* event)
+{
+    if (m_scroll && watched == m_scroll->viewport() && event->type() == QEvent::Resize) { reflow(); }
+    return CanonCanvas::eventFilter(watched, event);
+}
+
+void AetherLabWidget::reflow()
+{
+    const int width = this->width();
+    m_heading->setDirection(width < 1000 ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_controls->setDirection(width < 1280 ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_analysis->setDirection(width < 1000 ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_models->setDirection(width < 720 ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    // Font metrics and readout text vary, so stack rows until the content fits
+    // the viewport without horizontal scrolling.
+    // The outer layout caches its minimum until it is invalidated.
+    const auto fits = [this] {
+        m_content->layout()->invalidate();
+        return m_content->minimumSizeHint().width() <= m_scroll->viewport()->width();
+    };
+    for (QBoxLayout* row : {m_controls, m_heading, m_analysis, m_models}) {
+        if (fits()) { break; }
+        row->setDirection(QBoxLayout::TopToBottom);
+    }
 }
 
 } // namespace AetherSDR

@@ -111,15 +111,40 @@ alone does not authorize analyzer RF. See [Automation Bridge and MCP](./automati
 
 ## Troubleshooting
 
-- **No USB devices:** check the data cable, close AntScope, then use **Refresh
-  USB**. Only Stick Pro serial prefixes 4600/4601 in normal USB mode are listed.
-- **Cannot open:** close another AetherSDR instance or analyzer client. The
-  current build may lack HID support, or the selected interface may be wrong.
-- **Deadline, count or endpoint error:** save the session trace, reconnect,
-  and report the firmware, requested range and returned rows. Partial data is
-  retained and never marked complete.
-- **Sweep is disabled:** wait for **Ready** and confirm RF isolation. A finished
-  sweep requires a fresh **Connect**.
+### No USB devices are listed
+
+The cable carries power only, another program holds the analyzer, or the
+analyzer is not in normal USB mode. Only Stick Pro serial prefixes 4600/4601
+in normal USB mode are listed.
+
+1. Check that the cable is a data cable.
+2. Close AntScope and any other analyzer client.
+3. Click **Refresh USB**.
+
+### The analyzer will not open
+
+Another AetherSDR instance or analyzer client holds the device, this build
+lacks HID support, or the wrong interface is selected.
+
+1. Close other AetherSDR instances and analyzer clients.
+2. Select the Stick Pro in the interface list and click **Connect** again.
+
+### A sweep stops with a deadline, count or endpoint error
+
+The analyzer did not return the requested rows in time or in order. Partial
+data is retained and never marked complete.
+
+1. Click **Save session…** to keep the protocol trace.
+2. Click **Connect** again.
+3. Report the firmware, the requested range and the returned rows.
+
+### Run sweep is disabled
+
+The analyzer is not **Ready**, RF isolation is not confirmed, or the previous
+sweep has finished.
+
+1. After a finished sweep, click **Connect** again.
+2. Wait for **Ready**, then confirm RF isolation.
 
 ### ERROR-20 when starting a sweep
 

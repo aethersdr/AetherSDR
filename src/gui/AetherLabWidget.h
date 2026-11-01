@@ -5,6 +5,7 @@
 
 class QBoxLayout;
 class QResizeEvent;
+class QScrollArea;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -26,11 +27,15 @@ signals:
     void returnRequested();
 protected:
     void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 private:
     void refresh();
+    void reflow();
     void saveSession();
     AntennaAnalyzerModel* m_model;
     AetherLabPlot* m_plot{nullptr};
+    QScrollArea* m_scroll{nullptr};
+    QWidget* m_content{nullptr};
     QComboBox* m_devices{nullptr};
     QDoubleSpinBox* m_start{nullptr};
     QDoubleSpinBox* m_stop{nullptr};

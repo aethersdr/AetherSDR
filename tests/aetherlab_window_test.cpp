@@ -66,12 +66,12 @@ private slots:
         QVERIFY(!isolation->isChecked());
         isolation->setChecked(true);
         QVERIFY(sweep->isEnabled());
-        QVERIFY(model.sweep(14000000, 14350000, 2, true));
+        QVERIFY(model.sweep(14000000, 14350000, 3, true));
         input->feed("OK\r\n");
         input->feed("OK\r\n");
-        input->feed("14,100,0\r\n14.175,50,0\r\n14.35,54,0\r\n");
-        QTRY_COMPARE(marker->maximum(), 2);
-        marker->setValue(2);
+        input->feed("14,100,0\r\n14.175,50,0\r\n14.2,-10,0\r\n14.35,54,0\r\n");
+        QTRY_COMPARE(marker->maximum(), 3);
+        marker->setValue(3);
         QCOMPARE(frequency->text(), QStringLiteral("14.350000 MHz"));
         QCOMPARE(readout->text(), QStringLiteral("1.080"));
         const auto accessibleText = [](QWidget* widget) {
@@ -96,12 +96,17 @@ private slots:
         QCOMPARE(accessibleText(window.findChild<QLabel*>("aetherLabValue_reflectionPhaseDeg")), QStringLiteral("Phase ∠S11: undefined"));
         QCOMPARE(window.findChild<QLabel*>("aetherLabValue_returnLossDb")->text(), QStringLiteral("∞ dB"));
         QCOMPARE(window.findChild<QLabel*>("aetherLabValue_reflectionPhaseDeg")->text(), QStringLiteral("undefined"));
+        // A non-passive row has no return loss; the readout must not carry a unit.
+        // The layout checks below keep this marker, whose readouts are the widest.
+        marker->setValue(2);
+        QCOMPARE(window.findChild<QLabel*>("aetherLabValue_returnLossDb")->text(), QStringLiteral("undefined"));
+        QCOMPARE(accessibleText(window.findChild<QLabel*>("aetherLabValue_returnLossDb")), QStringLiteral("Return loss: undefined"));
         QVERIFY(!sweep->isEnabled());
         QWidget* plot = window.findChild<QWidget*>("aetherLabPlot");
         QVERIFY(plot);
         QAccessibleInterface* accessible = QAccessible::queryAccessibleInterface(plot);
         QVERIFY(accessible);
-        QVERIFY(accessible->text(QAccessible::Value).contains("3 measured rows"));
+        QVERIFY(accessible->text(QAccessible::Value).contains("4 measured rows"));
         QVERIFY(!window.grab().isNull());
         window.findChild<QDoubleSpinBox*>("aetherLabStartMHz")->setValue(600.0);
         window.findChild<QDoubleSpinBox*>("aetherLabStopMHz")->setValue(600.0);

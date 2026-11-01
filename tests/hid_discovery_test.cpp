@@ -119,7 +119,9 @@ int main(int argc, char** argv)
     }
     // Exercise the production analyzer worker as guarded callers churn. Failed
     // opens also prove that the global error was copied while discovery was locked.
-    for (int i = 0; i < kIterations; ++i) {
+    // Each run takes a device QLockFile, which costs ~170 ms on NTFS; keep the count low.
+    constexpr int kTransportRuns = 25;
+    for (int i = 0; i < kTransportRuns; ++i) {
         QEventLoop loop;
         QTimer deadline;
         deadline.setSingleShot(true);
