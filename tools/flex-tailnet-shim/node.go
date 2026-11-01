@@ -117,6 +117,9 @@ type Node struct {
 	// moment a start attempt has a tsnet instance (login.go).
 	loginRead loginReader
 	keyExpiry *time.Time // the node key's expiry; nil when it doesn't expire
+	// joinGen counts stops: a sign-in watcher writes only while the join it
+	// was started for is still the node's (keepSignedIn).
+	joinGen uint64
 
 	telemetry linkTelemetry // per-peer path, RTT and throughput (telemetry.go)
 
@@ -522,7 +525,10 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 	n.mu.Lock()
 	n.closers = append(n.closers, func() error { kcancel(); return nil })
 	n.mu.Unlock()
-	go n.keepSignedIn(kctx, read, lc.StartLoginInteractive)
+	n.mu.Lock()
+	gen := n.joinGen
+	n.mu.Unlock()
+	go n.keepSignedIn(kctx, gen, read, lc.StartLoginInteractive)
 	return nil
 }
 
@@ -676,6 +682,7 @@ func (n *Node) stop(logout bool) error {
 	n.fwd = nil
 	n.routesInUse = nil
 	n.loginRead, n.keyExpiry = nil, nil
+	n.joinGen++
 	n.telemetry.mu.Lock()
 	n.telemetry.peers = nil
 	n.telemetry.mu.Unlock()

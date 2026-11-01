@@ -100,13 +100,22 @@ release is `"version": "26.7.4.1"`).
 }
 ```
 
-- `platform` / `arch`: `windows` or `linux`; `x86_64` or `arm64`, as
-  `QSysInfo::buildCpuArchitecture()` names them. macOS updates through Sparkle
-  (Phase 4) and is not listed.
+- `platform` / `arch`: `windows`, `linux` or `macos`; `x86_64` or `arm64`, as
+  `QSysInfo::buildCpuArchitecture()` names them.
 - **Windows** is the tree inside the portable zip, which is the `deploy\` tree
   `setup.exe` installs. **Linux** is the tree inside the AppImage's squashfs,
   which `AetherSDR --install` installs (see
-  [The Linux install](#the-linux-install-phase-5)).
+  [The Linux install](#the-linux-install-phase-5)). **macOS** is the signed
+  `AetherSDR.app` bundle, its paths starting at `Contents/` (see
+  [The macOS install](#the-macos-install-phase-4)). Its release asset is the
+  app tarball `AetherSDR-<tag>-macOS-<apple-silicon|intel>.app.tar.zst`, which
+  is both the payload and its `full`.
+- `dax_driver` (macOS only, optional): `{"source": "<40 hex>"}`, the git tree
+  hash of `hal-plugin/` at the tag. The DAX driver carries the same hash,
+  stamped into its `Info.plist` as `AetherSDRDAXSource` when it is built
+  (`hal-plugin/CMakeLists.txt`); the app compares the installed driver's stamp
+  with this to tell the user a release changes the driver. Anything but a
+  40-digit lowercase hash rejects the manifest.
 - `full`: the whole payload, the fallback when no patch applies or anything
   fails to verify. Its `sha256` and `size` are as binding as a bundle's: release
   assets can be replaced by anyone with write access, and the signed manifest
@@ -475,6 +484,107 @@ because `~/.local/share/AetherSDR` already holds user data. `LinuxInstall`
   install folder is writable. The AppImage, distribution packages and build
   folders keep **Get AetherSDR**; the AppImage also offers Install for
   updates.
+
+## The macOS install (Phase 4)
+
+macOS uses this updater, not Sparkle, and needs no helper (maintainer
+rulings on #5304). The install is the `AetherSDR.app` bundle wherever the
+user put it; `MacInstall` (`src/core`) does the work.
+
+- **Offered** (`UpdateInstaller::canInstallInPlace`) when the running binary
+  is `<bundle>/Contents/MacOS/AetherSDR`, the bundle was not translocated (a
+  quarantined app started from where it was downloaded runs from a read-only
+  `…/AppTranslocation/…` copy), and both the bundle's folder and the bundle
+  itself are writable: the swap moves it. A copy running from the DMG fails
+  the folder probe. The staging root is the per-user state folder.
+- **The hand-over checks, the exit swaps.** At Restart to update (on the
+  worker thread) or as AetherSDR quits, `UpdateInstaller::prepareSwap` runs
+  `MacInstall::prepare`: a staged bundle on another volume than the app is
+  copied beside it under a hidden `.AetherSDR-incoming-<pid>-*` name, so the
+  swap is still one rename (copies whose process is gone are removed first;
+  another live instance's copy stays);
+  then `codesign --verify --deep --strict` and the frozen
+  `--update-selftest`. The swap waits for `UpdateInstaller::finishSwapOnExit`,
+  which `main()` calls after the event loop returns and the window is gone
+  (and which first waits, bounded, for Restart to update's checks if the
+  user quit while they ran):
+  after the swap, the bundle's path holds the new release, so nothing the
+  running process loads late may come after it. A UI-scale restart, which
+  opens the bundle again as this process exits, drops the readied swap; the
+  release stays staged.
+- **The swap** is one `renamex_np(RENAME_SWAP)` of the readied bundle and the
+  installed one, so nothing at the bundle's path is ever half in place. The
+  bundle swapped out is moved to `update/previous`, replacing the one there,
+  when that is on the same volume, and removed otherwise (a maintainer
+  ruling: `/Applications` shows one AetherSDR). Success writes
+  `Updated <version>` to `swap-result.txt`. While another AetherSDR runs the
+  bundle's binary (`open -n`; found through `proc_pidpath`), the swap waits
+  as the Windows helper does: `OldStillRunning`, the release stays staged
+  (a maintainer ruling). A swap that cannot be made writes `NotPossible`
+  and, at quit, counts as a failed try with the self-test's; the third is
+  final (`RolledBack`): the release is dropped and never offered again, so a
+  rename macOS keeps refusing is not retried at every quit. A refusal on
+  Restart to update, which the user asked for, is not counted. Restart to
+  update then runs
+  `open -n <bundle>` once this process has exited.
+- **The code signature backs up the manifest; it is not the trust boundary.**
+  The manifest's Ed25519 signature decides what is installed; codesign
+  catches a staged tree that does not match what was signed, before it can
+  replace a working app. When the running app has a team, the staged bundle
+  must carry a Developer ID Application signature of that same team
+  (`codesign -R` with `anchor apple generic and certificate
+  leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] =
+  "<team>"`, a maintainer ruling), so a tree re-signed by another process in
+  the user-writable staging folder between the manifest re-check and the
+  swap is refused. An ad-hoc signed local build (`TeamIdentifier=not set`)
+  checks the signature alone.
+- A bad signature is final at once. A check that could not run (codesign
+  missing or timing out, or the running app's team unreadable) refuses
+  nothing and rolls nothing back: the release stays staged for the next
+  try. A failed self-test is final on Restart to update and retried at the
+  next quit up to the third, as on Linux; a final failure is remembered as
+  rolled back.
+- The bundle carries no signatures in extended attributes (no
+  `com.apple.cs.*`), so the payload is its bytes and its symlinks (the
+  frameworks' `Versions/Current` and the links through it). A copy with
+  every extended attribute stripped, as the stager writes it, passes
+  `codesign --verify --deep --strict` and `spctl --assess` (checked on
+  v26.5.3). The notarization ticket is stapled to the DMG, not the app;
+  Gatekeeper accepts the app through the online check, and a bundle the
+  updater writes carries no quarantine flag.
+- Names compare case-insensitively on macOS, as on Windows: APFS's default
+  ignores case.
+- The DAX driver is not part of the payload (a maintainer ruling); it stays
+  an install from the DMG. While a release is staged whose `dax_driver.source`
+  differs from the installed driver's stamp
+  (`/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver`, read by
+  `MacInstall::daxDriverSourceOf`; a driver from before the stamp counts as
+  different), the Updates window says the release also updates the DAX audio
+  driver and to install it from the release's disk image
+  (`UpdateController::daxDriverChanges`, read once per staged version). That
+  note comes ahead of the offline notes. The driver's `CFBundleShortVersionString`
+  is not used: it has never been bumped (maintainer rulings: the source hash,
+  compared with the installed driver).
+- **CI** (the Phase 4 CI half): the macOS DMG workflow's `app-tarball` job
+  takes `AetherSDR.app` out of that leg's own signed, notarized DMG (one leg
+  failing to sign holds back only its own tarball; on a tag, a leg without a
+  signed DMG fails rather than fall back to the unsigned bundle), checks it with
+  `codesign --verify --deep --strict`, and writes the app tarball with
+  `tools/build_update_manifest.py --app-tarball` (ustar with the framework
+  links and exec bits, read back against the bundle's own file list). The
+  signing job, which holds the Apple identities, checks out nothing; this
+  job holds none. Sign Release Artifacts and Update Manifest are both also
+  triggered by the macOS DMG build. Signing GPG-signs the app tarballs, which
+  join `SHA256SUMS.txt`; Update Manifest checks each with
+  `check_release_tarball` (the app's own strict reader, as for Linux) and
+  passes `--dax-driver-source` from the tag. Both wait for the app tarballs
+  only while the tag's macOS DMG build can still attach them: once it has
+  finished without them, Linux and Windows are signed and published without
+  them, and the manifest leaves macOS out until it is dispatched again (a
+  maintainer ruling: macOS never blocks the other platforms). All of this
+  applies only when the tag's own `macos-dmg.yml` makes app tarballs (it
+  names `--app-tarball`): a tag cut before that leaves macOS out of the
+  manifest (`--no-macos-payloads`).
 
 ## Install update (the app's side)
 

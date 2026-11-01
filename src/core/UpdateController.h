@@ -6,6 +6,7 @@
 #include <QString>
 
 #include <functional>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -63,6 +64,11 @@ public:
         std::function<bool(const QString& file)> trash;
         // Starts the installed release once this process has exited.
         std::function<bool()> startInstalled;
+
+        // macOS (RFC #5304 Phase 4): the source stamped into the installed DAX
+        // driver (MacInstall::daxDriverSourceOf): nullopt when none is
+        // installed, empty when it predates the stamp.
+        std::function<std::optional<QString>()> installedDaxDriverSource;
     };
 
     // This app's: the install it runs from, UpdateInstaller::stateDir(),
@@ -101,6 +107,14 @@ public:
     // appImageInstalled.
     void installAppImage(bool trash);
 
+    // A staged release's DAX driver differs from the installed one: the
+    // Updates window says to install it from that release's disk image (the
+    // in-app update installs the app only).
+    bool daxDriverChanges() const;
+    // The rule itself: the release names a source, a driver is installed, and
+    // its stamp differs (an unstamped driver, from before the stamp, too).
+    static bool daxDriverChanges(const std::optional<QString>& installed, const QString& staged);
+
     State state() const { return m_state; }
     // The release staged, or being staged; empty when Idle.
     QString version() const { return m_version; }
@@ -130,6 +144,9 @@ public:
     // As the app quits: the same, silently, without the restart, waited
     // for. False when nothing was handed over.
     bool installOnQuit();
+    // macOS: forgets a swap readied for this exit, because another instance
+    // is starting from the bundle (a UI-scale restart). It stays staged.
+    void dropPendingSwap();
 
 signals:
     void stateChanged();
@@ -174,6 +191,9 @@ private:
     UpdateStager* m_stager;
     State m_state{State::Idle};
     bool m_installingAppImage{false};
+    // The staged release's DAX driver source, read once per staged version.
+    mutable QString m_daxSourceVersion;
+    mutable QString m_daxSource;
     QString m_version;
     UpdateStager::StagedRelease m_staged;
     QString m_latest;   // GitHub's latest as last heard; empty: not known

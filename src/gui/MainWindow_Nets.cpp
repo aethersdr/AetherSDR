@@ -62,19 +62,11 @@ void MainWindow::initNetScheduler()
 
 void MainWindow::showNetSchedulerDialog()
 {
-    // A canon workspace window: created directly rather than through
-    // showOrRaisePersistent(), which would apply View → Frameless Window.
-    const bool wasFresh = !m_netSchedulerDialog;
-    if (wasFresh) {
+    const bool wasFresh = showOrRaiseCanon(m_netSchedulerDialog, [this] {
         NetSchedulerDialog::CaptureFn capture = [this]() { return captureCurrentNetPreset(); };
-        auto* dlg = new NetSchedulerDialog(
+        return new NetSchedulerDialog(
             m_netScheduler ? m_netScheduler->entries() : QList<NetEntry>(), capture, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        m_netSchedulerDialog = dlg;
-    }
-    m_netSchedulerDialog->show();
-    m_netSchedulerDialog->raise();
-    m_netSchedulerDialog->activateWindow();
+    });
     if (wasFresh) {
         connect(m_netSchedulerDialog.data(), &NetSchedulerDialog::entriesChanged, this,
                 [this](const QList<NetEntry>& nets) { persistNetSchedule(nets); });

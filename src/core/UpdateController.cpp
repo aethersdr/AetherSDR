@@ -1,6 +1,7 @@
 #include "UpdateController.h"
 
 #include "LinuxInstall.h"
+#include "MacInstall.h"
 #include "LogManager.h"
 #include "UpdateInstaller.h"
 #include "UpdateSettings.h"
@@ -36,8 +37,19 @@ UpdateController::Environment UpdateController::forThisApp()
         !tree.isEmpty()) {
         env.request.installRoot = tree;
     }
+#elif defined(Q_OS_MACOS)
+    // The app bundle, whose root the manifest's paths start from
+    // (Contents/MacOS/AetherSDR), not the binary's own folder.
+    if (const QString bundle = MacInstall::bundleOf(QCoreApplication::applicationDirPath()); !bundle.isEmpty()) {
+        env.request.installRoot = bundle;
+    }
 #endif
     env.request.stagingRoot = UpdateInstaller::stateDir();
+#if defined(Q_OS_MACOS)
+    env.installedDaxDriverSource = [] {
+        return MacInstall::daxDriverSourceOf(QStringLiteral("/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver"));
+    };
+#endif
     // Windows: the portable zip is the tree setup.exe installs, so either
     // install can take it when no patch applies. Linux: the tarball is the
     // installed tree.
@@ -68,7 +80,7 @@ UpdateController::Environment UpdateController::forThisApp()
         UpdateSettings::setInstalledFromAppImage(version);
         // Without the AppImage's variables: its mount is gone by then.
         if (!LinuxInstall::startAfterExit(QCoreApplication::applicationPid(),
-                                          QDir(base).filePath(QStringLiteral("current/AppRun")),
+                                          {QDir(base).filePath(QStringLiteral("current/AppRun"))},
                                           LinuxInstall::appImageVariables())) {
             UpdateSettings::setInstalledFromAppImage({});
             return false;
@@ -317,6 +329,24 @@ bool UpdateController::restartToUpdate(QString* problem)
     return true;
 }
 
+bool UpdateController::daxDriverChanges(const std::optional<QString>& installed, const QString& staged)
+{
+    return !staged.isEmpty() && installed.has_value() && *installed != staged;
+}
+
+bool UpdateController::daxDriverChanges() const
+{
+    if (m_state != State::Staged || m_version.isEmpty() || !m_env.installedDaxDriverSource) {
+        return false;
+    }
+    if (m_daxSourceVersion != m_version) {
+        const UpdateStager::Request& r = m_env.request;
+        m_daxSource = UpdateStager::stagedDaxDriverSource(r.stagingRoot, m_version, r.platform, r.arch);
+        m_daxSourceVersion = m_version;
+    }
+    return daxDriverChanges(m_env.installedDaxDriverSource(), m_daxSource);
+}
+
 QString UpdateController::appImageToInstall() const
 {
     return m_env.appImage.isEmpty() || !m_env.installRunning || !installedVersion().isEmpty() ? QString()
@@ -383,6 +413,11 @@ void UpdateController::installAppImage(bool trash)
         }
         return r;
     }));
+}
+
+void UpdateController::dropPendingSwap()
+{
+    UpdateInstaller::dropPendingSwap();
 }
 
 bool UpdateController::installOnQuit()

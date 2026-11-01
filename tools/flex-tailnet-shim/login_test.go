@@ -130,7 +130,7 @@ func TestExpiredSignInAsksOnceAndRecovers(t *testing.T) {
 	var asks atomic.Int32
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go n.keepSignedIn(ctx, fb.read, func(context.Context) error { asks.Add(1); return nil })
+	go n.keepSignedIn(ctx, n.joinGen, fb.read, func(context.Context) error { asks.Add(1); return nil })
 
 	waitFor(t, "the expiry to be recorded", func() bool { return n.Status().KeyExpiry == "2027-04-30T12:00:00Z" })
 	fb.set(loginInfo{Backend: "NeedsLogin"})
@@ -475,5 +475,33 @@ func TestANodeAwaitingApprovalIsNotClaimable(t *testing.T) {
 	waitFor(t, "the approval wait to close the window", func() bool { return !n.Status().Claimable })
 	if _, _, err := n.ProvisionInteractive("", "attacker", nil, nil, nil); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("token-less takeover while awaiting approval: %v", err)
+	}
+}
+
+// A sign-in watcher whose node has stopped writes nothing: its last read
+// can't put an old expiry or "running" over the next join (stop bumps
+// joinGen).
+func TestAStoppedNodesWatcherWritesNothing(t *testing.T) {
+	fastLoginPolls(t)
+	n := newTestNode(t, "tok")
+	expiry := time.Date(2027, 4, 30, 12, 0, 0, 0, time.UTC)
+	fb := &fakeBackend{}
+	fb.set(loginInfo{Backend: "Running", KeyExpiry: &expiry})
+	n.mu.Lock()
+	gen := n.joinGen
+	n.mu.Unlock()
+	if err := n.stop(false); err != nil {
+		t.Fatal(err)
+	}
+	n.setState(stateStarting, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go n.keepSignedIn(ctx, gen, fb.read, nil)
+	time.Sleep(40 * time.Millisecond)
+	if s := n.currentState(); s != stateStarting {
+		t.Fatalf("a stale watcher set the state to %q", s)
+	}
+	if n.Status().KeyExpiry != "" {
+		t.Fatal("a stale watcher wrote its expiry")
 	}
 }

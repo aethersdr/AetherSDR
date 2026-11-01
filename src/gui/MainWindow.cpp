@@ -3598,21 +3598,13 @@ void MainWindow::publishRadioStateMqtt()
 RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
 {
     const QString prevComp = m_radioModel.audioCompressionParam();
-    const bool wasFresh = !m_radioSetupDialog;
-    // A canon workspace window: created directly rather than through
-    // showOrRaisePersistent(), which would apply View → Frameless Window.
-    if (wasFresh) {
-        auto* dlg = new RadioSetupDialog(&m_radioModel, m_audio,
-                                         &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                                         m_kiwiSdrManager, &m_acomConn, &m_speConn,
-                                         &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn, &m_kpa500Conn,
-                                         this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        m_radioSetupDialog = dlg;
-    }
-    m_radioSetupDialog->show();
-    m_radioSetupDialog->raise();
-    m_radioSetupDialog->activateWindow();
+    const bool wasFresh = showOrRaiseCanon(m_radioSetupDialog, [this] {
+        return new RadioSetupDialog(&m_radioModel, m_audio,
+                                    &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
+                                    m_kiwiSdrManager, &m_acomConn, &m_speConn,
+                                    &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn, &m_kpa500Conn,
+                                    this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn);
+    });
     if (wasFresh && m_radioSetupDialog)
         wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     if (m_radioSetupDialog && !page.isEmpty())
@@ -5015,9 +5007,8 @@ void MainWindow::hideConnectionDialog()
 
 void MainWindow::showMemoryDialog()
 {
-    const bool wasFresh = !m_memoryDialog;
-    showOrRaisePersistent(m_memoryDialog, &m_radioModel);
-    if (wasFresh && m_memoryDialog) {
+    if (showOrRaiseCanon(m_memoryDialog,
+                         [this] { return new MemoryDialog(&m_radioModel, this); })) {
         connect(m_memoryDialog.data(), &MemoryDialog::memoryActivated,
                 this, [this](int memoryIndex) { activateMemorySpot(memoryIndex); });
         connect(m_memoryDialog.data(), &QObject::destroyed, this, [this] {
@@ -9833,6 +9824,11 @@ void MainWindow::applyUiScale(int pct)
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer == QMessageBox::Yes) {
         m_relaunchingApp = true;
+        // A new instance starts from the bundle as this one exits: a swap
+        // readied for this exit would replace it under that instance.
+        if (m_updateController) {
+            m_updateController->dropPendingSwap();
+        }
 #ifdef Q_OS_MACOS
         // On macOS, relaunch via 'open -n' so the .app bundle is activated through
         // Launch Services — direct binary exec bypasses the bundle, causing dock

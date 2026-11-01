@@ -84,7 +84,8 @@ QString checkedAuthUrl(const QString& url);
 bool supportsQrSignIn(const QString& version);
 // Whether the Remote Access window should start the QR sign-in without being
 // asked: the radio belongs to no tailnet (never provisioned, or a QR sign-in
-// abandoned with its token), the container can, nothing is in flight, and
+// abandoned with its token or failed here), the container can, nothing is in
+// flight, and
 // the keychain has answered, so the token it holds is known and can't
 // arrive after a new one.
 bool shouldSignInUnasked(const TailnetShimStatus& status, bool tokenLoaded, bool haveToken,

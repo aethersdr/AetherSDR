@@ -1619,8 +1619,7 @@ void WaveformsDialog::resetRemoteAccess()
     setRowNotice(name, tr("Resetting…"), QStringLiteral("pending"), true);
 
     // The radio accepts the removal at once and takes a few seconds to carry
-    // it out; install again once it no longer lists the container (or after
-    // a bound, if its list never says so).
+    // it out; install again once it no longer lists the container.
     struct Pending {
         bool done{false};
         QMetaObject::Connection listed;
@@ -1654,13 +1653,25 @@ void WaveformsDialog::resetRemoteAccess()
     pending->replied = connect(&waveforms, &FlexWaveformModel::commandFinished, this,
                                [this, name, finish](const QString& action, const QString& which,
                                                     bool ok, const QString& message) {
+        // The row notice is onWaveformCommandFinished's; this adds the why.
         if (action == QLatin1String("remove_container") && which == name && !ok) {
             finish(false);
-            setRowNotice(name, tr("Reset failed"), QStringLiteral("error"), false);
-            showWaveformInstallResultDialog(this, tr("Reset Failed"), message);
+            showWaveformInstallResultDialog(
+                this, tr("Reset Failed"),
+                tr("The radio didn't remove the remote-access container: %1")
+                    .arg(message.isEmpty() ? tr("the radio refused it") : message));
         }
     });
-    connect(bound, &QTimer::timeout, this, [finish] { finish(true); });
+    // Installing over a container the radio still lists would collide with
+    // it: if the removal isn't seen in time, say so rather than install.
+    connect(bound, &QTimer::timeout, this, [this, name, finish] {
+        finish(false);
+        setRowNotice(name, tr("Reset didn't finish"), QStringLiteral("error"), false);
+        showWaveformInstallResultDialog(
+            this, tr("Reset Failed"),
+            tr("The radio still lists the remote-access container after 30 seconds. Remove it "
+               "from the Waveforms list, then install Remote Access again."));
+    });
     bound->start(30'000);
     waveforms.requestRemoveContainer(name);
 }

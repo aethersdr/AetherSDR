@@ -86,6 +86,10 @@ func pendingState(li loginInfo) string {
 func (n *Node) setLoginState(state string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.setLoginStateLocked(state)
+}
+
+func (n *Node) setLoginStateLocked(state string) {
 	switch n.state {
 	case stateStarting, stateRunning, stateNeedsLogin, stateNeedsApproval:
 		n.state, n.lastError = state, ""
@@ -138,8 +142,21 @@ var signInKeepPoll = 15 * time.Second
 // sign-in: it shows that, asks the control plane for a URL the admin-token
 // holder can fetch, and returns to running once someone signs in. It also
 // tracks the key's expiry for /v1/status.
-func (n *Node) keepSignedIn(ctx context.Context, read loginReader, startLogin func(context.Context) error) {
+//
+// gen is the join it watches (Node.joinGen): a read still in flight when
+// that node stops must not write its expiry or state over the next join's.
+func (n *Node) keepSignedIn(ctx context.Context, gen uint64, read loginReader, startLogin func(context.Context) error) {
 	asked := false
+	// current runs f under mu if the watched join is still the node's.
+	current := func(f func()) bool {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		if n.joinGen != gen {
+			return false
+		}
+		f()
+		return true
+	}
 	check := func() {
 		rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		li, err := read(rctx)
@@ -147,13 +164,13 @@ func (n *Node) keepSignedIn(ctx context.Context, read loginReader, startLogin fu
 		if err != nil {
 			return
 		}
-		n.mu.Lock()
-		n.keyExpiry = li.KeyExpiry
-		n.mu.Unlock()
+		if !current(func() { n.keyExpiry = li.KeyExpiry }) {
+			return
+		}
 		switch {
 		case li.Backend == "Running":
 			asked = false
-			n.setLoginState(stateRunning)
+			current(func() { n.setLoginStateLocked(stateRunning) })
 		case li.Backend == "NeedsLogin":
 			if li.AuthURL == "" && !asked && startLogin != nil {
 				asked = true
@@ -165,11 +182,11 @@ func (n *Node) keepSignedIn(ctx context.Context, read loginReader, startLogin fu
 				cancel()
 			}
 			if s := pendingState(li); s != "" {
-				n.setLoginState(s)
+				current(func() { n.setLoginStateLocked(s) })
 			}
 		case li.Backend == "NeedsMachineAuth":
 			n.markJoined()
-			n.setLoginState(stateNeedsApproval)
+			current(func() { n.setLoginStateLocked(stateNeedsApproval) })
 		}
 	}
 	check()

@@ -626,6 +626,10 @@ void UpdatesWindow::refresh()
         m_tagline->setText(release.tagline);
         if (!store.isEmpty()) {
             note = tr("Updates for this copy come from %1.").arg(store);
+        } else if (m_controller && m_controller->version() == release.version && m_controller->daxDriverChanges()) {
+            // About what will install, so ahead of the offline notes. The in-app
+            // update installs the app only (RFC #5304 Phase 4).
+            note = tr("This release also updates the DAX audio driver. Install it from the release's disk image.");
         } else if (m_failed && release.fromSettings) {
             note = tr("Couldn't reach GitHub for this release's details. Check your connection, then try again.");
         } else if (m_failed) {

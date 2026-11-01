@@ -874,7 +874,7 @@ private slots:
         QProcess quitting;
         quitting.start(QStringLiteral("sleep"), {QStringLiteral("1")});
         QVERIFY(quitting.waitForStarted());
-        QVERIFY(LinuxInstall::startAfterExit(quitting.processId(), program));
+        QVERIFY(LinuxInstall::startAfterExit(quitting.processId(), {program}));
         QTest::qWait(400);
         QVERIFY(!QFileInfo::exists(started));
         QVERIFY(quitting.waitForFinished(5000));
@@ -904,7 +904,7 @@ private slots:
         QProcess quitting;
         quitting.start(QStringLiteral("sleep"), {QStringLiteral("0.3")});
         QVERIFY(quitting.waitForStarted());
-        QVERIFY(LinuxInstall::startAfterExit(quitting.processId(), program, {QStringLiteral("APPIMAGE")}));
+        QVERIFY(LinuxInstall::startAfterExit(quitting.processId(), {program}, {QStringLiteral("APPIMAGE")}));
         qunsetenv("APPIMAGE");
         qunsetenv("AETHER_KEPT");
         ::close(held);

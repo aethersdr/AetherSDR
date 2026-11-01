@@ -637,17 +637,21 @@ QStringList LinuxInstall::appImageVariables()
     return {QStringLiteral("APPIMAGE"), QStringLiteral("APPDIR"), QStringLiteral("ARGV0"), QStringLiteral("OWD")};
 }
 
-bool LinuxInstall::startAfterExit(qint64 pid, const QString& program, const QStringList& unset)
+bool LinuxInstall::startAfterExit(qint64 pid, const QStringList& command, const QStringList& unset)
 {
+    if (command.isEmpty()) {
+        return false;
+    }
     // 600 polls of 0.2 s: two minutes for the quit's own prompts and
     // shutdown, then nothing is started.
     static const QString script = QStringLiteral(
-        "i=0; while kill -0 \"$1\" 2>/dev/null; do i=$((i+1)); "
-        "if [ \"$i\" -gt 600 ]; then exit 1; fi; sleep 0.2; done; exec \"$2\"");
+        "p=$1; shift; i=0; while kill -0 \"$p\" 2>/dev/null; do i=$((i+1)); "
+        "if [ \"$i\" -gt 600 ]; then exit 1; fi; sleep 0.2; done; exec \"$@\"");
     QProcess process;
     process.setProgram(QStringLiteral("/bin/sh"));
-    process.setArguments({QStringLiteral("-c"), script, QStringLiteral("aethersdr-restart"),
-                          QString::number(pid), program});
+    process.setArguments(QStringList{QStringLiteral("-c"), script, QStringLiteral("aethersdr-restart"),
+                                     QString::number(pid)}
+                         + command);
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     for (const QString& name : unset) {
         env.remove(name);

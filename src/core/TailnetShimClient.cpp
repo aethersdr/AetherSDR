@@ -171,7 +171,10 @@ bool shouldSignInUnasked(const TailnetShimStatus& st, bool tokenLoaded, bool hav
         return false;
     }
     const bool fresh = !st.provisioned && st.state == QLatin1String("unprovisioned");
-    const bool abandoned = st.claimable && st.provisioned && !haveToken;
+    // A pending sign-in nobody here can finish: its token is elsewhere, or
+    // this computer's attempt failed (error) before anyone signed in.
+    const bool abandoned = st.claimable && st.provisioned
+        && (!haveToken || st.state == QLatin1String("error"));
     return fresh || abandoned;
 }
 
