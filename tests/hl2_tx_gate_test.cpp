@@ -1659,10 +1659,9 @@ int main(int argc, char** argv)
 
     // ---- A key must not survive a stop() and a restart of the stream ----
     //
-    // stop() ends the session but does not touch the latched key, and start()
-    // does not either; only the operation fence can lift it. start() is stood in
-    // for by marking the client streaming again: it binds a socket, and its body
-    // never writes m_mox.
+    // stop() drops the latched key, so the next session streams unkeyed until a
+    // fresh setMox(true). start() is stood in for by marking the client
+    // streaming again: it binds a socket, and its body never writes m_mox.
     {
         TxTestAuthority tx;
         MetisClient c;
@@ -1694,10 +1693,8 @@ int main(int argc, char** argv)
     // ---- Silence: the link goes down, then the operation is reset ----
     //
     // Stage 2 of the silence watchdog reports linkDown and does not stop the EP2
-    // timer. Read from onWatchdogTick(): it does not clear the latched key
-    // either, so until the coordinator is reset (or the operation otherwise stops
-    // permitting dispatch) EP2 frames keep carrying C0 bit 0. The reset below is
-    // what ends it, at the very next packet.
+    // timer or clear the latched key, so EP2 frames keep carrying C0 bit 0 until
+    // the coordinator is reset. The reset below ends it at the very next packet.
     {
         TxTestAuthority tx;
         MetisClient c;
@@ -1726,8 +1723,9 @@ int main(int argc, char** argv)
     //
     // Reachable at the client or the backend only. There is no receive-only mode,
     // first-EP6 requirement or band/filter-validity check in either keying path
-    // (setMoxImpl and Hl2Backend::applyKeying test the operation fence and the
-    // gate), so those rows have nothing to refuse and are not written.
+    // (setMoxImpl tests the operation fence, the gate and a running session;
+    // Hl2Backend::applyKeying the fence and the gate), so those rows have nothing
+    // to refuse and are not written.
     {
         struct Row {
             const char* name;
