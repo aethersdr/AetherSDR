@@ -113,6 +113,17 @@ tailnet login within seconds; it is never stored or logged.
 Keys are changed in-process (logout, then a new tsnet server with the same
 state directory). Nothing is known to restart a container whose process exits.
 
+## FLEX-6000: the native build (experimental)
+
+FLEX-6000 radios have no container feature, so `native/` packages the same
+shim as a legacy waveform, `AetherTailnet.ssdr_waveform`, for their ARMv7
+CPU. `-run-dir` / `SHIM_RUN_DIR` keeps tsnet's logs and caches on volatile
+storage while the node's identity stays in the state directory: the
+FLEX-6300 measured by `cmd/radio-probe` persists only to a 60 MB flash
+partition. `native/TESTING.md` is the test protocol, with a prompt for a
+tester's AI assistant; `native/tool.py` installs, provisions and watches it
+from the LAN.
+
 ## Build
 
 ```sh
