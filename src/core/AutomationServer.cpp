@@ -11343,8 +11343,9 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
 
     if (action == QLatin1String("center")) {
         // Same contract as `tune` — see refuseUntunableMhz(). It matters more
-        // here: RadioModel::setPanCenter() clamps only the LOW edge, so an
-        // out-of-range centre is optimistically stored and advertised over TCI
+        // here: RadioModel::setPanCenter() clamps only the LOW edge and any
+        // declared receivePanCenterControl, so elsewhere an out-of-range centre
+        // is optimistically stored and advertised over TCI
         // (`dds:`) even though the radio rejects it — the same silent no-op as
         // #4550, one verb over.
         double mhz = 0.0;
