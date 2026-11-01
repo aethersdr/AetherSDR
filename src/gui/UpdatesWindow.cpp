@@ -4,12 +4,15 @@
 #include "core/UpdateChecker.h"
 #include "core/UpdateController.h"
 #include "gui/CanonIndicators.h"
+#include "gui/CanonMessageBox.h"
 #include "gui/FirmwareUpdateCard.h"
 #include "gui/FlowLayout.h"
+#include "gui/ScopedChildWidget.h"
 
 #include <QCheckBox>
 #include <QCoreApplication>
 #include <QDesktopServices>
+#include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -131,7 +134,7 @@ QString sheet()
                "QLabel { background: transparent; color: {{color.canon.inkSoft}}; }"
                // Plain containers stay see-through over the canon ground.
                "QWidget#updatesHeader, QWidget#updatesVersion, QWidget#updatesChapters,"
-               " QWidget#updatesContent, QScrollArea#updatesScroll,"
+               " QWidget#updatesContent, QWidget#updatesInstallForUpdates, QScrollArea#updatesScroll,"
                " QScrollArea#updatesScroll > QWidget > QWidget { background: transparent; border: none; }"
                "QLabel[role=\"eyebrow\"] { color: {{color.canon.cyan}}; font-size: 11px; font-weight: 700;"
                " letter-spacing: 1.5px; }"
@@ -343,6 +346,25 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget*
     m_progressRow->hide();
     content->addWidget(m_progressRow);
 
+    // Install for updates (an AppImage, Linux): the offer, or where the
+    // install is once there is one.
+    m_appImageRow = new QWidget;
+    m_appImageRow->setObjectName(QStringLiteral("updatesInstallForUpdates"));
+    auto* appImageRow = new QHBoxLayout(m_appImageRow);
+    appImageRow->setContentsMargins(0, 0, 0, 0);
+    appImageRow->setSpacing(10);
+    m_appImageText = plainLabel(QStringLiteral("note"));
+    m_appImageText->setObjectName(QStringLiteral("updatesInstallForUpdatesText"));
+    m_appImageText->setWordWrap(true);
+    appImageRow->addWidget(m_appImageText, 1);
+    m_installForUpdates = new QPushButton(tr("Install for updates"));
+    m_installForUpdates->setObjectName(QStringLiteral("updatesSecondary"));
+    m_installForUpdates->setCursor(Qt::PointingHandCursor);
+    m_installForUpdates->setAccessibleName(tr("Install for updates"));
+    appImageRow->addWidget(m_installForUpdates, 0, Qt::AlignTop);
+    m_appImageRow->hide();
+    content->addWidget(m_appImageRow);
+
     auto* footer = new QHBoxLayout;
     m_footnote = plainLabel(QStringLiteral("footnote"));
     m_footnote->setObjectName(QStringLiteral("updatesFootnote"));
@@ -376,6 +398,7 @@ UpdatesWindow::UpdatesWindow(UpdateChecker* checker, RadioModel* radio, QWidget*
 
     connect(m_get, &QPushButton::clicked, this, &UpdatesWindow::primaryClicked);
     connect(m_download, &QPushButton::clicked, this, &UpdatesWindow::openDownload);
+    connect(m_installForUpdates, &QPushButton::clicked, this, &UpdatesWindow::installForUpdatesClicked);
     connect(m_cancel, &QPushButton::clicked, this, [this] {
         if (m_controller) {
             m_controller->cancel();
@@ -469,6 +492,11 @@ void UpdatesWindow::setController(UpdateController* controller)
                     m_browserVersion = version;
                     refresh();
                 });
+        connect(controller, &UpdateController::appImageInstalled, this,
+                [this](bool, const QString& problem) {
+                    m_appImageProblem = problem;
+                    refresh();
+                });
         connect(controller, &UpdateController::failed, this, [this](const QString& reason, const QString& version) {
             m_installProblem = reason;
             m_problemVersion = version;
@@ -516,6 +544,37 @@ void UpdatesWindow::primaryClicked()
         }
         m_controller->install(version);
     }
+}
+
+void UpdatesWindow::installForUpdatesClicked()
+{
+    if (!m_controller || m_controller->appImageToInstall().isEmpty() || m_controller->isInstallingAppImage()) {
+        return;
+    }
+    const QString version = QCoreApplication::applicationVersion();
+    const QString appImage = m_controller->appImageToInstall();
+    ScopedChildWidget<CanonMessageBox> ask(
+        tr("Install for updates"),
+        tr("Install AetherSDR %1 so it updates itself?").arg(version), this);
+    ask.get()->setInformativeText(
+        tr("It is copied into %1 and added to your applications menu, with an aethersdr command. AetherSDR "
+           "then restarts from there, and Install update keeps it current. Nothing is downloaded, and your "
+           "settings stay as they are.")
+            .arg(m_controller->installFolder()));
+    QCheckBox* trash = ask.get()->addCheckBox(
+        tr("Move this AppImage, %1, to the trash afterward").arg(QFileInfo(appImage).fileName()));
+    trash->setObjectName(QStringLiteral("updatesTrashAppImage"));
+    trash->setAccessibleDescription(tr("Moves %1 to the trash once AetherSDR is installed.").arg(appImage));
+    trash->setToolTip(appImage);
+    ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject);
+    QPushButton* go = ask.get()->addButton(tr("Install and restart"), CanonMessageBox::Role::Accept);
+    ask.get()->setDefaultButton(go);
+    ask.get()->exec();
+    if (!ask || ask.get()->clickedButton() != go || !m_controller) {
+        return;
+    }
+    m_appImageProblem.clear();
+    m_controller->installAppImage(trash->isChecked());
 }
 
 UpdatesWindow::View UpdatesWindow::currentView() const
@@ -689,6 +748,35 @@ void UpdatesWindow::refresh()
         m_get->setEnabled(!(staged && installing));
         m_autoCheck->setEnabled(UpdateChecker::storeName().isEmpty());
     }
+
+    // Install for updates, in every view: it needs nothing from GitHub.
+    const QString appImage = m_controller ? m_controller->appImageToInstall() : QString();
+    const bool installingAppImage = m_controller && m_controller->isInstallingAppImage();
+    const QString installed = m_controller && !m_controller->appImage().isEmpty()
+                                  ? m_controller->installedVersion()
+                                  : QString();
+    QString appImageText;
+    if (installingAppImage) {
+        appImageText = tr("Installing AetherSDR %1 for updates…").arg(running);
+    } else if (!m_appImageProblem.isEmpty()) {
+        appImageText = m_appImageProblem;
+    } else if (!appImage.isEmpty()) {
+        appImageText = tr("This AppImage doesn't install updates. Install AetherSDR %1 from it once, and "
+                          "Install update keeps it current. Nothing is downloaded.")
+                           .arg(running);
+    } else if (!installed.isEmpty()) {
+        appImageText = tr("AetherSDR %1 is installed for updates. Start it from your applications menu, or with "
+                          "aethersdr: it updates itself, and this AppImage doesn't.")
+                           .arg(installed);
+    }
+    m_appImageText->setText(appImageText);
+    m_appImageRow->setVisible(!appImageText.isEmpty());
+    m_installForUpdates->setVisible(!appImage.isEmpty() || installingAppImage);
+    m_installForUpdates->setEnabled(!installingAppImage && !m_firmwareBusy);
+    m_installForUpdates->setText(installingAppImage ? tr("Installing…") : tr("Install for updates"));
+    m_installForUpdates->setAccessibleDescription(
+        tr("Copies AetherSDR %1 from this AppImage into an install that updates itself, then restarts it.")
+            .arg(running));
 
     if (staged && installState == State::Installing) {
         m_footnote->setText(tr("Installing AetherSDR %1…").arg(release.version));

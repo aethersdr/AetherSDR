@@ -396,14 +396,49 @@ names the one to run:
 because `~/.local/share/AetherSDR` already holds user data. `LinuxInstall`
 (`src/core`) does all of it.
 
-- **`AetherSDR --install`**, run from the unpacked tree (the tarball, or
-  `--appimage-extract`'s `squashfs-root`), copies the tree into
+- **`AetherSDR --install`**, run from the unpacked tarball or from the
+  AppImage (whose mount is the same tree), copies the tree into
   `install/<version>`, makes it `current`, writes the menu entry from the
   tree's own `usr/share/applications/AetherSDR.desktop` with `Exec` and
   `TryExec` naming `current/AppRun`, links the tree's hicolor icons and the
   command through `current`, and starts it. A file of the user's own at a
-  link's place is left alone. It runs before `QApplication` and writes no
-  settings.
+  link's place is left alone. If the menu entry or `current` can't be
+  written, a release folder it has just copied is removed again, so a
+  failed install leaves nothing behind. It runs before `QApplication` and
+  writes no settings. The copy is made writable by its owner folder by folder, since
+  the AppImage's mount is read-only and its modes would otherwise follow.
+- **Install for updates** (RFC #5304 Phase 6) is the same install from the
+  AppImage's Updates window, offered only when the running binary is the
+  AppImage's own (`$APPDIR/usr/bin`, with `$APPIMAGE` set; the variables
+  alone are inherited by anything another AppImage starts), it is not
+  already in an install, and no installed release is current: an
+  existing install is never replaced from an AppImage, which could be older.
+  That holds against an install made while the copy runs, too:
+  `LinuxInstall::install` takes `Current::KeepExisting`, which makes the
+  link with a plain `symlink()` at `current` instead of renaming one over
+  it, so it fails if anything is there by then. The copy is removed again,
+  and the window points to the install that won. A `current` naming no
+  installed release (its folder gone, or a target outside the install)
+  does not count as an install: it is moved aside in one rename, judged,
+  and removed, or put back with `RENAME_NOREPLACE` if it names a release
+  after all. `--install` keeps `Current::Replace`, so an older AppImage's
+  `--install` deliberately replaces a newer install.
+  `UpdateController::installAppImage` runs `LinuxInstall::install` on the
+  running tree on a worker thread, then, if the operator ticked it in the
+  confirmation (off by default, a maintainer ruling), moves the AppImage to
+  the trash with `QFile::moveToTrash`. Only when both succeed does it start
+  `current/AppRun` after this process exits and close the window; a failed
+  trash leaves the install in place and says so instead of restarting. The
+  started copy, and the one `--install` starts, run without the AppImage
+  runtime's variables (`APPIMAGE`, `APPDIR`, `ARGV0`, `OWD`), whose mount
+  is gone by then and which would make the installed copy take itself for
+  the AppImage, and without any inherited descriptor: the runtime leaves
+  one open on its mount, which would keep the mount and the AppImage file
+  alive for as long as the installed copy runs. Before it restarts, the version goes in
+  `Updates.installedFromAppImage`; the installed copy's next start reports
+  it in the status bar once (`UpdateController::lastUpdate`, outcome
+  `Installed`) and clears it, a maintainer ruling. The AppImage never
+  reports it.
 - **The switch** is what the helper's hand-over is on Windows, done by the
   app itself in `UpdateInstaller::launchHelper`: the staged tree is renamed
   into `install/<version>`, that folder's `AppRun --update-selftest` must
@@ -438,7 +473,8 @@ because `~/.local/share/AetherSDR` already holds user data. `LinuxInstall`
   (`/proc/self/exe`: Qt reports the link's folder when started through
   `AppRun` or `current`) is `install/<version>/usr/bin/AetherSDR` and the
   install folder is writable. The AppImage, distribution packages and build
-  folders keep **Get AetherSDR**.
+  folders keep **Get AetherSDR**; the AppImage also offers Install for
+  updates.
 
 ## Install update (the app's side)
 

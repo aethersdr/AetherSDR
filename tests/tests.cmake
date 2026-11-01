@@ -3937,6 +3937,8 @@ add_executable(firmware_close_dialog_test
     src/gui/UpdatesWindow.cpp
     src/gui/FirmwareUpdateCard.cpp
     src/gui/CanonPrompt.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/CanonWindow.cpp
 )
 target_include_directories(firmware_close_dialog_test PRIVATE src tests)
@@ -4850,6 +4852,8 @@ add_executable(updates_window_test
     src/gui/UpdatesWindow.cpp
     src/gui/FirmwareUpdateCard.cpp
     src/gui/CanonPrompt.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/CanonWindow.cpp
 )
 target_include_directories(updates_window_test PRIVATE src tests)

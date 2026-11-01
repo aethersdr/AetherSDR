@@ -2337,6 +2337,13 @@ void MainWindow::wireUpdateChecker()
                     m_updatesWindow->showInstallProblem(problem, version);
                 }
             });
+    // Install for updates: installed, and it starts once this copy quits.
+    connect(m_updateController, &UpdateController::appImageInstalled, this,
+            [this](bool restart, const QString&) {
+                if (restart) {
+                    close();
+                }
+            });
     connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
             [this](const QString& ver) {
         m_updateController->refreshStaged(ver);
@@ -2429,6 +2436,8 @@ void MainWindow::reportLastUpdate()
         text = tr("The update to %1 couldn't be put in place, so nothing changed.").arg(r.version);
     } else if (r.outcome == QLatin1String("OldStillRunning")) {
         text = tr("The update to %1 installs the next time you quit.").arg(r.version);
+    } else if (r.outcome == QLatin1String("Installed")) {
+        text = tr("AetherSDR %1 is installed for updates. It updates itself from File > Update.").arg(r.version);
     }
     if (!text.isEmpty()) {
         statusBar()->showMessage(text, 10000);

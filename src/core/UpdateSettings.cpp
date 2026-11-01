@@ -19,6 +19,7 @@ const QString kAcceptedManifestField = QStringLiteral("acceptedManifestUtc");
 const QString kRolledBackVersionField = QStringLiteral("rolledBackVersion");
 const QString kQuitSwitchVersionField = QStringLiteral("quitSwitchVersion");
 const QString kQuitSwitchTriesField = QStringLiteral("quitSwitchTries");
+const QString kInstalledFromAppImageField = QStringLiteral("installedFromAppImage");
 } // namespace
 
 QJsonObject UpdateSettings::readObj()
@@ -136,6 +137,22 @@ void UpdateSettings::setQuitSwitchTries(const QString& version, int tries)
     QJsonObject o = readObj();
     o[kQuitSwitchVersionField] = version;
     o[kQuitSwitchTriesField] = tries;
+    write(o);
+}
+
+QString UpdateSettings::installedFromAppImage()
+{
+    return readObj().value(kInstalledFromAppImageField).toString();
+}
+
+void UpdateSettings::setInstalledFromAppImage(const QString& version)
+{
+    QJsonObject o = readObj();
+    if (VersionNumber::parse(version).isNull()) {
+        o.remove(kInstalledFromAppImageField);
+    } else {
+        o[kInstalledFromAppImageField] = VersionNumber::parse(version).toString();
+    }
     write(o);
 }
 

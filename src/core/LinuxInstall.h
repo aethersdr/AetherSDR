@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 
 #include <functional>
 
@@ -46,14 +47,34 @@ public:
     // AppImage, a build folder, a distribution's package.
     static QString treeOf(const QString& appDir, const QString& base);
 
-    // AetherSDR --install, from an unpacked tarball (or, later, from inside
-    // the AppImage): copies tree into <base>/<version>, makes it current,
+    // The AppImage this process runs from ($APPIMAGE), for Install for
+    // updates: only when the binary in binDir is the AppImage's own
+    // ($APPDIR/usr/bin) and not an installed release. The runtime's variables
+    // are inherited, so a copy started from another AppImage (a terminal
+    // that is one) has them too, and is not that AppImage. Empty otherwise.
+    static QString appImageOf(const QString& binDir, const QString& base);
+
+    // The release current names in base when it is installed (its folder is
+    // there with AppRun); empty otherwise, a link left dangling included.
+    static QString installedVersion(const QString& base);
+
+    // AetherSDR --install, from an unpacked tarball or from inside the
+    // AppImage (Install for updates, RFC #5304 Phase 6): copies tree into <base>/<version>, makes it current,
     // and points the menu entry, its icon and the aethersdr command at
     // current. A file or link of the user's own at ~/.local/bin/aethersdr is
     // left alone; note says so. If the menu entry can't be written, current
-    // is not changed.
+    // is not changed, a release folder it copied is removed again, and so is
+    // a menu entry it added.
+    //
+    // Replace (--install) makes version current whatever current named.
+    // KeepExisting (Install for updates) makes it current only if nothing
+    // is current when it gets there, checked in the same step that makes the
+    // link, so an install made while this one copies is never replaced; the
+    // copy is then removed again. A current naming no installed release
+    // (left by an earlier install) does not count, and is cleared.
+    enum class Current { Replace, KeepExisting };
     static bool install(const QString& tree, const QString& version, const Paths& paths,
-                        QString* problem, QString* note = nullptr);
+                        QString* problem, QString* note = nullptr, Current policy = Current::Replace);
 
     // Runs <tree>/AppRun --update-selftest and waits for it (60 s at most):
     // true when it wrote version as its marker.
@@ -79,10 +100,17 @@ public:
     static Switch switchTo(const QString& base, const QString& stagedDir, const QString& version,
                            const QString& keep, const SelfTest& test, bool retry, QString* problem);
 
+    // What an AppImage's runtime sets ($APPIMAGE, $APPDIR, ...): an
+    // installed release started from inside the AppImage is run without
+    // them, or it would take itself for the AppImage.
+    static QStringList appImageVariables();
+
     // Starts program once process pid has exited, giving up after two
     // minutes: Restart to update's relaunch, without a second instance
-    // overlapping the one that is closing.
-    static bool startAfterExit(qint64 pid, const QString& program);
+    // overlapping the one that is closing. The variables named in unset are
+    // removed from what program starts with, and it inherits no descriptor
+    // beyond the standard three.
+    static bool startAfterExit(qint64 pid, const QString& program, const QStringList& unset = {});
 };
 
 } // namespace AetherSDR
