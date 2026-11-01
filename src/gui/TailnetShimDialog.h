@@ -76,6 +76,7 @@ private:
 
     QFrame* m_tailnetCard{nullptr};    // shown once the radio has joined a tailnet
     QFrame* m_devicesCard{nullptr};    // likewise
+    QFrame* m_joinCard{nullptr};       // hidden while the radio is on the tailnet
     QLabel* m_statusDot{nullptr};
     QLabel* m_stateLabel{nullptr};
     QLabel* m_nameLabel{nullptr};

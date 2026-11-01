@@ -246,7 +246,8 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     // Card: joining (by QR code, or an auth key under Advanced) and who may
     // connect.
     QVBoxLayout* join = nullptr;
-    layout->addWidget(makeCard(tr("Join your tailnet"), body, &join));
+    m_joinCard = makeCard(tr("Join your tailnet"), body, &join);
+    layout->addWidget(m_joinCard);
     // Who may reach the radio is the tailnet's business (its access rules
     // in the Tailscale admin console), not a list kept here.
     m_qrHint = roleLabel(QString(), "hint", body);
@@ -613,9 +614,14 @@ void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
     // Joined: on the tailnet now, or holding an address from before (an
     // expired sign-in keeps its address and its shared devices).
     const bool joined = st.state == QLatin1String("running") || !st.tailnetIp.isEmpty();
-    if (m_tailnetCard->isVisible() != joined || m_devicesCard->isVisible() != joined) {
+    // Joining is done once the radio is on the tailnet; an expired sign-in
+    // (or any state short of running) brings the card back for its code.
+    const bool joining = st.state != QLatin1String("running");
+    if (m_tailnetCard->isVisible() != joined || m_devicesCard->isVisible() != joined
+        || m_joinCard->isVisible() != joining) {
         m_tailnetCard->setVisible(joined);
         m_devicesCard->setVisible(joined);
+        m_joinCard->setVisible(joining);
         if (isVisible()) {
             fitToContents();
         }
