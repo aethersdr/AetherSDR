@@ -23,14 +23,20 @@ public:
     // Whether a and b are on one volume, so a rename can move between them.
     static bool sameVolume(const QString& a, const QString& b);
 
-    // The Developer ID team that signed bundle ("944M585CW5"); empty when it
-    // has none (an ad-hoc signed local build) or can't be read.
-    static QString teamOf(const QString& bundle);
+    // The team that signed bundle ("944M585CW5"), empty when it has none (an
+    // ad-hoc signed local build). False when codesign could not tell.
+    static bool teamOf(const QString& bundle, QString* team);
 
+    // What a signature check found.
+    enum class Signature {
+        Valid,
+        Invalid,      // codesign refused it: no second try changes that
+        NotChecked,   // codesign could not run or finish: try again later
+    };
     // /usr/bin/codesign --verify --deep --strict on tree, also requiring, when
-    // team is given, a Developer ID signature from that team; problem is what
-    // codesign said when it refuses.
-    static bool verifySignature(const QString& tree, const QString& team, QString* problem);
+    // team is given, a Developer ID Application signature from that team;
+    // problem is what codesign said, or why it couldn't run.
+    static Signature verifySignature(const QString& tree, const QString& team, QString* problem);
 
     // Whether a process other than this one runs bundle's binary: another
     // AetherSDR, started with open -n, which the swap would pull the bundle
@@ -43,7 +49,7 @@ public:
 
     // The checks prepare() runs, injected by tests.
     struct Checks {
-        std::function<bool(const QString& tree, QString* problem)> signature;
+        std::function<Signature(const QString& tree, QString* problem)> signature;
         std::function<bool(const QString& tree, const QString& version)> selfTest;
     };
     // codesign pinned to the team that signed runningBundle, and the self-test.
@@ -52,8 +58,9 @@ public:
     enum class Prepared {
         Ready,    // *ready is the bundle to swap in as AetherSDR exits
         Failed,   // it failed a check and was removed (only when !retry, or
-                  // for the signature, which no second try changes)
-        Kept,     // the self-test failed; stagedDir is left to try again
+                  // for a refused signature, which no second try changes)
+        Kept,     // the self-test failed, or the signature couldn't be
+                  // checked; stagedDir is left to try again
         Refused,  // nothing to swap: not a bundle, or no room beside the app
     };
     // Gets stagedDir ready to replace bundle. A staged tree on another volume
@@ -69,6 +76,10 @@ public:
     // swapped out goes to previousDir, replacing what was there, when that is
     // on the same volume; otherwise it is removed. False, with nothing
     // changed, when the swap could not be made.
+    //
+    // A copy prepare() makes beside the app is named for the process that
+    // made it (.AetherSDR-incoming-<pid>-<id>); prepare() removes only those
+    // whose process is gone.
     static bool swap(const QString& bundle, const QString& ready, const QString& previousDir, QString* problem);
 };
 

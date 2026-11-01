@@ -492,11 +492,14 @@ user put it; `MacInstall` (`src/core`) does the work.
 - **The hand-over checks, the exit swaps.** At Restart to update (on the
   worker thread) or as AetherSDR quits, `UpdateInstaller::prepareSwap` runs
   `MacInstall::prepare`: a staged bundle on another volume than the app is
-  copied beside it under a hidden `.AetherSDR-incoming-*` name, so the swap
-  is still one rename (copies a crashed run left behind are removed first);
+  copied beside it under a hidden `.AetherSDR-incoming-<pid>-*` name, so the
+  swap is still one rename (copies whose process is gone are removed first;
+  another live instance's copy stays);
   then `codesign --verify --deep --strict` and the frozen
   `--update-selftest`. The swap waits for `UpdateInstaller::finishSwapOnExit`,
-  which `main()` calls after the event loop returns and the window is gone:
+  which `main()` calls after the event loop returns and the window is gone
+  (and which first waits, bounded, for Restart to update's checks if the
+  user quit while they ran):
   after the swap, the bundle's path holds the new release, so nothing the
   running process loads late may come after it. A UI-scale restart, which
   opens the bundle again as this process exits, drops the readied swap; the
@@ -509,22 +512,30 @@ user put it; `MacInstall` (`src/core`) does the work.
   `Updated <version>` to `swap-result.txt`. While another AetherSDR runs the
   bundle's binary (`open -n`; found through `proc_pidpath`), the swap waits
   as the Windows helper does: `OldStillRunning`, the release stays staged
-  (a maintainer ruling). A swap that cannot be made writes `NotPossible` and
-  counts as a failed try at quit with the self-test's; the third is final and
-  the release is dropped and remembered as rolled back, so a rename macOS
-  keeps refusing is not retried at every quit. Restart to update then runs
+  (a maintainer ruling). A swap that cannot be made writes `NotPossible`
+  and, at quit, counts as a failed try with the self-test's; the third is
+  final (`RolledBack`): the release is dropped and never offered again, so a
+  rename macOS keeps refusing is not retried at every quit. A refusal on
+  Restart to update, which the user asked for, is not counted. Restart to
+  update then runs
   `open -n <bundle>` once this process has exited.
 - **The code signature backs up the manifest; it is not the trust boundary.**
   The manifest's Ed25519 signature decides what is installed; codesign
   catches a staged tree that does not match what was signed, before it can
-  replace a working app. When the running app has a Developer ID team, the
-  staged bundle must be signed by that same team (`codesign -R` with
-  `anchor apple generic and certificate leaf[subject.OU] = "<team>"`, a
-  maintainer ruling), so a tree re-signed by another process in the
-  user-writable staging folder between the manifest re-check and the swap is
-  refused. An ad-hoc signed local build checks the signature alone. A bad signature is final at once. A failed self-test is final
-  on Restart to update and retried at the next quit up to the third, as on
-  Linux; a final failure is remembered as rolled back.
+  replace a working app. When the running app has a team, the staged bundle
+  must carry a Developer ID Application signature of that same team
+  (`codesign -R` with `anchor apple generic and certificate
+  leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] =
+  "<team>"`, a maintainer ruling), so a tree re-signed by another process in
+  the user-writable staging folder between the manifest re-check and the
+  swap is refused. An ad-hoc signed local build (`TeamIdentifier=not set`)
+  checks the signature alone.
+- A bad signature is final at once. A check that could not run (codesign
+  missing or timing out, or the running app's team unreadable) refuses
+  nothing and rolls nothing back: the release stays staged for the next
+  try. A failed self-test is final on Restart to update and retried at the
+  next quit up to the third, as on Linux; a final failure is remembered as
+  rolled back.
 - The bundle carries no signatures in extended attributes (no
   `com.apple.cs.*`), so the payload is its bytes and its symlinks (the
   frameworks' `Versions/Current` and the links through it). A copy with

@@ -4,6 +4,7 @@
 #include "core/UpdateInstaller.h"
 #include "core/UpdateSettings.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -11,6 +12,7 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
@@ -75,7 +77,8 @@ void makeBundle(const QString& bundle, const QByteArray& version, int exitCode =
 
 MacInstall::Checks passing()
 {
-    return {[](const QString&, QString*) { return true; }, [](const QString&, const QString&) { return true; }};
+    return {[](const QString&, QString*) { return MacInstall::Signature::Valid; },
+            [](const QString&, const QString&) { return true; }};
 }
 
 } // namespace
@@ -123,7 +126,7 @@ private slots:
         QStringList checked;
         MacInstall::Checks checks{[&](const QString& tree, QString*) {
                                       checked << QStringLiteral("signature ") + tree;
-                                      return true;
+                                      return MacInstall::Signature::Valid;
                                   },
                                   [&](const QString& tree, const QString& v) {
                                       checked << QStringLiteral("self-test ") + tree + QLatin1Char(' ') + v;
@@ -154,7 +157,7 @@ private slots:
         makeBundle(staged, "26.11.2");
         MacInstall::Checks badSignature{[](const QString&, QString* p) {
                                             *p = QStringLiteral("a sealed resource is missing or invalid");
-                                            return false;
+                                            return MacInstall::Signature::Invalid;
                                         },
                                         [](const QString&, const QString&) { return true; }};
         QCOMPARE(MacInstall::prepare(bundle, staged, QStringLiteral("26.11.2"), badSignature, true, &ready, &problem),
@@ -163,7 +166,7 @@ private slots:
         QVERIFY(!QFileInfo::exists(staged));
         // A self-test that fails: kept to try again, or removed when final.
         makeBundle(staged, "26.11.2");
-        MacInstall::Checks badTest{[](const QString&, QString*) { return true; },
+        MacInstall::Checks badTest{[](const QString&, QString*) { return MacInstall::Signature::Valid; },
                                    [](const QString&, const QString&) { return false; }};
         QCOMPARE(MacInstall::prepare(bundle, staged, QStringLiteral("26.11.2"), badTest, true, &ready, &problem),
                  MacInstall::Prepared::Kept);
@@ -232,17 +235,20 @@ private slots:
                                    {QStringLiteral("--force"), QStringLiteral("--sign"), QStringLiteral("-"), bundle}),
                  0);
         QString problem;
-        QVERIFY2(MacInstall::verifySignature(bundle, {}, &problem), qPrintable(problem));
+        using Sig = MacInstall::Signature;
+        QVERIFY2(MacInstall::verifySignature(bundle, {}, &problem) == Sig::Valid, qPrintable(problem));
         writeFile(bundle + QStringLiteral("/Contents/Resources/qt.conf"), "[Paths]\nPrefix=elsewhere\n");
-        QVERIFY(!MacInstall::verifySignature(bundle, {}, &problem));
+        QVERIFY(MacInstall::verifySignature(bundle, {}, &problem) == Sig::Invalid);
         QVERIFY2(problem.contains(QLatin1String("doesn't match")), qPrintable(problem));
         // Signed again, ad hoc: valid, but not by the team a release requires.
         QCOMPARE(QProcess::execute(QStringLiteral("/usr/bin/codesign"),
                                    {QStringLiteral("--force"), QStringLiteral("--sign"), QStringLiteral("-"), bundle}),
                  0);
-        QVERIFY(MacInstall::teamOf(bundle).isEmpty());
-        QVERIFY2(MacInstall::verifySignature(bundle, {}, &problem), qPrintable(problem));
-        QVERIFY(!MacInstall::verifySignature(bundle, QStringLiteral("944M585CW5"), &problem));
+        QString team = QStringLiteral("x");
+        QVERIFY(MacInstall::teamOf(bundle, &team));
+        QVERIFY(team.isEmpty());   // ad hoc: no team, and known to have none
+        QVERIFY2(MacInstall::verifySignature(bundle, {}, &problem) == Sig::Valid, qPrintable(problem));
+        QVERIFY(MacInstall::verifySignature(bundle, QStringLiteral("944M585CW5"), &problem) == Sig::Invalid);
 #endif
     }
 
@@ -326,7 +332,7 @@ private slots:
                                         inCheck = true;
                                         cv.notify_all();
                                         cv.wait(l, [&] { return release; });
-                                        return true;
+                                        return MacInstall::Signature::Valid;
                                     },
                                     [](const QString&, const QString&) { return true; }};
         bool prepared = true;
@@ -437,12 +443,150 @@ private slots:
             QVERIFY(QDir().rename(staged, away));
             UpdateInstaller::finishSwapOnExit();
             QVERIFY(QDir().rename(away, staged));
-            QCOMPARE(readFile(state + QStringLiteral("/swap-result.txt")), QByteArray("NotPossible 26.11.2\n"));
+            QCOMPARE(readFile(state + QStringLiteral("/swap-result.txt")),
+                     i < 3 ? QByteArray("NotPossible 26.11.2\n") : QByteArray("RolledBack 26.11.2\n"));
             QCOMPARE(UpdateSettings::quitSwitchTries(QStringLiteral("26.11.2")), i);
             QCOMPARE(UpdateSettings::rolledBackVersion().isEmpty(), i < 3);
         }
         QVERIFY(!QFileInfo::exists(staged + QStringLiteral(".json")));   // discarded at the third
         QCOMPARE(readFile(bundle + QStringLiteral("/Contents/Info.plist")), QByteArray("<plist>26.11.1</plist>"));
+    }
+
+    // A check that couldn't run says nothing against the release: kept, even
+    // when final, and never rolled back.
+    void aSignatureThatCouldNotBeCheckedKeepsTheRelease()
+    {
+        QTemporaryDir tmp;
+        const QString bundle = tmp.filePath(QStringLiteral("Apps/AetherSDR.app"));
+        makeBundle(bundle, "26.11.1");
+        const QString staged = tmp.filePath(QStringLiteral("update/26.11.2"));
+        makeBundle(staged, "26.11.2");
+        MacInstall::Checks unknown{[](const QString&, QString* p) {
+                                       *p = QStringLiteral("Its code signature could not be checked.");
+                                       return MacInstall::Signature::NotChecked;
+                                   },
+                                   [](const QString&, const QString&) { return true; }};
+        QString ready;
+        QString problem;
+        QCOMPARE(MacInstall::prepare(bundle, staged, QStringLiteral("26.11.2"), unknown, false, &ready, &problem),
+                 MacInstall::Prepared::Kept);
+        QVERIFY(QFileInfo::exists(staged + QStringLiteral("/Contents/MacOS/AetherSDR")));
+        // Whose signature a release needs, when that can't be read, is not
+        // "anyone's": a bundle that isn't there has no readable team.
+        QCOMPARE(MacInstall::real(tmp.filePath(QStringLiteral("nowhere.app"))).signature(staged, &problem),
+                 MacInstall::Signature::NotChecked);
+    }
+
+    // Only copies whose process is gone are cleared from beside the app.
+    void onlyACopyWhoseProcessIsGoneIsCleared()
+    {
+#ifdef Q_OS_UNIX
+        QTemporaryDir tmp;
+        const QString bundle = tmp.filePath(QStringLiteral("Apps/AetherSDR.app"));
+        makeBundle(bundle, "26.11.1");
+        const QString staged = tmp.filePath(QStringLiteral("update/26.11.2"));
+        makeBundle(staged, "26.11.2");
+        QProcess gone;
+        gone.start(QStringLiteral("/bin/sh"), {QStringLiteral("-c"), QStringLiteral("exit 0")});
+        QVERIFY(gone.waitForFinished(5000));
+        const QString apps = tmp.filePath(QStringLiteral("Apps"));
+        const QString dead = QStringLiteral(".AetherSDR-incoming-%1-aaaaaaaa").arg(gone.processId() > 0 ? gone.processId() : 999999);
+        const QString live = QStringLiteral(".AetherSDR-incoming-%1-bbbbbbbb").arg(QCoreApplication::applicationPid());
+        QVERIFY(QDir(apps).mkpath(dead));
+        QVERIFY(QDir(apps).mkpath(live));
+        QString ready;
+        QString problem;
+        QCOMPARE(MacInstall::prepare(bundle, staged, QStringLiteral("26.11.2"), passing(), false, &ready, &problem),
+                 MacInstall::Prepared::Ready);
+        QVERIFY(!QFileInfo::exists(QDir(apps).filePath(dead)));
+        QVERIFY(QFileInfo::exists(QDir(apps).filePath(live)));
+#endif
+    }
+
+    // Quit while Restart to update's checks still run on the worker: the exit
+    // waits for them, then swaps and restarts as asked.
+    void theExitWaitsForChecksStillRunning()
+    {
+        QTemporaryDir tmp;
+        const QString bundle = tmp.filePath(QStringLiteral("Apps/AetherSDR.app"));
+        makeBundle(bundle, "26.11.1");
+        const QString state = tmp.filePath(QStringLiteral("update"));
+        const QString staged = state + QStringLiteral("/26.11.2");
+        makeBundle(staged, "26.11.2");
+        QStringList restarted;
+        UpdateInstaller::setRestartForTesting([&](const QString& b) {
+            restarted << b;
+            return true;
+        });
+        std::mutex m;
+        std::condition_variable cv;
+        bool inCheck = false;
+        bool release = false;
+        MacInstall::Checks blocking{[&](const QString&, QString*) {
+                                        std::unique_lock<std::mutex> l(m);
+                                        inCheck = true;
+                                        cv.notify_all();
+                                        cv.wait(l, [&] { return release; });
+                                        return MacInstall::Signature::Valid;
+                                    },
+                                    [](const QString&, const QString&) { return true; }};
+        QString problem;
+        std::thread worker([&] {
+            UpdateInstaller::prepareSwap(bundle, staged, QStringLiteral("26.11.2"), blocking, true, state, &problem);
+        });
+        {
+            std::unique_lock<std::mutex> l(m);
+            QVERIFY(cv.wait_for(l, std::chrono::seconds(10), [&] { return inCheck; }));
+        }
+        std::atomic<bool> finished{false};
+        std::thread exiting([&] {
+            UpdateInstaller::finishSwapOnExit();
+            finished = true;
+        });
+        QTest::qWait(300);
+        QVERIFY(!finished);   // waiting for the checks
+        {
+            const std::lock_guard<std::mutex> l(m);
+            release = true;
+        }
+        cv.notify_all();
+        worker.join();
+        exiting.join();
+        UpdateInstaller::setRestartForTesting({});
+        QCOMPARE(readFile(bundle + QStringLiteral("/Contents/Info.plist")), QByteArray("<plist>26.11.2</plist>"));
+        QCOMPARE(restarted, QStringList{bundle});
+    }
+
+    // A refused swap on Restart to update was asked for: it isn't counted
+    // against the release, and the restart still happens.
+    void aRefusedSwapOnRestartIsNotCounted()
+    {
+        QTemporaryDir tmp;
+        const QString bundle = tmp.filePath(QStringLiteral("Apps/AetherSDR.app"));
+        makeBundle(bundle, "26.11.1");
+        const QString state = tmp.filePath(QStringLiteral("update"));
+        const QString staged = state + QStringLiteral("/26.11.2");
+        makeBundle(staged, "26.11.2");
+        UpdateSettings::setRolledBackVersion({});
+        UpdateSettings::setQuitSwitchTries(QStringLiteral("26.11.2"), 0);
+        int restarts = 0;
+        UpdateInstaller::setRestartForTesting([&](const QString&) {
+            ++restarts;
+            return true;
+        });
+        const QString away = tmp.filePath(QStringLiteral("away"));
+        QString problem;
+        for (int i = 0; i < 4; ++i) {
+            QVERIFY(UpdateInstaller::prepareSwap(bundle, staged, QStringLiteral("26.11.2"), passing(), true, state,
+                                                 &problem));
+            QVERIFY(QDir().rename(staged, away));
+            UpdateInstaller::finishSwapOnExit();
+            QVERIFY(QDir().rename(away, staged));
+        }
+        UpdateInstaller::setRestartForTesting({});
+        QCOMPARE(UpdateSettings::quitSwitchTries(QStringLiteral("26.11.2")), 0);
+        QVERIFY(UpdateSettings::rolledBackVersion().isEmpty());
+        QCOMPARE(restarts, 4);
     }
 
     void aReleaseFailingAtQuitIsTriedThreeTimesThenRolledBack()
@@ -455,7 +599,7 @@ private slots:
         makeBundle(staged, "26.11.2");
         UpdateSettings::setRolledBackVersion({});
         UpdateSettings::setQuitSwitchTries(QStringLiteral("26.11.2"), 0);
-        MacInstall::Checks failing{[](const QString&, QString*) { return true; },
+        MacInstall::Checks failing{[](const QString&, QString*) { return MacInstall::Signature::Valid; },
                                    [](const QString&, const QString&) { return false; }};
         QString problem;
         for (int i = 1; i <= 2; ++i) {

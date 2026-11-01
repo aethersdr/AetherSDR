@@ -2,6 +2,7 @@
 
 #include "LogManager.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -20,6 +21,7 @@
 #include <string.h>     // strerror
 #include <errno.h>
 #include <sys/stat.h>   // stat, for the volume
+#include <signal.h>     // kill
 #include <unistd.h>     // getpid
 #endif
 #if defined(Q_OS_MACOS)
@@ -66,6 +68,17 @@ bool exchange(const QString& a, const QString& b, QString* problem)
 #endif
 }
 
+// Whether process pid exists (EPERM: it does, as another user's).
+bool processRuns(qint64 pid)
+{
+#if defined(Q_OS_MACOS) || defined(Q_OS_LINUX)
+    return pid > 0 && (::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM);
+#else
+    Q_UNUSED(pid);
+    return false;
+#endif
+}
+
 void removeTree(const QString& path)
 {
     std::error_code ec;
@@ -103,45 +116,67 @@ bool MacInstall::sameVolume(const QString& a, const QString& b)
 #endif
 }
 
-QString MacInstall::teamOf(const QString& bundle)
+bool MacInstall::teamOf(const QString& bundle, QString* team)
 {
+    team->clear();
     QProcess p;
     p.setProcessChannelMode(QProcess::MergedChannels);
     p.start(QStringLiteral("/usr/bin/codesign"), {QStringLiteral("-dv"), QStringLiteral("--verbose=2"), bundle});
-    if (!p.waitForStarted(10000) || !p.waitForFinished(30000) || p.exitCode() != 0) {
-        return {};
+    if (!p.waitForStarted(10000) || !p.waitForFinished(30000) || p.exitStatus() != QProcess::NormalExit
+        || p.exitCode() != 0) {
+        p.kill();
+        p.waitForFinished(5000);
+        return false;
     }
-    static const QRegularExpression team(QStringLiteral("^TeamIdentifier=([A-Z0-9]{10})$"),
+    const QString said = QString::fromLocal8Bit(p.readAll());
+    static const QRegularExpression line(QStringLiteral("^TeamIdentifier=(.*)$"),
                                          QRegularExpression::MultilineOption);
-    return team.match(QString::fromLocal8Bit(p.readAll())).captured(1);
+    const QRegularExpressionMatch m = line.match(said);
+    if (!m.hasMatch()) {
+        return false;
+    }
+    const QString value = m.captured(1).trimmed();
+    static const QRegularExpression id(QStringLiteral("^[A-Z0-9]{10}$"));
+    if (value == QLatin1String("not set")) {
+        return true;   // ad hoc: no team
+    }
+    if (!id.match(value).hasMatch()) {
+        return false;
+    }
+    *team = value;
+    return true;
 }
 
-bool MacInstall::verifySignature(const QString& tree, const QString& team, QString* problem)
+MacInstall::Signature MacInstall::verifySignature(const QString& tree, const QString& team, QString* problem)
 {
     QStringList args{QStringLiteral("--verify"), QStringLiteral("--deep"), QStringLiteral("--strict")};
     if (!team.isEmpty()) {
-        // The team that signed this copy, and only by a Developer ID: a tree
-        // re-signed by anyone else in the staging folder is refused.
+        // A Developer ID Application certificate (Apple's marker OID) of the
+        // team that signed this copy: a tree re-signed by anyone else in the
+        // staging folder, or with another of the team's certificates, is
+        // refused.
         args << QStringLiteral("-R")
-             << QStringLiteral("=anchor apple generic and certificate leaf[subject.OU] = \"%1\"").arg(team);
+             << QStringLiteral("=anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] "
+                               "and certificate leaf[subject.OU] = \"%1\"")
+                    .arg(team);
     }
     args << tree;
     QProcess p;
     p.setProcessChannelMode(QProcess::MergedChannels);
     p.start(QStringLiteral("/usr/bin/codesign"), args);
-    if (!p.waitForStarted(10000) || !p.waitForFinished(120000)) {
+    if (!p.waitForStarted(10000) || !p.waitForFinished(120000) || p.exitStatus() != QProcess::NormalExit) {
         p.kill();
         p.waitForFinished(5000);
         *problem = QStringLiteral("Its code signature could not be checked.");
-        return false;
+        return Signature::NotChecked;
     }
-    if (p.exitStatus() != QProcess::NormalExit || p.exitCode() != 0) {
+    if (p.exitCode() != 0) {
         const QString said = QString::fromLocal8Bit(p.readAll()).trimmed();
         qCWarning(lcUpdater).noquote() << "code signature check failed:" << said;
         *problem = QStringLiteral("Its code signature doesn't match: %1").arg(said);
-        return false;
+        return Signature::Invalid;
     }
-    return true;
+    return Signature::Valid;
 }
 
 bool MacInstall::selfTest(const QString& tree, const QString& version)
@@ -179,8 +214,8 @@ bool MacInstall::otherInstanceRunning(const QString& bundle)
     if (binary.isEmpty()) {
         return false;
     }
-    const pid_t self = ::getpid();
 #if defined(Q_OS_MACOS)
+    const pid_t self = ::getpid();
     // proc_listallpids returns how many pids it wrote, not bytes.
     std::vector<pid_t> pids(16384);
     const int count = ::proc_listallpids(pids.data(), static_cast<int>(pids.size() * sizeof(pid_t)));
@@ -193,6 +228,7 @@ bool MacInstall::otherInstanceRunning(const QString& bundle)
     }
 #elif defined(Q_OS_LINUX)
     // The same question through /proc, so the tests run here too.
+    const pid_t self = ::getpid();
     for (const QString& pid : QDir(QStringLiteral("/proc")).entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
         bool number = false;
         const pid_t p = static_cast<pid_t>(pid.toLongLong(&number));
@@ -207,8 +243,17 @@ bool MacInstall::otherInstanceRunning(const QString& bundle)
 
 MacInstall::Checks MacInstall::real(const QString& runningBundle)
 {
-    const QString team = teamOf(runningBundle);
-    return {[team](const QString& tree, QString* problem) { return verifySignature(tree, team, problem); },
+    QString team;
+    const bool known = teamOf(runningBundle, &team);
+    return {[known, team](const QString& tree, QString* problem) {
+                // Not knowing who signed this copy never drops the pin: the
+                // check waits for a time it can tell.
+                if (!known) {
+                    *problem = QStringLiteral("Its code signature could not be checked.");
+                    return Signature::NotChecked;
+                }
+                return verifySignature(tree, team, problem);
+            },
             &MacInstall::selfTest};
 }
 
@@ -220,18 +265,24 @@ MacInstall::Prepared MacInstall::prepare(const QString& bundle, const QString& s
         return Prepared::Refused;
     }
     const QString parent = QFileInfo(bundle).absolutePath();
-    // A copy an earlier run left beside the app (it exited before its swap).
+    // A copy a run left beside the app when it exited before its swap; one
+    // whose process still runs is that instance's, and stays.
     const QStringList left = QDir(parent).entryList({QStringLiteral(".AetherSDR-incoming-*")},
                                                     QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot);
     for (const QString& name : left) {
-        removeTree(QDir(parent).filePath(name));
+        bool number = false;
+        const qint64 pid = name.section(QLatin1Char('-'), 2, 2).toLongLong(&number);
+        if (!number || !processRuns(pid)) {
+            removeTree(QDir(parent).filePath(name));
+        }
     }
     QString tree = stagedDir;
     // The swap is one rename, so the new bundle must be on the app's volume:
     // staged elsewhere, it is copied beside the app under a hidden name.
     if (!sameVolume(stagedDir, parent)) {
-        tree = QDir(parent).filePath(QStringLiteral(".AetherSDR-incoming-")
-                                     + QUuid::createUuid().toString(QUuid::WithoutBraces).left(8));
+        tree = QDir(parent).filePath(QStringLiteral(".AetherSDR-incoming-%1-%2")
+                                         .arg(QCoreApplication::applicationPid())
+                                         .arg(QUuid::createUuid().toString(QUuid::WithoutBraces).left(8)));
         std::error_code ec;
         fs::copy(toPath(stagedDir), toPath(tree), fs::copy_options::recursive | fs::copy_options::copy_symlinks, ec);
         if (ec) {
@@ -246,8 +297,13 @@ MacInstall::Prepared MacInstall::prepare(const QString& bundle, const QString& s
             removeTree(tree);
         }
     };
-    // No second try changes a signature.
-    if (!checks.signature(tree, problem)) {
+    switch (checks.signature(tree, problem)) {
+    case Signature::Valid:
+        break;
+    case Signature::NotChecked:   // nothing known against the release: kept
+        drop();
+        return Prepared::Kept;
+    case Signature::Invalid:      // no second try changes a signature
         drop();
         removeTree(stagedDir);
         return Prepared::Failed;
@@ -275,9 +331,8 @@ bool MacInstall::swap(const QString& bundle, const QString& ready, const QString
         return false;
     }
     // ready now holds the bundle that was running: the previous version.
-    const QString keepIn = QFileInfo(previousDir).absolutePath();
-    QDir().mkpath(keepIn);
-    if (!previousDir.isEmpty() && sameVolume(ready, keepIn)) {
+    const QString keepIn = previousDir.isEmpty() ? QString() : QFileInfo(previousDir).absolutePath();
+    if (!keepIn.isEmpty() && QDir().mkpath(keepIn) && sameVolume(ready, keepIn)) {
         removeTree(previousDir);
         std::error_code ec;
         fs::rename(toPath(ready), toPath(previousDir), ec);

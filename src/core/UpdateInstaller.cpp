@@ -17,6 +17,8 @@
 #include <QStandardPaths>
 #include <QTemporaryFile>
 
+#include <chrono>
+#include <condition_variable>
 #include <mutex>
 
 #ifdef Q_OS_WIN
@@ -69,8 +71,10 @@ struct PendingSwap {
 };
 struct SwapState {
     std::mutex lock;
+    std::condition_variable settled;   // a preparation finished
     PendingSwap pending;
     quint64 generation = 0;
+    int preparing = 0;                 // preparations still running
 };
 SwapState& swapState()
 {
@@ -82,6 +86,19 @@ SwapState& swapState()
 std::function<bool(const QString& bundle)>& otherInstance()
 {
     static std::function<bool(const QString&)> f = &MacInstall::otherInstanceRunning;
+    return f;
+}
+
+// Restart to update's start of the bundle once this process has exited,
+// replaced by tests.
+bool openAfterExit(const QString& bundle)
+{
+    return LinuxInstall::startAfterExit(QCoreApplication::applicationPid(),
+                                        {QStringLiteral("/usr/bin/open"), QStringLiteral("-n"), bundle});
+}
+std::function<bool(const QString& bundle)>& restarter()
+{
+    static std::function<bool(const QString&)> f = &openAfterExit;
     return f;
 }
 
@@ -332,7 +349,19 @@ bool UpdateInstaller::prepareSwap(const QString& bundle, const QString& stagedDi
     {
         const std::lock_guard<std::mutex> g(swapState().lock);
         generation = swapState().generation;
+        ++swapState().preparing;
     }
+    // However it ends, finishSwapOnExit stops waiting for it.
+    struct Done {
+        ~Done()
+        {
+            {
+                const std::lock_guard<std::mutex> g(swapState().lock);
+                --swapState().preparing;
+            }
+            swapState().settled.notify_all();
+        }
+    } done;
     const int tried = restart ? 0 : UpdateSettings::quitSwitchTries(version);
     QString ready;
     const Prepared result = MacInstall::prepare(bundle, stagedDir, version, checks,
@@ -376,6 +405,11 @@ void UpdateInstaller::setOtherInstanceCheckForTesting(std::function<bool(const Q
     otherInstance() = check ? std::move(check) : std::function<bool(const QString&)>(&MacInstall::otherInstanceRunning);
 }
 
+void UpdateInstaller::setRestartForTesting(std::function<bool(const QString& bundle)> restart)
+{
+    restarter() = restart ? std::move(restart) : std::function<bool(const QString&)>(&openAfterExit);
+}
+
 void UpdateInstaller::dropPendingSwap()
 {
     const std::lock_guard<std::mutex> g(swapState().lock);
@@ -387,7 +421,11 @@ void UpdateInstaller::finishSwapOnExit()
 {
     PendingSwap p;
     {
-        const std::lock_guard<std::mutex> g(swapState().lock);
+        // Restart to update's checks may still run on the worker (quit while
+        // they did): they finish first, so the restart asked for happens.
+        // Bounded by the checks' own timeouts.
+        std::unique_lock<std::mutex> g(swapState().lock);
+        swapState().settled.wait_for(g, std::chrono::minutes(4), [] { return swapState().preparing == 0; });
         p = swapState().pending;
         swapState().pending = {};
     }
@@ -413,24 +451,26 @@ void UpdateInstaller::finishSwapOnExit()
         writeSwapResult(p.stateDir, updater::Outcome::Updated, p.version);
         qCInfo(lcUpdater).noquote() << "v" + p.version + " installed in" << p.bundle;
     } else {
-        // Nothing changed. Counted with the failed checks at quit: the third
-        // is final, as on Linux, so a swap macOS keeps refusing is not
-        // retried at every quit.
+        // Nothing changed. At quit it counts with the failed checks: the
+        // third is final, so a swap macOS keeps refusing is not retried at
+        // every quit (Restart to update is asked for, and not counted).
         dropCopy();
-        writeSwapResult(p.stateDir, updater::Outcome::NotPossible, p.version);
         qCWarning(lcUpdater).noquote() << "update to v" + p.version + " not installed:" << problem;
-        const int tried = UpdateSettings::quitSwitchTries(p.version) + 1;
-        UpdateSettings::setQuitSwitchTries(p.version, tried);
+        const int tried = p.restart ? 0 : UpdateSettings::quitSwitchTries(p.version) + 1;
+        if (!p.restart) {
+            UpdateSettings::setQuitSwitchTries(p.version, tried);
+        }
         if (tried >= kQuitSwitchTries) {
             UpdateSettings::setRolledBackVersion(p.version);   // never offered again
             UpdateStager::discard(p.stateDir, p.version);
+            writeSwapResult(p.stateDir, updater::Outcome::RolledBack, p.version);
+        } else {
+            writeSwapResult(p.stateDir, updater::Outcome::NotPossible, p.version);
         }
     }
     // Restart to update starts AetherSDR again either way: the new bundle,
     // or the one that is still there.
-    if (p.restart
-        && !LinuxInstall::startAfterExit(QCoreApplication::applicationPid(),
-                                         {QStringLiteral("/usr/bin/open"), QStringLiteral("-n"), p.bundle})) {
+    if (p.restart && !restarter()(p.bundle)) {
         qCWarning(lcUpdater) << "the restart could not be arranged";
     }
 }
