@@ -530,6 +530,30 @@ void TailnetShimDialog::maybeSignInUnasked()
     }
 }
 
+// Fits the window to what is shown, after the layout has caught up with a
+// show or hide: measured at once, a just-hidden panel still counts, so the
+// window grows but never shrinks back.
+void TailnetShimDialog::fitToContents()
+{
+    if (m_fitPending) {
+        return;
+    }
+    m_fitPending = true;
+    QTimer::singleShot(0, this, [this] {
+        m_fitPending = false;
+        if (!isVisible()) {
+            return;
+        }
+        if (QLayout* l = bodyWidget()->layout()) {
+            l->activate();
+        }
+        if (QLayout* l = layout()) {
+            l->activate();
+        }
+        adjustSize();
+    });
+}
+
 void TailnetShimDialog::setWrapped(QLabel* label, const QString& text, int width)
 {
     // Status polls repeat the same text every few seconds; re-laying out the
@@ -542,7 +566,7 @@ void TailnetShimDialog::setWrapped(QLabel* label, const QString& text, int width
     label->ensurePolished();
     label->setMinimumHeight(text.isEmpty() ? 0 : label->heightForWidth(width));
     if (isVisible()) {
-        adjustSize();
+        fitToContents();
     }
 }
 
@@ -594,7 +618,7 @@ void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
         m_tailnetCard->setVisible(joined);
         m_devicesCard->setVisible(joined);
         if (isVisible()) {
-            adjustSize();
+            fitToContents();
         }
     }
     QString line = stateText(st);
@@ -887,7 +911,7 @@ void TailnetShimDialog::showSignIn(const QString& url)
     if (!m_qrPanel->isVisible()) {
         m_qrPanel->show();
         if (isVisible()) {
-            adjustSize();
+            fitToContents();
         }
     }
 }
@@ -899,7 +923,7 @@ void TailnetShimDialog::hideSignIn()
     if (m_qrPanel->isVisible()) {
         m_qrPanel->hide();
         if (isVisible()) {
-            adjustSize();
+            fitToContents();
         }
     }
 }
@@ -910,7 +934,7 @@ void TailnetShimDialog::setAdvancedOpen(bool open)
                                    : tr("▸ Advanced: use an auth key"));
     m_keyPanel->setVisible(open);
     if (isVisible()) {
-        adjustSize();
+        fitToContents();
     }
 }
 

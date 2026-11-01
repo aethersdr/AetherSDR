@@ -46,6 +46,7 @@ private:
     void hideSignIn();
     void onLogin(const TailnetShimLogin& login);
     void setAdvancedOpen(bool open);
+    void fitToContents();
     // Starts the QR sign-in without being asked when no tailnet owns the
     // radio: never provisioned, or a sign-in abandoned with its token.
     void maybeSignInUnasked();
@@ -68,6 +69,7 @@ private:
     bool m_signingIn{false};
     // The code is offered unasked once per window, and again on Refresh.
     bool m_autoSignInTried{false};
+    bool m_fitPending{false};
     bool m_advancedOpenedForVersion{false};
     QString m_authUrl;   // the sign-in URL the QR code shows, if any
     std::optional<TailnetShimStatus> m_status;
