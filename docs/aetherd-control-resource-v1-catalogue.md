@@ -354,8 +354,11 @@ method or a resource.
 
 ### Meters
 
-The HL2 defines nine meters. They reach clients through the generic `meter`
-resource; the HL2 chooses the indices, since the radio assigns none.
+`Hl2Backend::defineMeters` defines nine meters. They reach clients through the
+generic `meter` resource; the HL2 chooses the indices, since the radio assigns
+none. Each additional receiver adds one `SLC` / `LEVEL` meter at index
+100 + receiver number (`sourceIndex` is the receiver number; same unit and
+range).
 
 | Index | `source` | `name` | `unit` | Range | Note |
 |---|---|---|---|---|---|
@@ -378,13 +381,13 @@ comes from an uncalibrated reference curve, not a calibrated power reading.
   `hasSupplyVoltageTelemetry` and `hasPaCurrentTelemetry` to false.
 - ADC overload: the backend emits `frontEndOverloadChanged`, but no daemon
   resource carries it.
-- `radioCatalogue` capabilities: `maximumTransmitWatts` is `0.0` for the HL2,
+- `radioSession` capabilities: `maximumTransmitWatts` is `0.0` for the HL2,
   meaning uncalibrated rather than zero watts. The HL2's `txPowerBands` is not
   projected into any resource.
 
 ### Extensions
 
-The HL2 advertises extension namespace `hl2`, listed in the `radioCatalogue`
+The HL2 advertises extension namespace `hl2`, listed in the `radioSession`
 capabilities `extensions` field, and implements its verbs in
 `Hl2Backend::invokeExtension`. The control protocol's method registry is
 closed and has no extension method, so a daemon client cannot invoke them;

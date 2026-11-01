@@ -168,7 +168,7 @@ nothing — see §4a.
 
 `extensionNamespaces` names `hl2` because `invokeExtension` answers its verbs: the field is
 what a client checks before issuing an extension call, so it must not be empty while the
-verbs work. The namespace name is carried in the `radioCatalogue` resource's `extensions`
+verbs work. The namespace name is carried in the `radioSession` resource's `capabilities.extensions`
 list; the daemon does not expose a way to call a verb (see the HL2 section of
 [the control resource catalogue](../aetherd-control-resource-v1-catalogue.md#hl2-backend-observations)).
 
