@@ -1256,6 +1256,26 @@ void UpdateStager::discard(const QString& stagingRoot, const QString& version)
     qCInfo(lcUpdater).noquote() << "staged update to v" + version + " discarded";
 }
 
+QString UpdateStager::stagedDaxDriverSource(const QString& stagingRoot, const QString& version,
+                                            const QString& platform, const QString& arch)
+{
+    if (stagingRoot.isEmpty() || !releaseVersion().match(version).hasMatch()) {
+        return {};
+    }
+    QFile f(recordPath(stagingRoot, version, QStringLiteral(".manifest.json")));
+    UpdateManifest m;
+    QString problem;
+    if (f.size() > kMaxManifestBytes || !f.open(QIODevice::ReadOnly) || !UpdateManifest::parse(f.readAll(), &m, &problem)) {
+        return {};
+    }
+    for (const UpdateManifest::Payload& p : m.payloads) {
+        if (p.platform == platform && p.arch == arch) {
+            return p.daxDriverSource;
+        }
+    }
+    return {};
+}
+
 bool UpdateStager::revalidate(const QString& stagingRoot, const StagedRelease& staged,
                               const QString& platform, const QString& arch, QString* problem)
 {

@@ -107,7 +107,14 @@ release is `"version": "26.7.4.1"`).
   which `AetherSDR --install` installs (see
   [The Linux install](#the-linux-install-phase-5)). **macOS** is the signed
   `AetherSDR.app` bundle, its paths starting at `Contents/` (see
-  [The macOS install](#the-macos-install-phase-4)).
+  [The macOS install](#the-macos-install-phase-4)). Its release asset is the
+  app tarball `AetherSDR-<tag>-macOS-<apple-silicon|intel>.app.tar.zst`, which
+  is both the payload and its `full`.
+- `dax_driver` (macOS only, optional): `{"source": "<40 hex>"}`, the git tree
+  hash of `hal-plugin/` at the tag. The app compares it with the hash it was
+  built from (`AETHER_BUILD_DAX_DRIVER_SOURCE`, written at build time with the
+  rest of the build identity) to tell the user a release changes the DAX
+  driver. Anything but a 40-digit lowercase hash rejects the manifest.
 - `full`: the whole payload, the fallback when no patch applies or anything
   fails to verify. Its `sha256` and `size` are as binding as a bundle's: release
   assets can be replaced by anyone with write access, and the signed manifest
@@ -547,7 +554,25 @@ user put it; `MacInstall` (`src/core`) does the work.
 - Names compare case-insensitively on macOS, as on Windows: APFS's default
   ignores case.
 - The DAX driver is not part of the payload (a maintainer ruling); it stays
-  an install from the DMG.
+  an install from the DMG. While a release is staged whose `dax_driver.source`
+  differs from this build's, and a driver is installed
+  (`/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver`), the Updates window says
+  the release also updates the DAX audio driver and to install it from the
+  release's disk image (`UpdateController::daxDriverChanges`). The driver's
+  `Info.plist` version is not used: it has never been bumped (a maintainer
+  ruling).
+- **CI** (the Phase 4 CI half): the macOS DMG workflow's `app-tarball` job
+  takes `AetherSDR.app` out of the signed, notarized DMG, checks it with
+  `codesign --verify --deep --strict`, and writes the app tarball with
+  `tools/build_update_manifest.py --app-tarball` (ustar with the framework
+  links and exec bits, read back against the bundle's own file list). The
+  signing job, which holds the Apple identities, checks out nothing; this
+  job holds none. Sign Release Artifacts GPG-signs the app tarballs, which
+  join `SHA256SUMS.txt`. Update Manifest also runs after the macOS DMG
+  build, waits for them, and passes `--dax-driver-source` from the tag. Each
+  of these applies only when the tag's own `macos-dmg.yml` makes app
+  tarballs (it names `--app-tarball`): a tag cut before that leaves macOS
+  out of the manifest (`--no-macos-payloads`).
 
 ## Install update (the app's side)
 

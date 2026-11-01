@@ -639,6 +639,9 @@ void UpdatesWindow::refresh()
             note = m_installProblem;
         } else if (UpdateChecker::isSkipped(release.version)) {
             note = tr("You skipped this release, so UPDATE is not shown in the title bar.");
+        } else if (m_controller && m_controller->version() == release.version && m_controller->daxDriverChanges()) {
+            // The in-app update installs the app only (RFC #5304 Phase 4).
+            note = tr("This release also updates the DAX audio driver. Install it from the release's disk image.");
         }
         break;
     }

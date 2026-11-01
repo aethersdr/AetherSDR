@@ -2385,8 +2385,9 @@ add_custom_target(aether_build_identity ALL
     COMMENT "Capturing build identity (git describe)"
     VERBATIM)
 # AutomationServer.cpp (ping) lives in aetherdesktop_support; the About dialog
-# and Copy Assist's ASR fault stamp are in the executable.
-foreach(_aether_build_id_consumer aetherdesktop_support AetherSDR)
+# and Copy Assist's ASR fault stamp are in the executable; UpdateController
+# (the DAX driver's source, RFC #5304 Phase 4) is in aethercore.
+foreach(_aether_build_id_consumer aethercore aetherdesktop_support AetherSDR)
     add_dependencies(${_aether_build_id_consumer} aether_build_identity)
     target_include_directories(${_aether_build_id_consumer} PRIVATE "${AETHER_BUILD_ID_DIR}")
 endforeach()

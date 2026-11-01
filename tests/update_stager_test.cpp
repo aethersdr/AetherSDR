@@ -474,6 +474,32 @@ private slots:
         QVERIFY(!parses(withSource(42)));
     }
 
+    // The staged release's DAX driver source, read from the manifest kept
+    // beside it: for its own platform and arch only.
+    void theStagedDaxDriverSourceIsReadFromItsManifest()
+    {
+        QJsonObject o = fixtureManifest();
+        QJsonArray ps = o[QStringLiteral("payloads")].toArray();
+        QJsonObject p = ps[0].toObject();
+        const QString hash = QStringLiteral("ebf4a3c10dbbbe04d70f59c99d55de467e9ccc07");
+        p[QStringLiteral("dax_driver")] = QJsonObject{{QStringLiteral("source"), hash}};
+        ps[0] = p;
+        o[QStringLiteral("payloads")] = ps;
+        const QString platform = p[QStringLiteral("platform")].toString();
+        const QString arch = p[QStringLiteral("arch")].toString();
+        const QString version = o[QStringLiteral("version")].toString();
+        QTemporaryDir root;
+        QCOMPARE(UpdateStager::stagedDaxDriverSource(root.path(), version, platform, arch), QString());
+        QFile f(root.filePath(version + QStringLiteral(".manifest.json")));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(bytes(o));
+        f.close();
+        QCOMPARE(UpdateStager::stagedDaxDriverSource(root.path(), version, platform, arch), hash);
+        QCOMPARE(UpdateStager::stagedDaxDriverSource(root.path(), version, QStringLiteral("macos-other"), arch),
+                 QString());
+        QCOMPARE(UpdateStager::stagedDaxDriverSource(root.path(), QStringLiteral("../x"), platform, arch), QString());
+    }
+
     void chooseRefusesReplayFreezeAndOldReleases()
     {
         const UpdateManifest m = parsed(fixtureManifest());

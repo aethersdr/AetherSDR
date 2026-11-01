@@ -583,6 +583,26 @@ private slots:
         }
     }
 
+    // The DAX driver note (RFC #5304 Phase 4): only when both sources are
+    // known, they differ, and a driver is installed.
+    void theDaxDriverNoteNeedsAChangeAndAnInstalledDriver()
+    {
+        const QString a = QStringLiteral("ebf4a3c10dbbbe04d70f59c99d55de467e9ccc07");
+        const QString b = QStringLiteral("0123456789abcdef0123456789abcdef01234567");
+        QVERIFY(UpdateController::daxDriverChanges(a, b, true));
+        QVERIFY(!UpdateController::daxDriverChanges(a, a, true));          // unchanged
+        QVERIFY(!UpdateController::daxDriverChanges(a, b, false));         // no driver installed
+        QVERIFY(!UpdateController::daxDriverChanges(QString(), b, true));  // a build outside git
+        QVERIFY(!UpdateController::daxDriverChanges(a, QString(), true));  // a manifest naming none
+        // Nothing staged: no note.
+        Rig rig(m_key);
+        UpdateController::Environment e = rig.env();
+        e.daxDriverSource = a;
+        e.daxDriverInstalled = [] { return true; };
+        UpdateController c(e);
+        QVERIFY(!c.daxDriverChanges());
+    }
+
     void inPlaceIsAskedOfTheEnvironment()
     {
         Rig rig(m_key);

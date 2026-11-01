@@ -63,6 +63,12 @@ public:
         std::function<bool(const QString& file)> trash;
         // Starts the installed release once this process has exited.
         std::function<bool()> startInstalled;
+
+        // macOS (RFC #5304 Phase 4): the DAX driver source this build was made
+        // from (the git tree hash of hal-plugin/; empty when unknown), and
+        // whether a DAX driver is installed.
+        QString daxDriverSource;
+        std::function<bool()> daxDriverInstalled;
     };
 
     // This app's: the install it runs from, UpdateInstaller::stateDir(),
@@ -100,6 +106,13 @@ public:
     // thread, then, with trash, moves the AppImage to the trash. Ends in
     // appImageInstalled.
     void installAppImage(bool trash);
+
+    // A staged release changes the DAX driver this build was made with, and
+    // one is installed: the Updates window says to install it from that
+    // release's disk image (the in-app update installs the app only).
+    bool daxDriverChanges() const;
+    // The rule itself: both sources known and different, and a driver there.
+    static bool daxDriverChanges(const QString& running, const QString& staged, bool installed);
 
     State state() const { return m_state; }
     // The release staged, or being staged; empty when Idle.
