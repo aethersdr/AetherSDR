@@ -51,7 +51,8 @@ that:
 - Uninstall the other tailnet waveforms first (for example FlexiTailnet).
   Two shims can't share the radio's ports.
 - Signing out (step 7) removes the radio from your tailnet. Uninstalling
-  removes every file.
+  should remove the waveform's files, its saved state included; step 7
+  checks that, because it hasn't been confirmed on a radio yet.
 
 ## You need
 
@@ -109,9 +110,11 @@ Run the commands from this folder. `tool.py` talks to the radio over the LAN.
      from your tailnet;
    - `python3 -I tool.py --host <radio-ip> uninstall`;
    - check that uninstalling cleared the saved state, which AetherSDR's
-     Reset relies on: `install` again, wait for it to be listed, run
-     `status` and note whether it says `"provisioned": false` and
-     `"state": "unprovisioned"`, then `uninstall` once more;
+     Reset relies on. First note where the state was: the shim's first log
+     line ends `state in <dir>`, either the waveform's own `state` folder or
+     `/var/tmp/aether-tailnet`. Then `install` again, wait for it to be
+     listed, run `status` and note whether it says `"provisioned": false`
+     and `"state": "unprovisioned"`, then `uninstall` once more;
    - delete `admin-token.txt`;
    - delete the radio from **Machines** in the admin console if it's still
      listed (and revoke any auth key you used).
@@ -130,7 +133,7 @@ Run the commands from this folder. `tool.py` talks to the radio over the LAN.
 | 4 | Does a remote session work? | your notes; `session.jsonl` → `session_detail` (packets, gaps, breaks), `shim_cpu_pct`, `path`, `rtt_ms` | The point of the shim |
 | 5 | Does it survive a reboot? | step 6 timing; same `tailnet_ip` | No re-provisioning after power cuts |
 | 6 | Direct or relayed? | `path` (`direct`, `peer-relay`, `relay`) | A relayed path costs latency |
-| 7 | Does uninstalling clear it? | step 7, `status` after reinstalling | AetherSDR's Reset uninstalls and reinstalls; if the radio keeps `state/`, the radio would come back still signed in with the old token |
+| 7 | Does uninstalling clear it? | step 7: the `state in` directory, `status` after reinstalling | AetherSDR's Reset uninstalls and reinstalls. If the radio keeps `state/`, or the state was in `/var/tmp/aether-tailnet` (which no uninstall touches), the radio comes back still signed in with the old token |
 
 ## Prompt for your AI assistant
 
@@ -250,11 +253,13 @@ that isn't writable.
 ```sh
 git clone https://github.com/aethersdr/AetherSDR.git
 cd AetherSDR
-git checkout feat/tailnet-shim-native
+git checkout flex-tailnet-shim-v0.5.1
 cd tools/flex-tailnet-shim/native
 python3 -I build.py --output ~/aether-tailnet [--log-url http://<pc-ip>:8765/] [--small]
 ```
 
-It needs Go 1.27.1 (a newer Go fetches it by itself) and Python 3. All
+The release tag rebuilds the published package; before the tag exists, or
+to test unreleased changes, check out `main` (or the branch you were sent)
+instead. It needs Go 1.27.1 (a newer Go fetches it by itself) and Python 3. All
 dependencies are vendored. Without `--log-url` the package is reproducible
 byte for byte.

@@ -1606,6 +1606,7 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
     });
 
     const QPointer<RadioModel> modelGuard(m_radioModel);
+    const RadioControlSession chosenSession = m_radioModel->controlSession();
     // Each signal fires once per attempt; whichever fires first closes the
     // window and disconnects the other.
     auto finish = [progress]() {
@@ -1615,13 +1616,15 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
     auto readyConn = std::make_shared<QMetaObject::Connection>();
     auto failConn = std::make_shared<QMetaObject::Connection>();
     *readyConn = connect(m_shimDownloader, &TailnetShimDownloader::ready, this,
-                         [this, finish, modelGuard, readyConn, failConn, docker](const QString& path) {
+                         [this, finish, modelGuard, chosenSession, readyConn, failConn,
+                          docker](const QString& path) {
         disconnect(*readyConn);
         disconnect(*failConn);
         finish();
         updateInstallButtonState();
-        if (modelGuard) {
-            installWaveformPath(docker, path, modelGuard);
+        // A reconnect during the download may have brought a different radio.
+        if (RadioModel* radio = radioStillChosen(modelGuard, chosenSession)) {
+            installWaveformPath(docker, path, radio);
         }
     });
     *failConn = connect(m_shimDownloader, &TailnetShimDownloader::failed, this,
@@ -1731,13 +1734,15 @@ void WaveformsDialog::installWaveformFile(const QString& title,
 
     const QPointer<WaveformsDialog> self(this);
     const QPointer<RadioModel> modelGuard(m_radioModel);
+    const RadioControlSession chosenSession = m_radioModel->controlSession();
     const QString path = QFileDialog::getOpenFileName(
         this,
         title,
         initialPath,
         filter);
 
-    if (!self || !modelGuard || self->m_radioModel != modelGuard.data() || path.isEmpty()) {
+    if (!self || !radioStillChosen(modelGuard, chosenSession)
+        || self->m_radioModel != modelGuard.data() || path.isEmpty()) {
         return;
     }
 

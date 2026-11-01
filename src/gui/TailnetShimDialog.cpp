@@ -1031,8 +1031,8 @@ void TailnetShimDialog::reset()
         this);
     ask.get()->setInformativeText(
         m_native
-            ? tr("Resetting uninstalls and reinstalls the remote-access waveform: the radio "
-                 "leaves your tailnet now, and you sign it in again with a new code.")
+            ? tr("Resetting uninstalls and reinstalls the remote-access waveform, so the radio "
+                 "can be signed in again with a new code.")
             : tr("Resetting removes and reinstalls the remote-access container: the radio leaves "
                  "your tailnet now, and you sign it in again with a new code."));
     // Return keeps what is on the radio; resetting takes a click.

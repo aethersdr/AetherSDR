@@ -361,6 +361,11 @@ asking computer's own session.
   its tailnet state. Then delete the radio from **Machines** in the
   admin console.
 
+On a FLEX-6000, Reset and Uninstall rely on the radio deleting the
+waveform's saved state with its files, which hasn't been confirmed on a
+radio yet. If **Remote Access** still shows the radio on your tailnet after
+a Reset, please report it.
+
 Settings can only be changed **from the radio's local network**. The window
 shows **Unavailable** when AetherSDR is connected to the radio over the
 tailnet itself. Remotely you can operate, but not reconfigure, the

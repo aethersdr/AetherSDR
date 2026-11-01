@@ -51,7 +51,7 @@ func main() {
 	flag.Parse()
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	startLogSink()
-	log.Printf("flex-tailnet-shim %s starting", version())
+	log.Printf("flex-tailnet-shim %s starting; state in %s", version(), *stateDir)
 
 	disc := &Discovery{}
 	node := &Node{StateDir: *stateDir, RunDir: *runDir, RadioAddr: *radioAddr, MaxMTU: *maxMTU, Discovery: disc}

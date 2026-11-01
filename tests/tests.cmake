@@ -5104,6 +5104,15 @@ target_include_directories(waveform_install_gate_test PRIVATE src)
 target_link_libraries(waveform_install_gate_test PRIVATE Qt6::Core)
 add_test(NAME waveform_install_gate_test COMMAND waveform_install_gate_test)
 
+# radioStillChosen(): a finished Remote Access download or picked waveform
+# file installs only within the control session it was chosen in. A real
+# RadioModel with no backend connected; socket-free.
+add_executable(waveform_install_session_test tests/waveform_install_session_test.cpp)
+target_include_directories(waveform_install_session_test PRIVATE src tests)
+target_link_libraries(waveform_install_session_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME waveform_install_session_test COMMAND waveform_install_session_test)
+set_tests_properties(waveform_install_session_test PROPERTIES TIMEOUT 30)
+
 # D-STAR capability/build visibility and delayed-start admission. Pure policy:
 # no QApplication, settings, helper process, serial device, or sockets.
 add_executable(dstar_availability_gate_test tests/dstar_availability_gate_test.cpp)
