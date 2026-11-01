@@ -813,7 +813,7 @@ behaviour at four gates plus two fan-out sites:
 
 | Site | What `false` does |
 |---|---|
-| `SpectrumWidget::applyNoiseFloorAutoAdjust` | Early return — the gate that actually stops the runaway, because `m_refLevel` is local and would keep marching without it |
+| `SpectrumWidget::applyNoiseFloorAutoAdjust` | Early return only when the bins are also not absolute (`noiseFloorAutoAdjustAllowed`, an OR): stops the runaway on Icom, where `m_refLevel` is local and would keep marching; a no-op on HL2, ANAN and RTL |
 | `sendDbmRangeCommand` (`MainWindow_Wiring.cpp`) | Backstop: no dBm range leaves for the radio, whichever caller asked |
 | `radioDbmHeadroomRecoveryRequested` handler | Return — the second ratchet source; gating `dbmRangeChangeRequested` alone did not stop it |
 | `dbmRangeChangeRequested`, auto-floor branch | Re-seeds the widget from the pan's real range instead of commanding one |
@@ -838,15 +838,11 @@ passes the HL2's absolute float dBFS bins through untouched and
 not move with `m_refLevel`. The declaration rests on the source fact (there is no
 echo to wait for); the runtime question is open.
 
-**One read of this flag is doing a second job**, and it is worth knowing before
-the next backend sets it. Four of the gates above stop outbound traffic that
-cannot arrive. The first — `SpectrumWidget::applyNoiseFloorAutoAdjust` — turns
-the noise-floor auto-adjust off, justified in its own comment by a radio whose
-floor "is already where the calibration puts it". That is true of an Icom and
-false of a raw-IQ backend, whose scale is arbitrary and local and where a local
-auto-floor is the only one available. The two questions coincide on a Flex and an
-Icom and come apart here; the gate should eventually ask whether the floor
-MEASUREMENT depends on a commanded range.
+**The auto-floor gate no longer rests on this flag alone.** It once turned the
+noise-floor auto-adjust off for every backend declaring `false`, which is wrong
+for a raw-IQ backend whose local auto-floor is the only one it has. That split
+has happened through `panBinsAbsolute`: `noiseFloorAutoAdjustAllowed()`
+(`NoiseFloorAutoAdjustGate.h`) keeps the loop open when the bins are absolute.
 
 **The calibration claim is declared and nothing reads it yet.** It is the
 second question: an HL2's axis is dBFS wearing a dBm label, because nothing on
