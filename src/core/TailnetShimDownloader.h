@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 #include <QCryptographicHash>
 
 #include "TailnetShimRelease.h"
@@ -47,6 +48,11 @@ public:
     // Where the verified package is cached. The native package keeps its
     // file name: the radio installs a legacy waveform by that name.
     static QString cachePath(TailnetShimPackage package = TailnetShimPackage::Container);
+
+    // Deletes verified copies of earlier releases from `waveformsDir` (the
+    // folder cachePath() uses): flex-tailnet-shim-*.tar.gz and
+    // aether-tailnet-*/ other than the current pins. Returns what it removed.
+    static QStringList removeStaleCopies(const QString& waveformsDir);
 
     void start();
     void cancel();

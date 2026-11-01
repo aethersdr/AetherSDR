@@ -60,6 +60,7 @@ private:
     void saveSharing();
     void signOut();
     void reset();
+    void updateRadioShim();   // reinstall at the pinned version, after asking
     void onProvisioned(const TailnetShimProvisionReply& reply);
     void onRequestFailed(const QString& operation, const QString& message, bool unauthorized);
 
@@ -101,6 +102,7 @@ private:
     QPushButton* m_refreshButton{nullptr};
     QPushButton* m_signOutButton{nullptr};
     QPushButton* m_resetButton{nullptr};   // in Disconnect's place when locked out
+    QPushButton* m_updateButton{nullptr};  // when the radio runs an older release
     QPushButton* m_joinButton{nullptr};
 
     // Sign-in by QR code, and the auth key under Advanced.

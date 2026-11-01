@@ -93,6 +93,15 @@ std::optional<TailnetShimLogin> parseLoginReply(const QByteArray& json);
 QString checkedAuthUrl(const QString& url);
 // Whether a container version signs in by QR code (0.5.0 and later).
 bool supportsQrSignIn(const QString& version);
+
+// The version this AetherSDR installs: the container's pin, or the legacy
+// waveform's on a radio without a Waveform Processor.
+QString pinnedVersion(bool native);
+
+// True when `installed` is an older release than `pinned`, comparing
+// major.minor.patch and ignoring a suffix such as "-native". False when
+// either can't be read, so an unknown version never offers an update.
+bool updateAvailable(const QString& installed, const QString& pinned);
 // Whether the Remote Access window should start the QR sign-in without being
 // asked: the radio belongs to no tailnet (never provisioned, or a QR sign-in
 // abandoned with its token or failed here), the container can, nothing is in

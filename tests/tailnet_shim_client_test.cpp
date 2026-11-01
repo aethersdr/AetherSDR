@@ -14,6 +14,8 @@
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QTemporaryDir>
 
@@ -312,6 +314,67 @@ int main(int argc, char** argv)
         ok &= expect(nativeDownloader.package() == P::Native
                          && TailnetShimDownloader().package() == P::Container,
                      "a downloader keeps the package it was made for");
+    }
+
+    // Update: offered only for an older release than the pin, by number.
+    {
+        using tailnetshim::updateAvailable;
+        ok &= expect(updateAvailable(QStringLiteral("0.5.0"), QStringLiteral("0.5.1")),
+                     "0.5.0 -> 0.5.1 is an update");
+        ok &= expect(!updateAvailable(QStringLiteral("0.5.1"), QStringLiteral("0.5.1"))
+                         && !updateAvailable(QStringLiteral("0.6.0"), QStringLiteral("0.5.1")),
+                     "the same or a newer release is not");
+        ok &= expect(updateAvailable(QStringLiteral("0.4.10"), QStringLiteral("0.5.0"))
+                         && !updateAvailable(QStringLiteral("0.5.10"), QStringLiteral("0.5.9")),
+                     "compared as numbers, not text");
+        ok &= expect(updateAvailable(QStringLiteral("0.5.0-native"), QStringLiteral("0.5.1-native"))
+                         && !updateAvailable(QStringLiteral("0.5.1-native"),
+                                             QStringLiteral("0.5.1-native")),
+                     "a -native suffix is ignored");
+        ok &= expect(!updateAvailable(QString(), QStringLiteral("0.5.1"))
+                         && !updateAvailable(QStringLiteral("dev"), QStringLiteral("0.5.1")),
+                     "an unreadable version never offers an update");
+        ok &= expect(tailnetshim::pinnedVersion(false) == QLatin1String(TailnetShimRelease::kVersion)
+                         && tailnetshim::pinnedVersion(true)
+                                == QLatin1String(TailnetShimNativeRelease::kVersion),
+                     "each package is compared with its own pin");
+    }
+
+    // Earlier releases' verified copies are removed; the current ones and
+    // anything else in the folder stay.
+    {
+        QTemporaryDir cache;
+        const QDir dir(cache.path());
+        const QString container = QFileInfo(TailnetShimDownloader::cachePath()).fileName();
+        const QString nativeDir = QFileInfo(QFileInfo(TailnetShimDownloader::cachePath(
+            TailnetShimPackage::Native)).absolutePath()).fileName();
+        auto touch = [&](const QString& rel) {
+            dir.mkpath(QFileInfo(dir.filePath(rel)).path());
+            QFile f(dir.filePath(rel));
+            return f.open(QIODevice::WriteOnly) && f.write("x") == 1;
+        };
+        ok &= expect(touch(QStringLiteral("flex-tailnet-shim-0.4.1.tar.gz"))
+                         && touch(QStringLiteral("flex-tailnet-shim-0.5.0.tar.gz"))
+                         && touch(container)
+                         && touch(QStringLiteral("aether-tailnet-0.5.0-native/AetherTailnet.ssdr_waveform"))
+                         && touch(nativeDir + QStringLiteral("/AetherTailnet.ssdr_waveform"))
+                         && touch(QStringLiteral("flex-tailnet-shim-0.5.0.tar.gz.part"))
+                         && touch(QStringLiteral("aether-health-0.1.0/AetherHealth.ssdr_waveform"))
+                         && touch(QStringLiteral("notes.txt")),
+                     "cache fixture written");
+        QStringList removed = TailnetShimDownloader::removeStaleCopies(cache.path());
+        removed.sort();
+        ok &= expect(removed == QStringList({QStringLiteral("aether-tailnet-0.5.0-native"),
+                                             QStringLiteral("flex-tailnet-shim-0.4.1.tar.gz"),
+                                             QStringLiteral("flex-tailnet-shim-0.5.0.tar.gz")}),
+                     "earlier releases removed");
+        ok &= expect(dir.exists(container) && dir.exists(nativeDir)
+                         && dir.exists(QStringLiteral("flex-tailnet-shim-0.5.0.tar.gz.part"))
+                         && dir.exists(QStringLiteral("aether-health-0.1.0"))
+                         && dir.exists(QStringLiteral("notes.txt")),
+                     "current pins, partial downloads and other files kept");
+        ok &= expect(TailnetShimDownloader::removeStaleCopies(cache.path()).isEmpty(),
+                     "nothing left to remove the second time");
     }
 
     // Configure… and Reset find the shim in either package, and nothing else.

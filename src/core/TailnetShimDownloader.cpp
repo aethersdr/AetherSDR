@@ -78,6 +78,8 @@ void TailnetShimDownloader::start()
     const QString target = cachePath(m_package);
     if (QFileInfo::exists(target)) {
         if (verifyFile(target, m_pin.sha256, m_pin.size).isEmpty()) {
+            // Both packages cache under the same waveforms/ folder.
+            removeStaleCopies(QFileInfo(cachePath()).absolutePath());
             QTimer::singleShot(0, this, [this, target] { emit ready(target); });
             return;
         }
@@ -163,6 +165,7 @@ void TailnetShimDownloader::onFinished()
         emit failed(error);
         return;
     }
+    removeStaleCopies(QFileInfo(cachePath()).absolutePath());
     emit ready(target);
 }
 
@@ -185,6 +188,29 @@ QString TailnetShimDownloader::promoteVerified(const QString& part, const QStrin
         return tr("Cannot save the verified package to %1.").arg(QDir::toNativeSeparators(target));
     }
     return {};
+}
+
+QStringList TailnetShimDownloader::removeStaleCopies(const QString& waveformsDir)
+{
+    const QString container = QFileInfo(cachePath(TailnetShimPackage::Container)).fileName();
+    const QString native =
+        QFileInfo(QFileInfo(cachePath(TailnetShimPackage::Native)).absolutePath()).fileName();
+    QStringList removed;
+    const QDir dir(waveformsDir);
+    for (const QFileInfo& f : dir.entryInfoList({QStringLiteral("flex-tailnet-shim-*.tar.gz")},
+                                                QDir::Files)) {
+        if (f.fileName() != container && QFile::remove(f.absoluteFilePath())) {
+            removed << f.fileName();
+        }
+    }
+    for (const QFileInfo& d : dir.entryInfoList({QStringLiteral("aether-tailnet-*")},
+                                                QDir::Dirs | QDir::NoDotAndDotDot)) {
+        if (d.fileName() != native && !d.isSymLink()
+            && QDir(d.absoluteFilePath()).removeRecursively()) {
+            removed << d.fileName();
+        }
+    }
+    return removed;
 }
 
 void TailnetShimDownloader::cancel()
