@@ -294,7 +294,7 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 		Dir:      n.tsnetDir(),
 		AuthKey:  authKey,
 		Logf:     func(string, ...any) {},
-		UserLogf: log.Printf,
+		UserLogf: withoutURLs(log.Printf),
 	}
 	// The local client starts tsnet, so the sign-in state can be watched
 	// while Up waits; without an auth key the timeout stops counting once

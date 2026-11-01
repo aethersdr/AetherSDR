@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -239,5 +240,17 @@ func TestProvisionStillRefusesAMalformedKey(t *testing.T) {
 	rec := call(t, h, "POST", "/v1/provision", "192.168.1.10:5000", "", `{"auth_key":"nope","hostname":"x"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("got %d", rec.Code)
+	}
+}
+
+// tsnet logs the sign-in URL every few seconds while it waits; the shim's
+// log must never carry it.
+func TestUserLogWithholdsURLs(t *testing.T) {
+	var got []string
+	logf := withoutURLs(func(format string, args ...any) { got = append(got, fmt.Sprintf(format, args...)) })
+	logf("To start this tsnet server, restart with TS_AUTHKEY set, or go to: %s", testAuthURL)
+	logf("self-hosted: %s and %s", "https://headscale.example/register/abc", "plain text 100%")
+	if strings.Contains(strings.Join(got, "\n"), "://") || !strings.Contains(got[0], "<url withheld>") || !strings.Contains(got[1], "100%") {
+		t.Fatalf("logged %q", got)
 	}
 }

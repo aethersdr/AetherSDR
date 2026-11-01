@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"time"
 
 	"tailscale.com/client/local"
@@ -24,6 +25,17 @@ const (
 	stateNeedsLogin    = "needs_login"    // waiting for someone to open the sign-in URL
 	stateNeedsApproval = "needs_approval" // signed in; a tailnet admin must approve the device
 )
+
+var urlInLog = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://\S+`)
+
+// withoutURLs wraps a logger so no URL reaches it. tsnet repeats the sign-in
+// URL to its user log every few seconds while it waits, and the shim's log
+// goes to the radio's journal and, in development, to SHIM_LOG_URL.
+func withoutURLs(logf func(string, ...any)) func(string, ...any) {
+	return func(format string, args ...any) {
+		logf("%s", urlInLog.ReplaceAllString(fmt.Sprintf(format, args...), "<url withheld>"))
+	}
+}
 
 // loginInfo is the tailnet backend's view of the node's sign-in.
 type loginInfo struct {
