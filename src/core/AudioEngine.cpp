@@ -9504,6 +9504,8 @@ void AudioEngine::onTxAudioReady()
         if (m_audioSource) {
             observeTxCaptureState(m_audioSource->state(), bufferedBeforeDrain);
         }
+        // TCI owns TX audio: the voice processor is not on the path.
+        TxChainLatency::publishVoiceProcessorFrames(-1);
         return;
     }
 #ifdef Q_OS_MACOS
