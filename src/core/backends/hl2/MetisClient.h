@@ -341,12 +341,17 @@ public:
     static int effectiveNumRx(const Params& p);
     int effectiveNumRx() const { return effectiveNumRx(m_params); }
 
-    // Transmit gate. setMox() does nothing until enableTransmit(true); with the gate
-    // closed setMox(true) is a silent no-op, so a refused key fails safe. Policy lives
-    // in Hl2Backend (interactive enables; automation defers to
+    // Transmit gate. setMox() does nothing until enableTransmit(true), and closing the
+    // gate drops the key; with it closed setMox(true) is a silent no-op, so a refused key
+    // fails safe. Policy lives in Hl2Backend (interactive enables; automation defers to
     // AETHER_AUTOMATION_ALLOW_TX). hl2_tx_gate_test asserts that no EP2 frame carries
     // C0 bit 0 while the gate is closed.
-    void enableTransmit(bool allowed) noexcept { m_txAllowed = allowed; }
+    void enableTransmit(bool allowed) noexcept
+    {
+        m_txAllowed = allowed;
+        if (!allowed)
+            m_mox = false;
+    }
     [[nodiscard]] bool transmitEnabled() const noexcept { return m_txAllowed; }
 
     // Key / unkey. Ignored unless enableTransmit(true) was called.

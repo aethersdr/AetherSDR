@@ -616,6 +616,9 @@ void MetisClient::stop()
         m_socket = nullptr;
     }
     m_running = false;
+    // The key ends with the session: the next start() streams unkeyed until a
+    // fresh setMox(true).
+    m_mox = false;
     // Any silence recovery in flight ends with the session. The COUNTERS do
     // not: they live on m_link, which start() replaces and stop() leaves
     // standing, because a stop is not a reason to forget that a recovery
