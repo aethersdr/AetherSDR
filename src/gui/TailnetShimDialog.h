@@ -6,6 +6,7 @@
 #include "core/TailnetShimClient.h"
 
 class QCheckBox;
+class QFrame;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -69,6 +70,8 @@ private:
     QString m_authUrl;   // the sign-in URL the QR code shows, if any
     std::optional<TailnetShimStatus> m_status;
 
+    QFrame* m_tailnetCard{nullptr};    // shown once the radio has joined a tailnet
+    QFrame* m_devicesCard{nullptr};    // likewise
     QLabel* m_statusDot{nullptr};
     QLabel* m_stateLabel{nullptr};
     QLabel* m_nameLabel{nullptr};

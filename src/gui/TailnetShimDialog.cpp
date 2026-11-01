@@ -37,6 +37,7 @@ namespace {
 // the QLabels inside it (QLabel is a QFrame).
 constexpr const char* kTailnetDialogStyle =
     "QWidget#tailnetBody { background: transparent; }"
+    "QWidget#tsInset { background: transparent; }"
     "QLabel { color: {{color.canon.inkSoft}}; background: transparent; border: none; font-size: 12px; }"
     "QLabel#tsTitle { color: {{color.canon.ink}}; font-size: 20px; font-weight: bold; }"
     "QLabel#tsStatusLine { color: {{color.canon.muted}}; font-size: 13px; }"
@@ -199,7 +200,8 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
 
     // Card: the node on the tailnet.
     QVBoxLayout* tailnet = nullptr;
-    layout->addWidget(makeCard(tr("Tailnet"), body, &tailnet));
+    m_tailnetCard = makeCard(tr("Tailnet"), body, &tailnet);
+    layout->addWidget(m_tailnetCard);
     auto* grid = new QGridLayout;
     grid->setHorizontalSpacing(16);
     grid->setVerticalSpacing(8);
@@ -285,6 +287,7 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     // The sign-in QR code, its steps, and the link for a screen reader or a
     // phone-less sign-in.
     m_qrPanel = new QWidget(body);
+    m_qrPanel->setObjectName(QStringLiteral("tsInset"));
     auto* qrRow = new QHBoxLayout(m_qrPanel);
     qrRow->setContentsMargins(0, 4, 0, 0);
     qrRow->setSpacing(16);
@@ -329,6 +332,7 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     connect(m_advancedToggle, &QPushButton::toggled, this, &TailnetShimDialog::setAdvancedOpen);
     join->addWidget(m_advancedToggle, 0, Qt::AlignLeft);
     m_keyPanel = new QWidget(body);
+    m_keyPanel->setObjectName(QStringLiteral("tsInset"));
     auto* keyBox = new QVBoxLayout(m_keyPanel);
     keyBox->setContentsMargins(0, 0, 0, 0);
     keyBox->setSpacing(8);
@@ -370,7 +374,8 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
 
     // Card: station devices (4O3A accessories) shared as subnet routes.
     QVBoxLayout* devices = nullptr;
-    layout->addWidget(makeCard(tr("Station devices"), body, &devices));
+    m_devicesCard = makeCard(tr("Station devices"), body, &devices);
+    layout->addWidget(m_devicesCard);
     m_devicesLabel = roleLabel(QString(), "value", body);
     setWrapped(m_devicesLabel,
                tr("Looking for Antenna Genius, Power Genius XL and Tuner Genius XL…"),
@@ -403,6 +408,11 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, QWidget* parent)
     m_saveSharingButton->setAccessibleName(tr("Save which station devices are shared"));
     sharingButtons->addWidget(m_saveSharingButton);
     devices->addLayout(sharingButtons);
+
+    // The node's details and station-device sharing mean nothing until the
+    // radio is on a tailnet: they appear once it has been (showStatus).
+    m_tailnetCard->hide();
+    m_devicesCard->hide();
 
     // Messages (always worded; colour only reinforces).
     m_messageLabel = roleLabel(QString(), "message", body);
@@ -580,6 +590,16 @@ void TailnetShimDialog::showError(const QString& message)
 void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
 {
     m_status = st;
+    // Joined: on the tailnet now, or holding an address from before (an
+    // expired sign-in keeps its address and its shared devices).
+    const bool joined = st.state == QLatin1String("running") || !st.tailnetIp.isEmpty();
+    if (m_tailnetCard->isVisible() != joined || m_devicesCard->isVisible() != joined) {
+        m_tailnetCard->setVisible(joined);
+        m_devicesCard->setVisible(joined);
+        if (isVisible()) {
+            adjustSize();
+        }
+    }
     QString line = stateText(st);
     if (!st.version.isEmpty()) {
         line += QStringLiteral(" · ") + tr("container %1").arg(st.version);
