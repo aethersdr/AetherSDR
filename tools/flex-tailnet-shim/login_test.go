@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -307,5 +309,171 @@ func TestUserLogWithholdsURLs(t *testing.T) {
 	logf("self-hosted: %s and %s", "https://headscale.example/register/abc", "plain text 100%")
 	if strings.Contains(strings.Join(got, "\n"), "://") || !strings.Contains(got[0], "<url withheld>") || !strings.Contains(got[1], "100%") {
 		t.Fatalf("logged %q", got)
+	}
+}
+
+// pendingSignInStart stands in for a join waiting for its sign-in: the
+// backend offers a URL at once, so a provision returns without waiting.
+func pendingSignInStart(n *Node) func(context.Context, string, time.Duration) error {
+	fb := &fakeBackend{}
+	fb.set(loginInfo{Backend: "NeedsLogin", AuthURL: testAuthURL})
+	return func(ctx context.Context, _ string, _ time.Duration) error {
+		n.mu.Lock()
+		n.loginRead = fb.read
+		n.mu.Unlock()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+}
+
+// writeTailnetState writes a tailscaled.state as tsnet's file store does.
+func writeTailnetState(t *testing.T, dir string, keys map[string]string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	st := map[string][]byte{}
+	for k, v := range keys {
+		st[k] = []byte(v)
+	}
+	b, _ := json.Marshal(st)
+	if err := os.WriteFile(filepath.Join(dir, "tailscaled.state"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Reaching the tailnet ends the token-free window even when the completion
+// can't be saved, and a restart then reads the tailnet state rather than the
+// stale flag.
+func TestAJoinedNodeIsNeverClaimableEvenIfItsCompletionIsntSaved(t *testing.T) {
+	n := newTestNode(t, "")
+	n.startFn = pendingSignInStart(n)
+	if _, _, err := n.ProvisionInteractive("", "flex-qr", nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.interruptBoot(); err != nil {
+		t.Fatal(err)
+	}
+	// The save fails: a directory sits where its temporary file goes.
+	blocker := n.cfgPath() + ".tmp"
+	if err := os.Mkdir(blocker, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	n.markJoined()
+	if n.Status().Claimable {
+		t.Fatal("a joined node is claimable after a failed save")
+	}
+	if _, _, err := n.ProvisionInteractive("", "attacker", nil, nil, nil); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("token-less takeover of a joined node: %v", err)
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	// On disk the flag is still pending; the tailnet state says joined.
+	writeTailnetState(t, n.tsnetDir(), map[string]string{"_current-profile": "profile-a1b2", "_machinekey": "k"})
+	reloaded := &Node{StateDir: n.StateDir}
+	if err := reloaded.load(); err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Status().Claimable {
+		t.Fatal("a stale pending flag made the reloaded node claimable")
+	}
+	if _, _, err := reloaded.ProvisionInteractive("", "attacker", nil, nil, nil); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("token-less takeover after reload: %v", err)
+	}
+}
+
+func TestJoinedBeforeReadsTheTailnetState(t *testing.T) {
+	for name, c := range map[string]struct {
+		keys    map[string]string
+		garbage bool
+		none    bool
+		want    bool
+	}{
+		"no state file":           {none: true, want: false},
+		"machine key, no profile": {keys: map[string]string{"_machinekey": "k"}, want: false},
+		"a current profile":       {keys: map[string]string{"_current-profile": "profile-a1b2"}, want: true},
+		"unreadable state":        {garbage: true, want: true},
+	} {
+		dir := t.TempDir()
+		switch {
+		case c.garbage:
+			os.WriteFile(filepath.Join(dir, "tailscaled.state"), []byte("{not json"), 0o600)
+		case !c.none:
+			writeTailnetState(t, dir, c.keys)
+		}
+		if got := joinedBefore(dir); got != c.want {
+			t.Errorf("%s: joinedBefore=%v, want %v", name, got, c.want)
+		}
+	}
+}
+
+// A sign-in that never finished stays claimable across a restart.
+func TestAnUnfinishedSignInStaysClaimableAfterARestart(t *testing.T) {
+	n := newTestNode(t, "")
+	n.cfg = provisionConfig{TokenSHA256: sha256Hex("lost"), Hostname: "flex-qr", PendingSignIn: true}
+	if err := n.save(n.cfg); err != nil {
+		t.Fatal(err)
+	}
+	writeTailnetState(t, n.tsnetDir(), map[string]string{"_machinekey": "k"})
+	reloaded := &Node{StateDir: n.StateDir}
+	if err := reloaded.load(); err != nil || !reloaded.Status().Claimable {
+		t.Fatalf("claimable=%v err=%v", reloaded.Status().Claimable, err)
+	}
+}
+
+// 0.5.0 keeps no access list: one saved by an older version is dropped on
+// start-up, and a provision that sends one doesn't keep it.
+func TestAccessListsAreDropped(t *testing.T) {
+	n := newTestNode(t, "")
+	n.cfg = provisionConfig{TokenSHA256: sha256Hex("tok"), Hostname: "flex", Allow: []string{"old@example.com"}}
+	if err := n.save(n.cfg); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := &Node{StateDir: n.StateDir}
+	if err := reloaded.load(); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.Status().Allow; len(got) != 0 {
+		t.Fatalf("list kept in memory: %v", got)
+	}
+	again := &Node{StateDir: n.StateDir}
+	if err := again.load(); err != nil || len(again.cfg.Allow) != 0 {
+		t.Fatalf("list kept on disk: %v %v", again.cfg.Allow, err)
+	}
+
+	fresh := newTestNode(t, "")
+	fresh.startFn = inertStart(fresh)
+	if _, err := fresh.Provision("", "tskey-auth-k", "flex", []string{"tag:ops"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := fresh.Status().Allow; len(got) != 0 {
+		t.Fatalf("provision kept a list: %v", got)
+	}
+}
+
+// Waiting for a tailnet admin's approval, the node already belongs to the
+// tailnet of whoever signed in: it can't be taken over without the token.
+func TestANodeAwaitingApprovalIsNotClaimable(t *testing.T) {
+	fastLoginPolls(t)
+	n := newTestNode(t, "")
+	n.startFn = pendingSignInStart(n)
+	if _, _, err := n.ProvisionInteractive("", "flex-qr", nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.interruptBoot(); err != nil {
+		t.Fatal(err)
+	}
+	if !n.Status().Claimable {
+		t.Fatal("a fresh pending sign-in isn't claimable")
+	}
+	fb := &fakeBackend{}
+	fb.set(loginInfo{Backend: "NeedsMachineAuth"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go n.watchJoin(ctx, fb.read, true, func() {})
+	waitFor(t, "the approval wait to close the window", func() bool { return !n.Status().Claimable })
+	if _, _, err := n.ProvisionInteractive("", "attacker", nil, nil, nil); !errors.Is(err, errUnauthorized) {
+		t.Fatalf("token-less takeover while awaiting approval: %v", err)
 	}
 }

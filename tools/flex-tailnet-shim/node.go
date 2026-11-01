@@ -189,6 +189,24 @@ func (n *Node) load() error {
 	if err := json.Unmarshal(b, &n.cfg); err != nil {
 		return fmt.Errorf("corrupt %s: %w", n.cfgPath(), err)
 	}
+	// Access is the tailnet's own rules from 0.5.0: a list an older version
+	// kept is dropped, and said so.
+	if len(n.cfg.Allow) > 0 {
+		log.Printf("access list %v dropped: who may connect is now the tailnet's access rules", n.cfg.Allow)
+		n.cfg.Allow = nil
+		if err := n.save(n.cfg); err != nil {
+			log.Printf("could not save the settings without the access list: %v", err)
+		}
+	}
+	// A pending sign-in whose completion couldn't be saved: the tailnet
+	// state says it finished, so it isn't claimable.
+	if n.cfg.PendingSignIn && joinedBefore(n.tsnetDir()) {
+		log.Printf("sign-in recorded as pending, but the tailnet state shows it completed")
+		n.cfg.PendingSignIn = false
+		if err := n.save(n.cfg); err != nil {
+			log.Printf("could not record the completed sign-in: %v", err)
+		}
+	}
 	if n.provisioned() {
 		n.state = stateStarting
 	} else {
@@ -692,9 +710,10 @@ func (n *Node) stop(logout bool) error {
 	return errors.Join(errs...)
 }
 
-// authorizer checks each tailnet caller with WhoIs against the current
-// allowlist (logins or tags). An empty allowlist admits any tailnet peer.
-// It fails closed: a caller whose identity can't be established is refused.
+// authorizer checks each tailnet caller with WhoIs. Who may connect is the
+// tailnet's own access rules (0.5.0), so any peer whose identity is
+// established is admitted; it fails closed: a caller whose identity can't be
+// established is refused.
 func (n *Node) authorizer(lc *local.Client) func(net.Addr) (string, bool) {
 	return admitOnly(n.checker(lc))
 }
@@ -726,23 +745,9 @@ func (n *Node) checker(lc *local.Client) identityCheck {
 		if who.UserProfile != nil && !who.Node.IsTagged() {
 			id = who.UserProfile.LoginName + " on " + id
 		}
-		n.mu.Lock()
-		allow := append([]string{}, n.cfg.Allow...)
-		n.mu.Unlock()
-		if len(allow) == 0 {
-			return id, true, nil
-		}
-		for _, a := range allow {
-			if who.UserProfile != nil && !who.Node.IsTagged() && a == who.UserProfile.LoginName {
-				return id, true, nil
-			}
-			for _, t := range who.Node.Tags {
-				if a == t {
-					return id, true, nil
-				}
-			}
-		}
-		return id, false, nil
+		// Who may connect is the tailnet's access rules: a peer the tailnet
+		// routes here is admitted once its identity is established.
+		return id, true, nil
 	}
 }
 
@@ -774,7 +779,8 @@ func newToken() (token, hash string) {
 // Provision joins (or re-joins) the tailnet with a fresh auth key. The first
 // call needs no token (trust on first use, matching the radio API's own LAN
 // trust); later calls must present the admin token returned by the first.
-// It returns a new admin token on success.
+// It returns a new admin token on success. allow is accepted from older
+// clients and ignored: the tailnet's access rules decide who may connect.
 //
 // The token is checked here, under opMu, not by the caller: checked before
 // the lock, two first-use requests could both see an unprovisioned node and
@@ -788,7 +794,7 @@ func (n *Node) Provision(presented, authKey, hostname string, allow, routes []st
 	defer end()
 
 	token, hash := newToken()
-	cfg := provisionConfig{TokenSHA256: hash, Hostname: hostname, Allow: allow, Routes: routes,
+	cfg := provisionConfig{TokenSHA256: hash, Hostname: hostname, Routes: routes,
 		ShareDiscovered: shareDiscovered}
 	if err := n.replaceNode(cfg); err != nil {
 		return "", err
@@ -815,12 +821,17 @@ func (n *Node) Provision(presented, authKey, hostname string, allow, routes []st
 	return token, nil
 }
 
-// SetAllow changes who may connect, without leaving the tailnet, and ends
-// every open connection the new list refuses (revokeDisallowed).
+// SetAllow clears an access list (older clients set one; 0.5.0 keeps none and
+// refuses a non-empty one, errAccessListRetired), then ends any open
+// connection the authorizer no longer admits (revokeDisallowed).
 func (n *Node) SetAllow(presented string, allow []string) error {
 	end, err := n.beginOp(presented, false)
 	if err != nil {
 		return err
+	}
+	if len(allow) > 0 {
+		end()
+		return errAccessListRetired
 	}
 	n.mu.Lock()
 	cfg := n.cfg
@@ -907,6 +918,10 @@ func (n *Node) SignOut(presented string) error {
 // errUnauthorized: the presented admin token doesn't match (or a first-use
 // provision lost the race to another).
 var errUnauthorized = errors.New("admin token required")
+
+// errAccessListRetired: from 0.5.0 the shim keeps no list of who may
+// connect; the tailnet's access rules decide.
+var errAccessListRetired = errors.New("the remote-access container no longer keeps an access list; set who may connect with your tailnet's access rules")
 
 // Status is what GET /v1/status returns. It never contains a secret.
 type Status struct {

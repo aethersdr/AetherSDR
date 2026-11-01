@@ -342,6 +342,9 @@ container.
   share the tailnet (family, club members), limit who may reach the radio
   with **Access controls** in the admin console; tag the radio with an auth
   key (Part 4) to write rules for it by tag.
+- Containers before 0.5.0 kept their own **Who may connect** list. Version
+  0.5.0 drops it when it starts, so after updating, set any restriction with
+  your tailnet's access rules instead.
 - The sign-in code is a link that adds the radio to whichever tailnet opens
   it first. AetherSDR shows it only to the computer that started the sign-in
   or holds the admin token; the container never logs it.

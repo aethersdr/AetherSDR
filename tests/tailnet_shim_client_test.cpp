@@ -10,6 +10,7 @@
 #include "core/TailnetLinkTelemetry.h"
 #include "core/TailnetShimClient.h"
 #include "core/TailnetShimDownloader.h"
+#include "core/TailnetShimTokenStore.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -155,6 +156,62 @@ int main(int argc, char** argv)
         ok &= expect(tailnetshim::supportsQrSignIn(QStringLiteral("0.5.0-native")), "native 0.5.0 too");
         ok &= expect(tailnetshim::supportsQrSignIn(QStringLiteral("1.0.0")), "1.0.0 too");
         ok &= expect(!tailnetshim::supportsQrSignIn(QString()), "an unknown version doesn't");
+    }
+
+    // The window starts the sign-in unasked only once the keychain has
+    // answered, and a late keychain read never replaces a newer token
+    // (review of #6932: held read -> fresh status -> provision -> late read).
+    {
+        TailnetShimStatus fresh;
+        fresh.version = QStringLiteral("0.5.0");
+        fresh.state = QStringLiteral("unprovisioned");
+        fresh.claimable = true;
+        ok &= expect(!tailnetshim::shouldSignInUnasked(fresh, false, false, false, true, false),
+                     "no unasked sign-in before the keychain answers");
+        ok &= expect(tailnetshim::shouldSignInUnasked(fresh, true, false, false, true, false),
+                     "an unasked sign-in once it has");
+        ok &= expect(!tailnetshim::shouldSignInUnasked(fresh, true, false, true, true, false)
+                     && !tailnetshim::shouldSignInUnasked(fresh, true, false, false, false, false)
+                     && !tailnetshim::shouldSignInUnasked(fresh, true, false, false, true, true),
+                     "not while busy, off the LAN, or a second time");
+        TailnetShimStatus abandoned = fresh;
+        abandoned.provisioned = true;
+        abandoned.state = QStringLiteral("needs_login");
+        ok &= expect(tailnetshim::shouldSignInUnasked(abandoned, true, false, false, true, false)
+                     && !tailnetshim::shouldSignInUnasked(abandoned, true, true, false, true, false),
+                     "an abandoned sign-in restarts only without its token");
+        TailnetShimStatus joined = abandoned;
+        joined.claimable = false;
+        joined.state = QStringLiteral("running");
+        ok &= expect(!tailnetshim::shouldSignInUnasked(joined, true, false, false, true, false),
+                     "never for a radio a tailnet owns");
+        TailnetShimStatus old = fresh;
+        old.version = QStringLiteral("0.4.1");
+        ok &= expect(!tailnetshim::shouldSignInUnasked(old, true, false, false, true, false),
+                     "never for a container without QR sign-in");
+
+        ok &= expect(tailnetshim::tokenAfterKeychainRead(QStringLiteral("new"), QStringLiteral("stale"))
+                         == QStringLiteral("new")
+                     && tailnetshim::tokenAfterKeychainRead(QString(), QStringLiteral("kept"))
+                         == QStringLiteral("kept"),
+                     "a token issued meanwhile beats the keychain read");
+        ok &= expect(TailnetShimTokenStore::pickLoadedToken(true, QStringLiteral("stale"),
+                                                            QStringLiteral("new")) == QStringLiteral("new")
+                     && TailnetShimTokenStore::pickLoadedToken(true, QStringLiteral("stale"), QString()).isEmpty()
+                     && TailnetShimTokenStore::pickLoadedToken(false, QStringLiteral("read"),
+                                                               QString()) == QStringLiteral("read"),
+                     "a keychain read finished after a save yields that save");
+
+        // Without a keychain the session store answers on the next turn,
+        // with the token current then, not when the load was asked.
+        QString got = QStringLiteral("unset");
+        TailnetShimTokenStore::load(QStringLiteral("REVIEW-SERIAL"), &app,
+                                    [&got](const QString& t) { got = t; });
+        TailnetShimTokenStore::save(QStringLiteral("REVIEW-SERIAL"), QStringLiteral("issued-after"));
+        QCoreApplication::processEvents();
+        QCoreApplication::processEvents();
+        ok &= expect(got == QStringLiteral("issued-after"), "a load answers with a token saved after it began");
+        TailnetShimTokenStore::save(QStringLiteral("REVIEW-SERIAL"), QString());
     }
 
     ok &= expect(tailnetshim::suggestedHostname(QStringLiteral("KK7GWY FLEX-8600"))

@@ -164,6 +164,22 @@ bool supportsQrSignIn(const QString& version)
     return major > 0 || minor >= 5;
 }
 
+bool shouldSignInUnasked(const TailnetShimStatus& st, bool tokenLoaded, bool haveToken,
+                         bool busy, bool lanReachable, bool alreadyTried)
+{
+    if (alreadyTried || busy || !lanReachable || !tokenLoaded || !supportsQrSignIn(st.version)) {
+        return false;
+    }
+    const bool fresh = !st.provisioned && st.state == QLatin1String("unprovisioned");
+    const bool abandoned = st.claimable && st.provisioned && !haveToken;
+    return fresh || abandoned;
+}
+
+QString tokenAfterKeychainRead(const QString& held, const QString& read)
+{
+    return held.isEmpty() ? read : held;
+}
+
 QString parseError(const QByteArray& json)
 {
     const QJsonDocument doc = QJsonDocument::fromJson(json);
@@ -196,13 +212,6 @@ QByteArray sharingBody(const QStringList& routes, bool shareDiscovered)
     QJsonObject o;
     o.insert(QStringLiteral("routes"), QJsonArray::fromStringList(routes));
     o.insert(QStringLiteral("share_discovered"), shareDiscovered);
-    return QJsonDocument(o).toJson(QJsonDocument::Compact);
-}
-
-QByteArray allowBody(const QStringList& allow)
-{
-    QJsonObject o;
-    o.insert(QStringLiteral("allow"), QJsonArray::fromStringList(allow));
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 
@@ -360,13 +369,6 @@ void TailnetShimClient::setSharing(const QStringList& routes, bool shareDiscover
     handle(send(QStringLiteral("PUT"), QStringLiteral("/v1/routes"),
                 tailnetshim::sharingBody(routes, shareDiscovered), adminToken),
            QStringLiteral("sharing"));
-}
-
-void TailnetShimClient::setAllow(const QStringList& allow, const QString& adminToken)
-{
-    handle(send(QStringLiteral("PUT"), QStringLiteral("/v1/allow"),
-                tailnetshim::allowBody(allow), adminToken),
-           QStringLiteral("allow"));
 }
 
 void TailnetShimClient::signOut(const QString& adminToken)

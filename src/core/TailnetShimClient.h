@@ -82,12 +82,21 @@ std::optional<TailnetShimLogin> parseLoginReply(const QByteArray& json);
 QString checkedAuthUrl(const QString& url);
 // Whether a container version signs in by QR code (0.5.0 and later).
 bool supportsQrSignIn(const QString& version);
+// Whether the Remote Access window should start the QR sign-in without being
+// asked: the radio belongs to no tailnet (never provisioned, or a QR sign-in
+// abandoned with its token), the container can, nothing is in flight, and
+// the keychain has answered, so the token it holds is known and can't
+// arrive after a new one.
+bool shouldSignInUnasked(const TailnetShimStatus& status, bool tokenLoaded, bool haveToken,
+                         bool busy, bool lanReachable, bool alreadyTried);
+// The token the window keeps when the keychain answers: one it already
+// holds (issued by a sign-in meanwhile) wins over the read.
+QString tokenAfterKeychainRead(const QString& held, const QString& read);
 QString parseError(const QByteArray& json);
 // An empty authKey is left out, which asks for sign-in by QR code.
 QByteArray provisionBody(const QString& authKey, const QString& hostname,
                          const QStringList& allow, const QStringList& routes = {},
                          bool shareDiscovered = true);
-QByteArray allowBody(const QStringList& allow);
 QByteArray sharingBody(const QStringList& routes, bool shareDiscovered);
 // "KK7GWY FLEX-8600" -> "kk7gwy-flex-8600": a valid tailnet hostname.
 QString suggestedHostname(const QString& nickname);
@@ -113,7 +122,6 @@ public:
     void provision(const QString& authKey, const QString& hostname,
                    const QStringList& allow, const QStringList& routes,
                    bool shareDiscovered, const QString& adminToken);
-    void setAllow(const QStringList& allow, const QString& adminToken);
     void setSharing(const QStringList& routes, bool shareDiscovered, const QString& adminToken);
     void signOut(const QString& adminToken);
 
@@ -121,7 +129,7 @@ signals:
     void statusReceived(const AetherSDR::TailnetShimStatus& status);
     void provisioned(const AetherSDR::TailnetShimProvisionReply& reply);
     void loginReceived(const AetherSDR::TailnetShimLogin& login);
-    // operation is "status", "login", "provision", "allow", "sharing" or "signout". unauthorized
+    // operation is "status", "login", "provision", "sharing" or "signout". unauthorized
     // is true when the shim refused the admin token.
     void requestFailed(const QString& operation, const QString& message, bool unauthorized);
 

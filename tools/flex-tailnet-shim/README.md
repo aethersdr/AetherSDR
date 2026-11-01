@@ -103,6 +103,11 @@ URL, and the dialog shows it as a new QR code (from the LAN only, since the
 expired node is off the tailnet). A tagged auth key, under Advanced, makes a
 node that never expires.
 
+**Access** (0.5.0): who may connect is decided by the tailnet's own access
+rules. Versions before 0.5.0 kept a Who may connect list and enforced it;
+0.5.0 drops a saved list at start-up (and logs it), ignores one sent with a
+provision, and refuses to set one.
+
 ## Provisioning API
 
 The API is plain HTTP on the radio's LAN address, TCP 48992. It is never on
@@ -115,7 +120,7 @@ are refused.
 | GET | `/v1/status` | no | State (`needs_login` and `needs_approval` while waiting on a person), tailnet IP and DNS name, allowlist, session count, version, key expiry, last error. Never a secret. |
 | POST | `/v1/provision` | only once provisioned | `{auth_key, hostname, allow[]}`: joins (or, with the token, re-joins) the tailnet and returns `{admin_token, status}`. Without `auth_key` it signs in by URL and also returns `auth_url` once the control plane sends it (within 30 s); the join goes on in the background |
 | GET | `/v1/login` | yes | `{state, auth_url, key_expiry}`: the sign-in URL while one is wanted (a new join, or an expired key) |
-| PUT | `/v1/allow` | yes | `{allow[]}`: changes who may connect without leaving the tailnet |
+| PUT | `/v1/allow` | yes | `{allow: []}` clears a list an older version kept; from 0.5.0 a non-empty list is refused (400): who may connect is the tailnet's access rules |
 | POST | `/v1/signout` | yes | Logs out, deletes the node state and forgets the token |
 
 **Trust model:** the first provisioning is open to the LAN. That matches the

@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"time"
 
 	"tailscale.com/client/local"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 )
 
@@ -115,6 +118,11 @@ func (n *Node) watchJoin(ctx context.Context, read loginReader, interactive bool
 		}
 		// A keyed join that the control plane answers with a sign-in URL
 		// has had its key refused: it stays "starting" until its timeout.
+		// Waiting for an admin's approval means someone has signed in: the
+		// node belongs to their tailnet, so it is no longer claimable.
+		if pendingState(li) == stateNeedsApproval {
+			n.markJoined()
+		}
 		if s := pendingState(li); s != "" && interactive {
 			n.setLoginState(s)
 			disarm()
@@ -160,6 +168,7 @@ func (n *Node) keepSignedIn(ctx context.Context, read loginReader, startLogin fu
 				n.setLoginState(s)
 			}
 		case li.Backend == "NeedsMachineAuth":
+			n.markJoined()
 			n.setLoginState(stateNeedsApproval)
 		}
 	}
@@ -216,7 +225,8 @@ func (n *Node) Login(presented string) (LoginReply, error) {
 // control plane's URL, inside AetherSDR's request timeout.
 const loginURLWait = 30 * time.Second
 
-// ProvisionInteractive joins the tailnet without an auth key: it saves the
+// ProvisionInteractive joins the tailnet without an auth key (allow is
+// ignored, as in Provision): it saves the
 // settings and a new admin token, starts the join in the background, and
 // returns the token with the sign-in URL once the control plane sends it.
 // The token comes back even without a URL (a slow control plane), so the
@@ -228,7 +238,7 @@ func (n *Node) ProvisionInteractive(presented, hostname string, allow, routes []
 		return "", "", err
 	}
 	token, hash := newToken()
-	cfg := provisionConfig{TokenSHA256: hash, Hostname: hostname, Allow: allow, Routes: routes,
+	cfg := provisionConfig{TokenSHA256: hash, Hostname: hostname, Routes: routes,
 		ShareDiscovered: shareDiscovered, PendingSignIn: true}
 	if err := n.replaceNode(cfg); err != nil {
 		end()
@@ -266,24 +276,45 @@ func (n *Node) ProvisionInteractive(presented, hostname string, allow, routes []
 	return token, "", nil
 }
 
-// markJoined records that the node has been on the tailnet, ending the
-// token-free window a pending sign-in by URL leaves open. Caller holds opMu
-// (start does).
+// markJoined records that someone has signed the node in (it reached the
+// tailnet, or awaits an admin's approval there), ending the token-free
+// window a pending sign-in by URL leaves open. Called while a join holds
+// opMu (start, watchJoin) or from the running node's watcher.
 func (n *Node) markJoined() {
 	n.mu.Lock()
+	if !n.cfg.PendingSignIn {
+		n.mu.Unlock()
+		return
+	}
+	// Closed in memory first, whatever the save does: a node on the tailnet
+	// is never claimable. A save that fails leaves the flag on disk, and
+	// load then checks the tailnet state instead (joinedBefore).
+	n.cfg.PendingSignIn = false
 	cfg := n.cfg
 	n.mu.Unlock()
-	if !cfg.PendingSignIn {
-		return
-	}
-	cfg.PendingSignIn = false
 	if err := n.save(cfg); err != nil {
 		log.Printf("could not record the completed sign-in: %v", err)
-		return
 	}
-	n.mu.Lock()
-	n.cfg.PendingSignIn = false
-	n.mu.Unlock()
+}
+
+// joinedBefore reports whether the tailnet state in dir records a completed
+// sign-in. tailscaled writes its current-profile key only once a login has
+// given the node an identity, so a sign-in that never finished has none. A
+// state file that can't be read or parsed counts as joined: fail closed.
+func joinedBefore(dir string) bool {
+	b, err := os.ReadFile(filepath.Join(dir, "tailscaled.state"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	var st map[string]json.RawMessage
+	if json.Unmarshal(b, &st) != nil {
+		return true
+	}
+	cur, ok := st[string(ipn.CurrentProfileStateKey)]
+	return ok && len(cur) > 2 // more than an empty JSON string
 }
 
 // replaceNode leaves the previous tailnet and saves cfg as the node's
