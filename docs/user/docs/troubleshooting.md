@@ -38,6 +38,15 @@ multiFLEX is off on the radio and other clients are already connected.
 1. Disconnect one of the stations listed in the **Connected Stations** dialog.
 2. See [Multi-Flex](./multi-flex.md).
 
+### Connected, but the panadapter stays empty
+
+A **No spectrum data received** warning appears about 10 seconds after connecting. The control connection works, but the radio's spectrum and audio stream (UDP) is not reaching AetherSDR. A firewall on this computer or on the network path, or a VPN, may be blocking it, or AetherSDR may be using the wrong network interface.
+
+1. The warning names the source mode and the local TCP and UDP endpoints. Check the UDP endpoint is on the same network as the radio.
+2. If you use a VPN, disconnect it or exclude the radio's network, then reconnect.
+3. **Windows:** open **Tools → Network Diagnostics...** → **Windows Firewall**. If a rule blocks AetherSDR, click **Fix…**.
+4. To report it, turn on the **VITA-49** log category in **Help → Support & Diagnostics...**, restart AetherSDR, reconnect, and attach the log. It shows where the stream was bound and whether any packet arrived. See [Support and Logging](./support-and-logging.md).
+
 ### SmartLink: signed in, but no radio is listed
 
 The radio is not registered with SmartLink, or port forwarding is not set up.

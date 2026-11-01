@@ -118,6 +118,9 @@ local network.
 
 *The Waveforms window, listing the waveforms installed on the radio. The serial number and the waveform processor's address are blacked out.*
 
+When the installed list is empty, **No radio waveforms installed** appears
+with the hint **Use Install... to add waveforms to your radio.**
+
 1. Open **Tools → Waveforms...**.
 2. Click **Install...** and choose **Remote Access (Tailscale)**.
 3. AetherSDR downloads the container image (about 8 MB) and checks its

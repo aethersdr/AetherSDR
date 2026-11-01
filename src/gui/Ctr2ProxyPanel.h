@@ -3,6 +3,8 @@
 #include <QPointer>
 #include <QWidget>
 
+#include <functional>
+
 class QCheckBox;
 class QLabel;
 class QLineEdit;
@@ -27,6 +29,21 @@ public:
 
     void setModel(Ctr2ProxyModel* model);
 
+#ifdef Q_OS_LINUX
+    // What the CTR2 access rule is wanted for: the relay's Start, a firmware
+    // action on a CTR2 running its firmware (HID), or one on a CTR2-Max in
+    // download mode (its serial port). One rule covers all three; the
+    // questions differ.
+    enum class RuleUse { Relay, Firmware, DownloadMode };
+    // Whether this build's rule is already installed, locally or packaged.
+    static bool accessRuleInstalled();
+    // A CTR2 window action found the device closed to this login: offer the
+    // rule, and call afterInstalled once it is in place. False when no install
+    // started (declined, already installed, no pkexec, one already running):
+    // the caller carries on as it would without the rule.
+    bool offerAccessRule(RuleUse use, std::function<void()> afterInstalled);
+#endif
+
 private:
     void buildUi();
     void syncAddresses();
@@ -35,9 +52,10 @@ private:
     void syncStats();
     void onStartClicked();
 #ifdef Q_OS_LINUX
-    void offerUsbAccessRule();
+    // True when the install started.
+    bool offerUsbAccessRule(RuleUse use = RuleUse::Relay);
     void showManualRuleInstructions(const QString& why);
-    void installUsbAccessRule();
+    void installUsbAccessRule(RuleUse use);
     void startAfterRuleInstalled(int attemptsLeft);
 #endif
 
@@ -68,6 +86,7 @@ private:
     QLabel* m_problemLabel{nullptr};
     QLabel* m_errorLabel{nullptr};
     bool m_installingRule{false};  // pkexec rule install in flight
+    std::function<void()> m_afterRule;   // a CTR2 window action's next step
 };
 
 } // namespace AetherSDR

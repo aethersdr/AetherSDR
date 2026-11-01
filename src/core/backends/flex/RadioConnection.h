@@ -32,6 +32,7 @@ class RadioConnection : public QObject {
     friend class TxOperationIntegrationTestAccess;
     friend class RadioConnectionSessionTestAccess;
     friend class TuneOutputControlTestAccess;
+    friend class LanUdpKeepaliveTestAccess;
     std::function<void(quint32, const QString&)> m_commandSinkForTest;
 
 public:

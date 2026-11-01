@@ -395,8 +395,8 @@ after a timeout is asking for a reply byte-for-byte equal to the one it
 abandoned, and a wire with no transaction id cannot separate those two.
 `hl2_rqst_ack_test` pins that residual rather than hiding it. `Echo::
 SubsystemRead`, which matches on the six-bit address alone, is weaker still —
-so `requestRegister` refuses it outright today, no allow-listed address being of
-that shape.
+so `requestRegister` refuses it outright, no allow-listed address being of that
+shape. Its one caller is the IO board status read below.
 
 **No radio has ever answered this code.** Every test behind item 13 is synthetic
 — a hand-built `Ep6Response` fed straight to `ingestControlResponse`. That is
@@ -407,7 +407,115 @@ flagged request will be answered; nothing here is evidence that one was. First
 hardware run: arm a read-back at `0x0a` on a streaming radio and watch
 `staleAcks()` stay at zero while `answered()` moves. Until then, treat the
 `Answered` path as unexercised on real hardware and say so in anything built on
-it.
+it. The `SubsystemRead` path has since been answered by a radio (the IO board
+status read below, with its numbers); the echo path at `0x0a`/`0x0e` has not.
+
+### The IO board status read
+
+`MetisClient::requestIoBoardStatus()`, reached as verb `hl2` / `ioboard.status`,
+reads the N2ADR IO board's status registers. It is the only request that reaches
+`0x3d`; `requestRegister` still refuses that address, so this adds no write path
+to the companion bus. The C&C data is `0x079D0600`: cookie `0x07`, stop | chip
+`0x1D`, register 6. `i2c_bus2.v` takes the cookie's low bit as "read":
+
+```verilog
+            state_next = cmd_data[24] ? STATE_READ_CMDADDR : STATE_CMDADDR;
+```
+
+It takes the chip from `cmd_data[22:16]` and never reads the stop bit, which is
+set only to match the write path. `STATE_READ_CMDADDR` and `STATE_READ_DATA0`
+write only the register pointer, then stop; `STATE_READ_DATA1..4` read four
+bytes, the first into `resp_data[7:0]`, and `RESP_READ` returns them as the
+reply's C1..C4. On the board (HL2IOBoard `n2adr_lib/i2c_slave_handler.c`, commit
+`bbf0a2c`), the first byte a write delivers is stored as the register number and
+nothing is written; each requested byte returns one register and advances. So
+one read returns registers 6..9:
+
+| Reply DATA | Register | Meaning (HL2IOBoard README) | Reply key |
+|---|---|---|---|
+| `[7:0]` | 6 `REG_INPUT_PINS` | bit 0 EXTTR (1 = receive), bits 1..5 In1..In5 | `inputPins`, `receiving`, `in1`..`in5` |
+| `[15:8]` | 7 `REG_ANTENNA_TUNER` | ATU progress: `0xEE` send RF, `0` tuned, `>= 0xF0` failed | `antennaTuner` |
+| `[23:16]` | 8 `REG_FAULT` | `0` = no fault; other codes are undefined | `fault` |
+| `[31:24]` | 9 `REG_FIRMWARE_MAJOR` | firmware major version | `firmwareMajor` |
+
+None of the four has a read side effect (the ADC registers from 25 up do, and
+the read stops short of them); the pointer write flashes the board's LED.
+
+Matching on the address alone is sound here for a reason particular to `0x3d`:
+nothing else sets RQST there, so a reply at `0x3d` answers an IO board read. The
+residual is the one the paragraph above describes, a late reply to an abandoned
+read landing on the next, and that reply carries the same four registers, at
+most a deadline plus a quarantine old.
+
+The bus can be busy in three ways, and none gives a reading. `i2c_bus2.v` looks
+at a command only in `STATE_IDLE`:
+- In `STATE_IDLE` with the I2C master still busy, the command is refused with
+  `0x3F` (`cmd_ack_next = 1'b0; // Missed`).
+- During another read (`STATE_READ_*` holds `cmd_ack` low), `control.v`'s
+  `RESP_ACK` sees the low ack and also answers `0x3F`.
+- During a write (`STATE_CMDADDR`, `STATE_FCMDADDR` and their data states, where
+  `cmd_ack` stays high), the command is ignored outright, and `control.v` answers
+  at `0x3d` with the request's own DATA, `0x079D0600`. A board could in principle
+  read back those exact bytes (pins `0x00`, ATU 6, fault `0x9D`, firmware 7), but
+  only while transmitting with an undefined fault code.
+
+`ioboard.status` reports all three as "the radio's I2C bus was busy" rather than
+retrying.
+
+The bus runs at 312.5 kHz (`clk_ctrl` 2.5 MHz, `prescale` 2), so a read or a
+write holds it for about 0.1–0.2 ms. EP2 packets are 2.6 ms apart on average,
+but the 2 ms pacer catches up in bursts microseconds apart, and an IO board
+TX-frequency bank that reaches a busy bus is ignored with nothing to report it,
+because writes carry no RQST. So `MetisClient::buildNextControlPacket()` spaces
+bus 2 around the read:
+- a config bank whose filter, RX-antenna or AK4951 speaker bits changed since
+  the last packet sent counts as a bus-2 write, because frame A's change starts
+  one ahead of frame B, and the read never shares its packet;
+- the read waits until 2 ms (by the millisecond clock, so more than 1 ms) after
+  the last bus-2 write sent;
+- an I2C write waits until 2 ms after the read, keeping its place in the queue.
+
+A held bank costs at most one packet. Writes are not spaced from each other:
+back-to-back I2C writes in a burst, and an IO board bank in the same packet as
+a filter change, share the bus as they did before the read existed.
+
+With no board fitted the read should still complete, not be refused:
+`i2c_master.v` strobes `missed_ack` when no chip acknowledges and carries on, and
+`i2c_bus2.v` never consults it. The bytes are then whatever the idle bus reads,
+`0xFF` with pull-ups; the gateware sets none on `io_scl2`/`io_sda2`. The board
+never sets bits 6..7 of register 6 (the README gives them to `REG_IN_PINS`, 168,
+only), and every firmware build reports a major version of 1 or more, so
+`ioboard.status` answers a reply with either bit set, or with firmware 0, with
+the error "No IO board answered", not a reading; a read that never completes
+times out.
+Unverified on hardware: no run yet has had the board unplugged.
+
+**On hardware** (2026-10-23; HL2 gateware 74.2, N2ADR IO board firmware major
+1, host on Wi-Fi, 48 kHz, one receiver, receive only): two runs, polling every
+2 s.
+- **Answers.** 285 reads were answered, every one with the same registers:
+  `inputPins 0x01` (EXTTR receiving), ATU 0, fault 0, firmware 1. That is the
+  value read, not an echo: an echo of `0x079D0600` would decode as pins `0x00`,
+  firmware 7. With the link healthy, the run that timed it saw round trips of
+  4–36 ms, median 9 ms.
+- **Byte order, from a second board.** The reply above, `01 00 00 01`, reads
+  the same either way round, so it cannot show the order. ON8ST's board
+  (firmware 2.11, on #6703), read through the port-1025 command path into the
+  same `i2c_bus2.v` read states, can: `0x02000001` from register 6 (firmware 2
+  in `[31:24]`), and bytes `00 00 02 0B` in `[7:0]..[31:24]` from register 7,
+  which also confirms the auto-increment.
+- **No bus-busy refusals**, including through a six-band sweep whose IO board
+  frequency pushes shared the bus.
+- **Timeouts followed Wi-Fi delay or loss past the 42 ms deadline.** Of 65
+  failures, 57 fell inside two minutes in which `MetisClient` recovered a 2 s
+  EP6 silence and counted 29,731 dropped EP6 packets.
+- **The quarantine did its job on the late replies it saw.** In the run that
+  counted them, 19 late replies arrived during the quarantine and were counted
+  as `staleAcks()` rather than paired. The registers never changed, so a reply
+  that outlived the quarantine would have looked like a fresh one; these runs
+  cannot rule that residual out.
+- **"The radio did not answer" is retryable.** A consumer should poll again
+  rather than report the board missing.
 
 **Bonus, for §13 item 14.** `clip_cnt` is a 2-bit saturating counter cleared on
 **every** `resp_rqst`, and the ADC-overload bit in RADDR 0 is `(&clip_cnt)` —

@@ -1541,7 +1541,7 @@ QString ThemeManager::resolve(const QString& stylesheetTemplate) const
 QString ThemeManager::checkBoxIndicatorStyle()
 {
     // Single source of truth for the checkbox indicator used across dialogs
-    // (RadioSetupDialog, DxClusterDialog, FreeDvReporterDialog).  Kept as an
+    // (MidiMappingDialog).  Kept as an
     // unresolved token template so applyStyleSheet() expands it per widget
     // and it re-paints on theme switches.
     static const QString kStyle =

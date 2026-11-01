@@ -156,6 +156,28 @@ inline int panPointsForPixelWidth(int pixels, bool edgeCropEnabled)
     return n;
 }
 
+// Device pixels for `logicalPixels` at `devicePixelRatio`, clamped to
+// [1, maximumPixels]. A non-finite or non-positive ratio counts as 1.
+inline int panDevicePixels(int logicalPixels, double devicePixelRatio, int maximumPixels)
+{
+    const double dpr = std::isfinite(devicePixelRatio) && devicePixelRatio > 0.0
+        ? devicePixelRatio : 1.0;
+    return std::clamp(static_cast<int>(std::lround(logicalPixels * dpr)), 1, maximumPixels);
+}
+
+// FLEX radios cap panadapter FFT frames at a 4096-bin boundary: at or past it
+// the right edge is malformed on firmware 4.2.18/4.2.20, and on a FLEX-8600
+// running 4.3.16 xpixels of 4093 or more stops FFT and waterfall data for
+// every connected client until the radio reboots (4092 works). 3840 leaves
+// margin for models and firmware not yet measured.
+inline constexpr int kMaxRadioPanXPixels = 3840;
+
+// The xpixels a Flex pan `logicalWidth` points wide asks for at `devicePixelRatio`.
+inline int panRadioXpixels(int logicalWidth, double devicePixelRatio)
+{
+    return panDevicePixels(logicalWidth, devicePixelRatio, kMaxRadioPanXPixels);
+}
+
 // No explicit frame when cropping is off: preserve each existing writer's
 // fallback, especially DSS's preview-base resolution on Flex/Icom.
 inline std::optional<FrequencyFrame> edgeCroppedWaterfallFrame(

@@ -107,8 +107,10 @@ AetherKnob.
 - **Linux:** a udev rule for the CTR2 ships with the build. If the device
   cannot be opened, **Start** offers to install the rule
   (`/etc/udev/rules.d/70-aethersdr-ctr2.rules`) through `pkexec`, asking for
-  your administrator password once. The rule only opens CTR2 controllers and
-  the AetherKnob to whoever is logged in at the computer.
+  your administrator password once. The rule opens CTR2 controllers, the
+  AetherKnob, and the USB serial port of ESP32-S3 boards (which the CTR2-Max
+  uses in download mode, for firmware installs) to whoever is logged in at the
+  computer, and to no one else.
 - **AetherKnob** (an AetherSDR controller on the Elecrow CrowPanel 2.1"
   rotary display) uses USB mode the same way. It appears in the list as
   **AetherKnob**. While it is relaying, AetherSDR also sends it a 32-bar
@@ -199,8 +201,10 @@ version, or other stock firmware it asks you to, in an alert: hold **BOOT** (thr
   AetherSDR reads the registration before writing anything, and refuses an
   unregistered unit; AetherCTR2 also checks it at every start.
 - **Linux:** download mode uses the unit's USB serial port. If AetherSDR
-  cannot open it, add yourself to the group that owns the port (`dialout` or
-  `uucp`, depending on the distribution) and log in again.
+  cannot open it, the CTR2 window offers to install the CTR2 access rule
+  (the same one **Start** installs) through `pkexec`, asking for your
+  administrator password once, then carries on with the install. No group
+  change or logging out is needed.
 - A build with serial-port support (Qt Serial Port) for download mode, and
   USB HID support (hidapi) for updates over the cable.
 
@@ -249,7 +253,15 @@ starts.
 The CTR2 window notices the switch by itself: the device list and **Status**
 follow within a couple of seconds, with no **Rescan** needed. With **Start
 automatically** ticked, the relay starts again once the CTR2-Max is back in
-AetherCTR2.
+AetherCTR2. After a restart asked for from the CTR2 window, it waits for the
+unit to leave and come back rather than reopening it on its way out; if
+AetherSDR misses that, it tries again after 20 seconds. Another controller is
+not kept waiting.
+
+Before **Restart into**, **Install** or a stock-firmware install, the window
+may show **Reading the CTR2-Max's firmware…** for a moment while it checks
+whether the running firmware can restart on request, so it asks for the BOOT
+and RESET buttons only when the firmware really needs them.
 
 ### Backups
 
@@ -263,7 +275,9 @@ date, including any saved with **Back Up…** in earlier versions of AetherSDR
 it. Installing one restores it: the whole flash goes back exactly as it
 was, both firmwares, the settings and the registration included, and anything
 since is lost. A backup restores only onto the unit it came from (matched by
-its MAC address), and only if the file is unchanged since it was made.
+its MAC address), and only if the file is unchanged since it was made. The
+question before a restore has **Cancel** as its default, so pressing Return
+keeps what is on the unit; restoring takes a click on **Restore**.
 
 ### Cancelling
 

@@ -2,7 +2,7 @@
 
 The source snapshot is pinned to ggerganov/ggmorse commit
 `8fb433d6cd6a71940f51b5724663ec0c75bf0b62` (see `COMMIT`). AetherSDR carries
-two local changes to the otherwise exact upstream snapshot:
+three local changes to the otherwise exact upstream snapshot:
 
 1. `src/ggmorse.cpp`: Æ, Ø and Å added to the Morse alphabet as Latin-1
    `0xC6`, `0xD8` and `0xC5` — Æ `·−·−` (also Ä), Ø `−−−·` (also Ö),
@@ -18,8 +18,11 @@ two local changes to the otherwise exact upstream snapshot:
    grows from 100 to 120 to hold the larger speed index. Upstream's own
    `&& s < 55` loop bound is deleted so the raised clamps are reachable.
    The comment above the coarse search states those limits (#6669 corrected it from "5..115").
+3. `src/ggmorse.cpp`: the decode loop no longer writes decoded characters,
+   `?` and word spacing to stdout (`printf` / `fflush(stdout)`); `rxData` is
+   the output, and the stdout copy filled CI logs with test Morse (#5745).
 
 ## When refreshing ggmorse
 
-Check whether upstream has gained either change; drop any it now has.
-Otherwise reapply both, keeping every other file exact, and update `COMMIT`.
+Check whether upstream has gained any of these changes; drop any it now has.
+Otherwise reapply them, keeping every other file exact, and update `COMMIT`.

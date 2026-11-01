@@ -228,14 +228,18 @@ EspFlasher::~EspFlasher()
     close();
 }
 
-bool EspFlasher::open(const QString& portName, QString* error)
+bool EspFlasher::open(const QString& portName, QString* error, bool* accessDenied)
 {
     close();
+    if (accessDenied)
+        *accessDenied = false;
     auto s = std::make_unique<Session>();
     s->serial.setPortName(portName);
     s->serial.setBaudRate(115200);
     if (!s->serial.open(QIODevice::ReadWrite)) {
         if (s->serial.error() == QSerialPort::PermissionError) {
+            if (accessDenied)
+                *accessDenied = true;
             *error = QCoreApplication::translate(
                 "EspFlasher", "Permission to open %1 was denied.").arg(portName);
         } else {

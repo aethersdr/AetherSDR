@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 #include <iostream>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QElapsedTimer>
 #include <QThread>
@@ -60,19 +61,18 @@ QVector<float> letterV(PcmFormat format)
     return samples;
 }
 
-bool retainLockedEstimates()
+bool establishEstimates(CwRxModel& decoder, PcmProducer& producer)
 {
-    CwRxModel decoder;
     QString decoded;
-    QObject::connect(&decoder, &CwRxModel::textDecoded, &decoder,
-                     [&](const QString& text, float) { decoded += text; });
+    const auto collect = QObject::connect(&decoder, &CwRxModel::textDecoded, &decoder,
+                                          [&](const QString& text, float) { decoded += text; });
+    const auto release = qScopeGuard([collect] { QObject::disconnect(collect); });
     decoder.setPitchRange(550, 650);
     decoder.setSpeedRange(18, 22);
     decoder.start();
     // Exercise fixed24 receive ingress with the original source lease.
     // Backend switches below use the inert stub; no model is downloaded.
     const PcmFormat format{24000, PcmLayout::Stereo};
-    PcmProducer producer;
     DecoderPcmAdapter adapter;
     adapter.selectRoute(DecoderPcmAdapter::RouteLane::NativeSlice, 11);
     if (!require(producer.start(PcmPurpose::Slice, 11, format),
@@ -88,10 +88,17 @@ bool retainLockedEstimates()
         pump(10);
     }
     pump(300);
-    if (!require(decoded.count('V') >= 3, "Real fixed24 worker did not decode Morse V")
-        || !require(decoder.estimatedPitch() > 550 && decoder.estimatedPitch() < 650
-                        && decoder.estimatedSpeed() > 0,
-                    "Worker did not establish positive pitch and speed")) { return false; }
+    return require(decoded.count('V') >= 3, "Real fixed24 worker did not decode Morse V")
+        && require(decoder.estimatedPitch() > 550 && decoder.estimatedPitch() < 650
+                       && decoder.estimatedSpeed() > 0,
+                   "Worker did not establish positive pitch and speed");
+}
+
+bool retainLockedEstimates()
+{
+    CwRxModel decoder;
+    PcmProducer producer;  // the lease must stay current while locking
+    if (!establishEstimates(decoder, producer)) { return false; }
     decoder.lockPitch(true);
     decoder.lockSpeed(true);
     const float pitch = decoder.estimatedPitch();
@@ -157,6 +164,70 @@ bool savedRangesStayInsideTheSliders()
     store(R"({"rx":"True","tx":"False"})");
     return kept;
 }
+
+bool unlockAfterStopClearsReadout()
+{
+    // The CW panel shows the last statsUpdated. A stopped decoder keeps its
+    // locked values on screen; unlocking them must publish the cleared
+    // estimate, or a dead reading stays up (#5745).
+    float shownPitch = -1;  // declared before the decoder so they outlive it
+    float shownSpeed = -1;
+    CwRxModel decoder;
+    PcmProducer producer;  // the lease must stay current while locking
+    if (!establishEstimates(decoder, producer)) { return false; }
+    decoder.lockPitch(true);
+    decoder.lockSpeed(true);
+    decoder.stop();
+    QObject::connect(&decoder, &CwRxModel::statsUpdated, &decoder,
+                     [&](float pitch, float speed) { shownPitch = pitch; shownSpeed = speed; });
+    pump(20);
+    if (!require(shownPitch > 550 && shownSpeed > 0, "Stopped decoder did not show its locked values")) {
+        return false;
+    }
+    decoder.lockPitch(false);
+    pump(20);
+    if (!require(shownPitch == 0 && shownSpeed > 0, "Unlocking pitch on a stopped decoder left it on screen")) {
+        return false;
+    }
+    decoder.lockSpeed(false);
+    pump(20);
+    return require(shownPitch == 0 && shownSpeed == 0,
+                   "Unlocking speed on a stopped decoder left it on screen");
+}
+
+bool sameRange(std::optional<CwDecodeSettings::Range> got, int low, int high)
+{
+    return got && sameRange(*got, low, high);
+}
+
+// The pitch range follows the radio's CW pitch: kept when it contains the
+// pitch, re-centred on the pitch when it misses it.
+bool pitchRangeFollowsTheRadioPitch()
+{
+    using S = CwDecodeSettings;
+    // CONSTRUCTED pitches: they exercise the centring and the span edges only.
+    if (!require(sameRange(S::pitchRangeAround(800), 650, 950)
+                 && sameRange(S::pitchRangeAround(250), 300, 600)
+                 && sameRange(S::pitchRangeAround(1150), 900, 1200)
+                 && sameRange(S::pitchRangeAround(1500), 900, 1200),
+                 "The range around a pitch is not 300 Hz inside the slider span")) { return false; }
+
+    const S::Range fixedDefault = S::kPitchDefault;
+    // MEASURED (#6158, reporter's support bundle 2026-10-04: `transmit … pitch=710`,
+    // no saved range) — the radio's pitch sits outside the 500-700 default.
+    if (!require(sameRange(S::pitchRangeFor(710, fixedDefault), 560, 860),
+                 "A pitch outside the range did not re-centre on it")) { return false; }
+    // MEASURED (#6650 review, NF0T, FLEX-8400 fw 4.3.16, 2026-10-23): range set by
+    // hand to 545-700, then CW pitch 600 -> 610 — the hand-set range must stay.
+    if (!require(!S::pitchRangeFor(610, S::Range{545, 700}),
+                 "A pitch change inside a hand-set range replaced it")) { return false; }
+    // CONSTRUCTED values from here: the range edges only.
+    if (!require(!S::pitchRangeFor(500, fixedDefault) && !S::pitchRangeFor(700, fixedDefault),
+                 "A pitch on the range edge replaced it")) { return false; }
+    return require(sameRange(S::pitchRangeFor(499, fixedDefault), 349, 649)
+                   && sameRange(S::pitchRangeFor(701, fixedDefault), 551, 851),
+                   "A pitch just outside the range did not re-centre on it");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -165,6 +236,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     AppSettings::instance().load();
     if (!savedRangesStayInsideTheSliders()) { return 1; }
+    if (!pitchRangeFollowsTheRadioPitch()) { return 1; }
     CwDecodeSettings::setBackend(QStringLiteral("unknown"));
     if (!require(!CwDecodeSettings::neuralSelected(),
                  "Unknown saved backend disables ggmorse controls")) { return 1; }
@@ -249,5 +321,6 @@ int main(int argc, char** argv)
     QCoreApplication::processEvents();
     if (!require(posts == settled + 1,
                  "Stale queued statusChanged survived the backend switch")) { return 1; }
-    return require(!decoder.isRunning(), "Stopped decoder restarted") && retainLockedEstimates() ? 0 : 1;
+    return require(!decoder.isRunning(), "Stopped decoder restarted") && retainLockedEstimates()
+        && unlockAfterStopClearsReadout() ? 0 : 1;
 }

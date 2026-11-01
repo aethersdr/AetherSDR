@@ -83,6 +83,13 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.canon.aqua", QString("#8ef7e6"));
     m_tokens.insert("color.canon.bloom.blue", QString("#293aa7ff"));
     m_tokens.insert("color.canon.bloom.teal", QString("#1a7bf2dc"));
+    m_tokens.insert("color.canon.category.amber", QString("#f0a35e"));
+    m_tokens.insert("color.canon.category.aqua", QString("#8ef7e6"));
+    m_tokens.insert("color.canon.category.blue", QString("#3aa7ff"));
+    m_tokens.insert("color.canon.category.cyan", QString("#5de3ff"));
+    m_tokens.insert("color.canon.category.rose", QString("#fca5a5"));
+    m_tokens.insert("color.canon.category.teal", QString("#7bf2dc"));
+    m_tokens.insert("color.canon.category.violet", QString("#c4a1ff"));
     m_tokens.insert("color.canon.control", QString("#12233a"));
     m_tokens.insert("color.canon.cyan", QString("#5de3ff"));
     m_tokens.insert("color.canon.grid", QString("#0978aad2"));
@@ -138,6 +145,8 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.meter.pivot.rim", QString("#3a3e48"));
     m_tokens.insert("color.meter.rms", QString("#00b4d8"));
     m_tokens.insert("color.meter.thresh", QString("#ffb84d"));
+    m_tokens.insert("color.qr.dark", QString("#000000"));
+    m_tokens.insert("color.qr.light", QString("#ffffff"));
     m_tokens.insert("color.slice.a", QString("#00d4ff"));
     m_tokens.insert("color.slice.b", QString("#ff40ff"));
     m_tokens.insert("color.slice.c", QString("#40ff40"));

@@ -30,6 +30,20 @@ The panadapter is the main display: the FFT spectrum on top and the scrolling wa
 - If the wheel tunes the wrong way for your mouse or trackball, turn on **Radio Setup → Appearance & Behavior → Reverse mouse-wheel tuning direction**.
 - Dragging any slider shows its value in a small popup.
 
+### Touch controls
+
+On a touchscreen the panadapter and the rest of the app are fully operable by touch:
+
+| Gesture | Does |
+|--------|------|
+| **Tap** | Same as a click — double-tap to tune (or single-tap with **Single-Click to Tune** on) |
+| **Drag** on the spectrum / waterfall | Pan the display |
+| **Two-finger pinch** | Zoom the span, anchored under your fingers |
+| **Press and hold** (about ⅔ of a second) | Acts as a right-click — opens the context menu |
+| **Drag** in a list or menu | Flick-scroll it, with momentum; a tap still selects the item |
+
+Touch-scroll works in every scrollable list and menu. The exception is the drag-to-rearrange lists — the applet panel down the left edge and the favorites picker — where a drag moves items instead of scrolling.
+
 ### The header
 
 A thin header runs across the top of each panadapter, drawn over the spectrum so the trace and grid show through it.
@@ -101,7 +115,7 @@ Drag the divider between the spectrum and the waterfall to resize them. The spli
 
 ### Band plan overlay
 
-The strip along the bottom of the spectrum shows band segments, colored by use. In the ARRL (US) plan, for example: blue for CW, red for data, orange for phone/SSB, cyan for beacons, purple for satellite, green for weak-signal SSB, and yellow for mixed or experimental segments. Dots mark spot frequencies (FT8, WSPR, QRP calling and so on); hover for a tooltip.
+The strip along the bottom of the spectrum shows band segments, colored by use. In the ARRL (US) plan, for example: blue for CW, red for data, orange for phone/SSB, cyan for beacons, purple for satellite, green for weak-signal SSB, and yellow for mixed or experimental segments. Dots mark spot frequencies (FT8, WSPR, QRP calling and so on); hover for a tooltip. Some segments also carry a usage note from the published band plan, such as "Digimodes, automatically controlled data stations (unattended)" or "All modes except SSB". Hover over the segment to read it. The IARU Region 1 and SSA (Sweden) plans have these notes.
 
 **View → Band Plan** sets:
 
@@ -136,6 +150,13 @@ It re-uses the main panadapter's data, so it uses no extra radio panadapter or s
 - Pan layouts, including floating pans, are restored when you reconnect.
 - With the [Workspace Canvas](./workspace-canvas.md) on, **Import pop-outs onto canvas** places floating pans on the canvas.
 
+Opening a pan waits for the connected backend to publish its actual display.
+The waterfall may arrive afterward. If creation remains unconfirmed, AetherSDR
+does not automatically retry: another request could allocate a second display.
+Closing a pan requests cleanup; the pan disappears when the backend reports its
+removal. The normal close action preserves the last pan, and a backend may
+refuse a close because it still needs that receiver.
+
 ### Panadapter messages
 
 Status cards appear over the spectrum for things like "Center Lock released", a renderer problem, or KiwiSDR connection state. KiwiSDR status cards can be collapsed to a small pill but not closed.
@@ -143,6 +164,10 @@ Status cards appear over the spectrum for things like "Center Lock released", a 
 ### Status bar
 
 The status bar at the bottom of the window starts with the band-stack indicator and **+PAN** (add a panadapter), followed by indicators such as **TNF**, **CWX**, **ASR**, **DVK** and **FDX** (each only on radios and builds that support it). Click an indicator to toggle it, or press **Tab** to reach it and **Return** or **Enter** to activate it.
+
+**FDX** requests full duplex through the connected radio. A refusal leaves its
+state unchanged; a delayed reply cannot overwrite a newer request or a newer
+radio status. Enabling full duplex does not start a transmission.
 
 **View → FPS Meters** (Ctrl+F) adds spectrum and waterfall frame-rate readouts to each pan.
 
@@ -216,6 +241,7 @@ Click **Display** in the overlay menu. The panel is divided into sections and sc
 | **FFT Line** | Off–5.0 px, default 1.0 px | Trace thickness, with its own color button. |
 | **FFT Fill** | 0–100, default 70 | Fill opacity under the trace, with its own color button. |
 | **FFT Floor** + **Auto** | 1–99, default 75 | With **Auto** on, the dBm scale follows the noise floor and keeps it at this height (% from top). Off by default. |
+| **NF Range** | 0–10 dB in 0.5 dB steps; the radio's default is 1.5 | How far the measured noise floor may move before **Auto** repositions the scale. A larger range steadies the display at high zoom. The radio stores it. Needs SmartSDR+ on a FLEX-8000 series or Aurora radio with firmware 4.3.16 or later; otherwise it is dimmed and its tooltip says why. |
 
 #### WATERFALL
 

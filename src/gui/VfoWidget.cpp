@@ -2804,7 +2804,15 @@ void VfoWidget::buildTabContent()
                                      void (SliceModel::* setter)(bool),
                                      DspLevelTarget tag) {
             connect(btn, &QPushButton::toggled, this, [this, setter, tag](bool on) {
-                if (!m_updatingFromModel && m_slice) (m_slice->*setter)(on);
+                // Keep the object operand in a local: calling a captured
+                // member-function pointer on m_slice directly makes GCC 13.3's
+                // Debug UBSan code read an uninitialized register, which ASan
+                // reports as a stack-buffer-underflow (#6724). The client DSP
+                // applets use the same form for the same reason.
+                SliceModel* const target = m_slice;
+                if (!m_updatingFromModel && target) {
+                    (target->*setter)(on);
+                }
                 if (on) pushDspLevelTarget(tag);
                 else    popDspLevelTarget(tag);
             });
@@ -3572,10 +3580,10 @@ void VfoWidget::relayoutToCurrentContent()
     }
 }
 
-void VfoWidget::setSmartSdrPlus(bool has)
+void VfoWidget::setCwAutotuneLicensed(bool licensed)
 {
-    if (m_hasSmartSdrPlus == has) return;
-    m_hasSmartSdrPlus = has;
+    if (m_cwAutotuneLicensed == licensed) return;
+    m_cwAutotuneLicensed = licensed;
     if (m_slice) rebuildFilterButtons();
 }
 
@@ -6392,7 +6400,7 @@ void VfoWidget::rebuildFilterButtons()
             "QPushButton:pressed { background: #00607a; }"
             "QPushButton:checked { background: #00607a; color: #e0f0ff; border-color: #00b4d8; }";
 
-        if (m_hasSmartSdrPlus) {
+        if (m_cwAutotuneLicensed) {
             m_autotuneOnceBtn = new QPushButton("Once");
             m_autotuneOnceBtn->setFixedHeight(26);
             m_autotuneOnceBtn->setStyleSheet(btnStyle);

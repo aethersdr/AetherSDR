@@ -1,4 +1,9 @@
 #include "MemoryDialog.h"
+#include "CanonIndicators.h"
+#include "CanonMessageBox.h"
+#include "CanonScrollBarStyle.h"
+#include "CanonTableStyle.h"
+#include "FramelessResizer.h"
 #include "MemoryFilterPolicy.h"
 #include "MemoryCommands.h"
 #include "core/MemoryCsvCompat.h"
@@ -27,7 +32,6 @@
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QDebug>
-#include <QMessageBox>
 #include <QProgressBar>
 #include <QProgressDialog>
 #include <QPointer>
@@ -49,17 +53,94 @@ namespace AetherSDR {
 
 namespace {
 
-void showMemoryMessage(QWidget* parent, QMessageBox::Icon icon,
-                       const QString& title, const QString& text)
+// A notice with one OK button, for the window's errors and results.
+void showMemoryMessage(QWidget* parent, const QString& title, const QString& text)
 {
-    ScopedChildWidget<QMessageBox> boxOwner(parent);
-    QMessageBox& box = *boxOwner.get();
-    box.setIcon(icon);
-    box.setWindowTitle(title);
-    box.setText(text);
-    box.setStandardButtons(QMessageBox::Ok);
+    ScopedChildWidget<CanonMessageBox> boxOwner(title, text, parent);
+    CanonMessageBox& box = *boxOwner.get();
+    box.setDefaultButton(box.addButton(QStringLiteral("OK"), CanonMessageBox::Role::Accept));
     box.exec();
 }
+
+// Why a button is unavailable (or what it does), for the mouse and for
+// screen readers alike.
+void setButtonReason(QPushButton* button, const QString& reason)
+{
+    button->setToolTip(reason);
+    button->setAccessibleDescription(reason);
+}
+
+// The window's own widgets on the canon palette; the table takes the shared
+// canonTableRules() after it.
+constexpr const char* kMemoryStyle = R"(
+QLabel {
+    background: transparent;
+    color: {{color.canon.inkSoft}};
+}
+QLabel#memorySelectionHint {
+    color: {{color.canon.muted}};
+}
+QPushButton {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 5px 12px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: {{color.canon.nested}};
+    color: {{color.canon.aqua}};
+}
+QPushButton:focus {
+    border-color: {{color.canon.aqua}};
+}
+QPushButton:disabled {
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+    background: transparent;
+}
+QLineEdit,
+QComboBox {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 4px 6px;
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QLineEdit:focus,
+QComboBox:focus {
+    border-color: {{color.canon.aqua}};
+}
+QLineEdit:disabled,
+QComboBox:disabled {
+    color: {{color.canon.muted}};
+    border-color: {{color.canon.line}};
+}
+QComboBox QAbstractItemView {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.lineHi}};
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+)";
+
+// The table's selection ink and paddings, after the shared canon table rules.
+// A cell editor (a field or a one-click list) takes the field rules above.
+constexpr const char* kMemoryTableStyle = R"(
+QTableView::item:selected {
+    color: {{color.canon.ink}};
+}
+QTableView::item {
+    padding: 2px 6px;
+}
+QHeaderView::section {
+    padding: 5px 6px;
+}
+)";
 
 class MemoryTableItem : public QTableWidgetItem {
 public:
@@ -278,13 +359,26 @@ static const QStringList COLUMNS = {
 };
 
 MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
-    : PersistentDialog("Memory Channels", "MemoryDialogGeometry", parent),
+    : CanonWindow(QStringLiteral("Memory Channels"), parent, Kind::Workspace),
       m_model(model)
 {
-    theme::setContainer(this, QStringLiteral("dialog/memory"));
-    resize(1000, 500);
+    theme::setContainer(this, QStringLiteral("canon/memory"));
+    // Size and position persist under the key it used as a PersistentDialog,
+    // so saved geometry carries over; it resizes from every edge. 40 px
+    // taller than before for the canon header.
+    setGeometryKey(QStringLiteral("MemoryDialogGeometry"));
+    resize(1000, 540);
+    FramelessResizer::install(this);
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kMemoryStyle) + canonTableRules()
+             + QString::fromLatin1(kMemoryTableStyle) + canonScrollBarRules()
+             + canonItemCheckRules(QStringLiteral("QTableWidget"));
+    });
 
     auto* root = new QVBoxLayout(bodyWidget());
+    root->setContentsMargins(14, 12, 14, 14);
+    root->setSpacing(10);
+    root->addWidget(makeCanonHeader(QStringLiteral("Memory Channels")));
 
     // ── Search + profile filter ──────────────────────────────────────────
     auto* filterRow = new QHBoxLayout;
@@ -292,6 +386,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     m_searchEdit = new QLineEdit;
     m_searchEdit->setPlaceholderText("Type a memory name and press Enter");
     m_searchEdit->setClearButtonEnabled(true);
+    m_searchEdit->setAccessibleName(QStringLiteral("Search memories"));
     m_searchEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_searchEdit->installEventFilter(this);
     filterRow->addWidget(m_searchEdit, 1);
@@ -299,6 +394,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     filterRow->addWidget(m_filterLabel);
     m_filterCombo = new QComboBox;
     m_filterCombo->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    m_filterCombo->setAccessibleName(QStringLiteral("Profile filter"));
     rebuildFilterCombo();
     filterRow->addWidget(m_filterCombo);
     root->addLayout(filterRow);
@@ -316,6 +412,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     // ── Table ─────────────────────────────────────────────────────────────
     m_table = new QTableWidget(0, COLUMNS.size());
     m_table->setHorizontalHeaderLabels(COLUMNS);
+    m_table->setAccessibleName(QStringLiteral("Memory channels"));
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     // Cells edit in place: click a selected cell, press F2/Enter on the keyboard
@@ -331,8 +428,6 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     m_table->setSortingEnabled(false);
     m_table->installEventFilter(this);
     m_table->viewport()->installEventFilter(this);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_table, "QTableWidget { alternate-background-color: {{color.background.0}}; }"
-        "QTableWidget::item:selected { background: #2060a0; }");
     auto* header = m_table->horizontalHeader();
     header->setSectionsClickable(true);
     header->setSortIndicatorShown(false);
@@ -384,6 +479,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
 
     root->addWidget(m_table);
     m_selectionHintLabel = new QLabel;
+    m_selectionHintLabel->setObjectName(QStringLiteral("memorySelectionHint"));
     root->addWidget(m_selectionHintLabel);
     updateEditingAvailability();
 
@@ -517,7 +613,7 @@ void MemoryDialog::keyPressEvent(QKeyEvent* event)
         return;
     }
 
-    QDialog::keyPressEvent(event);
+    CanonWindow::keyPressEvent(event);
 }
 
 bool MemoryDialog::eventFilter(QObject* watched, QEvent* event)
@@ -589,12 +685,12 @@ bool MemoryDialog::eventFilter(QObject* watched, QEvent* event)
         }
     }
 
-    return QDialog::eventFilter(watched, event);
+    return CanonWindow::eventFilter(watched, event);
 }
 
 void MemoryDialog::showEvent(QShowEvent* event)
 {
-    PersistentDialog::showEvent(event);
+    CanonWindow::showEvent(event);
     updateEditingAvailability();
     if (m_searchEdit)
         m_searchEdit->setFocus(Qt::OtherFocusReason);
@@ -978,7 +1074,7 @@ void MemoryDialog::onExport()
         currentExportRecords(m_model->memories(), filterProfile);
 
     if (records.isEmpty()) {
-        showMemoryMessage(this, QMessageBox::Information, "Export Memories",
+        showMemoryMessage(this, "Export Memories",
                                  filterProfile.isEmpty()
                                      ? "There are no memories to export."
                                      : "There are no memories in the current filter to export.");
@@ -997,7 +1093,7 @@ void MemoryDialog::onExport()
     const QByteArray csv = MemoryCsvCompat::serialize(records);
     const MemoryCsvParseResult validation = MemoryCsvCompat::parse(csv);
     if (!validation.ok()) {
-        showMemoryMessage(this, QMessageBox::Warning, "Export Memories",
+        showMemoryMessage(this, "Export Memories",
                              QString("The generated SmartSDR CSV failed validation:\n%1")
                                  .arg(validation.errors.join('\n')));
         return;
@@ -1005,27 +1101,27 @@ void MemoryDialog::onExport()
 
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
-        showMemoryMessage(this, QMessageBox::Warning, "Export Memories",
+        showMemoryMessage(this, "Export Memories",
                              QString("Couldn't open %1 for writing.")
                                  .arg(QDir::toNativeSeparators(path)));
         return;
     }
 
     if (file.write(csv) != csv.size()) {
-        showMemoryMessage(this, QMessageBox::Warning, "Export Memories",
+        showMemoryMessage(this, "Export Memories",
                              QString("Couldn't write the SmartSDR CSV to %1.")
                                  .arg(QDir::toNativeSeparators(path)));
         return;
     }
 
     if (!file.commit()) {
-        showMemoryMessage(this, QMessageBox::Warning, "Export Memories",
+        showMemoryMessage(this, "Export Memories",
                              QString("Couldn't save %1.")
                                  .arg(QDir::toNativeSeparators(path)));
         return;
     }
 
-    showMemoryMessage(this, QMessageBox::Information, "Export Memories",
+    showMemoryMessage(this, "Export Memories",
                              QString("Exported %1 memories to %2.")
                                  .arg(records.size())
                                  .arg(QDir::toNativeSeparators(QFileInfo(path).fileName())));
@@ -1051,7 +1147,7 @@ void MemoryDialog::onImport()
 
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
-        showMemoryMessage(this, QMessageBox::Warning, "Import Memories",
+        showMemoryMessage(this, "Import Memories",
                              QString("Couldn't open %1 for reading.")
                                  .arg(QDir::toNativeSeparators(path)));
         return;
@@ -1089,22 +1185,24 @@ void MemoryDialog::startImport(const MemoryCsvParseResult& parsed, const QString
 
         dialogGuard->populateTable();
 
-        ScopedChildWidget<QMessageBox> summaryOwner(dialogGuard.data());
-        QMessageBox& summary = *summaryOwner.get();
-        summary.setWindowTitle("Import Memories");
-        summary.setIcon(state->issues.isEmpty() ? QMessageBox::Information : QMessageBox::Warning);
-        summary.setText(QString("Imported %1 %2 from %3 (%4 format).")
-                            .arg(state->importedCount)
-                            .arg(state->importedCount == 1 ? "record" : "records")
-                            .arg(state->fileName)
-                            .arg(MemoryCsvCompat::formatName(state->format)));
+        ScopedChildWidget<CanonMessageBox> summaryOwner(
+            QStringLiteral("Import Memories"),
+            QString("Imported %1 %2 from %3 (%4 format).")
+                .arg(state->importedCount)
+                .arg(state->importedCount == 1 ? "record" : "records")
+                .arg(state->fileName)
+                .arg(MemoryCsvCompat::formatName(state->format)),
+            dialogGuard.data());
+        CanonMessageBox& summary = *summaryOwner.get();
         if (!state->issues.isEmpty()) {
             summary.setInformativeText(
-                QString("%1 %2 skipped or couldn't be imported. See Details for the row names and messages.")
+                QString("%1 %2 skipped or couldn't be imported:")
                     .arg(state->issues.size())
                     .arg(state->issues.size() == 1 ? "row was" : "rows were"));
             summary.setDetailedText(state->issues.join('\n'));
         }
+        summary.setDefaultButton(summary.addButton(QStringLiteral("OK"),
+                                                   CanonMessageBox::Role::Accept));
         summary.exec();
         if (dialogGuard && summaryOwner)
             dialogGuard->focusTableOnCurrentRow();
@@ -1265,24 +1363,26 @@ void MemoryDialog::onRemove()
     const RadioControlSession session = m_model->controlSession();
     QMap<int, quint64> revisions;
     for (const int index : indices) { revisions.insert(index, m_model->memorySlotRevision(index)); }
-    ScopedChildWidget<QMessageBox> confirmOwner(this);
-    QMessageBox& confirm = *confirmOwner.get();
-    confirm.setIcon(QMessageBox::Warning);
-    confirm.setWindowTitle(indices.size() == 1 ? "Delete Memory" : "Delete Memories");
-    confirm.setText(indices.size() == 1
-        ? QString("Delete %1?").arg(memoryDescriptions.value(0, "the selected memory"))
-        : QString("Delete %1 selected memories?").arg(indices.size()));
+    ScopedChildWidget<CanonMessageBox> confirmOwner(
+        indices.size() == 1 ? QStringLiteral("Delete Memory") : QStringLiteral("Delete Memories"),
+        indices.size() == 1
+            ? QString("Delete %1?").arg(memoryDescriptions.value(0, "the selected memory"))
+            : QString("Delete %1 selected memories?").arg(indices.size()),
+        this);
+    CanonMessageBox& confirm = *confirmOwner.get();
     confirm.setInformativeText("This can't be undone.");
     if (memoryDescriptions.size() > 1)
         confirm.setDetailedText(memoryDescriptions.join('\n'));
-    confirm.setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
-    confirm.setDefaultButton(QMessageBox::Cancel);
-    const int result = confirm.exec();
+    confirm.setDefaultButton(confirm.addButton(QStringLiteral("Cancel"),
+                                               CanonMessageBox::Role::Reject));
+    QPushButton* deleteButton =
+        confirm.addButton(QStringLiteral("Delete"), CanonMessageBox::Role::Destructive);
+    confirm.exec();
     if (!dialogGuard || !modelGuard || dialogGuard->m_model != modelGuard.data() || !confirmOwner
         || modelGuard->controlSession() != session) {
         return;
     }
-    if (result != QMessageBox::Yes) {
+    if (confirm.clickedButton() != deleteButton) {
         dialogGuard->focusTableOnCurrentRow();
         return;
     }
@@ -1344,15 +1444,18 @@ void MemoryDialog::onRemove()
             }
             dialogGuard->populateTable();
             if (state->failed > 0) {
-                ScopedChildWidget<QMessageBox> failureOwner(dialogGuard.data());
-                QMessageBox& failure = *failureOwner.get();
-                failure.setIcon(QMessageBox::Warning);
-                failure.setWindowTitle(state->failed == 1 ? "Delete Memory" : "Delete Memories");
-                failure.setText(state->failed == 1
-                    ? QString("Couldn't delete %1.").arg(state->failedDescriptions.value(0))
-                    : QString("Couldn't delete %1 memories.").arg(state->failed));
+                ScopedChildWidget<CanonMessageBox> failureOwner(
+                    state->failed == 1 ? QStringLiteral("Delete Memory")
+                                       : QStringLiteral("Delete Memories"),
+                    state->failed == 1
+                        ? QString("Couldn't delete %1.").arg(state->failedDescriptions.value(0))
+                        : QString("Couldn't delete %1 memories.").arg(state->failed),
+                    dialogGuard.data());
+                CanonMessageBox& failure = *failureOwner.get();
                 if (state->failedDescriptions.size() > 1)
                     failure.setDetailedText(state->failedDescriptions.join('\n'));
+                failure.setDefaultButton(failure.addButton(QStringLiteral("OK"),
+                                                           CanonMessageBox::Role::Accept));
                 failure.exec();
                 if (!dialogGuard || !failureOwner) {
                     return;
@@ -1467,7 +1570,7 @@ void MemoryDialog::updateSelectionActions()
             needsConnection = recallable && memory->nativeFilter > 0 && !m_model->isConnected();
         }
         m_selectBtn->setEnabled(selectedCount == 1 && recallable && !needsConnection);
-        m_selectBtn->setToolTip(needsConnection
+        setButtonReason(m_selectBtn, needsConnection
             ? "Connect to a radio before recalling a synced native memory."
             : selectedCount == 1 && !recallable
             ? "Split, reverse-split, DV, and DD memories are display-only."
@@ -1476,28 +1579,34 @@ void MemoryDialog::updateSelectionActions()
     }
     if (m_selectAllBtn) {
         m_selectAllBtn->setEnabled(visibleCount > 0 && selectedCount < visibleCount);
-        m_selectAllBtn->setToolTip(visibleCount > 0
+        setButtonReason(m_selectAllBtn, visibleCount > 0
             ? "Select every memory in the current search/filter result."
             : QString());
     }
     if (m_removeBtn) {
         m_removeBtn->setEnabled(m_model->memoriesWritable() && selectedCount > 0);
         m_removeBtn->setText(selectedCount > 1 ? "Remove Selected" : "Remove");
+        setButtonReason(m_removeBtn,
+                        !m_model->memoriesWritable()
+                            ? QStringLiteral("Radio memories are read-only in this version.")
+                            : selectedCount == 0
+                            ? QStringLiteral("Select one or more memories to remove.")
+                            : QString());
     }
     const bool writable = m_model->memoriesWritable();
     if (m_addBtn) {
         m_addBtn->setEnabled(writable);
-        m_addBtn->setToolTip(writable ? QString()
+        setButtonReason(m_addBtn, writable ? QString()
                                      : "Radio memories are read-only in this version.");
     }
     if (m_importBtn) {
         m_importBtn->setEnabled(writable);
-        m_importBtn->setToolTip(writable ? QString()
+        setButtonReason(m_importBtn, writable ? QString()
                                         : "Writing radio memories is not available yet.");
     }
     if (m_exportBtn) {
         m_exportBtn->setEnabled(!m_model->memories().isEmpty());
-        m_exportBtn->setToolTip(QStringLiteral("Export the displayed memories to CSV."));
+        setButtonReason(m_exportBtn, QStringLiteral("Export the displayed memories to CSV."));
     }
     if (m_syncBtn) {
         const bool refreshable = m_model->memoriesRefreshable();
@@ -1506,7 +1615,7 @@ void MemoryDialog::updateSelectionActions()
             capabilities, m_filterCombo->currentData().toString());
         m_syncBtn->setVisible(refreshable);
         m_syncBtn->setEnabled(refreshable && hasRequiredGroup && !m_syncInProgress);
-        m_syncBtn->setToolTip(hasRequiredGroup
+        setButtonReason(m_syncBtn, hasRequiredGroup
             ? QStringLiteral("Read the current memory channels from the radio.")
             : QStringLiteral("Choose an IC-705 memory group before reading."));
     }

@@ -378,7 +378,7 @@ void testWindowFlow()
     std::atomic<int> opens{0};
 
     FirmwareInstallModel model(nullptr);
-    model.setJobTargetOpener([flash, &opens](const QString&, QString*) {
+    model.setJobTargetOpener([flash, &opens](const QString&, QString*, bool*) {
         ++opens;
         // The job owns what it opens; this one shares the test's flash.
         struct Shared : EspFlashTarget {
@@ -578,7 +578,7 @@ void testReleaseAndRestore()
     std::atomic<int> opens{0};
 
     FirmwareInstallModel model(nullptr);
-    model.setJobTargetOpener([flash, &opens](const QString&, QString*) {
+    model.setJobTargetOpener([flash, &opens](const QString&, QString*, bool*) {
         ++opens;
         auto s = std::make_unique<SharedFlash>();
         s->f = flash;
@@ -734,7 +734,7 @@ void testRestartInto()
     flash->flash.replace(0x410000, image.size(), image);
     flash->flash.replace(0x10000, app().size(), app());   // the stock firmware
     FirmwareInstallModel model(nullptr);
-    model.setJobTargetOpener([flash](const QString&, QString*) {
+    model.setJobTargetOpener([flash](const QString&, QString*, bool*) {
         auto s = std::make_unique<SharedFlash>();
         s->f = flash;
         return std::unique_ptr<EspFlashTarget>(std::move(s));

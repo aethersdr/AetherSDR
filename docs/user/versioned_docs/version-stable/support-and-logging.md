@@ -12,9 +12,16 @@ When something isn't working, AetherSDR has several built-in tools for capturing
 - **Help → Slice Troubleshooting...**: a guided check for slice problems
 - **Tools → Runtime Monitor...**, **Tools → Network Diagnostics...** and **Tools → Radio Health...**: see [Runtime Monitor](./runtime-monitor.md)
 
+The JSON view in **Help → Slice Troubleshooting...** includes read-only FlexRadio metadata when the
+radio reports it: `radio.iaru_region` (1–3) and each slice's `chain_mode`.
+Unknown, unsupported or invalid observations appear as `null`. The processing
+chain is separate from the selected mode; a waveform slice can have mode `FDVU`
+and chain `DIGU`. The reported IARU region does not select your client band plan
+or grant transmit permission. Select your display plan under **View → Band Plan**.
+
 Before you file a report, drop your log or support bundle on the [Log Analyzer](/log-analyzer). It checks for known problems and links the fix for each one it finds. It runs in your browser; the file is never uploaded. **Help → Log Analyzer** and the **Log Analyzer** button in **Help → Support & Diagnostics...** open it.
 
-The Help menu starts with **AetherSDR Documentation** (this site), **Printable Manual (PDF)** and **Log Analyzer**, which open in your browser. It also has **Getting Started...**, **AetherSDR Help...**, **What's New...**, three how-to guides (**Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...**), **AetherSDR Website**, **Donate to AetherSDR**, **Contributing to AetherSDR...**, **Check for Updates...** and **About AetherSDR**. On Windows and Linux the menus are behind the **☰** button at the left of the title bar; on macOS they are in the system menu bar.
+The Help menu starts with **AetherSDR Documentation** (this site), **Printable Manual (PDF)** and **Log Analyzer**, which open in your browser. It also has **Getting Started...**, **AetherSDR Help...**, **What's New...**, three how-to guides (**Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...**), **AetherSDR Website**, **Donate to AetherSDR**, **Contributing to AetherSDR...**, **Check for Updates...**, **Check for Updates Automatically** and **About AetherSDR**. On Windows and Linux the menus are behind the **☰** button at the left of the title bar; on macOS they are in the system menu bar.
 
 ## Using Support & Diagnostics
 
@@ -29,6 +36,8 @@ The Help menu starts with **AetherSDR Documentation** (this site), **Printable M
 A grid of checkboxes, one per log category. Hover a box for what it covers. Turn on the categories relevant to your problem, then reproduce it. The dialog advises restarting AetherSDR after changing categories so the new settings are in effect from startup.
 
 **Enable All** / **Disable All** toggle every category at once. The categories, and which are on by default, are listed under [Log categories](#log-categories).
+
+For refused audio-output or **Show TX in Waterfall** edits, the Protocol / Status log names the requested setting and value, such as `Backend refused operation line output gain 30`. This records a request that was not dispatched; it does not confirm a radio state change.
 
 ### Log viewer
 
