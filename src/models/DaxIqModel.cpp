@@ -92,7 +92,7 @@ DaxIqModel::PactlRunner& pactlRunnerForTest()
 
 quint32 runPactl(const QStringList& args)
 {
-    const auto& runner = pactlRunnerForTest();
+    const DaxIqModel::PactlRunner& runner = pactlRunnerForTest();
     return runner ? runner(args) : runPactlSync(args);
 }
 

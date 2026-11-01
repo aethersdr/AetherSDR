@@ -10,6 +10,7 @@
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/sim/SimBackend.h"
+#include "models/DaxIqModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -2786,6 +2787,12 @@ int main(int argc, char** argv)
 {
     TestSettingsProfile settingsProfile(
         QStringLiteral("aether-tci-server-review-test"));
+    // The DAX IQ fixture builds a pipe, which would load module-pipe-source
+    // into the user's live PulseAudio through pactl on the model's worker
+    // thread. Answer it here: no process is launched (#6726).
+    AetherSDR::DaxIqModel::setPactlRunnerForTest([](const QStringList&) {
+        return quint32{0};
+    });
     QCoreApplication app(argc, argv);
     AetherSDR::AppSettings::instance().load();
 

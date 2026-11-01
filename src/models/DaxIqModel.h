@@ -59,6 +59,7 @@ public:
     // Set it before any DaxIqModel exists; it is read on the worker threads.
     using PactlRunner = std::function<quint32(const QStringList&)>;
     static void setPactlRunnerForTest(PactlRunner runner);
+
     QList<int> supportedSampleRates() const;
     bool supportsSampleRate(int rate) const;
     int sampleRateForPreference(int rate) const;

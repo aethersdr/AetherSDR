@@ -21,6 +21,7 @@
 #include <QBrush>
 #include <QAbstractItemView>
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QPushButton>
 #include <QProgressBar>
@@ -29,9 +30,8 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QPixmap>
-
-#include <atomic>
 #include <QStringList>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <cstdio>
@@ -496,6 +496,12 @@ int main(int argc, char** argv)
     }
     check(recoveredAt96k, "profile recovery restores a saved 192k preference at 96k");
 #ifndef Q_OS_WIN
+    // Pipe set-up is queued to the workers; give them time to reach it.
+    QElapsedTimer pipeSetup;
+    pipeSetup.start();
+    while (pactlCalls.load() == 0 && pipeSetup.elapsed() < 30000) {
+        spin(10);
+    }
     check(pactlCalls.load() > 0, "IQ pipe setup reached the test's pactl runner");
 #endif
     return failures == 0 ? 0 : 1;

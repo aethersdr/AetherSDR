@@ -81,7 +81,7 @@ race:QHttpThreadDelegate::~QHttpThreadDelegate
 
 # Qt's file-system model start-up (#6726; kpa500_advanced_widget_test, any
 # test that opens a non-native QFileDialog). QFileSystemModelPrivate::init
-# connects to its QFileInfoGatherer (qfilesystemmodel.cpp:2162) after the
+# connects to its QFileInfoGatherer (qfilesystemmodel.cpp:2158-2165) after the
 # gatherer's thread has already started, so the main thread's addConnection
 # resizes the gatherer's signal vector while the new thread's QThread::started
 # emission reads it in doActivate. Both accesses are inside Qt; no AetherSDR
