@@ -10,9 +10,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [v26.11.1] — 2026-11-01
 
-### Install update on Windows, macOS and Linux · Remote Access on FLEX-6000 radios with QR sign-in · AetherLab, a vector network analyzer · eight more canon windows and TCI 2.1
+### Install update on Windows, macOS and Linux · Remote Access on FLEX-6000 radios with QR sign-in · AetherLab, an experimental vector network analyzer · eight more canon windows and TCI 2.1
 
-44 merged changes from 11 human contributors. AetherSDR now installs its own updates: the Updates window downloads the newest release and swaps it in as AetherSDR exits, on Windows, on macOS and on Linux from an install that `AetherSDR --install` or **Install for updates** makes, and every release carries the signed tarballs the update manifest names. Remote Access signs a radio in to a tailnet with a QR code and reaches FLEX-6000 radios as a legacy waveform, and the Waveforms window edits a SmartSDR 4.3 container's environment and shows the radio's free storage, memory and CPU. AetherLab drives a RigExpert Stick Pro as a vector network analyzer. Eight more windows move to the canon, the TCI server speaks protocol 2.1 for sample types, squelch and split, and a lapsed SmartSDR+ subscription keeps the features released before it expired.
+44 merged changes from 11 human contributors. AetherSDR now installs its own updates: the Updates window downloads the newest release and swaps it in as AetherSDR exits, on Windows, on macOS and on Linux from an install that `AetherSDR --install` or **Install for updates** makes, and every release carries the signed tarballs the update manifest names. Remote Access signs a radio in to a tailnet with a QR code and reaches FLEX-6000 radios as a legacy waveform, and the Waveforms window edits a SmartSDR 4.3 container's environment and shows the radio's free storage, memory and CPU. AetherLab drives a RigExpert Stick Pro as an experimental vector network analyzer. Eight more windows move to the canon, the TCI server speaks protocol 2.1 for sample types, squelch and split, and a lapsed SmartSDR+ subscription keeps the features released before it expired.
 
 ### In-app updates
 
@@ -30,7 +30,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### AetherLab
 
-- **AetherLab — a vector network analyzer for the RigExpert Stick Pro (#6481).** A new workspace, opened from **+ → AetherLab** or **Tools → AetherLab…**, sweeps a Stick Pro over USB from 100 kHz to 600 MHz in up to 1001 points and shows SWR, return loss, |Z|, reflection, and series and parallel R, X, L and C, with markers and raw CSV and JSON export. Each sweep needs an explicit Connect and a confirmation that the analyzer is isolated, and every sweep ends with the analyzer off and USB closed. The radio connection stays live, and a radio tab returns to it. The automation bridge gains `lab` verbs behind `AETHER_AUTOMATION_ALLOW_LAB_RF=1`. RFC #6471, first milestone.
+- **AetherLab — an experimental vector network analyzer for the RigExpert Stick Pro (#6481).** A USB proof of concept: a new workspace, opened from **+ → AetherLab** or **Tools → AetherLab…**, sweeps a Stick Pro over USB from 100 kHz to 600 MHz in up to 1001 points and shows SWR, return loss, |Z|, reflection, and series and parallel R, X, L and C, with markers and raw CSV and JSON export. Each sweep needs an explicit Connect and confirmation that the analyzer is isolated. Each acquisition, cancellation or error attempts an analyzer stop command and closes USB; physical RF silence remains unverified. Hardware USB sweeps are qualified on one Stick Pro 108 on macOS. The radio connection stays live, and a radio tab returns to it. The automation bridge gains `lab` verbs behind `AETHER_AUTOMATION_ALLOW_LAB_RF=1`. RFC #6471, first milestone.
 
 ### Canon windows
 

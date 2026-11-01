@@ -390,8 +390,8 @@ complete list are in [`CHANGELOG.md`](CHANGELOG.md):
 - **Container environments and radio health tools** — edit a SmartSDR 4.3
   container's variables and recreate it, and see the radio's free storage,
   memory and CPU in the Waveforms window (v26.11.1).
-- **AetherLab** — a vector network analyzer workspace for the RigExpert Stick
-  Pro. RFC #6471 (v26.11.1).
+- **AetherLab** — an experimental vector network analyzer workspace for the
+  RigExpert Stick Pro. RFC #6471 (v26.11.1).
 - **Eight more canon windows and TCI 2.1** — Callsign Lookup, FreeDV Reporter,
   Net Scheduler, Memory Channels and four dialogs on the canon; TCI sample
   types, squelch in dB, split, RIT/XIT and AGC events (v26.11.1).
