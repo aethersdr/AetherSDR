@@ -90,10 +90,14 @@ static void check(bool ok, const char* message)
 {
     if (!ok) { ++failures; std::fprintf(stderr, "FAIL: %s\n", message); }
 }
+// The ceiling only bounds a failure: every wait returns as soon as its
+// predicate holds. The slowest wait here takes about 3 s under ASan on one
+// core, and TSan is several times slower, so a 5 s ceiling failed the
+// eight-receiver PPM cases there (#6726). No wait here expects a timeout.
 template<class F> static bool waitFor(F predicate)
 {
     QElapsedTimer timer; timer.start();
-    while (!predicate() && timer.elapsed() < 5000) {
+    while (!predicate() && timer.elapsed() < 30000) {
         QCoreApplication::processEvents(); QThread::msleep(2);
     }
     return predicate();
