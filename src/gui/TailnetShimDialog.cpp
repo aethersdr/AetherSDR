@@ -1,6 +1,8 @@
 #include "TailnetShimDialog.h"
 #include "CanonIndicators.h"
+#include "CanonMessageBox.h"
 #include "QrCodeImage.h"
+#include "ScopedChildWidget.h"
 
 #include "core/TailnetShimTokenStore.h"
 #include "core/ThemeManager.h"
@@ -17,7 +19,6 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
 #include <QStyle>
@@ -984,13 +985,19 @@ void TailnetShimDialog::saveSharing()
 
 void TailnetShimDialog::reset()
 {
-    const auto answer = QMessageBox::question(
-        this, tr("Reset Remote Access"),
-        tr("This computer doesn't hold the key that lets it change this radio's remote access. "
-           "Resetting removes and reinstalls the remote-access container: the radio leaves your "
-           "tailnet now, and you sign it in again with a new code."),
-        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
-    if (answer != QMessageBox::Yes) {
+    const QPointer<TailnetShimDialog> self(this);
+    ScopedChildWidget<CanonMessageBox> ask(
+        tr("Reset Remote Access?"),
+        tr("This computer doesn't hold the key that lets it change this radio's remote access."),
+        this);
+    ask.get()->setInformativeText(
+        tr("Resetting removes and reinstalls the remote-access container: the radio leaves your "
+           "tailnet now, and you sign it in again with a new code."));
+    // Return keeps what is on the radio; resetting takes a click.
+    ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
+    QPushButton* go = ask.get()->addButton(tr("Reset"), CanonMessageBox::Role::Destructive);
+    ask.get()->exec();
+    if (!self || !ask || ask.get()->clickedButton() != go) {
         return;
     }
     emit resetRequested();
@@ -999,12 +1006,17 @@ void TailnetShimDialog::reset()
 
 void TailnetShimDialog::signOut()
 {
-    const auto answer = QMessageBox::question(
-        this, tr("Disconnect"),
-        tr("Disconnect this radio from your tailnet? Remote sessions end now. To connect it "
-           "again, open this window on the radio's local network and scan the new code."),
-        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
-    if (answer != QMessageBox::Yes) {
+    const QPointer<TailnetShimDialog> self(this);
+    ScopedChildWidget<CanonMessageBox> ask(
+        tr("Disconnect from Your Tailnet?"),
+        tr("Remote sessions end now, and the radio leaves your tailnet."), this);
+    ask.get()->setInformativeText(
+        tr("To connect it again, open this window on the radio's local network and scan the "
+           "new code."));
+    ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
+    QPushButton* go = ask.get()->addButton(tr("Disconnect"), CanonMessageBox::Role::Destructive);
+    ask.get()->exec();
+    if (!self || !ask || ask.get()->clickedButton() != go) {
         return;
     }
     m_messageLabel->hide();
