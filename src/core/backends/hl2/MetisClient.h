@@ -7,6 +7,7 @@
 #include <QList>
 #include <QObject>
 
+#include <atomic>
 #include <complex>
 #include <span>
 #include <cstdint>
@@ -184,7 +185,8 @@ public:
     // and marshals these across; they are Q_INVOKABLE so it can.
     Q_INVOKABLE bool start(const Params& params);   // bind, send start + priming C&C, begin ingest
     Q_INVOKABLE void stop();                        // send stop, close socket
-    [[nodiscard]] bool isRunning() const noexcept { return m_running; }
+    // Safe from any thread: Hl2Backend reads it to refuse a key while stopped.
+    [[nodiscard]] bool isRunning() const noexcept { return m_running.load(); }
     [[nodiscard]] quint64 droppedPackets() const noexcept { return m_drops; }
     [[nodiscard]] const Hl2Telemetry& telemetry() const noexcept { return m_telemetry; }
 
@@ -942,7 +944,9 @@ private:
     int m_bsConsecutiveTimeouts = 0;
     // Since the MOX falling edge; invalid until the first unkey of the session.
     QElapsedTimer m_sinceUnkey;
-    bool m_running = false;
+    // Written on the I/O thread (start(), stop()); atomic so isRunning() can be
+    // read from the backend's thread.
+    std::atomic<bool> m_running{false};
     bool m_linkUp = false;
     // Reused per-packet decode buffers, one vector per running receiver. Sized
     // from m_ccRxFreq and reused rather than reallocated: at four receivers and

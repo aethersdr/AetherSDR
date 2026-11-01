@@ -4435,6 +4435,13 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                           "without AETHER_AUTOMATION_ALLOW_TX";
         return;
     }
+    // A key with no running session is refused here too, so this backend never
+    // records or publishes a key that MetisClient::setMoxImpl() refuses at the
+    // wire. An unkey always goes through.
+    if (key && (!m_metis || !m_metis->isRunning())) {
+        qWarning() << "Hl2Backend: key refused — the radio session is not running";
+        return;
+    }
     // A manual PTT/MOX asserted while Break-In owns the current key transfers
     // that ownership to the operator. The backend is already keyed, so without
     // this explicit handoff the pending CW hang timer would later unkey a PTT
