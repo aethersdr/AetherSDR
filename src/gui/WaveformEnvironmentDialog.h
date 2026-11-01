@@ -20,6 +20,10 @@ class RadioModel;
 
 // Why the Environment… action is unavailable, or empty when it can be used.
 QString waveformEnvironmentUnavailableReason(const RadioModel* model);
+// Why a Docker install must wait, or empty: a deploy picks up whatever
+// variables the radio has staged, so installs wait while an environment change
+// holds some, or while this client cannot tell whether its last one was cleared.
+QString waveformEnvironmentInstallBlocker(const RadioModel* model);
 
 // Edits one Docker waveform container's environment (SmartSDR 4.3.16, Waveforms
 // → Environment…). The rows start from what the radio reports; Apply & Recreate
@@ -40,6 +44,8 @@ public:
     // skipped. Public for the dialog test.
     static QString collectEnvironment(const QList<QPair<QString, QString>>& rows,
                                       WaveformEnvironment* environment);
+    // Why an empty list cannot be applied (the radio keeps the old environment).
+    static QString emptyEnvironmentReason();
 
     // Starts an apply; returns false when it was refused before anything was
     // sent. The owner reports the outcome back through showApplyResult().
@@ -62,6 +68,8 @@ private:
     void setMessage(const QString& text, const QString& tone);
     void onApply();
     void onRadioEnvironmentChanged();
+    void onClearStaging();
+    bool hasRows() const;
 
     RadioModel* m_model{nullptr};
     ApplyHandler m_applyHandler;
@@ -78,6 +86,9 @@ private:
     QPushButton* m_addButton{nullptr};
     QPushButton* m_revertButton{nullptr};
     QPushButton* m_applyButton{nullptr};
+    QPushButton* m_clearStagingButton{nullptr};
+    QLabel* m_applyHint{nullptr};
+    int m_newRowCount{0};
 };
 
 } // namespace AetherSDR

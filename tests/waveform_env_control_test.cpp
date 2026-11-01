@@ -4,12 +4,15 @@
 // and injected status only: no sockets, radio or TX.
 #include "TestSettingsProfile.h"
 #include "RadioSetupControlFixture.h"
+#include "AutomationSensitiveLineEdit.h"
 #include "core/backends/flex/CommandParser.h"
 #include "gui/WaveformEnvironmentDialog.h"
 #include "models/FlexWaveformModel.h"
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QImage>
+#include <QLabel>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLineEdit>
@@ -194,125 +197,241 @@ struct ApplyRig {
         backend = installRadioSetupBackend(radio);
         backend->setModelProvider([] { return QStringLiteral("FLEX-8600"); });
         backend->setFirmwareVersionProvider([] { return QStringLiteral("4.3.16.42034"); });
-        status(radio, QStringLiteral("waveform container"),
-               {{QStringLiteral("name"), QStringLiteral("wf-x")}, {QStringLiteral("version"), QStringLiteral("1")},
-                {QStringLiteral("env"), b64(R"({"OLD":"1"})")}});
+        container(R"({"OLD":"1"})");
     }
+    // The measured replies (FLEX-8600 4.3.16): R|0 with a message per verb.
     void accept() { backend->replyLast({RadioSetupReply::Kind::Accepted, 0, {}}); }
+    void reply(qsizetype index, RadioSetupReply::Kind kind = RadioSetupReply::Kind::Accepted,
+               const QString& message = {})
+    {
+        const RadioSetupCompletion callback = backend->replies.at(index);
+        callback({kind, kind == RadioSetupReply::Kind::Accepted ? 0 : 0x50000015, message});
+    }
+    void container(const QByteArray& json)
+    {
+        Kvs kvs{{QStringLiteral("name"), QStringLiteral("wf-x")}, {QStringLiteral("version"), QStringLiteral("1")}};
+        if (!json.isEmpty()) { kvs.insert(QStringLiteral("env"), b64(json)); }
+        status(radio, QStringLiteral("waveform container"), kvs);
+    }
+    void restarted(const QString& result = QStringLiteral("ok"))
+    {
+        status(radio, QStringLiteral("waveform restarted"),
+               {{QStringLiteral("name"), QStringLiteral("wf-x")}, {QStringLiteral("result"), result}});
+    }
 };
+
+using Result = std::optional<WaveformEnvApplyResult>;
+auto into(Result& result) { return [&result](const WaveformEnvApplyResult& r) { result = r; }; }
 
 void applySequence()
 {
+    const QString clear = QStringLiteral("waveform env clear");
     {
+        // The measured order: `restarted` arrives before the recreate's reply,
+        // the next container line still carries the OLD environment, and the new
+        // one arrives in a later broadcast.
         ApplyRig rig;
-        std::optional<WaveformEnvApplyResult> result;
+        Result result;
+        QSignalSpy staging(&rig.radio, &RadioModel::waveformEnvironmentStagingChanged);
         const bool started = rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"),
             {{QStringLiteral("API_KEY"), QStringLiteral("s3cret value")}, {QStringLiteral("MODE"), QStringLiteral("fast")}},
-            nullptr, [&](const WaveformEnvApplyResult& r) { result = r; });
-        check(started && rig.radio.waveformEnvironmentApplyActive()
-                  && rig.backend->commands == QStringList{QStringLiteral("waveform env clear")},
-              "an apply starts with a clear and waits for its reply");
-        check(!rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {}, nullptr, {}),
+            nullptr, into(result));
+        check(started && rig.radio.waveformEnvironmentApplyActive() && rig.radio.waveformEnvironmentStagingUncertain()
+                  && staging.size() == 1 && rig.backend->commands == QStringList{clear},
+              "an apply starts with a clear, marks staging in use and waits for the reply");
+        check(waveformEnvironmentInstallBlocker(&rig.radio).contains(QLatin1String("Wait for")),
+              "Docker installs wait while an apply is in flight");
+        check(!rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {{QStringLiteral("A"), {}}}, nullptr, {}),
               "a second apply is refused while one is in flight");
         rig.accept();
         rig.accept();
         rig.accept();
-        check(rig.backend->commands == QStringList{QStringLiteral("waveform env clear"),
-                                                   QStringLiteral("waveform env API_KEY=s3cret value"),
+        check(rig.backend->commands == QStringList{clear, QStringLiteral("waveform env API_KEY=s3cret value"),
                                                    QStringLiteral("waveform env MODE=fast"),
                                                    QStringLiteral("waveform recreate wf-x")},
               "each accepted step sends the next, ending with the recreate");
+        const qsizetype recreateReply = rig.backend->replies.size() - 1;
+        rig.restarted();
+        check(!result && rig.backend->commands.size() == 5 && rig.backend->commands.last() == clear,
+              "restarted ok sends the acknowledged cleanup clear and does not finish yet");
+        rig.reply(recreateReply);
+        rig.container(R"({"OLD":"1"})");
+        check(!result, "the stale container line after the restart does not finish the apply");
         rig.accept();
         check(!result && rig.radio.waveformEnvironmentApplyActive(),
-              "an accepted recreate still waits for the radio's restarted status");
-        status(rig.radio, QStringLiteral("waveform restarted"),
-               {{QStringLiteral("name"), QStringLiteral("other")}, {QStringLiteral("result"), QStringLiteral("ok")}});
-        check(!result, "another waveform's restart is not this one");
-        status(rig.radio, QStringLiteral("waveform restarted"),
-               {{QStringLiteral("name"), QStringLiteral("wf-x")}, {QStringLiteral("result"), QStringLiteral("ok")}});
-        check(result && result->outcome == Outcome::Recreated && !rig.radio.waveformEnvironmentApplyActive()
-                  && rig.backend->commands.last() == QLatin1String("waveform env clear"),
-              "result=ok finishes Recreated and clears the stage so it cannot reach a later deploy");
-        check(rig.radio.flexWaveformModel().waveforms().value(0).environment.value(QStringLiteral("OLD"))
-                  == QLatin1String("1"),
-              "nothing local claims the new environment: only the radio's next status will");
-    }
-    {
-        ApplyRig rig;
-        std::optional<WaveformEnvApplyResult> result;
-        rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {{QStringLiteral("K"), QStringLiteral("v")}},
-                                           nullptr, [&](const WaveformEnvApplyResult& r) { result = r; });
-        rig.accept();
-        rig.backend->replyLast({RadioSetupReply::Kind::Failed, 0x50000015, QStringLiteral("Invalid value")});
-        check(result && result->outcome == Outcome::Refused
-                  && result->message.contains(QLatin1String("variable K"))
-                  && !result->message.contains(QLatin1String("=v"))
-                  && !rig.backend->commands.contains(QStringLiteral("waveform recreate wf-x"))
-                  && rig.backend->commands.last() == QLatin1String("waveform env clear"),
-              "a refused stage stops before the recreate, names the key not the value, and clears");
-    }
-    {
-        ApplyRig rig;
-        std::optional<WaveformEnvApplyResult> result;
-        rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {}, nullptr,
-                                           [&](const WaveformEnvApplyResult& r) { result = r; });
-        rig.accept();
-        check(rig.backend->commands == QStringList{QStringLiteral("waveform env clear"),
-                                                   QStringLiteral("waveform recreate wf-x")},
-              "an empty environment clears and recreates");
-        // The status may beat the command reply.
-        status(rig.radio, QStringLiteral("waveform restarted"),
-               {{QStringLiteral("name"), QStringLiteral("wf-x")}, {QStringLiteral("result"), QStringLiteral("error")}});
-        check(result && result->outcome == Outcome::RecreateFailed, "result=error finishes RecreateFailed");
-        rig.accept();
-        check(result->outcome == Outcome::RecreateFailed, "the late reply changes nothing");
+              "an acknowledged cleanup still waits for the new environment");
+        rig.container(R"({"API_KEY":"s3cret value","MODE":"fast"})");
+        check(result && result->outcome == Outcome::Recreated && result->environmentConfirmed
+                  && result->stagingCleared && !rig.radio.waveformEnvironmentApplyActive()
+                  && !rig.radio.waveformEnvironmentStagingUncertain(),
+              "the broadcast carrying the requested set finishes Recreated, confirmed and cleaned up");
     }
     {
         ApplyRig rig;
         WaveformEnvTestAccess::confirmTimeout(rig.radio, 20);
-        std::optional<WaveformEnvApplyResult> result;
-        rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {}, nullptr,
-                                           [&](const WaveformEnvApplyResult& r) { result = r; });
+        Result result;
+        rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {{QStringLiteral("K"), QStringLiteral("v")}},
+                                           nullptr, into(result));
+        rig.accept(); rig.accept(); rig.accept();
+        rig.restarted();
         rig.accept();
-        rig.accept();
+        rig.container(R"({"OLD":"1"})");
         QTest::qWait(80);
-        check(result && result->outcome == Outcome::NoConfirmation
-                  && rig.backend->commands.last() == QLatin1String("waveform env clear")
-                  && !rig.radio.waveformEnvironmentApplyActive(),
-              "no restarted status in time finishes NoConfirmation and still clears");
+        check(result && result->outcome == Outcome::Recreated && !result->environmentConfirmed
+                  && result->stagingCleared,
+              "if the new environment never arrives the result says recreated but unconfirmed");
+    }
+    {
+        ApplyRig rig;
+        Result result;
+        rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {{QStringLiteral("K"), QStringLiteral("v")}},
+                                           nullptr, into(result));
+        rig.accept(); rig.accept(); rig.accept();
+        rig.restarted();
+        rig.container(R"({"K":"v"})");
+        rig.backend->replyLast({RadioSetupReply::Kind::Failed, 0x50000015, QStringLiteral("busy")});
+        check(!waveformEnvironmentInstallBlocker(&rig.radio).isEmpty(),
+              "Docker installs stay blocked after a cleanup that was not acknowledged");
+        check(result && result->outcome == Outcome::Recreated && result->environmentConfirmed
+                  && !result->stagingCleared && result->stagingMessage == QLatin1String("busy")
+                  && !rig.radio.waveformEnvironmentApplyActive() && rig.radio.waveformEnvironmentStagingUncertain(),
+              "a refused cleanup reports recreated-but-not-cleaned and keeps staging uncertain");
+        Result again;
+        check(!rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {}, nullptr, into(again)),
+              "an empty environment is refused: the radio would keep the old one");
+        std::optional<RadioControlReply> cleared;
+        check(rig.radio.clearWaveformEnvironmentStaging(nullptr, [&](const RadioControlReply& r) { cleared = r; })
+                  && rig.backend->commands.last() == clear && rig.radio.waveformEnvironmentStagingUncertain(),
+              "Clear Staged Variables sends a clear and stays uncertain until it is acknowledged");
+        check(rig.radio.waveformEnvironmentStagingUncertain()
+                  && waveformEnvironmentInstallBlocker(&rig.radio).contains(QLatin1String("Clear Staged Variables")),
+              "until then Docker installs stay blocked and say how to clear it");
+        rig.accept();
+        check(cleared && cleared->kind == RadioControlReply::Kind::Accepted
+                  && !rig.radio.waveformEnvironmentStagingUncertain(),
+              "an acknowledged clear makes staging known clear again");
+        check(waveformEnvironmentInstallBlocker(&rig.radio).isEmpty(), "and installs are allowed again");
+    }
+    {
+        ApplyRig rig;
+        Result result;
+        rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {{QStringLiteral("K"), QStringLiteral("v")}},
+                                           nullptr, into(result));
+        rig.accept(); rig.accept(); rig.accept();
+        rig.backend->accept = false;  // the sink refuses the cleanup outright
+        rig.restarted();
+        rig.container(R"({"K":"v"})");
+        check(result && result->outcome == Outcome::Recreated && !result->stagingCleared
+                  && rig.radio.waveformEnvironmentStagingUncertain(),
+              "a cleanup that cannot be dispatched is reported, not assumed");
+    }
+    {
+        ApplyRig rig;
+        Result result;
+        rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {{QStringLiteral("K"), QStringLiteral("v")}},
+                                           nullptr, into(result));
+        rig.accept();
+        rig.backend->replyLast({RadioSetupReply::Kind::Failed, 0x50000015, QStringLiteral("Invalid value")});
+        check(!result && rig.backend->commands.last() == clear
+                  && !rig.backend->commands.contains(QStringLiteral("waveform recreate wf-x")),
+              "a refused stage stops before the recreate and sends the cleanup");
+        rig.accept();
+        check(result && result->outcome == Outcome::Refused && result->stagingCleared
+                  && result->message.contains(QLatin1String("variable K"))
+                  && !result->message.contains(QLatin1String("=v")) && !rig.radio.waveformEnvironmentStagingUncertain(),
+              "it then finishes Refused, naming the key and not the value, with staging cleared");
+    }
+    {
+        ApplyRig rig;
+        Result result;
+        rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {{QStringLiteral("K"), QString()}},
+                                           nullptr, into(result));
+        rig.accept(); rig.accept();
+        check(rig.backend->commands.at(1) == QLatin1String("waveform env K="),
+              "an empty value stages as K= (the way to empty a variable)");
+        rig.restarted(QStringLiteral("error"));
+        rig.accept();
+        check(result && result->outcome == Outcome::RecreateFailed && result->stagingCleared,
+              "result=error finishes RecreateFailed after the cleanup");
+    }
+    {
+        ApplyRig rig;
+        WaveformEnvTestAccess::confirmTimeout(rig.radio, 20);
+        Result result;
+        rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {{QStringLiteral("K"), QStringLiteral("v")}},
+                                           nullptr, into(result));
+        rig.accept(); rig.accept(); rig.accept();
+        QTest::qWait(80);
+        check(!result && rig.backend->commands.last() == clear,
+              "no restarted status in time sends the cleanup");
+        rig.accept();
+        check(result && result->outcome == Outcome::NoConfirmation && result->stagingCleared,
+              "and finishes NoConfirmation once it is acknowledged");
     }
     {
         ApplyRig rig;
         for (const WaveformEnvironment& bad : {
+                 WaveformEnvironment{},
                  WaveformEnvironment{{QStringLiteral("A"), QStringLiteral("1")}, {QStringLiteral("A"), QStringLiteral("2")}},
                  WaveformEnvironment{{QStringLiteral("A B"), QStringLiteral("1")}},
-                 WaveformEnvironment{{QStringLiteral("A"), QStringLiteral("1\n2")}}}) {
+                 WaveformEnvironment{{QStringLiteral("A"), QStringLiteral("1\n2")}},
+                 WaveformEnvironment{{QStringLiteral("A"), QStringLiteral("a  b")}},
+                 WaveformEnvironment{{QStringLiteral("A"), QStringLiteral(" a")}},
+                 WaveformEnvironment{{QStringLiteral("A"), QString(513, QLatin1Char('v'))}}}) {
             check(!rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), bad, nullptr, {})
-                      && rig.backend->commands.isEmpty() && !rig.radio.waveformEnvironmentApplyActive(),
-                  "a duplicate, invalid name or multi-line value is refused before anything is sent");
+                      && rig.backend->commands.isEmpty() && !rig.radio.waveformEnvironmentApplyActive()
+                      && !rig.radio.waveformEnvironmentStagingUncertain(),
+                  "an empty, duplicate, invalid, multi-line, spaced or overlong set is refused before anything is sent");
         }
-        check(!rig.radio.applyWaveformEnvironment(QStringLiteral("wf x"), {}, nullptr, {}),
+        check(!rig.radio.applyWaveformEnvironment(QStringLiteral("wf x"), {{QStringLiteral("A"), {}}}, nullptr, {}),
               "an unsafe container name is refused");
     }
     {
         ApplyRig rig;
         rig.backend->setFirmwareVersionProvider([] { return QStringLiteral("4.2.20.41343"); });
-        check(!rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {}, nullptr, {})
+        check(!rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {{QStringLiteral("A"), {}}}, nullptr, {})
                   && rig.backend->commands.isEmpty(),
               "older firmware refuses the apply and sends nothing");
     }
     {
         ApplyRig rig;
-        std::optional<WaveformEnvApplyResult> result;
-        rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {}, nullptr,
-                                           [&](const WaveformEnvApplyResult& r) { result = r; });
+        Result result;
+        rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {{QStringLiteral("A"), {}}}, nullptr, into(result));
         rig.accept();
         rig.accept();
         rig.backend->live = false;
         RadioSetupControlTestAccess::disconnected(rig.radio);
-        check(result && result->outcome == Outcome::Cancelled && !rig.radio.waveformEnvironmentApplyActive(),
-              "a session that ends while waiting finishes Cancelled");
+        check(result && result->outcome == Outcome::Cancelled && !result->stagingCleared
+                  && !rig.radio.waveformEnvironmentApplyActive() && rig.radio.waveformEnvironmentStagingUncertain(),
+              "a session that ends mid-apply finishes Cancelled with staging uncertain");
     }
+}
+
+QPushButton* buttonNamed(QWidget& root, const QString& objectName)
+{
+    for (QPushButton* button : root.findChildren<QPushButton*>()) {
+        if (button->objectName() == objectName) { return button; }
+    }
+    return nullptr;
+}
+QPushButton* buttonText(QWidget& root, const QString& text)
+{
+    for (QPushButton* button : root.findChildren<QPushButton*>()) {
+        if (button->text() == text) { return button; }
+    }
+    return nullptr;
+}
+QList<QLineEdit*> liveEdits(QWidget& root)
+{
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    return root.findChildren<QLineEdit*>();
+}
+QLineEdit* editNamed(QWidget& root, const QString& accessibleName)
+{
+    for (QLineEdit* edit : liveEdits(root)) {
+        if (edit->accessibleName() == accessibleName) { return edit; }
+    }
+    return nullptr;
 }
 
 void editor()
@@ -327,45 +446,158 @@ void editor()
                       {{QStringLiteral("A"), {}}, {QStringLiteral("A"), {}}}, nullptr).isEmpty()
               && !WaveformEnvironmentDialog::collectEnvironment({{QStringLiteral("1A"), {}}}, nullptr).isEmpty(),
           "a value without a name, a duplicate or an invalid name gets a reason");
+    check(WaveformEnvironmentDialog::collectEnvironment({{QStringLiteral("A"), QStringLiteral("a  b")}}, nullptr)
+                  .contains(QLatin1String("two spaces"))
+              && WaveformEnvironmentDialog::collectEnvironment({{QStringLiteral("A"), QStringLiteral("a ")}}, nullptr)
+                  .contains(QLatin1String("starts or ends with a space"))
+              && WaveformEnvironmentDialog::collectEnvironment({{QStringLiteral("A"), QStringLiteral("a\tb")}}, nullptr)
+                  .contains(QLatin1String("one line")),
+          "repeated, edge and control whitespace are refused with a reason, never altered");
+    check(WaveformEnvironmentDialog::collectEnvironment({}, nullptr)
+              == WaveformEnvironmentDialog::emptyEnvironmentReason(),
+          "an empty list is refused with the keeps-the-old-variables reason");
 
+    // A value and a name longer than AetherSDR sends, as another client could
+    // have set them: shown intact, never shortened, refused on Apply.
+    const QString longValue(600, QLatin1Char('t'));
+    const QString longKey = QStringLiteral("K") + QString(69, QLatin1Char('x'));
     ApplyRig rig;
+    rig.container(QJsonDocument(QJsonObject{{QStringLiteral("OLD"), QStringLiteral("1")},
+                                            {QStringLiteral("TOKEN"), longValue},
+                                            {longKey, QStringLiteral("v")}}).toJson(QJsonDocument::Compact));
     WaveformEnvironmentDialog dialog(&rig.radio, QStringLiteral("wf-x"));
-    const auto edits = [&dialog] { return dialog.findChildren<QLineEdit*>(); };
-    check(edits().size() == 2 && edits().at(0)->text() == QLatin1String("OLD")
-              && edits().at(1)->text() == QLatin1String("1"),
-          "the rows start from the environment the radio reports");
-    check(edits().at(1)->echoMode() == QLineEdit::Password, "values are masked by default");
-    QCheckBox* show = dialog.findChild<QCheckBox*>();
-    show->setChecked(true);
-    check(edits().at(1)->echoMode() == QLineEdit::Normal, "Show values reveals them");
-
-    QPushButton* apply = nullptr;
-    for (QPushButton* button : dialog.findChildren<QPushButton*>()) {
-        if (button->objectName() == QLatin1String("wfEnvApply")) { apply = button; }
-    }
-    check(apply && apply->isEnabled(), "Apply & Recreate is available on 4.3.16");
     std::optional<WaveformEnvironment> handed;
-    dialog.setApplyHandler([&](const QString& name, const WaveformEnvironment& environment) {
+    dialog.setApplyHandler([&](const QString&, const WaveformEnvironment& environment) {
         handed = environment;
-        return name == QLatin1String("wf-x");
+        return true;
     });
-    edits().at(1)->setText(QStringLiteral("2"));
+    QPushButton* apply = buttonNamed(dialog, QStringLiteral("wfEnvApply"));
+    QLineEdit* token = editNamed(dialog, QStringLiteral("Value of TOKEN"));
+    QLineEdit* longName = editNamed(dialog, QStringLiteral("Name of ") + longKey);
+    check(token && token->text() == longValue && longName && longName->text() == longKey,
+          "a long reported value and name load intact");
+    editNamed(dialog, QStringLiteral("Value of OLD"))->setText(QStringLiteral("2"));
     apply->click();
-    check(handed && *handed == WaveformEnvironment{{QStringLiteral("OLD"), QStringLiteral("2")}}
-              && !apply->isEnabled() && !edits().at(0)->isEnabled(),
-          "Apply hands over the edited rows and locks the editor while the radio works");
-    status(rig.radio, QStringLiteral("waveform container"),
-           {{QStringLiteral("name"), QStringLiteral("wf-x")}, {QStringLiteral("version"), QStringLiteral("1")},
-            {QStringLiteral("env"), b64(R"({"OLD":"2","NEW":"3"})")}});
-    dialog.showApplyResult({Outcome::Recreated, {}});
-    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-    check(edits().size() == 4 && apply->isEnabled(),
-          "after Recreated the rows show what the radio now reports");
+    check(!handed && token->text() == longValue
+              && dialog.findChildren<QLabel*>().size() > 0,
+          "editing another row and applying refuses visibly and leaves the long value unchanged");
+    bool reasonShown = false;
+    for (QLabel* label : dialog.findChildren<QLabel*>()) {
+        if (label->isVisibleTo(&dialog) && label->text().contains(QLatin1String("characters"))) { reasonShown = true; }
+    }
+    check(reasonShown, "the length refusal is shown on the dialog");
 
-    rig.backend->setFirmwareVersionProvider([] { return QStringLiteral("4.2.20.41343"); });
-    emit rig.radio.capabilitiesChanged(true, rig.radio.backendCapabilities());
-    check(!apply->isEnabled() && !apply->accessibleDescription().isEmpty()
-              && apply->accessibleDescription() == apply->toolTip(),
+    // Every value edit is permanently sensitive, before and after Show values.
+    QCheckBox* show = dialog.findChild<QCheckBox*>();
+    const auto allSensitive = [&dialog] {
+        bool all = true;
+        int values = 0;
+        for (QLineEdit* edit : liveEdits(dialog)) {
+            if (edit->accessibleName().startsWith(QLatin1String("Value of"))) {
+                ++values;
+                all = all && edit->property("aetherSensitiveValue").toBool()
+                      && automationLineEditValue(edit) != edit->text();
+            }
+        }
+        return all && values > 0;
+    };
+    check(token->echoMode() == QLineEdit::Password && allSensitive(), "values are masked and marked sensitive");
+    show->setChecked(true);
+    check(token->echoMode() == QLineEdit::Normal && allSensitive()
+              && automationLineEditValue(token) == QLatin1String("<hidden>"),
+          "after Show values the automation dump still hides every value");
+    dialog.show();
+    QCoreApplication::processEvents();
+    const QImage revealed = token->grab().toImage();
+    QImage masked;
+    {
+        AutomationSensitiveGrabMask mask(&dialog);
+        check(token->echoMode() == QLineEdit::Password, "an automation grab masks a revealed value");
+        masked = token->grab().toImage();
+    }
+    check(!masked.isNull() && masked != revealed && token->echoMode() == QLineEdit::Normal,
+          "the grab's pixels differ from the revealed text and Show is restored after");
+
+    // Added rows: sensitive too, with an accessible name that does not move.
+    buttonText(dialog, QStringLiteral("Add Variable"))->click();
+    QCoreApplication::processEvents();
+    QLineEdit* newName = editNamed(dialog, QStringLiteral("Name of new variable 1"));
+    QLineEdit* newValue = editNamed(dialog, QStringLiteral("Value of new variable 1"));
+    check(newName && newValue && newValue->property("aetherSensitiveValue").toBool()
+              && newValue->echoMode() == QLineEdit::Normal,
+          "an added row's value is sensitive and follows Show values");
+    newName->setText(QStringLiteral("AE_APP"));
+    check(editNamed(dialog, QStringLiteral("Value of new variable 1")) == newValue
+              && newValue->accessibleDescription().contains(QLatin1String("AE_APP")),
+          "typing the name keeps the row's accessible name and updates its description");
+
+    // Remove every row: Apply is dimmed and says why, visibly and accessibly.
+    while (QPushButton* remove = [&dialog]() -> QPushButton* {
+               for (QPushButton* b : dialog.findChildren<QPushButton*>()) {
+                   if (b->text() == QLatin1String("Remove") && b->isVisibleTo(&dialog)) { return b; }
+               }
+               return nullptr;
+           }()) {
+        remove->click();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+    bool hintShown = false;
+    for (QLabel* label : dialog.findChildren<QLabel*>()) {
+        if (label->isVisibleTo(&dialog) && label->text() == WaveformEnvironmentDialog::emptyEnvironmentReason()) {
+            hintShown = true;
+        }
+    }
+    check(!apply->isEnabled() && hintShown
+              && apply->accessibleDescription() == WaveformEnvironmentDialog::emptyEnvironmentReason()
+              && apply->toolTip() == apply->accessibleDescription(),
+          "with no rows Apply is dimmed and the empty-staging reason is shown and announced");
+
+    // Revert reloads the radio's rows, still sensitive.
+    buttonText(dialog, QStringLiteral("Revert"))->click();
+    check(editNamed(dialog, QStringLiteral("Value of TOKEN"))
+              && editNamed(dialog, QStringLiteral("Value of TOKEN"))->property("aetherSensitiveValue").toBool()
+              && editNamed(dialog, QStringLiteral("Value of TOKEN"))->text() == longValue,
+          "reloaded rows are sensitive and intact");
+
+    // A recreate whose new environment has not arrived yet is not shown as confirmed.
+    WaveformEnvApplyResult unconfirmed;
+    unconfirmed.outcome = Outcome::Recreated;
+    unconfirmed.stagingCleared = true;
+    dialog.showApplyResult(unconfirmed);
+    bool saysUnconfirmed = false;
+    for (QLabel* label : dialog.findChildren<QLabel*>()) {
+        if (label->text().contains(QLatin1String("has not yet reported"))) { saysUnconfirmed = true; }
+    }
+    check(saysUnconfirmed, "recreated without the new environment says so instead of claiming it");
+
+    WaveformEnvApplyResult notCleaned;
+    notCleaned.outcome = Outcome::Recreated;
+    notCleaned.environmentConfirmed = true;
+    notCleaned.stagingMessage = QStringLiteral("busy");
+    dialog.showApplyResult(notCleaned);
+    bool saysCleanup = false;
+    for (QLabel* label : dialog.findChildren<QLabel*>()) {
+        if (label->text().contains(QLatin1String("Clearing the radio's staged variables failed (busy)"))) {
+            saysCleanup = true;
+        }
+    }
+    check(saysCleanup, "a failed cleanup is reported separately from the recreate");
+
+    // While staging is uncertain the editor offers Clear Staged Variables.
+    rig.radio.applyWaveformEnvironment(QStringLiteral("wf-x"), {{QStringLiteral("A"), {}}}, nullptr, {});
+    rig.backend->live = false;
+    RadioSetupControlTestAccess::disconnected(rig.radio);
+    rig.backend->live = true;
+    QPushButton* clearStaging = buttonText(dialog, QStringLiteral("Clear Staged Variables"));
+    check(rig.radio.waveformEnvironmentStagingUncertain() && clearStaging && clearStaging->isVisibleTo(&dialog),
+          "uncertain staging shows Clear Staged Variables");
+
+    ApplyRig older;
+    older.backend->setFirmwareVersionProvider([] { return QStringLiteral("4.2.20.41343"); });
+    WaveformEnvironmentDialog old(&older.radio, QStringLiteral("wf-x"));
+    QPushButton* oldApply = buttonNamed(old, QStringLiteral("wfEnvApply"));
+    check(!oldApply->isEnabled() && !oldApply->accessibleDescription().isEmpty()
+              && oldApply->accessibleDescription() == oldApply->toolTip(),
           "on older firmware Apply is dimmed with the reason in its tooltip and accessible description");
 }
 } // namespace

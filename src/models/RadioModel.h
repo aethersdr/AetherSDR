@@ -1120,14 +1120,23 @@ public:
                                        QObject* replyContext = nullptr,
                                        const RadioControlCompletion& completion = {});
     // Replace a container's environment and recreate it: clear the staged
-    // environment, stage each variable, recreate, then wait for the radio's
-    // `waveform restarted` status and clear the stage again so it cannot leak into
-    // a later deploy. One apply at a time; false = refused before anything was sent.
-    // The completion runs exactly once unless replyContext is destroyed first.
+    // environment, stage each variable, recreate, wait for the radio's `waveform
+    // restarted` status and for a container status carrying the new environment,
+    // and clear the stage again (acknowledged) so it cannot leak into a later
+    // deploy. Staging is radio-wide, so the first clear also drops anything
+    // another client staged. One apply at a time; an empty environment is refused
+    // because the radio keeps the old one when nothing is staged. false = refused
+    // before anything was sent. The completion runs exactly once unless
+    // replyContext is destroyed first.
     bool applyWaveformEnvironment(const QString& name, const WaveformEnvironment& environment,
                                   QObject* replyContext,
                                   std::function<void(const WaveformEnvApplyResult&)> completion);
     bool waveformEnvironmentApplyActive() const { return m_waveformEnvApplyActive; }
+    // This client staged variables and has not seen an acknowledged clear since,
+    // so the radio may still hold them for the next deploy.
+    bool waveformEnvironmentStagingUncertain() const { return m_waveformEnvStagingUncertain; }
+    // An acknowledged `waveform env clear`; on success the staging is known clear.
+    bool clearWaveformEnvironmentStaging(QObject* replyContext, const RadioControlCompletion& completion);
     // A container's environment as the radio last reported it, or nullopt when no
     // container of that name is installed. Values may be secrets.
     std::optional<QMap<QString, QString>> waveformContainerEnvironment(const QString& name) const;
@@ -1237,6 +1246,8 @@ signals:
     // An installed container's environment changed (name), or the list of
     // installed waveforms did (empty name).
     void waveformContainersChanged(const QString& name);
+    // waveformEnvironmentApplyActive() or waveformEnvironmentStagingUncertain() changed.
+    void waveformEnvironmentStagingChanged();
     void transmitFrequencyCheckChanged(bool on);
     // Straight-key-shaped local CW edges (serial key line, TCI `keyer:trx`,
     // MIDI/keyboard/HID), all via sendCwKey; drives the local sidetone
@@ -2130,6 +2141,8 @@ private:
     DaxIqModel          m_daxIqModel;
     FlexWaveformModel   m_flexWaveformModel;
     bool m_waveformEnvApplyActive{false};
+    bool m_waveformEnvStagingUncertain{false};
+    void setWaveformEnvironmentStagingState(bool active, bool uncertain);
     int  m_waveformEnvConfirmTimeoutMs{60000};
     DStarModel          m_dstarModel{nullptr, true};
 

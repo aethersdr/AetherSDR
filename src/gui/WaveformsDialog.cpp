@@ -1433,6 +1433,8 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
             this, &WaveformsDialog::onWaveformCommandFinished);
     connect(&wfModel, &FlexWaveformModel::restarted,
             this, &WaveformsDialog::onWaveformRestarted);
+    connect(m_radioModel, &RadioModel::waveformEnvironmentStagingChanged,
+            this, &WaveformsDialog::updateInstallButtonState);
     // The Environment… action follows the radio's firmware and platform.
     connect(m_radioModel, &RadioModel::capabilitiesChanged,
             this, &WaveformsDialog::refreshWaveformList);
@@ -1496,13 +1498,11 @@ void WaveformsDialog::updateInstallButtonState()
     }
 
     const FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
-    // While a container environment is being applied the radio holds staged
-    // variables, and a deploy now would pick them up.
     const QString dockerBlocker = !connected
         ? tr("Connect to a radio before installing Docker waveform images.")
-        : m_radioModel->waveformEnvironmentApplyActive()
-            ? tr("Wait for the container environment change to finish.")
-            : dockerInstallBlockerText(m_radioModel, wfModel);
+        : waveformEnvironmentInstallBlocker(m_radioModel).isEmpty()
+            ? dockerInstallBlockerText(m_radioModel, wfModel)
+            : waveformEnvironmentInstallBlocker(m_radioModel);
     const bool dockerReady = connected && dockerBlocker.isEmpty();
     m_installDockerAction->setEnabled(!busy && dockerReady);
     if (m_installRemoteAccessAction) {
@@ -1719,9 +1719,9 @@ void WaveformsDialog::installWaveformPath(bool docker, const QString& path, Radi
 
     if (docker) {
         const FlexWaveformModel& wfModel = modelGuard->flexWaveformModel();
-        const QString blocker = modelGuard->waveformEnvironmentApplyActive()
-            ? tr("Wait for the container environment change to finish.")
-            : dockerInstallBlockerText(modelGuard, wfModel);
+        const QString staging = waveformEnvironmentInstallBlocker(modelGuard);
+        const QString blocker = staging.isEmpty()
+            ? dockerInstallBlockerText(modelGuard, wfModel) : staging;
         if (!blocker.isEmpty()) {
             showDockerWfpNotReadyDialog(this, blocker);
             return;
@@ -2314,7 +2314,12 @@ void WaveformsDialog::onEnvironmentApplyFinished(const QString& name,
     using Outcome = WaveformEnvApplyResult::Outcome;
     switch (result.outcome) {
     case Outcome::Recreated:
-        setRowNotice(name, tr("Recreated"), QStringLiteral("ok"), false);
+        if (result.stagingCleared) {
+            setRowNotice(name, tr("Recreated"), QStringLiteral("ok"), false);
+        } else {
+            setRowNotice(name, tr("Recreated, but clearing staged variables failed"),
+                         QStringLiteral("error"), false);
+        }
         break;
     case Outcome::RecreateFailed:
         setRowNotice(name, tr("Recreate failed: the radio reported an error"),

@@ -76,6 +76,28 @@ QString waveformEnvironmentUnavailableReason(const RadioModel* model)
     return {};
 }
 
+QString waveformEnvironmentInstallBlocker(const RadioModel* model)
+{
+    if (!model) {
+        return {};
+    }
+    if (model->waveformEnvironmentApplyActive()) {
+        return QObject::tr("Wait for the container environment change to finish.");
+    }
+    if (model->waveformEnvironmentStagingUncertain()
+        && model->backendCapabilities().waveformEnvControl.has_value()) {
+        return QObject::tr("The radio may still hold staged environment variables. Open "
+                           "Environment… on a container and click Clear Staged Variables.");
+    }
+    return {};
+}
+
+QString WaveformEnvironmentDialog::emptyEnvironmentReason()
+{
+    return tr("Add at least one variable. When nothing is staged the radio keeps the "
+              "container's current variables, so to empty one, give it an empty value instead.");
+}
+
 QString WaveformEnvironmentDialog::collectEnvironment(const QList<QPair<QString, QString>>& rows,
                                                       WaveformEnvironment* environment)
 {
@@ -97,12 +119,27 @@ QString WaveformEnvironmentDialog::collectEnvironment(const QList<QPair<QString,
         if (keys.contains(key)) {
             return tr("%1 is listed more than once.").arg(key);
         }
-        if (!WaveformEnvRequest::valueValid(value)) {
-            return tr("The value of %1 must be at most %2 characters on one line.")
-                .arg(key).arg(WaveformEnvRequest::kMaxValueChars);
+        // Refused, never altered: a value the radio reported is applied exactly
+        // or not at all, so editing one row cannot change another.
+        switch (WaveformEnvRequest::valueIssue(value)) {
+        case WaveformEnvRequest::ValueIssue::None: break;
+        case WaveformEnvRequest::ValueIssue::TooLong:
+            return tr("The value of %1 is %2 characters; AetherSDR sends at most %3.")
+                .arg(key).arg(value.size()).arg(WaveformEnvRequest::kMaxValueChars);
+        case WaveformEnvRequest::ValueIssue::ControlCharacter:
+            return tr("The value of %1 must be on one line, without tabs or control characters.").arg(key);
+        case WaveformEnvRequest::ValueIssue::EdgeWhitespace:
+            return tr("The value of %1 starts or ends with a space. The radio would not keep it; "
+                      "remove the space.").arg(key);
+        case WaveformEnvRequest::ValueIssue::RepeatedWhitespace:
+            return tr("The value of %1 has two spaces in a row. The radio collapses them into "
+                      "one; use single spaces.").arg(key);
         }
         keys.insert(key);
         result.append({key, value});
+    }
+    if (result.isEmpty()) {
+        return emptyEnvironmentReason();
     }
     if (environment) { *environment = result; }
     return {};
@@ -202,6 +239,15 @@ WaveformEnvironmentDialog::WaveformEnvironmentDialog(RadioModel* model, const QS
     tools->addStretch(1);
     layout->addLayout(tools);
 
+    // Visible whenever Apply is dimmed for an empty list, so the reason is not
+    // only in a tooltip.
+    m_applyHint = new QLabel(emptyEnvironmentReason(), body);
+    m_applyHint->setProperty("wfEnvRole", QStringLiteral("hint"));
+    m_applyHint->setWordWrap(true);
+    m_applyHint->setAccessibleName(tr("Why Apply is unavailable"));
+    m_applyHint->setAccessibleDescription(m_applyHint->text());
+    layout->addWidget(m_applyHint);
+
     m_message = new QLabel(body);
     m_message->setProperty("wfEnvRole", QStringLiteral("message"));
     m_message->setWordWrap(true);
@@ -224,7 +270,15 @@ WaveformEnvironmentDialog::WaveformEnvironmentDialog(RadioModel* model, const QS
     m_applyButton->setObjectName(QStringLiteral("wfEnvApply"));
     m_applyButton->setAccessibleName(tr("Apply the environment and recreate waveform %1").arg(m_name));
     connect(m_applyButton, &QPushButton::clicked, this, &WaveformEnvironmentDialog::onApply);
+    // Shown only while this client cannot tell whether the radio still holds
+    // variables it staged; installs wait until a clear is acknowledged.
+    m_clearStagingButton = new QPushButton(tr("Clear Staged Variables"), body);
+    m_clearStagingButton->setAccessibleName(tr("Clear the radio's staged environment variables"));
+    m_clearStagingButton->setAccessibleDescription(
+        tr("The radio may still hold variables staged for the next install."));
+    connect(m_clearStagingButton, &QPushButton::clicked, this, &WaveformEnvironmentDialog::onClearStaging);
     buttons->addWidget(m_revertButton);
+    buttons->addWidget(m_clearStagingButton);
     buttons->addStretch(1);
     buttons->addWidget(closeButton);
     buttons->addWidget(m_applyButton);
@@ -237,6 +291,8 @@ WaveformEnvironmentDialog::WaveformEnvironmentDialog(RadioModel* model, const QS
         connect(m_model, &RadioModel::capabilitiesChanged,
                 this, &WaveformEnvironmentDialog::updateAvailability);
         connect(m_model, &RadioModel::connectionStateChanged,
+                this, &WaveformEnvironmentDialog::updateAvailability);
+        connect(m_model, &RadioModel::waveformEnvironmentStagingChanged,
                 this, &WaveformEnvironmentDialog::updateAvailability);
     }
     loadFromRadio();
@@ -266,22 +322,34 @@ void WaveformEnvironmentDialog::addRow(const QString& key, const QString& value)
     rowLayout->setSpacing(8);
     Row row;
     row.widget = rowWidget;
+    // No setMaxLength: Qt would cut a longer value the radio reported the moment
+    // it loads. Lengths are checked, and refused visibly, only on Apply.
     row.key = new QLineEdit(key, rowWidget);
     row.key->setPlaceholderText(tr("NAME"));
-    row.key->setMaxLength(WaveformEnvRequest::kMaxKeyChars);
     row.value = new QLineEdit(value, rowWidget);
-    row.value->setMaxLength(WaveformEnvRequest::kMaxValueChars);
+    // Permanent: Show values must never expose the text to automation dumps or
+    // grabs (AutomationSensitiveLineEdit.h).
+    row.value->setProperty("aetherSensitiveValue", true);
     row.value->setEchoMode(m_showValues && m_showValues->isChecked()
                                ? QLineEdit::Normal : QLineEdit::Password);
     auto* remove = new QPushButton(tr("Remove"), rowWidget);
-    const auto label = [row, remove] {
+    // Names fixed at creation, so a script or screen reader can keep addressing
+    // the row while its variable name is typed; the description follows the name.
+    const QString handle = key.isEmpty() ? tr("new variable %1").arg(++m_newRowCount) : key;
+    row.key->setAccessibleName(tr("Name of %1").arg(handle));
+    row.value->setAccessibleName(tr("Value of %1").arg(handle));
+    remove->setAccessibleName(tr("Remove %1").arg(handle));
+    const auto describe = [row, remove] {
         const QString name = row.key->text().trimmed();
-        row.key->setAccessibleName(name.isEmpty() ? tr("New variable name") : tr("Variable name %1").arg(name));
-        row.value->setAccessibleName(name.isEmpty() ? tr("New variable value") : tr("Value of %1").arg(name));
-        remove->setAccessibleName(name.isEmpty() ? tr("Remove new variable") : tr("Remove variable %1").arg(name));
+        const QString text = name.isEmpty() ? tr("No name yet") : tr("Variable %1").arg(name);
+        row.key->setAccessibleDescription(text);
+        row.value->setAccessibleDescription(text);
+        remove->setAccessibleDescription(text);
     };
-    label();
-    connect(row.key, &QLineEdit::textChanged, rowWidget, label);
+    describe();
+    connect(row.key, &QLineEdit::textChanged, rowWidget, describe);
+    connect(row.key, &QLineEdit::textChanged, this, &WaveformEnvironmentDialog::updateAvailability);
+    connect(row.value, &QLineEdit::textChanged, this, &WaveformEnvironmentDialog::updateAvailability);
     connect(remove, &QPushButton::clicked, this, [this, rowWidget] { removeRow(rowWidget); });
     rowLayout->addWidget(row.key, 2);
     rowLayout->addWidget(row.value, 3);
@@ -292,6 +360,7 @@ void WaveformEnvironmentDialog::addRow(const QString& key, const QString& value)
     const bool editable = !m_applying && m_containerPresent
         && waveformEnvironmentUnavailableReason(m_model).isEmpty();
     rowWidget->setEnabled(editable);
+    if (m_applyButton) { updateAvailability(); }
 }
 
 void WaveformEnvironmentDialog::removeRow(QWidget* rowWidget)
@@ -304,6 +373,15 @@ void WaveformEnvironmentDialog::removeRow(QWidget* rowWidget)
     }
     rowWidget->deleteLater();
     m_emptyLabel->setVisible(m_rows.isEmpty());
+    updateAvailability();
+}
+
+bool WaveformEnvironmentDialog::hasRows() const
+{
+    for (const Row& row : m_rows) {
+        if (!row.key->text().trimmed().isEmpty() || !row.value->text().isEmpty()) { return true; }
+    }
+    return false;
 }
 
 QList<QPair<QString, QString>> WaveformEnvironmentDialog::rowValues() const
@@ -322,17 +400,26 @@ void WaveformEnvironmentDialog::updateAvailability()
         reason = tr("%1 is no longer installed on the radio.").arg(m_name);
     }
     const bool editable = reason.isEmpty() && !m_applying;
+    const bool empty = !hasRows();
     for (const Row& row : std::as_const(m_rows)) {
         row.widget->setEnabled(editable);
     }
     m_addButton->setEnabled(editable);
     m_revertButton->setEnabled(!m_applying && m_containerPresent);
-    m_applyButton->setEnabled(editable);
-    const QString tip = m_applying ? tr("Waiting for the radio to recreate the container.") : reason;
+    m_applyButton->setEnabled(editable && !empty);
+    const QString tip = m_applying ? tr("Waiting for the radio to recreate the container.")
+        : !reason.isEmpty() ? reason
+        : empty ? emptyEnvironmentReason() : QString();
     for (QWidget* control : {static_cast<QWidget*>(m_addButton), static_cast<QWidget*>(m_applyButton)}) {
-        control->setToolTip(tip);
-        control->setAccessibleDescription(tip);
+        const QString text = control == m_addButton && reason.isEmpty() && !m_applying ? QString() : tip;
+        control->setToolTip(text);
+        control->setAccessibleDescription(text);
     }
+    m_applyHint->setVisible(editable && empty);
+    const bool uncertain = m_model && m_model->waveformEnvironmentStagingUncertain()
+        && !m_model->waveformEnvironmentApplyActive();
+    m_clearStagingButton->setVisible(uncertain);
+    m_clearStagingButton->setEnabled(uncertain && waveformEnvironmentUnavailableReason(m_model).isEmpty());
     if (!reason.isEmpty() && !m_applying) {
         setMessage(reason, QStringLiteral("error"));
     }
@@ -362,6 +449,11 @@ void WaveformEnvironmentDialog::onRadioEnvironmentChanged()
     }
     if (shown == m_loaded || !present) {
         loadFromRadio();
+    } else if (shown == reported) {
+        // The radio caught up with what is on screen (after a recreate whose
+        // new environment arrived late): nothing to tell the operator.
+        m_loaded = reported;
+        m_containerPresent = present;
     } else {
         m_containerPresent = present;
         setMessage(tr("The radio reported a different environment. Revert shows it."),
@@ -398,25 +490,61 @@ void WaveformEnvironmentDialog::showApplyResult(const WaveformEnvApplyResult& re
 {
     m_applying = false;
     using Outcome = WaveformEnvApplyResult::Outcome;
+    QString text;
+    bool ok = false;
     switch (result.outcome) {
     case Outcome::Recreated:
-        loadFromRadio();
-        setMessage(tr("Recreated. These are the variables the radio now reports."),
-                   QStringLiteral("ok"));
+        if (result.environmentConfirmed) {
+            loadFromRadio();
+            text = tr("Recreated. These are the variables the radio now reports.");
+        } else {
+            // The rows stay as applied and follow the radio's next report; they
+            // are not presented as confirmed.
+            text = tr("Recreated, but the radio has not yet reported the new variables.");
+        }
+        ok = result.environmentConfirmed;
         break;
     case Outcome::RecreateFailed:
-        setMessage(tr("The radio could not recreate %1.").arg(m_name), QStringLiteral("error"));
+        text = tr("The radio could not recreate %1.").arg(m_name);
         break;
     case Outcome::NoConfirmation:
-        setMessage(tr("The radio accepted the recreate but has not reported the result. "
-                      "Check the waveform before relying on it."), QStringLiteral("error"));
+        text = tr("The radio accepted the recreate but has not reported the result. "
+                  "Check the waveform before relying on it.");
         break;
     case Outcome::Refused:
     case Outcome::Cancelled:
-        setMessage(tr("Nothing was recreated: %1.").arg(result.message), QStringLiteral("error"));
+        text = tr("Nothing was recreated: %1.").arg(result.message);
         break;
     }
+    if (!result.stagingCleared) {
+        ok = false;
+        text += QLatin1Char(' ') + tr("Clearing the radio's staged variables failed (%1), so Docker "
+                                      "installs stay blocked until Clear Staged Variables succeeds.")
+                                       .arg(result.stagingMessage);
+    }
+    setMessage(text, ok ? QStringLiteral("ok") : QStringLiteral("error"));
     updateAvailability();
+}
+
+void WaveformEnvironmentDialog::onClearStaging()
+{
+    if (!m_model) { return; }
+    const QPointer<WaveformEnvironmentDialog> self(this);
+    const bool sent = m_model->clearWaveformEnvironmentStaging(this, [self](const RadioControlReply& reply) {
+        if (!self) { return; }
+        if (reply.kind == RadioControlReply::Kind::Accepted) {
+            self->setMessage(tr("The radio's staged variables are cleared."), QStringLiteral("ok"));
+        } else {
+            self->setMessage(tr("Clearing staged variables failed: %1.")
+                                 .arg(reply.message.trimmed().isEmpty() ? tr("no reason given")
+                                                                        : reply.message.trimmed()),
+                             QStringLiteral("error"));
+        }
+        self->updateAvailability();
+    });
+    if (!sent) {
+        setMessage(tr("Clearing staged variables could not be sent."), QStringLiteral("error"));
+    }
 }
 
 } // namespace AetherSDR

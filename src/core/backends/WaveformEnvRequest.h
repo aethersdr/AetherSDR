@@ -36,17 +36,30 @@ struct WaveformEnvRequest {
         return true;
     }
 
-    // The value ends the command line, so a line break or other control
-    // character would end it early or inject a second command.
-    static bool valueValid(const QString& value)
+    // Why a value cannot be staged as typed. The value ends the command line, so
+    // a line break or other control character would end it early or inject a
+    // second command. The radio rebuilds the value from its space-separated
+    // tokens, so it collapses runs of spaces (measured, FLEX-8600 4.3.16) and a
+    // value with edge or repeated whitespace would arrive changed.
+    enum class ValueIssue { None, TooLong, ControlCharacter, EdgeWhitespace, RepeatedWhitespace };
+    static ValueIssue valueIssue(const QString& value)
     {
-        if (value.size() > kMaxValueChars) { return false; }
+        if (value.size() > kMaxValueChars) { return ValueIssue::TooLong; }
         for (const QChar ch : value) {
             if (ch.category() == QChar::Other_Control || ch == QChar::LineSeparator
-                || ch == QChar::ParagraphSeparator) { return false; }
+                || ch == QChar::ParagraphSeparator) { return ValueIssue::ControlCharacter; }
         }
-        return true;
+        if (!value.isEmpty() && (value.front().isSpace() || value.back().isSpace())) {
+            return ValueIssue::EdgeWhitespace;
+        }
+        for (qsizetype i = 1; i < value.size(); ++i) {
+            if (value.at(i).isSpace() && value.at(i - 1).isSpace()) {
+                return ValueIssue::RepeatedWhitespace;
+            }
+        }
+        return ValueIssue::None;
     }
+    static bool valueValid(const QString& value) { return valueIssue(value) == ValueIssue::None; }
 
     // Same token rule as the existing waveform restart/remove commands.
     static bool nameValid(const QString& name)
@@ -73,7 +86,8 @@ struct WaveformEnvRequest {
 
 using WaveformEnvironment = QList<QPair<QString, QString>>;
 
-// The outcome of RadioModel::applyWaveformEnvironment.
+// The outcome of RadioModel::applyWaveformEnvironment. Recreating the container
+// and cleaning up the radio's staging are separate facts, reported separately.
 struct WaveformEnvApplyResult {
     enum class Outcome {
         Recreated,       // the radio reported result=ok for the recreate
@@ -84,6 +98,13 @@ struct WaveformEnvApplyResult {
     };
     Outcome outcome{Outcome::Refused};
     QString message;
+    // Recreated only: a container status carrying exactly the requested
+    // environment arrived. The first status after `restarted` still carries the
+    // old one (measured), so the restart alone does not show it.
+    bool environmentConfirmed{false};
+    // The final `waveform env clear` was acknowledged by the radio.
+    bool stagingCleared{false};
+    QString stagingMessage;
 };
 
 } // namespace AetherSDR
