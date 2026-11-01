@@ -4289,7 +4289,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
         for (SliceModel* slice : m_radioModel.slices()) {
             channels << slice->daxChannel();
         }
-        const auto write = DaxRestorePolicy::quitWrite(
+        const DaxRestorePolicy::QuitWrite write = DaxRestorePolicy::quitWrite(
             m_radioModel.backendCapabilities().hasDaxStreams,
             m_radioModel.isConnected(), channels);
         for (const auto& [key, channel] : write.set) {
