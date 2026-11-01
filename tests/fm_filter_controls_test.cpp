@@ -18,6 +18,7 @@
 #include <QImage>
 #include <QMenu>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QtTest>
 
@@ -461,6 +462,68 @@ private slots:
             QVERIFY(unavailable);
             QVERIFY(!unavailable->isHidden());
         }
+    }
+
+    void hl2CwSavedPresetsRespectProductionRanges_data()
+    {
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<QString>("saved");
+        QTest::addColumn<QString>("label");
+        QTest::addColumn<int>("low");
+        QTest::addColumn<int>("high");
+        for (const QString& mode : {QStringLiteral("CW"), QStringLiteral("CWL")}) {
+            QTest::newRow(qPrintable(mode + "-edges"))
+                << mode << QStringLiteral("-170:170") << QStringLiteral("340") << -170 << 170;
+            QTest::newRow(qPrintable(mode + "-width"))
+                << mode << QStringLiteral("340") << QStringLiteral("340") << -170 << 170;
+            QTest::newRow(qPrintable(mode + "-mixed"))
+                << mode << QStringLiteral("300:1060,-170:170,-7000:7000")
+                << QStringLiteral("340") << -170 << 170;
+            QTest::newRow(qPrintable(mode + "-invalid"))
+                << mode << QStringLiteral("300:1060,-7000:7000")
+                << QStringLiteral("500") << -250 << 250;
+        }
+    }
+
+    void hl2CwSavedPresetsRespectProductionRanges()
+    {
+        QFETCH(QString, mode);
+        QFETCH(QString, saved);
+        QFETCH(QString, label);
+        QFETCH(int, low);
+        QFETCH(int, high);
+        const QString key = QStringLiteral("FilterPresets_%1").arg(mode);
+        AppSettings::instance().setValue(key, saved);
+        const auto clearPresets = qScopeGuard([key] { AppSettings::instance().remove(key); });
+
+        hl2::Hl2Backend hl2;
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        backend->caps.receiveFilterControl = hl2.capabilities().receiveFilterControl;
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceModel slice(4);
+        setMode(slice, mode);
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setSlice(&slice);
+        vfo.setSlice(&slice);
+        rx.setRadioModel(&model);
+        vfo.setRadioModel(&model);
+        QSignalSpy intents(&slice, &SliceModel::filterCommandIssued);
+        for (QWidget* surface : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            QVERIFY(!button(*surface, QStringLiteral("760")));
+            QVERIFY(!button(*surface, QStringLiteral("14K")));
+            QPushButton* preset = button(*surface, label);
+            QVERIFY(preset);
+            QVERIFY(!preset->isHidden());
+            QVERIFY(preset->isEnabled());
+            intents.clear();
+            preset->click();
+            QCOMPARE(intents.count(), 1);
+            QCOMPARE(intents.at(0).at(0).toInt(), low);
+            QCOMPARE(intents.at(0).at(1).toInt(), high);
+        }
+        QCOMPARE(AppSettings::instance().value(key).toString(), saved);
     }
 
     void fixedFmDoesNotAcquireAnAdjustableLadder()

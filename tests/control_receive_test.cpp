@@ -495,19 +495,6 @@ void productionCapabilityContracts()
         check(hl2Cw->minimumLowHz == -6000 && hl2Cw->maximumHighHz == 6000
                 && hl2Cwl->minimumLowHz == -6000 && hl2Cwl->maximumHighHz == 6000,
             "HL2 CW and CWL cuts leave room for the maximum CW pitch");
-        // A pair beyond the CW limit or not straddling the carrier is outside.
-        const auto accepts = [](const ReceiveFilterMode& r, int low, int high) {
-            const qint64 width = qint64(high) - low;
-            return low >= r.minimumLowHz && low <= r.maximumLowHz
-                && high >= r.minimumHighHz && high <= r.maximumHighHz
-                && width >= r.minimumWidthHz && width <= r.maximumWidthHz;
-        };
-        check(accepts(*hl2Cw, -250, 250) && accepts(*hl2Cwl, -250, 250)
-                && accepts(*hl2Fm, -8000, 8000) && accepts(*hl2Dsb, -3000, 3000),
-            "HL2 accepts the default CW, CWL, FM and DSB passbands");
-        check(!accepts(*hl2Cw, -7000, 250) && !accepts(*hl2Cwl, 100, 500)
-                && !accepts(*hl2Fm, -13000, 8000) && !accepts(*hl2Dsb, -5, 5),
-            "HL2 refuses cuts past the CW limit, off the carrier, past 12 kHz and too narrow");
     }
     check(!hl2Filter(QStringLiteral("WBFM")) && !hl2Filter(QStringLiteral("WFM"))
             && !hl2Filter(QStringLiteral("DRM")) && !hl2Filter(QStringLiteral("NFM"))
@@ -753,6 +740,57 @@ void productionCapabilityContracts()
 #endif
 }
 
+void hl2DeclaredFiltersDriveTheControlPlane()
+{
+    hl2::Hl2Backend hl2;
+    const RadioCapabilities caps = hl2.capabilities();
+    const auto expect = [&](const char* mode, int low, int high, const char* expected) {
+        Fixture f;
+        f.backend->caps.receiveModeControl = caps.receiveModeControl;
+        f.backend->caps.receiveFilterControl = caps.receiveFilterControl;
+        f.report(QString::fromLatin1(mode), -250, 250);
+        QJsonObject values = f.params(ReceiveOperation::Filter);
+        values.insert(QStringLiteral("lowHz"), low);
+        values.insert(QStringLiteral("highHz"), high);
+        const QJsonObject response = f.send(ReceiveOperation::Filter, values);
+        const QString actual = response.contains(QStringLiteral("result"))
+            ? QStringLiteral("result") : error(response);
+        if (actual != QString::fromLatin1(expected)) {
+            std::printf("%s filter %d:%d: expected %s, got %s\n",
+                        mode, low, high, expected, qPrintable(actual));
+        }
+        check(actual == QString::fromLatin1(expected),
+              "HL2 production filter record controls daemon admission");
+        if (QString::fromLatin1(expected) == QStringLiteral("result")) {
+            check(response.value("result").toObject().value("accepted").toBool()
+                      && f.backend->intents == 1 && f.backend->method == QStringLiteral("filter")
+                      && f.backend->args.value("low").toInt() == low
+                      && f.backend->args.value("high").toInt() == high
+                      && f.backend->filterOrigin == SliceFilterRequest::Origin::Operator,
+                  "accepted HL2 passband dispatches exactly one unchanged operator intent");
+        } else {
+            check(f.backend->intents == 0, "refused HL2 passband dispatches no backend intent");
+        }
+        check(f.backend->keys == 0, "HL2 filter admission never dispatches keying");
+    };
+    expect("CW", -250, 250, "result");
+    expect("CWL", -250, 250, "result");
+    expect("FM", -8000, 8000, "result");
+    expect("DSB", -3000, 3000, "result");
+    expect("CW", -6000, 6000, "result");
+    expect("CWL", -6000, 6000, "result");
+    expect("FM", -12000, 12000, "result");
+    expect("DSB", -10, 10, "result");
+    expect("CW", -6001, 250, "request.out_of_range");
+    expect("CWL", 100, 500, "request.out_of_range");
+    expect("FM", -12001, 8000, "request.out_of_range");
+    expect("DSB", -5, 5, "request.out_of_range");
+    expect("CW", -250, 0, "request.out_of_range");
+    expect("CWL", -250, 6001, "request.out_of_range");
+    expect("WBFM", -8000, 8000, "capability.unavailable");
+    expect("DRM", -3000, 3000, "capability.unavailable");
+}
+
 // THE STRANDING ITSELF, driven through the target that does the stranding.
 //
 // productionCapabilityContracts() above reads the HL2's receiveModeControl
@@ -901,6 +939,7 @@ int main(int argc, char** argv)
     delayedIdleCannotAuthorizeReceive();
     rangesAndBudget();
     productionCapabilityContracts();
+    hl2DeclaredFiltersDriveTheControlPlane();
     hl2DeclaredModesDriveTheControlPlane();
     return failures == 0 ? 0 : 1;
 }
