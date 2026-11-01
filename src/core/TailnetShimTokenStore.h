@@ -29,6 +29,11 @@ public:
                      QObject* context = nullptr,
                      std::function<void(bool persisted, const QString& error)> done = {});
     [[nodiscard]] static bool persistentStoreAvailable();
+    // What a finished keychain read yields: the read, unless a save happened
+    // while it ran, in which case that save's (newer) token, or none if the
+    // save deleted it. Public for its test.
+    [[nodiscard]] static QString pickLoadedToken(bool savedSinceReadStarted, const QString& read,
+                                                 const QString& sessionNow);
 };
 
 }  // namespace AetherSDR

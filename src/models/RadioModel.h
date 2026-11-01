@@ -7,6 +7,7 @@
 
 #include "core/backends/flex/CommandParser.h"   // MessageSeverity for radioMessageReceived
 #include "core/GuiClientRegistrationState.h"
+#include "models/LicenseEntitlement.h"
 #include "core/RadioSettingsScope.h"  // RFC #4603 radio-scoped feature documents
 #include "core/backends/GpsDelta.h"     // applyGpsChanges payload (aetherd 2.3)
 #include "core/backends/MemoryDelta.h"  // applyMemoryChanges payload (aetherd 2.3)
@@ -33,6 +34,7 @@
 #include "SliceModel.h"
 #include "MeterModel.h"
 #include "PanadapterModel.h"
+#include "PanBandTransitions.h"
 #include "ProfileLoadPanWriteQueue.h"
 #include "TunerModel.h"
 #include "AmpModel.h"
@@ -265,9 +267,20 @@ public:
 
     // License info (populated from "sub license all" responses)
     QString licenseRadioId()        const { return m_licenseRadioId; }
-    QString licenseExpirationDate() const { return m_licenseExpirationDate; }
+    QString licenseExpirationDate() const
+    {
+        return m_licenseSubscription.expiration.isValid()
+            ? m_licenseSubscription.expiration.date().toString(QStringLiteral("MM/dd/yyyy"))
+            : QString();
+    }
     QString licenseMaxVersion()     const { return m_licenseMaxVersion; }
-    QString licenseSubscription()   const { return m_licenseSubscription; }
+    QString licenseSubscription()   const
+    {
+        return m_licenseSubscription.label(QDateTime::currentDateTime());
+    }
+    // CW Autotune (`slice auto_tune`) is a SmartSDR+ feature the radio keeps
+    // after the subscription lapses; see LicenseEntitlement.h.
+    bool cwAutotuneLicensed() const;
     LicenseFeatureState licenseFeature(const QString& name) const;
     bool licenseFeatureSeen(const QString& name) const;
     // The radio refused a dvk command as unlicensed (50004001); the reliable
@@ -895,6 +908,11 @@ public:
     bool wakeIcomRadio(int modelId, int address, QString* error = nullptr);
     bool radioWakeActive() const { return m_radioWakeActive; }
     void connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort);
+    // SmartLink only reaches Flex radios. A session that last ran another family
+    // (IC-705, HL2) still holds that backend, which has no PanadapterStream for the
+    // WAN hole punch, so swap to Flex before the connect is requested. Returns false
+    // when no PanadapterStream is available afterwards.
+    bool prepareFlexBackendForWan();
     void setPendingClientDisconnects(const QList<quint32>& handles);
     bool disconnectClient(quint32 handle);
     // Called by MainWindow in response to multiFlexConflictDetected().
@@ -1297,7 +1315,13 @@ signals:
     // load deferral, so clients can order dependent radio commands around the
     // real `display pan set ... band=...` write.
     void panBandAboutToDispatch(const QString& panId);
+    // Emitted synchronously by removePanadapter() just before the remove
+    // command, while the pan can still be written to.
+    void panAboutToRemove(const QString& panId);
     void panBandDispatchFailed(const QString& panId);
+    // The pan's last outstanding band change has settled: its reply (or a
+    // dispatch failure) arrived, after the new band's own rates (#6791).
+    void panBandSettled(const QString& panId);
     // Emitted when createPanadapter() is blocked because the radio's pan limit is reached.
     void panadapterLimitReached(int limit, const QString& model);
     // Emitted when the radio rejects a slice create command (e.g. limit reached across
@@ -2123,10 +2147,12 @@ private:
     QString     m_region;
     std::optional<int> m_iaruRegion;
     QString     m_radioOptions;
+    // Clears every license record of the session, so the next radio inherits
+    // none of them, and emits licenseFeaturesChanged when anything was held.
+    void clearLicenseState();
     QString     m_licenseRadioId;
-    QString     m_licenseExpirationDate;
     QString     m_licenseMaxVersion;
-    QString     m_licenseSubscription;   // e.g. "SmartSDR+", "SmartSDR", "Unknown"
+    LicenseSubscriptionState m_licenseSubscription;
     QHash<QString, LicenseFeatureState> m_licenseFeatures;
     QString     m_ip;
     QString     m_netmask;
@@ -2592,8 +2618,8 @@ private:
     enum class NetState { Off, Excellent, VeryGood, Good, Fair, Poor };
     void applyAdaptiveFrameRate(NetState newState, NetState oldState);
     static int fpsCapForState(NetState s);  // single source of truth; see obs. 1 in PR review
-    // adaptiveWfRateForCap() moved to the public network-diagnostics section (#4261).
-    void sendAdaptiveCapToPan(const QString& panId, int fpsCap);
+    // adaptiveWfRateForCap() and sendAdaptiveCapToPan() are in the public
+    // network-diagnostics section (#4261).
     double networkQualityTargetScore(int pingMs) const;
     NetState networkStateForScore(double score, NetState currentState) const;
     bool usesRemoteNetworkThresholds() const;
@@ -2638,6 +2664,7 @@ private:
     static constexpr qint64 THROTTLE_MIN_DWELL_MS = 5000;
     qint64 m_lastThrottleEngageMs{0};   // QDateTime::currentMSecsSinceEpoch() at last engage
     bool   m_pendingThrottleLift{false}; // lift deferred by min-dwell; fired in evaluateNetworkQuality()
+    PanBandTransitions m_panBandTransitions;
 
     // Backend-reported transport stats for non-Flex families, which have no
     // m_connection/m_panStream. Populated only from
@@ -2708,6 +2735,14 @@ public:
     // cap's own status echo while distinguishing it from a real radio/profile
     // update (#4261).
     int     adaptiveWfRateForCap(int fpsCap) const;
+    // Send one pan the adaptive cap's FPS and waterfall rate. Public so
+    // MainWindow can put the cap back on after a band change while capped.
+    // Does nothing while the pan has a band change in flight.
+    void    sendAdaptiveCapToPan(const QString& panId, int fpsCap);
+    // True while a band change sent to this pan awaits its reply: the client
+    // does not hold the new band's rates yet (see PanBandTransitions).
+    bool    panBandInFlight(const QString& panId) const
+    { return m_panBandTransitions.inFlight(panId); }
     QString networkQuality()   const;
     int     packetLossWindowSeconds() const { return NETWORK_LOSS_WINDOW_SAMPLES; }
     int     packetLossWindowDrops() const { return m_packetLossWindowErrors; }

@@ -10,6 +10,7 @@
 #include <QString>
 
 #include <algorithm>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -113,6 +114,25 @@ public:
     static Range speedRange() { return readRange("speedLow", "speedHigh", kSpeedSpan, kSpeedDefault); }
     static void setPitchRange(int low, int high) { writeRange("pitchLow", "pitchHigh", low, high); }
     static void setSpeedRange(int low, int high) { writeRange("speedLow", "speedHigh", low, high); }
+
+    // The pitch range centred on the CW pitch: 300 Hz wide, shifted to stay
+    // inside the slider span (a pitch beyond the span gets the edge window).
+    static constexpr int kPitchHalfWidth = 150;
+    static constexpr Range pitchRangeAround(int pitchHz)
+    {
+        const int width = 2 * kPitchHalfWidth;
+        const int low = std::clamp(pitchHz - kPitchHalfWidth, kPitchSpan.low, kPitchSpan.high - width);
+        return Range{low, low + width};
+    }
+
+    // The range to apply for CW pitch `pitchHz`, or nothing to keep `current`:
+    // a range that already contains the pitch is kept (it may be the operator's),
+    // one that misses it is re-centred on the pitch.
+    static constexpr std::optional<Range> pitchRangeFor(int pitchHz, Range current)
+    {
+        if (current.low <= pitchHz && pitchHz <= current.high) return std::nullopt;
+        return pitchRangeAround(pitchHz);
+    }
 
     // One-shot migration from the legacy "CwDecodeOverlay" flat key.  Run
     // at startup before any caller reads the new blob.  Safe to call

@@ -3572,10 +3572,10 @@ void VfoWidget::relayoutToCurrentContent()
     }
 }
 
-void VfoWidget::setSmartSdrPlus(bool has)
+void VfoWidget::setCwAutotuneLicensed(bool licensed)
 {
-    if (m_hasSmartSdrPlus == has) return;
-    m_hasSmartSdrPlus = has;
+    if (m_cwAutotuneLicensed == licensed) return;
+    m_cwAutotuneLicensed = licensed;
     if (m_slice) rebuildFilterButtons();
 }
 
@@ -6392,7 +6392,7 @@ void VfoWidget::rebuildFilterButtons()
             "QPushButton:pressed { background: #00607a; }"
             "QPushButton:checked { background: #00607a; color: #e0f0ff; border-color: #00b4d8; }";
 
-        if (m_hasSmartSdrPlus) {
+        if (m_cwAutotuneLicensed) {
             m_autotuneOnceBtn = new QPushButton("Once");
             m_autotuneOnceBtn->setFixedHeight(26);
             m_autotuneOnceBtn->setStyleSheet(btnStyle);
