@@ -26,7 +26,7 @@ import (
 	"time"
 )
 
-const probeVersion = "0.1.0"
+const probeVersion = "0.1.1"
 
 // Report is everything the probe found. It holds no secrets (environment
 // values only for allowlisted names) and leaves out the hostname, which on a
@@ -46,18 +46,21 @@ type Report struct {
 
 // Summary is the handful of answers the report exists for.
 type Summary struct {
-	Arch           string   `json:"arch"`
-	Kernel         string   `json:"kernel"`
-	CPUModel       string   `json:"cpu_model"`
-	Cores          int      `json:"cores"`
-	MemTotalMB     int64    `json:"mem_total_mb"`
-	MemAvailableMB int64    `json:"mem_available_mb"`
-	CPUIdlePct     float64  `json:"cpu_idle_pct"`
-	ChaChaMBps     float64  `json:"chacha20poly1305_mb_per_s"`
-	UID            int      `json:"uid"`
-	WritableDirs   []string `json:"writable_dirs"`
-	SurvivedReboot []string `json:"dirs_whose_marker_survived_a_reboot"`
-	BootsSeen      int      `json:"boots_seen_by_markers"`
+	Arch           string `json:"arch"`
+	Kernel         string `json:"kernel"`
+	CPUModel       string `json:"cpu_model"`
+	Cores          int    `json:"cores"`
+	MemTotalMB     int64  `json:"mem_total_mb"`
+	MemAvailableMB int64  `json:"mem_available_mb"`
+	// MemAvailableEstimated: the kernel predates MemAvailable (Linux 3.14),
+	// so mem_available_mb is MemFree+Buffers+Cached, as free(1) did.
+	MemAvailableEstimated bool     `json:"mem_available_estimated,omitempty"`
+	CPUIdlePct            float64  `json:"cpu_idle_pct"`
+	ChaChaMBps            float64  `json:"chacha20poly1305_mb_per_s"`
+	UID                   int      `json:"uid"`
+	WritableDirs          []string `json:"writable_dirs"`
+	SurvivedReboot        []string `json:"dirs_whose_marker_survived_a_reboot"`
+	BootsSeen             int      `json:"boots_seen_by_markers"`
 	// RunsThisBoot counts starts in this boot from the markers: above 1,
 	// the radio relaunches an exited waveform.
 	RunsThisBoot        int               `json:"runs_this_boot"`
@@ -163,22 +166,23 @@ func collect(ctx context.Context, radioAPI bool) *Report {
 
 func summarize(r *Report) Summary {
 	s := Summary{
-		Arch:           r.System.Machine,
-		Kernel:         r.System.KernelRelease,
-		CPUModel:       r.System.CPUModel,
-		Cores:          r.System.Cores,
-		MemTotalMB:     r.System.Mem["MemTotal"] / 1024,
-		MemAvailableMB: r.System.Mem["MemAvailable"] / 1024,
-		CPUIdlePct:     r.Load.IdlePct,
-		ChaChaMBps:     r.Bench.ChaCha20Poly1305MBps,
-		UID:            r.Identity.UID,
-		InternetTCP:    r.Network.ControlTCP.OK,
-		InternetTLS:    r.Network.ControlTLS.OK,
-		ShimPortsFree:  true,
+		Arch:          r.System.Machine,
+		Kernel:        r.System.KernelRelease,
+		CPUModel:      r.System.CPUModel,
+		Cores:         r.System.Cores,
+		MemTotalMB:    r.System.Mem["MemTotal"] / 1024,
+		CPUIdlePct:    r.Load.IdlePct,
+		ChaChaMBps:    r.Bench.ChaCha20Poly1305MBps,
+		UID:           r.Identity.UID,
+		InternetTCP:   r.Network.ControlTCP.OK,
+		InternetTLS:   r.Network.ControlTLS.OK,
+		ShimPortsFree: true,
 		// Empty, not null, so a reader sees "none" rather than "unknown".
 		WritableDirs:   []string{},
 		SurvivedReboot: []string{},
 	}
+	s.MemAvailableMB, s.MemAvailableEstimated = memAvailableKB(r.System.Mem)
+	s.MemAvailableMB /= 1024
 	bootSet := map[string]bool{}
 	for _, d := range r.Storage.Dirs {
 		if d.Writable {
@@ -227,4 +231,13 @@ func summarize(r *Report) Summary {
 		}
 	}
 	return s
+}
+
+// memAvailableKB is MemAvailable, or on a kernel older than 3.14 (the
+// FLEX-6300 runs 2.6.37) the older free(1) estimate.
+func memAvailableKB(mem map[string]int64) (int64, bool) {
+	if v, ok := mem["MemAvailable"]; ok {
+		return v, false
+	}
+	return mem["MemFree"] + mem["Buffers"] + mem["Cached"], true
 }
