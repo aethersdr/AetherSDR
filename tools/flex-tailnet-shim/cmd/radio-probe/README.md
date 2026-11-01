@@ -19,6 +19,7 @@ On every start it collects a report and serves it for 30 minutes at
 | Who it runs as | UID/GID, capabilities, seccomp, cgroup, limits, parent process |
 | Where the shim could keep state | Writes `.aether-radio-probe-marker` in its own install directory and each usual writable place; the radio's waveform store and its parents (`/var/lib/smartsdr`, `…/waveforms`) are only checked with `access(2)`, never written |
 | Does that state survive a reboot | Each marker lists the boots that saw it; the run after a reboot reports which survived |
+| What fills the waveform store | `storage.waveform_store`: each installed waveform's size, read-only |
 | Does the radio relaunch it | `runs_this_boot` above 1 means the radio restarted it after it exited |
 | Internet | DNS, TCP and a verified TLS handshake to the Tailscale control plane, STUN to DERP |
 | Shim ports | Binds TCP 48992/48993 and UDP 41641, then lists everything listening |

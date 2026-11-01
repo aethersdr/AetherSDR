@@ -47,10 +47,9 @@ cleanup command removes every trace.
    Or, from Python:
    `python3 -I upload.py --host <radio-ip> --install AetherRadioProbe.ssdr_waveform`
    Note how long it takes, and whether AetherRadioProbe appears in the
-   waveform list without a reboot. On a FLEX-6300 it uploaded in under a
-   second and was running 45 seconds later with no reboot; other 6000 users
-   have reported 4–5 minutes and a reboot. If it isn't listed after 10
-   minutes, reboot the radio.
+   waveform list without a reboot. On a FLEX-6300 and a FLEX-6700 it
+   uploaded in under a second and was running 12–45 seconds later with no
+   reboot. If it isn't listed after 10 minutes, reboot the radio.
 3. **First report.** Once it's listed, wait 2 minutes, then
    `python3 -I upload.py --host <radio-ip> --report boot1.json`
    or open `http://<radio-ip>:48994/` in a browser and save the page as
@@ -91,6 +90,13 @@ To compare against, a FLEX-6300 on SmartSDR 4.2.18 reported:
 - **Lifecycle:** running 45 s after upload with no reboot, and restarted itself at boot.
 - **Persistent storage:** `/user/waveforms/AetherRadioProbe` (ext2, 41 MB free) and `/var/tmp` (ext3) kept their markers across a power cycle.
 - **UDP source:** `127.0.0.1:4992` → `127.0.0.1:4993`, and the same pattern for each address.
+
+A FLEX-6700 on SmartSDR 4.3.16 had the same computer (same kernel, one
+Cortex-A8 core, 469 MB) and the same answers, with two differences:
+
+- **CPU:** SmartSDR took about 51% of the core and ChaCha ran at 7.1 MB/s.
+- **Space:** its `/user` partition is only 19 MB, and was full with the
+  probe's 12.8 MB installed, so about 13 MB was free beforehand.
 
 Go 1.27 documents Linux 3.2 as its minimum, but the probe ran on that 2.6.37
 kernel. Probe 0.1.0 reported `mem_available_mb: 0` on it, because kernels

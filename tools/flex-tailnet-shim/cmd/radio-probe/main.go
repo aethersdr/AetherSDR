@@ -26,7 +26,7 @@ import (
 	"time"
 )
 
-const probeVersion = "0.1.1"
+const probeVersion = "0.1.2"
 
 // Report is everything the probe found. It holds no secrets (environment
 // values only for allowlisted names) and leaves out the hostname, which on a

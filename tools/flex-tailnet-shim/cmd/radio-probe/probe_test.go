@@ -190,3 +190,18 @@ func TestMemAvailableFallsBackOnOldKernels(t *testing.T) {
 		t.Fatalf("new kernel: %d %v", kb, est)
 	}
 }
+
+func TestStoreUsageSizesEachWaveform(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "A", "sub"), 0o755)
+	os.WriteFile(filepath.Join(dir, "A", "x"), make([]byte, 100), 0o644)
+	os.WriteFile(filepath.Join(dir, "A", "sub", "y"), make([]byte, 50), 0o644)
+	os.MkdirAll(filepath.Join(dir, "B"), 0o755)
+	got := storeUsage(dir)
+	if len(got) != 2 || got[0].Name != "A" || got[0].Bytes != 150 || got[0].Files != 2 || got[1].Bytes != 0 {
+		t.Fatalf("got %+v", got)
+	}
+	if e := storeUsage(filepath.Join(dir, "missing")); len(e) != 1 || e[0].Error == "" {
+		t.Fatalf("missing store: %+v", e)
+	}
+}

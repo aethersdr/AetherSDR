@@ -74,6 +74,51 @@ func identityInfo() IdentityInfo {
 type StorageInfo struct {
 	Mounts string     `json:"mounts"`
 	Dirs   []DirCheck `json:"dirs"`
+	// Store is what occupies the waveform store this probe was installed
+	// in: the space a native shim has to share.
+	Store []StoreEntry `json:"waveform_store"`
+}
+
+// StoreEntry is one waveform in the store and the bytes it holds.
+type StoreEntry struct {
+	Name  string `json:"name"`
+	Bytes int64  `json:"bytes"`
+	Files int    `json:"files"`
+	Error string `json:"error,omitempty"`
+}
+
+// storeUsage sizes each entry of dir, read-only, stopping at a bounded
+// number of files so a large store can't stall the report.
+func storeUsage(dir string) []StoreEntry {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return []StoreEntry{{Name: dir, Error: err.Error()}}
+	}
+	var out []StoreEntry
+	budget := 20000
+	for _, e := range ents {
+		se := StoreEntry{Name: e.Name()}
+		err := filepath.WalkDir(filepath.Join(dir, e.Name()), func(_ string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil // unreadable: count what we can
+			}
+			if budget--; budget < 0 {
+				return filepath.SkipAll
+			}
+			if d.Type().IsRegular() {
+				if fi, err := d.Info(); err == nil {
+					se.Bytes += fi.Size()
+					se.Files++
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			se.Error = err.Error()
+		}
+		out = append(out, se)
+	}
+	return out
 }
 
 type DirCheck struct {
@@ -197,6 +242,9 @@ func storageInfo(bootID string, dirs []string) StorageInfo {
 	mountsText := readTrim("/proc/self/mounts", 16384)
 	mounts := parseMounts(mountsText)
 	s := StorageInfo{Mounts: mountsText}
+	if exe, err := os.Executable(); err == nil {
+		s.Store = storeUsage(filepath.Dir(filepath.Dir(exe)))
+	}
 	exe, _ := os.Executable()
 	run := markerRun{BootID: bootID, Time: time.Now().UTC(), Exe: exe}
 	for _, d := range dirs {
