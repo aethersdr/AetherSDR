@@ -223,7 +223,6 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 
 ## Existing dialogs that follow this pattern (look at these for reference)
 
-- `src/gui/MemoryDialog.{h,cpp}`
 - `src/gui/AetherDspDialog.{h,cpp}`
 - `src/gui/MidiMappingDialog.{h,cpp}`
 - `src/gui/PanLayoutDialog.{h,cpp}`
@@ -234,7 +233,7 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 A window built on `CanonWindow` (`src/gui/CanonWindow.{h,cpp}`, RFC #6226)
 deliberately opts out of frameless chrome integration, and by default of
 geometry persistence too. About AetherSDR, Remote Access (Tailscale),
-Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Radio Setup, TX Band Settings, Callsign Lookup, Connect to Radio (`ConnectionPanel`), AGC-T Calibration, Icom RC-28 Button Mapping, NR2's FFTW Wisdom window, MQTT Settings, Keyboard Shortcuts (`ShortcutDialog`), Ulanzi Dial — Control Mapping, Net Scheduler and the AetherRX / AetherTX Settings (profile library) dialogs are built on it.
+Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Radio Setup, TX Band Settings, Callsign Lookup, Connect to Radio (`ConnectionPanel`), AGC-T Calibration, Icom RC-28 Button Mapping, NR2's FFTW Wisdom window, MQTT Settings, Keyboard Shortcuts (`ShortcutDialog`), Ulanzi Dial — Control Mapping, Net Scheduler, Memory Channels and the AetherRX / AetherTX Settings (profile library) dialogs are built on it.
 
 | Concern | `CanonWindow` | Why |
 |---|---|---|
@@ -271,7 +270,7 @@ What it keeps:
 It is translucent, so the rounded corners need a compositor; an X11 session
 without one shows square black corners. Use `CanonWindow` only for windows the
 style guide covers: short-lived windows, and the tool windows the maintainer
-has moved to it (Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Icom RC-28 Button Mapping, Radio Setup, TX Band Settings, FFTW Wisdom, Callsign Lookup, Ulanzi Dial — Control Mapping, Net Scheduler). A tool window on it also
+has moved to it (Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Icom RC-28 Button Mapping, Radio Setup, TX Band Settings, FFTW Wisdom, Callsign Lookup, Ulanzi Dial — Control Mapping, Net Scheduler, Memory Channels). A tool window on it also
 installs `FramelessResizer`, since `CanonWindow` itself only moves, unless its
 contents are placed at fixed positions: Ulanzi Dial — Control Mapping keeps a
 fixed size, because its pills sit at fixed points on the dial picture. A

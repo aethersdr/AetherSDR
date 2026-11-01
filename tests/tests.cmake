@@ -8083,9 +8083,13 @@ add_executable(stored_control_dialogs_test
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/MemoryDialog.cpp
     src/gui/MemoryCommands.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
+    ${THEME_TEST_RESOURCES}
 )
 target_include_directories(stored_control_dialogs_test PRIVATE src tests)
 target_link_libraries(stored_control_dialogs_test PRIVATE aethercore Qt6::Core Qt6::Widgets Qt6::Test)

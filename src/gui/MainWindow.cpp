@@ -5015,9 +5015,18 @@ void MainWindow::hideConnectionDialog()
 
 void MainWindow::showMemoryDialog()
 {
+    // A canon workspace window: created directly rather than through
+    // showOrRaisePersistent(), which would apply View → Frameless Window.
     const bool wasFresh = !m_memoryDialog;
-    showOrRaisePersistent(m_memoryDialog, &m_radioModel);
-    if (wasFresh && m_memoryDialog) {
+    if (wasFresh) {
+        auto* dlg = new MemoryDialog(&m_radioModel, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_memoryDialog = dlg;
+    }
+    m_memoryDialog->show();
+    m_memoryDialog->raise();
+    m_memoryDialog->activateWindow();
+    if (wasFresh) {
         connect(m_memoryDialog.data(), &MemoryDialog::memoryActivated,
                 this, [this](int memoryIndex) { activateMemorySpot(memoryIndex); });
         connect(m_memoryDialog.data(), &QObject::destroyed, this, [this] {
