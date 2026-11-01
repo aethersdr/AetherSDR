@@ -15,13 +15,13 @@ namespace AetherSDR {
 //
 // Bump all four together when a new shim release is published.
 struct TailnetShimRelease {
-    static constexpr const char* kVersion = "0.4.1";
+    static constexpr const char* kVersion = "0.5.0";
     static constexpr const char* kUrl =
         "https://github.com/aethersdr/AetherSDR/releases/download/"
-        "flex-tailnet-shim-v0.4.1/flex-tailnet-shim-0.4.1.tar.gz";
+        "flex-tailnet-shim-v0.5.0/flex-tailnet-shim-0.5.0.tar.gz";
     static constexpr const char* kSha256 =
-        "ed37c0e3b65a239a3a759e2b030a42be71c69ea4c37bdd149e1bce3f46bed35b";
-    static constexpr qint64 kSize = 8055196;
+        "68f50ae8c257214984c43b55fe42dba46fdb57ab24a44bc3c49e6786aaf7cd61";
+    static constexpr qint64 kSize = 8066394;
 };
 
 }  // namespace AetherSDR
