@@ -34,6 +34,34 @@ Model* radioStillChosen(const QPointer<Model>& model, const Session& chosen)
     return model && model->controlSessionCurrent(chosen) ? model.data() : nullptr;
 }
 
+// Why "Install radio health tools" (and its readout) is unavailable, or
+// None. The agent is a legacy waveform answering on the radio's LAN
+// address, so it needs a connected radio that takes waveforms, reached
+// directly over its local network (not SmartLink, whose remembered LAN
+// address may still look private).
+enum class RadioHealthBlocker {
+    None,
+    NotConnected,
+    NoWaveforms,    // this radio family installs no waveforms
+    Remote,         // a SmartLink (WAN) session
+    NotLan,         // reached at a non-private address (e.g. over a tailnet)
+};
+
+inline RadioHealthBlocker radioHealthBlocker(bool connected, bool hasWaveforms,
+                                             bool wan, bool lanAddress)
+{
+    if (!connected) {
+        return RadioHealthBlocker::NotConnected;
+    }
+    if (!hasWaveforms) {
+        return RadioHealthBlocker::NoWaveforms;
+    }
+    if (wan) {
+        return RadioHealthBlocker::Remote;
+    }
+    return lanAddress ? RadioHealthBlocker::None : RadioHealthBlocker::NotLan;
+}
+
 // Why "Install -> Docker Waveform Image..." is blocked, or None (#4210).
 // Follows live WFP runtime state plus the no-WFP-hardware check, NOT the
 // FlexLib "wfp" license feature: a radio with WFP powered and ready can report

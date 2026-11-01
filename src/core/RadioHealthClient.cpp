@@ -18,6 +18,9 @@ namespace AetherSDR {
 namespace {
 constexpr int kTimeoutMs = 3000;
 constexpr qsizetype kMaxReply = 4096;   // the agent's line is under 1 KB
+// /proc/meminfo counts KiB. 2^40 KiB (1 PiB) is far beyond any radio and
+// keeps the byte conversion (x 1024) well inside qint64.
+constexpr qint64 kMaxMemKb = qint64(1) << 40;
 }  // namespace
 
 namespace radiohealth {
@@ -38,8 +41,13 @@ std::optional<RadioHealth> parse(const QByteArray& line)
     const int idle = o.value(QStringLiteral("cpu_idle_pct")).toInt(-1);
     h.cpuIdlePct = idle >= 0 && idle <= 100 ? idle : -1;
     h.cpuCores = qBound(0, o.value(QStringLiteral("cpu_cores")).toInt(0), 1024);
-    h.memTotalKb = o.value(QStringLiteral("mem_total_kb")).toInteger(-1);
-    h.memAvailableKb = o.value(QStringLiteral("mem_available_kb")).toInteger(-1);
+    // Out-of-range memory is dropped, not formatted: a total outside
+    // 1..kMaxMemKb, or available memory outside 0..total.
+    const qint64 total = o.value(QStringLiteral("mem_total_kb")).toInteger(-1);
+    h.memTotalKb = total >= 1 && total <= kMaxMemKb ? total : -1;
+    const qint64 avail = o.value(QStringLiteral("mem_available_kb")).toInteger(-1);
+    const qint64 ceiling = h.memTotalKb > 0 ? h.memTotalKb : kMaxMemKb;
+    h.memAvailableKb = avail >= 0 && avail <= ceiling ? avail : -1;
     h.memEstimated = o.value(QStringLiteral("mem_estimated")).toBool(false);
     for (const QJsonValue& v : o.value(QStringLiteral("storage")).toArray()) {
         const QJsonObject s = v.toObject();
@@ -76,7 +84,7 @@ QString resourceSummary(const RadioHealth& h)
     const QLocale locale;
     QStringList parts;
     if (h.memAvailableKb >= 0) {
-        const QString size = locale.formattedDataSize(h.memAvailableKb * 1000, 1,
+        const QString size = locale.formattedDataSize(h.memAvailableKb * 1024, 1,
                                                       QLocale::DataSizeSIFormat);
         parts << (h.memEstimated ? QObject::tr("Memory about %1 free").arg(size)
                                  : QObject::tr("Memory %1 free").arg(size));
@@ -129,11 +137,36 @@ QString writeBundledPackage(const QString& dir, QString* error, const QString& r
     return target;
 }
 
+bool isLanIpv4(const QHostAddress& address)
+{
+    return !address.isNull() && address.protocol() == QAbstractSocket::IPv4Protocol
+        && (address.isPrivateUse() || address.isLinkLocal());
+}
+
 }  // namespace radiohealth
 
 RadioHealthClient::RadioHealthClient(QObject* parent)
     : QObject(parent)
 {
+}
+
+void RadioHealthClient::setRadioAddress(const QHostAddress& address)
+{
+    if (address != m_address) {
+        cancel();
+        m_address = address;
+    }
+}
+
+void RadioHealthClient::cancel()
+{
+    ++m_generation;
+    if (QTcpSocket* socket = m_socket) {
+        m_socket = nullptr;
+        socket->disconnect(this);
+        socket->abort();
+        socket->deleteLater();
+    }
 }
 
 void RadioHealthClient::fetch()
@@ -142,6 +175,7 @@ void RadioHealthClient::fetch()
         return;
     }
     m_buffer.clear();
+    m_readGeneration = m_generation;
     auto* socket = new QTcpSocket(this);
     m_socket = socket;
     connect(socket, &QTcpSocket::readyRead, this, [this, socket] {
@@ -172,8 +206,16 @@ void RadioHealthClient::finish()
     socket->disconnect(this);
     socket->abort();
     socket->deleteLater();
-    const qsizetype end = m_buffer.indexOf('\n');
-    if (const auto health = end < 0 ? std::nullopt : radiohealth::parse(m_buffer.left(end))) {
+    deliver(m_buffer, m_readGeneration);
+}
+
+void RadioHealthClient::deliver(const QByteArray& reply, quint64 generation)
+{
+    if (generation != m_generation) {
+        return;   // retired by cancel() or a new address
+    }
+    const qsizetype end = reply.indexOf('\n');
+    if (const auto health = end < 0 ? std::nullopt : radiohealth::parse(reply.left(end))) {
         emit received(*health);
     } else {
         emit failed(tr("The radio health tools didn't answer."));

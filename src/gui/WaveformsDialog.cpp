@@ -1442,8 +1442,6 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     healthLayout->setSpacing(16);
     m_healthCheck = new QCheckBox(tr("Install radio health tools"), healthFrame);
     m_healthCheck->setAccessibleName(tr("Install radio health tools"));
-    m_healthCheck->setToolTip(tr("Installs a small tool on the radio (about 63 KB) that reports "
-                                 "its free storage, memory and CPU here."));
     m_healthLabel = new QLabel(healthFrame);
     m_healthLabel->setObjectName(QStringLiteral("RadioHealthReadout"));
     m_healthLabel->setAccessibleName(tr("Radio health"));
@@ -1461,6 +1459,9 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
 
     m_healthClient = new RadioHealthClient(this);
     connect(m_healthClient, &RadioHealthClient::received, this, [this](const RadioHealth& h) {
+        if (!m_healthTimer->isActive()) {
+            return;   // the bar stopped reading (disconnect, uninstall, another radio)
+        }
         const QString storage = radiohealth::storageSummary(h);
         const QString resources = radiohealth::resourceSummary(h);
         m_healthLabel->setText(storage.isEmpty() && resources.isEmpty()
@@ -1481,6 +1482,9 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
         m_healthResourceLabel->setToolTip(m_healthLabel->toolTip());
     });
     connect(m_healthClient, &RadioHealthClient::failed, this, [this](const QString&) {
+        if (!m_healthTimer->isActive()) {
+            return;
+        }
         m_healthLabel->setText(tr("Waiting for the radio health tools to answer…"));
         m_healthLabel->setToolTip({});
         m_healthResourceLabel->hide();
@@ -1812,28 +1816,53 @@ void WaveformsDialog::updateHealthBar()
     }
     // The agent answers only on the radio's local network.
     const QHostAddress address = m_radioModel->radioAddress();
-    const bool lan = m_radioModel->isConnected() && !address.isNull()
-        && address.protocol() == QAbstractSocket::IPv4Protocol
-        && (address.isPrivateUse() || address.isLinkLocal());
+    const RadioHealthBlocker blocker = radioHealthBlocker(
+        m_radioModel->isConnected(), m_radioModel->backendCapabilities().hasWaveforms,
+        m_radioModel->isWan(), radiohealth::isLanIpv4(address));
+    const bool available = blocker == RadioHealthBlocker::None;
     const bool busy = m_healthBusy || (m_installer && m_installer->isInstalling());
     {
         const QSignalBlocker block(m_healthCheck);
         m_healthCheck->setChecked(installed);
     }
-    m_healthCheck->setEnabled(lan && !busy);
-    m_healthClient->setRadioAddress(lan ? address : QHostAddress());
+    m_healthCheck->setEnabled(available && !busy);
+    // A changed or cleared address also retires a read in flight.
+    m_healthClient->setRadioAddress(available ? address : QHostAddress());
 
+    QString reason;
+    switch (blocker) {
+    case RadioHealthBlocker::NotConnected:
+        reason = tr("Connect to a radio to see its storage, memory and CPU.");
+        break;
+    case RadioHealthBlocker::NoWaveforms:
+        reason = tr("This radio doesn't take waveforms, so it can't run the radio health tools.");
+        break;
+    case RadioHealthBlocker::Remote:
+        reason = tr("Radio health is shown only on the radio's local network, not over "
+                    "SmartLink.");
+        break;
+    case RadioHealthBlocker::NotLan:
+        reason = tr("Radio health is shown only on the radio's local network.");
+        break;
+    case RadioHealthBlocker::None:
+        break;
+    }
     if (busy) {
         m_healthLabel->setText(installed ? tr("Removing the radio health tools…")
                                          : tr("Installing the radio health tools…"));
-    } else if (!m_radioModel->isConnected()) {
-        m_healthLabel->setText(tr("Connect to a radio to see its storage, memory and CPU."));
-    } else if (!lan) {
-        m_healthLabel->setText(tr("Radio health is shown only on the radio's local network."));
+    } else if (!reason.isEmpty()) {
+        m_healthLabel->setText(reason);
     } else if (!installed) {
         m_healthLabel->setText(tr("Shows the radio's free storage, memory and CPU here."));
     }
-    const bool reading = installed && lan && !busy;
+    // The reason a disabled checkbox gives, on the accessible channel too (#4896).
+    m_healthCheck->setAccessibleDescription(
+        busy ? m_healthLabel->text()
+             : !reason.isEmpty() ? reason
+             : tr("Installs a small tool on the radio (about 110 KB) that reports its free "
+                  "storage, memory and CPU here."));
+    m_healthCheck->setToolTip(m_healthCheck->accessibleDescription());
+    const bool reading = installed && available && !busy;
     if (!reading) {
         m_healthLabel->setToolTip({});
         m_healthResourceLabel->hide();
@@ -1847,12 +1876,20 @@ void WaveformsDialog::updateHealthBar()
         }
     } else {
         m_healthTimer->stop();
+        m_healthClient->cancel();
     }
 }
 
 void WaveformsDialog::onHealthToggled(bool install)
 {
-    if (!m_radioModel || !m_radioModel->isConnected() || m_healthBusy) {
+    // The same admission as the checkbox's enabled state: never dispatch to a
+    // radio the bar would refuse.
+    if (!m_radioModel || m_healthBusy
+        || radioHealthBlocker(m_radioModel->isConnected(),
+                              m_radioModel->backendCapabilities().hasWaveforms,
+                              m_radioModel->isWan(),
+                              radiohealth::isLanIpv4(m_radioModel->radioAddress()))
+               != RadioHealthBlocker::None) {
         updateHealthBar();
         return;
     }

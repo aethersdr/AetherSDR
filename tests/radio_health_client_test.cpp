@@ -12,6 +12,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QHostAddress>
 #include <QLocale>
 #include <QTemporaryDir>
 
@@ -20,6 +21,13 @@
 using namespace AetherSDR;
 
 namespace {
+
+// Reaches the client's read fence without a socket.
+class FenceProbe : public RadioHealthClient {
+public:
+    using RadioHealthClient::deliver;
+    using RadioHealthClient::generation;
+};
 
 int g_failed = 0;
 
@@ -71,8 +79,8 @@ int main(int argc, char** argv)
     check(six && six->cpuIdlePct == -1 && six->memEstimated, "6000 reply parses");
     if (six) {
         check(radiohealth::summary(*six)
-                  == QStringLiteral("Storage 7 MB free · Memory about 270.0 MB free"),
-              "unknown CPU left out; estimated memory says about");
+                  == QStringLiteral("Storage 7 MB free · Memory about 276.5 MB free"),
+              "unknown CPU left out; estimated memory says about; kB are KiB (270000 x 1024)");
     }
 
     check(!radiohealth::parse("not json"), "garbage refused");
@@ -97,6 +105,57 @@ int main(int argc, char** argv)
               && radiohealth::summary(*noVolumes) == QStringLiteral("CPU 5% idle"),
           "no readable volume: storage left out");
 
+
+    // Memory from the radio is range-checked before any arithmetic.
+    const auto huge = radiohealth::parse(
+        R"({"agent":"0.1.0","mem_available_kb":9223372036854775807,"storage":[]})");
+    check(huge && huge->memAvailableKb == -1 && radiohealth::summary(*huge).isEmpty(),
+          "an impossible amount of memory is dropped, not formatted (no overflow)");
+    const auto over = radiohealth::parse(
+        R"({"agent":"0.1.0","mem_total_kb":1,"mem_available_kb":1000000,"storage":[]})");
+    check(over && over->memTotalKb == 1 && over->memAvailableKb == -1,
+          "available memory above the total is dropped");
+    const auto badTotal = radiohealth::parse(
+        R"({"agent":"0.1.0","mem_total_kb":-5,"mem_available_kb":1000,"storage":[]})");
+    check(badTotal && badTotal->memTotalKb == -1 && badTotal->memAvailableKb == 1000,
+          "a bad total is dropped; available memory still stands on its own bound");
+    const auto negative = radiohealth::parse(
+        R"({"agent":"0.1.0","mem_total_kb":100,"mem_available_kb":-1,"storage":[]})");
+    check(negative && negative->memAvailableKb == -1, "negative available memory is dropped");
+
+    check(radiohealth::isLanIpv4(QHostAddress(QStringLiteral("192.168.50.100")))
+              && radiohealth::isLanIpv4(QHostAddress(QStringLiteral("10.0.0.2")))
+              && radiohealth::isLanIpv4(QHostAddress(QStringLiteral("169.254.1.1"))),
+          "private and link-local IPv4 are the LAN");
+    check(!radiohealth::isLanIpv4(QHostAddress(QStringLiteral("100.83.76.76")))
+              && !radiohealth::isLanIpv4(QHostAddress(QStringLiteral("8.8.8.8")))
+              && !radiohealth::isLanIpv4(QHostAddress(QStringLiteral("fd00::1")))
+              && !radiohealth::isLanIpv4(QHostAddress()),
+          "a tailnet, public, IPv6 or empty address is not");
+
+    // A retired read never reaches the window.
+    {
+        FenceProbe client;
+        int received = 0;
+        int failed = 0;
+        QObject::connect(&client, &RadioHealthClient::received, [&] { ++received; });
+        QObject::connect(&client, &RadioHealthClient::failed, [&] { ++failed; });
+        client.setRadioAddress(QHostAddress(QStringLiteral("192.168.50.100")));
+        const quint64 read = client.generation();
+        client.deliver(flex8600 + '\n', read);
+        check(received == 1, "the current read delivers");
+        client.cancel();
+        client.deliver(flex8600 + '\n', read);
+        client.deliver("garbage\n", read);
+        check(received == 1 && failed == 0, "after cancel() the old read is silent, even its failure");
+        const quint64 next = client.generation();
+        client.setRadioAddress(QHostAddress(QStringLiteral("192.168.50.101")));
+        client.deliver(flex8600 + '\n', next);
+        check(received == 1, "a new radio address retires the read in flight");
+        client.setRadioAddress(QHostAddress(QStringLiteral("192.168.50.101")));
+        client.deliver(flex8600 + '\n', client.generation());
+        check(received == 2, "the same address keeps the current read");
+    }
 
     check(isRadioHealthWaveform(QStringLiteral("AetherHealth"), false),
           "the agent's legacy row is recognized");
