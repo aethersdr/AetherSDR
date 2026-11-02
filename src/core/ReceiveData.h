@@ -78,6 +78,7 @@ struct ReceiveStreamStats {
         qint64 bytes = 0;
         int packets = 0;
         int errors = 0;
+        int late = 0;
     };
 };
 

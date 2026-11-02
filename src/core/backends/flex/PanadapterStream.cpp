@@ -577,7 +577,7 @@ void PanadapterStream::publishReceiveTelemetry()
     }
     for (int i = 0; i < CatCount; ++i) {
         const CategoryStats counters = categoryStats(static_cast<StreamCategory>(i));
-        snapshot.categories[i] = {counters.bytes, counters.packets, counters.errors};
+        snapshot.categories[i] = {counters.bytes, counters.packets, counters.errors, counters.late};
     }
     m_receiveData->telemetry(std::move(snapshot));
 }

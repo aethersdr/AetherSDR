@@ -67,6 +67,10 @@ public:
         snapshot.categories[ReceiveStreamStats::Spectrum] = {2048, 20, 1};
         backend.m_receiveData->telemetry(snapshot);
     }
+    static void publishTelemetry(PanadapterStream& stream)
+    {
+        stream.publishReceiveTelemetry();
+    }
 };
 }
 namespace {
@@ -145,6 +149,37 @@ void meterClock()
           "clear inside a meter callback cannot resurrect the rest of the batch");
 
 }
+
+void latePacketTelemetry()
+{
+    RadioModel radio;
+    auto* backend = dynamic_cast<FlexBackend*>(radio.backend());
+    check(backend != nullptr, "Flex backend available for late-packet telemetry");
+    if (!backend) { return; }
+    PanadapterStream* stream = backend->panStream();
+    FlexReceiveDataTestAccess::begin(*backend);
+    stream->registerPanStream(1);
+    stream->registerWfStream(2);
+    QMetaObject::invokeMethod(stream, [&] {
+        FlexReceiveDataTestAccess::fft(*stream, 1, 2);
+        FlexReceiveDataTestAccess::fft(*stream, 1, 1);
+        FlexReceiveDataTestAccess::waterfall(*stream, 2, 2);
+        FlexReceiveDataTestAccess::waterfall(*stream, 2, 1);
+        FlexReceiveDataTestAccess::waterfall(*stream, 2, 1);
+        FlexReceiveDataTestAccess::publishTelemetry(*stream);
+    }, Qt::BlockingQueuedConnection);
+    drain();
+    check(radio.categoryStats(ReceiveStreamStats::Spectrum).late == 1
+          && radio.categoryStats(ReceiveStreamStats::Waterfall).late == 2,
+          "decoder late-packet counts reach model diagnostics through telemetry");
+    check(radio.categoryStats(ReceiveStreamStats::Spectrum).errors == 0
+          && radio.categoryStats(ReceiveStreamStats::Waterfall).errors == 0,
+          "late-packet counts remain separate from sequence errors");
+    backend->retireReceiveData();
+    check(radio.categoryStats(ReceiveStreamStats::Spectrum).late == 1
+          && radio.categoryStats(ReceiveStreamStats::Waterfall).late == 2,
+          "retirement preserves cumulative late-packet counts");
+}
 }
 int main(int argc, char** argv)
 {
@@ -152,6 +187,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     nestedDelivery();
     meterClock();
+    latePacketTelemetry();
     RadioModel radio;
     auto* backend = dynamic_cast<FlexBackend*>(radio.backend());
     check(backend != nullptr, "production Flex backend available");

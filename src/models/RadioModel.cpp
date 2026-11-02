@@ -9215,7 +9215,7 @@ ReceiveStreamStats::Counters RadioModel::categoryStats(ReceiveStreamStats::Categ
     if (const auto snapshot = backendReceiveTelemetry()) { return snapshot->categories[cat]; }
     if (!m_panStream) { return {}; }
     const auto counters = m_panStream->categoryStats(static_cast<PanadapterStream::StreamCategory>(cat));
-    return {counters.bytes, counters.packets, counters.errors};
+    return {counters.bytes, counters.packets, counters.errors, counters.late};
 }
 
 QVector<PanadapterStream::AudioStreamDiagnostics> RadioModel::audioStreamDiagnostics() const

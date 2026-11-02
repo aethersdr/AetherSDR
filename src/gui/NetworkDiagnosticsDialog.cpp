@@ -3052,8 +3052,8 @@ void NetworkDiagnosticsDialog::refresh()
         }
         rateLabels[i]->setText(QString("%1 kbps").arg(static_cast<int>(rateKbps)));
         QString drop = formatDrop(cs);
-        if (cats[i] == PanadapterStream::CatFFT
-            || cats[i] == PanadapterStream::CatWaterfall) {
+        if (cats[i] == ReceiveStreamStats::Spectrum
+            || cats[i] == ReceiveStreamStats::Waterfall) {
             drop += QStringLiteral(" \u00b7 %1 late").arg(cs.late);
         }
         dropLabels[i]->setText(drop);
