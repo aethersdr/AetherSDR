@@ -774,8 +774,8 @@ add_test(NAME radio_discovery_source_test COMMAND radio_discovery_source_test)
 # Socket-free daemon startup policy: a fresh child process reads isolated saved
 # nicknames through native static helpers; no discovery source is started with
 # local=true and no socket, USB scan or synthetic firmware peer is used.
-# Also launches the real daemon with an invalid logical endpoint name, which
-# must fail before binding a socket or constructing model/settings consumers.
+# Also checks directed-address diagnostics with an invalid logical endpoint
+# guarding every child: no bind occurs even if argument validation regresses.
 add_executable(aetherd_discovery_startup_test tests/aetherd_discovery_startup_test.cpp)
 target_include_directories(aetherd_discovery_startup_test PRIVATE src tests)
 target_compile_definitions(aetherd_discovery_startup_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
@@ -2641,6 +2641,21 @@ set_target_properties(hl2_discovery_logging_test PROPERTIES AUTOMOC ON)
 target_include_directories(hl2_discovery_logging_test PRIVATE src)
 target_link_libraries(hl2_discovery_logging_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME hl2_discovery_logging_test COMMAND hl2_discovery_logging_test)
+
+# A directed discovery target finds an HL2 a broadcast cannot reach (aetherd
+# --hl2-address): the target filter, socket-free.
+add_executable(hl2_directed_discovery_test
+    tests/hl2_directed_discovery_test.cpp
+    src/core/backends/hl2/Hl2Discovery.cpp
+    src/core/backends/hl2/MetisProtocol.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+)
+set_target_properties(hl2_directed_discovery_test PROPERTIES AUTOMOC ON)
+target_include_directories(hl2_directed_discovery_test PRIVATE src)
+target_link_libraries(hl2_directed_discovery_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME hl2_directed_discovery_test COMMAND hl2_directed_discovery_test)
 
 add_executable(nr2_settings_model_test
     tests/nr2_settings_model_test.cpp
@@ -10206,6 +10221,7 @@ set(AETHER_SETTINGS_CONSUMERS
     dax_receive_applet_test
     graphic_eq_persistence_test
     hl2_discovery_logging_test
+    hl2_directed_discovery_test
     reroute_dead_controls_test
     cat_freedv_mode_tokens_test
     hl2_bandstack_digital_agc_test
