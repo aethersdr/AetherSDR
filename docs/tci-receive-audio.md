@@ -35,7 +35,7 @@ Line Out subscriber releases its demand without removing a stream needed by PC A
 silence during any radio TX, including simultaneous receive. While true, it
 passes the playback mix unchanged without injecting a second transmit feed.
 Radio-side MON must already be audible to appear in this mix. This is a
-presentation recording, not the station-owned mic-attribution contract above.
+recording of the mixed playback output, not a station-scoped TX-only stream.
 No MON, PTT or radio input selection commands are issued. PC Audio is optional;
 separate local cue/sidetone sinks and server-side file recording are outside scope.
 

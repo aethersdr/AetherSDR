@@ -183,9 +183,9 @@ It does not record other applications or separate local cue/sidetone devices.
 **Include TX (Line Out)** is off by default. When off, Line Out sends silence
 throughout radio TX, including any simultaneous RX: TX monitor and RX cannot be
 separated after mixing. When on, it records the existing playback mix during TX
-without adding a duplicate microphone feed. On FlexRadio, enable MON yourself
-to hear and record radio-side TX monitor audio. Subscribing never changes MON,
-microphone selection or transmitter state.
+without adding a separate TX source. On FlexRadio, enable MON yourself to hear
+and record radio-side TX monitor audio. Subscribing never changes MON, radio
+input routing or transmitter state.
 
 Switching PC Audio on or off does not stop an active Line Out subscription.
 When PC Audio is turned off without consent, the subscription remains active
