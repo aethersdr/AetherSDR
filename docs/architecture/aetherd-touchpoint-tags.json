@@ -353,6 +353,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/ExternalFilePath.h": {
+  "tag": "ui-support",
+  "note": "Resolves an existing AppData log or support-bundle file to the physical MSIX LocalCache location for display and for external applications (Explorer, mail client). Presentation-path plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/FirmwareCurrency.h": {
   "tag": "universal",
   "note": "Pure release comparison and its operator-facing wording; names no family and holds no wire types \u2014 the published version and release-notes template both arrive from the backend's declared capability.",

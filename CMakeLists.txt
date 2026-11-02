@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.10.4 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.11.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -1186,6 +1186,7 @@ set(CORE_SOURCES
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
     src/core/SupportBundle.cpp
+    src/core/ExternalFilePath.cpp
     src/core/IssueReport.cpp
     src/core/SystemInfo.cpp
     src/core/SystemInfoCollector.cpp
@@ -1941,7 +1942,8 @@ target_link_libraries(aetherd PRIVATE
 if(WIN32)
     # ole32/oleaut32: WindowsFirewall reads the firewall policy over COM;
     # shell32: its Fix runs netsh through a UAC prompt.
-    target_link_libraries(aethercore PRIVATE advapi32 ole32 oleaut32 shell32)
+    # uuid: ExternalFilePath's Windows known-folder identifiers.
+    target_link_libraries(aethercore PRIVATE advapi32 ole32 oleaut32 shell32 uuid)
 endif()
 
 # --- ASR engine: vendored whisper.cpp (RFC #4333, Phase 1) -------------------

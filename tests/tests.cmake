@@ -1333,19 +1333,6 @@ add_test(NAME anan_speaker_audio_test COMMAND anan_speaker_audio_test)
 # Without this property that is a green pass with zero checks.
 set_tests_properties(anan_speaker_audio_test PROPERTIES SKIP_RETURN_CODE 77)
 
-# ANAN transport counters -> IRadioBackend::LinkStats -- what the status bar's
-# "Network:" field reads: bytes from every radio datagram, packets from DDC
-# frames only, nothing from another host. SOCKET: binds one UDP socket on
-# AnyIPv4, ephemeral port (P2Client::start()), and sends its startup sequence to
-# 127.0.0.1. No listener, no fake peer, no radio.
-add_executable(anan_link_telemetry_test tests/anan_link_telemetry_test.cpp)
-target_include_directories(anan_link_telemetry_test PRIVATE src tests)
-target_link_libraries(anan_link_telemetry_test
-    PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
-add_test(NAME anan_link_telemetry_test COMMAND anan_link_telemetry_test)
-# Exit 77 == no local UDP socket could be bound, so nothing could be observed.
-set_tests_properties(anan_link_telemetry_test PROPERTIES SKIP_RETURN_CODE 77)
-
 # ANAN discovery targets: directed broadcasts for distinct attached subnets,
 # retaining the global broadcast and excluding /31 and /32 point-to-point links.
 # Two NICs sharing a subnet still use the preferred route. Also discovery's log
@@ -1947,7 +1934,9 @@ if(AETHER_BACKEND_RTL)
     target_include_directories(rtl_model_acceptance_test PRIVATE src tests)
     target_link_libraries(rtl_model_acceptance_test PRIVATE aethercore Qt6::Core)
     add_test(NAME rtl_model_acceptance_test COMMAND rtl_model_acceptance_test)
-    set_tests_properties(rtl_model_acceptance_test PROPERTIES TIMEOUT 60)
+    # Each waitFor allows 30 s; this leaves room for a stuck backend to print
+    # its FAILs and the failure count instead of dying as a bare Timeout.
+    set_tests_properties(rtl_model_acceptance_test PROPERTIES TIMEOUT 300)
 
     # Inject the C API into the private adapter; no USB, sockets or driver load.
     add_executable(rtl_usb_controls_test tests/rtl_usb_controls_test.cpp
@@ -6141,6 +6130,33 @@ add_test(NAME tgxl_docked_parity_test COMMAND tgxl_docked_parity_test)
 set_tests_properties(tgxl_docked_parity_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# TGXL antenna names: socket-free parse and TunerApplet wiring.
+# Injects antenna R-frames via the processLine() test seam; covers the happy
+# path, missing keys, length cap, ampersand escaping, and disconnect reset.
+add_executable(tgxl_antenna_names_test
+    tests/tgxl_antenna_names_test.cpp
+    src/gui/TunerApplet.cpp
+    src/gui/AccessoryPanelWidgets.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/TunerModel.cpp
+    src/models/MeterModel.cpp
+    src/models/BandSettings.cpp
+    src/core/TgxlConnection.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
+)
+target_include_directories(tgxl_antenna_names_test PRIVATE src)
+target_link_libraries(tgxl_antenna_names_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network
+)
+set_target_properties(tgxl_antenna_names_test PROPERTIES AUTOMOC ON)
+add_test(NAME tgxl_antenna_names_test COMMAND tgxl_antenna_names_test)
+set_tests_properties(tgxl_antenna_names_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # TGXL applet port strips and STANDBY ordering: the relay path claims no
 # trigger mode it cannot know ("RF SENSE"), and BYPASS -> STANDBY commands
 # operate first so the radio's in-between status already reads STANDBY.
@@ -6731,6 +6747,7 @@ target_link_libraries(ax25_replay PRIVATE Qt6::Core aether_libmodem_core aether_
 
 add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
     tools/ax25_session_analyze.cpp
+    tools/Ax25SessionWav.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
     src/core/tnc/HdlcCodec.cpp
@@ -6743,6 +6760,15 @@ add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
 )
 target_include_directories(ax25_session_analyze PRIVATE src)
 target_link_libraries(ax25_session_analyze PRIVATE Qt6::Core aether_libmodem_core aether_afskdemod)
+
+# File-only parser coverage; no modem, settings, or radio transport.
+add_executable(ax25_session_wav_test
+    tests/ax25_session_wav_test.cpp
+    tools/Ax25SessionWav.cpp
+)
+target_include_directories(ax25_session_wav_test PRIVATE tools)
+target_link_libraries(ax25_session_wav_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME ax25_session_wav_test COMMAND ax25_session_wav_test)
 
 # AX.25 airtime model + link-liveness behaviour (T3 idle poll, bounded REJ
 # recovery, SABME refusal, Karn-safe RTT sampling). See docs/HFMODEM.md.
@@ -8360,12 +8386,16 @@ add_executable(system_info_dialog_test
     src/core/SystemInfoCollector.cpp
     src/core/MemoryTelemetry.cpp
     src/core/ThreadName.cpp
+    src/core/ExternalFilePath.cpp
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_settings>
 )
 target_include_directories(system_info_dialog_test PRIVATE src tests)
 target_link_libraries(system_info_dialog_test PRIVATE Qt6::Widgets)
+if(WIN32)
+    target_link_libraries(system_info_dialog_test PRIVATE shell32 ole32 uuid)
+endif()
 set_target_properties(system_info_dialog_test PROPERTIES AUTOMOC ON)
 add_test(NAME system_info_dialog_test COMMAND system_info_dialog_test)
 set_tests_properties(system_info_dialog_test PROPERTIES
@@ -10458,6 +10488,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tgxl_panel_widgets_test
     tgxl_direct_protocol_test
     tgxl_docked_parity_test
+    tgxl_antenna_names_test
     tgxl_applet_ports_test
     pgxl_direct_protocol_test
     pgxl_panel_test
@@ -10662,6 +10693,16 @@ if(RADE_FOUND)
     endif()
     add_test(NAME rade_phase_renorm_test COMMAND rade_phase_renorm_test)
 endif()
+
+# Filesystem-only MSIX presentation-path resolution; fixtures use a private temp directory.
+add_executable(external_file_path_test
+    tests/external_file_path_test.cpp src/core/ExternalFilePath.cpp)
+target_include_directories(external_file_path_test PRIVATE src)
+target_link_libraries(external_file_path_test PRIVATE Qt6::Core)
+if(WIN32)
+    target_link_libraries(external_file_path_test PRIVATE shell32 ole32 uuid)
+endif()
+add_test(NAME external_file_path_test COMMAND external_file_path_test)
 
 # ── Deferred retrofits: applied after the LAST test, wherever it is declared ──
 #

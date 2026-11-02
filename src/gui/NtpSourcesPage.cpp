@@ -294,15 +294,12 @@ int NtpSourcesPage::enabledCount() const
     int count = 0;
     for (const NtpSourceState& s : m_model.ntpSources()) {
         const auto request = m_pending.constFind(s.id);
-        if (request == m_pending.cend()) {
-            count += m_model.ntpSourceEnabledShown(s) ? 1 : 0;
-        } else {
-            count += *request == Action::Enable ? 1 : 0;
+        if (request != m_pending.cend()
+            && (*request == Action::Disable || *request == Action::Remove)) {
+            continue;
         }
-    }
-    // A created source starts enabled.
-    for (auto it = m_pending.cbegin(); it != m_pending.cend(); ++it) {
-        count += it.value() == Action::Create && !source(it.key()) ? 1 : 0;
+        // A requested enable or create can still fail; count its status only.
+        count += m_model.ntpSourceEnabledShown(s) ? 1 : 0;
     }
     return count;
 }

@@ -4,10 +4,16 @@
 // and injected status only: no sockets, radio or TX.
 #include "TestSettingsProfile.h"
 #include "RadioSetupControlFixture.h"
+#include "core/AudioEngine.h"
+#include "core/QsoRecorder.h"
+#include "core/AutomationServer.h"
 #include "core/backends/flex/CommandParser.h"
 #include "gui/NtpSourcesPage.h"
 
 #include <QApplication>
+#include <QByteArray>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -18,6 +24,14 @@
 #include <optional>
 
 namespace AetherSDR {
+class AutomationServerTestAccess {
+public:
+    static QJsonObject request(AutomationServer& server, const QByteArray& line)
+    {
+        return server.handleLine(line, nullptr);
+    }
+};
+
 class NtpSourcesTestAccess {
 public:
     static void publish(RadioModel& radio) { radio.publishCapabilities(radio.isConnected()); }
@@ -296,6 +310,63 @@ void subscription()
           "a FLEX-6000 on 4.3.16 is never sent the subscription");
 }
 
+void bridgeReadback()
+{
+    Rig rig;
+    AutomationServer server;
+    server.setRadioModel(&rig.radio);
+    server.setReadOnly(true);
+    const auto read = [&server] {
+        return AutomationServerTestAccess::request(server, QByteArray("get ntp"));
+    };
+    rig.firmware = QStringLiteral("4.2.20");
+    const QJsonObject unavailable = read();
+    check(unavailable.value("ok").toBool()
+              && unavailable.value("ntp").toObject() == QJsonObject{
+                  {"available", false}, {"maxSources", 0}, {"sources", QJsonArray{}}},
+          "get ntp is available read-only and reports unsupported firmware without sources");
+
+    rig.firmware = QStringLiteral("4.3.16.42034");
+    NtpSourceDelta delta;
+    delta.id = QStringLiteral("a");
+    delta.address = QStringLiteral("pool.ntp.org");
+    delta.directive = QStringLiteral("pool");
+    delta.description = QStringLiteral("Shack time");
+    delta.enabled = false;
+    delta.selected = true;
+    delta.prefer = true;
+    delta.state = QStringLiteral("candidate");
+    delta.stratum = 2;
+    delta.reach = 15;
+    NtpSourcesTestAccess::apply(rig.radio, delta);
+    const QJsonObject source{
+        {"id", "a"}, {"address", "pool.ntp.org"}, {"directive", "pool"},
+        {"description", "Shack time"}, {"enabled", false}, {"selected", true},
+        {"inUse", true}, {"prefer", true}, {"state", "candidate"},
+        {"stratum", 2}, {"reach", 15}, {"updating", false}};
+    check(read().value("ntp").toObject() == QJsonObject{
+              {"available", true}, {"maxSources", 10}, {"sources", QJsonArray{source}}}
+              && rig.backend->commands.isEmpty(),
+          "get ntp reports every documented source field and sends no command");
+
+    rig.radio.replaceNtpSource(def(QStringLiteral("a")), nullptr, {});
+    delta.enabled = true;
+    delta.selected = false;
+    delta.state = QStringLiteral("selected");
+    NtpSourcesTestAccess::apply(rig.radio, delta);
+    const QJsonObject updating = read().value("ntp").toObject().value("sources").toArray().at(0).toObject();
+    check(updating.value("updating").toBool() && updating.value("enabled").toBool()
+              && !updating.value("selected").toBool() && updating.value("inUse").toBool()
+              && !rig.radio.ntpSourceEnabledShown(rig.radio.ntpSources().at(0)),
+          "get ntp exposes live enabled and in-use state while the page pins an edit's checkbox");
+    rig.refuse();
+    check(!read().value("ntp").toObject().value("sources").toArray().at(0).toObject().value("updating").toBool(),
+          "get ntp clears updating when an edit ends");
+    rig.removed(QStringLiteral("a"));
+    check(read().value("ntp").toObject().value("sources").toArray().isEmpty(),
+          "get ntp drops a source when the radio removes it");
+}
+
 using ReplaceResult = std::optional<RadioModel::NtpSourceReplaceResult>;
 auto into(ReplaceResult& r) { return [&r](const RadioModel::NtpSourceReplaceResult& v) { r = v; }; }
 
@@ -527,7 +598,63 @@ struct PageRig : Rig {
     template <typename T> T* find(const char* name) { return page.findChild<T*>(QString::fromLatin1(name)); }
     QTableWidget* table() { return find<QTableWidget>("ntpSourcesTable"); }
     void select(int row) { table()->selectRow(row); }
+    void requestSecondSource(Action action)
+    {
+        if (action == Action::Enable) {
+            source(QStringLiteral("b"), false);
+            table()->item(1, 6)->setCheckState(Qt::Checked);
+        } else {
+            find<QPushButton>("ntpAddSource")->click();
+            find<QLineEdit>("ntpSourceId")->setText(QStringLiteral("b"));
+            find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("other.example"));
+            find<QPushButton>("ntpSourceSave")->click();
+        }
+    }
 };
+
+void pagePendingPositiveRequests()
+{
+    for (const Action action : {Action::Enable, Action::Create}) {
+        {
+            PageRig rig;
+            rig.source(QStringLiteral("a"));
+            rig.answer = false;
+            rig.requestSecondSource(action);
+            const RadioSetupCompletion reply = rig.backend->replies.back();
+            rig.table()->item(0, 6)->setCheckState(Qt::Unchecked);
+            check(rig.asked.size() == 1 && rig.asked.last().contains(QLatin1String("only enabled"))
+                      && !rig.backend->commands.contains(QStringLiteral("ntp_sources disable id=a")),
+                  "a pending enable or create cannot waive the last-source disable confirmation");
+            rig.select(0);
+            rig.find<QPushButton>("ntpRemoveSource")->click();
+            check(rig.asked.size() == 2 && rig.asked.last().contains(QLatin1String("only enabled"))
+                      && !rig.backend->commands.contains(QStringLiteral("ntp_sources remove id=a")),
+                  "a pending enable or create cannot hide the last-source removal warning");
+            reply({RadioSetupReply::Kind::Failed, static_cast<int>(0xE2000000u), QStringLiteral("refused")});
+            check(rig.table()->item(0, 6)->checkState() == Qt::Checked,
+                  "refusing the pending source leaves the confirmed source enabled after Cancel");
+        }
+        {
+            PageRig rig;
+            rig.source(QStringLiteral("a"));
+            rig.answer = false;
+            rig.requestSecondSource(action);
+            rig.accept();
+            rig.table()->item(0, 6)->setCheckState(Qt::Unchecked);
+            check(rig.asked.size() == 1 && !rig.backend->commands.contains(QStringLiteral("ntp_sources disable id=a")),
+                  "an accepted enable or create still needs its status before replacing the last enabled source");
+        }
+        {
+            PageRig rig;
+            rig.source(QStringLiteral("a"));
+            rig.requestSecondSource(action);
+            rig.source(QStringLiteral("b"));
+            rig.table()->item(0, 6)->setCheckState(Qt::Unchecked);
+            check(rig.asked.isEmpty() && rig.backend->commands.last() == QStringLiteral("ntp_sources disable id=a"),
+                  "a reported enabled source counts even while its enable or create reply is pending");
+        }
+    }
+}
 
 void page()
 {
@@ -729,9 +856,11 @@ int main(int argc, char** argv)
     modelList();
     productionRoute();
     subscription();
+    bridgeReadback();
     replaceSequence();
     page();
     pageSafeguards();
+    pagePendingPositiveRequests();
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ok", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }

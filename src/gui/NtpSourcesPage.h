@@ -53,7 +53,7 @@ private:
     void setMessage(const QString& text, const QString& token);
     QString selectedId() const;
     const NtpSourceState* source(const QString& id) const;
-    // Enabled sources once the requests still in flight land.
+    // Reported enabled sources, excluding pending disables and removals.
     int enabledCount() const;
     bool pending(const QString& id) const { return m_pending.contains(id); }
     void track(const QString& id, NtpSourceRequest::Action action);
