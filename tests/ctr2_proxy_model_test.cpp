@@ -448,7 +448,7 @@ void testAutoStart(const QString& product)
     AetherSDR::Ctr2RelaySettings{}.save();
 }
 
-// Lynovation's firmware relays over USB from v1.02.00 on, so a CTR2-Max on
+// Lynovation's firmware relays over USB from v2.00.00 on, so a CTR2-Max on
 // it starts by itself like AetherCTR2; one that never answers the link (an
 // earlier version) gets the hint, which an answer or a stop clears. Other
 // stock CTR2 identities still have no USB mode.
@@ -484,7 +484,7 @@ void testStockFirmwareOverUsb()
     check(model.noAnswerHint().isEmpty(), "no hint while the CTR2 may still answer");
     check(waitUntil([&] { return !model.noAnswerHint().isEmpty(); }, 2000),
           "a CTR2 that never answers gets the hint");
-    check(model.noAnswerHint().contains(QStringLiteral("v1.02.00"))
+    check(model.noAnswerHint().contains(QStringLiteral("v2.00.00"))
               && model.noAnswerHint().contains(QStringLiteral("Wi-Fi")),
           "the hint names the firmware needed and the Wi-Fi alternative");
     model.stop();

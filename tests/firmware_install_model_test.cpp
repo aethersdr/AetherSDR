@@ -224,6 +224,46 @@ void testCtr2MaxOnly()
           "an AetherKnob alone is not a CTR2-Max, stock or otherwise");
 }
 
+// With only another kind of controller selected (CTR2-MIDI, AetherKnob),
+// the window's CTR2-Max part has nothing to offer and is hidden; a CTR2-Max
+// running firmware or in download mode, Wi-Fi mode, or an unknown device
+// keeps it.
+void testOtherControllerOnly()
+{
+    using Info = Ctr2HidPort::DeviceInfo;
+    using Loader = FirmwareInstallModel::Loader;
+    const Info midi{QStringLiteral("midi"), 0x2886, 0x0056, {}, QStringLiteral("XIAO_ESP32S3"),
+                    QStringLiteral("555555555555")};
+    const Info knob{QStringLiteral("knob"), 0x303A, 0x1001, {}, QStringLiteral("AETHER_KNOB"),
+                    QStringLiteral("333333333333")};
+    const Info max{QStringLiteral("max"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
+                   QStringLiteral("444444444444")};
+    const Info other{QStringLiteral("other"), 0x303A, 0x1001, {}, QStringLiteral("SOMETHING"),
+                     QStringLiteral("666666666666")};
+    const auto hidden = [](const QList<Info>& devices, const QString& selected,
+                           const QList<Loader>& loaders = {},
+                           Ctr2ProxyModel::Transport transport = Ctr2ProxyModel::Transport::Usb) {
+        Ctr2ProxyModel relay;
+        relay.setUsbBackend([=] { return devices; },
+                            [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
+        relay.setTransport(transport);
+        relay.setUsbDevicePath(selected);
+        FirmwareInstallModel model(&relay);
+        model.setDeviceSources([=] { return loaders; }, [=] { return devices; });
+        return model.otherControllerOnly();
+    };
+    check(hidden({midi}, midi.path), "a CTR2-MIDI alone hides the CTR2-Max part");
+    check(hidden({knob}, knob.path), "so does an AetherKnob");
+    check(!hidden({midi, max}, midi.path), "a CTR2-Max connected beside it keeps it");
+    check(!hidden({midi}, midi.path, {{QStringLiteral("ttyACM0"), QStringLiteral("444444444444")}}),
+          "so does a CTR2-Max in download mode");
+    check(!hidden({max}, max.path), "a CTR2-Max selected keeps it");
+    check(!hidden({other}, other.path), "a device that is no known CTR2 keeps it");
+    check(!hidden({midi}, QString()), "no device selected keeps it");
+    check(!hidden({midi}, midi.path, {}, Ctr2ProxyModel::Transport::Wifi),
+          "Wi-Fi mode keeps it");
+}
+
 // A device in download mode whose MAC is not known is not acted on: the job
 // could not tell it from another on the same port.
 void testUnknownMac()
@@ -283,6 +323,7 @@ int main(int argc, char** argv)
     testAccessDenied();
     testFollowsRelaySelection();
     testCtr2MaxOnly();
+    testOtherControllerOnly();
     testUnknownMac();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

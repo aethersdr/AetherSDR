@@ -105,6 +105,11 @@ public:
     // one that takes the commands, except AetherCTR2 before 0.9.2, which
     // has SWITCH only. Any other needs its BOOT and RESET buttons.
     bool restartsIntoDownloadMode(const Target& target) const;
+    // The relay's selected USB device is a controller of another kind
+    // (CTR2-MIDI, AetherKnob, an M5Dial), and no CTR2-Max is running or in
+    // download mode: nothing in the window's CTR2-Max sections applies, so it
+    // hides them. False while an action runs.
+    bool otherControllerOnly() const;
     // Looks for the device again now, rather than at the next poll.
     void lookAgain() { poll(); }
     bool busy() const;
