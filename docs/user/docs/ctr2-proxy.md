@@ -28,10 +28,12 @@ AetherSDR's own command or transmit paths.
 - **USB mode** needs a CTR2-Max running Lynovation's firmware v2.00.00 or
   later, or AetherCTR2 (AetherSDR installs it; see
   [Installing AetherCTR2 on a CTR2-Max](#installing-aetherctr2-on-a-ctr2-max)),
-  or an AetherKnob, and a build with USB HID support (hidapi). From v2.00.00
-  the CTR2-Max's firmware connects over USB only.
+  a CTR2-MIDI on firmware with USB support, or an AetherKnob, and a build with
+  USB HID support (hidapi). From v2.00.00 the CTR2-Max's firmware connects
+  over USB only.
 - **Wi-Fi mode** is for CTR2s that connect over Wi-Fi: Lynovation's other CTR2
-  controllers, and a CTR2-Max still on firmware older than v2.00.00.
+  controllers (the M5Dial-based CTR2-Quad, Duo and Uno, and a CTR2-MIDI on
+  earlier firmware), and a CTR2-Max still on firmware older than v2.00.00.
 
 ## Setup
 
@@ -56,9 +58,9 @@ The **Mode** selector offers **Wi-Fi** and **USB**.
 *The CTR2 relay controls before a CTR2 is selected, from before they moved into the CTR2 window. The radio's address is blacked out.*
 
 > **Check the mode the first time.** On builds with USB support, USB is the
-> default until the relay has been started once. Lynovation's other CTR2
-> controllers, and a CTR2-Max on firmware older than v2.00.00, work only in
-> **Wi-Fi** mode, so pick it for those.
+> default until the relay has been started once. Lynovation's M5Dial-based
+> CTR2s, a CTR2-MIDI without USB support, and a CTR2-Max on firmware older
+> than v2.00.00, work only in **Wi-Fi** mode, so pick it for those.
 
 ## Starting automatically
 
@@ -69,11 +71,12 @@ connects to a radio. The choice is saved.
 - If the CTR2 is not plugged in yet, AetherSDR keeps looking every few seconds
   and starts the relay when it appears.
 - Pressing **Stop** holds it off until AetherSDR next connects to a radio.
-- In USB mode it starts a CTR2-Max (on Lynovation's firmware or AetherCTR2)
-  or an AetherKnob. A CTR2-Max on firmware older than v2.00.00 never answers; see
+- In USB mode it starts a CTR2-Max (on Lynovation's firmware or AetherCTR2),
+  a CTR2-MIDI or an AetherKnob. A CTR2-Max on firmware older than v2.00.00, or
+  a CTR2-MIDI on firmware without USB support, never answers; see
   [No answer from the CTR2](#no-answer-from-the-ctr2). Lynovation's firmware
-  uses Espressif's generic USB name, so another ESP32-S3 board with the same
-  name and kind of HID interface may be tried too. A device that never
+  uses its board's generic USB name (Espressif's, or Seeed's XIAO_ESP32S3), so
+  another board with the same name and kind of HID interface may be tried too. A device that never
   answers is tried about once a minute.
 - **Linux:** if the CTR2 udev rule is not installed yet, press **Start** once
   to install it.
@@ -98,8 +101,8 @@ features of the CTR2 that rely on UDP may not work this way.
 
 The CTR2's traffic travels in USB HID reports, and AetherSDR starts the link,
 so you only pick the device and press **Start**. It needs a CTR2-Max running
-Lynovation's firmware v2.00.00 or later or AetherCTR2 (see below), or an
-AetherKnob.
+Lynovation's firmware v2.00.00 or later or AetherCTR2 (see below), a CTR2-MIDI
+on firmware with USB support, or an AetherKnob.
 
 - The **USB** device list shows candidate HID devices, with known CTR2 boards
   and the AetherKnob named and listed first. While the relay is stopped the
@@ -386,14 +389,15 @@ The build was made without hidapi.
 
 The relay is running in USB mode, but the CTR2 has not answered it:
 "No answer from the CTR2. USB mode needs CTR2-Max firmware v2.00.00 or
-later, or AetherCTR2."
+later, AetherCTR2, or CTR2-MIDI firmware with USB support."
 
 1. Check the CTR2-Max's firmware version. Before v2.00.00 it has no USB mode.
+   A CTR2-MIDI needs Lynovation's firmware with USB support.
 2. Update it to v2.00.00 or later (see
    [Updating the CTR2-Max's own firmware](#updating-the-ctr2-maxs-own-firmware)), or
    install AetherCTR2.
 3. Or stop the relay and use **Wi-Fi** mode with the firmware it has. Other
-   CTR2 controllers always use Wi-Fi mode.
+   M5Dial-based CTR2s (Quad, Duo, Uno) always use Wi-Fi mode.
 
 If the relay stops with an error before the CTR2 ever answered, **Start
 automatically** waits a minute before trying it again, instead of a few
