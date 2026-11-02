@@ -1890,7 +1890,7 @@ private:
     // the retained radio rows remain discrete and authoritative.
     QTimer* m_waterfallScrollTimer{nullptr};
     QElapsedTimer m_waterfallScrollClock;
-    QElapsedTimer m_lastFftPresentClock;  // last data-driven FFT present (#6883)
+    QElapsedTimer m_lastFftFrameClock;  // last ingested FFT frame (#6883)
     float m_waterfallScrollDistanceRows{1.0f};
     // Per-visible-row frequency frame, indexed by the physical waterfall ring
     // row. The GPU uses this to place each row in the current viewport without

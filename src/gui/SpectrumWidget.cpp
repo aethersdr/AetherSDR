@@ -8812,7 +8812,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm, const Spectru
         }
     }
 
-    m_lastFftPresentClock.restart();
+    m_lastFftFrameClock.restart();
     coalescedUpdate();
 }
 
@@ -11948,14 +11948,14 @@ void SpectrumWidget::leaveEvent(QEvent* event)
 bool SpectrumWidget::presentNeededBesideFft() const
 {
     return AetherSDR::presentNeededBesideFft(
-        m_lastFftPresentClock.isValid() ? m_lastFftPresentClock.elapsed() : -1,
+        m_lastFftFrameClock.isValid() ? m_lastFftFrameClock.elapsed() : -1,
         m_fftFps);
 }
 
 bool SpectrumWidget::deferPresentToFft()
 {
     const qint64 remainingMs = AetherSDR::fftLivenessRemainingMs(
-        m_lastFftPresentClock.isValid() ? m_lastFftPresentClock.elapsed() : -1,
+        m_lastFftFrameClock.isValid() ? m_lastFftFrameClock.elapsed() : -1,
         m_fftFps);
     if (remainingMs <= 0) {
         return false;
