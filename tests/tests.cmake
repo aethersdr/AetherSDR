@@ -7124,6 +7124,13 @@ target_include_directories(tci_sql_level_test PRIVATE src tests)
 target_link_libraries(tci_sql_level_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME tci_sql_level_test COMMAND tci_sql_level_test)
 
+# TCI agc_gain in dB (TCI 2.1 §AGC_GAIN): socket-free stub backend and
+# TciProtocol driven by command text. Nothing is bound, opened or keyed.
+add_executable(tci_agc_gain_test tests/tci_agc_gain_test.cpp)
+target_include_directories(tci_agc_gain_test PRIVATE src tests)
+target_link_libraries(tci_agc_gain_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME tci_agc_gain_test COMMAND tci_agc_gain_test)
+
 # #5774: socket-free rigctl `L RF` / `l RF`. An injected backend records the pan
 # RF gain it is handed; the pan is materialised through the seam's geometry
 # signal. Nothing is bound, opened or keyed.
@@ -10320,6 +10327,7 @@ set(AETHER_SETTINGS_CONSUMERS
     cat_freedv_mode_tokens_test
     hl2_bandstack_digital_agc_test
     tci_sql_level_test
+    tci_agc_gain_test
     radio_model_client_state_test
     pan_control_routing_test
     squelch_level_scale_test
