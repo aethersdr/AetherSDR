@@ -143,6 +143,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 ## Transmit
 
 - **SSB voice** uses WDSP's TXA modulator. The EQ, PROC, TX low/high cut, eSSB, ALC and compression gauges act on the HL2.
+- **TX filter-loss notice:** when transmitting from receiver A, AetherSDR can warn if the transmit audio is strongly attenuated through the modulator. The check uses a 40 dB threshold, so a narrow passband can still reduce audio without triggering a notice. It does not detect this loss in FM or while transmitting from another receiver.
 - **The Mic Level slider is the transmit level.** The ALC only ever reduces. The Phone panel shows the **ALC Gain** the radio reports.
 - **The ALC gauge shows the audio peak after the ALC, before the modulator.** It sits at the ALC target while the ALC is reducing. It is not the transmitted envelope, which can stand above it when the audio is limited or compressed.
 - **Data:** WSJT-X and similar programs work over the [TCI Server](./tci-server.md). Their power slider changes RF output, and the speech ALC does not raise client audio. The WSPR beacon defaults to −3 dBFS and is not moved by the mic slider.
