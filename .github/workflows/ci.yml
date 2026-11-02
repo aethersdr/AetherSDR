@@ -175,6 +175,7 @@ jobs:
           df -h /__w
           find /host-unused -mindepth 2 -maxdepth 2 -exec rm -rf {} +
           df -h /__w
+          df -B1 --output=avail /__w | tail -n 1 > /tmp/aether-ci-free-bytes
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -246,6 +247,9 @@ jobs:
       - name: Zero ccache stats
         run: ccache --zero-stats
 
+      - name: Check CI test debug policy
+        run: python3 tools/test_ci_test_debug.py
+
       - name: Configure
         run: |
           # Redirect, not `| tee`: this job runs in the CI container, which
@@ -260,18 +264,14 @@ jobs:
           # AETHER_GPU_SPECTRUM=ON is stated rather than left to the CMake
           # default so the assertion below has a request to check against.
           #
-          # -g1, not RelWithDebInfo's -g: ~250 test executables each link a
-          # static aethercore and carry their own copy of its debug info. At
-          # -g each is ~325 MB and the tree outgrew the runner; at -g1 (line
-          # tables only, so backtraces keep file:line) each is ~120 MB.
-          # full-suite.yml configures identically and restores this job's
-          # ccache, so change both together. Compress linked DWARF to avoid
-          # repeating uncompressed line tables in every test executable. The
-          # compiler flags and cached objects remain unchanged.
+          # Keep -g1 compiler objects for app diagnostics and the shared ccache.
+          # Tests omit debug data at link time; the app retains compressed line
+          # tables. full-suite.yml must use the same configuration.
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
             "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
             "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
             "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--compress-debug-sections=zlib-gabi" \
+            -DAETHER_CI_STRIP_TEST_DEBUG=ON \
             -DAETHER_GPU_SPECTRUM=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache > configure.log 2>&1 || {
@@ -307,21 +307,21 @@ jobs:
 
       - name: Build
         run: |
-          rc=0
-          cmake --build build -j$(nproc) || rc=$?
-          df -h /__w
-          du -sh build /ccache
-          exit "$rc"
+          python3 tools/ci_linux_build.py
 
-      - name: Verify compressed debug lines
-        run: |
-          address=$(nm -n build/AetherSDR | awk '$3 == "main" { print $1; exit }')
-          test -n "$address"
-          location=$(addr2line -e build/AetherSDR "$address")
-          echo "main: $location"
-          case "$location" in
-            '??:'*|'':*) exit 1 ;;
-          esac
+      - name: Upload Linux disk evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: linux-disk-${{ github.job }}-${{ github.run_id }}
+          path: |
+            build/ci-disk-metrics.json
+            build/.ninja_log
+            build/ci-stripped-test-executables.txt
+          if-no-files-found: ignore
+
+      - name: Verify test stripping and app debug lines
+        run: python3 tools/verify_ci_test_debug.py
 
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months

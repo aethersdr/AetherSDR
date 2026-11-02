@@ -63,6 +63,7 @@ jobs:
           df -h /__w
           find /host-unused -mindepth 2 -maxdepth 2 -exec rm -rf {} +
           df -h /__w
+          df -B1 --output=avail /__w | tail -n 1 > /tmp/aether-ci-free-bytes
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -98,6 +99,12 @@ jobs:
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
         run: bash scripts/setup/setup-deepfilter.sh
 
+      - name: Zero ccache stats
+        run: ccache --zero-stats
+
+      - name: Check CI test debug policy
+        run: python3 tools/test_ci_test_debug.py
+
       - name: Configure
         id: configure
         run: |
@@ -107,6 +114,7 @@ jobs:
             "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
             "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
             "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--compress-debug-sections=zlib-gabi" \
+            -DAETHER_CI_STRIP_TEST_DEBUG=ON \
             -DAETHER_GPU_SPECTRUM=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache > configure.log 2>&1 || {
@@ -117,11 +125,21 @@ jobs:
       - name: Build
         id: build
         run: |
-          rc=0
-          cmake --build build -j$(nproc) || rc=$?
-          df -h /__w
-          du -sh build /ccache
-          exit "$rc"
+          python3 tools/ci_linux_build.py
+
+      - name: Upload Linux disk evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: linux-disk-${{ github.job }}-${{ github.run_id }}
+          path: |
+            build/ci-disk-metrics.json
+            build/.ninja_log
+            build/ci-stripped-test-executables.txt
+          if-no-files-found: ignore
+
+      - name: Verify test stripping and app debug lines
+        run: python3 tools/verify_ci_test_debug.py
 
       # A Configure or Build failure skips ctest, and a skipped step's output
       # reads as null, which the report steps' `exit != '0'` treats as equal

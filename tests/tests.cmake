@@ -10933,6 +10933,17 @@ if(NOT AETHERSDR_SANITIZER STREQUAL "none"
                    "${AETHER_SANITIZER_TIMEOUT_SCALE}")
 endif()
 
+option(AETHER_CI_STRIP_TEST_DEBUG
+    "Omit debug information from Linux CI test executables at link time" OFF)
+if(AETHER_CI_STRIP_TEST_DEBUG)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux"
+            OR NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"
+            OR _aether_tests_instrumented)
+        message(FATAL_ERROR
+            "AETHER_CI_STRIP_TEST_DEBUG requires an uninstrumented Linux GCC/Clang build")
+    endif()
+endif()
+
 # Every executable declared in this file: the directory's targets now, minus the
 # baseline from the top of the file, each one checked against the names this
 # file's text declares.
@@ -10980,7 +10991,15 @@ endfunction()
 
 function(aether_retrofit_tests)
     aether_collect_test_executables(_test_executables)
+    set(_stripped_executables "")
     foreach(_target IN LISTS _test_executables)
+        if(AETHER_CI_STRIP_TEST_DEBUG)
+            target_link_options(${_target} PRIVATE "LINKER:--strip-debug")
+            get_target_property(_excluded ${_target} EXCLUDE_FROM_ALL)
+            if(NOT _excluded)
+                string(APPEND _stripped_executables "$<TARGET_FILE:${_target}>\n")
+            endif()
+        endif()
         get_target_property(_links ${_target} LINK_LIBRARIES)
 
         # GUI harnesses that link aethercore used to receive ThemeManager,
@@ -11006,6 +11025,11 @@ function(aether_retrofit_tests)
             target_link_libraries(${_target} PRIVATE aether_test_wisdom_isolation)
         endif()
     endforeach()
+
+    if(AETHER_CI_STRIP_TEST_DEBUG)
+        file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/ci-stripped-test-executables.txt"
+            CONTENT "${_stripped_executables}")
+    endif()
 
     get_property(_tests DIRECTORY PROPERTY TESTS)
     foreach(_test IN LISTS _tests)
