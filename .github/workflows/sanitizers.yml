@@ -1,6 +1,6 @@
 name: Sanitizers
 
-# Weekly debug-heavy build that runs the test suite under AddressSanitizer +
+# Twice-weekly debug-heavy build that runs the test suite under AddressSanitizer +
 # UndefinedBehaviorSanitizer (one matrix entry) and ThreadSanitizer (separate
 # entry, incompatible with ASan). Failures are uploaded as artifacts and
 # tracked in a sticky GitHub issue per sanitizer kind so the queue does not
@@ -8,10 +8,9 @@ name: Sanitizers
 
 on:
   schedule:
-    # Saturdays 02:00 Pacific. GitHub cron is UTC and ignores DST, so this is
-    # 02:00 PDT / 01:00 PST; a fixed early-Saturday slot is the point, not the
-    # exact minute.
-    - cron: '0 9 * * 6'
+    # Mondays and Thursdays at 02:00 Pacific, adjusting automatically for DST.
+    - cron: '0 2 * * 1,4'
+      timezone: 'America/Los_Angeles'
   workflow_dispatch:
 
 permissions:
