@@ -24,14 +24,16 @@ to the typed 48 kHz domain; native 24/48 kHz capture preserves its format until
 the worker converts to the fixed wire rate. PCM epochs retire on disable,
 device close/rate change and TX-state transitions. The existing bounded mailbox
 and per-client 256 KiB output limit also apply to Line Out. A Line Out subscriber
-independently retains the radio speaker stream. Without a playback device, the
+retains the radio speaker stream while PC Audio is enabled, or when the separate
+default-off **Line Out with PC Audio off** consent is enabled. Without consent,
+PC Audio off releases the radio stream and Line Out is silent. Without a playback device, the
 existing 10 ms timer drains the same mixer at 48 kHz; no audio sink is opened.
 Turning PC Audio off closes only playback and does not stop recording. The last
 Line Out subscriber releases its demand without removing a stream needed by PC Audio.
 
 `TciRecording.lineOutIncludeTx` defaults false. While false, Line Out sends
 silence during any radio TX, including simultaneous receive. While true, it
-passes the playback mix unchanged; it does not add `dax_mic` or local TX PCM.
+passes the playback mix unchanged without injecting a second transmit feed.
 Radio-side MON must already be audible to appear in this mix. This is a
 presentation recording, not the station-owned mic-attribution contract above.
 No MON, PTT or radio input selection commands are issued. PC Audio is optional;

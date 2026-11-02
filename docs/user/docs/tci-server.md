@@ -37,6 +37,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 | **RX1 … RX8** | One row per receive channel: the slice it carries, a logarithmic output level meter and a 0-100% receive gain slider. Rows above the radio's slice capacity are hidden. |
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
 | **Include TX (Line Out)** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
+| **Line Out with PC Audio off** | Explicitly allows Line Out to keep the radio audio stream open when PC Audio is off. Off by default; this mutes the radio speaker, headphone and line-out outputs while a TCI client records. |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
 
@@ -167,8 +168,11 @@ and `line_out_stop:<receiver>;`. It uses TCI stream type **4**, fixed at
 The receiver number labels the subscription; its content is the same complete
 playback mix, not that receiver alone. RX and Line Out can run together.
 
-**PC Audio is optional.** A Line Out subscription keeps the incoming radio audio
-and software mixer running without opening a PC playback device. It records
+**PC Audio is optional.** While PC Audio is off, Line Out sends silence and
+releases its radio audio demand by default. Enable **Line Out with PC Audio off**
+to explicitly allow the radio audio stream to stay open; while a TCI client
+records, this mutes the radio speaker, headphone and line-out outputs. With PC Audio on, Line Out keeps the incoming radio
+audio and software mixer running without opening an additional playback device. It records
 the final shared stereo mix,
 including the open slices' existing volume, pan and mute, client-side RX DSP,
 and other sources in that mix. PC playback master volume and mute do not affect
@@ -184,8 +188,10 @@ to hear and record radio-side TX monitor audio. Subscribing never changes MON,
 microphone selection or transmitter state.
 
 Switching PC Audio on or off does not stop an active Line Out subscription.
-The radio audio stream is released after the last Line Out listener stops unless
-PC playback still needs it.
+When PC Audio is turned off without consent, the subscription remains active
+but Line Out is silent until PC Audio is restored or consent is enabled. The
+radio audio stream is released after the last Line Out listener stops unless
+PC playback still needs it or the consent setting is enabled.
 Server-side `line_out_recorder_*` file recording is not implemented.
 Live TX, MON and multi-client recording qualification remain outstanding
 ([#6410](https://github.com/aethersdr/AetherSDR/issues/6410)).

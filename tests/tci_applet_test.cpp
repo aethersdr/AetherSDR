@@ -32,20 +32,40 @@ int main(int argc, char** argv)
     RadioModel model;
     TciServer server(&model);
     TciApplet applet;
+    auto* lineOut = applet.findChild<QCheckBox*>(QStringLiteral("tciLineOutIncludeTx"));
+    auto* lineOutConsent = applet.findChild<QCheckBox*>(QStringLiteral("tciLineOutPcAudioOffConsent"));
+    const QString consentWarning = lineOutConsent
+        ? lineOutConsent->accessibleDescription() : QString();
     applet.setRadioModel(&model);
     applet.setTciServer(&server);
-    auto* lineOut = applet.findChild<QCheckBox*>(QStringLiteral("tciLineOutIncludeTx"));
-    check(lineOut && lineOut->text() == QStringLiteral("Line Out TX"),
-          "Line Out TX control uses its plain feature name");
+    check(lineOut && lineOut->text() == QStringLiteral("Include TX (Line Out)"),
+          "Line Out TX control names its destination");
     check(lineOut && !lineOut->isChecked(), "Line Out TX inclusion defaults off");
     check(lineOut && !lineOut->isEnabled() && !lineOut->accessibleDescription().isEmpty(),
           "Line Out TX control is unavailable with an accessible reason when disconnected");
+    check(lineOutConsent && lineOutConsent->text() == QStringLiteral("Line Out with PC Audio off"),
+          "PC Audio-off Line Out consent is distinct from TX inclusion");
+    check(lineOutConsent && !lineOutConsent->isChecked()
+          && consentWarning.contains(QStringLiteral("mutes"))
+          && consentWarning.contains(QStringLiteral("speaker"))
+          && consentWarning.contains(QStringLiteral("headphone"))
+          && consentWarning.contains(QStringLiteral("line-out")),
+          "PC Audio-off Line Out consent defaults off and names every muted radio output");
 
     server.setLineOutIncludeTx(true);
     check(server.lineOutIncludeTx() && lineOut && lineOut->isChecked(),
           "Line Out TX control mirrors the server setting");
     TciServer restored(&model);
     check(restored.lineOutIncludeTx(), "Line Out TX preference persists independently");
+    server.setLineOutPcAudioOffConsent(true);
+    check(server.lineOutPcAudioOffConsent() && lineOutConsent && lineOutConsent->isChecked(),
+          "PC Audio-off Line Out consent mirrors the server setting");
+    TciServer restoredConsent(&model);
+    check(restoredConsent.lineOutPcAudioOffConsent(),
+          "PC Audio-off Line Out consent persists independently");
+    server.setLineOutPcAudioOffConsent(false);
+    check(lineOutConsent && !lineOutConsent->isChecked(),
+          "PC Audio-off Line Out consent mirrors controller updates");
     server.setLineOutIncludeTx(false);
     check(lineOut && !lineOut->isChecked(), "Line Out TX control mirrors controller updates");
 

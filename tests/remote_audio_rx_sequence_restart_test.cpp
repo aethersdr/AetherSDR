@@ -175,6 +175,7 @@ void lineOutOwnsReceiveWithoutPcPlayback()
     for (bool pcPlaybackRemains : {false, true}) {
         settings.setValue("PcAudioEnabled", "False");
         RadioModel radio;
+        radio.setLineOutPcAudioOffConsent(true);
         QList<QPair<quint32, QString>> commands;
         using Access = TxOperationIntegrationTestAccess;
         Access::recordCommands(radio, commands);
@@ -215,6 +216,54 @@ void lineOutOwnsReceiveWithoutPcPlayback()
     settings.setValue("PcAudioEnabled", previous);
 }
 
+void lineOutRequiresConsentWhenPcAudioIsOff()
+{
+    auto& settings = AppSettings::instance();
+    const QVariant previous = settings.value("PcAudioEnabled", "True");
+    settings.setValue("PcAudioEnabled", "False");
+
+    RadioModel radio;
+    QList<QPair<quint32, QString>> commands;
+    using Access = TxOperationIntegrationTestAccess;
+    Access::recordCommands(radio, commands);
+    Access::connectTransport(radio);
+    Access::acceptGuiRegistration(radio);
+
+    radio.setLineOutAudioRequested(true);
+    Access::drainCommands(radio);
+    int creates = 0;
+    for (const auto& command : commands) {
+        if (command.second.startsWith(QStringLiteral("stream create type=remote_audio_rx "))) {
+            ++creates;
+        }
+    }
+    report("Line Out does not open remote_audio_rx while PC Audio is off without consent",
+           creates == 0 && !radio.lineOutAudioStreamDemanded());
+
+    radio.setLineOutPcAudioOffConsent(true);
+    Access::drainCommands(radio);
+    quint32 createSeq = 0;
+    for (const auto& command : commands) {
+        if (command.second.startsWith(QStringLiteral("stream create type=remote_audio_rx "))) {
+            ++creates;
+            createSeq = command.first;
+        }
+    }
+    report("explicit PC Audio-off consent starts the radio audio stream", creates == 1
+           && radio.lineOutAudioStreamDemanded());
+    if (createSeq != 0) { Access::reply(radio, createSeq, QStringLiteral("0x04000008")); }
+    radio.setLineOutPcAudioOffConsent(false);
+    Access::drainCommands(radio);
+    bool removed = false;
+    for (const auto& command : commands) {
+        removed = removed || command.second.startsWith(QStringLiteral("stream remove 0x04000008"));
+    }
+    report("withdrawing consent releases the stream and stops Line Out demand",
+           removed && !radio.lineOutAudioStreamDemanded());
+    Access::finish(radio);
+    settings.setValue("PcAudioEnabled", previous);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -224,6 +273,7 @@ int main(int argc, char** argv)
 
     preconnectAudioDoesNotBlockRegisteredReceive();
     lineOutOwnsReceiveWithoutPcPlayback();
+    lineOutRequiresConsentWhenPcAudioIsOff();
 
     RadioModel radio;
     auto backend = std::make_unique<Backend>();

@@ -89,10 +89,11 @@ public:
         return caps;
     }
     bool exportAvailable = true;
+    bool connected = false;
     bool ownsRxAudio() const override { return true; }
     void connectRadio(const RadioConnectRequest&) override {} // no transport
     void disconnectRadio() override { retirePcmStreams(); emit disconnected(); }
-    bool isConnected() const override { return false; }
+    bool isConnected() const override { return connected; }
     void setSliceFrequency(int, double) override {}
     void setSliceMode(int, const QString&) override {}
     void setSliceFilter(int, int, int) override {}

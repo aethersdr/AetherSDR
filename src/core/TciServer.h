@@ -111,6 +111,8 @@ public:
     void setAudioEngine(AudioEngine* audio);
     void setLineOutIncludeTx(bool enabled);
     bool lineOutIncludeTx() const { return m_lineOutIncludeTx; }
+    void setLineOutPcAudioOffConsent(bool enabled);
+    bool lineOutPcAudioOffConsent() const { return m_lineOutPcAudioOffConsent; }
     // Thread-safe owning ingress, safe even if a source callback overlaps
     // controller destruction. The closure contains no controller pointer.
     std::function<void(int, const PcmFrame&)> daxPcmSink() const;
@@ -174,6 +176,7 @@ public slots:
 
 signals:
     void lineOutIncludeTxChanged(bool enabled);
+    void lineOutPcAudioOffConsentChanged(bool enabled);
     void clientCountChanged(int count);
     void rxBindingsChanged();
     // Fired whenever the client list or any client's subscriptions change
@@ -365,6 +368,7 @@ private:
     void syncLineOutClient(const ClientState& client);
     void updateLineOutCapture();
     bool m_lineOutIncludeTx{false};
+    bool m_lineOutPcAudioOffConsent{false};
     bool m_lineOutCaptureWanted{false};
     TciClient* clientById(quint64 id) const;
     void resetClientRx(ClientState& client);

@@ -4,11 +4,14 @@
 
 #ifdef HAVE_WEBSOCKETS
 #include "MeterSlider.h"
+#include "ControlAvailabilityRegistry.h"
+#include "CanonIndicators.h"
 #include "core/AppSettings.h"
 #include "core/TciServer.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QCheckBox>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -212,7 +215,7 @@ void TciApplet::buildUI()
     m_lineOutIncludeTx->setAccessibleName(tr("TCI Include TX (Line Out)"));
     m_lineOutIncludeTx->setAccessibleDescription(tr(
         "Include TX monitor audio present in the radio speaker mix in Line Out. "
-        "Does not enable MON or add microphone audio. When off, Line Out is silent "
+        "Does not enable MON or add a separate transmit feed. When off, Line Out is silent "
         "during radio transmit, including simultaneous receive audio."));
     m_lineOutIncludeTx->setToolTip(m_lineOutIncludeTx->accessibleDescription());
     m_lineOutIncludeTx->setEnabled(false);
@@ -225,6 +228,27 @@ void TciApplet::buildUI()
     outer->addLayout(lineOutRow);
     connect(m_lineOutIncludeTx, &QCheckBox::toggled, this, [this](bool enabled) {
         if (m_tciServer) { m_tciServer->setLineOutIncludeTx(enabled); }
+    });
+    auto* lineOutConsentRow = new QHBoxLayout;
+    lineOutConsentRow->setContentsMargins(4, 1, 4, 2);
+    m_lineOutPcAudioOffConsent = new QCheckBox(tr("Line Out with PC Audio off"), this);
+    m_lineOutPcAudioOffConsent->setObjectName(QStringLiteral("tciLineOutPcAudioOffConsent"));
+    m_lineOutPcAudioOffConsent->setAccessibleName(tr("Allow Line Out with PC Audio off"));
+    m_lineOutPcAudioOffConsent->setAccessibleDescription(tr(
+        "When PC Audio is off, Line Out is silent by default. When enabled, Line Out keeps "
+        "the radio audio stream open and mutes the radio speaker, headphone and line-out "
+        "outputs while a TCI client is recording. Off by default."));
+    m_lineOutPcAudioOffConsent->setToolTip(m_lineOutPcAudioOffConsent->accessibleDescription());
+    m_lineOutPcAudioOffConsent->setEnabled(false);
+    applyCanonSheet(m_lineOutPcAudioOffConsent, [] {
+        return QStringLiteral("QCheckBox { color: {{color.canon.inkSoft}}; font-size: 11px; }")
+            + canonIndicatorRules();
+    });
+    lineOutConsentRow->addWidget(m_lineOutPcAudioOffConsent);
+    lineOutConsentRow->addStretch();
+    outer->addLayout(lineOutConsentRow);
+    connect(m_lineOutPcAudioOffConsent, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (m_tciServer) { m_tciServer->setLineOutPcAudioOffConsent(enabled); }
     });
     // Port + Enable row (bottom)
     auto* enableRow = new QHBoxLayout;
@@ -346,10 +370,15 @@ void TciApplet::setRadioModel(RadioModel* model)
     m_model = model;
     delete m_lineOutAvailability;
     m_lineOutAvailability = nullptr;
+    delete m_lineOutPcAudioOffAvailability;
+    m_lineOutPcAudioOffAvailability = nullptr;
     if (!model) {
         m_lineOutIncludeTx->setEnabled(false);
         m_lineOutIncludeTx->setAccessibleDescription(
             tr("Line Out requires a connected radio and a TCI server, not PC Audio."));
+        m_lineOutPcAudioOffConsent->setEnabled(false);
+        m_lineOutPcAudioOffConsent->setAccessibleDescription(
+            tr("Line Out consent requires a connected radio and a TCI server."));
         return;
     }
     m_lineOutAvailability = new ControlAvailabilityRegistry(*model, this);
@@ -357,6 +386,11 @@ void TciApplet::setRadioModel(RadioModel* model)
         tr("Line Out requires a connected radio and a TCI server, not PC Audio."),
         [this](bool connected, const RadioCapabilities&) { return connected && m_tciServer; },
         [this] { return m_tciServer && m_tciServer->lineOutIncludeTx(); }, false);
+    m_lineOutPcAudioOffAvailability = new ControlAvailabilityRegistry(*model, this);
+    m_lineOutPcAudioOffAvailability->registerWidget(m_lineOutPcAudioOffConsent,
+        tr("Line Out consent requires a connected radio and a TCI server."),
+        [this](bool connected, const RadioCapabilities&) { return connected && m_tciServer; },
+        [this] { return m_tciServer && m_tciServer->lineOutPcAudioOffConsent(); }, false);
     connect(model, &RadioModel::capabilitiesChanged, this,
         [this](bool, const RadioCapabilities&) {
             if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
@@ -428,6 +462,7 @@ void TciApplet::setTciServer(TciServer* tci)
 #ifdef HAVE_WEBSOCKETS
     if (m_tciServer) {
         disconnect(m_tciServer, &TciServer::lineOutIncludeTxChanged, this, nullptr);
+        disconnect(m_tciServer, &TciServer::lineOutPcAudioOffConsentChanged, this, nullptr);
         disconnect(m_tciServer, &TciServer::clientCountChanged, this, nullptr);
     }
     m_tciServer = tci;
@@ -435,12 +470,24 @@ void TciApplet::setTciServer(TciServer* tci)
         const QSignalBlocker blocker(m_lineOutIncludeTx);
         m_lineOutIncludeTx->setChecked(tci && tci->lineOutIncludeTx());
     }
+    {
+        const QSignalBlocker blocker(m_lineOutPcAudioOffConsent);
+        m_lineOutPcAudioOffConsent->setChecked(tci && tci->lineOutPcAudioOffConsent());
+    }
     if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
+    if (m_lineOutPcAudioOffAvailability) { m_lineOutPcAudioOffAvailability->refreshEngaged(); }
     if (tci) {
         connect(tci, &TciServer::lineOutIncludeTxChanged, this, [this](bool enabled) {
             const QSignalBlocker blocker(m_lineOutIncludeTx);
             m_lineOutIncludeTx->setChecked(enabled);
             if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
+        });
+        connect(tci, &TciServer::lineOutPcAudioOffConsentChanged, this, [this](bool enabled) {
+            const QSignalBlocker blocker(m_lineOutPcAudioOffConsent);
+            m_lineOutPcAudioOffConsent->setChecked(enabled);
+            if (m_lineOutPcAudioOffAvailability) {
+                m_lineOutPcAudioOffAvailability->refreshEngaged();
+            }
         });
         connect(tci, &TciServer::clientCountChanged,
                 this, [this]() { updateTciStatus(); });

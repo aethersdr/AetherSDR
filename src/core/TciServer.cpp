@@ -79,6 +79,17 @@ constexpr int kIcomTciUnkeySettleMs = 500;
 // publishes the settled state again.
 constexpr int kSplitSettleMs = 450;
 
+void writeRecordingSetting(const QString& key, const QJsonValue& value)
+{
+    auto& settings = AppSettings::instance();
+    QJsonObject recording = QJsonDocument::fromJson(
+        settings.value("TciRecording", "{}").toString().toUtf8()).object();
+    recording.insert(key, value);
+    settings.setValue("TciRecording", QString::fromUtf8(
+        QJsonDocument(recording).toJson(QJsonDocument::Compact)));
+    settings.save();
+}
+
 QString tciCommandName(const QString& message)
 {
     const QString trimmed = message.trimmed().toLower();
@@ -164,6 +175,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         AppSettings::instance().value("TciRecording", "{}").toString().toUtf8())
         .object();
     m_lineOutIncludeTx = recording.value("lineOutIncludeTx").toBool(false);
+    m_lineOutPcAudioOffConsent = recording.value("lineOutPcAudioOffConsent").toBool(false);
+    if (m_model) { m_model->setLineOutPcAudioOffConsent(m_lineOutPcAudioOffConsent); }
     m_io = std::make_unique<TciIoWorker>();
     m_io->setLineOutIncludeTx(m_lineOutIncludeTx);
     m_pcmIngress->worker = m_io.get();
@@ -2862,6 +2875,15 @@ void TciServer::setLineOutIncludeTx(bool enabled)
     writeRecordingSetting(QStringLiteral("lineOutIncludeTx"), enabled);
     m_io->post([io = m_io.get(), enabled] { io->setLineOutIncludeTx(enabled); });
     emit lineOutIncludeTxChanged(enabled);
+}
+
+void TciServer::setLineOutPcAudioOffConsent(bool enabled)
+{
+    if (m_lineOutPcAudioOffConsent == enabled) { return; }
+    m_lineOutPcAudioOffConsent = enabled;
+    writeRecordingSetting(QStringLiteral("lineOutPcAudioOffConsent"), enabled);
+    if (m_model) { m_model->setLineOutPcAudioOffConsent(enabled); }
+    emit lineOutPcAudioOffConsentChanged(enabled);
 }
 
 void TciServer::syncLineOutClient(const ClientState& client)

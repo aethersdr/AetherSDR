@@ -9906,6 +9906,13 @@ void RadioModel::requestLocalPtt()
 
 void RadioModel::createRxAudioStream()
 {
+    const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    if (!pcAudio && !lineOutAudioStreamDemanded()) {
+        qCDebug(lcProtocol) << "RadioModel: PC audio disabled and Line Out consent is off — skipping remote_audio_rx";
+        logRemoteAudioRxSummary(QStringLiteral("create skipped: Line Out not authorized while PC Audio is off"));
+        return;
+    }
+
     // A pre-connect PC Audio toggle must not leave a request pending when no
     // registered GUI session can send it. The connect handshake retries it.
     if (!hasCommandPlane() || !isConnected()
@@ -9975,7 +9982,7 @@ void RadioModel::createRxAudioStream()
 
 void RadioModel::removeRxAudioStream()
 {
-    if (m_lineOutAudioRequested) {
+    if (lineOutAudioStreamDemanded()) {
         m_rxAudio.removeRequested = false;
         return;
     }
@@ -10011,7 +10018,25 @@ void RadioModel::setLineOutAudioRequested(bool requested)
 {
     if (m_lineOutAudioRequested == requested) { return; }
     m_lineOutAudioRequested = requested;
-    if (requested) {
+    if (lineOutAudioStreamDemanded()) {
+        m_rxAudio.removeRequested = false;
+        createRxAudioStream();
+    } else if (AppSettings::instance().value("PcAudioEnabled", "True").toString() != "True") {
+        removeRxAudioStream();
+    }
+}
+
+bool RadioModel::lineOutAudioStreamDemanded() const
+{
+    const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    return m_lineOutAudioRequested && (pcAudio || m_lineOutPcAudioOffConsent);
+}
+
+void RadioModel::setLineOutPcAudioOffConsent(bool enabled)
+{
+    if (m_lineOutPcAudioOffConsent == enabled) { return; }
+    m_lineOutPcAudioOffConsent = enabled;
+    if (lineOutAudioStreamDemanded()) {
         m_rxAudio.removeRequested = false;
         createRxAudioStream();
     } else if (AppSettings::instance().value("PcAudioEnabled", "True").toString() != "True") {
@@ -10022,7 +10047,7 @@ void RadioModel::setLineOutAudioRequested(bool requested)
 void RadioModel::scheduleRxAudioStreamEnsure(const QString& reason)
 {
     const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
-    if (!pcAudio && !m_lineOutAudioRequested) {
+    if (!pcAudio && !lineOutAudioStreamDemanded()) {
         qCDebug(lcProtocol) << "RadioModel: PC audio disabled — skipping remote_audio_rx";
         if (m_rxAudio.streamId != 0) {
             qCDebug(lcProtocol) << "RadioModel: removing unexpected owned remote_audio_rx while PC audio is disabled";
@@ -10039,7 +10064,7 @@ void RadioModel::scheduleRxAudioStreamEnsure(const QString& reason)
             logRemoteAudioRxSummary(QStringLiteral("ensure canceled: disconnected"));
             return;
         }
-        if (!pcAudioNow && !m_lineOutAudioRequested) {
+        if (!pcAudioNow && !lineOutAudioStreamDemanded()) {
             logRemoteAudioRxSummary(QStringLiteral("ensure canceled: no longer needed"));
             return;
         }
@@ -10098,7 +10123,7 @@ bool RadioModel::handleRemoteAudioRxStreamStatus(const QString& object,
     }
 
     const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
-    if (!pcAudio && !m_lineOutAudioRequested && m_rxAudio.streamId != 0
+    if (!pcAudio && !lineOutAudioStreamDemanded() && m_rxAudio.streamId != 0
         && (action == RadioStatusOwnership::RemoteAudioRxAction::Adopted
             || action == RadioStatusOwnership::RemoteAudioRxAction::Updated)) {
         qCDebug(lcProtocol) << "RadioModel: removing restored remote_audio_rx because PC audio is disabled";

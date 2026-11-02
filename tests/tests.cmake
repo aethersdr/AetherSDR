@@ -10350,9 +10350,19 @@ if(NOT WIN32)
 endif()
 
 if(TARGET Qt6::WebSockets)
+    add_executable(tci_applet_test tests/tci_applet_test.cpp
+        src/gui/TciApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
+        src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp
+        src/gui/ControlAvailabilityRegistry.cpp)
+    target_include_directories(tci_applet_test PRIVATE src tests)
+    target_link_libraries(tci_applet_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+    add_test(NAME tci_applet_test COMMAND tci_applet_test)
+    set_tests_properties(tci_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
     add_executable(tci_rx_applet_test tests/tci_rx_applet_test.cpp
         src/gui/TciApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
-        src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp)
+        src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp
+        src/gui/ControlAvailabilityRegistry.cpp)
     target_include_directories(tci_rx_applet_test PRIVATE src tests)
     target_link_libraries(tci_rx_applet_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
     add_test(NAME tci_rx_applet_test COMMAND tci_rx_applet_test)
@@ -10393,6 +10403,7 @@ set(AETHER_SETTINGS_CONSUMERS
     noise_blanker_kind_model_test
     automation_nb2_capability_test
     tci_rx_audio_test
+    tci_applet_test
     tci_rx_applet_test
     bandscope_trace_render_test
     decoder_audio_routing_test
