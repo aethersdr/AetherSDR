@@ -30,7 +30,6 @@ private slots:
     void openLogFolder();
     void enableAll();
     void disableAll();
-    void sendToSupport();
 
 private:
     void buildUI();

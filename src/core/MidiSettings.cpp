@@ -497,7 +497,19 @@ void MidiSettings::load()
 
 bool MidiSettings::save()
 {
-    return saveBindings(loadBindings());
+    if (m_savesBlocked) {
+        qWarning() << "MidiSettings: refusing preference save; startup could not read"
+                   << settingsFilePath();
+        return false;
+    }
+    ReadOutcome outcome = ReadOutcome::Failed;
+    const QVector<MidiBinding> bindings = parseBindingsFromXml(settingsFilePath(), &outcome);
+    if (outcome == ReadOutcome::Failed) {
+        qWarning() << "MidiSettings: refusing preference save after settings read/parse failure"
+                   << settingsFilePath();
+        return false;
+    }
+    return saveBindings(bindings);
 }
 
 // ── Bindings ────────────────────────────────────────────────────────────────
@@ -507,8 +519,25 @@ QVector<MidiBinding> MidiSettings::loadBindings() const
     return parseBindingsFromXml(settingsFilePath());
 }
 
+QVector<MidiBinding> MidiSettings::loadStartupBindings()
+{
+    ReadOutcome outcome = ReadOutcome::Failed;
+    QVector<MidiBinding> bindings = parseBindingsFromXml(settingsFilePath(), &outcome);
+    m_savesBlocked = (outcome == ReadOutcome::Failed);
+    if (m_savesBlocked) {
+        qWarning() << "MidiSettings: could not read" << settingsFilePath()
+                   << "- leaving it untouched and refusing MIDI binding saves this session";
+    }
+    return bindings;
+}
+
 bool MidiSettings::saveBindings(const QVector<MidiBinding>& bindings)
 {
+    if (m_savesBlocked) {
+        qWarning() << "MidiSettings: refusing binding save; startup could not read"
+                   << settingsFilePath();
+        return false;
+    }
     return writeSettingsDocument(settingsFilePath(), bindings);
 }
 
@@ -560,11 +589,28 @@ bool MidiSettings::writeSettingsDocument(const QString& filePath,
     return true;
 }
 
-QVector<MidiBinding> MidiSettings::parseBindingsFromXml(const QString& filePath)
+QVector<MidiBinding> MidiSettings::parseBindingsFromXml(const QString& filePath,
+                                                      ReadOutcome* outcome)
 {
+    if (outcome) {
+        *outcome = ReadOutcome::Failed;
+    }
     QVector<MidiBinding> result;
     QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return result;
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        const QFileInfo info(filePath);
+        bool absent = !info.exists() && !info.isSymLink();
+#ifndef Q_OS_WIN
+        // exists() also reads false when the folder cannot be searched, which
+        // hides a file that is there. Only a searchable folder proves absence.
+        const QFileInfo dir(info.absolutePath());
+        absent = absent && (!dir.exists() || dir.permission(QFileDevice::ExeUser));
+#endif
+        if (outcome && absent) {
+            *outcome = ReadOutcome::Absent;
+        }
+        return result;
+    }
 
     QXmlStreamReader xml(&file);
     while (!xml.atEnd()) {
@@ -581,6 +627,9 @@ QVector<MidiBinding> MidiSettings::parseBindingsFromXml(const QString& filePath)
             if (!b.paramId.isEmpty())
                 result.append(b);
         }
+    }
+    if (outcome && !xml.hasError() && file.error() == QFileDevice::NoError) {
+        *outcome = ReadOutcome::Parsed;
     }
     return result;
 }

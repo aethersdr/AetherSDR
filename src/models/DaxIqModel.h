@@ -5,6 +5,7 @@
 #include <QMap>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QThread>
 #include <QVector>
 #include <QList>
@@ -60,6 +61,14 @@ public:
     // Queried on the owner thread at request time so model/backend replacement
     // cannot leave a cached limit from the previous radio.
     void setSampleRateProvider(std::function<QList<int>()> provider);
+
+    // Tests only: replaces the `pactl` call every worker makes to load or
+    // unload an IQ pipe's module-pipe-source, so a test launches no process
+    // from the worker thread (#6726). Returns the module index, 0 on failure.
+    // Set it before any DaxIqModel exists; it is read on the worker threads.
+    using PactlRunner = std::function<quint32(const QStringList&)>;
+    static void setPactlRunnerForTest(PactlRunner runner);
+
     QList<int> supportedSampleRates() const;
     bool supportsSampleRate(int rate) const;
     int sampleRateForPreference(int rate) const;

@@ -277,11 +277,13 @@ StripReverbPanel::StripReverbPanel(AudioEngine* engine, QWidget* parent)
     auto wire = [this, gridBox](ClientCompKnob* k, auto setter, auto vizSetter) {
         connect(k, &ClientCompKnob::valueChanged, this,
                 [this, setter, vizSetter, gridBox](float v) {
-            if (m_audio && m_audio->clientReverbTx()) {
-                (m_audio->clientReverbTx()->*setter)(v);
+            // Local object operands: see VfoWidget::buildTabContent (#6724).
+            if (auto* const engine = m_audio ? m_audio->clientReverbTx() : nullptr) {
+                (engine->*setter)(v);
                 m_audio->saveClientReverbSettings();
             }
-            (gridBox->*vizSetter)(v);
+            auto* const display = gridBox;
+            (display->*vizSetter)(v);
         });
     };
     wire(m_size,    &ClientReverb::setSize,        &GridBox::setSize);

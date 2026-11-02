@@ -628,8 +628,17 @@ void MainWindow::buildMenuBar()
 #else
         MidiControlManager* midi = nullptr;
 #endif
-        showOrRaisePersistent(m_ulanziMapperDialog, m_dialBackend,
-                              &m_shortcutManager, midi);
+        // A canon dialog, so not showOrRaisePersistent(): that applies View →
+        // Frameless Window, which a CanonWindow does not follow.
+        if (!m_ulanziMapperDialog) {
+            auto* dlg = new UlanziDialMapperDialog(m_dialBackend, &m_shortcutManager,
+                                                   midi, this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            m_ulanziMapperDialog = dlg;
+        }
+        m_ulanziMapperDialog->show();
+        m_ulanziMapperDialog->raise();
+        m_ulanziMapperDialog->activateWindow();
     });
     settingsMenu->addSeparator();
     auto* usbCablesAction = settingsMenu->addAction("USB Cables...");
@@ -661,23 +670,15 @@ void MainWindow::buildMenuBar()
 
     auto* spotsAction = settingsMenu->addAction("SpotHub...");
     connect(spotsAction, &QAction::triggered, this, [this] {
-        // A canon workspace window: created directly rather than through
-        // showOrRaisePersistent(), which would apply View → Frameless Window.
-        const bool wasFresh = !m_spotHubDialog;
-        if (wasFresh) {
-            auto* hub = new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
-                                            m_spotCollectorClient, m_potaClient, m_eibiClient,
-                                            m_n1mmSpotClient,
+        const bool wasFresh = showOrRaiseCanon(m_spotHubDialog, [this] {
+            return new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
+                                       m_spotCollectorClient, m_potaClient, m_eibiClient,
+                                       m_n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
-                                            m_freedvClient,
+                                       m_freedvClient,
 #endif
-                                            &m_radioModel, &m_dxccProvider, this);
-            hub->setAttribute(Qt::WA_DeleteOnClose);
-            m_spotHubDialog = hub;
-        }
-        m_spotHubDialog->show();
-        m_spotHubDialog->raise();
-        m_spotHubDialog->activateWindow();
+                                       &m_radioModel, &m_dxccProvider, this);
+        });
 #ifdef HAVE_WEBSOCKETS
         // Every open, not just the first: this dialog is a persistent
         // singleton, so without this the field would only ever show
@@ -861,16 +862,7 @@ void MainWindow::buildMenuBar()
             statusBar()->showMessage("Not connected to radio", 3000);
             return;
         }
-        // A canon workspace window: created directly rather than through
-        // showOrRaisePersistent(), which would apply View → Frameless Window.
-        if (!m_txBandDialog) {
-            auto* dialog = new TxBandDialog(&m_radioModel, this);
-            dialog->setAttribute(Qt::WA_DeleteOnClose);
-            m_txBandDialog = dialog;
-        }
-        m_txBandDialog->show();
-        m_txBandDialog->raise();
-        m_txBandDialog->activateWindow();
+        showOrRaiseCanon(m_txBandDialog, [this] { return new TxBandDialog(&m_radioModel, this); });
     });
 
     // Inhibit during TUNE submenu — user selects which TX outputs to suppress.
@@ -1643,6 +1635,11 @@ void MainWindow::buildMenuBar()
     });
 
     toolsMenu->addSeparator();
+    auto* labAction = toolsMenu->addAction(tr("AetherLab…"));
+    labAction->setObjectName(QStringLiteral("aetherLabAction"));
+    labAction->setStatusTip(tr("Open the Stick Pro analyzer workspace; RF isolation is required"));
+    connect(labAction, &QAction::triggered, this, &MainWindow::showAetherLab);
+
     auto* swrScanAction = toolsMenu->addAction("Start SWR Scan...");
     m_swrScanAction = swrScanAction;
     swrScanAction->setEnabled(false);
@@ -2312,11 +2309,29 @@ void MainWindow::wireUpdateChecker()
     m_updateController->refreshStaged(QString());
     connect(m_updateController, &UpdateController::stateChanged, this, [this] {
         if (m_titleBar) {
-            const bool ready = m_updateController->state() == UpdateController::State::Staged
-                               || m_updateController->state() == UpdateController::State::Handed;
+            const UpdateController::State s = m_updateController->state();
+            const bool ready = s == UpdateController::State::Staged || s == UpdateController::State::Installing
+                               || s == UpdateController::State::Handed;
             m_titleBar->setUpdateStaged(ready ? m_updateController->version() : QString());
         }
     });
+    // Restart to update, once the release is handed over: quit, the normal
+    // way, prompts and all.
+    connect(m_updateController, &UpdateController::restartReady, this,
+            [this](bool handed, const QString& problem, const QString& version) {
+                if (handed) {
+                    close();
+                } else if (m_updatesWindow) {
+                    m_updatesWindow->showInstallProblem(problem, version);
+                }
+            });
+    // Install for updates: installed, and it starts once this copy quits.
+    connect(m_updateController, &UpdateController::appImageInstalled, this,
+            [this](bool restart, const QString&) {
+                if (restart) {
+                    close();
+                }
+            });
     connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
             [this](const QString& ver) {
         m_updateController->refreshStaged(ver);
@@ -2387,16 +2402,12 @@ void MainWindow::showUpdatesWindow(bool checkNow)
 void MainWindow::restartToUpdate()
 {
     // The helper waits for this process to exit, then swaps the release in
-    // and starts it; the quit is the normal one, prompts and all.
+    // and starts it; restartReady closes the window once it has it.
     QString problem;
-    const QString version = m_updateController->version();   // before a refusal clears it
-    if (!m_updateController->restartToUpdate(&problem)) {
-        if (m_updatesWindow) {
-            m_updatesWindow->showInstallProblem(problem, version);
-        }
-        return;
+    const QString version = m_updateController->version();
+    if (!m_updateController->restartToUpdate(&problem) && m_updatesWindow) {
+        m_updatesWindow->showInstallProblem(problem, version);
     }
-    close();
 }
 
 void MainWindow::reportLastUpdate()
@@ -2413,6 +2424,8 @@ void MainWindow::reportLastUpdate()
         text = tr("The update to %1 couldn't be put in place, so nothing changed.").arg(r.version);
     } else if (r.outcome == QLatin1String("OldStillRunning")) {
         text = tr("The update to %1 installs the next time you quit.").arg(r.version);
+    } else if (r.outcome == QLatin1String("Installed")) {
+        text = tr("AetherSDR %1 is installed for updates. It updates itself from File > Update.").arg(r.version);
     }
     if (!text.isEmpty()) {
         statusBar()->showMessage(text, 10000);
