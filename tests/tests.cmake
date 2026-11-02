@@ -774,8 +774,8 @@ add_test(NAME radio_discovery_source_test COMMAND radio_discovery_source_test)
 # Socket-free daemon startup policy: a fresh child process reads isolated saved
 # nicknames through native static helpers; no discovery source is started with
 # local=true and no socket, USB scan or synthetic firmware peer is used.
-# Also launches the real daemon with an invalid logical endpoint name, which
-# must fail before binding a socket or constructing model/settings consumers.
+# Also checks directed-address diagnostics with an invalid logical endpoint
+# guarding every child: no bind occurs even if argument validation regresses.
 add_executable(aetherd_discovery_startup_test tests/aetherd_discovery_startup_test.cpp)
 target_include_directories(aetherd_discovery_startup_test PRIVATE src tests)
 target_compile_definitions(aetherd_discovery_startup_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
@@ -2642,6 +2642,21 @@ target_include_directories(hl2_discovery_logging_test PRIVATE src)
 target_link_libraries(hl2_discovery_logging_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME hl2_discovery_logging_test COMMAND hl2_discovery_logging_test)
 
+# A directed discovery target finds an HL2 a broadcast cannot reach (aetherd
+# --hl2-address): the target filter, socket-free.
+add_executable(hl2_directed_discovery_test
+    tests/hl2_directed_discovery_test.cpp
+    src/core/backends/hl2/Hl2Discovery.cpp
+    src/core/backends/hl2/MetisProtocol.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+)
+set_target_properties(hl2_directed_discovery_test PROPERTIES AUTOMOC ON)
+target_include_directories(hl2_directed_discovery_test PRIVATE src)
+target_link_libraries(hl2_directed_discovery_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME hl2_directed_discovery_test COMMAND hl2_directed_discovery_test)
+
 add_executable(nr2_settings_model_test
     tests/nr2_settings_model_test.cpp
     src/models/Nr2SettingsModel.cpp
@@ -3957,6 +3972,9 @@ add_executable(flex_control_visibility_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -3983,6 +4001,9 @@ add_executable(radio_setup_no_transient_window_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4021,6 +4042,9 @@ add_executable(radio_setup_region_field_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4048,6 +4072,9 @@ add_executable(radio_setup_operations_test
     src/gui/TxBandDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4080,6 +4107,9 @@ add_executable(radio_setup_label_theme_token_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4106,6 +4136,9 @@ add_executable(radio_setup_window_size_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4132,6 +4165,9 @@ add_executable(radio_setup_pair_grid_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4164,6 +4200,9 @@ add_executable(radio_setup_max_power_field_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4193,6 +4232,9 @@ add_executable(radio_setup_tx_timing_fields_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4223,6 +4265,9 @@ add_executable(radio_setup_recording_mode_dim_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4254,6 +4299,9 @@ add_executable(radio_setup_headphone_output_gate_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4288,6 +4336,9 @@ add_executable(radio_nickname_test
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kpa500AdvancedWidget.cpp
@@ -4355,6 +4406,9 @@ add_executable(radio_setup_show_tx_waterfall_test
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -5944,6 +5998,9 @@ add_executable(peripheral_auth_dialog_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -6692,6 +6749,7 @@ add_test(NAME hid_device_parser_test COMMAND hid_device_parser_test)
 # Not a ctest (needs an input file); built on demand for troubleshooting.
 add_executable(ax25_replay EXCLUDE_FROM_ALL
     tools/ax25_replay.cpp
+    tools/Ax25ReplayWav.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
     src/core/tnc/HdlcCodec.cpp
@@ -6703,8 +6761,18 @@ add_executable(ax25_replay EXCLUDE_FROM_ALL
 target_include_directories(ax25_replay PRIVATE src)
 target_link_libraries(ax25_replay PRIVATE Qt6::Core aether_libmodem_core aether_afskdemod)
 
+# File-only parser coverage; no modem, settings, or radio transport.
+add_executable(ax25_replay_wav_test
+    tests/ax25_replay_wav_test.cpp
+    tools/Ax25ReplayWav.cpp
+)
+target_include_directories(ax25_replay_wav_test PRIVATE tools)
+target_link_libraries(ax25_replay_wav_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME ax25_replay_wav_test COMMAND ax25_replay_wav_test)
+
 add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
     tools/ax25_session_analyze.cpp
+    tools/Ax25SessionWav.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
     src/core/tnc/HdlcCodec.cpp
@@ -6717,6 +6785,15 @@ add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
 )
 target_include_directories(ax25_session_analyze PRIVATE src)
 target_link_libraries(ax25_session_analyze PRIVATE Qt6::Core aether_libmodem_core aether_afskdemod)
+
+# File-only parser coverage; no modem, settings, or radio transport.
+add_executable(ax25_session_wav_test
+    tests/ax25_session_wav_test.cpp
+    tools/Ax25SessionWav.cpp
+)
+target_include_directories(ax25_session_wav_test PRIVATE tools)
+target_link_libraries(ax25_session_wav_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME ax25_session_wav_test COMMAND ax25_session_wav_test)
 
 # AX.25 airtime model + link-liveness behaviour (T3 idle poll, bounded REJ
 # recovery, SABME refusal, Karn-safe RTT sampling). See docs/HFMODEM.md.
@@ -8829,6 +8906,26 @@ add_test(NAME waveform_env_control_test COMMAND waveform_env_control_test)
 set_tests_properties(waveform_env_control_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# SmartSDR 4.3 NTP time sources (#6953): validation, Flex capability and wire
+# text, `ntp_sources` decode, the subscription, the remove-and-create edit and
+# the Radio Setup Time page. Recording sinks and injected status; no socket.
+add_executable(ntp_sources_test
+    tests/ntp_sources_test.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+)
+target_include_directories(ntp_sources_test PRIVATE src tests)
+target_link_libraries(ntp_sources_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+set_target_properties(ntp_sources_test PROPERTIES AUTOMOC ON)
+add_test(NAME ntp_sources_test COMMAND ntp_sources_test)
+set_tests_properties(ntp_sources_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # AntennaChoiceGate.h: when the RX/TX antenna menus refuse instead of offering
 # invented ANT1/ANT2. Header-only predicate, no Qt.
 add_executable(antenna_choice_gate_test tests/antenna_choice_gate_test.cpp)
@@ -10226,6 +10323,7 @@ set(AETHER_SETTINGS_CONSUMERS
     dax_receive_applet_test
     graphic_eq_persistence_test
     hl2_discovery_logging_test
+    hl2_directed_discovery_test
     reroute_dead_controls_test
     cat_freedv_mode_tokens_test
     hl2_bandstack_digital_agc_test
