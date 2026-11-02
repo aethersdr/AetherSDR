@@ -2,6 +2,7 @@
 
 #include <QLoggingCategory>
 #include <QNetworkDatagram>
+#include <QStringList>
 #include <QTimer>
 #include <QUdpSocket>
 
@@ -81,7 +82,28 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     if (m_host.isNull())
         return false;   // not a parseable IPv4/IPv6 literal -- fail fast, no hostname lookup here
 
-    m_ddc0FreqWord = 0;
+    // Resolve the session's DDC list ONCE, before anything is sent: the
+    // caller's explicit list, or RX1 alone on its routed DDC. See
+    // Params::activeDdcs for why these are not merged. Entries the codec would
+    // ignore are dropped here, so the list, the enable mask and the link DDC
+    // all describe the DDCs the radio is actually asked for.
+    const std::vector<DdcConfig> requested = params.activeDdcs.empty()
+        ? std::vector<DdcConfig>{DdcConfig{.ddc = kRx1Route.ddc,
+                                           .rateKsps = params.rx1RateKsps,
+                                           .adcIndex = params.rx1AdcIndex}}
+        : params.activeDdcs;
+    std::vector<DdcConfig> ddcs;
+    std::uint8_t enabledDdcs = 0;
+    for (const DdcConfig& ddc : requested) {
+        if (ddc.ddc < 0 || ddc.ddc >= kMaxDdcs || (enabledDdcs & (1u << ddc.ddc)) != 0)
+            continue;
+        enabledDdcs |= static_cast<std::uint8_t>(1u << ddc.ddc);
+        ddcs.push_back(ddc);
+    }
+    if (ddcs.empty())
+        return false;   // no DDC to run, so the radio would never send a frame
+
+    m_ddcFreqWords.fill(0);
     m_bypassAdc0Filters = params.bypassAdc0Filters;
     m_bypassAdc1Filters = params.bypassAdc1Filters;
     m_adc0AttenuationDb = params.adc0AttenuationDb;
@@ -89,7 +111,7 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     m_speakerAudioEnabled = params.speakerAudioEnabled;
     m_bandFiltersEnabled = params.bandFiltersEnabled;
     m_speakerAmpMuted = params.speakerAmpMuted;
-    m_ddc0FreqHz = 0.0;   // cleared with m_ddc0FreqWord: nothing is tuned yet
+    m_ddcFreqHz.fill(0.0);   // cleared with m_ddcFreqWords: nothing is tuned yet
     m_speakerPending.clear();
     m_speakerPacer.reset();
     // Sequence restarts per session, like the DDC expectations below: p2app
@@ -98,11 +120,10 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     m_speakerOverflowLogged = false;
     m_speakerUnderflowReports = 0;
     m_lastSpeakerFifoLevel = 0;
-    // Every DDC's sequence tracker, not just DDC0's -- a stale expectation
+    // Every DDC's sequence tracker, not just the link DDC's -- a stale expectation
     // carried across a restart would report a phantom gap on the new
     // session's first frame.
     m_expectedSeq.fill(std::nullopt);
-    m_activeDdcCount = 1;   // real value set once the DDC list is resolved below
     m_drops = 0;
     m_rxBytes = 0;
     m_rxPackets = 0;
@@ -128,23 +149,16 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     //
     // Discovery FIRST, from this socket -- see the class comment for why:
     // it is the source port of THIS packet that decides where the radio
-    // sends DDC0 IQ, not the source port of General/DDC-Specific/High-
+    // sends IQ, not the source port of General/DDC-Specific/High-
     // Priority below. The reply (if any arrives here) is not parsed;
-    // onReadyRead() already drops anything that isn't DDC0-shaped.
+    // onReadyRead() already drops anything that isn't DDC-shaped.
     sendTo(*m_socket, buildDiscovery(), m_host, kRadioPort, m_txBytes);
     sendTo(*m_socket, buildGeneral(), m_host, kRadioPort, m_txBytes);
 
-    // Resolve the session's DDC list ONCE: either the caller's explicit
-    // multi-DDC list, or a one-element list from the DDC0 shorthand. See
-    // Params::activeDdcs for why these are not merged.
-    std::vector<DdcConfig> ddcs = params.activeDdcs;
-    if (ddcs.empty())
-        ddcs.push_back(DdcConfig{params.ddc0RateKsps, params.ddc0AdcIndex});
-    if (static_cast<int>(ddcs.size()) > kMaxDdcs)
-        ddcs.resize(kMaxDdcs);
-    m_activeDdcCount = static_cast<int>(ddcs.size());
+    m_enabledDdcs = enabledDdcs;
+    m_linkDdc = ddcs.front().ddc;
     // Retained for setDdcRateLive() -- see its own comment for why the whole
-    // list (not just the count) has to survive start().
+    // list (not just the mask) has to survive start().
     m_activeDdcs = ddcs;
     m_ditherEnabled = params.ditherEnabled;
     m_randomEnabled = params.randomEnabled;
@@ -152,13 +166,10 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     // Destination ports below are NOT interchangeable with kRadioPort -- see
     // kDdcSpecificPort/kHighPriorityPort's comment. p2app tells these two
     // packet types apart by which port they arrive on.
-    sendTo(*m_socket,
-          buildDdcSpecific(ddcs, /*numAdcs=*/2,
-                           params.ditherEnabled, params.randomEnabled),
-          m_host, kDdcSpecificPort, m_txBytes);
-    // Every DDC gets the shared m_ddc0FreqWord (sharedFreqWords()): there is no
-    // per-DDC tuning setter yet. All run=1 senders build the packet the same
-    // way, so they cannot disagree (#5547).
+    sendTo(*m_socket, ddcSpecificPacket(), m_host, kDdcSpecificPort, m_txBytes);
+    // Every DDC's word is zero until the caller tunes it (setDdcFrequencyHz()).
+    // All run=1 senders build the packet the same way, so they cannot
+    // disagree (#5547).
     sendRunningHighPriority();
 
     m_keepaliveTimer->start();
@@ -235,7 +246,7 @@ QString P2Client::localEndpoint() const
         return {};
     // AnyIPv4 prints as "0.0.0.0", which is the honest answer for a wildcard
     // bind -- the socket genuinely is not pinned to one interface. The PORT is
-    // the load-bearing half anyway: it is what the radio streams DDC0 to.
+    // the load-bearing half anyway: it is what the radio streams IQ to.
     return QStringLiteral("%1:%2").arg(m_socket->localAddress().toString())
                                   .arg(port);
 }
@@ -370,12 +381,18 @@ void P2Client::onSpeakerDrainTick()
     }
 }
 
-void P2Client::setDdc0FrequencyHz(double hz)
+void P2Client::setDdcFrequencyHz(int ddcIndex, double hz)
 {
-    m_ddc0FreqWord = phaseWord(hz);
-    // Moves with m_ddc0FreqWord and nothing else: a stale value would energise
+    // A word for any other DDC would go out in every High Priority packet for
+    // a receiver nobody runs.
+    if (!isEnabledDdc(ddcIndex)) {
+        return;
+    }
+    const auto slot = static_cast<std::size_t>(ddcIndex);
+    m_ddcFreqWords[slot] = phaseWord(hz);
+    // Moves with the word and nothing else: a stale value would energise
     // the filter for a band the receiver has left.
-    m_ddc0FreqHz = hz;
+    m_ddcFreqHz[slot] = hz;
     if (m_running && m_socket) {
         sendRunningHighPriority();
     }
@@ -418,7 +435,7 @@ HighPriorityOptions P2Client::highPriorityOptions() const
     HighPriorityOptions opts;
     opts.muteSpeakerAmp = m_speakerAmpMuted;
     if (m_bandFiltersEnabled) {
-        // Both banks follow DDC0's frequency, as deskHPSDR's do with one
+        // Both banks follow the link DDC's frequency, as deskHPSDR's do with one
         // receiver: an unset bank would keep whatever the last session
         // energised. The selection replaces the bypass flags; they are the
         // same relay bit.
@@ -426,43 +443,51 @@ HighPriorityOptions P2Client::highPriorityOptions() const
         // The relays switch only when the tuned frequency crosses a band
         // edge, and AnanBackend throttles retunes before they reach here
         // (scheduleTuneApply()), so a drag across bands sends a few packets.
-        const AlexRxFilter filter = alexRxFilterFor(m_ddc0FreqHz);
+        const AlexRxFilter filter =
+            alexRxFilterFor(m_ddcFreqHz[static_cast<std::size_t>(m_linkDdc)]);
         opts.adc0Filter = filter;
         opts.adc1Filter = filter;
     }
     return opts;
 }
 
+std::array<std::uint8_t, 1444> P2Client::ddcSpecificPacket() const
+{
+    return buildDdcSpecific(m_activeDdcs, /*numAdcs=*/2, m_ditherEnabled, m_randomEnabled);
+}
+
+std::array<std::uint8_t, 1444> P2Client::runningHighPriorityPacket() const
+{
+    return buildHighPriority(true, m_ddcFreqWords,
+                             m_bypassAdc0Filters, m_bypassAdc1Filters,
+                             m_adc0AttenuationDb, m_adc1AttenuationDb,
+                             highPriorityOptions());
+}
+
 void P2Client::sendRunningHighPriority()
 {
-    sendTo(*m_socket,
-          buildHighPriority(true, sharedFreqWords(),
-                            m_bypassAdc0Filters, m_bypassAdc1Filters,
-                            m_adc0AttenuationDb, m_adc1AttenuationDb,
-                            highPriorityOptions()),
-          m_host, kHighPriorityPort, m_txBytes);
+    sendTo(*m_socket, runningHighPriorityPacket(), m_host, kHighPriorityPort, m_txBytes);
 }
 
 bool P2Client::setDdcRateLive(int ddcIndex, int rateKsps)
 {
-    if (!m_running || !m_socket)
+    // isEnabledDdc() range-checks ddcIndex, which indexes m_expectedSeq below.
+    if (!m_running || !m_socket || !isEnabledDdc(ddcIndex))
         return false;
-    if (ddcIndex < 0 || ddcIndex >= static_cast<int>(m_activeDdcs.size()))
+    const auto slot = std::find_if(m_activeDdcs.begin(), m_activeDdcs.end(),
+                                   [ddcIndex](const DdcConfig& ddc) { return ddc.ddc == ddcIndex; });
+    if (slot == m_activeDdcs.end())
         return false;
 
-    auto& slot = m_activeDdcs[static_cast<std::size_t>(ddcIndex)];
-    const bool rateChanged = slot.rateKsps != rateKsps;
-    slot.rateKsps = rateKsps;
+    const bool rateChanged = slot->rateKsps != rateKsps;
+    slot->rateKsps = rateKsps;
     // Whole packet, every DDC's row -- see this function's declaration
     // comment. Same destination port start() used: p2app tells DDC-Specific
     // from High Priority by which port it arrives on, so this is not
     // interchangeable with kRadioPort. Sent even when rateChanged is false:
     // AnanBackend retries this call at 60/140 ms for UDP loss, and those
     // retries must not no-op after the first write (#5547).
-    sendTo(*m_socket,
-          buildDdcSpecific(m_activeDdcs, /*numAdcs=*/2,
-                           m_ditherEnabled, m_randomEnabled),
-          m_host, kDdcSpecificPort, m_txBytes);
+    sendTo(*m_socket, ddcSpecificPacket(), m_host, kDdcSpecificPort, m_txBytes);
 
     // The stream's sample cadence changes underneath us from here, so the
     // sequence expectation for THIS DDC is no longer meaningful -- clear it
@@ -489,7 +514,8 @@ void P2Client::onConnectTimeout()
 {
     if (!m_linkUp)
         emit connectionError(QStringLiteral(
-            "no DDC0 IQ from the radio within %1 ms of start").arg(m_activeConnectTimeoutMs));
+            "no IQ from the radio's DDC%1 within %2 ms of start")
+            .arg(m_linkDdc).arg(m_activeConnectTimeoutMs));
 }
 
 void P2Client::onReadyRead()
@@ -531,7 +557,7 @@ void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 sende
 
     const auto frame = parseDdcFrame(bytes);
     if (!frame) {
-        // Not DDC0-shaped: Mic Data, High Priority Status, or this session's
+        // Not DDC-shaped: Mic Data, High Priority Status, or this session's
         // Discovery reply. Parse the reply on EVERY datagram (notify once): skipping it
         // would let a duplicate reply fall through and decode as a phantom underflow.
         if (const auto reply = parseDiscoveryReply(bytes)) {
@@ -554,23 +580,27 @@ void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 sende
 
     // Which DDC sent this. The IQ packet carries no DDC index of its
     // own, so the sender port is the only discriminator -- see
-    // ddcIndexForSenderPort()'s comment for how that is verified.
+    // ddcIndexForSenderPort()'s comment for how that is verified. Only a DDC
+    // this session enabled counts.
     const auto ddcIndex = ddcIndexForSenderPort(
-        static_cast<std::uint16_t>(senderPort), m_activeDdcCount);
-    if (!ddcIndex) {
+        static_cast<std::uint16_t>(senderPort), kMaxDdcs);
+    if (!ddcIndex || !isEnabledDdc(*ddcIndex)) {
         // DDC-shaped but from a port this session did not enable (another client, or a
         // DDC left running): drop it without counting a drop. Warn once per port, since
         // a source-port mismatch (other firmware, NAT, negotiated ports) would otherwise
-        // present only as onConnectTimeout()'s "no DDC0 IQ".
+        // present only as onConnectTimeout()'s "no IQ".
         if (!m_warnedUnexpectedPorts.contains(senderPort)) {
             m_warnedUnexpectedPorts.insert(senderPort);
+            QStringList expected;
+            for (int n = 0; n < kMaxDdcs; ++n) {
+                if (isEnabledDdc(n))
+                    expected << QString::number(kDdc0DefaultPort + n);
+            }
             qCWarning(lcAnanP2).nospace()
                 << "ANAN: dropping DDC-shaped datagram from unexpected "
                    "sender port " << senderPort << " (expected "
-                << kDdc0DefaultPort << ".."
-                << (kDdc0DefaultPort + m_activeDdcCount - 1)
-                << " for " << m_activeDdcCount
-                << " active DDC(s)) -- not counted as a drop";
+                << expected.join(QLatin1Char('/'))
+                << " for this session's DDCs) -- not counted as a drop";
         }
         return;
     }
@@ -592,11 +622,11 @@ void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 sende
     }
     m_expectedSeq[slot] = frame->seq + 1;
 
-    // linkUp stays keyed on DDC0: it is the receiver every session has,
-    // and the connect timeout's message says "no DDC0 IQ". A session
-    // whose DDC1 streamed but whose DDC0 never did is a real failure,
-    // not a connected session.
-    if (!m_linkUp && *ddcIndex == 0) {
+    // linkUp stays keyed on the link DDC: it carries the receiver every
+    // session has, and the connect timeout's message names it. A session
+    // whose other DDC streamed but whose link DDC never did is a real
+    // failure, not a connected session.
+    if (!m_linkUp && *ddcIndex == m_linkDdc) {
         m_linkUp = true;
         m_connectTimeoutTimer->stop();
         emit linkUp();
@@ -605,8 +635,6 @@ void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 sende
     m_decodeScratch.clear();
     decodeIq(*frame, m_decodeScratch);
     emit ddcIqReady(*ddcIndex, m_decodeScratch);
-    if (*ddcIndex == 0)
-        emit ddc0IqReady(m_decodeScratch);
 }
 
 }  // namespace AetherSDR::anan

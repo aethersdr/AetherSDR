@@ -258,6 +258,17 @@ QString redactPii(const QString& msg)
         QRegularExpression::CaseInsensitiveOption);
     out.replace(*digestRe, QStringLiteral("\\1***REDACTED***"));
 
+    // A Flex waveform container environment (SmartSDR 4.3.16) can hold an API key
+    // or password under ANY variable name, so no keyword table can know it. Both
+    // wire shapes are scrubbed whole: the staged value runs to the end of the line
+    // because it may contain spaces, and the reported env= is base64 JSON.
+    static const QRegularExpression* waveformEnvStageRe = new QRegularExpression(
+        R"((\bwaveform env [A-Za-z_][A-Za-z0-9_]*=)[^\r\n]*)");
+    out.replace(*waveformEnvStageRe, QStringLiteral("\\1***REDACTED***"));
+    static const QRegularExpression* waveformEnvReportRe = new QRegularExpression(
+        R"((\bwaveform container\b[^\r\n]*?\benv=)[^\s"]+)");
+    out.replace(*waveformEnvReportRe, QStringLiteral("\\1***REDACTED***"));
+
     // Every keyword rule, generated once from the one table (#5480).
     for (const FieldRule& rule : fieldRules())
         out = redactField(std::move(out), rule);

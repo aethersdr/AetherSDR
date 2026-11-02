@@ -125,9 +125,9 @@ void CanonWindow::keyPressEvent(QKeyEvent* event)
 
 void CanonWindow::hideEvent(QHideEvent* event)
 {
-    // Move and resize saves are in memory; hiding flushes them to disk. Hide,
-    // not close: Escape and Ctrl+W go through QDialog::reject(), which hides
-    // the window without a close event.
+    // Move and resize saves are in memory; hiding flushes them to disk. Here,
+    // not in closeEvent(): Escape and Ctrl+W go through QDialog::reject(),
+    // which closes the window (WA_DeleteOnClose applies) without calling it.
     if (!m_geometryKey.isEmpty() && m_placed) {
         saveGeometryToSettings();
         AppSettings::instance().save();
