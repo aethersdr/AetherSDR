@@ -54,6 +54,11 @@ Skimmer spots from the Reverse Beacon Network, over the same telnet protocol.
 - **Rate Limit** — maximum spots per second sent to the radio (default 10), so contests don't flood the display. Extra spots are queued for the next batch.
 - **Startup Commands…**, **Auto-Connect**, **Hide Unverified**, **RBN Console** and **Spot Color** (default blue) as on the Cluster tab
 
+Queued radio-bound spots belong to the current connection. Disconnecting or
+pressing **Clear All** discards the older queue, so it cannot refill the radio's
+spot list after a clear or carry into a replacement session. New arrivals can
+populate the list again.
+
 ### WSJT-X (decode spotter)
 
 Listens for WSJT-X decode messages over UDP and spots the stations you are hearing.

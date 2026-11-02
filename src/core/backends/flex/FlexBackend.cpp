@@ -788,6 +788,18 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasVoiceKeyer = true;
     caps.hasFullDuplex = true;
     caps.hasWaveforms = true;            // installable SmartSDR waveforms
+    // Container environments (FlexLib 4.3.16 Radio.cs:8841-8861) need firmware
+    // that has them and a platform with a Waveform Processor.
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform != RadioPlatform::Unknown
+        && !isKnownNonWfpPlatform(mc.platform)) {
+        caps.waveformEnvControl = RadioCapabilities::WaveformEnvControl{};
+    }
+    // The radio's own NTP time sources (FlexLib 4.3.16 NtpSource.cs; SMART-10565
+    // names FLEX-8000/Aurora). FlexLib subscribes on every radio, so the gate is
+    // the platform those share: BigBend, ML-9600 and CL-9300 included.
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform == RadioPlatform::BigBend) {
+        caps.ntpSourceControl = RadioCapabilities::NtpSourceControl{NtpSourceRules::kMaxSources};
+    }
     caps.hasMultiClientSessions = true;  // multiFLEX
     caps.alwaysUseClientSideSpots = false;
     // TNFs. Neither FlexLib nor the `tnf` status declares a ceiling — Radio.cs

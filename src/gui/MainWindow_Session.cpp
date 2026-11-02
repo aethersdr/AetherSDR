@@ -6,6 +6,7 @@
 // at its original constructor position.
 
 #include "MainWindow.h"
+#include "models/AntennaAnalyzerModel.h"
 
 #include "MeterApplet.h"
 
@@ -48,6 +49,7 @@
 #include "PanadapterApplet.h"
 #include "PanFrameGuard.h"
 #include "CatControlApplet.h"
+#include "models/ReceiverSlotCount.h"
 #include "ClientChainApplet.h"
 #include "DaxApplet.h"
 #include "DaxIqApplet.h"
@@ -309,9 +311,19 @@ void MainWindow::refreshRadioTabs()
             || entry.id == m_lastSessionTab.id
             || !hidden.contains(entry.id);
     }
-    m_titleBar->setRadioTabs(tabs);
     m_titleBar->setDiscoveredRadios(tabs);
+    if (m_aetherLabWidget) {
+        RadioTabEntry lab;
+        lab.kind = RadioTabEntry::Kind::Workspace;
+        lab.id = QStringLiteral("aetherlab");
+        lab.name = tr("AetherLab");
+        lab.detail = tr("Antenna Analyzer · USB");
+        tabs.append(lab);
+    }
+    m_titleBar->setRadioTabs(tabs);
+    // Refresh radio-link ownership even while the lab remains selected.
     m_titleBar->setActiveRadio(activeSerial);
+    if (m_aetherLabActive) { m_titleBar->setActiveRadio(QStringLiteral("aetherlab")); }
 }
 
 void MainWindow::wireDiscovery()
@@ -547,6 +559,8 @@ void MainWindow::wireDiscovery()
         // operator confirm — the tab is a selector, not a disconnect button.
         connect(m_titleBar, &TitleBar::radioTabActivated, this,
                 [this](const QString& radioId) {
+            if (radioId == QLatin1String("aetherlab")) { showAetherLab(); return; }
+            returnFromAetherLab();
             if (m_radioModel.isConnected() && m_radioModel.serial() == radioId) {
                 return;   // already the active session — nothing to do
             }
@@ -606,6 +620,8 @@ void MainWindow::wireDiscovery()
             dialog->show();
             editor->setFocus(Qt::OtherFocusReason);
         });
+        connect(m_titleBar->radioTabBar(), &RadioTabBar::aetherLabRequested,
+                this, &MainWindow::showAetherLab);
         connect(m_titleBar->radioTabBar(), &RadioTabBar::rescanRequested,
                 m_connPanel, &ConnectionPanel::retryDiscoveryRequested);
         connect(m_titleBar->radioTabBar(), &RadioTabBar::radioActionRequested,
@@ -793,6 +809,10 @@ void MainWindow::disconnectFromRadioByUser()
     s.remove("LastConnectedRadioSerial");
     s.remove("LastRoutedRadioIp");
     s.save();
+    // Lift any adaptive cap while the link is up, so the radio keeps the
+    // operator's rates rather than the cap for the next session.
+    if (m_adaptiveThrottleActive)
+        restorePreCapPanRates();
     m_radioModel.disconnectFromRadio();
 }
 
@@ -2491,6 +2511,45 @@ void MainWindow::wirePanLifecycle()
 
 }
 
+void MainWindow::applyCatPortCount()
+{
+    auto& s = AppSettings::instance();
+    const bool masterOn = s.value("CatEnabled", "False").toString() == "True";
+
+    for (int i = 0; i < kCatPorts; ++i) {
+        if (!catPort(i)) {
+            continue;
+        }
+
+        const QString prefix = QString("CatPort_%1_").arg(i);
+        const bool portEnabled = s.value(prefix + "Enabled", "False").toString() == "True";
+        const QString d = s.value(prefix + "Dialect", "Rigctld").toString();
+        const CatDialect dialect = dialectFromKey(d);
+        const QString defaultPort = dialect == CatDialect::OTRSP
+            ? QString::number(CatPort::kOtrspDefaultPort) : QString();
+        const QString savedPort = s.value(prefix + "Port", "").toString();
+        const int portNum = (savedPort.isEmpty() ? defaultPort : savedPort).toInt();
+        // CAT ports are independent control channels, not one port per receiver.
+        const bool shouldRun = masterOn && portEnabled && portNum >= 1024 && portNum <= 65535;
+
+        if (shouldRun && !catPort(i)->isRunning()) {
+            catPort(i)->setDialect(dialect);
+            catPort(i)->setVfoA(s.value(prefix + "VfoA", "0").toInt());
+            catPort(i)->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
+            catPort(i)->start(static_cast<quint16>(portNum));
+        } else if (!shouldRun
+                   && (catPort(i)->isRunning() || !catPort(i)->errorString().isEmpty())) {
+            catPort(i)->stop();
+        }
+    }
+
+    auto* applet = m_appletPanel ? m_appletPanel->catControlApplet() : nullptr;
+    if (applet) {
+        applet->setCatEnabled(masterOn);
+        applet->setMaxSlices(ReceiverSlotCount::catLetters(&m_radioModel));
+    }
+}
+
 void MainWindow::wireCatPorts()
 {
     // ── Unified CAT ports (kCatPorts slots, configured from settings) ───────────
@@ -2507,9 +2566,7 @@ void MainWindow::wireCatPorts()
         const QString prefix = QString("CatPort_%1_").arg(i);
         auto& s = AppSettings::instance();
         QString d = s.value(prefix + "Dialect", "Rigctld").toString();
-        CatDialect dial = (d == "FlexCAT") ? CatDialect::FlexCAT
-                        : (d == "TS2000")  ? CatDialect::TS2000
-                        : CatDialect::Rigctld;
+        CatDialect dial = dialectFromKey(d);
         catPort(i)->setDialect(dial);
         catPort(i)->setVfoA(s.value(prefix + "VfoA", "0").toInt());
         catPort(i)->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
@@ -2549,6 +2606,12 @@ void MainWindow::wireCatPorts()
     m_session->setTciServer(tci);
     m_appletPanel->tciApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->tciApplet()->setTciServer(tciServer());
+    // `rx_ctun_ex` (Thetis CTUN) drives center lock, the inverse switch. A TCI
+    // client is not the operator: it changes the live lock only, never the
+    // saved preference, so it does not outlive the session.
+    tci->setCenterLockHandlers(
+        [this](int sliceId, bool locked) { setSessionCenterLockForSlice(sliceId, locked); },
+        [this](int sliceId) { return centerLockActiveForSlice(m_radioModel.slice(sliceId)); });
     // TCI RX row count follows the radio's slice capacity too (#4854 review).
     if (auto* tciApplet = m_appletPanel->tciApplet()) {
         tciApplet->setMaxDaxChannels(m_radioModel.maxSlices());
@@ -3014,6 +3077,9 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
             };
         }
         return tciServer()->routingSnapshot();
+    });
+    m_automation->setLabHandler([this](const QString& action, const QString& value) {
+        return antennaAnalyzerModel()->automation(action, value);
     });
     m_automation->setDeviceDiagnosticsHandler([this](const QString& diagnostic) {
         if (diagnostic != QLatin1String("ulanzi")

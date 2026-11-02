@@ -781,6 +781,7 @@ QVariantMap TitleBar::barState() const
         {QStringLiteral("update"),
          QVariantMap{
              {QStringLiteral("version"), m_updateVersion},
+             {QStringLiteral("staged"), m_stagedVersion},
              {QStringLiteral("visible"), m_updateBadge && m_updateBadge->isVisible()},
          }},
         {QStringLiteral("appMenu"),
@@ -1346,22 +1347,34 @@ void TitleBar::setUpdateAvailable(const QString& latestVersion)
     // tooltip (which Qt may render as rich text).
     const VersionNumber parsed = VersionNumber::parse(latestVersion);
     m_updateVersion = parsed.isNull() ? QString() : parsed.toString();
-    if (m_updateBadge) {
-        const QString tip = m_updateVersion.isEmpty()
-            ? QString()
-            : QStringLiteral("AetherSDR v%1 is available. Click for details.")
-                  .arg(m_updateVersion);
-        m_updateBadge->setToolTip(tip);
-        m_updateBadge->setAccessibleDescription(tip);
-    }
+    refreshUpdateBadge();
+}
+
+void TitleBar::setUpdateStaged(const QString& version)
+{
+    const VersionNumber parsed = VersionNumber::parse(version);
+    m_stagedVersion = parsed.isNull() ? QString() : parsed.toString();
     refreshUpdateBadge();
 }
 
 void TitleBar::refreshUpdateBadge()
 {
-    if (m_updateBadge) {
-        m_updateBadge->setVisible(!m_updateVersion.isEmpty() && !m_minimalMode);
+    if (!m_updateBadge) {
+        return;
     }
+    const bool staged = !m_stagedVersion.isEmpty();
+    const QString version = staged ? m_stagedVersion : m_updateVersion;
+    m_updateBadge->setText(staged ? QStringLiteral("RESTART TO UPDATE") : QStringLiteral("UPDATE"));
+    m_updateBadge->setAccessibleName(staged ? QStringLiteral("AetherSDR update ready to install")
+                                            : QStringLiteral("AetherSDR update available"));
+    const QString tip = version.isEmpty() ? QString()
+                        : staged ? QStringLiteral("AetherSDR v%1 is ready. It installs when you quit. "
+                                                  "Click to restart and install it now from Updates.")
+                                       .arg(version)
+                                 : QStringLiteral("AetherSDR v%1 is available. Click for details.").arg(version);
+    m_updateBadge->setToolTip(tip);
+    m_updateBadge->setAccessibleDescription(tip);
+    m_updateBadge->setVisible(!version.isEmpty() && !m_minimalMode);
 }
 
 QString TitleBar::formatTxElapsed(qint64 ms) const
