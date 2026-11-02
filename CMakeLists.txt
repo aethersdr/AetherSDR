@@ -911,6 +911,7 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexStoredControls.cpp
     src/core/backends/flex/FlexSliceStatus.cpp
     src/core/backends/flex/FlexWaveformEnvControls.cpp
+    src/core/backends/flex/FlexNtpSourceControls.cpp
     src/core/backends/flex/FlexSliceLifecycleControls.cpp
     src/core/backends/flex/FlexPanControls.cpp
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
@@ -1264,6 +1265,7 @@ set(MODEL_SOURCES
     src/models/RadioModel_Utilities.cpp
     src/models/RadioModel_StoredControls.cpp
     src/models/RadioModel_WaveformEnv.cpp
+    src/models/RadioModel_NtpSources.cpp
     src/models/RadioModel_SliceLifecycle.cpp
     src/models/RadioModel_SliceObservations.cpp
     src/models/RadioModel_PanControls.cpp
@@ -1378,6 +1380,7 @@ set(GUI_SOURCES
     src/gui/FirmwareUpdateCard.cpp
     src/gui/CanonPrompt.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
