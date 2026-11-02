@@ -287,6 +287,9 @@ private:
     // Delivers one bandscope block through MetisClient's signal and ages the mirror,
     // so converter-row expiry is testable without a radio.
     friend struct Hl2HealthBlockTestAccess;
+    // Marks the backend connected and reaches its MetisClient, so the
+    // `ioboard.status` verb can be followed to the client and back without a socket.
+    friend struct Hl2IoBoardStatusTestAccess;
     // Reads the receive shift/NCO and adds a second receiver's state without a
     // socket or DSP, for hl2_rit_xit_test. Reaches nothing else.
     friend struct Hl2RitXitTestAccess;
@@ -962,6 +965,9 @@ private:
     // The outstanding `bandscope.frame` requestId, or 0. One at a time: a reply is
     // one 2048-sample snapshot.
     quint64 m_bandscopeFrameRequest = 0;
+    // The outstanding `ioboard.status` requestId, or 0. One at a time, because
+    // the radio's response register holds one reply.
+    quint64 m_ioBoardStatusRequest = 0;
     // The most recent accepted bandscope block, mirrored from
     // MetisClient::bandscopeBlockReady. DISPLAY ONLY (IRadioBackend.h); levels are
     // uncalibrated and pre-DDC, comparable only with the gateware clip flag.

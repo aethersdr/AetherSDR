@@ -560,6 +560,12 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         m_alcPeakDbfs = dbfs;
         emit meterUpdate(QStringLiteral("TX:ALC"), dbfs);
     });
+    // Both sides of the TX passband, for the TX-filter-loss check (#6605).
+    // SC_FILT_2 last: MeterModel evaluates the pair when it arrives.
+    connect(m_txDsp, &Hl2TxDsp::filterLevels, this, [this](float in, float out) {
+        emit meterUpdate(QStringLiteral("TX:SC_FILT_1"), in);
+        emit meterUpdate(QStringLiteral("TX:SC_FILT_2"), out);
+    });
         // The gain the ALC applies, a separate meter from TX:ALC (a level):
         // they move in opposite directions. Mirrored into m_alcGainDb for
         // healthSnapshot() and published as TX:ALCGAIN for MeterModel.
@@ -689,6 +695,38 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         m_bandscopeFrameRequest = 0;
         if (id != 0)
             emit extensionError(id, reason);
+    });
+
+    // `ioboard.status`'s two answers, consuming the outstanding id like
+    // bandscope.frame's above.
+    connect(m_metis, &MetisClient::ioBoardStatusReady, this, [this](quint32 registers) {
+        const quint64 id = std::exchange(m_ioBoardStatusRequest, 0);
+        if (id == 0) {
+            return;
+        }
+        const AetherSDR::hl2::IoBoardStatus s = AetherSDR::hl2::decodeIoBoardStatus(registers);
+        if (!s.fromBoard()) {
+            emit extensionError(id, QStringLiteral("No IO board answered."));
+            return;
+        }
+        emit extensionResult(id, QVariantMap{
+            {QStringLiteral("inputPins"), s.inputPins},
+            {QStringLiteral("receiving"), s.receiving()},
+            {QStringLiteral("in1"), s.input(1)},
+            {QStringLiteral("in2"), s.input(2)},
+            {QStringLiteral("in3"), s.input(3)},
+            {QStringLiteral("in4"), s.input(4)},
+            {QStringLiteral("in5"), s.input(5)},
+            {QStringLiteral("antennaTuner"), s.antennaTuner},
+            {QStringLiteral("fault"), s.fault},
+            {QStringLiteral("firmwareMajor"), s.firmwareMajor},
+        });
+    });
+    connect(m_metis, &MetisClient::ioBoardStatusFailed, this, [this](const QString& reason) {
+        const quint64 id = std::exchange(m_ioBoardStatusRequest, 0);
+        if (id != 0) {
+            emit extensionError(id, reason);
+        }
     });
 
     m_linkStatsTimer = new QTimer(this);
@@ -1922,13 +1960,27 @@ RadioCapabilities Hl2Backend::capabilities() const
          QStringLiteral("SAM"), QStringLiteral("CW"), QStringLiteral("CWL"),
          QStringLiteral("FM")}};
     // Conservative carrier-relative subdomains of the existing WDSP passband.
+    // Every mode below has its cuts applied by the NBP stage ahead of the
+    // detector (WdspChannel::setFilter -> RXANBPSetFreqs; nbp0 runs in every
+    // non-WBFM mode, third_party/wdsp/upstream/RXA.c SetRXAMode) and read back
+    // unchanged (Receiver::filterLowHz/HighHz, carrier-relative). DSB and FM are
+    // symmetric-about-the-carrier like AM, so they take AM's range; the straddle
+    // keeps the carrier inside the passband. CW/CWL add the BFO to the cuts in
+    // dspFilterHz(), whose pitch reaches 6000 Hz (setCwPitch), so their cuts stop
+    // at 6000 Hz and the demodulator's edges stay inside +-12000 Hz. Unlike a
+    // Flex, whose pitch is radio-owned and so not guessed, the host DSP owns the
+    // BFO here (cwBfoOffsetHz), which is why CW and FM can be declared at all.
     c.receiveFilterControl = ReceiveFilterControl{SliceFrequencyControl::Authority::Engine, {
         {QStringLiteral("USB"), 0, 11990, 10, 12000, 10, 12000},
         {QStringLiteral("DIGU"), 0, 11990, 10, 12000, 10, 12000},
         {QStringLiteral("LSB"), -12000, -10, -11990, 0, 10, 12000},
         {QStringLiteral("DIGL"), -12000, -10, -11990, 0, 10, 12000},
         {QStringLiteral("AM"), -12000, -10, 10, 12000, 20, 24000},
-        {QStringLiteral("SAM"), -12000, -10, 10, 12000, 20, 24000}}};
+        {QStringLiteral("SAM"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("DSB"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("FM"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("CW"), -6000, -10, 10, 6000, 20, 12000},
+        {QStringLiteral("CWL"), -6000, -10, 10, 6000, 20, 12000}}};
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.dspParameterReset = std::nullopt;
@@ -5942,6 +5994,28 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                                       Qt::QueuedConnection);
             return;
         }
+        // The IO board's input pins, ATU state, fault code and firmware major,
+        // read from the board over I2C2. A device round trip, like
+        // bandscope.frame; MetisClient answers every request.
+        if (verb == QLatin1String("ioboard.status")) {
+            if (requestId == 0) {
+                return;
+            }
+            if (!m_connected) {
+                emit extensionError(requestId,
+                                    QStringLiteral("Not connected to a radio."));
+                return;
+            }
+            if (m_ioBoardStatusRequest != 0) {
+                emit extensionError(
+                    requestId, QStringLiteral("An IO board read is already pending."));
+                return;
+            }
+            m_ioBoardStatusRequest = requestId;
+            QMetaObject::invokeMethod(m_metis, "requestIoBoardStatus",
+                                      Qt::QueuedConnection);
+            return;
+        }
         // Noise-blanker READBACK, per receiver. Exists because the bridge's
         // `get dsp` reports the SLICE MODEL's nb flag, which is set the moment
         // the operator clicks and says nothing about whether the intent reached
@@ -8148,6 +8222,12 @@ void Hl2Backend::defineMeters()
     // on a full-scale block). sourceIndex 0 as for COMPPEAK: one transmitter.
     def(9, QStringLiteral("TX"),  QStringLiteral("ALCGAIN"), QStringLiteral("dB"),
         -20.0, 0.0,    QStringLiteral("Gain the ALC is applying"));
+    // Peaks either side of the TX passband (Hl2TxDsp::filterLevels): the names
+    // RadioModel's TX-filter-loss check reads (#4651). sourceIndex 0 as above.
+    def(10, QStringLiteral("TX"), QStringLiteral("SC_FILT_1"), QStringLiteral("dBFS"),
+        -140.0, 0.0,   QStringLiteral("Transmit audio after the ALC, into the modulator"));
+    def(11, QStringLiteral("TX"), QStringLiteral("SC_FILT_2"), QStringLiteral("dBFS"),
+        -140.0, 0.0,   QStringLiteral("Modulated transmit IQ, the modulator's output"));
 }
 
 void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)

@@ -456,6 +456,23 @@ int main(int argc, char** argv)
         bar->setUpdateAvailable(QString());
         app.processEvents();
         check(!updateState().value(QStringLiteral("visible")).toBool(), "empty version clears the badge");
+        // Staged: RESTART TO UPDATE, shown whatever the check says (Check
+        // daily off clears the available version, not a staged release).
+        bar->setUpdateStaged(QStringLiteral("26.10.3"));
+        app.processEvents();
+        check(updateState().value(QStringLiteral("staged")).toString() == QLatin1String("26.10.3")
+                  && updateState().value(QStringLiteral("visible")).toBool(),
+              "a staged release shows the badge");
+        check(badge && badge->text() == QLatin1String("RESTART TO UPDATE")
+                  && badge->accessibleName() == QLatin1String("AetherSDR update ready to install")
+                  && badge->accessibleDescription().contains(QLatin1String("26.10.3")),
+              "the staged badge says so, to a screen reader too");
+        bar->setUpdateAvailable(QStringLiteral("26.10.3"));
+        bar->setUpdateStaged(QString());
+        app.processEvents();
+        check(badge && badge->text() == QLatin1String("UPDATE") && badge->isVisible(),
+              "discarded, the badge is UPDATE again");
+        bar->setUpdateAvailable(QString());
     }
 
     // ── Radio tabs ──────────────────────────────────────────────────────────
@@ -658,6 +675,30 @@ int main(int argc, char** argv)
         bar->setActiveRadio(connected.id);
     }
 
+    {
+        RadioTabEntry lab;
+        lab.kind = RadioTabEntry::Kind::Workspace;
+        lab.id = QStringLiteral("aetherlab");
+        lab.name = QStringLiteral("AetherLab");
+        lab.detail = QStringLiteral("Antenna Analyzer · USB");
+        bar->setRadioTabs({connected, inUse, lab});
+        bar->setActiveRadio(connected.id);
+        bar->setActiveRadio(lab.id);
+        RadioTab* labTab = tabWithId(*bar, lab.id);
+        check(labTab && labTab->isChecked(), "workspace can be selected independently of the radio");
+        check(labTab && !labTab->isLinkCarrier(), "workspace never carries the radio heartbeat");
+        check(tabWithId(*bar, connected.id)->isLinkCarrier(), "radio retains heartbeat while lab is selected");
+        check(labTab && labTab->statusLine() == lab.detail, "workspace has its own status description");
+        bar->radioTabBar()->setLinkIndicator(QColor(Qt::red), true);
+        check(labTab && !labTab->accessibleName().contains(QStringLiteral("Link lost")), "radio loss never labels the analyzer as lost");
+        bar->radioTabBar()->setLinkIndicator(QColor(), false);
+        bar->setRadioTabs({lab});
+        bar->setActiveRadio(lab.id);
+        check(!tabWithId(*bar, lab.id)->isLinkCarrier(), "workspace-only strip has no fake radio carrier");
+        bar->setRadioTabs({connected, inUse});
+        bar->setActiveRadio(connected.id);
+    }
+
     // ── Discovered-radios popover ───────────────────────────────────────────
     RadioTabBar* tabs = bar->radioTabBar();
     check(tabs != nullptr, "the bar owns a radio tab strip");
@@ -676,6 +717,9 @@ int main(int argc, char** argv)
             QLabel* heading = popover->findChild<QLabel*>(
                 QStringLiteral("discoveredRadiosHeading"));
             check(manual != nullptr, "the popover exposes its manual-connect row");
+            QPushButton* lab = popover->findChild<QPushButton*>(QStringLiteral("radioSwitcherAetherLab"));
+            QPushButton* rescan = popover->findChild<QPushButton*>(QStringLiteral("radioSwitcherRescan"));
+            check(lab && rescan && lab->y() > rescan->y(), "AetherLab is offered below Rescan radios");
             check(heading != nullptr, "the popover exposes its heading");
             if (manual) {
                 check(manual->text() == QStringLiteral("Connect manually\u2026"),

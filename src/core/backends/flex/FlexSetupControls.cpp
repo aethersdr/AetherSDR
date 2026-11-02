@@ -161,7 +161,8 @@ ReceiveDispatch FlexBackend::requestRadioSetup(const RadioSetupRequest& request,
     return sink(command, completion) ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
 }
 
-ReceiveDispatch FlexBackend::requestTxBand(const TxBandRequest& request)
+ReceiveDispatch FlexBackend::requestTxBand(const TxBandRequest& request,
+                                           const RadioSetupCompletion& completion)
 {
     using Field = TxBandRequest::Field;
     if (!request.valid() || !m_setupSink) { return ReceiveDispatch::Unsupported; }
@@ -183,7 +184,7 @@ ReceiveDispatch FlexBackend::requestTxBand(const TxBandRequest& request)
     const int value = std::holds_alternative<int>(request.value)
         ? std::get<int>(request.value) : int(std::get<bool>(request.value));
     const auto sink = m_setupSink;
-    return sink(QStringLiteral("%1 bandset %2 %3=%4").arg(verb).arg(request.bandId).arg(key).arg(value), {})
+    return sink(QStringLiteral("%1 bandset %2 %3=%4").arg(verb).arg(request.bandId).arg(key).arg(value), completion)
         ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
 }
 

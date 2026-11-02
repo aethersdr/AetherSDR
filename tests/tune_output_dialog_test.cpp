@@ -1,13 +1,21 @@
 // Socket-free production TX Band Settings controls with injected command replies.
 #include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "gui/CanonWindow.h"
 #include "gui/TxBandDialog.h"
 #include "models/RadioModel.h"
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QDialog>
 #include <QGridLayout>
 #include <QLabel>
+#include <QMenu>
+#include <QPointer>
+#include <QLineEdit>
+#include <QImage>
+#include <QTest>
 
 #include <cstdio>
 #include <functional>
@@ -92,7 +100,9 @@ void supportedDialog()
 {
     Fixture f(QStringLiteral("4.3.16.42034"));
     TxBandDialog dialog(&f.radio);
-    dialog.resize(700, 450);
+    // The smallest the window can be: a restored rectangle below the minimum
+    // is clamped up to it, so this is the worst case for clipping.
+    dialog.resize(dialog.minimumSize());
     dialog.show();
     QApplication::processEvents();
     QCheckBox* forty = bandBox(dialog, 5);
@@ -109,7 +119,14 @@ void supportedDialog()
             check(dialog.rect().contains(headerBounds)
                       && label->width() >= label->sizeHint().width()
                       && label->height() >= label->sizeHint().height(),
-                  "restoring a small window cannot clip the header text");
+                  "the window at its minimum size cannot clip the header text");
+            // Measured in the font the sheet gives it, not the default font: a
+            // label measured before polish is sized for different text.
+            const QMargins margins = label->contentsMargins();
+            const int textWidth = label->fontMetrics().horizontalAdvance(label->text())
+                + margins.left() + margins.right();
+            check(qAbs(label->minimumWidth() - textWidth) <= 2,
+                  "a header's minimum width is its text in the canon sheet's font");
         }
     }
     check(newHeaders == 1, "one added column has the approved concise label");
@@ -189,6 +206,178 @@ void firmwareIdentityAfterReadback()
               && f.commands.isEmpty(),
           "late firmware identity enables the existing table with each earlier confirmed value");
 }
+// A field's standard right-click menu is a child of the field, so the canon
+// body's transparent-everything rule reaches it; the sheet gives popups their
+// panel back. Without that the menu draws no background at all.
+void rightClickMenuIsOpaque()
+{
+    Fixture f(QStringLiteral("4.3.16.42034"));
+    TxBandDialog dialog(&f.radio);
+    dialog.show();
+    QTest::qWaitForWindowExposed(&dialog);
+    const QList<QLineEdit*> edits = dialog.findChildren<QLineEdit*>();
+    check(!edits.isEmpty(), "the table exposes a power field");
+    if (edits.isEmpty()) {
+        return;
+    }
+    QMenu* menu = edits.first()->createStandardContextMenu();
+    check(menu->parentWidget() == edits.first(),
+          "control: the field's menu is parented inside the canon body");
+    menu->popup(dialog.mapToGlobal(QPoint(40, 40)));
+    QTest::qWait(100);
+    const QImage image = menu->grab().toImage();
+    check(!image.isNull()
+              && qAlpha(image.pixel(image.width() / 2, image.height() / 2)) == 255,
+          "a field's right-click menu has an opaque background");
+    menu->close();
+    delete menu;
+    check(f.commands.isEmpty(), "opening the menu sends no commands");
+}
+
+// TX Band Settings is a canon workspace (#6239) that restores geometry saved
+// under TxBandDialogGeometry, including the base64 rectangles earlier
+// releases wrote.
+void canonWorkspace()
+{
+    static const QString kKey = QStringLiteral("TxBandDialogGeometry");
+    Fixture f(QStringLiteral("4.3.16.42034"));
+    auto& settings = AppSettings::instance();
+    settings.remove(kKey);
+    {
+        TxBandDialog dialog(&f.radio);
+        check(qobject_cast<CanonWindow*>(&dialog) != nullptr, "TX Band Settings is a CanonWindow");
+        check(dialog.windowType() == Qt::Window
+                  && dialog.windowFlags().testFlag(Qt::FramelessWindowHint),
+              "it is a frameless workspace window, not a dialog on its parent");
+    }
+
+    // A rectangle saved before the migration: QWidget::saveGeometry() in base64.
+    // Compared by height: the offscreen screen is 800 px wide, narrower than
+    // the table's minimum, so a restored width is clamped to the minimum.
+    TxBandDialog restored(&f.radio);
+    const QSize chosen(restored.minimumWidth(), restored.minimumHeight() + 110);
+    QDialog legacy;
+    legacy.resize(chosen);
+    settings.setValue(kKey, QString::fromLatin1(legacy.saveGeometry().toBase64()));
+    check(restored.height() != chosen.height(), "control: a fresh window is not born at the saved height");
+    restored.show();
+    check(QTest::qWaitForWindowExposed(&restored), "the window is exposed");
+    for (int i = 0; i < 50 && restored.height() != chosen.height(); ++i) {
+        QTest::qWait(20);
+    }
+    check(restored.height() == chosen.height(), "geometry saved by the old dialog restores under its key");
+
+    const QSize resized = chosen + QSize(40, 20);
+    restored.resize(resized);
+    QCoreApplication::processEvents();
+    restored.hide();
+    const QString saved = settings.value(kKey).toString();
+    check(saved.endsWith(QStringLiteral(",%1,%2").arg(resized.width()).arg(resized.height())),
+          "hiding the window saves its size under the same key");
+    check(f.commands.isEmpty(), "opening, resizing and hiding the window sends no commands");
+}
+
+QLineEdit* fieldNamed(TxBandDialog& dialog, const QString& name)
+{
+    for (QLineEdit* edit : dialog.findChildren<QLineEdit*>()) {
+        if (edit->accessibleName() == name) {
+            return edit;
+        }
+    }
+    return nullptr;
+}
+
+QLabel* headerTitle(TxBandDialog& dialog)
+{
+    return dialog.findChild<QLabel*>(QStringLiteral("canonHeaderTitle"));
+}
+
+// The table belongs to one TX profile: a new profile rebuilds it under a new
+// heading, and band values the radio reports later reach the open table.
+void followsTheRadio()
+{
+    Fixture f(QStringLiteral("4.3.16.42034"));
+    f.radio.transmitModel().setActiveProfile(QStringLiteral("Default"));
+    f.radio.handleStatusForTest(QStringLiteral("transmit band 5"),
+        {{QStringLiteral("band_name"), QStringLiteral("40")}, {QStringLiteral("rfpower"), QStringLiteral("30")}});
+    f.commands.clear();
+    TxBandDialog dialog(&f.radio);
+    dialog.show();
+    QApplication::processEvents();
+    QLabel* title = headerTitle(dialog);
+    check(title && title->text().endsWith(QStringLiteral("Profile: Default)")),
+          "the heading names the profile the table was built from");
+    QPointer<QLineEdit> rf = fieldNamed(dialog, QStringLiteral("RF power percent, band 40"));
+    check(rf && rf->text() == QStringLiteral("30"), "the RF power field shows the band's value");
+
+    f.radio.handleStatusForTest(QStringLiteral("transmit band 5"), {{QStringLiteral("rfpower"), QStringLiteral("55")}});
+    QApplication::processEvents();
+    check(rf && rf->text() == QStringLiteral("55"), "a band value the radio reports reaches the open table");
+
+    f.radio.handleStatusForTest(QStringLiteral("interlock band 5"), {{QStringLiteral("tx1_enabled"), QStringLiteral("1")}});
+    QApplication::processEvents();
+    QCheckBox* tx1 = nullptr;
+    for (QCheckBox* box : dialog.findChildren<QCheckBox*>()) {
+        if (box->accessibleName() == QStringLiteral("RCA TX1, band 40")) {
+            tx1 = box;
+        }
+    }
+    check(tx1 && tx1->isChecked(), "a keying output the radio reports reaches its check box");
+
+    rf->setFocus();
+    rf->selectAll();
+    QTest::keyClicks(rf, QStringLiteral("4"));
+    f.radio.handleStatusForTest(QStringLiteral("transmit band 5"), {{QStringLiteral("rfpower"), QStringLiteral("60")}});
+    QApplication::processEvents();
+    check(rf->text() == QStringLiteral("4"), "a field being typed in keeps the operator's text");
+    rf->undo();
+    rf->setModified(false);
+    rf->clearFocus();
+
+    f.radio.transmitModel().setActiveProfile(QStringLiteral("Contest"));
+    QApplication::processEvents();
+    check(title && title->text().endsWith(QStringLiteral("Profile: Contest)"))
+              && dialog.windowTitle().endsWith(QStringLiteral("Profile: Contest)")),
+          "a new TX profile renames the heading and the window");
+    QLineEdit* rebuilt = fieldNamed(dialog, QStringLiteral("RF power percent, band 40"));
+    check(!rf && rebuilt && rebuilt->text() == QStringLiteral("60"),
+          "a new TX profile rebuilds the table from the radio's values");
+    check(dialog.findChildren<QLineEdit*>().size() == 2 * f.radio.txBandSettings().size(),
+          "the rebuilt table has one row per band");
+    f.radio.handleStatusForTest(QStringLiteral("transmit band 7"),
+        {{QStringLiteral("band_name"), QStringLiteral("30")}, {QStringLiteral("rfpower"), QStringLiteral("25")}});
+    QApplication::processEvents();
+    QLineEdit* added = fieldNamed(dialog, QStringLiteral("RF power percent, band 30"));
+    check(added && added->text() == QStringLiteral("25"), "a band the radio adds gets its own row");
+    f.radio.handleStatusForTest(QStringLiteral("transmit band 8"), {{QStringLiteral("rfpower"), QStringLiteral("20")}});
+    QApplication::processEvents();
+    f.radio.handleStatusForTest(QStringLiteral("interlock band 8"), {{QStringLiteral("band_name"), QStringLiteral("17")}});
+    QApplication::processEvents();
+    check(fieldNamed(dialog, QStringLiteral("RF power percent, band 17")) != nullptr,
+          "a band whose name arrives later is rebuilt under its name");
+
+    // Esc hides the window; showing it again builds a fresh table.
+    QPointer<QLineEdit> beforeHide = fieldNamed(dialog, QStringLiteral("RF power percent, band 40"));
+    dialog.hide();
+    dialog.show();
+    QApplication::processEvents();
+    check(!beforeHide && fieldNamed(dialog, QStringLiteral("RF power percent, band 40")),
+          "reopening a hidden window builds a fresh table");
+
+    // This fixture's backend takes no bandset writes, so every click is refused.
+    QCheckBox* inhibit = nullptr;
+    for (QCheckBox* box : dialog.findChildren<QCheckBox*>()) {
+        if (box->accessibleName() == QStringLiteral("PTT inhibit, band 40")) {
+            inhibit = box;
+        }
+    }
+    check(inhibit && !inhibit->isChecked(), "control: band 40 starts without PTT inhibit");
+    if (inhibit) {
+        inhibit->click();
+    }
+    check(inhibit && !inhibit->isChecked(), "a click the radio cannot take shows the radio's value again");
+    check(f.commands.isEmpty(), "following the radio sends no commands");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -198,8 +387,13 @@ int main(int argc, char** argv)
         return 1;
     }
     QApplication app(argc, argv);
+    app.setQuitOnLastWindowClosed(false);
+    AppSettings::instance().load();
     supportedDialog();
     unavailableDialog();
     firmwareIdentityAfterReadback();
+    canonWorkspace();
+    rightClickMenuIsOpaque();
+    followsTheRadio();
     return failures == 0 ? 0 : 1;
 }

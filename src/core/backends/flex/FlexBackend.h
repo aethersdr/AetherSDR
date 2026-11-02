@@ -116,7 +116,8 @@ public:
     ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
                                       const RadioSetupCompletion& completion = {},
                                       const RadioControlFence& current = {}) override;
-    ReceiveDispatch requestTxBand(const TxBandRequest& request) override;
+    ReceiveDispatch requestTxBand(const TxBandRequest& request,
+                                  const RadioSetupCompletion& completion = {}) override;
     ReceiveDispatch requestSpot(const SpotRequest& request, const QString& panId = {}) override;
     ReceiveDispatch requestPanControl(const QString& panId, const PanControlRequest& request) override;
     ReceiveDispatch requestSlicePreset(int sliceId, const SlicePresetRequest& request) override;
@@ -131,6 +132,12 @@ public:
     ReceiveDispatch requestMemory(const MemoryRequest& request,
                                   const RadioControlCompletion& completion = {},
                                   const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestWaveformEnv(const WaveformEnvRequest& request,
+                                       const RadioControlCompletion& completion = {},
+                                       const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestNtpSource(const NtpSourceRequest& request,
+                                     const RadioControlCompletion& completion = {},
+                                     const RadioControlFence& current = {}) override;
     ReceiveDispatch requestUsbCable(const UsbCableRequest& request) override;
     ReceiveDispatch requestTransverter(const TransverterRequest& request,
                                        const RadioSetupCompletion& completion = {}) override;
@@ -246,6 +253,15 @@ public:
     // RadioModel residual). Satellite counts are numeric; the rest keep the
     // radio's string form (units included).
     void decodeGpsStatus(const QString& rawBody);
+    // Decode a raw status body (after "S<handle>|") whose object this backend
+    // parses from the raw line itself; false when it is not one of them. Today
+    // that is `ntp_sources`, whose quoted description keeps its spaces only in
+    // the raw line.
+    bool decodeRawStatus(const QString& body);
+    // Decode one `ntp_sources id=<id> …` status body (after "ntp_sources ") into
+    // a present-only NtpSourceDelta and emit ntpSourceChanged. The description is
+    // quoted and may hold spaces (FlexLib NtpSource.cs SplitStatusTokens).
+    void decodeNtpSourceStatus(const QString& rawBody);
     // Decode a Flex memory-slot status kv-set (keyed by slot index) into a
     // normalized MemoryDelta and emit memoryChanged (aetherd RFC 2.3 — RadioModel
     // residual). Sets delta.removed for "in_use=0" / a bare "removed"; carries

@@ -58,6 +58,18 @@ int main(int argc, char** argv)
     check(picked("linux", "arm64", false) == QLatin1String("AetherSDR-v26.10.3-aarch64.AppImage"),
           "Linux arm64 AppImage");
     check(picked("macos", "x86_64", false).isEmpty(), "no Intel Mac build: release page instead");
+    {
+        // A release with an Intel Mac build (v26.10.4 on) offers it to one.
+        QList<ReleaseAsset> withIntel = r.assets;
+        ReleaseAsset intel;
+        intel.name = QStringLiteral("AetherSDR-v26.10.4-macOS-intel.dmg");
+        withIntel.append(intel);
+        const int i = UpdateChecker::pickAsset(withIntel, QStringLiteral("macos"), QStringLiteral("x86_64"), false);
+        check(i >= 0 && withIntel[i].name == intel.name, "macOS Intel");
+        const int j = UpdateChecker::pickAsset(withIntel, QStringLiteral("macos"), QStringLiteral("arm64"), false);
+        check(j >= 0 && withIntel[j].name == QLatin1String("AetherSDR-v26.10.3-macOS-apple-silicon.dmg"),
+              "an Apple silicon Mac still gets its own");
+    }
     check(picked("windows", "arm64", false).isEmpty(), "no Windows on ARM build: release page instead");
 
     // The allowlist.

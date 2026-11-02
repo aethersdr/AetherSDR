@@ -32,6 +32,8 @@
 #include "ClientDisconnectDialog.h"
 #include "ConnectedStationsDialog.h"
 #include "TitleBar.h"
+#include "UpdatesWindow.h"
+#include "core/UpdateController.h"
 #include "WindowCaptionButtons.h"
 #include "WindowChrome.h"
 #ifdef Q_OS_MACOS
@@ -152,6 +154,7 @@
 #include "SliceTroubleshootingDialog.h"
 #include "ShortcutDialog.h"
 #include "MultiFlexDialog.h"
+#include "Nr2WisdomDialog.h"
 #include "HelpDialog.h"
 #include "ThemeEditorDialog.h"
 #include "WhatsNewDialog.h"
@@ -200,9 +203,7 @@
 #include <QGuiApplication>
 #include <QProcess>
 #include <QScreen>
-#include <QAccessible>
 #include <QTimer>
-#include <QElapsedTimer>
 #include <QDateTime>
 #include <QIcon>
 #include <QCursor>
@@ -724,6 +725,39 @@ bool MainWindow::sendWanRadioClientDisconnects(const QString& serial,
     return true;
 }
 
+// Send each pan the FPS and waterfall rate captured in its SpectrumWidget
+// before the adaptive cap arrived. Live fps/line-duration status is held out
+// of the widgets while throttled, so these are the operator's values and the
+// cap never becomes saved radio state. Empty panId = every pan.
+//
+// A pan with a band change in flight is skipped. Its widget still holds the
+// band it left, and the new band carries its own rates, uncapped:
+// RadioModel holds the cap until the change settles (#6791).
+void MainWindow::restorePreCapPanRates(const QString& onlyPanId)
+{
+    if (profileLoadRadioStateWritesHeld()) {
+        qCDebug(lcProtocol)
+            << "MainWindow: adaptive throttle restore suppressed during profile load";
+        return;
+    }
+    if (!m_panStack) return;
+    for (auto* applet : m_panStack->allApplets()) {
+        if (!applet) continue;
+        auto* sw = applet->spectrumWidget();
+        if (!sw) continue;
+        const QString panId = applet->panId();
+        if (!onlyPanId.isEmpty() && panId != onlyPanId) continue;
+        if (m_radioModel.panBandInFlight(panId)) continue;
+        // Route through requestPanDisplayRates, not raw Flex wire text: a
+        // backend that shapes its own display rate (HL2) has no Flex
+        // command sink, so the restore silently never arrived and an FPS
+        // change made while throttled was lost for good. The dispatcher
+        // picks the seam or the wire per backend. (#4470)
+        m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
+                                            sw->wfLineDuration());
+    }
+}
+
 void MainWindow::disconnectWanRadioClients(const WanRadioInfo& info)
 {
     const auto clients = buildDisconnectClients(info);
@@ -757,10 +791,19 @@ void MainWindow::showMultiFlexDialog()
         return;
     }
 
-    MultiFlexDialog dlg(&m_radioModel, this);
-    connect(&dlg, &MultiFlexDialog::disconnectClientRequested,
-            this, &MainWindow::handleMultiFlexClientDisconnect);
-    dlg.exec();
+    // A canon dialog that stays open beside the main window: raised if it is
+    // already open, otherwise created. Closing it (Escape, Ctrl+W, the corner
+    // button) destroys it, so each open starts fresh.
+    if (!m_multiFlexDialog) {
+        auto* dlg = new MultiFlexDialog(&m_radioModel, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        connect(dlg, &MultiFlexDialog::disconnectClientRequested,
+                this, &MainWindow::handleMultiFlexClientDisconnect);
+        m_multiFlexDialog = dlg;
+    }
+    m_multiFlexDialog->show();
+    m_multiFlexDialog->raise();
+    m_multiFlexDialog->activateWindow();
 }
 
 void MainWindow::handleMultiFlexClientDisconnect(quint32 handle, const QString& displayName)
@@ -812,12 +855,17 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
     // Pre-bind UDP socket for VITA-49 reception BEFORE requesting
     // connection, so we can pass our port to the SmartLink server.
     // The server tells the radio our public IP:port for UDP streaming.
-    // SmartLink is a Flex service, so in practice this path only runs with a
-    // PanadapterStream present -- but it dereferenced it bare, and "in practice"
-    // is what the HL2 bring-up kept disproving. Decline instead of crashing.
-    if (!m_radioModel.panStream()) {
+    // SmartLink is a Flex service, but the session may still hold the backend
+    // of the last non-Flex radio (IC-705, HL2), which has no PanadapterStream.
+    // Swap to Flex first; decline rather than dereference null if that fails.
+    if (!m_radioModel.prepareFlexBackendForWan()) {
         qWarning() << "MainWindow: WAN connect requested with no PanadapterStream"
-                   << "— backend does not use VITA-49 transport";
+                   << "— Flex backend unavailable";
+        m_connPanel->setStatusText("SmartLink connection failed");
+        setPanadapterConnectionAnimation(false);
+        // From requestWanReconnect(), let the next tick try again rather than
+        // re-arm forever behind an attempt that never started.
+        m_wanReconnectAttemptInProgress = false;
         return;
     }
     quint16 udpPort = m_radioModel.panStream()->localPort();
@@ -1657,6 +1705,22 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel.transmitModel(), &TransmitModel::phoneStateChanged,
             this, [this]() { refreshCwDecodeState(); });
 
+    // The receive decoder's pitch range follows the CW pitch: a range that
+    // contains the pitch is kept, one that misses it is re-centred on it
+    // (CwDecodeSettings::pitchRangeFor). cwPitchReported also carries a
+    // reported pitch the model already held, which cwPitchChanged skips.
+    // The pitch itself is only read here, never stored or sent.
+    const auto followCwPitch = [this](int hz) {
+        if (const auto range = CwDecodeSettings::pitchRangeFor(hz, CwDecodeSettings::pitchRange())) {
+            CwDecodeSettings::setPitchRange(range->low, range->high);
+            if (m_cwDecoderApplet) {
+                m_cwDecoderApplet->restoreCwRanges();
+            }
+        }
+    };
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchReported, this, followCwPitch);
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchChanged, this, followCwPitch);
+
     // RTTY decoder audio feed is wired in wireRxDemodAudioSinks() above,
     // gated on the decoder being running.
 
@@ -1778,13 +1842,14 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
-    // Propagate late-arriving SmartSDR+ subscription + dual-SCU diversity
+    // Propagate the late-arriving CW Autotune license + dual-SCU diversity
     // eligibility to all existing VFOs. Both depend on radio info (license
-    // subscription / model) that can arrive after a slice is created — in
-    // which case onSliceAdded reads empty strings and the VFO gets stuck in
-    // the wrong state (#1356 for SmartSDR+, #1503 for DIV).
+    // feature / model) that can arrive after a slice is created — in which
+    // case onSliceAdded reads empty state and the VFO gets stuck in the wrong
+    // state (#1356 for Autotune, #1503 for DIV). Every `license feature` and
+    // `license subscription` status emits infoChanged.
     connect(&m_radioModel, &RadioModel::infoChanged, this, [this]() {
-        const bool hasPlus = m_radioModel.licenseSubscription().contains("SmartSDR+");
+        const bool autotuneLicensed = m_radioModel.cwAutotuneLicensed();
         const bool divAllowed = m_radioModel.isDiversityAllowed();
         // Refresh extended-DSP (NRL/NRS/RNN/NRF) visibility here too: onSliceAdded
         // pushes it once at slice creation, but if the `model` status arrives after
@@ -1795,7 +1860,7 @@ MainWindow::MainWindow(QWidget* parent)
             for (auto* applet : m_panStack->allApplets()) {
                 auto* sw = applet->spectrumWidget();
                 for (auto* vfo : sw->findChildren<VfoWidget*>()) {
-                    vfo->setSmartSdrPlus(hasPlus);
+                    vfo->setCwAutotuneLicensed(autotuneLicensed);
                     vfo->setDiversityAllowed(divAllowed);
                     vfo->setHasExtendedDsp(hasExtendedDsp);
                 }
@@ -1811,6 +1876,20 @@ MainWindow::MainWindow(QWidget* parent)
     // the next radio's statuses arrive.)
     connect(&m_radioModel, &RadioModel::licenseFeaturesChanged, this,
             &MainWindow::updateKeyerAvailability);
+    // The same clear withdraws the CW Autotune license from surviving VFOs.
+    connect(&m_radioModel, &RadioModel::licenseFeaturesChanged, this, [this]() {
+        // ~RadioModel's teardown clears the licenses too; never rebuild a VFO
+        // whose slice is already gone.
+        if (!m_panStack || m_shuttingDown) {
+            return;
+        }
+        const bool autotuneLicensed = m_radioModel.cwAutotuneLicensed();
+        for (auto* applet : m_panStack->allApplets()) {
+            for (auto* vfo : applet->spectrumWidget()->findChildren<VfoWidget*>()) {
+                vfo->setCwAutotuneLicensed(autotuneLicensed);
+            }
+        }
+    });
 
     // Client-side DSP buttons (NR2 / NR4 / MNR / BNR / DFNR / RN2) now
     // live only in the AetherDSP applet, which owns its own
@@ -2156,31 +2235,43 @@ MainWindow::MainWindow(QWidget* parent)
         m_adaptiveFpsCap = active ? fpsCap : 0;
         if (m_titleBar)
             m_titleBar->setThrottleFlashColor(active ? fpsCapColor(fpsCap) : QString{});
-        if (!active) {
-            // Throttle lifted — restore the radio values captured in each
-            // SpectrumWidget before the transient cap status arrived. Live
-            // fps/line-duration status is deliberately held out of the widgets
-            // while throttled, so the cap never becomes profile state.
-            if (profileLoadRadioStateWritesHeld()) {
-                qCDebug(lcProtocol)
-                    << "MainWindow: adaptive throttle restore suppressed during profile load";
-                return;
-            }
-            if (!m_panStack) return;
-            for (auto* applet : m_panStack->allApplets()) {
-                if (!applet) continue;
-                auto* sw = applet->spectrumWidget();
-                if (!sw) continue;
-                const QString panId = applet->panId();
-                // Route through requestPanDisplayRates, not raw Flex wire text: a
-                // backend that shapes its own display rate (HL2) has no Flex
-                // command sink, so the restore silently never arrived and an FPS
-                // change made while throttled was lost for good. The dispatcher
-                // picks the seam or the wire per backend. (#4470)
-                m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
-                                                    sw->wfLineDuration());
-            }
+        if (active) {
+            m_adaptiveFpsCapsSent.insert(fpsCap);
+            m_adaptiveWfRatesSent.insert(m_radioModel.adaptiveWfRateForCap(fpsCap));
+        } else {
+            m_adaptiveFpsCapsSent.clear();
+            m_adaptiveWfRatesSent.clear();
+            restorePreCapPanRates();
         }
+    });
+
+    // A Flex saves each pan's FPS and waterfall rate in the band it leaves, so
+    // a band change while capped would store the cap as that band's setting.
+    // Put the operator's values back first. Only band changes AetherSDR
+    // dispatches pass through here: one from CAT, another client or a pan
+    // dragged across a band edge does not (#6791).
+    connect(&m_radioModel, &RadioModel::panBandAboutToDispatch,
+            this, [this](const QString& panId) {
+        // restorePreCapPanRates() skips a pan whose previous band change is
+        // still in flight: the band being left has not been capped, and the
+        // widget still holds the band before it.
+        if (m_adaptiveThrottleActive)
+            restorePreCapPanRates(panId);
+    });
+    // The reply follows the new band's own pan and waterfall status, so the
+    // widget now holds that band's rates as the restore target. Until here
+    // RadioModel kept the cap off the pan, a tier change included.
+    connect(&m_radioModel, &RadioModel::panBandSettled,
+            this, [this](const QString& panId) {
+        if (m_adaptiveThrottleActive)
+            m_radioModel.sendAdaptiveCapToPan(panId, m_adaptiveFpsCap);
+    });
+    // Closing a pan has the same effect: the radio keeps the closing pan's
+    // rates and gives them to the next pan it opens.
+    connect(&m_radioModel, &RadioModel::panAboutToRemove,
+            this, [this](const QString& panId) {
+        if (m_adaptiveThrottleActive)
+            restorePreCapPanRates(panId);
     });
 
     connect(&m_radioModel.meterModel(), &MeterModel::hwTelemetryChanged,
@@ -3426,22 +3517,28 @@ void MainWindow::toggleAetherRxDialog()
 #ifdef HAVE_MQTT
 void MainWindow::showMqttSettingsDialog()
 {
-    const bool wasFresh = !m_mqttSettingsDialog;
-    showOrRaisePersistent(m_mqttSettingsDialog);
-    if (!wasFresh || !m_mqttSettingsDialog)
-        return;
+    // A canon dialog, so not showOrRaisePersistent(): that applies View →
+    // Frameless Window, which a CanonWindow does not follow.
+    if (!m_mqttSettingsDialog) {
+        auto* dlg = new MqttSettingsDialog(this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_mqttSettingsDialog = dlg;
 
-    connect(m_mqttSettingsDialog, &MqttSettingsDialog::settingsSaved,
-            this, [this](const QString& password) {
-        if (!m_appletPanel || !m_appletPanel->mqttApplet())
-            return;
-        auto* mqttApplet = m_appletPanel->mqttApplet();
-        mqttApplet->setCachedPassword(password);
-        mqttApplet->refreshSettings();
-        if (m_mqttClient) {
-            m_mqttClient->setSubscriptions(mqttSubscriptionTopics(mqttApplet->topicConfig()));
-        }
-    });
+        connect(dlg, &MqttSettingsDialog::settingsSaved,
+                this, [this](const QString& password) {
+            if (!m_appletPanel || !m_appletPanel->mqttApplet())
+                return;
+            auto* mqttApplet = m_appletPanel->mqttApplet();
+            mqttApplet->setCachedPassword(password);
+            mqttApplet->refreshSettings();
+            if (m_mqttClient) {
+                m_mqttClient->setSubscriptions(mqttSubscriptionTopics(mqttApplet->topicConfig()));
+            }
+        });
+    }
+    m_mqttSettingsDialog->show();
+    m_mqttSettingsDialog->raise();
+    m_mqttSettingsDialog->activateWindow();
 }
 
 void MainWindow::publishCwDecodeMqtt(const QString& text, float cost, bool rx)
@@ -3546,21 +3643,13 @@ void MainWindow::publishRadioStateMqtt()
 RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
 {
     const QString prevComp = m_radioModel.audioCompressionParam();
-    const bool wasFresh = !m_radioSetupDialog;
-    // A canon workspace window: created directly rather than through
-    // showOrRaisePersistent(), which would apply View → Frameless Window.
-    if (wasFresh) {
-        auto* dlg = new RadioSetupDialog(&m_radioModel, m_audio,
-                                         &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                                         m_kiwiSdrManager, &m_acomConn, &m_speConn,
-                                         &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn, &m_kpa500Conn,
-                                         this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        m_radioSetupDialog = dlg;
-    }
-    m_radioSetupDialog->show();
-    m_radioSetupDialog->raise();
-    m_radioSetupDialog->activateWindow();
+    const bool wasFresh = showOrRaiseCanon(m_radioSetupDialog, [this] {
+        return new RadioSetupDialog(&m_radioModel, m_audio,
+                                    &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
+                                    m_kiwiSdrManager, &m_acomConn, &m_speConn,
+                                    &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn, &m_kpa500Conn,
+                                    this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn);
+    });
     if (wasFresh && m_radioSetupDialog)
         wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     if (m_radioSetupDialog && !page.isEmpty())
@@ -4201,6 +4290,13 @@ void MainWindow::closeEvent(QCloseEvent* event)
         }
     }
 
+    // Lift any adaptive cap while the connection is alive, or the radio keeps
+    // the capped rates for the next session. Before the UI teardown below:
+    // the pre-cap rates live in the SpectrumWidgets, and prepareShutdown()
+    // deletes every pan applet, which left this loop nothing to send (#6791).
+    if (m_adaptiveThrottleActive)
+        restorePreCapPanRates();
+
     preparePanadapterUiForShutdown();
     auto& s = AppSettings::instance();
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());
@@ -4264,24 +4360,22 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
     // Save per-slice DAX channel assignments for restore on next launch.
     // Keyed by slice index (A=0, B=1, ...) since radio-assigned IDs change.
+    // #4558: the write also drops keys beyond the slice count, so a config
+    // poisoned by an earlier multi-slice quit self-heals. A radio without DAX
+    // writes nothing, keeping the saved Flex assignment. DaxRestorePolicy::
+    // quitWrite() carries why, and the unit test pins each case.
     {
-        const QList<SliceModel*> slices = m_radioModel.slices();
-        for (int i = 0; i < slices.size(); ++i) {
-            const QString key = DaxRestorePolicy::keyForIndex(i);
-            if (slices[i]->daxChannel() > 0) {
-                s.setValue(key, QString::number(slices[i]->daxChannel()));
-            } else {
-                s.remove(key);
-            }
+        QList<int> channels;
+        for (SliceModel* slice : m_radioModel.slices()) {
+            channels << slice->daxChannel();
         }
-        // #4558: also drop keys beyond the slice count at quit, so a config
-        // poisoned by an earlier multi-slice quit self-heals instead of staying
-        // armed forever. Both preconditions — connected AND holding a populated
-        // slice list — are load-bearing; DaxRestorePolicy::staleKeysToPrune()
-        // carries why, and the unit test pins both.
-        for (const QString& key :
-             DaxRestorePolicy::staleKeysToPrune(m_radioModel.isConnected(),
-                                                slices.size())) {
+        const DaxRestorePolicy::QuitWrite write = DaxRestorePolicy::quitWrite(
+            m_radioModel.backendCapabilities().hasDaxStreams,
+            m_radioModel.isConnected(), channels);
+        for (const auto& [key, channel] : write.set) {
+            s.setValue(key, QString::number(channel));
+        }
+        for (const QString& key : write.remove) {
             s.remove(key);
         }
     }
@@ -4468,6 +4562,15 @@ void MainWindow::closeEvent(QCloseEvent* event)
 #ifdef HAVE_WEBSOCKETS
         m_freedvClient = nullptr;
 #endif
+    }
+
+    // A staged update installs as AetherSDR quits (RFC #5304): the helper
+    // waits for this process to exit. Not while radio firmware is being
+    // written, not when a new instance is already starting from the install
+    // (a UI-scale restart), and not twice after Restart to update handed it
+    // over. Every quit, close() or QApplication::quit(), arrives here.
+    if (m_updateController && !m_relaunchingApp && !(m_updatesWindow && m_updatesWindow->firmwareBusy())) {
+        m_updateController->installOnQuit();
     }
 
     QMainWindow::closeEvent(event);
@@ -4954,9 +5057,8 @@ void MainWindow::hideConnectionDialog()
 
 void MainWindow::showMemoryDialog()
 {
-    const bool wasFresh = !m_memoryDialog;
-    showOrRaisePersistent(m_memoryDialog, &m_radioModel);
-    if (wasFresh && m_memoryDialog) {
+    if (showOrRaiseCanon(m_memoryDialog,
+                         [this] { return new MemoryDialog(&m_radioModel, this); })) {
         connect(m_memoryDialog.data(), &MemoryDialog::memoryActivated,
                 this, [this](int memoryIndex) { activateMemorySpot(memoryIndex); });
         connect(m_memoryDialog.data(), &QObject::destroyed, this, [this] {
@@ -7105,6 +7207,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_panDisplayStatusConnections.clear();
         m_adaptiveThrottleActive = false;
         m_adaptiveFpsCap = 0;  // clear cap alongside throttle flag — see #2829 review
+        m_adaptiveFpsCapsSent.clear();
+        m_adaptiveWfRatesSent.clear();
 
         // Clear spectrum/waterfall so the display doesn't look frozen
         if (m_panStack) {
@@ -8210,6 +8314,11 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     }
     if (m_multiFlexAction) {
         m_multiFlexAction->setVisible(!connected || caps.hasMultiClientSessions);
+    }
+    // The dashboard stays open beside the main window, so a radio without
+    // multi-client sessions closes it rather than leaving it to drive one.
+    if (connected && !caps.hasMultiClientSessions && m_multiFlexDialog) {
+        m_multiFlexDialog->close();  // QPointer, guarded above
     }
     updateToolsMenuState();
     // Both entries open the SAME host serial knob (m_aetherControlAction is
@@ -9621,185 +9730,18 @@ void MainWindow::enableNr2WithWisdom()
         const auto result = std::make_shared<std::atomic<int>>(
             static_cast<int>(SpectralNR::WisdomResult::Failed));
 
-        const bool frameless =
-            AppSettings::instance().value("FramelessWindow", "True").toString() == "True";
-
-        auto* dlg = new QDialog(this);
-        dlg->setObjectName("nr2WisdomDialog");
-        dlg->setWindowTitle("AetherSDR — FFTW Wisdom");
-        if (frameless) {
-            dlg->setWindowFlag(Qt::FramelessWindowHint, true);
-        }
-        // Modeless — wisdom generation can take minutes; locking the
-        // operator out of the radio for that whole window was a worse UX
-        // than letting them keep operating while the worker thread runs
-        // in the background.  The thread is already off the GUI thread
-        // (see QThread::create below); progress callbacks marshal back
-        // via QMetaObject::invokeMethod and the Cancel path is wired
-        // through QDialog::rejected.
-        dlg->setWindowModality(Qt::NonModal);
-        // Tool window flag so the dialog floats above the main window
-        // without claiming a separate taskbar entry, and stays visible
-        // when the operator clicks back to the main UI.
-        dlg->setWindowFlag(Qt::Tool, true);
-        dlg->setAttribute(Qt::WA_ShowWithoutActivating, true);
-#ifdef Q_OS_MACOS
-        // Qt maps Qt::Tool to an NSPanel, which AppKit hides whenever the
-        // application deactivates — fatal for a dialog that is modeless by
-        // design and lives for minutes.  This attribute is what turns that
-        // off: QWidgetPrivate::create() forwards it to the QWindow property
-        // _q_macAlwaysShowToolWindow, which QCocoaWindow reads to decide
-        // NSWindow.hidesOnDeactivate.  It is read during window creation, so
-        // it MUST stay ahead of the first show()/winId() — moving it below
-        // would silently no-op on macOS with nothing failing elsewhere.
-        dlg->setAttribute(Qt::WA_MacAlwaysShowToolWindow, true);
-#endif
-        dlg->setMinimumWidth(500);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(dlg, "QDialog { background: #050710; }"
-            "QLabel { color: {{color.text.secondary}}; background: transparent; }"
-            "QProgressBar { text-align: center; font-size: 13px;"
-            " font-weight: bold; color: {{color.text.primary}};"
-            " background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 3px; }"
-            "QProgressBar::chunk { background: {{color.accent}}; }");
-
-        auto* root = new QVBoxLayout(dlg);
-        root->setContentsMargins(0, 0, 0, 0);
-        root->setSpacing(0);
-
-        auto* titleBar = new FramelessWindowTitleBar(QStringLiteral("AetherSDR — FFTW Wisdom"), dlg);
-        titleBar->setVisible(frameless);
-        root->addWidget(titleBar);
-
-        auto* content = new QWidget(dlg);
-        auto* body = new QVBoxLayout(content);
-        body->setContentsMargins(10, frameless ? 8 : 10, 10, 10);
-        body->setSpacing(10);
-
-        auto* label = new QLabel(
-            "Optimizing FFT plans for NR2...\n\n"
-            "This window will automatically close when wisdom generation is complete.",
-            content);
-        label->setObjectName("nr2WisdomStatusLabel");
-        label->setWordWrap(true);
-        body->addWidget(label);
-
-        auto* progress = new QProgressBar(content);
-        progress->setObjectName("nr2WisdomProgressBar");
-        progress->setRange(0, 100);
-        progress->setValue(0);
-        body->addWidget(progress);
-
-        auto* activityRow = new QHBoxLayout();
-        activityRow->setContentsMargins(0, 0, 0, 0);
-        auto* activityLabel = new QLabel("Working", content);
-        activityLabel->setObjectName("nr2WisdomActivityLabel");
-        activityLabel->setAccessibleName("FFTW wisdom generation activity");
-        activityRow->addWidget(activityLabel);
-        activityRow->addStretch();
-        auto* elapsedLabel = new QLabel("Elapsed: 0:00", content);
-        elapsedLabel->setObjectName("nr2WisdomElapsedTimeLabel");
-        elapsedLabel->setAccessibleName("Elapsed time");
-        activityRow->addWidget(elapsedLabel);
-        body->addLayout(activityRow);
-
-        auto* reassuranceLabel = new QLabel(
-            "Still working — FFTW planning can take several minutes on some systems.", content);
-        reassuranceLabel->setObjectName("nr2WisdomReassuranceLabel");
-        reassuranceLabel->setAccessibleName("FFTW wisdom generation reassurance");
-        reassuranceLabel->setWordWrap(true);
-        // Reserve the row while hidden.  This line toggles on every quiet
-        // interval, and without the reservation each toggle relayouts the
-        // dialog — the tool window grows when it appears and is left with
-        // dead space when it goes.  #4728 is a report about this window
-        // being visually unstable at exactly this point in the run, so the
-        // replacement liveness cue must not reintroduce geometry churn.
-        QSizePolicy reassurancePolicy = reassuranceLabel->sizePolicy();
-        reassurancePolicy.setRetainSizeWhenHidden(true);
-        reassuranceLabel->setSizePolicy(reassurancePolicy);
-        reassuranceLabel->hide();
-        body->addWidget(reassuranceLabel);
-
-        const auto announceLabel = [](QLabel* target) {
-            target->setAccessibleName(target->text());
-            QAccessibleEvent event(target, QAccessible::NameChanged);
-            QAccessible::updateAccessibility(&event);
-        };
-
-        auto* buttonRow = new QHBoxLayout();
-        buttonRow->addStretch();
-        auto* cancelButton = new QPushButton("Cancel", content);
-        cancelButton->setObjectName("nr2WisdomCancelButton");
-        cancelButton->setAutoDefault(false);
-        cancelButton->setDefault(false);
-        buttonRow->addWidget(cancelButton);
-        body->addLayout(buttonRow);
-        root->addWidget(content);
-
+        // The window shows progress and takes the cancel; the worker reads
+        // `cancelled`, which the window's cancel and shutdown both set.
+        auto* dlg = new Nr2WisdomDialog(this);
+        connect(dlg, &Nr2WisdomDialog::cancelRequested, this,
+                [cancelled]() { cancelled->store(true); });
         m_nr2WisdomDialog = dlg;
         dlg->show();
 
-        auto* activityTimer = new QTimer(dlg);
-        activityTimer->setInterval(500);
-        const auto elapsedTimer = std::make_shared<QElapsedTimer>();
-        const auto lastCallbackTimer = std::make_shared<QElapsedTimer>();
-        elapsedTimer->start();
-        lastCallbackTimer->start();
-        connect(activityTimer, &QTimer::timeout, dlg,
-            [cancelled, activityLabel, elapsedLabel, reassuranceLabel,
-                elapsedTimer, lastCallbackTimer, announceLabel]() {
-                const qint64 elapsedSeconds = elapsedTimer->elapsed() / 1000;
-                elapsedLabel->setText(QString("Elapsed: %1:%2")
-                    .arg(elapsedSeconds / 60)
-                    .arg(elapsedSeconds % 60, 2, 10, QLatin1Char('0')));
-                const int dotCount = static_cast<int>((elapsedTimer->elapsed() / 500) % 4);
-                activityLabel->setText(QString("%1%2")
-                    .arg(cancelled->load() ? "Canceling" : "Working")
-                    .arg(QString(dotCount, QLatin1Char('.'))));
-                if (cancelled->load()) {
-                    reassuranceLabel->setText(
-                        "Cancel requested — waiting for the current FFT plan to finish.");
-                    reassuranceLabel->show();
-                } else {
-                    const bool quiet = lastCallbackTimer->elapsed() >= 10000;
-                    if (quiet && !reassuranceLabel->isVisible()) {
-                        reassuranceLabel->show();
-                        announceLabel(reassuranceLabel);
-                    } else if (!quiet) {
-                        reassuranceLabel->hide();
-                    }
-                }
-            });
-        activityTimer->start();
-
-        const auto requestCancel = [cancelled, label, progress, cancelButton,
-                                       activityLabel, reassuranceLabel, announceLabel]() {
-            if (cancelled->exchange(true)) {
-                return;
-            }
-            // activityLabel is left to the activity timer: it reads
-            // `cancelled` and switches to the animated "Canceling..." on its
-            // next tick.  Setting a static string here would be overwritten
-            // within 500 ms, and the animated form is the better affordance
-            // anyway — it keeps proving the app is alive while the in-flight
-            // FFT plan finishes.
-            reassuranceLabel->setText(
-                "Cancel requested — waiting for the current FFT plan to finish.");
-            reassuranceLabel->show();
-            announceLabel(reassuranceLabel);
-            cancelButton->setEnabled(false);
-            progress->setRange(0, 0);
-            label->setText("Canceling FFTW wisdom generation...\n\n"
-                           "Audio will continue unchanged. This may take a moment while the current FFT plan finishes.");
-        };
-        connect(cancelButton, &QPushButton::clicked, dlg, requestCancel);
-        connect(dlg, &QDialog::rejected, dlg, requestCancel);
-
-        const QPointer<QDialog> dlgGuard(dlg);
-        auto* thread = QThread::create([cancelled, result, dlgGuard, label, progress,
-                                           reassuranceLabel, lastCallbackTimer]() {
+        const QPointer<Nr2WisdomDialog> dlgGuard(dlg);
+        auto* thread = QThread::create([cancelled, result, dlgGuard]() {
             const auto wisdomResult = AudioEngine::generateWisdom(
-                [cancelled, dlgGuard, label, progress, reassuranceLabel,
-                    lastCallbackTimer](int step, int total, const std::string& desc) {
+                [cancelled, dlgGuard](int step, int total, const std::string& desc) {
                     if (!dlgGuard) {
                         return;
                     }
@@ -9808,18 +9750,14 @@ void MainWindow::enableNr2WithWisdom()
                     }
                     int pct = total > 0 ? (step * 100 / total) : 0;
                     QString d = QString::fromStdString(desc);
-                    QMetaObject::invokeMethod(dlgGuard.data(), [dlgGuard, label, progress, reassuranceLabel,
-                                                                  lastCallbackTimer, pct, d]() {
+                    QMetaObject::invokeMethod(dlgGuard.data(), [dlgGuard, pct, d]() {
                         if (!dlgGuard) {
                             return;
                         }
-                        lastCallbackTimer->restart();
-                        reassuranceLabel->hide();
                         if (!d.isEmpty()) {
-                            label->setText(d + "\n\n"
-                                "This window will automatically close when wisdom generation is complete.");
+                            dlgGuard->setStepDescription(d);
                         } else {
-                            progress->setValue(pct);
+                            dlgGuard->setProgress(pct);
                         }
                     });
                 },
@@ -9828,25 +9766,17 @@ void MainWindow::enableNr2WithWisdom()
         });
         m_nr2WisdomThread = thread;
         m_nr2WisdomCancel = cancelled;
-        connect(thread, &QThread::finished, this, [this, dlg, progress, label, thread, result,
-                                                     activityTimer, activityLabel, reassuranceLabel,
-                                                     announceLabel]() {
+        connect(thread, &QThread::finished, this, [this, dlg, thread, result]() {
             m_nr2WisdomCancel.reset();
             const auto wisdomResult =
                 static_cast<SpectralNR::WisdomResult>(result->load());
             const bool ready = wisdomResult == SpectralNR::WisdomResult::Ready
                             || wisdomResult == SpectralNR::WisdomResult::Generated;
-            activityTimer->stop();
-            reassuranceLabel->hide();
-            progress->setRange(0, 100);
-            progress->setValue(ready ? 100 : 0);
 
             if (!ready) {
-                activityLabel->setText("Stopped");
-                label->setText(wisdomResult == SpectralNR::WisdomResult::Cancelled
-                    ? "Wisdom generation canceled. Audio was left unchanged."
-                    : "Wisdom generation failed. Audio was left unchanged.");
-                announceLabel(label);
+                dlg->showResult(wisdomResult == SpectralNR::WisdomResult::Cancelled
+                    ? Nr2WisdomDialog::Outcome::Canceled
+                    : Nr2WisdomDialog::Outcome::Failed);
                 if (auto* a = m_appletPanel ? m_appletPanel->clientRxDspApplet() : nullptr) {
                     if (auto* w = a->widget()) {
                         w->syncFromEngine();
@@ -9864,9 +9794,7 @@ void MainWindow::enableNr2WithWisdom()
                 return;
             }
 
-            activityLabel->setText("Complete");
-            label->setText("Wisdom generation complete!");
-            announceLabel(label);
+            dlg->showResult(Nr2WisdomDialog::Outcome::Complete);
             QTimer::singleShot(800, this, [this, dlg, thread]() {
                 dlg->accept();
                 dlg->deleteLater();
@@ -9905,6 +9833,12 @@ void MainWindow::applyUiScale(int pct)
         QString("UI scale changed to %1%. Restart AetherSDR now to apply?").arg(pct),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer == QMessageBox::Yes) {
+        m_relaunchingApp = true;
+        // A new instance starts from the bundle as this one exits: a swap
+        // readied for this exit would replace it under that instance.
+        if (m_updateController) {
+            m_updateController->dropPendingSwap();
+        }
 #ifdef Q_OS_MACOS
         // On macOS, relaunch via 'open -n' so the .app bundle is activated through
         // Launch Services — direct binary exec bypasses the bundle, causing dock
@@ -10307,6 +10241,7 @@ void MainWindow::toggleMinimalModeFromAction()
 
 void MainWindow::toggleMinimalMode(bool on)
 {
+    if (on && m_aetherLabActive) { returnFromAetherLab(); }
     // Canvas mode owns the shell; minimal mode owns the window — they
     // cannot overlap.  Entering minimal from canvas used to reparent an
     // EMPTY applet panel (every applet lent to the canvas, every pan on
@@ -10358,6 +10293,7 @@ void MainWindow::toggleMinimalMode(bool on)
         // Hide the splitter (contains spectrum + applet panel) and reparent
         // the applet panel directly into the central layout
         m_splitter->hide();
+        if (m_labWorkspaceStack) { m_labWorkspaceStack->hide(); }
         m_appletPanel->setParent(centralWidget());
         centralWidget()->layout()->addWidget(m_appletPanel);
         m_appletPanel->show();
@@ -10440,6 +10376,7 @@ void MainWindow::toggleMinimalMode(bool on)
                 heldSpectra.append(sw);
             }
         }
+        if (m_labWorkspaceStack) { m_labWorkspaceStack->show(); }
         m_splitter->show();
 
         // Release fixed width and restore minimum size

@@ -50,6 +50,10 @@ context that would otherwise live in tribal knowledge.
   implementation gaps — phase carries no sign on the wire, and a record is not
   a coherent snapshot — and for the shared-transport poll gate.
 
+- [`update-manifest.md`](update-manifest.md) — the signed in-app update
+  manifest (RFC #5304): where it lives, the Ed25519 signature, the payload and
+  patch-bundle schema, and the apply contract the app-side updater implements.
+
 - [`radio-capabilities-map.md`](radio-capabilities-map.md) — every
   `RadioCapabilities` field, what each backend declares, and where the value is
   read. Read before adding a field: the struct defaults to `false`, so a

@@ -1188,6 +1188,12 @@ private:
     void positionZoomButtons();
     void drawFreqScale(QPainter& p, const QRect& r);
     double frequencyCanvasFractionAtGlobal(const QPointF& globalPosition) const;
+    // Zoom the pan by a bandwidth multiplier, pinning the frequency under
+    // globalPosition to its pixel. Shared by the macOS trackpad pinch
+    // (QNativeGestureEvent, ZoomNativeGesture) and the touch pinch
+    // (QPinchGesture) paths in event(). Returns true (the event is consumed)
+    // whether the zoom applied or was clamped at a bandwidth limit.
+    bool applyAnchoredZoom(double bandwidthFactor, const QPointF& globalPosition);
     void drawDbmScale(QPainter& p, const QRect& specRect);
     // Shared strip chrome (background, border, ref-adjust arrows) for both the
     // 2D linear dBm scale and the 3D stacked-trace amplitude scale, so the
@@ -1884,6 +1890,7 @@ private:
     // the retained radio rows remain discrete and authoritative.
     QTimer* m_waterfallScrollTimer{nullptr};
     QElapsedTimer m_waterfallScrollClock;
+    QElapsedTimer m_lastFftFrameClock;  // last ingested FFT frame (#6883)
     float m_waterfallScrollDistanceRows{1.0f};
     // Per-visible-row frequency frame, indexed by the physical waterfall ring
     // row. The GPU uses this to place each row in the current viewport without
@@ -2015,6 +2022,14 @@ private:
     // a teardown reorder can't leave a dangling scheduler here. (#4139)
     QPointer<PanadapterRenderScheduler> m_renderScheduler;
     void coalescedUpdate();                 // update(), coalesced into one present per slot
+    // While FFT frames are presenting, a scroll tick, waterfall row or overlay
+    // change rides the next one instead of compositing the window on its own
+    // (#6883). deferPresentToFft() returns true when it deferred, and arms
+    // m_fftPresentWake so the deferred state is still presented if that FFT
+    // frame never arrives.
+    bool presentNeededBesideFft() const;
+    bool deferPresentToFft();
+    QTimer* m_fftPresentWake{nullptr};
     // VFO passband drag state (#404)
     bool m_draggingVfo{false};
     int  m_vfoDragOffsetHz{0};  // Hz offset from VFO at grab point (#1120)

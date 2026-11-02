@@ -38,6 +38,8 @@
 #include "core/backends/PanControlRequest.h"
 #include "core/backends/SlicePresetRequest.h"
 #include "core/backends/ProfileRequest.h"
+#include "core/backends/NtpSourceRequest.h"
+#include "core/backends/WaveformEnvRequest.h"
 #include "core/backends/MemoryRequest.h"
 #include "core/backends/SliceLifecycleRequest.h"
 #include "core/backends/RestoredRadioState.h"
@@ -189,7 +191,7 @@ public:
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSlicePreset(int, const SlicePresetRequest&)
     { return ReceiveDispatch::Unsupported; }
-    virtual ReceiveDispatch requestTxBand(const TxBandRequest&)
+    virtual ReceiveDispatch requestTxBand(const TxBandRequest&, const RadioSetupCompletion& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestPanDisplay(const QString& panId, const QString&,
         const PanDisplayRequest& request, const RadioControlCompletion& = {},
@@ -248,6 +250,19 @@ public:
     virtual ReceiveDispatch requestMemory(const MemoryRequest&,
                                           const RadioControlCompletion& = {},
                                           const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    // One step of a waveform container environment change. Gated by
+    // capabilities().waveformEnvControl; the radio's container status is the only
+    // confirmation of what the environment became.
+    virtual ReceiveDispatch requestWaveformEnv(const WaveformEnvRequest&,
+                                               const RadioControlCompletion& = {},
+                                               const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    // One command toward the radio's NTP time source list. Gated by
+    // capabilities().ntpSourceControl; ntpSourceChanged is the only confirmation.
+    virtual ReceiveDispatch requestNtpSource(const NtpSourceRequest&,
+                                             const RadioControlCompletion& = {},
+                                             const RadioControlFence& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestUsbCable(const UsbCableRequest&)
     { return ReceiveDispatch::Unsupported; }
@@ -1230,6 +1245,9 @@ signals:
     // database importing/exporting flags); RadioModel routes it to TransmitModel
     // tx/mic profiles, the global-profile list, or the import/export flags.
     void profileChanged(const ProfileDelta& delta);
+
+    // Present-only status for one of the radio's NTP time sources, or its removal.
+    void ntpSourceChanged(const NtpSourceDelta& delta);
 
     // Meter definition catalog (aetherd RFC 2.3 — MeterModel touchpoint). The
     // backend decodes the vendor meter-status wire format into a typed MeterDef;

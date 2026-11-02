@@ -85,7 +85,9 @@ bool Hl2ControlRequest::matches(const Ep6Response& r) const noexcept
     if (r.raddr != m_request.addr)
         return false;
     // Echo::SubsystemRead replies carry the value read, not the bytes written,
-    // so the address is all the evidence there is. Echo::Exact replies carry
+    // so the address is all the evidence there is. Except when the gateware
+    // ignored the read: then the reply is the echo, which only the caller can
+    // tell apart (MetisClient::publishControlVerdict). Echo::Exact replies carry
     // the echo, and we spend it: matching on the address alone would pair a
     // reply with any request at the same register, which after an abandoned
     // request is the wrong one.

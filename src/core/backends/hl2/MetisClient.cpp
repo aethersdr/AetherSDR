@@ -41,6 +41,17 @@ namespace AetherSDR::hl2 {
 
 namespace {
 
+// requestIoBoardStatus()'s answer for every way bus 2 can be busy.
+const QString kIoBoardBusBusy = QStringLiteral("the radio's I2C bus was busy");
+
+// The config bank's bits that start a bus-2 write when they change
+// (i2c_bus2.v, address 0x00): filter select DATA[23:17], RX antenna DATA[13] and,
+// on AK4951 builds, the speaker bit DATA[11].
+std::uint32_t configBus2Bits(const Cc& config) noexcept
+{
+    return (std::uint32_t(config[2] & 0xFE) << 8) | std::uint32_t(config[3] & 0x28);
+}
+
 // A family switch destroys the transport without power-cycling the radio.
 // Keep unresolved clock recovery until a complete OFF sequence is sent.
 struct Cl1RecoveryRegistry {
@@ -297,6 +308,8 @@ bool MetisClient::start(const Params& params)
     m_port = params.port;
     m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), m_params.ocFilterByte,
                           m_params.ditherBit, m_params.randomBit);
+    // A new session's first config bank may move the radio's filter relays.
+    m_lastConfigBus2Sent = kConfigBus2Unknown;
     m_ccGain = ccRxGain(m_params.lnaGainDb);
     // Every receiver starts on RX1's frequency; Hl2Backend moves the rest as it
     // brings each slice up. The BANK COUNT is fixed here and never re-derived
@@ -575,7 +588,7 @@ void MetisClient::dropControlRequest()
     const auto st = m_ccRequest.state();
     if (st == Hl2ControlRequest::State::Queued
         || st == Hl2ControlRequest::State::Awaiting) {
-        emit controlRequestFailed(m_ccRequest.outstanding().addr, /*refused=*/false);
+        publishControlFailure(m_ccRequest.outstanding().addr, /*refused=*/false);
     }
     m_ccRequest.reset();
     // A bank already built but not yet confirmed has nowhere to land now.
@@ -1176,17 +1189,55 @@ bool MetisClient::requestRegister(int addr, quint32 data, bool subsystemRead)
     return m_ccRequest.arm(r);
 }
 
+void MetisClient::requestIoBoardStatus()
+{
+    // Same stream gate as requestRegister(): the reply can only ride EP6.
+    if (!m_running || !m_linkUp) {
+        emit ioBoardStatusFailed(QStringLiteral("the radio is not streaming"));
+        return;
+    }
+    Hl2ControlRequest::Request r;
+    r.addr = kC0I2c2 >> 1;
+    r.data = kIoBoardStatusReadData;
+    r.echo = Hl2ControlRequest::Echo::SubsystemRead;
+    if (!m_ccRequest.arm(r)) {
+        emit ioBoardStatusFailed(
+            QStringLiteral("another control request is outstanding or quarantined"));
+    }
+}
+
 void MetisClient::publishControlVerdict()
 {
     const auto reply = m_ccRequest.takeReply();
     if (!reply)
         return;
-    if (reply->outcome == Hl2ControlRequest::Outcome::Answered) {
-        emit controlReplyReady(reply->addr, reply->data);
+    if (reply->outcome != Hl2ControlRequest::Outcome::Answered) {
+        publishControlFailure(reply->addr,
+                              reply->outcome == Hl2ControlRequest::Outcome::Refused);
+    } else if (reply->addr == (kC0I2c2 >> 1)) {
+        // i2c_bus2.v ignores a command that arrives during a write, and control.v
+        // then returns the request's own DATA as the reply (docs/HERMES.md, "The
+        // IO board status read"). A real reading of those bytes would need EXTTR
+        // low and an undefined fault code, so this costs nothing real.
+        if (reply->data == kIoBoardStatusReadData) {
+            emit ioBoardStatusFailed(kIoBoardBusBusy);
+        } else {
+            emit ioBoardStatusReady(reply->data);
+        }
     } else {
-        emit controlRequestFailed(
-            reply->addr, reply->outcome == Hl2ControlRequest::Outcome::Refused);
+        emit controlReplyReady(reply->addr, reply->data);
     }
+}
+
+void MetisClient::publishControlFailure(int addr, bool refused)
+{
+    // Only requestIoBoardStatus() arms 0x3d; requestRegister() refuses it.
+    if (addr == (kC0I2c2 >> 1)) {
+        emit ioBoardStatusFailed(refused ? kIoBoardBusBusy
+                                         : QStringLiteral("the radio did not answer"));
+        return;
+    }
+    emit controlRequestFailed(addr, refused);
 }
 
 qint64 MetisClient::controlNowMs() const noexcept
@@ -1410,6 +1461,11 @@ void MetisClient::reportTxUnderflowRun()
 
 std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
 {
+    return buildNextControlPacket(controlNowMs());
+}
+
+std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qint64 nowMs)
+{
     const qint64 now = TxCoordinator::monotonicMs();
     if (!m_moxOperation.permitsDispatch(now)) {
         m_mox = false;
@@ -1432,8 +1488,22 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
     // a stale claim that some later packet carried the request.
     m_requestOnBuiltPacket = false;
     m_cl1BankOnBuiltPacket = false;
+    m_busReadOnBuiltPacket = false;
+    m_i2cWriteOnBuiltPacket = false;
+    m_builtAtMs = nowMs;
+    m_configBus2OnBuiltPacket = configBus2Bits(m_ccConfig);
+    const auto isI2cBank = [](const Cc& bank) {
+        return bank[0] == kC0I2c1 || bank[0] == kC0I2c2;
+    };
+    // Bus 2 spacing (m_builtAtMs): a held bank waits for a later packet, in order.
+    const bool holdI2cWrite = nowMs - m_lastBusReadSentMs < kI2cBusSpacingMs;
+    const bool requestIsBusRead = m_ccRequest.state() == Hl2ControlRequest::State::Queued
+        && m_ccRequest.outstanding().addr == (kC0I2c2 >> 1);
+    const bool holdBusRead = requestIsBusRead
+        && (m_configBus2OnBuiltPacket != m_lastConfigBus2Sent
+            || nowMs - m_lastI2cWriteSentMs < kI2cBusSpacingMs);
     Cc b;
-    if (!m_oneShot.empty()) {
+    if (!m_oneShot.empty() && !(holdI2cWrite && isI2cBank(m_oneShot.front()))) {
         b = m_oneShot.front();
         m_oneShot.pop_front();
         // Claimed, not yet counted: onControlPacketSent() decides whether this
@@ -1441,7 +1511,8 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         // above and for the same reason — a packet built and then discarded must
         // not retire one of the twenty-four writes.
         m_cl1BankOnBuiltPacket = isCl1Bank(b);
-    } else if (const auto rqst = m_ccRequest.wireBank()) {
+        m_i2cWriteOnBuiltPacket = isI2cBank(b);
+    } else if (const auto rqst = holdBusRead ? std::optional<Cc>{} : m_ccRequest.wireBank()) {
         // AFTER the one-shots, ahead of the round robin. After, because a
         // one-shot is a write the operator asked for and a read-back that
         // overtook it would return the value from before the change. Ahead of
@@ -1452,6 +1523,7 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         // per armed request — the RQST bit never reaches a bank the round robin
         // re-asserts, which would re-request three times a rotation for ever.
         b = *rqst;
+        m_busReadOnBuiltPacket = requestIsBusRead;
         // Not onRequestSent() here: the deadline starts when onControlPacketSent() sees
         // the socket accept the bank, so a failed send leaves the request Queued for the
         // next EP2 frame instead of timing out unseen.
@@ -1609,6 +1681,19 @@ void MetisClient::onControlPacketSent(qint64 bytesWritten, qint64 nowMs) noexcep
     m_requestOnBuiltPacket = false;
     if (carriedRequest && bytesWritten > 0)
         m_ccRequest.onRequestSent(nowMs);
+    if (bytesWritten > 0) {
+        // Not a session's first config: the read waits for EP6, long after it.
+        if (m_lastConfigBus2Sent != kConfigBus2Unknown
+            && m_configBus2OnBuiltPacket != m_lastConfigBus2Sent)
+            m_lastI2cWriteSentMs = m_builtAtMs;
+        m_lastConfigBus2Sent = m_configBus2OnBuiltPacket;
+        if (m_busReadOnBuiltPacket)
+            m_lastBusReadSentMs = m_builtAtMs;
+        if (m_i2cWriteOnBuiltPacket)
+            m_lastI2cWriteSentMs = m_builtAtMs;
+    }
+    m_busReadOnBuiltPacket = false;
+    m_i2cWriteOnBuiltPacket = false;
     // Only a complete OFF sequence releases recovery. A session interrupted
     // earlier leaves the record for the next transport to resend the whole table.
     const bool carriedCl1 = m_cl1BankOnBuiltPacket;

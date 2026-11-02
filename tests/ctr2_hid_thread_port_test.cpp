@@ -54,6 +54,7 @@ struct FakeDevice {
     std::atomic<int> writeDelayMs{0};
     std::atomic<int> writesBegun{0};
     std::atomic<bool> failWrites{false};
+    std::atomic<int> failWritesAfter{-1}; // not -1: writes after this many fail
     std::atomic<bool> closed{false};
     std::function<void()> onWritten;   // after a write completes, on the I/O thread
     QByteArray featureReply;           // Get Feature 0x02 answer, ID first; empty = stall
@@ -83,6 +84,9 @@ struct FakeDevice {
                 return -1;
             }
             std::lock_guard<std::mutex> g(lock);
+            if (failWritesAfter >= 0 && static_cast<int>(writes.size()) >= failWritesAfter) {
+                return -1;
+            }
             writes.emplace_back(reinterpret_cast<const char*>(buffer), size);
             if (onWritten) {
                 onWritten();
@@ -223,6 +227,23 @@ void testReadsAndFailures()
     check(waitUntil([&] { return !failure2.isEmpty(); }) && failure2.contains("injected failure"),
           "a failed write fails the port with the device's reason");
     port2->shutdown({});
+    waitUntil([] { return false; }, 100);
+
+    // Writes that went out before a failing one in the same tick are counted,
+    // and reported before the failure: the firmware updater relies on it.
+    auto dev3 = std::make_shared<FakeDevice>();
+    dev3->failWritesAfter = 2;
+    auto* port3 = new Ctr2HidThreadPort(dev3->io(), QStringLiteral("fake"));
+    int sent3 = 0;
+    int sentAtFailure = -1;
+    QObject::connect(port3, &Ctr2HidPort::reportsSent, port3, [&](int n) { sent3 += n; });
+    QObject::connect(port3, &Ctr2HidPort::failed, port3,
+                     [&](const QString&) { sentAtFailure = sent3; });
+    port3->send(reports(3, 0x50));
+    check(waitUntil([&] { return sentAtFailure >= 0; }) && dev3->writeCount() == 2
+              && sentAtFailure == 2,
+          "writes before a failing one in the same tick are reported sent, before the failure");
+    port3->shutdown({});
     waitUntil([] { return false; }, 100);
 }
 

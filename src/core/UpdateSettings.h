@@ -41,6 +41,31 @@ public:
     // One write for a successful answer: its time and the release it named.
     static void recordAnswer(const QDateTime& when, const QString& latestVersion);
 
+    // The generated_at of the newest signed update manifest accepted
+    // (docs/architecture/update-manifest.md): an older one is a replay and
+    // is refused. Compared only with itself, never with the clock. Invalid
+    // before the first.
+    static QDateTime acceptedManifestUtc();
+    static void setAcceptedManifestUtc(const QDateTime& generatedAt);
+
+    // A release the updater installed and then rolled back because it failed
+    // its self-test (RFC #5304 Phase 3). Install update does not offer it
+    // again, so a broken release is never re-staged in a loop. Empty: none.
+    static QString rolledBackVersion();
+    static void setRolledBackVersion(const QString& version);
+
+    // How many quits in a row a staged Linux release failed its self-test
+    // as it was switched in (RFC #5304 Phase 5): the third is final. Zero
+    // for any other version.
+    static int quitSwitchTries(const QString& version);
+    static void setQuitSwitchTries(const QString& version, int tries);
+
+    // The release Install for updates installed from the AppImage and
+    // restarted into (RFC #5304 Phase 6), until that start reports it.
+    // Empty: none.
+    static QString installedFromAppImage();
+    static void setInstalledFromAppImage(const QString& version);
+
     // Whether an automatic check may run at nowUtc: enabled, and the last
     // answer is missing, older than the interval, or in the future (the
     // clock moved backward).

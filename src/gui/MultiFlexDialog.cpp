@@ -1,4 +1,7 @@
 #include "MultiFlexDialog.h"
+#include "CanonTableStyle.h"
+#include "FramelessResizer.h"
+#include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 
 #include <QBoxLayout>
@@ -6,53 +9,129 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QStyle>
+#include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QTableWidgetItem>
-#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
-static const char* kDialogStyle =
-    "QDialog { background: #0f0f1a; }"
-    "QLabel { color: #c8d8e8; }"
-    "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
-    "  border-radius: 3px; color: #c8d8e8; padding: 6px 20px; font-weight: bold; }"
-    "QPushButton:hover { background: #203040; border-color: #00b4d8; }"
-    "QPushButton#disconnectClientButton { background: #3a1a22; border-color: #7a2836; "
-    "  color: #ffd6d6; padding: 4px 12px; }"
-    "QPushButton#disconnectClientButton:hover { background: #4a202a; border-color: #d84a5f; }"
-    "QPushButton#disconnectClientButton:disabled { background: #24242e; border-color: #404050; color: #8a8a94; }"
-    "QTableWidget { background: #0f0f1a; color: #c8d8e8; "
-    "  gridline-color: #203040; border: 1px solid #304050; }"
-    "QTableWidget::item { padding: 4px 8px; }"
-    "QHeaderView::section { background: #1a2a3a; color: #8aa8c0; "
-    "  border: 1px solid #203040; padding: 6px; font-weight: bold; }";
+// Every color is a canon token: the window sits under canon/multiFlex. The
+// Enabled / Disabled button keeps its on/off green and red, through the
+// success and danger tokens.
+static const char* kDialogStyle = R"(
+QLabel {
+    background: transparent;
+    color: {{color.canon.inkSoft}};
+}
+QPushButton {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 6px;
+    padding: 6px 20px;
+    font-weight: bold;
+}
+QPushButton:hover {
+    border-color: {{color.canon.cyan}};
+}
+QPushButton#multiFlexEnableButton {
+    font-size: 13px;
+}
+QPushButton#multiFlexEnableButton[multiFlexOn="true"] {
+    color: {{color.toggle.success.foreground.checked}};
+    background: {{color.toggle.success.background.checked}};
+    border-color: {{color.toggle.success.border.checked}};
+}
+QPushButton#multiFlexEnableButton[multiFlexOn="false"] {
+    color: {{color.accent.danger}};
+    border-color: {{color.accent.danger}};
+}
+QPushButton#multiFlexEnableButton[multiFlexOn="true"]:hover,
+QPushButton#multiFlexEnableButton[multiFlexOn="false"]:hover {
+    border-color: {{color.canon.aqua}};
+}
+QPushButton#disconnectClientButton {
+    color: {{color.accent.danger}};
+    border-color: {{color.accent.danger}};
+    padding: 4px 12px;
+}
+QPushButton#disconnectClientButton:hover {
+    background: {{color.canon.nested}};
+}
+QPushButton#disconnectClientButton:disabled {
+    color: {{color.button.danger.foreground.disabled}};
+    background: {{color.button.danger.background.disabled}};
+    border-color: {{color.button.danger.border.disabled}};
+}
+)";
+
+// The dashboard's paddings, after the shared canon table rules.
+static const char* kDialogTableStyle = R"(
+QTableWidget::item {
+    padding: 4px 8px;
+}
+QHeaderView::section {
+    padding: 6px;
+}
+)";
+
+namespace {
+
+// Keeps an item's own color on a selected row: the PTT tick stays green and
+// our station stays cyan on the selection band, where Qt would draw them in
+// the highlighted-text color. Items with no color of their own take the
+// table's text color there, as on an unselected row.
+class KeepItemColorDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+protected:
+    void initStyleOption(QStyleOptionViewItem* option, const QModelIndex& index) const override
+    {
+        QStyledItemDelegate::initStyleOption(option, index);
+        const QVariant foreground = index.data(Qt::ForegroundRole);
+        option->palette.setBrush(QPalette::HighlightedText,
+                                 foreground.canConvert<QBrush>()
+                                     ? foreground.value<QBrush>()
+                                     : option->palette.brush(QPalette::Text));
+    }
+};
+
+} // namespace
 
 constexpr int kDisconnectActionColumnWidth = 144;
 constexpr int kDisconnectButtonWidth = 128;
 
 MultiFlexDialog::MultiFlexDialog(RadioModel* model, QWidget* parent)
-    : PersistentDialog("multiFLEX Dashboard", "MultiFlexDialogGeometry", parent),
+    : CanonWindow(QStringLiteral("multiFLEX Dashboard"), parent),
       m_model(model)
 {
-    theme::setContainer(this, QStringLiteral("dialog/multiFlex"));
+    setObjectName(QStringLiteral("MultiFlexDialog"));
+    theme::setContainer(this, QStringLiteral("canon/multiFlex"));
+    // Size and position persist under the key it used as a PersistentDialog,
+    // so saved geometry carries over; it resizes from every edge.
+    setGeometryKey(QStringLiteral("MultiFlexDialogGeometry"));
+    // Return must not click the default button: that is the Enabled /
+    // Disabled toggle, which turns multiFLEX off on the radio.
+    setReturnClicksDefault(false);
     setMinimumSize(680, 280);
     resize(760, 320);
-    setStyleSheet(kDialogStyle);
+    FramelessResizer::install(this);
+    ThemeManager::instance().applyStyleSheet(
+        bodyWidget(), QString::fromLatin1(kDialogStyle) + canonTableRules()
+                          + QString::fromLatin1(kDialogTableStyle));
 
     auto* root = new QVBoxLayout(bodyWidget());
+    root->setContentsMargins(14, 12, 14, 14);
     root->setSpacing(10);
-
-    // Title
-    auto* title = new QLabel("multiFLEX Stations");
-    title->setAlignment(Qt::AlignCenter);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(title, "QLabel { font-size: 16px; font-weight: bold; color: {{color.text.primary}}; }");
-    root->addWidget(title);
+    root->addWidget(makeCanonHeader(QStringLiteral("multiFLEX Dashboard")));
 
     // Enable/disable button
     auto* btnRow = new QHBoxLayout;
     btnRow->addStretch();
     m_enableBtn = new QPushButton;
+    m_enableBtn->setObjectName(QStringLiteral("multiFlexEnableButton"));
     connect(m_enableBtn, &QPushButton::clicked, this, [this]() {
         m_model->setMultiFlexEnabled(!m_model->multiFlexEnabled());
         refresh();
@@ -75,13 +154,13 @@ MultiFlexDialog::MultiFlexDialog(RadioModel* model, QWidget* parent)
     m_table->verticalHeader()->setDefaultSectionSize(36);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_table->setItemDelegate(new KeepItemColorDelegate(m_table));
     root->addWidget(m_table);
 
     // Local PTT button row
     auto* pttRow = new QHBoxLayout;
     pttRow->addStretch();
     m_pttLabel = new QLabel;
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_pttLabel, "QLabel { color: {{color.text.secondary}}; }");
     pttRow->addWidget(m_pttLabel);
     m_pttBtn = new QPushButton("Enable");
     connect(m_pttBtn, &QPushButton::clicked, this, [this]() {
@@ -91,18 +170,21 @@ MultiFlexDialog::MultiFlexDialog(RadioModel* model, QWidget* parent)
     pttRow->addStretch();
     root->addLayout(pttRow);
 
-    // Close button
-    auto* closeRow = new QHBoxLayout;
-    closeRow->addStretch();
-    auto* closeBtn = new QPushButton("Close");
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
-    closeRow->addWidget(closeBtn);
-    root->addLayout(closeRow);
-
     // Refresh on client changes or row selection
     connect(m_model, &RadioModel::otherClientsChanged, this, [this]() { refresh(); });
     connect(m_model, &RadioModel::infoChanged, this, [this]() { refresh(); });
     connect(m_table, &QTableWidget::itemSelectionChanged, this, [this]() { refresh(); });
+    // The PTT tick and our own station's name carry token colors per item;
+    // a theme change recolors them in place.
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, &MultiFlexDialog::applyItemColors);
+    // The dashboard belongs to one radio session: losing the radio closes it,
+    // so its controls never act on a radio that is gone and no pending
+    // disconnect outlives the session.
+    connect(m_model, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+        if (!connected)
+            close();
+    });
 
     refresh();
 }
@@ -112,16 +194,14 @@ void MultiFlexDialog::refresh()
     if (m_refreshing) return;
     m_refreshing = true;
 
-    // Enable button style
+    // Enable button: green when on, red when off (the sheet's multiFlexOn rules)
     bool enabled = m_model->multiFlexEnabled();
     m_enableBtn->setText(enabled ? "Enabled" : "Disabled");
-    m_enableBtn->setStyleSheet(enabled
-        ? "QPushButton { background: #1a6030; color: #40ff80; border: 1px solid #20a040; "
-          "border-radius: 3px; padding: 6px 20px; font-weight: bold; font-size: 13px; }"
-          "QPushButton:hover { background: #207040; }"
-        : "QPushButton { background: #601a1a; color: #ff6060; border: 1px solid #a02020; "
-          "border-radius: 3px; padding: 6px 20px; font-weight: bold; font-size: 13px; }"
-          "QPushButton:hover { background: #702020; }");
+    if (m_enableBtn->property("multiFlexOn") != QVariant(enabled)) {
+        m_enableBtn->setProperty("multiFlexOn", enabled);
+        m_enableBtn->style()->unpolish(m_enableBtn);
+        m_enableBtn->style()->polish(m_enableBtn);
+    }
 
     const auto& infoMap = m_model->clientInfoMap();
     const quint32 ourHandle = m_model->ourClientHandle();
@@ -180,10 +260,8 @@ void MultiFlexDialog::refresh()
             restoreRow = row;
 
         // LOCAL PTT
-        auto* pttItem = new QTableWidgetItem(hasPtt ? "\xE2\x9C\x94" : "");
+        auto* pttItem = new QTableWidgetItem(hasPtt ? QStringLiteral("\u2713") : QString());
         pttItem->setTextAlignment(Qt::AlignCenter);
-        if (hasPtt)
-            pttItem->setForeground(QColor(0x40, 0xff, 0x40));
         pttItem->setData(Qt::UserRole, handle);
         m_table->setItem(row, 0, pttItem);
 
@@ -199,8 +277,6 @@ void MultiFlexDialog::refresh()
             displayName = QString("client 0x%1").arg(handle, 8, 16, QChar('0')).toUpper();
         auto* stationItem = new QTableWidgetItem(displayName);
         stationItem->setTextAlignment(Qt::AlignCenter);
-        if (isUs)
-            stationItem->setForeground(QColor(0x00, 0xb4, 0xd8));
         stationItem->setData(Qt::UserRole, handle);
         m_table->setItem(row, 1, stationItem);
 
@@ -244,6 +320,8 @@ void MultiFlexDialog::refresh()
         ++row;
     }
 
+    applyItemColors();
+
     // Restore row selection after repopulation (blocked to avoid re-entrancy)
     if (restoreRow >= 0) {
         QSignalBlocker sb(m_table);
@@ -281,6 +359,21 @@ void MultiFlexDialog::refresh()
         m_pttLabel->show();
         m_pttBtn->setText("Enable");
         m_pttBtn->show();
+    }
+}
+
+void MultiFlexDialog::applyItemColors()
+{
+    auto& tm = ThemeManager::instance();
+    const QColor pttColor = tm.color(m_table, QStringLiteral("color.accent.success"));
+    const QColor ourColor = tm.color(m_table, QStringLiteral("color.canon.cyan"));
+    const quint32 ourHandle = m_model->ourClientHandle();
+    for (int row = 0; row < m_table->rowCount(); ++row) {
+        if (auto* ptt = m_table->item(row, 0); ptt && !ptt->text().isEmpty())
+            ptt->setForeground(pttColor);
+        if (auto* station = m_table->item(row, 1);
+            station && station->data(Qt::UserRole).toUInt() == ourHandle)
+            station->setForeground(ourColor);
     }
 }
 

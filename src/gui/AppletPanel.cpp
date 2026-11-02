@@ -177,6 +177,9 @@ class AppletDropArea : public QScrollArea {
 public:
     AppletDropArea(AppletPanel* panel) : QScrollArea(panel), m_panel(panel) {
         setAcceptDrops(true);
+        // Opt out of the app-wide touch-scroll hook: applets are rearranged by
+        // touch-dragging them, which QScroller would swallow as a scroll.
+        setProperty("_aetherNoTouchScroll", true);
     }
 
 protected:

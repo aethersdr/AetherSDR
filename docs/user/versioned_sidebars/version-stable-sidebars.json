@@ -21,6 +21,7 @@
       "items": [
         "supported-radios",
         "flexradio",
+        "radio-health-tools",
         "hermes-lite-2",
         "networked-icom",
         "anan-g2",
@@ -55,7 +56,8 @@
         "memory-channels",
         "profile-management",
         "xvtr-transverters",
-        "workspace-canvas"
+        "workspace-canvas",
+        "aetherlab"
       ]
     },
     {
@@ -130,6 +132,7 @@
         "smartlink-setup",
         "manual-connection",
         "tailscale-remote-access",
+        "waveform-environment",
         "low-bandwidth-connections",
         "multi-flex"
       ]
@@ -145,6 +148,7 @@
         "themes-and-theme-editor",
         "slice-colors",
         "accessibility",
+        "updates",
         "firmware-update"
       ]
     },

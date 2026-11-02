@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include "core/MqttSettings.h"
 
 class QCheckBox;
@@ -12,7 +12,10 @@ class QTableWidget;
 
 namespace AetherSDR {
 
-class MqttSettingsDialog : public PersistentDialog {
+// The MQTT broker, subscriptions and publish buttons: a short-lived
+// CanonWindow dialog (style guide, RFC #6226). OK and Apply save; Cancel,
+// the corner button, Escape and Ctrl+W close without saving.
+class MqttSettingsDialog : public CanonWindow {
     Q_OBJECT
 
 public:
