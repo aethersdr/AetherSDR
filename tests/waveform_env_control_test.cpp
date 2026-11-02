@@ -222,6 +222,17 @@ struct ApplyRig {
     }
 };
 
+// A capable session also subscribes to the radio's NTP sources (#6953); these
+// checks count the environment commands only.
+QStringList envCommands(const ApplyRig& rig)
+{
+    QStringList commands;
+    for (const QString& command : rig.backend->commands) {
+        if (!command.startsWith(QLatin1String("sub ntp_sources"))) { commands.append(command); }
+    }
+    return commands;
+}
+
 using Result = std::optional<WaveformEnvApplyResult>;
 auto into(Result& result) { return [&result](const WaveformEnvApplyResult& r) { result = r; }; }
 
@@ -483,10 +494,10 @@ void stagingFollowsTheRadio()
         leaveUncertain(rig);
         check(rig.radio.waveformEnvironmentStagingUncertain() && !waveformEnvironmentInstallBlocker(&rig.radio).isEmpty(),
               "an unacknowledged cleanup blocks installs on that radio");
-        const qsizetype before = rig.backend->commands.size();
+        const qsizetype before = envCommands(rig).size();
         reconnect(rig, QStringLiteral("8600-A"));
         WaveformEnvTestAccess::publish(rig.radio);
-        check(rig.backend->commands.size() == before + 1 && rig.backend->commands.last() == clear,
+        check(envCommands(rig).size() == before + 1 && envCommands(rig).last() == clear,
               "a new session to the same radio sends exactly one clear, however often capabilities publish");
         rig.accept();
         check(!rig.radio.waveformEnvironmentStagingUncertain() && waveformEnvironmentInstallBlocker(&rig.radio).isEmpty(),
@@ -509,13 +520,13 @@ void stagingFollowsTheRadio()
         ApplyRig rig;
         WaveformEnvTestAccess::serial(rig.radio, QStringLiteral("8600-A"));
         leaveUncertain(rig);
-        const qsizetype before = rig.backend->commands.size();
+        const qsizetype before = envCommands(rig).size();
         reconnect(rig, QStringLiteral("8400-B"));
-        check(rig.backend->commands.size() == before && !rig.radio.waveformEnvironmentStagingUncertain()
+        check(envCommands(rig).size() == before && !rig.radio.waveformEnvironmentStagingUncertain()
                   && waveformEnvironmentInstallBlocker(&rig.radio).isEmpty(),
               "a different radio is neither blocked nor sent a clear");
         reconnect(rig, QStringLiteral("8600-A"));
-        check(rig.backend->commands.size() == before + 1 && rig.backend->commands.last() == clear,
+        check(envCommands(rig).size() == before + 1 && envCommands(rig).last() == clear,
               "returning to the first radio still clears it");
     }
 }
