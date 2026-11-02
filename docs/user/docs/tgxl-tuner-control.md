@@ -60,7 +60,9 @@ Docked in the applet panel, the TUN applet (title "TGXL") shows:
   pressing it stops the tune. The tuner stays in operate.
 - **OPERATE**: cycles OPERATE → BYPASS → STANDBY.
 - **ANT 1 / ANT 2 / ANT 3** antenna buttons, shown with a direct connection to
-  a TGXL that has an antenna switch.
+  a TGXL that has an antenna switch. On the 3-way model with firmware
+  1.2.41 or later, custom port names supplied by the tuner replace these labels.
+  When no names are returned, the buttons retain their default labels.
 
 Messages from the tuner appear across the applet for as long as the tuner
 shows them: after a successful tune it shows the SWR it settled on

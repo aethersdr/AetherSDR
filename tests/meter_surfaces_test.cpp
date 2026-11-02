@@ -166,6 +166,23 @@ void testHl2PublishesAlcGain()
           backend.contains("meterUpdate(QStringLiteral(\"TX:ALCGAIN\")"));
 }
 
+// TX:SC_FILT_1/SC_FILT_2: the names MeterModel's TX-filter-loss pair matches
+// (#6605). MeterModel evaluates the pair when SC_FILT_2 arrives, so the HL2
+// must publish SC_FILT_1 first. Structural, as above.
+void testHl2PublishesTxFilterTaps()
+{
+    const QByteArray backend =
+        withoutLineComments(readSource("/src/core/backends/hl2/Hl2Backend.cpp"));
+    check("Hl2Backend defines a TX SC_FILT_1 meter",
+          backend.contains("QStringLiteral(\"SC_FILT_1\")"));
+    check("Hl2Backend defines a TX SC_FILT_2 meter",
+          backend.contains("QStringLiteral(\"SC_FILT_2\")"));
+    const qsizetype in = backend.indexOf("meterUpdate(QStringLiteral(\"TX:SC_FILT_1\")");
+    const qsizetype out = backend.indexOf("meterUpdate(QStringLiteral(\"TX:SC_FILT_2\")");
+    check("Hl2Backend feeds TX:SC_FILT_1", in >= 0);
+    check("Hl2Backend feeds TX:SC_FILT_2 after TX:SC_FILT_1", out > in && in >= 0);
+}
+
 }  // namespace
 
 int main()
@@ -173,5 +190,6 @@ int main()
     testEverySurfaceHasACertificationRow();
     testAlcGainSurfaceIsRegisteredInDb();
     testHl2PublishesAlcGain();
+    testHl2PublishesTxFilterTaps();
     return g_failed == 0 ? 0 : 1;
 }

@@ -111,3 +111,4 @@ Not part of the TCI specification.
 | `rx_play` |
 | `tx_gain` |
 | `active_slice` |
+| `rx_ctun_ex` |
