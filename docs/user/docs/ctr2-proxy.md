@@ -40,7 +40,8 @@ Relay** at the top, and **CTR2-Max Firmware** below it (see
 [Installing AetherCTR2 on a CTR2-Max](#installing-aetherctr2-on-a-ctr2-max)).
 When the USB device selected is another kind of controller (a CTR2-MIDI, an
 M5Dial or an AetherKnob) and no CTR2-Max is connected, the window shows only
-the relay; the firmware part comes back when a CTR2-Max is connected.
+the relay. The firmware part comes back when a CTR2-Max is connected, and
+stays until the window is closed.
 Closing the window does not stop the relay.
 
 The relay starts when you press **Start**, or by itself with **Start

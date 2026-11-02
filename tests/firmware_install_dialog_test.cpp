@@ -40,78 +40,114 @@ const Info kKnob{QStringLiteral("knob"), 0x303A, 0x1001, {}, QStringLiteral("AET
 const Info kMax{QStringLiteral("max"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
                 QStringLiteral("444444444444")};
 
-void settle()
+// Waits for the window to settle into `done`; true once it has.
+template <typename Done>
+bool settles(Done done)
 {
-    QTest::qWait(150);
+    return QTest::qWaitFor(done, 5000);
 }
 
-// Each transition the reviewer of PR #6975 reproduced, checking that the
-// window ends at the height its contents ask for.
+struct Window {
+    std::shared_ptr<QList<Info>> devices = std::make_shared<QList<Info>>();
+    std::shared_ptr<QList<FirmwareInstallModel::Loader>> loaders =
+        std::make_shared<QList<FirmwareInstallModel::Loader>>();
+    Ctr2ProxyModel relay;
+    std::unique_ptr<FirmwareInstallDialog> dialog;
+    FirmwareInstallModel* fw{nullptr};
+    QTabWidget* tabs{nullptr};
+
+    // Opens the window with only an AetherKnob, selected.
+    bool open()
+    {
+        *devices = {kKnob};
+        relay.setUsbBackend([d = devices] { return *d; },
+                            [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
+        relay.setTransport(Ctr2ProxyModel::Transport::Usb);
+        relay.setUsbDevicePath(kKnob.path);
+        dialog = std::make_unique<FirmwareInstallDialog>(&relay);
+        dialog->setAttribute(Qt::WA_DeleteOnClose, false);
+        fw = dialog->findChild<FirmwareInstallModel*>();
+        tabs = dialog->findChild<QTabWidget*>(QStringLiteral("firmwareInstallTabs"));
+        if (!fw || !tabs) {
+            return false;
+        }
+        fw->setDeviceSources([l = loaders] { return *l; }, [d = devices] { return *d; });
+        dialog->show();
+        return QTest::qWaitForWindowExposed(dialog.get());
+    }
+    bool partShown() const { return tabs->isVisibleTo(dialog.get()); }
+    bool fits() const { return dialog->height() == dialog->sizeHint().height(); }
+    void lookAgain()
+    {
+        fw->lookAgain();
+        QCoreApplication::processEvents();
+    }
+};
+
+// The transitions the review of PR #6975 reproduced: each time the part hides,
+// the window ends at the height its contents ask for.
 void heightFollowsTheMaxPart()
 {
-    auto devices = std::make_shared<QList<Info>>(QList<Info>{kKnob});
-    Ctr2ProxyModel relay;
-    relay.setUsbBackend([devices] { return *devices; },
-                        [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
-    relay.setTransport(Ctr2ProxyModel::Transport::Usb);
-    relay.setUsbDevicePath(kKnob.path);
-
-    auto* dialog = new FirmwareInstallDialog(&relay);
-    dialog->setAttribute(Qt::WA_DeleteOnClose, false);
-    auto* fw = dialog->findChild<FirmwareInstallModel*>();
-    auto* tabs = dialog->findChild<QTabWidget*>(QStringLiteral("firmwareInstallTabs"));
-    check(fw && tabs, "the window holds its firmware model and tabs");
-    if (!fw || !tabs) {
-        delete dialog;
+    Window w;
+    check(w.open(), "the window opens, holding its firmware model and tabs");
+    if (!w.fw || !w.tabs) {
         return;
     }
-    fw->setDeviceSources([] { return QList<FirmwareInstallModel::Loader>(); },
-                         [devices] { return *devices; });
-    dialog->show();
-    settle();
+    check(!w.partShown(), "an AetherKnob alone hides the CTR2-Max part");
+    check(settles([&] { return w.fits(); }), "and the window opens at the relay's height");
+    const int shortHeight = w.dialog->height();
 
-    const auto fits = [dialog] { return dialog->height() == dialog->sizeHint().height(); };
-    check(!tabs->isVisibleTo(dialog), "an AetherKnob alone hides the CTR2-Max part");
-    check(fits(), "and the window opens at the relay's height");
-    const int shortHeight = dialog->height();
+    w.relay.setTransport(Ctr2ProxyModel::Transport::Wifi);
+    check(w.partShown(), "Wi-Fi mode shows it");
+    check(settles([&] { return w.dialog->height() > shortHeight; }),
+          "and the window grows for it");
 
-    relay.setTransport(Ctr2ProxyModel::Transport::Wifi);
-    settle();
-    check(tabs->isVisibleTo(dialog), "Wi-Fi mode shows it");
-    check(dialog->height() > shortHeight, "and the window grows for it");
+    w.relay.setTransport(Ctr2ProxyModel::Transport::Usb);
+    check(!w.partShown(), "back in USB mode it hides again");
+    check(settles([&] { return w.fits(); }), "and the window shrinks back to the relay's height");
+}
 
-    relay.setTransport(Ctr2ProxyModel::Transport::Usb);
-    settle();
-    check(!tabs->isVisibleTo(dialog), "back in USB mode it hides again");
-    check(fits(), "and the window shrinks back to the relay's height");
-
-    *devices = {kKnob, kMax};
-    fw->lookAgain();
-    settle();
-    check(tabs->isVisibleTo(dialog), "a CTR2-Max plugged in beside the knob shows it");
-
-    *devices = {kKnob};
-    fw->lookAgain();
-    settle();
-    check(!tabs->isVisibleTo(dialog), "the CTR2-Max unplugged hides it");
-    check(fits(), "and the window shrinks again");
-
-    fw->setDeviceSources(
-        [] {
-            return QList<FirmwareInstallModel::Loader>{
-                {QStringLiteral("ttyACM0"), QStringLiteral("444444444444")}};
-        },
-        [devices] { return *devices; });
-    settle();
-    check(tabs->isVisibleTo(dialog), "a CTR2-Max in download mode shows it");
-
-    fw->setDeviceSources([] { return QList<FirmwareInstallModel::Loader>(); },
-                         [devices] { return *devices; });
-    settle();
-    check(!tabs->isVisibleTo(dialog), "download mode left, it hides");
-    check(fits(), "and the window shrinks again");
-
-    delete dialog;
+// A CTR2-Max seen once keeps the part for as long as the window is open: one
+// rebooting after an install or a restart leaves the lists, and the relay
+// selects the knob meanwhile, but the result stays in view.
+void aCtr2MaxSeenKeepsThePart()
+{
+    {
+        Window w;
+        check(w.open(), "the window opens");
+        if (!w.fw || !w.tabs) {
+            return;
+        }
+        *w.devices = {kKnob, kMax};
+        w.relay.refreshDevices();
+        w.relay.setUsbDevicePath(kMax.path);
+        w.lookAgain();
+        check(w.partShown(), "a CTR2-Max plugged in beside the knob, and selected, shows it");
+        check(settles([&] { return w.dialog->height() >= w.dialog->sizeHint().height(); }),
+              "and the window is tall enough for it");
+        const int tall = w.dialog->height();
+        *w.devices = {kKnob};
+        w.relay.refreshDevices();
+        w.lookAgain();
+        check(w.relay.usbDevicePath() == kKnob.path,
+              "the CTR2-Max gone (rebooting), the relay selects the knob");
+        check(w.partShown(), "but the part stays");
+        check(w.dialog->height() == tall, "and so does the window's height");
+    }
+    {
+        Window w;
+        check(w.open(), "the window opens again");
+        if (!w.fw || !w.tabs) {
+            return;
+        }
+        check(!w.partShown(), "reopened with the knob alone, the part is hidden");
+        *w.loaders = {{QStringLiteral("ttyACM0"), QStringLiteral("444444444444")}};
+        w.lookAgain();
+        check(w.partShown(), "a CTR2-Max in download mode shows it");
+        *w.loaders = {};
+        w.lookAgain();
+        check(w.partShown(), "and it stays after download mode is left");
+    }
 }
 
 } // namespace
@@ -132,6 +168,7 @@ int main(int argc, char** argv)
     FirmwareInstallModel::setBackupFolderForTesting(folders.filePath(QStringLiteral("backups")));
 
     heightFollowsTheMaxPart();
+    aCtr2MaxSeenKeepsThePart();
 
     return g_failures ? 1 : 0;
 }

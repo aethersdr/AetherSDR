@@ -188,6 +188,7 @@ void FirmwareInstallModel::setDeviceSources(LoaderSource loaders, HidSource hid)
 {
     m_loaders = std::move(loaders);
     m_hid = std::move(hid);
+    m_maxSeen = false;
     poll();
 }
 
@@ -231,7 +232,7 @@ bool FirmwareInstallModel::busy() const
 
 bool FirmwareInstallModel::otherControllerOnly() const
 {
-    if (m_device != Device::None || busy() || !m_relay
+    if (m_maxSeen || m_device != Device::None || busy() || !m_relay || !m_hid
         || m_relay->transport() != Ctr2ProxyModel::Transport::Usb) {
         return false;
     }
@@ -299,6 +300,7 @@ void FirmwareInstallModel::poll()
         m_mac = mac;
         m_hidPath = hidPath;
         m_loaderCount = loaders;
+        m_maxSeen = m_maxSeen || device != Device::None;
         emit deviceChanged();
     }
     startWhenInDownloadMode();

@@ -262,6 +262,27 @@ void testOtherControllerOnly()
     check(!hidden({midi}, QString()), "no device selected keeps it");
     check(!hidden({midi}, midi.path, {}, Ctr2ProxyModel::Transport::Wifi),
           "Wi-Fi mode keeps it");
+
+    // A CTR2-Max seen once keeps it: rebooting after an install or a restart,
+    // it leaves the lists for a while, and the relay selects the other
+    // controller meanwhile.
+    auto devices = std::make_shared<QList<Info>>(QList<Info>{midi, max});
+    auto loaders = std::make_shared<QList<Loader>>();
+    Ctr2ProxyModel relay;
+    relay.setUsbBackend([devices] { return *devices; },
+                        [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
+    relay.setTransport(Ctr2ProxyModel::Transport::Usb);
+    relay.setUsbDevicePath(midi.path);
+    FirmwareInstallModel model(&relay);
+    model.setDeviceSources([loaders] { return *loaders; }, [devices] { return *devices; });
+    *devices = {midi};
+    model.lookAgain();
+    check(!model.otherControllerOnly(), "a CTR2-Max gone from the lists still keeps it");
+    *loaders = {{QStringLiteral("ttyACM0"), QStringLiteral("444444444444")}};
+    model.lookAgain();
+    *loaders = {};
+    model.lookAgain();
+    check(!model.otherControllerOnly(), "so does one gone from download mode");
 }
 
 // A device in download mode whose MAC is not known is not acted on: the job
