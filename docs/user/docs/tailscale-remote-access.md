@@ -1,16 +1,18 @@
 ---
 title: "Tailscale Remote Access"
 slug: "/tailscale-remote-access"
-description: "Operate a FLEX-8000 series or Aurora radio from anywhere: a small container installed inside the radio joins your private Tailscale network."
+description: "Operate a FlexRadio from anywhere: a small service installed inside the radio, as a container or a waveform, joins your private Tailscale network."
 ---
 
-Operate a FLEX-8000 series or Aurora radio from anywhere: a small container
-installed **inside the radio** joins your private Tailscale network. It works
+Operate a FlexRadio from anywhere: a small service installed **inside the
+radio** joins your private Tailscale network. FLEX-8000 series and Aurora
+radios run it as a container; FLEX-6000 series radios run it as a legacy
+waveform. It works
 behind carrier-grade NAT (CGNAT), Starlink, cellular home internet or any
 router whose ports you can't forward, and it needs no SmartLink account.
 The radio needs firmware **4.2.18 or later**.
 
-AetherSDR installs and sets up the container for you from the **Waveforms**
+AetherSDR installs and sets it up for you from the **Waveforms**
 window. After that you connect from anywhere with **Connect by IP**, as if the
 radio were on your desk.
 
@@ -31,7 +33,12 @@ radio were on your desk.
 > containers, on firmware **4.2.18 or later** (see
 > [Firmware Update](./firmware-update.md)). It was developed and measured
 > on a FLEX-8600 (firmware 4.2.20); the FLEX-8400 and Aurora have not been
-> tested yet. FLEX-6000 series radios can't run containers.
+> tested yet.
+>
+> **FLEX-6000 series** radios can't run containers, so they get the same
+> service as a legacy waveform instead (see
+> [On a FLEX-6000](#on-a-flex-6000)). It has run on a FLEX-6400; the
+> FLEX-6300 and 6700 passed the compatibility probe but haven't run it yet.
 
 ## What Tailscale is
 
@@ -64,7 +71,7 @@ Some things to know:
 |---|---|---|
 | Port forwarding at the station | Not needed; works behind CGNAT | Required (TCP 4994, UDP 4993) or UPnP |
 | Account | A **free** Tailscale Personal account | A FlexRadio SmartLink account |
-| Radios | FLEX-8000 series, Aurora, firmware 4.2.18 or later | All FlexRadio models with SmartLink |
+| Radios | FLEX-8000 series and Aurora (firmware 4.2.18 or later), FLEX-6000 series | All FlexRadio models with SmartLink |
 | Station accessories (Antenna Genius, PGXL, TGXL) | Reachable remotely | Not reachable |
 | What the remote computer needs | The Tailscale app | Nothing extra |
 
@@ -92,7 +99,7 @@ Personal plan** automatically, with nothing to cancel later.
 The **admin console** at
 [login.tailscale.com/admin](https://login.tailscale.com/admin) is where you
 manage the tailnet: the **Machines** page lists every device, and
-**Settings → Keys** creates auth keys.
+**Access controls** decides which devices and people may reach which.
 
 ## Part 2 — Put your operating computer on the tailnet
 
@@ -137,6 +144,28 @@ power-on.
 tagged `flex-tailnet-shim-v<version>`. Then use **Install... → Docker
 Waveform Image...** and pick that file.
 
+### On a FLEX-6000
+
+The same **Install... → Remote Access (Tailscale)** works. On a radio with no
+Waveform Processor, AetherSDR downloads the legacy waveform package instead
+(`AetherTailnet-<version>-native.ssdr_waveform`, about 9 MB), checks it the
+same way, and installs it. It appears in the installed list as
+**AetherTailnet**, marked **Legacy**, with a **Configure…** button.
+Everything after that, signing in, sharing station devices and connecting
+remotely, is the same as on a FLEX-8000.
+
+Things that differ on a FLEX-6000:
+
+- **Space.** The waveform needs about 9 MB on the radio's waveform storage.
+  A FLEX-6400 or 6700 has only 13–17 MB free there, so it may not fit
+  alongside other legacy waveforms. If the install fails for space,
+  uninstall a waveform you don't use and try again.
+- **One CPU core.** The radio's processor is shared with SmartSDR, so the
+  service runs at a lower priority and the radio always comes first.
+- **Without internet on the AetherSDR computer**, download the
+  `.ssdr_waveform` file from the same release and use **Install... → Legacy
+  Waveform (.ssdr_waveform)...**.
+
 The container can run alongside other waveform containers, such as FreeDV.
 AetherSDR has its own RADE digital voice, so it doesn't need the FreeDV
 container (see [RADE Digital Voice](./rade-digital-voice.md)).
@@ -147,46 +176,30 @@ again. Another firmware, profile or Radio DVK transfer must finish first.
 Upload completion means the bytes were sent; the radio's installed-waveform
 list confirms when the waveform becomes available.
 
-## Part 4 — Join the radio to your tailnet
+## Part 4 — Sign the radio in to your tailnet
 
-<img src="/img/screens/tailnet-remote-access.png" width="600" alt="Remote Access window. The status line reads On your tailnet, container 0.4.0, 0 remote session(s), above an explanation of remote access over Tailscale. The Tailnet group shows the tailnet name and address (both blacked out) with a Copy button, Remote sessions 0 and Container version 0.4.0. Join your tailnet has an Auth key field (placeholder tskey-auth-...), Machine name flx8600, a Who may connect field (placeholder you@example.com, tag:operators), a note on single-use keys, and Save Access List and Change Key buttons. Station devices lists the devices found on the radio's network (blacked out) with a Share the devices found here over the tailnet checkbox, an Other devices field and Save Sharing. An amber note about the admin token and Refresh, Sign Out of Tailnet and Done buttons close the window." />
-
-*The Remote Access window for the flex-tailnet-shim container. Tailnet names, addresses and station device addresses are blacked out.*
-
-### Create an auth key
-
-An **auth key** lets a device join your tailnet without anyone signing in
-on it. The radio has no screen, so this is how it signs in.
-
-1. In the admin console open **Settings → Keys**, then **Generate auth
-   key**.
-2. Leave **Reusable** off: the key is used once.
-3. Leave **Ephemeral** off, so the radio stays in your tailnet when it is
-   switched off.
-4. Turn on **Pre-approved** if your tailnet requires device approval.
-5. Optionally add a **tag** (for example `tag:radio`) if you manage access
-   with tags.
-6. Click **Generate key** and copy it. It starts `tskey-auth-` and is shown
-   only once.
-
-Keys expire after at most 90 days, but this one only needs to work once.
-After the radio has joined, the tailnet remembers it, including across
-reboots.
-
-### Configure the container
+### Scan the code
 
 1. In **Waveforms**, click **Configure…** on the **flex-tailnet-shim** row.
-   The **Remote Access** window opens.
-2. Paste the key into **AUTH KEY**. It is sent to the radio once and kept
-   nowhere: not in AetherSDR, not in its settings, not in its logs.
-3. **MACHINE NAME** is how the radio appears in your tailnet. It's filled
-   in from the radio's nickname; change it if you like (lowercase letters,
-   digits and dashes).
-4. **WHO MAY CONNECT** (optional, see [Security](#security)): leave it empty
-   to allow every device in your tailnet, or list tailnet logins and tags,
-   for example `you@example.com, tag:operators`.
-5. Click **Join Tailnet**. Joining takes a few seconds, up to about a
-   minute.
+   The **Remote Access** window opens, and a **QR code** appears by itself
+   within a few seconds.
+2. Scan the code with your phone's camera, sign in to Tailscale with the
+   account from Part 1, and approve the radio. No phone handy? **Copy Link**
+   and open the link in a browser instead.
+3. The window turns to **On your tailnet**. If your tailnet requires an
+   admin to approve new devices, it first says **Waiting for approval**:
+   approve the radio on **Machines**.
+
+The code is shown only to the computer that started the sign-in. Don't share
+it: whoever opens it first adds the radio to *their* tailnet. If no code
+appears, click **Refresh**.
+
+The radio joins under a name taken from its nickname (for example
+`flx8600`). Rename it on **Machines** if you like.
+
+<img src="/img/screens/tailnet-remote-access.png" width="600" alt="Remote Access window. The status line reads On your tailnet, container 0.5.0, 0 remote session(s), above an explanation of remote access over Tailscale. The Tailnet group shows the tailnet name and address (both blacked out) with a Copy button, Remote sessions 0, Container version 0.5.0 and Sign-in expires Thursday, April 29, 2027, with a note on turning off key expiry in the Tailscale admin console. Station devices lists a Tuner Genius XL and an Antenna Genius (addresses blacked out) with a Share the devices found here over the tailnet checkbox, an Other devices field, a note that their routes are offered but not yet confirmed, and Save Sharing. Refresh, Disconnect and Done close the window." />
+
+*The Remote Access window with the radio on the tailnet. Tailnet names, addresses and station device addresses are blacked out.*
 
 When the status reads **On your tailnet**, the **Tailnet** card shows:
 
@@ -195,24 +208,58 @@ When the status reads **On your tailnet**, the **Tailnet** card shows:
 | **TAILNET NAME** | The radio's name on your tailnet |
 | **TAILNET ADDRESS** | The `100.x.y.z` address to connect to. **Copy** puts it on the clipboard. |
 | **REMOTE SESSIONS** | Clients connected through the tailnet right now |
-| **CONTAINER VERSION** | The container's version |
+| **CONTAINER VERSION** | The container's version (**WAVEFORM VERSION** on a FLEX-6000) |
+| **SIGN-IN EXPIRES** | When the radio's sign-in runs out, or **Never** |
 
 Write the tailnet address down: it's what you connect to when you're away.
 
+### Turn off key expiry
+
+A device signed in this way has to sign in again every **180 days** by
+default. Until it does, it drops off your tailnet, and it can only be signed
+in again from the station. To keep the radio on for good, open **Machines**
+in the admin console, click **⋯** on the radio's row and choose **Disable key
+expiry**. **SIGN-IN EXPIRES** then reads **Never**.
+
+If it does expire, open **Remote Access** at the station: a new code appears,
+and scanning it brings the radio back.
+
+### Advanced: join with an auth key
+
+An **auth key** signs the radio in without a phone. A key with a **tag** also
+makes a radio whose sign-in never expires and that your access rules can
+address by tag.
+
+1. In the admin console open **Settings → Keys**, then **Generate auth
+   key**. Leave **Reusable** and **Ephemeral** off; turn on
+   **Pre-approved** if your tailnet requires device approval; optionally
+   add a **tag** (for example `tag:radio`).
+2. Click **Generate key** and copy it. It starts `tskey-auth-` and is shown
+   only once.
+3. In **Remote Access**, open **▸ Advanced: use an auth key**. Check
+   **MACHINE NAME** (lowercase letters, digits and dashes), paste the key
+   into **AUTH KEY** and click **Join with Key**.
+
+The key is sent to the radio once and kept nowhere: not in AetherSDR, not in
+its settings, not in its logs.
+
+A container older than 0.5.0 can only join with a key: the window opens
+Advanced for you and suggests updating the container (remove it, then
+install again from Part 3).
+
 ### The admin token
 
-The first successful join returns an **admin token** that AetherSDR stores
-in your system keychain (Windows Credential Manager, macOS Keychain, or the
-Secret Service / GNOME Keyring on Linux), keyed to this radio's serial
-number. From then on the container accepts changes only from a computer that
-holds it: changing the key, who may connect, device sharing, or signing out.
+The first sign-in returns an **admin token** that AetherSDR stores in your
+system keychain (Windows Credential Manager, macOS Keychain, or the Secret
+Service / GNOME Keyring on Linux), keyed to this radio's serial number. From
+then on the container accepts changes only from a computer that holds it:
+device sharing, disconnecting, or joining again.
 
 - The first setup is open to anyone on the radio's local network, the same
-  trust the radio's own API uses there.
-- If the keychain can't store the token, the window says so and the token is
-  kept until AetherSDR quits.
-- If the token is lost, remove and reinstall the container (Part 7) to start
-  over.
+  trust the radio's own API uses there. So is a sign-in that was started but
+  never finished.
+- A computer that doesn't hold the token (a second computer, for example)
+  shows **Reset** instead of **Disconnect** (Part 7).
 
 ## Part 5 — Share station devices (optional)
 
@@ -233,8 +280,8 @@ their applets work remotely too.
    connection actually travels through a route; after that it shows
    **Confirmed in use over the tailnet**.
 5. Remotely, set each device's applet to its **LAN address** (for example
-   `192.168.1.40`), exactly as at home. **WHO MAY CONNECT** applies to the
-   devices as well as the radio. See [Amplifiers](./amplifiers.md) and
+   `192.168.1.40`), exactly as at home. Your tailnet's access rules apply
+   to the devices as well as the radio. See [Amplifiers](./amplifiers.md) and
    [TGXL Tuner Control](./tgxl-tuner-control.md).
 
 Remember `--accept-routes` on Linux computers (Part 2).
@@ -302,19 +349,28 @@ radio side's view of the link, reported by the container:
 The container answers these requests only on the tailnet, and only with the
 asking computer's own session.
 
-## Part 7 — Change, sign out or remove
+## Part 7 — Disconnect, reset or remove
 
-- **Change Key**: join again with a new auth key, for example to move the
-  radio to another tailnet. It needs the admin token.
-- **Save Access List**: change **WHO MAY CONNECT** without leaving the
-  tailnet.
-- **Sign Out of Tailnet**: ends remote sessions, logs the radio out, and
-  deletes its tailnet state and token. You'll need a new auth key to set it
-  up again. If the container can't delete its saved settings, it changes
-  nothing and says so, and AetherSDR keeps the token.
-- **Remove the container** from the **Waveforms** list to uninstall it. That
-  also wipes its tailnet state. Then delete the radio from **Machines** in the
+- **Disconnect** (shown once the radio is on the tailnet): ends remote
+  sessions, signs the radio out and deletes its tailnet state and token. The
+  next time you open **Remote Access**, a new code appears to sign it in
+  again, to the same tailnet or another. If the container can't delete its
+  saved settings, it changes nothing and says so, and AetherSDR keeps the
+  token.
+- **Reset** (shown instead of Disconnect when this computer doesn't hold the
+  admin token): removes the container (on a FLEX-6000, uninstalls the
+  waveform) and installs it again, after asking.
+  The radio leaves your tailnet; open **Remote Access** again and scan the
+  new code. Delete the old entry from **Machines** in the admin console.
+- **Remove the container** (on a FLEX-6000, **Uninstall** the
+  **AetherTailnet** waveform) from the **Waveforms** list. That also wipes
+  its tailnet state. Then delete the radio from **Machines** in the
   admin console.
+
+On a FLEX-6000, Reset and Uninstall rely on the radio deleting the
+waveform's saved state with its files, which hasn't been confirmed on a
+radio yet. If **Remote Access** still shows the radio on your tailnet after
+a Reset, please report it.
 
 Settings can only be changed **from the radio's local network**. The window
 shows **Unavailable** when AetherSDR is connected to the radio over the
@@ -323,20 +379,19 @@ container.
 
 ## Security
 
-- **Anyone allowed to connect can operate the radio, including transmitting.**
-  An empty **WHO MAY CONNECT** means everyone in your tailnet. If you share
-  the tailnet (family, club members), list the people or tags who may
-  operate.
-- The container checks every connection with Tailscale's identity service
-  (`WhoIs`) against that list before passing it to the radio or to a shared
-  station device. A file transfer's side channel is open only to the
-  computer that asked for the transfer.
-- **Save Access List** takes effect at once. Anyone no longer on the list
-  is disconnected from the radio, which ends anything they were
-  transmitting, and their file transfers and station-device connections
-  are closed. Only a definite refusal ends a connection: if Tailscale
-  can't answer who a device is (a timeout, for example), the connection
-  is kept, while a new connection is refused until it can.
+- **Anyone your tailnet lets reach the radio can operate it, including
+  transmitting.** By default that is every device in your tailnet. If you
+  share the tailnet (family, club members), limit who may reach the radio
+  with **Access controls** in the admin console; tag the radio with an auth
+  key (Part 4) to write rules for it by tag.
+- Containers before 0.5.0 kept their own **Who may connect** list. Version
+  0.5.0 drops it when it starts, so after updating, set any restriction with
+  your tailnet's access rules instead.
+- The sign-in code is a link that adds the radio to whichever tailnet opens
+  it first. AetherSDR shows it only to the computer that started the sign-in
+  or holds the admin token; the container never logs it.
+- A file transfer's side channel is open only to the computer that asked for
+  the transfer.
 - Shared devices never reach the radio itself. A route wide enough to
   include the radio's own address doesn't make the radio's ports reachable
   through it.
@@ -348,9 +403,9 @@ container.
 - On the tailnet the container exposes only the radio's own ports, its
   forwarded side channels, shared station devices, and the diagnostics
   report. Its setup interface listens only on the radio's local network.
-- The auth key and the admin token travel over the station LAN unencrypted,
-  to the radio's local address. The key is single-use and spent within
-  seconds; the container stores only a hash of the token.
+- The sign-in link, an auth key and the admin token travel over the station
+  LAN unencrypted, to the radio's local address. A key is single-use and
+  spent within seconds; the container stores only a hash of the token.
 - Over the internet, everything travels inside WireGuard and is encrypted end
   to end.
 
@@ -374,18 +429,25 @@ about a fifth of one core and around 34 MB of memory.
   firmware 4.2.18 or later (see [Firmware Update](./firmware-update.md)).
 - **Remote Access says "Unavailable"**: connect to the radio over its
   local network, not over the tailnet, to change settings.
+- **No QR code appears**: click **Refresh**. A container older than 0.5.0
+  can't show one; update it (Part 4).
+- **"Waiting for approval"**: your tailnet requires an admin to approve new
+  devices. Approve the radio on **Machines**.
+- **The radio dropped off the tailnet after months**: its sign-in expired.
+  Open **Remote Access** at the station and scan the new code, then turn off
+  key expiry (Part 4).
 - **"Doesn't look like a Tailscale auth key"**: paste the whole key,
   starting `tskey-auth-`.
 - **"Could not join the tailnet"**: the key is used up, expired or
   revoked. Generate a new one. If your tailnet requires device approval,
   approve the radio on **Machines**, or use a **Pre-approved** key.
-- **"The container rejected this computer's admin token"**: this computer
-  doesn't hold the token from the first setup. Use the computer that set it
-  up, or remove and reinstall the container.
+- **Disconnect is missing and the sharing settings are grayed out**: this
+  computer doesn't hold the admin token. Use the computer that set the radio
+  up, or **Reset** (Part 7).
 - **Can't connect remotely**:
   - check that Tailscale is running on the remote computer, that the radio
-    shows as connected on **Machines**, and that your login or tag is in
-    **WHO MAY CONNECT**;
+    shows as connected on **Machines**, and that your tailnet's access rules
+    let you reach it;
   - right after a radio reboot, give the container about 20 seconds.
 - **Spectrum or audio stutters**:
   - check **Network Diagnostics → Remote Link** for a relayed path;

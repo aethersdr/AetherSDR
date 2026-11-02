@@ -8,9 +8,12 @@
 #include "core/TailnetShimClient.h"
 #include "core/TailnetShimRelease.h"
 #include "core/TailnetShimDownloader.h"
+#include "core/RadioHealthClient.h"
+#include "core/RadioHealthPackage.h"
 #include "TailnetShimDialog.h"
+#include "WaveformEnvironmentDialog.h"
 #include "FramelessResizer.h"
-#include "PersistentDialog.h"   // its small pop-up dialogs keep the persistent pattern
+#include "CanonMessageBox.h"
 #include "RoundedMenu.h"
 #include "models/FlexWaveformModel.h"
 #include "models/RadioModel.h"
@@ -37,6 +40,7 @@
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPointer>
+#include <QLocale>
 #include <QTimer>
 #include <memory>
 #include <QPushButton>
@@ -128,6 +132,13 @@ QString wfpRuntimeStatusText(const FlexWaveformModel& wfModel)
         ? QObject::tr("READY")
         : QObject::tr("NOT READY");
     return QObject::tr("%1, %2").arg(powerText, readyText);
+}
+
+TailnetShimPackage remoteAccessPackageFor(const RadioModel* radioModel)
+{
+    return remoteAccessUsesNativePackage(radioModel->capabilities().platform)
+        ? TailnetShimPackage::Native
+        : TailnetShimPackage::Container;
 }
 
 QString dockerInstallBlockerText(const RadioModel* radioModel,
@@ -265,6 +276,7 @@ QFrame#WaveformsHeaderRule {
     max-height: 1px;
 }
 QFrame#WaveformsStatusFrame,
+QFrame#WaveformsHealthFrame,
 QFrame#localDigitalVoicePanel,
 QFrame#installedWaveformsPanel {
     background: {{color.canon.raised}};
@@ -345,6 +357,7 @@ QLabel#ValuePill {
     background: {{color.canon.control}};
 }
 QLabel#MutedLabel,
+QLabel#RadioHealthReadout,
 QLabel#EmptyStateText {
     color: {{color.canon.muted}};
 }
@@ -797,38 +810,18 @@ QWidget* makeEmptyWaveformsState(QWidget* parent = nullptr)
 
 void showDockerWfpNotReadyDialog(QWidget* parent, const QString& statusText)
 {
-    ScopedChildWidget<PersistentDialog> dialogOwner(
-        QObject::tr("Docker Waveform Unavailable"), QString(), parent);
-    PersistentDialog& dialog = *dialogOwner.get();
-    theme::setContainer(&dialog, QStringLiteral("dialog/waveforms/wfpNotReady"));
-    dialog.setWindowModality(Qt::WindowModal);
-    dialog.setModal(true);
-    dialog.setMinimumWidth(420);
-
-    auto* root = new QVBoxLayout(dialog.bodyWidget());
-    root->setSpacing(10);
-
-    auto* message = new QLabel(
+    ScopedChildWidget<CanonMessageBox> box(
+        QObject::tr("Docker Waveform Unavailable"),
         QObject::tr("AetherSDR can upload a Docker waveform image only when the radio "
-                    "supports the Waveform Processor and reports WFP ON and READY.\n\n"
-                    "Current status: %1.\n\n"
+                    "supports the Waveform Processor and reports WFP ON and READY."),
+        parent);
+    box.get()->setInformativeText(
+        QObject::tr("Current status: %1.\n\n"
                     "Use Install > Legacy Waveform (.ssdr_waveform)... for classic packages.")
             .arg(statusText));
-    message->setTextFormat(Qt::PlainText);
-    message->setWordWrap(true);
-    message->setAccessibleName(QObject::tr("Docker waveform install status"));
-    root->addWidget(message);
-
-    auto* buttons = new QHBoxLayout;
-    buttons->addStretch();
-    auto* okButton = new QPushButton(QObject::tr("OK"));
-    okButton->setAccessibleName(QObject::tr("Close Docker waveform status"));
-    okButton->setDefault(true);
-    QObject::connect(okButton, &QPushButton::clicked, &dialog, &QDialog::accept);
-    buttons->addWidget(okButton);
-    root->addLayout(buttons);
-
-    dialog.exec();
+    box.get()->setDefaultButton(box.get()->addButton(QObject::tr("OK"),
+                                                     CanonMessageBox::Role::Accept));
+    box.get()->exec();
 }
 
 bool confirmRadioWaveformRemoval(QWidget* parent, const QString& name, bool isContainer)
@@ -844,72 +837,81 @@ bool confirmRadioWaveformRemoval(QWidget* parent, const QString& name, bool isCo
         : QObject::tr("Uninstall");
 
     const QPointer<QWidget> parentGuard(parent);
-    ScopedChildWidget<PersistentDialog> dialogOwner(title, QString(), parent);
-    PersistentDialog& dialog = *dialogOwner.get();
-    theme::setContainer(&dialog, QStringLiteral("dialog/waveforms/removeConfirm"));
-    dialog.setWindowModality(Qt::WindowModal);
-    dialog.setModal(true);
-    dialog.setMinimumWidth(380);
-
-    auto* root = new QVBoxLayout(dialog.bodyWidget());
-    root->setSpacing(10);
-
-    auto* message = new QLabel(question);
-    message->setTextFormat(Qt::PlainText);
-    message->setWordWrap(true);
-    message->setAccessibleName(QObject::tr("Radio waveform removal confirmation"));
-    root->addWidget(message);
-
-    auto* buttons = new QHBoxLayout;
-    buttons->addStretch();
-
-    auto* cancelButton = new QPushButton(QObject::tr("Cancel"));
-    cancelButton->setAccessibleName(QObject::tr("Cancel radio waveform removal"));
-    cancelButton->setDefault(true);
-    QObject::connect(cancelButton, &QPushButton::clicked, &dialog, &QDialog::reject);
-    buttons->addWidget(cancelButton);
-
-    auto* confirmButton = new QPushButton(confirmText);
-    confirmButton->setAccessibleName(confirmText);
-    QObject::connect(confirmButton, &QPushButton::clicked, &dialog, &QDialog::accept);
-    buttons->addWidget(confirmButton);
-
-    root->addLayout(buttons);
-
-    const int result = dialog.exec();
-    return parentGuard && dialogOwner && result == QDialog::Accepted;
+    ScopedChildWidget<CanonMessageBox> box(title, question, parent);
+    // Return keeps the waveform; removing it takes a click.
+    box.get()->setDefaultButton(box.get()->addButton(QObject::tr("Cancel"),
+                                                     CanonMessageBox::Role::Reject));
+    QPushButton* confirm = box.get()->addButton(confirmText, CanonMessageBox::Role::Destructive);
+    box.get()->exec();
+    return parentGuard && box && box.get()->clickedButton() == confirm;
 }
 
 void showWaveformInstallResultDialog(QWidget* parent,
                                      const QString& title,
                                      const QString& messageText)
 {
-    ScopedChildWidget<PersistentDialog> dialogOwner(title, QString(), parent);
-    PersistentDialog& dialog = *dialogOwner.get();
-    theme::setContainer(&dialog, QStringLiteral("dialog/waveforms/installResult"));
-    dialog.setWindowModality(Qt::WindowModal);
-    dialog.setModal(true);
-    dialog.setMinimumWidth(420);
+    ScopedChildWidget<CanonMessageBox> box(title, messageText, parent);
+    box.get()->setDefaultButton(box.get()->addButton(QObject::tr("OK"),
+                                                     CanonMessageBox::Role::Accept));
+    box.get()->exec();
+}
 
-    auto* root = new QVBoxLayout(dialog.bodyWidget());
-    root->setSpacing(10);
+// The canon look for the download and install progress windows, as the NR2
+// wisdom window's: canon ink, and the bar in the brand gradient.
+constexpr const char* kProgressStyle = R"(
+QWidget { color: {{color.canon.inkSoft}}; background: transparent; }
+QLabel#waveformProgressTitle { color: {{color.canon.ink}}; font-size: 16px; font-weight: bold; }
+QProgressBar {
+    text-align: center; font-size: 12px; font-weight: bold; color: {{color.canon.ink}};
+    background: {{color.canon.nested}}; border: 1px solid {{color.canon.line}}; border-radius: 4px;
+}
+QProgressBar::chunk { background: {{color.brand.gradient}}; border-radius: 3px; }
+QPushButton {
+    color: {{color.canon.cyan}}; background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}}; border-radius: 4px; padding: 6px 16px; font-weight: bold;
+}
+QPushButton:hover { background: {{color.canon.nested}}; color: {{color.canon.aqua}}; }
+QPushButton:focus { border-color: {{color.canon.aqua}}; }
+)";
 
-    auto* message = new QLabel(messageText);
-    message->setTextFormat(Qt::PlainText);
-    message->setWordWrap(true);
-    message->setAccessibleName(QObject::tr("Waveform install result"));
-    root->addWidget(message);
+// A progress window in the canon style: a title, a line of text, a bar and
+// Cancel (which, like Escape or the corner button, rejects it).
+struct CanonProgress {
+    CanonWindow* window{nullptr};
+    QLabel* label{nullptr};
+    QProgressBar* bar{nullptr};
+    QPushButton* cancel{nullptr};
+};
 
+CanonProgress makeCanonProgress(const QString& title, const QString& text, QWidget* parent)
+{
+    CanonProgress p;
+    p.window = new CanonWindow(title, parent);
+    p.window->setWindowModality(Qt::WindowModal);
+    p.window->setMinimumWidth(460);
+    applyCanonSheet(p.window->bodyWidget(), [] { return QString::fromLatin1(kProgressStyle); });
+    auto* root = new QVBoxLayout(p.window->bodyWidget());
+    root->setContentsMargins(28, 26, 28, 22);
+    root->setSpacing(12);
+    auto* heading = new QLabel(title);
+    heading->setObjectName(QStringLiteral("waveformProgressTitle"));
+    heading->setTextFormat(Qt::PlainText);
+    root->addWidget(heading);
+    p.label = new QLabel(text);
+    p.label->setTextFormat(Qt::PlainText);
+    p.label->setWordWrap(true);
+    root->addWidget(p.label);
+    p.bar = new QProgressBar;
+    p.bar->setRange(0, 100);
+    p.bar->setValue(0);
+    root->addWidget(p.bar);
     auto* buttons = new QHBoxLayout;
     buttons->addStretch();
-    auto* okButton = new QPushButton(QObject::tr("OK"));
-    okButton->setAccessibleName(QObject::tr("Close waveform install result"));
-    okButton->setDefault(true);
-    QObject::connect(okButton, &QPushButton::clicked, &dialog, &QDialog::accept);
-    buttons->addWidget(okButton);
+    p.cancel = new QPushButton(QObject::tr("Cancel"));
+    buttons->addWidget(p.cancel);
     root->addLayout(buttons);
-
-    dialog.exec();
+    QObject::connect(p.cancel, &QPushButton::clicked, p.window, &QDialog::reject);
+    return p;
 }
 
 } // namespace
@@ -1431,6 +1433,76 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     installedRoot->addWidget(listFrame, 1);
     contentRow->addWidget(installedFrame, 1);
 
+    // ── Radio health bar ──────────────────────────────────────────────────────
+    // An opt-in agent on the radio (tools/radio-health) reports its free
+    // storage, memory and CPU. It never appears in the installed list: this
+    // checkbox installs and removes it, and mirrors whether the radio lists it.
+    auto* healthFrame = makePanel(QStringLiteral("WaveformsHealthFrame"), bodyWidget());
+    auto* healthLayout = new QHBoxLayout(healthFrame);
+    healthLayout->setContentsMargins(18, 10, 18, 10);
+    healthLayout->setSpacing(16);
+    m_healthCheck = new QCheckBox(tr("Install radio health tools"), healthFrame);
+    m_healthCheck->setAccessibleName(tr("Install radio health tools"));
+    m_healthLabel = new QLabel(healthFrame);
+    m_healthLabel->setObjectName(QStringLiteral("RadioHealthReadout"));
+    m_healthLabel->setAccessibleName(tr("Radio health"));
+    m_healthLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_healthLabel->setTextFormat(Qt::PlainText);
+    m_healthResourceLabel = new QLabel(healthFrame);
+    m_healthResourceLabel->setObjectName(QStringLiteral("RadioHealthReadout"));
+    m_healthResourceLabel->setAccessibleName(tr("Radio memory and CPU"));
+    m_healthResourceLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_healthResourceLabel->setTextFormat(Qt::PlainText);
+    // One row: checkbox, storage, then memory and CPU.
+    healthLayout->addWidget(m_healthCheck);
+    healthLayout->addWidget(m_healthLabel);
+    healthLayout->addWidget(m_healthResourceLabel);
+    healthLayout->addStretch(1);
+    root->addWidget(healthFrame);
+
+    m_healthClient = new RadioHealthClient(this);
+    connect(m_healthClient, &RadioHealthClient::received, this, [this](const RadioHealth& h) {
+        if (!m_healthTimer->isActive()) {
+            return;   // the bar stopped reading (disconnect, uninstall, another radio)
+        }
+        const QString storage = radiohealth::storageSummary(h);
+        const QString resources = radiohealth::resourceSummary(h);
+        m_healthLabel->setText(storage.isEmpty() && resources.isEmpty()
+                                   ? tr("The radio reported no readings.") : storage);
+        m_healthResourceLabel->setText(resources);
+        m_healthResourceLabel->setVisible(!resources.isEmpty());
+        QStringList detail;
+        for (const RadioHealth::Volume& v : h.storage) {
+            detail << tr("%1: %2 free of %3").arg(v.path,
+                QLocale().formattedDataSize(qint64(v.freeBytes), 1, QLocale::DataSizeSIFormat),
+                QLocale().formattedDataSize(qint64(v.totalBytes), 1, QLocale::DataSizeSIFormat));
+        }
+        if (h.cpuCores > 0) {
+            detail << tr("%n CPU core(s)", "", h.cpuCores);
+        }
+        detail << tr("Radio health tools %1").arg(h.agentVersion);
+        // The paths and version come from the radio: escaped, in a tooltip
+        // that is always rich text, so they show as text and never as markup.
+        for (QString& line : detail) {
+            line = line.toHtmlEscaped();
+        }
+        m_healthLabel->setToolTip(QStringLiteral("<qt>") + detail.join(QStringLiteral("<br>"))
+                                  + QStringLiteral("</qt>"));
+        m_healthResourceLabel->setToolTip(m_healthLabel->toolTip());
+    });
+    connect(m_healthClient, &RadioHealthClient::failed, this, [this](const QString&) {
+        if (!m_healthTimer->isActive()) {
+            return;
+        }
+        m_healthLabel->setText(tr("Waiting for the radio health tools to answer…"));
+        m_healthLabel->setToolTip({});
+        m_healthResourceLabel->hide();
+    });
+    m_healthTimer = new QTimer(this);
+    m_healthTimer->setInterval(5000);
+    connect(m_healthTimer, &QTimer::timeout, m_healthClient, &RadioHealthClient::fetch);
+    connect(m_healthCheck, &QCheckBox::toggled, this, &WaveformsDialog::onHealthToggled);
+
     // ── Wire model + theme signals ────────────────────────────────────────────
     FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
     connect(&wfModel, &FlexWaveformModel::wfpStatusChanged,
@@ -1439,8 +1511,17 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
             this, &WaveformsDialog::updateInstallButtonState);
     connect(&wfModel, &FlexWaveformModel::waveformsChanged,
             this, &WaveformsDialog::refreshWaveformList);
+    connect(&wfModel, &FlexWaveformModel::waveformsChanged,
+            this, &WaveformsDialog::updateHealthBar);
     connect(&wfModel, &FlexWaveformModel::commandFinished,
             this, &WaveformsDialog::onWaveformCommandFinished);
+    connect(&wfModel, &FlexWaveformModel::restarted,
+            this, &WaveformsDialog::onWaveformRestarted);
+    connect(m_radioModel, &RadioModel::waveformEnvironmentStagingChanged,
+            this, &WaveformsDialog::updateInstallButtonState);
+    // The Environment… action follows the radio's firmware and platform.
+    connect(m_radioModel, &RadioModel::capabilitiesChanged,
+            this, &WaveformsDialog::refreshWaveformList);
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &WaveformsDialog::refreshStatus);
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
@@ -1473,6 +1554,8 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     }
     connect(m_radioModel, &RadioModel::connectionStateChanged,
             this, &WaveformsDialog::updateInstallButtonState);
+    connect(m_radioModel, &RadioModel::connectionStateChanged,
+            this, &WaveformsDialog::updateHealthBar);
     connect(m_radioModel, &RadioModel::infoChanged,
             this, &WaveformsDialog::refreshStatus);
     connect(m_radioModel, &RadioModel::infoChanged,
@@ -1484,6 +1567,7 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     refreshStatus();
     updateInstallButtonState();
     refreshWaveformList();
+    updateHealthBar();
     if constexpr (kShowLocalDigitalVoiceControls) {
         refreshDStarConfiguration();
         refreshDStarStatus();
@@ -1501,19 +1585,31 @@ void WaveformsDialog::updateInstallButtonState()
     }
 
     const FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
-    const QString dockerBlocker = connected
-        ? dockerInstallBlockerText(m_radioModel, wfModel)
-        : tr("Connect to a radio before installing Docker waveform images.");
+    const QString stagingBlocker = connected ? waveformEnvironmentInstallBlocker(m_radioModel) : QString();
+    const QString dockerBlocker = !connected
+        ? tr("Connect to a radio before installing Docker waveform images.")
+        : stagingBlocker.isEmpty() ? dockerInstallBlockerText(m_radioModel, wfModel) : stagingBlocker;
     const bool dockerReady = connected && dockerBlocker.isEmpty();
     m_installDockerAction->setEnabled(!busy && dockerReady);
     if (m_installRemoteAccessAction) {
         const bool downloading = m_shimDownloader && m_shimDownloader->isRunning();
-        m_installRemoteAccessAction->setEnabled(!busy && !downloading && dockerReady);
+        // A radio with no Waveform Processor takes the legacy waveform, which
+        // the Docker gate doesn't govern.
+        const TailnetShimPackage package = remoteAccessPackageFor(m_radioModel);
+        const bool native = package == TailnetShimPackage::Native;
+        const bool remoteReady = connected && (native || dockerReady);
+        m_installRemoteAccessAction->setEnabled(!busy && !downloading && remoteReady);
         // The reason goes on the accessible channel too, not just the tooltip (#4896).
-        const QString remoteTip = dockerReady
-            ? tr("Download the remote-access container (version %1), verify it, and install it.")
-                  .arg(QString::fromLatin1(TailnetShimRelease::kVersion))
-            : (busy ? tr("A waveform install is already in progress.") : dockerBlocker);
+        const QString version = TailnetShimDownloader::pin(package).version;
+        const QString remoteTip = busy
+            ? tr("A waveform install is already in progress.")
+            : !connected ? tr("Connect to a radio before installing Remote Access.")
+            : !remoteReady ? dockerBlocker
+            : native
+            ? tr("Download the remote-access waveform (version %1), verify it, and install it.")
+                  .arg(version)
+            : tr("Download the remote-access container (version %1), verify it, and install it.")
+                  .arg(version);
         m_installRemoteAccessAction->setToolTip(remoteTip);
         m_installRemoteAccessAction->setStatusTip(remoteTip);
     }
@@ -1558,41 +1654,50 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
     if (!m_radioModel || !m_radioModel->isConnected()) {
         return;
     }
-    const QString blocker = dockerInstallBlockerText(m_radioModel, m_radioModel->flexWaveformModel());
-    if (!blocker.isEmpty()) {
-        showDockerWfpNotReadyDialog(this, blocker);
+    installRemoteAccess(remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container);
+}
+
+void WaveformsDialog::installRemoteAccess(bool container)
+{
+    if (!m_radioModel || !m_radioModel->isConnected()) {
         return;
+    }
+    const TailnetShimPackage package =
+        container ? TailnetShimPackage::Container : TailnetShimPackage::Native;
+    const bool docker = container;
+    if (docker) {
+        const QString blocker =
+            dockerInstallBlockerText(m_radioModel, m_radioModel->flexWaveformModel());
+        if (!blocker.isEmpty()) {
+            showDockerWfpNotReadyDialog(this, blocker);
+            return;
+        }
+    }
+    if (m_shimDownloader && m_shimDownloader->isRunning()) {
+        return;
+    }
+    // The radio may have changed since the last download, and with it the package.
+    if (m_shimDownloader && m_shimDownloader->package() != package) {
+        m_shimDownloader->deleteLater();
+        m_shimDownloader = nullptr;
     }
     if (!m_shimDownloader) {
-        m_shimDownloader = new TailnetShimDownloader(this);
-    }
-    if (m_shimDownloader->isRunning()) {
-        return;
+        m_shimDownloader = new TailnetShimDownloader(package, this);
     }
 
-    auto* progress = new PersistentDialog(tr("Downloading Remote Access"), QString(), this);
-    theme::setContainer(progress, QStringLiteral("dialog/waveforms/installProgress"));
-    progress->setWindowModality(Qt::WindowModal);
-    progress->setMinimumWidth(420);
-    auto* root = new QVBoxLayout(progress->bodyWidget());
-    root->setSpacing(10);
-    auto* label = new QLabel(tr("Downloading the remote-access container %1 and checking it "
-                                "against the release this AetherSDR expects...")
-                                 .arg(QString::fromLatin1(TailnetShimRelease::kVersion)));
-    label->setWordWrap(true);
-    label->setAccessibleName(tr("Remote access download progress"));
-    root->addWidget(label);
-    auto* bar = new QProgressBar;
-    bar->setRange(0, 100);
+    const QString version = TailnetShimDownloader::pin(package).version;
+    const CanonProgress dl = makeCanonProgress(
+        tr("Downloading Remote Access"),
+        docker ? tr("Downloading the remote-access container %1 and checking it against the "
+                    "release this AetherSDR expects...").arg(version)
+               : tr("Downloading the remote-access waveform %1 and checking it against the "
+                    "release this AetherSDR expects...").arg(version),
+        this);
+    CanonWindow* progress = dl.window;
+    QProgressBar* bar = dl.bar;
+    dl.label->setAccessibleName(tr("Remote access download progress"));
     bar->setAccessibleName(tr("Remote access download progress value"));
-    root->addWidget(bar);
-    auto* buttons = new QHBoxLayout;
-    buttons->addStretch();
-    auto* cancel = new QPushButton(tr("Cancel"));
-    cancel->setAccessibleName(tr("Cancel remote access download"));
-    buttons->addWidget(cancel);
-    root->addLayout(buttons);
-    connect(cancel, &QPushButton::clicked, progress, &QDialog::reject);
+    dl.cancel->setAccessibleName(tr("Cancel remote access download"));
     connect(progress, &QDialog::rejected, m_shimDownloader, &TailnetShimDownloader::cancel);
     connect(m_shimDownloader, &TailnetShimDownloader::progress, progress,
             [bar](qint64 got, qint64 total) {
@@ -1600,7 +1705,7 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
     });
 
     const QPointer<RadioModel> modelGuard(m_radioModel);
-    const RadioControlSession session = modelGuard->controlSession();
+    const RadioControlSession chosenSession = m_radioModel->controlSession();
     // Each signal fires once per attempt; whichever fires first closes the
     // window and disconnects the other.
     auto finish = [progress]() {
@@ -1610,13 +1715,15 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
     auto readyConn = std::make_shared<QMetaObject::Connection>();
     auto failConn = std::make_shared<QMetaObject::Connection>();
     *readyConn = connect(m_shimDownloader, &TailnetShimDownloader::ready, this,
-                         [this, finish, modelGuard, session, readyConn, failConn](const QString& path) {
+                         [this, finish, modelGuard, chosenSession, readyConn, failConn,
+                          docker](const QString& path) {
         disconnect(*readyConn);
         disconnect(*failConn);
         finish();
         updateInstallButtonState();
-        if (modelGuard) {
-            installWaveformPath(true, path, modelGuard, session);
+        // A reconnect during the download may have brought a different radio.
+        if (RadioModel* radio = radioStillChosen(modelGuard, chosenSession)) {
+            installWaveformPath(docker, path, radio, chosenSession);
         }
     });
     *failConn = connect(m_shimDownloader, &TailnetShimDownloader::failed, this,
@@ -1633,6 +1740,217 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
     updateInstallButtonState();
 }
 
+void WaveformsDialog::resetRemoteAccess(bool container, bool update)
+{
+    if (!m_radioModel || !m_radioModel->isConnected()) {
+        return;
+    }
+    // The installed row says which package this is; the platform may not be
+    // identified yet.
+    const bool docker = container;
+    const QString name = QString::fromLatin1(docker ? kTailnetShimContainerName
+                                                    : kTailnetShimNativeName);
+    const QString removeAction = docker ? QStringLiteral("remove_container")
+                                        : QStringLiteral("uninstall");
+    FlexWaveformModel& waveforms = m_radioModel->flexWaveformModel();
+    setRowNotice(name, update ? tr("Updating…") : tr("Resetting…"), QStringLiteral("pending"), true);
+
+    // The radio accepts the removal at once and takes a few seconds to carry
+    // it out; install again once it no longer lists the shim.
+    struct Pending {
+        bool done{false};
+        QMetaObject::Connection listed;
+        QMetaObject::Connection replied;
+    };
+    auto pending = std::make_shared<Pending>();
+    auto* bound = new QTimer(this);
+    bound->setSingleShot(true);
+    auto finish = [this, pending, bound, docker](bool install) {
+        if (pending->done) {
+            return;
+        }
+        pending->done = true;
+        disconnect(pending->listed);
+        disconnect(pending->replied);
+        bound->stop();
+        bound->deleteLater();
+        if (install) {
+            installRemoteAccess(docker);
+        }
+    };
+    pending->listed = connect(&waveforms, &FlexWaveformModel::waveformsChanged, this,
+                              [&waveforms, finish] {
+        for (const FlexWaveformEntry& w : waveforms.waveforms()) {
+            if (isTailnetShimWaveform(w.name, w.isContainer)) {
+                return;
+            }
+        }
+        finish(true);
+    });
+    pending->replied = connect(&waveforms, &FlexWaveformModel::commandFinished, this,
+                               [this, name, removeAction, docker, update, finish](
+                                   const QString& action, const QString& which,
+                                   bool ok, const QString& message) {
+        // The row notice is onWaveformCommandFinished's; this adds the why.
+        if (action == removeAction && which == name && !ok) {
+            finish(false);
+            const QString why = message.isEmpty() ? tr("the radio refused it") : message;
+            showWaveformInstallResultDialog(
+                this, update ? tr("Update Failed") : tr("Reset Failed"),
+                docker ? tr("The radio didn't remove the remote-access container: %1").arg(why)
+                       : tr("The radio didn't uninstall the remote-access waveform: %1").arg(why));
+        }
+    });
+    // Installing over a container the radio still lists would collide with
+    // it: if the removal isn't seen in time, say so rather than install.
+    connect(bound, &QTimer::timeout, this, [this, name, docker, update, finish] {
+        finish(false);
+        setRowNotice(name, update ? tr("Update didn't finish") : tr("Reset didn't finish"),
+                     QStringLiteral("error"), false);
+        showWaveformInstallResultDialog(
+            this, update ? tr("Update Failed") : tr("Reset Failed"),
+            docker ? tr("The radio still lists the remote-access container after 30 seconds. "
+                        "Remove it from the Waveforms list, then install Remote Access again.")
+                   : tr("The radio still lists the remote-access waveform after 30 seconds. "
+                        "Uninstall it from the Waveforms list, then install Remote Access "
+                        "again."));
+    });
+    bound->start(30'000);
+    if (docker) {
+        waveforms.requestRemoveContainer(name);
+    } else {
+        waveforms.requestUninstall(name);
+    }
+}
+
+void WaveformsDialog::updateHealthBar()
+{
+    if (!m_healthCheck || !m_radioModel) {
+        return;
+    }
+    bool installed = false;
+    for (const FlexWaveformEntry& w : m_radioModel->flexWaveformModel().waveforms()) {
+        installed = installed || isRadioHealthWaveform(w.name, w.isContainer);
+    }
+    // The agent answers only on the radio's local network.
+    const QHostAddress address = m_radioModel->radioAddress();
+    const RadioHealthBlocker blocker = radioHealthBlocker(
+        m_radioModel->isConnected(), m_radioModel->backendCapabilities().hasWaveforms,
+        m_radioModel->isWan(), radiohealth::isLanIpv4(address));
+    const bool available = blocker == RadioHealthBlocker::None;
+    const bool busy = m_healthBusy || (m_installer && m_installer->isInstalling());
+    {
+        const QSignalBlocker block(m_healthCheck);
+        m_healthCheck->setChecked(installed);
+    }
+    m_healthCheck->setEnabled(available && !busy);
+    // A changed or cleared address also retires a read in flight.
+    m_healthClient->setRadioAddress(available ? address : QHostAddress());
+
+    QString reason;
+    switch (blocker) {
+    case RadioHealthBlocker::NotConnected:
+        reason = tr("Connect to a radio to see its storage, memory and CPU.");
+        break;
+    case RadioHealthBlocker::NoWaveforms:
+        reason = tr("This radio doesn't take waveforms, so it can't run the radio health tools.");
+        break;
+    case RadioHealthBlocker::Remote:
+        reason = tr("Radio health is shown only on the radio's local network, not over "
+                    "SmartLink.");
+        break;
+    case RadioHealthBlocker::NotLan:
+        reason = tr("Radio health is shown only on the radio's local network.");
+        break;
+    case RadioHealthBlocker::None:
+        break;
+    }
+    if (busy) {
+        m_healthLabel->setText(installed ? tr("Removing the radio health tools…")
+                                         : tr("Installing the radio health tools…"));
+    } else if (!reason.isEmpty()) {
+        m_healthLabel->setText(reason);
+    } else if (!installed) {
+        m_healthLabel->setText(tr("Shows the radio's free storage, memory and CPU here."));
+    }
+    // The reason a disabled checkbox gives, on the accessible channel too (#4896).
+    m_healthCheck->setAccessibleDescription(
+        busy ? m_healthLabel->text()
+             : !reason.isEmpty() ? reason
+             : tr("Installs a small tool on the radio (about 110 KB) that reports its free "
+                  "storage, memory and CPU here."));
+    m_healthCheck->setToolTip(m_healthCheck->accessibleDescription());
+    const bool reading = installed && available && !busy;
+    if (!reading) {
+        m_healthLabel->setToolTip({});
+        m_healthResourceLabel->hide();
+    }
+
+    if (reading) {
+        if (!m_healthTimer->isActive()) {
+            m_healthLabel->setText(tr("Waiting for the radio health tools to answer…"));
+            m_healthTimer->start();
+            m_healthClient->fetch();
+        }
+    } else {
+        m_healthTimer->stop();
+        m_healthClient->cancel();
+    }
+}
+
+void WaveformsDialog::onHealthToggled(bool install)
+{
+    // The same admission as the checkbox's enabled state: never dispatch to a
+    // radio the bar would refuse.
+    if (!m_radioModel || m_healthBusy
+        || radioHealthBlocker(m_radioModel->isConnected(),
+                              m_radioModel->backendCapabilities().hasWaveforms,
+                              m_radioModel->isWan(),
+                              radiohealth::isLanIpv4(m_radioModel->radioAddress()))
+               != RadioHealthBlocker::None) {
+        updateHealthBar();
+        return;
+    }
+    const QString name = QString::fromLatin1(kRadioHealthWaveformName);
+    if (!install) {
+        m_healthBusy = true;
+        updateHealthBar();
+        FlexWaveformModel& waveforms = m_radioModel->flexWaveformModel();
+        auto conn = std::make_shared<QMetaObject::Connection>();
+        *conn = connect(&waveforms, &FlexWaveformModel::commandFinished, this,
+                        [this, conn, name](const QString& action, const QString& which,
+                                           bool ok, const QString& message) {
+            if (action != QLatin1String("uninstall") || which != name) {
+                return;
+            }
+            disconnect(*conn);
+            m_healthBusy = false;
+            updateHealthBar();
+            if (!ok) {
+                m_healthLabel->setText(tr("The radio didn't remove the health tools: %1")
+                    .arg(message.isEmpty() ? tr("it refused") : message));
+            }
+        });
+        waveforms.requestUninstall(name);
+        return;
+    }
+
+    // The package ships inside AetherSDR; the installer wants a file.
+    QString error;
+    const QString path = radiohealth::writeBundledPackage(
+        QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
+            + QStringLiteral("/waveforms/aether-health-%1")
+                  .arg(QString::fromLatin1(RadioHealthPackage::kVersion)),
+        &error);
+    if (path.isEmpty()) {
+        updateHealthBar();
+        m_healthLabel->setText(error);
+        return;
+    }
+    installWaveformPath(false, path, m_radioModel, m_radioModel->controlSession(), true);
+    updateHealthBar();
+}
+
 void WaveformsDialog::installWaveformFile(const QString& title,
                                           const QString& filter,
                                           bool docker,
@@ -1644,22 +1962,23 @@ void WaveformsDialog::installWaveformFile(const QString& title,
 
     const QPointer<WaveformsDialog> self(this);
     const QPointer<RadioModel> modelGuard(m_radioModel);
-    const RadioControlSession session = modelGuard->controlSession();
+    const RadioControlSession chosenSession = m_radioModel->controlSession();
     const QString path = QFileDialog::getOpenFileName(
         this,
         title,
         initialPath,
         filter);
 
-    if (!self || !modelGuard || self->m_radioModel != modelGuard.data() || path.isEmpty()) {
+    if (!self || !radioStillChosen(modelGuard, chosenSession)
+        || self->m_radioModel != modelGuard.data() || path.isEmpty()) {
         return;
     }
 
-    installWaveformPath(docker, path, modelGuard, session);
+    installWaveformPath(docker, path, modelGuard, chosenSession);
 }
 
 void WaveformsDialog::installWaveformPath(bool docker, const QString& path, RadioModel* model,
-                                           const RadioControlSession& session)
+                                          const RadioControlSession& session, bool quiet)
 {
     const QPointer<RadioModel> modelGuard(model);
     if (!modelGuard || m_radioModel != modelGuard.data() || !modelGuard->controlSessionCurrent(session)) {
@@ -1668,7 +1987,9 @@ void WaveformsDialog::installWaveformPath(bool docker, const QString& path, Radi
 
     if (docker) {
         const FlexWaveformModel& wfModel = modelGuard->flexWaveformModel();
-        const QString blocker = dockerInstallBlockerText(modelGuard, wfModel);
+        const QString staging = waveformEnvironmentInstallBlocker(modelGuard);
+        const QString blocker = staging.isEmpty()
+            ? dockerInstallBlockerText(modelGuard, wfModel) : staging;
         if (!blocker.isEmpty()) {
             showDockerWfpNotReadyDialog(this, blocker);
             return;
@@ -1693,40 +2014,32 @@ void WaveformsDialog::installWaveformPath(bool docker, const QString& path, Radi
 
     m_installBtn->setEnabled(false);
 
-    auto* progress = new PersistentDialog(
-        docker ? tr("Installing Docker Waveform")
-               : tr("Installing Legacy Waveform"),
-        QString(),
+    if (quiet) {
+        connect(m_installer, &WaveformInstaller::finished,
+                this, [this](bool ok, const QString& msg) {
+                    updateInstallButtonState();
+                    updateHealthBar();
+                    if (!ok) {
+                        m_healthLabel->setText(tr("Couldn't install the radio health tools: %1")
+                                                   .arg(msg));
+                    }
+                }, Qt::SingleShotConnection);
+        m_installer->installLegacyWaveform(path, session);
+        return;
+    }
+
+    const CanonProgress inst = makeCanonProgress(
+        docker ? tr("Installing Docker Waveform") : tr("Installing Legacy Waveform"),
+        docker ? tr("Installing Docker waveform...") : tr("Installing legacy waveform..."),
         this);
-    theme::setContainer(progress, QStringLiteral("dialog/waveforms/installProgress"));
-    progress->setWindowModality(Qt::WindowModal);
-    progress->setModal(true);
-    progress->setMinimumWidth(420);
-
-    auto* progressRoot = new QVBoxLayout(progress->bodyWidget());
-    progressRoot->setSpacing(10);
-
-    auto* progressLabel = new QLabel(
-        docker ? tr("Installing Docker waveform...")
-               : tr("Installing legacy waveform..."));
-    progressLabel->setTextFormat(Qt::PlainText);
-    progressLabel->setWordWrap(true);
+    CanonWindow* progress = inst.window;
+    QLabel* progressLabel = inst.label;
+    QProgressBar* progressBar = inst.bar;
+    QPushButton* cancelButton = inst.cancel;
     progressLabel->setAccessibleName(tr("Waveform install progress"));
-    progressRoot->addWidget(progressLabel);
-
-    auto* progressBar = new QProgressBar;
-    progressBar->setRange(0, 100);
-    progressBar->setValue(0);
     progressBar->setTextVisible(true);
     progressBar->setAccessibleName(tr("Waveform install progress value"));
-    progressRoot->addWidget(progressBar);
-
-    auto* progressButtons = new QHBoxLayout;
-    progressButtons->addStretch();
-    auto* cancelButton = new QPushButton(tr("Cancel"));
     cancelButton->setAccessibleName(tr("Cancel waveform install"));
-    progressButtons->addWidget(cancelButton);
-    progressRoot->addLayout(progressButtons);
 
     connect(m_installer, &WaveformInstaller::progressChanged,
             progress, [progressBar, progressLabel](int pct, const QString& msg) {
@@ -1734,8 +2047,6 @@ void WaveformsDialog::installWaveformPath(bool docker, const QString& path, Radi
                 progressLabel->setText(msg);
             });
 
-    connect(cancelButton, &QPushButton::clicked,
-            progress, &QDialog::reject);
     connect(progress, &QDialog::rejected, this, [this] {
         if (m_installer && m_installer->isInstalling()) {
             m_installer->cancel();
@@ -1747,6 +2058,7 @@ void WaveformsDialog::installWaveformPath(bool docker, const QString& path, Radi
                 progress->close();
                 progress->deleteLater();
                 updateInstallButtonState();
+                updateHealthBar();
                 showWaveformInstallResultDialog(
                     this,
                     ok ? tr("Install Complete") : tr("Install Failed"),
@@ -2087,7 +2399,13 @@ void WaveformsDialog::refreshWaveformList()
     }
 
     const FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
-    const QList<FlexWaveformEntry>& waveforms = wfModel.waveforms();
+    // The radio health agent is the health bar's, not a row of its own.
+    QList<FlexWaveformEntry> waveforms;
+    for (const FlexWaveformEntry& entry : wfModel.waveforms()) {
+        if (!isRadioHealthWaveform(entry.name, entry.isContainer)) {
+            waveforms.append(entry);
+        }
+    }
 
     if (waveforms.isEmpty()) {
         m_listLayout->insertWidget(0, makeEmptyWaveformsState(m_listContainer));
@@ -2149,13 +2467,14 @@ void WaveformsDialog::refreshWaveformList()
         actionLayout->setContentsMargins(0, 0, 0, 0);
         actionLayout->setSpacing(kInstalledWaveformActionButtonSpacing);
 
-        // The remote-access container gets a Configure… button that opens its
-        // Tailscale settings; every other waveform keeps Restart / Remove only.
+        // The remote-access shim (container or legacy waveform) gets a
+        // Configure… button that opens its Tailscale settings; every other
+        // waveform keeps Restart / Remove only.
         QPushButton* configureBtn = nullptr;
-        if (isContainer && name == QLatin1String(kTailnetShimContainerName)) {
+        if (isTailnetShimWaveform(name, isContainer)) {
             configureBtn = new QPushButton(tr("Configure…"), actionWidget);
             configureBtn->setAccessibleName(tr("Configure remote access for waveform %1").arg(name));
-            connect(configureBtn, &QPushButton::clicked, this, [this]() {
+            connect(configureBtn, &QPushButton::clicked, this, [this, isContainer]() {
                 // A CanonWindow: one at a time; a second click raises it.
                 static QPointer<TailnetShimDialog> open;
                 if (open) {
@@ -2163,10 +2482,29 @@ void WaveformsDialog::refreshWaveformList()
                     open->activateWindow();
                     return;
                 }
-                auto* dialog = new TailnetShimDialog(m_radioModel, this);
+                auto* dialog = new TailnetShimDialog(m_radioModel, !isContainer, this);
                 dialog->setAttribute(Qt::WA_DeleteOnClose);
+                connect(dialog, &TailnetShimDialog::resetRequested, this,
+                        [this, isContainer](bool update) {
+                    resetRemoteAccess(isContainer, update);
+                });
                 open = dialog;
                 dialog->show();
+            });
+        }
+
+        // Docker containers carry a radio-held environment (SmartSDR 4.3.16).
+        // Dimmed with the reason on a radio that cannot edit it.
+        QPushButton* environmentBtn = nullptr;
+        if (isContainer) {
+            environmentBtn = new QPushButton(tr("Environment…"), actionWidget);
+            environmentBtn->setAccessibleName(tr("Edit the environment of waveform %1").arg(name));
+            const QString unavailable = waveformEnvironmentUnavailableReason(m_radioModel);
+            environmentBtn->setEnabled(unavailable.isEmpty() && !rowPending);
+            environmentBtn->setToolTip(unavailable);
+            environmentBtn->setAccessibleDescription(unavailable);
+            connect(environmentBtn, &QPushButton::clicked, this, [this, name]() {
+                openEnvironmentEditor(name);
             });
         }
 
@@ -2203,12 +2541,16 @@ void WaveformsDialog::refreshWaveformList()
             installedWaveformActionButtonWidth(restartBtn, removeBtn),
             styledWaveformActionButtonWidth(restartBtn),
             styledWaveformActionButtonWidth(removeBtn),
-            styledWaveformActionButtonWidth(configureBtn)});
-        const int actionButtonCount = configureBtn ? 3 : 2;
-        if (configureBtn) {
-            configureBtn->setFixedWidth(actionButtonWidth);
-            configureBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-            actionLayout->addWidget(configureBtn);
+            styledWaveformActionButtonWidth(configureBtn),
+            styledWaveformActionButtonWidth(environmentBtn)});
+        const int actionButtonCount = 2 + (configureBtn ? 1 : 0) + (environmentBtn ? 1 : 0);
+        for (QPushButton* extra : {configureBtn, environmentBtn}) {
+            if (!extra) {
+                continue;
+            }
+            extra->setFixedWidth(actionButtonWidth);
+            extra->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            actionLayout->addWidget(extra);
         }
         restartBtn->setFixedWidth(actionButtonWidth);
         restartBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
@@ -2222,6 +2564,81 @@ void WaveformsDialog::refreshWaveformList()
 
         m_listLayout->insertWidget(m_listLayout->count() - 1, row);
     }
+}
+
+void WaveformsDialog::openEnvironmentEditor(const QString& name)
+{
+    // One editor per container; a second click raises it.
+    if (const QPointer<WaveformEnvironmentDialog> open = m_environmentDialogs.value(name)) {
+        open->raise();
+        open->activateWindow();
+        return;
+    }
+    auto* dialog = new WaveformEnvironmentDialog(m_radioModel, name, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    // The apply belongs to this window, so its outcome reaches the row even when
+    // the editor is closed first.
+    dialog->setApplyHandler([this](const QString& container, const WaveformEnvironment& environment) {
+        const auto finished = std::make_shared<bool>(false);
+        const bool started = m_radioModel->applyWaveformEnvironment(container, environment, this,
+            [this, container, finished](const WaveformEnvApplyResult& result) {
+                *finished = true;
+                m_environmentApplies.remove(container);
+                onEnvironmentApplyFinished(container, result);
+                updateInstallButtonState();
+                if (const QPointer<WaveformEnvironmentDialog> editor = m_environmentDialogs.value(container)) {
+                    editor->showApplyResult(result);
+                }
+            });
+        // A step refused on the spot has already reported; otherwise the row
+        // waits for the radio.
+        if (started && !*finished) {
+            m_environmentApplies.insert(container);
+            setRowNotice(container, tr("Recreating…"), QStringLiteral("pending"), true);
+        }
+        updateInstallButtonState();
+        return started;
+    });
+    m_environmentDialogs.insert(name, dialog);
+    dialog->show();
+}
+
+void WaveformsDialog::onEnvironmentApplyFinished(const QString& name,
+                                                 const WaveformEnvApplyResult& result)
+{
+    using Outcome = WaveformEnvApplyResult::Outcome;
+    switch (result.outcome) {
+    case Outcome::Recreated:
+        if (result.stagingCleared) {
+            setRowNotice(name, tr("Recreated"), QStringLiteral("ok"), false);
+        } else {
+            setRowNotice(name, tr("Recreated, but clearing staged variables failed"),
+                         QStringLiteral("error"), false);
+        }
+        break;
+    case Outcome::RecreateFailed:
+        setRowNotice(name, tr("Recreate failed: the radio reported an error"),
+                     QStringLiteral("error"), false);
+        break;
+    case Outcome::NoConfirmation:
+        setRowNotice(name, tr("Recreate not confirmed by the radio"), QStringLiteral("error"), false);
+        break;
+    case Outcome::Refused:
+    case Outcome::Cancelled:
+        setRowNotice(name, tr("Environment not applied"), QStringLiteral("error"), false);
+        break;
+    }
+}
+
+void WaveformsDialog::onWaveformRestarted(const QString& name, bool ok)
+{
+    // An environment apply reports its own outcome. A plain restart already said
+    // "Restarted" on the command reply; a later result=error corrects it.
+    if (m_environmentApplies.contains(name) || ok) {
+        return;
+    }
+    setRowNotice(name, tr("Restart failed: the radio reported an error"),
+                 QStringLiteral("error"), false);
 }
 
 void WaveformsDialog::setRowNotice(const QString& name, const QString& text,

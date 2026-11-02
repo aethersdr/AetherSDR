@@ -145,6 +145,8 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.meter.pivot.rim", QString("#3a3e48"));
     m_tokens.insert("color.meter.rms", QString("#00b4d8"));
     m_tokens.insert("color.meter.thresh", QString("#ffb84d"));
+    m_tokens.insert("color.qr.dark", QString("#000000"));
+    m_tokens.insert("color.qr.light", QString("#ffffff"));
     m_tokens.insert("color.slice.a", QString("#00d4ff"));
     m_tokens.insert("color.slice.b", QString("#ff40ff"));
     m_tokens.insert("color.slice.c", QString("#40ff40"));
