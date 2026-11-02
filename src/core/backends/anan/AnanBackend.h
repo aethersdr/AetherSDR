@@ -408,11 +408,11 @@ private:
     double m_restoredFreqHz = 0.0;
     QString m_restoredMode;
     // Live AGC state in AGC-T knob units (agcKnobDb() converts). Both
-    // connectRadio() and beginRateChange() build the DSP config from it, so
-    // it survives a reconnect. RadioModel rebuilds the backend only on a
-    // family switch, so connecting another ANAN keeps it too, as it keeps the
-    // noise blanker below. emitSliceState() publishes it so the knob shows
-    // what the DSP runs.
+    // connectRadio() and beginRateChange() build the DSP config from it.
+    // applyRestoredState() sets it before every connect from this radio's
+    // stored AGC (the Agc domain), or the defaults when it has none, so
+    // another ANAN does not inherit it the way it inherits the noise blanker
+    // below. emitSliceState() publishes it so the knob shows what the DSP runs.
     int m_agcMode = 3;
     int m_agcThreshold = kDefaultAgcThreshold;
     int m_agcOffLevel = kDefaultAgcOffLevel;
