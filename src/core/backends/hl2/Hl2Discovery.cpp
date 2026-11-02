@@ -2,6 +2,7 @@
 
 #include "core/AppSettings.h"
 #include "core/LogManager.h"   // lcDiscovery
+#include "core/discovery/DirectedDiscoveryAddress.h"
 
 #include <QJsonObject>
 #include "core/backends/hl2/MetisProtocol.h"
@@ -252,7 +253,7 @@ void Hl2Discovery::setDirectedTargets(const QList<QHostAddress>& targets)
 {
     m_directedTargets.clear();
     for (const QHostAddress& target : targets) {
-        if (target.protocol() == QAbstractSocket::IPv4Protocol && !target.isNull()
+        if (discovery::isDirectedDiscoveryAddress(target)
             && !m_directedTargets.contains(target)) {
             m_directedTargets.append(target);
         }

@@ -193,7 +193,12 @@ the existing simulator identity without constructing a radio backend or scanning
 LAN/USB. The flags may be combined. With `--discover-local`, `--hl2-address <ipv4>`
 (repeatable) also probes that address by unicast for a Hermes-Lite 2 that a
 broadcast cannot reach, for example one on another subnet; a reply is handled
-like a broadcast reply. No discovered radio is connected. Icom's
+like a broadcast reply. Each value must be an IPv4 literal: malformed and IPv6
+values, `0.0.0.0`, `255.255.255.255` and multicast addresses are rejected with a
+diagnostic and exit status 1 before the daemon opens its socket or loads settings.
+Repeated addresses are probed once per interface per sweep. Without
+`--discover-local`, valid addresses have no effect and the daemon reports that.
+No discovered radio is connected. Icom's
 manual address/credentials, SmartLink and external directories are outside this
 slice; desktop discovery and autoconnect remain unchanged.
 

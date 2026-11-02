@@ -1,10 +1,6 @@
-// The directed (unicast) discovery target list keeps only usable targets.
-//
-// Pure policy, no socket and no event loop: setDirectedTargets drops null and
-// non-IPv4 addresses (writeDatagram() to either sends nothing from an IPv4
-// socket) and de-duplicates, so a repeated target costs one probe per sweep.
-// That a unicast probe reaches a routed radio is a property of real firmware
-// and is covered on hardware, not by a fake peer here.
+// Socket-free target policy: only IPv4 hosts survive, in first-seen order.
+// Repetition must not multiply probes, and invalid inputs must not displace
+// valid targets. Routed-radio convergence needs firmware evidence separately.
 
 #include "core/backends/hl2/Hl2Discovery.h"
 
@@ -22,8 +18,9 @@ int failures = 0;
 void check(bool condition, const char* what)
 {
     std::fprintf(stderr, "[%s] %s\n", condition ? " OK " : "FAIL", what);
-    if (!condition)
+    if (!condition) {
         ++failures;
+    }
 }
 
 QList<QHostAddress> accepted(const QList<QHostAddress>& targets)
@@ -44,6 +41,12 @@ int main(int argc, char** argv)
     check(accepted({}).isEmpty(), "no target configured: nothing is probed");
     check(accepted({QHostAddress(QStringLiteral("not an address")), QHostAddress::AnyIPv6}).isEmpty(),
           "null and non-IPv4 targets are dropped");
+    check(accepted({QHostAddress::AnyIPv4}).isEmpty(), "unspecified IPv4 is dropped");
+    check(accepted({QHostAddress::Broadcast}).isEmpty(), "limited broadcast is dropped");
+    check(accepted({QHostAddress(QStringLiteral("224.0.0.1"))}).isEmpty(), "multicast is dropped");
+    check(accepted({QHostAddress::AnyIPv4, a, QHostAddress::Broadcast,
+                    QHostAddress(QStringLiteral("239.255.255.250")), a}) == QList<QHostAddress>{a},
+          "non-unicast entries do not displace valid targets");
     check(accepted({a}) == QList<QHostAddress>{a}, "an IPv4 target is kept");
     check(accepted({a, a, b, a}) == (QList<QHostAddress>{a, b}), "a repeated target is kept once, in order");
     check(accepted({QHostAddress(QStringLiteral("not an address")), QHostAddress::AnyIPv6, a, a}) == QList<QHostAddress>{a},

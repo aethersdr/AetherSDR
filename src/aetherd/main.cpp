@@ -4,10 +4,12 @@
 #include "core/control/LocalControlServer.h"
 #include "core/control/RadioResourceAdapter.h"
 #include "core/control/RadioCatalogue.h"
+#include "core/discovery/DirectedDiscoveryAddress.h"
 #include "models/RadioSession.h"
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QHostAddress>
 #include <QLockFile>
 #include <QTextStream>
 
@@ -74,6 +76,17 @@ int main(int argc, char* argv[])
     AetherSDR::aetherd::addCredentialOptions(parser);
     AetherSDR::aetherd::addGrantAdminOptions(parser);
     parser.process(app);
+    const QStringList hl2Addresses = parser.values(hl2AddressOption);
+    for (const QString& text : hl2Addresses) {
+        if (!AetherSDR::discovery::isDirectedDiscoveryAddress(QHostAddress(text))) {
+            QTextStream(stderr) << "aetherd: --hl2-address '" << text
+                                << "' must be a unicast IPv4 literal\n";
+            return 1;
+        }
+    }
+    if (!hl2Addresses.isEmpty() && !parser.isSet(localDiscoveryOption)) {
+        QTextStream(stderr) << "aetherd: --hl2-address has no effect without --discover-local\n";
+    }
     if (parser.isSet(QStringLiteral("tx-admin"))) {
         return AetherSDR::aetherd::runGrantAdmin(parser);
     }
@@ -135,7 +148,7 @@ int main(int argc, char* argv[])
     std::unique_ptr<AetherSDR::RadioDiscoverySource> discoverySource =
         AetherSDR::aetherd::makeDiscoverySource(
             {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption),
-             parser.values(hl2AddressOption)});
+             hl2Addresses});
     AetherSDR::RadioSession radioSession;
     radioSession.setSessionId(1);
     std::unique_ptr<AetherSDR::control::RadioConnectionTarget> connectionTarget;

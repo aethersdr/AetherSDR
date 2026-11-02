@@ -770,8 +770,8 @@ add_test(NAME radio_discovery_source_test COMMAND radio_discovery_source_test)
 # Socket-free daemon startup policy: a fresh child process reads isolated saved
 # nicknames through native static helpers; no discovery source is started with
 # local=true and no socket, USB scan or synthetic firmware peer is used.
-# Also launches the real daemon with an invalid logical endpoint name, which
-# must fail before binding a socket or constructing model/settings consumers.
+# Also checks directed-address diagnostics with an invalid logical endpoint
+# guarding every child: no bind occurs even if argument validation regresses.
 add_executable(aetherd_discovery_startup_test tests/aetherd_discovery_startup_test.cpp)
 target_include_directories(aetherd_discovery_startup_test PRIVATE src tests)
 target_compile_definitions(aetherd_discovery_startup_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")

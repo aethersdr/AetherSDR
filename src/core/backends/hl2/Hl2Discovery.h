@@ -71,14 +71,13 @@ public:
     // Broadcast one discovery datagram now (also called by the interval timer).
     void sweepNow();
 
-    // Addresses probed by unicast in every sweep, besides the broadcasts. A
-    // broadcast does not cross a router, so an HL2 on another subnet is only
-    // found this way (the desktop's connect-by-IP probe is the same idea).
-    // Empty by default; a reply is handled exactly like a broadcast reply.
+    // IPv4 host destinations probed on every bound interface in each sweep.
+    // Unlike broadcasts, these probes can reach a routed subnet. Unspecified,
+    // limited-broadcast, multicast and repeated targets are omitted.
+    // Empty by default; replies share the broadcast parser and identity.
     void setDirectedTargets(const QList<QHostAddress>& targets);
-    // The accepted targets, after the IPv4-only, non-null, de-duplicating
-    // filter setDirectedTargets applies. Lets the policy be asserted without
-    // a socket (tests/hl2_discovery_logging_test is the sibling precedent).
+    // Accepted host addresses after filtering and de-duplication. The value
+    // copy keeps callers from mutating a running sweep's target policy.
     [[nodiscard]] QList<QHostAddress> directedTargets() const { return m_directedTargets; }
 
     [[nodiscard]] bool isRunning() const noexcept;
