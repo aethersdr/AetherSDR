@@ -5,7 +5,10 @@
 
 #include <QApplication>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonObject>
+#include <QVariantMap>
+#include <QWidget>
 
 #include <cstdio>
 
@@ -19,6 +22,18 @@ public:
     }
 };
 }
+
+// A stand-in the bridge finds by class name, so its handling of the widget's
+// answer is tested without the desktop SpectrumWidget.
+namespace TraceBinsFake {
+class SpectrumWidget : public QWidget
+{
+    Q_OBJECT
+public:
+    QVariantMap answer;
+    Q_INVOKABLE QVariantMap traceBinsSnapshot() const { return answer; }
+};
+}  // namespace TraceBinsFake
 
 namespace {
 int failures = 0;
@@ -60,6 +75,28 @@ int main(int argc, char** argv)
     check(r.value("ok").toBool() && r.value("pans").isArray(),
           "tracedebug without a property still answers with the pans array");
 
+    TraceBinsFake::SpectrumWidget pan;
+    pan.setObjectName(QStringLiteral("trace-bins-fake"));
+    pan.answer = {{QStringLiteral("panIndex"), 0},
+                  {QStringLiteral("refusal"),
+                   QStringLiteral("geometry changed 1 frames ago; wait for 3 settled frames")}};
+    r = request(R"({"cmd":"get","model":"tracedebug","selector":"0","property":"bins"})");
+    check(!r.value("ok").toBool(), "a widget refusal is an ok:false reply");
+    check(r.value("error").toString()
+              == QLatin1String("tracedebug bins: geometry changed 1 frames ago; wait for 3 settled frames"),
+          "and the reply carries the widget's reason");
+    check(!r.contains(QLatin1String("pan")), "and no bins");
+
+    pan.answer = {{QStringLiteral("panIndex"), 0},
+                  {QStringLiteral("count"), 2},
+                  {QStringLiteral("ageMs"), 40},
+                  {QStringLiteral("bins"), QVariantList{-120.5, -119.0}}};
+    r = request(R"({"cmd":"get","model":"tracedebug","selector":"0","property":"bins"})");
+    const QJsonObject panReply = r.value("pan").toObject();
+    check(r.value("ok").toBool() && panReply.value("ageMs").toInt() == 40
+              && panReply.value("bins").toArray().size() == 2,
+          "an accepted frame passes through with its age");
+
     // The bridge reaches the widget by method NAME; a misspelling would only
     // ever show as "no pan matches". Pin the name on both sides.
     const QByteArray server_src = readSource("/src/core/AutomationServer.cpp");
@@ -74,3 +111,5 @@ int main(int argc, char** argv)
     }
     return failures == 0 ? 0 : 1;
 }
+
+#include "automation_tracedebug_bins_test.moc"

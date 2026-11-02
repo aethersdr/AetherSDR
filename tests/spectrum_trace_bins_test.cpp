@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QVariant>
 
 #include <cmath>
 #include <cstdio>
@@ -53,6 +54,61 @@ int main()
               && empty.value(QStringLiteral("binHz")).toDouble() == 0.0
               && empty.value(QStringLiteral("bins")).toArray().isEmpty(),
           "no frame yet: zero bins and binHz 0, not a division by zero");
+
+    // FrameCapture: the frame as received, refused until the geometry settles.
+    {
+        using Capture = SpectrumTraceBins::FrameCapture;
+        constexpr quint64 k = Capture::kSettledFrames;
+        const auto frame = [](float offset) {
+            QVector<float> f(64);
+            for (int i = 0; i < f.size(); ++i)
+                f[i] = -120.0f + offset + 0.25f * static_cast<float>(i);
+            return f;
+        };
+        const auto binsOf = [](const QVariantMap& m) {
+            QVector<float> out;
+            for (const QVariant& v : m.value(QStringLiteral("bins")).toList())
+                out.append(static_cast<float>(v.toDouble()));
+            return out;
+        };
+        Capture c;
+        check(c.refusal(14.1, 0.2, false, false).contains(QLatin1String("no frame")),
+              "capture: no frame yet is refused");
+        for (quint64 i = 1; i <= k; ++i)
+            c.ingest(frame(static_cast<float>(i)), i, 14.1, 0.2, false);
+        check(c.refusal(14.1, 0.2, false, false).isEmpty(), "capture: kSettledFrames frames settle");
+        check(binsOf(c.snapshot()) == frame(static_cast<float>(k)), "capture: the last frame comes back as fed");
+        check(c.snapshot().value(QStringLiteral("fftFrameSequence")).toULongLong() == k,
+              "capture: with that frame's sequence");
+        check(c.snapshot().value(QStringLiteral("ageMs")).toLongLong() >= 0, "capture: ageMs is reported");
+
+        check(!c.refusal(14.15, 0.2, false, false).isEmpty(), "capture: a centre other than the frame's is refused");
+        c.noteGeometryChange();
+        check(c.refusal(14.1, 0.2, false, false).contains(QLatin1String("0 frames ago")),
+              "capture: refused right after a reported change");
+        for (quint64 i = 1; i < k; ++i) {
+            c.ingest(frame(10.0f + static_cast<float>(i)), k + i, 14.1, 0.2, false);
+            check(!c.refusal(14.1, 0.2, false, false).isEmpty(), "capture: refused below kSettledFrames");
+        }
+        c.ingest(frame(20.0f), 2 * k, 14.1, 0.2, false);
+        check(c.refusal(14.1, 0.2, false, false).isEmpty() && binsOf(c.snapshot()) == frame(20.0f),
+              "capture: the kSettledFrames-th frame is returned");
+
+        c.ingest(frame(30.0f), 2 * k + 1, 14.2, 0.1, false);  // a change nobody reported
+        check(!c.refusal(14.2, 0.1, false, false).isEmpty(),
+              "capture: a geometry change seen only at ingest restarts the count");
+        check(c.refusal(14.2, 0.1, true, false).contains(QLatin1String("animation")),
+              "capture: a running pan animation is refused");
+        check(c.refusal(14.2, 0.1, false, true).contains(QLatin1String("in progress")),
+              "capture: a gesture in progress is refused");
+        for (quint64 i = 0; i < k; ++i)
+            c.ingest(frame(40.0f), 3 * k + i, 14.2, 0.1, true);
+        check(c.refusal(14.2, 0.1, false, false).contains(QLatin1String("dBm range")),
+              "capture: a frame rebased across a dBm range change is refused");
+        c.ingest({}, 9999, 14.2, 0.1, false);
+        check(c.snapshot().value(QStringLiteral("fftFrameSequence")).toULongLong() != 9999,
+              "capture: an empty frame is not captured");
+    }
 
     if (g_failures == 0)
         std::fprintf(stderr, "spectrum_trace_bins_test: all checks passed\n");

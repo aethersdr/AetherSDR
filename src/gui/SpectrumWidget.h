@@ -31,6 +31,7 @@
 
 #include "DssRenderer.h"
 #include "SpectrumPreviewLogic.h"
+#include "SpectrumTraceBins.h"
 #include "WaterfallHistoryBuffer.h"
 #include "WaterfallTimeMarkers.h"
 #include "WaterfallTimeScaleLock.h"
@@ -1678,6 +1679,9 @@ private:
     std::function<bool()> m_dbmRangeCommandEligible;
     qint64 m_encoderRangeChangedMs{0};
     quint64 m_fftFrameSequence{0};
+    // The last frame as received, for `get tracedebug <pan> bins`; only
+    // updateSpectrum() writes it. See noteTraceGeometryChange().
+    SpectrumTraceBins::FrameCapture m_traceCapture;
     quint64 m_renderedFftFrameSequence{0};
     quint64 m_renderedEncoderRangeGeneration{0};
     qint64 m_renderedTraceMs{0};
@@ -2544,6 +2548,10 @@ private:
                             double newCenterMhz, double newBandwidthMhz);
     bool reprojectSpectrum(double oldCenterMhz, double oldBandwidthMhz,
                            double newCenterMhz, double newBandwidthMhz);
+    // Called wherever the displayed or requested centre/bandwidth changes, so
+    // traceBinsSnapshot() refuses until the new geometry has settled frames.
+    void noteTraceGeometryChange() { m_traceCapture.noteGeometryChange(); }
+    bool traceGeometryInFlight() const;
 };
 
 } // namespace AetherSDR

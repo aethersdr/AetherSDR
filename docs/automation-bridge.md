@@ -1096,23 +1096,42 @@ used by the stacked trace renderer.
 ```
 
 **The bins themselves** (#5806). With `property` `bins` and one pan as the
-selector, the reply carries that pan's trace bins instead of statistics:
+selector, the reply carries that pan's last decoded frame instead of statistics:
 
 ```json
 → {"cmd":"get","model":"tracedebug","selector":"0","property":"bins"}
 ← {"ok":true,"model":"tracedebug","property":"bins","pan":{
    "panIndex":0,"name":"SpectrumWidget","kiwiWaterfallActive":false,
-   "count":1024,"finiteCount":1024,"fftFrameSequence":5120,
+   "count":1024,"finiteCount":1024,"fftFrameSequence":5120,"ageMs":31,"settledFrames":12,
    "centerHz":3775000,"spanHz":384000,"lowHz":3583000,"binHz":375,
    "encoderRangeValid":true,"encoderMinDbm":-140,"encoderMaxDbm":-20,"encoderYPixels":700,
    "bins":[-121.4,-121.9,...]}}
 ```
 
-- `bins` is the last radio frame as the widget decoded it, before display
-  smoothing, from `lowHz` in steps of `binHz` (`spanHz` / `count`). It is the
-  whole computed frame: on a radio that declares `hasDdcPanEdgeRolloff` (ANAN)
-  the display shows only its central part, over a narrower span. During a Flex
-  dBm range release it may hold rebased bins. A non-finite bin is `null`.
+- `bins` is the last radio frame exactly as the widget decoded it: never
+  smoothed, never reprojected after a pan or zoom, never cropped. It runs from
+  `lowHz` in steps of `binHz` (`spanHz` / `count`), the pan geometry the
+  widget showed when the frame arrived. It is the whole computed frame: on a
+  radio that declares `hasDdcPanEdgeRolloff` (ANAN) the display shows only its
+  central part, over a narrower span. A non-finite bin is `null`.
+- `ageMs` is the time since that frame arrived (monotonic clock).
+  `fftFrameSequence` tells two reads of the same frame apart. `settledFrames`
+  counts the frames received since the geometry last changed.
+- A frame carries no frequency geometry of its own, so the widget only pairs it
+  with the geometry it is showing once that geometry has been steady for 3
+  frames. Until then the reply is a refusal, `ok:false` with the reason:
+
+  ```json
+  ← {"ok":false,"error":"tracedebug bins: geometry changed 1 frames ago; wait for 3 settled frames"}
+  ```
+
+  The refusals: `no frame decoded yet`; `pan animation running`; `a pan or
+  zoom is in progress` (a drag, or a zoom still settling or waiting to be sent);
+  `geometry changed after the last frame` and `geometry changed N frames ago`
+  (any change of centre or bandwidth, shown or requested); and `the last frame
+  was decoded across a dBm range change`. Retry after a frame interval. A
+  retune the widget has not been told about yet (made elsewhere, before its
+  status arrives) cannot be seen here.
 - The values are in the units the backend delivered; nothing here calibrates
   them. On Flex they are decoded from the radio's pixel encoding, so one
   amplitude step is `(encoderMaxDbm - encoderMinDbm) / (encoderYPixels - 1)`.
@@ -1120,7 +1139,6 @@ selector, the reply carries that pan's trace bins instead of statistics:
   reference has been measured (`Hl2DbReference::isCalibrated()`).
 - When `kiwiWaterfallActive` is true, the pan is showing a KiwiSDR source and
   `bins` is still the radio's frame, not the trace on screen.
-- `fftFrameSequence` tells two reads of the same frame apart.
 - A selector is required: `bins` without one is an error, and so is a selector
   that matches no pan.
 

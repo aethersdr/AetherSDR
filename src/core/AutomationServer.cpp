@@ -6046,6 +6046,11 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                 continue;
             }
             if (wantBins) {
+                // The widget refuses while the frame's geometry is not settled.
+                const QString refusal = snap.value(QStringLiteral("refusal")).toString();
+                if (!refusal.isEmpty()) {
+                    return err(QStringLiteral("tracedebug bins: ") + refusal);
+                }
                 return QJsonObject{{QStringLiteral("ok"), true},
                                    {QStringLiteral("model"), model},
                                    {QStringLiteral("property"), property},

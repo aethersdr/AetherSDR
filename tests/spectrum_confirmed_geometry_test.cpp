@@ -2,6 +2,7 @@
 #include "TestSettingsProfile.h"
 #include "FlexSquelchBridgeFixture.h"
 #include "gui/SpectrumWidget.h"
+#include "gui/SpectrumTraceBins.h"
 #include "gui/VfoWidget.h"
 #include "gui/SpectrumOverlayMenu.h"
 #include "gui/MainWindowHelpers.h"
@@ -106,6 +107,9 @@ struct SpectrumOffscreenTestAccess {
                              QPointF globalPos) {
         widget.applyAnchoredZoom(bandwidthFactor, globalPos);
     }
+    static void finishZoomSettle(SpectrumWidget& widget) {
+        widget.finishFrequencyRangeSettleUpdate();
+    }
 };
 }
 namespace AetherSDR::rtl {
@@ -178,6 +182,135 @@ int runPanPixelsAtRetinaScale()
     check(panXpixelsFor(&pan) == 3840, "pan pixels: a 2560-point pan (a 5K screen's full width) is capped at 3840");
     return failures ? 1 : 0;
 }
+
+// `get tracedebug <pan> bins` (#5806): the widget hands out the last frame as
+// it arrived, with the geometry it arrived under, and refuses while a pan or
+// zoom has not been followed by kSettledFrames frames.
+int runTraceBins()
+{
+    int failures = 0;
+    const auto check = [&](bool ok, const char* name) {
+        std::printf("[%s] %s\n", ok ? "OK" : "FAIL", name);
+        failures += !ok;
+    };
+    constexpr int kSettled = static_cast<int>(SpectrumTraceBins::FrameCapture::kSettledFrames);
+    int frameNo = 0;
+    // Each frame distinct and sloped, so a reprojected copy cannot equal it.
+    const auto frame = [&frameNo]() {
+        ++frameNo;
+        QVector<float> bins(256);
+        for (int i = 0; i < bins.size(); ++i) {
+            bins[i] = -130.0f + 0.1f * static_cast<float>(i) + static_cast<float>(frameNo);
+        }
+        bins[64] = -40.0f - static_cast<float>(frameNo);
+        return bins;
+    };
+    const auto refusal = [](const QVariantMap& m) {
+        return m.value(QStringLiteral("refusal")).toString();
+    };
+    const auto sameBins = [](const QVariantMap& m, const QVector<float>& want) {
+        const QVariantList got = m.value(QStringLiteral("bins")).toList();
+        if (got.size() != want.size()) {
+            return false;
+        }
+        for (int i = 0; i < want.size(); ++i) {
+            if (got.at(i).toDouble() != static_cast<double>(want.at(i))) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto nearHz = [](double a, double b) { return std::abs(a - b) < 1e-3; };
+
+    SpectrumWidget w;
+    w.resize(1000, 600);
+    w.setFrequencyRangeImmediate(14.100, 0.200);
+    check(refusal(w.traceBinsSnapshot()).contains(QLatin1String("no frame")),
+          "trace bins: refused before any frame");
+
+    QVector<float> last;
+    for (int i = 0; i < kSettled; ++i) {
+        last = frame();
+        w.updateSpectrum(last);
+    }
+    QVariantMap m = w.traceBinsSnapshot();
+    check(refusal(m).isEmpty() && sameBins(m, last),
+          "trace bins (a): settled frames are returned exactly as fed");
+    check(nearHz(m.value(QStringLiteral("centerHz")).toDouble(), 14'100'000.0)
+              && nearHz(m.value(QStringLiteral("spanHz")).toDouble(), 200'000.0)
+              && m.value(QStringLiteral("ageMs")).toLongLong() >= 0,
+          "trace bins (a): with the ingest geometry and a frame age");
+
+    // (b) A radio-echo zoom: setFrequencyRangeImmediate reprojects m_bins.
+    w.setFrequencyRangeImmediate(14.100, 0.100);
+    m = w.traceBinsSnapshot();
+    check(!refusal(m).isEmpty(), "trace bins (b): refused right after a zoom, before any new frame");
+    for (int i = 0; i < kSettled - 1; ++i) {
+        last = frame();
+        w.updateSpectrum(last);
+        check(!refusal(w.traceBinsSnapshot()).isEmpty(),
+              "trace bins (b): refused while fewer than kSettledFrames frames followed the zoom");
+    }
+    last = frame();
+    w.updateSpectrum(last);
+    m = w.traceBinsSnapshot();
+    check(refusal(m).isEmpty() && sameBins(m, last)
+              && nearHz(m.value(QStringLiteral("spanHz")).toDouble(), 100'000.0),
+          "trace bins (b): the kSettledFrames-th frame after the zoom is returned as fed, at the new span");
+
+    // (b) A centre-only snap (a large pan): m_bins is reprojected, not replaced.
+    w.setFrequencyRangeImmediate(14.160, 0.100);
+    check(!refusal(w.traceBinsSnapshot()).isEmpty(),
+          "trace bins (b): refused right after a large pan");
+    for (int i = 0; i < kSettled; ++i) {
+        last = frame();
+        w.updateSpectrum(last);
+    }
+    m = w.traceBinsSnapshot();
+    check(refusal(m).isEmpty() && sameBins(m, last)
+              && nearHz(m.value(QStringLiteral("centerHz")).toDouble(), 14'160'000.0),
+          "trace bins (b): settled again after the pan, at the new centre");
+
+    // (b) A local anchored zoom (trackpad/pinch path): in progress until it settles.
+    const QPointF anchor(w.mapToGlobal(QPoint(w.width() / 2, w.height() / 2)));
+    SpectrumOffscreenTestAccess::anchoredZoom(w, 1.5, anchor);
+    check(!refusal(w.traceBinsSnapshot()).isEmpty(),
+          "trace bins (b): refused during a local zoom gesture");
+    SpectrumOffscreenTestAccess::finishZoomSettle(w);
+    for (int i = 0; i < kSettled - 1; ++i) {
+        w.updateSpectrum(frame());
+    }
+    check(!refusal(w.traceBinsSnapshot()).isEmpty(),
+          "trace bins (b): refused after the gesture until kSettledFrames frames");
+    last = frame();
+    w.updateSpectrum(last);
+    m = w.traceBinsSnapshot();
+    check(refusal(m).isEmpty() && sameBins(m, last),
+          "trace bins (b): returned once the gesture's frames settled");
+
+    // (c) A pan-follow nudge animates the centre.
+    const double center = w.centerMhz();
+    w.setFrequencyRange(center + w.bandwidthMhz() * 0.05, w.bandwidthMhz());
+    check(refusal(w.traceBinsSnapshot()).contains(QLatin1String("animation")),
+          "trace bins (c): refused while the pan animation runs");
+    for (int i = 0; i < kSettled; ++i) {
+        w.updateSpectrum(frame());
+    }
+    check(refusal(w.traceBinsSnapshot()).contains(QLatin1String("animation")),
+          "trace bins (c): frames during the animation do not end the refusal");
+    wait(400);
+    check(!refusal(w.traceBinsSnapshot()).isEmpty(),
+          "trace bins (c): refused after the animation lands until new frames arrive");
+    for (int i = 0; i < kSettled; ++i) {
+        last = frame();
+        w.updateSpectrum(last);
+    }
+    m = w.traceBinsSnapshot();
+    check(refusal(m).isEmpty() && sameBins(m, last)
+              && nearHz(m.value(QStringLiteral("centerHz")).toDouble(), w.centerMhz() * 1e6),
+          "trace bins (c): returned after the animation at the landed centre");
+    return failures ? 1 : 0;
+}
 }
 
 int main(int argc, char** argv)
@@ -189,6 +322,9 @@ int main(int argc, char** argv)
     }
     if (app.arguments().contains(QStringLiteral("--pan-pixels-retina"))) {
         return runPanPixelsAtRetinaScale();
+    }
+    if (app.arguments().contains(QStringLiteral("--trace-bins"))) {
+        return runTraceBins();
     }
     int failures = 0;
     const auto check = [&](bool ok, const char* name) {

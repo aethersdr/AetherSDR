@@ -1817,13 +1817,29 @@ QVariantMap SpectrumWidget::automationDisplaySettingsSnapshot() const
     return snap;
 }
 
+bool SpectrumWidget::traceGeometryInFlight() const
+{
+    return m_draggingPan || m_draggingBandwidth || m_panDragPendingCenterValid
+        || m_frequencyRangeSettlePending || m_frequencyRangeCommandThrottle.hasPending();
+}
+
 QVariantMap SpectrumWidget::traceBinsSnapshot() const
 {
-    // m_bins: the last decoded radio frame, before display smoothing and the
-    // pan-edge crop. During a Flex dBm range release it may hold rebased bins.
-    // It stays the radio's frame while a Kiwi source is displayed.
-    QVariantMap m = SpectrumTraceBins::snapshot(m_bins, m_centerMhz, m_bandwidthMhz,
-                                                m_fftFrameSequence);
+    // The last decoded radio frame as received (never smoothed, reprojected or
+    // cropped) with the geometry shown when it arrived, or a refusal while
+    // that geometry cannot be trusted. It stays the radio's frame while a
+    // Kiwi source is displayed.
+    const bool panAnimationRunning =
+        m_panCenterAnim && m_panCenterAnim->state() != QAbstractAnimation::Stopped;
+    const QString refusal = m_traceCapture.refusal(m_centerMhz, m_bandwidthMhz,
+                                                   panAnimationRunning,
+                                                   traceGeometryInFlight());
+    QVariantMap m;
+    if (refusal.isEmpty()) {
+        m = m_traceCapture.snapshot();
+    } else {
+        m[QStringLiteral("refusal")] = refusal;
+    }
     m[QStringLiteral("panIndex")] = m_panIndex;
     m[QStringLiteral("name")] = objectName();
     m[QStringLiteral("kiwiWaterfallActive")] = m_kiwiSdrWaterfallActive;
@@ -1987,6 +2003,14 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     theme::setContainer(this, QStringLiteral("spectrum"));
 
     m_panStats.clock.start();  // panstats rates are meaningless without an epoch
+
+    // A requested range can reach the radio before the widget shows it.
+    connect(this, &SpectrumWidget::frequencyRangeChangeRequested, this,
+            [this](double, double) { noteTraceGeometryChange(); });
+    connect(this, &SpectrumWidget::centerChangeRequested, this,
+            [this](double) { noteTraceGeometryChange(); });
+    connect(this, &SpectrumWidget::edgePanTuneRequested, this,
+            [this](double, double) { noteTraceGeometryChange(); });
 
     setMinimumHeight(100);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -2336,6 +2360,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         }
         m_centerMhz = newCenter;
         m_bandwidthMhz = newBw;
+        noteTraceGeometryChange();
         resetNoiseFloorBaseline();
         if (previewed) {
             scheduleFrequencyPreviewFrame();
@@ -7939,6 +7964,7 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
 
     if (bwChanged) {
         m_bandwidthMhz = bandwidthMhz;
+        noteTraceGeometryChange();
     }
 
     if (largeShift || !animateSmallNudges) {
@@ -7965,6 +7991,7 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
         }
         m_centerMhz       = centerMhz;
         m_panCenterTarget = centerMhz;
+        noteTraceGeometryChange();
         resetNoiseFloorBaseline();
         if (m_radioOwnsDbmScale && !m_panBinsAbsolute && !m_kiwiSdrWaterfallActive) {
             prepareForFftScaleChange();
@@ -8017,11 +8044,13 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
         connect(m_panCenterAnim, &QVariantAnimation::valueChanged, this,
             [this](const QVariant& v) {
                 m_centerMhz = v.toDouble();
+                noteTraceGeometryChange();
                 markOverlayDirty();
             });
         connect(m_panCenterAnim, &QVariantAnimation::finished, this,
             [this]() {
                 m_centerMhz = m_panCenterTarget;  // land exactly on target
+                noteTraceGeometryChange();
                 markOverlayDirty();
             });
     }
@@ -8034,6 +8063,7 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
     m_panCenterAnim->setStartValue(m_centerMhz);
     m_panCenterAnim->setEndValue(centerMhz);
     m_panCenterAnim->setDuration(110);
+    noteTraceGeometryChange();
     m_panCenterAnim->start();
     emit frequencyRangeChanged(centerMhz, m_bandwidthMhz);
 }
@@ -8689,6 +8719,9 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm, const Spectru
             }
         }
     }
+
+    m_traceCapture.ingest(binsDbm, m_fftFrameSequence, m_centerMhz, m_bandwidthMhz,
+                          spectrumBins == &adjustedBins);
 
     if (m_resetFftSmoothingOnNextFrame || !m_clientFftSmoothing) {
         m_smoothed = *spectrumBins;
@@ -10442,6 +10475,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                     [this, freq = so.freqMhz]{
                         if (!panGeometryConfirmationRequired()) {
                             m_centerMhz = freq;
+                            noteTraceGeometryChange();
                             markOverlayDirty();
                         }
                         emit centerChangeRequested(freq);
@@ -10904,6 +10938,7 @@ void SpectrumWidget::edgePanVelocityStep()
     if (!panGeometryConfirmationRequired()) {
         reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, m_bandwidthMhz);
         m_centerMhz = newCenter;
+        noteTraceGeometryChange();
         markOverlayDirty();
     }
 
@@ -11046,6 +11081,7 @@ void SpectrumWidget::applyPanDragCenter(double newCenterMhz, bool force)
         }
 
         m_centerMhz = newCenterMhz;
+        noteTraceGeometryChange();
         if (previewed) {
             scheduleFrequencyPreviewFrame();
         } else {
@@ -11329,6 +11365,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         }
         m_bandwidthMhz = newBw;
         m_centerMhz = zoomCenter;
+        noteTraceGeometryChange();
         resetNoiseFloorBaseline();
         if (previewed) {
             scheduleFrequencyPreviewFrame();
@@ -12098,6 +12135,7 @@ bool SpectrumWidget::applyAnchoredZoom(double bandwidthFactor,
     }
     m_bandwidthMhz = newBw;
     m_centerMhz = newCenter;
+    noteTraceGeometryChange();
     resetNoiseFloorBaseline();
     if (previewed) {
         scheduleFrequencyPreviewFrame();
@@ -12298,6 +12336,7 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
         }
         m_centerMhz    = newCenter;
         m_bandwidthMhz = newBw;
+        noteTraceGeometryChange();
         resetNoiseFloorBaseline();
         if (previewed) {
             scheduleFrequencyPreviewFrame();
