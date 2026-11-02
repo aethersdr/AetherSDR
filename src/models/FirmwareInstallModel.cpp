@@ -232,14 +232,17 @@ bool FirmwareInstallModel::busy() const
 bool FirmwareInstallModel::otherControllerOnly() const
 {
     if (m_device != Device::None || busy() || !m_relay
-        || m_relay->transport() != Ctr2ProxyModel::Transport::Usb)
+        || m_relay->transport() != Ctr2ProxyModel::Transport::Usb) {
         return false;
+    }
     const QString selected = m_relay->usbDevicePath();
-    if (selected.isEmpty())
+    if (selected.isEmpty()) {
         return false;
+    }
     for (const Ctr2HidPort::DeviceInfo& d : m_hid()) {
-        if (d.path == selected)
+        if (d.path == selected) {
             return !d.ctr2Model().isEmpty();
+        }
     }
     return false;
 }

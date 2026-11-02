@@ -416,9 +416,10 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
         connect(m_model, &Ctr2ProxyModel::firmwareVersionChanged, this,
                 &FirmwareInstallDialog::syncDevice);
     // Its device list and selection decide whether the CTR2-Max part shows.
-    if (m_model)
+    if (m_model) {
         connect(m_model, &Ctr2ProxyModel::configurationChanged, this,
                 &FirmwareInstallDialog::syncMaxPart);
+    }
 
     // Every button at its full height: squeezed, the sheet's fixed padding
     // clips its label. The window's minimum height follows, so it opens (and
@@ -659,18 +660,26 @@ void FirmwareInstallDialog::syncDevice()
 void FirmwareInstallDialog::syncMaxPart()
 {
     const bool show = !m_fw->otherControllerOnly();
-    if (m_maxPart->isVisibleTo(this) == show)
+    if (m_maxPart->isVisibleTo(this) == show) {
         return;
+    }
     m_maxPart->setVisible(show);
-    if (isVisible())
+    if (isVisible()) {
         fitHeight();
+    }
 }
 
 // Shorter with the CTR2-Max part hidden; with it, tall enough for all of it.
+// The body's layout first: until it settles, the body keeps the minimum height
+// it had with the part shown, and that would hold the window at its old size.
 void FirmwareInstallDialog::fitHeight()
 {
-    if (QLayout* l = layout())
-        l->activate();
+    if (QLayout* body = bodyWidget()->layout()) {
+        body->activate();
+    }
+    if (QLayout* window = layout()) {
+        window->activate();
+    }
     const int fit = sizeHint().height();
     resize(width(), m_maxPart->isVisibleTo(this) ? qMax(height(), fit) : fit);
 }
