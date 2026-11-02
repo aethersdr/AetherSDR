@@ -133,6 +133,9 @@ public:
     ReceiveDispatch requestMemory(const MemoryRequest& request,
                                   const RadioControlCompletion& completion = {},
                                   const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestWaveformEnv(const WaveformEnvRequest& request,
+                                       const RadioControlCompletion& completion = {},
+                                       const RadioControlFence& current = {}) override;
     ReceiveDispatch requestUsbCable(const UsbCableRequest& request) override;
     ReceiveDispatch requestTransverter(const TransverterRequest& request,
                                        const RadioSetupCompletion& completion = {}) override;

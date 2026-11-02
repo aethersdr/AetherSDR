@@ -92,7 +92,7 @@ inline QString radioVoiceKeyerUnavailableReason(bool hasVoiceKeyer,
         return QStringLiteral("not available on this radio");
     }
     if (radioRefused || (licenseSeen && !licenseEnabled)) {
-        return QStringLiteral("requires an active SmartSDR+ subscription");
+        return QStringLiteral("not licensed on this radio (SmartSDR+)");
     }
     return QString();
 }
@@ -100,12 +100,14 @@ inline QString radioVoiceKeyerUnavailableReason(bool hasVoiceKeyer,
 // Tooltip for the DVK indicator. Names the SmartSDR+ requirement directly
 // rather than FlexLib's "Subscribe…" copy. FlexLib gates DVK on the
 // subscription Feature record and a FLEX-8600 on fw 4.2.18 reports
-// `reason=PLUS`, so `reason` is not branched on.
+// `reason=PLUS`, so `reason` is not branched on. It says the radio is not
+// licensed, never that the subscription must be active: a lapsed subscriber
+// keeps every feature released before the expiration (LicenseEntitlement.h).
 inline QString dvkIndicatorTooltip(DvkIndicatorBlocker blocker)
 {
     if (blocker == DvkIndicatorBlocker::NotLicensed) {
         return QStringLiteral(
-            "Digital Voice Keyer — requires an active SmartSDR+ subscription");
+            "Digital Voice Keyer — not licensed on this radio (SmartSDR+)");
     }
     return QStringLiteral("Digital Voice Keyer — click to toggle");
 }

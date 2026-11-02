@@ -38,6 +38,7 @@
 #include "core/backends/PanControlRequest.h"
 #include "core/backends/SlicePresetRequest.h"
 #include "core/backends/ProfileRequest.h"
+#include "core/backends/WaveformEnvRequest.h"
 #include "core/backends/MemoryRequest.h"
 #include "core/backends/SliceLifecycleRequest.h"
 #include "core/backends/RestoredRadioState.h"
@@ -249,6 +250,13 @@ public:
     virtual ReceiveDispatch requestMemory(const MemoryRequest&,
                                           const RadioControlCompletion& = {},
                                           const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    // One step of a waveform container environment change. Gated by
+    // capabilities().waveformEnvControl; the radio's container status is the only
+    // confirmation of what the environment became.
+    virtual ReceiveDispatch requestWaveformEnv(const WaveformEnvRequest&,
+                                               const RadioControlCompletion& = {},
+                                               const RadioControlFence& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestUsbCable(const UsbCableRequest&)
     { return ReceiveDispatch::Unsupported; }

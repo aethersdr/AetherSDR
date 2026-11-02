@@ -90,10 +90,12 @@ static void check(bool ok, const char* message)
 {
     if (!ok) { ++failures; std::fprintf(stderr, "FAIL: %s\n", message); }
 }
+// Allow sanitizer overhead while bounding failures. Every wait returns
+// as soon as its predicate holds; none expects a timeout.
 template<class F> static bool waitFor(F predicate)
 {
     QElapsedTimer timer; timer.start();
-    while (!predicate() && timer.elapsed() < 5000) {
+    while (!predicate() && timer.elapsed() < 30000) {
         QCoreApplication::processEvents(); QThread::msleep(2);
     }
     return predicate();
