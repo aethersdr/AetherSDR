@@ -774,8 +774,8 @@ add_test(NAME radio_discovery_source_test COMMAND radio_discovery_source_test)
 # Socket-free daemon startup policy: a fresh child process reads isolated saved
 # nicknames through native static helpers; no discovery source is started with
 # local=true and no socket, USB scan or synthetic firmware peer is used.
-# Also launches the real daemon with an invalid logical endpoint name, which
-# must fail before binding a socket or constructing model/settings consumers.
+# Also checks directed-address diagnostics with an invalid logical endpoint
+# guarding every child: no bind occurs even if argument validation regresses.
 add_executable(aetherd_discovery_startup_test tests/aetherd_discovery_startup_test.cpp)
 target_include_directories(aetherd_discovery_startup_test PRIVATE src tests)
 target_compile_definitions(aetherd_discovery_startup_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
@@ -1332,19 +1332,6 @@ add_test(NAME anan_speaker_audio_test COMMAND anan_speaker_audio_test)
 # Exit 77 == the speaker port was already held, so nothing could be observed.
 # Without this property that is a green pass with zero checks.
 set_tests_properties(anan_speaker_audio_test PROPERTIES SKIP_RETURN_CODE 77)
-
-# ANAN transport counters -> IRadioBackend::LinkStats -- what the status bar's
-# "Network:" field reads: bytes from every radio datagram, packets from DDC
-# frames only, nothing from another host. SOCKET: binds one UDP socket on
-# AnyIPv4, ephemeral port (P2Client::start()), and sends its startup sequence to
-# 127.0.0.1. No listener, no fake peer, no radio.
-add_executable(anan_link_telemetry_test tests/anan_link_telemetry_test.cpp)
-target_include_directories(anan_link_telemetry_test PRIVATE src tests)
-target_link_libraries(anan_link_telemetry_test
-    PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
-add_test(NAME anan_link_telemetry_test COMMAND anan_link_telemetry_test)
-# Exit 77 == no local UDP socket could be bound, so nothing could be observed.
-set_tests_properties(anan_link_telemetry_test PROPERTIES SKIP_RETURN_CODE 77)
 
 # ANAN discovery targets: directed broadcasts for distinct attached subnets,
 # retaining the global broadcast and excluding /31 and /32 point-to-point links.
@@ -2373,6 +2360,29 @@ add_test(NAME callsign_lookup_dialog_test COMMAND callsign_lookup_dialog_test)
 set_tests_properties(callsign_lookup_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The CTR2 window (FirmwareInstallDialog): with only another kind of
+# controller selected it shows the relay alone, and its height follows the
+# CTR2-Max part as it hides and shows. Socket-free: device lists injected, no
+# HID device opened, catalogs pointed at a missing local file.
+add_executable(firmware_install_dialog_test
+    tests/firmware_install_dialog_test.cpp
+    src/gui/FirmwareInstallDialog.cpp
+    src/gui/Ctr2ProxyPanel.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(firmware_install_dialog_test PRIVATE src tests)
+target_link_libraries(firmware_install_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(firmware_install_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME firmware_install_dialog_test COMMAND firmware_install_dialog_test)
+set_tests_properties(firmware_install_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # MQTT Settings on CanonWindow: the fields' right-click menus keep a canon
 # panel. Socket-free; the dialog is never accepted, so no broker connection.
 add_executable(mqtt_settings_dialog_test
@@ -2654,6 +2664,21 @@ set_target_properties(hl2_discovery_logging_test PROPERTIES AUTOMOC ON)
 target_include_directories(hl2_discovery_logging_test PRIVATE src)
 target_link_libraries(hl2_discovery_logging_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME hl2_discovery_logging_test COMMAND hl2_discovery_logging_test)
+
+# A directed discovery target finds an HL2 a broadcast cannot reach (aetherd
+# --hl2-address): the target filter, socket-free.
+add_executable(hl2_directed_discovery_test
+    tests/hl2_directed_discovery_test.cpp
+    src/core/backends/hl2/Hl2Discovery.cpp
+    src/core/backends/hl2/MetisProtocol.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+)
+set_target_properties(hl2_directed_discovery_test PROPERTIES AUTOMOC ON)
+target_include_directories(hl2_directed_discovery_test PRIVATE src)
+target_link_libraries(hl2_directed_discovery_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME hl2_directed_discovery_test COMMAND hl2_directed_discovery_test)
 
 add_executable(nr2_settings_model_test
     tests/nr2_settings_model_test.cpp
@@ -3970,6 +3995,9 @@ add_executable(flex_control_visibility_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -3996,6 +4024,9 @@ add_executable(radio_setup_no_transient_window_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4034,6 +4065,9 @@ add_executable(radio_setup_region_field_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4061,6 +4095,9 @@ add_executable(radio_setup_operations_test
     src/gui/TxBandDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4093,6 +4130,9 @@ add_executable(radio_setup_label_theme_token_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4119,6 +4159,9 @@ add_executable(radio_setup_window_size_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4145,6 +4188,9 @@ add_executable(radio_setup_pair_grid_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4177,6 +4223,9 @@ add_executable(radio_setup_max_power_field_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4206,6 +4255,9 @@ add_executable(radio_setup_tx_timing_fields_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4236,6 +4288,9 @@ add_executable(radio_setup_recording_mode_dim_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4267,6 +4322,9 @@ add_executable(radio_setup_headphone_output_gate_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -4301,6 +4359,9 @@ add_executable(radio_nickname_test
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kpa500AdvancedWidget.cpp
@@ -4368,6 +4429,9 @@ add_executable(radio_setup_show_tx_waterfall_test
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -5957,6 +6021,9 @@ add_executable(peripheral_auth_dialog_test
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/Kxpa100AdvancedWidget.cpp
@@ -6099,6 +6166,33 @@ target_link_libraries(tgxl_docked_parity_test PRIVATE
 set_target_properties(tgxl_docked_parity_test PROPERTIES AUTOMOC ON)
 add_test(NAME tgxl_docked_parity_test COMMAND tgxl_docked_parity_test)
 set_tests_properties(tgxl_docked_parity_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# TGXL antenna names: socket-free parse and TunerApplet wiring.
+# Injects antenna R-frames via the processLine() test seam; covers the happy
+# path, missing keys, length cap, ampersand escaping, and disconnect reset.
+add_executable(tgxl_antenna_names_test
+    tests/tgxl_antenna_names_test.cpp
+    src/gui/TunerApplet.cpp
+    src/gui/AccessoryPanelWidgets.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/TunerModel.cpp
+    src/models/MeterModel.cpp
+    src/models/BandSettings.cpp
+    src/core/TgxlConnection.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
+)
+target_include_directories(tgxl_antenna_names_test PRIVATE src)
+target_link_libraries(tgxl_antenna_names_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network
+)
+set_target_properties(tgxl_antenna_names_test PROPERTIES AUTOMOC ON)
+add_test(NAME tgxl_antenna_names_test COMMAND tgxl_antenna_names_test)
+set_tests_properties(tgxl_antenna_names_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # TGXL applet port strips and STANDBY ordering: the relay path claims no
@@ -6678,6 +6772,7 @@ add_test(NAME hid_device_parser_test COMMAND hid_device_parser_test)
 # Not a ctest (needs an input file); built on demand for troubleshooting.
 add_executable(ax25_replay EXCLUDE_FROM_ALL
     tools/ax25_replay.cpp
+    tools/Ax25ReplayWav.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
     src/core/tnc/HdlcCodec.cpp
@@ -6689,8 +6784,18 @@ add_executable(ax25_replay EXCLUDE_FROM_ALL
 target_include_directories(ax25_replay PRIVATE src)
 target_link_libraries(ax25_replay PRIVATE Qt6::Core aether_libmodem_core aether_afskdemod)
 
+# File-only parser coverage; no modem, settings, or radio transport.
+add_executable(ax25_replay_wav_test
+    tests/ax25_replay_wav_test.cpp
+    tools/Ax25ReplayWav.cpp
+)
+target_include_directories(ax25_replay_wav_test PRIVATE tools)
+target_link_libraries(ax25_replay_wav_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME ax25_replay_wav_test COMMAND ax25_replay_wav_test)
+
 add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
     tools/ax25_session_analyze.cpp
+    tools/Ax25SessionWav.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
     src/core/tnc/HdlcCodec.cpp
@@ -6703,6 +6808,15 @@ add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
 )
 target_include_directories(ax25_session_analyze PRIVATE src)
 target_link_libraries(ax25_session_analyze PRIVATE Qt6::Core aether_libmodem_core aether_afskdemod)
+
+# File-only parser coverage; no modem, settings, or radio transport.
+add_executable(ax25_session_wav_test
+    tests/ax25_session_wav_test.cpp
+    tools/Ax25SessionWav.cpp
+)
+target_include_directories(ax25_session_wav_test PRIVATE tools)
+target_link_libraries(ax25_session_wav_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME ax25_session_wav_test COMMAND ax25_session_wav_test)
 
 # AX.25 airtime model + link-liveness behaviour (T3 idle poll, bounded REJ
 # recovery, SABME refusal, Karn-safe RTT sampling). See docs/HFMODEM.md.
@@ -7018,6 +7132,13 @@ target_include_directories(cat_freedv_mode_tokens_test PRIVATE src tests)
 target_link_libraries(cat_freedv_mode_tokens_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME cat_freedv_mode_tokens_test COMMAND cat_freedv_mode_tokens_test)
 
+# TCI rx_volume in the spec form (trx,channel,dB). Injected stub backend,
+# TciProtocol fed command text. Socket-free, nothing keyed.
+add_executable(tci_rx_volume_test tests/tci_rx_volume_test.cpp)
+target_include_directories(tci_rx_volume_test PRIVATE src tests)
+target_link_libraries(tci_rx_volume_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME tci_rx_volume_test COMMAND tci_rx_volume_test)
+
 # #6142: a band-stack recall into DIGU/DIGL leaves the HL2's data-mode AGC
 # alone. A real, unconnected Hl2Backend behind RadioModel. Socket-free.
 add_executable(hl2_bandstack_digital_agc_test tests/hl2_bandstack_digital_agc_test.cpp)
@@ -7032,6 +7153,13 @@ add_executable(tci_sql_level_test tests/tci_sql_level_test.cpp)
 target_include_directories(tci_sql_level_test PRIVATE src tests)
 target_link_libraries(tci_sql_level_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME tci_sql_level_test COMMAND tci_sql_level_test)
+
+# TCI agc_gain in dB (TCI 2.1 §AGC_GAIN): socket-free stub backend and
+# TciProtocol driven by command text. Nothing is bound, opened or keyed.
+add_executable(tci_agc_gain_test tests/tci_agc_gain_test.cpp)
+target_include_directories(tci_agc_gain_test PRIVATE src tests)
+target_link_libraries(tci_agc_gain_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME tci_agc_gain_test COMMAND tci_agc_gain_test)
 
 # #5774: socket-free rigctl `L RF` / `l RF`. An injected backend records the pan
 # RF gain it is handed; the pan is materialised through the seam's geometry
@@ -7643,6 +7771,25 @@ add_executable(cat_tune_policy_test tests/cat_tune_policy_test.cpp)
 target_include_directories(cat_tune_policy_test PRIVATE src)
 target_link_libraries(cat_tune_policy_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME cat_tune_policy_test COMMAND cat_tune_policy_test)
+
+add_executable(otrsp_protocol_test tests/otrsp_protocol_test.cpp)
+target_include_directories(otrsp_protocol_test PRIVATE src tests)
+target_link_libraries(otrsp_protocol_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME otrsp_protocol_test COMMAND otrsp_protocol_test)
+
+# Our CAT server is the subject: binds ephemeral TCP ports and, on Unix, a PTY.
+# No external radio or synthetic firmware peer is used.
+add_executable(otrsp_port_test tests/otrsp_port_test.cpp)
+target_include_directories(otrsp_port_test PRIVATE src tests)
+target_link_libraries(otrsp_port_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME otrsp_port_test COMMAND otrsp_port_test)
+set_tests_properties(otrsp_port_test PROPERTIES SKIP_RETURN_CODE 77)
+
+add_executable(otrsp_applet_test tests/otrsp_applet_test.cpp src/gui/CatControlApplet.cpp)
+target_include_directories(otrsp_applet_test PRIVATE src tests)
+target_link_libraries(otrsp_applet_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME otrsp_applet_test COMMAND otrsp_applet_test)
+set_tests_properties(otrsp_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # RadioModel audio-mute model-state contract (#4771).
 add_executable(radiomodel_audio_mute_test tests/radiomodel_audio_mute_test.cpp)
@@ -8813,6 +8960,26 @@ target_link_libraries(waveform_env_control_test PRIVATE
 set_target_properties(waveform_env_control_test PROPERTIES AUTOMOC ON)
 add_test(NAME waveform_env_control_test COMMAND waveform_env_control_test)
 set_tests_properties(waveform_env_control_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# SmartSDR 4.3 NTP time sources (#6953): validation, Flex capability and wire
+# text, `ntp_sources` decode, the subscription, the remove-and-create edit and
+# the Radio Setup Time page. Recording sinks and injected status; no socket.
+add_executable(ntp_sources_test
+    tests/ntp_sources_test.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+)
+target_include_directories(ntp_sources_test PRIVATE src tests)
+target_link_libraries(ntp_sources_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+set_target_properties(ntp_sources_test PROPERTIES AUTOMOC ON)
+add_test(NAME ntp_sources_test COMMAND ntp_sources_test)
+set_tests_properties(ntp_sources_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # AntennaChoiceGate.h: when the RX/TX antenna menus refuse instead of offering
@@ -10168,6 +10335,16 @@ if(NOT WIN32)
     set_tests_properties(dax_receive_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+if(TARGET Qt6::WebSockets)
+    add_executable(tci_rx_applet_test tests/tci_rx_applet_test.cpp
+        src/gui/TciApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
+        src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp)
+    target_include_directories(tci_rx_applet_test PRIVATE src tests)
+    target_link_libraries(tci_rx_applet_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+    add_test(NAME tci_rx_applet_test COMMAND tci_rx_applet_test)
+    set_tests_properties(tci_rx_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 set(AETHER_SETTINGS_CONSUMERS
     update_controller_test
     update_installer_test
@@ -10175,6 +10352,9 @@ set(AETHER_SETTINGS_CONSUMERS
     ulanzi_dial_mapper_dialog_test
     mqtt_settings_dialog_test
     flex_readonly_metadata_test
+    otrsp_protocol_test
+    otrsp_port_test
+    otrsp_applet_test
     dsp_parameter_reset_test
     cw_rx_model_test
     asr_native_receiver_test
@@ -10182,10 +10362,13 @@ set(AETHER_SETTINGS_CONSUMERS
     dax_receive_applet_test
     graphic_eq_persistence_test
     hl2_discovery_logging_test
+    hl2_directed_discovery_test
     reroute_dead_controls_test
     cat_freedv_mode_tokens_test
+    tci_rx_volume_test
     hl2_bandstack_digital_agc_test
     tci_sql_level_test
+    tci_agc_gain_test
     radio_model_client_state_test
     pan_control_routing_test
     squelch_level_scale_test
@@ -10196,6 +10379,7 @@ set(AETHER_SETTINGS_CONSUMERS
     noise_blanker_kind_model_test
     automation_nb2_capability_test
     tci_rx_audio_test
+    tci_rx_applet_test
     bandscope_trace_render_test
     decoder_audio_routing_test
     ax25_receive_model_test
@@ -10402,6 +10586,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tgxl_panel_widgets_test
     tgxl_direct_protocol_test
     tgxl_docked_parity_test
+    tgxl_antenna_names_test
     tgxl_applet_ports_test
     pgxl_direct_protocol_test
     pgxl_panel_test

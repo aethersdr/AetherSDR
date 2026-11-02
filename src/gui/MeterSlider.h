@@ -54,8 +54,18 @@ public:
     }
 
     float gain() const { return m_gain; }
-    float level() const { return m_smooth.value(); }
+    float level() const {
+        if (!m_logarithmicLevel) { return m_smooth.value(); }
+        const float output = m_smooth.value() * m_gain;
+        return output > 0.0f
+            ? std::clamp((20.0f * std::log10(output) + 60.0f) / 60.0f, 0.0f, 1.0f) : 0.0f;
+    }
     bool isDragging() const { return m_dragging; }
+
+    void setLogarithmicLevelEnabled(bool enabled) {
+        m_logarithmicLevel = enabled;
+        update();
+    }
 
     void setDragValueFormatter(DragValueFormatter formatter) {
         m_dragValueFormatter = std::move(formatter);
@@ -68,21 +78,20 @@ public:
     }
 
     void setGain(float g) {
+        if (!std::isfinite(g)) { return; }
         g = std::clamp(g, 0.0f, 1.0f);
         if (g != m_gain) {
             m_gain = g;
-            // The level meter is drawn post-fader (level × gain), so a
-            // gain change must repaint to reflect the new effective
-            // output level immediately.
             update();
         }
     }
 
-    // Level is in [0, 1].  Target-only — the animation timer below
+    // Level is pre-fader linear amplitude in [0, 1]. Target-only — the animation timer below
     // interpolates the displayed bar toward this target with the
     // shared MeterSmoother ballistics, so high-rate setLevel() calls
     // from the audio thread don't twitch the bar.
     void setLevel(float l) {
+        if (!std::isfinite(l)) { l = 0.0f; }
         l = std::clamp(l, 0.0f, 1.0f);
         m_smooth.setTarget(l);
         if (!m_smooth.needsAnimation()) {
@@ -95,7 +104,7 @@ public:
     }
 
 signals:
-    void gainChanged(float gain);  // 0.0–1.0
+    void gainChanged(float gain);
 
 protected:
     void paintEvent(QPaintEvent*) override {
@@ -121,11 +130,7 @@ protected:
         p.setPen(borderColour);
         p.drawRect(rect().adjusted(0, 0, -1, -1));
 
-        // Level meter fill (behind the slider) — post-fader: the
-        // smoothed RMS is multiplied by the current gain so the bar
-        // reflects the actual output level rather than the raw input.
-        // Moving the fader gives immediate visual feedback.
-        const float lvl = m_smooth.value() * m_gain;
+        const float lvl = m_logarithmicLevel ? level() : m_smooth.value() * m_gain;
         if (lvl > 0.0f) {
             int fillW = static_cast<int>(lvl * barW);
             // Three-stop "level-meter heat": dim-accent at safe levels,
@@ -175,7 +180,7 @@ protected:
         if (delta != 0.0f) {
             float g = std::clamp(m_gain + delta, 0.0f, 1.0f);
             if (g != m_gain) {
-                m_gain = g;
+                setGain(g);
                 emit gainChanged(m_gain);
                 update();
             }
@@ -238,10 +243,9 @@ protected:
 
 private:
     void updateGainFromMouse(int x) {
-        float g = static_cast<float>(x - 1) / static_cast<float>(width() - 2);
-        g = std::clamp(g, 0.0f, 1.0f);
+        const float g = std::clamp(static_cast<float>(x - 1) / static_cast<float>(std::max(1, width() - 2)), 0.0f, 1.0f);
         if (g != m_gain) {
-            m_gain = g;
+            setGain(g);
             emit gainChanged(m_gain);
             update();
         }
@@ -273,6 +277,7 @@ private:
     }
 
     float         m_gain{0.5f};
+    bool          m_logarithmicLevel{false};
     MeterSmoother m_smooth;
     QTimer        m_animTimer;
     QElapsedTimer m_animElapsed;

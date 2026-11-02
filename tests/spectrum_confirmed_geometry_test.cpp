@@ -17,6 +17,7 @@
 #include <QPainter>
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QThread>
@@ -883,6 +884,68 @@ int main(int argc, char** argv)
         check(reqSpan < 0, "anchored zoom past max bandwidth is clamped (no request)");
         SpectrumOffscreenTestAccess::anchoredZoom(widget, 1.0e-9, anchor);  // past min
         check(reqSpan < 0, "anchored zoom past min bandwidth is clamped (no request)");
+    }
+    {
+        // #6883: while FFT frames present, a waterfall row and its scroll ride
+        // the next FFT present. If the stream stops right after, the deferred
+        // row and its finished scroll must still be presented. One FFT frame,
+        // one native row 5 ms later, then silence.
+        SpectrumWidget wf;
+        wf.resize(1000, 600);
+        wf.setFrequencyRangeImmediate(14.100, 0.200);
+        wf.show();
+        const auto pump = [](int ms) {
+            QElapsedTimer clock;
+            clock.start();
+            while (clock.elapsed() < ms) {
+                QApplication::processEvents(QEventLoop::AllEvents, 5);
+                QThread::msleep(1);
+            }
+        };
+        pump(150);
+        // Offscreen has no QRhi to size the waterfall; give it rows directly.
+        SpectrumOffscreenTestAccess::prepareHistory(wf);
+        struct PaintCounter : QObject {
+            int paints = 0;
+            bool eventFilter(QObject*, QEvent* event) override {
+                if (event->type() == QEvent::Paint) {
+                    ++paints;
+                }
+                return false;
+            }
+        } counter;
+        wf.setConnectionAnimationVisible(false);
+        pump(100);
+        wf.installEventFilter(&counter);
+        pump(300);
+        std::printf("fft_stop_idle_paints=%d\n", counter.paints);
+        check(counter.paints == 0, "the final-frame probe starts from an idle widget");
+        counter.paints = 0;
+        wf.updateSpectrum(QVector<float>(512, -100.0f));
+        pump(5);
+        wf.updateWaterfallRow(QVector<float>(1024, 100.0f), 14.0, 14.2, 1);
+        const int paintsAtRow = counter.paints;
+        {
+            const QVariantMap atRow = wf.automationDssSnapshot();
+            std::printf("fft_stop_at_row width=%d rows=%d history=%d write=%d animating=%d visible=%d\n",
+                        atRow.value(QStringLiteral("waterfallWidth")).toInt(),
+                        atRow.value(QStringLiteral("waterfallRows")).toInt(),
+                        atRow.value(QStringLiteral("waterfallHistoryRows")).toInt(),
+                        atRow.value(QStringLiteral("waterfallWriteRow")).toInt(),
+                        atRow.value(QStringLiteral("waterfallScrollAnimating")).toBool(),
+                        wf.isVisible());
+        }
+        pump(500);
+        const QVariantMap stats = wf.automationDssSnapshot();
+        std::printf("fft_stop_final_frame paintsAtRow=%d paintsAfter=%d rows=%d animating=%d\n",
+                    paintsAtRow, counter.paints,
+                    stats.value(QStringLiteral("waterfallHistoryRows")).toInt(),
+                    stats.value(QStringLiteral("waterfallScrollAnimating")).toBool());
+        check(stats.value(QStringLiteral("waterfallHistoryRows")).toInt() >= 1,
+              "the native row reached the waterfall");
+        check(counter.paints > paintsAtRow,
+              "a row deferred to the next FFT frame is still presented when the FFT stops");
+        wf.removeEventFilter(&counter);
     }
     return failures ? 1 : 0;
 }
