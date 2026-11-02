@@ -1382,6 +1382,8 @@ void RadioModel::setupBackend(const QString& family)
     });
     connect(m_backend.get(), &IRadioBackend::profileChanged, this,
             [this](const ProfileDelta& delta) { applyProfileChanges(delta); });
+    connect(m_backend.get(), &IRadioBackend::ntpSourceChanged, this,
+            [this](const NtpSourceDelta& delta) { applyNtpSourceChanges(delta); });
 
     // The PanadapterStream connects below exist only on Flex and Sim; a backend
     // carrying its own IQ has no m_panStream. Each is guarded individually, not by an
@@ -2235,6 +2237,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<MeterDef>();
     qRegisterMetaType<RadioDelta>();
     qRegisterMetaType<GpsDelta>();
+    qRegisterMetaType<NtpSourceDelta>();
     qRegisterMetaType<MemoryDelta>();
 
     // Watch both sides of the TX filter so a cut that silences the transmit
@@ -2323,6 +2326,7 @@ RadioModel::RadioModel(QObject* parent)
             &m_dstarModel, &DStarModel::handleWaveformStatus);
     connect(this, &RadioModel::capabilitiesChanged,
             this, &RadioModel::autoClearWaveformEnvironmentStaging);
+    connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::syncNtpSources);
     connect(&m_flexWaveformModel, &FlexWaveformModel::environmentChanged,
             this, &RadioModel::waveformContainersChanged);
     connect(&m_flexWaveformModel, &FlexWaveformModel::waveformsChanged, this, [this] {
@@ -9768,6 +9772,13 @@ void RadioModel::handleMessageReceived(const ParsedMessage& msg, quint64 gpsSess
     }
     if (body.startsWith("profile cw ")) {
         handleProfileStatusRaw("cw", body.mid(11));  // skip "profile cw "
+        return;
+    }
+
+    // Objects the Flex backend reads from the raw line itself (ntp_sources),
+    // from this session only.
+    if (m_flexBackend && gpsSessionGeneration == m_gpsSessionGeneration
+        && m_flexBackend->decodeRawStatus(body)) {
         return;
     }
 

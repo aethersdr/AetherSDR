@@ -796,6 +796,7 @@ connects).
 | `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
 | `daxtx` | — (optional property) | This client's DAX TX stream identity, observed ownership, media readiness, pending operation, and live refusal reasons — see [`get daxtx`](#get-daxtx) |
 | `waveforms` | — | installed legacy/Docker waveforms (each container with `environmentKeys`: its environment variable names, never their values), WFP state, local Digital Voice service/mode configuration and delivery metrics, raw radio `mode_list` values, duplicate counts, last maintenance response, and recent `waveform status` reports |
+| `ntp` | — (optional property) | the radio's own NTP time sources (SmartSDR 4.3.16, BigBend platform): `available` (the radio has them), `maxSources`, and `sources`, each with `id`, `address`, `directive` (server/pool/peer), `description`, `enabled`, `selected`, `inUse` (selected, or chrony state `selected`), `prefer`, `state` (raw chrony state), `stratum` and `reach` (−1 while unknown), and `updating` (an edit's remove-and-create is in flight; `enabled` is the radio's live value). Read-only; edits go through Radio Setup ▸ Time. |
 
 Read-only Flex metadata is available as `get radio` → `iaruRegion` (1–3 or
 `null`) and `get slice` / `get slices` → `chainMode` (bounded radio-reported

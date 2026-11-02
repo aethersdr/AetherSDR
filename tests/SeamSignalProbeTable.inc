@@ -42,6 +42,7 @@ AETHER_SEAM_PROBE(memoryRefreshStarted);
 AETHER_SEAM_PROBE(memoryRefreshProgress);
 AETHER_SEAM_PROBE(memoryRefreshFinished);
 AETHER_SEAM_PROBE(profileChanged);
+AETHER_SEAM_PROBE(ntpSourceChanged);
 AETHER_SEAM_PROBE(meterDefined);
 AETHER_SEAM_PROBE(meterRemoved);
 AETHER_SEAM_PROBE(panCenterBandwidthChanged);

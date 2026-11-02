@@ -2872,6 +2872,7 @@ const QStringList& getModelNames()
         QStringLiteral("display"),
         QStringLiteral("waveforms"),
         QStringLiteral("daxtx"),
+        QStringLiteral("ntp"),
         QStringLiteral("kiwi"),
     };
     return kModels;
@@ -6252,6 +6253,30 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             return err(QStringLiteral("get daxtx takes no selector; stream identity is fixed to this client"));
         }
         data = radio->daxTxOwnershipSnapshot();
+    } else if (model == QLatin1String("ntp")) {
+        // The radio's own NTP time sources as it last reported them (#6953).
+        const std::optional<RadioCapabilities::NtpSourceControl> control =
+            radio->backendCapabilities().ntpSourceControl;
+        QJsonArray sources;
+        for (const NtpSourceState& n : radio->ntpSources()) {
+            sources.append(QJsonObject{
+                {QStringLiteral("id"), n.id},
+                {QStringLiteral("address"), n.address},
+                {QStringLiteral("directive"), n.directive},
+                {QStringLiteral("description"), n.description},
+                {QStringLiteral("enabled"), n.enabled},
+                {QStringLiteral("selected"), n.selected},
+                {QStringLiteral("inUse"), n.inUse()},
+                {QStringLiteral("prefer"), n.prefer},
+                {QStringLiteral("state"), n.state},
+                {QStringLiteral("stratum"), n.stratum},
+                {QStringLiteral("reach"), n.reach},
+                {QStringLiteral("updating"), radio->ntpSourceReplaceActive(n.id)},
+            });
+        }
+        data = QJsonObject{{QStringLiteral("available"), control.has_value()},
+                           {QStringLiteral("maxSources"), control ? control->maxSources : 0},
+                           {QStringLiteral("sources"), sources}};
     } else if (model == QLatin1String("transmit")) {
         data = transmitSnapshot(&radio->transmitModel(),
                                 radio->backendCapabilities().hasDownwardExpander,
