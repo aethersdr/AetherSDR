@@ -132,6 +132,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: linux-disk-${{ github.job }}-${{ github.run_id }}
+          include-hidden-files: true
           path: |
             build/ci-disk-metrics.json
             build/.ninja_log
