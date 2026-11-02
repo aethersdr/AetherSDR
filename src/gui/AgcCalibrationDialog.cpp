@@ -315,6 +315,12 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     connect(&m_engine, &AgcTCalibrator::recommendation, this, &AgcCalibrationDialog::onRecommendation);
     connect(&m_engine, &AgcTCalibrator::quietSpotStatus, this, &AgcCalibrationDialog::onQuietSpot);
     connect(&m_engine, &AgcTCalibrator::finished, this, &AgcCalibrationDialog::onFinished);
+    connect(&m_engine, &AgcTCalibrator::noAudio, this, [this] {
+        // After onFinished(), which set "Calibration stopped." The sweep listens
+        // to this computer's audio, which PC Audio off stops; so can a stall,
+        // so ask rather than say.
+        m_recLabel->setText(tr("Stopped: no audio on this computer. Is PC Audio on?"));
+    });
 
     // Live audio level (cross-thread; auto-queued) and S-meter feed.
     if (m_audio) {

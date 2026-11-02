@@ -93,12 +93,18 @@ func TestProvisionedNodeRequiresToken(t *testing.T) {
 	if rec := call(t, h, "PUT", "/v1/allow", "192.168.1.10:5000", "", `{"allow":["tag:ops"]}`); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("allow without token: got %d", rec.Code)
 	}
+	// 0.5.0 keeps no access list: a list is refused even with the token,
+	// clearing one is accepted.
 	rec := call(t, h, "PUT", "/v1/allow", "192.168.1.10:5000", token, `{"allow":["tag:ops","kk7gwy@example.com"]}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("allow with token: got %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("list with token: got %d %s", rec.Code, rec.Body.String())
 	}
-	if got := n.Status().Allow; len(got) != 2 || got[0] != "tag:ops" {
-		t.Fatalf("allowlist not applied: %v", got)
+	rec = call(t, h, "PUT", "/v1/allow", "192.168.1.10:5000", token, `{"allow":[]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clearing with token: got %d %s", rec.Code, rec.Body.String())
+	}
+	if got := n.Status().Allow; len(got) != 0 {
+		t.Fatalf("a list was kept: %v", got)
 	}
 	if rec := call(t, h, "POST", "/v1/signout", "192.168.1.10:5000", "", ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("signout without token: got %d", rec.Code)

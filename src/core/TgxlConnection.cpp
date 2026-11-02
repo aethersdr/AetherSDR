@@ -3,6 +3,7 @@
 #include "TgxlConnection.h"
 #include "PeripheralAuthCode.h"
 #include "LogManager.h"
+#include <QRegularExpression>
 
 namespace AetherSDR {
 
@@ -402,17 +403,41 @@ void TgxlConnection::processLine(const QString& line)
         if (pipe2 >= 0) {
             QString body = line.mid(pipe2 + 1).trimmed();
             if (!body.isEmpty()) {
-                QMap<QString, QString> kvs;
-                const auto parts = body.split(' ', Qt::SkipEmptyParts);
-                for (const auto& part : parts) {
-                    int eq = part.indexOf('=');
-                    if (eq > 0)
-                        kvs.insert(part.left(eq), part.mid(eq + 1));
-                }
-                if (!kvs.isEmpty()) {
-                    m_pollInFlight = false;   // reply landed
-                    applyPollRateFor(kvs);
-                    emit statusUpdated(kvs);
+                // antenna name1=X name2=Y name3=Z  (3-way model, v1.2.41+)
+                if (body.startsWith(QStringLiteral("antenna "))) {
+                    QMap<QString, QString> kvs;
+                    const auto parts = body.mid(8).split(' ', Qt::SkipEmptyParts);
+                    for (const auto& part : parts) {
+                        int eq = part.indexOf('=');
+                        if (eq > 0) kvs.insert(part.left(eq), part.mid(eq + 1));
+                    }
+                    auto decode = [](const QString& s) {
+                        QString out = s;
+                        out.replace(QLatin1Char('_'), QLatin1Char(' '));
+                        // Device free text: strip C0 controls and Unicode bidi/format
+                        // characters before they reach the rest of the app (Principle VII).
+                        // TGXL firmware caps names at 8 characters; enforce the same
+                        // limit client-side so a misbehaving device cannot overflow the button.
+                        out.remove(QRegularExpression(QStringLiteral(
+                            "[\\x{0000}-\\x{001F}\\x{007F}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}]")));
+                        return out.trimmed().left(8);
+                    };
+                    emit antennaNamesChanged(decode(kvs.value(QStringLiteral("name1"))),
+                                             decode(kvs.value(QStringLiteral("name2"))),
+                                             decode(kvs.value(QStringLiteral("name3"))));
+                } else {
+                    QMap<QString, QString> kvs;
+                    const auto parts = body.split(' ', Qt::SkipEmptyParts);
+                    for (const auto& part : parts) {
+                        int eq = part.indexOf('=');
+                        if (eq > 0)
+                            kvs.insert(part.left(eq), part.mid(eq + 1));
+                    }
+                    if (!kvs.isEmpty()) {
+                        m_pollInFlight = false;   // reply landed
+                        applyPollRateFor(kvs);
+                        emit statusUpdated(kvs);
+                    }
                 }
             }
         }
@@ -462,6 +487,7 @@ void TgxlConnection::finishHandshake()
     m_authBlocked = false;
     m_authFailures = 0;
     sendCommand("info");
+    sendCommand("antenna read");  // 3-way custom antenna names (v1.2.41+)
     sendCommand("status");
     m_connected = true;
     m_pollTimer.start();

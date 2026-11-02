@@ -82,6 +82,33 @@ int main()
            gate(true, RadioPlatform::Microburst, false, false, false)
                == B::UnsupportedPlatform);
 
+    // ── Remote Access package: legacy waveform exactly where Docker can't go ──
+    report("Microburst -> native remote-access package",
+           remoteAccessUsesNativePackage(RadioPlatform::Microburst));
+    report("DeepEddy -> native remote-access package",
+           remoteAccessUsesNativePackage(RadioPlatform::DeepEddy));
+    report("BigBend -> container remote-access package",
+           !remoteAccessUsesNativePackage(RadioPlatform::BigBend));
+    report("DragonFire -> container remote-access package",
+           !remoteAccessUsesNativePackage(RadioPlatform::DragonFire));
+    // An unidentified radio stays on the container path, where the Docker
+    // gate holds it at "Checking" rather than guessing the legacy package.
+    report("Unknown -> container remote-access package",
+           !remoteAccessUsesNativePackage(RadioPlatform::Unknown));
+
+    // ── Radio health tools: a connected waveform radio on its own LAN ─────────
+    using H = RadioHealthBlocker;
+    report("health: connected waveform radio on the LAN -> None",
+           radioHealthBlocker(true, true, false, true) == H::None);
+    report("health: not connected wins",
+           radioHealthBlocker(false, true, false, true) == H::NotConnected);
+    report("health: a radio family without waveforms -> NoWaveforms",
+           radioHealthBlocker(true, false, false, true) == H::NoWaveforms);
+    report("health: SmartLink -> Remote, even with a private remembered address",
+           radioHealthBlocker(true, true, true, true) == H::Remote);
+    report("health: a non-LAN address (e.g. a tailnet) -> NotLan",
+           radioHealthBlocker(true, true, false, false) == H::NotLan);
+
     if (g_failed == 0) {
         std::printf("\nAll %d waveform-install-gate tests passed.\n", g_total);
         return 0;
