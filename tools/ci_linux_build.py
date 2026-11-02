@@ -37,9 +37,12 @@ def main():
             "sampling_interval_seconds": 0.25,
             "build_exit_code": status,
         }
-        Path("build").mkdir(exist_ok=True)
-        Path("build/ci-disk-metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
         print("CI_DISK_METRICS " + json.dumps(metrics), flush=True)
+        try:
+            Path("build").mkdir(exist_ok=True)
+            Path("build/ci-disk-metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
+        except OSError as error:
+            print(f"Could not save disk metrics: {error}", flush=True)
         subprocess.run(["df", "-B1", "."], check=False)
         subprocess.run(["du", "-sh", "build", "/ccache"], check=False)
     return status

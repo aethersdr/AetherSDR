@@ -4,6 +4,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
+
+import ci_linux_build
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -77,6 +80,25 @@ class TestCiDebugPolicy(unittest.TestCase):
         result, _, _ = self.configure(enabled=True, system="Darwin")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("uninstrumented Linux", result.stdout + result.stderr)
+
+
+class TestDiskFailureReporting(unittest.TestCase):
+    def test_full_disk_still_reports_metrics_and_build_failure(self):
+        child = MagicMock()
+        child.wait.return_value = 7
+        with (patch.object(Path, "read_text", return_value="1000"),
+              patch.object(Path, "mkdir"),
+              patch.object(Path, "write_text", side_effect=OSError(28, "No space left on device")),
+              patch.object(ci_linux_build, "available_bytes", side_effect=[900, 700, 650]),
+              patch.object(ci_linux_build.subprocess, "check_output", return_value="8"),
+              patch.object(ci_linux_build.subprocess, "Popen", return_value=child),
+              patch.object(ci_linux_build.subprocess, "run") as diagnostics,
+              patch("builtins.print") as output):
+            self.assertEqual(ci_linux_build.main(), 7)
+        report = output.call_args_list[0].args[0]
+        self.assertIn('"sampled_peak_growth_bytes": 350', report)
+        self.assertIn('"build_exit_code": 7', report)
+        self.assertEqual(diagnostics.call_count, 2)
 
 
 if __name__ == "__main__":
