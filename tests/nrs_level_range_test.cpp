@@ -315,7 +315,7 @@ private slots:
     {
         Fixture f;
         QVERIFY(f.init());
-        f.radio.handleSliceStatusForTest(1, sliceStatus());
+        applyFlexSliceStatus(f.radio, 1, sliceStatus());
         SliceModel* first = f.radio.slice(0);
         SliceModel* second = f.radio.slice(1);
         QVERIFY(first);
@@ -338,7 +338,7 @@ private slots:
         vfo.setSlice(second);
         QVERIFY(!nr->isChecked());
         for (const bool on : {true, false}) {
-            f.backend->decodeSliceStatus(1, {{QStringLiteral("nr"), on ? "1" : "0"}});
+            publishFlexSliceStatus(*f.backend, 1, {{QStringLiteral("nr"), on ? "1" : "0"}});
             QCOMPARE(nr->isChecked(), on);
             QVERIFY(firstRequests.isEmpty());
             QVERIFY(secondRequests.isEmpty());
