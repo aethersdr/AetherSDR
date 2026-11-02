@@ -29,7 +29,7 @@ kept on the macOS and Windows jobs because the claim each pins is about that
 platform's toolchain (Apple Metal, MSVC portability); the Linux job runs no
 tests, and the list does not grow. Every test declared in `tests.cmake` that
 the default configure builds runs unfiltered on every push to `main`
-(`full-suite.yml`) and weekly under the sanitizers (`sanitizers.yml`). (A test
+(`full-suite.yml`) and twice weekly under the sanitizers (`sanitizers.yml`). (A test
 behind a default-OFF option runs in neither unless that lane passes the
 option; say so in the PR.) `tools/check_ci_test_gate.py` runs in
 `Static checks` and fails the PR if a `-R` pattern in a pull-request workflow

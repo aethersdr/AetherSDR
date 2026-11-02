@@ -10,9 +10,13 @@
 #include "core/TailnetLinkTelemetry.h"
 #include "core/TailnetShimClient.h"
 #include "core/TailnetShimDownloader.h"
+#include "core/TailnetShimTokenStore.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 
 #include <QJsonArray>
@@ -58,8 +62,9 @@ int main(int argc, char** argv)
 
     const QByteArray provisioned = R"({"admin_token":"abc123","status":)" + running + "}";
     const auto pr = tailnetshim::parseProvisionReply(provisioned);
-    ok &= expect(pr.has_value() && pr->first == QStringLiteral("abc123")
-                 && pr->second.state == QStringLiteral("running"), "provision reply parses");
+    ok &= expect(pr.has_value() && pr->adminToken == QStringLiteral("abc123")
+                 && pr->status.state == QStringLiteral("running") && pr->authUrl.isEmpty(),
+                 "provision reply parses");
     ok &= expect(!tailnetshim::parseProvisionReply(running).has_value(),
                  "provision reply without a token is rejected");
 
@@ -96,6 +101,125 @@ int main(int argc, char** argv)
                  "provision body has exactly the API's fields");
     ok &= expect(body.value(QStringLiteral("auth_key")).toString()
                  == QStringLiteral("tskey-auth-k123"), "auth key trimmed");
+
+    // Sign-in by QR code (shim 0.5.0): no key in the body, a URL in the reply.
+    {
+        const QJsonObject qrBody = QJsonDocument::fromJson(tailnetshim::provisionBody(
+            QStringLiteral("  "), QStringLiteral("flex-8600"), {})).object();
+        ok &= expect(!qrBody.contains(QStringLiteral("auth_key")),
+                     "a QR sign-in sends no auth_key");
+        const QByteArray qrReply = R"({"admin_token":"tok","auth_url":"https://login.tailscale.com/a/abc123",
+            "status":{"version":"0.5.0","provisioned":true,"state":"needs_login","key_expiry":""}})";
+        const auto qr = tailnetshim::parseProvisionReply(qrReply);
+        ok &= expect(qr && qr->authUrl == QStringLiteral("https://login.tailscale.com/a/abc123")
+                     && qr->status.state == QStringLiteral("needs_login"),
+                     "a QR provision reply carries the sign-in URL");
+        const auto late = tailnetshim::parseProvisionReply(
+            R"({"admin_token":"tok","error":"the tailnet sign-in didn't start: x",
+                "status":{"version":"0.5.0","state":"error"}})");
+        ok &= expect(late && late->adminToken == QStringLiteral("tok") && !late->error.isEmpty(),
+                     "a token that comes with an error is still returned");
+
+        const auto login = tailnetshim::parseLoginReply(
+            R"({"state":"needs_login","auth_url":"https://login.tailscale.com/a/xyz","key_expiry":"2027-04-30T12:00:00Z"})");
+        ok &= expect(login && login->authUrl == QStringLiteral("https://login.tailscale.com/a/xyz")
+                     && login->keyExpiry == QStringLiteral("2027-04-30T12:00:00Z"), "login reply parses");
+        ok &= expect(!tailnetshim::parseLoginReply(R"({"error":"admin token required"})"),
+                     "an error is not a login reply");
+
+        ok &= expect(tailnetshim::checkedAuthUrl(QStringLiteral("http://login.tailscale.com/a/x")).isEmpty(),
+                     "plain http sign-in URL refused");
+        ok &= expect(tailnetshim::checkedAuthUrl(QStringLiteral("javascript:alert(1)")).isEmpty(),
+                     "non-https scheme refused");
+        ok &= expect(tailnetshim::checkedAuthUrl(QStringLiteral("https://x/a b")).isEmpty(),
+                     "URL with whitespace refused");
+        ok &= expect(tailnetshim::checkedAuthUrl(QStringLiteral("https://headscale.example.net/register/abc"))
+                         == QStringLiteral("https://headscale.example.net/register/abc"),
+                     "a self-hosted control server's URL is kept");
+        ok &= expect(tailnetshim::checkedAuthUrl(QStringLiteral("https://x/") + QString(600, QLatin1Char('a'))).isEmpty(),
+                     "oversized URL refused");
+
+        const auto withExpiry = tailnetshim::parseStatus(
+            R"({"version":"0.5.0","state":"running","key_expiry":"2027-04-30T12:00:00Z"})");
+        ok &= expect(withExpiry && withExpiry->keyExpiry == QStringLiteral("2027-04-30T12:00:00Z"),
+                     "status key expiry parses");
+        const auto pending = tailnetshim::parseStatus(
+            R"({"version":"0.5.0","provisioned":true,"state":"needs_login","claimable":true})");
+        ok &= expect(pending && pending->claimable, "a never-completed sign-in is claimable");
+        const auto oldRunning = tailnetshim::parseStatus(
+            R"({"version":"0.4.1","provisioned":true,"state":"running"})");
+        const auto oldFresh = tailnetshim::parseStatus(
+            R"({"version":"0.4.1","provisioned":false,"state":"unprovisioned"})");
+        ok &= expect(oldRunning && !oldRunning->claimable && oldFresh && oldFresh->claimable,
+                     "before 0.5.0 only an unprovisioned radio is claimable");
+
+        ok &= expect(!tailnetshim::supportsQrSignIn(QStringLiteral("0.4.1")), "0.4.1 has no QR sign-in");
+        ok &= expect(!tailnetshim::supportsQrSignIn(QStringLiteral("0.4.1-native")), "0.4.1-native neither");
+        ok &= expect(tailnetshim::supportsQrSignIn(QStringLiteral("0.5.0")), "0.5.0 signs in by QR");
+        ok &= expect(tailnetshim::supportsQrSignIn(QStringLiteral("0.5.0-native")), "native 0.5.0 too");
+        ok &= expect(tailnetshim::supportsQrSignIn(QStringLiteral("1.0.0")), "1.0.0 too");
+        ok &= expect(!tailnetshim::supportsQrSignIn(QString()), "an unknown version doesn't");
+    }
+
+    // The window starts the sign-in unasked only once the keychain has
+    // answered, and a late keychain read never replaces a newer token
+    // (review of #6932: held read -> fresh status -> provision -> late read).
+    {
+        TailnetShimStatus fresh;
+        fresh.version = QStringLiteral("0.5.0");
+        fresh.state = QStringLiteral("unprovisioned");
+        fresh.claimable = true;
+        ok &= expect(!tailnetshim::shouldSignInUnasked(fresh, false, false, false, true, false),
+                     "no unasked sign-in before the keychain answers");
+        ok &= expect(tailnetshim::shouldSignInUnasked(fresh, true, false, false, true, false),
+                     "an unasked sign-in once it has");
+        ok &= expect(!tailnetshim::shouldSignInUnasked(fresh, true, false, true, true, false)
+                     && !tailnetshim::shouldSignInUnasked(fresh, true, false, false, false, false)
+                     && !tailnetshim::shouldSignInUnasked(fresh, true, false, false, true, true),
+                     "not while busy, off the LAN, or a second time");
+        TailnetShimStatus abandoned = fresh;
+        abandoned.provisioned = true;
+        abandoned.state = QStringLiteral("needs_login");
+        ok &= expect(tailnetshim::shouldSignInUnasked(abandoned, true, false, false, true, false)
+                     && !tailnetshim::shouldSignInUnasked(abandoned, true, true, false, true, false),
+                     "an abandoned sign-in restarts only without its token");
+        TailnetShimStatus failedHere = abandoned;
+        failedHere.state = QStringLiteral("error");
+        ok &= expect(tailnetshim::shouldSignInUnasked(failedHere, true, true, false, true, false),
+                     "a pending sign-in that failed here restarts even with its token");
+        TailnetShimStatus joined = abandoned;
+        joined.claimable = false;
+        joined.state = QStringLiteral("running");
+        ok &= expect(!tailnetshim::shouldSignInUnasked(joined, true, false, false, true, false),
+                     "never for a radio a tailnet owns");
+        TailnetShimStatus old = fresh;
+        old.version = QStringLiteral("0.4.1");
+        ok &= expect(!tailnetshim::shouldSignInUnasked(old, true, false, false, true, false),
+                     "never for a container without QR sign-in");
+
+        ok &= expect(tailnetshim::tokenAfterKeychainRead(QStringLiteral("new"), QStringLiteral("stale"))
+                         == QStringLiteral("new")
+                     && tailnetshim::tokenAfterKeychainRead(QString(), QStringLiteral("kept"))
+                         == QStringLiteral("kept"),
+                     "a token issued meanwhile beats the keychain read");
+        ok &= expect(TailnetShimTokenStore::pickLoadedToken(true, QStringLiteral("stale"),
+                                                            QStringLiteral("new")) == QStringLiteral("new")
+                     && TailnetShimTokenStore::pickLoadedToken(true, QStringLiteral("stale"), QString()).isEmpty()
+                     && TailnetShimTokenStore::pickLoadedToken(false, QStringLiteral("read"),
+                                                               QString()) == QStringLiteral("read"),
+                     "a keychain read finished after a save yields that save");
+
+        // Without a keychain the session store answers on the next turn,
+        // with the token current then, not when the load was asked.
+        QString got = QStringLiteral("unset");
+        TailnetShimTokenStore::load(QStringLiteral("REVIEW-SERIAL"), &app,
+                                    [&got](const QString& t) { got = t; });
+        TailnetShimTokenStore::save(QStringLiteral("REVIEW-SERIAL"), QStringLiteral("issued-after"));
+        QCoreApplication::processEvents();
+        QCoreApplication::processEvents();
+        ok &= expect(got == QStringLiteral("issued-after"), "a load answers with a token saved after it began");
+        TailnetShimTokenStore::save(QStringLiteral("REVIEW-SERIAL"), QString());
+    }
 
     ok &= expect(tailnetshim::suggestedHostname(QStringLiteral("KK7GWY FLEX-8600"))
                  == QStringLiteral("kk7gwy-flex-8600"), "hostname from nickname");
@@ -155,6 +279,115 @@ int main(int argc, char** argv)
                                                         image.size()).isEmpty(),
                      "missing file refused");
     }
+
+    // The two packages each check against their own pin, and the native one
+    // keeps the .ssdr_waveform name WaveformInstaller requires.
+    {
+        using P = TailnetShimPackage;
+        const auto container = TailnetShimDownloader::pin(P::Container);
+        const auto native = TailnetShimDownloader::pin(P::Native);
+        ok &= expect(container.sha256 == QByteArray(TailnetShimRelease::kSha256)
+                         && container.size == TailnetShimRelease::kSize
+                         && container.url == QLatin1String(TailnetShimRelease::kUrl),
+                     "container pin is TailnetShimRelease");
+        ok &= expect(native.sha256 == QByteArray(TailnetShimNativeRelease::kSha256)
+                         && native.size == TailnetShimNativeRelease::kSize
+                         && native.url == QLatin1String(TailnetShimNativeRelease::kUrl)
+                         && native.version == QLatin1String(TailnetShimNativeRelease::kVersion),
+                     "native pin is TailnetShimNativeRelease");
+        ok &= expect(native.sha256.size() == 64 && native.sha256 == native.sha256.toLower()
+                         && native.sha256 != container.sha256,
+                     "native pin is its own lower-case SHA-256");
+        ok &= expect(native.url.startsWith(QLatin1String("https://"))
+                         && native.url.endsWith(QLatin1String(".ssdr_waveform")),
+                     "native package downloads over HTTPS as a .ssdr_waveform");
+        ok &= expect(native.version.endsWith(QLatin1String("-native")),
+                     "native pin names the version the waveform reports");
+        const QString nativeCache = TailnetShimDownloader::cachePath(P::Native);
+        ok &= expect(QFileInfo(nativeCache).fileName() == QLatin1String("AetherTailnet.ssdr_waveform")
+                         && nativeCache.contains(native.version),
+                     "native cache is AetherTailnet.ssdr_waveform, per version");
+        ok &= expect(TailnetShimDownloader::cachePath() == TailnetShimDownloader::cachePath(P::Container)
+                         && TailnetShimDownloader::cachePath(P::Container) != nativeCache,
+                     "container cache is the default and separate from the native one");
+        TailnetShimDownloader nativeDownloader(P::Native);
+        ok &= expect(nativeDownloader.package() == P::Native
+                         && TailnetShimDownloader().package() == P::Container,
+                     "a downloader keeps the package it was made for");
+    }
+
+    // Update: offered only for an older release than the pin, by number.
+    {
+        using tailnetshim::updateAvailable;
+        ok &= expect(updateAvailable(QStringLiteral("0.5.0"), QStringLiteral("0.5.1")),
+                     "0.5.0 -> 0.5.1 is an update");
+        ok &= expect(!updateAvailable(QStringLiteral("0.5.1"), QStringLiteral("0.5.1"))
+                         && !updateAvailable(QStringLiteral("0.6.0"), QStringLiteral("0.5.1")),
+                     "the same or a newer release is not");
+        ok &= expect(updateAvailable(QStringLiteral("0.4.10"), QStringLiteral("0.5.0"))
+                         && !updateAvailable(QStringLiteral("0.5.10"), QStringLiteral("0.5.9")),
+                     "compared as numbers, not text");
+        ok &= expect(updateAvailable(QStringLiteral("0.5.0-native"), QStringLiteral("0.5.1-native"))
+                         && !updateAvailable(QStringLiteral("0.5.1-native"),
+                                             QStringLiteral("0.5.1-native")),
+                     "a -native suffix is ignored");
+        ok &= expect(!updateAvailable(QString(), QStringLiteral("0.5.1"))
+                         && !updateAvailable(QStringLiteral("dev"), QStringLiteral("0.5.1")),
+                     "an unreadable version never offers an update");
+        ok &= expect(tailnetshim::pinnedVersion(false) == QLatin1String(TailnetShimRelease::kVersion)
+                         && tailnetshim::pinnedVersion(true)
+                                == QLatin1String(TailnetShimNativeRelease::kVersion),
+                     "each package is compared with its own pin");
+    }
+
+    // Earlier releases' verified copies are removed; the current ones and
+    // anything else in the folder stay.
+    {
+        QTemporaryDir cache;
+        const QDir dir(cache.path());
+        const QString container = QFileInfo(TailnetShimDownloader::cachePath()).fileName();
+        const QString nativeDir = QFileInfo(QFileInfo(TailnetShimDownloader::cachePath(
+            TailnetShimPackage::Native)).absolutePath()).fileName();
+        auto touch = [&](const QString& rel) {
+            dir.mkpath(QFileInfo(dir.filePath(rel)).path());
+            QFile f(dir.filePath(rel));
+            return f.open(QIODevice::WriteOnly) && f.write("x") == 1;
+        };
+        ok &= expect(touch(QStringLiteral("flex-tailnet-shim-0.4.1.tar.gz"))
+                         && touch(QStringLiteral("flex-tailnet-shim-0.5.0.tar.gz"))
+                         && touch(container)
+                         && touch(QStringLiteral("aether-tailnet-0.5.0-native/AetherTailnet.ssdr_waveform"))
+                         && touch(nativeDir + QStringLiteral("/AetherTailnet.ssdr_waveform"))
+                         && touch(QStringLiteral("flex-tailnet-shim-0.5.0.tar.gz.part"))
+                         && touch(QStringLiteral("aether-health-0.1.0/AetherHealth.ssdr_waveform"))
+                         && touch(QStringLiteral("notes.txt")),
+                     "cache fixture written");
+        QStringList removed = TailnetShimDownloader::removeStaleCopies(cache.path());
+        removed.sort();
+        ok &= expect(removed == QStringList({QStringLiteral("aether-tailnet-0.5.0-native"),
+                                             QStringLiteral("flex-tailnet-shim-0.4.1.tar.gz"),
+                                             QStringLiteral("flex-tailnet-shim-0.5.0.tar.gz")}),
+                     "earlier releases removed");
+        ok &= expect(dir.exists(container) && dir.exists(nativeDir)
+                         && dir.exists(QStringLiteral("flex-tailnet-shim-0.5.0.tar.gz.part"))
+                         && dir.exists(QStringLiteral("aether-health-0.1.0"))
+                         && dir.exists(QStringLiteral("notes.txt")),
+                     "current pins, partial downloads and other files kept");
+        ok &= expect(TailnetShimDownloader::removeStaleCopies(cache.path()).isEmpty(),
+                     "nothing left to remove the second time");
+    }
+
+    // Configure… and Reset find the shim in either package, and nothing else.
+    ok &= expect(isTailnetShimWaveform(QStringLiteral("flex-tailnet-shim"), true),
+                 "container shim recognized");
+    ok &= expect(isTailnetShimWaveform(QStringLiteral("AetherTailnet"), false),
+                 "native shim recognized");
+    ok &= expect(!isTailnetShimWaveform(QStringLiteral("AetherTailnet"), true)
+                     && !isTailnetShimWaveform(QStringLiteral("flex-tailnet-shim"), false),
+                 "a name in the other package's slot is not the shim");
+    ok &= expect(!isTailnetShimWaveform(QStringLiteral("AetherRadioProbe"), false)
+                     && !isTailnetShimWaveform(QString(), false),
+                 "other waveforms are not the shim");
 
     // Link telemetry (/v1/session): the shape tools/flex-tailnet-shim
     // telemetry.go encodes, summed over this client's sessions and streams.
