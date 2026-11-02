@@ -6,6 +6,8 @@
 #include "core/backends/hl2/Hl2Discovery.h"
 #include "core/backends/sim/SimBackend.h"
 
+#include <utility>
+
 namespace AetherSDR {
 namespace {
 
@@ -40,6 +42,11 @@ public:
         if (m_options.local) {
             m_flex = std::make_unique<RadioDiscovery>();
             m_hl2 = std::make_unique<hl2::Hl2Discovery>();
+            QList<QHostAddress> directed;
+            for (const QString& text : std::as_const(m_options.hl2Addresses)) {
+                directed.append(QHostAddress(text));
+            }
+            m_hl2->setDirectedTargets(directed);
             m_anan = std::make_unique<anan::AnanDiscovery>();
             wire(m_flex.get(), QStringLiteral("flex"), QStringLiteral("lan"));
             wire(m_hl2.get(), QStringLiteral("hl2"), QStringLiteral("lan"));

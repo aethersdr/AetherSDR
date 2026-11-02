@@ -38,6 +38,7 @@
 #include "core/backends/PanControlRequest.h"
 #include "core/backends/SlicePresetRequest.h"
 #include "core/backends/ProfileRequest.h"
+#include "core/backends/NtpSourceRequest.h"
 #include "core/backends/WaveformEnvRequest.h"
 #include "core/backends/MemoryRequest.h"
 #include "core/backends/SliceLifecycleRequest.h"
@@ -262,6 +263,12 @@ public:
     virtual ReceiveDispatch requestWaveformEnv(const WaveformEnvRequest&,
                                                const RadioControlCompletion& = {},
                                                const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    // One command toward the radio's NTP time source list. Gated by
+    // capabilities().ntpSourceControl; ntpSourceChanged is the only confirmation.
+    virtual ReceiveDispatch requestNtpSource(const NtpSourceRequest&,
+                                             const RadioControlCompletion& = {},
+                                             const RadioControlFence& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestUsbCable(const UsbCableRequest&)
     { return ReceiveDispatch::Unsupported; }
@@ -1244,6 +1251,9 @@ signals:
     // database importing/exporting flags); RadioModel routes it to TransmitModel
     // tx/mic profiles, the global-profile list, or the import/export flags.
     void profileChanged(const ProfileDelta& delta);
+
+    // Present-only status for one of the radio's NTP time sources, or its removal.
+    void ntpSourceChanged(const NtpSourceDelta& delta);
 
     // Meter definition catalog (aetherd RFC 2.3 — MeterModel touchpoint). The
     // backend decodes the vendor meter-status wire format into a typed MeterDef;
