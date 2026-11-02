@@ -2014,9 +2014,13 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
             });
     connect(this, &SpectrumWidget::centerChangeRequested, this,
             [this](double centerMhz) { noteTraceGeometryRequest(centerMhz, m_bandwidthMhz); });
+    // An unchanged centre is a slice tune only (driveVfoDragTune); MainWindow
+    // sends no pan command for it, so it is no geometry request.
     connect(this, &SpectrumWidget::edgePanTuneRequested, this,
             [this](double centerMhz, double) {
-                noteTraceGeometryRequest(centerMhz, m_bandwidthMhz);
+                if (!qFuzzyCompare(centerMhz, m_centerMhz)) {
+                    noteTraceGeometryRequest(centerMhz, m_bandwidthMhz);
+                }
             });
 
     setMinimumHeight(100);

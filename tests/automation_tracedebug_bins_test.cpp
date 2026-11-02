@@ -66,8 +66,19 @@ QByteArray functionBody(const QByteArray& source, const QByteArray& signature)
     return end < 0 ? QByteArray() : source.mid(start, end - start);
 }
 
-// Every assignment to the shown centre or bandwidth that is not followed,
-// within three lines, by noteTraceGeometryChange(). Returns the line numbers.
+// C++ source with // and /* */ comments removed (string literals here hold
+// no comment markers).
+QByteArray withoutComments(const QByteArray& source)
+{
+    QString text = QString::fromUtf8(source);
+    text.remove(QRegularExpression(QStringLiteral("/\\*.*?\\*/"),
+                                   QRegularExpression::DotMatchesEverythingOption));
+    text.remove(QRegularExpression(QStringLiteral("//[^\\n]*")));
+    return text.toUtf8();
+}
+
+// Every code line assigning the shown centre or bandwidth that is not followed,
+// within eight lines, by noteTraceGeometryChange(). Returns the line numbers.
 QList<int> unhookedGeometryWrites(const QByteArray& source)
 {
     const QList<QByteArray> lines = source.split('\n');
@@ -75,11 +86,13 @@ QList<int> unhookedGeometryWrites(const QByteArray& source)
         QStringLiteral("\\bm_(centerMhz|bandwidthMhz)\\s*=[^=]"));
     QList<int> out;
     for (int i = 0; i < lines.size(); ++i) {
-        if (!write.match(QString::fromUtf8(lines.at(i))).hasMatch()) {
+        const QByteArray code = lines.at(i).trimmed();
+        if (code.startsWith("//") || code.startsWith("*")
+            || !write.match(QString::fromUtf8(code)).hasMatch()) {
             continue;
         }
         bool hooked = false;
-        for (int j = i; j < std::min<int>(i + 4, lines.size()); ++j) {
+        for (int j = i; j < std::min<int>(i + 9, lines.size()); ++j) {
             hooked = hooked || lines.at(j).contains("noteTraceGeometryChange();");
         }
         if (!hooked) {
@@ -147,8 +160,8 @@ int main(int argc, char** argv)
     // executable (and the opt-in spectrum_trace_bins_widget_test), so the
     // default lane can pin its source but not run it.
     const QByteArray widget_cpp = readSource("/src/gui/SpectrumWidget.cpp");
-    const QByteArray snapshotBody =
-        functionBody(widget_cpp, "QVariantMap SpectrumWidget::traceBinsSnapshot() const");
+    const QByteArray snapshotBody = withoutComments(
+        functionBody(widget_cpp, "QVariantMap SpectrumWidget::traceBinsSnapshot() const"));
     check(snapshotBody.contains("m_traceCapture.refusal(")
               && snapshotBody.contains("m_traceCapture.snapshot()")
               && !snapshotBody.contains("m_bins"),
@@ -166,7 +179,9 @@ int main(int argc, char** argv)
           "every range echo is offered to the unconfirmed request before any early return");
     const QList<int> unhooked = unhookedGeometryWrites(widget_cpp);
     for (int line : unhooked) {
-        std::fprintf(stderr, "  unhooked geometry write at SpectrumWidget.cpp:%d\n", line);
+        std::fprintf(stderr,
+                     "  SpectrumWidget.cpp:%d writes the shown centre or bandwidth: "
+                     "add noteTraceGeometryChange() after it\n", line);
     }
     check(!widget_cpp.isEmpty() && unhooked.isEmpty(),
           "every write of the shown centre or bandwidth notes a trace geometry change");

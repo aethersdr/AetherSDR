@@ -110,6 +110,11 @@ struct SpectrumOffscreenTestAccess {
     static void finishZoomSettle(SpectrumWidget& widget) {
         widget.finishFrequencyRangeSettleUpdate();
     }
+    // One in-window slice-drag tune step: edgePanTuneRequested with the
+    // centre unchanged.
+    static void sliceDragTuneStep(SpectrumWidget& widget, int x) {
+        widget.driveVfoDragTune(x, "test");
+    }
 };
 }
 namespace AetherSDR::rtl {
@@ -338,6 +343,16 @@ int runTraceBins()
     m = w.traceBinsSnapshot();
     check(refusal(m).isEmpty() && sameBins(m, last), "trace bins: returned again after new frames");
 
+    // A slice-drag tune step leaves the pan where it is: no geometry change.
+    {
+        const quint64 settledBefore = m.value(QStringLiteral("settledFrames")).toULongLong();
+        SpectrumOffscreenTestAccess::sliceDragTuneStep(w, w.width() / 3);
+        const QVariantMap after = w.traceBinsSnapshot();
+        check(refusal(after).isEmpty()
+                  && after.value(QStringLiteral("settledFrames")).toULongLong() == settledBefore,
+              "trace bins: a slice-drag tune step with an unchanged centre keeps the settle count");
+    }
+
     // Confirmation mode: a sent request changes nothing until the radio's echo.
     {
         SpectrumWidget f;
@@ -384,6 +399,10 @@ int runTraceBins()
         wait(static_cast<int>(SpectrumTraceBins::FrameCapture::kRequestEchoGuardMs) + 200);
         check(refusal(f.traceBinsSnapshot()).isEmpty(),
               "trace bins (confirm): a lost echo stops refusing after kRequestEchoGuardMs");
+        // A slice-drag tune step sends no pan command, so nothing awaits an echo.
+        SpectrumOffscreenTestAccess::sliceDragTuneStep(f, f.width() / 3);
+        check(refusal(f.traceBinsSnapshot()).isEmpty(),
+              "trace bins (confirm): a slice-drag tune step with an unchanged centre is not an unconfirmed request");
     }
     return failures ? 1 : 0;
 }

@@ -1132,7 +1132,8 @@ selector, the reply carries that pan's last decoded frame instead of statistics:
   confirms geometry: from the request until its echo, at most 2 s);
   `geometry changed after the last frame` and `geometry changed N frames ago`
   (any change of centre or bandwidth, shown or requested); and `the last frame
-  was decoded across a dBm range change`. Retry after a frame interval. A
+  was decoded across a dBm range change`. A refused client retries after a
+  frame interval, or up to 2 s for an unconfirmed request. A
   retune the widget has not been told about yet (made elsewhere, before its
   status arrives) cannot be seen here.
 - The values are in the units the backend delivered; nothing here calibrates
