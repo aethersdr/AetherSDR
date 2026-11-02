@@ -1463,9 +1463,8 @@ QString TciProtocol::cmdAgcGain(const QStringList& args, bool isSet)
         }
     }, Qt::QueuedConnection);
 
-    // Echo the gain the knob step really gives, not the client's number.
-    m_pendingNotification = QStringLiteral("agc_gain:%1,%2;")
-                                .arg(trx).arg(external ? value : agcGainDbForLevel(value));
+    // The observed threshold relay announces changes, including backend
+    // confirmation. A discarded queued request must announce nothing.
     return {};
 }
 

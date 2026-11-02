@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.10.4 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.11.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -910,6 +910,7 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexUtilityControls.cpp
     src/core/backends/flex/FlexStoredControls.cpp
     src/core/backends/flex/FlexWaveformEnvControls.cpp
+    src/core/backends/flex/FlexNtpSourceControls.cpp
     src/core/backends/flex/FlexSliceLifecycleControls.cpp
     src/core/backends/flex/FlexPanControls.cpp
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
@@ -1056,6 +1057,7 @@ set(CORE_SOURCES
     src/core/Ctr2UsbRelay.cpp
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
+    src/core/OtrspProtocol.cpp
     src/core/CatPort.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/KiwiSdrRedirectPolicy.cpp
@@ -1185,6 +1187,7 @@ set(CORE_SOURCES
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
     src/core/SupportBundle.cpp
+    src/core/ExternalFilePath.cpp
     src/core/IssueReport.cpp
     src/core/SystemInfo.cpp
     src/core/SystemInfoCollector.cpp
@@ -1262,6 +1265,7 @@ set(MODEL_SOURCES
     src/models/RadioModel_Utilities.cpp
     src/models/RadioModel_StoredControls.cpp
     src/models/RadioModel_WaveformEnv.cpp
+    src/models/RadioModel_NtpSources.cpp
     src/models/RadioModel_SliceLifecycle.cpp
     src/models/RadioModel_PanControls.cpp
     src/models/RadioModel_TxCoordinator.cpp
@@ -1375,6 +1379,7 @@ set(GUI_SOURCES
     src/gui/FirmwareUpdateCard.cpp
     src/gui/CanonPrompt.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
@@ -1938,7 +1943,8 @@ target_link_libraries(aetherd PRIVATE
 if(WIN32)
     # ole32/oleaut32: WindowsFirewall reads the firewall policy over COM;
     # shell32: its Fix runs netsh through a UAC prompt.
-    target_link_libraries(aethercore PRIVATE advapi32 ole32 oleaut32 shell32)
+    # uuid: ExternalFilePath's Windows known-folder identifiers.
+    target_link_libraries(aethercore PRIVATE advapi32 ole32 oleaut32 shell32 uuid)
 endif()
 
 # --- ASR engine: vendored whisper.cpp (RFC #4333, Phase 1) -------------------

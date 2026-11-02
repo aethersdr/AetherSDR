@@ -1,4 +1,10 @@
 {
+ "core/backends/NtpSourceRequest.h": {
+  "tag": "universal",
+  "note": "Seam vocabulary for a radio-held NTP time source list: the definition and request types with the firmware's id/address/description allowlists, the reported source state and its present-only delta. No wire text; FlexBackend encodes and decodes it (SmartSDR 4.3.16) and capabilities().ntpSourceControl gates it.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/backends/WaveformEnvRequest.h": {
   "tag": "universal",
   "note": "Seam vocabulary for a radio-held waveform container environment: the typed clear/stage/recreate request with its validation, and the apply outcome. No wire text; FlexBackend encodes it (SmartSDR 4.3.16) and capabilities().waveformEnvControl gates it.",
@@ -344,6 +350,12 @@
  "core/DxccColorProvider.h": {
   "tag": "universal",
   "note": "DXCC worked-status from ADIF log, colors cluster spots by call/freq/mode; radio-agnostic spot/logging feature",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ExternalFilePath.h": {
+  "tag": "ui-support",
+  "note": "Resolves an existing AppData log or support-bundle file to the physical MSIX LocalCache location for display and for external applications (Explorer, mail client). Presentation-path plumbing, not radio state.",
   "split": "",
   "confidence": "high"
  },

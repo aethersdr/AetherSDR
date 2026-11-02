@@ -128,16 +128,16 @@ void testSetIsDecibels()
 
     f.send(tci, QStringLiteral("agc_gain:0,87"));
     check(f.slice->receiveAgcThreshold() == 76, "agc_gain:0,87 sets knob 76");
-    check(tci.pendingNotification() == QStringLiteral("agc_gain:0,86;"),
-          "the echo states the gain knob 76 really gives");
+    check(f.send(tci, QStringLiteral("agc_gain:0")) == QStringLiteral("agc_gain:0,86;"),
+          "GET states the gain knob 76 really gives");
 
     f.send(tci, QStringLiteral("agc_gain:0,-20"));
     check(f.slice->receiveAgcThreshold() == 0, "-20 dB sets knob 0");
 
     f.send(tci, QStringLiteral("agc_gain:0,500"));
     check(f.slice->receiveAgcThreshold() == 100, "a value above 120 dB is held at 120 dB");
-    check(tci.pendingNotification() == QStringLiteral("agc_gain:0,120;"),
-          "the held value is what is echoed");
+    check(f.send(tci, QStringLiteral("agc_gain:0")) == QStringLiteral("agc_gain:0,120;"),
+          "GET states the held value");
 
     f.send(tci, QStringLiteral("agc_gain:0,loud"));
     check(f.slice->receiveAgcThreshold() == 100, "a non-number is ignored");
@@ -175,13 +175,13 @@ void testHugeAndNonFiniteValuesStayBounded()
     f.send(tci, QStringLiteral("agc_gain:0,2147483648"));
     check(f.slice->receiveAgcThreshold() == 0,
           "a KiwiSDR value past int range is held at the top, 0 dB, not wrapped");
-    check(tci.pendingNotification() == QStringLiteral("agc_gain:0,0;"),
-          "and the echo states the bounded value");
+    check(f.send(tci, QStringLiteral("agc_gain:0")) == QStringLiteral("agc_gain:0,0;"),
+          "and GET states the bounded value");
     f.send(tci, QStringLiteral("agc_gain:0,-4294967296"));
     check(f.slice->receiveAgcThreshold() == -160,
           "a KiwiSDR value below int range is held at the bottom, -160 dB");
-    check(tci.pendingNotification() == QStringLiteral("agc_gain:0,-160;"),
-          "and the echo states the bounded value");
+    check(f.send(tci, QStringLiteral("agc_gain:0")) == QStringLiteral("agc_gain:0,-160;"),
+          "and GET states the bounded value");
 }
 
 void testPathChangeBeforeDeliveryDropsTheSet()
@@ -195,6 +195,7 @@ void testPathChangeBeforeDeliveryDropsTheSet()
 
     // Queued for the knob, delivered after a KiwiSDR replacement starts.
     tci.handleCommand(QStringLiteral("agc_gain:0,-10"));
+    check(tci.pendingNotification().isEmpty(), "a queued knob SET publishes no speculative gain");
     f.slice->setExternalReceiveAudioReplacementMute(true, false);
     QCoreApplication::processEvents();
     check(f.slice->receiveAgcThreshold() == -90,
@@ -203,6 +204,7 @@ void testPathChangeBeforeDeliveryDropsTheSet()
 
     // Queued for the KiwiSDR, delivered after the replacement stops.
     tci.handleCommand(QStringLiteral("agc_gain:0,-10"));
+    check(tci.pendingNotification().isEmpty(), "a queued KiwiSDR SET publishes no speculative gain");
     f.slice->setExternalReceiveAudioReplacementMute(false, false);
     QCoreApplication::processEvents();
     check(f.slice->agcThreshold() == 72, "a KiwiSDR SET is not delivered to the knob");

@@ -3257,6 +3257,7 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
             }
             announce(guard);
         });
+        return announce;
     };
     wireValue(&SliceModel::ritChanged, "rit_offset",
               [slice] { return QString::number(slice->ritFreq()); });
@@ -3264,8 +3265,10 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
               [slice] { return QString::number(slice->xitFreq()); });
     wireValue(&SliceModel::agcModeChanged, "agc_mode",
               [slice] { return slice->receiveAgcMode().toLower(); });
-    wireValue(&SliceModel::agcThresholdChanged, "agc_gain",
-              [slice] { return QString::number(TciProtocol::agcGainDb(slice)); });
+    const auto announceAgcGain = wireValue(&SliceModel::agcThresholdChanged, "agc_gain",
+        [slice] { return QString::number(TciProtocol::agcGainDb(slice)); });
+    connect(slice, &SliceModel::externalReceiveAgcThresholdChanged, this,
+            [slice, announceAgcGain] { announceAgcGain(slice); });
 
     // Deferred state sync on (re)wire: a Flex band change recreates the slice, and
     // if the restored frequency equals the init value no frequencyChanged fires,
