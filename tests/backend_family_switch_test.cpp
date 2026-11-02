@@ -394,6 +394,32 @@ int main(int argc, char** argv)
                   QStringLiteral("latch: the stale value survives, unvouched-for"));
         }
 
+        // 6c. SmartLink after a non-Flex session. startWanRadioConnect() needs a
+        //     PanadapterStream for the UDP pre-bind, and only the Flex backend
+        //     owns one; a session that last ran another family must be switched
+        //     to Flex first, and a Flex session must be left alone.
+        std::printf("-- SmartLink prepare after a non-Flex session\n");
+        g_phase.store("wan prepare");
+        if (switchTo(model, QStringLiteral("hl2"), rebuilt)) {
+            check(model.panStream() == nullptr, "wan: the hl2 backend has no PanadapterStream");
+            const int before = rebuilt.count();
+            check(model.prepareFlexBackendForWan(), "wan: prepare reports a stream after hl2");
+            check(model.family() == QLatin1String("flex"), "wan: prepare switched the family to flex");
+            check(model.panStream() != nullptr, "wan: prepare left a PanadapterStream");
+            check(rebuilt.count() == before + 1,
+                  QStringLiteral("wan: prepare announced backendRebuilt once (%1)")
+                      .arg(rebuilt.count() - before));
+        }
+        {
+            switchTo(model, QStringLiteral("flex"), rebuilt);
+            IRadioBackend* flexBackend = model.backend();
+            const int before = rebuilt.count();
+            check(model.prepareFlexBackendForWan(), "wan: prepare reports a stream on flex");
+            check(model.backend() == flexBackend, "wan: prepare on flex kept the same backend");
+            check(rebuilt.count() == before, "wan: prepare on flex rebuilt nothing");
+        }
+        switchTo(model, QStringLiteral("hl2"), rebuilt);
+
         // 7. Destroy the model with a backend attached (the app-exit path). The
         //    timer is declared OUTSIDE this scope so it outlives ~RadioModel and
         //    can actually be read.

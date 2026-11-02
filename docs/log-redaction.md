@@ -27,6 +27,7 @@ adding a field is one row there plus one case in `tests/async_log_writer_test.cp
 | `grid` / `grid_square` / `locator` / `maidenhead`, keyword or whitespace form | fully redacted |
 | Hostname after `connecting to`, `connected to`, `reconnecting to`, `disconnected from`, `connect to`, `disconnecting from`, `pin for` — **only when the token looks like a host** (dotted name, or label followed by `:port`) | fully redacted, `:port` preserved |
 | URL authority (`scheme://user:pass@host`) | fully redacted, path preserved |
+| Flex waveform container environment: a staged `waveform env KEY=value` and a reported `waveform container … env=<base64>` | value fully redacted to the end of the line / the token; the key and container name stay readable |
 
 Each of these is matched in bare, single-quoted, double-quoted, JSON and
 Qt-escaped (`\"value\"`) spellings, because they all share one value grammar.

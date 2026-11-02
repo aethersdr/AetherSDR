@@ -597,6 +597,34 @@ void testGridRedaction(const QString& dir)
            && !contents.contains(QStringLiteral("47.6205")));
 }
 
+void testWaveformEnvRedaction(const QString& dir)
+{
+    // One log line each, as RadioConnection writes them (QDebug quotes the text).
+    const QString staged = writeAndRead(
+        dir + "/waveform-env-tx.log", QtDebugMsg, QStringLiteral("aether.connection"),
+        QStringLiteral("TX: \"C12|waveform env SERVER_KEY=hunter2 with spaces\""));
+    report("a staged waveform env value is redacted to the end of the line",
+           !staged.contains(QStringLiteral("hunter2"))
+           && !staged.contains(QStringLiteral("with spaces"))
+           && staged.contains(QStringLiteral("waveform env SERVER_KEY=***REDACTED***")));
+    const QString reported = writeAndRead(
+        dir + "/waveform-env-rx.log", QtDebugMsg, QStringLiteral("aether.connection"),
+        QStringLiteral("RX: \"S0|waveform container name=wf-x version=1.0 "
+                       "env=eyJTRVJWRVJfS0VZIjoiaHVudGVyMiJ9 removed=0\""));
+    report("a reported container env is redacted and the rest of the status stays",
+           !reported.contains(QStringLiteral("eyJTRVJWRVJfS0VZ"))
+           && reported.contains(QStringLiteral("name=wf-x version=1.0 env=***REDACTED*** removed=0")));
+    const QString clearOnly = writeAndRead(
+        dir + "/waveform-env-clear.log", QtDebugMsg, QStringLiteral("aether.connection"),
+        QStringLiteral("TX: \"C13|waveform env clear\" then waveform recreate wf-x"));
+    report("a bare waveform env clear and a recreate are left readable",
+           clearOnly.contains(QStringLiteral("waveform env clear"))
+           && clearOnly.contains(QStringLiteral("waveform recreate wf-x")));
+    report("waveform env redaction is idempotent",
+           redactPii(redactPii(QStringLiteral("waveform env K=v")))
+               == QStringLiteral("waveform env K=***REDACTED***"));
+}
+
 void testQuotedAndQtEscapedValueForms(const QString& dir)
 {
     const QString path = dir + "/json_forms.log";
@@ -1019,6 +1047,7 @@ int main(int argc, char** argv)
     testUserFieldRedaction(dir);
     testHostContextRedaction(dir);
     testGridRedaction(dir);
+    testWaveformEnvRedaction(dir);
     testQuotedAndQtEscapedValueForms(dir);
     testShortValueIsFullyRedacted(dir);
     testAuthSchemeIsNotMistakenForTheValue(dir);

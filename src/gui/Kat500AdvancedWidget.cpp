@@ -432,7 +432,7 @@ QString Kat500AdvancedWidget::schemaReason(bool writing) const
     if (!m_model) {
         return tr("Connect a KAT500 first.");
     }
-    const QString reason = m_model->unavailableReason(writing);
+    const QString reason = m_model->unavailableReason(writing, writing);
     if (!reason.isEmpty()) {
         return reason;
     }

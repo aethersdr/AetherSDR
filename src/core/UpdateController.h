@@ -6,6 +6,7 @@
 #include <QString>
 
 #include <functional>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -27,6 +28,8 @@ public:
         Idle,      // nothing staged, nothing running
         Staging,   // downloading and applying; progress() reports it
         Staged,    // stagedVersion() is ready for Restart to update or the quit
+        Installing,   // Restart to update: checking it and handing it over
+                      // (on Linux, switching it in), on a worker thread
         Handed,    // the helper has it and is waiting for AetherSDR to exit
     };
 
@@ -44,6 +47,28 @@ public:
         // UpdateSettings::rolledBackVersion: a release the helper rolled
         // back is never staged or offered again.
         std::function<QString()> rolledBackVersion;
+
+        // Install for updates (RFC #5304 Phase 6), on Linux: the AppImage
+        // file AetherSDR runs from ($APPIMAGE); empty when it isn't one.
+        QString appImage;
+        // Where Install for updates puts it, as shown ("~/.local/share/...").
+        QString installFolder;
+        // The release installed for updates (LinuxInstall's current); empty:
+        // nothing is installed.
+        std::function<QString()> installedVersion;
+        // Installs the running release, the AppImage's own tree, for
+        // updates (LinuxInstall::install), never over an install made
+        // meanwhile. Runs on a worker thread.
+        std::function<bool(QString* problem, QString* note)> installRunning;
+        // Moves file to the trash. Runs on a worker thread.
+        std::function<bool(const QString& file)> trash;
+        // Starts the installed release once this process has exited.
+        std::function<bool()> startInstalled;
+
+        // macOS (RFC #5304 Phase 4): the source stamped into the installed DAX
+        // driver (MacInstall::daxDriverSourceOf): nullopt when none is
+        // installed, empty when it predates the stamp.
+        std::function<std::optional<QString>()> installedDaxDriverSource;
     };
 
     // This app's: the install it runs from, UpdateInstaller::stateDir(),
@@ -51,7 +76,8 @@ public:
     static Environment forThisApp();
 
     // What AetherSDRUpdater did after the last run ("Updated", "RolledBack",
-    // ...; empty outcome: nothing), as main.cpp read it at start.
+    // ...; empty outcome: nothing), as main.cpp read it at start, or
+    // "Installed" once, in the copy Install for updates restarted into.
     struct LastUpdate {
         QString outcome;
         QString version;
@@ -65,6 +91,29 @@ public:
     // A release the helper rolled back here: never staged, offered or
     // badged again.
     bool isRolledBack(const QString& version) const;
+
+    // Install for updates: the AppImage whose release can be installed for
+    // updates, when AetherSDR runs as one and nothing is installed yet;
+    // empty otherwise.
+    QString appImageToInstall() const;
+    // The release installed for updates; empty when none.
+    QString installedVersion() const;
+    // The AppImage AetherSDR runs from; empty when it isn't one.
+    QString appImage() const { return m_env.appImage; }
+    QString installFolder() const { return m_env.installFolder; }
+    bool isInstallingAppImage() const { return m_installingAppImage; }
+    // Copies the running release into the install for updates on a worker
+    // thread, then, with trash, moves the AppImage to the trash. Ends in
+    // appImageInstalled.
+    void installAppImage(bool trash);
+
+    // A staged release's DAX driver differs from the installed one: the
+    // Updates window says to install it from that release's disk image (the
+    // in-app update installs the app only).
+    bool daxDriverChanges() const;
+    // The rule itself: the release names a source, a driver is installed, and
+    // its stamp differs (an unstamped driver, from before the stamp, too).
+    static bool daxDriverChanges(const std::optional<QString>& installed, const QString& staged);
 
     State state() const { return m_state; }
     // The release staged, or being staged; empty when Idle.
@@ -86,13 +135,18 @@ public:
     void discard(const QString& version);
 
     // Restart to update: checks the staged files again and hands them to
-    // the helper, which starts the new version once AetherSDR has quit. The
-    // caller then quits. False with problem when it cannot (the staged
-    // release is then discarded, to be staged again).
+    // the helper, which starts the new version once AetherSDR has quit, on
+    // a worker thread (on Linux the switch and its self-test run there, up
+    // to a minute for a release that hangs). False with problem when
+    // nothing is staged; otherwise restartReady says how it went, and the
+    // caller quits when it was handed over.
     bool restartToUpdate(QString* problem);
-    // As the app quits: the same, silently, without the restart. False when
-    // nothing was handed over.
+    // As the app quits: the same, silently, without the restart, waited
+    // for. False when nothing was handed over.
     bool installOnQuit();
+    // macOS: forgets a swap readied for this exit, because another instance
+    // is starting from the bundle (a UI-scale restart). It stays staged.
+    void dropPendingSwap();
 
 signals:
     void stateChanged();
@@ -106,9 +160,25 @@ signals:
     // the newer one and reason says so. Every attempt ends in staged,
     // browserNeeded or failed.
     void failed(const QString& reason, const QString& version);
+    // Restart to update finished: handed over (quit now), or not, with
+    // problem (the staged release is discarded when it can't be used again).
+    void restartReady(bool handed, const QString& problem, const QString& version);
+    // Install for updates finished. restart: it is installed and starts
+    // once AetherSDR exits (quit now). Otherwise problem says what went
+    // wrong: it wasn't installed, or it was but the AppImage couldn't be
+    // moved to the trash or the installed copy started, and nothing restarts.
+    void appImageInstalled(bool restart, const QString& problem);
 
 private:
-    bool handOver(bool restart, QString* problem);
+    // What a hand-over did, worked out off the GUI thread.
+    struct HandOver {
+        bool handed = false;
+        bool changed = false;    // the staged files changed on disk
+        bool consumed = false;   // the staged tree is gone (Linux's switch used it up)
+        QString problem;
+    };
+    static HandOver runHandOver(const Environment& env, const UpdateStager::StagedRelease& staged, bool restart);
+    bool finishHandOver(const HandOver& h, const UpdateStager::StagedRelease& staged, QString* problem);
     // A staging attempt for attempted ended without a release.
     void endAttempt(const QString& attempted, const QString& reason, bool browser);
     // A newer latest has been heard than version.
@@ -120,6 +190,10 @@ private:
     Environment m_env;
     UpdateStager* m_stager;
     State m_state{State::Idle};
+    bool m_installingAppImage{false};
+    // The staged release's DAX driver source, read once per staged version.
+    mutable QString m_daxSourceVersion;
+    mutable QString m_daxSource;
     QString m_version;
     UpdateStager::StagedRelease m_staged;
     QString m_latest;   // GitHub's latest as last heard; empty: not known

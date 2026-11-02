@@ -12,8 +12,10 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QObject>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTimer>
 
 #include <atomic>
 #include <cstdio>
@@ -62,10 +64,13 @@ private:
     std::shared_ptr<Log> m_log;
 };
 
-bool waitFinished(FirmwareInstallModel& model, bool* ok, QString* message)
+bool waitFinished(FirmwareInstallModel& model, bool* ok, QString* message, int timeoutMs = 10000)
 {
     bool done = false;
-    QObject::connect(&model, &FirmwareInstallModel::finished, &model,
+    // Completion may be emitted again after success or timeout. The callback
+    // must stop referring to this wait's stack as soon as the wait returns.
+    QObject waitContext;
+    QObject::connect(&model, &FirmwareInstallModel::finished, &waitContext,
                      [&](bool o, const QString& m) {
                          done = true;
                          *ok = o;
@@ -73,11 +78,33 @@ bool waitFinished(FirmwareInstallModel& model, bool* ok, QString* message)
                      });
     QElapsedTimer t;
     t.start();
-    while (!done && t.elapsed() < 10000) {
+    while (!done && t.elapsed() < timeoutMs) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
         QThread::msleep(2);
     }
     return done;
+}
+
+void testWaitLifetime()
+{
+    FirmwareInstallModel model(nullptr);
+    bool ok = false;
+    QString message;
+    QTimer::singleShot(0, &model, [&model] {
+        emit model.finished(true, QStringLiteral("complete"));
+    });
+    check(waitFinished(model, &ok, &message) && ok && message == QStringLiteral("complete"),
+          "the active waiter receives completion");
+    emit model.finished(false, QStringLiteral("later completion"));
+    check(ok && message == QStringLiteral("complete"),
+          "a completed waiter no longer receives results");
+
+    ok = false;
+    message = QStringLiteral("unchanged");
+    check(!waitFinished(model, &ok, &message, 0), "a wait can time out without a result");
+    emit model.finished(true, QStringLiteral("late after timeout"));
+    check(!ok && message == QStringLiteral("unchanged"),
+          "a timed-out waiter no longer receives results");
 }
 
 void testConfirmedDevice()
@@ -251,6 +278,7 @@ int main(int argc, char** argv)
     // The relay model reads its saved setup: never the operator's.
     TestSettingsProfile profile(QStringLiteral("firmware_install_model_test"));
     QCoreApplication app(argc, argv);
+    testWaitLifetime();
     testConfirmedDevice();
     testAccessDenied();
     testFollowsRelaySelection();

@@ -94,7 +94,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7565,
+          "line": 7601,
           "text": "\"RadioModel: terminal GUI client registration failure\""
         }
       ]
@@ -111,12 +111,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7494,
+          "line": 7530,
           "text": "RadioModel: this GUI client was force-disconnected by another client"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7539,
+          "line": 7575,
           "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
         }
       ]
@@ -133,7 +133,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7404,
+          "line": 7440,
           "text": "RadioModel: multiFLEX disabled, other clients present"
         }
       ]
@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8739,
+          "line": 8772,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -210,7 +210,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7780,
+          "line": 7816,
           "text": "RadioModel: no VITA-49 UDP data received after 10s"
         }
       ]
@@ -227,7 +227,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7758,
+          "line": 7794,
           "text": "RadioModel: UDP stream setup failed"
         },
         {
@@ -237,7 +237,7 @@
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7837,
+          "line": 7873,
           "text": "RadioModel: client udpport collision"
         }
       ]
@@ -452,12 +452,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 1400,
+          "line": 1401,
           "text": "RadioModel: dax_rx stream create for channel"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 1899,
+          "line": 1950,
           "text": "stream create failed/dropped"
         }
       ]
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 13352,
+          "line": 13407,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -491,12 +491,12 @@
       "source": [
         {
           "file": "src/models/DaxIqModel.cpp",
-          "line": 399,
+          "line": 420,
           "text": "DaxIqWorker: pactl load-module failed for IQ ch"
         },
         {
           "file": "src/models/DaxIqModel.cpp",
-          "line": 408,
+          "line": 429,
           "text": "DaxIqWorker: cannot open IQ pipe"
         }
       ]
@@ -608,7 +608,7 @@
       "source": [
         {
           "file": "src/main.cpp",
-          "line": 86,
+          "line": 87,
           "text": "Non-fatal X11 error suppressed (error_code="
         }
       ]
@@ -941,7 +941,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 2886,
+          "line": 2906,
           "text": "HL2: could not open the UDP socket"
         }
       ]
@@ -1034,12 +1034,12 @@
       "source": [
         {
           "file": "src/core/AsyncLogWriter.cpp",
-          "line": 677,
+          "line": 688,
           "text": "Logging dropped debug/info lines count="
         },
         {
           "file": "src/core/AsyncLogWriter.cpp",
-          "line": 683,
+          "line": 694,
           "text": "Logging dropped warning/critical/fatal lines count="
         }
       ]
