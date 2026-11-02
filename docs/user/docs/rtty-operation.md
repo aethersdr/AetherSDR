@@ -26,7 +26,7 @@ The radio stores a global default (`rtty_mark_default`) that applies to all new 
 
 ### Shift
 
-The shift is the frequency difference between the Mark and Space tones. The standard amateur RTTY shift is **170 Hz**. Other shifts exist (for example 850 Hz for military/commercial) but are uncommon on the amateur bands.
+The shift is the frequency difference between the Mark and Space tones. The standard amateur RTTY shift is **170 Hz**. Other shifts exist (for example 850 Hz for military/commercial, or 85 Hz for the DWD weather broadcasts on LF such as DDH47 on 147.3 kHz) but are uncommon on the amateur bands.
 
 The shift is set per slice via `rtty_shift` in the radio's slice status.
 
@@ -105,7 +105,7 @@ See [DAX Virtual Audio](./dax-virtual-audio.md) and [CAT Control](./cat-control.
 | Control | Options | What it does |
 |---|---|---|
 | **Mark** | **Auto**, 2125, 2210, 1700, 1275, 1000, 915, 850, 500 Hz | The Mark tone. **Auto** follows the slice's mark setting from the radio, live. |
-| **Shift** | 45, 50, 75, 100, **170**, 182, 200, 240, 425, 450, 500, 850 Hz | Mark-to-space shift |
+| **Shift** | 45, 50, 75, 85, 100, **170**, 182, 200, 240, 425, 450, 500, 850 Hz | Mark-to-space shift. A value set by hand in the settings file (`RttyDecoderShiftHz`) that is not on the list is kept as its own entry, as long as it is between 10 and 1000 Hz. |
 | **Baud** | **45.45**, 50, 75, 100, 110, 150, 300 | Symbol rate |
 | **REV** | On / off | Reverse polarity — space above mark (inverted signal) |
 | **Sens** | 0–100 (default 0) | Display squelch: hides characters the decoder is not confident about, so noise between transmissions doesn't fill the pane. 0 shows everything; about 38 hides what the stats bar calls UNLOCK; 100 keeps only near-certain copy. Display only — nothing is retuned. |

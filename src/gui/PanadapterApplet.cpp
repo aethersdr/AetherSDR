@@ -436,12 +436,27 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_rttyShiftCombo->setStyleSheet(comboStyle);
     m_rttyShiftCombo->setFixedWidth(52);
     m_rttyShiftCombo->setToolTip("Mark-to-space frequency shift");
-    // fldigi standard shifts
-    for (int hz : {45, 50, 75, 100, 170, 182, 200, 240, 425, 450, 500, 850})
+    // fldigi standard shifts, plus 85 Hz: the DWD weather broadcasts on LF
+    // (DDH47, 147.3 kHz) use it, and the nearest list entry put the space
+    // filter 10-15 Hz off the tone (#6969).
+    for (int hz : {45, 50, 75, 85, 100, 170, 182, 200, 240, 425, 450, 500, 850})
         m_rttyShiftCombo->addItem(QString::number(hz), hz);
     {
+        // A shift typed into the settings file need not be on the list. Keep
+        // any plausible RTTY shift as its own entry, in sorted position, so it
+        // survives a restart instead of silently becoming 170 Hz (#6969); only
+        // junk falls back. The space tone is mark - shift, so the ceiling stays
+        // below the lowest Mark entry.
+        constexpr int kRttyShiftMinHz = 10;
+        constexpr int kRttyShiftMaxHz = 1000;
         const int saved = AppSettings::instance().value("RttyDecoderShiftHz", "170").toInt();
-        const int idx   = m_rttyShiftCombo->findData(saved);
+        int idx = m_rttyShiftCombo->findData(saved);
+        if (idx < 0 && saved >= kRttyShiftMinHz && saved <= kRttyShiftMaxHz) {
+            idx = 0;
+            while (idx < m_rttyShiftCombo->count() && m_rttyShiftCombo->itemData(idx).toInt() < saved)
+                ++idx;
+            m_rttyShiftCombo->insertItem(idx, QString::number(saved), saved);
+        }
         m_rttyShiftCombo->setCurrentIndex(idx >= 0 ? idx : m_rttyShiftCombo->findData(170));
     }
     connect(m_rttyShiftCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
