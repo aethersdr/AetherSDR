@@ -77,7 +77,7 @@ func TestRotatedTokenIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := n.SetAllow(old, []string{"tag:ops"}); !errors.Is(err, errUnauthorized) {
+	if err := n.SetAllow(old, nil); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("SetAllow with the rotated token: %v", err)
 	}
 	if err := n.SetSharing(old, nil, nil); !errors.Is(err, errUnauthorized) {
@@ -86,7 +86,7 @@ func TestRotatedTokenIsRefused(t *testing.T) {
 	if err := n.SignOut(old); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("SignOut with the rotated token: %v", err)
 	}
-	if err := n.SetAllow(cur, []string{"tag:ops"}); err != nil {
+	if err := n.SetAllow(cur, nil); err != nil {
 		t.Fatalf("SetAllow with the current token: %v", err)
 	}
 }
@@ -288,7 +288,7 @@ func TestOperatorRequestsInterruptAStuckBoot(t *testing.T) {
 
 	n.Boot()
 	waitAttempt("first boot")
-	within("SetAllow", func() error { return n.SetAllow(token, []string{"tag:ops"}) })
+	within("SetAllow", func() error { return n.SetAllow(token, nil) })
 	waitAttempt("boot after SetAllow") // a provisioned node keeps trying to rejoin
 	within("SetSharing", func() error { return n.SetSharing(token, nil, nil) })
 	waitAttempt("boot after SetSharing")
@@ -359,11 +359,11 @@ func TestSignOutInterruptsAStuckBoot(t *testing.T) {
 	}
 }
 
-// Saving a narrower allowlist ends what it no longer admits, at once: the
-// removed computer's radio session (so the radio drops it and unkeys what it
+// An access change ends what the authorizer no longer admits, at once: the
+// refused computer's radio session (so the radio drops it and unkeys what it
 // owned), its side-channel transfer and its station-device splice. The
-// computer still allowed keeps its session.
-func TestSaveAccessListEndsRemovedConnections(t *testing.T) {
+// computer still admitted keeps its session.
+func TestAnAccessChangeEndsConnectionsTheAuthorizerRefuses(t *testing.T) {
 	const token = "test-admin-token"
 	n := newTestNode(t, token)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -407,7 +407,7 @@ func TestSaveAccessListEndsRemovedConnections(t *testing.T) {
 	n.splices.add(removedFrom, netip.MustParseAddr("192.168.50.103"), devA)
 	n.fwd.splices.add(removedFrom, netip.Addr{}, sideA)
 
-	if err := n.SetAllow(token, []string{"tag:ops"}); err != nil {
+	if err := n.SetAllow(token, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !removed.waitClosed(2 * time.Second) {
@@ -445,7 +445,7 @@ func TestSlowBootTeardownAnswersBusy(t *testing.T) {
 		t.Fatal("no boot attempt")
 	}
 	start := time.Now()
-	err := n.SetAllow(token, []string{"tag:ops"})
+	err := n.SetAllow(token, nil)
 	if !errors.Is(err, errBusy) || time.Since(start) > time.Second {
 		t.Fatalf("SetAllow: %v after %v, want errBusy promptly", err, time.Since(start))
 	}

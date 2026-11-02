@@ -67,7 +67,7 @@ With a neural decoder selected:
 - **Sens**, the lock buttons and the Pitch and WPM ranges are unavailable; they apply to ggmorse only.
 - Characters are coloured by the model's own confidence, on the same green-to-red scale, and are never hidden.
 - Callsign contact cards and the MQTT text stream come from ggmorse only.
-- AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on radios with SmartSDR+) works with any decoder.
+- AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on a radio licensed for it through SmartSDR+, which it keeps after the subscription lapses) works with any decoder.
 
 DeepCW discards its provisional text (about 5–7 seconds) when the source changes, audio is interrupted, or decoding stops. Its worker finishes the current inference or model load before stopping, so switching decoders can pause the interface until that work finishes.
 

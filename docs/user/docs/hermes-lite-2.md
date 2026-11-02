@@ -97,6 +97,22 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 
 > **Upgrading from an older version:** receive audio is about 12 dB quieter at every AF gain setting: on the speaker, the radio's own codec, TCI and the decoders. If you turned a slice's AF gain down (to about 25) to stop strong stations distorting, you can turn it back up.
 
+### Receive filters
+
+Choose filter presets in [RX Controls](./rx-controls.md) or the
+[VFO flag's mode tab](./vfo-widget.md#mode-tab). In **FM**, the VFO offers widths
+from **6K** to **20K** in 2 kHz steps; the compact RX applet shows the first six,
+**6K** to **16K**. In **WBFM**, the passband control is disabled and the preset
+row shows **Filter unavailable**.
+
+Saved **CW/CWL** presets must straddle the signal marker: the low cut is
+−6000 to −10 Hz and the high cut is +10 to +6000 Hz. Presets outside those
+ranges are skipped; if none fit, the normal CW presets appear.
+
+> **Upgrading from an older version:** a saved CW preset with both cuts on the
+> same side of the marker is skipped. Recreate it with cuts on opposite sides
+> of the marker, or choose a standard CW width.
+
 ### Squelch
 
 The **SQL** button works per mode family:
@@ -127,6 +143,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 ## Transmit
 
 - **SSB voice** uses WDSP's TXA modulator. The EQ, PROC, TX low/high cut, eSSB, ALC and compression gauges act on the HL2.
+- **TX filter-loss notice:** when transmitting from receiver A, AetherSDR can warn if the transmit audio is strongly attenuated through the modulator. The check uses a 40 dB threshold, so a narrow passband can still reduce audio without triggering a notice. It does not detect this loss in FM or while transmitting from another receiver.
 - **The Mic Level slider is the transmit level.** The ALC only ever reduces. The Phone panel shows the **ALC Gain** the radio reports.
 - **The ALC gauge shows the audio peak after the ALC, before the modulator.** It sits at the ALC target while the ALC is reducing. It is not the transmitted envelope, which can stand above it when the audio is limited or compressed.
 - **Data:** WSJT-X and similar programs work over the [TCI Server](./tci-server.md). Their power slider changes RF output, and the speech ALC does not raise client audio. The WSPR beacon defaults to −3 dBFS and is not moved by the mic slider.

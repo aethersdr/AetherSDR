@@ -18,6 +18,8 @@ opens a browse panel (see [Memory browse panel](#memory-browse-panel)).
 
 *The Memory Channels window, listing the memories stored in the radio.*
 
+The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it; it reopens at the size and place you left it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS); while the search box holds text, **Esc** clears it first. **View → Frameless Window** does not apply to it.
+
 ## Using memory channels
 
 ### Finding a memory
