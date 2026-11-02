@@ -33,7 +33,7 @@ public:
     QString description() const;
     const Kat500::Status& status() const { return m_status; }
     qint64 fieldAgeMs(const QString& command) const;
-    QString unavailableReason(bool writing = false) const;
+    QString unavailableReason(bool writing = false, bool requireZeroRf = false) const;
     bool operationBusy() const { return !m_operation.isEmpty(); }
     QString operationName() const { return m_operation; }
 
@@ -50,7 +50,9 @@ public:
     // Explicit operator intent only. No command here keys a radio/carrier.
     bool startTune(bool saveMatch = true, std::function<bool()> permit = {});
     bool cancelTune();
-    // Retain stop intent if its controller goes away while a serial request drains.
+    bool tuneSearchPending() const;
+    bool tuneCancellationPending() const;
+    // Retain explicit stop intent while an operation or late reply drains.
     void cancelTuneAfterPendingOperation();
     bool readMatchStatus();
     bool memorize(int frequencyKhz = 0);
@@ -111,6 +113,7 @@ private:
         int timeoutMs = 2000;
         bool mutation = false;
         bool requiresIdle = true;
+        bool requiresZeroRf = false;
     };
     void transportOpened();
     void transportClosed(const QString& reason = {});
@@ -127,12 +130,12 @@ private:
     void report(const QString& text, bool polling = false);
     bool requestValue(const QByteArray& setter, const QByteArray& getter, std::function<bool(const Kat500::Status&)> verify,
                       const QString& name, bool allowOff = false);
-    void preflight(std::function<void()> ready);
+    void preflight(std::function<void()> ready, bool requireZeroRf = true);
     void readRegion(bool external, int address, int end, std::function<void(QByteArray)> complete);
     void readRegionBlock();
-    void restoreBlock();
+    void restoreBlock(bool refreshed = false);
     void restoreNextRegion();
-    void applyNextSetting();
+    void applyNextSetting(bool refreshed = false);
     void eraseNextBand();
     void queueIdentity();
     void pollTuneCancellation();
@@ -208,6 +211,8 @@ private:
     qint64 m_settleNext = 0;
     quint64 m_settleGeneration = 0;
     bool m_settleAllowOff = false;
+    qint64 m_searchDeadline = 0;
+    bool m_searchObserved = false;
     qint64 m_cancelTuneDeadline = 0;
     qint64 m_tuneResultDeadline = 0;
     bool m_deferredTuneCancel = false;

@@ -608,10 +608,10 @@ void PanadapterStream::unregisterPanStream(quint32 streamId)
         QMutexLocker lock(&m_streamMutex);
         if (m_receiveData) { m_receiveData->unregisterStream(streamId, false); }
         m_knownPanStreams.remove(streamId);
-        m_frames.remove(streamId);
         m_dbmRanges.remove(streamId);
         m_dbmRangeGenerations.remove(streamId);
         m_pendingDbmRanges.remove(streamId);
+        m_frames.remove(streamId);
     }
     restartStreamSequence(streamId);
 }
@@ -649,11 +649,11 @@ void PanadapterStream::restartAllStreamSequences()
 void PanadapterStream::clearRegisteredStreams()
 {
     QMutexLocker lock(&m_streamMutex);
+    m_frames.clear();
+    m_wfFrames.clear();
     if (m_receiveData) { m_receiveData->clearStreams(); }
     m_knownPanStreams.clear();
     m_knownWfStreams.clear();
-    m_frames.clear();
-    m_wfFrames.clear();
     m_dbmRanges.clear();
     m_dbmRangeGenerations.clear();
     m_pendingDbmRanges.clear();
@@ -1155,46 +1155,65 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     if (m_receiveData && !m_knownPanStreams.contains(streamId)) { return; }
     const ReceiveDataLease lease = m_receiveData ? m_receiveData->streamLease(streamId, false) : ReceiveDataLease{};
     const ReceiveReceipt receipt = ReceiveReceipt::now();
-    // Per-stream frame assembly.
-    auto& frame = m_frames[streamId];
-    const bool startsNewFrame =
-        frameIndex != frame.frameIndex || totalBins != frame.totalBins;
-    if (startsNewFrame) {
-        if (frame.totalBins > 0 && !frame.isComplete())
-            PerfTelemetry::instance().recordFrameRestart(PerfTelemetry::FrameKind::Panadapter);
-        frame.reset(frameIndex, totalBins);
+    // Per-stream frame assembly. A completed frame is copied out so the
+    // lock is not held for the dBm conversion or the emit.
+    QVector<quint16> frameBins;
+    int floorFilledSuffixStart = -1;
+    bool latePacket = false;
+    {
+        auto& frame = m_frames[streamId];
+        // A late packet from an already-replaced frame must not restart
+        // assembly and throw away the frame now in progress; FlexLib drops it
+        // (reference/FlexLib/FlexLib/Panadapter.cs:805, v4.3.16), whatever its
+        // width, so a resize's last old-width packet cannot break the first
+        // new-width frame (#6883).
+        latePacket = frame.totalBins > 0
+            && isLateVitaFrame(frame.frameIndex, frameIndex);
+        if (!latePacket) {
+            const bool startsNewFrame =
+                frameIndex != frame.frameIndex || totalBins != frame.totalBins;
+            if (startsNewFrame) {
+                if (frame.totalBins > 0 && !frame.isComplete())
+                    PerfTelemetry::instance().recordFrameRestart(PerfTelemetry::FrameKind::Panadapter);
+                frame.reset(frameIndex, totalBins);
+            }
+
+            if (static_cast<int>(startBin) + binsToRead > frame.buf.size())
+                return;
+            if (frame.isComplete())
+                return;
+            if (!frame.coverage.markRange(startBin, binsToRead))
+                return;
+
+            for (int i = 0; i < binsToRead; ++i)
+                frame.buf[startBin + i] = qFromBigEndian<quint16>(binData + i * 2);
+
+            if (!frame.isComplete()) return;
+
+            // On an x_pixels grow, firmware 4.2.18 can complete one expanded
+            // frame with the old-width prefix followed by zero-filled new bins.
+            // Zero means max dBm in the radio's vertical pixel encoding. Reject
+            // that placeholder before it reaches FFT averaging or retained 3D
+            // history; the previous complete FFT remains live until the first
+            // valid expanded frame arrives.
+            const bool zeroFilledGrowth = hasZeroFilledFftGrowthSuffix(
+                frame.buf, frame.lastAcceptedTotalBins);
+            const FftGrowthSuffixAction growthAction =
+                frame.growthSuffixGuard.observe(zeroFilledGrowth, frame.totalBins);
+            if (growthAction == FftGrowthSuffixAction::Reject) {
+                return;
+            }
+            if (growthAction == FftGrowthSuffixAction::EmitWithFloorSuffix) {
+                floorFilledSuffixStart = frame.lastAcceptedTotalBins;
+            } else {
+                frame.lastAcceptedTotalBins = frame.totalBins;
+            }
+            frameBins = frame.buf;
+        }
     }
-
-    if (static_cast<int>(startBin) + binsToRead > frame.buf.size())
+    if (latePacket) {
+        recordLatePacket(CatFFT);
         return;
-    if (frame.isComplete())
-        return;
-    if (!frame.coverage.markRange(startBin, binsToRead))
-        return;
-
-    for (int i = 0; i < binsToRead; ++i)
-        frame.buf[startBin + i] = qFromBigEndian<quint16>(binData + i * 2);
-
-    if (!frame.isComplete()) return;
-
-    // On an x_pixels grow, firmware 4.2.18 can complete one expanded frame
-    // with the old-width prefix followed by zero-filled new bins. Zero means
-    // max dBm in the radio's vertical pixel encoding. Reject that placeholder
-    // before it reaches FFT averaging or retained 3D history; the previous
-    // complete FFT remains live until the first valid expanded frame arrives.
-    const bool zeroFilledGrowth = hasZeroFilledFftGrowthSuffix(
-        frame.buf, frame.lastAcceptedTotalBins);
-    const FftGrowthSuffixAction growthAction =
-        frame.growthSuffixGuard.observe(zeroFilledGrowth, frame.totalBins);
-    if (growthAction == FftGrowthSuffixAction::Reject) {
-        return;
-    }
-    const int floorFilledSuffixStart =
-        growthAction == FftGrowthSuffixAction::EmitWithFloorSuffix
-        ? frame.lastAcceptedTotalBins
-        : -1;
-    if (growthAction == FftGrowthSuffixAction::Accept) {
-        frame.lastAcceptedTotalBins = frame.totalBins;
     }
 
     // Convert to dBm using per-stream range
@@ -1213,11 +1232,12 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
         decodeScale = {dbmRange.first, dbmRange.second, generation};
         yPixVal = m_yPixels.value(streamId, 700);
     }
+    streamLock.unlock();
     auto [minDbm, maxDbm] = dbmRange;
     const float range = maxDbm - minDbm;
     if (range <= 0.0f) return;
 
-    const int   count = frame.buf.size();
+    const int   count = frameBins.size();
     QVector<float> bins(count);
 
     // The radio's configured y_pixels is the encoding scale. Values at or
@@ -1236,13 +1256,12 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
         const float pixel = floorFillSuffix
             ? yPix - 1.0f
             : std::clamp(
-                static_cast<float>(frame.buf[i]), 0.0f, yPix - 1.0f);
+                static_cast<float>(frameBins[i]), 0.0f, yPix - 1.0f);
         const float dbm = maxDbm - (pixel / (yPix - 1.0f)) * range;
         bins[i] = std::clamp(dbm, minDbm, maxDbm);
     }
 
     const qint64 emittedNs = PerfTelemetry::instance().enabled() ? PerfTelemetry::nowNs() : 0;
-    streamLock.unlock();
     if (m_receiveData) {
         m_receiveData->spectrum({streamId, std::move(bins), decodeScale, emittedNs, receipt, lease});
     } else {
@@ -1315,46 +1334,61 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
     if (m_receiveData && !m_knownWfStreams.contains(streamId)) { return; }
     const ReceiveDataLease lease = m_receiveData ? m_receiveData->streamLease(streamId, true) : ReceiveDataLease{};
     const ReceiveReceipt receipt = ReceiveReceipt::now();
-    auto& wfFrame = m_wfFrames[streamId];
-    if (timecode != wfFrame.timecode
-        || totalBinsInFrame != wfFrame.totalBins) {
-        if (wfFrame.totalBins > 0 && !wfFrame.isComplete())
-            PerfTelemetry::instance().recordFrameRestart(PerfTelemetry::FrameKind::Waterfall);
-        wfFrame.reset(timecode, totalBinsInFrame, lowFreqMhz, binBwMhz, autoBlack);
-    }
-
-    // Copy this fragment's bins into the assembly buffer.
-    // Only process the first row (height is typically 1).
     const uchar* tilePayload = raw + payloadOffset;
-    const int binsToRead = qMin(static_cast<int>(tileWidth),
-                                static_cast<int>(totalBinsInFrame) - static_cast<int>(firstBinIndex));
-    if (binsToRead <= 0) return;
+    WaterfallFrame row;
+    bool latePacket = false;
+    {
+        auto& wfFrame = m_wfFrames[streamId];
+        // A late tile from an already-replaced row is dropped rather than
+        // restarting assembly and losing the row in progress (#6883).
+        latePacket = wfFrame.totalBins > 0
+            && isLateVitaFrame(wfFrame.timecode, timecode);
+        if (!latePacket) {
+            if (timecode != wfFrame.timecode
+                || totalBinsInFrame != wfFrame.totalBins) {
+                if (wfFrame.totalBins > 0 && !wfFrame.isComplete())
+                    PerfTelemetry::instance().recordFrameRestart(PerfTelemetry::FrameKind::Waterfall);
+                wfFrame.reset(timecode, totalBinsInFrame, lowFreqMhz, binBwMhz, autoBlack);
+            }
 
-    // Defense in depth: even with the reset condition above, validate that
-    // the upper write index fits the buffer.  Guards against any future
-    // refactor that breaks the wfFrame.buf.size() <-> wfFrame.totalBins
-    // invariant.  GHSA-7gvg-x594-pprq.
-    if (firstBinIndex + binsToRead > wfFrame.buf.size()) return;
-    if (wfFrame.isComplete()) return;
-    if (!wfFrame.coverage.markRange(firstBinIndex, binsToRead)) return;
+            // Copy this fragment's bins into the assembly buffer.
+            // Only process the first row (height is typically 1).
+            const int binsToRead = qMin(static_cast<int>(tileWidth),
+                                        static_cast<int>(totalBinsInFrame) - static_cast<int>(firstBinIndex));
+            if (binsToRead <= 0) return;
 
-    for (int i = 0; i < binsToRead; ++i) {
-        const auto raw16 = static_cast<qint16>(qFromBigEndian<quint16>(tilePayload + i * 2));
-        wfFrame.buf[firstBinIndex + i] = static_cast<float>(raw16) / 128.0f;
+            // Defense in depth: even with the reset condition above, validate
+            // that the upper write index fits the buffer.  Guards against any
+            // future refactor that breaks the wfFrame.buf.size() <->
+            // wfFrame.totalBins invariant.  GHSA-7gvg-x594-pprq.
+            if (firstBinIndex + binsToRead > wfFrame.buf.size()) return;
+            if (wfFrame.isComplete()) return;
+            if (!wfFrame.coverage.markRange(firstBinIndex, binsToRead)) return;
+
+            for (int i = 0; i < binsToRead; ++i) {
+                const auto raw16 = static_cast<qint16>(qFromBigEndian<quint16>(tilePayload + i * 2));
+                wfFrame.buf[firstBinIndex + i] = static_cast<float>(raw16) / 128.0f;
+            }
+            // Only emit when the full frame is assembled
+            if (!wfFrame.isComplete()) return;
+            row = wfFrame;
+        }
     }
-    // Only emit when the full frame is assembled
-    if (!wfFrame.isComplete()) return;
+    if (latePacket) {
+        recordLatePacket(CatWaterfall);
+        return;
+    }
 
-    const double frameHighMhz = wfFrame.lowFreqMhz + wfFrame.binBwMhz * wfFrame.totalBins;
+    const double frameHighMhz = row.lowFreqMhz + row.binBwMhz * row.totalBins;
     const qint64 emittedNs = PerfTelemetry::instance().enabled() ? PerfTelemetry::nowNs() : 0;
-    ReceiveWaterfallRow row{streamId, wfFrame.buf, wfFrame.lowFreqMhz, frameHighMhz,
-        wfFrame.timecode, wfFrame.autoBlack, emittedNs, receipt, lease};
+    ReceiveWaterfallRow observation{streamId, row.buf, row.lowFreqMhz, frameHighMhz,
+        row.timecode, row.autoBlack, emittedNs, receipt, lease};
     streamLock.unlock();
     if (m_receiveData) {
-        m_receiveData->waterfall(std::move(row));
+        m_receiveData->waterfall(std::move(observation));
     } else {
         emit waterfallAutoBlackLevel(streamId, row.autoBlack);
-        emit waterfallRowReady(streamId, row.intensity, row.lowMhz, row.highMhz, row.timecode, emittedNs);
+        emit waterfallRowReady(streamId, observation.intensity, observation.lowMhz, observation.highMhz, row.timecode, emittedNs);
     }
 }
 
@@ -1701,6 +1735,12 @@ int PanadapterStream::packetTotalCount() const
     for (auto it = m_streamStats.constBegin(); it != m_streamStats.constEnd(); ++it)
         total += it->totalCount;
     return total;
+}
+
+void PanadapterStream::recordLatePacket(StreamCategory cat)
+{
+    QMutexLocker lock(&m_statsMutex);
+    m_catStats[cat].late++;
 }
 
 PanadapterStream::CategoryStats PanadapterStream::categoryStats(StreamCategory cat) const

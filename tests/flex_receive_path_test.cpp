@@ -206,11 +206,21 @@ int main(int argc, char** argv)
           "diagnostics read backend snapshot");
     check(ping.empty(), "UDP telemetry is not a TCP ping confirmation");
     produce(2);
+    produce(1);
+    drain();
+    check(spectrum.size() == 2 && waterfall.size() == 2
+          && stream->categoryStats(PanadapterStream::CatFFT).late == 1
+          && stream->categoryStats(PanadapterStream::CatWaterfall).late == 1,
+          "late frames are discarded before the typed receive queues");
+    spectrum.clear(); waterfall.clear(); black.clear();
+    produce(3);
+    drain();
+    produce(4);
     stream->unregisterPanStream(pan); stream->registerPanStream(pan);
     stream->unregisterWfStream(wf); stream->registerWfStream(wf);
     drain();
     check(spectrum.size() == 1 && waterfall.size() == 1, "queued data fenced across ID reuse");
-    produce(3);
+    produce(5);
     backend->retireReceiveData();
     drain();
     check(spectrum.size() == 1 && waterfall.size() == 1, "queued data fenced across session retirement");
@@ -220,7 +230,7 @@ int main(int argc, char** argv)
     stream->registerPanStream(pan); stream->registerWfStream(wf);
     QObject::connect(&radio, &RadioModel::panFeedSpectrumReady, &radio,
         [&] { backend->retireReceiveData(); });
-    produce(4);
+    produce(6);
     drain();
     check(spectrum.size() == 2 && waterfall.size() == 1,
           "disconnect inside one delivery cancels remaining detached events");
