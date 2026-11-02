@@ -1125,8 +1125,11 @@ selector, the reply carries that pan's last decoded frame instead of statistics:
   ← {"ok":false,"error":"tracedebug bins: geometry changed 1 frames ago; wait for 3 settled frames"}
   ```
 
-  The refusals: `no frame decoded yet`; `pan animation running`; `a pan or
-  zoom is in progress` (a drag, or a zoom still settling or waiting to be sent);
+  The refusals: `no frame decoded yet` (also after the display was cleared,
+  on disconnect or a profile load); `pan animation running`; `a pan or zoom is
+  in progress` (a drag, or a zoom still settling or waiting to be sent); `a
+  requested pan or zoom is not yet confirmed by the radio` (on a radio that
+  confirms geometry: from the request until its echo, at most 2 s);
   `geometry changed after the last frame` and `geometry changed N frames ago`
   (any change of centre or bandwidth, shown or requested); and `the last frame
   was decoded across a dBm range change`. Retry after a frame interval. A
@@ -1135,6 +1138,10 @@ selector, the reply carries that pan's last decoded frame instead of statistics:
 - The values are in the units the backend delivered; nothing here calibrates
   them. On Flex they are decoded from the radio's pixel encoding, so one
   amplitude step is `(encoderMaxDbm - encoderMinDbm) / (encoderYPixels - 1)`.
+  These fields belong to the returned frame: `encoderMinDbm`/`encoderMaxDbm`
+  are the dBm range that frame was decoded with (the stream's decode scale
+  when it reports one, else the widget's encoder range as the frame arrived),
+  and `encoderYPixels` is the y-pixel count the widget held as it arrived.
   On HL2 they come from a host-side FFT, absolute only once a full-scale
   reference has been measured (`Hl2DbReference::isCalibrated()`).
 - When `kiwiWaterfallActive` is true, the pan is showing a KiwiSDR source and

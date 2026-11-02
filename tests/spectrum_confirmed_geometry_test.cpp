@@ -309,6 +309,82 @@ int runTraceBins()
     check(refusal(m).isEmpty() && sameBins(m, last)
               && nearHz(m.value(QStringLiteral("centerHz")).toDouble(), w.centerMhz() * 1e6),
           "trace bins (c): returned after the animation at the landed centre");
+
+    // The encoder fields are the frame's, not the widget's current range.
+    {
+        SpectrumWidget e;
+        e.resize(1000, 600);
+        e.setFrequencyRangeImmediate(7.100, 0.200);
+        e.setEncoderDbmRange(-140.0f, -20.0f, 1);
+        for (int i = 0; i < kSettled; ++i) {
+            e.updateSpectrum(frame(), SpectrumDecodeScale{-140.0f, -20.0f, 1});
+        }
+        e.setEncoderDbmRange(-150.0f, -30.0f, 2);
+        const QVariantMap em = e.traceBinsSnapshot();
+        check(refusal(em).isEmpty()
+                  && em.value(QStringLiteral("encoderMinDbm")).toFloat() == -140.0f
+                  && em.value(QStringLiteral("encoderMaxDbm")).toFloat() == -20.0f,
+              "trace bins: the encoder range is the one the returned frame was decoded with");
+    }
+
+    // clearDisplay (disconnect, profile load) drops the captured frame.
+    w.clearDisplay();
+    check(refusal(w.traceBinsSnapshot()).contains(QLatin1String("no frame")),
+          "trace bins: refused as no frame after clearDisplay");
+    for (int i = 0; i < kSettled; ++i) {
+        last = frame();
+        w.updateSpectrum(last);
+    }
+    m = w.traceBinsSnapshot();
+    check(refusal(m).isEmpty() && sameBins(m, last), "trace bins: returned again after new frames");
+
+    // Confirmation mode: a sent request changes nothing until the radio's echo.
+    {
+        SpectrumWidget f;
+        f.resize(1000, 600);
+        f.setPanGeometryConfirmationRequired(true);
+        f.observeFrequencyRange(10.120, 0.200);
+        double reqCenter = -1.0;
+        double reqSpan = -1.0;
+        QObject::connect(&f, &SpectrumWidget::frequencyRangeChangeRequested, &f,
+                         [&](double c, double b) { reqCenter = c; reqSpan = b; });
+        for (int i = 0; i < kSettled; ++i) {
+            f.updateSpectrum(frame());
+        }
+        check(refusal(f.traceBinsSnapshot()).isEmpty(), "trace bins (confirm): settled before the request");
+        const QPointF mid(f.mapToGlobal(QPoint(f.width() / 2, f.height() / 2)));
+        SpectrumOffscreenTestAccess::anchoredZoom(f, 0.5, mid);
+        SpectrumOffscreenTestAccess::finishZoomSettle(f);
+        check(reqSpan > 0.0 && nearHz(f.bandwidthMhz() * 1e6, 200'000.0),
+              "trace bins (confirm): the zoom is requested, not applied");
+        for (int i = 0; i < kSettled; ++i) {
+            f.updateSpectrum(frame());
+        }
+        check(refusal(f.traceBinsSnapshot()).contains(QLatin1String("not yet confirmed")),
+              "trace bins (confirm): frames before the echo do not end the refusal");
+        f.observeFrequencyRange(reqCenter, reqSpan);
+        check(!refusal(f.traceBinsSnapshot()).isEmpty(),
+              "trace bins (confirm): refused right after the echo moves the geometry");
+        for (int i = 0; i < kSettled; ++i) {
+            last = frame();
+            f.updateSpectrum(last);
+        }
+        m = f.traceBinsSnapshot();
+        check(refusal(m).isEmpty() && sameBins(m, last)
+                  && nearHz(m.value(QStringLiteral("spanHz")).toDouble(), reqSpan * 1e6),
+              "trace bins (confirm): returned after the echo and settled frames, at the echoed span");
+        // An echo that never comes stops refusing after the guard.
+        SpectrumOffscreenTestAccess::anchoredZoom(f, 0.5, mid);
+        SpectrumOffscreenTestAccess::finishZoomSettle(f);
+        for (int i = 0; i < kSettled; ++i) {
+            f.updateSpectrum(frame());
+        }
+        check(refusal(f.traceBinsSnapshot()).contains(QLatin1String("not yet confirmed")),
+              "trace bins (confirm): a request without an echo is refused");
+        wait(static_cast<int>(SpectrumTraceBins::FrameCapture::kRequestEchoGuardMs) + 200);
+        check(refusal(f.traceBinsSnapshot()).isEmpty(),
+              "trace bins (confirm): a lost echo stops refusing after kRequestEchoGuardMs");
+    }
     return failures ? 1 : 0;
 }
 }

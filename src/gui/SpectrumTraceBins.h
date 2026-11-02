@@ -45,6 +45,14 @@ inline QVariantMap snapshot(const QVector<float>& bins, double centerMhz,
     return m;
 }
 
+// The dBm encoding a frame was decoded with, as the widget knew it then.
+struct FrameEncoder {
+    bool valid{false};
+    float minDbm{0.0f};
+    float maxDbm{0.0f};
+    int yPixels{0};
+};
+
 // The last decoded frame exactly as it arrived, with the pan geometry shown
 // when it arrived. A frame carries no geometry of its own, so the pair is
 // trusted only once kSettledFrames frames have arrived since the geometry
@@ -55,14 +63,45 @@ public:
     // A settling guard, not a measured latency: how many frames the radio
     // still sends for the old geometry after a change is not known.
     static constexpr quint64 kSettledFrames = 3;
+    // A guard, not a measured round trip: how long a sent request whose
+    // echo never matches it keeps the reply refused.
+    static constexpr qint64 kRequestEchoGuardMs = 2000;
+
+    using Encoder = FrameEncoder;
 
     // Every change of the displayed or requested centre or bandwidth.
     void noteGeometryChange() { m_framesAtGeometryChange = m_framesIngested; }
 
+    // The display was cleared: no frame until the next one arrives.
+    void clear() { *this = FrameCapture{}; }
+
+    // When the radio must confirm geometry, a sent request changes nothing
+    // until its echo. Until then (or kRequestEchoGuardMs) the reply refuses.
+    void noteRequestSent(double centerMhz, double bandwidthMhz)
+    {
+        noteGeometryChange();
+        m_requestCenterMhz = centerMhz;
+        m_requestBandwidthMhz = bandwidthMhz;
+        m_requestSent.start();
+    }
+    void noteRangeObserved(double centerMhz, double bandwidthMhz)
+    {
+        if (m_requestSent.isValid() && std::abs(centerMhz - m_requestCenterMhz) <= 1.0e-6
+            && std::abs(bandwidthMhz - m_requestBandwidthMhz) <= 1.0e-6) {
+            m_requestSent.invalidate();
+        }
+    }
+    void cancelRequest() { m_requestSent.invalidate(); }
+    bool requestUnconfirmed() const
+    {
+        return m_requestSent.isValid() && m_requestSent.elapsed() < kRequestEchoGuardMs;
+    }
+
     // rebasedForDisplay: the widget judged this frame encoded with a dBm
     // range other than the one it was decoded with.
     void ingest(const QVector<float>& bins, quint64 fftFrameSequence,
-                double centerMhz, double bandwidthMhz, bool rebasedForDisplay)
+                double centerMhz, double bandwidthMhz, bool rebasedForDisplay,
+                const FrameEncoder& encoder = FrameEncoder())
     {
         if (bins.isEmpty()) {
             return;
@@ -77,6 +116,7 @@ public:
         m_centerMhz = centerMhz;
         m_bandwidthMhz = bandwidthMhz;
         m_rebasedForDisplay = rebasedForDisplay;
+        m_encoder = encoder;
         m_received.start();
     }
 
@@ -95,6 +135,9 @@ public:
         if (gestureInProgress) {
             return QStringLiteral("a pan or zoom is in progress");
         }
+        if (requestUnconfirmed()) {
+            return QStringLiteral("a requested pan or zoom is not yet confirmed by the radio");
+        }
         const QString wait = QStringLiteral("; wait for %1 settled frames").arg(kSettledFrames);
         if (centerMhzNow != m_centerMhz || bandwidthMhzNow != m_bandwidthMhz) {
             return QStringLiteral("geometry changed after the last frame") + wait;
@@ -109,13 +152,18 @@ public:
         return {};
     }
 
-    // The frame with its ingest geometry. ageMs: monotonic time since it arrived.
+    // The frame with its ingest geometry and encoding. ageMs: monotonic time
+    // since it arrived.
     QVariantMap snapshot() const
     {
         QVariantMap m = SpectrumTraceBins::snapshot(m_bins, m_centerMhz, m_bandwidthMhz,
                                                     m_fftFrameSequence);
         m[QStringLiteral("ageMs")] = m_received.isValid() ? m_received.elapsed() : qint64(-1);
         m[QStringLiteral("settledFrames")] = QVariant::fromValue(settledFrames());
+        m[QStringLiteral("encoderRangeValid")] = m_encoder.valid;
+        m[QStringLiteral("encoderMinDbm")] = m_encoder.minDbm;
+        m[QStringLiteral("encoderMaxDbm")] = m_encoder.maxDbm;
+        m[QStringLiteral("encoderYPixels")] = m_encoder.yPixels;
         return m;
     }
 
@@ -125,9 +173,13 @@ private:
     double m_centerMhz{0.0};
     double m_bandwidthMhz{0.0};
     bool m_rebasedForDisplay{false};
+    FrameEncoder m_encoder;
     quint64 m_framesIngested{0};
     quint64 m_framesAtGeometryChange{0};
     QElapsedTimer m_received;
+    double m_requestCenterMhz{0.0};
+    double m_requestBandwidthMhz{0.0};
+    QElapsedTimer m_requestSent;
 };
 
 }  // namespace AetherSDR::SpectrumTraceBins

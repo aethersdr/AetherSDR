@@ -2551,6 +2551,8 @@ private:
     // Called wherever the displayed or requested centre/bandwidth changes, so
     // traceBinsSnapshot() refuses until the new geometry has settled frames.
     void noteTraceGeometryChange() { m_traceCapture.noteGeometryChange(); }
+    // A range, centre or edge-pan request the widget sent to the radio.
+    void noteTraceGeometryRequest(double centerMhz, double bandwidthMhz);
     bool traceGeometryInFlight() const;
 };
 

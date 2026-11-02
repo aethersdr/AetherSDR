@@ -1817,6 +1817,15 @@ QVariantMap SpectrumWidget::automationDisplaySettingsSnapshot() const
     return snap;
 }
 
+void SpectrumWidget::noteTraceGeometryRequest(double centerMhz, double bandwidthMhz)
+{
+    if (panGeometryConfirmationRequired()) {
+        m_traceCapture.noteRequestSent(centerMhz, bandwidthMhz);
+    } else {
+        noteTraceGeometryChange();
+    }
+}
+
 bool SpectrumWidget::traceGeometryInFlight() const
 {
     return m_draggingPan || m_draggingBandwidth || m_panDragPendingCenterValid
@@ -1843,12 +1852,6 @@ QVariantMap SpectrumWidget::traceBinsSnapshot() const
     m[QStringLiteral("panIndex")] = m_panIndex;
     m[QStringLiteral("name")] = objectName();
     m[QStringLiteral("kiwiWaterfallActive")] = m_kiwiSdrWaterfallActive;
-    // The dBm encoder aperture the bins were decoded against: on Flex one
-    // amplitude step is (max - min) / (yPixels - 1).
-    m[QStringLiteral("encoderRangeValid")] = m_encoderRangeValid;
-    m[QStringLiteral("encoderMinDbm")] = m_encoderMinDbm;
-    m[QStringLiteral("encoderMaxDbm")] = m_encoderMaxDbm;
-    m[QStringLiteral("encoderYPixels")] = m_encoderYPixels;
     return m;
 }
 
@@ -2006,11 +2009,15 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
 
     // A requested range can reach the radio before the widget shows it.
     connect(this, &SpectrumWidget::frequencyRangeChangeRequested, this,
-            [this](double, double) { noteTraceGeometryChange(); });
+            [this](double centerMhz, double bandwidthMhz) {
+                noteTraceGeometryRequest(centerMhz, bandwidthMhz);
+            });
     connect(this, &SpectrumWidget::centerChangeRequested, this,
-            [this](double) { noteTraceGeometryChange(); });
+            [this](double centerMhz) { noteTraceGeometryRequest(centerMhz, m_bandwidthMhz); });
     connect(this, &SpectrumWidget::edgePanTuneRequested, this,
-            [this](double, double) { noteTraceGeometryChange(); });
+            [this](double centerMhz, double) {
+                noteTraceGeometryRequest(centerMhz, m_bandwidthMhz);
+            });
 
     setMinimumHeight(100);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -6772,6 +6779,7 @@ void SpectrumWidget::clearDisplay()
     clearFrequencyPreview();
     m_bins.clear();
     m_smoothed.clear();
+    m_traceCapture.clear();
     clearWaterfallRows();
     m_hasNativeWaterfall = false;
     m_lastNativeTileMs = 0;
@@ -7817,6 +7825,7 @@ void SpectrumWidget::cancelPanGeometryRequests()
     m_frequencyRangePendingValid = false;
     m_frequencyRangeCommandThrottle.clear();
     m_frequencyRangeCommandClock.invalidate();
+    m_traceCapture.cancelRequest();
     for (QTimer* timer : {m_panDragSettleTimer, m_frequencyRangeSettleTimer,
                          m_frequencyRangeCommandTimer, m_vfoDragEdgePanTimer}) {
         if (timer) { timer->stop(); }
@@ -7879,6 +7888,7 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
                                                bool animateSmallNudges,
                                                bool confirmedObservation)
 {
+    m_traceCapture.noteRangeObserved(centerMhz, bandwidthMhz);
     if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz)
         return;
 
@@ -8720,8 +8730,15 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm, const Spectru
         }
     }
 
+    // The frame's own decode scale when the stream reports one, else the
+    // encoder range the widget holds as the frame arrives.
+    const SpectrumTraceBins::FrameCapture::Encoder traceEncoder = decodeScale.valid()
+        ? SpectrumTraceBins::FrameCapture::Encoder{true, decodeScale.minDbm,
+                                                   decodeScale.maxDbm, m_encoderYPixels}
+        : SpectrumTraceBins::FrameCapture::Encoder{m_encoderRangeValid, m_encoderMinDbm,
+                                                   m_encoderMaxDbm, m_encoderYPixels};
     m_traceCapture.ingest(binsDbm, m_fftFrameSequence, m_centerMhz, m_bandwidthMhz,
-                          spectrumBins == &adjustedBins);
+                          spectrumBins == &adjustedBins, traceEncoder);
 
     if (m_resetFftSmoothingOnNextFrame || !m_clientFftSmoothing) {
         m_smoothed = *spectrumBins;

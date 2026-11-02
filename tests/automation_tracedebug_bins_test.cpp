@@ -7,9 +7,12 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QList>
+#include <QRegularExpression>
 #include <QVariantMap>
 #include <QWidget>
 
+#include <algorithm>
 #include <cstdio>
 
 namespace AetherSDR {
@@ -50,6 +53,40 @@ QByteArray readSource(const char* relativePath)
 {
     QFile f(QString::fromLatin1(AETHER_SOURCE_DIR) + QString::fromLatin1(relativePath));
     return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+}
+
+// The body of the function whose definition starts with `signature`.
+QByteArray functionBody(const QByteArray& source, const QByteArray& signature)
+{
+    const qsizetype start = source.indexOf(signature);
+    if (start < 0) {
+        return {};
+    }
+    const qsizetype end = source.indexOf("\n}\n", start);
+    return end < 0 ? QByteArray() : source.mid(start, end - start);
+}
+
+// Every assignment to the shown centre or bandwidth that is not followed,
+// within three lines, by noteTraceGeometryChange(). Returns the line numbers.
+QList<int> unhookedGeometryWrites(const QByteArray& source)
+{
+    const QList<QByteArray> lines = source.split('\n');
+    const QRegularExpression write(
+        QStringLiteral("\\bm_(centerMhz|bandwidthMhz)\\s*=[^=]"));
+    QList<int> out;
+    for (int i = 0; i < lines.size(); ++i) {
+        if (!write.match(QString::fromUtf8(lines.at(i))).hasMatch()) {
+            continue;
+        }
+        bool hooked = false;
+        for (int j = i; j < std::min<int>(i + 4, lines.size()); ++j) {
+            hooked = hooked || lines.at(j).contains("noteTraceGeometryChange();");
+        }
+        if (!hooked) {
+            out.append(i + 1);
+        }
+    }
+    return out;
 }
 }  // namespace
 
@@ -105,6 +142,34 @@ int main(int argc, char** argv)
     check(server_src.contains("\"traceBinsSnapshot\""), "the bridge invokes traceBinsSnapshot");
     check(widget_h.contains("Q_INVOKABLE QVariantMap traceBinsSnapshot() const;"),
           "SpectrumWidget declares traceBinsSnapshot as Q_INVOKABLE");
+
+    // The widget's wiring. SpectrumWidget.cpp is built only into the desktop
+    // executable (and the opt-in spectrum_trace_bins_widget_test), so the
+    // default lane can pin its source but not run it.
+    const QByteArray widget_cpp = readSource("/src/gui/SpectrumWidget.cpp");
+    const QByteArray snapshotBody =
+        functionBody(widget_cpp, "QVariantMap SpectrumWidget::traceBinsSnapshot() const");
+    check(snapshotBody.contains("m_traceCapture.refusal(")
+              && snapshotBody.contains("m_traceCapture.snapshot()")
+              && !snapshotBody.contains("m_bins"),
+          "traceBinsSnapshot answers from the captured frame, never m_bins");
+    check(functionBody(widget_cpp, "void SpectrumWidget::updateSpectrum(")
+              .contains("m_traceCapture.ingest(binsDbm,"),
+          "updateSpectrum captures the frame as received");
+    check(functionBody(widget_cpp, "void SpectrumWidget::clearDisplay()")
+              .contains("m_traceCapture.clear();"),
+          "clearDisplay clears the captured frame");
+    const QByteArray internalBody =
+        functionBody(widget_cpp, "void SpectrumWidget::setFrequencyRangeInternal(");
+    const qsizetype observed = internalBody.indexOf("m_traceCapture.noteRangeObserved(");
+    check(observed >= 0 && observed < internalBody.indexOf("return;"),
+          "every range echo is offered to the unconfirmed request before any early return");
+    const QList<int> unhooked = unhookedGeometryWrites(widget_cpp);
+    for (int line : unhooked) {
+        std::fprintf(stderr, "  unhooked geometry write at SpectrumWidget.cpp:%d\n", line);
+    }
+    check(!widget_cpp.isEmpty() && unhooked.isEmpty(),
+          "every write of the shown centre or bandwidth notes a trace geometry change");
 
     if (failures == 0) {
         std::fprintf(stderr, "automation_tracedebug_bins_test: all checks passed\n");

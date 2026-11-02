@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QThread>
 #include <QVariant>
 
 #include <cmath>
@@ -108,6 +109,39 @@ int main()
         c.ingest({}, 9999, 14.2, 0.1, false);
         check(c.snapshot().value(QStringLiteral("fftFrameSequence")).toULongLong() != 9999,
               "capture: an empty frame is not captured");
+
+        // The encoding reported is the one the frame was captured with.
+        for (quint64 i = 0; i < k; ++i)
+            c.ingest(frame(50.0f), 4 * k + i, 14.2, 0.1, false, {true, -140.0f, -20.0f, 700});
+        const QVariantMap enc = c.snapshot();
+        check(enc.value(QStringLiteral("encoderRangeValid")).toBool()
+                  && enc.value(QStringLiteral("encoderMinDbm")).toFloat() == -140.0f
+                  && enc.value(QStringLiteral("encoderMaxDbm")).toFloat() == -20.0f
+                  && enc.value(QStringLiteral("encoderYPixels")).toInt() == 700,
+              "capture: the frame's encoder range and y-pixels are reported");
+
+        // A request the radio must confirm refuses until its echo.
+        check(c.refusal(14.2, 0.1, false, false).isEmpty(), "capture: settled before the request");
+        c.noteRequestSent(14.3, 0.1);
+        for (quint64 i = 0; i < k; ++i)
+            c.ingest(frame(60.0f), 5 * k + i, 14.2, 0.1, false);
+        check(c.refusal(14.2, 0.1, false, false).contains(QLatin1String("not yet confirmed")),
+              "capture: frames under the old geometry do not end an unconfirmed request");
+        c.noteRangeObserved(14.31, 0.1);
+        check(c.requestUnconfirmed(), "capture: an echo of another range does not confirm it");
+        c.noteRangeObserved(14.3, 0.1);
+        check(!c.requestUnconfirmed(), "capture: the matching echo confirms it");
+        c.noteRequestSent(14.4, 0.1);
+        c.cancelRequest();
+        check(!c.requestUnconfirmed(), "capture: a cancelled request is not awaited");
+        c.noteRequestSent(14.5, 0.1);
+        QThread::msleep(static_cast<unsigned long>(Capture::kRequestEchoGuardMs + 100));
+        check(!c.requestUnconfirmed(), "capture: a lost echo stops refusing after kRequestEchoGuardMs");
+
+        c.clear();
+        check(c.refusal(14.2, 0.1, false, false).contains(QLatin1String("no frame")),
+              "capture: cleared, it is refused as no frame decoded yet");
+        check(c.snapshot().value(QStringLiteral("count")).toInt() == 0, "capture: cleared, it holds no bins");
     }
 
     if (g_failures == 0)
