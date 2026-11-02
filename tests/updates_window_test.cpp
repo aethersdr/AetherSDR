@@ -4,6 +4,7 @@
 #include "core/UpdateChecker.h"
 #include "core/UpdateController.h"
 #include "core/UpdateSettings.h"
+#include "gui/CanonMessageBox.h"
 #include "gui/FirmwareUpdateCard.h"
 #include "gui/UpdatesWindow.h"
 #include "models/RadioModel.h"
@@ -23,6 +24,7 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimer>
 
 #include "monocypher-ed25519.h"
 
@@ -411,7 +413,10 @@ int main(int argc, char** argv)
             }
         }
         check(name && name->text() == QLatin1String("No radio connected"), "radio section names the absence");
-        const QPushButton* install = button(w, QStringLiteral("Install"));
+        const QPushButton* install = nullptr;   // the radio section's, not Install for updates
+        for (const QPushButton* b : w.findChild<FirmwareUpdateCard*>()->findChildren<QPushButton*>()) {
+            install = b->text().startsWith(QLatin1String("Install")) ? b : install;
+        }
         const QPushButton* open = button(w, QStringLiteral("Open Installer"));
         check(install && !install->isEnabled() && !install->accessibleDescription().isEmpty(),
               "Install is dimmed with a stated reason");
@@ -462,9 +467,9 @@ int main(int argc, char** argv)
                   && !primary->accessibleDescription().isEmpty(),
               "Install update names the release for a screen reader");
         check(progressRow && !progressRow->isVisible(), "no progress before Install");
-        const QPushButton* download = button(*w, QStringLiteral("Download installer"));
+        const QPushButton* download = button(*w, QStringLiteral("Download release"));
         check(download && download->isVisible() && download->accessibleDescription().contains(QLatin1String("browser")),
-              "Download installer keeps the browser route beside Install update");
+              "Download release keeps the browser route beside Install update");
         check(progress && !progress->accessibleName().isEmpty(), "the progress bar has a name");
 
         // Cancel: back to Install update, nothing kept.
@@ -473,7 +478,7 @@ int main(int argc, char** argv)
         }
         app.processEvents();
         check(progressRow && progressRow->isVisible() && !primary->isVisible(), "staging shows progress, not the button");
-        check(download && !download->isVisible(), "no Download installer while staging");
+        check(download && !download->isVisible(), "no Download release while staging");
         auto* cancel = const_cast<QPushButton*>(button(*w, QStringLiteral("Cancel")));
         check(cancel && !cancel->accessibleName().isEmpty(), "Cancel is offered, named");
         if (cancel) {
@@ -612,8 +617,118 @@ int main(int argc, char** argv)
         app.processEvents();
         check(button(w, QStringLiteral("Get AetherSDR 26.10.3")) != nullptr,
               "without in-place support, Get AetherSDR as before");
-        const QPushButton* link = button(w, QStringLiteral("Download installer"));
-        check(!link || !link->isVisible(), "no Download installer when the primary action is the download");
+        const QPushButton* link = button(w, QStringLiteral("Download release"));
+        check(!link || !link->isVisible(), "no Download release when the primary action is the download");
+    }
+
+    {
+        // Install for updates, from an AppImage: offered in the current view
+        // too, asks first with the trash unchecked, and once installed points
+        // to the install instead.
+        const QString wasVersion = QCoreApplication::applicationVersion();
+        QCoreApplication::setApplicationVersion(QStringLiteral("26.10.3"));
+        InstallRig rig;
+        rig.inPlace = false;
+        QString installed;
+        QStringList trashed;
+        int starts = 0;
+        UpdateController::Environment e = rig.env();
+        e.request.runningVersion = QStringLiteral("26.10.3");
+        e.appImage = QStringLiteral("/home/op/AetherSDR-v26.10.3-x86_64.AppImage");
+        e.installFolder = QStringLiteral("~/.local/share/AetherSDR/install");
+        e.installedVersion = [&installed] { return installed; };
+        e.installRunning = [&installed](QString*, QString*) {
+            installed = QStringLiteral("26.10.3");
+            return true;
+        };
+        e.trash = [&trashed](const QString& f) {
+            trashed.append(f);
+            return true;
+        };
+        e.startInstalled = [&starts] {
+            ++starts;
+            return true;
+        };
+        UpdateController controller(e);
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow w(&checker, nullptr);
+        w.setController(&controller);
+        w.show();
+        network.last->finishWithBody(releaseJson(QStringLiteral("tagline")));
+        app.processEvents();
+        auto* row = w.findChild<QWidget*>(QStringLiteral("updatesInstallForUpdates"));
+        const QPushButton* offer = button(w, QStringLiteral("Install for updates"));
+        check(text(w, "updatesEyebrow").contains(QLatin1String("UP TO DATE")), "an AppImage on the newest release");
+        check(row && row->isVisible() && offer && offer->isVisible() && offer->isEnabled(),
+              "Install for updates is offered when up to date");
+        check(offer && !offer->accessibleDescription().isEmpty(), "Install for updates is described for a screen reader");
+        check(text(w, "updatesInstallForUpdatesText").contains(QLatin1String("26.10.3")),
+              "the offer names the release it installs");
+
+        // Cancel in the question: nothing happens.
+        bool asked = false;
+        bool trashUnchecked = false;
+        const auto answer = [&](const QString& click, bool tickTrash) {
+            QTimer::singleShot(0, [&, click, tickTrash] {
+                for (QWidget* top : QApplication::topLevelWidgets()) {
+                    auto* box = qobject_cast<CanonMessageBox*>(top);
+                    if (!box || !box->isVisible()) {
+                        continue;
+                    }
+                    asked = box->accessibleDescription().contains(QLatin1String("~/.local/share/AetherSDR/install"));
+                    auto* trash = box->findChild<QCheckBox*>(QStringLiteral("updatesTrashAppImage"));
+                    trashUnchecked = trash && !trash->isChecked() && !trash->accessibleDescription().isEmpty()
+                                     && trash->text().contains(QLatin1String("AetherSDR-v26.10.3-x86_64.AppImage"));
+                    if (trash && tickTrash) {
+                        trash->setChecked(true);
+                    }
+                    for (QPushButton* b : box->findChildren<QPushButton*>()) {
+                        if (b->text() == click) {
+                            b->click();
+                            return;
+                        }
+                    }
+                    box->reject();
+                }
+            });
+        };
+        answer(QStringLiteral("Cancel"), true);
+        const_cast<QPushButton*>(offer)->click();
+        app.processEvents();
+        check(asked && trashUnchecked,
+              "it asks first, naming the install folder, with the trash unchecked and naming the AppImage");
+        check(!controller.isInstallingAppImage() && trashed.isEmpty() && installed.isEmpty(),
+              "Cancel installs nothing");
+
+        asked = false;
+        QSignalSpy done(&controller, &UpdateController::appImageInstalled);
+        answer(QStringLiteral("Install and restart"), true);
+        const_cast<QPushButton*>(offer)->click();
+        check(asked, "Install for updates asks again");
+        check(done.wait(20000) && done.at(0).at(0).toBool(), "installed, it restarts");
+        check(trashed == QStringList{e.appImage} && starts == 1, "the AppImage went to the trash, as asked");
+        app.processEvents();
+        offer = button(w, QStringLiteral("Install for updates"));
+        check(!offer || !offer->isVisible(), "once installed, no offer");
+        check(row && row->isVisible() && text(w, "updatesInstallForUpdatesText").contains(QLatin1String("installed for updates")),
+              "once installed, it says where the install is");
+        QCoreApplication::setApplicationVersion(wasVersion);
+    }
+
+    {
+        // Not an AppImage: no row at all.
+        InstallRig rig;
+        UpdateController controller(rig.env());
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow w(&checker, nullptr);
+        w.setController(&controller);
+        w.show();
+        network.last->finishWithBody(releaseJson(QStringLiteral("tagline")));
+        app.processEvents();
+        auto* row = w.findChild<QWidget*>(QStringLiteral("updatesInstallForUpdates"));
+        check(row && !row->isVisible(), "no Install for updates when not an AppImage");
     }
 
     return failures ? 1 : 0;

@@ -4,6 +4,7 @@
 #include "ModemChrome.h"
 
 #include <QAccessible>
+#include <QCheckBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPlainTextEdit>
@@ -84,6 +85,10 @@ CanonMessageBox::CanonMessageBox(const QString& title, const QString& text, QWid
     m_details->hide();
     root->addWidget(m_details);
 
+    m_checks = new QVBoxLayout;
+    m_checks->setSpacing(6);
+    root->addLayout(m_checks);
+
     root->addSpacing(4);
     m_buttons = new QHBoxLayout;
     m_buttons->setSpacing(8);
@@ -112,6 +117,13 @@ void CanonMessageBox::setTextSelectable(bool on)
     const Qt::TextInteractionFlags flags = on ? Qt::TextSelectableByMouse : Qt::NoTextInteraction;
     m_text->setTextInteractionFlags(flags);
     m_info->setTextInteractionFlags(flags);
+}
+
+QCheckBox* CanonMessageBox::addCheckBox(const QString& text)
+{
+    auto* box = new QCheckBox(text);
+    m_checks->addWidget(box);
+    return box;
 }
 
 QPushButton* CanonMessageBox::addButton(const QString& text, Role role)
