@@ -19,6 +19,16 @@ enum class RadioPlatform {
     DragonFire,  // RT-2122
 };
 
+// Platforms with no on-radio WFP hardware at all (6000-series Microburst /
+// DeepEddy). This is a genuine hard incompatibility for Docker waveform
+// deployment, distinct from the "wfp" license feature (gui/WaveformInstallGate.h).
+// The one rule for both the install gate and FlexBackend's waveform capabilities.
+inline bool isKnownNonWfpPlatform(RadioPlatform platform)
+{
+    return platform == RadioPlatform::Microburst
+        || platform == RadioPlatform::DeepEddy;
+}
+
 // Per-model feature flags mirroring FlexLib/ModelInfo.cs (Platform,
 // Has2Meters, Has4Meters, HasLoopA, HasLoopB, ...).  Authority for any UI
 // surface that varies by model capability — the band selector in the

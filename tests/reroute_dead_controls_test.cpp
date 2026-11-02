@@ -424,31 +424,33 @@ void testRemoteSurfacesStillReachRadioNrWhereItExists()
 // TCI sql_enable and sql_level each send the pair, applied on a queued hop. A
 // client that sends both in one burst must not have the second command read
 // the slice's old value for the first one's half and undo it (#6172).
+// sql_level is spec dB; this backend publishes no scale, so -160 + level maps
+// it: -130 dB is level 30, -125 dB level 35, -110 dB level 50.
 void testTciSquelchBurstKeepsBothHalves()
 {
     Fixture f;
     TciProtocol tci(&f.radio);
     (void)tci.handleCommand(QStringLiteral("sql_enable:0,true"));
-    (void)tci.handleCommand(QStringLiteral("sql_level:0,20"));
+    (void)tci.handleCommand(QStringLiteral("sql_level:0,-130"));
     QCoreApplication::processEvents();
     const auto& sent = f.backend->squelch;
-    check(!sent.empty() && sent.back().on && sent.back().level == 20,
-          "TCI: sql_enable true then sql_level 20 in one burst requests on at 20");
+    check(!sent.empty() && sent.back().on && sent.back().level == 30,
+          "TCI: sql_enable true then sql_level -130 dB in one burst requests on at 30");
     check(std::all_of(sent.begin(), sent.end(),
                       [](const LoggingBackend::Toggle& t) { return t.on; }),
           "TCI: no request in that burst turns squelch off");
 
     f.backend->squelch.clear();
-    (void)tci.handleCommand(QStringLiteral("sql_level:0,35"));
+    (void)tci.handleCommand(QStringLiteral("sql_level:0,-125"));
     (void)tci.handleCommand(QStringLiteral("sql_enable:0,false"));
     QCoreApplication::processEvents();
     check(!sent.empty() && !sent.back().on && sent.back().level == 35,
-          "TCI: sql_level 35 then sql_enable false in one burst keeps level 35");
+          "TCI: sql_level -125 dB then sql_enable false in one burst keeps level 35");
 
     // The held half ends with its burst: a later command reads the slice again.
     f.backend->squelch.clear();
     const bool sliceOn = f.slice->receiveSquelchOn();
-    (void)tci.handleCommand(QStringLiteral("sql_level:0,50"));
+    (void)tci.handleCommand(QStringLiteral("sql_level:0,-110"));
     QCoreApplication::processEvents();
     check(!sent.empty() && sent.back().on == sliceOn && sent.back().level == 50,
           "TCI: a lone sql_level after the burst uses the slice's own enable");
