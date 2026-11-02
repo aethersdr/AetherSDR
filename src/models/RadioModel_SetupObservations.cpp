@@ -24,12 +24,11 @@ void RadioModel::resetSetupObservations()
     retireSetupObservations();
     const quint64 generation = m_setupObservationGeneration;
     m_xvtrList.clear();
-    m_licenseSubscriptions.clear();
+    m_licenseSubscriptionLabel.clear();
     m_licenseExpiryTimer.stop();
     m_licenseRadioId.clear();
     m_licenseMaxVersion.clear();
-    m_licenseSubscription.clear();
-    m_licenseExpirationDate.clear();
+    m_licenseSubscription = {};
     m_filterVoice = m_filterCw = m_filterDigital = 2;
     m_filterVoiceAuto = false;
     m_filterCwAuto = m_filterDigitalAuto = true;
@@ -43,18 +42,12 @@ void RadioModel::resetSetupObservations()
     emit infoChanged();
 }
 
-void RadioModel::refreshLicenseSubscription(const QDateTime& now)
+bool RadioModel::refreshLicenseSubscription(const QDateTime& now)
 {
-    m_licenseSubscription = QStringLiteral("SmartSDR");
-    m_licenseExpirationDate.clear();
-    for (const QString& name : {QStringLiteral("smartsdr+_early_access"), QStringLiteral("smartsdr+")}) {
-        const QDateTime expiration = m_licenseSubscriptions.value(name);
-        if (!expiration.isValid() || expiration <= now) { continue; }
-        m_licenseSubscription = name.endsWith(QLatin1String("early_access"))
-            ? QStringLiteral("SmartSDR+ Early Access") : QStringLiteral("SmartSDR+");
-        m_licenseExpirationDate = expiration.date().toString(QStringLiteral("MM/dd/yyyy"));
-        return;
-    }
+    const QString label = m_licenseSubscription.label(now);
+    const bool changed = m_licenseSubscriptionLabel != label;
+    m_licenseSubscriptionLabel = label;
+    return changed;
 }
 
 void RadioModel::applySetupObservation(const SetupStatusObservation& observation)
@@ -123,12 +116,18 @@ void RadioModel::applySetupObservation(const SetupStatusObservation& observation
         case LicenseStatusValues::Kind::Base:
             assign(m_licenseRadioId, value.radioId);
             assign(m_licenseMaxVersion, value.maximumVersion);
+            if (m_licenseSubscription.name.isEmpty()) { m_licenseSubscription.name = QStringLiteral("SmartSDR"); }
             refreshLicenseSubscription(QDateTime::currentDateTime());
             break;
         case LicenseStatusValues::Kind::Subscription:
             if (!value.expiration.isValid() || (value.name != QLatin1String("smartsdr+")
                 && value.name != QLatin1String("smartsdr+_early_access"))) { return; }
-            m_licenseSubscriptions.insert(value.name, value.expiration);
+            if (!m_licenseSubscription.expiration.isValid() || value.expiration > m_licenseSubscription.expiration) {
+                m_licenseSubscription = {
+                    value.name == QLatin1String("smartsdr+_early_access")
+                        ? QStringLiteral("SmartSDR+ Early Access") : QStringLiteral("SmartSDR+"),
+                    value.expiration};
+            }
             refreshLicenseSubscription(QDateTime::currentDateTime());
             m_licenseExpiryTimer.start();
             break;

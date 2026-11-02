@@ -44,7 +44,6 @@
 #include <QFontDatabase>
 #include <QDateTime>
 #include <QStandardPaths>
-#include <QProcess>
 #include <QTimer>
 #include <cstdio>
 #include <cstdlib>
@@ -240,9 +239,9 @@ static int runConfigCli(int argc, char* argv[])
 
 #ifdef Q_OS_LINUX
 // ── `AetherSDR --install` — the Linux install the updater keeps current ───────
-// Run from an unpacked release tarball: copies the release into
-// ~/.local/share/AetherSDR/install/<version>/, makes it current, adds the
-// menu entry and the aethersdr command, then starts it (RFC #5304 Phase 5).
+// Run from an unpacked release tarball or the AppImage: copies the release
+// into ~/.local/share/AetherSDR/install/<version>/, makes it current, adds
+// the menu entry and the aethersdr command, then starts it (RFC #5304 Phase 5).
 // Needs a console, not a window; nothing of the user's settings is touched.
 static int runInstallCli(int argc, char* argv[])
 {
@@ -273,7 +272,10 @@ static int runInstallCli(int argc, char* argv[])
         std::printf("%s\n", qPrintable(note));
     }
     if (qEnvironmentVariableIsSet("WAYLAND_DISPLAY") || qEnvironmentVariableIsSet("DISPLAY")) {
-        QProcess::startDetached(run, {});
+        // Once this installer has exited, without the AppImage's variables
+        // or descriptors when run from it, as Install for updates starts it.
+        AetherSDR::LinuxInstall::startAfterExit(QCoreApplication::applicationPid(), {run},
+                                                AetherSDR::LinuxInstall::appImageVariables());
     }
     return EXIT_SUCCESS;
 }
@@ -687,7 +689,7 @@ int main(int argc, char* argv[])
         auto& s = AetherSDR::AppSettings::instance();
         bool removed = false;
         for (const char* key : {"SHistorySoftEdgeDb", "AboutDialogGeometry",
-                                "MqttSettingsDialogGeometry"}) {
+                                "MqttSettingsDialogGeometry", "UlanziDialMapperGeom"}) {
             if (s.contains(key)) {
                 s.remove(key);
                 removed = true;
@@ -826,6 +828,10 @@ int main(int argc, char* argv[])
 
         exitCode = app.exec();
     }
+
+    // macOS: a staged update goes in now, with the window gone and nothing
+    // more to load from the bundle (RFC #5304 Phase 4). Nothing elsewhere.
+    AetherSDR::UpdateInstaller::finishSwapOnExit();
 
     AetherSDR::ShutdownTrace::complete("application");
 

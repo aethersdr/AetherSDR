@@ -192,8 +192,9 @@ editors, and final configuration writes on disconnect, removal, or cable-family
 replacement. These are radio-global inventories, not client-owned slice data.
 The model keeps at most 256 transverters, 256 USB cables, and 128 license feature
 names; the transport retains at most 512 setup entity leases. New entries beyond
-those bounds are rejected without evicting existing state. Subscription dates
-only select the displayed subscription; they never grant a feature.
+those bounds are rejected without evicting existing state. The latest subscription expiration selects the displayed subscription, including
+lapsed subscriptions. Reported feature records remain authoritative; CW auto-tune
+uses an active subscription only when firmware has not reported that feature.
 
 Profile and memory dialogs use typed `ProfileRequest` / `MemoryRequest` values
 through `RadioModel`; `FlexStoredControls` owns encoding, including recall

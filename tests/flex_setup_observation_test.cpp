@@ -153,13 +153,18 @@ void modelSemantics()
     deliver("license", {{"radio_id", "abc"}, {"highest_major_version", "4"}});
     deliver("license subscription", {{"name", "smartsdr+_early_access"}, {"expiration", "2099-02-03T12:00:00Z"}});
     deliver("license subscription", {{"name", "smartsdr+"}, {"expiration", "2099-03-04T12:00:00Z"}});
-    check(radio.licenseSubscription() == "SmartSDR+ Early Access", "subscription precedence is independent of arrival order");
-    FlexSetupStatusTestPeer::refreshLicense(radio, QDateTime::fromString("2099-02-03T12:00:00Z", Qt::ISODate));
     check(radio.licenseSubscription() == "SmartSDR+" && radio.licenseExpirationDate() == "03/04/2099",
-          "expiry at its exact instant falls back to the remaining active subscription");
-    FlexSetupStatusTestPeer::refreshLicense(radio, QDateTime::fromString("2099-04-01T00:00:00Z", Qt::ISODate));
-    check(radio.licenseSubscription() == "SmartSDR" && radio.licenseExpirationDate().isEmpty(),
-          "expiry clears stale subscription text without inventing feature permissions");
+          "latest expiration selects the subscription independently of arrival order");
+    deliver("license subscription", {{"name", "smartsdr+_early_access"}, {"expiration", "2000-01-01"}});
+    check(radio.licenseSubscription() == "SmartSDR+" && radio.licenseExpirationDate() == "03/04/2099",
+          "a lapsed subscription cannot replace the current subscription");
+    RadioModel expired;
+    installRadioSetupBackend(expired);
+    FlexSetupStatusTestPeer::deliver(expired, "license subscription", {{"name", "smartsdr+"}, {"expiration", "2000-01-01"}});
+    check(expired.licenseSubscription() == "SmartSDR+ (expired)" && expired.licenseExpirationDate() == "01/01/2000",
+          "expired subscriptions retain their diagnostic name and date");
+    FlexSetupStatusTestPeer::deliver(expired, "license feature", {{"name", "auto_tune"}, {"enabled", "1"}});
+    check(expired.cwAutotuneLicensed(), "authoritative feature grants survive subscription expiration");
     deliver("license feature", {{"name", "digital_voice_keyer"}, {"enabled", "1"}});
     radio.dvkModel().noteRefusal(0x50004001u);
     deliver("license feature", {{"name", "digital_voice_keyer"}, {"enabled", "1"}});
