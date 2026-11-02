@@ -2159,17 +2159,21 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 applyLabelStyle(lbl);
         }
 
-        // Update labels live if license status arrives after dialog opens
-        connect(m_model, &RadioModel::infoChanged, this, [this] {
-            if (!m_model->licenseSubscription().isEmpty())
-                m_licSubscriptionLabel->setText(m_model->licenseSubscription());
-            if (!m_model->licenseExpirationDate().isEmpty())
-                m_licExpirationLabel->setText(m_model->licenseExpirationDate());
-            if (!m_model->licenseRadioId().isEmpty())
-                m_licRadioIdLabel->setText(m_model->licenseRadioId());
-            if (!m_model->licenseMaxVersion().isEmpty())
-                m_licMaxVersionLabel->setText(m_model->licenseMaxVersion());
-        });
+        // Update labels live if license status arrives after dialog opens.
+        // Unconditional: a radio switch clears the license records
+        // (licenseFeaturesChanged), and the previous radio's values must not
+        // linger.
+        const auto refreshLicenseLabels = [this] {
+            const auto orDash = [](const QString& value) {
+                return value.isEmpty() ? QStringLiteral("—") : value;
+            };
+            m_licSubscriptionLabel->setText(orDash(m_model->licenseSubscription()));
+            m_licExpirationLabel->setText(orDash(m_model->licenseExpirationDate()));
+            m_licRadioIdLabel->setText(orDash(m_model->licenseRadioId()));
+            m_licMaxVersionLabel->setText(orDash(m_model->licenseMaxVersion()));
+        };
+        connect(m_model, &RadioModel::infoChanged, this, refreshLicenseLabels);
+        connect(m_model, &RadioModel::licenseFeaturesChanged, this, refreshLicenseLabels);
 
         vbox->addWidget(group);
     }

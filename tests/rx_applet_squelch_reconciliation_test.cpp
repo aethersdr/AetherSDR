@@ -12,6 +12,8 @@
 #include "models/RadioModel.h"
 
 #include <QApplication>
+#include <QDate>
+#include <QDateTime>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
@@ -26,14 +28,19 @@ public:
     {
         SliceModel* slice = RadioSetupControlTestAccess::addSlice(radio, 0);
         radio.m_ownedSliceIds.insert(0);
-        radio.m_licenseSubscription = QStringLiteral("SmartSDR+");
+        license(radio, QStringLiteral("SmartSDR+"));
         SliceDelta delta;
         delta.mode = QStringLiteral("CW");
         slice->applyChanges(delta);
         return slice;
     }
     static void license(RadioModel& radio, const QString& value)
-    { radio.m_licenseSubscription = value; emit radio.infoChanged(); }
+    {
+        radio.m_licenseSubscription = {QStringLiteral("SmartSDR+"), QDate(2000, 1, 1).startOfDay()};
+        radio.m_licenseFeatures.insert(QStringLiteral("auto_tune"), {true, !value.isEmpty(), QStringLiteral("plus")});
+        emit radio.licenseFeaturesChanged();
+        emit radio.infoChanged();
+    }
 };
 struct RxAppletSquelchTestAccess {
     static QSlider* slider(RxApplet& applet) { return applet.m_sqlSlider; }

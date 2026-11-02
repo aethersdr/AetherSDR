@@ -6,6 +6,8 @@
 #include "core/backends/sim/SimBackend.h"
 
 #include <QCoreApplication>
+#include <QDate>
+#include <QDateTime>
 #include <QEventLoop>
 #include <QSignalSpy>
 #include <QTest>
@@ -40,7 +42,11 @@ public:
         radio.applyRadioChanges(delta);
     }
     static void license(RadioModel& radio, const QString& value)
-    { radio.m_licenseSubscription = value; emit radio.infoChanged(); }
+    {
+        radio.m_licenseSubscription = {QStringLiteral("SmartSDR+"), QDate(2000, 1, 1).startOfDay()};
+        radio.m_licenseFeatures.insert(QStringLiteral("auto_tune"), {true, !value.isEmpty(), QStringLiteral("plus")});
+        emit radio.licenseFeaturesChanged();
+    }
     static void own(RadioModel& radio, int id, bool owned)
     {
         if (owned) { radio.m_ownedSliceIds.insert(id); }

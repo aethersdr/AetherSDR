@@ -9,7 +9,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7601,
+          "line": 7638,
           "text": "else if (key == \"model\")"
         }
       ]
@@ -21,7 +21,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7610,
+          "line": 7647,
           "text": "else if (key == \"software_ver\")"
         }
       ]
@@ -94,7 +94,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7563,
+          "line": 7600,
           "text": "\"RadioModel: terminal GUI client registration failure\""
         }
       ]
@@ -111,12 +111,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7493,
+          "line": 7530,
           "text": "RadioModel: this GUI client was force-disconnected by another client"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7537,
+          "line": 7574,
           "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
         }
       ]
@@ -133,7 +133,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7403,
+          "line": 7440,
           "text": "RadioModel: multiFLEX disabled, other clients present"
         }
       ]
@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8747,
+          "line": 8781,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -193,7 +193,7 @@
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7610,
+          "line": 7647,
           "text": "else if (key == \"software_ver\")"
         }
       ]
@@ -210,7 +210,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7804,
+          "line": 7841,
           "text": "RadioModel: no VITA-49 UDP data received after 10s"
         }
       ]
@@ -227,7 +227,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7782,
+          "line": 7819,
           "text": "RadioModel: UDP stream setup failed"
         },
         {
@@ -237,7 +237,7 @@
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7858,
+          "line": 7895,
           "text": "RadioModel: client udpport collision"
         }
       ]
@@ -452,12 +452,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 1452,
+          "line": 1453,
           "text": "RadioModel: dax_rx stream create for channel"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 1899,
+          "line": 1950,
           "text": "stream create failed/dropped"
         }
       ]
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 13319,
+          "line": 13375,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -491,12 +491,12 @@
       "source": [
         {
           "file": "src/models/DaxIqModel.cpp",
-          "line": 399,
+          "line": 420,
           "text": "DaxIqWorker: pactl load-module failed for IQ ch"
         },
         {
           "file": "src/models/DaxIqModel.cpp",
-          "line": 408,
+          "line": 429,
           "text": "DaxIqWorker: cannot open IQ pipe"
         }
       ]
@@ -608,7 +608,7 @@
       "source": [
         {
           "file": "src/main.cpp",
-          "line": 86,
+          "line": 87,
           "text": "Non-fatal X11 error suppressed (error_code="
         }
       ]
@@ -941,7 +941,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 2887,
+          "line": 2907,
           "text": "HL2: could not open the UDP socket"
         }
       ]
@@ -1034,12 +1034,12 @@
       "source": [
         {
           "file": "src/core/AsyncLogWriter.cpp",
-          "line": 677,
+          "line": 688,
           "text": "Logging dropped debug/info lines count="
         },
         {
           "file": "src/core/AsyncLogWriter.cpp",
-          "line": 683,
+          "line": 694,
           "text": "Logging dropped warning/critical/fatal lines count="
         }
       ]

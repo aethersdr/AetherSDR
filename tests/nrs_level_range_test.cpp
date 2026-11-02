@@ -310,6 +310,53 @@ private slots:
         QVERIFY(f.commands.isEmpty());
     }
 
+    void leveledDspUsesCurrentSlice()
+    {
+        Fixture f;
+        QVERIFY(f.init());
+        f.radio.handleSliceStatusForTest(1, sliceStatus());
+        SliceModel* first = f.radio.slice(0);
+        SliceModel* second = f.radio.slice(1);
+        QVERIFY(first);
+        QVERIFY(second);
+        VfoWidget vfo;
+        vfo.setRadioModel(&f.radio);
+        vfo.setSlice(first);
+        QPushButton* nr = vfo.findChild<QPushButton*>(QStringLiteral("dspNRBtn"));
+        QVERIFY(nr);
+        QSignalSpy firstRequests(first, &SliceModel::receiveDspRequested);
+        QSignalSpy secondRequests(second, &SliceModel::receiveDspRequested);
+        f.commands.clear();
+        nr->click();
+        QCOMPARE(firstRequests.size(), 1);
+        QVERIFY(secondRequests.isEmpty());
+        QCOMPARE(f.commands, QStringList{QStringLiteral("slice set 0 nr=1")});
+
+        firstRequests.clear();
+        f.commands.clear();
+        vfo.setSlice(second);
+        QVERIFY(!nr->isChecked());
+        for (const bool on : {true, false}) {
+            f.backend->decodeSliceStatus(1, {{QStringLiteral("nr"), on ? "1" : "0"}});
+            QCOMPARE(nr->isChecked(), on);
+            QVERIFY(firstRequests.isEmpty());
+            QVERIFY(secondRequests.isEmpty());
+            QVERIFY(f.commands.isEmpty());
+        }
+        nr->click();
+        QVERIFY(firstRequests.isEmpty());
+        QCOMPARE(secondRequests.size(), 1);
+        QCOMPARE(f.commands, QStringList{QStringLiteral("slice set 1 nr=1")});
+
+        secondRequests.clear();
+        f.commands.clear();
+        vfo.setSlice(nullptr);
+        nr->setChecked(!nr->isChecked());
+        QVERIFY(firstRequests.isEmpty());
+        QVERIFY(secondRequests.isEmpty());
+        QVERIFY(f.commands.isEmpty());
+    }
+
     void simulatedBridgeProof()
     {
         // Real production bridge dispatch, widgets, model and Flex encoder;

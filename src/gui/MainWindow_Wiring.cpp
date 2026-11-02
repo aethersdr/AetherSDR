@@ -283,13 +283,17 @@ void MainWindow::noteBandRecallForPan(const QString& panId)
         }
     }
 
+    // The recalled slice's removal clears the live lock (and its session-only
+    // mark) before the grace timer runs, so carry the mark across the rebuild.
+    const bool centerLockSessionOnly = m_centerLockSessionOnlyPans.contains(panId);
     const quint64 centerLockGeneration = m_centerLockRebind.noteBandRecall(
         panId,
         lockedSlice ? lockedSlice->sliceId() : -1,
         lockedSlice ? lockedSlice->letter() : QString(),
         ownedSliceCount);
     QTimer::singleShot(kBandRecallRecreateGraceMs, this,
-                       [this, panId, centerLockGeneration, bandRecallGeneration]() {
+                       [this, panId, centerLockGeneration, bandRecallGeneration,
+                        centerLockSessionOnly]() {
         // Only the latest recall for this pan clears the Kiwi band-recall
         // marker; a superseding recall now owns the window, so an older timer
         // must not clear it out from under the in-flight rebuild.
@@ -328,9 +332,14 @@ void MainWindow::noteBandRecallForPan(const QString& panId)
             if (replacement && replacement->panId() == panId
                 && m_radioModel.sliceMayBelongToUs(replacement->sliceId())) {
                 // persist=true self-persists and cancels any pending recall (a
-                // no-op here — resolveAfterGrace already consumed it).
-                setCenterLockForPan(panId, replacement->sliceId(), true, true);
+                // no-op here — resolveAfterGrace already consumed it). A lock a
+                // TCI client set is restored live only and stays session-only.
+                setCenterLockForPan(panId, replacement->sliceId(), true,
+                                    !centerLockSessionOnly);
                 if (centerLockActiveForSlice(replacement)) {
+                    if (centerLockSessionOnly) {
+                        m_centerLockSessionOnlyPans.insert(panId);
+                    }
                     return;
                 }
             }
@@ -338,7 +347,7 @@ void MainWindow::noteBandRecallForPan(const QString& panId)
             // report it as missing (not ambiguous — the tracker WAS sure).
         }
 
-        clearCenterLockForPan(panId, true);
+        clearCenterLockForPan(panId, !centerLockSessionOnly);
         showCenterLockReleaseNotification(
             panId,
             resolution.kind
@@ -519,7 +528,8 @@ void MainWindow::saveCenterLockSettings() const
 
 void MainWindow::persistCenterLockForSlice(const SliceModel* slice)
 {
-    if (!slice || slice->panId().isEmpty() || !m_panStack) {
+    if (!slice || slice->panId().isEmpty() || !m_panStack
+        || m_centerLockSessionOnlyPans.contains(slice->panId())) {
         return;
     }
 
@@ -592,8 +602,10 @@ void MainWindow::setCenterLockForPan(const QString& panId, int sliceId, bool on,
     bool canceledPendingRecall = false;
     if (persist) {
         // A persisted setter call is explicit operator intent. It supersedes
-        // any automatic restoration still waiting on a band recall.
+        // any automatic restoration still waiting on a band recall, and a
+        // TCI client's session-only lock on this pan.
         canceledPendingRecall = m_centerLockRebind.cancel(panId);
+        m_centerLockSessionOnlyPans.remove(panId);
     }
 
     if (!on) {
@@ -613,6 +625,7 @@ void MainWindow::setCenterLockForPan(const QString& panId, int sliceId, bool on,
     }
 
     m_centerLockSliceByPan.insert(panId, sliceId);
+    m_centerLockSessionOnlyPans.remove(panId);
     if (persist) {
         persistCenterLockForSlice(slice);
     }
@@ -631,7 +644,10 @@ void MainWindow::clearCenterLockForPan(const QString& panId, bool clearPersisted
         m_centerLockRebind.cancel(panId);
     }
 
-    if (clearPersistedIntent && m_panStack) {
+    // A TCI client's session-only lock never owned the saved intent, so
+    // clearing it (slice close, migration, removal) leaves that intent alone.
+    const bool sessionOnly = m_centerLockSessionOnlyPans.remove(panId);
+    if (clearPersistedIntent && !sessionOnly && m_panStack) {
         const QString radioKey = centerLockRadioKey();
         if (SpectrumWidget* sw = m_panStack->spectrum(panId);
             !radioKey.isEmpty() && sw) {
@@ -661,6 +677,22 @@ void MainWindow::clearCenterLockForSlice(int sliceId, bool clearPersistedIntent)
     }
     for (const QString& panId : pansToClear) {
         clearCenterLockForPan(panId, clearPersistedIntent);
+    }
+}
+
+void MainWindow::setSessionCenterLockForSlice(int sliceId, bool on)
+{
+    SliceModel* slice = m_radioModel.slice(sliceId);
+    if (!slice || slice->panId().isEmpty()) {
+        return;
+    }
+    const QString panId = slice->panId();
+    // Locking the slice that already holds the lock changes nothing, so it
+    // must not demote an operator's lock to session-only.
+    const bool alreadyLocked = centerLockActiveForSlice(slice);
+    setCenterLockForPan(panId, sliceId, on, /*persist=*/false);
+    if (on && !alreadyLocked && centerLockActiveForSlice(slice)) {
+        m_centerLockSessionOnlyPans.insert(panId);
     }
 }
 
@@ -1705,8 +1737,7 @@ bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
     if (!targetVfo) {
         targetVfo = target->addVfoWidget(sliceId);
         if (targetVfo) {
-            const QString& sub = m_radioModel.licenseSubscription();
-            targetVfo->setSmartSdrPlus(sub.contains("SmartSDR+"));
+            targetVfo->setCwAutotuneLicensed(m_radioModel.cwAutotuneLicensed());
             targetVfo->setHasExtendedDsp(m_radioModel.hasExtendedDspFilters());
             targetVfo->setHasRadioSideDsp(m_radioModel.hasRadioSideDsp());
             targetVfo->setHasLmsNoiseFilters(m_radioModel.hasLmsNoiseFilters());
@@ -1893,7 +1924,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // restore was actually suppressed. Logging every mid-session add would
         // report "skipping" for the overwhelmingly common case of no key at
         // all, which is noise in exactly the captures this logging exists for.
-        if (savedDax > 0 && m_daxRestore.restoreAllowed()) {
+        const bool radioHasDax = m_radioModel.backendCapabilities().hasDaxStreams;
+        if (m_daxRestore.shouldRestore(savedDax, radioHasDax)) {
             // QPointer guards against a dangling slice: a raw SliceModel*
             // stays non-null after the slice is destroyed, so the `s &&`
             // check below is only meaningful if the capture auto-nulls.
@@ -1911,6 +1943,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
                     sp->setDaxChannel(savedDax);
                 }
             });
+        } else if (savedDax > 0 && !radioHasDax) {
+            qCDebug(lcDax) << "MainWindow: skipping last-session DAX restore"
+                           << key << "=" << savedDax
+                           << "on a radio without DAX channels, slice"
+                           << s->sliceId();
         } else if (savedDax > 0) {
             qCDebug(lcDax) << "MainWindow: skipping last-session DAX restore"
                            << key << "=" << savedDax
@@ -2400,13 +2437,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
     if (auto* swForVfo = spectrumForSlice(s)) {
         auto* vfo = swForVfo->addVfoWidget(s->sliceId());
 
-        // Set SmartSDR+ flag before wireVfoWidget so rebuildFilterButtons
+        // Set the CW Autotune license before wireVfoWidget so rebuildFilterButtons
         // sees the correct value when setSlice() triggers the first build (#1356)
-        {
-            const QString& sub = m_radioModel.licenseSubscription();
-            bool hasPlus = sub.contains("SmartSDR+");
-            vfo->setSmartSdrPlus(hasPlus);
-        }
+        vfo->setCwAutotuneLicensed(m_radioModel.cwAutotuneLicensed());
 
         // Set extended DSP flag before wireVfoWidget so the mode-change lambda
         // in setSlice() gates NRL/NRS/RNN/NRF visibility correctly (#2177)
@@ -3389,18 +3422,19 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
             // the cap's own echo so the pre-cap radio value stays the restore
             // target, but let a genuine radio/profile update through even while
             // throttled (#4261 — otherwise it's lost when the throttle lifts).
+            // Every cap this episode sent counts as our echo, not just the
+            // current one (#6791).
             if (applyThrottledDisplayReport(m_adaptiveThrottleActive,
-                                            m_adaptiveFpsCap, fps)) {
+                                            m_adaptiveFpsCapsSent, fps)) {
                 sw->setFftFps(fps);
             }
         }));
     connections.append(connect(
         pan, &PanadapterModel::waterfallLineDurationReported,
         sw, [this, sw](int lineDurationMs) {
-            if (applyThrottledDisplayReport(
-                    m_adaptiveThrottleActive,
-                    m_radioModel.adaptiveWfRateForCap(m_adaptiveFpsCap),
-                    lineDurationMs)) {
+            if (applyThrottledDisplayReport(m_adaptiveThrottleActive,
+                                            m_adaptiveWfRatesSent,
+                                            lineDurationMs)) {
                 sw->setWfLineDuration(lineDurationMs);
             }
         }));
@@ -3463,13 +3497,12 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         sw->setFftWeightedAvg(pan->weightedAverage());
     }
     if (applyThrottledDisplayReport(m_adaptiveThrottleActive,
-                                    m_adaptiveFpsCap, pan->fps())) {
+                                    m_adaptiveFpsCapsSent, pan->fps())) {
         sw->setFftFps(pan->fps());
     }
-    if (applyThrottledDisplayReport(
-            m_adaptiveThrottleActive,
-            m_radioModel.adaptiveWfRateForCap(m_adaptiveFpsCap),
-            pan->waterfallLineDuration())) {
+    if (applyThrottledDisplayReport(m_adaptiveThrottleActive,
+                                    m_adaptiveWfRatesSent,
+                                    pan->waterfallLineDuration())) {
         sw->setWfLineDuration(pan->waterfallLineDuration());
     }
 }

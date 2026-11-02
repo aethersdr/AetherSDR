@@ -21,6 +21,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QEvent>
 #include <QEventLoop>
 #include <QFile>
 #include <QFont>
@@ -87,6 +88,7 @@ public:
     bool connected{true};
     bool supported{true};
     bool refuse{false};
+    std::optional<RadioCapabilities::AgcGainScale> gainScale;
     QVector<ModeRequest> modeRequests;
     QVector<SliceAgcRequest> agcRequests;
     QStringList wireCommands;
@@ -105,6 +107,7 @@ public:
     {
         RadioCapabilities caps;
         caps.hasAgcThreshold = true;
+        caps.agcGainScale = gainScale;
         if (supported) {
             caps.autoAgcThresholdControl = RadioCapabilities::AutoAgcThresholdControl{
                 QStringLiteral("auto_agc")};
@@ -140,6 +143,20 @@ public:
         delta.agcThresholdMode = mode;
         emit sliceChanged(sliceId, delta);
     }
+    void agcStatus(const QString& agcMode, int threshold, int offLevel)
+    {
+        SliceDelta delta;
+        delta.active = true;
+        delta.frequency = 14.25;
+        delta.mode = QStringLiteral("USB");
+        delta.filterLow = 100;
+        delta.filterHigh = 2800;
+        delta.agcMode = agcMode;
+        delta.agcThreshold = threshold;
+        delta.agcOffLevel = offLevel;
+        delta.agcThresholdMode = AgcThresholdMode::Manual;
+        emit sliceChanged(0, delta);
+    }
     bool isConnected() const override { return connected; }
     void connectRadio(const RadioConnectRequest&) override {}
     void disconnectRadio() override {}
@@ -158,6 +175,32 @@ void settle()
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
     }
 }
+
+// Every tooltip a widget is given, in order. A confirmed-control slider is
+// re-synced to the radio's value right after a drag step, so the drag's own
+// tooltip is only seen here.
+class ToolTipLog final : public QObject
+{
+public:
+    explicit ToolTipLog(QWidget* widget)
+        : m_widget(widget)
+    {
+        widget->installEventFilter(this);
+    }
+    QStringList seen;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (watched == m_widget && event->type() == QEvent::ToolTipChange) {
+            seen.append(m_widget->toolTip());
+        }
+        return false;
+    }
+
+private:
+    QWidget* m_widget;
+};
 
 QJsonObject namedNode(const QJsonObject& node, const QString& name)
 {
@@ -513,6 +556,46 @@ private slots:
         QVERIFY(automatic->isEnabled());
         flag.setSlice(nullptr);
         QVERIFY(!automatic->isEnabled() && !automatic->isChecked());
+    }
+
+    // The AGC-T tooltips print the gain a declared agcGainScale gives the knob,
+    // in the RX applet and on the slice flag, both for the radio's value and
+    // during a drag. Without a scale they print the knob with "dB", as before.
+    void thresholdTooltipsPrintTheDeclaredGain()
+    {
+        Fixture fixture;
+        VfoWidget flag;
+        flag.setRadioModel(&fixture.radio);
+        flag.setSlice(fixture.radio.slice(0));
+        QSlider* rxSlider = fixture.threshold();
+        QSlider* flagSlider = nullptr;
+        for (QSlider* slider : flag.findChildren<QSlider*>()) {
+            if (slider->accessibleName() == QStringLiteral("AGC threshold")) {
+                flagSlider = slider;
+            }
+        }
+        QVERIFY(rxSlider && flagSlider);
+        QVERIFY(rxSlider->toolTip().startsWith(QStringLiteral("AGC Threshold: 65 dB")));
+        QVERIFY(flagSlider->toolTip().startsWith(QStringLiteral("AGC Threshold: 65 dB")));
+
+        fixture.backend->gainScale = RadioCapabilities::AgcGainScale{-20.0, 1.4};
+        fixture.backend->agcStatus(QStringLiteral("med"), 71, 29);
+        QCOMPARE(rxSlider->toolTip(), QStringLiteral("AGC Threshold: 79.4 dB"));
+        QCOMPARE(flagSlider->toolTip(), QStringLiteral("AGC Threshold: 79.4 dB"));
+
+        ToolTipLog rxLog(rxSlider);
+        ToolTipLog flagLog(flagSlider);
+        rxSlider->setValue(70);
+        flagSlider->setValue(69);
+        QVERIFY2(rxLog.seen.contains(QStringLiteral(
+                     "AGC Threshold: 78.0 dB\nRight-click to calibrate against the noise floor")),
+            qPrintable(rxLog.seen.join(QStringLiteral(" | "))));
+        QVERIFY2(flagLog.seen.contains(QStringLiteral("AGC Threshold: 76.6 dB")),
+            qPrintable(flagLog.seen.join(QStringLiteral(" | "))));
+
+        fixture.backend->agcStatus(QStringLiteral("off"), 71, 29);
+        QCOMPARE(rxSlider->toolTip(), QStringLiteral("AGC Off Level: 20.6 dB"));
+        QCOMPARE(flagSlider->toolTip(), QStringLiteral("AGC Off Level: 20.6 dB"));
     }
 
     void refusedDispatchDoesNotEngageAutomaticMode()

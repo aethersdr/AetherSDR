@@ -220,7 +220,7 @@ QString RadioModel::cwAutoTuneUnavailableReason(SliceModel* source, CwAutoTuneAc
                 && operation->cleanupEligible
             ? QString() : tr("No CW auto-tune loop was requested by this client.");
     }
-    if (!m_licenseSubscription.contains(QStringLiteral("SmartSDR+"))) { return tr("Requires SmartSDR+."); }
+    if (!cwAutotuneLicensed()) { return tr("Requires a CW auto-tune license."); }
     const QString mode = source->mode();
     if (mode != QLatin1String("CW") && mode != QLatin1String("CWL") && mode != QLatin1String("CWU")) {
         return tr("Select a CW receive mode.");

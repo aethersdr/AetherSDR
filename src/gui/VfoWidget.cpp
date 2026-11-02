@@ -13,6 +13,7 @@
 #endif
 #include "ScopedChildWidget.h"
 #include "AgcModeAvailability.h"
+#include "AgcGainText.h"
 #include "FmTonePresentation.h"
 #include "gui/CtcssToneLabel.h"
 #include "PhaseKnob.h"
@@ -1932,9 +1933,14 @@ void VfoWidget::buildTabContent()
         connect(m_agcTSlider, &QSlider::valueChanged, this, [this](int v) {
             if (m_agcValueLbl) m_agcValueLbl->setText(QString::number(v));
             const bool agcOff = m_slice && (m_slice->receiveAgcMode() == "off");
+            // As updateAgcSliderFromSlice() reads the capabilities.
+            const bool scaled = m_radioModel && m_radioModel->isConnected() && m_slice
+                && !m_slice->externalReceiveReplacementActive();
+            const QString gain = agcKnobText(v, scaled
+                ? m_radioModel->backendCapabilities().agcGainScale : std::nullopt);
             m_agcTSlider->setToolTip(agcOff
-                ? QString("AGC Off Level: %1 dB").arg(v)
-                : QString("AGC Threshold: %1 dB").arg(v));
+                ? QString("AGC Off Level: %1").arg(gain)
+                : QString("AGC Threshold: %1").arg(gain));
             if (!m_updatingFromModel && m_slice && m_agcTSlider->isEnabled()) {
                 if (agcOff) m_slice->setAgcOffLevel(v);
                 else m_slice->setAgcThreshold(v);
@@ -2804,7 +2810,15 @@ void VfoWidget::buildTabContent()
                                      void (SliceModel::* setter)(bool),
                                      DspLevelTarget tag) {
             connect(btn, &QPushButton::toggled, this, [this, setter, tag](bool on) {
-                if (!m_updatingFromModel && m_slice) (m_slice->*setter)(on);
+                // Keep the object operand in a local: calling a captured
+                // member-function pointer on m_slice directly makes GCC 13.3's
+                // Debug UBSan code read an uninitialized register, which ASan
+                // reports as a stack-buffer-underflow (#6724). The client DSP
+                // applets use the same form for the same reason.
+                SliceModel* const target = m_slice;
+                if (!m_updatingFromModel && target) {
+                    (target->*setter)(on);
+                }
                 if (on) pushDspLevelTarget(tag);
                 else    popDspLevelTarget(tag);
             });
@@ -3576,11 +3590,11 @@ void VfoWidget::updateCwAutoTuneControls()
 {
     if (!m_radioModel || !m_slice) { return; }
     const bool loop = m_radioModel->cwAutoTuneLoopRequested(m_slice->sliceId());
-    const bool plus = m_radioModel->licenseSubscription().contains(QStringLiteral("SmartSDR+"));
-    const bool rebuild = plus != m_hasSmartSdrPlus || (loop && !m_autotuneLoopBtn)
-        || (!loop && !plus && m_autotuneLoopBtn);
+    const bool licensed = m_radioModel->cwAutotuneLicensed();
+    const bool rebuild = licensed != m_cwAutotuneLicensed || (loop && !m_autotuneLoopBtn)
+        || (!loop && !licensed && m_autotuneLoopBtn);
     m_cwLoopRequested = loop;
-    m_hasSmartSdrPlus = plus;
+    m_cwAutotuneLicensed = licensed;
     if (rebuild) {
         // A reply may be synchronous with a button signal; retire that event
         // before replacing the controls that emitted it.
@@ -3595,7 +3609,7 @@ void VfoWidget::updateCwAutoTuneControls()
     if (m_autotuneOnceBtn && m_registeredCwOnce != m_autotuneOnceBtn) {
         m_registeredCwOnce = m_autotuneOnceBtn;
         m_filterAvailability->registerRestriction(m_autotuneOnceBtn,
-            tr("Requires a connected, owned, unlocked CW slice and SmartSDR+ support."),
+            tr("Requires a connected, owned, unlocked CW slice and a CW auto-tune license."),
             [this](bool, const RadioCapabilities&) {
                 return m_radioModel && m_radioModel->cwAutoTuneUnavailableReason(
                     m_slice, CwAutoTuneAction::Once).isEmpty();
@@ -3613,10 +3627,10 @@ void VfoWidget::updateCwAutoTuneControls()
     m_filterAvailability->refreshEngaged();
 }
 
-void VfoWidget::setSmartSdrPlus(bool has)
+void VfoWidget::setCwAutotuneLicensed(bool licensed)
 {
-    if (m_hasSmartSdrPlus == has) return;
-    m_hasSmartSdrPlus = has;
+    if (m_cwAutotuneLicensed == licensed) return;
+    m_cwAutotuneLicensed = licensed;
     if (m_slice) rebuildFilterButtons();
 }
 
@@ -6190,8 +6204,8 @@ void VfoWidget::updateAgcSliderFromSlice()
     m_agcTSlider->setValue(value);
     m_agcTSlider->setToolTip(!available
         ? tr("AGC threshold and off level are unavailable on this radio")
-        : agcOff ? QString("AGC Off Level: %1 dB").arg(value)
-        : QString("AGC Threshold: %1 dB").arg(value));
+        : agcOff ? QString("AGC Off Level: %1").arg(agcKnobText(value, caps.agcGainScale))
+        : QString("AGC Threshold: %1").arg(agcKnobText(value, caps.agcGainScale)));
     m_agcTSlider->setAccessibleName(agcOff ? "AGC off level" : "AGC threshold");
     m_agcValueLbl->setText(QString::number(value));
 }
@@ -6434,7 +6448,7 @@ void VfoWidget::rebuildFilterButtons()
             "QPushButton:pressed { background: #00607a; }"
             "QPushButton:checked { background: #00607a; color: #e0f0ff; border-color: #00b4d8; }";
 
-        if (m_hasSmartSdrPlus || m_cwLoopRequested) {
+        if (m_cwAutotuneLicensed || m_cwLoopRequested) {
             m_autotuneOnceBtn = new QPushButton("Once");
             m_autotuneOnceBtn->setAccessibleName(tr("CW auto-tune once"));
             m_autotuneOnceBtn->setObjectName(QStringLiteral("cwAutoTuneOnce"));
